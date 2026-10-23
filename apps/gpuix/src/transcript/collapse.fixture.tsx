@@ -3,7 +3,7 @@ import { render } from '@gpuix/react'
 import { useState } from 'react'
 import { Collapse } from '../motion/kit.tsx'
 import { ThemeProvider, useTheme, Label } from '../ui.tsx'
-import { Button } from './kit.tsx'
+import { Button } from '../kit/Button.tsx'
 function Fixture() {
   const t = useTheme(), [open, setOpen] = useState(true), [lines, setLines] = useState(2)
   return <div testId="collapse-ready" style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', padding: 24, backgroundColor: t.surface }}>

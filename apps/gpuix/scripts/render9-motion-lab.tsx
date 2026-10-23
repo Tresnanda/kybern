@@ -4,8 +4,9 @@
 import '../src/native/local-build.ts'
 import { render, useGpuixRequired } from '@gpuix/react'
 import { useEffect, useState } from 'react'
-import { ThemeProvider, ChromeButton, Label, useTheme } from '../src/ui.tsx'
-import { KitButton } from '../src/kit/AlertDialog.tsx'
+import { ThemeProvider, Label, useTheme } from '../src/ui.tsx'
+import { Button } from '../src/kit/Button.tsx'
+import { IconButton } from '../src/kit/IconButton.tsx'
 import { Pop } from '../src/composer/motion.tsx'
 import { Icon } from '../src/icons.tsx'
 import { N } from '../src/nav/glyphs.ts'
@@ -36,8 +37,8 @@ function Lab() {
   }
   return <div key={key} testId="app-ready" onKeyDown={e => action(e.key ?? '')} style={{ position: 'relative', width: '100%', height: '100%', backgroundColor: t.v('--background') }}>
     <div style={{ position: 'absolute', left: 24, top: 24, display: 'flex', gap: 16, alignItems: 'center' }}>
-      <div testId="press-kit" style={{ display: 'flex' }}><KitButton variant="default" onClick={() => {}}>Continue</KitButton></div>
-      <div testId="press-chrome" style={{ display: 'flex' }}><ChromeButton icon="plus" onClick={() => {}} /></div>
+      <div testId="press-kit" style={{ display: 'flex' }}><Button variant="primary" onClick={() => {}}>Continue</Button></div>
+      <div testId="press-chrome" style={{ display: 'flex' }}><IconButton icon="plus" label="Add" onClick={() => {}} /></div>
     </div>
     <div style={{ position: 'absolute', left: 24, top: 90, display: 'flex', gap: 8 }}>
       {tile > 0 && <Pop key={tile}>

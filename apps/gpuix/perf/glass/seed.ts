@@ -38,13 +38,15 @@ const uuid = (key: string) => { const h = createHash('sha256').update(`glass-v1:
 
 // ─── Content ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-const shortList = (label: string, n: number) => Array.from({ length: n }, (_, i) => `- ${label} ${i + 1} stays short.`).join('\n')
+/** `KYBERN_GLASS_WIDE=1` (the blur checker, `src/platform/verify.blur.ts`): lines that run across the column, so a frosted popup has text to blur. */
+const WIDE = process.env.KYBERN_GLASS_WIDE === '1'
+const shortList = (label: string, n: number) => Array.from({ length: n }, (_, i) => WIDE ? `- ${label} ${i + 1} keeps the whole line busy, so a frosted surface over it has real detail to blur out, word after word.` : `- ${label} ${i + 1} stays short.`).join('\n')
 export const FILLER = (i: number) => `## Pass ${i + 1}\n\nThe layout holds.\n\n${shortList('Check', 10)}\n\nNothing else moved.`
 /** Twelve short lines: more than `RESULT_CLAMP_LINES` (8), so `resultNeedsClamp` is true. */
 export const INBOUND_BODY = [
   'Permission checks pass on every route.',
   '',
-  ...Array.from({ length: 11 }, (_, i) => `- Route ${i + 1} is covered.`),
+  ...Array.from({ length: 11 }, (_, i) => WIDE ? `- Route ${i + 1} is covered across every handler in the permission layer, read by hand and checked by test, line after line.` : `- Route ${i + 1} is covered.`),
 ].join('\n')
 /** The last answer's line count; tuned so that 600 px up leaves both cards above the composer. */
 export const TAIL_LINES = Number(process.env.KYBERN_GLASS_TAIL_LINES ?? 16)

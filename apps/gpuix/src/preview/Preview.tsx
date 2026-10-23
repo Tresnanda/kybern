@@ -11,7 +11,10 @@ import { getClient, useApp } from '../state.ts'
 import { setNav, useNav } from '../nav/store.ts'
 import { addWindowKeyHandler, onWindowKeyDown } from '../nav/keys.ts'
 import { webHost } from '../native/webview.ts'
-import { IconButton } from '../sidebar/rows.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
+import { Button } from '../kit/Button.tsx'
+import { PickerChip } from '../kit/PickerChip.tsx'
+import { TextField } from '../kit/Field.tsx'
 import { Menu, MenuItem } from '../nav/overlay.tsx'
 import { N } from '../nav/glyphs.ts'
 import { ink, Label, useTheme } from '../ui.tsx'
@@ -19,13 +22,14 @@ import { revealTransform } from '../motion/kit.tsx'
 import { pressRow } from '../shell/motion.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { Floating } from '../live/Floating.tsx'
-import { Action, DockEmpty, ErrorLine } from '../dock/parts.tsx'
+import { DockEmpty, ErrorLine } from '../dock/parts.tsx'
 import { floatingPreview, openPreview, previewState, setPreview, showPreview, subscribePreviews, usePreview } from './store.ts'
 import { PreviewSlot, PreviewSurface, previewCommand } from './Surface.tsx'
 import { previewDockSize } from './Surface.tsx'
 import { useElementBounds } from '../native/layout-hooks.ts'
 import { clampPlayerSize, defaultPlayerSize, type PlayerSize } from '../../../../packages/kybern-client/src/previewMiniPlayer.ts'
 import { dockGeometry, useDock } from '../dock/store.ts'
+import { useGroups } from '../split/store.ts'
 import { useSidebarWidth, useWindowWidth } from '../shell/layout.ts'
 import { PreviewResizeCapture } from './resize.tsx'
 import { MiniResize, type MiniCorner } from './MiniResize.tsx'
@@ -34,7 +38,6 @@ import { PreviewChrome } from './Chrome.tsx'
 import { PreviewStateView } from './States.tsx'
 import { PictureInPictureIcon } from '@hugeicons/core-free-icons'
 import { glyph } from '../icons.tsx'
-import { KitButton } from '../kit/AlertDialog.tsx'
 const PIP = glyph(PictureInPictureIcon)
 
 /** Desktop `DockEmpty` in the preview body: a block parent, so it sits at the top (`py-10`), not centred. */
@@ -75,10 +78,10 @@ export function PreviewPane({ threadId }: { threadId: string }) {
     <PreviewChrome threadId={threadId} />
     {entry && s.device && <DeviceToolbar threadId={threadId} />}
     <ErrorLine error={s.error} />
-    {s.wsFailed && !s.wsNoticeDismissed && entry?.proxy && <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 12, height: 28 }}><Label color={t.textSecondary} size={11} truncate>{`Live reload isn't connected through ${environment.name}. Reload to see changes.`}</Label><Action onClick={() => previewCommand(threadId, 'reload')}>Reload</Action><IconButton press icon={N.x} label="Dismiss" size={20} onClick={() => setPreview(threadId, { wsNoticeDismissed: true })} /></div>}
+    {s.wsFailed && !s.wsNoticeDismissed && entry?.proxy && <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 12, height: 28 }}><Label color={t.textSecondary} size={11} truncate>{`Live reload isn't connected through ${environment.name}. Reload to see changes.`}</Label><Button variant="ghost" size="sm" onClick={() => previewCommand(threadId, 'reload')}>Reload</Button><IconButton icon={N.x} label="Dismiss" size="sm" onClick={() => setPreview(threadId, { wsNoticeDismissed: true })} /></div>}
     {s.permission ? <PreviewStateView threadId={threadId} />
     : s.busy && s.load.phase !== 'waiting' ? <DockEmpty icon={N.globe} title="Opening preview…" />
-    : entry ? s.floating ? <FloatingState><KitButton size="sm" variant="subtle" testId="preview-return" onClick={() => setPreview(threadId, { floating: false })}>Return to panel</KitButton></FloatingState> : s.load.phase !== 'ready' ? <PreviewStateView threadId={threadId} /> : <PreviewSlot threadId={threadId} kind="dock" />
+    : entry ? s.floating ? <FloatingState><Button size="sm" testId="preview-return" onClick={() => setPreview(threadId, { floating: false })}>Return to tab</Button></FloatingState> : s.load.phase !== 'ready' ? <PreviewStateView threadId={threadId} /> : <PreviewSlot threadId={threadId} kind="dock" />
     : sorted.length || recents.length ? <virtual-list style={{ flexGrow: 1, minHeight: 0, width: '100%' }}><div style={{ paddingLeft: 12, paddingRight: 12, paddingTop: 16, paddingBottom: 16 }}>
       <DockSection label={environment.local ? 'Local servers' : `Servers on ${environment.name}`} count={servers.length} />
       <div style={{ display: 'flex', flexDirection: 'column', marginLeft: 12, marginRight: 12, padding: 4, borderRadius: 10, backgroundColor: t.buttonSecondary }}>
@@ -88,7 +91,7 @@ export function PreviewPane({ threadId }: { threadId: string }) {
           <Label color={t.textSecondary} size={13}>{new URL(server.url).host}</Label>
         </div>)}
       </div>
-      {!showAll && sorted.length > 12 && <Action textSize={13} onClick={() => setShowAll(true)}>{`Show ${sorted.length - 12} more`}</Action>}
+      {!showAll && sorted.length > 12 && <Button variant="ghost" size="sm" onClick={() => setShowAll(true)}>{`Show ${sorted.length - 12} more`}</Button>}
       {recents.length > 0 && <><DockSection label="Recent" /><div style={{ display: 'flex', flexDirection: 'column', marginLeft: 12, marginRight: 12, padding: 4, borderRadius: 10, backgroundColor: t.buttonSecondary }}>
         {recents.map((recent, index) => <RecentRow key={`${recent.kind}:${recent.value}`} recent={recent} index={index} now={now} open={() => void openPreview(threadId, recent.value)} forget={() => forgetRecent(key, recent)} />)}
       </div></>}
@@ -105,7 +108,7 @@ function RecentRow({ recent, index, now, open, forget }: { recent: PreviewRecent
   return <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} style={{ display: 'flex', alignItems: 'center', height: 44, gap: 8, paddingLeft: 10, paddingRight: 10, borderRadius: 6, hover: { backgroundColor: t.hover } }}>
     <div testId={`preview-recent-${index}`} role="button" tabIndex={0} onClick={open} onFocus={() => setHover(true)} onBlur={() => setHover(false)} onKeyDown={e => { if (e.key === 'enter') open() }} style={{ display: 'flex', flexGrow: 1, minWidth: 0, alignItems: 'center', gap: 10, cursor: 'pointer', borderRadius: 6, ...pressRow(t, t.hover) }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 5, backgroundColor: t.v('--color-background-elevated-secondary') }}><Icon source={recent.kind === 'file' ? ICONS.file : N.globe} size={13} color={t.textSecondary} /></div><div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={ink(t, 0.9)} size={14} lineHeight={21} truncate>{title}</Label><Label color={muted(t, 0.7)} size={13} lineHeight={19.5} truncate>{`${location} · ${ago}`}</Label></div>
-    </div><div paintTransform={revealTransform(hover)} style={{ ...(hover ? {} : { pointerEvents: 'none' }), ...(PATCHED_NATIVE ? {} : { opacity: hover ? 1 : 0 }) }}><IconButton press testId={`preview-forget-${index}`} icon={N.x} label={`Remove ${title} from recent`} onHover={setHover} size={24} onClick={forget} /></div>
+    </div><div paintTransform={revealTransform(hover)} style={{ ...(hover ? {} : { pointerEvents: 'none' }), ...(PATCHED_NATIVE ? {} : { opacity: hover ? 1 : 0 }) }}><IconButton testId={`preview-forget-${index}`} icon={N.x} label={`Remove ${title} from recent`} size="sm" onFocus={() => setHover(true)} onBlur={() => setHover(false)} onClick={forget} /></div>
   </div>
 }
 function DeviceToolbar({ threadId }: { threadId: string }) {
@@ -113,7 +116,7 @@ function DeviceToolbar({ threadId }: { threadId: string }) {
   const [width, setWidth] = useState(String(s.width)), [height, setHeight] = useState(String(s.height))
   useEffect(() => { setWidth(String(s.width)); setHeight(String(s.height)) }, [s.width, s.height])
   const commit = () => { const w = parseViewportField(width), h = parseViewportField(height); if (w !== null && h !== null && isViewportSizeValid(w, h)) setPreview(threadId, { width: w, height: h, preset: null, error: null }); else { setWidth(String(s.width)); setHeight(String(s.height)); setPreview(threadId, { error: 'Use dimensions from 240–3840.' }) } }
-  return <div testId="preview-device-toolbar" style={{ display: 'flex', height: 32, alignItems: 'center', gap: 4, paddingLeft: 8, paddingRight: 8 }}><Menu testId="preview-device-preset" trigger={() => <Action onClick={() => {}}>{VIEWPORT_PRESETS.find(p => p.id === s.preset)?.label ?? 'Responsive'}</Action>}><MenuItem id="responsive" label="Responsive" onSelect={() => setPreview(threadId, { preset: null })} />{VIEWPORT_PRESETS.map(p => <MenuItem key={p.id} id={p.id} label={`${p.label} · ${p.w} × ${p.h}`} onSelect={() => setPreview(threadId, { width: p.w, height: p.h, preset: p.id })} />)}</Menu><input testId="preview-width" aria-label="Width" value={width} onChange={e => setWidth(e.value ?? '')} onSubmit={commit} onBlur={commit} style={{ width: 48, height: 24, fontSize: 11, color: t.text, backgroundColor: t.buttonSecondary }} /><Label color={t.textSecondary} size={11}>×</Label><input testId="preview-height" aria-label="Height" value={height} onChange={e => setHeight(e.value ?? '')} onSubmit={commit} onBlur={commit} style={{ width: 48, height: 24, fontSize: 11, color: t.text, backgroundColor: t.buttonSecondary }} /><Action press={false} testId="preview-rotate" onClick={() => setPreview(threadId, { width: s.height, height: s.width })}>Rotate</Action><IconButton icon={N.x} size={24} label="Hide device toolbar" onClick={() => setPreview(threadId, { device: false })} /></div>
+  return <div testId="preview-device-toolbar" style={{ display: 'flex', height: 32, alignItems: 'center', gap: 4, paddingLeft: 8, paddingRight: 8 }}><Menu testId="preview-device-preset" trigger={open => <PickerChip size="sm" open={open}>{VIEWPORT_PRESETS.find(p => p.id === s.preset)?.label ?? 'Responsive'}</PickerChip>}><MenuItem id="responsive" label="Responsive" onSelect={() => setPreview(threadId, { preset: null })} />{VIEWPORT_PRESETS.map(p => <MenuItem key={p.id} id={p.id} label={`${p.label} · ${p.w} × ${p.h}`} onSelect={() => setPreview(threadId, { width: p.w, height: p.h, preset: p.id })} />)}</Menu><TextField testId="preview-width" label="Width" value={width} onChange={setWidth} onSubmit={commit} onBlur={commit} width={60} style={{ fontVariantNumeric: 'tabular-nums' } as never} /><Label color={t.textSecondary} size={11}>×</Label><TextField testId="preview-height" label="Height" value={height} onChange={setHeight} onSubmit={commit} onBlur={commit} width={60} style={{ fontVariantNumeric: 'tabular-nums' } as never} /><Button variant="ghost" size="sm" testId="preview-rotate" onClick={() => setPreview(threadId, { width: s.height, height: s.width })}>Rotate</Button><IconButton icon={N.x} size="sm" label="Hide device toolbar" onClick={() => setPreview(threadId, { device: false })} /></div>
 }
 /** Agent requests and shortcut live outside the dock; closing it unmounts its UI. */
 export function PreviewIntegration({ insetBottom = 0 }: { insetBottom?: number } = {}) {
@@ -130,10 +133,13 @@ export function PreviewIntegration({ insetBottom = 0 }: { insetBottom?: number }
   }), [id, page, settings])
   useEffect(() => {
     if (!connected) return
-    return getClient()!.onNotification('previews.open_requested', payload => { const request = payload as PreviewOpenRequestedNotification; showPreview(request.thread_id); void openPreview(request.thread_id, request.target) })
+    return getClient()!.onNotification('previews.open_requested', payload => { const request = payload as PreviewOpenRequestedNotification; showPreview(request.thread_id, true); void openPreview(request.thread_id, request.target) })
   }, [connected])
   useEffect(() => addWindowKeyHandler(e => { if (id && page === 'home' && !settings && e.modifiers?.cmd && e.modifiers.alt && e.key === 'p') { setNav({ keyboardNav: true }); const s = previewState(id); if (s.entries.length) { setPreview(id, { floating: !s.floating }); if (s.floating) showPreview(id) } else showPreview(id); return true } }), [id, page, settings])
-  const ids = [...new Set([id, floating].filter((value): value is string => !!value))].sort()
+  // One native document per thread: the threads whose browser tab is active in some group, the selected one, and the floating one.
+  const groups = useGroups()
+  const shown = Object.values(groups).filter((g) => g.threadId && g.active === 'preview').map((g) => g.threadId)
+  const ids = [...new Set([id, floating, ...shown].filter((value): value is string => !!value))].sort()
   return <>{ids.map(threadId => <PreviewSurface key={threadId} threadId={threadId} />)}{floating && page === 'home' && !settings ? <MiniPlayer key={floating} insetBottom={insetBottom} insetEnd={insetEnd} threadId={floating} /> : null}<PreviewResizeCapture /></>
 }
 function MiniPlayer({ threadId, insetBottom, insetEnd }: { threadId: string; insetBottom: number; insetEnd: number }) {
@@ -165,7 +171,7 @@ function MiniBody({ threadId, entry, corner, size, available, setSize }: { threa
   }, [hover])
   return <div onMouseEnter={() => setOverBody(true)} onMouseLeave={() => setOverBody(false)} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
     {s.load.phase === 'ready' ? <PreviewSlot threadId={threadId} kind="mini" /> : <PreviewStateView threadId={threadId} />}
-    {(hover || shown) && <MiniChrome title={s.pageTitle || entry.title} otherThread={selectedElsewhere ? threadTitle : undefined} revealed={hover} onHover={setOverHeader}><IconButton icon={N.panelRight} size={24} testId="preview-mini-return" label="Return to panel" onClick={() => { setPreview(threadId, { floating: false }); showPreview(threadId) }} /><IconButton icon={N.x} size={24} testId="preview-mini-close" label="Close preview" onClick={() => { setPreview(threadId, { floating: false }) }} /></MiniChrome>}
+    {(hover || shown) && <MiniChrome title={s.pageTitle || entry.title} otherThread={selectedElsewhere ? threadTitle : undefined} revealed={hover} onHover={setOverHeader}><IconButton icon={N.panelRight} size="sm" testId="preview-mini-return" label="Return to tab" onClick={() => { setPreview(threadId, { floating: false }); showPreview(threadId) }} /><IconButton icon={N.x} size="sm" testId="preview-mini-close" label="Close preview" onClick={() => { setPreview(threadId, { floating: false }) }} /></MiniChrome>}
     <MiniResize corner={corner} size={size} bounds={available} onResize={next => { setSize(next); save('kybern.preview.size', next) }} />
   </div>
 }

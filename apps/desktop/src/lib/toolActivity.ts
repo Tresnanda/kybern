@@ -876,9 +876,10 @@ export interface ToolCallSummary {
 
 type SummaryCategory = "command" | "edit" | "read" | "search" | "agent" | "computer" | "item" | "itemWrite" | "tool"
 
+/** By importance: what changed, what ran, then what was looked at. */
 const SUMMARY_ORDER: readonly SummaryCategory[] = [
-  "command",
   "edit",
+  "command",
   "read",
   "search",
   "agent",
@@ -897,7 +898,18 @@ export function summarizeToolCalls(
     items.some((item) => !item.complete || item.isError)
   )
     return null
+  return {
+    label: joinSummaryPhrases(toolSummaryPhrases(items)),
+    visual: toolVisualKind(items[0]!.call),
+    entryCount: items.length,
+  }
+}
 
+/**
+ * "edited 2 files", "ran 3 commands", … for the given calls, in `SUMMARY_ORDER`, lower case. Reads and edits count
+ * distinct files. Every call counts, whatever its state: callers pass the calls they want named (settled ones, say).
+ */
+export function toolSummaryPhrases(items: readonly ToolSummaryItem[]): string[] {
   const counts = new Map<SummaryCategory, number>()
   const fileKeys = new Map<SummaryCategory, Set<string>>()
   for (const item of items) {
@@ -917,15 +929,10 @@ export function summarizeToolCalls(
   for (const [category, paths] of fileKeys)
     counts.set(category, (counts.get(category) ?? 0) + paths.size)
 
-  const phrases = SUMMARY_ORDER.flatMap((category) => {
+  return SUMMARY_ORDER.flatMap((category) => {
     const count = counts.get(category) ?? 0
     return count > 0 ? [summaryPhrase(category, count)] : []
   })
-  return {
-    label: joinSummaryPhrases(phrases),
-    visual: toolVisualKind(items[0]!.call),
-    entryCount: items.length,
-  }
 }
 
 /** Kybern notes and tasks: searches count with searches, the rest as items read or changed. */
@@ -979,7 +986,7 @@ function summaryPhrase(category: SummaryCategory, count: number): string {
     case "read":
       return `read ${count} ${plural("file")}`
     case "search":
-      return `ran ${count} ${plural("search", "searches")}`
+      return `searched ${count} ${plural("time")}`
     case "agent":
       return `delegated ${count} ${plural("task")}`
     case "computer":
@@ -993,11 +1000,145 @@ function summaryPhrase(category: SummaryCategory, count: number): string {
   }
 }
 
-function joinSummaryPhrases(phrases: readonly string[]): string {
+/** "Edited 2 files · ran 3 commands": phrases joined with a middle dot, only the first letter lifted. */
+export function joinSummaryPhrases(phrases: readonly string[]): string {
   if (phrases.length === 0) return "Used tools"
-  const [first, ...rest] = phrases
-  const capitalized = first!.charAt(0).toUpperCase() + first!.slice(1)
-  if (rest.length === 0) return capitalized
-  if (rest.length === 1) return `${capitalized} and ${rest[0]}`
-  return `${capitalized}, ${rest.slice(0, -1).join(", ")}, and ${rest.at(-1)}`
+  const text = phrases.join(" · ")
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
+/** What a call acted on, for a chip: the files it read or changed, the command it ran, or what it searched for. */
+export type ToolTarget =
+  | { kind: "files"; paths: string[] }
+  | { kind: "command"; command: string }
+  | { kind: "query"; query: string; scope?: string }
+
+/** The target of a read, edit, write, command or search; null when the call names none (the row keeps its label). */
+export function toolTarget(call: ToolCall, activity: ToolActivityLine = toolLine(call)): ToolTarget | null {
+  const input = call.input
+  const actions = commandActions(input)
+  const command = actions.find((action) => action.command)?.command ?? inputString(input, ["command", "cmd"])
+  const operands = command ? commandOperands(command) : null
+  switch (activity.kind) {
+    case "read":
+    case "edit":
+    case "write": {
+      const changed = changedFilePaths(input)
+      if (changed.length > 0) return { kind: "files", paths: changed }
+      const direct = inputString(input, ["file_path", "filePath", "path"]) ?? actions.find((action) => action.path && /read/i.test(action.type))?.path
+      if (direct) return { kind: "files", paths: [direct] }
+      if (!operands) return null
+      const path = operands.tool === "cat" ? (redirectTarget(operands.args) ?? operands.positional.at(-1)) : READ_COMMANDS.has(operands.tool) ? operands.positional.at(-1) : undefined
+      return path ? { kind: "files", paths: [path] } : null
+    }
+    case "command":
+      return command ? { kind: "command", command: compactText(unwrapShellCommand(command), 200) } : null
+    case "search": {
+      const action = actions.find((candidate) => candidate.query)
+      if (action?.query) return { kind: "query", query: action.query, ...(action.path ? { scope: action.path } : {}) }
+      if (WEB_SEARCH_TOOLS.has(normalized(call.name))) {
+        const query = inputQuery(input)
+        return query ? { kind: "query", query, scope: "the web" } : null
+      }
+      const query = inputString(input, ["pattern", "query"])
+      if (query) {
+        const scope = inputString(input, ["path", "directory", "cwd"])
+        return { kind: "query", query, ...(scope ? { scope } : {}) }
+      }
+      if (!operands) return null
+      const nameAt = operands.args.findIndex((arg) => arg === "-name" || arg === "-iname")
+      const found = SEARCH_COMMANDS.has(operands.tool) ? operands.positional[0] : nameAt >= 0 ? operands.args[nameAt + 1] : operands.tool === "fd" ? operands.positional[0] : undefined
+      return found ? { kind: "query", query: found } : null
+    }
+    default:
+      return null
+  }
+}
+
+/** The tool and operands of the first meaningful segment of a shell command (`cd` hops skipped). */
+function commandOperands(rawCommand: string): { tool: string; args: string[]; positional: string[] } {
+  const command = unwrapShellCommand(rawCommand)
+  const segment = shellSegments(command).find((candidate) => {
+    const tool = executable(meaningfulCommandTokens(candidate)[0] ?? "")
+    return tool !== "cd" && tool !== "pushd"
+  }) ?? command
+  const tokens = meaningfulCommandTokens(segment)
+  const args = tokens.slice(1)
+  return { tool: executable(tokens[0] ?? ""), args, positional: positionalArgs(args) }
+}
+
+/** `changes[].path` of a patch-style edit, uncompacted (a chip opens the file). */
+function changedFilePaths(input: JsonValue): string[] {
+  for (const record of inputRecords(input)) {
+    if (!Array.isArray(record.changes)) continue
+    const paths = record.changes
+      .map((change) => asRecord(change))
+      .map((change) => (change ? (directString(change, "path") ?? directString(change, "file_path") ?? directString(change, "filePath")) : undefined))
+      .filter((path): path is string => !!path)
+    if (paths.length > 0) return paths
+  }
+  return []
+}
+
+/**
+ * Lines an edit adds and removes, from its input: `old_string`/`new_string` (and `edits[]`), a written file's
+ * `content`, or unified diffs in a patch. Lines both sides keep are not counted (a line diff). Null when the input
+ * carries no text to count.
+ */
+export function toolLineCounts(call: ToolCall): { additions: number; deletions: number } | null {
+  let additions = 0
+  let deletions = 0
+  let found = false
+  const pair = (before: string, after: string) => {
+    const a = before ? before.split("\n") : []
+    const b = after ? after.split("\n") : []
+    let start = 0
+    while (start < a.length && start < b.length && a[start] === b[start]) start++
+    let end = 0
+    while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end++
+    const common = sharedLines(a.slice(start, a.length - end), b.slice(start, b.length - end))
+    deletions += a.length - start - end - common
+    additions += b.length - start - end - common
+    found = true
+  }
+  const patch = (text: string) => {
+    for (const line of text.split("\n")) {
+      if (line.startsWith("+++") || line.startsWith("---")) continue
+      if (line.startsWith("+")) additions++
+      else if (line.startsWith("-")) deletions++
+    }
+    found = true
+  }
+  const record = inputRecords(call.input)[0]
+  if (!record) return null
+  const text = (value: unknown) => (typeof value === "string" ? value : undefined)
+  const edits = Array.isArray(record.edits) ? record.edits.map((edit) => asRecord(edit)).filter((edit): edit is JsonRecord => !!edit) : [record]
+  for (const edit of edits) {
+    const before = text(edit.old_string) ?? text(edit.oldString)
+    const after = text(edit.new_string) ?? text(edit.newString)
+    if (before !== undefined || after !== undefined) pair(before ?? "", after ?? "")
+  }
+  if (!found && text(record.content) !== undefined && toolLine(call).kind === "write") pair("", text(record.content)!.replace(/\n$/, ""))
+  if (!found && Array.isArray(record.changes))
+    for (const change of record.changes) {
+      const entry = asRecord(change)
+      const diff = entry && (text(entry.diff) ?? text(entry.unified_diff) ?? text(entry.patch))
+      if (diff) patch(diff)
+      else if (entry && text(entry.content) !== undefined) pair("", text(entry.content)!.replace(/\n$/, ""))
+    }
+  if (!found && typeof record.patch === "string") patch(record.patch)
+  if (!found && typeof record.input === "string" && /^\*\*\* Begin Patch/m.test(record.input)) patch(record.input)
+  return found ? { additions, deletions } : null
+}
+
+/** Lines two texts keep in common (longest common subsequence); 0 past 250,000 comparisons, so a huge edit counts whole. */
+function sharedLines(a: readonly string[], b: readonly string[]): number {
+  if (a.length === 0 || b.length === 0 || a.length * b.length > 250_000) return 0
+  let previous = new Array<number>(b.length + 1).fill(0)
+  for (const line of a) {
+    const row = new Array<number>(b.length + 1).fill(0)
+    for (let j = 0; j < b.length; j++) row[j + 1] = line === b[j] ? previous[j]! + 1 : Math.max(previous[j + 1]!, row[j]!)
+    previous = row
+  }
+  return previous[b.length]!
 }

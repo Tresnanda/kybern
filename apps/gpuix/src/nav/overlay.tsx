@@ -30,9 +30,10 @@ import {
 import { muted, popoverStyle, PopupLayer, surfaceShadow } from '../composer/Menu.tsx'
 import { Icon } from '../icons.tsx'
 import { hoverTrigger, useHover } from '../kit/hover.tsx'
+import { Kbd } from '../kit/Kbd.tsx'
 import { kitOverlayOpen } from '../kit/AlertDialog.tsx'
 import { TOOLTIP_DELAY_MS, TOOLTIP_SKIP_MS } from '../kit/hoverController.ts'
-import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { ink, Label, useTheme } from '../ui.tsx'
 import { N } from './glyphs.ts'
 import { containsPoint, submenuCorridor, type Point } from './menuGeometry.ts'
 import { pointerNav } from './store.ts'
@@ -743,15 +744,15 @@ export function MenuSeparator() {
 
 // ---- tooltips ----
 
-/** Tooltip box metrics: 13px text, 8px × 4px padding, 1px border; `Kbd` chips are 20px. */
+/** Tooltip box metrics: 13px text, 8px × 4px padding, 1px border; `Kbd` chips are 18px (`kit/Kbd.tsx`). */
 const TIP_TEXT_EM = 0.53
 const TIP_HEIGHT = 4 * 2 + 17 + 2
-const TIP_KBD_HEIGHT = 4 * 2 + 20 + 2
+const TIP_KBD_HEIGHT = 4 * 2 + 18 + 2
 
 /** Estimated tooltip width; GPUIX cannot measure a layer before it paints. */
 function tipWidth(label: string, keys?: string[]) {
   const text = label.length * 13 * TIP_TEXT_EM
-  const kbd = keys?.length ? 8 + keys.length * 24 - 4 : 0
+  const kbd = keys?.length ? 8 + keys.length * 21 - 3 : 0
   return Math.round(text + kbd + 16 + 2)
 }
 
@@ -836,35 +837,6 @@ export function Tip({
           {shortcut && <Kbd keys={shortcut} />}
         </PopupLayer>
       )}
-    </div>
-  )
-}
-
-/** `Kbd` / `KbdGroup`: 20px chips, 12px medium muted text on `bg-muted`. */
-export function Kbd({ keys }: { keys: string[] }) {
-  const t = useTheme()
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-      {keys.map((key) => (
-        <div
-          key={key}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            height: 20,
-            minWidth: 20,
-            paddingLeft: 4,
-            paddingRight: 4,
-            borderRadius: 6,
-            backgroundColor: t.v('--muted'),
-          }}
-        >
-          <Label color={muted(t, 1)} size={12} weight={500}>
-            {key}
-          </Label>
-        </div>
-      ))}
     </div>
   )
 }
@@ -967,7 +939,7 @@ export function Dialog({
       />
       <PopupLayer
         still={still}
-        material={palette ? 'none' : 'popup'}
+        material="popup"
         appear="dialog"
         materialize={{ origin: [0.5, 0.5] }}
         leaving={leaving}

@@ -47,18 +47,21 @@ import { useCurrentSpaceId } from './spaces/current.ts'
 import { FONT_UI } from './theme.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from './ui.tsx'
 import { GlassEdge } from './kit/GlassEdge.tsx'
-import { frostBackdrop, frostFill, useGlass } from './platform/glass.ts'
+import { frostBackdrop, frostFill, raisedFill, useGlass } from './platform/glass.ts'
 import { addWindowKeyHandler } from './nav/keys.ts'
 import { keyboardAnswer } from './requests/Panel.tsx'
 import { isUserInput, connectorApproval } from '../../../packages/kybern-client/src/userInput.ts'
-import { answerApproval } from './transcript/Requests.tsx'
-import { FooterChip } from './composer/chips.tsx'
+import { handleCardKey, isRowCard } from './requests/actions.ts'
+import { focusCard, setComposerEmpty } from './requests/ui.ts'
+import { useControls } from './kit/controls.ts'
+import { IconButton } from './kit/IconButton.tsx'
+import { PickerChip } from './kit/PickerChip.tsx'
 import { G } from './composer/glyphs.ts'
 import { muted, PickerItem, PickerMenu } from './composer/Menu.tsx'
 import { useCompletion } from './composer/Completion.tsx'
 import { useThreadCommands } from './composer/commands.ts'
 import { tokenIcon } from './composer/token-icons.ts'
-import { ModelPicker, ModelTriggerLabel } from './composer/ModelPicker.tsx'
+import { accountLead, ModelPicker, ModelTriggerLabel } from './composer/ModelPicker.tsx'
 import { PermissionPicker } from './composer/PermissionPicker.tsx'
 import { Leave, Pop, SwapOnChange, useLeavingList } from './composer/motion.tsx'
 import { Rise } from './motion/kit.tsx'
@@ -86,17 +89,17 @@ import {
   patchDraft,
   removeQueued,
   sendToThread,
+  STEERABLE,
   setThreadMode,
   setThreadModel,
   uploadPath,
   uploadBytes,
   useComposer,
 } from './composer/store.ts'
+import { alreadyAttachedText, contentHash, newFiles } from './composer/attached.ts'
 
 export const COMPOSER_RADIUS = 19.2
 const DEFAULT_PLACEHOLDER = 'Ask anything, @ to mention, $ skills, or / commands'
-/** Agents whose running turn accepts steering (`views/Thread.tsx:388`). */
-const STEERABLE = ['claude-code', 'codex', 'pi', 'omp']
 
 export function Composer({ thread, tray }: { thread: Thread | null; tray?: ReactNode }) {
   const status = useApp((s) => s.status)
@@ -321,6 +324,8 @@ interface Attachment {
   /** Inline label (`image1`) the prompt can mention as `@image1`. */
   label: string
   path: string
+  /** A pasted image's content digest, so pasting the same picture twice attaches it once (`composer/attached.ts`). */
+  hash?: string
 }
 
 /**
@@ -397,6 +402,11 @@ export function ComposerView(input: ComposerViewProps) {
   const [text, setText] = useState(saved?.text ?? '')
   const [attachments, setAttachments] = useState<Attachment[]>(saved?.attachments ?? [])
   const [uploading, setUploading] = useState(0)
+  // What the composer holds or is uploading, read by the add paths so a repeat is skipped even mid-upload.
+  const attachmentsNow = useRef(attachments)
+  attachmentsNow.current = attachments
+  const pendingPaths = useRef(new Set<string>())
+  const pendingHashes = useRef(new Set<string>())
   // A Finder drag over the card (`dragOver` in the desktop composer), eased by `DropHighlight`.
   const [dragOver, setDragOver] = useState(false)
   const [sending, setSending] = useState(false)
@@ -443,6 +453,7 @@ export function ComposerView(input: ComposerViewProps) {
 
   const empty = text.trim().length === 0 && attachments.length === 0
   useEffect(() => { props.onEmptyChange?.(empty) }, [empty])
+  useEffect(() => { setComposerEmpty(props.draftKey, empty); return () => setComposerEmpty(props.draftKey, true) }, [props.draftKey, empty])
   const permissionUnsupported = provider?.kind !== 'cursor' && !!providers.find(p => p.kind === provider?.kind && !p.supported_permission_modes.includes(mode))
   const disabledReason = !connected ? 'Reconnect to send a message.' : props.readOnly ? 'This conversation is read-only.' : props.sendDisabled ? props.sendDisabledReason ?? 'Sending is unavailable.' : permissionUnsupported ? 'Choose a permission mode supported by this agent.' : sending ? 'Sending…' : uploading > 0 ? 'Wait for attachments to finish uploading.' : empty ? 'Write a message or attach a file.' : null
   const canSend = !disabledReason
@@ -482,11 +493,14 @@ export function ComposerView(input: ComposerViewProps) {
     if (pane.frozen || !editor.current || renderer.getFocusedElementId?.() !== editor.current.id) return false
     const m = e.modifiers
     if (m?.cmd || m?.alt || m?.ctrl || m?.shift) return false
-    if (!empty || sending || !props.currentThreadId || !/^[1-4]$/.test(e.key ?? '')) return false
+    if (!empty || sending || !props.currentThreadId || !/^([1-9]|escape|up|down)$/.test(e.key ?? '')) return false
     const approval = pane.get().open.pendingApprovals[0]
-    if (!approval) return false
+    if (!approval || !isRowCard(approval)) return false
+    // Return is never taken from the composer, so a stray Enter cannot approve anything; ↑ ↓ hand the keyboard to the card.
+    if (e.key === 'up' || e.key === 'down') { focusCard(); return handleCardKey(approval, props.currentThreadId, e.key) }
     keyboardAnswer()
-    if (!answerApproval(approval, props.currentThreadId, Number(e.key))) return false
+    if (!handleCardKey(approval, props.currentThreadId, e.key!)) return false
+    if (!/^[1-9]$/.test(e.key!)) return true
     approvalDigit.current = e.key!
     // GPUIX 0.10 delivers events asynchronously and cannot prevent native text
     // insertion. Remove only the exact consumed digit, never subsequent typing.
@@ -534,8 +548,6 @@ export function ComposerView(input: ComposerViewProps) {
       setSending(false)
     }
   }
-  const attachmentsNow = useRef(attachments)
-  attachmentsNow.current = attachments
   useEffect(() => onComposerRestore(props.draftKey, (draft) => {
     // A label the draft's own attachments took meanwhile is renumbered, in the restored text too.
     const taken = attachmentsNow.current.map((a) => a.label), renamed = new Map<string, string>()
@@ -553,6 +565,9 @@ export function ComposerView(input: ComposerViewProps) {
   }), [props.draftKey])
 
   const addClipboardImage = async (image: ClipboardImage) => {
+    const hash = contentHash(image.data)
+    if (attachmentsNow.current.some((a) => a.hash === hash) || pendingHashes.current.has(hash)) { setFeedback(alreadyAttachedText([image.name ?? 'This image'])); focusEditor(); return }
+    pendingHashes.current.add(hash)
     setUploading((n) => n + 1)
     setError(null)
     const name = image.name ?? 'pasted-image.png'
@@ -560,23 +575,29 @@ export function ComposerView(input: ComposerViewProps) {
       const info = await uploadBytes(name, image.mediaType, image.data)
       // Native images accept data URIs, so previews need no temporary file.
       const path = `data:${image.mediaType};base64,${Buffer.from(image.data).toString('base64')}`
-      setAttachments((list) => [...list, { ...info, path, label: nextAttachmentLabel(info.media_type, list.map((a) => a.label)) }])
+      setAttachments((list) => list.some((a) => a.hash === hash) ? list : [...list, { ...info, path, hash, label: nextAttachmentLabel(info.media_type, list.map((a) => a.label)) }])
     } catch (e) { setError(`Unable to attach image: ${errorText(e)}`) }
-    finally { setUploading((n) => n - 1); focusEditor() }
+    finally { pendingHashes.current.delete(hash); setUploading((n) => n - 1); focusEditor() }
   }
 
   const addFiles = async (picked?: string[]) => {
     const paths = picked ?? (await renderer.promptForPaths?.({ files: true, multiple: true, prompt: 'Attach' }))
     if (!paths?.length) return
-    setFeedback(null)
-    setUploading((n) => n + paths.length)
-    for (const path of paths) {
+    // A file already attached (or on its way) is not attached again, however its path is spelled (`fileKey`).
+    const { fresh, duplicates } = newFiles([...attachmentsNow.current, ...[...pendingPaths.current].map((path) => ({ path }))], paths)
+    setFeedback(duplicates.length ? alreadyAttachedText(duplicates.map((path) => path.split('/').pop() || path)) : null)
+    if (!fresh.length) { focusEditor(); return }
+    for (const path of fresh) pendingPaths.current.add(path)
+    setUploading((n) => n + fresh.length)
+    for (const path of fresh) {
       try {
         const info = await uploadPath(path)
-        setAttachments((list) => [...list, { ...info, path, label: nextAttachmentLabel(info.media_type, list.map((a) => a.label)) }])
+        // Checked again as it lands: another add may have raced it between this upload and the next render.
+        setAttachments((list) => newFiles(list, [path]).fresh.length ? [...list, { ...info, path, label: nextAttachmentLabel(info.media_type, list.map((a) => a.label)) }] : list)
       } catch (e) {
         setError(`Unable to attach ${path.split('/').pop()}: ${errorText(e)}`)
       } finally {
+        pendingPaths.current.delete(path)
         setUploading((n) => n - 1)
       }
     }
@@ -607,6 +628,7 @@ export function ComposerView(input: ComposerViewProps) {
     }
   }
 
+  const triggerAccount = provider && provider.instance !== 'default' ? props.accounts.find(a => a.provider.kind === provider.kind && a.provider.instance === provider.instance) ?? null : null
   const modelName = current?.display_name ?? (model ? uncataloguedName(model) : provider ? PROVIDER_LABEL[provider.kind] : '')
 
   return (
@@ -736,9 +758,7 @@ export function ComposerView(input: ComposerViewProps) {
               side="top"
               align="start"
               trigger={(open) => (
-                <FooterChip square pressed={open}>
-                  {() => <Icon name="plus" size={18} color={t.text} />}
-                </FooterChip>
+                <IconButton icon="plus" label="Add" active={open} />
               )}
             >
               <PickerItem id="files" testId="add-files" onSelect={() => void addFiles()}>
@@ -778,17 +798,15 @@ export function ComposerView(input: ComposerViewProps) {
                   lastModelRefresh.current = Date.now()
                   void props.onReloadModels(true).catch((e) => setError(`Unable to reload models: ${errorText(e)}`))
                 }}
-                label={(color) => (
+                lead={accountLead(provider.kind, triggerAccount)}
+                label={() => (
                   <ModelTriggerLabel
-                    kind={provider.kind}
-                    account={provider.instance !== 'default' ? props.accounts.find(a => a.provider.kind === provider.kind && a.provider.instance === provider.instance) ?? null : null}
+                    account={triggerAccount}
                     model={modelName}
                     qualifier={qualifier}
                     fast={traits.fast}
                     effort={(current?.display_name ?? model) && effortLabel ? formatEffort(effortLabel) : null}
                     traits={traits.labels}
-                    chevron={canPickModel || canReload || canPickProvider}
-                    color={color}
                   />
                 )}
               />
@@ -816,14 +834,15 @@ export function ComposerView(input: ComposerViewProps) {
  * spinner or the stop square grows in). A keyboard send still swaps because it reports state, not navigation, and never delays input.
  */
 export function SendButton({ running, sending, canSend, steering, disabledReason, onSubmit, onStop }: { running: boolean; sending: boolean; canSend: boolean; steering: boolean; disabledReason?: string | null; onSubmit: () => void; onStop?: () => void }) {
-  const t = useTheme()
-  const ink = t.v('--color-background-elevated-primary-opaque')
+  const c = useControls()
+  const inactive = !running && !sending && !canSend
+  const glyph = inactive ? c.disabled.fg : c.send.fg
   return (
     <Tip label={running ? 'Stop generation' : disabledReason ?? (steering ? 'Steer now ⌘↵' : 'Send ↵')}>
-      <RoundButton testId={running ? 'stop' : 'send'} disabled={running ? false : !canSend} onClick={running ? onStop : onSubmit}>
+      <RoundButton testId={running ? 'stop' : 'send'} disabled={running ? false : !canSend} inactive={inactive} onClick={running ? onStop : onSubmit}>
         {/* `IconSwap` arrow ↔ spinner while sending, arrow ↔ stop square while the thread runs (`Composer.tsx:1441`); the spinner is the shared-clock loader. */}
         <SwapOnChange kind="icon" active={running ? 'stop' : sending ? 'sending' : 'send'} style={{ width: 20, height: 20 }}>
-          {running ? <Icon source={G.stop} size={10} color={ink} /> : sending ? <MatrixLoader rgb={rgbOf(ink)} alpha={1} gap={1.5} /> : <Icon name="send" size={20} color={ink} />}
+          {running ? <Icon source={G.stop} size={10} color={glyph} /> : sending ? <MatrixLoader rgb={rgbOf(glyph)} alpha={1} gap={1.5} /> : <Icon name="send" size={20} color={glyph} />}
         </SwapOnChange>
       </RoundButton>
     </Tip>
@@ -838,10 +857,15 @@ function rgbOf(color: string): [number, number, number] {
   return [r, g, b]
 }
 
-/** `COMPOSER_FOOTER_SEND_BUTTON_CLASS_NAME` on a `prominent` button: the ink circle, 30% when off. It grows to 1.05 on hover (`hover:scale-105`, 150 ms) and squashes on press. */
-function RoundButton({ children, disabled, onClick, onMouseEnter, onMouseLeave, onMouseDown, onFocus, onBlur, onKeyDown, testId }: {
+/**
+ * Direction C Send (`useControls().send`): a 32 px circle (28 in a split pane) in the accent tint with the tinted glyph; an inactive
+ * Send drops to the disabled fill and glyph. Stop is the same circle. It still grows to 1.05 on hover and squashes on press.
+ */
+function RoundButton({ children, disabled, inactive, onClick, onMouseEnter, onMouseLeave, onMouseDown, onFocus, onBlur, onKeyDown, testId }: {
   children: ReactNode
   disabled?: boolean
+  /** Looks switched off (a Send with nothing to send); a sending Send is disabled but keeps its tint. */
+  inactive?: boolean
   onClick?: () => void
   /** The tooltip trigger's handlers (`Tip` clones them onto its child). */
   onMouseEnter?: () => void
@@ -852,7 +876,7 @@ function RoundButton({ children, disabled, onClick, onMouseEnter, onMouseLeave, 
   onKeyDown?: (event: { key?: string }) => void
   testId: string
 }) {
-  const t = useTheme()
+  const c = useControls()
   const [hover, setHover] = useState(false)
   // `surfaceMode === "split" && "!size-7"`: 28px in a split pane.
   const size = usePaneCompact() ? 28 : 32
@@ -877,10 +901,9 @@ function RoundButton({ children, disabled, onClick, onMouseEnter, onMouseLeave, 
         height: size,
         borderRadius: size / 2,
         flexShrink: 0,
-        backgroundColor: t.text,
-        opacity: disabled ? 0.3 : 1,
+        backgroundColor: inactive ? c.disabled.bg : c.send.bg,
         cursor: disabled ? 'default' : 'pointer',
-        active: disabled ? {} : { opacity: 0.8 },
+        ...(disabled ? {} : { focusVisible: { outlineWidth: 2, outlineColor: c.focus, outlineOffset: 0 } }),
       }}
     >
       {children}
@@ -905,36 +928,22 @@ function RunningControls({
   onPromptMode: (mode: 'queue' | 'steer') => void
 }) {
   const t = useTheme()
-  const [hover, setHover] = useState(false)
   // `@max-[360px]:gap-0 @max-[360px]:px-1.5`: the label goes (it stays for screen readers) and the clock, or the spinner while sending, stands in.
   const icon = !useFooterFit().model
+  const text = sending ? 'Sending…' : steering ? 'Steer now' : 'Queue'
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
-      <div
+      <PickerChip
+        bare
         testId="queue"
-        onMouseEnter={() => setHover(true)}
-        onMouseLeave={() => setHover(false)}
-        onClick={canSend ? onSubmit : undefined}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: icon ? 0 : 4,
-          paddingLeft: icon ? 6 : 8,
-          paddingRight: icon ? 6 : 8,
-          paddingTop: 2,
-          paddingBottom: 2,
-          borderRadius: 10,
-          backgroundColor: hover && canSend ? t.buttonSecondaryHover : t.buttonSecondary,
-          opacity: canSend ? 1 : 0.64,
-          cursor: canSend ? 'pointer' : 'default',
-        }}
+        chevron={false}
+        disabled={!canSend}
+        onClick={onSubmit}
+        label={text}
+        {...(icon ? (sending ? { lead: <Spinner size={12} color={t.text} /> } : { icon: 'clock' }) : {})}
       >
-        {icon ? (sending ? <Spinner size={12} color={t.text} /> : <Icon name="clock" size={14} color={t.text} />) : (
-          <Label color={t.text} size={13} weight={500} lineHeight={18}>
-            {sending ? 'Sending…' : steering ? 'Steer now' : 'Queue'}
-          </Label>
-        )}
-      </div>
+        {icon ? null : text}
+      </PickerChip>
       {canSteer && (
         <PickerMenu
           testId="delivery"
@@ -942,9 +951,7 @@ function RunningControls({
           align="end"
           width={240}
           trigger={(open) => (
-            <FooterChip square pressed={open}>
-              {(color) => <Icon name="chevronDown" size={12} color={color} />}
-            </FooterChip>
+            <IconButton icon="chevronDown" label="Delivery" glyph={12} active={open} />
           )}
         >
           <PickerItem id="queue" onSelect={() => onPromptMode('queue')} style={{ paddingTop: 4, paddingBottom: 4 }}>
@@ -972,6 +979,7 @@ function RunningControls({
 /** Image tiles and file cards above the editor (`Composer.tsx:1143-1171`). */
 export function Attachments({ items, uploading, onRemove, onPreviewClose }: { items: Attachment[]; uploading: number; onRemove: (a: Attachment) => void; onPreviewClose?: () => void }) {
   const t = useTheme()
+  const g = useGlass()
   const renderer = useGpuixRequired()
   // A clicked image tile morphs into the shared preview out of the tile's rect (`motion/ImageMorph.tsx`); the tile hides while its
   // image is away.
@@ -1043,7 +1051,7 @@ export function Attachments({ items, uploading, onRemove, onPreviewClose }: { it
                 borderRadius: 12,
                 borderWidth: 1,
                 borderColor: t.borderLight,
-                backgroundColor: t.variant === 'dark' ? t.composer : '#ffffff',
+                backgroundColor: raisedFill(g, t.variant === 'dark' ? t.composer : '#ffffff'),
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, flexShrink: 0, borderRadius: 8, backgroundColor: elevated }}>

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.12.0
+
+<!-- kybern-release-title: Tabs, new controls and real glass in Kybern GPUIX -->
+<!-- kybern-release-summary: Open files, diffs, terminals, the browser and more as tabs inside a thread, answer agents from clearer approval cards, follow their work in compact rows, and use redesigned controls on a glass window that now really blurs, with far less memory used by images. -->
+
+- Open files, diffs, terminals, the browser, Review, pull requests, notes, tasks, visuals, artifacts and diagrams as **tabs in the thread header**, next to the chat. A single click in Explorer or Changes opens a preview tab (italic) that the next click replaces. Tabs are kept per thread across restarts. ⌘1 goes to the chat, ⌘2–⌘9 to a tab, ⌃Tab cycles, ⌘W closes a tab and ⌘⇧T reopens one.
+- Pin a subagent or a delegated agent as a tab from the Agents panel or its row in the chat to watch it live; a delegated agent's tab has its own composer.
+- Split tabs as well as threads: ⌘\ and ⌘⇧\ move the active tab into a new group to the right or below, up to four groups, each with its own tabs. ⌘⌥ and an arrow key moves between groups. The dock keeps the lists you open things from.
+- Redesign the buttons and controls: one calm, tinted main action per card or dialog instead of a white pill, clear secondary and ghost buttons, disabled buttons that look disabled, one checkbox, radio, segmented control, chip and text field style, and select buttons that show names instead of ids.
+- On a glass window, menus, dialogs, sheets and the palette now blur what's behind them, and the strip above the composer, code blocks and your messages follow the glass instead of staying solid.
+- Remove the dark band above the composer; text scrolls under it and blurs the same way every time.
+- Fade long tab titles instead of cutting them with "…", and separate thread tabs with thin bars.
+- Answer agents from clearer request cards: every choice is a numbered row (no more **⋯** menu), the full command shows with each chained step on its own line, **Allow … for this session** says exactly what it allows, and **Decline** lets you tell the agent what to do instead. Press a number, use ↑ ↓ and Return, or Esc to cancel the turn. Every kind of request — commands, edits, plans, app access, computer use, notes and tasks, permissions, secrets and questions — uses the same layout.
+- Follow agent work in compact rows: everything an agent does between two messages folds into one line such as "Edited 1 file · ran 2 commands · read 3 files", with failures in red and the current step while it works. Open it to see each step as a file, command or search chip; click a file to open it as a tab. New rows slide in smoothly as the agent works.
+- Send a queued follow-up into the running turn with **Steer now** on its row, for agents that accept steering (Claude Code, Codex, Pi and Oh My Pi).
+- Mark what's already attached in the **@** and **$** pickers; pick an item again to remove it, and attaching the same file twice no longer adds it twice. Deleting a chip in the composer no longer deletes the one next to it.
+- Zoom into images: tall screenshots open fitted to their width and scroll, double-click switches between fit and 100%, and ⌘+, ⌘−, ⌘0, ⌘-scroll and dragging zoom and pan, in the viewer and in image tabs.
+- Use far less memory for images in replies and attachments: they're decoded at the size they're shown and the viewer opens the original, so a long session's peak went from about 700 MB to about 300 MB. Kybern GPUIX also writes a small memory log (`memory.jsonl`, a line a minute) so memory spikes can be traced; `KYBERN_MEMORY_LOG=0` turns it off.
+
 ## 0.11.1
 
 <!-- kybern-release-title: Caps Lock types capitals in Kybern GPUIX -->

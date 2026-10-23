@@ -10,7 +10,7 @@ registerHooks({
   },
 })
 
-const { chunkKey, chunkWork } = await import("./src/lib/workChunks.ts")
+const { chunkKey, chunkRuns, chunkWork } = await import("./src/lib/workChunks.ts")
 
 let n = 0
 const id = () => `b${++n}`
@@ -114,4 +114,60 @@ test("messages to other threads keep their own rows instead of folding into a to
   const send = (extra) => tool("mcp__kybern__kybern_thread_send", { thread_id: "t", body: "Hi" }, extra)
   assert.equal(shape(chunkWork([read(), send(), send(), read()], none)), "1 1 1 1")
   assert.equal(shape(chunkWork([read(), read(), send()], none)), "T2 1")
+})
+
+// ---- chunkRuns: one run per gap between narration ----
+
+const runShape = (chunks) => chunks.map((chunk) => (chunk.kind === "run" ? `R${chunk.blocks.length}` : chunk.kind === "single" ? (chunk.block.kind === "assistant" ? (chunk.block.text ? "P" : "t") : chunk.block.kind[0]) : chunk.kind === "subagents" ? `S${chunk.blocks.length}` : chunk.kind === "delegations" ? `D${chunk.blocks.length}` : `T${chunk.blocks.length}`)).join(" ")
+const prose = () => ({ ...thinking(), text: "Narration", thinking: "" })
+const thoughtThenProse = () => ({ ...thinking(), text: "Narration", thinking: "hmm" })
+const approval = () => ({ kind: "approval", id: id(), turnId: "t", at: "", seq: n, approval: {}, decision: null })
+const process = () => ({ kind: "runtime_task", id: id(), turnId: "t", at: "", seq: n, task: { id: `task-${n}`, kind: "process", status: "running" } })
+
+test("every stretch of work between narration is one run, whatever its calls' state", () => {
+  const pending = read()
+  pending.complete = false
+  const failed = read()
+  failed.isError = true
+  assert.equal(runShape(chunkRuns([read(), tool("Bash", { command: "x" }), thinking(), pending, failed, read()], none)), "R6")
+  assert.equal(runShape(chunkRuns([read(), prose(), read(), read(), prose()], none)), "R1 P R2 P")
+  assert.equal(runShape(chunkRuns([read()], none)), "R1", "one call is a run too")
+})
+
+test("reasoning joins the run; a block with reasoning and text gives its reasoning to the run and stands for its text", () => {
+  const mixed = thoughtThenProse()
+  const chunks = chunkRuns([read(), mixed, read()], none)
+  assert.equal(runShape(chunks), "R2 P R1")
+  assert.equal(chunks[0].blocks.at(-1), mixed, "the reasoning is the run's last member")
+  assert.equal(chunks[1].block, mixed)
+  assert.equal(runShape(chunkRuns([thinking(), read(), thinking(), read()], none)), "R4")
+})
+
+test("approvals, mid-turn messages and launches still split runs", () => {
+  const user = { kind: "user", id: id(), turnId: "t", at: "", seq: n, message: { parts: [] } }
+  assert.equal(runShape(chunkRuns([read(), approval(), read()], none)), "R1 a R1")
+  assert.equal(runShape(chunkRuns([read(), user, read()], none)), "R1 u R1")
+  assert.equal(runShape(chunkRuns([read(), launch(), launch(), read()], none)), "R1 S2 R1")
+  assert.equal(runShape(chunkRuns([read(), delegate(), read()], none)), "R1 t R1")
+  const send = tool("mcp__kybern__kybern_thread_send", { thread_id: "x", body: "Hi" })
+  assert.equal(runShape(chunkRuns([read(), send, read()], none)), "R1 t R1")
+})
+
+test("background processes stay in the run; agent tasks stand as launches", () => {
+  assert.equal(runShape(chunkRuns([tool("Bash", { command: "dev" }), process(), read()], none)), "R3")
+  assert.equal(runShape(chunkRuns([read(), runtimeAgent(), read()], none)), "R1 r R1")
+})
+
+test("a run keeps its key as it grows, and as its first reasoning gains text", () => {
+  const think = thinking()
+  const blocks = [think]
+  const key = chunkKey(chunkRuns(blocks, none)[0])
+  assert.equal(key, `group:${think.id}`)
+  blocks.push(read(), read())
+  assert.equal(chunkKey(chunkRuns(blocks, none)[0]), key)
+  blocks[0] = { ...think, text: "Now the answer" }
+  const after = chunkRuns(blocks, none)
+  assert.equal(runShape(after), "R1 P R2")
+  assert.equal(chunkKey(after[0]), key)
+  assert.equal(chunkKey(after[1]), think.id, "the narration's key is the block's own, distinct from the run")
 })

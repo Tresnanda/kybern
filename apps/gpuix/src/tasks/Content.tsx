@@ -10,9 +10,8 @@ import { openLink } from '../notes/NoteEditor.tsx'
 import { notesTokens } from '../notes/kit.tsx'
 import { FONT_UI } from '../theme.ts'
 import { ink, useTheme } from '../ui.tsx'
+import { Checkbox } from '../kit/Checkbox.tsx'
 import { taskTyping } from './store.ts'
-
-const TICK = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><path d="M2.2 5.2 4.1 7.1 7.9 3" fill="none" stroke="#000" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'
 
 /** `.tk-dtitle`: 28/34 at 650, no box. Return commits and moves to the description; Escape puts the saved title back. */
 export function TitleField({ value, saved, onChange, onCommit, onEnter }: { value: string; saved: string; onChange: (value: string) => void; onCommit: () => void; onEnter: () => void }) {
@@ -95,10 +94,8 @@ export function CriterionRow({ index, text, checked, focusToken, onToggle, onTex
   // The row asked to take focus (after Return, Backspace or Add): once it is mounted.
   useEffect(() => { if (focusNow && ref.current) renderer?.focusElement?.(ref.current.id) }, [focusNow, focusToken])
   return (
-    <div testId={`task-criterion-row-${index}`} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, minHeight: 32, paddingTop: 4, paddingBottom: 4 }}>
-      <div testId={`task-criterion-${index}`} role="checkbox" aria-checked={checked} aria-label={text || "Criterion"} tabIndex={0} onClick={onToggle} onKeyDown={(e) => { if (e.key === "space") { e.preventDefault(); onToggle() } }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, marginTop: 4, borderRadius: 4.5, flexShrink: 0, cursor: 'pointer', ...(checked ? { backgroundColor: k.checkOn } : { borderWidth: 1.5, borderColor: k.fg4, hover: { borderColor: k.fg3 } }) }}>
-        {checked && <svg source={TICK} style={{ width: 10.5, height: 10.5, color: t.surface, pointerEvents: 'none' }} />}
-      </div>
+    <div testId={`task-criterion-row-${index}`} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, minHeight: 32, paddingTop: 4, paddingBottom: 4 }}>
+      <Checkbox testId={`task-criterion-${index}`} tone="neutral" aria-label={text || 'Criterion'} checked={checked} onCheckedChange={onToggle} style={{ marginTop: 4 }} />
       <textarea
         ref={ref}
         testId={`task-criterion-text-${index}`}

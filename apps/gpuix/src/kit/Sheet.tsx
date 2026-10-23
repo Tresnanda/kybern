@@ -16,10 +16,15 @@ import { createContext, useContext, useState, type ReactNode } from 'react'
 import { muted } from '../composer/Menu.tsx'
 import { useSettingsModal } from '../settings/controls.tsx'
 import { Label, useTheme } from '../ui.tsx'
+import { frostBackdrop, frostFill, useGlass } from '../platform/glass.ts'
 import {
-  CLOSE_GLYPH, EASE_DEFAULT, EASE_IN_OUT_CSS, KitButton, ModalLayer, useEscapeLayer, usePresence, useReturnFocus, WindowSized,
+  CLOSE_GLYPH, EASE_DEFAULT, EASE_IN_OUT_CSS, ModalLayer, useEscapeLayer, usePresence, useReturnFocus, WindowSized,
+  controlVariant,
   type ButtonVariant,
 } from './AlertDialog.tsx'
+import type { ButtonVariant as ControlVariant } from './Button.tsx'
+import { Button } from './Button.tsx'
+import { IconButton } from './IconButton.tsx'
 
 export type SheetSide = 'right' | 'left' | 'top' | 'bottom'
 const DURATION = 0.2
@@ -55,6 +60,7 @@ export function Sheet({
   testId?: string
 }) {
   const t = useTheme()
+  const g = useGlass()
   const [own, setOwn] = useState(defaultOpen)
   const open = openProp ?? own
   const setOpen = (next: boolean) => { if (openProp === undefined) setOwn(next); onOpenChange?.(next) }
@@ -99,13 +105,14 @@ export function Sheet({
           anchor={side === 'bottom' ? 'bottomLeft' : 'topLeft'}
           priority={6}
           radius={radius}
+          backdrop={frostBackdrop(g, 'menus', radius)}
           testId={testId}
           focus
           onKeyDown={(e) => { if (e.key === 'escape' && escape.claim()) setOpen(false) }}
           // A press in a nested popup (an alert's card, a select hanging past the panel) is not a scrim press.
           onMouseDownOutside={dismissible ? () => { if (escape.isTop()) setOpen(false) } : undefined}
           // `shadow-lg/5`: two 5% layers; the wrapper carries the wider one, the panel the tighter one.
-          style={{ display: 'flex', borderRadius: radius, boxShadow: { offsetX: 0, offsetY: 10, blurRadius: 15, spreadRadius: -3, color: 'rgba(0, 0, 0, 0.05)' } }}
+          style={{ display: 'flex', borderRadius: radius, ...(g.on ? {} : { boxShadow: { offsetX: 0, offsetY: 10, blurRadius: 15, spreadRadius: -3, color: 'rgba(0, 0, 0, 0.05)' } }) }}
         >
           <div
             style={{
@@ -114,18 +121,18 @@ export function Sheet({
               position: 'relative',
               width: panelWidth,
               ...(vertical ? { height: H } : { maxHeight: H - 48 }),
-              backgroundColor: t.v('--popover'),
-              borderColor: t.border,
+              backgroundColor: frostFill(g, 'menus', t.v('--popover'), 'frostMenu'),
+              borderColor: g.on ? g.frostRim : t.border,
               ...border,
               borderRadius: radius,
               overflow: 'hidden',
-              boxShadow: { offsetX: 0, offsetY: 4, blurRadius: 6, spreadRadius: -4, color: 'rgba(0, 0, 0, 0.05)' },
+              ...(g.on ? {} : { boxShadow: { offsetX: 0, offsetY: 4, blurRadius: 6, spreadRadius: -4, color: 'rgba(0, 0, 0, 0.05)' } }),
             }}
           >
             {children}
             {showCloseButton && (
               <div style={{ position: 'absolute', top: 8, right: 8 }}>
-                <KitButton variant="ghost" size="icon" icon={CLOSE_GLYPH} label="Close" testId={testId ? `${testId}-close` : undefined} onClick={() => setOpen(false)} />
+                <IconButton icon={CLOSE_GLYPH} label="Close" size="lg" testId={testId ? `${testId}-close` : undefined} onClick={() => setOpen(false)} />
               </div>
             )}
           </div>
@@ -189,7 +196,8 @@ export function SheetFooter({ children, variant = 'default' }: { children: React
 }
 
 /** `SheetClose render={<Button … />}`: a button that runs `onClick`, then closes the sheet. */
-export function SheetClose({ children, variant = 'outline', onClick, disabled, testId }: { children: string; variant?: ButtonVariant; onClick?: () => void; disabled?: boolean; testId?: string }) {
+export function SheetClose({ children, variant = 'secondary', onClick, disabled, testId }: { children: string; variant?: ButtonVariant | ControlVariant; onClick?: () => void; disabled?: boolean; testId?: string }) {
   const ctx = useContext(SheetContext)
-  return <KitButton variant={variant} disabled={disabled} testId={testId} onClick={() => { onClick?.(); ctx?.close() }}>{children}</KitButton>
+  const { variant: kind, danger } = controlVariant(variant)
+  return <Button size="lg" variant={kind} danger={danger} disabled={disabled} testId={testId} onClick={() => { onClick?.(); ctx?.close() }}>{children}</Button>
 }

@@ -9,7 +9,7 @@
 // Rule for new surfaces: on whole-window glass never composite onto `t.surface` or paint an opaque fill on a content-area
 // surface; use `raisedFill`, `wash` or `frostFill`. Never put an outer shadow under a fill with alpha < 0.85.
 import { backdropAllowed } from './material.ts'
-import { FROST_ENABLED, type FrostClass } from './translucency.ts'
+import { FROST_ENABLED, frostQuietInk, type FrostClass } from './translucency.ts'
 import { BACKDROP, type BackdropFilter } from '../native/backdrop.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { over, type GlassTokens, type Theme } from '../theme.ts'
@@ -33,6 +33,24 @@ export const frostBackdrop = (g: GlassTokens, c: FrostClass, radius: number): Ba
 export function frostFill(g: GlassTokens, c: FrostClass, solid: string, tint: 'frost' | 'frostMenu' | 'frostStacked' = 'frost'): string {
   if (!g.on) return solid
   return frosted(g, c) ? g[tint] : g.denseFloat
+}
+const quiet = new WeakMap<Theme, Map<string, Theme>>()
+/**
+ * The theme for what sits on a frosted panel (request cards): secondary, tertiary, placeholder and disabled text lifted so they
+ * stay readable at the glass readability floor (`frostQuietInk`). The theme itself off glass. Cached per theme and fill, so the
+ * kit's per-theme caches (`controlsFor`) hold.
+ */
+export function frostQuietTheme(t: Theme, g: GlassTokens, fill: string): Theme {
+  if (!g.on) return t
+  let byFill = quiet.get(t)
+  if (!byFill) quiet.set(t, byFill = new Map())
+  let lifted = byFill.get(fill)
+  if (!lifted) {
+    const ink = frostQuietInk(t.variant, t.raw, fill)
+    lifted = ink ? { ...t, textSecondary: ink.secondary, textTertiary: ink.tertiary, textPlaceholder: ink.tertiary } : t
+    byFill.set(fill, lifted)
+  }
+  return lifted
 }
 /** A frost pill's fill under the pointer. */
 export const frostHoverFill = (g: GlassTokens, c: FrostClass, solid: string) => !g.on ? solid : frosted(g, c) ? g.frostHover : g.denseHover

@@ -10,7 +10,9 @@ import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { Chevron } from '../motion/Chevron.tsx'
 import { enterTransform } from '../motion/kit.tsx'
-import { Button, PageBlock, Row, Section } from './controls.tsx'
+import { PageBlock, Row, Section } from './controls.tsx'
+import { Button } from '../kit/Button.tsx'
+import { useControls } from '../kit/controls.ts'
 import { Segmented } from '../kit/Segmented.tsx'
 import { Slider } from '../kit/Slider.tsx'
 import { FocusRing, Switch, useFocusRing } from '../kit/Switch.tsx'
@@ -111,12 +113,12 @@ function VariantSection({ variant, active, save }: { variant: ThemeVariant; acti
     : undefined
   const inactive = prefs.theme === 'system' ? `Used when your system switches to ${variant}` : variant === 'dark' ? 'Used when you choose Dark or System' : 'Used when you choose Light or System'
   const accessory = active ? <Label color={t.textSecondary} size={13} lineHeight={18}>In use now</Label>
-    : <><Label color={t.textSecondary} size={13} lineHeight={18}>{inactive}</Label><Button variant="outline" size="xs" testId={`settings-use-${variant}`} onClick={() => save(() => setAppearance({ theme: variant }))}>{`Use ${variant} theme`}</Button></>
+    : <><Label color={t.textSecondary} size={13} lineHeight={18}>{inactive}</Label><Button variant="secondary" size="sm" testId={`settings-use-${variant}`} onClick={() => save(() => setAppearance({ theme: variant }))}>{`Use ${variant} theme`}</Button></>
   const summary = `Sidebar ${m.sidebarOpacity}% · Content ${m.contentOpacity}% · Surface ${m.surfaceOpacity ?? SURFACE_DEFAULT[variant]}% · Blur ${m.blur === null ? 'Auto' : m.blur}`
 
   return <Section title={`${Name} theme`} accessory={accessory}>
     <Row title="Window" description="Translucent lets your desktop show through Kybern." status={status}>
-      <Segmented testId={`settings-window-${variant}`} aria-label={`${Name} theme window material`} textSize={13} segmentPadX={10} options={WINDOW_OPTIONS} value={m.material} onChange={(material) => { setDisclose(true); patch({ material: material as typeof m.material }) }} />
+      <Segmented testId={`settings-window-${variant}`} aria-label={`${Name} theme window material`} options={WINDOW_OPTIONS} value={m.material} onChange={(material) => { setDisclose(true); patch({ material: material as typeof m.material }) }} />
     </Row>
     {translucent && <div key="sidebar" paintTransform={rise}><Row title="Sidebar only" description="Keep the conversation solid. Only the sidebar and window frame are translucent.">
       <Switch aria-label={`${Name} theme translucent sidebar only`} testId={`settings-sidebar-only-${variant}`} checked={sidebarOnly} onCheckedChange={(next) => patch({ sidebarOnly: next })} />
@@ -132,17 +134,18 @@ function VariantSection({ variant, active, save }: { variant: ThemeVariant; acti
       <Slider testId={`settings-surface-opacity-${variant}`} aria-label={`${Name} theme surface opacity`} ariaValueText={`${surfaceValue} percent`} value={surfaceValue} min={SURFACE_MIN} max={100} valueLabel={`${surfaceValue}%`} onChange={surface.onChange} onCommit={surface.onCommit} />
     </Row></div>}
     {translucent && open && <div key="blur" paintTransform={advanced}><Row title="Blur" description="How much your desktop is blurred behind the whole window. Auto uses the macOS material.">
-      {m.blur !== null && <Button variant="outline" size="xs" testId={`settings-blur-auto-${variant}`} label={`${Name} theme automatic blur`} onClick={() => patch({ blur: null })}>{active && unavailable ? 'Unavailable, use Auto' : 'Auto'}</Button>}
+      {m.blur !== null && <Button variant="secondary" size="sm" testId={`settings-blur-auto-${variant}`} label={`${Name} theme automatic blur`} onClick={() => patch({ blur: null })}>{active && unavailable ? 'Unavailable, use Auto' : 'Auto'}</Button>}
       <Slider testId={`settings-blur-${variant}`} aria-label={`${Name} theme blur`} ariaValueText={blurValue === null ? 'Automatic' : `${blurValue} points`} value={blurValue ?? VIBRANCY_EQUIVALENT_BLUR} min={BLUR_MIN} max={BLUR_MAX} muted={blurValue === null} valueLabel={blurValue === null ? 'Auto' : String(blurValue)} onChange={blur.onChange} onCommit={blur.onCommit} />
     </Row></div>}
     {translucent && open && <div key="reset" paintTransform={advanced} style={{ display: 'flex', justifyContent: 'flex-end', paddingLeft: 18, paddingRight: 18, paddingTop: 12, paddingBottom: 12 }}>
-      <Button variant="outline" size="xs" testId={`settings-reset-${variant}`} label={`Reset ${lower} theme window settings to defaults`} disabled={isAdvancedDefault({ ...m, contentOpacity: contentValue }, variant)} onClick={() => patch(advancedDefaults(m))}>Reset to defaults</Button>
+      <Button variant="ghost" size="sm" testId={`settings-reset-${variant}`} label={`Reset ${lower} theme window settings to defaults`} disabled={isAdvancedDefault({ ...m, contentOpacity: contentValue }, variant)} onClick={() => patch(advancedDefaults(m))}>Reset to defaults</Button>
     </div>}
   </Section>
 }
 
 export function Appearance() {
   const t = useTheme()
+  const c = useControls()
   const prefs = useAppearance()
   const [error, setError] = useState('')
   // `apply` is a `setAppearance` / `setWindowMaterial` call; both throw when the file cannot be written.
@@ -154,7 +157,7 @@ export function Appearance() {
       <div style={{ display: 'flex', gap: 14 }}>{(['light', 'dark', 'system'] as const).map((value) => {
         const preview = { frame: value === 'dark' ? '#202023' : '#f7f7f8', text: value === 'system' ? '#929299' : value === 'dark' ? '#ededf0' : '#27272a' }
         return <div key={value} testId={`settings-theme-${value}`} tabIndex={0} aria-label={`${value} theme`} aria-pressed={prefs.theme === value} onClick={() => save({ theme: value })} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') save({ theme: value }) }} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, flexBasis: 0, minWidth: 0, cursor: 'pointer' }}>
-          <div style={{ display: 'flex', pointerEvents: 'none', height: 112, borderWidth: 1, borderColor: prefs.theme === value ? 'transparent' : t.border, ...(prefs.theme === value ? { boxShadow: { offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: 2, color: t.text } } : {}), borderRadius: 10, padding: 10, ...(value === 'system' ? { background: { type: 'linear-gradient' as const, angle: 110, stops: [{ color: '#f7f7f8', position: 0.499 }, { color: '#202023', position: 0.501 }] } } : { backgroundColor: preview.frame }) }}>
+          <div style={{ display: 'flex', pointerEvents: 'none', height: 112, borderWidth: 1, borderColor: prefs.theme === value ? c.accent : t.border, ...(prefs.theme === value ? { boxShadow: { offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: 2, color: c.acc(0.3) } } : {}), borderRadius: 10, padding: 10, ...(value === 'system' ? { background: { type: 'linear-gradient' as const, angle: 110, stops: [{ color: '#f7f7f8', position: 0.499 }, { color: '#202023', position: 0.501 }] } } : { backgroundColor: preview.frame }) }}>
             <div style={{ display: 'flex', flexDirection: 'column', pointerEvents: 'none', width: '28%', paddingTop: 14, paddingRight: 7, gap: 9, borderRightWidth: 1, borderColor: preview.text, opacity: 0.25 }}>{[0, 1, 2].map((i) => <div key={i} style={{ pointerEvents: 'none', height: 4, borderRadius: 3, backgroundColor: preview.text }} />)}</div>
             <div style={{ display: 'flex', flexDirection: 'column', pointerEvents: 'none', flexGrow: 1, paddingTop: 16, paddingLeft: 12 }}>
               <div style={{ width: '48%', height: 4, borderRadius: 2, backgroundColor: preview.text, opacity: 0.6, marginBottom: 7 }} />
@@ -162,7 +165,7 @@ export function Appearance() {
               <div style={{ height: 24, borderWidth: 1, borderColor: preview.text, borderRadius: 4, opacity: 0.15, marginTop: 5, marginBottom: 12 }} />
               <div style={{ width: '76%', height: 4, borderRadius: 2, backgroundColor: preview.text, opacity: 0.25 }} />
             </div>
-          </div><div style={{ display: 'flex', pointerEvents: 'none', gap: 7, paddingTop: 13, alignItems: 'center' }}><Icon source={value === 'system' ? N.laptop : value === 'dark' ? N.moon : N.sun} size={16} color={t.text} /><Label color={t.text} size={13}>{value[0].toUpperCase() + value.slice(1)}</Label></div>
+          </div><div style={{ display: 'flex', pointerEvents: 'none', gap: 7, paddingTop: 13, alignItems: 'center' }}><Icon source={value === 'system' ? N.laptop : value === 'dark' ? N.moon : N.sun} size={16} color={prefs.theme === value ? c.accentFg : t.text} /><Label color={prefs.theme === value ? c.accentFg : t.text} size={13} weight={prefs.theme === value ? 600 : undefined}>{value[0].toUpperCase() + value.slice(1)}</Label></div>
         </div>
       })}</div>
       <Label color={t.textSecondary} size={12} lineHeight={19.2}>System follows your device’s light and dark appearance.</Label>

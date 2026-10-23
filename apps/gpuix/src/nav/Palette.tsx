@@ -16,6 +16,7 @@ import { isFreeChatProject } from '../../../../packages/kybern-client/src/types.
 import { NotesOverlays } from '../notes/Overlays.tsx'
 import { newNote, openNote, openQuickNote, useNotes } from '../notes/store.ts'
 import { Icon } from '../icons.tsx'
+import { SearchField } from '../kit/SearchField.tsx'
 import { MatrixLoader } from '../MatrixLoader.tsx'
 import { getState, useApp } from '../state.ts'
 import { SPACE_COPY, inSpace } from '../../../../packages/kybern-client/src/spaces.ts'
@@ -26,7 +27,8 @@ import { SpaceLogo } from '../spaces/SpaceLogo.tsx'
 import { Label, ProviderMark, useTheme } from '../ui.tsx'
 import { N } from './glyphs.ts'
 import { canMoveNavHistory, goBack, goForward, goPage, isNavEntryValid, newThread, openThread } from './history.ts'
-import { Dialog, Kbd, muted } from './overlay.tsx'
+import { Dialog, muted } from './overlay.tsx'
+import { Kbd } from '../kit/Kbd.tsx'
 import { getNav, setNav, useNav } from './store.ts'
 
 interface Item {
@@ -42,51 +44,6 @@ interface Item {
 export function Palette() {
   const open = useNav((s) => s.paletteOpen)
   return <><NotesOverlays />{open && <PaletteDialog />}</>
-}
-
-/** `SearchInput`: a 36px field with the search glyph and a drawn placeholder (GPUIX fixes its own). */
-export function SearchField({
-  value,
-  onChange,
-  placeholder,
-  onKeyDown,
-  onSubmit,
-  testId,
-  height = 36,
-}: {
-  value: string
-  onChange: (value: string) => void
-  placeholder: string
-  onKeyDown?: (key: string, e: { modifiers?: { ctrl: boolean } }) => void
-  onSubmit?: () => void
-  testId?: string
-  height?: number
-}) {
-  const t = useTheme()
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, height, paddingLeft: 10, paddingRight: 10, position: 'relative' }}>
-      <Icon source={N.search} size={16} color={muted(t, 1)} />
-      <div style={{ display: 'flex', flexGrow: 1, minWidth: 0, position: 'relative', alignItems: 'center' }}>
-        {!value && (
-          <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>
-            <Label color={muted(t, 0.72)} size={15} truncate>
-              {placeholder}
-            </Label>
-          </div>
-        )}
-        <input
-          autoFocus
-          testId={testId}
-          value={value}
-          onChange={(e) => onChange(e.value ?? '')}
-          onSubmit={onSubmit}
-          onKeyDown={(e) => onKeyDown?.(e.key ?? '', e)}
-          theme={{ text: t.text, caret: t.text }}
-          style={{ flexGrow: 1, minWidth: 0, height: 24, fontSize: 15, color: t.text, backgroundColor: 'rgba(0, 0, 0, 0)' }}
-        />
-      </div>
-    </div>
-  )
 }
 
 function PaletteDialog() {
@@ -276,20 +233,27 @@ function PaletteDialog() {
 
   let index = -1
   return (
-    // CommandDialogPopup has no backdrop filter, including full translucency.
+    // The desktop's CommandDialogPopup has no backdrop filter; here the card frosts like a menu on whole-window glass (the dialog path).
     <Dialog onClose={close} width={672} variant="palette" testId="palette" instant={getNav().keyboardNav}>
       <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, paddingLeft: 0, paddingRight: 0 }}>
         <div style={{ paddingLeft: 10, paddingRight: 10, paddingTop: 6, paddingBottom: 6 }}>
           <SearchField
+            bare
+            autoFocus
+            label="Search the palette"
+            size="lg"
             value={query}
             testId="palette-input"
             placeholder="Search threads, notes, tasks, projects, and commands"
+            shell={{ height: 36, paddingLeft: 10, paddingRight: 10 }}
+            style={{ fontSize: 15 }}
             onChange={(value) => {
               setQuery(value)
               setHighlight(0)
             }}
             onSubmit={() => run(flat[active])}
-            onKeyDown={(key, e) => {
+            onKeyDown={(e) => {
+              const key = e.key ?? ''
               if (key === 'escape') close()
               else if (key === 'down' || (key === 'n' && e.modifiers?.ctrl)) move(1)
               else if (key === 'up' || (key === 'p' && e.modifiers?.ctrl)) move(-1)

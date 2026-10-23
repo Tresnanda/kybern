@@ -7,6 +7,7 @@ import { CLI_INSTANCE, isCliInstance } from '../../../desktop/src/lib/accounts.t
 import { bindingLimit, PROVIDER_NAMES } from '../../../desktop/src/lib/providerUsage.ts'
 import type { AccountSummary, ProviderKind, ProviderLimits } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
+import { Button } from '../kit/Button.tsx'
 import { errorText } from '../nav/actions.ts'
 import { N } from '../nav/glyphs.ts'
 import { showDialog } from '../dialogs/store.ts'
@@ -80,7 +81,7 @@ function CardAccountRow({ account, left, onChoose }: { account: AccountSummary; 
     return <div testId={`rail-account-${account.provider.instance}`} style={row}>
       <div role="radio" aria-checked={false} aria-disabled style={{ display: 'flex', alignItems: 'center', gap: 10, flexGrow: 1, flexShrink: 1, minWidth: 0, opacity: 0.7 }}>{body}</div>
       <Label color={t.warning} size={13} lineHeight={19.5}>Needs sign-in</Label>
-      <div testId={`rail-account-signin-${account.provider.instance}`} role="button" aria-label="Sign in" tabIndex={0} onClick={() => showDialog({ kind: 'account', provider: kind, instance: account.provider.instance })} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') showDialog({ kind: 'account', provider: kind, instance: account.provider.instance }) }} style={{ display: 'flex', flexShrink: 0, cursor: 'pointer' }}><Label color={t.text} size={13} lineHeight={19.5} weight={500}>Sign in</Label></div>
+      <Button testId={`rail-account-signin-${account.provider.instance}`} size="sm" onClick={() => showDialog({ kind: 'account', provider: kind, instance: account.provider.instance })}>Sign in</Button>
     </div>
   }
   return <div testId={`rail-account-${account.provider.instance}`} role="radio" aria-checked={account.is_default} aria-label={account.name} tabIndex={0} onClick={onChoose} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') onChoose() }} style={{ ...row, cursor: 'pointer', ...(account.is_default ? {} : { hover: { backgroundColor: t.buttonSecondaryHover } }) }}>

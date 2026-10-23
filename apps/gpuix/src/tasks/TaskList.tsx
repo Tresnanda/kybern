@@ -11,7 +11,7 @@ import { TaskWindow, type TaskWindowEntry } from './TaskWindow.tsx'
 import { isGroupCollapsed, isOpenStatus, latestRun, runOutcome, STATUS_LABEL, type TaskGroup } from '@/state/tasksModel'
 import { relativeTime } from '@/lib/format'
 import type { TaskItem, TaskStatus } from '../../../../packages/kybern-client/src/types.ts'
-import { Button } from '../settings/controls.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
 import { Icon } from '../icons.tsx'
 import { ProjectDot } from '../notes/kit.tsx'
 import { N } from '../nav/glyphs.ts'
@@ -19,26 +19,20 @@ import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { raisedFill, useGlass } from '../platform/glass.ts'
 import type { GlassTokens } from '../theme.ts'
 import { over } from '../theme.ts'
-import { Check, checkHandledClick, pressedCheck, PriorityGlyph, StatusGlyph } from './Glyphs.tsx'
+import { SelectBox, checkHandledClick, pressedCheck, PriorityGlyph, StatusGlyph } from './Glyphs.tsx'
 import { CountPop } from './CountPop.tsx'
 import { QuickAdd } from './QuickAdd.tsx'
 import { MoreMenu } from './TaskMenus.tsx'
 import { openTask, pick, prefs, quickAdd, setTasks, taskState, useTasks } from './store.ts'
 
-/** `.tk-btn add`: a 28px plus at the row's end. A creation affordance, so it is always on screen: muted, full ink under the pointer. */
+/** `.tk-btn add`: a plus at the row's end. A creation affordance, so it is always on screen. */
 function AddButton({ testId, onClick, inset = 0 }: { testId: string; onClick: () => void; inset?: number }) {
-  const t = useTheme()
-  const [hover, setHover] = useState(false)
-  return (
-    <div testId={testId} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} onClick={onClick} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 7, marginRight: -inset, cursor: 'pointer', hover: { backgroundColor: ink(t, 0.05) } }}>
-      <Icon source={N.plus} size={14} color={ink(t, hover ? 1 : 0.6)} />
-    </div>
-  )
+  return <IconButton testId={testId} icon="plus" label="Add task" glyph={14} onClick={onClick} style={{ marginRight: -inset }} />
 }
 
 /**
  * The selection checkbox, always on screen. At rest it is dimmed; the row's hover, focus or selection brings it to full strength.
- * (The checkbox itself is `Glyphs.tsx`'s `Check`: a muted outline until picked.)
+ * (The checkbox itself is `Glyphs.tsx`'s `SelectBox`, the kit `Checkbox`)
  */
 function SelectCheck({ lit, children }: { lit: boolean; children: ReactNode }) {
   return <div style={{ display: 'flex', alignItems: 'center', opacity: lit ? 1 : 0.8 }}>{children}</div>
@@ -209,7 +203,7 @@ export const TaskRow = memo(function TaskRow({
           }}
           style={{ ...cardSurface(t, g, raised, focused), opacity: dragOpacity }}
         >
-          <CardLines task={task} detail={detail} checkShown={hover || selected} check={<Check testId={`task-select-${task.id}`} checked={selected} onClick={(shift) => pick(task.id, sequence, shift)} />} />
+          <CardLines task={task} detail={detail} checkShown={hover || selected} check={<SelectBox testId={`task-select-${task.id}`} checked={selected} onClick={(shift) => pick(task.id, sequence, shift)} />} />
         </div>
       </div>
       </ShiftRow>
@@ -248,7 +242,7 @@ export const TaskRow = memo(function TaskRow({
       >
         {selected && focused && <div style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, borderWidth: 2, borderColor: ink(t, 0.14), borderRadius: card ? 8 : 0, pointerEvents: 'none' }} />}
         {/* The checkbox is always on screen, in its own 22px slot at the row's start. */}
-        <div style={{ width: 22, flexShrink: 0 }}><SelectCheck lit={hover || focused || selected}><Check testId={`task-select-${task.id}`} checked={selected} onClick={(shift) => pick(task.id, sequence, shift)} /></SelectCheck></div>
+        <div style={{ width: 22, flexShrink: 0 }}><SelectCheck lit={hover || focused || selected}><SelectBox testId={`task-select-${task.id}`} checked={selected} onClick={(shift) => pick(task.id, sequence, shift)} /></SelectCheck></div>
         <div onClick={() => openTask(task.id)} style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
           <div style={{ width: 28, pointerEvents: 'none', userSelect: 'none' }}>
             <PriorityGlyph priority={task.priority} />

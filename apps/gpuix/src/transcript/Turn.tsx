@@ -1,3 +1,4 @@
+import { openTab } from '../tabs/open.ts'
 import type { PublicInstance } from '@gpuix/react'
 import { chooseTab, setDock } from '../dock/store.ts'
 import { getFileIconName } from '../../../desktop/src/lib/kit/fileIcons.ts'
@@ -18,7 +19,7 @@ import { calendarDateKey, calendarDateLabel, elapsedSince, plural } from '../../
 import { clockTime } from './clock.ts'
 import { isImageGenerationTool } from '../../../desktop/src/lib/toolActivity.ts'
 import { responseImages } from '../../../desktop/src/lib/responseImages.ts'
-import { isAgentLaunchBlock, isDelegationLaunchBlock, isOrchestrationBlock } from '../../../desktop/src/lib/workChunks.ts'
+import { chunkRuns, isAgentLaunchBlock, isDelegationLaunchBlock, isOrchestrationBlock } from '../../../desktop/src/lib/workChunks.ts'
 import { buildWorkHierarchy, shouldRevealLiveText, type Block, type TurnGroup } from '../../../../packages/kybern-client/src/transcript.ts'
 import type { ContentPart, Diff, RuntimeTask, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { removePending, usePendingSend } from '../composer/pending.ts'
@@ -31,10 +32,12 @@ import { Icon } from '../icons.tsx'
 import { useLoopVisibility } from '../native/loop-visibility.ts'
 import { MatrixLoader, useLoaderSecond } from '../MatrixLoader.tsx'
 import { clockDuration, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { Button } from '../kit/Button.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
 import { CopyAction, messageText, SaveToNoteAction, UserBubble } from './bubble.tsx'
 import { T } from './glyphs.ts'
 import { ResponseImage } from './images.tsx'
-import { alpha, Button, cachedMarkdownTheme, Chevron, fg, META, muted, Para, ROW_LINE, RowIcon, TEXT } from './kit.tsx'
+import { alpha, cachedMarkdownTheme, Chevron, fg, META, muted, Para, ROW_LINE, RowIcon, TEXT } from './kit.tsx'
 import { over } from '../theme.ts'
 import { Collapse, Rise } from '../motion/kit.tsx'
 import { Shimmer } from './motion.tsx'
@@ -152,6 +155,8 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
       (b.kind === 'assistant' && !b.complete && (b.id === group.liveThinkingId || shouldRevealLiveText(b.text, b.complete))) ||
       (b.kind === 'approval' && !b.decision),
   )
+  // Between calls the newest run says "thinking" in its tail, instead of a separate row blinking in under it.
+  const endsInRun = useMemo(() => running && !hasLiveWork && chunkRuns(hierarchy.roots, tasksByToolCall).at(-1)?.kind === 'run', [running, hasLiveWork, hierarchy, tasksByToolCall])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -169,11 +174,11 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
           <WorkingHeader since={group.user?.at ?? group.work[0]?.at ?? ''} />
           {hierarchy.roots.length > 0 && (
             <div style={{ marginTop: 4 }}>
-              <WorkRows compact blocks={hierarchy.roots} ctx={ctx} tone="bright" liveTextId={group.liveTextId} liveThinkingId={group.liveThinkingId} />
+              <WorkRows compact blocks={hierarchy.roots} ctx={ctx} tone="bright" liveTextId={group.liveTextId} liveThinkingId={group.liveThinkingId} waiting={endsInRun} />
             </div>
           )}
           {/* `thinkingRow`: `t-row-enter` each time it mounts. */}
-          {!hasLiveWork && (
+          {!hasLiveWork && !endsInRun && (
             <Rise kind="row" style={{ marginTop: 6 }}>
               <Shimmer text="Thinking" color={muted(t)} lineHeight={TEXT.lineHeight} />
             </Rise>
@@ -345,17 +350,12 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
           {canUndo && (
-            <div testId="edited-undo" onClick={reverting ? undefined : () => void undo()} style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
-              <Label color={muted(t)} style={{ hover: { color: t.text } }}>
-                Undo
-              </Label>
-              {reverting ? <MatrixLoader /> : <Icon source={T.undo} size={12} color={muted(t)} />}
-            </div>
+            <Button variant="ghost" size="sm" testId="edited-undo" busy={reverting} iconAfter={T.undo} onClick={() => void undo()}>Undo</Button>
           )}
-          <Button testId="edited-review" variant="chrome-outline" onClick={() => { chooseTab(threadId, 'changes'); setDock(threadId, { open: true }) }}>Review</Button>
-          <div testId="edited-files-toggle" onClick={() => setExpanded(!expanded)} style={{ display: 'flex', padding: 4, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
+          <Button testId="edited-review" size="sm" onClick={() => openTab(threadId, { kind: 'diff' })}>Review</Button>
+          <IconButton testId="edited-files-toggle" label={expanded ? 'Hide edited files' : 'Show edited files'} icon={T.chevronDown} size="sm" onClick={() => setExpanded(!expanded)}>
             <Chevron open={expanded} color={muted(t, t.variant === 'dark' ? 0.5 : 0.7)} />
-          </div>
+          </IconButton>
         </div>
       </div>
       {/* `DisclosureRegion`s: the file list, and the files past the first five inside it. */}
@@ -428,7 +428,7 @@ function EditedFileRow({ file, threadId, turnId, first, border }: { file: Diff['
         <div style={{ flexGrow: 1 }} />
         <DiffStat additions={file.additions} deletions={file.deletions} />
         </div>
-        <div testId={`edited-review-${file.path}`} role="button" aria-label={`Open ${file.path} in the diff panel`} onClick={() => { chooseTab(threadId, 'changes'); setDock(threadId, { open: true }) }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 6, flexShrink: 0, hover: { backgroundColor: t.buttonSecondaryHover } }}><Icon source={T.panelRight} size={14} color={muted(t, 0.6)} /></div>
+        <IconButton testId={`edited-review-${file.path}`} label={`Open the changes in ${file.path} in a tab`} icon={T.panelRight} size="sm" onClick={() => openTab(threadId, { kind: 'diff', path: file.path })} />
       </div>
       <Collapse open={open && ready}>
         <div style={{ display: 'flex', flexDirection: 'column', borderTopWidth: 1, borderColor: raisedRim(g, border), backgroundColor: g.on ? 'rgba(0, 0, 0, 0)' : t.v('--background') }}>
@@ -469,8 +469,8 @@ function SendFailed({ threadId, id, error, parts }: { threadId: ThreadId; id: st
         <Label color={t.v('--destructive')} size={META.size} lineHeight={META.lineHeight} truncate style={{ flexShrink: 1 }}>
           {`Not sent. ${error ?? 'The daemon did not answer.'}`}
         </Label>
-        <Button variant="subtle" testId="send-retry" onClick={() => retryPending(threadId, id)}>Retry</Button>
-        <Button variant="ghost" testId="send-edit" onClick={() => {
+        <Button size="sm" testId="send-retry" onClick={() => retryPending(threadId, id)}>Retry</Button>
+        <Button variant="ghost" size="sm" testId="send-edit" onClick={() => {
           if (restoreToComposer(`thread:${threadId}`, parts, messageText(parts))) removePending(threadId, id)
         }}>Edit</Button>
       </div>

@@ -13,6 +13,11 @@ import type { EditorState } from './RichEditor.tsx'
 import { SLASH_ICON } from './icons.ts'
 import { TURN_INTO_ITEMS } from './slash.ts'
 import { pressTransform } from '../motion/press.ts'
+import { Button } from '../kit/Button.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
+import { PickerChip } from '../kit/PickerChip.tsx'
+import { TextField } from '../kit/Field.tsx'
+import type { ControlSize } from '../kit/controls.ts'
 
 const ICONS = {
   bold: glyph(TextBoldIcon), italic: glyph(TextItalicIcon), strike: glyph(TextStrikethroughIcon), code: glyph(SourceCodeIcon),
@@ -33,29 +38,17 @@ function linkLabel(href: string): string {
   return href.replace(/^(https?:\/\/|mailto:|tel:)/i, '').replace(/\/$/, '')
 }
 
-/** `FormatButton`: a 28px square with the icon at 14px, pressed when active. Every control of the desktop's format bar is a
- *  `press` button (scale 0.97 on :active, `motion/press.ts`). */
-export function FormatButton({ icon, label, shortcut, active, onClick, size = 28, iconSize = 14, testId }: { icon: string; label: string; shortcut?: string; active?: boolean; onClick: () => void; size?: number; iconSize?: number; testId?: string }) {
-  const t = useTheme()
+/** `FormatButton`: a kit `IconButton` (28, or `sm` 24) with the tooltip; `active` is the current mark or block. */
+export function FormatButton({ icon, label, shortcut, active, onClick, size = 'md', iconSize = 14, testId }: { icon: string; label: string; shortcut?: string; active?: boolean; onClick: () => void; size?: ControlSize; iconSize?: number; testId?: string }) {
   return (
     <Tip label={shortcut ? `${label} ${shortcut}` : label}>
-      <div testId={testId ?? `editor-format-${label.toLowerCase().replaceAll(' ', '-')}`} role="button" aria-label={label} aria-selected={active}
-        onClick={onClick}
-        paintTransform={pressTransform()}
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: size, height: size, borderRadius: size === 28 ? 7 : 6, cursor: 'pointer', backgroundColor: active ? t.buttonSecondary : undefined, hover: { backgroundColor: active ? t.buttonSecondary : t.buttonSecondaryHover } }}>
-        <Icon source={icon} size={iconSize} color={active ? t.text : t.textSecondary} />
-      </div>
+      <IconButton testId={testId ?? `editor-format-${label.toLowerCase().replaceAll(' ', '-')}`} icon={icon} label={label} size={size} glyph={iconSize} active={active} onClick={onClick} />
     </Tip>
   )
 }
 
 function TextButton({ label, onClick, testId, strong }: { label: string; onClick: () => void; testId?: string; strong?: boolean }) {
-  const t = useTheme()
-  return (
-    <div testId={testId} role="button" onClick={onClick} paintTransform={pressTransform()} style={{ display: 'flex', alignItems: 'center', height: 28, paddingLeft: 8, paddingRight: 8, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
-      <Label color={strong ? t.text : t.textSecondary} size={14} weight={strong ? 500 : 400} style={{ pointerEvents: 'none' }}>{label}</Label>
-    </div>
-  )
+  return <Button testId={testId} size="sm" variant={strong ? 'secondary' : 'ghost'} onClick={onClick}>{label}</Button>
 }
 
 /** The link address field: Back, the address, Apply (Remove when cleared). */
@@ -73,16 +66,14 @@ export function LinkField({ initial, command, onDone, width = 224 }: { initial: 
   }
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-      <div testId="editor-link-back" role="button" aria-label="Back to formatting" onClick={() => { onDone(); command({ cmd: 'focus' }) }} paintTransform={pressTransform()} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
-        <Icon source={ICONS.back} size={14} color={t.textSecondary} />
-      </div>
-      <input ref={input} testId="editor-link-address" aria-label="Link address" value={value} placeholder="Paste a link"
+      <IconButton testId="editor-link-back" icon={ICONS.back} label="Back to formatting" size="sm" glyph={14} onClick={() => { onDone(); command({ cmd: 'focus' }) }} />
+      <TextField ref={input} testId="editor-link-address" label="Link address" value={value} placeholder="Paste a link"
         interceptKeys={['escape']}
-        onChange={(e) => setValue(e.value ?? '')}
+        onChange={setValue}
         onSubmit={apply}
         onKeyDown={(e) => { if (e.key === 'escape') { e.preventDefault(); onDone(); command({ cmd: 'focus' }) } }}
         theme={{ text: t.text, caret: t.text }}
-        style={{ width, height: 28, paddingLeft: 6, paddingRight: 6, fontSize: 14, color: t.text, backgroundColor: 'transparent' }} />
+        width={width} />
       <TextButton testId="editor-link-apply" label={initial && !value.trim() ? 'Remove' : 'Apply'} onClick={apply} strong />
     </div>
   )
@@ -116,11 +107,7 @@ export function FormatBar({ state, command }: { state: EditorState; command: Com
           })}
         </div>
           : <>
-            <div testId="editor-turn-into" role="button" aria-label={`Turn into. Now ${blockTitle}`} onClick={() => setMode('turn')} paintTransform={pressTransform()}
-              style={{ display: 'flex', alignItems: 'center', gap: 4, height: 28, paddingLeft: 8, paddingRight: 6, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
-              <Label color={t.textSecondary} size={14} truncate style={{ maxWidth: 96, pointerEvents: 'none' }}>{blockTitle}</Label>
-              <Icon source={ICONS.chevron} size={12} color={ink(t, 0.4)} />
-            </div>
+            <PickerChip quiet size="sm" testId="editor-turn-into" label={`Turn into. Now ${blockTitle}`} maxWidth={120} onClick={() => setMode('turn')}>{blockTitle}</PickerChip>
             {separator}
             <FormatButton icon={ICONS.bold} label="Bold" shortcut="⌘B" active={state.marks.bold} onClick={() => run({ cmd: 'mark', mark: 'bold' })} />
             <FormatButton icon={ICONS.italic} label="Italic" shortcut="⌘I" active={state.marks.italic} onClick={() => run({ cmd: 'mark', mark: 'italic' })} />

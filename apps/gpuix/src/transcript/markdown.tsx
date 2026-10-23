@@ -1,3 +1,4 @@
+import { openTabFromPane } from '../tabs/open.ts'
 import { useTranscriptRowLease } from './Window.tsx'
 // Native GFM keeps prose, tables and syntax highlighting in single bounded
 // nodes. Code expansion contributes rows to the OUTER transcript virtual list.
@@ -11,9 +12,10 @@ import { getClient, usePaneAccess } from '../state.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { FONT_MONO } from '../theme.ts'
 import { Dialog, DialogHeader } from '../nav/overlay.tsx'
-import { Button, cachedCodeTheme, cachedMarkdownTheme, CODE, muted, TEXT } from './kit.tsx'
+import { cachedCodeTheme, cachedMarkdownTheme, CODE, muted, TEXT } from './kit.tsx'
 import { CopyAction } from './bubble.tsx'
-import { Icon } from '../icons.tsx'
+import { Button } from '../kit/Button.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
 import { T } from './glyphs.ts'
 import { reportError } from './store.ts'
 import { chipifyKybernRefs } from './refs.ts'
@@ -200,23 +202,15 @@ function lineCount(text: string) {
   return n
 }
 
-/** `.chat-markdown-codeblock__header` / `__action` (kit.css): 1.6px 6.4px 1.6px 9.6px
- *  around 24px square, 8px-radius buttons; no border or rule under the header. */
-function HeaderButton({ testId, label, active, onClick, children }: { testId: string; label: string; active?: boolean; onClick: () => void; children: ReactNode }) {
-  const t = useTheme()
-  return <div testId={testId} role="button" aria-label={label} onClick={onClick} style={{ display: 'flex', width: 24, height: 24, alignItems: 'center', justifyContent: 'center', borderRadius: 8, cursor: 'pointer', flexShrink: 0, backgroundColor: 'rgba(0, 0, 0, 0)', hover: { backgroundColor: t.v('--color-background-button-secondary-hover') } }}>{children}</div>
-}
-
+/** `.chat-markdown-codeblock__header`: 1.6px 6.4px 1.6px 9.6px around 24px kit buttons; no border or rule under the header. */
 export const CodeHeader = memo(function CodeHeader({ part, expanded, wrap, onExpand, onWrap }: {
   part: MarkdownPart; expanded: boolean; wrap: boolean; onExpand?: () => void; onWrap: () => void
 }) {
   const t = useTheme()
   return <div testId="code-header" style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 1.6, paddingBottom: 1.6, paddingLeft: 9.6, paddingRight: 6.4, borderTopLeftRadius: CODE.radius, borderTopRightRadius: CODE.radius, overflow: 'hidden', backgroundColor: t.codeSurface }}>
     <Label color={muted(t)} size={11.52} lineHeight={16.128} font={FONT_MONO} style={{ flexGrow: 1 }}>{part.language === 'mermaid' ? 'Mermaid source' : part.language || 'text'}</Label>
-    {onExpand && <Button testId="code-expand" variant="ghost" onClick={onExpand}>{expanded ? 'Show less' : 'Show more'}</Button>}
-    <HeaderButton testId="code-wrap" label={wrap ? 'Disable line wrap' : 'Wrap lines'} onClick={onWrap}>
-      <Icon source={T.textWrap} size={12} color={wrap ? t.text : muted(t)} />
-    </HeaderButton>
+    {onExpand && <Button testId="code-expand" variant="ghost" size="sm" onClick={onExpand}>{expanded ? 'Show less' : 'Show more'}</Button>}
+    <IconButton testId="code-wrap" label={wrap ? 'Disable line wrap' : 'Wrap lines'} icon={T.textWrap} glyph={13} size="sm" active={wrap} onClick={onWrap} />
     <CopyAction text={part.text} testId="code-copy" />
   </div>
 })
@@ -275,16 +269,28 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
     // An image link (or an inline image native Markdown paints as a link) opens the image, wherever its folder is.
     if (localImageLink(href) || (link.kind === 'file' && /\.(?:png|jpe?g|gif|webp|avif)$/i.test(link.path))) { setImage(href); return }
     try {
-      if (link.kind === 'external') { spawn('open', [link.url]).on('error', e => reportError('Unable to open link', e)); return }
+      if (link.kind === 'external') {
+        // A pull request of this thread's own repository opens as a tab; any other link goes to the browser.
+        const pr = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/.exec(link.url)
+        const thread = pane.get().open.thread
+        if (pr && thread) {
+          const git = await client.call('git.status', { thread_id: thread.id }).catch(() => null)
+          const repo = git?.remote_url && /[:/]([^/:]+\/[^/]+?)(?:\.git)?$/.exec(git.remote_url)?.[1]
+          if (repo && repo.toLowerCase() === pr[1]!.toLowerCase() && openTabFromPane(pane.id, { kind: 'pr', projectId: thread.project_id, number: Number(pr[2]) })) return
+        }
+        spawn('open', [link.url]).on('error', e => reportError('Unable to open link', e)); return
+      }
+      // From inside a thread, files, notes and tasks open as permanent tabs beside the chat (ADE-54); the page is a click away.
       if (link.kind === 'file') {
         const threadId = pane.get().selectedId
         if (!threadId) return
-        const file = await client.call('threads.files.read', { thread_id: threadId, path: link.path })
-        setPreview({ title: link.line ? `${link.path}:${link.line}` : link.path, text: file.content, code: true, line: link.line, markdown: MARKDOWN_FILE.test(link.path) })
+        if (!openTabFromPane(pane.id, { kind: 'file', path: link.path, root: 'thread', ...(link.line ? { line: link.line } : {}) })) {
+          const file = await client.call('threads.files.read', { thread_id: threadId, path: link.path })
+          setPreview({ title: link.line ? `${link.path}:${link.line}` : link.path, text: file.content, code: true, line: link.line, markdown: MARKDOWN_FILE.test(link.path) })
+        }
       } else if (link.kind === 'kybern') {
-        // A chip opens the note or task page, as on the desktop.
-        if (link.target === 'note') openNote(link.id)
-        else { goPage('tasks'); openTask(link.id) }
+        if (link.target === 'note') { if (!openTabFromPane(pane.id, { kind: 'note', id: link.id })) openNote(link.id) }
+        else if (!openTabFromPane(pane.id, { kind: 'task', id: link.id })) { goPage('tasks'); openTask(link.id) }
       }
     } catch (e) { reportError('Unable to open link', e) }
   }
@@ -298,8 +304,8 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
       <DialogHeader title={preview.title} onClose={() => setPreview(null)} />
       {(shown.start > 1 || preview.markdown) && <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 16, paddingRight: 16 }}>
         <Label color={muted(t)} style={{ flexGrow: 1 }}>{shown.start > 1 ? `From line ${shown.start}` : ''}</Label>
-        {shown.start > 1 && <Button testId="chat-link-whole-file" variant="ghost" onClick={() => setPreview({ ...preview, whole: true })}>Show whole file</Button>}
-        {preview.markdown && <Button testId="chat-link-markdown-source" variant="ghost" onClick={() => setPreview({ ...preview, raw: !preview.raw })}>{preview.raw ? 'Show preview' : 'Show source'}</Button>}
+        {shown.start > 1 && <Button testId="chat-link-whole-file" variant="ghost" size="sm" onClick={() => setPreview({ ...preview, whole: true })}>Show whole file</Button>}
+        {preview.markdown && <Button testId="chat-link-markdown-source" variant="ghost" size="sm" onClick={() => setPreview({ ...preview, raw: !preview.raw })}>{preview.raw ? 'Show preview' : 'Show source'}</Button>}
       </div>}
       <virtual-list style={{ height: 480 }} estimatedItemHeight={300} overdraw={240}>
         {(preview.code && !rendered ? lineChunks(shown.text) : textChunks(shown.text)).map((chunk, i) => <div key={i} style={{ padding: 16 }}>{preview.code && !rendered ? <CodeChunk text={chunk} wrap={true} /> : <markdown source={chunk} theme={cachedMarkdownTheme(t)} style={{ color: t.text, userSelect: 'text' }} />}</div>)}

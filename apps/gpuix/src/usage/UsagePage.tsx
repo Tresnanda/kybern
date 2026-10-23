@@ -1,4 +1,3 @@
-import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { onEnvironmentChange } from '../shell/environment.ts'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
@@ -16,7 +15,10 @@ import { DURATION, EASE } from '../motion/tokens.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { LimitFill } from './AccountMark.tsx'
 import { load, save as savePreference } from '../pulls/persist.ts'
-import { Button, Segments, column, row } from './controls.tsx'
+import { column, row } from './controls.tsx'
+import { Button } from '../kit/Button.tsx'
+import { Segmented } from '../kit/Segmented.tsx'
+import { TextField } from '../kit/Field.tsx'
 
 const PERIODS = [['7', 'Last 7 days'], ['30', 'Last 30 days'], ['all', 'All time']] as const
 type Period = typeof PERIODS[number][0]
@@ -112,11 +114,11 @@ export function UsagePage() {
   const refreshAll = () => { refresh(n => n + 1); refreshAccounts(n => n + 1); askLimits(true) }
   const sections: { key: string; content: ReactNode }[] = [
     { key: 'toolbar', content: <div style={{ ...row, justifyContent: 'space-between', gap: 16 }}>
-      <Menu testId="usage-period" trigger={() => <Button style={{ borderWidth: 1, borderColor: t.border }}>{`${PERIODS.find(p => p[0] === period)![1]} ⌄`}</Button>}>
+      <Menu testId="usage-period" trigger={() => <Button chevron>{PERIODS.find(p => p[0] === period)![1]}</Button>}>
         {PERIODS.map(([value, label]) => <MenuItem key={value} id={value} label={label} checked={period === value} testId={`usage-period-${value}`} onSelect={() => changePeriod(value)} />)}
       </Menu>
-      <Segments value={group} options={ [['provider', 'Agent'], ['model', 'Model'], ['day', 'Day']] } onChange={changeGroup} testId="usage-group" width={[58,58,44]} fontSize={12} />
-      <div testId="usage-refresh" role="button" aria-label="Refresh" tabIndex={loading?-1:0} onClick={()=>{if(!loading)refreshAll()}} onKeyDown={e=>{if(!loading&&(e.key==='enter'||e.key==='space'))refreshAll()}} style={{...row,gap:4,height:28,paddingLeft:10,paddingRight:10,borderRadius:8,hover:{backgroundColor:t.hover}}}><Icon source={N.refresh} size={14} color={t.textSecondary}/><Label color={t.textSecondary} size={14}>{loading&&data?'Refreshing…':'Refresh'}</Label></div>
+      <Segmented aria-label="Group by" value={group} options={[{ value: 'provider', label: 'Agent' }, { value: 'model', label: 'Model' }, { value: 'day', label: 'Day' }]} onChange={v => changeGroup(v as UsageGroup)} testId="usage-group" />
+      <Button testId="usage-refresh" variant="ghost" icon={N.refresh} label="Refresh" disabled={loading} onClick={refreshAll}>{loading && data ? 'Refreshing…' : 'Refresh'}</Button>
     </div> },
   ]
   if (groups.length) {
@@ -148,7 +150,7 @@ export function UsagePage() {
         })}
       </div>
       <div style={{ ...row, justifyContent: 'space-between' }}>{[chart[0], chart[Math.floor(chart.length / 2)], chart[chart.length - 1]].map(d => <Label key={d!.key} color={t.textSecondary} size={11}>{dayLabel(d!.key)}</Label>)}</div>
-    </div> : <div style={{ ...column, gap: 10, paddingTop:30, paddingBottom:30, alignItems:'flex-start' }}><Label color={t.text}>No usage in this period</Label><Label color={t.textSecondary} size={13} lineHeight={20.8} style={{maxWidth:440}}>Usage appears here after an agent finishes a turn on this machine. Try a longer period to see earlier activity.</Label>{period !== 'all' && <Button style={{borderWidth:1,borderColor:t.border}} onClick={() => changePeriod('all')}>Show all time</Button>}</div> })
+    </div> : <div style={{ ...column, gap: 10, paddingTop:30, paddingBottom:30, alignItems:'flex-start' }}><Label color={t.text}>No usage in this period</Label><Label color={t.textSecondary} size={13} lineHeight={20.8} style={{maxWidth:440}}>Usage appears here after an agent finishes a turn on this machine. Try a longer period to see earlier activity.</Label>{period !== 'all' && <Button onClick={() => changePeriod('all')}>Show all time</Button>}</div> })
     sections.push({ key: 'breakdown', content: <Rise kind="pane" play={panePlay}><div style={{ ...column, gap: 20, paddingBottom:12 }}><Heading title="Breakdown" />{rows.length>0&&<div style={{ ...row, width: '100%', gap: 0 }}>{[group === 'provider' ? 'Agent' : group === 'model' ? 'Model' : 'Day (UTC)', 'Turns', 'Tokens', 'Cost'].map((s, i) => <Label key={s} color={t.textSecondary} size={11} style={{ width: i === 0 ? '50%' : '16.666%', textAlign: i ? 'right' : 'left' }}>{s}</Label>)}</div>}</div></Rise> })
     for (const r of rows) sections.push({ key: `row-${r.key}`, content: <Rise kind="pane" play={panePlay}><div style={{ ...row, width: '100%', gap: 0, paddingTop: 16, paddingBottom: 16, borderTopWidth: 1, borderColor: t.border }}>
       <div style={{ ...column, width: '50%', gap: 10 }}><div style={row}>{group === 'provider' && <ProviderMark kind={r.key} size={14} />}<Label color={t.text} size={13} truncate>{group === 'provider' ? PROVIDER_NAMES[r.key] ?? r.key : group === 'day' ? dayLabel(r.key, true) : r.key === '(default)' ? 'Default model' : r.key}</Label></div><div style={{ height: 3, maxWidth: 240, backgroundColor: t.buttonSecondary, borderRadius: 2 }}><div style={{ width: `${count(r) / max * 100}%`, height: 3, backgroundColor: ink(t, .5), borderRadius: 2 }} /></div></div>
@@ -178,7 +180,7 @@ function PlanValue({ cost, period }: { cost: number; period: Period }) {
   const multiple = periodCost ? cost / periodCost : null
   const periodLabel = period === '7' ? 'in the last 7 days' : period === '30' ? 'this month' : 'so far'
   const save = () => { const n = Number(draft); const next = Number.isFinite(n) && n > 0 ? n : null; try { savePreference('usage.plan-cost', next); planCost = next; setMonthly(next); setEdit(false); setError(null) } catch { setError('Unable to save plan cost. Check your local preferences folder and try again.') } }
-  return <div style={{ ...column, gap: 8, padding: 18, borderWidth: 1, borderColor: t.border, borderRadius: 12 }}><div style={{ ...row, justifyContent: 'space-between' }}><Label color={t.text} size={13} weight={600}>Subscription value</Label>{edit ? <div style={row}><input testId="usage-plan-input" autoFocus value={draft} onChange={e => setDraft((e.value ?? '').replace(/[^0-9.]/g, ''))} onSubmit={save} onKeyDown={e => { if (e.key === 'escape') setEdit(false) }} placeholder="200" style={{ width: 96, height: 28, color: t.text, backgroundColor: t.buttonSecondary }} /><Button onClick={save}>Save</Button></div> : <Button testId="usage-plan-edit" onClick={() => { setDraft(monthly ? String(monthly) : ''); setEdit(true) }}>{monthly ? `$${monthly}/mo` : 'Set plan cost'}</Button>}</div>{error && <Label color={t.red} size={12}>{error}</Label>}{multiple !== null && <Label color={t.text} size={42} weight={600}>{`${multiple >= 10 ? Math.round(multiple).toLocaleString() : multiple.toFixed(1)}×`}</Label>}<Label color={t.textSecondary} size={12} lineHeight={19} style={{maxWidth:480}}>{multiple !== null ? `You ran ${usd(cost)} of pay-as-you-go compute on ${usd(periodCost!)} of subscription ${periodLabel}.` : monthly ? `${usd(cost)} of pay-as-you-go compute on your subscription ${periodLabel}. Pick a 7- or 30-day period to see your value multiple.` : 'Add your total plan cost per month to see how much pay-as-you-go compute your flat fee actually covers.'}</Label></div>
+  return <div style={{ ...column, gap: 8, padding: 18, borderWidth: 1, borderColor: t.border, borderRadius: 12 }}><div style={{ ...row, justifyContent: 'space-between' }}><Label color={t.text} size={13} weight={600}>Subscription value</Label>{edit ? <div style={row}><TextField label="Monthly plan cost" testId="usage-plan-input" autoFocus value={draft} onChange={v => setDraft(v.replace(/[^0-9.]/g, ''))} onSubmit={save} onKeyDown={e => { if (e.key === 'escape') setEdit(false) }} placeholder="200" width={96} /><Button variant="primary" onClick={save}>Save</Button></div> : <Button testId="usage-plan-edit" variant={monthly ? 'secondary' : 'primary'} onClick={() => { setDraft(monthly ? String(monthly) : ''); setEdit(true) }}>{monthly ? `$${monthly}/mo` : 'Set plan cost'}</Button>}</div>{error && <Label color={t.red} size={12}>{error}</Label>}{multiple !== null && <Label color={t.text} size={42} weight={600}>{`${multiple >= 10 ? Math.round(multiple).toLocaleString() : multiple.toFixed(1)}×`}</Label>}<Label color={t.textSecondary} size={12} lineHeight={19} style={{maxWidth:480}}>{multiple !== null ? `You ran ${usd(cost)} of pay-as-you-go compute on ${usd(periodCost!)} of subscription ${periodLabel}.` : monthly ? `${usd(cost)} of pay-as-you-go compute on your subscription ${periodLabel}. Pick a 7- or 30-day period to see your value multiple.` : 'Add your total plan cost per month to see how much pay-as-you-go compute your flat fee actually covers.'}</Label></div>
 }
 
 onEnvironmentChange(() => { const value = Number(load('usage.plan-cost', null)); planCost = Number.isFinite(value) && value > 0 ? value : null })

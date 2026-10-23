@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ProjectsBrowseResult } from '../../../../packages/kybern-client/src/types.ts'
 import { Dialog, DialogHeader } from '../nav/overlay.tsx'
-import { Button, TextField } from '../settings/controls.tsx'
+import { Button } from '../kit/Button.tsx'
+import { TextField } from '../kit/Field.tsx'
+import { RADIUS } from '../kit/controls.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { getClient } from '../state.ts'
 import { addProjectToCurrentSpace } from '../spaces/add.ts'
@@ -38,8 +40,8 @@ export function ProjectPicker({ close }: { close: () => void }) {
   return <Dialog onClose={close} width={512} testId="project-picker"><DialogHeader title="Add project" description={`Choose a folder on ${activeEnvironment().name}.`} onClose={close} />
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingLeft:16, paddingRight:16, paddingTop:0, paddingBottom:12 }}>
       <Label color={t.text} size={14}>Folder path</Label>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><TextField testId="project-picker-path" autoFocus label="Project folder path" value={path} onChange={setPath} onSubmit={() => void browse(path)} width="100%" style={{height:32,fontSize:14,backgroundColor:'transparent',borderColor:t.borderHeavy}} /><Button variant="secondary" testId="project-picker-open" disabled={busy || !path} onClick={() => void browse(path)}>Open folder</Button></div>
-      <div style={{height:256,width:'100%',borderWidth:1,borderColor:t.border,borderRadius:8,padding:4}}><virtual-list testId="project-picker-folders" style={{height:246,width:'100%'}}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><TextField testId="project-picker-path" autoFocus size="lg" label="Project folder path" value={path} onChange={setPath} onSubmit={() => void browse(path)} width="100%" /><Button size="lg" variant="secondary" testId="project-picker-open" disabled={busy || !path} onClick={() => void browse(path)}>Open folder</Button></div>
+      <div style={{height:256,width:'100%',borderWidth:1,borderColor:t.border,borderRadius:RADIUS.field,padding:4}}><virtual-list testId="project-picker-folders" style={{height:246,width:'100%'}}>
         {listing?.parent && <div key="parent"><FolderRow testId="project-picker-parent" disabled={busy} onClick={() => void browse(listing.parent!)} name="Parent folder" /></div>}
         {listing?.directories.map((directory) => <div key={directory.path}><FolderRow disabled={busy} onClick={() => void browse(directory.path)} name={directory.name} /></div>)}
         {busy && <div key="loading" style={{ padding: 12 }}><Label color={t.textSecondary} size={12}>Loading folders…</Label></div>}
@@ -47,7 +49,7 @@ export function ProjectPicker({ close }: { close: () => void }) {
         {listing?.has_more && <div key="more" style={{ padding: 12 }}><Label color={t.textSecondary} size={12}>Showing the first 1,000 folders. Enter a path to open another folder.</Label></div>}
       </virtual-list></div>
       {error && <Label color={t.red} size={12}>{error}</Label>}
-      <div style={{ display: 'flex', justifyContent: 'flex-end',paddingTop:12 }}><Button variant="primary" testId="project-picker-add" disabled={busy || !path.trim()} onClick={() => void add()}>Add this folder</Button></div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end',paddingTop:12 }}><Button size="lg" variant="primary" testId="project-picker-add" disabled={busy || !path.trim()} onClick={() => void add()}>Add this folder</Button></div>
     </div>
   </Dialog>
 }

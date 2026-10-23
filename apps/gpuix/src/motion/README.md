@@ -206,3 +206,22 @@ exits ≈30% faster than entrances; keyboard-driven and 100+/day actions stay in
   reveal-exit` (native `KYBERN_MOTION_TRACE=1`: input, batches, renders, retained ticks and presents on one clock).
 - Hover fades, rings, web documents, checklist press: `native/hover-fade-check.ts`, `native/ring-check.ts`,
   `native/webview-check.ts`, `src/editor/check.ts` (all in, or next to, `native/update.sh`).
+
+## Zoomable images (`zoom.ts`, `zoomController.ts`, `ZoomSurface.tsx`)
+
+The lightbox and the image tab zoom one image node with a `paintTransform` (scale + translate, origin top-left); nothing relayouts
+per wheel event. `zoom.ts` is the geometry (fit, 100% = actual device pixels, 800% cap, clamping, pointer-anchored zoom),
+`ZoomController` the state and input (`onScroll` pans, ⌘-scroll zooms, drag pans, double click and the HUD toggle fit ↔ 100%, ⌘+ ⌘− ⌘0),
+and `ZoomSurface`/`ZoomHud` subscribe to its snapshot so only they re-render. GPUIX 0.11 delivers no pinch/magnify event to JS, so a
+trackpad pinch does nothing. Run `bun src/motion/zoom.verify.ts` (needs the patched addon) against a tall image.
+
+- ⌘-scroll toward the top (GPUI `deltaY > 0`, the wheel rolled up) zooms in, as ⌘/ctrl-scroll does in browsers, Figma and Sketch.
+- A press that travels more than 4 pt is a drag: the click its release produces is swallowed, so a pan released over the
+  letterbox never closes the lightbox and never counts towards a double click.
+- Escape closes the lightbox whatever the zoom (Quick Look's rule; ⌘0 is the way back to fit). The lightbox stops Escape and the
+  zoom keys (`stopPropagation`): GPUIX bubbles a keystroke through every ancestor and then the window handlers, and an empty
+  composer's window handler cancels the agent's turn on Escape while a request is pending. The image tab ignores Escape.
+- Memory: the zoom is the transform of one retained `PolychromeSprite` (`subtree_transform_window.rs` scales its bounds), so the
+  image is decoded and uploaded once at its own pixel size, whatever the zoom; nothing re-decodes, re-rasterizes or allocates
+  per zoom level. That one copy is still width × height × 4 bytes in the decoded `RenderImage` and again in the atlas (an
+  8000 × 8000 image is about 256 MB each), the same as before zoom existed.

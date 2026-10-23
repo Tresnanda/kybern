@@ -199,6 +199,30 @@ export function coatFloor(variant: ThemeVariant, O: Record<string, string>): num
   }
   return 100
 }
+/**
+ * Quiet text on a frosted panel (request cards): the text colour at the least alpha, in 1% steps, at which tertiary text,
+ * placeholders and disabled labels reach 4.5:1, both on `fill` and inside a field on it (the field's ink wash), over the coat
+ * at its floor on the worst desktop; secondary text keeps 7% more alpha and 4.5:1 on the fill. Each never drops below the
+ * theme's own alpha. Null when the colours cannot be read. With the default themes and the stacked frost: tertiary 0.65 in
+ * both variants, secondary 0.72.
+ */
+export function frostQuietInk(variant: ThemeVariant, O: Record<string, string>, fill: string): { secondary: string; tertiary: string } | null {
+  const c = readableColors(O)
+  const f = parseRgba(fill)
+  const tertiary = parseRgba(O['--color-text-foreground-tertiary'])
+  if (!c || !f || !tertiary) return null
+  const under = blend(coatColor(variant, c.surface), coatFloor(variant, O) / 100, ADVERSE[variant])
+  const panel = blend(f, f[3], under)
+  const field = blend(c.text, variant === 'light' ? 0.04 : 0.06, panel)
+  const least = (on: Rgba[], from: number) => {
+    for (let a = from; a < 1; a = Math.round((a + 0.01) * 100) / 100) if (on.every((b) => contrast(blend(c.text, a, b), b) >= 4.5)) return a
+    return 1
+  }
+  const rgba = (a: number) => `rgba(${c.text[0]}, ${c.text[1]}, ${c.text[2]}, ${a})`
+  const quiet = least([panel, field], Math.max(tertiary[3], 0.01))
+  return { tertiary: rgba(quiet), secondary: rgba(least([panel], Math.max(c.muted[3], Math.min(1, quiet + 0.07)))) }
+}
+
 /** The opacity the window paints: the slider's value, held at the readability floor. */
 export const effectiveOpacity = (variant: ThemeVariant, O: Record<string, string>, opacity: number) => Math.max(opacity, coatFloor(variant, O))
 

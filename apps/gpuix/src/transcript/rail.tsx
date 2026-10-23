@@ -19,6 +19,7 @@
 import { motion } from '@gpuix/react'
 import { memo, useMemo, useState } from 'react'
 import { REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { useGlass } from '../platform/glass.ts'
 import { Para } from './kit.tsx'
 
 export interface RailItem { id: string; label: string; description?: string }
@@ -43,6 +44,7 @@ export const MessageRail = memo(function MessageRail({ items, active, height, bo
   onJump: (id: string) => void
 }) {
   const t = useTheme()
+  const g = useGlass()
   const [hovered, setHovered] = useState<string | null>(null)
   const railHeight = Math.max(0, height - 12 - (bottomInset + 24))
   const capacity = Math.max(1, Math.floor((railHeight - 8) / ROW))
@@ -88,7 +90,8 @@ export const MessageRail = memo(function MessageRail({ items, active, height, bo
       initial={{ top: cardTop }}
       animate={{ top: cardTop }}
       transition={RAIL_SPRING()}
-      style={{ position: 'absolute', left: CARD.left, width: CARD.width, height: CARD.height, display: 'flex', flexDirection: 'column', gap: 4, padding: 12, borderRadius: 18, borderWidth: 1, borderColor: t.v('--border'), backgroundColor: t.v('--card'), overflow: 'hidden', pointerEvents: 'none', boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 3, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.1)' } }}
+      style={{ position: 'absolute', left: CARD.left, width: CARD.width, height: CARD.height, display: 'flex', flexDirection: 'column', gap: 4, padding: 12, borderRadius: 18, borderWidth: 1, borderColor: g.on ? g.frostRim : t.v('--border'), // The card slides with the pointer (a layout spring): a tint only, no blur that would be redone every frame.
+      backgroundColor: g.on ? g.denseFloat : t.v('--card'), overflow: 'hidden', pointerEvents: 'none', ...(g.on ? {} : { boxShadow: { offsetX: 0, offsetY: 1, blurRadius: 3, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.1)' } }) }}
     >
       <Para color={t.v('--card-foreground')} size={12} lineHeight={16} weight={500} style={{ lineClamp: 1 }}>{hoveredItem.label}</Para>
       {hoveredItem.description && <Para color={t.v('--muted-foreground')} size={12} lineHeight={16} style={{ lineClamp: 2 }}>{hoveredItem.description}</Para>}

@@ -6,9 +6,11 @@ import type { HtmlVisual } from '../../../../packages/kybern-client/src/types.ts
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import { visualFrameHeight, visualHeight, visualLink, visualThemeFragment, VISUAL_COLUMN_WIDTH } from '../../../../packages/kybern-client/src/visuals.ts'
 import { activeEnvironment } from '../shell/environment.ts'
-import { getClient } from '../state.ts'
+import { getClient, usePaneAccess } from '../state.ts'
+import { openTabFromPane } from '../tabs/open.ts'
+import { useChatHidden } from '../tabs/hidden.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { Button } from './kit.tsx'
+import { Button } from '../kit/Button.tsx'
 import { Icon } from '../icons.tsx'
 import { T } from './glyphs.ts'
 import { PopupLayer } from '../composer/Menu.tsx'
@@ -16,9 +18,7 @@ import { Tip } from '../nav/overlay.tsx'
 import { useLoaderTime, easeInOut, NATIVE_PAINT_ANIMATIONS } from '../MatrixLoader.tsx'
 import { webHost } from '../native/webview.ts'
 import { observeElementBounds, type ElementBoundsEvent } from '../native/layout.ts'
-import { useNativeWindowSize } from '../native/layout-hooks.ts'
 import { useWebLayer } from '../native/web-occlusion.ts'
-import { Dialog } from '../nav/overlay.tsx'
 import { visualTheme } from '../preview/theme.ts'
 import { launchBrowser } from '../preview/browser.ts'
 import { useNav } from '../nav/store.ts'
@@ -29,7 +29,7 @@ const heights = new Map<string, number>()
 const placements = new Map<string, () => void>()
 
 /** Geometry leases keep the same WK document while expanding/collapsing. */
-function VisualSlot({ id, height, active, onHover }: { id: string; height: number; active: boolean; onHover?: (over: boolean) => void }) {
+export function VisualSlot({ id, height, active, onHover }: { id: string; height: number; active: boolean; onHover?: (over: boolean) => void }) {
   const renderer = useGpuixRequired(), ref = useRef<PublicInstance | null>(null), layer = useWebLayer()
   useEffect(() => {
     if (!ref.current) return
@@ -47,26 +47,16 @@ function VisualSlot({ id, height, active, onHover }: { id: string; height: numbe
   return <div ref={ref} testId="visual-frame" onMouseEnter={() => onHover?.(true)} onMouseLeave={() => onHover?.(false)} style={{ height, width: '100%', flexShrink: 0 }} />
 }
 
-export const VisualCard = memo(function VisualCard({ visual, threadId }: { visual: HtmlVisual; threadId: string }) {
-  const t = useTheme(), size = useNativeWindowSize(), id = `visual:${threadId}:${visual.id}`
-  const [error, setError] = useState(''), [attempt, retry] = useState(0), [expanded, setExpanded] = useState(false)
-  // A WK document has arbitrary interactive state. Once visited, retain its
-  // owner until this transcript closes; native offscreen placement hides it
-  // without reloading the document. Ordinary Markdown/code bodies stay bounded.
-  useTranscriptRowLease(true)
+/**
+ * One visual's native document: its frame ticket, the WK document, theme and messages. Shared by the inline card and the
+ * visual tab (ADE-54), which use different document ids so each has its own web view.
+ */
+export function useVisualDocument(threadId: string, visualId: string, id: string, events: { onHover?: (over: boolean) => void; onSize?: (height: number) => void } = {}) {
+  const t = useTheme()
+  const [error, setError] = useState(''), [attempt, retry] = useState(0)
   const [loaded, setLoaded] = useState(false), [skeleton, setSkeleton] = useState(false)
-  // The pointer is over the figure (reported by its wrapper) or the control; the control hides a beat after both leave.
-  const [overFigure, setOverFigure] = useState(false), [overControl, setOverControl] = useState(false), [showControl, setShowControl] = useState(false)
-  // The control stays mounted through its exit (`PopupLayer leaving`); it arrives with the popup's own fade and scale.
-  const [controlMounted, setControlMounted] = useState(false)
-  useEffect(() => {
-    if (overFigure || overControl) { setShowControl(true); return }
-    const id = setTimeout(() => setShowControl(false), 120)
-    return () => clearTimeout(id)
-  }, [overFigure, overControl])
-  const [height, setHeight] = useState(() => heights.get(id) ?? visualFrameHeight(visual, VISUAL_COLUMN_WIDTH))
   const ready = useRef(false), theme = useRef(visualTheme(t)); theme.current = visualTheme(t)
-  const active = useNav(state => state.page === 'home' && !state.settingsOpen)
+  const on = useRef(events); on.current = events
   useEffect(() => {
     const client = getClient(), owner = activeEnvironment()
     if (!client) return
@@ -81,15 +71,13 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
       if (event.type === 'created' || event.type === 'loaded') { ready.current = true; placements.get(id)?.(); webHost.theme(id, theme.current) }
       if (event.type === 'failed' || event.type === 'terminated') setError(event.message ?? 'The page stopped responding. Retry to reload it.')
       if (event.type !== 'message' || !event.data) return
-      if (event.data.kind === 'kybern-visual-hover') { setOverFigure(!!event.data.value); return }
+      if (event.data.kind === 'kybern-visual-hover') { on.current.onHover?.(!!event.data.value); return }
       if (event.data.kind === 'loaded' && !documentReady) { clearTimeout(watchdog); watchdog = setTimeout(() => { if (alive && !documentReady) setError('The preview expired or did not finish loading. Retry to reopen it.') }, 4000) }
       if (event.data.kind === 'kybern-visual-ready' && !documentReady && !fallback) fallback = setTimeout(reveal, 1000)
       if (event.data.kind === 'kybern-visual-size') {
         const measured = visualHeight(event.data.height)
         if (measured !== null) {
-          const next = visualFrameHeight(visual, VISUAL_COLUMN_WIDTH, measured)
-          heights.delete(id); heights.set(id, next); if (heights.size > 256) heights.delete(heights.keys().next().value!)
-          setHeight(next)
+          on.current.onSize?.(measured)
           reveal()
         }
       } else if (event.data.kind === 'kybern-visual-link') {
@@ -97,43 +85,60 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
         if (link) void launchBrowser(link).catch(error => setError(String(error)))
       }
     })
-    void client.call('threads.visuals.frame', { thread_id: threadId, visual_id: visual.id }).then(result => {
+    void client.call('threads.visuals.frame', { thread_id: threadId, visual_id: visualId }).then(result => {
       ticket = result.ticket
       if (!alive || owner !== activeEnvironment()) { void client.call('threads.visuals.revoke', { thread_id: threadId, ticket }); ticket = undefined; return }
       const url = `${httpBase(client.endpoint.url)}/visual-frame/${encodeURIComponent(ticket)}` + visualThemeFragment(theme.current)
       try { generation = webHost.create(id, url, 'visual') } catch (error) { setError(String(error)) }
     }).catch(error => { if (alive) setError(String(error)) })
     return () => { alive = false; ready.current = false; clearTimeout(loading); clearTimeout(watchdog); clearTimeout(fallback); stop(); webHost.destroy(id); if (ticket) void client.call('threads.visuals.revoke', { thread_id: threadId, ticket }).catch(() => {}) }
-  }, [threadId, visual.id, id, attempt])
+  }, [threadId, visualId, id, attempt])
   useEffect(() => { if (ready.current) webHost.theme(id, theme.current) }, [id, t])
-  const [expandedHeight, expandedWidth] = [Math.max(100, size.height - 32 - 44 - 2), Math.max(320, size.width - 32)]
-  const frame = <VisualSlot id={id} height={expanded ? expandedHeight : height} active={active && loaded && !error} onHover={setOverFigure} />
-  const control = showControl && loaded && !error && !expanded
+  return { error, loaded, skeleton, retry: () => retry((n) => n + 1) }
+}
+
+export const VisualCard = memo(function VisualCard({ visual, threadId }: { visual: HtmlVisual; threadId: string }) {
+  const t = useTheme(), id = `visual:${threadId}:${visual.id}`
+  const pane = usePaneAccess()
+  // A WK document has arbitrary interactive state. Once visited, retain its
+  // owner until this transcript closes; native offscreen placement hides it
+  // without reloading the document. Ordinary Markdown/code bodies stay bounded.
+  useTranscriptRowLease(true)
+  // The pointer is over the figure (reported by its wrapper) or the control; the control hides a beat after both leave.
+  const [overFigure, setOverFigure] = useState(false), [overControl, setOverControl] = useState(false), [showControl, setShowControl] = useState(false)
+  // The control stays mounted through its exit (`PopupLayer leaving`); it arrives with the popup's own fade and scale.
+  const [controlMounted, setControlMounted] = useState(false)
+  useEffect(() => {
+    if (overFigure || overControl) { setShowControl(true); return }
+    const id = setTimeout(() => setShowControl(false), 120)
+    return () => clearTimeout(id)
+  }, [overFigure, overControl])
+  const [height, setHeight] = useState(() => heights.get(id) ?? visualFrameHeight(visual, VISUAL_COLUMN_WIDTH))
+  const hidden = useChatHidden()
+  const active = useNav(state => state.page === 'home' && !state.settingsOpen) && !hidden
+  const { error, loaded, skeleton, retry: retryDocument } = useVisualDocument(threadId, visual.id, id, {
+    onHover: setOverFigure,
+    onSize: (measured) => {
+      const next = visualFrameHeight(visual, VISUAL_COLUMN_WIDTH, measured)
+      heights.delete(id); heights.set(id, next); if (heights.size > 256) heights.delete(heights.keys().next().value!)
+      setHeight(next)
+    },
+  })
+  const control = showControl && loaded && !error
   if (control && !controlMounted) setControlMounted(true)
   return <div testId="visual-card" data-status={error ? 'error' : loaded ? 'ready' : 'loading'} style={{ display: 'flex', flexDirection: 'column', marginTop: 8, marginBottom: 8, position: 'relative' }}>
-    {expanded ? <>
-      <div style={{ height, width: '100%' }} />
-      <Dialog instant width={expandedWidth} radius={14} onClose={() => setExpanded(false)} testId="visual-expanded">
-        {/* The desktop's native <dialog> opens and closes without motion (`instant`). `.visual-reply__expanded-header`: 44px, 16px / 8px inset, the title and a ghost close button. */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 44, paddingLeft: 16, paddingRight: 8, backgroundColor: t.surface }}>
-          <Label color={t.text} weight={500} truncate style={{ flexGrow: 1 }}>{visual.title || 'Interactive visual'}</Label>
-          <div testId="dialog-close" role="button" aria-label="Close expanded preview" onClick={() => setExpanded(false)} style={{ display: 'flex', width: 28, height: 28, alignItems: 'center', justifyContent: 'center', borderRadius: 8, cursor: 'pointer', flexShrink: 0, hover: { backgroundColor: t.buttonSecondaryHover } }}>
-            <Icon source={T.close} size={14} color={t.textSecondary} />
-          </div>
-        </div>
-        {frame}
-      </Dialog>
-    </> : <div style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}>
-      {frame}
+    {/* "Open in a tab" opens the whole document as a visual tab (ADE-54) with its own web view (`VisualTab`). */}
+    <div style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}>
+      <VisualSlot id={id} height={height} active={active && loaded && !error} onHover={setOverFigure} />
       {/* The glass control sits 8px inside the top-right corner (`.visual-reply__open`). It is an anchored layer so it paints above the native document. */}
-      {controlMounted && !expanded && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 0 }}>
+      {controlMounted && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 0 }}>
         <PopupLayer leaving={!control} onLeft={() => setControlMounted(false)} kind="tooltip" side="bottom" align="end" sideOffset={8} alignOffset={-8} material="none" occlude style={{ borderRadius: 14 }}>
-          <Tip label="Expand preview" side="bottom" size={28}>
+          <Tip label="Open in a tab" side="bottom" size={28}>
             <div
               testId="visual-expand"
               role="button"
-              aria-label="Expand preview"
-              onClick={() => { setOverControl(false); setExpanded(true) }}
+              aria-label="Open in a tab"
+              onClick={() => { setOverControl(false); openTabFromPane(pane.id, { kind: 'visual', id: visual.id, title: visual.title || 'Interactive visual' }) }}
               onMouseEnter={() => setOverControl(true)}
               onMouseLeave={() => setOverControl(false)}
               style={{
@@ -150,13 +155,13 @@ export const VisualCard = memo(function VisualCard({ visual, threadId }: { visua
           </Tip>
         </PopupLayer>
       </div>}
-    </div>}
+    </div>
     {/* The skeleton fades out when the document is ready, while the document itself fades in (`webDocumentEnter`). */}
     <Presence show={skeleton && !loaded && !error} exit={EXIT.backdrop} style={{ position: 'absolute', top: 0, left: 0, right: 0, height }}><Skeleton height={height} /></Presence>
     {error && <div testId="visual-error" style={{ position: 'absolute', top: 0, left: 0, right: 0, height, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, paddingTop: Math.min(height * 0.35, 160), paddingLeft: 16, paddingRight: 16, borderRadius: 10, borderWidth: 1, borderColor: t.border, backgroundColor: ink(t, 0.04) }}>
       <Label color={t.text} weight={500} style={{ textAlign: 'center' }}>{`Couldn’t load “${visual.title}”`}</Label>
       {error && <Label color={t.textSecondary} size={13} style={{ textAlign: 'center', lineClamp: 2 }}>{error}</Label>}
-      <Button testId="visual-retry" variant="subtle" onClick={() => retry(n => n + 1)}><Icon source={T.rotateCcw} size={14} color={t.text} />Retry</Button>
+      <Button testId="visual-retry" icon={T.rotateCcw} onClick={retryDocument}>Retry</Button>
     </div>}
   </div>
 })
@@ -176,4 +181,25 @@ export function Skeleton({ height }: { height: number }) {
     {...(native ? { paintTransform: { initial: { opacity: 1 }, animate: { opacity: dim ? 0.55 : 1 }, transition: { duration: 0.8, ease: [0.42, 0, 0.58, 1] } } } : {})}
     onMotionComplete={native ? () => setDim(value => !value) : undefined}
     style={{ position: 'absolute', top: 0, left: 0, right: 0, height, borderRadius: 10, backgroundColor: ink(t, 0.04), opacity, pointerEvents: 'none' }} />
+}
+
+/** A visual opened as a tab (ADE-54): the whole document at the tab's size, its own web view (`visual-tab:` id). */
+export function VisualTab({ threadId, visualId }: { threadId: string; visualId: string }) {
+  const t = useTheme()
+  const renderer = useGpuixRequired()
+  const id = `visual-tab:${threadId}:${visualId}`
+  const { error, loaded, retry } = useVisualDocument(threadId, visualId, id)
+  const [host, setHost] = useState<PublicInstance | null>(null)
+  const [height, setHeight] = useState(400)
+  const active = useNav(state => state.page === 'home' && !state.settingsOpen)
+  useEffect(() => host ? observeElementBounds(renderer, host.id, e => { if (e.rect) setHeight(h => Math.abs(h - e.rect!.height) < 0.5 ? h : e.rect!.height) }) : undefined, [renderer, host])
+  return <div ref={setHost} testId="visual-tab" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
+    <VisualSlot id={id} height={height} active={active && loaded && !error} />
+    {!loaded && !error && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}><Skeleton height={height} /></div>}
+    {error && <div testId="visual-error" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 24 }}>
+      <Label color={t.text} weight={500} style={{ textAlign: 'center' }}>Couldn’t load this visual</Label>
+      <Label color={t.textSecondary} size={13} style={{ textAlign: 'center', lineClamp: 2 }}>{error}</Label>
+      <Button testId="visual-retry" icon={T.rotateCcw} onClick={retry}>Retry</Button>
+    </div>}
+  </div>
 }

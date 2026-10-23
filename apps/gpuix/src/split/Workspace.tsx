@@ -3,6 +3,7 @@ import { BACKDROP_ALLOWED } from '../native/backdrop-material.ts'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { ThreadHeader } from '../nav/TitleBar.tsx'
+import { GroupContent } from '../tabs/Body.tsx'
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { motion, useGpuixRequired, type PublicInstance, type EventPayload } from '@gpuix/react'
 import { dropZoneAt, splitForZone, type DropZone } from './geometry.ts'
@@ -10,7 +11,9 @@ import { clampSplitRatioForWidth, shouldStackHorizontalSplit } from '../../../de
 import { PaneProvider, focusPane, getPane, selectPaneThread, useApp } from '../state.ts'
 import { observeElementBounds, type LayoutRect } from '../native/layout.ts'
 import { Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { Button, Para, alpha } from '../transcript/kit.tsx'
+import { useGlass } from '../platform/glass.ts'
+import { Para, alpha } from '../transcript/kit.tsx'
+import { Button } from '../kit/Button.tsx'
 import { addWindowKeyHandler } from '../nav/keys.ts'
 import { usePacing } from '../drag/pacing.ts'
 import { DragGhost, type Settle } from '../drag/Ghost.tsx'
@@ -29,6 +32,36 @@ import { canSplitPane, collectThreadPanes, closePane, getSplitRoot, resizePane, 
 const ROW_LEFT = 58
 const ROW_WIDTH = 244
 const bounds = new Map<string, LayoutRect>()
+// Each leaf's window rect, published for the title bar (top groups draw their strips over their own column), the tab drag
+// and ⌘⌥ arrow focus. A new snapshot only when a rect changes.
+let rectsSnapshot: ReadonlyMap<string, LayoutRect> = new Map()
+const rectListeners = new Set<() => void>()
+function setBounds(id: string, rect: LayoutRect | null) {
+  const old = bounds.get(id)
+  if (rect && old && old.x === rect.x && old.y === rect.y && old.width === rect.width && old.height === rect.height) return
+  if (!rect && !old) return
+  if (rect) bounds.set(id, rect); else bounds.delete(id)
+  rectsSnapshot = new Map(bounds)
+  for (const listener of rectListeners) listener()
+}
+export const paneRects = () => bounds
+const subscribeRects = (listener: () => void) => { rectListeners.add(listener); return () => { rectListeners.delete(listener) } }
+const readRects = () => rectsSnapshot
+export const usePaneRects = () => useSyncExternalStore(subscribeRects, readRects)
+// Primitive reads of the rects: a resize or a dock spring changes the rects every frame, and these re-render their reader only
+// when the answer flips (the "no per-frame React" rule), unlike `usePaneRects`.
+/** Whether a leaf sits in the lower row of a split. */
+export const useLowerLeaf = (id: string) => useSyncExternalStore(subscribeRects, () => isLowerLeaf(rectsSnapshot, id))
+/** Whether a leaf is narrower than `width` (false while it has no rect). */
+export const usePaneNarrower = (id: string, width: number) => useSyncExternalStore(subscribeRects, () => { const r = rectsSnapshot.get(id); return r ? r.width < width : false })
+/** A leaf below another one (the lower row of a split): it draws a 32 px strip; top leaves draw theirs in the title bar. */
+export function isLowerLeaf(rects: ReadonlyMap<string, LayoutRect>, id: string) {
+  const rect = rects.get(id)
+  if (!rect) return false
+  let top = Infinity
+  for (const r of rects.values()) top = Math.min(top, r.y)
+  return rect.y > top + 1
+}
 type Source = { title: string; kind: string; bounds: () => { x: number; y: number; width: number; height: number } | null }
 type Ghost = { title: string; kind: string; offX: number; offY: number; width: number; height: number; homeY: number }
 type Drag = { kind: 'resize'; id: string; horizontal: boolean; rect: LayoutRect } | { kind: 'thread'; id: string; x: number; y: number; ghost?: Ghost; target?: { id: string; zone: DropZone }; settle?: Settle }
@@ -89,7 +122,7 @@ function cancel() {
   stopReleaseWatch?.(); stopReleaseWatch = undefined
   pending = null; stopSelection?.(); stopSelection = undefined; publish(null)
 }
-onEnvironmentChange(() => { cancel(); suppressedThread = null; bounds.clear() })
+onEnvironmentChange(() => { cancel(); suppressedThread = null; for (const id of [...bounds.keys()]) setBounds(id, null) })
 
 export function SplitWorkspace({ children }: { children: ReactNode }) {
   const root = useSplitRoot()
@@ -126,13 +159,14 @@ function Leaf({ id, split, children }: { id: string; split: boolean; children: R
   const [node, ref] = useState<PublicInstance | null>(null)
   useEffect(() => {
     if (!node) return
-    const stop = observeElementBounds(renderer, node.id, event => { if (event.rect) bounds.set(id, event.rect); else bounds.delete(id) })
-    return () => { stop(); bounds.delete(id) }
+    const stop = observeElementBounds(renderer, node.id, event => setBounds(id, event.rect))
+    return () => { stop(); setBounds(id, null) }
   }, [renderer, node, id])
+  const lower = useLowerLeaf(id)
   return <PaneProvider id={id} compact={split}><div ref={ref} testId={`pane-${id}`} onMouseDown={() => focusPane(id)} onFocus={() => focusPane(id)} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', position: 'relative' }}>
-    {split && <PaneHeaderOrNone id={id} />}
-    <LeafBody id={id} focused={focused}><LeafContent id={id} split={split}>{children}</LeafContent></LeafBody>
-    {split && <FocusRing focused={focused} color={alpha(t.v('--color-border-focus'), .28)} />}
+    {split && lower && <PaneHeaderOrNone id={id} />}
+    <LeafBody id={id} focused={focused}><LeafContent id={id} split={split}><GroupContent leafId={id}>{children}</GroupContent></LeafContent></LeafBody>
+    {split && <FocusRing focused={focused} color={alpha(t.v('--color-border-focus'), .55)} />}
   </div></PaneProvider>
 }
 /** `.split-thread-pane::after`: the focused pane's ring fades in and out over 120 ms. Focus moved from the keyboard (⌘⌥←/→) swaps it at once. Paint-only. */
@@ -176,32 +210,22 @@ function LeafContent({ id, split, children }: { id: string; split: boolean; chil
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: 8, marginBottom: 12, backgroundColor: t.buttonSecondary }}><Icon source={N.columns} size={16} color={t.textSecondary} /></div>
     <Label color={t.text} size={15} weight={500} lineHeight={18}>Start a conversation</Label>
     <div style={{ display: 'flex', maxWidth: 216, marginTop: 4, justifyContent: 'center' }}><Para color={t.textSecondary} size={13} lineHeight={19} style={{ textAlign: 'center' }}>Start a new thread, choose a recent one, or drag one here.</Para></div>
-    <PaneButton testId={`pane-new-${id}`} tone="primary" top={16} onClick={() => { focusPane(id); showDraft(true) }}>New thread</PaneButton>
+    <Button testId={`pane-new-${id}`} variant="primary" style={{ marginTop: 16 }} onClick={() => { focusPane(id); showDraft(true) }}>New thread</Button>
     {recent.length > 0 && <div style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%', marginTop: 16 }}>
-      {recent.map(thread => <PaneButton key={thread.id} testId={`pane-recent-${id}-${thread.id}`} tone="ghost" mark={thread.provider.kind} onClick={() => { focusPane(id); void selectPaneThread(id, thread.id) }}>{thread.title || 'Untitled'}</PaneButton>)}
+      {recent.map(thread => <Button key={thread.id} testId={`pane-recent-${id}-${thread.id}`} variant="ghost" block label={thread.title || 'Untitled'} style={{ justifyContent: 'flex-start', paddingLeft: 8, paddingRight: 8 }} onClick={() => { focusPane(id); void selectPaneThread(id, thread.id) }}><ProviderMark kind={thread.provider.kind} size={14} /><Label color={t.text} size={14} lineHeight={20} truncate style={{ pointerEvents: 'none' }}>{thread.title || 'Untitled'}</Label></Button>)}
     </div>}
-    <PaneButton tone="outline" top={16} icon={N.x} onClick={() => closePane(id)}>Close pane</PaneButton>
+    <Button size="sm" icon={N.x} style={{ marginTop: 16 }} onClick={() => closePane(id)}>Close pane</Button>
   </div></div>
-}
-/** Kit buttons of the empty pane: default `sm` (28px), ghost `sm` rows with a provider mark, `chrome-outline` `xs`. */
-function PaneButton({ children, tone, onClick, testId, top = 0, icon, mark }: { children: string; tone: 'primary' | 'ghost' | 'outline'; onClick: () => void; testId?: string; top?: number; icon?: string; mark?: string }) {
-  const t = useTheme()
-  const row = tone === 'ghost'
-  return <div testId={testId} role="button" tabIndex={0} onClick={onClick} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onClick() }}
-    style={{ display: 'flex', alignItems: 'center', justifyContent: row ? 'flex-start' : 'center', gap: 6, height: tone === 'outline' ? 26 : 28, width: row ? '100%' : undefined, minWidth: 0, marginTop: top, paddingLeft: row ? 8 : tone === 'outline' ? 8 : 9, paddingRight: row ? 8 : tone === 'outline' ? 8 : 9, borderRadius: 8, borderWidth: 1, borderColor: tone === 'outline' ? t.border : 'rgba(0, 0, 0, 0)', backgroundColor: tone === 'primary' ? t.buttonPrimary : undefined, cursor: 'pointer', hover: tone === 'primary' ? { opacity: 0.9 } : { backgroundColor: t.buttonSecondaryHover } }}>
-    {mark && <ProviderMark kind={mark} size={14} />}
-    {icon && <Icon source={icon} size={14} color={t.text} />}
-    <Label color={tone === 'primary' ? t.buttonPrimaryText : t.text} size={tone === 'outline' ? 13 : 14} weight={row ? 400 : 500} lineHeight={16} truncate>{children}</Label>
-  </div>
 }
 function PaneHeaderOrNone({ id }: { id: string }) {
   // An empty pane has no header: the empty state carries its own actions.
   const selected = useApp(s => s.selectedId)
   return selected ? <PaneHeader id={id} /> : null
 }
+/** A lower group's 32 px strip (`sm` tabs) with its pane actions; the top groups' strips are in the title bar. */
 function PaneHeader({ id }: { id: string }) {
   const t = useTheme()
-  return <div testId={`pane-header-${id}`} onMouseDown={() => focusPane(id)} onClick={() => focusPane(id)} style={{ display: 'flex', alignItems: 'center', height: 46, flexShrink: 0, paddingLeft: 20, paddingRight: 20, gap: 8, borderBottomWidth: 1, borderColor: t.border }}><ThreadHeader paneId={id} /></div>
+  return <div testId={`pane-header-${id}`} onMouseDown={() => focusPane(id)} style={{ display: 'flex', alignItems: 'center', height: 32, flexShrink: 0, paddingLeft: 6, paddingRight: 6, gap: 4, borderBottomWidth: 1, borderColor: t.surfaceDivider }}><ThreadHeader leafId={id} size="sm" /></div>
 }
 export function moveSplitDrag(e: EventPayload) {
   const current = drag
@@ -244,7 +268,7 @@ export function SplitDragLayer() {
   const [anchor, setAnchor] = useState<PublicInstance | null>(null)
   const [originY, setOriginY] = useState(0)
   useEffect(() => anchor ? observeElementBounds(renderer, anchor.id, e => setOriginY(e.rect?.y ?? 0)) : undefined, [anchor, renderer])
-  const current = useDrag(), t = useTheme()
+  const current = useDrag(), t = useTheme(), g = useGlass()
   const pacing = usePacing('split')
   useEffect(() => addWindowKeyHandler(e => { if (e.key === 'escape' && (drag || pending)) { drag?.kind === 'thread' ? settleHome() : cancel(); return true } }), [])
   const target = current?.kind === 'thread' ? current.target : undefined
@@ -259,13 +283,13 @@ export function SplitDragLayer() {
       ? <DragGhost rect={{ x: ROW_LEFT, y: current.ghost.homeY - originY, width: current.ghost.width, height: current.ghost.height }} grab={{ x: current.ghost.offX, y: current.ghost.offY }} x={current.x} y={current.y - originY} settle={current.settle ?? null} onSettled={() => { if (drag?.kind === 'thread' && drag.settle) publish(null) }} pacing={pacing as never} radius={10}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 10, paddingRight: 10, height: '100%' }}><ProviderMark kind={current.ghost.kind} size={14} /><Label color={t.text} size={14} truncate>{current.ghost.title}</Label></div>
         </DragGhost>
-      : <div ref={pacing} style={{ position: 'absolute', display: 'flex', alignItems: 'center', gap: 8, left: current.x + 12, top: current.y - originY + 12, width: 240, height: 29, paddingLeft: 10, paddingRight: 10, borderRadius: 10, backgroundColor: t.surface, borderWidth: 1, borderColor: t.border, boxShadow: { offsetX: 0, offsetY: 8, blurRadius: 24, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.2)' }, pointerEvents: 'none' }}><Label color={t.text} size={12}>Move conversation</Label></div>}
+      : <div ref={pacing} style={{ position: 'absolute', display: 'flex', alignItems: 'center', gap: 8, left: current.x + 12, top: current.y - originY + 12, width: 240, height: 29, paddingLeft: 10, paddingRight: 10, borderRadius: 10, backgroundColor: g.on ? g.denseFloat : t.surface, borderWidth: 1, borderColor: t.border, boxShadow: { offsetX: 0, offsetY: 8, blurRadius: 24, spreadRadius: 0, color: 'rgba(0, 0, 0, 0.2)' }, pointerEvents: 'none' }}><Label color={t.text} size={12}>Move conversation</Label></div>}
   </div>}
   </>
 }
 type Box = { x: number; y: number; width: number; height: number }
 /** The drop target: the pane dims, the highlight fades and grows in, and it springs when the zone changes. Reduce Motion paints the final state with no tween (a zero-length tween leaves it invisible). */
-function DropOverlay({ rect, zone, whole }: { rect: Box; zone: DropZone; whole: boolean }) {
+export function DropOverlay({ rect, zone, whole }: { rect: Box; zone: DropZone; whole: boolean }) {
   const t = useTheme()
   const side = !whole && (zone === 'left' || zone === 'right'), stack = !whole && (zone === 'top' || zone === 'bottom')
   const hl = {

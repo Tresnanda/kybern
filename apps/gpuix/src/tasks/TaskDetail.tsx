@@ -12,11 +12,10 @@ import { getClient } from '../state.ts'
 import { openThread } from '../nav/history.ts'
 import { Menu, MenuItem } from '../nav/overlay.tsx'
 import { useNotes, rpc as noteRpc } from '../notes/store.ts'
-import { Button } from '../settings/controls.tsx'
+import { Button } from '../kit/Button.tsx'
 import { CriterionRow, DescriptionEditor, TitleField } from './Content.tsx'
 import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
 import { cachedMarkdownTheme } from '../transcript/kit.tsx'
-import { Check } from './Glyphs.tsx'
 import { MoreMenu, ProjectMenu, TaskMenus } from './TaskMenus.tsx'
 import { useTaskAutosave } from './autosave.ts'
 import { TaskDock } from './TaskDock.tsx'
@@ -25,7 +24,8 @@ import { EDGE_FADE } from '../native/local-build.ts'
 import { openTask, taskState, taskTyping, setTasks, updateTask } from './store.ts'
 
 
-export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: string[] }) {
+/** `width`: the task is a tab beside a chat (ADE-54) and lays out by its own width rather than the window's. */
+export function TaskDetail({ task, sequence, width }: { task: TaskItem; sequence: string[]; width?: number }) {
   const t = useTheme()
   const g = useGlass()
   const availableNotes = useNotes((s) => s.notes)
@@ -81,8 +81,9 @@ export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: strin
   const size = useWindowSize({ intervalMs: 300 })
   const sidebar = useSidebarWidth()
   // `.tk-dcol`: 620px, or the main column less 24px each side; the side panel is 296px.
-  const sidePanel = size.width - 52 - sidebar - 8 >= 760 ? 296 : 0
-  const main = size.width - 52 - sidebar - 8 - sidePanel
+  const available = width ?? size.width - 52 - sidebar - 8
+  const sidePanel = available >= 760 ? 296 : 0
+  const main = available - sidePanel
   const gutter = Math.max(24, (main - 620) / 2)
   const padding = { paddingLeft: gutter, paddingRight: gutter, paddingBottom: 0 }
   const k = notesTokens(t)
@@ -101,7 +102,7 @@ export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: strin
           <div key="content" style={{ ...padding, paddingTop: 48, display: 'flex', flexDirection: 'column', gap: 14 }}>
             <TitleField value={edit.title} saved={task.title} onChange={edit.editTitle} onCommit={() => void edit.flush()} onEnter={() => setEditing(true)} />
             <DescriptionEditor value={description} epoch={descriptionEpoch} onChange={changeDescription} onCommit={() => void edit.flush()} onExit={() => setEditing(false)} onFocus={beginEdit} focus={editing} />
-            {edit.conflict && <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Label color={t.red} size={12}>This task changed elsewhere.</Label><Button testId="task-use-theirs" onClick={edit.useTheirs}>Use theirs</Button><Button testId="task-keep-mine" onClick={edit.keepMine}>Keep mine</Button></div>}
+            {edit.conflict && <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Label color={t.red} size={12}>This task changed elsewhere.</Label><Button testId="task-use-theirs" size="sm" onClick={edit.useTheirs}>Use theirs</Button><Button testId="task-keep-mine" size="sm" onClick={edit.keepMine}>Keep mine</Button></div>}
             {edit.error && !edit.conflict && <Label color={t.red} size={12}>{edit.error}</Label>}
           </div>
           <div key="criteria-title" style={{ ...padding, paddingTop: 36, paddingBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -124,10 +125,8 @@ export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: strin
               />
             </div>
           ))}
-          <div key="add-criterion" style={padding}>
-            <div testId="task-add-criterion" onClick={() => { changeCriteria([...criteria, { checked: false, text: '' }], false); setFocusRow({ index: criteria.length, token: Date.now() }) }} style={{ display: 'flex', alignItems: 'center', gap: 8, height: 32, marginLeft: -8, marginRight: -8, paddingLeft: 8, paddingRight: 8, borderRadius: 7, cursor: 'pointer', hover: { backgroundColor: ink(t, 0.05) } }}>
-              <Icon source={N.plus} size={14} color={k.fg3} /><Label color={k.fg3} size={13} lineHeight={19.5}>Add a criterion</Label>
-            </div>
+          <div key="add-criterion" style={{ ...padding, display: 'flex', alignItems: 'center' }}>
+            <Button testId="task-add-criterion" variant="ghost" size="sm" icon="plus" onClick={() => { changeCriteria([...criteria, { checked: false, text: '' }], false); setFocusRow({ index: criteria.length, token: Date.now() }) }}>Add a criterion</Button>
           </div>
           <div key="notes-title" style={{ ...padding, paddingTop: 36, paddingBottom: 8, display: 'flex', alignItems: 'center' }}>
             <Label color={t.text} size={13} lineHeight={19.5} weight={600}>Linked notes</Label>
@@ -136,7 +135,7 @@ export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: strin
             <div key={note.id} style={{ ...padding }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, height: 34, marginLeft: -8, marginRight: -8, paddingLeft: 8, paddingRight: 8, borderRadius: 7, hover: { backgroundColor: ink(t, 0.05) } }}>
                 <div onClick={() => setExpandedNote(expandedNote === note.id ? null : note.id)} style={{ display: 'flex', alignItems: 'center', gap: 10, flexGrow: 1, minWidth: 0, cursor: 'pointer' }}><Icon source={N.note} size={14} color={k.fg3} /><Label color={k.fg1} size={13} lineHeight={19.5} truncate>{note.title || 'Untitled note'}</Label></div>
-                <div testId={`task-detach-${note.id}`} onClick={() => void updateTask(task.id, { note_ids: task.note_ids.filter((id) => id !== note.id) }).catch(() => {})} style={{ cursor: 'pointer' }}><Label color={k.fg3} size={12}>Remove link</Label></div>
+                <Button testId={`task-detach-${note.id}`} variant="ghost" size="sm" onClick={() => void updateTask(task.id, { note_ids: task.note_ids.filter((id) => id !== note.id) }).catch(() => {})}>Remove link</Button>
               </div>
               {expandedNote === note.id && (
                 <markdown theme={cachedMarkdownTheme(t)} source={note.body} style={{ color: t.text, userSelect: 'text' }} />
@@ -144,7 +143,7 @@ export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: strin
             </div>
           ))}
           <div key="link-note" style={padding}>
-            <Menu testId="task-attach-note" trigger={() => <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 32, marginLeft: -8, marginRight: -8, paddingLeft: 8, paddingRight: 8, borderRadius: 7, pointerEvents: 'none', hover: { backgroundColor: ink(t, 0.05) } }}><Icon source={N.plus} size={14} color={k.fg3} /><Label color={k.fg3} size={13} lineHeight={19.5}>Link a note</Label></div>}>
+            <Menu testId="task-attach-note" trigger={() => <Button variant="ghost" size="sm" icon="plus">Link a note</Button>}>
               {availableNotes.filter((note) => !note.deleted_at && !task.note_ids.includes(note.id) && noteRpc(note.id) === getClient()).map((note) => <MenuItem key={note.id} id={note.id} testId={`task-attach-${note.id}`} label={note.title || 'Untitled'} onSelect={() => void updateTask(task.id, { note_ids: [...task.note_ids, note.id] }).catch(() => {})} />)}
             </Menu>
           </div>
@@ -158,7 +157,7 @@ export function TaskDetail({ task, sequence }: { task: TaskItem; sequence: strin
                 <Label color={k.fg2} size={13} lineHeight={18} style={{ flexGrow: 1 }}>
                   {event.kind === 'created' ? 'Created' : event.kind === 'status' ? `Changed status to ${STATUS_LABEL[event.status]}` : `Run ${event.run.number} · ${runOutcome(event.run, Date.now())}`}
                 </Label>
-                {event.kind === 'run' && <div onClick={() => openThread(event.run.thread_id)} style={{ cursor: 'pointer' }}><Label color={k.fg1} size={12} weight={500}>Open run</Label></div>}
+                {event.kind === 'run' && <Button variant="ghost" size="sm" onClick={() => openThread(event.run.thread_id)}>Open run</Button>}
                 <Label color={k.fg3} size={12} lineHeight={18}>{relativeTime(event.at, Date.now()).replace(/^(\d+[smhd])$/, '$1 ago')}</Label>
               </div>
             </div>

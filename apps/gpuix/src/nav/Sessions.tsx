@@ -7,10 +7,8 @@ import { useGpuix, type PublicInstance } from '@gpuix/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { relativeTime } from '@/lib/format'
 import type { ProviderKind, SavedSession } from '../../../../packages/kybern-client/src/types.ts'
-import { Icon } from '../icons.tsx'
 import { MatrixLoader } from '../MatrixLoader.tsx'
 import { Rise } from '../motion/kit.tsx'
-import { iconEnter } from '../shell/motion.ts'
 import { getClient, useApp } from '../state.ts'
 import { inSpace } from '../../../../packages/kybern-client/src/spaces.ts'
 import { useCurrentSpaceId } from '../spaces/current.ts'
@@ -18,8 +16,12 @@ import { Label, ProviderMark, useTheme } from '../ui.tsx'
 import { providerLabel } from '../sidebar/model.ts'
 import { errorText, resumeSession } from './actions.ts'
 import { N } from './glyphs.ts'
-import { Dialog, DialogHeader, Kbd, Menu, MenuItem, muted } from './overlay.tsx'
-import { SearchField } from './Palette.tsx'
+import { Dialog, DialogHeader, Menu, MenuItem, muted } from './overlay.tsx'
+import { Kbd } from '../kit/Kbd.tsx'
+import { Button } from '../kit/Button.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
+import { PickerChip } from '../kit/PickerChip.tsx'
+import { SearchField } from '../kit/SearchField.tsx'
 import { setNav, useNav } from './store.ts'
 
 const KINDS: ProviderKind[] = ['claude-code', 'codex', 'opencode', 'pi', 'omp', 'cursor']
@@ -156,12 +158,10 @@ function SessionPicker({ projectId: initialProject }: { projectId: string | null
           minWidth={208}
           testId="sessions-agent"
           rootStyle={{ flexGrow: 0 }}
-          trigger={() => (
-            <Chip>
-              {provider === 'all' ? <Icon source={N.clock} size={14} color={small} /> : <ProviderMark kind={provider} size={14} />}
-              <Label color={small}>{provider === 'all' ? 'All agents' : providerLabel(provider)}</Label>
-              <Icon source={N.chevronDown} size={12} color={muted(t, 0.5)} />
-            </Chip>
+          trigger={(open) => (
+            <PickerChip open={open} icon={provider === 'all' ? 'clock' : undefined} mark={provider === 'all' ? undefined : provider}>
+              {provider === 'all' ? 'All agents' : providerLabel(provider) ?? provider}
+            </PickerChip>
           )}
         >
           <MenuItem id="all" label="All agents" checked={provider === 'all'} onSelect={() => (setProvider('all'), setPageIndex(0), setHighlight(0))} />
@@ -183,14 +183,10 @@ function SessionPicker({ projectId: initialProject }: { projectId: string | null
             minWidth={192}
             testId="sessions-project"
             rootStyle={{ flexGrow: 0, minWidth: 0 }}
-            trigger={() => (
-              <Chip>
-                <Icon source={N.folder} size={14} color={small} />
-                <Label color={small} truncate>
-                  {allProjects ? 'All projects' : project.name}
-                </Label>
-                <Icon source={N.chevronDown} size={12} color={muted(t, 0.5)} />
-              </Chip>
+            trigger={(open) => (
+              <PickerChip open={open} icon="folder" truncate>
+                {allProjects ? 'All projects' : project.name}
+              </PickerChip>
             )}
           >
             <MenuItem id="project" label={project.name} checked={!allProjects} onSelect={() => (setAllProjects(false), setPageIndex(0), setHighlight(0))} />
@@ -198,28 +194,31 @@ function SessionPicker({ projectId: initialProject }: { projectId: string | null
           </Menu>
         )}
         <div style={{ flexGrow: 1 }} />
-        <div
-          role="button"
+        <IconButton
           testId="sessions-refresh"
-          aria-label="Refresh sessions"
+          icon={N.refresh}
+          label="Refresh sessions"
+          size="lg"
+          disabled={loading}
           onClick={() => {
             if (loading || opening) return
             const current = ++generation.current
             setPageIndex(0)
             for (const kind of kinds) void fetchProvider(kind, null, current)
           }}
-          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: 10, cursor: 'pointer', opacity: loading ? 0.5 : 1, hover: { backgroundColor: t.buttonSecondaryHover } }}
-        >
-          <Icon source={N.refresh} size={14} color={t.text} />
-        </div>
+        />
       </div>
       <div style={{ paddingLeft: 20, paddingRight: 20, paddingBottom: 4 }}>
         <Label color={small} size={13}>
           Search sessions
         </Label>
       </div>
-      <div style={{ paddingLeft: 10, paddingRight: 10 }}>
+      <div style={{ display: 'flex', paddingLeft: 20, paddingRight: 20 }}>
         <SearchField
+          size="lg"
+          label="Search sessions"
+          autoFocus
+          width="100%"
           value={query}
           testId="sessions-input"
           placeholder="Title, folder, or session ID"
@@ -230,7 +229,8 @@ function SessionPicker({ projectId: initialProject }: { projectId: string | null
             setHighlight(0)
           }}
           onSubmit={() => void resume(selected)}
-          onKeyDown={(key) => {
+          onKeyDown={(e) => {
+            const key = e.key ?? ''
             if (key === 'escape') close()
             else if (key === 'down') move(1)
             else if (key === 'up') move(-1)
@@ -318,9 +318,7 @@ function SessionPicker({ projectId: initialProject }: { projectId: string | null
                         : 'Start a conversation in an installed agent, then refresh this list.'}
                 </Label>
                 {!errors.length && (q || projectId) && (
-                  <div onClick={() => (q ? setQuery('') : setAllProjects(true))} style={{ paddingLeft: 10, paddingRight: 10, paddingTop: 4, paddingBottom: 4, borderRadius: 8, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
-                    <Label color={t.text}>{q ? 'Clear search' : 'Show all projects'}</Label>
-                  </div>
+                  <Button size="sm" onClick={() => (q ? setQuery('') : setAllProjects(true))}>{q ? 'Clear search' : 'Show all projects'}</Button>
                 )}
               </>
             )}
@@ -328,15 +326,18 @@ function SessionPicker({ projectId: initialProject }: { projectId: string | null
         )}
         {(pageIndex > 0 || more.length > 0 || all.length > (pageIndex + 1) * PAGE) && (
           <div style={{ display: 'flex', justifyContent: 'center', gap: 12, paddingTop: 8, paddingBottom: 8 }}>
-            {pageIndex > 0 && <TextButton label="Previous sessions" onClick={() => setPageIndex((n) => n - 1)} />}
+            {pageIndex > 0 && <Button variant="ghost" size="sm" onClick={() => setPageIndex((n) => n - 1)}>Previous sessions</Button>}
             {(more.length > 0 || all.length > (pageIndex + 1) * PAGE) && (
-              <TextButton
-                label={all.length > (pageIndex + 1) * PAGE ? 'Next sessions' : 'Load more sessions'}
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => {
                   if (all.length > (pageIndex + 1) * PAGE) return setPageIndex((n) => n + 1)
                   for (const kind of more) void fetchProvider(kind, pages[kind]!.next_cursor, generation.current)
                 }}
-              />
+              >
+                {all.length > (pageIndex + 1) * PAGE ? 'Next sessions' : 'Load more sessions'}
+              </Button>
             )}
           </div>
         )}
@@ -374,52 +375,18 @@ function SessionPicker({ projectId: initialProject }: { projectId: string | null
               </Label>
             </div>
           )}
-          <div
+          <Button
             testId="sessions-resume"
+            variant="primary"
+            size="lg"
+            busy={!!opening}
+            disabled={!selected}
             onClick={() => void resume(selected)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              height: 32,
-              paddingLeft: 14,
-              paddingRight: 14,
-              borderRadius: 16,
-              backgroundColor: t.buttonPrimary,
-              opacity: !selected || opening ? 0.5 : 1,
-              cursor: !selected || opening ? 'default' : 'pointer',
-            }}
           >
-            {opening && (
-              <div paintTransform={iconEnter()} style={{ display: 'flex' }}>
-                <MatrixLoader />
-              </div>
-            )}
-            <Label color={t.buttonPrimaryText} weight={500}>
-              {opening ? 'Opening…' : selected?.thread_id ? 'Open thread' : 'Resume session'}
-            </Label>
-          </div>
+            {opening ? 'Opening…' : selected?.thread_id ? 'Open thread' : 'Resume session'}
+          </Button>
         </div>
       </div>
     </Dialog>
-  )
-}
-
-/** `COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME`: a borderless capsule that fills on hover. */
-function Chip({ children }: { children: React.ReactNode }) {
-  const t = useTheme()
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 8, paddingRight: 8, paddingTop: 4, paddingBottom: 4, borderRadius: 999, cursor: 'pointer', minWidth: 0, hover: { backgroundColor: t.buttonSecondaryHover } }}>
-      {children}
-    </div>
-  )
-}
-
-function TextButton({ label, onClick }: { label: string; onClick: () => void }) {
-  const t = useTheme()
-  return (
-    <div onClick={onClick} style={{ paddingLeft: 10, paddingRight: 10, paddingTop: 4, paddingBottom: 4, borderRadius: 8, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
-      <Label color={t.text}>{label}</Label>
-    </div>
   )
 }

@@ -8,7 +8,7 @@ import { Label, useTheme } from '../ui.tsx'
 import type { PermissionMode, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
 import { G } from './glyphs.ts'
 import { CheckMark, PickerItem, PickerMenu } from './Menu.tsx'
-import { FooterChip } from './chips.tsx'
+import { PickerChip } from '../kit/PickerChip.tsx'
 import { useFooterFit } from './footerWidth.tsx'
 import { usePaneCompact } from '../state.ts'
 
@@ -71,18 +71,16 @@ export function PermissionPicker({
       gap={4}
       disabled={locked}
       trigger={(open) => (
-        <FooterChip pressed={open} color={accent} dimHover={!!accent}>
-          {(color) => (
-            <>
-              <Icon source={info.icon} size={16} color={color} />
-              {showLabel && (
-                <Label color={color} truncate>
-                  {info.label}
-                </Label>
-              )}
-            </>
-          )}
-        </FooterChip>
+        <PickerChip
+          bare
+          truncate
+          open={open}
+          chevron={showLabel}
+          label={info.label}
+          lead={<Icon source={info.icon} size={16} color={accent ?? t.iconSecondary} />}
+        >
+          {showLabel ? <Label color={accent ?? t.text} size={13} lineHeight={18} weight={500} truncate>{info.label}</Label> : null}
+        </PickerChip>
       )}
     >
       {modes.map((m) => {

@@ -13,6 +13,9 @@ float backdrop_edge_fade(float2 p, RoundedClipNode n) {
     float m=min(min(r.x,r.y),min(r.z,r.w));
     return m*m;
 }
+// Specialised per pipeline (index 0): true on Apple GPUs, which read the target in the shader (programmable blending); false elsewhere,
+// where the fixed-function blend of the vertical pass is used instead and the destination alpha stays as it was.
+constant bool programmable_blend [[function_constant(0)]];
 struct Varying { float4 position [[position]]; float2 pixel; };
 vertex Varying backdrop_vertex(uint i [[vertex_id]], constant Params &p [[buffer(0)]]) {
     float2 uv=float2((i==1||i==3)?1:0, i>=2?1:0);
@@ -20,7 +23,7 @@ vertex Varying backdrop_vertex(uint i [[vertex_id]], constant Params &p [[buffer
     Varying o; o.pixel=pos;
     o.position=float4(pos/p.viewport.xy*float2(2,-2)+float2(-1,1),0,1); return o;
 }
-fragment float4 backdrop_fragment(Varying in [[stage_in]], texture2d<float> source [[texture(0)]], constant Params &p [[buffer(0)]], device const RoundedClipNode *clips [[buffer(7)]]) {
+fragment float4 backdrop_fragment(Varying in [[stage_in]], float4 dst [[color(0), function_constant(programmable_blend)]], texture2d<float> source [[texture(0)]], constant Params &p [[buffer(0)]], device const RoundedClipNode *clips [[buffer(7)]]) {
     constexpr sampler s(coord::pixel, address::clamp_to_edge, filter::linear);
     bool vertical=p.values.w!=0;
     float2 pos=vertical?in.pixel-p.crop.xy:in.pixel+p.crop.xy;
@@ -35,6 +38,10 @@ fragment float4 backdrop_fragment(Varying in [[stage_in]], texture2d<float> sour
     }
     float4 c=sum/total;
     if(vertical){
+        // The blurred alpha, kept apart from the coverage mask below: on a translucent window the surface's own alpha must be
+        // the blurred scene's, or the scene's silhouettes (opaque glyph pixels on a translucent coat) stay sharp in the alpha
+        // channel and the desktop shows through them however well the colour is blurred.
+        float blurred_alpha=c.a;
         if(any(in.pixel<p.clip.xy)||any(in.pixel>=p.clip.xy+p.clip.zw))discard_fragment();
         float radius=min(p.values.z,min(p.bounds.z,p.bounds.w)/2);
         float2 q=abs(in.pixel-(p.bounds.xy+p.bounds.zw/2))-(p.bounds.zw/2-radius);
@@ -58,6 +65,9 @@ fragment float4 backdrop_fragment(Varying in [[stage_in]], texture2d<float> sour
             c.a*=saturate(.5-d); id=n.parent;
         }
         if(p.viewport.w>0)c.a*=clamp((in.pixel.y-p.bounds.y)/(p.bounds.w*p.viewport.w),0.0,1.0);
+        // Programmable blending (Apple GPUs; the pass then has no fixed-function blend): the blurred premultiplied colour and the
+        // blurred alpha replace the destination by the coverage, `mix(dst, blurred, coverage)` on all four channels.
+        if(programmable_blend)return float4(c.rgb*c.a+dst.rgb*(1.0-c.a),blurred_alpha*c.a+dst.a*(1.0-c.a));
     }
     return c;
 }

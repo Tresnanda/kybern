@@ -2,23 +2,20 @@
 // the breadcrumb, then pin, share and more.
 import { useSyncExternalStore } from 'react'
 import { noteTitle } from '@/state/notesModel'
-import { Icon, ICONS } from '../icons.tsx'
+import { ICONS } from '../icons.tsx'
+import { IconButton as KitIconButton } from '../kit/IconButton.tsx'
 import { N } from '../nav/glyphs.ts'
 import { Tip } from '../nav/overlay.tsx'
-import { ink, Label, useTheme } from '../ui.tsx'
+import { Label, useTheme } from '../ui.tsx'
 import { NoteMenu } from './NoteMenu.tsx'
 import { notesTokens, NOTES_UI, SHARE } from './kit.tsx'
 import { noteSession } from './session.ts'
 import { gallery, recordNote, rpc, useNotes } from './store.ts'
 
 function IconButton({ icon, label, shortcut, testId, onClick, pressed }: { icon: string; label: string; shortcut?: string[]; testId?: string; onClick?: () => void; pressed?: boolean }) {
-  const t = useTheme()
-  const k = notesTokens(t)
   return (
     <Tip label={label} shortcut={shortcut} side="bottom">
-      <div testId={testId} aria-label={label} onClick={onClick} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 10, cursor: 'pointer', hover: { backgroundColor: t.buttonTertiaryHover } }}>
-        <Icon source={icon} size={16} color={pressed ? k.fg : k.fg2} />
-      </div>
+      <KitIconButton testId={testId} icon={icon} label={label} active={pressed} onClick={onClick} />
     </Tip>
   )
 }

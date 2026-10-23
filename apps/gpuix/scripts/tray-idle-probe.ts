@@ -76,7 +76,7 @@ try {
     for (const line of text.split('\n')) { const key = line.replace(/[\d.]+/g, '#').slice(0, 160); if (!line.includes('[kybern-submit]') && !line.includes('[kybern-frame]')) counts.set(key, (counts.get(key) ?? 0) + 1) }
     for (const [k, n] of [...counts].sort((a, b) => b[1] - a[1]).slice(0, 40)) console.log(`${String(n).padStart(6)}  ${k}`)
   }
-  if (argv.includes('--bounds')) for (const id of [`children-${ready.parentId}`, 'dock-tabs', 'matrix-loader', 'composer-drop-zone', 'composer-tray', 'thread-request', 'transcript-bottom-fade', 'scroll-to-bottom', 'composer-overlay']) for (const { bounds: b } of await app.getByTestId(id).all()) console.log(`[bounds] ${id} ${b ? `${b.x},${b.y} ${b.width}x${b.height}` : 'none'}`)
+  if (argv.includes('--bounds')) for (const id of [`children-${ready.parentId}`, 'dock-tabs', 'matrix-loader', 'composer-drop-zone', 'composer-tray', 'thread-request', 'scroll-to-bottom', 'composer-overlay']) for (const { bounds: b } of await app.getByTestId(id).all()) console.log(`[bounds] ${id} ${b ? `${b.x},${b.y} ${b.width}x${b.height}` : 'none'}`)
   if (argv.includes('--tree')) {
     // What paints after each loader inside its bounds (tree order is paint order, absent deferred popups).
     type N = { id: number; type: string; text?: string; testId?: string; style?: Record<string, unknown>; bounds?: { x: number; y: number; width: number; height: number }; children?: N[] }

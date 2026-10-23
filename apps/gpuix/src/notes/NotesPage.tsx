@@ -7,7 +7,9 @@ import { N } from '../nav/glyphs.ts'
 import { addWindowKeyHandler } from '../nav/keys.ts'
 import { Menu, MenuItem } from '../nav/overlay.tsx'
 import { getNav, setNav, useNav } from '../nav/store.ts'
-import { Button } from '../settings/controls.tsx'
+import { Button } from '../kit/Button.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
+import { PickerChip } from '../kit/PickerChip.tsx'
 import { useApp } from '../state.ts'
 import { inSpace } from '../../../../packages/kybern-client/src/spaces.ts'
 import { useCurrentSpaceId, useSpaceProjects } from '../spaces/current.ts'
@@ -119,12 +121,12 @@ export function NotesGallery() {
     {chip('global', 'Global')}
     {projects.filter((p) => choices.projects.some((c) => c.id === p.id)).map((p) => <Chip key={p.id} label={p.name} selected={filter.kind === 'project' && filter.projectId === p.id} dot={p.id} onClick={(byKey) => pickFilter({ kind: 'project', projectId: p.id }, byKey)} />)}
     {choices.threads > 0 && chip('threads', 'Threads')}
-    <Menu testId="notes-projects" sideOffset={6} trigger={() => <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, cursor: 'pointer', hover: { backgroundColor: k.hover } }}><Icon source={N.plus} size={14} color={k.fg3} /></div>}>
+    <Menu testId="notes-projects" sideOffset={6} trigger={() => <IconButton icon={N.plus} label="Filter by another project" glyph={14} />}>
       {projects.map((p) => <MenuItem key={p.id} id={p.id} label={p.name} onSelect={() => pickFilter({ kind: 'project', projectId: p.id })} />)}
     </Menu>
     {filter.kind === 'deleted' && <Chip label="Recently deleted" selected onClick={(byKey) => pickFilter({ kind: 'deleted' }, byKey)} />}
     <div style={{ flexGrow: 1 }} />
-    {choices.deleted > 0 && filter.kind !== 'deleted' && <Chip testId="notes-filter-deleted" label="Recently deleted" quiet onClick={(byKey) => pickFilter({ kind: 'deleted' }, byKey)} />}
+    {choices.deleted > 0 && filter.kind !== 'deleted' && <Chip testId="notes-filter-deleted" label="Recently deleted" onClick={(byKey) => pickFilter({ kind: 'deleted' }, byKey)} />}
   </div>
   return <div testId="page-notes" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
     {error && <div style={{ display: 'flex', gap: 10, padding: 24 }}><Label color={t.red}>{error}</Label><Button onClick={() => void refreshNotes()}>Try again</Button></div>}
@@ -163,14 +165,10 @@ function emptyDetail(filter: NotesFilter): string {
   }
 }
 
-/** `.notes-chip`: 28px, radius 8, 11px side padding; the selected one is a fill, not an underline. */
-function Chip({ label, selected, dot, quiet, icon, onClick, testId }: { label: string; selected?: boolean; dot?: string | null; quiet?: boolean; icon?: string; onClick: (byKey: boolean) => void; testId?: string }) {
-  const k = useNotesTokens()
-  return <div testId={testId} tabIndex={0} onClick={() => onClick(false)} onKeyDown={(e) => { if (e.key === 'enter') onClick(true) }} style={{ display: 'flex', alignItems: 'center', gap: 7, height: 28, flexShrink: 0, paddingLeft: 11, paddingRight: 11, borderRadius: 8, cursor: 'pointer', backgroundColor: selected ? k.sel : undefined, hover: { backgroundColor: selected ? k.sel : k.hover } }}>
-    {dot !== undefined && dot !== null && <ProjectDot projectId={dot} />}
-    {icon && <Icon source={icon} size={13} color={k.fg3} />}
-    <Label color={selected ? k.fg : quiet ? k.fg3 : k.fg2} size={NOTES_UI} lineHeight={21} weight={selected ? 500 : undefined}>{label}</Label>
-  </div>
+/** A scope chip: a `PickerChip` kept quiet and neutral (Notes keeps selection in ink), no chevron (a single-select filter). */
+function Chip({ label, selected, dot, icon, onClick, testId }: { label: string; selected?: boolean; dot?: string | null; icon?: string; onClick: (byKey: boolean) => void; testId?: string }) {
+  return <PickerChip quiet neutral muted chevron={false} testId={testId} label={label} selected={selected} icon={icon} lead={dot !== undefined && dot !== null ? <ProjectDot projectId={dot} /> : undefined}
+    onKeyboard={() => onClick(true)} onClick={() => onClick(false)}>{label}</PickerChip>
 }
 
 /** `.notes-hints`: one quiet line, no key caps. */

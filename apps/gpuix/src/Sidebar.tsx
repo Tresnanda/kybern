@@ -13,12 +13,14 @@ import { SpinIcon } from './kit/Spin.tsx'
 import { loadProviders } from './nav/live.ts'
 import { N } from './nav/glyphs.ts'
 import { newThread } from './nav/history.ts'
-import { ContextMenu, Kbd, Menu, MenuItem, MenuLabel, MenuSeparator, muted } from './nav/overlay.tsx'
+import { ContextMenu, Menu, MenuItem, MenuLabel, MenuSeparator, muted } from './nav/overlay.tsx'
+import { Kbd } from './kit/Kbd.tsx'
 import { getNav, setNav, useNav } from './nav/store.ts'
 import { EnvironmentSwitcher } from './sidebar/EnvironmentSwitcher.tsx'
 import { attentionItems, buildRows, type AttentionKind, type Row } from './sidebar/model.ts'
 import { BlockRow, inProjectBlock, setReorderContext } from './sidebar/reorder.tsx'
 import { DisclosureGroup, diffRows, liveGroups, markDisclosure, withGroups, rowHeight, type Group } from './sidebar/motion.tsx'
+import { Button } from './kit/Button.tsx'
 import { Rise, SwapOnChange } from './motion/kit.tsx'
 import { ARRIVAL_LEAD, TreeMotion, TreeRise, type TreeMotionState } from './tree/Tree.tsx'
 import { pressRow } from './shell/motion.ts'
@@ -28,7 +30,7 @@ import {
   ChildRow,
   CreateCoordinatorRow,
   EmptySpaceRow,
-  IconButton,
+  SidebarIconButton,
   MessageRow,
   MoreRow,
   NoThreadsRow,
@@ -278,13 +280,10 @@ function BrandRow() {
       <AppMenu />
       <div style={{ flexGrow: 1 }} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <IconButton
+        <SidebarIconButton
           icon={N.search}
-          size={24}
+          size="sm"
           glyph={15}
-          radius={8}
-          color={ink(t, 0.8)}
-          hoverColor={t.text}
           label="Search"
           tooltip={['Search (⌘K)']}
           tooltipSide="bottom"
@@ -325,13 +324,12 @@ function AppMenu() {
       testId="app-menu"
       rootStyle={{ flexGrow: 0 }}
       trigger={() => (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 32, paddingLeft: 10, paddingRight: 10, borderRadius: 10, cursor: 'pointer', hover: { backgroundColor: accent(t) } }}>
+        <Button variant="ghost" size="lg" chevron label="kybern menu" style={{ paddingLeft: 10 }}>
           {/* Cal Sans once GPUIX can register fonts; semibold SF until then. */}
-          <Label color={t.text} size={17} font="Cal Sans" weight={600}>
+          <Label color={t.text} size={17} font="Cal Sans" weight={600} style={{ pointerEvents: 'none' }}>
             kybern
           </Label>
-          <Icon source={N.chevronDown} size={14} color={muted(t, 0.7)} />
-        </div>
+        </Button>
       )}
     >
       <MenuItem id="add" icon={N.folderOpen} label="Add project" onSelect={() => void addProject()} />
@@ -392,22 +390,20 @@ function NotificationBell() {
         if (e.isRightClick || e.button === 2) setMenuAt({ x: e.x ?? 0, y: e.y ?? 0 })
       }}
     >
-      <IconButton
+      <div style={{ position: 'relative', display: 'flex' }}>
+      <SidebarIconButton
         icon={N.bell}
-        size={24}
+        size="sm"
         glyph={15}
-        radius={8}
-        color={active ? t.text : ink(t, 0.8)}
-        hoverColor={t.text}
         active={active}
         label={active ? 'Show all threads' : 'Show threads that need attention'}
         tooltip={active ? 'Show all threads' : items.length > 0 ? `${items.length} need attention` : 'Threads that need attention'}
         tooltipSide="bottom"
         onClick={toggle}
         testId="sidebar-bell"
-      >
+      />
         {top && <div style={{ position: 'absolute', top: 2, right: 2, width: 6, height: 6, borderRadius: 3, backgroundColor: KIND_DOT[top](t), pointerEvents: 'none' }} />}
-      </IconButton>
+      </div>
       {menuAt && (
         <ContextMenu at={menuAt} onClose={() => setMenuAt(null)} width={224}>
           <MenuLabel>Notifications</MenuLabel>

@@ -17,6 +17,9 @@ import { openSaveToNote } from '../notes/store.ts'
 import { useApp } from '../state.ts'
 import { useTheme } from '../ui.tsx'
 import { Label } from '../ui.tsx'
+import { Button } from '../kit/Button.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
+import { raisedFill, useGlass } from '../platform/glass.ts'
 import { T } from './glyphs.ts'
 import { ResponseImage } from './images.tsx'
 import { AttachmentImage } from '../composer/AttachmentImage.tsx'
@@ -35,50 +38,31 @@ export function CopyAction({ text, testId }: { text: string; testId?: string }) 
   const [copied, setCopied] = useState(false)
   useTranscriptRowLease(copied)
   return (
-    <div
+    <IconButton
       testId={testId}
-      role="button"
-      aria-label="Copy message"
-      onClick={
-        text
-          ? () => {
-              copyText(text)
-              setCopied(true)
-              setTimeout(() => setCopied(false), 1400)
-            }
-          : undefined
-      }
-      style={{ display: 'flex', width: 24, height: 24, alignItems: 'center', justifyContent: 'center', flexShrink: 0, cursor: text ? 'pointer' : 'default', opacity: text ? 1 : 0.4 }}
+      label="Copy message"
+      icon={T.copy}
+      size="sm"
+      disabled={!text}
+      onClick={() => {
+        copyText(text)
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1400)
+      }}
     >
       <SwapOnChange kind="icon" active={copied ? 'check' : 'copy'}>
-        <Icon
-          source={copied ? T.check : T.copy}
-          size={13.5}
-          color={copied ? t.green : muted(t)}
-          style={copied || !text ? undefined : { hover: { color: t.text } }}
-        />
+        <Icon source={copied ? T.check : T.copy} size={13.5} color={copied ? t.green : t.iconSecondary} style={{ pointerEvents: 'none' }} />
       </SwapOnChange>
-    </div>
+    </IconButton>
   )
 }
 
 /** `SaveToNoteAction`: opens the shared "Save to note" picker (`notes/Overlays.tsx`) with this text. */
 export function SaveToNoteAction({ text, testId }: { text: string; testId?: string }) {
-  const t = useTheme()
   const threadId = useApp((s) => s.selectedId)
   const title = useApp((s) => s.open.thread?.title ?? '')
   const enabled = !!text && !!threadId
-  return (
-    <div
-      testId={testId}
-      role="button"
-      aria-label="Save to note"
-      onClick={enabled ? () => openSaveToNote({ text, threadTitle: title, threadId: threadId! }) : undefined}
-      style={{ display: 'flex', width: 24, height: 24, alignItems: 'center', justifyContent: 'center', flexShrink: 0, cursor: enabled ? 'pointer' : 'default', opacity: enabled ? 1 : 0.4 }}
-    >
-      <Icon source={T.note} size={13.5} color={muted(t)} style={enabled ? { hover: { color: t.text } } : undefined} />
-    </div>
-  )
+  return <IconButton testId={testId} label="Save to note" icon={T.note} glyph={13.5} size="sm" disabled={!enabled} onClick={() => openSaveToNote({ text, threadTitle: title, threadId: threadId! })} />
 }
 
 export function messageText(parts: ContentPart[]): string {
@@ -99,6 +83,7 @@ const FOOTER_HEIGHT = 28
 
 export const UserBubble = memo(function UserBubble({ parts, at, pending = false, clampLines }: { parts: ContentPart[]; at: string; pending?: boolean; clampLines?: number }) {
   const t = useTheme()
+  const g = useGlass()
   const [hover, setHover] = useState(false)
   const renderer = useGpuixRequired()
   const body = useRef<PublicInstance | null>(null)
@@ -159,7 +144,7 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
                   ) : (
                     <div
                       key={i}
-                      style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, maxWidth: 256, paddingLeft: 8, paddingRight: 8, borderRadius: 14, borderWidth: 1, borderColor: t.border, backgroundColor: t.composer }}
+                      style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, maxWidth: 256, paddingLeft: 8, paddingRight: 8, borderRadius: 14, borderWidth: 1, borderColor: t.border, backgroundColor: raisedFill(g, t.composer) }}
                     >
                       <Icon source={T.file} size={14} color={t.text} />
                       <Label color={t.text} size={13} weight={500} truncate>
@@ -182,7 +167,8 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
                   borderRadius: 12.8,
                   borderWidth: 1,
                   borderColor: 'rgba(0, 0, 0, 0)',
-                  backgroundColor: t.variant === 'dark' ? t.composer : 'rgba(255, 255, 255, 0.743)',
+                  // Whole-window glass: the raised tint over the coat, not the composer's near-opaque fill.
+                  backgroundColor: raisedFill(g, t.variant === 'dark' ? t.composer : 'rgba(255, 255, 255, 0.743)'),
                 }}
               >
                 {/* Plain text, not <markdown>: native markdown has no intrinsic width, and the
@@ -200,9 +186,7 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
                 </div>
               </div>
             )}
-            {clampLines && (overflowing || expanded) && <div testId="subagent-prompt-toggle" role="button" onClick={() => setExpanded(!expanded)} style={{ paddingTop: 4, paddingBottom: 4, cursor: 'pointer' }}>
-              <Label color={muted(t)} size={12}>{expanded ? 'Show less' : 'Show full prompt'}</Label>
-            </div>}
+            {clampLines && (overflowing || expanded) && <Button variant="ghost" size="sm" testId="subagent-prompt-toggle" onClick={() => setExpanded(!expanded)} style={{ alignSelf: 'flex-start' }}>{expanded ? 'Show less' : 'Show full prompt'}</Button>}
 
             {/* Hover footer below the bubble (`absolute top-full right-0 pt-1`). The owner's own bounds
                 reach down over it (`FOOTER_HEIGHT` padding, cancelled by the margin), so the pointer keeps

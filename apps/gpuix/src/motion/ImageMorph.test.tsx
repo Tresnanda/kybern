@@ -6,7 +6,7 @@ import type { ReactNode } from 'react'
 
 mock.module('../native/visibility.ts', () => ({ isWindowVisible: () => true, onWindowVisibility: () => () => {} }))
 mock.module('../native/local-build.ts', () => ({ PATCHED_NATIVE: true }))
-const { fallbackTo, ImageViewer, LANDED, lightboxRect, morphFrom, onScreen, MORPH_OPEN, MORPH_CLOSE } = await import('./ImageMorph.tsx')
+const { fallbackTo, ImageViewer, LANDED, lightboxArea, lightboxLayout, lightboxRect, morphFrom, onScreen, MORPH_OPEN, MORPH_CLOSE } = await import('./ImageMorph.tsx')
 const { ThemeProvider } = await import('../ui.tsx')
 const entry = createRequire(import.meta.url).resolve('@gpuix/react')
 const { createRoot, flushSync } = await import(pathToFileURL(path.join(path.dirname(entry), 'reconciler/reconciler.js')).href)
@@ -77,8 +77,8 @@ test('a pointer open morphs from the thumbnail and a pointer close returns into 
   let now: typeof from | null = from
   const closed: string[] = []
   h.render(<ImageViewer testId="viewer" src={image} label="icon.png" from={from} source={() => now} onClose={() => closed.push('closed')} />)
-  const rect = lightboxRect(WINDOW, { width: 256, height: 256 })
-  const start = morphFrom(from, rect, true)
+  const rect = lightboxRect(WINDOW, { width: 256, height: 256 }), area = lightboxArea(WINDOW)
+  const start = morphFrom(from, rect, true, area)
   const outer = h.props('viewer-image').paintTransform, inner = [...h.custom.values()].find(p => p.paintTransform?.animate?.clipRadius !== undefined)!.paintTransform
   expect(outer).toMatchObject({ initial: start.outer, animate: LANDED.outer, transition: MORPH_OPEN })
   expect(inner).toMatchObject({ initial: start.inner, animate: LANDED.inner, transition: MORPH_OPEN })
@@ -90,7 +90,7 @@ test('a pointer open morphs from the thumbnail and a pointer close returns into 
   // The thumbnail moved while the preview was open; the close lands on its new rect, retargeting from the value on screen.
   now = { ...from, rect: { ...from.rect, y: 500 } }
   h.fire('viewer-scrim', { eventType: 'click' })
-  const back = morphFrom(now, rect, true)
+  const back = morphFrom(now, rect, true, area)
   const closing = h.props('viewer-image').paintTransform
   expect(closing).toMatchObject({ initial: false, animate: back.outer, transition: MORPH_CLOSE })
   expect(closed).toEqual([])
@@ -130,5 +130,77 @@ test('Tab and Shift-Tab wrap inside the open preview, and it follows window resi
   expect(h.style.get(box)).toMatchObject({ width: 900, height: 640 })
   // A keyboard open is instant: nothing on the image moves.
   expect(h.props('viewer-image').paintTransform ?? undefined).toBeUndefined()
+  h.root.unmount()
+})
+
+// ADE-55 follow-up: the preview zooms. A tall screenshot sheet used to open as a sliver.
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+
+function pngOfSize(width: number, height: number) {
+  const bytes = Buffer.alloc(33)
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes)
+  bytes.writeUInt32BE(13, 8); bytes.write('IHDR', 12); bytes.writeUInt32BE(width, 16); bytes.writeUInt32BE(height, 20)
+  const file = path.join(mkdtempSync(path.join(tmpdir(), 'zoom-')), `${width}x${height}.png`)
+  writeFileSync(file, bytes)
+  return file
+}
+
+test('a very tall image fills the room fitted to its width; a normal one keeps its old rect', () => {
+  const tall = lightboxLayout(WINDOW, { width: 3240, height: 6432 })
+  expect(tall.long).toBe(true)
+  expect(tall.rect).toEqual(tall.area)
+  expect(tall.area).toMatchObject({ width: 1000, y: 104 })
+  const normal = lightboxLayout(WINDOW, { width: 256, height: 256 })
+  expect(normal.long).toBe(false)
+  expect(normal.rect).toEqual(lightboxRect(WINDOW, { width: 256, height: 256 }))
+  // The room ends 48 px above the window's bottom edge, as the old rect did for a full-height image.
+  expect(lightboxRect(WINDOW, { width: 10, height: 100000 }).y + lightboxRect(WINDOW, { width: 10, height: 100000 }).height).toBe(tall.area.y + tall.area.height)
+})
+
+test('a tall image opens without a morph, at the top; scroll pans, ⌘-scroll zooms, a double click toggles 100%, ⌘0 fits', () => {
+  const h = harness()
+  const from = { rect: { x: 40, y: 600, width: 64, height: 64 }, radius: 11, fit: 'cover' as const }
+  h.render(<ImageViewer testId="viewer" src={pngOfSize(1620, 3240)} label="sheet.png" from={from} source={() => from} onClose={() => {}} />)
+  // A fade, not a morph: the thumbnail only matches the whole picture.
+  expect(h.props('viewer-image').paintTransform).toMatchObject({ initial: { opacity: 0 }, animate: { opacity: 1 } })
+  const stage = () => h.props('viewer-zoom-surface-stage').paintTransform.animate
+  expect(stage()).toMatchObject({ scale: 1, translateX: 0, translateY: 0 })
+  h.fire('viewer-zoom-surface', { eventType: 'scroll', x: 600, y: 300, deltaX: 0, deltaY: -200, precise: true, modifiers: {} })
+  expect(stage().translateY).toBe(-200)
+  h.fire('viewer-zoom-surface', { eventType: 'scroll', x: 600, y: 300, deltaX: 0, deltaY: 40, precise: true, modifiers: { cmd: true } })
+  expect(stage().scale).toBeGreaterThan(1)
+  h.fire('viewer', { eventType: 'keyDown', key: '0', modifiers: { cmd: true } })
+  expect(stage()).toMatchObject({ scale: 1, translateY: 0 })
+  // Reduce Motion is off here: a discrete change eases; a wheel step does not.
+  h.fire('viewer-zoom-surface', { eventType: 'click', x: 600, y: 300, button: 0, clickCount: 2 })
+  expect(h.props('viewer-zoom-surface-stage').paintTransform.transition.duration).toBeGreaterThan(0)
+  h.fire('viewer-zoom-surface', { eventType: 'scroll', x: 600, y: 300, deltaX: 0, deltaY: -10, precise: true, modifiers: {} })
+  expect(h.props('viewer-zoom-surface-stage').paintTransform.transition.duration).toBe(0)
+  h.root.unmount()
+})
+
+// Review 2026-10-23: Escape closed the preview and then bubbled on (GPUIX bubbles a keystroke through every ancestor and then
+// the window handlers unless a handler stops it). An empty composer's window handler cancels the agent's turn on Escape while a
+// request is pending, and the preview hands focus back to that composer as it closes.
+test('Escape closes the preview and stops there; zoom keys stop there too; other keys bubble on', () => {
+  const h = harness()
+  const closed: string[] = [], outer: string[] = []
+  h.render(<div testId="card" onKeyDown={(e: { key?: string }) => outer.push(e.key ?? '')}>
+    <ImageViewer testId="viewer" src={pngOfSize(1620, 3240)} label="sheet.png" from={null} source={() => null} onClose={() => closed.push('closed')} />
+  </div>)
+  // Native sends one keystroke to the focused element, then to each ancestor, sharing its id.
+  const press = (key: string, keystrokeId: number, modifiers = {}) => {
+    h.fire('viewer', { eventType: 'keyDown', key, modifiers, keystrokeId })
+    h.fire('card', { eventType: 'keyDown', key, modifiers, keystrokeId })
+  }
+  press('=', 1, { cmd: true })
+  expect(h.props('viewer-zoom-surface-stage').paintTransform.animate.scale).toBeGreaterThan(1)
+  press('a', 2)
+  expect(outer).toEqual(['a'])
+  // Zoomed in, Escape still closes (Quick Look's rule; ⌘0 is the way back to fit) and the card never hears it.
+  press('escape', 3)
+  expect(closed).toEqual(['closed'])
+  expect(outer).toEqual(['a'])
   h.root.unmount()
 })

@@ -2,13 +2,15 @@ import { setWindowCloseHandler } from '@gpuix/native/host'
 import { useGpuixRequired } from '@gpuix/react'
 import { useEffect, useRef, useState } from 'react'
 import type { Thread } from '../../../../packages/kybern-client/src/types.ts'
-import { Icon } from '../icons.tsx'
-import { N } from '../nav/glyphs.ts'
+import { Button } from '../kit/Button.tsx'
+import { Checkbox } from '../kit/Checkbox.tsx'
 import { Dialog } from '../nav/overlay.tsx'
 import { errorText } from '../nav/actions.ts'
 import { getClient, getState } from '../state.ts'
 import { Label, ProviderMark, useTheme } from '../ui.tsx'
 import { load, save, flush } from './persist.ts'
+import { closeActiveTab } from '../tabs/open.ts'
+import { closeRequestSource } from '../tabs/closeKey.ts'
 
 export function CloseGuard() {
   const renderer = useGpuixRequired()
@@ -21,6 +23,8 @@ export function CloseGuard() {
   useEffect(() => {
     if (!renderer.setCloseGuard || !renderer.resolveCloseRequest) return
     const off = setWindowCloseHandler(renderer, () => {
+      // ⌘W closes the active document tab, never the thread; on the chat tab the window closes as before (ADE-54).
+      if (closeRequestSource() !== 'pointer' && closeActiveTab()) return false
       const busy = getState().threads.filter((t) => t.status === 'running' || t.status === 'awaiting-approval')
       if (!load('kybern.askBeforeClose', true) || !busy.length) return true
       setPending(busy); setAskAgain(true); setError('')
@@ -72,24 +76,15 @@ export function CloseGuard() {
       {pending.length > 4 && <div style={{ paddingLeft: 10, paddingTop: 4, paddingBottom: 4 }}><Label color={theme.textSecondary} size={12}>{`and ${pending.length - 4} more`}</Label></div>}
     </div>
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 16, paddingRight: 16, paddingBottom: 4 }}>
-      <div testId="close-guard-remember" role="checkbox" aria-label="Ask again next time" aria-checked={askAgain} tabIndex={stopping ? -1 : 0} onClick={() => { if (!stopping) setAskAgain(!askAgain) }} onKeyDown={(e) => { if (!stopping && (e.key === 'space' || e.key === 'enter')) setAskAgain(!askAgain) }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, flexShrink: 0, borderRadius: 4, borderWidth: 1, borderColor: askAgain ? theme.text : theme.border, backgroundColor: askAgain ? theme.text : 'transparent', opacity: stopping ? 0.45 : 1 }}>{askAgain && <Icon source={N.check} size={12} color={theme.surface} />}</div>
-      <Label color={theme.textSecondary} size={14} lineHeight={20}>Ask again next time</Label>
+      <Checkbox testId="close-guard-remember" aria-label="Ask again next time" checked={askAgain} onCheckedChange={setAskAgain} disabled={stopping} />
+      <div onClick={() => { if (!stopping) setAskAgain(!askAgain) }} style={{ display: 'flex', cursor: stopping ? 'default' : 'pointer' }}><Label color={theme.textSecondary} size={14} lineHeight={20}>Ask again next time</Label></div>
     </div>
     {error && <div style={{ paddingLeft: 16, paddingRight: 16, paddingTop: 8 }}><Label color={theme.red} size={12}>{error}</Label></div>}
-    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, paddingLeft: 16, paddingRight: 16, paddingTop: 12, paddingBottom: 12 }}>
-      <GuardButton testId="close-guard-cancel" tone="outline" disabled={stopping} onClick={cancel}>Cancel</GuardButton>
-      <GuardButton testId="close-guard-stop" tone="destructive" disabled={stopping} onClick={() => void stop()}>{stopping ? 'Stopping…' : 'Stop threads and close'}</GuardButton>
-      <GuardButton testId="close-guard-close" tone="primary" disabled={stopping} onClick={() => finish(true)}>Close window</GuardButton>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 16, paddingRight: 16, paddingTop: 12, paddingBottom: 12 }}>
+      <Button size="lg" variant="secondary" danger testId="close-guard-stop" disabled={stopping} onClick={() => void stop()}>{stopping ? 'Stopping…' : 'Stop threads and close'}</Button>
+      <div style={{ flexGrow: 1 }} />
+      <Button size="lg" variant="secondary" testId="close-guard-cancel" disabled={stopping} onClick={cancel}>Cancel</Button>
+      <Button size="lg" variant="primary" testId="close-guard-close" disabled={stopping} onClick={() => finish(true)}>Close window</Button>
     </div>
   </Dialog>
-}
-
-/** The kit's footer buttons: `chrome-outline`, `destructive-outline` and the default (primary) variants, 32px tall. */
-function GuardButton({ children, tone, onClick, disabled, testId }: { children: string; tone: 'outline' | 'destructive' | 'primary'; onClick: () => void; disabled: boolean; testId: string }) {
-  const t = useTheme()
-  return (
-    <div testId={testId} role="button" aria-label={children} tabIndex={disabled ? -1 : 0} onClick={() => !disabled && onClick()} onKeyDown={(e) => { if (!disabled && (e.key === 'enter' || e.key === 'space')) onClick() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 32, paddingLeft: 12, paddingRight: 12, borderRadius: 10, borderWidth: tone === 'primary' ? 0 : 1, borderColor: tone === 'destructive' ? t.border : t.border, backgroundColor: tone === 'primary' ? t.buttonPrimary : 'transparent', opacity: disabled ? 0.45 : 1, cursor: disabled ? 'default' : 'pointer', hover: { backgroundColor: tone === 'primary' ? t.buttonPrimary : t.buttonSecondaryHover } }}>
-      <Label color={tone === 'primary' ? t.buttonPrimaryText : tone === 'destructive' ? t.red : t.text} size={14} lineHeight={20}>{children}</Label>
-    </div>
-  )
 }

@@ -11,6 +11,7 @@ import { AnimatePresence } from '@gpuix/react'
 import { useEffect, useRef, type ReactNode } from 'react'
 import { alpha } from '../transcript/kit.tsx'
 import { REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { useGlass } from '../platform/glass.ts'
 import { LIFT, SPRING } from './spring.ts'
 import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
 import { PaintTranslate } from './PaintTranslate.tsx'
@@ -38,6 +39,7 @@ export function DragGhost({ rect, grab, x, y, settle, onSettled, radius = 10, pa
   children: ReactNode
 }) {
   const t = useTheme()
+  const g = useGlass()
   const left = x - grab.x, top = y - grab.y
   const done = useRef(false)
   useEffect(() => {
@@ -85,7 +87,7 @@ export function DragGhost({ rect, grab, x, y, settle, onSettled, radius = 10, pa
           initial={{ left: 0, top: 0, width: rect.width, height: rect.height }}
           animate={lifted ? { left: -grow / 2, top: -growY / 2, width: rect.width + grow, height: rect.height + growY } : { left: 0, top: 0, width: rect.width, height: rect.height }}
           transition={{ duration: REDUCED_MOTION ? 0 : lifted ? 0.14 : 0.2, ease: [0.23, 1, 0.32, 1] }}
-          style={{ position: 'absolute', display: 'flex', flexDirection: 'column', justifyContent: 'center', overflow: 'hidden', borderRadius: radius, backgroundColor: t.surface, borderWidth: 1, borderColor: alpha(t.border, 1), pointerEvents: 'none' }}
+          style={{ position: 'absolute', display: 'flex', flexDirection: 'column', justifyContent: 'center', overflow: 'hidden', borderRadius: radius, backgroundColor: g.on ? g.denseFloat : t.surface, borderWidth: 1, borderColor: alpha(t.border, 1), pointerEvents: 'none' }}
         >
           {children}
         </motion.div>

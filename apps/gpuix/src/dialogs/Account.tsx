@@ -33,7 +33,12 @@ import { Dialog } from '../nav/overlay.tsx'
 import { setNav } from '../nav/store.ts'
 import { errorText } from '../nav/actions.ts'
 import { useNav } from '../nav/store.ts'
-import { Button, Select, TextField } from '../settings/controls.tsx'
+import { Select } from '../settings/controls.tsx'
+import { Button } from '../kit/Button.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
+import { TextField } from '../kit/Field.tsx'
+import { useControls } from '../kit/controls.ts'
+import { Chevron } from '../motion/Chevron.tsx'
 import { Switch } from '../kit/Switch.tsx'
 import { openExternal, pickFolder } from '../settings/external.ts'
 import { S } from '../settings/glyphs.ts'
@@ -194,7 +199,7 @@ export function Account({ close, provider, instance }: { close: () => void; prov
       if (status && !status.available) { setNav({ settingsOpen: true }); close(); void import('../settings/SettingsScreen.tsx').then((m) => m.openSettingsTab('agents')); return }
       setKind(next)
     }} upstream={upstream} onUpstream={setUpstream} folder={folder} onFolder={setFolder} advancedOpen={advancedOpen} onAdvancedOpen={setAdvancedOpen} remote={remote} />
-    footer = <><Button testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button><Button testId="account-start" variant="primary" disabled={!ready || starting} onClick={() => void begin()}>{kind && supportsBrowserLogin(kind) && !remote ? 'Continue in browser' : 'Continue'}</Button></>
+    footer = <><Button size="lg" testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button><Button size="lg" testId="account-start" variant="primary" disabled={!ready || starting} onClick={() => void begin()}>{kind && supportsBrowserLogin(kind) && !remote ? 'Continue in browser' : 'Continue'}</Button></>
   } else if (step === 'waiting' && login && kind) {
     const url = loginHost(login.url)
     const canCode = supportsPasteCode(kind) || supportsDeviceCode(kind)
@@ -211,12 +216,12 @@ export function Account({ close, provider, instance }: { close: () => void; prov
         <QuietLink testId="account-show-terminal" onClick={showTerminal}>Having trouble? Show terminal</QuietLink>
       </div>
     </Body>
-    footer = <Button testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button>
+    footer = <Button size="lg" testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button>
   } else if (step === 'paste' && login && kind) {
     const sending = api.codeState === 'sending' || verifying
     const submit = () => { if (code.trim() && !sending) void api.submitCode(code) }
     body = <PasteStep login={login} remote={remote} host={host} transport={transport} wrong={api.codeState === 'wrong'} code={code} onCode={setCode} shown={codeShown} onShown={setCodeShown} onSubmit={submit} onTerminal={showTerminal} />
-    footer = <><Button testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button><Button testId="account-paste-submit" variant="primary" busy={sending} disabled={sending} onClick={submit}>Sign in</Button></>
+    footer = <><Button size="lg" testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button><Button size="lg" testId="account-paste-submit" variant="primary" busy={sending} disabled={sending} onClick={submit}>Sign in</Button></>
   } else if (step === 'device' && login && kind) {
     const url = loginHost(login.url)
     body = <Body gap={12}>
@@ -233,7 +238,7 @@ export function Account({ close, provider, instance }: { close: () => void; prov
       {verifying && <Checking />}
       <div style={{ display: 'flex', justifyContent: 'center' }}><QuietLink testId="account-show-terminal" onClick={showTerminal}>Having trouble? Show terminal</QuietLink></div>
     </Body>
-    footer = <Button testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button>
+    footer = <Button size="lg" testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button>
   } else if (step === 'terminal' && kind) {
     const info = api.legacyTerminal ?? login?.terminal
     body = <Body gap={12}>
@@ -245,7 +250,7 @@ export function Account({ close, provider, instance }: { close: () => void; prov
       </div>
       {verifying && <Checking />}
     </Body>
-    footer = <Button testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button>
+    footer = <Button size="lg" testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button>
   } else if (step === 'success' && login && kind) {
     const email = login.identity?.email
     const meta = [[agent, login.identity?.plan].filter(Boolean).join(' '), login.identity?.organization].filter(Boolean).join(' · ')
@@ -260,7 +265,7 @@ export function Account({ close, provider, instance }: { close: () => void; prov
       {!reauth && <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <Label color={t.text} size={14} lineHeight={21} weight={500}>Name</Label>
-          <TextField testId="account-name" label="Name" value={shownName} onChange={(value) => setName(value)} width="100%" onSubmit={() => { if (isNameValid(shownName)) void finish().then((ok) => { if (ok) { dismissed.current = true; close() } }) }} style={{ height: 32, fontSize: 14, backgroundColor: t.inputGroupFill, borderColor: isNameValid(shownName) ? t.border : t.v('--destructive') }} />
+          <TextField testId="account-name" label="Name" size="lg" invalid={!isNameValid(shownName)} value={shownName} onChange={(value) => setName(value)} width="100%" onSubmit={() => { if (isNameValid(shownName)) void finish().then((ok) => { if (ok) { dismissed.current = true; close() } }) }} />
           {!isNameValid(shownName) && <Label color={t.v('--destructive')} size={13} lineHeight={19.5}>Enter a name up to 120 characters.</Label>}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -276,8 +281,8 @@ export function Account({ close, provider, instance }: { close: () => void; prov
       {finishError && <Label color={t.v('--destructive')} size={13} lineHeight={19.5}>{finishError}</Label>}
     </Body>
     footer = reauth
-      ? <Button testId="account-done" variant="primary" onClick={() => { void refreshAccounts(); dismissed.current = true; close() }}>Done</Button>
-      : <Button testId="account-finish" variant="primary" disabled={!isNameValid(shownName) || finishing} onClick={() => void finish().then((ok) => { if (ok) { dismissed.current = true; close() } })}>Add account</Button>
+      ? <Button size="lg" testId="account-done" variant="primary" onClick={() => { void refreshAccounts(); dismissed.current = true; close() }}>Done</Button>
+      : <Button size="lg" testId="account-finish" variant="primary" disabled={!isNameValid(shownName) || finishing} onClick={() => void finish().then((ok) => { if (ok) { dismissed.current = true; close() } })}>Add account</Button>
   } else if (step === 'duplicate' && login && kind) {
     const existing = accountFor(accounts, kind, login.duplicate_of)
     const isCli = login.duplicate_of === 'default'
@@ -288,8 +293,8 @@ export function Account({ close, provider, instance }: { close: () => void; prov
       <Desc center>{isCli ? `This is the account your ${agent} CLI already uses.` : `${login.identity?.email ?? 'This email'} is ${agent}’s ${existingName} account.`}</Desc>
     </Body>
     footer = isCli
-      ? <Button testId="account-done" variant="primary" onClick={dismiss}>Done</Button>
-      : <><Button testId="account-done" variant="ghost" onClick={dismiss}>Done</Button><Button testId="account-reauth" variant="primary" onClick={() => void api.restart({ instance: login.duplicate_of, directory: undefined, upstream: undefined, mode: login.mode })}>{`Sign in again to ${existingName}`}</Button></>
+      ? <Button size="lg" testId="account-done" variant="primary" onClick={dismiss}>Done</Button>
+      : <><Button size="lg" testId="account-done" variant="ghost" onClick={dismiss}>Done</Button><Button size="lg" testId="account-reauth" variant="primary" onClick={() => void api.restart({ instance: login.duplicate_of, directory: undefined, upstream: undefined, mode: login.mode })}>{`Sign in again to ${existingName}`}</Button></>
   } else if (step === 'error') {
     const message = failure ?? login?.error ?? 'Sign-in didn’t finish. Try again, or show the terminal.'
     body = <Body align="center" top={16} gap={8}>
@@ -297,10 +302,10 @@ export function Account({ close, provider, instance }: { close: () => void; prov
       <Title>Unable to sign in</Title>
       <Desc center testId="account-error">{message}</Desc>
     </Body>
-    footer = <><Button testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button>{login?.mode !== 'terminal' && kind && !legacy && <Button testId="account-show-terminal" onClick={showTerminal}>Show terminal</Button>}<Button testId="account-retry" variant="primary" onClick={() => void tryAgain()}>Try again</Button></>
+    footer = <><Button size="lg" testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button>{login?.mode !== 'terminal' && kind && !legacy && <Button size="lg" testId="account-show-terminal" onClick={showTerminal}>Show terminal</Button>}<Button size="lg" testId="account-retry" variant="primary" onClick={() => void tryAgain()}>Try again</Button></>
   } else {
     body = <Body><Title>Add an account</Title><div style={{ height: 64, marginTop: 12, borderRadius: 6, backgroundColor: t.buttonSecondary }} /></Body>
-    footer = <Button testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button>
+    footer = <Button size="lg" testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button>
   }
   return <Dialog onClose={dismiss} width={448} testId="add-account">
     <Rise key={step ?? 'none'} kind="row">{body}</Rise>
@@ -312,8 +317,7 @@ export function Account({ close, provider, instance }: { close: () => void; prov
 // ── Pieces ───────────────────────────────────────────────────────────────────
 
 export function CloseX({ onClose }: { onClose: () => void }) {
-  const t = useTheme()
-  return <div testId="dialog-close" role="button" aria-label="Close" onClick={onClose} style={{ position: 'absolute', top: 8, right: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: 10, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}><Icon source={N.x} size={16} color={t.iconSecondary} style={{ pointerEvents: 'none' }} /></div>
+  return <IconButton testId="dialog-close" icon={N.x} label="Close" size="lg" onClick={onClose} style={{ position: 'absolute', top: 8, right: 8 }} />
 }
 
 /** `BODY_CLASS`: `px-4 pt-4 pb-4`, gap per step. */
@@ -333,9 +337,7 @@ function Quiet({ children }: { children: string }) {
   return <Label color={t.textSecondary} size={13} lineHeight={19.5}>{children}</Label>
 }
 function QuietLink({ children, onClick, testId }: { children: string; onClick: () => void; testId?: string }) {
-  const t = useTheme()
-  const [hover, setHover] = useState(false)
-  return <div testId={testId} role="button" aria-label={children} tabIndex={0} onClick={onClick} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') onClick() }} style={{ display: 'flex', cursor: 'pointer', borderRadius: 4 }}><Label color={hover ? t.text : t.textSecondary} size={13} lineHeight={19.5}>{children}</Label></div>
+  return <Button testId={testId} variant="ghost" size="sm" onClick={onClick}>{children}</Button>
 }
 function Checking() {
   const t = useTheme()
@@ -373,6 +375,7 @@ function ColorSwatches({ value, onChange }: { value: AccountColor; onChange: (co
 
 function PickStep(props: { providers: { kind: ProviderKind; display_name: string; available: boolean }[]; kind: ProviderKind | undefined; onKind: (kind: ProviderKind) => void; upstream: string; onUpstream: (id: string) => void; folder: string; onFolder: (value: string) => void; advancedOpen: boolean; onAdvancedOpen: (open: boolean) => void; remote: boolean }) {
   const t = useTheme()
+  const c = useControls()
   const { providers, kind, remote } = props
   const placeholder = kind === 'claude-code' ? '~/.claude-work' : kind === 'codex' ? '~/.codex-work' : `~/.${kind ?? 'agent'}-work`
   const TILE = Math.floor((448 - 32 - 16) / 3) - 2
@@ -387,7 +390,7 @@ function PickStep(props: { providers: { kind: ProviderKind; display_name: string
         {providers.map((p) => {
           const selected = p.kind === kind
           return <div key={p.kind} testId={`account-provider-${p.kind}`} role="radio" aria-checked={selected} tabIndex={0} onClick={() => props.onKind(p.kind)} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') props.onKind(p.kind) }}
-            style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 8, width: TILE, minWidth: 0, padding: 12, borderWidth: 1, borderColor: selected ? t.v('--color-text-accent') : t.border, borderRadius: 12, backgroundColor: selected ? t.buttonSecondary : 'transparent', opacity: p.available ? 1 : 0.55, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
+            style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 8, width: TILE, minWidth: 0, padding: 12, borderWidth: 1, borderColor: selected ? c.accent : t.border, borderRadius: 12, backgroundColor: selected ? c.optionSelected : 'transparent', opacity: p.available ? 1 : 0.55, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
             <ProviderMark kind={p.kind} size={18} />
             <Label color={t.text} size={14} lineHeight={21} weight={500} truncate>{p.display_name}</Label>
             {!p.available && <Label color={t.textSecondary} size={13} lineHeight={19.5} style={{ marginTop: -6 }}>Not installed</Label>}
@@ -396,15 +399,13 @@ function PickStep(props: { providers: { kind: ProviderKind; display_name: string
       </div>
       {kind === 'omp' && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}><Label color={t.text} size={14} lineHeight={21} weight={500}>Sign in with</Label><Select compact testId="account-upstream" label="Sign in with" value={props.upstream} onChange={props.onUpstream} options={OMP_UPSTREAMS.map((u) => ({ value: u.id, label: u.label }))} /></div>}
       {kind && kind !== 'opencode' && kind !== 'pi' && <div style={{ display: 'flex', flexDirection: 'column' }}>
-        <div testId="account-advanced" role="button" aria-expanded={props.advancedOpen} tabIndex={0} onClick={() => props.onAdvancedOpen(!props.advancedOpen)} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') props.onAdvancedOpen(!props.advancedOpen) }} style={{ display: 'flex', alignItems: 'center', alignSelf: 'flex-start', gap: 4, marginLeft: -4, paddingLeft: 4, paddingRight: 4, borderRadius: 4, cursor: 'pointer' }}>
-          <Label color={t.textSecondary} size={13} lineHeight={19.5}>Advanced</Label><motion.svg source={N.chevronDown} initial={false} animate={{ rotate: props.advancedOpen ? 180 : 0 }} transition={{ duration: REDUCED_MOTION ? 0 : DURATION.fast, ease: [...EASE.smoothOut] }} style={{ width: 12, height: 12, color: t.textSecondary, flexShrink: 0, pointerEvents: 'none' }} />
-        </div>
+        <Button testId="account-advanced" variant="ghost" size="sm" label="Advanced" trailing={<Chevron open={props.advancedOpen} size={12} color={t.textSecondary} />} onClick={() => props.onAdvancedOpen(!props.advancedOpen)} style={{ alignSelf: 'flex-start', marginLeft: -8 }}>Advanced</Button>
         {props.advancedOpen && <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 12, paddingBottom: 4 }}>
           <Label color={t.text} size={14} lineHeight={21} weight={500}>Folder</Label>
           <Label color={ink(t, 0.8)} size={13} lineHeight={19.5} weight={500}>Use an existing folder</Label>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{ flexGrow: 1, display: 'flex', minWidth: 0 }}><TextField testId="account-folder" label="Folder" placeholder={placeholder} value={props.folder} onChange={props.onFolder} width="100%" style={{ height: 32, fontSize: 14, backgroundColor: t.inputGroupFill }} /></div>
-            {!remote && <Button testId="account-choose-folder" onClick={() => void pickFolder().then((picked) => { if (picked) props.onFolder(picked) })}>Choose…</Button>}
+            <div style={{ flexGrow: 1, display: 'flex', minWidth: 0 }}><TextField testId="account-folder" label="Folder" size="lg" placeholder={placeholder} value={props.folder} onChange={props.onFolder} width="100%" /></div>
+            {!remote && <Button testId="account-choose-folder" size="lg" onClick={() => void pickFolder().then((picked) => { if (picked) props.onFolder(picked) })}>Choose…</Button>}
           </div>
           <Label color={t.textSecondary} size={13} lineHeight={19.5}>Kybern uses the sign-in already saved in this folder and never deletes it.</Label>
         </div>}
@@ -427,10 +428,7 @@ function PasteStep({ login, remote, host, transport, wrong, code, onCode, shown,
     </div>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <Label color={t.text} size={14} lineHeight={21} weight={500}>Code</Label>
-      <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
-        <input testId="account-code" aria-label="Code" secure={!shown} autoFocus={wrong} placeholder="Paste code" value={code} onChange={(e) => onCode(e.value ?? '')} onSubmit={onSubmit} style={{ width: '100%', height: 32, minWidth: 0, borderWidth: 1, borderColor: wrong ? t.v('--destructive') : t.border, borderRadius: 8, paddingLeft: 10, paddingRight: 36, fontFamily: code ? 'Menlo' : FONT_UI, fontSize: 13, color: t.text, backgroundColor: t.inputGroupFill }} />
-        <div testId="account-code-toggle" role="button" aria-label="Show code" aria-pressed={shown} tabIndex={0} onClick={() => onShown(!shown)} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') onShown(!shown) }} style={{ position: 'absolute', right: 3, top: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, borderRadius: 6, hover: { backgroundColor: t.buttonSecondaryHover } }}><Icon source={S.eye} size={14} color={shown ? t.text : t.textSecondary} style={{ pointerEvents: 'none' }} /></div>
-      </div>
+      <TextField testId="account-code" label="Code" size="lg" secure={!shown} autoFocus={wrong} placeholder="Paste code" value={code} onChange={onCode} onSubmit={onSubmit} invalid={wrong} mono={!!code} width="100%" trailing={<IconButton testId="account-code-toggle" icon={S.eye} label="Show code" size="sm" active={shown} onClick={() => onShown(!shown)} />} />
       {wrong && <Label color={t.v('--destructive')} size={13} lineHeight={19.5}>That code didn’t work. Open the sign-in page again and paste the new code.</Label>}
     </div>
     <QuietLink testId="account-show-terminal" onClick={onTerminal}>Having trouble? Show terminal</QuietLink>

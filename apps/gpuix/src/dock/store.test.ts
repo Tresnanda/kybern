@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { dockGeometry, restoreDockChoices } from './store.ts'
+import { dockGeometry, legacyTerminalThreads, restoreDockChoices } from './store.ts'
 
 describe('dock layout and thread choices', () => {
   test('reserves 320px for chat and overlays below 736px of available space', () => {
@@ -41,8 +41,10 @@ describe('dock layout and thread choices', () => {
 
 test('restoring dock preferences rejects corrupt values and stale tabs', () => {
   expect(restoreDockChoices({ corrupt: true }).size).toBe(0)
-  const restored = restoreDockChoices([null, ['thread', { open: true, tabs: ['terminal', 'unknown', 'terminal'], tab: 'unknown', width: -5, instant: true }]])
-  expect(restored.get('thread')).toEqual({ open: true, tabs: ['terminal'], tab: 'terminal', width: 416, instant: false })
+  const restored = restoreDockChoices([null, ['thread', { open: true, tabs: ['agents', 'unknown', 'agents'], tab: 'unknown', width: -5, instant: true }]])
+  expect(restored.get('thread')).toEqual({ open: true, tabs: ['agents'], tab: 'agents', width: 416, instant: false })
+  // Terminal, preview and review open as tabs beside the chat since ADE-54: saved dock choices drop them.
+  expect(restoreDockChoices([['t', { open: true, tabs: ['terminal', 'preview', 'review', 'explorer'], tab: 'terminal' }]]).get('t')).toMatchObject({ tabs: ['explorer'], tab: 'explorer' })
 })
 
 // Persistence is part of setDock now: even a bare `bun test` must not save test
@@ -56,3 +58,8 @@ async function isolated(source: string) {
     return JSON.parse(output)
   } finally { rmSync(dir, { recursive: true, force: true }) }
 }
+
+test('threads whose saved dock had the old terminal panel', () => {
+  expect(legacyTerminalThreads([['a', { tabs: ['terminal', 'explorer'] }], ['b', { tabs: ['explorer'] }], null, ['c', {}], 'x'])).toEqual(['a'])
+  expect(legacyTerminalThreads({ corrupt: true })).toEqual([])
+})

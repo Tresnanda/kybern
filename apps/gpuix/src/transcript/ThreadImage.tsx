@@ -15,26 +15,27 @@ import { Label, useTheme } from '../ui.tsx'
 import { Rise } from '../motion/kit.tsx'
 import { Icon } from '../icons.tsx'
 import { T } from './glyphs.ts'
-import { Button, muted } from './kit.tsx'
+import { muted } from './kit.tsx'
+import { Button } from '../kit/Button.tsx'
 import { ImageLightbox, ResponseImage } from './images.tsx'
 import { ImageViewer } from '../motion/ImageMorph.tsx'
+import { openTab } from '../tabs/open.ts'
+import { storeImageBytes } from './imageFiles.ts'
 
 /** Retried once after this, for an image the agent wrote moments before its reply arrived. */
 const RETRY_MS = 1500
-const CACHE_BYTES = 48 * 1024 * 1024
+const CACHE_ENTRIES = 256
 
-type Loaded = { source: string; bytes: number }
+/** `source`: the image as a cached file (`imageFiles.ts`), never a `data:` URL. */
+type Loaded = { source: string }
 type Failure = { status: number; reason: string }
 const cache = new Map<string, Loaded>()
-let cached = 0
-onEnvironmentChange(() => { cache.clear(); cached = 0 })
+onEnvironmentChange(() => cache.clear())
 
 function remember(key: string, value: Loaded) {
-  if (value.bytes > CACHE_BYTES / 4) return
-  const prior = cache.get(key)
-  if (prior) { cached -= prior.bytes; cache.delete(key) }
-  while (cache.size && cached + value.bytes > CACHE_BYTES) { const oldest = cache.keys().next().value!; cached -= cache.get(oldest)!.bytes; cache.delete(oldest) }
-  cache.set(key, value); cached += value.bytes
+  cache.delete(key)
+  cache.set(key, value)
+  while (cache.size > CACHE_ENTRIES) cache.delete(cache.keys().next().value!)
 }
 
 /** What the reader is told, by the daemon's answer. */
@@ -57,11 +58,10 @@ async function load(threadId: string, source: string, signal: AbortSignal): Prom
   if (!response.ok) throw imageFailure(response.status, await response.text().catch(() => ''))
   const media = response.headers.get('content-type')?.split(';')[0] ?? ''
   if (!media.startsWith('image/')) throw imageFailure(415, '')
-  const data = await response.arrayBuffer()
-  return { source: `data:${media};base64,${Buffer.from(data).toString('base64')}`, bytes: data.byteLength }
+  return { source: await storeImageBytes(new Uint8Array(await response.arrayBuffer()), media) }
 }
 
-function useThreadImage(threadId: string | null, source: string) {
+export function useThreadImage(threadId: string | null, source: string) {
   const environment = useEnvironment()
   const key = `${environment.revision}:${threadId}:${source}`
   const [state, setState] = useState<{ key: string; image?: Loaded; failure?: Failure; attempt: number }>(() => ({ key, image: cache.get(key), attempt: 0 }))
@@ -106,7 +106,7 @@ function LocalThreadImage({ threadId, source, label, at }: { threadId: string | 
   const image = useThreadImage(threadId, source)
   const cwd = useApp(s => s.threads.find(th => th.id === threadId)?.cwd ?? (s.open.thread?.id === threadId ? s.open.thread?.cwd : undefined))
   const environment = useEnvironment()
-  if (image.image) return <ResponseImage source={image.image.source} label={label} at={at} />
+  if (image.image) return <ResponseImage source={image.image.source} tabSource={source} label={label} at={at} />
   if (!image.failure) return <ImageCard label={label} loading />
   const local = environment.local && cwd
   const file = local ? path.resolve(cwd, decodeURIComponent(reference(source).replace(/^file:\/\/(localhost)?/, ''))) : null
@@ -127,8 +127,8 @@ function ImageCard({ label, reason, loading = false, onRetry, onReveal }: { labe
       </div>
       <Label color={muted(t)} size={12} lineHeight={16}>{loading ? 'Loading image…' : reason ?? ''}</Label>
       {(onRetry || onReveal) && <div style={{ display: 'flex', gap: 8 }}>
-        {onRetry && <Button variant="subtle" testId="thread-image-retry" onClick={onRetry}>Retry</Button>}
-        {onReveal && <Button variant="ghost" testId="thread-image-reveal" onClick={onReveal}>Show in Finder</Button>}
+        {onRetry && <Button size="sm" testId="thread-image-retry" onClick={onRetry}>Retry</Button>}
+        {onReveal && <Button variant="ghost" size="sm" testId="thread-image-reveal" onClick={onReveal}>Show in Finder</Button>}
       </div>}
     </div>
   </Rise>
@@ -138,7 +138,7 @@ function ImageCard({ label, reason, loading = false, onRetry, onReveal }: { labe
 export function ThreadImagePreview({ threadId, source, onClose }: { threadId: string; source: string; onClose: () => void }) {
   const image = useThreadImage(threadId, source)
   const label = decodeURIComponent(reference(source).split('/').pop() ?? 'Image')
-  if (image.image) return <ImageViewer testId="image-lightbox" src={image.image.source} label={label} from={null} source={() => null} onClose={onClose} />
+  if (image.image) return <ImageViewer testId="image-lightbox" src={image.image.source} label={label} from={null} source={() => null} onClose={onClose} onOpenInTab={() => openTab(threadId, { kind: 'image', source, label })} />
   return image.failure ? <ImageLightboxCard label={label} reason={image.failure.reason} onClose={onClose} onRetry={image.retry} /> : null
 }
 

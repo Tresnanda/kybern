@@ -18,11 +18,11 @@ import type { QueuedMessage, RuntimeTask, Thread } from '../../../../packages/ky
 import { commandSummary, queuedPreview, trayDefaultOpen, traySummary, type TrayCounts } from '../../../../packages/kybern-client/src/composerTray.ts'
 import { stoppableSubagents, subagentCounts, subagentDetail, subagentSpan, subagentThreadPhase, subagentTypeLabel, type SubagentPhase } from '../../../../packages/kybern-client/src/subagents.ts'
 import { Icon } from '../icons.tsx'
-import { MatrixLoader } from '../MatrixLoader.tsx'
 import { G } from '../composer/glyphs.ts'
 import { Dim, Leave, useLeavingList } from '../composer/motion.tsx'
 import { SECTION_LABEL, SectionLabel } from '../composer/Menu.tsx'
-import { removeQueued } from '../composer/store.ts'
+import { removeQueued, STEERABLE, steerQueued } from '../composer/store.ts'
+import { useApp } from '../state.ts'
 import { Chevron } from '../motion/Chevron.tsx'
 import { Collapse, Rise, SwapOnChange, revealTransform } from '../motion/kit.tsx'
 import { openThread } from '../nav/history.ts'
@@ -33,8 +33,10 @@ import { FONT_MONO } from '../theme.ts'
 import { T } from '../transcript/glyphs.ts'
 import { reportError } from '../transcript/store.ts'
 import { markTreeOpen, TICK_GAP, TreeGroup, TreeItem, TreeLines, useTreeSlot, type TreeShape } from '../tree/Tree.tsx'
-import { ink, Label, useTheme } from '../ui.tsx'
+import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
 import { controlSubagent, showDock } from './Activity.tsx'
+import { Button } from '../kit/Button.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
 
 /** Row height. The body scrolls once its rows and the labels after the first pass `MAX_ROWS` rows of height; a half row peeks
  *  under the edge. */
@@ -103,6 +105,9 @@ function TrayHeader({ counts, subagents, tasks, open, onToggle }: { counts: Tray
   const state = working ? 'working' : counts.subagents.failed > 0 ? 'failed' : counts.subagents.done + counts.subagents.stopped > 0 ? 'done' : 'queued'
   const label = segments.map(s => s.text).join(', ')
   const toggle = () => onToggle(false)
+  // A working subagent shows its harness; with only background tasks running, a terminal.
+  const lead = subagents.find(s => subagentThreadPhase(s) === 'working')
+  const workingGlyph = lead ? <ProviderMark kind={lead.provider.kind} size={14} /> : <Icon source={G.terminal} size={14} color={ink(t, 0.5)} />
   return (
     // "Stop all" sits between the summary and the chevron but outside the toggle: GPUIX clicks bubble, and a stop must not
     // also close the tray. The summary is the focusable toggle; the chevron is a second pointer target for the same toggle.
@@ -117,7 +122,7 @@ function TrayHeader({ counts, subagents, tasks, open, onToggle }: { counts: Tray
         onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onToggle(true) }}
         style={{ display: 'flex', alignItems: 'center', gap: 8, height: 36, paddingLeft: 14, paddingRight: 8, cursor: 'pointer', flexGrow: 1, flexShrink: 1, minWidth: 0 }}
       >
-        <StatusGlyph phase={state} />
+        <StatusGlyph phase={state} working={workingGlyph} />
         {/* The whole line swaps as one (`TextSwap`): swapping a single segment would slide its neighbours under the outgoing copy. */}
         <SwapOnChange active={label} style={{ justifyContent: 'flex-start', flexGrow: 1, flexShrink: 1, minWidth: 0, overflow: 'hidden' }}>
           <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
@@ -130,7 +135,7 @@ function TrayHeader({ counts, subagents, tasks, open, onToggle }: { counts: Tray
           </div>
         </SwapOnChange>
       </div>
-      {open && stoppable.length >= 2 && <HeaderButton testId="subagents-stop-all" onClick={() => { for (const child of stoppable) void controlSubagent(child, 'stop') }}>Stop all</HeaderButton>}
+      {open && stoppable.length >= 2 && <Button size="sm" testId="subagents-stop-all" onClick={() => { for (const child of stoppable) void controlSubagent(child, 'stop') }}>Stop all</Button>}
       <div testId="composer-tray-chevron" onClick={toggle} style={{ display: 'flex', alignItems: 'center', height: 36, paddingLeft: 8, paddingRight: 8, flexShrink: 0, cursor: 'pointer' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20 }}>
           <Chevron open={open} source={T.chevronDown} turn={180} size={12} color={ink(t, 0.45)} />
@@ -140,22 +145,13 @@ function TrayHeader({ counts, subagents, tasks, open, onToggle }: { counts: Tray
   )
 }
 
-function HeaderButton({ children, onClick, testId }: { children: string; onClick: () => void; testId: string }) {
-  const t = useTheme()
-  return (
-    <div testId={testId} role="button" tabIndex={0} onClick={onClick} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onClick() }}
-      style={{ display: 'flex', alignItems: 'center', height: 24, paddingLeft: 8, paddingRight: 8, borderRadius: 8, flexShrink: 0, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
-      <Label color={ink(t, 0.7)} size={12} weight={500}>{children}</Label>
-    </div>
-  )
-}
-
-/** Loader while working, then a check, an alert or a stop square; the change cross-swaps (`IconSwap`), the first state paints still. */
-function StatusGlyph({ phase }: { phase: SubagentPhase | 'queued' }) {
+/** What is working (its harness mark, or a terminal for a background task), then a check, an alert or a stop square; the change
+ *  cross-swaps (`IconSwap`), the first state paints still. */
+function StatusGlyph({ phase, working }: { phase: SubagentPhase | 'queued'; working: ReactNode }) {
   const t = useTheme()
   return (
     <SwapOnChange kind="icon" active={phase} style={{ width: 16, height: 16, flexShrink: 0 }}>
-      {phase === 'working' ? <MatrixLoader whole />
+      {phase === 'working' ? working
         : phase === 'failed' ? <Icon source={T.alert} size={14} color={t.red} />
         : phase === 'stopped' ? <Icon source={G.stop} size={9} color={ink(t, 0.45)} />
         : phase === 'queued' ? <Icon source={G.clock} size={14} color={ink(t, 0.5)} />
@@ -337,14 +333,8 @@ function Clock({ startedAt, endedAt }: { startedAt: number; endedAt: number | nu
   return <Elapsed startedAt={startedAt} endedAt={endedAt} size={12} tabular color={ink(t, 0.42)} />
 }
 function IconAction({ label, glyph, size = 12, onClick, testId }: { label: string; glyph: string; size?: number; onClick: () => void; testId: string }) {
-  const t = useTheme()
   const focus = useRowFocus()
-  return (
-    <div testId={testId} role="button" aria-label={label} tabIndex={0} {...focus} onClick={onClick} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onClick() }}
-      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
-      <Icon source={glyph} size={size} color={ink(t, 0.48)} />
-    </div>
-  )
+  return <IconButton testId={testId} label={label} icon={glyph} glyph={size} size="sm" onClick={onClick} {...focus} />
 }
 
 const SubagentRow = memo(function SubagentRow({ thread }: { thread: Thread }) {
@@ -367,7 +357,7 @@ const SubagentRow = memo(function SubagentRow({ thread }: { thread: Thread }) {
     <Dim dimmed={phase === 'done' || phase === 'stopped'} level={0.7}>
       <SubagentHover thread={thread}>
         <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}>
-          <Row testId={`subagent-open-${thread.id}`} onOpen={() => openThread(thread.id)} glyph={<StatusGlyph phase={phase} />} actions={actions} trailing={span && <Clock startedAt={span.startedAt} endedAt={span.endedAt} />}>
+          <Row testId={`subagent-open-${thread.id}`} onOpen={() => openThread(thread.id)} glyph={<StatusGlyph phase={phase} working={<ProviderMark kind={thread.provider.kind} size={14} />} />} actions={actions} trailing={span && <Clock startedAt={span.startedAt} endedAt={span.endedAt} />}>
             <Title keep={!!failure}>{thread.title || 'Subagent'}</Title>
             {failure ? <Meta color={t.red} shrink>{failure.text}</Meta> : type && <Meta>{type}</Meta>}
           </Row>
@@ -399,7 +389,7 @@ const HelperRow = memo(function HelperRow({ thread }: { thread: Thread }) {
   const amber = t.variant === 'dark' ? '#fcd34d' : '#d97706'
   return (
     <Row testId={`helper-${thread.id}`} onOpen={() => openThread(thread.id)}
-      glyph={thread.status === 'running' ? <MatrixLoader whole /> : approval ? <Icon source={G.hand} size={14} color={amber} /> : thread.status === 'failed' ? <Icon source={T.alert} size={14} color={t.red} /> : <Icon source={T.check} size={14} color={ink(t, 0.45)} />}>
+      glyph={thread.status === 'running' ? <ProviderMark kind={thread.provider.kind} size={14} /> : approval ? <Icon source={G.hand} size={14} color={amber} /> : thread.status === 'failed' ? <Icon source={T.alert} size={14} color={t.red} /> : <Icon source={T.check} size={14} color={ink(t, 0.45)} />}>
       <Title>{thread.title || 'Untitled'}</Title>
       <Meta color={approval ? amber : thread.status === 'failed' ? t.red : undefined}>{thread.status === 'running' ? 'Helper' : approval ? 'Needs approval' : thread.status === 'failed' ? 'Failed' : 'Helper · idle'}</Meta>
     </Row>
@@ -412,6 +402,9 @@ const QueuedRow = memo(function QueuedRow({ item, threadId }: { item: QueuedMess
   const thumb = preview.images[0]
   const outline = ink(t, 0.1)
   const remove = () => void removeQueued(threadId, item.id).catch(e => reportError('Unable to remove follow-up', e))
+  // A running turn of an agent that takes steering can get the follow-up now instead of after it ends.
+  const steerable = useApp((s) => { const thread = s.threads.find((x) => x.id === threadId); return !!thread && thread.status === 'running' && STEERABLE.includes(thread.provider.kind) })
+  const steer = () => void steerQueued(threadId, item).catch(e => reportError('Couldn’t steer with this follow-up. If the turn just ended it was already sent; otherwise try again', e))
   return (
     <Row testId={`queued-${item.id}`} hoverable={false}
       glyph={thumb && preview.imagesOnly
@@ -419,10 +412,8 @@ const QueuedRow = memo(function QueuedRow({ item, threadId }: { item: QueuedMess
         : <Icon source={preview.kind === 'update' ? G.workflow : G.clock} size={14} color={ink(t, 0.5)} />}
       trailing={<div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         {preview.imageCount > 0 && !preview.imagesOnly && <ImageCount count={preview.imageCount} thumb={thumb} />}
-        <div testId={`queued-remove-${item.id}`} role="button" aria-label="Remove queued follow-up" tabIndex={0} onClick={remove} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') remove() }}
-          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.buttonSecondaryHover } }}>
-          <Icon source={G.x} size={12} color={ink(t, 0.38)} />
-        </div>
+        {steerable && <Button testId={`queued-steer-${item.id}`} variant="ghost" size="sm" onClick={steer}>Steer now</Button>}
+        <IconButton testId={`queued-remove-${item.id}`} label="Remove queued follow-up" icon={G.x} glyph={12} size="sm" onClick={remove} />
       </div>}
     >
       <Title testId="queued-preview">{preview.text}</Title>

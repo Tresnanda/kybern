@@ -4,7 +4,7 @@ import { Icon } from '../icons.tsx'
 import { EASE_OUT, ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { muted } from '../nav/overlay.tsx'
 import { Rise } from '../motion/kit.tsx'
-import { pressTransform } from '../motion/press.ts'
+import { Button } from '../kit/Button.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 
 /**
@@ -23,16 +23,6 @@ export function DockEmpty({ icon, title, body, lineage = false, instant = false 
   </div>
 }
 
-/** A dock text action: the desktop's kit `Button` (chip/xs/sm) or `press` button, so it squashes on press (`motion/press.ts`).
- *  `press={false}` where the desktop control does not (alert-dialog closes, "Show more" links, toolbar actions). */
-export function Action({ children, onClick, disabled, testId, textSize = 11, secondary = false, press = true }: { children: ReactNode; onClick: () => void; disabled?: boolean; testId?: string; textSize?: number; secondary?: boolean; press?: boolean }) {
-  const t = useTheme()
-  return <div role="button" tabIndex={disabled ? -1 : 0} onKeyDown={(event) => { if (!disabled && (event.key === 'enter' || event.key === 'space')) onClick() }} aria-disabled={disabled} testId={testId} onClick={disabled ? undefined : onClick} paintTransform={pressTransform(press && !disabled)}
-    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, minHeight: 28, paddingLeft: 8, paddingRight: 8, borderRadius: 6, backgroundColor: secondary ? t.buttonSecondary : undefined, flexShrink: 0, opacity: disabled ? 0.45 : 1, cursor: disabled ? 'default' : 'pointer', hover: disabled ? {} : { backgroundColor: t.buttonSecondaryHover } }}>
-    <Label color={t.textSecondary} size={textSize}>{children}</Label>
-  </div>
-}
-
 export function Section({ label, children }: { label: string; children?: ReactNode }) {
   const t = useTheme()
   return <div style={{ display: 'flex', height: 32, flexShrink: 0, alignItems: 'center', gap: 6, paddingLeft: 14, paddingRight: 6 }}>
@@ -45,7 +35,7 @@ export function ErrorLine({ error, retry }: { error: string | null; retry?: () =
   if (!error) return null
   return <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: 12 }}>
     <Label color={t.red} size={12}>{error}</Label>
-    {retry && <Action onClick={retry}>Try again</Action>}
+    {retry && <Button size="sm" style={{ alignSelf: 'flex-start' }} onClick={retry}>Try again</Button>}
   </div>
 }
 

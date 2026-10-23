@@ -1,6 +1,7 @@
 import { activeEnvironment, onEnvironmentChange } from '../shell/environment.ts'
 import { DeferredReads } from '../shell/deferredReads.ts'
 import { startupMark } from '../perf/startup.ts'
+import { memoryStep } from '../perf/memoryLog.ts'
 import { createStreamTopology } from './streamBlocks.ts'
 import { pendingFor, removePending, settledPending, subscribePending, withPending } from '../composer/pending.ts'
 // Transcript-side state and actions, mirroring `apps/desktop/src/state/rpc.ts`
@@ -277,6 +278,7 @@ export function loadEarlier(paneId = getFocusedPaneId()): Promise<boolean> {
     const next = prependThreadHistory(base, page, events.filter(event => event.seq > base.lastSeq), getThreadOpen(threadId)!)
     startupMark('history-projected', { cursor, durationMs: performance.now() - started, entries: page.transcript.length })
     setThreadOpen(threadId, next)
+    memoryStep('history-page', { id: threadId, entries: page.transcript.length, blocks: next.blocks.length })
     startupMark('history-ready', { cursor: base.nextBeforeSeq, entries: page.transcript.length })
     primeThreadHistory(threadId)
     return next.nextBeforeSeq != null && historyPageShowedNothing(historyTop(base.blocks), historyTop(next.blocks))

@@ -1,4 +1,4 @@
-export const SCENARIOS = ['startup-cold','startup-warm','startup-packaged','open-long','older-history','thread-scroll','thread-fling','sidebar-scroll','explorer-scroll','markdown-scroll','code-scroll','pr-summary','pr-changes','streaming','streaming-away','streaming-menu','idle-home','idle-thread'] as const
+export const SCENARIOS = ['startup-cold','startup-warm','startup-packaged','open-long','older-history','thread-scroll','thread-fling','sidebar-scroll','explorer-scroll','markdown-scroll','code-scroll','pr-summary','pr-changes','streaming','streaming-away','streaming-menu','streaming-palette','idle-home','idle-thread'] as const
 export type Scenario = typeof SCENARIOS[number]
 export const percentile = (values: number[], fraction: number): number | null => { const sorted=[...values].sort((a,b)=>a-b); return sorted[Math.min(sorted.length-1,Math.floor(sorted.length*fraction))]??null }
 export const distribution = (values: number[]) => ({p50:percentile(values,.5),p95:percentile(values,.95),p99:percentile(values,.99),max:values.length?Math.max(...values):null})

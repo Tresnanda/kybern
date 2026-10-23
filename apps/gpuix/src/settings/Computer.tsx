@@ -4,14 +4,17 @@
 // only while setup is unfinished, like the desktop; nothing polls once it is ready.
 import { useEffect, useState } from 'react'
 import type { ComputerNote, ComputerPermission, ComputerStatus } from '../../../../packages/kybern-client/src/types.ts'
-import { MatrixLoader } from '../MatrixLoader.tsx'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { errorText } from '../nav/actions.ts'
 import { toast } from '../shell/toasts.tsx'
 import { getClient, useApp } from '../state.ts'
 import { Label, ink, useTheme } from '../ui.tsx'
-import { Button, Row, Section, Select } from './controls.tsx'
+import { Row, Section, Select } from './controls.tsx'
+import { Button } from '../kit/Button.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
+import { TextArea } from '../kit/TextArea.tsx'
+import { TokenChip } from '../kit/TokenChip.tsx'
 import { Switch } from '../kit/Switch.tsx'
 import { latestSettings, refreshSettings, updateSettings, useSettings } from './store.ts'
 
@@ -91,7 +94,7 @@ export function ComputerUse() {
       </Row>
       {permissions && <Row title="Accessibility" description="Lets CuaDriver read app windows and click and type in them."><PermissionState state={status.accessibility} /></Row>}
       {permissions && <Row title="Screen Recording" description="Lets CuaDriver take screenshots of app windows."><PermissionState state={status.screen_recording} /></Row>}
-      {missingPermission && <Row title="" description="CuaDriver asks macOS for both permissions. This page updates when they’re on."><Button testId="computer-grant" disabled={busy !== null} onClick={() => void run('grant_permissions')}>Grant access</Button></Row>}
+      {missingPermission && <Row title="" description="CuaDriver asks macOS for both permissions. This page updates when they’re on."><Button testId="computer-grant" variant="primary" disabled={busy !== null} onClick={() => void run('grant_permissions')}>Grant access</Button></Row>}
       {!enabled && !!status?.installed && !needsInstall && <Row title="" description="Turn on computer use to check CuaDriver’s permissions." />}
       {problems.map((check) => <Row key={check.name} title="" description={check.message} status={check.fix ?? undefined} />)}
     </Section>
@@ -105,8 +108,7 @@ function CuaDriverVersion({ status }: { status: ComputerStatus }) {
 }
 
 function InstallButton({ busy, disabled, update, onClick }: { busy: boolean; disabled: boolean; update: boolean; onClick: () => void }) {
-  const t = useTheme()
-  return <div testId="computer-install" role="button" aria-label={update ? 'Update CuaDriver' : 'Install CuaDriver'} tabIndex={disabled ? -1 : 0} onClick={() => !disabled && onClick()} onKeyDown={(e) => { if (!disabled && (e.key === 'enter' || e.key === 'space')) onClick() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, minHeight: 28, paddingLeft: 10, paddingRight: 10, borderRadius: 8, backgroundColor: t.buttonPrimary, opacity: disabled && !busy ? 0.45 : 1, cursor: disabled ? 'default' : 'pointer' }}>{busy && <MatrixLoader dot={2} gap={1.33} rgb={t.variant === 'dark' ? [13, 13, 13] : [252, 252, 252]} alpha={0.7} />}<Label color={t.buttonPrimaryText} size={14} lineHeight={21}>{busy ? 'Installing…' : update ? 'Update CuaDriver' : 'Install CuaDriver'}</Label></div>
+  return <Button testId="computer-install" variant="primary" label={update ? 'Update CuaDriver' : 'Install CuaDriver'} busy={busy} disabled={disabled && !busy} onClick={onClick}>{busy ? 'Installing…' : update ? 'Update CuaDriver' : 'Install CuaDriver'}</Button>
 }
 
 /** `PermissionState`: a check and "Allowed"/"Installed", "Not allowed", or "Checking…". */
@@ -117,8 +119,7 @@ function PermissionState({ state, granted = 'Allowed' }: { state: ComputerPermis
 }
 
 function AllowedApp({ app, onRemove }: { app: string; onRemove: () => void }) {
-  const t = useTheme()
-  return <div style={{ display: 'flex', alignItems: 'center', gap: 4, height: 28, paddingLeft: 10, paddingRight: 4, borderRadius: 6, backgroundColor: t.v('--color-background-elevated-secondary') }}><Label color={ink(t, 0.85)} size={12} lineHeight={16}>{app}</Label><div testId={`computer-allowed-${app}`} role="button" aria-label={`Stop allowing ${app}`} tabIndex={0} onClick={onRemove} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') onRemove() }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 4, hover: { backgroundColor: t.buttonSecondaryHover } }}><Icon source={N.x} size={14} color={t.textSecondary} style={{ pointerEvents: 'none' }} /></div></div>
+  return <TokenChip testId={`computer-allowed-chip-${app}`} removeTestId={`computer-allowed-${app}`} removeLabel={`Stop allowing ${app}`} onRemove={onRemove}>{app}</TokenChip>
 }
 
 function AppNotes() {
@@ -155,18 +156,18 @@ function AppNotes() {
     {notes.map((note) => editing?.bundleId === note.bundle_id
       ? <div key={note.bundle_id} style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 18, paddingRight: 18, paddingTop: 16, paddingBottom: 16 }}>
         <Label color={t.text} size={14} lineHeight={21} weight={500}>{note.app}</Label>
-        <textarea testId="computer-note-text" aria-label={`Notes on ${note.app}`} readOnly={busy} value={editing.text} onChange={(e) => setEditing({ bundleId: note.bundle_id, text: e.value ?? '' })} style={{ height: 112, width: '100%', paddingLeft: 9, paddingRight: 9, paddingTop: 3, paddingBottom: 3, borderWidth: 1, borderColor: t.v('--input'), borderRadius: 8, backgroundColor: t.inputGroupFill, color: t.text, fontSize: 14 }} />
+        <TextArea testId="computer-note-text" label={`Notes on ${note.app}`} disabled={busy} value={editing.text} onChange={(text) => setEditing({ bundleId: note.bundle_id, text })} minRows={5} maxRows={12} />
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
           <Label color={editing.text.length > APP_NOTE_MAX_CHARS ? t.v('--destructive') : t.textSecondary} size={12} lineHeight={16}>{`${editing.text.length} of ${APP_NOTE_MAX_CHARS} characters`}</Label>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Button size="chip" variant="ghost" disabled={busy} onClick={() => setEditing(null)}>Cancel</Button>
-            <Button testId="computer-note-save" size="chip" variant="subtle" disabled={busy || editing.text === note.text || editing.text.length > APP_NOTE_MAX_CHARS} onClick={() => void save(note, editing.text)}>Save notes</Button>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => setEditing(null)}>Cancel</Button>
+            <Button testId="computer-note-save" size="sm" variant="secondary" disabled={busy || editing.text === note.text || editing.text.length > APP_NOTE_MAX_CHARS} onClick={() => void save(note, editing.text)}>Save notes</Button>
           </div>
         </div>
       </div>
       : <Row key={note.bundle_id} title={note.app} description={<Label color={t.textSecondary} size={14} lineHeight={21.7} style={{ maxWidth: 451 }}>{note.text.split('\n').slice(0, 4).join('\n')}</Label>}>
         <Button testId={`computer-note-edit-${note.bundle_id}`} disabled={busy} onClick={() => setEditing({ bundleId: note.bundle_id, text: note.text })}>Edit</Button>
-        <div testId={`computer-note-delete-${note.bundle_id}`} role="button" aria-label={`Delete the notes on ${note.app}`} tabIndex={busy ? -1 : 0} onClick={() => { if (!busy) void save(note, '') }} onKeyDown={(e) => { if (!busy && (e.key === 'enter' || e.key === 'space')) void save(note, '') }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 4, opacity: busy ? 0.45 : 1, hover: { backgroundColor: t.buttonSecondaryHover } }}><Icon source={N.x} size={14} color={t.textSecondary} style={{ pointerEvents: 'none' }} /></div>
+        <IconButton testId={`computer-note-delete-${note.bundle_id}`} icon={N.x} label={`Delete the notes on ${note.app}`} size="sm" disabled={busy} onClick={() => void save(note, '')} />
       </Row>)}
   </Section>
 }

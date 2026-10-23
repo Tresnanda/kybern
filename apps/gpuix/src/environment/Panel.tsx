@@ -1,7 +1,7 @@
 import { activeEnvironment } from '../shell/environment.ts'
 import { useNav } from '../nav/store.ts'
 import { spawn } from 'node:child_process'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { motion } from '@gpuix/react'
 import { GitCommitIcon, GithubIcon, Edit02Icon, Copy01Icon, ArrowUpRight01Icon } from '@hugeicons/core-free-icons'
 import type { Diff, GitStatus, Thread } from '../../../../packages/kybern-client/src/types.ts'
@@ -9,7 +9,9 @@ import { Icon, glyph } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { Menu, MenuItem, MenuLabel, MenuSeparator, muted } from '../nav/overlay.tsx'
 import { surfaceShadow } from '../composer/Menu.tsx'
+import { frostBackdrop, frostFill, useGlass } from '../platform/glass.ts'
 import { getClient, onOpenEvent, useApp } from '../state.ts'
+import { openTab } from '../tabs/open.ts'
 import { chooseTab, setDock, type DockTab } from '../dock/store.ts'
 import { openWeb } from '../dock/Diff.tsx'
 import { load, save } from '../shell/persist.ts'
@@ -20,28 +22,26 @@ import { MatrixLoader } from '../MatrixLoader.tsx'
 import { copyText } from '../transcript/store.ts'
 import { ENVIRONMENT_MOTION, useEnvironmentPanel, useEnvironmentDock, openEnvironmentPanel, closeEnvironmentPanel, finishEnvironmentClose } from './store.ts'
 import { ThreadNote } from './ThreadNote.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
 
 const G = { commit: glyph(GitCommitIcon), github: glyph(GithubIcon), changes: glyph(Edit02Icon), copy: glyph(Copy01Icon), external: glyph(ArrowUpRight01Icon) }
 const SECTIONS = [['changes', 'Changes'], ['repository', 'Repository'], ['pullRequest', 'Pull request'], ['editor', 'Editor'], ['notes', 'Notes']] as const
 type Section = typeof SECTIONS[number][0]
 export function EnvironmentTrigger({ threadId }: { threadId: string }) {
-  const t = useTheme()
+  const keyed = useRef(false)
   const panel = useEnvironmentPanel()
   const open = panel?.threadId === threadId && !panel.leaving
   const toggle = (keyboard = false) => {
     if (open) return closeEnvironmentPanel()
     openEnvironmentPanel(threadId, keyboard)
   }
-  return <div testId="environment-toggle" tabIndex={0} aria-label="Environment" aria-expanded={open}
-    onClick={() => toggle()} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') toggle(true) }}
-    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, backgroundColor: open ? t.buttonSecondaryHover : undefined, hover: { backgroundColor: t.buttonSecondaryHover } }}>
-    <Icon source={N.window} size={16} color={t.textSecondary} />
-  </div>
+  return <IconButton testId="environment-toggle" label="Environment" icon={N.window} active={open} onClick={() => { const keyboard = keyed.current; keyed.current = false; toggle(keyboard) }} onKeyboard={() => { keyed.current = true }} />
 }
 
 /** Keep deferred layers out of the title bar's cached island, which cannot replay their hit bounds. */
 export function EnvironmentOverlay() {
   const t = useTheme()
+  const g = useGlass()
   const panel = useEnvironmentPanel()
   const dock = useEnvironmentDock()
   const selected = useApp((s) => s.selectedId)
@@ -56,7 +56,8 @@ export function EnvironmentOverlay() {
     onMotionComplete={() => { if (leaving) finishEnvironmentClose(panel.generation) }}
     style={{ position: 'absolute', left: dock.x + dock.width - 300, top: dock.y + 12, pointerEvents: leaving ? 'none' : 'auto' }}>
     <div testId="environment-panel" tabIndex={0} autoFocus onKeyDown={(e) => { if (e.key === 'escape') closeEnvironmentPanel() }}
-      style={{ display: 'flex', flexDirection: 'column', width: 288, maxHeight: Math.max(120, dock.height - 24), overflow: 'scroll', padding: 6, gap: 2, borderRadius: 16, borderWidth: 1, borderColor: t.borderLight, backgroundColor: t.popover, boxShadow: surfaceShadow(t), pointerEvents: leaving ? 'none' : 'auto' }}>
+      backdrop={frostBackdrop(g, 'menus', 16)}
+      style={{ display: 'flex', flexDirection: 'column', width: 288, maxHeight: Math.max(120, dock.height - 24), overflow: 'scroll', padding: 6, gap: 2, borderRadius: 16, borderWidth: 1, borderColor: g.on ? g.frostRim : t.borderLight, backgroundColor: frostFill(g, 'menus', t.popover, 'frostMenu'), ...(g.on ? {} : { boxShadow: surfaceShadow(t) }), pointerEvents: leaving ? 'none' : 'auto' }}>
       <EnvironmentPanel key={threadId} threadId={threadId} />
     </div>
   </motion.div>
@@ -127,7 +128,7 @@ function EnvironmentPanel({ threadId }: { threadId: string }) {
   }
   return <>
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingLeft: 8 }}><Label color={muted(t, 0.4)} size={14} lineHeight={21}>Environment</Label>
-      <Menu testId="environment-sections" align="end" width={192} trigger={() => <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, pointerEvents: 'none' }}><Icon source={N.settings} size={14} color={t.textSecondary} /></div>}><MenuLabel>Sections</MenuLabel>{SECTIONS.map(([key, label]) => <MenuItem key={key} id={key} testId={`environment-section-${key}`} label={label} checked={!hidden[key]} keepOpen onSelect={() => { const next = { ...hidden, [key]: !hidden[key] }; setHidden(next); save('kybern.env.hidden', next) }} />)}</Menu>
+      <Menu testId="environment-sections" align="end" width={192} trigger={() => <IconButton label="Sections" icon={N.settings} glyph={14} />}><MenuLabel>Sections</MenuLabel>{SECTIONS.map(([key, label]) => <MenuItem key={key} id={key} testId={`environment-section-${key}`} label={label} checked={!hidden[key]} keepOpen onSelect={() => { const next = { ...hidden, [key]: !hidden[key] }; setHidden(next); save('kybern.env.hidden', next) }} />)}</Menu>
     </div>
     {!hidden.changes && <Row testId="environment-changes" icon={G.changes} label="Changes" disabled={!diff?.files.length} onClick={() => dock('changes')} trailing={(diff?.files.length ?? 0) > 0 && <><Label color={t.green} size={12}>{`+${diff?.files.reduce((n, f) => n + f.additions, 0) ?? 0}`}</Label><Label color={t.red} size={12}>{`−${diff?.files.reduce((n, f) => n + f.deletions, 0) ?? 0}`}</Label></>} />}
     <Menu testId="environment-running" width={260} trigger={() => <Row decorative icon={thread?.worktree ? N.worktree : N.laptop} label={thread?.worktree ? 'Worktree' : local ? 'Local' : 'Remote'} trailing={chevron} />}><MenuLabel>Running in</MenuLabel><MenuItem id="cwd" label={cwd || 'Local'} checked disabled={!local || !cwd} onSelect={() => spawn('open', ['-R', cwd], { stdio: 'ignore' }).on('error', () => {})} /></Menu>
@@ -135,7 +136,7 @@ function EnvironmentPanel({ threadId }: { threadId: string }) {
       <Row testId="environment-commit" icon={G.commit} spinning={busy} label="Commit and push" disabled={busy || git.dirty_files === 0} onClick={() => void run('commit')} trailing={git.dirty_files > 0 ? <Label color={t.textSecondary} size={12}>{String(git.dirty_files)}</Label> : chevron} />
     </>}
     {!hidden.repository && git?.remote_url && <><SectionTitle>Repository</SectionTitle><Row icon={G.github} label={/[:/]([^/:]+\/[^/]+?)(?:\.git)?$/.exec(git.remote_url)?.[1] ?? git.remote_url} trailing={external} onClick={() => openWeb(git.remote_url!.replace(/^git@([^:]+):/, 'https://$1/').replace(/\.git$/, ''))} /></>}
-    {!hidden.pullRequest && git?.is_git && <><SectionTitle>Pull request</SectionTitle>{git.pull_request ? <Row testId="environment-pr" icon={N.pullRequest} label={`#${git.pull_request.number} ${git.pull_request.title}`} trailing={<>{git.pull_request.is_draft && <div style={{ paddingLeft: 6, paddingRight: 6, paddingTop: 1, paddingBottom: 1, borderRadius: 9999, backgroundColor: t.buttonSecondary }}><Label color={muted(t, 0.6)} size={10}>Draft</Label></div>}{external}</>} onClick={() => dock('review')} /> : <Row icon={N.pullRequest} spinning={busy} label="Create pull request" disabled={busy || !git.remote_url} onClick={() => void run('pr')} />}</>}
+    {!hidden.pullRequest && git?.is_git && <><SectionTitle>Pull request</SectionTitle>{git.pull_request ? <Row testId="environment-pr" icon={N.pullRequest} label={`#${git.pull_request.number} ${git.pull_request.title}`} trailing={<>{git.pull_request.is_draft && <div style={{ paddingLeft: 6, paddingRight: 6, paddingTop: 1, paddingBottom: 1, borderRadius: 9999, backgroundColor: t.buttonSecondary }}><Label color={muted(t, 0.6)} size={10}>Draft</Label></div>}{external}</>} onClick={() => openTab(threadId, { kind: 'review' })} /> : <Row icon={N.pullRequest} spinning={busy} label="Create pull request" disabled={busy || !git.remote_url} onClick={() => void run('pr')} />}</>}
     {!hidden.editor && <><SectionTitle>Editor</SectionTitle><Row testId="environment-editor" icon={N.layoutSidebar} label="Editor view" onClick={() => dock('explorer')} /><Menu testId="environment-folder" width={192} trigger={() => <Row decorative icon={N.folder} label="Open in Finder" trailing={chevron} />}><MenuItem id="reveal" icon={N.folder} label="Reveal in Finder" disabled={!local || !cwd} onSelect={() => spawn('open', ['-R', cwd], { stdio: 'ignore' }).on('error', () => {})} /><MenuItem id="open" icon={G.external} label="Open folder" disabled={!local || !cwd} onSelect={() => spawn('open', [cwd], { stdio: 'ignore' }).on('error', () => {})} /><MenuItem id="copy" icon={G.copy} label="Copy path" onSelect={() => copyText(cwd)} /></Menu></>}
     {!hidden.notes && <><div style={{ height: 1, backgroundColor: t.borderLight, marginTop: 4, marginBottom: 4 }} /><div testId="environment-notes-toggle" tabIndex={0} aria-expanded={notesOpen} onClick={() => { setNotesOpen(!notesOpen); save('kybern.env.notes', !notesOpen) }} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') { setNotesOpen(!notesOpen); save('kybern.env.notes', !notesOpen) } }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, minHeight: 25, paddingLeft: 8, paddingRight: 8, paddingTop: 4, paddingBottom: 4, borderRadius: 8, hover: { backgroundColor: t.buttonSecondaryHover } }}><Label color={muted(t, 0.4)} size={13} lineHeight={16}>Notes</Label><Icon source={notesOpen ? N.chevronDown : N.chevronRight} size={12} color={muted(t, 0.6)} /></div>{notesOpen && <div style={{ display: 'flex', flexDirection: 'column', paddingTop: 2 }}><ThreadNote key={threadId} threadId={threadId} /></div>}</>}
   </>

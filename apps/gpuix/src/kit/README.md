@@ -14,6 +14,52 @@ checked against it, in images, with `scripts/kit9-pair.ts` (see "Verifying").
   `kit/hoverController.ts` so only one is visible app-wide.
 - Never a JS timer or React commit driving visible movement per frame: use `motion.div` tweens or paint animations.
 
+## The control system (ADE-55, Direction C "Tinted state")
+
+One set of controls for the whole app. Colour means state: the commit action and every selection share one translucent accent tint, never
+a solid slab; neutrals are ink alphas, so every control composites on any surface including whole-window glass (the dark column serves
+Solid dark and glass alike). Spec: `.kybern-artifacts/ade-55-design/spec.md`. A live board of every component is
+`gallery/controlsBoard.tsx` (`KIT_SECTION=controls-board`, captured by `bun scripts/kit-controls-board.ts <out> [dark|light|both]`).
+
+**Tokens (`controls.ts`).** `RADIUS` (xs 5, sm 8, md 9, lg 11, xl 13, field 9, check 5, kbd 5, pill 999, segTrack 11, segThumb 9),
+`HEIGHT` (xs 20, sm 24, md 28, lg 32, xl 36), `SPACE` (the 4 pt grid), `CONTROL[size]` (per `sm|md|lg`: height, padX, iconPad, label
+and glyph size, gap, radius) and `useControls()` / `controlsFor(theme)` (the colour tokens: `primary`, `secondary`, `ghost`,
+`destructive`, `danger`, `disabled`, `focus`, `field`, `chip`, `segmented`, `check`, …). Nothing hard-codes 8/10/14 or 28/32 on a
+control any more. Hover, pressed and keyboard focus (`focusVisible`, a 2 px accent outline) are native styles with no React state; only
+the ghost label and icon buttons track the pointer, because a native hover cannot recolour a child.
+
+**States.** rest, hover (one fill step up), pressed (a further step plus `SCALE.press`), `focusVisible` (keyboard only), selected/on
+(tint, never colour alone), disabled (the disabled fill and `text3`, no hover, press or shadow: a disabled primary no longer looks
+primary), busy (label kept, a 12 px spinner leads it, disabled).
+
+**One-primary rule.** At most one `primary` per surface (card, dialog, bar, header, composer, settings section). On a confirm surface the
+destructive action is the primary (`destructive`) and Cancel/Keep is `secondary`. A safe primary with a destructive alternative:
+the alternative is `secondary danger` on the leading edge, Cancel + primary trailing. Lowest weight is `ghost`. The primary owns ⌘↵
+(`kbd="⌘↵"`). Menus never contain buttons.
+
+| Component | Props | Replaced |
+| --- | --- | --- |
+| `Button` | `variant` primary/secondary/ghost/destructive, `danger`, `size` sm/md/lg, `icon`, `iconAfter`, `chevron`, `kbd`, `busy`, `disabled`, `swap`, `trailing`, `block`, `onKeyboard`, `label` | `transcript/kit` Button, `settings/controls` Button, `usage/controls` Button, `KitButton`, `EnvButton`, `GuardButton`, `PaneButton`, tray `HeaderButton`, Notes `HeaderButton`, and the one-off pills |
+| `IconButton` | `icon`, `label` (required), `size`, `active`, `secondary`, `glyph`, `color`, `disabled` | sidebar `IconButton`, title-bar `ChromeIcon`, `ChromeButton`, editor toolbar, terminal toolbar, `AddButton`, `Toggle` (deleted) |
+| `SplitButton` | `variant` primary/secondary, `size`, `onClick`, `menu` (the `MenuItem`s), `menuAlign` | the PR Merge pair, Notes compose + chevron |
+| `PickerChip` | `icon`/`mark`/`dot`/`lead`, `secondary`, `chevron`, `open`, `selected`, `neutral`, `quiet`, `muted`, `size` sm/md, `truncate`, `maxWidth` | `FooterChip`, `TrayChip`, Notes `Chip`, the Tasks scope chip, the model trigger, "Queue ⌄", the dock empty-state chips |
+| `TokenChip` | `onRemove`, `lead` | the Computer-use app chips, `Combobox` chips |
+| `Checkbox` | as before (`indeterminate`, `invalid`), `tone` accent/neutral; `onCheckedChange(checked, { shift })` | the Tasks `Check`, the criteria box, `WorktreeCheck`, the close-guard box, coordinator glyph checkboxes |
+| `Radio`, `RadioRow` | `checked`, `title`, `description`, `onSelect` | the question-card and PR-review radios |
+| `Segmented` | `size` sm/md, options with `icon` (label shown as a tooltip) and `count`, `fill`, `tone` accent/neutral | `settings/controls` Segmented, `usage/controls` Segments (non-tab uses), the Tasks view toggle |
+| `TextField`, `SearchField`, `NumberField`, `TextArea`, `FieldShell` | `size` md/lg, `invalid`, `disabled`, `bare`, `leading`, `trailing`, `width` | `settings/controls` TextField/NumberField, the palette, settings, PR list and Notes searches, `AnswerField`, the PR review and environment textareas, `EnvInput` |
+| `SelectTrigger` | the display name as children, `mark`, `size`, `open`, `placeholder` | the `settings/controls` Select trigger, `kit/Select`'s trigger, the usage period button |
+| `Kbd` | `keys` | `nav/overlay` Kbd (18 high, one chip per key, a 1 px ink edge) |
+
+`Slider` (Settings only; the model-picker effort slider is unchanged) draws the 4 px track, the accent fill and the 16 px thumb; `Switch`
+keeps its 32 × 20 geometry with no off-track border, the new thumb shadow and a native focus ring. The nav rail is unchanged by design.
+Tasks and Notes keep their quiet look: `PickerChip quiet` (transparent at rest, a neutral ink fill and the chevron on hover) for the
+property pickers and `neutral` for selected filters, and `Checkbox`/`Segmented` take `tone="neutral"` (ink fill, spec §3.3), so their
+selection stays ink; accent stays on the commit action, focus and
+selection elsewhere.
+
+Known gaps: a disabled `TextField` shows the ink edge only (the spec's 45° hatch needs a repeating pattern the renderer lacks).
+
 ## Verifying (the gallery)
 
 `visual/kit/` renders a named *section* of the desktop's own kit components (Vite + WebKit, no daemon);
@@ -65,16 +111,15 @@ They keep an Escape stack (the innermost
 overlay closes first: a `Select` inside a `Sheet`; `useEscapeLayer(open)` returns `claim()` for Escape and `isTop()` for outside
 presses, and `nav/overlay.tsx`'s `Dialog` defers to `kitOverlayOpen()`) and return focus to the opener. Neither traps Tab yet.
 The window size is read only while one is mounted (`WindowSized`). `ModalLayer`, `useEscapeLayer`, `usePresence`, `WindowSized`
-and `KitButton` (the desktop `Button`: `variant` default/outline/destructive/…, `size`, `icon`) are exported for other dialogs.
+are exported for other dialogs; the footer buttons are the one `Button` (`AlertDialogClose`/`SheetClose` map the desktop's variant names with `controlVariant`).
 
 ## Form controls
 
 - `Switch` (`checked`/`defaultChecked`/`onCheckedChange`, `disabled`, `aria-label`): 32×20 track, 12 px thumb travel, press stretch.
 - `Checkbox` (same plus `indeterminate`, `invalid`): the check strokes itself in (`.t-check-path`), painted natively by
   `paintAnimation: { kind: 'stroke' }` (`motion/success.ts` `strokeDraw`; no render or JS per frame).
-- `Toggle` (`pressed`/`defaultPressed`/`onPressedChange`, `variant` default/outline, `size` xs/sm/default/lg, `icon`, children = label).
-- `Segmented` (`options: {value,label,unavailable?}[]`, `value`, `onChange`, `busy`, `textSize` 14, `segmentHeight` 24, `segmentPadX` 8,
-  `fill`): radiogroup with the raised thumb that slides between segments; arrow keys skip unavailable options.
+- `Segmented` (`options: {value,label,icon?,count?,unavailable?}[]`, `value`, `onChange`, `busy`, `size` md/sm, `segmentPadX`, `fill`): radiogroup with the sliding tinted thumb;
+  arrow keys skip unavailable options.
 - `TimePicker` (`value` "HH:MM", `onChange`, `width` 168): two scrolling columns.
 - `Select` (`options: SelectEntry[]` = `{value,label,disabled?} | {group} | {separator:true}`, `value`/`defaultValue`/`onValueChange`,
   `placeholder`, `size` xs/sm/default/lg, `variant`, `surface` settings/composer, `side`, `align`, `sideOffset`, `width`, `label`):
@@ -101,6 +146,22 @@ once in `App.tsx` and follows the pointer during a drag (GPUIX only delivers mou
 Used by the Explorer tree (176-520) and the PR list (288-512); the thread sidebar, dock and split dividers keep their own handles
 (`shell/ResizeHandle.tsx`, `dock/`, `split/`), all driven by `scripts/kit9-resize-check.ts`.
 
+## Tabs (`Tabs.tsx`)
+
+The one tab strip (ADE-55 §2.7, Direction C): the in-thread strip (`tabs/Strip.tsx`), the dock, the terminal pane, the PR
+detail and the model picker. `<Tabs items active onSelect onClose? onDoubleClick? size="md"|"sm" focused markSingle underlineGap
+dividerAfter overflow minWidth gap dropIndex trailing wrapTab registerTab stripRef onTabMouseDown/Move/Up animate testId />`.
+Items: `key`, `label`, `icon` | `mark` | `iconNode`, `preview` (italic, drawn as a Markdown emphasis because GPUIX text has
+no `fontStyle`), `pinned` (no ✕), `dirty` (6 px dot until hover), `detail`/`extra` (counts, diff stats), `disabled`,
+`iconOnly`, `tooltip`, `testId`, `closeTestId`. Geometry: 28 (sm 24) high, padding 8 (sm 7), glyph 14, gap 6, label 13/500
+(sm 12/500), width 96–200 (pinned up to 320), ✕ 16 with radius 5 on the active and hovered tab. The active tab of a
+focused strip has no fill and a 2 × (width − 16) accent underline `underlineGap` below it (the strip's bottom edge); in
+an unfocused split group the underline turns to ink and the label to secondary text (`markSingle` underlines a lone tab,
+so every group of a split marks its active tab). Overflow scrolls sideways with a 16 px `edgeFade`
+and a » menu; the active tab is kept in view (instantly: no per-frame JS). A tab that appears after mount fades in from
+0.97 (150 ms, paint-only; the neighbours step aside because GPUIX tweens no `maxWidth`), a closed one shrinks from its
+measured width to 0 (120 ms); Reduce Motion: opacity, 90 ms. Switching is instant.
+
 ## Attention pop (`Pop.tsx`)
 
 `<Label paintAnimation={popAnimation()}>`: the desktop's `.t-pop` (scale 0.85 → 1, opacity 0.4 → 1, 250 ms `--ease-bounce`) on a
@@ -112,7 +173,7 @@ Leaves only: a box with a background does not scale (no subtree scale in the ren
 - `HoverCard`, `Tip` (`nav/overlay.tsx`), `Menu`, `ContextMenu` and `MenuSub`: popups stay mounted through their exit (`PopupLayer`
   `leaving`/`onLeft`): menus 150 ms to 0.99, tooltips and hover cards 80 ms. A close from the keyboard (Escape, Enter on an item)
   unmounts at once; a tooltip or card that opened `instant` leaves at once too; submenus leave with the root menu.
-- `Switch`, `Segmented` (equal-width segments) and `Toggle`'s `Fill` move or fade as paint-only transforms; `Badge` pops a numeric
+- `Switch` and `Segmented` (equal-width segments) move or fade as paint-only transforms; `Badge` pops a numeric
   label when it changes after mount (`useCountPop`).
 - `dock/loading.tsx` `LoadingLines`, `useAfter`: a skeleton that only shows after 150 ms of waiting (never a flash for fast reads).
 

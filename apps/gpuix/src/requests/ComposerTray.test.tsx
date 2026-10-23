@@ -41,7 +41,8 @@ function harness() {
     /** Every test id in tree (paint) order. */
     testIds: () => walk(rootId).map(id => custom.get(id)?.testId).filter((id): id is string => typeof id === 'string'),
     /** The nearest ancestor of `id` (itself included) with a paint transform. */
-    transformAbove: (id: number) => { for (let at: number | undefined = id; at !== undefined; at = parent.get(at)) if (custom.get(at)?.paintTransform) return custom.get(at)!.paintTransform; return undefined },
+    /** The nearest ancestor of `id` (itself included) whose paint transform animates opacity: a reveal, not a control's own press scale. */
+    transformAbove: (id: number) => { for (let at: number | undefined = id; at !== undefined; at = parent.get(at)) { const transform = custom.get(at)?.paintTransform; if (transform?.animate?.opacity !== undefined) return transform } return undefined },
     fire: (id: number, eventType: string) => flushSync(() => handleGpuixEvent({ eventType, elementId: id }, renderer)),
   }
 }

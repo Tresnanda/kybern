@@ -1,17 +1,17 @@
 import { transcriptMarkdownStyle } from '../native/markdown.ts'
-import { keyboardAnswer } from '../requests/Panel.tsx'
+
 // Small transcript primitives: the desktop's chat type scale, muted tones,
 // kit buttons (`components/kit/button.tsx` sm variants) and the disclosure
 // chevron. Values cite `chatTypography.ts` and `kit.css`.
-import type { ReactNode } from 'react'
+
 import type { StyleDesc } from '@gpuix/react'
 import { Icon } from '../icons.tsx'
 import { FONT_MONO, FONT_UI, type Theme } from '../theme.ts'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { T } from './glyphs.ts'
-import { G } from '../composer/glyphs.ts'
-import { SwapOnChange } from '../motion/kit.tsx'
-import { pressTransform } from '../motion/press.ts'
+
+
+
 
 /** `getChatTranscriptTextStyle()`: 14px at `leading-relaxed` (1.625). */
 export const TEXT = { size: 14, lineHeight: 22.75 }
@@ -55,92 +55,6 @@ export function RowIcon({ source, color, size = 14, box = 16 }: { source: string
   return (
     <div style={{ display: 'flex', width: box, height: box, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
       <Icon source={source} size={size} color={color} />
-    </div>
-  )
-}
-
-type Variant = 'default' | 'chrome-outline' | 'ghost' | 'subtle'
-
-/** Kit `Button` at size `sm`: 28px tall, 9px inline padding, 12px medium label. */
-export function Button({
-  children,
-  variant = 'default',
-  onClick,
-  disabled,
-  testId,
-  icon,
-  iconAfter,
-  swap,
-  trailing,
-}: {
-  children?: ReactNode
-  variant?: Variant
-  onClick?: () => void
-  disabled?: boolean
-  testId?: string
-  icon?: string
-  iconAfter?: string
-  /** A label that reports state ("Send" → "Sending…"): the old text leaves while the new one rises in (`TextSwap`). */
-  swap?: boolean
-  /** After the label (a rotating `Chevron`). */
-  trailing?: ReactNode
-}) {
-  const t = useTheme()
-  const color =
-    variant === 'default' ? t.buttonPrimaryText : variant === 'ghost' ? t.textSecondary : t.text
-  const base: StyleDesc =
-    variant === 'default'
-      ? { backgroundColor: t.buttonPrimary, borderColor: 'rgba(0, 0, 0, 0)' }
-      : variant === 'chrome-outline'
-        ? { borderColor: t.border }
-        : variant === 'subtle'
-          ? { backgroundColor: t.buttonSecondary, borderColor: 'rgba(0, 0, 0, 0)' }
-          : { borderColor: 'rgba(0, 0, 0, 0)' }
-  const hover: StyleDesc =
-    variant === 'default'
-      ? { opacity: 0.9 }
-      : variant === 'chrome-outline'
-        ? { backgroundColor: t.buttonSecondary }
-        : { backgroundColor: t.buttonSecondaryHover }
-  return (
-    <div
-      testId={testId}
-      role="button"
-      tabIndex={disabled ? -1 : 0}
-      aria-disabled={disabled}
-      onKeyDown={e => { if (!disabled && (e.key === 'enter' || e.key === 'space')) { keyboardAnswer(); onClick?.() } }}
-      onClick={disabled ? undefined : onClick}
-      paintTransform={pressTransform(!disabled && !!onClick)}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 6,
-        height: 28,
-        minWidth: children ? 0 : 28,
-        paddingLeft: children ? 9 : 0,
-        paddingRight: children ? 9 : 0,
-        borderRadius: 8,
-        borderWidth: 1,
-        flexShrink: 0,
-        cursor: disabled ? 'default' : 'pointer',
-        opacity: disabled ? 0.64 : 1,
-        ...base,
-        ...(disabled ? {} : { hover }),
-      }}
-    >
-      {icon && <Icon source={icon} size={16} color={color} style={{ opacity: 0.8 }} />}
-      {children != null && (
-        swap && typeof children === 'string'
-          ? <SwapOnChange active={children}>
-              <Label color={color} size={12} weight={500} lineHeight={16} style={{ whiteSpace: 'nowrap' }}>{children}</Label>
-            </SwapOnChange>
-          : <Label color={color} size={12} weight={500} lineHeight={16} style={{ whiteSpace: 'nowrap' }}>
-              {children}
-            </Label>
-      )}
-      {iconAfter && <Icon source={iconAfter} size={16} color={color} style={{ opacity: 0.8 }} />}
-      {trailing}
     </div>
   )
 }

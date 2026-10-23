@@ -6,7 +6,8 @@ import { Label, useTheme } from '../ui.tsx'
 import { toast } from '../shell/toasts.tsx'
 import { canSelfUpdate, checkForAppUpdate, installAppUpdate, useAppUpdate } from '../platform/update.ts'
 import { cliStatus, installCli, removeOtherCli, uninstallCli, type CliStatus } from '../platform/cli.ts'
-import { Button, Row, Section } from './controls.tsx'
+import { Row, Section } from './controls.tsx'
+import { Button } from '../kit/Button.tsx'
 import { useResource } from './resource.ts'
 
 type Line = { text: string; tone?: 'muted' | 'warning' | 'error' }

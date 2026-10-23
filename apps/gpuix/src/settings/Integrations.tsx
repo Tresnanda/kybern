@@ -2,6 +2,7 @@
 // and Codex in one project: agent and project pickers, Add connector and Refresh, the
 // Plugins/Connectors switch with search, and one card row per integration with its
 // actions, Connect and Sign in chips.
+import { openTab } from '../tabs/open.ts'
 import { useEffect, useState } from 'react'
 import type { Integration, IntegrationAction, IntegrationsCatalog, ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
@@ -9,12 +10,14 @@ import { N } from '../nav/glyphs.ts'
 import { errorText } from '../nav/actions.ts'
 import { setNav } from '../nav/store.ts'
 import { chooseTab, setDock } from '../dock/store.ts'
-import { Segments } from '../usage/controls.tsx'
 import { getClient, useApp } from '../state.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { GlassEdge } from '../kit/GlassEdge.tsx'
 import { settingsCardStyle, useGlass } from '../platform/glass.ts'
-import { Button, PageBlock, Select, TextField } from './controls.tsx'
+import { PageBlock, Select } from './controls.tsx'
+import { Button } from '../kit/Button.tsx'
+import { SearchField } from '../kit/SearchField.tsx'
+import { Segmented } from '../kit/Segmented.tsx'
 import { openExternal } from './external.ts'
 import { S } from './glyphs.ts'
 
@@ -78,8 +81,10 @@ export function Integrations() {
     try {
       await client.call('integrations.login', { thread_id: thread.id, name: item.id })
       if (getClient() !== client) return
-      chooseTab(thread.id, 'terminal')
-      setDock(thread.id, { open: true })
+      // The sign-in runs in a terminal of the thread: open it beside the chat.
+      const { terminals } = await client.call('terminals.list', { thread_id: thread.id })
+      const latest = terminals.at(-1)
+      if (latest) openTab(thread.id, { kind: 'terminal', id: latest.id })
       setNav({ settingsOpen: false })
     } catch (e) {
       setError(errorText(e))
@@ -94,15 +99,15 @@ export function Integrations() {
   const emptyBody = !projectId ? 'Choose a project to manage its plugins and connectors.' : !connected ? 'Connect your computer to load integrations.' : query ? `Nothing matches “${query}”. Try a different search.` : category === 'plugin' ? 'Install a plugin skill in your agent, then refresh to see it here.' : 'Connect an app in your agent, then refresh to see it here.'
   return <PageBlock><div testId="integrations" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      <Select compact testId="integrations-agent" label="Agent" value={provider} disabled={!!busy} onChange={(value) => { setProvider(value as ProviderKind); setNotice('') }} options={[{ value: 'claude-code', label: 'Claude Code' }, { value: 'codex', label: 'Codex' }]} />
+      <Select compact testId="integrations-agent" label="Agent" value={provider} disabled={!!busy} onChange={(value) => { setProvider(value as ProviderKind); setNotice('') }} options={[{ value: 'claude-code', label: 'Claude Code', mark: 'claude-code' }, { value: 'codex', label: 'Codex', mark: 'codex' }]} />
       <Select compact testId="integrations-project" label="Project" value={projectId} disabled={!!busy} onChange={setProjectId} options={projects.length ? projects.map((p) => ({ value: p.id, label: p.name })) : [{ value: '', label: 'Select project' }]} />
       <div style={{ flexGrow: 1 }} />
       {canSignIn && <Button testId="integrations-add-connector" variant="ghost" icon={S.externalLink} onClick={openConnectors}>Add connector</Button>}
       <Button testId="integrations-refresh" variant="ghost" icon={S.refresh} disabled={!connected || loading || !!busy} onClick={() => setRefresh((value) => value + 1)}>{loading ? 'Loading…' : 'Refresh'}</Button>
     </div>
     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-      <Segments testId="integrations-kind" value={category} width={[65, 90]} fontSize={12} options={[['plugin', 'Plugins'], ['connector', 'Connectors']]} onChange={(value) => { setCategory(value); setCount(40) }} />
-      <div style={{ flexGrow: 1, position: 'relative' }}>{/* `InputGroup`: `border-input` (white in light, so no visible edge) on `bg-background` / `dark:bg-input/32`. */}<TextField testId="integrations-search" label="Find integrations" placeholder={`Find a ${noun}`} value={query} onChange={(value) => { setQuery(value); setCount(40) }} width="100%" style={{ borderColor: t.v('--input'), backgroundColor: t.inputGroupFill, fontSize: 14, paddingLeft: 30 }} /><div style={{ position: 'absolute', left: 10, top: 8, pointerEvents: 'none' }}><Icon source={N.search} size={14} color={t.textSecondary} /></div></div>
+      <Segmented testId="integrations-kind" aria-label="Integration type" value={category} options={[{ value: 'plugin', label: 'Plugins' }, { value: 'connector', label: 'Connectors' }]} onChange={(value) => { setCategory(value as typeof category); setCount(40) }} />
+      <div style={{ display: 'flex', flexGrow: 1, minWidth: 0 }}><SearchField testId="integrations-search" label="Find integrations" placeholder={`Find a ${noun}`} value={query} onChange={(value) => { setQuery(value); setCount(40) }} width="100%" /></div>
     </div>
     <Label color={t.textSecondary} size={12} lineHeight={19.5}>{provider === 'codex' ? 'Type @ in a conversation to choose an installed plugin or connected app.' : 'Type / in a conversation to choose a plugin skill, such as /plugin:skill.'}</Label>
     {notice && <Label color={t.textSecondary} size={12} lineHeight={19.5}>{notice}</Label>}
@@ -113,7 +118,7 @@ export function Integrations() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 12, backgroundColor: t.buttonSecondary }}><Icon source={category === 'plugin' ? S.plugin : S.mcp} size={18} color={t.textSecondary} /></div>
         <Label color={t.text} size={13} lineHeight={20.8} weight={500}>{emptyTitle}</Label>
         <Label color={t.textSecondary} size={13} lineHeight={20.8} style={{ maxWidth: 380 }}>{emptyBody}</Label>
-        {query ? <Button variant="outline" onClick={() => setQuery('')}>Clear search</Button> : canSignIn ? <Button variant="outline" onClick={openConnectors}>Add a Claude connector</Button> : null}
+        {query ? <Button variant="secondary" onClick={() => setQuery('')}>Clear search</Button> : canSignIn ? <Button variant="secondary" onClick={openConnectors}>Add a Claude connector</Button> : null}
       </div>
       : <div testId="integrations-list" style={{ display: 'flex', flexDirection: 'column', ...settingsCardStyle(t, g), overflow: 'hidden' }}><GlassEdge radius={12} color={g.highlight} />
         {matches.slice(0, count).map((item, index) => {
@@ -128,9 +133,9 @@ export function Integrations() {
               {item.description && <Label color={t.textSecondary} size={12} lineHeight={19.5} style={{ marginTop: 4 }}>{item.description}</Label>}
               <Label color={t.textSecondary} size={11} lineHeight={16.5} style={{ marginTop: 6 }}>{`${item.status}${item.scope ? ` · ${item.scope}` : ''}`}</Label>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
-                {item.actions.map((action) => <Button key={action} testId={`integration-${item.id}-${action}`} size="chip" variant="subtle" disabled={!connected || !!busy} onClick={() => void change(item, action)}>{busy === item.id ? 'Working…' : LABELS[action]}</Button>)}
-                {item.connect_url && <Button size="chip" variant="subtle" onClick={() => void openExternal(item.connect_url!).catch((e) => setError(errorText(e)))}>{item.installed ? 'Manage connection' : 'Connect'}</Button>}
-                {item.can_login && <Button testId={`integration-login-${item.id}`} size="chip" variant="subtle" disabled={!connected || !!busy || !onThisProject} onClick={() => void login(item)}>Sign in</Button>}
+                {item.actions.map((action) => <Button key={action} testId={`integration-${item.id}-${action}`} size="sm" variant="secondary" disabled={!connected || !!busy} onClick={() => void change(item, action)}>{busy === item.id ? 'Working…' : LABELS[action]}</Button>)}
+                {item.connect_url && <Button size="sm" variant="secondary" onClick={() => void openExternal(item.connect_url!).catch((e) => setError(errorText(e)))}>{item.installed ? 'Manage connection' : 'Connect'}</Button>}
+                {item.can_login && <Button testId={`integration-login-${item.id}`} size="sm" variant="secondary" disabled={!connected || !!busy || !onThisProject} onClick={() => void login(item)}>Sign in</Button>}
               </div>
               {canSignInHere && <Label color={t.textSecondary} size={12} lineHeight={19.5} style={{ marginTop: 8 }}>Open a Claude conversation in this project to sign in.</Label>}
             </div>

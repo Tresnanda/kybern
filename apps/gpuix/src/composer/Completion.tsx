@@ -6,7 +6,8 @@ import { useTasks, refreshTasks } from '../tasks/store.ts'
 // opaque list floating 8px above the card at its full width, rows at 36px
 // with a 16px icon, the title in full ink and the description muted on one
 // line, section labels between kinds. ↑/↓ move, Enter or Tab pick, Escape
-// dismisses that trigger. Native key interception handles key-down and repeat;
+// dismisses that trigger. An item already in the draft stays in the list with a check, a tinted row and an "Attached" hint, and
+// picking it again removes it (`attached.ts`; the draft's own tokens are the source of truth). Native key interception handles key-down and repeat;
 // ⌃N/⌃P remain additional shortcuts.
 //
 // Completion uses the native UTF-16 selection and one undoable edit.
@@ -49,6 +50,8 @@ import { createComposerThreadReference, type ComposerThreadReference } from '../
 import { isChildThread } from '../../../../packages/kybern-client/src/subagents.ts'
 import { isFreeChatProject, type ContentPart, type NoteId, type NoteSummary, type ProjectId, type ProviderKind, type SkillInfo, type TaskItem, type Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
+import { useControls } from '../kit/controls.ts'
+import { removalEdit, standingTokens, type Range } from './attached.ts'
 import { getClient, useApp } from '../state.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { useNativeWindowSize } from '../native/layout-hooks.ts'
@@ -345,6 +348,33 @@ export function useCompletion({
           ? 'No matching skills'
           : 'No matching commands or skills'
 
+  // What the picker is typing right now (`@qu`, `$re`, `/co`): never counted as an attachment itself.
+  const trigger: Range | null = mention ? [mention.start, caret] : skill ? [skill.start, caret] : slash ? [slash.start, caret] : null
+  /** The token an item stands for in the draft, when it has been picked; null for commands and anything not yet picked. */
+  const tokenOf = (item: Item): string | null => {
+    switch (item.type) {
+      case 'note': return mentionRefs.find((r) => r.part.path === noteMentionPart({ id: item.note.id, title: noteTitle(item.note) }).path)?.token ?? null
+      case 'task': return mentionRefs.find((r) => r.part.path === taskMentionPart(item.task).path)?.token ?? null
+      case 'thread': return threadRefs.find((r) => r.part.thread_id === item.thread.id)?.token ?? null
+      case 'file': return mentioned.has(item.path) ? `@${item.path}` : null
+      case 'attachment': return `@${item.label}`
+      case 'plugin': case 'skill': return skillReference(item.skill).token
+      case 'command': return null
+    }
+  }
+  // Every token the editor can draw as a chip, so a mark (and a removal) sees the text exactly as the editor does.
+  const knownTokens = (): string[] => [...new Set([
+    ...mentionRefs.map((r) => r.token), ...threadRefs.map((r) => r.token), ...[...mentioned].map((path) => `@${path}`),
+    ...[...picked.values()].map((s) => skillReference(s).token), ...attachments.map((a) => a.token),
+    ...items.flatMap((item) => { const token = tokenOf(item); return token ? [token] : [] }),
+  ])]
+  const attachedIds = useMemo(() => {
+    const standing = standingTokens(text, knownTokens(), trigger)
+    return new Set(items.filter((item) => { const token = tokenOf(item); return !!token && standing.has(token) }).map((item) => item.id))
+  },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [items, text, mention?.start, skill?.start, slash?.start, caret, mentionRefs, threadRefs, mentioned, picked, attachments])
+
   const replace = (start: number, token: string, added?: TokenReference) => {
     // Whitespace already after the caret stands in for the token's own trailing space; the replacement takes it over so
     // the caret lands after it, ready for the next word, instead of gluing typing onto the chip.
@@ -355,9 +385,23 @@ export function useCompletion({
     return true
   }
 
+  /**
+   * Picking an attached item again: its token (and the trigger text) leaves the draft in one undoable edit. Its chip reference
+   * stays, as it does when the chip is deleted from the keyboard: `tokens` and `buildParts` only use references whose token is
+   * in the text, and an undo that brings the token back must bring back its chip, its wire part and its check.
+   */
+  const detach = (token: string): boolean => {
+    const change = removalEdit(text, token, trigger, knownTokens())
+    if (!change) return false
+    if (edit) edit(change.start, change.end, change.replacement)
+    else setText(`${text.slice(0, change.start)}${change.replacement}${text.slice(change.end)}`)
+    return true
+  }
+
   const pick = (i: number) => {
     const item = items[i]
     if (!item) return
+    if (attachedIds.has(item.id) && detach(tokenOf(item)!)) return
     if ((item.type === 'note' || item.type === 'task') && mention) {
       const part = item.type === 'note' ? noteMentionPart({ id: item.note.id, title: noteTitle(item.note) }) : taskMentionPart(item.task)
       const reference = createComposerMentionReference(part, mentionRefs, threadRefs.map(r => r.token))
@@ -453,6 +497,7 @@ export function useCompletion({
       items={items}
       index={index}
       grouped={!mention || filter === 'all'}
+      attached={attachedIds}
       chips={mention ? chips : []}
       filter={filter}
       onFilter={selectFilter}
@@ -537,6 +582,7 @@ function CompletionList({
   items,
   index,
   grouped,
+  attached,
   chips,
   filter,
   onFilter,
@@ -550,6 +596,8 @@ function CompletionList({
   items: Item[]
   index: number
   grouped: boolean
+  /** The ids of the rows already in the draft. */
+  attached: ReadonlySet<string>
   chips: MentionFilter[]
   filter: MentionFilter
   onFilter: (filter: MentionFilter) => void
@@ -560,6 +608,7 @@ function CompletionList({
   onPick: (i: number) => void
 }) {
   const t = useTheme()
+  const controls = useControls()
   const windowHeight = useNativeWindowSize().height
   const lookups = useMemo(() => ({
     projects: Object.fromEntries(projects.map((p) => [p.id, p])),
@@ -586,6 +635,7 @@ function CompletionList({
       ) : (
         items.map((item, i) => {
           const active = i === index
+          const isAttached = attached.has(item.id)
           const section = sectionOf(item)
           const title =
             item.type === 'note' ? noteTitle(item.note)
@@ -608,6 +658,7 @@ function CompletionList({
               <div
                 testId={`completion-${i}`}
                 aria-selected={active}
+                aria-checked={isAttached}
                 onMouseMove={() => !active && onHover(i)}
                 onClick={() => onPick(i)}
                 style={{
@@ -621,8 +672,9 @@ function CompletionList({
                   paddingBottom: 6,
                   borderRadius: 8,
                   cursor: 'pointer',
-                  ...(active ? { backgroundColor: t.buttonSecondary } : {}),
-                  hover: { backgroundColor: active ? t.buttonSecondary : t.buttonSecondaryHover },
+                  // Attached rows carry the selected tint (spec §5); the keyboard or pointer row steps it up.
+                  ...(isAttached ? { backgroundColor: active ? controls.primary.hover : controls.optionSelected } : active ? { backgroundColor: t.buttonSecondary } : {}),
+                  hover: { backgroundColor: isAttached ? controls.primary.hover : active ? t.buttonSecondary : t.buttonSecondaryHover },
                 }}
               >
                 <div style={{ display: 'flex', width: 16, height: 16, flexShrink: 0, alignItems: 'center', justifyContent: 'center' }}>
@@ -641,6 +693,7 @@ function CompletionList({
                     )}
                   </div>
                   <Trailing item={item} projectName={projectName} scopeLabel={item.type === 'note' ? noteScopeLabel(item.note, lookups.projects as never, lookups.threads as never) : ''} />
+                  {isAttached && <AttachedMark active={active} testId={`completion-attached-${i}`} />}
                 </div>
               </div>
             </div>
@@ -671,4 +724,16 @@ function Trailing({ item, projectName, scopeLabel }: { item: Item; projectName: 
     </div>
     default: return <Label color={muted(t, 0.55)} size={13} style={{ flexShrink: 0 }}>{skillSourceLabel(item.skill.scope)}</Label>
   }
+}
+
+/** A picked row's mark: the check and a quiet hint, which says what Enter will do (Remove) while the row is the live one. */
+function AttachedMark({ active, testId }: { active: boolean; testId: string }) {
+  const t = useTheme()
+  const controls = useControls()
+  return <div testId={testId} style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+    <div style={{ display: 'flex', width: 52, justifyContent: 'flex-end' }}>
+      <Label color={muted(t, active ? 0.75 : 0.5)} size={12}>{active ? 'Remove' : 'Attached'}</Label>
+    </div>
+    <Icon source={G.check} size={14} color={controls.accentFg} />
+  </div>
 }

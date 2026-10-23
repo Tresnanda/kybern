@@ -4,7 +4,7 @@ import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import type { PreviewOpenResult, PreviewTargetInfo, PreviewProbeResult } from '../../../../packages/kybern-client/src/types.ts'
 import { getClient, getState } from '../state.ts'
 import { launchBrowser } from './browser.ts'
-import { chooseTab, setDock } from '../dock/store.ts'
+import { openTab } from '../tabs/open.ts'
 import { onEnvironmentLeaving } from '../shell/environment.ts'
 import { openRelay } from './relay.ts'
 import { activeEnvironment } from '../shell/environment.ts'
@@ -28,7 +28,9 @@ export function setPreview(id: string, patch: Partial<PreviewState>) {
   if (!sessions.has(id) && sessions.size >= 40) { const key = sessions.keys().next().value!; sessions.get(key)?.entries.forEach(release); sessions.delete(key); generations.delete(key) }
   sessions.set(id, { ...previewState(id), ...patch }); listeners.forEach(l => l())
 }
-export function showPreview(id: string) { chooseTab(id, 'preview'); setDock(id, { open: true }) }
+/** The browser of a thread is a tab beside its chat (ADE-54); a thread off screen remembers it for when it is shown. `background`
+ *  (an agent's request) adds the tab without switching to it, so the chat and the composer keep the reader's place and focus. */
+export function showPreview(id: string, background = false) { openTab(id, { kind: 'preview' }, background ? { activate: false, focus: false } : {}) }
 function commitEntry(id: string, entry: Entry, replace: boolean, load: PreviewLoad) {
   const current = previewState(id)
   const replacing = replace && !!current.entries[current.index]

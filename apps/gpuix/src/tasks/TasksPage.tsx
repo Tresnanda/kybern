@@ -16,7 +16,9 @@ import { Menu, MenuItem, MenuSeparator } from '../nav/overlay.tsx'
 import { useCurrentSpaceId, useSpaceProjects } from '../spaces/current.ts'
 import { inSpace } from '../../../../packages/kybern-client/src/spaces.ts'
 import { useApp } from '../state.ts'
-import { Button, Segmented, selectOwnsEscape } from '../settings/controls.tsx'
+import { selectOwnsEscape } from '../settings/controls.tsx'
+import { Button } from '../kit/Button.tsx'
+import { Kbd } from '../kit/Kbd.tsx'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { Rise } from '../motion/kit.tsx'
 import { Presence } from '../motion/Presence.tsx'
@@ -224,7 +226,7 @@ export function TasksPage() {
               <Label color={t.textTertiary} size={13}>
                 {s.query ? 'Try another search.' : 'Create a task to keep track of work.'}
               </Label>
-              <Button onClick={() => quickAdd()}>New task</Button>
+              <Button variant="primary" onClick={() => quickAdd()}>New task</Button>
             </div>
           ) : s.prefs.view === 'board' ? (
             <TaskBoard columns={columns} sequence={sequence} projectName={projectName} />
@@ -276,15 +278,13 @@ function Hints({ selecting }: { selecting: boolean }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 20, height: 36, flexShrink: 0, paddingLeft: 20, paddingRight: 20 }}>
       {keys.map(([key, label]) => (
-        <div key={key} style={{ display: 'flex', gap: 5 }}>
-          <Label color={ink(t, 0.6)} size={12} lineHeight={18} weight={500}>{key}</Label>
+        <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Kbd keys={/^[⌘⌥⌃⇧↵⌫↑↓←→]+$/.test(key) ? [...key] : [key]} />
           <Label color={t.textTertiary} size={12} lineHeight={18}>{label}</Label>
         </div>
       ))}
       <div style={{ flexGrow: 1 }} />
-      <div testId="task-hide-hints" onClick={() => prefs({ showHints: false })} style={{ cursor: 'pointer' }}>
-        <Label color={ink(t, 0.22)} size={12} lineHeight={18}>Hide hints</Label>
-      </div>
+      <Button testId="task-hide-hints" variant="ghost" size="sm" onClick={() => prefs({ showHints: false })}>Hide hints</Button>
     </div>
   )
 }
@@ -297,13 +297,7 @@ export function DisplayMenu({ trigger }: { trigger?: () => React.ReactNode } = {
       testId="task-display"
       align="end"
       sideOffset={6}
-      trigger={trigger ?? (() => (
-        <div style={{ padding: 8, pointerEvents: 'none' }}>
-          <Label color={t.textSecondary} size={13}>
-            Display
-          </Label>
-        </div>
-      ))}
+      trigger={trigger ?? (() => <Button chevron>Display</Button>)}
     >
       <MenuItem id="group-label" label="Group by" disabled onSelect={() => {}} />
       {(['status', 'project', 'priority'] as TaskGrouping[]).map((grouping) => (

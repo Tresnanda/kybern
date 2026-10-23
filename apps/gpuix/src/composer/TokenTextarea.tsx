@@ -7,7 +7,7 @@ import { useTheme } from '../ui.tsx'
 import { FONT_MONO } from '../theme.ts'
 import { tinted } from '../transcript/kit.tsx'
 import { RichHistory, textEdit } from '../notes/rich-text.ts'
-import { editTokenText, tokenDisplayOffset, tokenSourceOffset, tokenText, type TokenReference, type TokenText } from './token-text.ts'
+import { editTokenText, snapToChips, tokenDisplayOffset, tokenSourceOffset, tokenText, type TokenReference, type TokenText } from './token-text.ts'
 
 export interface TokenTextareaHandle {
   selection(): InputSelection
@@ -63,7 +63,7 @@ export function TokenTextarea({ references, editorRef, nativeRef, onEditorError,
     const refs = added.length ? [...references, ...added] : references
     const previous = live.current, next = tokenText(value, refs), id = node.current.id
     // Only the changed range is replaced, so the native caret already ends after the inserted text (a picked chip).
-    const change = textEdit(previous.text, next.text)
+    const change = snapToChips(previous, next, textEdit(previous.text, next.text))
     nativeReplacement.current = next.text
     nativeCapabilities(renderer).editInput(id, { ...change, expectedValue: previous.text })
     const wanted = selection ?? { start: at, end: at, reversed: false }

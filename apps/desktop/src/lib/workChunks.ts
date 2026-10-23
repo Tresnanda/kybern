@@ -12,11 +12,20 @@ type ToolBlock = Extract<Block, { kind: "tool" }>
 
 export type WorkChunk =
   | { kind: "single"; block: Block }
+  /**
+   * Everything the agent did between two pieces of narration (`chunkRuns`): tool calls in any state, reasoning, and
+   * background processes, in order. A block with both reasoning and text is a member for its reasoning and then a
+   * `single` for its text.
+   */
+  | { kind: "run"; blocks: Block[] }
   | { kind: "tools"; blocks: ToolBlock[] }
   /** Two or more subagent launches (tool calls or runtime tasks), launch order. */
   | { kind: "subagents"; blocks: Block[] }
   /** Two or more `kybern_agent_delegate` calls, launch order. */
   | { kind: "delegations"; blocks: Block[] }
+
+/** What `chunkWork` returns: every chunk but a run. */
+export type ToolChunk = Exclude<WorkChunk, { kind: "run" }>
 
 const isTaskActive = (task: RuntimeTask) =>
   task.status === "pending" || task.status === "running" || task.status === "waiting" || task.status === "stopping"
@@ -49,8 +58,8 @@ export function isOrchestrationBlock(block: Block): boolean {
 /** Reasoning with no answer text: it may sit between two launches without breaking a group. */
 const isThinkingOnly = (block: Block) => block.kind === "assistant" && !block.text.trim()
 
-export function chunkWork(blocks: readonly Block[], tasksByToolCall: ReadonlyMap<string, RuntimeTask>): WorkChunk[] {
-  const chunks: WorkChunk[] = []
+export function chunkWork(blocks: readonly Block[], tasksByToolCall: ReadonlyMap<string, RuntimeTask>): ToolChunk[] {
+  const chunks: ToolChunk[] = []
   let tools: ToolBlock[] = []
   let launches: Block[] = []
   let launchKind: "subagents" | "delegations" = "subagents"
@@ -119,10 +128,78 @@ export function chunkKey(chunk: WorkChunk): string {
     case "single":
       return chunk.block.id
     case "tools":
+    case "run":
       return `group:${chunk.blocks[0]!.id}`
     case "subagents":
       return `subagents:${chunk.blocks[0]!.id}`
     case "delegations":
       return `delegations:${chunk.blocks[0]!.id}`
   }
+}
+
+/** A block that stays its own row between runs: narration, launches, approvals, messages, notices, images. */
+function standsAlone(block: Block, tasksByToolCall: ReadonlyMap<string, RuntimeTask>): boolean {
+  switch (block.kind) {
+    case "tool":
+      return isSubagentLaunchBlock(block, tasksByToolCall) || isDelegationLaunchBlock(block) || isThreadSendBlock(block) || !!agentItemTool(block.call.name)?.write
+    case "runtime_task":
+      return block.task.kind === "agent"
+    case "assistant":
+      return false
+    default:
+      return true
+  }
+}
+
+/** Narration: answer text between the work, whether or not reasoning came before it in the same block. */
+export const narrates = (block: Block) => block.kind === "assistant" && !!block.text.trim()
+
+/**
+ * Work folded around narration: every stretch of tool calls, reasoning and background processes between two pieces
+ * of prose is one `run` (running and failed calls included), so a turn reads as prose with one compact summary row
+ * per gap. Approvals, mid-turn messages, notices and images stand alone; launches keep their own groups
+ * (`chunkWork`'s subagent and delegation rules). A run's key is its first block's, so it never changes as the run grows.
+ */
+export function chunkRuns(blocks: readonly Block[], tasksByToolCall: ReadonlyMap<string, RuntimeTask>): WorkChunk[] {
+  const chunks: WorkChunk[] = []
+  let run: Block[] = []
+  let launches: Block[] = []
+  const flushRun = () => {
+    if (run.length > 0) chunks.push({ kind: "run", blocks: run })
+    run = []
+  }
+  const flushLaunches = () => {
+    if (launches.length > 0) chunks.push(...chunkWork(launches, tasksByToolCall))
+    launches = []
+  }
+  for (const block of blocks) {
+    if (isSubagentLaunchBlock(block, tasksByToolCall) || isDelegationLaunchBlock(block)) {
+      flushRun()
+      launches.push(block)
+      continue
+    }
+    // Reasoning between launches stays with them (`chunkWork` keeps it above or after the group).
+    if (launches.length > 0 && block.kind === "assistant" && !narrates(block)) {
+      launches.push(block)
+      continue
+    }
+    flushLaunches()
+    if (standsAlone(block, tasksByToolCall)) {
+      flushRun()
+      chunks.push({ kind: "single", block })
+      continue
+    }
+    if (block.kind === "assistant") {
+      if (block.thinking.trim()) run.push(block)
+      if (narrates(block)) {
+        flushRun()
+        chunks.push({ kind: "single", block })
+      }
+      continue
+    }
+    run.push(block)
+  }
+  flushLaunches()
+  flushRun()
+  return chunks
 }

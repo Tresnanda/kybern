@@ -10,7 +10,7 @@ import type {
 import { ComposerView } from '../Composer.tsx'
 import { ensureLoaded, loadProviders, useComposer } from '../composer/store.ts'
 import { openThread } from '../nav/history.ts'
-import { Segmented } from '../settings/controls.tsx'
+import { Segmented } from '../kit/Segmented.tsx'
 import { getClient, useApp } from '../state.ts'
 import { load, save } from '../shell/persist.ts'
 import { toast } from '../shell/toasts.tsx'
@@ -173,14 +173,15 @@ export function RunComposer({ ids, onEmptyChange }: { ids: string[]; onEmptyChan
               {!followup && !single && (
                 <div style={lineStyle}>
                   <Segmented
-                    label="Run tasks"
+                    size="sm"
+                    tone="neutral"
+                    aria-label="Run tasks"
                     value={batchMode}
                     onChange={(value) => setBatchMode(value as TaskBatchMode)}
                     options={[
                       { value: 'separate', label: 'Separate runs' },
                       { value: 'combined', label: 'One run' },
                     ]}
-                    width={100}
                   />
                 </div>
               )}

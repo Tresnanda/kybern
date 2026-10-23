@@ -7,7 +7,8 @@ import { render } from '@gpuix/react'
 import { Profiler, useState } from 'react'
 import { ThemeProvider, useTheme, Label } from '../src/ui.tsx'
 import { Menu, MenuItem, MenuSeparator, MenuSub, ContextMenu, Tip, Dialog, DialogHeader, useDialogClose } from '../src/nav/overlay.tsx'
-import { AlertDialog, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogClose, KitButton } from '../src/kit/AlertDialog.tsx'
+import { Button } from '../src/kit/Button.tsx'
+import { AlertDialog, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogClose } from '../src/kit/AlertDialog.tsx'
 import { Sheet, SheetHeader, SheetTitle, SheetDescription, SheetPanel } from '../src/kit/Sheet.tsx'
 import { Select } from '../src/kit/Select.tsx'
 import { HoverCard } from '../src/kit/HoverCard.tsx'
@@ -26,7 +27,7 @@ const at = (x: number, y: number, w: number, h: number) => ({ position: 'absolut
 
 function CardButton({ testId }: { testId: string }) {
   const close = useDialogClose()
-  return <div testId={testId}><KitButton variant="outline" onClick={() => close?.()}>Cancel</KitButton></div>
+  return <div testId={testId}><Button onClick={() => close?.()}>Cancel</Button></div>
 }
 
 function Lab() {

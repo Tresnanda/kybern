@@ -33,6 +33,8 @@ import { ink, Label, useTheme } from '../ui.tsx'
 import { GlassEdge } from './GlassEdge.tsx'
 import { frostBackdrop, frostFill, raisedFill, raisedRim, useGlass } from '../platform/glass.ts'
 import { useEscapeLayer } from './AlertDialog.tsx'
+import { IconButton } from './IconButton.tsx'
+import { TokenChip } from './TokenChip.tsx'
 
 const UNFOLD = glyph(UnfoldMoreIcon)
 const CHECK = glyph(Tick02Icon)
@@ -178,20 +180,19 @@ export function Combobox({
   )
 
   const button = (kind: 'trigger' | 'clear') => (
-    <div
+    <IconButton
       testId={testId ? `${testId}-${kind}` : undefined}
-      role="button"
-      aria-label={kind === 'clear' ? 'Clear' : 'Open'}
+      icon={kind === 'clear' ? N.x : UNFOLD}
+      label={kind === 'clear' ? 'Clear' : 'Open'}
+      size="sm"
       onClick={() => {
         if (disabled) return
         if (kind === 'clear') { setValue(multiple ? [] : null); setInput(''); focusInput(); return }
         setOpen(!open)
         focusInput()
       }}
-      style={{ position: 'absolute', right: 2, top: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, opacity: 0.8, cursor: 'pointer', hover: { opacity: 1 } }}
-    >
-      <Icon source={kind === 'clear' ? N.x : UNFOLD} size={16} color={t.text} style={{ pointerEvents: 'none' }} />
-    </div>
+      style={{ position: 'absolute', right: 4, top: 3 }}
+    />
   )
 
   const popup = open && (
@@ -289,18 +290,7 @@ export function Combobox({
         }}
       >
         {selectedList.map((v) => (
-          <div key={v} testId={testId ? `${testId}-chip-${v}` : undefined} style={{ display: 'flex', alignItems: 'center', height: 24, paddingLeft: 8, borderRadius: 7, backgroundColor: t.v('--color-background-elevated-secondary') }}>
-            <Label color={t.text} size={12} lineHeight={16} weight={500} style={{ pointerEvents: 'none' }}>{itemToLabel(v)}</Label>
-            <div
-              testId={testId ? `${testId}-chip-remove-${v}` : undefined}
-              role="button"
-              aria-label="Remove"
-              onClick={() => { if (!disabled) setValue(selectedList.filter((x) => x !== v)) }}
-              style={{ display: 'flex', alignItems: 'center', height: 24, paddingLeft: 6, paddingRight: 6, opacity: 0.8, cursor: 'pointer', hover: { opacity: 1 } }}
-            >
-              <Icon source={N.x} size={14} color={t.text} style={{ pointerEvents: 'none' }} />
-            </div>
-          </div>
+          <TokenChip key={v} testId={testId ? `${testId}-chip-${v}` : undefined} removeTestId={testId ? `${testId}-chip-remove-${v}` : undefined} removeLabel="Remove" onRemove={disabled ? undefined : () => setValue(selectedList.filter((x) => x !== v))}>{itemToLabel(v)}</TokenChip>
         ))}
         {inputField(true)}
         {popup}

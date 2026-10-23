@@ -5,7 +5,7 @@ def replace_once(text, old, new):
     return text.replace(old, new)
 renderer = replace_once(renderer, "    scratch: Option<metal::Texture>,", "    scratch: Option<metal::Texture>,\n    optimized: bool,")
 renderer = replace_once(renderer, "fn new(device:&metal::Device, format:metal::MTLPixelFormat)", "fn new(device:&metal::Device, format:metal::MTLPixelFormat, optimized:bool)")
-renderer = replace_once(renderer, 'lib.get_function("backdrop_fragment",None)', 'lib.get_function(if optimized {"backdrop_kernel_fragment"} else {"backdrop_fragment"},None)')
+renderer = replace_once(renderer, 'lib.get_function("backdrop_fragment",Some(constants()))', 'lib.get_function(if optimized {"backdrop_kernel_fragment"} else {"backdrop_fragment"},Some(constants()))')
 renderer = replace_once(renderer, 'lib.get_function("backdrop_vertex",None)', 'lib.get_function(if optimized {"backdrop_kernel_vertex"} else {"backdrop_vertex"},None)')
 renderer = replace_once(renderer, "        let scale=1u64;", "        let scale=if half {2u64} else {1u64};")
 renderer = replace_once(renderer, "vertical:pipeline(true)?,scratch:None", "vertical:pipeline(true)?,scratch:None,optimized")

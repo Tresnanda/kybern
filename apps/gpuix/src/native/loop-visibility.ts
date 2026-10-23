@@ -2,6 +2,7 @@ import { useGpuix, type PublicInstance } from '@gpuix/react'
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { isWindowVisible, onWindowVisibility } from './visibility.ts'
 import { observeElementBounds, type ElementBoundsEvent } from './layout.ts'
+import { useChatHidden } from '../tabs/hidden.ts'
 
 /** Paint observers do not schedule frames. Buffered and retained rows can stay
  * mounted outside the clip; only crossing its edge changes React state. */
@@ -14,8 +15,11 @@ export function hasVisiblePaint({rect, clippedRect:clip}: Pick<ElementBoundsEven
 export function hasWholePaint({rect, clippedRect:clip}: Pick<ElementBoundsEvent, 'rect' | 'clippedRect'>): boolean {
   return !!rect && !!clip && rect.width > 0 && rect.height > 0 && clip.width >= rect.width - 0.5 && clip.height >= rect.height - 0.5
 }
-/** `whole`: visible only while nothing clips it (`hasWholePaint`). */
-export function useLoopVisibility(active = true, whole = false) {
+/** `whole`: visible only while nothing clips it (`hasWholePaint`). A chat kept mounted under a document tab (`ChatHidden`, opacity
+ *  0) still has a painted rect, so its loops count as hidden explicitly: loaders, spinners and timers there present no frames. */
+export function useLoopVisibility(activeProp = true, whole = false) {
+  const hidden = useChatHidden()
+  const active = activeProp && !hidden
   const renderer = useGpuix()?.renderer
   const canObserve = typeof (renderer as {addLayoutObserver?: unknown} | undefined)?.addLayoutObserver === 'function'
   const ref = useRef<PublicInstance | null>(null)

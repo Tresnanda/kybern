@@ -9,6 +9,7 @@ import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { load, save } from '../shell/persist.ts'
 import { cornerPosition, nearestCorner } from '../../../../packages/kybern-client/src/previewMiniPlayer.ts'
 import { REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { frostBackdrop, frostFill, useGlass } from '../platform/glass.ts'
 import { useComposerOverlayHeight } from '../composer/height.ts'
 type Corner = 'top-end' | 'top-start' | 'bottom-end' | 'bottom-start'
 const corners: Corner[] = ['top-end', 'top-start', 'bottom-end', 'bottom-start']
@@ -19,6 +20,7 @@ export function Floating({ storageKey, width, height, testId, children, insetEnd
   // Bottom corners sit above the composer and its request panels, as on the desktop.
   const insetBottom = Math.max(explicitInset, useComposerOverlayHeight())
   const t = useTheme()
+  const g = useGlass()
   const { renderer } = useGpuix()
   const card = useRef<PublicInstance | null>(null)
   const container = useRef<PublicInstance | null>(null)
@@ -76,7 +78,8 @@ export function Floating({ storageKey, width, height, testId, children, insetEnd
     <div ref={card} testId={testId} onMouseUp={finish}
       paintTransform={leaving && PATCHED_NATIVE ? { initial: { opacity: 1, scale: 1 }, animate: REDUCED_MOTION ? { opacity: 0 } : { opacity: 0, scale: SCALE.small }, transition: REDUCED_MOTION ? { ...LEAVE, duration: 0.1 } : LEAVE, generation: leaveGeneration } : undefined}
       onMotionComplete={event => { if (leaving && event.motionGeneration === leaveGeneration) onLeft?.() }}
-      style={{ display: 'flex', flexDirection: 'column', width, height, borderRadius: radius, backgroundColor: t.popover, borderWidth: 0.6, borderColor: t.border, overflow: 'hidden', pointerEvents: leaving ? 'none' : 'auto', boxShadow: { offsetX: 0, offsetY: 8, blurRadius: 24, spreadRadius: 0, color: 'rgba(0,0,0,0.2)' }, ...cardStyle }}>
+      backdrop={frostBackdrop(g, 'menus', radius)}
+      style={{ display: 'flex', flexDirection: 'column', width, height, borderRadius: radius, backgroundColor: frostFill(g, 'menus', t.popover, 'frostMenu'), borderWidth: 0.6, borderColor: g.on ? g.frostRim : t.border, overflow: 'hidden', pointerEvents: leaving ? 'none' : 'auto', ...(g.on ? {} : { boxShadow: { offsetX: 0, offsetY: 8, blurRadius: 24, spreadRadius: 0, color: 'rgba(0,0,0,0.2)' } }), ...cardStyle }}>
       <div testId={`${testId}-drag`} aria-label="Move preview" onMouseUp={finish} onMouseMove={move} onMouseDown={e => {
         if (e.button !== 0 || e.x === undefined || e.y === undefined || !card.current || !container.current) return
         const b = renderer?.getElementBounds?.(card.current.id), p = parent.current ?? renderer?.getElementBounds?.(container.current.id)

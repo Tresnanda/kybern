@@ -4,12 +4,15 @@
 // the branch to start from. Menus open upward, 8px from the chip.
 import { useEffect } from 'react'
 import { Icon } from '../icons.tsx'
+import { GlassEdge } from '../kit/GlassEdge.tsx'
+import { frostBackdrop, frostFill, useGlass } from '../platform/glass.ts'
 import { Label, useTheme } from '../ui.tsx'
+import { alpha } from '../transcript/kit.tsx'
 import type { GitBranchesResult, Project, ProjectId } from '../../../../packages/kybern-client/src/types.ts'
 import type { ReactNode } from 'react'
 import { useApp } from '../state.ts'
 import { useSpaceProjects } from '../spaces/current.ts'
-import { TrayChip } from './chips.tsx'
+import { PickerChip } from '../kit/PickerChip.tsx'
 import { G } from './glyphs.ts'
 import { CheckMark, muted, PickerItem, PickerLabel, PickerMenu, PickerSeparator } from './Menu.tsx'
 import { loadBranches, patchDraft, useComposer } from './store.ts'
@@ -44,15 +47,22 @@ export function LandingTray({ projectId, useWorktree }: { projectId: ProjectId |
   )
 }
 
-/** `LandingTray`'s strip: the card's backing colour, rounded on top, 93.33% wide, holding chips. The task dock's tray is the same strip. */
+/** `LandingTray`'s strip: the card's backing colour, rounded on top, 93.33% wide, holding chips. The task dock's tray is the same strip.
+ *  Whole-window glass makes it the composer's stacked frost (`StackedPanel`): the same tint over a scene blur, a hairline rim and a
+ *  top highlight, open at the bottom where the card continues it; never an opaque slab beside the translucent card. */
 export function TrayFrame({ children, testId = 'landing-tray' }: { children: ReactNode; testId?: string }) {
   const t = useTheme()
-  // `--composer-backing-surface` (`kybern.css:12`, the light mix in `theme.logic`).
-  const backing = t.variant === 'dark' ? '#222222' : t.v('--composer-backing-surface')
+  const g = useGlass()
+  // `--composer-backing-surface` (`kybern.css:12`, the light mix in `theme.logic`). With any glass on it takes the composer
+  // card's own 90% (`--composer-surface`, `kit.css:2659`), so the strip is never an opaque slab above a translucent card.
+  const solid = t.variant === 'dark' ? '#222222' : t.v('--composer-backing-surface')
+  const backing = t.scope === 'none' ? solid : alpha(solid, 0.9)
   return (
     <div
       testId={testId}
+      backdrop={frostBackdrop(g, 'composer', COMPOSER_RADIUS)}
       style={{
+        position: 'relative',
         display: 'flex',
         alignItems: 'center',
         gap: 6,
@@ -65,9 +75,11 @@ export function TrayFrame({ children, testId = 'landing-tray' }: { children: Rea
         paddingBottom: 4,
         borderTopLeftRadius: COMPOSER_RADIUS,
         borderTopRightRadius: COMPOSER_RADIUS,
-        backgroundColor: backing,
+        ...(g.on ? { borderWidth: 1, borderBottomWidth: 0, borderColor: g.frostRim, marginBottom: -1 } : {}),
+        backgroundColor: frostFill(g, 'composer', backing, 'frostStacked'),
       }}
     >
+      <GlassEdge radius={COMPOSER_RADIUS} color={g.frostHighlight} />
       {children}
     </div>
   )
@@ -85,7 +97,7 @@ function ProjectChip({ projectId, projects }: { projectId: ProjectId; projects: 
       align="start"
       sideOffset={8}
       minWidth={224}
-      trigger={(open) => <TrayChip icon={G.folder} label={current?.name ?? 'Choose a project'} pressed={open} strong={!current} />}
+      trigger={(open) => <PickerChip bare icon={G.folder} open={open} truncate maxWidth={256}>{current?.name ?? 'Choose a project'}</PickerChip>}
     >
       <PickerLabel>{coordinator ? 'Project' : 'Chat location'}</PickerLabel>
       {!coordinator && (
@@ -119,7 +131,7 @@ function FreeChatChip({ projects }: { projects: Project[] }) {
       align="start"
       sideOffset={8}
       minWidth={256}
-      trigger={(open) => <TrayChip icon={G.message} label="Free chat" strong pressed={open} />}
+      trigger={(open) => <PickerChip bare icon={G.message} open={open} truncate maxWidth={256}>Free chat</PickerChip>}
     >
       <PickerLabel>Chat location</PickerLabel>
       <PickerItem id="free" onSelect={() => {}}>
@@ -157,7 +169,7 @@ export function WorkspaceTrayChip({ useWorktree, isGit, checkoutHint, onChange }
       sideOffset={8}
       width={256}
       trigger={(open) => (
-        <TrayChip icon={useWorktree ? G.worktree : G.laptop} label={useWorktree ? 'New worktree' : 'Checkout'} strong={useWorktree} pressed={open} />
+        <PickerChip bare icon={useWorktree ? G.worktree : G.laptop} open={open} truncate maxWidth={256}>{useWorktree ? 'New worktree' : 'Checkout'}</PickerChip>
       )}
     >
       <PickerLabel>Run in</PickerLabel>
@@ -229,7 +241,7 @@ export function BranchTrayChip({
       sideOffset={8}
       width={288}
       onOpenChange={(open) => open && onOpen()}
-      trigger={(open) => <TrayChip icon={G.branch} label={shown} strong={!!baseBranch} pressed={open} />}
+      trigger={(open) => <PickerChip bare icon={G.branch} open={open} truncate maxWidth={256}>{shown}</PickerChip>}
     >
       <PickerLabel>{useWorktree ? 'Fork the worktree from' : 'Branch'}</PickerLabel>
       {branches === null ? (
@@ -279,7 +291,7 @@ export function ProjectPickChip({ projectId, projects, onPick }: { projectId: Pr
       align="start"
       sideOffset={8}
       minWidth={224}
-      trigger={(open) => <TrayChip icon={G.folder} label={current?.name ?? 'Choose a project'} pressed={open} strong={!current} />}
+      trigger={(open) => <PickerChip bare icon={G.folder} open={open} truncate maxWidth={256}>{current?.name ?? 'Choose a project'}</PickerChip>}
     >
       <PickerLabel>Run in</PickerLabel>
       {projects.map((p) => (

@@ -14,7 +14,7 @@ import type { TaskItem } from '../../../../packages/kybern-client/src/types.ts'
 import { addWindowKeyHandler } from '../nav/keys.ts'
 import { getNav } from '../nav/store.ts'
 import { openThread } from '../nav/history.ts'
-import { Button } from '../settings/controls.tsx'
+import { Button } from '../kit/Button.tsx'
 import { observeElementBounds } from '../native/layout.ts'
 import { onWindowVisibility } from '../native/visibility.ts'
 import { useApp } from '../state.ts'
@@ -45,12 +45,15 @@ export function noteImageHome(id: string): ImageHome {
 }
 /** `.note-outline` sits 120px below the scroll top as its reading line. */
 const READING_LINE = 120
-export function NoteEditor({ id, compact = false }: { id: string; compact?: boolean }) {
+/** `width`: the note is a tab beside a chat (ADE-54): it lays out by its own width, not the window's, and Escape stays put. */
+/** `onClose`: the editor is a tab (ADE-54); a missing note offers to close it instead of leaving for the Notes page. */
+export function NoteEditor({ id, compact = false, width, onClose }: { id: string; compact?: boolean; width?: number; onClose?: () => void }) {
   const t = useTheme()
   const k = useNotesTokens()
   const { renderer } = useGpuix()
   const size = useWindowSize({ intervalMs: 300 })
-  const docWidth = Math.min(640, size.width - 60 - 48)
+  const room = width ?? size.width - 60
+  const docWidth = Math.min(640, room - 48)
   const session = useMemo(() => noteSession(id), [id])
   const snap = useSyncExternalStore(session.subscribe, session.getSnapshot)
   const summary = useNotes((s) => s.notes.find((n) => n.id === id))
@@ -78,8 +81,8 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
   useEffect(() => addWindowKeyHandler((e) => {
     if (getNav().paletteOpen || getNav().settingsOpen || getNotes().quick || getNotes().capture) return
     if (e.modifiers?.cmd && e.key === 's') { void session.flush(); return true }
-    if (!compact && e.key === 'escape' && !editing) { gallery(); return true }
-  }), [session, editing, compact])
+    if (!compact && width === undefined && e.key === 'escape' && !editing) { gallery(); return true }
+  }), [session, editing, compact, width])
   const finish = () => { renderer?.blur?.(); void session.flush() }
   // The document rises in when a pointer opened it (gallery click, New note); Enter and ⌘N show it at once. Banners that
   // appear later play their own entrance, those present when the note opened are part of the page's.
@@ -121,7 +124,7 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
   }, [snap.body, snap.epoch, state?.canUndo, state?.height])
   const headings = (state?.headings ?? []).slice(0, 80)
   // Desktop `hasOutline`: two headings and room in the margin.
-  const hasOutline = !compact && headings.length >= 2 && size.width >= 1050
+  const hasOutline = !compact && headings.length >= 2 && (width ?? size.width) >= 1050
   const editorTop = () => {
     const id = editor.current?.id
     const box = id != null ? renderer?.getElementBounds?.(id) : null
@@ -189,13 +192,15 @@ export function NoteEditor({ id, compact = false }: { id: string; compact?: bool
   />
   if (compact) return <div testId="thread-note-editor" style={{ display: 'flex', flexDirection: 'column', minHeight: 120, maxHeight: 320, padding: 10, gap: 6, borderRadius: 8, backgroundColor: t.buttonSecondary }}>
     {snap.phase === 'ready' ? <div testId="thread-note-scroll" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, overflow: 'scroll' }}>{body('compact')}</div> : <Label color={t.textSecondary} size={12}>{snap.phase === 'loading' ? 'Loading note…' : snap.error ?? 'This note is unavailable.'}</Label>}
-    {snap.conflict ? <div style={{ display: 'flex', gap: 6 }}><Button onClick={() => session.useTheirs()}>Use theirs</Button><Button onClick={() => session.keepMine()}>Keep mine</Button></div> : <div onClick={() => void session.flush()}><Label color={snap.status === 'error' ? t.red : t.textSecondary} size={11}>{status}</Label></div>}
+    {snap.conflict ? <div style={{ display: 'flex', gap: 6 }}><Button size="sm" danger onClick={() => session.useTheirs()}>Use theirs</Button><Button size="sm" variant="primary" onClick={() => session.keepMine()}>Keep mine</Button></div> : <div onClick={() => void session.flush()}><Label color={snap.status === 'error' ? t.red : t.textSecondary} size={11}>{status}</Label></div>}
   </div>
   return <div testId="note-editor" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
     {snap.phase === 'error' && <Banner opened={openedAt} title="Couldn’t open this note" detail={snap.error ?? ''}><Button onClick={() => void session.reload()}>Try again</Button></Banner>}
-    {snap.phase === 'missing' && <Banner opened={openedAt} title="This note no longer exists" detail="Return to Notes to open another document."><Button onClick={gallery}>Open Notes</Button></Banner>}
-    {snap.conflict && <Banner opened={openedAt} title="This note changed on another device" detail="Keep your version to replace theirs, or use theirs and discard your changes."><Button testId="note-use-theirs" onClick={() => session.useTheirs()}>Use theirs</Button><Button testId="note-keep-mine" onClick={() => session.keepMine()}>Keep mine</Button></Banner>}
-    {deleted && <Banner opened={openedAt} title="This note is in Recently deleted" detail="Restore it to edit it again."><Button testId="note-restore" onClick={() => void restoreNote(id)}>Restore</Button></Banner>}
+    {snap.phase === 'missing' && (onClose
+      ? <Banner opened={openedAt} title="This note no longer exists" detail="It was deleted or moved to another workspace."><Button testId="note-close-tab" onClick={onClose}>Close tab</Button></Banner>
+      : <Banner opened={openedAt} title="This note no longer exists" detail="Return to Notes to open another document."><Button onClick={gallery}>Open Notes</Button></Banner>)}
+    {snap.conflict && <Banner opened={openedAt} title="This note changed on another device" detail="Keep your version to replace theirs, or use theirs and discard your changes."><Button testId="note-use-theirs" danger onClick={() => session.useTheirs()}>Use theirs</Button><Button testId="note-keep-mine" variant="primary" onClick={() => session.keepMine()}>Keep mine</Button></Banner>}
+    {deleted && <Banner opened={openedAt} title="This note is in Recently deleted" detail="Restore it to edit it again."><Button testId="note-restore" variant="primary" onClick={() => void restoreNote(id)}>Restore</Button></Banner>}
     {snap.phase === 'ready' && <>
       <div ref={viewport} testId="note-viewport" style={{ display: 'flex', flexGrow: 1, minHeight: 0, position: 'relative' }}>
         <div ref={scroller} testId="note-body-list" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexGrow: 1, minHeight: 0, overflow: 'scroll' }}>

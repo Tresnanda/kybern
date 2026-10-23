@@ -51,7 +51,7 @@ import { ToolResultText } from "@/components/kybern/ToolResultText"
 import { diffTail, type TailChange } from "@/lib/tailChange"
 import { createTranscriptNavigation } from "@/lib/transcriptNavigation"
 import { useTranscriptRowState } from "@/lib/transcriptRowState"
-import { chunkKey, chunkWork, isAgentLaunchBlock, isDelegationLaunchBlock, isOrchestrationBlock, isSubagentLaunchBlock, isThreadSendBlock, type WorkChunk } from "@/lib/workChunks"
+import { chunkKey, chunkWork, isAgentLaunchBlock, isDelegationLaunchBlock, isOrchestrationBlock, isSubagentLaunchBlock, isThreadSendBlock, type ToolChunk } from "@/lib/workChunks"
 import { SubagentGroupRow, SubagentLaunchRow, type LaunchBlock } from "./subagents/SubagentRows"
 import { DelegationGroupRow, DelegationLaunchRow } from "./delegations/DelegationRows"
 import { AgentResultsCard, InboundMessageRow, SentToRow } from "./delegations/ThreadMessageRows"
@@ -1338,7 +1338,7 @@ function patchHierarchyTail(previous: WorkHierarchy, change: TailChange<Block>):
   return { ...previous, roots }
 }
 
-function patchChunksTail(previous: WorkChunk[], change: TailChange<Block>): WorkChunk[] | null {
+function patchChunksTail(previous: ToolChunk[], change: TailChange<Block>): ToolChunk[] | null {
   if (change.kind === "append") {
     if (!isLeafWorkBlock(change.after)) return null
     return [...previous, { kind: "single", block: change.after }]

@@ -1,7 +1,6 @@
 // Inline visual reply (`views/VisualReply.tsx`): the figure sits on the thread with no frame;
-// hovering it reveals a glass expand control 8px inside the top-right corner (tooltip "Expand preview");
-// the control opens the same document in a modal (44px header with the title and a close button),
-// and closing returns it. The embedded document is captured with `screencapture -l` (the GPUI
+// hovering it reveals a glass control 8px inside the top-right corner (tooltip "Open in a tab");
+// the control opens the document as a visual tab (ADE-54), and ⌘1 returns to the chat. The embedded document is captured with `screencapture -l` (the GPUI
 // screenshot API omits child NSViews). The pointer is synthetic (GPUI-level): a real pointer reaches the
 // document's wrapper, which reports the same hover (`kybern-visual-hover`).
 import assert from 'node:assert/strict'
@@ -29,11 +28,11 @@ for (const theme of ['dark', 'light'] as const) for (const reduced of [false, tr
     assert.ok(Math.abs((slot.x + slot.width - 8) - (control.x + control.width)) < 1.5 && Math.abs((slot.y + 8) - control.y) < 1.5, `8px inside the top-right corner: slot ${JSON.stringify(slot)} control ${JSON.stringify(control)}`)
     captureWindow(f.pid, `${out}/hover-${tag}.png`)
     await app.getByTestId('visual-expand').click(); await Bun.sleep(700)
-    await until(async () => (await app.getByTestId('visual-expanded').count()) > 0, 'expanded modal')
-    captureWindow(f.pid, `${out}/expanded-${tag}.png`)
-    await app.getByTestId('dialog-close').click(); await Bun.sleep(500)
-    await until(async () => (await app.getByTestId('visual-expanded').count()) === 0, 'modal closed')
-    console.log(`PASS ${tag}: rest without chrome, hover control ${control.width}x${control.height} at 8px, expand and close`)
+    await until(async () => (await app.getByTestId('visual-tab').count()) > 0, 'visual tab')
+    captureWindow(f.pid, `${out}/tab-${tag}.png`)
+    await app.getByTestId('app-ready').press('cmd-1'); await Bun.sleep(500)
+    await until(async () => (await app.getByTestId('visual-tab').count()) === 0, 'back to the chat')
+    console.log(`PASS ${tag}: rest without chrome, hover control ${control.width}x${control.height} at 8px, open in a tab and back`)
   } catch (error) { console.log(f.diagnostics()); throw error } finally { await f.close() }
 }
 process.exit(0)

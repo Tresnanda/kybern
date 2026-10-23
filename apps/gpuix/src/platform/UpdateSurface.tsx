@@ -14,7 +14,8 @@ import { glyph, Icon } from '../icons.tsx'
 import { Dialog, Tip, muted } from '../nav/overlay.tsx'
 import { PopupLayer, surfaceShadow } from '../composer/Menu.tsx'
 import { Spinner } from '../shell/Connection.tsx'
-import { Button } from '../settings/controls.tsx'
+import { Button } from '../kit/Button.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
 import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { openUrl } from '../pulls/PrStates.tsx'
 import { ink, Label, LOGO_SVG, REDUCED_MOTION, useTheme } from '../ui.tsx'
@@ -60,9 +61,7 @@ function ReleaseArtwork({ compact = false }: { compact?: boolean }) {
 
 /** The round dark button over the artwork (`!size-8 !rounded-full !bg-black/35`). */
 function ArtworkClose({ label, onClick, testId }: { label: string; onClick: () => void; testId: string }) {
-  return <div testId={testId} role="button" aria-label={label} onClick={onClick} style={{ position: 'absolute', right: 20, top: 20, width: 32, height: 32, borderRadius: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0, 0, 0, 0.35)', cursor: 'pointer', hover: { backgroundColor: 'rgba(0, 0, 0, 0.55)' } }}>
-    <Icon source={ICON.x} size={16} color="#ffffff" />
-  </div>
+  return <IconButton testId={testId} label={label} icon={ICON.x} size="lg" color="#ffffff" onClick={onClick} style={{ position: 'absolute', right: 20, top: 20, borderRadius: 16, backgroundColor: 'rgba(0, 0, 0, 0.35)', hover: { backgroundColor: 'rgba(0, 0, 0, 0.55)' }, active: { backgroundColor: 'rgba(0, 0, 0, 0.65)' } }} />
 }
 
 /**
@@ -98,8 +97,8 @@ export function RailUpdateButton() {
         <Label color={muted(t, 1)} size={12} lineHeight={19}>{errorKind === 'install' ? 'The last update didn’t install. Try again, or see the release details.' : 'Updating restarts Kybern and the agents running on this machine.'}</Label>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
-        <Button variant="ghost" testId="rail-update-details" onClick={() => { setOpen(false); openUpdateDetails() }}>See what’s new</Button>
-        <Button variant="primary" testId="rail-update-install" disabled={busy} onClick={() => void installAppUpdate()}>{label}</Button>
+        <Button size="sm" variant="ghost" testId="rail-update-details" onClick={() => { setOpen(false); openUpdateDetails() }}>See what’s new</Button>
+        <Button size="sm" variant="primary" testId="rail-update-install" disabled={busy} onClick={() => void installAppUpdate()}>{label}</Button>
       </div>
     </PopupLayer>}
   </div>
@@ -121,9 +120,7 @@ function UpdateAnnouncement({ version, notes, leaving, onGone }: { version: stri
         <Label color={muted(t, 1)} size={12} weight={500}>{`New · v${version.replace(/^v/, '')}`}</Label>
         <Label color={t.text} size={18} lineHeight={24} weight={500}>{release.title}</Label>
         <Label color={muted(t, 1)} size={14} lineHeight={22} style={{ lineClamp: 3 }}>{release.summary}</Label>
-        <div testId="update-announcement-details" role="button" onClick={openUpdateDetails} style={{ display: 'flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start', marginTop: 8, marginLeft: -10, height: 32, paddingLeft: 10, paddingRight: 10, borderRadius: 8, cursor: 'pointer', hover: { backgroundColor: t.buttonTertiaryHover } }}>
-          <Label color={t.text} size={14} weight={500}>See what’s new</Label><Icon source={ICON.arrowRight} size={16} color={t.text} />
-        </div>
+        <Button testId="update-announcement-details" variant="ghost" iconAfter={ICON.arrowRight} onClick={openUpdateDetails} style={{ alignSelf: 'flex-start', marginTop: 8, marginLeft: -12 }}>See what’s new</Button>
       </div>
     </div>
     </Presence>
@@ -150,9 +147,7 @@ function UpdateDetails({ version, notes }: { version: string; notes: string | nu
         {release.notes
           ? <markdown source={release.notes} theme={cachedMarkdownTheme(t)} style={{ color: t.text, userSelect: 'text' }} />
           : <Label color={muted(t, 1)} size={14} lineHeight={22}>{release.summary}</Label>}
-        <div role="button" testId="update-details-notes" onClick={() => openUrl(release.url)} style={{ display: 'flex', alignItems: 'center', gap: 4, alignSelf: 'flex-start', marginTop: 12, marginLeft: -12, height: 32, paddingLeft: 12, paddingRight: 12, borderRadius: 8, cursor: 'pointer' }}>
-          <Label color={t.text} size={14} weight={500}>Read release notes</Label><Icon source={ICON.arrowUpRight} size={14} color={t.text} />
-        </div>
+        <Button testId="update-details-notes" variant="ghost" iconAfter={ICON.arrowUpRight} onClick={() => openUrl(release.url)} style={{ alignSelf: 'flex-start', marginTop: 12, marginLeft: -12 }}>Read release notes</Button>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 24, paddingRight: 24, paddingTop: 8, flexShrink: 0 }}>
         {phase === 'installing'
@@ -164,8 +159,8 @@ function UpdateDetails({ version, notes }: { version: string; notes: string | nu
         {error && <Label color={t.red} size={12} lineHeight={19}>{error}</Label>}
       </div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, paddingLeft: 24, paddingRight: 24, paddingTop: 16, paddingBottom: 20, flexShrink: 0 }}>
-        <Button variant="ghost" testId="update-details-later" onClick={closeUpdateDetails}>Later</Button>
-        <Button variant="primary" testId="update-details-install" disabled={busy} onClick={() => void installAppUpdate()}>{label}</Button>
+        <Button size="lg" variant="ghost" testId="update-details-later" onClick={closeUpdateDetails}>Later</Button>
+        <Button size="lg" variant="primary" testId="update-details-install" disabled={busy} onClick={() => void installAppUpdate()}>{label}</Button>
       </div>
     </div>
   </Dialog>

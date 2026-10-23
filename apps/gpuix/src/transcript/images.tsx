@@ -14,6 +14,9 @@ import { EASE_OUT, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { DURATION, Rise, ZOOM } from '../motion/kit.tsx'
 import { alpha, muted, Para } from './kit.tsx'
 import { useFresh } from './motion.tsx'
+import { usePaneAccess } from '../state.ts'
+import { openTabFromPane } from '../tabs/open.ts'
+import { useImageFiles } from './imageFiles.ts'
 
 const sizes = new Map<string, { width: number; height: number } | null>()
 
@@ -91,7 +94,8 @@ function srcFor(source: string): string | null {
  * `at` is when the image arrived: one that just did resolves from a blur (`t-img`, 400 ms); history and recycled rows paint plainly.
  * A click morphs the image into the shared preview (`motion/ImageMorph.tsx`); Enter or Space opens it at once.
  */
-export function ResponseImage({ source, label = 'Agent image', compact = false, thumbnail = false, at }: { source: string; label?: string; compact?: boolean; thumbnail?: boolean; at?: string }) {
+/** `tabSource`: what an image tab reloads from (a thread-relative path), when `source` is already the loaded data. */
+export function ResponseImage({ source, tabSource, label = 'Agent image', compact = false, thumbnail = false, at }: { source: string; tabSource?: string; label?: string; compact?: boolean; thumbnail?: boolean; at?: string }) {
   const t = useTheme()
   const fresh = useFresh(at)
   // `t-img` starts when the bitmap has decoded (`<img onLoad>`), not on mount, so the blur resolves over the picture
@@ -99,6 +103,7 @@ export function ResponseImage({ source, label = 'Agent image', compact = false, 
   const [decoded, setDecoded] = useState(!fresh)
   useEffect(() => { if (decoded) return; const id = setTimeout(() => setDecoded(true), 1500); return () => clearTimeout(id) }, [decoded])
   const renderer = useGpuixRequired()
+  const pane = usePaneAccess()
   const restoreFocus = useTranscriptFocusRestoration()
   // The thumbnail paints the image cropped (`cover`); the reply image shows all of it.
   const viewer = useImageViewer({ radius: compact ? 8 : 12, fit: thumbnail ? 'cover' : 'contain' })
@@ -113,6 +118,8 @@ export function ResponseImage({ source, label = 'Agent image', compact = false, 
     )
   const width = thumbnail ? 64 : Math.min(280, size?.width ?? 280)
   const height = thumbnail ? 64 : size ? Math.round((width * size.height) / size.width) : 210
+  // Painted from a file at most twice the slot wide; the viewer opens the original (`imageFiles.ts`).
+  const files = useImageFiles(src, width * 2, size?.width ?? null)
   return (
     <>
     <Rise kind="image" play={fresh} hold={!decoded} style={{ flexShrink: 0 }}>
@@ -126,17 +133,17 @@ export function ResponseImage({ source, label = 'Agent image', compact = false, 
       onKeyDown={event => { if (event.key === 'enter' || event.key === 'space') viewer.show(false) }}
       style={{ display: 'flex', width, height, cursor: 'pointer', marginTop: compact || thumbnail ? 0 : 12, marginBottom: compact || thumbnail ? 0 : 12, flexShrink: 0, opacity: viewer.away ? 0 : 1 }}
     >
-      <img src={src} alt={label} objectFit={thumbnail ? "cover" : "contain"} onLoad={decoded ? undefined : () => setDecoded(true)}
-        style={{ width, height, borderRadius: compact ? 8 : 12, borderWidth: 1, borderColor: outline, pointerEvents: 'none' }} />
+      {files && <img src={files.inline} alt={label} objectFit={thumbnail ? "cover" : "contain"} onLoad={decoded ? undefined : () => setDecoded(true)}
+        style={{ width, height, borderRadius: compact ? 8 : 12, borderWidth: 1, borderColor: outline, pointerEvents: 'none' }} />}
     </div>
     </Rise>
-    {viewer.open && <ImageViewer testId="image-lightbox" src={src} label={label} from={viewer.open.from} source={viewer.source} finalFocus={() => {
+    {viewer.open && <ImageViewer testId="image-lightbox" src={files?.full ?? src} label={label} from={viewer.open.from} source={viewer.source} finalFocus={() => {
       const trigger = viewer.node.current
       if (trigger) {
         if (restoreFocus) restoreFocus(trigger.id)
         else renderer.focusElement?.(trigger.id)
       }
-    }} onClose={viewer.hide} />}
+    }} onClose={viewer.hide} onOpenInTab={() => openTabFromPane(pane.id, { kind: 'image', source: tabSource ?? source, label })} />}
     </>
   )
 }

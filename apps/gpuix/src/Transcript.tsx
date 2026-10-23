@@ -32,7 +32,6 @@ import { AnswerImages, DateSeparator, Turn, TurnFooter, turnTimestamp } from './
 import { useComposerOverlayHeight } from './composer/height.ts'
 import { GlassEdge } from './kit/GlassEdge.tsx'
 import { frostBackdrop, frostFill, frostHoverFill, useGlass } from './platform/glass.ts'
-import { EDGE_FADE } from './native/local-build.ts'
 import { loadEarlier, useActionError, useEarlierError, usePacedBlocks } from './transcript/store.ts'
 
 export { markdownTheme } from './transcript/kit.tsx'
@@ -67,7 +66,7 @@ const scrollAnchors = new Map<string, SavedAnchor>()
 export function Transcript() {
   const pane = usePaneAccess()
   const t = useTheme()
-  const faded = useGlass().on && EDGE_FADE
+  const g = useGlass()
   const renderer = useGpuixRequired()
   const threadId = useApp((s) => s.selectedId)
   const thread = useApp(s => s.open.thread)
@@ -404,7 +403,6 @@ export function Transcript() {
 
   return (
     <TranscriptTail.Provider value={tailRef}><TranscriptFocusRestoration.Provider value={restoreFocus}><TranscriptRowStateScope.Provider value={rowStateScope}><SparseRetention.Provider value={nativeWindow.context}><div ref={surfaceRef} testId="transcript-surface" onScroll={wheelAtTop} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
-      <OverlayFadeFrame faded={faded} visible={!atTail}>
       <virtual-list
         {...TRANSCRIPT_SCROLL_LAYOUT}
         {...(sparse ? { estimatedItemHeight: 160, itemCount: count, windowStart: windowIndices?.[0] ?? 0, windowIndices, ...nativeWindow.props } : { estimatedItemHeight: 160 })}
@@ -459,7 +457,6 @@ export function Transcript() {
           <BottomSpace key="__bottom" nodeRef={bottomRef} testId={`transcript-bottom:${pane.id}`} />,
         ]}
       </virtual-list>
-      </OverlayFadeFrame>
       {overflow && <OverlayRail items={railItems} active={activeId} height={paneHeight} onJump={(id) => {
         const index = rows.findIndex(row => row.turn.user?.id === id)
         if (index < 0 || !list.current) return
@@ -475,12 +472,11 @@ export function Transcript() {
       }} />}
       {actionError && (
         <div style={{ position: 'absolute', top: 12, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
-          <div style={{ paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8, borderRadius: 10, borderWidth: 1, borderColor: t.border, backgroundColor: t.popover, maxWidth: 480 }}>
+          <div backdrop={frostBackdrop(g, 'menus', 10)} style={{ position: 'relative', paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8, borderRadius: 10, borderWidth: 1, borderColor: g.on ? g.frostRim : t.border, backgroundColor: frostFill(g, 'menus', t.popover, 'frostMenu'), maxWidth: 480 }}>
             <Para color={t.text} size={13} lineHeight={19.5}>{actionError}</Para>
           </div>
         </div>
       )}
-      <OverlayFade visible={!atTail} />
       <OverlayScrollButton visible={!atTail} onClick={scrollToBottom} />
     </div></SparseRetention.Provider></TranscriptRowStateScope.Provider></TranscriptFocusRestoration.Provider></TranscriptTail.Provider>
   )
@@ -495,22 +491,6 @@ function BottomSpace({ nodeRef, testId }: { nodeRef: (node: PublicInstance | nul
 }
 function OverlayRail(props: Omit<ComponentProps<typeof MessageRail>, 'bottomInset'>) {
   return <MessageRail {...props} bottomInset={useOverlay()} />
-}
-/**
- * Whole-window glass has no surface for the bottom wash to fade into, so while the view is away from the tail the scroller itself
- * fades out above the composer (`edgeFade`: an alpha ramp over the last 32 px above the overlay; what lies under the overlay is
- * clear). The frame is only mounted with the patched addon on glass, and re-renders alone when the overlay grows a line.
- */
-function OverlayFadeFrame({ faded, visible, children }: { faded: boolean; visible: boolean; children: React.ReactNode }) {
-  if (!faded) return <>{children}</>
-  return <FadeFrame visible={visible}>{children}</FadeFrame>
-}
-function FadeFrame({ visible, children }: { visible: boolean; children: React.ReactNode }) {
-  const overlay = useOverlay()
-  return <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }} edgeFade={visible ? { bottom: 32, insetBottom: overlay } : undefined}>{children}</div>
-}
-function OverlayFade({ visible }: { visible: boolean }) {
-  return <BottomFade visible={visible} bottom={useOverlay()} />
 }
 function OverlayScrollButton({ visible, onClick }: { visible: boolean; onClick: () => void }) {
   return <ScrollToBottom visible={visible} bottom={useOverlay() + 24} onClick={onClick} />
@@ -592,23 +572,5 @@ export function ScrollToBottom({ visible, bottom, onClick }: { visible: boolean;
         <Icon source={T.arrowDown} size={14} color={t.text} />
       </div>
     </Presence>
-  )
-}
-
-/**
- * `.chat-scroll-fade` (kit.css:3333): a 32 px wash from the surface up into the transcript, just above the composer, that says
- * "there is more below" while the view is away from the tail. It fades in and out over 150 ms (`--ease-out`, paint-only; no
- * movement) instead of tracking the scroll offset, and, like the desktop, it is not drawn on a translucent window. The first
- * render is at rest: opening a thread already scrolled away shows it at once.
- */
-export function BottomFade({ visible, bottom }: { visible: boolean; /** The measured overlay height: the wash ends on its top edge (tray and requests included). */ bottom: number }) {
-  const t = useTheme()
-  if (t.scope === 'window') return null
-  return (
-    <div
-      testId="transcript-bottom-fade"
-      paintTransform={PATCHED_NATIVE ? { initial: false, animate: { opacity: visible ? 1 : 0 }, transition: { duration: DURATION.quick, ease: [...EASE.out] as [number, number, number, number] } } : undefined}
-      style={{ position: 'absolute', left: 0, right: 0, bottom, height: 32, pointerEvents: 'none', ...(PATCHED_NATIVE ? {} : { opacity: visible ? 1 : 0 }), background: { type: 'linear-gradient', angle: 180, stops: [{ color: alpha(t.surface, 0), position: 0 }, { color: t.surface, position: 1 }] } }}
-    />
   )
 }

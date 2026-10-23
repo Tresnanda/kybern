@@ -7,6 +7,7 @@
 import { motion, useGpuix, useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { followLine, nextTabIndex, pickerTabs, type PickerTab } from '@/lib/accountUi'
+import { Tabs as KitTabs, type TabsItem } from '../kit/Tabs.tsx'
 import { formatEffort, PROVIDER_LABEL } from '@/lib/format'
 import {
   MODEL_FLAT_LIMIT,
@@ -41,7 +42,11 @@ import { Icon } from '../icons.tsx'
 import { MatrixLoader } from '../MatrixLoader.tsx'
 import { FONT_UI } from '../theme.ts'
 import { EASE_OUT, ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { FooterChip } from './chips.tsx'
+import { Button } from '../kit/Button.tsx'
+import { IconButton } from '../kit/IconButton.tsx'
+import { Kbd } from '../kit/Kbd.tsx'
+import { PickerChip } from '../kit/PickerChip.tsx'
+import { SearchField } from '../kit/SearchField.tsx'
 import { useFooterFit } from './footerWidth.tsx'
 import { G } from './glyphs.ts'
 import { CheckMark, muted, PickerItem, PickerMenu, PopupLayer, popoverStyle } from './Menu.tsx'
@@ -88,6 +93,8 @@ export interface ModelPickerProps {
   onReload: () => void
   /** The trigger's label (`ComposerModelTriggerLabel`). */
   label: (color: string) => ReactNode
+  /** The trigger's lead where the provider mark is not enough (the account dot over the mark); defaults to the mark. */
+  lead?: ReactNode
 }
 
 export function ModelPicker(props: ModelPickerProps) {
@@ -98,6 +105,7 @@ export function ModelPicker(props: ModelPickerProps) {
   const dismissedByOutside = useRef(false)
   const triggerRef = useRef<PublicInstance | null>(null)
   const enabled = props.canPickModel || props.canPickProvider || props.canReload
+  const fit = useFooterFit()
   const close = () => {
     setOpen(false)
     props.onOpenChange?.(false)
@@ -130,9 +138,9 @@ export function ModelPicker(props: ModelPickerProps) {
         }}
         style={{ display: 'flex', minWidth: 0, flexShrink: 1 }}
       >
-        <FooterChip pressed={open} paddingX={8} disabled={!enabled}>
-          {props.label}
-        </FooterChip>
+        <PickerChip bare truncate open={open} disabled={!enabled} chevron={enabled && fit.model} {...(props.lead ? { lead: props.lead } : { mark: props.provider.kind })}>
+          {props.label(t.text)}
+        </PickerChip>
       </div>
       {open && (
         // The desktop popover's open (`ModelPicker.tsx:129`): 250 ms smooth-out fade from the trigger.
@@ -386,45 +394,32 @@ function ModelPickerPanel({
           {follow.state === 'pinned' && (
             <>
               <div style={{ flexGrow: 1 }} />
-              <div onClick={() => !busy && void onAccountChange?.(null)} style={{ cursor: 'pointer', flexShrink: 0 }}>
-                <Label color={ink(t, 0.8)} size={13} weight={500}>
-                  {follow.action}
-                </Label>
-              </div>
+              <Button variant="ghost" size="sm" disabled={busy} onClick={() => void onAccountChange?.(null)}>{follow.action}</Button>
             </>
           )}
         </div>
       )}
       {canPickModel && (
         <>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 36, paddingLeft: 12, paddingRight: 12, flexShrink: 0 }}>
-            <Icon source={G.search} size={14} color={muted(t, 0.5)} />
-            <div style={{ position: 'relative', display: 'flex', flexGrow: 1, minWidth: 0 }}>
-              {!query && (
-                <div style={{ position: 'absolute', left: 0, right: 0, top: 0, pointerEvents: 'none' }}>
-                  <Label color={muted(t, 0.5)} lineHeight={20} truncate>
-                    {showFavorites ? 'Search favorites' : `Search ${agentName} models`}
-                  </Label>
-                </div>
-              )}
-              <input
-                ref={(el) => {
-                  inputRef.current = el
-                }}
-                testId="model-search"
-                autoFocus
-                value={query}
-                onChange={(e) => {
-                  setQuery(e.value ?? '')
-                  setActiveKey(null)
-                }}
-                onKeyDown={(e) => onKeyDown(e.key ?? '', !!e.modifiers?.cmd)}
-                // The input consumes Enter as its own submit action; it never reaches onKeyDown.
-                onSubmit={() => onKeyDown('enter', false)}
-                theme={{ caret: t.text }}
-                style={{ flexGrow: 1, minWidth: 0, height: 20, fontSize: 14, lineHeight: 20, color: t.text, fontFamily: FONT_UI }}
-              />
-            </div>
+          <div style={{ display: 'flex', alignItems: 'center', paddingLeft: 8, paddingRight: 8, paddingTop: 4, paddingBottom: 4, flexShrink: 0 }}>
+            <SearchField
+              ref={(el: PublicInstance | null) => {
+                inputRef.current = el
+              }}
+              testId="model-search"
+              label={showFavorites ? 'Search favorites' : `Search ${agentName} models`}
+              placeholder={showFavorites ? 'Search favorites' : `Search ${agentName} models`}
+              autoFocus
+              width="100%"
+              value={query}
+              onChange={(value) => {
+                setQuery(value)
+                setActiveKey(null)
+              }}
+              onKeyDown={(e) => onKeyDown(e.key ?? '', !!e.modifiers?.cmd)}
+              // The input consumes Enter as its own submit action; it never reaches onKeyDown.
+              onSubmit={() => onKeyDown('enter', false)}
+            />
           </div>
           {divider}
           <div
@@ -526,70 +521,16 @@ function Tabs({
   const t = useTheme()
   const [hover, setHover] = useState<string | null>(null)
   const yellow = t.v('--color-accent-yellow')
-  const renderer = useGpuixRequired()
-  const nodes = useRef<(PublicInstance | null)[]>([])
-  // Roving focus (`ModelPickerTabs`): ←/→ move between enabled tabs, Home/End jump, Enter or Space activates.
-  const move = (key: string, index: number) => {
-    const target = key === 'right' ? nextTabIndex(tabs, index, 1) : key === 'left' ? nextTabIndex(tabs, index, -1) : key === 'home' ? nextTabIndex(tabs, -1, 1) : key === 'end' ? nextTabIndex(tabs, tabs.length, -1) : -1
-    const node = target >= 0 ? nodes.current[target] : null
-    if (node) renderer.focusElement?.(node.id)
-    return !!node
-  }
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 2, paddingLeft: 6, paddingRight: 6, paddingTop: 6 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 2, minWidth: 0, paddingBottom: 4, flexGrow: 1 }}>
-        {tabs.map((tab, tabPosition) => {
-          const hovered = hover === tab.key
-          const dim = tab.type === 'starred' ? 0.45 : tab.needsSignIn ? 0.3 : tab.notSetUp || tab.disabled ? 0.2 : busy && !tab.selected ? 0.2 : 0.45
-          const hoverDim = tab.type === 'starred' ? 1 : tab.needsSignIn || tab.notSetUp ? 0.6 : tab.disabled || busy ? dim : 1
-          const opacity = tab.selected ? 1 : hovered ? hoverDim : dim
-          const fill = tab.selected ? t.buttonSecondary : hovered && !(tab.type === 'account' && tab.disabled) ? t.buttonSecondaryHover : undefined
-          return (
-            <div
-              key={tab.key}
-              testId={`model-tab-${tab.key}`}
-              ref={node => { nodes.current[tabPosition] = node }}
-              role="tab"
-              aria-selected={tab.selected}
-              tabIndex={tab.selected ? 0 : -1}
-              onKeyDown={e => {
-                if (e.key === 'enter' || e.key === 'space') { if (tab.type === 'starred') onStarred(); else if (!tab.disabled) onAccount(tab); return }
-                move(e.key ?? '', tabPosition)
-              }}
-              onMouseEnter={() => setHover(tab.key)}
-              onMouseLeave={() => setHover((h) => (h === tab.key ? null : h))}
-              onClick={() => (tab.type === 'starred' ? onStarred() : onAccount(tab))}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 6,
-                height: 28,
-                minWidth: 28,
-                paddingLeft: 6,
-                paddingRight: 6,
-                borderRadius: ROW_RADIUS,
-                flexShrink: 0,
-                opacity,
-                cursor: 'pointer',
-                ...(fill ? { backgroundColor: fill } : {}),
-              }}
-            >
-              {tab.type === 'starred' ? (
-                <Icon source={tab.selected ? G.starFilled : G.star} size={14} color={tab.selected ? yellow : t.textSecondary} />
-              ) : (
-                <>
-                  <ProviderMark kind={tab.kind} size={14} />
-                  {tab.label && (
-                    <Label color={t.text} size={13} truncate>
-                      {tab.label}
-                    </Label>
-                  )}
-                </>
-              )}
-            </div>
-          )
-        })}
+      {/* The kit strip (ADE-55 §2.7): Starred, then one tab per account; an account that needs setting up is shown, dimmed. */}
+      <div style={{ display: 'flex', alignItems: 'center', minWidth: 0, height: 32, paddingBottom: 4, flexGrow: 1 }}>
+        <KitTabs testId="model-tabs" minWidth={0} overflow={false} animate={false} underlineGap={4}
+          active={tabs.find((tab) => tab.selected)?.key ?? null}
+          items={tabs.map((tab): TabsItem => tab.type === 'starred'
+            ? { key: tab.key, label: 'Starred', iconOnly: true, testId: `model-tab-${tab.key}`, iconNode: <Icon source={tab.selected ? G.starFilled : G.star} size={14} color={tab.selected ? yellow : t.textSecondary} /> }
+            : { key: tab.key, label: tab.label || PROVIDER_LABEL[tab.kind as keyof typeof PROVIDER_LABEL] || tab.kind, iconOnly: !tab.label, mark: tab.kind, testId: `model-tab-${tab.key}`, disabled: tab.disabled || (busy && !tab.selected), ...(tab.needsSignIn ? { tooltip: 'Sign in to use this account' } : tab.notSetUp ? { tooltip: 'Set up this agent to use it' } : {}) })}
+          onSelect={(key) => { const tab = tabs.find((x) => x.key === key); if (!tab) return; if (tab.type === 'starred') onStarred(); else if (!tab.disabled) onAccount(tab) }} />
       </div>
       {canReload && (
         <div
@@ -706,11 +647,7 @@ function ModelRow({
           </Label>
         )}
       </div>
-      {shortcut && (
-        <div style={{ display: 'flex', alignItems: 'center', height: 18, paddingLeft: 6, paddingRight: 6, borderRadius: 9, flexShrink: 0, backgroundColor: ink(t, 0.07) }}>
-          <Label color={t.textSecondary} size={13} lineHeight={18}>{`⌘${shortcut}`}</Label>
-        </div>
-      )}
+      {shortcut && <Kbd keys={['⌘', String(shortcut)]} testId={`model-shortcut-${shortcut}`} />}
       {row.kind === 'model' && (
         <div
           onMouseDown={() => {
@@ -816,15 +753,11 @@ function ModelFooter({
   const dark = t.variant === 'dark'
   const resetButton =
     traitsChanged || effortChanged ? (
-      <CardButton testId="effort-reset" onClick={() => !busy && void reset()}>
-        {(hover) => <Icon source={G.reset} size={16} color={hover ? effortAccent(dark) : muted(t, 0.6)} />}
-      </CardButton>
+      <IconButton testId="effort-reset" size="sm" label="Reset to defaults" icon={G.reset} disabled={busy} onClick={() => void reset()} style={{ marginLeft: -2, marginRight: -2 }} />
     ) : null
   const fastButton =
     fast && fastToggle ? (
-      <CardButton testId="fast-toggle" onClick={() => !busy && !fastReason && void change(fast.id, fastOn ? fastToggle.off : fastToggle.on)}>
-        {(hover) => <Icon source={fastOn ? G.bolt : G.boltOutline} size={16} color={fastOn ? effortAccent(dark) : hover ? t.text : muted(t, 0.6)} />}
-      </CardButton>
+      <IconButton testId="fast-toggle" size="sm" label={fastOn ? 'Turn off fast mode' : 'Turn on fast mode'} icon={fastOn ? G.bolt : G.boltOutline} glyph={16} color={fastOn ? effortAccent(dark) : undefined} disabled={busy || !!fastReason} onClick={() => void change(fast.id, fastOn ? fastToggle.off : fastToggle.on)} style={{ marginLeft: -2, marginRight: -2 }} />
     ) : null
 
   if (!rows.length && !hasEffort && !fast) return null
@@ -857,21 +790,6 @@ function ModelFooter({
       )}
       {!hasEffort && !fast && <div style={{ height: 2 }} />}
     </>
-  )
-}
-
-function CardButton({ children, onClick, testId }: { children: (hover: boolean) => ReactNode; onClick: () => void; testId?: string }) {
-  const [hover, setHover] = useState(false)
-  return (
-    <div
-      testId={testId}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      onClick={onClick}
-      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, marginLeft: -2, marginRight: -2, borderRadius: 6.4, cursor: 'pointer' }}
-    >
-      {children(hover)}
-    </div>
   )
 }
 
@@ -1120,43 +1038,46 @@ function TraitRow({
 // Desktop kit.css account palette (these static CSS tokens are not in buildThemeCssVariables).
 const accountDots: Record<string, [string, string]> = { blue: ['#0169cc', '#3386d6'], green: ['#00a240', '#2fbf63'], purple: ['#751ed9', '#b06dff'], pink: ['#c2307a', '#e86aa6'], teal: ['#0f8f86', '#33bfb3'], amber: ['#d97706', '#f5b44a'] }
 
-/** `ComposerModelTriggerLabel`: mark, model, qualifier, bolt, effort, traits, chevron. */
+/** The trigger's lead for an account with a colour: the provider mark with the account's dot hung over it (undefined otherwise: `ModelPicker` then draws the plain mark). */
+export function accountLead(kind: ProviderKind, account?: { name: string; color?: string | null } | null): ReactNode | undefined {
+  const dot = account?.color ? accountDots[account.color] : undefined
+  if (!dot) return undefined
+  // The desktop hangs a 6px dot 4px back over the mark (`-ml-1 self-start mt-0.5`) and leaves a 2px slot. A
+  // negative margin made the native intrinsic width drop ~36px and clipped the effort and chevron, so the dot is
+  // absolutely placed inside a 22px box (mark 14 + gap 6 + slot 2) instead.
+  return <AccountMark kind={kind} dot={dot} />
+}
+
+function AccountMark({ kind, dot }: { kind: ProviderKind; dot: [string, string] }) {
+  const t = useTheme()
+  return (
+    <div style={{ position: 'relative', display: 'flex', width: 22, height: 14, flexShrink: 0, pointerEvents: 'none' }}>
+      <ProviderMark kind={kind} size={14} />
+      <div style={{ position: 'absolute', left: 16, top: 2, width: 6, height: 6, borderRadius: 3, backgroundColor: dot[t.variant === 'dark' ? 1 : 0] }} />
+    </div>
+  )
+}
+
+/** `ComposerModelTriggerLabel`: account, model, qualifier, bolt, effort, traits. The mark leads and the chevron trails, both drawn by the `PickerChip`. */
 export function ModelTriggerLabel({
-  kind,
   account,
   model,
   qualifier,
   fast,
   effort,
   traits,
-  chevron,
-  color,
 }: {
-  kind: ProviderKind
   account?: { name: string; color?: string | null } | null
   model: string
   qualifier: string | null
   fast: boolean
   effort: string | null
   traits: string[]
-  chevron: boolean
-  color: string
 }) {
   const t = useTheme()
   const fit = useFooterFit()
   return (
     <div testId="model-label" style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flexShrink: 1, overflow: 'hidden' }}>
-      {account?.color && accountDots[account.color] ? (
-        // The desktop hangs a 6px dot 4px back over the mark (`-ml-1 self-start mt-0.5`) and leaves a 2px slot. A
-        // negative margin made the native intrinsic width drop ~36px and clipped the effort and chevron, so the dot is
-        // absolutely placed inside a 22px box (mark 14 + gap 6 + slot 2) instead.
-        <div style={{ position: 'relative', display: 'flex', width: 22, height: 14, flexShrink: 0 }}>
-          <ProviderMark kind={kind} size={14} />
-          <div style={{ position: 'absolute', left: 16, top: 2, width: 6, height: 6, borderRadius: 3, backgroundColor: accountDots[account.color]![t.variant === 'dark' ? 1 : 0] }} />
-        </div>
-      ) : (
-        <ProviderMark kind={kind} size={14} />
-      )}
       {account && fit.labels && <Label color={t.textSecondary} lineHeight={16} style={{ maxWidth: 96, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{account.name}</Label>}
       {/* `min-w-0 truncate`: the name takes the shrinking, and goes below 360px. */}
       {fit.model && (
@@ -1180,8 +1101,6 @@ export function ModelTriggerLabel({
           {traits.join(' · ')}
         </Label>
       )}
-      {/* Below 360px the desktop's overflow clip leaves only the mark; a partly clipped chevron would read as a stray mark. */}
-      {chevron && fit.model && <Icon name="chevronDown" size={14} color={color} style={{ opacity: 0.6 }} />}
     </div>
   )
 }
