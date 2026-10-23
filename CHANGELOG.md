@@ -13,7 +13,7 @@
 - Keep pasted keys out of the chat: paste an API key into the composer and Kybern offers to store it in your project's git-ignored env file, leaving a `$NAME` chip the agent can use.
 - Let agents keep going while you're away: a question can carry a default and a calm countdown, which pauses while you're looking at it. Set the longest wait, or turn it off, in Settings.
 - See which agent needs you: a question shows **Needs input**, apart from approvals, on its thread and on the thread that delegated it, and the notification names the agent. The delegating agent hears about it too and can answer the question for you; the record says who answered.
-- Answer questions more fully: questions render Markdown, the highlighted option shows its preview, and **Attach** adds an image, a file or a window capture to your answer.
+- Answer questions in a cleaner card: the question is the title, the first option is ready for the keyboard, previews sit beside the options (or under the focused one in a narrow window), **Something else…** becomes a text field in place, and one button sends. Questions render Markdown, and **Attach** adds an image, a file or a window capture to your answer. Every request card now lines up on the same edges.
 - Keep typing when a question arrives: it waits behind a small hint until you pause, and your draft is still there afterwards.
 - Grant macOS permissions from one card: when an app needs the camera, screen recording or another privacy permission, the card opens the right pane in System Settings and continues once it's granted.
 - Type in the composer after clicking in a visual or the Preview: the keyboard comes back on its own, and Esc in a page hands it back too. No more silent beeps.
