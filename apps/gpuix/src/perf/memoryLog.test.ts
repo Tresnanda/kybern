@@ -16,7 +16,9 @@ test('a line carries the footprint, the JS heap, each context and the steps sinc
   const lines = readFileSync(path.join(dir, 'memory.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line))
   expect(lines[0].reason).toBe('launch')
   const line = lines.at(-1)
-  expect(line.footprintMb).toBeGreaterThan(1)
+  // The physical footprint comes from macOS (`rusage_info_v0`); elsewhere the line carries null.
+  if (process.platform === 'darwin') expect(line.footprintMb).toBeGreaterThan(1)
+  else expect(line.footprintMb).toBeNull()
   expect(line.js.heapMb).toBeGreaterThan(0)
   expect(line.panes).toEqual([{ thread: 't1', blocks: 3 }])
   expect(line.steps.map((s: { phase: string }) => s.phase)).toEqual(['thread-open'])
