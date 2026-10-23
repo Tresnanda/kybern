@@ -3,7 +3,7 @@
 // replays it); the browser keeps its one native web view per thread (`preview/Surface.tsx` places it in whichever slot shows).
 import { toast } from '../shell/toasts.tsx'
 import { errorText } from '../nav/actions.ts'
-import { createContext, useContext, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react'
+import { useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import type { TerminalInfo, Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { subagentThreadPhase } from '../../../../packages/kybern-client/src/subagents.ts'
@@ -38,7 +38,7 @@ import { ZoomPane } from '../motion/ZoomSurface.tsx'
 import { activeTab, CHAT, tabKey, type Tab } from './model.ts'
 import { closeTabAction, keepTab, openTab, registerHostedPane } from './open.ts'
 import { useThreadRecord } from './Strip.tsx'
-import { ChatHidden } from './hidden.ts'
+import { ChatHidden, DocumentKeys, type DocumentKey } from './hidden.ts'
 
 /**
  * A leaf's content: `children` is its conversation page. A document tab is drawn over it; the chat stays mounted underneath
@@ -74,9 +74,6 @@ export function GroupContent({ leafId, children }: { leafId: string; children: R
 
 /** A document tab's box. It takes keyboard focus when it opens, so typing never lands in the hidden chat's composer. A preview
  *  tab the reader scrolls or types in is kept (single click → italic tab → permanent once used). */
-type DocumentKey = { key?: string; modifiers?: { cmd?: boolean; ctrl?: boolean; alt?: boolean; shift?: boolean } }
-/** The key handler a document body registers (the image tab's ⌘+ ⌘− ⌘0); the host calls it for keys while the tab has focus. */
-const DocumentKeys = createContext<MutableRefObject<((event: DocumentKey) => boolean) | null> | null>(null)
 
 function DocumentHost({ testId, onUsed, children }: { testId: string; onUsed?: () => void; children: ReactNode }) {
   const renderer = useGpuixRequired()

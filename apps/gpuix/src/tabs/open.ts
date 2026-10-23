@@ -1,7 +1,9 @@
 // Opening, closing and moving in-thread tabs (ADE-54). Every opener in the app goes through `openTab`: it finds the group that
 // should hold the tab (the one that already has it, else the focused group of that thread, else the thread's first group),
 // and a thread with no group on screen just remembers the tab for when it is shown.
-import { getClient, getFocusedPaneId, focusPane, getPaneState, selectThread, setPaneAlias } from '../state.ts'
+import { getClient, getFocusedPaneId, focusPane, getPaneState, getState, getThreadOpen, selectThread, setPaneAlias } from '../state.ts'
+import { bufferKey, getBuffer } from '../dock/fileBuffers.ts'
+import { requestCloseDirty } from './closeDirtyRequest.ts'
 import { closePane, closeTab, collectThreadPanes, getGroup, getGroups, groupsOfThread, moveTabToGroup, reopenClosedTab, splitTab, updateGroup, updateMemory, getSplitRoot, splitFocusedPane, type SplitDirection } from '../split/store.ts'
 import { activateIn, CHAT, cycleIn, hasTab, normalizeTab, numberIn, openIn, permanentIn, reorderIn, tabKey, type Tab } from './model.ts'
 import { getNav, setNav } from '../nav/store.ts'
@@ -73,12 +75,26 @@ export function selectTab(leafId: string, key: string) { updateGroup(leafId, (g)
 export function reorderTab(leafId: string, key: string, to: number) { updateGroup(leafId, (g) => reorderIn(g, key, to)) }
 export { moveTabToGroup, splitTab }
 
-/** Close with the tab's own clean-up: a terminal's shell is closed with its tab, as the dock's terminal tabs did. */
+/** The unsaved-edits buffer behind a file tab of `threadId` (`dock/fileBuffers.ts`), or null when its project is unknown. */
+export function fileTabBuffer(threadId: string | null, tab: Tab): string | null {
+  if (tab.kind !== 'file' || !threadId) return null
+  if (tab.root === 'thread') return bufferKey({ threadId }, tab.path)
+  const thread = getState().threads.find((t) => t.id === threadId) ?? getNav().children[threadId] ?? getThreadOpen(threadId)?.thread
+  return thread?.project_id ? bufferKey({ projectId: thread.project_id }, tab.path) : null
+}
+
+/** Close with the tab's own clean-up: a terminal's shell is closed with its tab, as the dock's terminal tabs did. A file with
+ *  unsaved edits asks first (Save / Don't save / Cancel). */
 export function closeTabAction(leafId: string, key: string) {
   const group = getGroup(leafId)
   const tab = group.tabs.find((t) => tabKey(t) === key)
   if (!tab || tab.kind === 'chat') return
   if (tab.kind === 'terminal') void getClient()?.call('terminals.close', { terminal_id: tab.id }).catch(() => {})
+  const buffer = fileTabBuffer(group.threadId, tab)
+  if (buffer && getBuffer(buffer)?.dirty && tab.kind === 'file') {
+    requestCloseDirty({ leafId, key, buffer, name: tab.path.split('/').pop() || tab.path })
+    return
+  }
   closeTab(leafId, key)
 }
 

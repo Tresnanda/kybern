@@ -22,7 +22,7 @@ import { Notifications } from './Notifications.tsx'
 import { About } from './About.tsx'
 
 export const TABS = [
-  ['general', 'General', 'Defaults for new threads and workspace behavior.', N.settings, 'default agent permissions worktree titles close notes preview'],
+  ['general', 'General', 'Defaults for new threads and workspace behavior.', N.settings, 'default agent permissions worktree titles close notes preview files editor open in wrap lines'],
   ['appearance', 'Appearance', 'Make Kybern feel at home on your desktop.', N.sun, 'theme light dark system translucent glass window solid opacity blur sidebar advanced content surface reset'],
   ['notifications', 'Notifications', 'Choose when Kybern gets your attention.', N.bell, 'alerts sound permission finishes fails input'],
   ['agents', 'Agent providers', 'Manage the coding agents on your connected machine.', S.terminal, 'harness install updates claude codex cursor opencode pi omp profiles sdk delegation coordinator autonomy models'],

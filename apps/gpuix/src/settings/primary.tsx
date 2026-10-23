@@ -22,6 +22,8 @@ import { Switch } from '../kit/Switch.tsx'
 import { latestSettings, updateSettings, useSettings } from './store.ts'
 import { setAppearance, useAppearance } from './appearance.ts'
 import { useResource } from './resource.ts'
+import { defaultEditor, installedEditors, setDefaultEditor } from '../dock/editors.ts'
+import { setWrapLines, useWrapLines } from '../dock/filePrefs.ts'
 
 export function General() {
   const { settings: s, saving } = useSettings()
@@ -41,9 +43,23 @@ export function General() {
       <Row title="Tell agents about Kybern" description="Adds a short guide to new agent sessions: how to show images, link notes and tasks, and reach other threads."><Switch aria-label="Tell agents about Kybern" checked={s.tell_agents_about_kybern ?? true} disabled={saving} onCheckedChange={(tell_agents_about_kybern) => void updateSettings({ tell_agents_about_kybern })} /></Row>
       <Row title="Ask before closing while threads work" description="Agents keep going after the window closes. The prompt lists them and offers to stop them."><Switch testId="settings-close-confirmation" aria-label="Ask before closing while threads work" checked={ask} onCheckedChange={value => { save('kybern.askBeforeClose', value); setAsk(value) }} /></Row>
     </Section>
+    <FilesSection />
     <Section title="Notes"><Row title="Global notes" description="Notes that belong to no project. Shared keeps one set on this Mac for every environment window. Switching never moves or deletes a note."><Select label="Global notes" testId="settings-global-notes" value={notesHome} onChange={(value) => setGlobalNotesHome(value as 'shared' | 'separate')} options={[{ value: 'shared', label: 'Shared across environments' }, { value: 'separate', label: 'Separate per environment' }]} /></Row></Section>
     <PreviewFolders />
   </>
+}
+
+/** File tabs (ADE-60/61): the editor "Open in" and ⌘⇧O use, and whether long lines wrap. Both are kept on this Mac. */
+function FilesSection() {
+  const editors = installedEditors()
+  const [editor, setEditor] = useState(() => defaultEditor()?.id ?? '')
+  const wrap = useWrapLines()
+  return <Section title="Files">
+    <Row title="Open files in" description={editors.length ? 'The editor File actions › Open in and ⌘⇧O use. Picking another editor there makes it the default.' : 'No code editor was found in Applications. Install one to open files from their tabs.'}>
+      {editors.length > 0 && <Select label="Open files in" testId="settings-file-editor" value={editor} onChange={(value) => { setDefaultEditor(value); setEditor(value) }} options={editors.map((candidate) => ({ value: candidate.id, label: candidate.name }))} />}
+    </Row>
+    <Row title="Wrap lines" description="Long lines in file tabs wrap at the tab's width. Off, they scroll sideways."><Switch aria-label="Wrap lines" testId="settings-file-wrap" checked={wrap} onCheckedChange={setWrapLines} /></Row>
+  </Section>
 }
 
 /** Folders outside a project that the user allowed Preview to serve files from (`PreviewFoldersRow`). */

@@ -1,16 +1,23 @@
 import { DocumentMarkdown } from '../native/markdownDocument.tsx'
 import { VirtualCode, type SyntaxDocument } from '../native/syntax.tsx'
 import { acquireSyntax, cachedRead, peekSyntax, rememberRead } from './fileCache.ts'
+import { adoptRead, bufferKey, EDITABLE_BYTES, getBuffer, keepMine, openBuffer, readFile, releaseBuffer, reloadBuffer, saveBuffer, useBufferState, type FileRoot } from './fileBuffers.ts'
+import { FileEditor, type FileEditorHandle } from './FileEditor.tsx'
+import { defaultEditor, installedEditors, openInEditor, type Editor } from './editors.ts'
+import { setWrapLines, useWrapLines } from './filePrefs.ts'
+import { DocumentKeys, type DocumentKey } from '../tabs/hidden.ts'
+import { isWindowVisible } from '../native/visibility.ts'
+import { toast } from '../shell/toasts.tsx'
 import { activeEnvironment } from '../shell/environment.ts'
 import { useGpuix, useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { spawn } from 'node:child_process'
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { FileEntry, FilesReadResult } from '../../../../packages/kybern-client/src/types.ts'
 
 import { ISLAND } from '../MatrixLoader.tsx'
 import { errorText } from '../nav/actions.ts'
 import { N } from '../nav/glyphs.ts'
-import { Menu, MenuItem } from '../nav/overlay.tsx'
+import { Menu, MenuCheckboxItem, MenuItem, MenuLabel, MenuSeparator } from '../nav/overlay.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
 import { SearchField } from '../kit/SearchField.tsx'
 import { Button } from '../kit/Button.tsx'
@@ -175,74 +182,143 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
   </div>
 }
 
-const MARKDOWN_PREVIEW_BYTES = 2 * 1024 * 1024
 /**
- * A file tab's body (ADE-54): a project file (`projectId`, read through `files.read`) or a path a chat names (`threadId`,
- * `threads.files.read`, relative to the thread's folder). `line` scrolls the source to that line.
+ * A file tab's body (ADE-54, editable since ADE-61): a project file (`projectId`, `files.read` / `files.write`) or a path a chat
+ * names (`threadId`, `threads.files.*`, relative to the thread's folder). A text file up to 2 MB opens in the editor; larger,
+ * truncated or binary files are read-only. `line` brings that line into view. The file is checked for changes on disk every
+ * 2 s while the tab shows: a clean buffer follows it, a dirty one shows "Changed on disk." with Reload / Keep mine.
  */
 export const FileViewer = memo(function FileViewer({ projectId, threadId, path, line, instant = false }: { projectId?: string; threadId?: string; path: string; line?: number; instant?: boolean }) {
   const t = useTheme()
+  const owner = projectId ? `p:${projectId}` : `t:${threadId}`
   // Decided when the viewer mounts: the loaded file enters as `t-pane` unless it was opened from the keyboard or is cached.
-  const [play] = useState(() => !instant && !cachedRead(projectId ? `p:${projectId}` : `t:${threadId}`, path))
+  const [play] = useState(() => !instant && !cachedRead(owner, path))
   const markdownFile = /\.(md|mdx|markdown)$/i.test(path)
   const project = useApp((s) => s.projects.find((p) => p.id === projectId))
   const thread = useApp((s) => threadId ? s.threads.find((th) => th.id === threadId) : undefined)
   const absolutePath = path.startsWith('/') ? path : project ? `${project.path}/${path}` : thread ? `${thread.cwd}/${path}` : null
+  const root = useMemo<FileRoot | null>(() => projectId ? { projectId } : threadId ? { threadId } : null, [projectId, threadId])
+  const key = root ? bufferKey(root, path) : null
   // A file shown before (`fileCache.ts`) draws at once and is re-read behind it; an unchanged read keeps the same object, so its
   // syntax document is not rebuilt.
-  const owner = projectId ? `p:${projectId}` : `t:${threadId}`
   const [file, setFile] = useState<FilesReadResult | null>(() => cachedRead(owner, path) ?? null)
   const [error, setError] = useState<string | null>(null)
-  const [preview, setPreview] = useState(() => /\.(md|mdx|markdown)$/i.test(path) && !line)
+  const [preview, setPreview] = useState(() => markdownFile && !line)
   const [reload, setReload] = useState(0)
+  const editable = !!file && !file.binary && !file.truncated && file.size <= EDITABLE_BYTES
+  const buffer = useBufferState(editable ? key : null)
+  const editor = useRef<FileEditorHandle | null>(null)
+  const wrap = useWrapLines()
   useEffect(() => {
+    if (!root || !key) return
     let current = true
     setError(null)
-    const read = async () => {
-      const client = getClient()!
-      if (!projectId && threadId) { const file = await client.call('threads.files.read', { thread_id: threadId, path }); return { content: file.content, truncated: false, binary: false, size: file.content.length } as FilesReadResult }
-      const first = await client.call('files.read', { project_id: projectId!, path, max_bytes: 256 * 1024 })
-      if (markdownFile && !first.binary && first.truncated && first.size <= MARKDOWN_PREVIEW_BYTES) {
-        const full = await client.call('files.read', { project_id: projectId!, path, max_bytes: MARKDOWN_PREVIEW_BYTES })
-        if (!full.truncated && Buffer.byteLength(full.content, 'utf8') <= MARKDOWN_PREVIEW_BYTES) return full
-      }
-      return first
-    }
-    void read().then((result) => {
+    void readFile(root, path).then((result) => {
       if (!current) return
       const cached = cachedRead(owner, path)
       const same = cached && cached.content === result.content && cached.truncated === result.truncated && cached.binary === result.binary
       if (!same) rememberRead(owner, path, result)
       setFile(same ? cached : result)
+      if (result.binary || result.truncated || result.size > EDITABLE_BYTES) return
+      const before = getBuffer(key)
+      openBuffer(root, path, result)
+      if (before) { const shown = adoptRead(key, result); if (shown != null) editor.current?.replace(shown) }
     }, (e) => { if (current) setError(errorText(e)) })
     return () => { current = false }
-  }, [owner, projectId, threadId, path, reload, markdownFile])
-  const canPreview = markdownFile && file && !file.binary && !file.truncated && file.size <= MARKDOWN_PREVIEW_BYTES
+  }, [owner, root, key, path, reload])
+  // Changes on disk (an agent edited the file): a cheap version check every 2 s while this tab shows and the window is visible.
+  useEffect(() => {
+    if (!root || !key || !editable) return
+    let current = true, busy = false
+    const timer = setInterval(() => {
+      const known = getBuffer(key)
+      if (busy || !known || known.saving || !isWindowVisible()) return
+      busy = true
+      void readFile(root, path, known.version).then((result) => {
+        if (!current || result.unchanged) return
+        const shown = adoptRead(key, result)
+        if (shown != null) { editor.current?.replace(shown); rememberRead(owner, path, result) }
+      }, () => {}).finally(() => { busy = false })
+    }, 2000)
+    return () => { current = false; clearInterval(timer) }
+  }, [root, key, editable, path, owner])
+  // A clean buffer goes with its tab; unsaved edits stay until saved or discarded.
+  useEffect(() => () => { if (key) releaseBuffer(key) }, [key])
+  const save = useCallback(() => { if (key && editable) void saveBuffer(key) }, [key, editable])
+  const editors = installedEditors()
+  const preferred = defaultEditor()
+  const openIn = useCallback((target: Editor | null) => {
+    if (!target || !absolutePath || !activeEnvironment().local) return
+    openInEditor(target, absolutePath, editor.current?.caretLine() ?? line ?? 1).catch((e: Error) => toast.error(e.message))
+  }, [absolutePath, line])
+  const canPreview = markdownFile && editable
   const showPreview = preview && canPreview
+  const showPreviewRef = useRef(showPreview)
+  showPreviewRef.current = showPreview
+  // ⌘S saves, ⌘F finds, ⌘G / ⇧⌘G step through matches, ⌘⇧O opens the file in the default editor.
+  const keys = useContext(DocumentKeys)
+  useEffect(() => {
+    if (!keys) return
+    const handler = (event: DocumentKey) => {
+      const m = event.modifiers
+      if (!m?.cmd || m.ctrl || m.alt) return false
+      if (event.key === 's' && !m.shift) { save(); return true }
+      if (event.key === 'f' && !m.shift && editable && !showPreviewRef.current) { editor.current?.find(); return true }
+      if (event.key === 'g') return editor.current?.findNext(!!m.shift) ?? false
+      if (event.key === 'o' && m.shift) { openIn(defaultEditor()); return true }
+      return false
+    }
+    keys.current = handler
+    return () => { if (keys.current === handler) keys.current = null }
+  }, [keys, save, openIn, editable])
   return <>
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 36, paddingLeft: 10, paddingRight: 4, flexShrink: 0, borderBottomWidth: 0.6, borderColor: t.borderLight }}>
       <Label color={t.textSecondary} size={11} truncate style={{ flexGrow: 1 }}>{path.replaceAll('/', ' › ')}</Label>
+      {(buffer?.saving || buffer?.dirty) && <div testId={buffer.saving ? 'file-saving' : 'file-unsaved'} style={{ display: 'flex', flexShrink: 0 }}><Label color={t.textTertiary} size={11}>{buffer.saving ? 'Saving…' : 'Unsaved'}</Label></div>}
       {canPreview && <Button size="sm" onClick={() => setPreview(!preview)}>{showPreview ? 'Source' : 'Preview'}</Button>}
-      <Menu align="end" minWidth={190} testId="dock-file-actions" trigger={() => <IconButton icon={N.ellipsis} label="File actions" />}>
+      <Menu align="end" minWidth={220} testId="dock-file-actions" trigger={() => <IconButton icon={N.ellipsis} label="File actions" />}>
+        <MenuItem id="save" label="Save" shortcut="⌘S" disabled={!buffer?.dirty || buffer.saving} onSelect={save} testId="file-action-save" />
+        <MenuCheckboxItem id="wrap" label="Wrap lines" checked={wrap} onCheckedChange={setWrapLines} testId="file-action-wrap" />
+        <MenuSeparator />
+        {editors.length > 0 && absolutePath && activeEnvironment().local && <>
+          <MenuLabel>Open in</MenuLabel>
+          {editors.map((candidate) => <MenuItem key={candidate.id} id={`open-${candidate.id}`} label={candidate.name} shortcut={candidate.id === preferred?.id ? '⌘⇧O' : undefined} testId={`file-open-${candidate.id}`} onSelect={() => openIn(candidate)} />)}
+          <MenuSeparator />
+        </>}
+        <MenuItem id="reveal" label="Reveal in Finder" icon={N.folder} disabled={!absolutePath || !activeEnvironment().local} onSelect={() => { if (absolutePath && activeEnvironment().local) spawn('open', ['-R', absolutePath], { stdio: 'ignore' }).on('error', () => {}) }} />
+        <MenuSeparator />
         <MenuItem id="relative" label="Copy relative path" onSelect={() => copyText(path)} />
         <MenuItem id="absolute" label="Copy absolute path" disabled={!absolutePath} onSelect={() => { if (absolutePath) copyText(absolutePath) }} />
-        <MenuItem id="contents" label="Copy contents" disabled={!file || file.binary} onSelect={() => { if (file && !file.binary) copyText(file.content) }} />
-        <MenuItem id="reveal" label="Reveal in Finder" icon={N.folder} disabled={!absolutePath || !activeEnvironment().local} onSelect={() => { if (absolutePath && activeEnvironment().local) spawn('open', ['-R', absolutePath], { stdio: 'ignore' }).on('error', () => {}) }} />
+        <MenuItem id="contents" label="Copy contents" disabled={!file || file.binary} onSelect={() => { const text = key ? getBuffer(key)?.text : undefined; if (text != null) copyText(text); else if (file && !file.binary) copyText(file.content) }} />
       </Menu>
-
     </div>
-    <ErrorLine error={error} retry={() => setReload((n) => n + 1)} />
+    {buffer?.conflict && <div testId="file-conflict" style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 40, paddingLeft: 12, paddingRight: 8, flexShrink: 0, backgroundColor: t.variant === 'dark' ? 'rgba(255, 186, 73, 0.10)' : 'rgba(186, 120, 0, 0.08)', borderBottomWidth: 0.6, borderColor: t.borderLight }}>
+      <Label color={t.text} size={12} style={{ flexGrow: 1 }}>Changed on disk. Reload to see it, or keep your edits and save over it.</Label>
+      <Button size="sm" testId="file-conflict-keep" onClick={() => { if (key) keepMine(key) }}>Keep mine</Button>
+      <Button size="sm" variant="primary" testId="file-conflict-reload" onClick={() => { if (!key) return; const shown = reloadBuffer(key); if (shown != null) editor.current?.replace(shown) }}>Reload</Button>
+    </div>}
+    <ErrorLine error={error ?? buffer?.error ?? null} retry={error ? () => setReload((n) => n + 1) : undefined} />
     {file ? <Rise kind="pane" play={play} style={{ flexGrow: 1, minHeight: 0, minWidth: 0 }}>{file.binary ? <DockEmpty icon={N.note} title="Binary file" body="Open this file in your editor to view it." /> : <>
-      {showPreview ? <virtual-list testId="dock-file-content" {...EXPLORER_SCROLL_LAYOUT} overdraw={0} style={{ flexGrow: 1, minHeight: 0, overflowX: 'scroll' }}>
-        <div style={{ padding: 12 }}><DocumentMarkdown source={file.content} theme={cachedMarkdownTheme(t)} /></div>
-      </virtual-list> : <FileCode content={file.content} path={path} line={line} />}
-      {file.truncated && <Label color={t.textSecondary} size={11} style={{ padding: 8 }}>Showing the first 256 KB. Open the file in your editor for the rest.</Label>}
+      {!editable && <ReadOnlyNote size={file.size} />}
+      {showPreview && key ? <virtual-list testId="dock-file-content" {...EXPLORER_SCROLL_LAYOUT} overdraw={0} style={{ flexGrow: 1, minHeight: 0, overflowX: 'scroll' }}>
+        <div style={{ padding: 12 }}><DocumentMarkdown source={getBuffer(key)?.text ?? file.content} theme={cachedMarkdownTheme(t)} /></div>
+      </virtual-list> : editable && key && buffer ? <FileEditor key={key} bufferKey={key} path={path} wrap={wrap} line={line} handle={editor} />
+        : <FileCode content={file.content} path={path} line={line} wrap={wrap} />}
     </>}</Rise> : !error && <LoadingLines testId="dock-file-loading" />}
   </>
 })
 
+/** Why a file opened read-only. */
+function ReadOnlyNote({ size }: { size: number }) {
+  const t = useTheme()
+  const reason = size > EDITABLE_BYTES ? `This file is ${(Math.ceil(size / 1024 / 1024 * 10) / 10).toFixed(1)} MB, over the 2 MB the editor opens` : 'Only part of this file could be read'
+  return <div testId="file-read-only" style={{ display: 'flex', alignItems: 'center', minHeight: 32, paddingLeft: 12, paddingRight: 12, flexShrink: 0, borderBottomWidth: 0.6, borderColor: t.borderLight }}>
+    <Label color={t.textSecondary} size={12}>{`Read-only. ${reason}; open it in your editor to change it.`}</Label>
+  </div>
+}
+
 // Share one whole-document parse across the bounded native rows.
-export function FileCode({ content, path, line }: { content: string; path: string; line?: number }) {
+export function FileCode({ content, path, line, wrap = false }: { content: string; path: string; line?: number; wrap?: boolean }) {
   const renderer = useGpuixRequired()
   // A document parsed for this text before (`fileCache.ts`) draws on the first render; otherwise it parses once and is kept.
   const [ready, setReady] = useState<{ content: string; path: string; document: SyntaxDocument } | null>(() => {
@@ -284,10 +360,19 @@ export function FileCode({ content, path, line }: { content: string; path: strin
   }, [document, line, renderer])
   if (error) return <ErrorLine error={error} retry={() => setRetry(n => n + 1)} />
   if (!document) return <LoadingLines testId="dock-source-loading" />
-  return <div testId="dock-file-horizontal" style={{ display: 'flex', flexGrow: 1, minHeight: 0, minWidth: 0, overflowX: 'scroll' }}><virtual-list ref={list} testId="dock-file-content" {...EXPLORER_SCROLL_LAYOUT} estimatedItemHeight={1280} overdraw={0} style={{ flexGrow: 1, flexShrink: 0, minHeight: 0, height: '100%', width: sourceWidth }}>
-    {chunks.map(chunk => <CodeChunk key={chunk.start} document={document} start={chunk.start} end={chunk.end} mark={line && line > chunk.start && line <= chunk.end ? line : undefined} />)}
+  // Wrapped, a chunk is as tall as its wrapped rows (the list measures it) and the native gutter keeps each number on its line.
+  return <div testId="dock-file-horizontal" style={{ display: 'flex', flexGrow: 1, minHeight: 0, minWidth: 0, overflowX: wrap ? 'hidden' : 'scroll' }}><virtual-list key={wrap ? 'wrap' : 'scroll'} ref={list} testId="dock-file-content" {...EXPLORER_SCROLL_LAYOUT} estimatedItemHeight={1280} overdraw={0} style={{ flexGrow: 1, flexShrink: wrap ? 1 : 0, minHeight: 0, minWidth: 0, height: '100%', width: wrap ? '100%' : sourceWidth }}>
+    {chunks.map(chunk => wrap
+      ? <WrappedChunk key={chunk.start} document={document} start={chunk.start} end={chunk.end} />
+      : <CodeChunk key={chunk.start} document={document} start={chunk.start} end={chunk.end} mark={line && line > chunk.start && line <= chunk.end ? line : undefined} />)}
   </virtual-list></div>
 }
+const WrappedChunk = memo(function WrappedChunk({ document, start, end }: { document: SyntaxDocument; start: number; end: number }) {
+  const t = useTheme()
+  return <div testId={`dock-code-chunk-${start}`} style={{ display: 'flex', width: '100%', minWidth: 0 }}>
+    <VirtualCode document={document.id} revision={document.revision} startLine={start} endLine={end} showLineNumbers softWrap theme={cachedMarkdownTheme(t)} style={{ userSelect: 'text', flexGrow: 1, minWidth: 0, fontFamily: FONT_MONO, fontSize: 12, lineHeight: 20 }} />
+  </div>
+})
 const CodeChunk = memo(function CodeChunk({ document, start, end, mark }: { document: SyntaxDocument; start: number; end: number; mark?: number }) {
   const t = useTheme()
   return <div testId={`dock-code-chunk-${start}`} style={{ display: 'flex', height: (end - start) * 20, width: '100%', minWidth: 0, position: 'relative' }}>

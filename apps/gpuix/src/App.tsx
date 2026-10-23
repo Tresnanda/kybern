@@ -2,6 +2,7 @@ import { SplitWorkspace, SplitDragLayer, trackThreadDrag, finishSplitDrag, useSp
 import { startSplitView } from './split/store.ts'
 import { useMeasureComposerOverlay } from './composer/height.ts'
 import { CloseGuard } from './shell/CloseGuard.tsx'
+import { CloseDirtyDialog } from './tabs/CloseDirty.tsx'
 import { WorkspaceDialogs } from './dialogs/Dialogs.tsx'
 import { EnvironmentDialogs } from './environments/Dialogs.tsx'
 import { useEnvironment } from './shell/environment.ts'
@@ -233,6 +234,7 @@ function Workspace() {
       <EnvironmentDialogs />
       <WorkspaceDialogs />
       <CloseGuard />
+      <CloseDirtyDialog />
       <Toaster />
       <AppUpdateSurface />
       <SidebarDragLayer />
