@@ -137,7 +137,8 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
   // The dock keeps the tree only; files open as tabs beside the chat (ADE-54).
   return <div style={{ display: 'flex', flexGrow: 1, minHeight: 0, minWidth: 0 }}>
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, position: 'relative' }}>
-      <div {...ISLAND} style={{ display: 'flex', width: '100%', height: 44, alignItems: 'center', padding: 8 }}>
+      {/* Never shrinks: a long tree squeezed this row until the field hung over the first rows (ADE-60). */}
+      <div {...ISLAND} style={{ display: 'flex', width: '100%', height: 44, flexShrink: 0, alignItems: 'center', padding: 8 }}>
         <SearchField testId="dock-file-search" placeholder="Search files…" label="Search files" value={query} onChange={setQuery} width="100%" />
       </div>
       <ErrorLine error={error} />
