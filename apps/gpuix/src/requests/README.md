@@ -26,3 +26,5 @@ deny `reason`; every other driver drops it, so the note also goes as the next qu
 
 Checks: `bun test src/requests`, `bun src/requests/summoned.verify.ts` and `SHOT_THEMES=dark,glass-dark bun src/requests/summoned.shots.ts` (summoned cards), `bun src/requests/keys.verify.ts` (native fixture; keys and notes), `SHOT_TAG=after SHOT_THEMES=dark,glass-dark bun src/requests/shots.ts`.
 Run the fixtures with `NAPI_RS_NATIVE_LIBRARY_PATH` set to a patched addon.
+
+Typing guard (`typingGuard.ts`, `TypingHint.tsx`): a card that would replace the composer (question, password, secret, pick, proposal) waits while the reader types: a hint above the composer stands in until the composer has been still for 1.5 s (Esc or a click opens it at once; a password or secret ignores Esc). The draft is kept by `composer/drafts.ts`; a question's deadline is paused while held. `typing.verify.ts` drives it.

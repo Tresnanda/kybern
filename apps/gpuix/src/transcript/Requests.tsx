@@ -5,6 +5,7 @@
 // Copy, choices and the RPCs (`approvals.respond`, `threads.answer`,
 // `threads.interrupt`) are the desktop's.
 import { useEffect, type ReactNode } from 'react'
+import { questionDeadline } from '../../../../packages/kybern-client/src/requestCards.ts'
 import { isUserInput, connectorApproval } from '../../../../packages/kybern-client/src/userInput.ts'
 import { isElementPick, pickRequestInput } from '../../../../packages/kybern-client/src/pickRequest.ts'
 import { secretRequestInput } from '../../../../packages/kybern-client/src/secretRequest.ts'
@@ -25,7 +26,10 @@ import { loginRequestInput, permissionRequestInput, promptRequestInput } from '.
 import { LoginRequestPanel } from '../requests/Login.tsx'
 import { PromptRequestPanel } from '../requests/Prompt.tsx'
 import { PermissionRequestPanel } from '../requests/Permission.tsx'
-import { useRequestProgress } from '../requests/progress.ts'
+import { actOnRequest, useRequestProgress } from '../requests/progress.ts'
+import { forgetCardHold, useCardHold } from '../requests/typingGuard.ts'
+import { TypingHint } from '../requests/TypingHint.tsx'
+import { threadProvider } from '../requests/actions.ts'
 import { useApp, usePaneAccess } from '../state.ts'
 import { ThemeScope, useTheme } from '../ui.tsx'
 import { GlassEdge } from '../kit/GlassEdge.tsx'
@@ -35,13 +39,17 @@ const EMPTY: never[] = []
 /** `--composer-radius` (1.2rem). */
 const RADIUS = 19.2
 
-/** Whether the first pending request replaces the composer input (`hideInput`). */
+/** Whether the first pending request replaces the composer input (`hideInput`) once it is shown: not while the reader is
+ *  typing, when it waits for a pause (`requests/typingGuard.ts`). */
 export function useBlockingRequest(): boolean {
   const approval = useApp((s) => (s.selectedId ? s.open.pendingApprovals[0] ?? null : null))
   const phase = useRequestProgress(approval?.id ?? '')?.phase
-  if (!approval) return false
-  return (isUserInput(approval) && !connectorApproval(approval)) || ownForm(approval, phase)
+  const takes = !!approval && takesComposer(approval, phase)
+  const held = useCardHold(takes ? approval.id : null)
+  return takes && !held
 }
+
+const takesComposer = (a: ApprovalRequest, phase?: string) => (isUserInput(a) && !connectorApproval(a)) || ownForm(a, phase)
 
 /** Cards that are their own closed form: the secret and password prompts, a pick of a file, image or window (an element pick is
  *  a choice card and keeps the composer), the Coordinator's proposals, and the sign-in card while it takes a pasted code. */
@@ -67,20 +75,26 @@ function RequestStack({ threadId }: { threadId: string }) {
   const first = pending[0] ?? null
   // A waiting visual is answered under its figure; it takes this slot only while the figure is out of view.
   const stub = useVisualAnswerStub(first)
-  const approval = first && isVisualAnswerCard(first) && !stub ? null : first
+  const arrived = first && isVisualAnswerCard(first) && !stub ? null : first
+  const phase = useRequestProgress(arrived?.id ?? '')?.phase
+  // A card that would take the composer waits while the reader types: the hint stands in for it until they pause.
+  const takes = !!arrived && takesComposer(arrived, phase)
+  const held = useCardHold(takes ? arrived.id : null)
+  const approval = held ? null : arrived
+  useCardHoldEffects(arrived, held)
   const activity = useRequestActivity(threadId)
   // Subagents, background tasks, helpers and queued follow-ups share one tray (`ComposerTray`) in this surface.
   const tray = { threadId, subagents: activity.strip?.rows ?? EMPTY, tasks: activity.active, helpers: activity.helpers, queued }
   const showTray = trayVisible(tray)
   const request = !!(approval || questions[0])
-  const visible = !!(request || activity.visible || showTray)
-  const phase = useRequestProgress(approval?.id ?? '')?.phase
-  const closed = !!approval && ((isUserInput(approval) && !connectorApproval(approval)) || ownForm(approval, phase))
+  const visible = !!(request || held || activity.visible || showTray)
+  const closed = !!approval && takesComposer(approval, phase)
   return (
     <PanelPresence show={visible}>{pending.length > 1 && <QueueSlivers count={pending.length} />}<StackedPanel closed={closed}>
       {/* `t-panel-enter`: each request rises into the stack as it arrives. */}
       <ActivityPanels threadId={threadId} data={activity} />
       <PanelPresence show={showTray}><PanelEnter><ComposerTray data={tray} divided={request} /></PanelEnter></PanelPresence>
+      {held && arrived && <PanelEnter key={`hint:${arrived.id}`}><TypingHint approval={arrived} provider={threadProvider(threadId)} /></PanelEnter>}
       {/* A password prompt always rises in, even right after a keyboard answer: a private prompt must be seen arriving. */}
       {request && <PanelEnter key={approval ? approval.id : questions[0]!.id} always={!!approval && !!promptRequestInput(approval)}>
         {approval ? (
@@ -91,6 +105,19 @@ function RequestStack({ threadId }: { threadId: string }) {
       </PanelEnter>}
     </StackedPanel></PanelPresence>
   )
+}
+
+/** While a card waits for the reader to pause: its question deadline does not run (it starts when the card is shown), and the
+ *  hold is forgotten with the card. */
+function useCardHoldEffects(approval: ApprovalRequest | null, held: boolean) {
+  const id = approval?.id
+  const timed = !!approval && !!questionDeadline(approval)
+  useEffect(() => {
+    if (!id || !held || !timed) return
+    void actOnRequest(id, 'pause').catch(() => { /* an older daemon: the countdown keeps running */ })
+    return () => { void actOnRequest(id, 'resume').catch(() => { /* resolved meanwhile */ }) }
+  }, [id, held, timed])
+  useEffect(() => () => { if (id) forgetCardHold(id) }, [id])
 }
 
 /** Sheets peeking out above the card while more requests wait: two at most, behind the one on top. */

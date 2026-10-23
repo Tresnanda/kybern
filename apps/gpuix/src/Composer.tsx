@@ -58,6 +58,9 @@ import { isVisualAnswerCard, pendingVisualAnswer, replyToVisual } from './reques
 import { setThreadComposerFocus } from './composer/focus.ts'
 import { handleCardKey, isRowCard } from './requests/actions.ts'
 import { cardKeyHandler, focusCard, setComposerEmpty } from './requests/ui.ts'
+import { noteKeystroke, openHeldCard } from './requests/typingGuard.ts'
+import { createDraftStore } from './composer/drafts.ts'
+import { kitOverlayOpen } from './kit/AlertDialog.tsx'
 import { useControls } from './kit/controls.ts'
 import { IconButton } from './kit/IconButton.tsx'
 import { PickerChip } from './kit/PickerChip.tsx'
@@ -332,7 +335,7 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
         if (!provider) return
         const launched = (threadId: string) => {
           // The prompt now belongs to the thread: drop the saved draft before the page switches, so no composer reloads it.
-          drafts.delete(`${pane.id}:${coordinator ? 'coordinator' : 'project'}:${projectId ?? 'free'}`)
+          drafts.drop(`${pane.id}:${coordinator ? 'coordinator' : 'project'}:${projectId ?? 'free'}`)
           extras.onLaunch?.(threadId, snapshot)
         }
         const task = extras.task
@@ -417,10 +420,10 @@ function uncataloguedName(model: string): string {
   return `Claude ${claude[1]![0]!.toUpperCase()}${claude[1]!.slice(1)} ${claude[2]}${claude[3] ? `.${claude[3]}` : ''}`
 }
 
-/** Text and attachments kept per thread or project while the composer is away (`composerDrafts`). */
-const drafts = new Map<string, { text: string; attachments: Attachment[] }>(loadEnvironmentPreference('kybern.composer.drafts', []))
-onEnvironmentLeaving(() => saveEnvironmentPreference('kybern.composer.drafts', [...drafts].slice(-100)))
-onEnvironmentChange(() => { drafts.clear(); for (const [key, value] of loadEnvironmentPreference<[string, { text: string; attachments: Attachment[] }][] >('kybern.composer.drafts', [])) drafts.set(key, value) })
+/** Text and attachments kept per thread or project while the composer is away (`composer/drafts.ts`). */
+const drafts = createDraftStore<Attachment>(() => loadEnvironmentPreference<[string, { text: string; attachments: Attachment[] }][]>('kybern.composer.drafts', []), (entries) => saveEnvironmentPreference('kybern.composer.drafts', entries))
+onEnvironmentLeaving(() => drafts.persist())
+onEnvironmentChange(() => drafts.reload())
 
 /** Pasted keys the person chose to keep as text (this session, in memory only): they are not flagged again. */
 const keptSecrets = new Set<string>()
@@ -550,9 +553,7 @@ export function ComposerView(input: ComposerViewProps) {
   useEffect(() => {
     // A caught key is never written to a draft: the text stays out of storage until the person chooses.
     if (secretCatch) return
-    if (text || attachments.length) drafts.set(props.draftKey, { text, attachments })
-    else drafts.delete(props.draftKey)
-    saveEnvironmentPreference('kybern.composer.drafts', [...drafts].slice(-100))
+    drafts.keep(props.draftKey, text, attachments)
   }, [text, attachments, props.draftKey, !!secretCatch])
 
   // The caught text left the draft (deleted, or edited into something else): the strip goes with it.
@@ -669,6 +670,16 @@ export function ComposerView(input: ComposerViewProps) {
     return true
   }), [renderer, completion, empty, sending, props.currentThreadId])
 
+  // A card waiting for a pause (`requests/typingGuard.ts`) opens at once on Esc in the composer; a password or secret never does.
+  useEffect(() => addWindowKeyHandler((e) => {
+    const m = e.modifiers
+    if (e.key !== 'escape' || m?.cmd || m?.alt || m?.ctrl || m?.shift) return false
+    // An open `@ $ /` menu takes Esc first: it closes the menu, not the composer.
+    if (completion.open || pane.frozen || secretCatchRef.current || kitOverlayOpen() || !editor.current || renderer.getFocusedElementId?.() !== editor.current.id) return false
+    const approval = pane.get().open.pendingApprovals[0]
+    return !!approval && approval.thread_id === props.currentThreadId && openHeldCard(approval)
+  }), [renderer, pane.frozen, props.currentThreadId, completion.open])
+
   const buildParts = (): ContentPart[] => {
     const parts = completion.buildParts()
     // Attachments the prompt never mentions keep their place at the end.
@@ -696,7 +707,7 @@ export function ComposerView(input: ComposerViewProps) {
     if (!hold) {
       setText('')
       setAttachments([])
-      drafts.delete(props.draftKey)
+      drafts.drop(props.draftKey)
     }
     focusEditor()
     try {
@@ -704,8 +715,7 @@ export function ComposerView(input: ComposerViewProps) {
       completion.reset()
       if (hold) {
         // The page has usually switched already; clear what this composer saved so the next new chat starts empty.
-        drafts.delete(props.draftKey)
-        saveEnvironmentPreference('kybern.composer.drafts', [...drafts].slice(-100))
+        drafts.drop(props.draftKey, true)
         setText('')
         setAttachments([])
       }
@@ -922,6 +932,8 @@ export function ComposerView(input: ComposerViewProps) {
                   const hit = props.readOnly || secretCatchRef.current ? null : scanInsert(textNow.current, next)
                   if (hit && !keptSecrets.has(hit.value)) setSecretCatch({ match: hit, phase: 'detected' })
                   textNow.current = next
+                  // A card waiting for a pause (`requests/typingGuard.ts`) starts its idle window over.
+                  noteKeystroke()
                   setText(next)
                 }
                 if (error) setError(null)
