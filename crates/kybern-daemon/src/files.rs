@@ -401,11 +401,18 @@ async fn existing_file(root: &Path, path: &str) -> Option<String> {
 /// Largest file a client may save (the editor's syntax limit).
 pub const MAX_WRITE_BYTES: usize = 2 * 1024 * 1024;
 
-/// An opaque on-disk version: modification time (ns) and size. Cheap to read,
-/// and an atomic replace always changes it.
+/// An opaque on-disk version: modification time (ns), size and, on Unix, the inode and change time. Cheap to read. Timestamps
+/// can be coarse (a same-length save within one clock tick keeps both), so the inode is what makes an atomic replace always
+/// change it, and the change time catches in-place writes that restore the old modification time.
 fn file_version(meta: &std::fs::Metadata) -> String {
     let modified =
         meta.modified().ok().and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok()).map(|time| time.as_nanos()).unwrap_or(0);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        format!("{modified:x}-{:x}-{:x}-{:x}.{:x}", meta.len(), meta.ino(), meta.ctime(), meta.ctime_nsec())
+    }
+    #[cfg(not(unix))]
     format!("{modified:x}-{:x}", meta.len())
 }
 
