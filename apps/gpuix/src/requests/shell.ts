@@ -1,6 +1,7 @@
 // What a command approval shows: the real `input.command` split into the commands the shell will run, so `a && b` never reads
-// as `a` (the card used to show the first line summary). Pure; `requests/CodeWell.tsx` draws it and `requests/model.ts` names
-// the session scope from it.
+// as `a` (the card used to show the first line summary). Pure, and display only: `CodeWell` in `Card.tsx` draws it. No allow
+// rule is ever built from a segment (the session option names what the harness itself would allow, `model.ts`), so a wrong split
+// can only misdraw; and when unsure, the command stays one unit.
 
 export type ShellOp = '&&' | '||' | ';' | '|' | '|&' | '&' | '\n'
 
@@ -14,104 +15,155 @@ export interface ShellSegment {
 /** The gutter glyph of a segment: `$` for the first command and for one on a new line, else the operator. */
 export const gutterOf = (op: ShellOp | null): string => (op === null || op === '\n' ? '$' : op)
 
-const isSpace = (c: string | undefined) => c === ' ' || c === '\t' || c === undefined
 const WORD = /^[A-Za-z0-9_\-./:=+@%,~]+$/
 
-/** The heredoc delimiter that starts at `s[i]` (just after `<<`), with where the delimiter word ends and whether `<<-` stripped tabs. */
+/** Where a `#` starts a comment and `[[` a test: at the start of a word. */
+const WORD_START = new Set([undefined, ' ', '\t', '\n', ';', '&', '|', '(', ')'])
+/** Characters that end a heredoc delimiter word. */
+const DELIMITER_END = /[\s;&|<>()]/
+
+/** The heredoc delimiter that starts at `s[i]` (just after `<<`): the word with its quotes and escapes removed, where it ends and whether `<<-` strips tabs. */
 function heredocDelimiter(s: string, i: number): { delimiter: string; end: number; strip: boolean } | null {
   let j = i
   const strip = s[j] === '-'
   if (strip) j++
   while (s[j] === ' ' || s[j] === '\t') j++
-  const quote = s[j] === '"' || s[j] === "'" ? s[j] : null
-  if (quote) j++
+  let delimiter = ''
   const start = j
-  while (j < s.length && (quote ? s[j] !== quote : /[A-Za-z0-9_\-.]/.test(s[j]!))) j++
-  if (j === start) return null
-  const delimiter = s.slice(start, j)
-  return { delimiter, end: quote ? j + 1 : j, strip }
+  while (j < s.length && !DELIMITER_END.test(s[j]!)) {
+    const c = s[j]!
+    if (c === "'" || c === '"') {
+      const close = s.indexOf(c, j + 1)
+      if (close < 0) return null
+      delimiter += s.slice(j + 1, close)
+      j = close + 1
+    } else if (c === '\\') { delimiter += s[j + 1] ?? ''; j += 2 } else { delimiter += c; j++ }
+  }
+  if (j === start || !delimiter) return null
+  return { delimiter, end: j, strip }
 }
 
+/** A context the splitter is inside: quotes, `$(…)`, `(…)`, `$((…))`/`((…))`, `${…}`, backticks and `[[ … ]]`. */
+type Context = "'" | '"' | '$(' | '(' | '((' | '${' | '`' | '[['
+
+/** Non-space text with line continuations removed: what a split may rearrange but never lose or add. */
+const essence = (text: string) => text.replace(/\\\n/g, '').replace(/\s+/g, '')
+
 /**
- * Splits a command on `&&`, `||`, `;`, `|`, `|&`, a background `&` and unquoted newlines. Quotes, escapes, `$(…)`/`(…)`/backtick
- * groups, comments and heredoc bodies are never split. Redirections (`2>&1`, `&>`, `<&3`) keep their `&`. Empty segments drop.
+ * Splits a command on `&&`, `||`, `;`, `|`, `|&`, a background `&` and unquoted newlines. Quotes, escapes, `$(…)`, `(…)`, `((…))`,
+ * `${…}`, backticks (nested too), `[[ … ]]`, comments and heredoc bodies are never split, and neither are `case` terminators
+ * (`;;`, `;&`). Redirections (`2>&1`, `&>`, `<&3`, `>|`) keep their operator. Empty segments drop.
+ *
+ * When the command does not read as a plain chain (an operator with no command before it, a chain ending in `&&`, or a split
+ * that would not keep every character), it comes back whole as one segment: the well must show exactly what runs.
  */
 export function splitShell(command: string): ShellSegment[] {
   const s = command.replace(/\r\n?/g, '\n')
   const out: ShellSegment[] = []
   let cur = ''
   let op: ShellOp | null = null
-  let quote: '"' | "'" | null = null
-  let depth = 0
-  let backtick = false
+  let unsure = false
+  const stack: Context[] = []
   let heredocs: { delimiter: string; strip: boolean }[] = []
+  const whole = (): ShellSegment[] => (s.trim() ? [{ op: null, text: s.trim() }] : [])
   const flush = (next: ShellOp | null) => {
     const text = cur.trim()
-    if (text) { out.push({ op: out.length ? op ?? '\n' : null, text }); op = next } else if (next && next !== '\n') op = next
     cur = ''
+    if (text) { out.push({ op: out.length ? op ?? '\n' : null, text }); op = next; return }
+    if (next === null || next === '\n') return
+    // An operator with no command before it (`&& a`, `a; ; b`): not a plain chain.
+    unsure = true
+    op = next
   }
   for (let i = 0; i < s.length; i++) {
     const c = s[i]!
-    if (quote === "'") { cur += c; if (c === "'") quote = null; continue }
+    const next = s[i + 1]
+    const top = stack[stack.length - 1]
+    if (top === "'") { cur += c; if (c === "'") stack.pop(); continue }
     if (c === '\\') {
-      if (s[i + 1] === '\n') { if (!/\s$/.test(cur)) cur += ' '; i++; while (s[i + 1] === ' ' || s[i + 1] === '\t') i++; continue }
-      cur += c + (s[i + 1] ?? ''); i++; continue
+      // A line continuation joins the lines; any other escape keeps the next character as it is.
+      if (next === '\n') { if (!/\s$/.test(cur)) cur += ' '; i++; while (s[i + 1] === ' ' || s[i + 1] === '\t') i++; continue }
+      cur += c + (next ?? ''); i++; continue
     }
-    if (quote === '"') {
+    if (top === '"') {
       cur += c
-      if (c === '"') quote = null
+      if (c === '"') stack.pop()
+      else if (c === '`') stack.push('`')
+      else if (c === '$' && next === '(') { cur += next; i++; stack.push('$(') } else if (c === '$' && next === '{') { cur += next; i++; stack.push('${') }
       continue
     }
-    if (c === "'" || c === '"') { quote = c; cur += c; continue }
-    if (c === '`') { backtick = !backtick; cur += c; continue }
-    if (c === '#' && isSpace(s[i - 1]) && !backtick) { while (i < s.length && s[i] !== '\n') { cur += s[i]; i++ } i--; continue }
-    if (c === '(' || (c === '{' && s[i - 1] === '$')) { depth++; cur += c; continue }
-    if ((c === ')' || c === '}') && depth > 0) { depth--; cur += c; continue }
-    if (depth > 0 || backtick) { cur += c; continue }
-    if (c === '<' && s[i + 1] === '<' && s[i + 2] !== '<') {
+    // Code: the top level and the inside of `$(…)`, `(…)`, `((…))`, `${…}`, backticks and `[[ … ]]`.
+    if (c === "'" || c === '"') { stack.push(c); cur += c; continue }
+    if (c === '`') { if (top === '`') stack.pop(); else stack.push('`'); cur += c; continue }
+    if (c === '$' && next === '{') { stack.push('${'); cur += '${'; i++; continue }
+    if (c === '$' && next === '(' && s[i + 2] === '(') { stack.push('(('); cur += '$(('; i += 2; continue }
+    if (c === '$' && next === '(') { stack.push('$('); cur += '$('; i++; continue }
+    if (c === '(' && next === '(' && top !== '((') { stack.push('(('); cur += '(('; i++; continue }
+    if (c === '(') { stack.push('('); cur += c; continue }
+    if (c === ')' && top === '((' && next === ')') { stack.pop(); cur += '))'; i++; continue }
+    if (c === ')' && (top === '$(' || top === '(')) { stack.pop(); cur += c; continue }
+    if (c === '}' && top === '${') { stack.pop(); cur += c; continue }
+    if (c === '[' && next === '[' && WORD_START.has(s[i - 1]) && /\s/.test(s[i + 2] ?? '') && top !== '((' && top !== '${') { stack.push('[['); cur += '[['; i++; continue }
+    if (c === ']' && next === ']' && top === '[[' && /\s/.test(s[i - 1] ?? '') && (s[i + 2] === undefined || /[\s;&|)]/.test(s[i + 2]!))) { stack.pop(); cur += ']]'; i++; continue }
+    if (c === '#' && WORD_START.has(s[i - 1]) && top !== '`' && top !== '${' && top !== '((' && top !== '[[') {
+      while (i < s.length && s[i] !== '\n') { cur += s[i]; i++ }
+      i--; continue
+    }
+    if (c === '<' && next === '<' && s[i + 2] !== '<' && s[i - 1] !== '<' && top !== '((' && top !== '${' && top !== '[[') {
       const found = heredocDelimiter(s, i + 2)
       if (found) { heredocs.push({ delimiter: found.delimiter, strip: found.strip }); cur += s.slice(i, found.end); i = found.end - 1; continue }
     }
-    if (c === '\n') {
-      if (heredocs.length) {
-        // The bodies follow this line: copy them whole, up to and including each delimiter line.
-        let pos = i + 1
-        for (const { delimiter, strip } of heredocs) {
-          let body = '\n'
-          while (pos <= s.length) {
-            const end = s.indexOf('\n', pos)
-            const line = s.slice(pos, end < 0 ? s.length : end)
-            body += line
-            pos = end < 0 ? s.length + 1 : end + 1
-            if ((strip ? line.replace(/^\t+/, '') : line) === delimiter) break
-            body += '\n'
-          }
-          cur += body
+    if (c === '\n' && heredocs.length) {
+      // The bodies follow this line, at any depth: copy them whole, up to and including each delimiter line.
+      let pos = i + 1
+      let body = ''
+      for (const { delimiter, strip } of heredocs) {
+        while (pos <= s.length) {
+          const end = s.indexOf('\n', pos)
+          const line = s.slice(pos, end < 0 ? s.length : end)
+          body += `\n${line}`
+          pos = end < 0 ? s.length + 1 : end + 1
+          if ((strip ? line.replace(/^\t+/, '') : line) === delimiter) break
         }
-        heredocs = []
-        i = pos - 2
-        continue
       }
-      flush('\n')
+      cur += body
+      heredocs = []
+      // Resume on the newline that ends the last delimiter line (it separates the next command).
+      i = pos - 2
       continue
     }
+    if (stack.length) { cur += c; continue }
+    if (c === '\n') { flush('\n'); continue }
     if (c === '&') {
-      if (s[i + 1] === '&') { flush('&&'); i++; continue }
-      if (s[i - 1] === '>' || s[i - 1] === '<' || s[i + 1] === '>') { cur += c; continue }
+      if (next === '&') { flush('&&'); i++; continue }
+      if (s[i - 1] === '>' || s[i - 1] === '<' || next === '>') { cur += c; continue }
       flush('&')
       continue
     }
     if (c === '|') {
-      if (s[i + 1] === '|') { flush('||'); i++; continue }
-      if (s[i + 1] === '&') { flush('|&'); i++; continue }
+      if (next === '|') { flush('||'); i++; continue }
+      if (s[i - 1] === '>') { cur += c; continue }
+      if (next === '&') { flush('|&'); i++; continue }
       flush('|')
       continue
     }
-    if (c === ';') { flush(';'); continue }
+    if (c === ';') {
+      // `;;`, `;&` and `;;&` end a `case` branch: not a chain.
+      if (next === ';' || next === '&') { cur += c + next; i++; if (s[i + 1] === '&') { cur += '&'; i++ } continue }
+      flush(';')
+      continue
+    }
     cur += c
   }
   flush(null)
-  return out
+  // What is left after the last command: a background `&` stays on it, a trailing `;` or newline means nothing, and a dangling
+  // `&&`, `||` or `|` is not a whole command.
+  let trailing = ''
+  if (op === '&' && out.length) { out[out.length - 1] = { ...out[out.length - 1]!, text: `${out[out.length - 1]!.text} &` } } else if (op === ';') trailing = ';'
+  else if (op !== null && op !== '\n') unsure = true
+  if (unsure) return whole()
+  const rebuilt = out.map((segment) => (segment.op && segment.op !== '\n' ? segment.op : '') + segment.text).join('') + trailing
+  return essence(rebuilt) === essence(s) ? out : whole()
 }
 
 export type TokenKind = 'cmd' | 'arg' | 'flag' | 'str' | 'op' | 'var' | 'body' | 'comment'
@@ -185,6 +237,6 @@ export function clampRows(rows: CodeRow[], max = 6, columns = WELL_COLUMNS): { r
   return { rows: shown, total, clamped: true }
 }
 
-/** Every command word the segments run (`cd`, `pnpm`, …), for the session option's "and N more". */
+/** Every command word the segments run (`cd`, `pnpm`, …). For display only: never build an allow rule from it. */
 export const commandNames = (command: string): string[] =>
   splitShell(command).map((segment) => shellTokens(segment.text.split('\n')[0] ?? '').find((token) => token.kind === 'cmd')?.text ?? '').filter(Boolean)

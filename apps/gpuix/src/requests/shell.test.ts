@@ -59,11 +59,72 @@ describe('splitShell', () => {
     expect(texts('cat <<EOF\nstill body && x')).toEqual(['cat <<EOF\nstill body && x'])
     expect(texts('cat <<< "a && b"')).toEqual(['cat <<< "a && b"'])
   })
-  test('empty and blank commands give nothing; stray operators drop', () => {
+  test('empty and blank commands give nothing; a trailing ; drops', () => {
     expect(splitShell('')).toEqual([])
-    expect(splitShell('  \n ; ')).toEqual([])
+    expect(splitShell('  \n  ')).toEqual([])
     expect(texts('a;')).toEqual(['a'])
-    expect(texts('&& a')).toEqual(['a'])
+    expect(texts('a;\n')).toEqual(['a'])
+  })
+  test('a stray or dangling operator is not a plain chain: the command stays whole', () => {
+    expect(splitShell('&& a')).toEqual([{ op: null, text: '&& a' }])
+    expect(splitShell('  \n ; ')).toEqual([{ op: null, text: ';' }])
+    expect(texts('a; ; b')).toEqual(['a; ; b'])
+    expect(texts('a &&')).toEqual(['a &&'])
+    expect(texts('a |')).toEqual(['a |'])
+    expect(texts('a\n&& b')).toEqual(['a\n&& b'])
+  })
+  test('a trailing background & stays on its command', () => {
+    expect(splitShell('pnpm dev &')).toEqual([{ op: null, text: 'pnpm dev &' }])
+    expect(texts('a && server &')).toEqual(['a', 'server &'])
+  })
+  test('escaped quotes do not end a string', () => {
+    expect(texts(String.raw`echo "a \" && b" && c`)).toEqual([String.raw`echo "a \" && b"`, 'c'])
+    expect(texts(String.raw`echo 'a'\''; b' && c`)).toEqual([String.raw`echo 'a'\''; b'`, 'c'])
+    expect(texts(String.raw`echo \' && c`)).toEqual([String.raw`echo \'`, 'c'])
+  })
+  test('substitutions nest inside double quotes and each other', () => {
+    expect(texts('echo "$(echo "a; b")" && c')).toEqual(['echo "$(echo "a; b")"', 'c'])
+    expect(texts('echo "`date; whoami`" | cat')).toEqual(['echo "`date; whoami`"', 'cat'])
+    expect(texts('x=$(a $(b && c) | d) && e')).toEqual(['x=$(a $(b && c) | d)', 'e'])
+    expect(texts('echo `a \\`b; c\\`` ; d')).toEqual(['echo `a \\`b; c\\``', 'd'])
+    expect(texts("echo $(echo ')' ; x) && y")).toEqual(["echo $(echo ')' ; x)", 'y'])
+    expect(texts('diff <(a; b) <(c | d) && e')).toEqual(['diff <(a; b) <(c | d)', 'e'])
+  })
+  test('arithmetic, [[ ]] and case terminators are not split', () => {
+    expect(texts('echo $((1 << 2 | 1)) && x')).toEqual(['echo $((1 << 2 | 1))', 'x'])
+    expect(texts('((i++)) || exit 1')).toEqual(['((i++))', 'exit 1'])
+    expect(texts('[[ -f a || -f b ]] && echo yes')).toEqual(['[[ -f a || -f b ]]', 'echo yes'])
+    expect(texts('case $x in a) one;; b) two;& c) three;;& esac')).toEqual(['case $x in a) one;; b) two;& c) three;;& esac'])
+  })
+  test('>| is a redirection, not a pipe', () => {
+    expect(texts('echo a >| out && b')).toEqual(['echo a >| out', 'b'])
+  })
+  test('a comment starts after an operator or a newline too', () => {
+    expect(texts('a;# b && c\nd')).toEqual(['a', '# b && c', 'd'])
+    expect(texts('a\n# b && c')).toEqual(['a', '# b && c'])
+    expect(texts('echo a#b && c')).toEqual(['echo a#b', 'c'])
+    expect(texts('echo $# && c')).toEqual(['echo $#', 'c'])
+  })
+  test('heredoc delimiters can be quoted or escaped, and bodies inside $( ) stay whole', () => {
+    expect(texts('cat <<\\EOF\nrm -rf x && y\nEOF\nnext')).toEqual(['cat <<\\EOF\nrm -rf x && y\nEOF', 'next'])
+    expect(texts('cat <<"E"OF\na; b\nEOF\nnext')).toEqual(['cat <<"E"OF\na; b\nEOF', 'next'])
+    expect(texts("cat << 'EOF' | sh\nrm a; rm b\nEOF\nnext")).toEqual(["cat << 'EOF'", "sh\nrm a; rm b\nEOF", 'next'])
+    expect(texts("x=$(cat <<'EOF'\n) ; evil\nEOF\n) && y")).toEqual(["x=$(cat <<'EOF'\n) ; evil\nEOF\n)", 'y'])
+    expect(texts('cat <<A <<B\n1 && 2\nA\n3 ; 4\nB\nnext')).toEqual(['cat <<A <<B\n1 && 2\nA\n3 ; 4\nB', 'next'])
+  })
+  test('an unterminated quote or substitution keeps the rest whole', () => {
+    expect(texts(`echo "a && b`)).toEqual([`echo "a && b`])
+    expect(texts('a && echo $(b; c')).toEqual(['a', 'echo $(b; c'])
+  })
+  test('no character of the command is ever lost', () => {
+    const samples = [
+      'pnpm run typecheck && bun test src', `git commit -m "fix: a && b" && git push`, 'a | b |& c || d; e & f', 'cat <<-X\n\tbody\n\tX\nnext',
+      'for f in *.ts; do echo "$f"; done', 'if [ -f a ]; then rm a; fi', '{ a; b; } > out', 'echo ${#arr[@]} && x', "echo '\\' && y",
+    ]
+    for (const command of samples) {
+      const rebuilt = splitShell(command).map((s) => (s.op && s.op !== '\n' ? s.op : '') + s.text).join('')
+      expect(rebuilt.replace(/\s+/g, '')).toBe(command.replace(/;\s*$/, '').replace(/\s+/g, ''))
+    }
   })
   test('CRLF is treated as newlines', () => {
     expect(texts('a\r\nb')).toEqual(['a', 'b'])
