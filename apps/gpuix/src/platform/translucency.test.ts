@@ -3,7 +3,7 @@ import { DEFAULT_THEME_STATE, buildThemeCssVariables } from '../../../desktop/sr
 import { THEMES, derivedThemeCount, materialFor, stack, themeFor, windowCoverage } from '../theme.ts'
 import {
   DEFAULT_VARIANT_MATERIAL, OPACITY_MIN, OPACITY_VARS, SIDEBAR_ONLY_PANEL_GLASS, SURFACE_DEFAULT, SURFACE_MIN, advancedDefaults, coatFloor, effectiveOpacity, effectiveSurface,
-  glassContrast, isAdvancedDefault, isSidebarOnly, materialCoverage, materialFormulas, materialVars, migrateWindow, normalizeVariantMaterial, opacityVarsFor, resolveScope, surfaceFloor,
+  frostQuietInk, glassContrast, isAdvancedDefault, isSidebarOnly, materialCoverage, materialFormulas, materialVars, migrateWindow, normalizeVariantMaterial, opacityVarsFor, resolveScope, surfaceFloor,
   windowCoats, type ThemeVariant, type VariantMaterial, type WindowScope,
 } from './translucency.ts'
 
@@ -365,5 +365,18 @@ describe('Advanced defaults', () => {
     expect(isAdvancedDefault(glass({ blur: null }), 'dark')).toBe(false)
     expect(isAdvancedDefault(glass({ surfaceOpacity: 55 }), 'dark')).toBe(true)
     expect(isAdvancedDefault(glass({ surfaceOpacity: 55 }), 'light')).toBe(false)
+  })
+})
+
+describe('quiet text on a frosted panel', () => {
+  test('tertiary, placeholder and disabled text reach 4.5:1 at the floor; secondary keeps its lead', () => {
+    const alpha = (c: string) => Number(c.match(/([\d.]+)\)$/)![1])
+    for (const [variant, tertiary, secondary] of [['dark', 0.66, 0.73], ['light', 0.62, 0.69]] as const) {
+      const ink = frostQuietInk(variant, opaque(variant), fills(variant, 'window', 90).glass.frostStacked)!
+      expect([alpha(ink.tertiary), alpha(ink.secondary)]).toEqual([tertiary, secondary])
+    }
+    // An opaque fill needs no lift: the theme's own alphas stand when they already pass.
+    expect(alpha(frostQuietInk('dark', opaque('dark'), 'rgba(0, 0, 0, 1)')!.secondary)).toBe(0.58)
+    expect(frostQuietInk('dark', { '--color-background-surface': 'oklch(0.2 0 0)' }, 'rgba(46, 46, 46, 0.48)')).toBeNull()
   })
 })

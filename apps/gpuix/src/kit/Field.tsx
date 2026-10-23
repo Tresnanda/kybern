@@ -92,6 +92,7 @@ export function TextField({ label, value, onChange, size = 'md', width, invalid 
         aria-invalid={invalid || undefined}
         value={value}
         readOnly={disabled}
+        theme={{ caret: t.text, textMuted: t.textPlaceholder, ...props.theme }}
         onChange={(e) => onChange(e.value ?? '')}
         onFocus={(e) => { setFocused(true); onFocus?.(e) }}
         onBlur={() => { setFocused(false); onBlur?.() }}

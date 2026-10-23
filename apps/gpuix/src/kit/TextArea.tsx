@@ -34,6 +34,7 @@ export function TextArea({ label, value, onChange, size = 'md', width, invalid =
         readOnly={disabled}
         minRows={minRows}
         maxRows={maxRows}
+        theme={{ caret: t.text, textMuted: t.textPlaceholder, ...props.theme }}
         onChange={(e) => onChange(e.value ?? '')}
         onFocus={(e) => { setFocused(true); onFocus?.(e) }}
         onBlur={() => { setFocused(false); onBlur?.() }}

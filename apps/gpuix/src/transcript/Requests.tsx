@@ -19,9 +19,9 @@ import { ApprovalCard } from '../requests/ApprovalCard.tsx'
 import { AsyncQuestionPanel, UserInputPanel } from '../requests/Question.tsx'
 import { isRowCard, answerApproval } from '../requests/actions.ts'
 import { useApp, usePaneAccess } from '../state.ts'
-import { useTheme } from '../ui.tsx'
+import { ThemeScope, useTheme } from '../ui.tsx'
 import { GlassEdge } from '../kit/GlassEdge.tsx'
-import { frostBackdrop, frostFill, useGlass } from '../platform/glass.ts'
+import { frostBackdrop, frostFill, frostQuietTheme, useGlass } from '../platform/glass.ts'
 
 const EMPTY: never[] = []
 /** `--composer-radius` (1.2rem). */
@@ -96,6 +96,7 @@ export function StackedPanel({ children, closed }: { children: ReactNode; closed
   const t = useTheme()
   const g = useGlass()
   const border = g.on ? g.frostRim : t.variant === 'dark' ? 'rgba(252, 252, 252, 0.052)' : 'rgba(13, 13, 13, 0.076)'
+  const fill = frostFill(g, 'composer', t.popover, 'frostStacked')
   return (
     <div
       testId="thread-request"
@@ -110,7 +111,7 @@ export function StackedPanel({ children, closed }: { children: ReactNode; closed
         width: '93.333%',
         alignSelf: 'center',
         marginBottom: closed ? 0 : -1,
-        backgroundColor: frostFill(g, 'composer', t.popover, 'frostStacked'),
+        backgroundColor: fill,
         borderWidth: 1,
         borderBottomWidth: closed ? 1 : 0,
         borderColor: border,
@@ -121,7 +122,8 @@ export function StackedPanel({ children, closed }: { children: ReactNode; closed
       }}
     >
       <GlassEdge radius={RADIUS - 1} color={g.frostHighlight} />
-      {children}
+      {/* Quiet text (counters, hints, placeholders, disabled buttons) stays readable on the frost at the glass floor. */}
+      <ThemeScope theme={frostQuietTheme(t, g, fill)}>{children}</ThemeScope>
     </div>
   )
 }

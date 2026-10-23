@@ -52,6 +52,8 @@ export const ThemeProvider = ({ children }: { children: ReactNode }) => {
   return <ThemeContext.Provider value={theme}><MaterialContext.Provider value={glass}>{children}</MaterialContext.Provider></ThemeContext.Provider>
 }
 export const useTheme = () => useContext(ThemeContext)
+/** A subtree that reads a variant of the active theme (quiet text lifted on a frosted panel, `frostQuietTheme`). */
+export const ThemeScope = ({ theme, children }: { theme: Theme; children: ReactNode }) => <ThemeContext.Provider value={theme}>{children}</ThemeContext.Provider>
 /** The frame, panel and content fills and the glass tints (`GlassTokens`), which follow the glass opacities; read the rest from `useTheme`. */
 export const useMaterial = () => useContext(MaterialContext)
 

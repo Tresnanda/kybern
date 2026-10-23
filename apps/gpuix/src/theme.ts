@@ -126,6 +126,8 @@ function build(variant: ThemeVariant, scope: WindowScope = 'none', contrast = fa
     text: v('--color-text-foreground'),
     textSecondary: v('--color-text-foreground-secondary'),
     textTertiary: v('--color-text-foreground-tertiary'),
+    /** Field placeholders: `placeholder:text-muted-foreground/72`, the desktop kit's inputs. */
+    textPlaceholder: resolve('color-mix(in srgb, var(--color-text-foreground-secondary) 72%, transparent)', raw),
     iconPrimary: v('--color-icon-primary'),
     iconSecondary: v('--color-icon-secondary'),
     iconTertiary: v('--color-icon-tertiary'),
