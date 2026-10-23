@@ -49,6 +49,9 @@ export function useDirtyKeys(): string {
   return useSyncExternalStore(subscribe, () => [...buffers.values()].filter((b) => b.dirty).map((b) => bufferKey(b.root, b.path)).join('\n'))
 }
 
+/** The keys of every buffer with unsaved edits (closing the window asks about them). */
+export const dirtyBufferKeys = () => [...buffers.entries()].filter(([, buffer]) => buffer.dirty).map(([key]) => key)
+
 /** The buffer for a read, created from it the first time. */
 export function openBuffer(root: FileRoot, path: string, file: FilesReadResult): FileBuffer {
   const key = bufferKey(root, path)
