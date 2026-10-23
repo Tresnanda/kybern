@@ -813,9 +813,19 @@ and one floating thread). Dock and mini-player publish clipped native geometry;
 the WK view never moves between parents or reloads on a slot change. Hidden
 docked documents unload after five minutes, with a new ticket on return. Native
 window occlusion/minimize notifications pause visual bootstrap loops and suspend
-media. Hidden views surrender native focus. Destruction removes both message
-handlers, observers, views, media, and the last host's key monitor. Native web
-input routes app shortcuts back to the existing JS shortcut handlers.
+media. Destruction removes both message handlers, observers, views, media, and
+the last host's key and mouse monitors. Native web input routes app shortcuts
+back to the existing JS shortcut handlers.
+
+Keyboard handback (ADE-69): a clicked document becomes AppKit's first responder,
+and GPUIView, its sibling, never reclaims it on click, so keys meant for the
+composer went to the page and beeped. The document gives the keyboard back to
+GPUIView on a press outside it (local mouse monitor), on an Escape the page left
+unhandled (WebKit sends it up the chain as `cancelOperation:` to `KybernWebClip`;
+preventDefault, a modal dialog or fullscreen keep it, and GPUI never sees it), on
+hide or destroy, and on the `release` op, which `src/native/focusHandback.ts` sends
+before every GPUIX focus move and on element focus events. Other unhandled plain
+keys end silently at the clip instead of NSBeep. `webview-check.ts` covers it.
 
 GPUI popups publish rounded occlusion paths, including a native dim layer for
 modal scrims. An expanded visual inherits its popup layer so it appears above

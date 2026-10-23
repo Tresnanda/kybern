@@ -9,7 +9,7 @@ static NSMutableArray<NSString *> *events;
 static NSString *lastEvent;
 static NSMutableDictionary *hosts;
 static NSMutableDictionary<NSNumber *, NSDictionary *> *occlusions;
-static id keyMonitor;
+static id keyMonitor, mouseMonitor;
 static BOOL pointerCaptured;
 static void emit(NSDictionary *event) {
   NSData *data = [NSJSONSerialization dataWithJSONObject:event options:0 error:nil];
@@ -18,6 +18,7 @@ static void emit(NSDictionary *event) {
   @synchronized(events) { if (events.count < 512) { wake = !events.count; [events addObject:[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]]; } }
   if (wake && signalJS) signalJS();
 }
+static BOOL releaseFocus(NSWindow *window);
 @interface KybernWebClip : NSView
 @property NSArray<NSBezierPath *> *blocked;
 @end
@@ -31,12 +32,38 @@ static void emit(NSDictionary *event) {
   for (NSBezierPath *path in self.blocked) if ([path containsPoint:local]) return nil;
   return [super hitTest:point];
 }
+// WebKit passes a key on to the web view's next responder only when the page left it unhandled: no preventDefault and
+// no default action (a field, a modal dialog or fullscreen closing). An unhandled Escape arrives as cancelOperation:
+// and gives the keyboard to GPUI. It ends here, so GPUI never sees it (it would close a menu or cancel a turn awaiting
+// approval). Other plain keys end here silently, as in Safari, instead of NSBeep; ⌘ keys continue up the chain.
+- (void)cancelOperation:(id)sender { releaseFocus(self.window); }
+- (void)keyDown:(NSEvent *)event {
+  if (event.modifierFlags & NSEventModifierFlagCommand) [super keyDown:event];
+}
 @end
 @interface KybernWebShade : NSView
 @end
 @implementation KybernWebShade
 - (NSView *)hitTest:(NSPoint)point { return nil; }
 @end
+// GPUI's key view. Our clips are its siblings under the content view, so a web view that holds first responder keeps
+// every keystroke: GPUIView is not in its responder chain and never claims first responder on click (Zed sets it once,
+// at window creation). Unhandled keys then end in NSBeep.
+static NSView *gpuiView(NSWindow *window) {
+  NSMutableArray<NSView *> *queue = [NSMutableArray arrayWithObject:window.contentView];
+  while (queue.count) {
+    NSView *view = queue.firstObject; [queue removeObjectAtIndex:0];
+    if ([NSStringFromClass(view.class) isEqual:@"GPUIView"]) return view;
+    if (![view isKindOfClass:KybernWebClip.class]) [queue addObjectsFromArray:view.subviews];
+  }
+  return window.contentView;
+}
+static WKWebView *focusedWeb(NSWindow *window);
+// Hand the keyboard back to GPUI when one of our documents holds it. WebKit blurs the page as the view resigns.
+static BOOL releaseFocus(NSWindow *window) {
+  if (!window || !focusedWeb(window)) return NO;
+  return [window makeFirstResponder:gpuiView(window)];
+}
 @interface KybernWebHost : NSObject <WKNavigationDelegate, WKScriptMessageHandler, WKURLSchemeHandler>
 @property NSString *identifier;
 @property NSString *category;
@@ -104,8 +131,9 @@ static void emit(NSDictionary *event) {
 }
 - (void)visibility {
   BOOL visible = self.placed && self.clip.window.isVisible && !self.clip.window.isMiniaturized && (self.clip.window.occlusionState & NSWindowOcclusionStateVisible);
+  // Before hiding: AppKit resigns a hidden first responder to the window itself, which handles no keys.
+  if (!visible && focusedWeb(self.web.window) == self.web) [self.web.window makeFirstResponder:gpuiView(self.web.window)];
   self.clip.hidden = !visible;
-  if (!visible && [self.web.window.firstResponder isKindOfClass:NSView.class] && [(NSView *)self.web.window.firstResponder isDescendantOf:self.web]) [self.web.window makeFirstResponder:self.clip.superview];
   if (self.hasVisibility && self.lastVisible == visible) return;
   self.hasVisibility = YES; self.lastVisible = visible;
   emit(@{@"id":self.identifier,@"generation":self.generation,@"type":@"visibility",@"visible":@(visible)});
@@ -153,6 +181,7 @@ static void emit(NSDictionary *event) {
 }
 - (void)dispose {
   [NSNotificationCenter.defaultCenter removeObserver:self];
+  if (focusedWeb(self.web.window) == self.web) [self.web.window makeFirstResponder:gpuiView(self.web.window)];
   [self.web stopLoading]; self.web.navigationDelegate = nil;
   [self.web.configuration.userContentController removeScriptMessageHandlerForName:@"kybern"];
   [self.web.configuration.userContentController removeScriptMessageHandlerForName:@"kybernFrame" contentWorld:[WKContentWorld worldWithName:@"KybernPreview"]];
@@ -160,6 +189,12 @@ static void emit(NSDictionary *event) {
 }
 @end
 
+static WKWebView *focusedWeb(NSWindow *window) {
+  NSResponder *responder = window.firstResponder;
+  if (![responder isKindOfClass:NSView.class]) return nil;
+  for (KybernWebHost *host in hosts.allValues) if (host.web && [(NSView *)responder isDescendantOf:host.web]) return host.web;
+  return nil;
+}
 void kybern_web_init(void (*callback)(void)) { events = [NSMutableArray new]; hosts = [NSMutableDictionary new]; occlusions = [NSMutableDictionary new]; signalJS = callback; }
 const char *kybern_web_next(void) {
   @synchronized(events) { if (!events.count) return NULL; lastEvent = events.firstObject; [events removeObjectAtIndex:0]; return lastEvent.UTF8String; }
@@ -170,6 +205,7 @@ void kybern_web_command(const char *json) {
   dispatch_async(dispatch_get_main_queue(), ^{
     NSString *identifier = cmd[@"id"], *op = cmd[@"op"];
     if ([op isEqual:@"capture"]) { pointerCaptured = [cmd[@"active"] boolValue]; return; }
+    if ([op isEqual:@"release"]) { for (NSWindow *w in NSApp.windows) releaseFocus(w); return; }
     if ([op isEqual:@"occlusion"]) {
       if ([cmd[@"rect"] isKindOfClass:NSDictionary.class]) occlusions[cmd[@"layer"]] = cmd; else [occlusions removeObjectForKey:cmd[@"layer"]];
       for (KybernWebHost *host in hosts.allValues) [host mask]; return;
@@ -189,6 +225,16 @@ void kybern_web_command(const char *json) {
           }
         }
         return event;
+      }];
+      // A press anywhere outside the document that holds the keyboard (GPUI, a popup cut out of the document, the
+      // title bar) gives it back to GPUI before the press is dispatched. A press in another document moves it there.
+      if (!mouseMonitor) mouseMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown | NSEventMaskOtherMouseDown handler:^NSEvent *(NSEvent *event) {
+        NSWindow *window = event.window; WKWebView *web = focusedWeb(window);
+        if (!web) return event;
+        NSView *frame = window.contentView.superview ?: window.contentView;
+        NSView *hit = [frame hitTest:[frame convertPoint:event.locationInWindow fromView:nil]];
+        for (KybernWebHost *h in hosts.allValues) if (hit && h.web && [hit isDescendantOf:h.web]) return event;
+        releaseFocus(window); return event;
       }];
       NSUInteger count = 0; for (KybernWebHost *h in hosts.allValues) if ([h.category isEqual:@"preview"]) count++;
       if (host || ([cmd[@"category"] isEqual:@"preview"] && count >= 2)) { emit(@{@"id":identifier,@"type":@"failed",@"message":@"Close another preview and try again."}); return; }
@@ -232,7 +278,7 @@ void kybern_web_command(const char *json) {
       if (script && host.childFrame) [host.web evaluateJavaScript:script inFrame:host.childFrame inContentWorld:[WKContentWorld worldWithName:@"KybernPreview"] completionHandler:^(id value, NSError *error) {}];
       return;
     }
-    if ([op isEqual:@"destroy"]) { [host dispose]; [hosts removeObjectForKey:identifier]; if (!hosts.count && keyMonitor) { [NSEvent removeMonitor:keyMonitor]; keyMonitor = nil; } emit(@{@"id":identifier,@"generation":host.generation,@"type":@"destroyed"}); return; }
+    if ([op isEqual:@"destroy"]) { [host dispose]; [hosts removeObjectForKey:identifier]; if (!hosts.count && keyMonitor) { [NSEvent removeMonitor:keyMonitor]; keyMonitor = nil; } if (!hosts.count && mouseMonitor) { [NSEvent removeMonitor:mouseMonitor]; mouseMonitor = nil; } emit(@{@"id":identifier,@"generation":host.generation,@"type":@"destroyed"}); return; }
     if ([op isEqual:@"place"]) {
       NSView *content = host.clip.superview;
       double x = [cmd[@"x"] doubleValue], y = [cmd[@"y"] doubleValue], width = [cmd[@"width"] doubleValue], height = [cmd[@"height"] doubleValue];

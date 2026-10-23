@@ -79,6 +79,8 @@ export const webHost = {
       layer, radius: logical.radius ?? 0, roundedClips: logical.roundedClips ?? [], layout: `window.kybernLayout?.(${[logical.width, logical.height, logical.scale, logical.left, logical.top].join(',')})` })
   },
   hide(id: string) { if (bridge) command({ op: 'hide', id }) },
+  /** Give the keyboard back to GPUI if a document holds it (`native/webview.m` `releaseFocus`); otherwise nothing. */
+  releaseFocus() { if (bridge) command({ op: 'release', id: '' }) },
   /** Test seam: the document layer's presented opacity and scale, as a `probe` event. */
   probe(id: string) { if (bridge) command({ op: 'probe', id }) },
   /**

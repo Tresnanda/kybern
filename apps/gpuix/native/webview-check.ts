@@ -26,6 +26,26 @@ try { for(const appearance of ['dark','light']) {
     log=await inspect();assert.ok(log.some(e=>e.data?.kind==='lab'&&e.data.count===1),'Native button click did not reach WKWebView');assert.ok(log.some(e=>e.data?.input==='kept text'),'Native text insertion did not reach WKWebView')
     await a.call('keyDown',{elementId:root,key:'s'});await Bun.sleep(200);log=await inspect();assert.ok(log.some(e=>e.type==='shortcut'&&e.key==='l'),'Command-L did not escape focused web input')
     await a.call('keyDown',{elementId:root,key:'x'});await Bun.sleep(200);log=await inspect();assert.ok(log.some(e=>e.type==='externalNavigation'&&e.url==='https://example.com/'),'External navigation was not blocked')
+    // ADE-69: a clicked page kept AppKit's first responder, so keys meant for GPUI went to the page and beeped. Presses
+    // on GPUI and keys go through AppKit's real path (local monitors, NSWindow first responder); presses in the page call
+    // its mouseDown directly, as a background window takes no first click. 0 = GPUI holds the keyboard, 1 = the page.
+    const act=async(key:string,wait=300)=>{await a.call('keyDown',{elementId:root,key});await Bun.sleep(wait)}
+    const focus=async()=>{await a.call('keyDown',{elementId:root,key:'w'});return JSON.parse(await a.getByTestId('result').textContent()) as {responder:number;keys:string[]}}
+    const appKeys=async(key='1')=>(await focus()).keys.filter(k=>k===key).length
+    await act('o');assert.equal((await focus()).responder,1,'A press on the page button did not focus the page')
+    await act('a');assert.equal((await focus()).responder,0,'A press on GPUI did not take the keyboard back from the page')
+    let typed=await appKeys();await act('z');assert.equal(await appKeys(),typed+1,'A key after the GPUI press did not reach GPUI')
+    await act('b');assert.equal((await focus()).responder,1,'A press in the page field did not focus the page')
+    await act('y');log=await inspect();assert.ok(log.some(e=>e.data?.kind==='lab'&&String(e.data.input).includes('2')),'A key in the page field did not reach the page')
+    const escapes=await appKeys('escape')
+    await act('v',500);assert.equal((await focus()).responder,0,'Escape in the page did not release the keyboard')
+    assert.equal(await appKeys('escape'),escapes,'The Escape that released the page also reached GPUI (it would close a menu or cancel a turn)')
+    typed=await appKeys();await act('z');assert.equal(await appKeys(),typed+1,'A key after Escape did not reach GPUI')
+    await act('k');await act('v',500);assert.equal((await focus()).responder,1,'Escape the page prevented must stay with the page')
+    await act('b');await act('h');assert.equal((await focus()).responder,0,'Hiding the page did not give GPUI the keyboard');await act('h',1000)
+    // Last: automation's own keyDown focuses through `focusElement`, so once the handback is installed every step releases.
+    await act('k');assert.equal((await focus()).responder,1);await act('l');assert.equal((await focus()).responder,0,'A programmatic GPUI focus did not take the keyboard back')
+    console.log(`PASS ${appearance}: focus handback (GPUI press, Escape, kept Escape, programmatic focus, hide)`)
     const windowNumber=log.find(e=>e.type==='created').windowNumber
     const shot=(name:string)=>execFileSync('screencapture',['-l',String(windowNumber),'-x',path.join(out,`${name}-${appearance}.png`)])
     shot('host-dock')
