@@ -266,6 +266,17 @@ export function newThread(projectId?: string, purpose?: 'thread' | 'coordinator'
   else selectFreeDraft()
 }
 
+/**
+ * Put a chat view (a thread or a project's draft, else a free chat) behind the
+ * current page without changing the page. Spaces keep their chat this way.
+ */
+export function selectChat(entry: NavEntry | undefined) {
+  if (entry?.kind === 'thread') {
+    if (getState().selectedId !== entry.id) void selectThread(entry.id)
+  } else if (entry?.kind === 'draft' && entry.draft.projectId) selectDraft(entry.draft.projectId, entry.draft.purpose)
+  else selectFreeDraft()
+}
+
 /** `selectFreeDraft`: without a project the composer would fall back to the most recent one. */
 function selectFreeDraft() {
   selectDraft()

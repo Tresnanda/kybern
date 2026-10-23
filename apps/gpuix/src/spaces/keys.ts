@@ -4,7 +4,7 @@
 import type { EventPayload } from '@gpuix/react'
 import { addWindowKeyHandler } from '../nav/keys.ts'
 import { terminalHasFocus } from '../terminal/focus.ts'
-import { switchSpace } from './current.ts'
+import { activateSpace } from './current.ts'
 import { getSpaces } from './store.ts'
 
 /** Which space ⌃`digit` picks: 1–8 by position, 9 the last. Flip `LAST_ON_NINE` to make ⌃9 an ordinary ninth space. */
@@ -24,7 +24,7 @@ export function spaceKey(event: EventPayload): boolean {
   if (supported !== true || spaces.length < 2 || terminalHasFocus()) return false
   const index = spaceForDigit(Number(event.key), spaces.length)
   if (index === null) return false
-  switchSpace(spaces[index]!.id, 'keyboard')
+  activateSpace(spaces[index]!.id, 'keyboard')
   return true
 }
 

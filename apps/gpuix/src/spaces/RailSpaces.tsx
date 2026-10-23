@@ -18,7 +18,7 @@ import { useApp } from '../state.ts'
 import { over } from '../theme.ts'
 import type { Theme } from '../theme.ts'
 import { ink, REDUCED_MOTION, useMaterial, useTheme } from '../ui.tsx'
-import { useCurrentSpaceId, switchSpace } from './current.ts'
+import { activateSpace, useCurrentSpaceId } from './current.ts'
 import { registerSpaceScroller, registerSpaceTarget, useSpaceDrag } from './drop.ts'
 import { SpaceEditor } from './SpaceEditor.tsx'
 import { DeleteSpace } from './DeleteSpace.tsx'
@@ -160,7 +160,7 @@ const SpaceRow = memo(function SpaceRow({ space, index, count, active, dot, rowR
         windowDrag={false}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
-        onClick={() => switchSpace(space.id, 'pointer')}
+        onClick={() => activateSpace(space.id, 'pointer')}
         onAuxClick={(event) => { if (event.isRightClick || event.button === 2) openSpaceMenu(space.id, { x: event.x ?? 0, y: event.y ?? 0 }) }}
         style={{ position: 'relative', width: RAIL, height: ROW, flexShrink: 0, cursor: 'pointer' }}
       >

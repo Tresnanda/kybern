@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { FREE_CHAT_PROJECT_ID, type Project, type Space, type Thread } from '../../../../packages/kybern-client/src/types.ts'
-import { currentEntry } from '../nav/history.ts'
+import { currentEntry, goPage } from '../nav/history.ts'
 import { getNav, setNav } from '../nav/store.ts'
 import { getState, set } from '../state.ts'
-import { currentSpaceId, scopedProjects, startSpaces, switchSpace } from './current.ts'
+import { activateSpace, currentSpaceId, scopedProjects, startSpaces, switchSpace } from './current.ts'
 import { setSpacesState } from './store.ts'
 
 const space = (id: string, position: number): Space => ({
@@ -92,12 +92,64 @@ describe('switchSpace', () => {
     expect(getNav()).toMatchObject({ keyboardNav: true, settingsOpen: false, paletteOpen: false })
   })
 
-  test('a remembered page comes back', () => {
+  test('keeps the page and swaps the chat behind it', () => {
+    set({ selectedId: 'ta' })
     setNav({ page: 'tasks' })
     switchSpace('s2', 'pointer')
-    expect(getNav().page).toBe('home')
+    expect(getNav().page).toBe('tasks')
+    expect(currentEntry()).toEqual({ kind: 'tasks' })
+    expect(getState().draft).toEqual({ projectId: 'c' })
+    expect(getState().selectedId).toBeNull()
     switchSpace('s1', 'pointer')
     expect(getNav().page).toBe('tasks')
+    expect(getState().selectedId).toBe('ta')
+  })
+})
+
+describe('Home and the active space (ADE-63)', () => {
+  test('Home from a page shows the active space’s chat and never switches space', () => {
+    set({ selectedId: 'tc' }) // s2 via the follow rule
+    setNav({ page: 'tasks' })
+    switchSpace('s1', 'pointer')
+    goPage('home')
+    expect(getNav().spaceId).toBe('s1')
+    expect(getNav().page).toBe('home')
+    expect(getState().selectedId).toBeNull() // s1's remembered chat, a draft, not s2's thread
+  })
+
+  test('a chat from another space left behind a page is replaced by this space’s', () => {
+    set({ selectedId: 'ta' })
+    setNav({ page: 'tasks' })
+    set({ selectedId: 'tc' }) // selected while a page shows: no follow, back to s1's chat
+    expect(getNav().spaceId).toBe('s1')
+    expect(getState().selectedId).toBe('ta')
+    goPage('home')
+    expect(getNav().spaceId).toBe('s1')
+  })
+
+  test('the active space’s tile goes to its Home; another tile keeps the page', () => {
+    set({ selectedId: 'ta' })
+    setNav({ page: 'notes' })
+    expect(activateSpace('s1', 'pointer')).toBe(true)
+    expect(getNav().page).toBe('home')
+    expect(getState().selectedId).toBe('ta')
+    setNav({ page: 'tasks' })
+    expect(activateSpace('s2', 'pointer')).toBe(true)
+    expect(getNav()).toMatchObject({ spaceId: 's2', page: 'tasks' })
+    expect(activateSpace('nope', 'pointer')).toBe(false)
+  })
+
+  test('the active space’s tile on Home leaves the chat alone', () => {
+    set({ selectedId: 'ta' })
+    activateSpace('s1', 'pointer')
+    expect(getState().selectedId).toBe('ta')
+    expect(getNav().page).toBe('home')
+  })
+
+  test('a remembered page entry from an older build is ignored', () => {
+    setNav({ spaceViews: { s2: { kind: 'tasks' } } })
+    switchSpace('s2', 'pointer')
+    expect(currentEntry()).toEqual({ kind: 'draft', draft: { projectId: 'c' } })
   })
 })
 
