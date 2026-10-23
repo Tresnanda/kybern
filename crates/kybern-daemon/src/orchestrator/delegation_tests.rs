@@ -244,7 +244,8 @@ where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Option<T>>,
 {
-    tokio::time::timeout(Duration::from_secs(8), async {
+    // Generous: a loaded CI runner takes several seconds per step (8 s flaked on macOS runners).
+    tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             if let Some(value) = check().await {
                 return value;

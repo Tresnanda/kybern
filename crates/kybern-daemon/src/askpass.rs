@@ -48,8 +48,11 @@ pub fn install_script(data_dir: &Path, cli: &Path) -> std::io::Result<PathBuf> {
     if std::fs::read_to_string(&path).ok().as_deref() != Some(script.as_str()) {
         std::fs::write(&path, script)?;
     }
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))?;
+    }
     Ok(path)
 }
 
@@ -284,10 +287,17 @@ fn linux_connection_owned_by(pid: u32, peer: std::net::SocketAddr) -> Option<boo
 }
 
 /// Whether the process still exists.
+#[cfg(unix)]
 pub fn process_alive(pid: u32) -> bool {
     // SAFETY: signal 0 only checks for the process; nothing is delivered.
     let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
     result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// No askpass prompts outside Unix (no sudo, and ssh and git ask their own way): a card never waits on a process there.
+#[cfg(not(unix))]
+pub fn process_alive(_pid: u32) -> bool {
+    true
 }
 
 const ASKERS: &[&str] = &["sudo", "ssh", "scp", "sftp", "rsync", "git"];
@@ -382,6 +392,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_connection_belongs_to_the_process_that_opened_it() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -396,6 +407,7 @@ mod tests {
         assert!(!connection_owned_by(std::process::id(), "127.0.0.1:1".parse().unwrap()));
     }
 
+    #[cfg(unix)]
     #[test]
     fn this_process_is_alive_and_a_bogus_one_is_not() {
         assert!(process_alive(std::process::id()));
@@ -461,6 +473,7 @@ mod tests {
         assert_eq!(env["GIT_TERMINAL_PROMPT"], "0");
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_script_runs_the_cli_and_is_private() {
         let dir = std::env::temp_dir().join(format!("kybern-askpass-test-{}", uuid::Uuid::now_v7()));
