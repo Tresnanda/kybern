@@ -10,12 +10,11 @@ const QUERIES = ['chunkWork', 'useFresh', 'TreeGroup', 'summarizeToolCalls']
 export const WORK_TICKS_PER_SEGMENT = 15
 
 const origin = { kind: 'root' }
-const message = (segment: number) => `bench-work-${segment}`
 const thinking = (segment: number) => `Checking how step ${segment} fits the transcript. `
 const narration = (segment: number, part: number) => part === 0 ? `Streaming paragraph ${segment}: the tools below ` : `preserve **formatted output** and Unicode 🌿.\n\n`
 
-function toolCall(segment: number, index: number) {
-  const n = segment * 4 + index, id = `bench-work-tool-${n}`
+function toolCall(segment: number, index: number, prefix: string) {
+  const n = segment * 4 + index, id = `${prefix}-tool-${n}`
   switch (index) {
     case 0: return { id, name: 'Read', input: { file_path: `/workspace/${FILES[n % FILES.length]}` } }
     case 1: return { id, name: 'Grep', input: { pattern: QUERIES[segment % QUERIES.length], path: 'src' } }
@@ -24,14 +23,14 @@ function toolCall(segment: number, index: number) {
   }
 }
 
-/** The payload for stream tick `tick` (0-based). */
-export function workTurnEvent(tick: number): Record<string, unknown> {
-  const segment = Math.floor(tick / WORK_TICKS_PER_SEGMENT), step = tick % WORK_TICKS_PER_SEGMENT, id = message(segment)
+/** The payload for stream tick `tick` (0-based). `prefix` keeps message and call ids apart when several turns stream. */
+export function workTurnEvent(tick: number, prefix = 'bench-work'): Record<string, unknown> {
+  const segment = Math.floor(tick / WORK_TICKS_PER_SEGMENT), step = tick % WORK_TICKS_PER_SEGMENT, id = `${prefix}-${segment}`
   if (step < 3) return { kind: 'assistant_thinking_delta', message_id: id, origin, delta: thinking(segment) }
   if (step === 3) return { kind: 'assistant_thinking_completed', message_id: id, origin }
   if (step < 6) return { kind: 'assistant_text_delta', message_id: id, origin, delta: narration(segment, step - 4) }
   if (step === 6) return { kind: 'assistant_message_completed', message_id: id, origin, text: narration(segment, 0) + narration(segment, 1), thinking: thinking(segment).repeat(3) }
-  const index = Math.floor((step - 7) / 2), call = toolCall(segment, index)
+  const index = Math.floor((step - 7) / 2), call = toolCall(segment, index, prefix)
   if ((step - 7) % 2 === 0) return { kind: 'tool_call_started', call, origin }
   const failed = (segment * 4 + index) % 7 === 6
   return { kind: 'tool_call_completed', tool_call_id: call.id, output: failed ? 'Error: exit code 1' : `ok ${segment}.${index}\n`, is_error: failed }
