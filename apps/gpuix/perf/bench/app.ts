@@ -13,6 +13,7 @@ const composer=await import('../../src/composer/store.ts')
 const {showFileInExplorer}=await import('../../src/dock/explorerSelection.ts')
 const {applyEvent,seedFromGet}=await import('../../../../packages/kybern-client/src/transcript.ts')
 let streamTimer:ReturnType<typeof setInterval>|undefined
+const workTurnEvent=process.env.KYBERN_BENCH_STREAM_WORK==='1'?(await import('./workTurn.ts')).workTurnEvent:null
 const {dlopen,FFIType}=await import('bun:ffi')
 const defaultWheel=path.join(process.env.KYBERN_DATA_DIR!,'bench-wheel.dylib')
 const wheelLibrary=process.env.KYBERN_BENCH_WHEEL_LIBRARY??(existsSync(defaultWheel)?defaultWheel:path.resolve(process.env.KYBERN_CLIENT_CONFIG_DIR!,'../..','bench-wheel.dylib'))
@@ -97,8 +98,10 @@ const server=Bun.serve({idleTimeout:255,port:0,hostname:'127.0.0.1',async fetch(
   push({kind:'turn_started',message_id:'bench-stream-user',message:{parts:[{type:'text',text:'Explain bounded rendering during a long answer.'}]}})
   let n=0;streamDeltas=0
   streamTimer=setInterval(()=>{
-   if(performance.now()-started>(body.durationMs??60000)){clearInterval(streamTimer);push({kind:'assistant_message_completed',message_id:message,origin:{kind:'root'},text:Array.from({length:n},(_,i)=>`Streaming paragraph ${i}: preserve **formatted output** and Unicode 🌿.\n\n`).join(''),thinking:null});push({kind:'turn_completed',stop_reason:'completed',usage:{input_tokens:100,output_tokens:100},duration_ms:Math.round(performance.now()-started),terminal_message_id:message});return}
+   if(performance.now()-started>(body.durationMs??60000)){clearInterval(streamTimer);if(workTurnEvent){push({kind:'turn_completed',stop_reason:'completed',usage:{input_tokens:100,output_tokens:100},duration_ms:Math.round(performance.now()-started),terminal_message_id:null});return}push({kind:'assistant_message_completed',message_id:message,origin:{kind:'root'},text:Array.from({length:n},(_,i)=>`Streaming paragraph ${i}: preserve **formatted output** and Unicode 🌿.\n\n`).join(''),thinking:null});push({kind:'turn_completed',stop_reason:'completed',usage:{input_tokens:100,output_tokens:100},duration_ms:Math.round(performance.now()-started),terminal_message_id:message});return}
    const due=process.env.KYBERN_BENCH_STREAM_CATCHUP==='1'?Math.floor((performance.now()-started)/40):n+1
+   // `KYBERN_BENCH_STREAM_WORK=1`: a busy agent turn (reasoning, narration, tool runs) instead of one long answer.
+   if(workTurnEvent){while(n<due)push(workTurnEvent(n++));streamDeltas=n;return}
    while(n<due){
     push({kind:'assistant_text_delta',message_id:message,origin:{kind:'root'},delta:`Streaming paragraph ${n++}: preserve **formatted output** and Unicode 🌿.\n\n`})
    }
