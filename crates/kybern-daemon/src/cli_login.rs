@@ -60,9 +60,15 @@ fn search(dirs: &[PathBuf], name: &str) -> Option<PathBuf> {
     dirs.iter().map(|dir| dir.join(name)).find(|path| is_executable(path))
 }
 
+#[cfg(unix)]
 fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     path.metadata().is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &Path) -> bool {
+    path.metadata().is_ok_and(|meta| meta.is_file())
 }
 
 fn common_dirs() -> Vec<PathBuf> {
