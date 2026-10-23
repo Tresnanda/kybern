@@ -3,7 +3,7 @@
 // and a thread with no group on screen just remembers the tab for when it is shown.
 import { getClient, getFocusedPaneId, focusPane, getPaneState, selectThread, setPaneAlias } from '../state.ts'
 import { closeTab, getGroup, getGroups, groupsOfThread, moveTabToGroup, reopenClosedTab, splitTab, updateGroup, updateMemory, getSplitRoot, splitFocusedPane, type SplitDirection } from '../split/store.ts'
-import { activateIn, CHAT, cycleIn, hasTab, numberIn, openIn, permanentIn, reorderIn, tabKey, type Tab } from './model.ts'
+import { activateIn, CHAT, cycleIn, hasTab, normalizeTab, numberIn, openIn, permanentIn, reorderIn, tabKey, type Tab } from './model.ts'
 import { getNav, setNav } from '../nav/store.ts'
 
 /** Pane ids of child-thread tabs, mapped to the leaf that hosts them (links inside a child tab open in its host group). */
@@ -32,7 +32,9 @@ export function leafForThread(threadId: string, prefer?: string): string | null 
   return leaves.includes(focused) ? focused : leaves[0]!
 }
 
-export function openTab(threadId: string, tab: Tab, options: OpenOptions = {}): boolean {
+export function openTab(threadId: string, requested: Tab, options: OpenOptions = {}): boolean {
+  // One file is one tab however its path was spelled (`normalizeTab`).
+  const tab = normalizeTab(requested)
   const key = tabKey(tab)
   const leaves = groupsOfThread(threadId)
   const holder = leaves.find((id) => hasTab(getGroup(id), key))
@@ -46,12 +48,14 @@ export function openTab(threadId: string, tab: Tab, options: OpenOptions = {}): 
 
 /** Open from inside a pane (a transcript, a child tab): the thread is the pane's group's. A subagent's page has no tab strip, so
  *  what it opens (a file link, an image, a diagram) becomes a tab of its parent thread, and the pane goes to the parent (⌘[ returns). */
-export function openTabFromPane(paneId: string, tab: Tab, options: OpenOptions = {}) {
+export function openTabFromPane(paneId: string, requested: Tab, options: OpenOptions = {}) {
   const leaf = hostLeaf(paneId)
   const pane = getPaneState(paneId)
   const threadId = getGroup(leaf).threadId ?? pane.selectedId
   if (!threadId) return false
   const thread = pane.open.thread?.id === threadId ? pane.open.thread : null
+  // A thread file named by its absolute path (an agent's tool call, a chat link) is the same tab as its workspace-relative path.
+  const tab = normalizeTab(requested, thread?.cwd)
   const parent = thread?.subagent ? thread.parent_thread_id : null
   if (parent) {
     const shown = groupsOfThread(parent).length > 0

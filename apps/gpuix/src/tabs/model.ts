@@ -41,6 +41,28 @@ export interface GroupRecord extends Group {
 /** What a thread had open, restored when it is shown again. */
 export type Memory = Map<string, Group>
 
+/**
+ * A file tab's path in one spelling, so a file opened from a chat link, a file chip and the agent's own absolute path is one
+ * tab: `.` segments and doubled or trailing slashes go, and under `cwd` (the thread's workspace, for `root: 'thread'`) an
+ * absolute path becomes relative to it. `..` is kept: only the daemon can say where it leads through a symlink.
+ */
+export function normalizeFilePath(path: string, cwd?: string | null): string {
+  const absolute = path.startsWith('/')
+  const clean = (absolute ? '/' : '') + path.split('/').filter((part) => part && part !== '.').join('/')
+  if (absolute && cwd) {
+    const root = normalizeFilePath(cwd)
+    if (root !== '/' && clean.startsWith(`${root}/`)) return clean.slice(root.length + 1)
+  }
+  return clean || path
+}
+
+/** `tab` with a file's path in its one spelling (`normalizeFilePath`); every other tab as it is. */
+export function normalizeTab(tab: Tab, cwd?: string | null): Tab {
+  if (tab.kind !== 'file') return tab
+  const path = normalizeFilePath(tab.path, tab.root === 'thread' ? cwd : null)
+  return path === tab.path ? tab : { ...tab, path }
+}
+
 /** One string per openable thing: reopening it focuses the existing tab. */
 export function tabKey(tab: Tab): string {
   switch (tab.kind) {

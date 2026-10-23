@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { CHAT, chatGroup, closeIn, cycleIn, moveBetween, numberIn, openIn, readGroup, readMemory, release, remember, reorderIn, retarget, tabKey, unionOf, writeMemory, type Groups, type Memory, type Tab } from './model.ts'
+import { CHAT, chatGroup, closeIn, cycleIn, moveBetween, normalizeFilePath, normalizeTab, numberIn, openIn, readGroup, readMemory, release, remember, reorderIn, retarget, tabKey, unionOf, writeMemory, type Groups, type Memory, type Tab } from './model.ts'
 
 const file = (path: string, line?: number): Tab => ({ kind: 'file', path, root: 'project', ...(line ? { line } : {}) })
 const keys = (g: { tabs: Tab[] }) => g.tabs.map(tabKey)
@@ -121,4 +121,26 @@ test('stored state is cleaned and bounded', () => {
 test('content-addressed keys are stable', () => {
   expect(tabKey({ kind: 'mermaid', code: 'graph TD; a-->b' })).toBe(tabKey({ kind: 'mermaid', code: 'graph TD; a-->b' }))
   expect(tabKey({ kind: 'mermaid', code: 'graph TD; a-->b' })).not.toBe(tabKey({ kind: 'mermaid', code: 'graph TD; a-->c' }))
+})
+
+// Review 2026-10-23: a file chip opened `src/a.ts`, a chat link `./src/a.ts` and the agent's absolute path the same file in three tabs.
+test('one file is one tab however its path is spelled', () => {
+  const cwd = '/Users/me/work/repo/'
+  for (const spelling of ['src/a.ts', './src/a.ts', 'src//a.ts', 'src/./a.ts', '/Users/me/work/repo/src/a.ts', '/Users/me/work//repo/./src/a.ts']) {
+    expect(normalizeFilePath(spelling, cwd)).toBe('src/a.ts')
+  }
+  // Outside the workspace, or with `..` (only the daemon can follow it through a symlink), the path is kept as given.
+  expect(normalizeFilePath('/Users/me/other/a.ts', cwd)).toBe('/Users/me/other/a.ts')
+  expect(normalizeFilePath('/Users/me/work/repository/a.ts', cwd)).toBe('/Users/me/work/repository/a.ts')
+  expect(normalizeFilePath('../x/a.ts', cwd)).toBe('../x/a.ts')
+  expect(normalizeFilePath('src/a.ts/', null)).toBe('src/a.ts')
+  // The root itself is never a prefix of everything.
+  expect(normalizeFilePath('/etc/hosts', '/')).toBe('/etc/hosts')
+  // Project files have no thread workspace to strip; other tabs pass through untouched.
+  const thread: Tab = { kind: 'file', path: '/Users/me/work/repo/src/a.ts', root: 'thread', line: 3 }
+  expect(normalizeTab(thread, cwd)).toEqual({ kind: 'file', path: 'src/a.ts', root: 'thread', line: 3 })
+  expect(tabKey(normalizeTab({ kind: 'file', path: './src/a.ts', root: 'thread' }, cwd))).toBe(tabKey(normalizeTab(thread, cwd)))
+  expect(normalizeTab({ kind: 'file', path: '/Users/me/work/repo/src/a.ts', root: 'project' }, cwd)).toMatchObject({ path: '/Users/me/work/repo/src/a.ts' })
+  const diff: Tab = { kind: 'diff', path: './src/a.ts' }
+  expect(normalizeTab(diff, cwd)).toBe(diff)
 })
