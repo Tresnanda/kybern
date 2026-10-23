@@ -1,3 +1,5 @@
 [toolchain]
-channel = "stable"
+# Pinned so a new stable's lints can't break `-D warnings` in CI on their own day.
+# Bump deliberately, together with `toolchain:` in .github/workflows/*.yml.
+channel = "1.99.1"
 components = ["rustfmt", "clippy"]
