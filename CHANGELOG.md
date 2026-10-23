@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.1
+
+<!-- kybern-release-title: Kybern GPUIX stays light through long agent runs -->
+<!-- kybern-release-summary: Kybern GPUIX no longer grows with every agent reply: a long session now stays around 300 MB instead of climbing past 700 MB. -->
+
+- Kybern GPUIX no longer grows by tens of MB with every agent reply. It now ships React's production build, which also does less work while a reply streams. In a replay of a real orchestration session, memory levels off around 300 MB instead of climbing past 400 MB within three replies.
+
 ## 0.12.0
 
 <!-- kybern-release-title: Tabs, new controls and real glass in Kybern GPUIX -->
