@@ -244,7 +244,7 @@ impl AppTools {
         ensure!(!args.path.is_empty(), "path is required");
         ensure_relative_path(Some(&args.path))?;
         let max_bytes = args.max_bytes.unwrap_or(MAX_FILE_BYTES).clamp(1, MAX_FILE_BYTES);
-        Ok(serde_json::to_value(crate::files::read_file(Path::new(&thread.cwd), &args.path, max_bytes).await?)?)
+        Ok(serde_json::to_value(crate::files::read_file(Path::new(&thread.cwd), &args.path, max_bytes, None).await?)?)
     }
 
     async fn list_files(&self, thread_id: ThreadId, args: ListFilesArgs) -> Result<Value> {

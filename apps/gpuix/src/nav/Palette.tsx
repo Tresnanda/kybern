@@ -2,7 +2,8 @@ import { setAppearance } from '../settings/appearance.ts'
 import { StatusGlyph } from '../tasks/Glyphs.tsx'
 import { quickAdd, openTask, useTasks } from '../tasks/store.ts'
 import { toggleDock } from '../dock/store.ts'
-import { splitFocusedPane } from '../split/store.ts'
+import { splitFocusedPane, useSplitRoot } from '../split/store.ts'
+import { closeFocusedPane } from '../tabs/open.ts'
 import { STATUS_LABEL } from '@/state/tasksModel'
 // Search palette (⌘K, the sidebar's search button): `views/Palette.tsx`. One
 // input over grouped results: suggested commands, the 40 most recent threads,
@@ -60,6 +61,7 @@ function PaletteDialog() {
   const spaces = useSpaces((s) => s.spaces)
   const spacesOn = useSpaces((s) => s.supported === true)
   const selectedId = useApp((s) => s.selectedId)
+  const inSplit = useSplitRoot().kind === 'split'
   const [query, setQuery] = useState('')
   const [highlight, setHighlight] = useState(0)
   const rowRefs = useRef(new Map<number, PublicInstance>())
@@ -109,6 +111,10 @@ function PaletteDialog() {
         : [{ id: 'dock', label: 'Toggle right sidebar', keywords: 'panel dock changes terminal', group: 'Suggested' as const, icon: <Icon source={N.panelRight} size={15} color={muted(t, 1)} />, meta: kbd(['⌘', 'J']), run: () => toggleDock() }]),
       ...(selectedId && page === 'home'
         ? [{ id: 'split', label: 'Split right', keywords: 'split pane thread column', group: 'Suggested' as const, icon: <Icon source={N.splitRight} size={15} color={muted(t, 1)} />, meta: kbd(['⌘', '\\']), run: () => void splitFocusedPane('horizontal') }]
+        : []),
+      // Runs after the palette closes, so the pane closes while the tabs are on screen.
+      ...(inSplit && page === 'home' && !settingsOpen
+        ? [{ id: 'close-pane', label: 'Close pane', keywords: 'close pane split group column', group: 'Suggested' as const, icon: <Icon source={N.x} size={15} color={muted(t, 1)} />, meta: kbd(['⌘', '⇧', 'W']), run: () => void closeFocusedPane() }]
         : []),
       ...(settingsOpen || canMoveNavHistory(history, -1, isNavEntryValid)
         ? [{ id: 'go-back', label: 'Go back', keywords: 'back previous history navigate return', group: 'Suggested' as const, icon: <Icon source={N.arrowLeft} size={15} color={muted(t, 1)} />, meta: kbd(['⌘', '[']), run: () => void goBack() }]
@@ -209,7 +215,7 @@ function PaletteDialog() {
     const matched = q ? all.filter((item) => `${item.label} ${item.keywords}`.toLowerCase().includes(q)) : all
     const order: Item['group'][] = ['Suggested', 'Threads', 'Notes', 'Tasks', 'Projects', 'Themes']
     return order.map((group) => ({ group, items: matched.filter((item) => item.group === group) })).filter((g) => g.items.length > 0)
-  }, [notes, threads, projects, taskMap, spaceId, spaces, spacesOn, selectedId, history, settingsOpen, page, query, t])
+  }, [notes, threads, projects, taskMap, spaceId, spaces, spacesOn, selectedId, inSplit, history, settingsOpen, page, query, t])
 
   const flat = groups.flatMap((g) => g.items)
   const active = Math.min(highlight, Math.max(0, flat.length - 1))

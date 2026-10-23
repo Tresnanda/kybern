@@ -1,17 +1,25 @@
 // The home screen's tray docked on the composer (`LandingTray` in
 // `views/Composer.tsx`, chips in `views/trayChips.tsx`, wiring in
-// `views/Draft.tsx`): the project (or Free chat), Checkout / New worktree, and
-// the branch to start from. Menus open upward, 8px from the chip.
-import { useEffect } from 'react'
+// `views/Draft.tsx`): an attached Up next task, Checkout / New worktree, and
+// the branch to start from. The project is picked by the new chat's headline
+// (ADE-62), so it has no chip here. Menus open upward, 8px from the chip.
+import { useEffect, useState } from 'react'
+import { Presence } from '../motion/Presence.tsx'
+import { popTransform } from '../kit/Pop.tsx'
+import { EASE } from '../motion/tokens.ts'
+import { useControls } from '../kit/controls.ts'
+import { IconButton } from '../kit/IconButton.tsx'
+import { N } from '../nav/glyphs.ts'
+import { PriorityGlyph } from '../tasks/Glyphs.tsx'
+import { ink } from '../ui.tsx'
 import { Icon } from '../icons.tsx'
 import { GlassEdge } from '../kit/GlassEdge.tsx'
 import { frostBackdrop, frostFill, useGlass } from '../platform/glass.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { alpha } from '../transcript/kit.tsx'
-import type { GitBranchesResult, Project, ProjectId } from '../../../../packages/kybern-client/src/types.ts'
+import type { GitBranchesResult, Project, ProjectId, TaskItem } from '../../../../packages/kybern-client/src/types.ts'
 import type { ReactNode } from 'react'
 import { useApp } from '../state.ts'
-import { useSpaceProjects } from '../spaces/current.ts'
 import { PickerChip } from '../kit/PickerChip.tsx'
 import { G } from './glyphs.ts'
 import { CheckMark, muted, PickerItem, PickerLabel, PickerMenu, PickerSeparator } from './Menu.tsx'
@@ -25,25 +33,60 @@ export function parentPath(p: string): string {
   return i <= 0 ? p : '…/' + p.slice(p.slice(0, i).lastIndexOf('/') + 1, i)
 }
 
-export function LandingTray({ projectId, useWorktree }: { projectId: ProjectId | null; useWorktree: boolean }) {
+/** Whether `LandingTray` draws anything: a free chat with no task attached has no chips, so the card sits alone. */
+export const landingTrayShown = (projectId: ProjectId | null, task: TaskItem | null | undefined) => !!projectId || !!task
+
+export function LandingTray({ projectId, useWorktree, task, onRemoveTask, still = false }: {
+  projectId: ProjectId | null
+  useWorktree: boolean
+  /** The Up next task attached to the message. */
+  task?: TaskItem | null
+  onRemoveTask?: () => void
+  /** A frozen copy (the send transition's ghost): no entrance and no loading. */
+  still?: boolean
+}) {
+  const t = useTheme()
   const everyProject = useApp((s) => s.projects)
-  const projects = useSpaceProjects()
   const project = projectId ? everyProject.find((p) => p.id === projectId) : undefined
-  const list = [...projects].sort((a, b) => a.name.localeCompare(b.name))
   const isGit = project?.is_git ?? false
   useEffect(() => {
-    if (projectId && isGit) void loadBranches(projectId)
-  }, [projectId, isGit])
+    if (!still && projectId && isGit) void loadBranches(projectId)
+  }, [projectId, isGit, still])
+  // The chip stays through its 120 ms fade after ×; it is not animated away by a send (the tray leaves as a whole).
+  const [shownTask, setShownTask] = useState(task ?? null)
+  if (task && task !== shownTask) setShownTask(task)
+  if (!landingTrayShown(projectId, task ?? shownTask)) return null
   return (
     <TrayFrame>
-      {project ? (
-        <ProjectChip projectId={project.id} projects={list} />
-      ) : (
-        <FreeChatChip projects={list} />
+      {shownTask && (
+        <Presence show={!!task} enter={still ? undefined : popTransform()} exit={{ to: { opacity: 0 }, duration: 0.12, ease: EASE.out }} onGone={() => setShownTask(null)} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0, flexShrink: 1 }}>
+          <AttachedTaskChip key={shownTask.id} task={shownTask} onRemove={onRemoveTask} />
+          {project && <div style={{ width: 1, height: 16, flexShrink: 0, backgroundColor: ink(t, 0.06) }} />}
+        </Presence>
       )}
       {project && <WorkspaceChip useWorktree={useWorktree} isGit={isGit} checkoutHint={parentPath(project.path)} />}
       {project && isGit && <BranchChip projectId={project.id} useWorktree={useWorktree} />}
     </TrayFrame>
+  )
+}
+
+/** The attached task (spec §5): a selected chip with no chevron, its priority glyph and "KEY · Title", and a × that detaches it. */
+function AttachedTaskChip({ task, onRemove }: { task: TaskItem; onRemove?: () => void }) {
+  const c = useControls()
+  return (
+    <PickerChip
+      testId="draft-attached-task"
+      selected
+      chevron={false}
+      truncate
+      maxWidth={252}
+      label={`${task.key} ${task.title}, attached`}
+      lead={<PriorityGlyph priority={task.priority} color={c.chip.selFg} />}
+      style={{ paddingRight: 4 }}
+    >
+      <Label color={c.chip.selFg} size={13} lineHeight={18} weight={500} truncate style={{ maxWidth: 220 }}>{`${task.key} · ${task.title || 'Untitled task'}`}</Label>
+      <IconButton testId="draft-attached-task-remove" size="sm" icon={N.x} glyph={12} color={c.chip.selFg} label={`Remove ${task.key} from message`} onClick={() => onRemove?.()} style={{ width: 20, height: 20 }} />
+    </PickerChip>
   )
 }
 
@@ -82,75 +125,6 @@ export function TrayFrame({ children, testId = 'landing-tray' }: { children: Rea
       <GlassEdge radius={COMPOSER_RADIUS} color={g.frostHighlight} />
       {children}
     </div>
-  )
-}
-
-/** `ProjectTrayChip`, plus the Free chat choice of the Free chat chip's menu (a Coordinator always has a project). */
-function ProjectChip({ projectId, projects }: { projectId: ProjectId; projects: Project[] }) {
-  const t = useTheme()
-  const current = projects.find((p) => p.id === projectId)
-  const coordinator = useApp((s) => s.draft.purpose === 'coordinator')
-  return (
-    <PickerMenu
-      testId="tray-project"
-      side="top"
-      align="start"
-      sideOffset={8}
-      minWidth={224}
-      trigger={(open) => <PickerChip bare icon={G.folder} open={open} truncate maxWidth={256}>{current?.name ?? 'Choose a project'}</PickerChip>}
-    >
-      <PickerLabel>{coordinator ? 'Project' : 'Chat location'}</PickerLabel>
-      {!coordinator && (
-        <PickerItem id="free" onSelect={() => patchDraft({ projectId: null, worktree: null, baseBranch: null })}>
-          <Icon source={G.message} size={18} color={t.text} style={{ opacity: 0.8 }} />
-          <Label color={t.text} truncate style={{ flexGrow: 1 }}>
-            Free chat
-          </Label>
-        </PickerItem>
-      )}
-      {projects.map((p) => (
-        <PickerItem key={p.id} id={p.id} onSelect={() => patchDraft({ projectId: p.id, worktree: null, baseBranch: null })}>
-          <Icon name="folder" size={18} color={t.text} style={{ opacity: 0.8 }} />
-          <Label color={t.text} truncate style={{ flexGrow: 1 }}>
-            {p.name}
-          </Label>
-          {p.id === projectId && <Icon source={G.checkBold} size={14} color={t.text} />}
-        </PickerItem>
-      ))}
-    </PickerMenu>
-  )
-}
-
-/** The Free chat chip and its "Chat location" menu (`views/Draft.tsx:180-226`). */
-function FreeChatChip({ projects }: { projects: Project[] }) {
-  const t = useTheme()
-  return (
-    <PickerMenu
-      testId="tray-project"
-      side="top"
-      align="start"
-      sideOffset={8}
-      minWidth={256}
-      trigger={(open) => <PickerChip bare icon={G.message} open={open} truncate maxWidth={256}>Free chat</PickerChip>}
-    >
-      <PickerLabel>Chat location</PickerLabel>
-      <PickerItem id="free" onSelect={() => {}}>
-        <Icon source={G.message} size={14} color={t.text} />
-        <Label color={t.text} truncate style={{ flexGrow: 1 }}>
-          Free chat
-        </Label>
-        <CheckMark color={t.text} />
-      </PickerItem>
-      {projects.map((p) => (
-        <PickerItem key={p.id} id={p.id} onSelect={() => patchDraft({ projectId: p.id, worktree: null, baseBranch: null })}>
-          <Icon name="folder" size={14} color={t.text} />
-          <Label color={t.text} truncate style={{ flexGrow: 1 }}>
-            {p.name}
-          </Label>
-          <CheckMark color={t.text} visible={false} />
-        </PickerItem>
-      ))}
-    </PickerMenu>
   )
 }
 

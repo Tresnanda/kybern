@@ -11,11 +11,20 @@ import { Label, ProviderMark, useTheme } from '../ui.tsx'
 import { load, save, flush } from './persist.ts'
 import { closeActiveTab } from '../tabs/open.ts'
 import { closeRequestSource } from '../tabs/closeKey.ts'
+import { dirtyBufferKeys, getBuffer, saveBuffer } from '../dock/fileBuffers.ts'
+
+/** Threads still working or waiting, when the reader wants to be asked about them before the window closes. */
+function busyThreads(): Thread[] | null {
+  const busy = getState().threads.filter((t) => t.status === 'running' || t.status === 'awaiting-approval')
+  return load('kybern.askBeforeClose', true) && busy.length ? busy : null
+}
 
 export function CloseGuard() {
   const renderer = useGpuixRequired()
   const theme = useTheme()
   const [pending, setPending] = useState<Thread[] | null>(null)
+  // File tabs with unsaved edits (ADE-61), asked about before the working threads.
+  const [unsaved, setUnsaved] = useState<string[] | null>(null)
   const [stopping, setStopping] = useState(false)
   const [askAgain, setAskAgain] = useState(true)
   const [error, setError] = useState('')
@@ -25,9 +34,9 @@ export function CloseGuard() {
     const off = setWindowCloseHandler(renderer, () => {
       // ⌘W closes the active document tab, never the thread; on the chat tab the window closes as before (ADE-54).
       if (closeRequestSource() !== 'pointer' && closeActiveTab()) return false
-      const busy = getState().threads.filter((t) => t.status === 'running' || t.status === 'awaiting-approval')
-      if (!load('kybern.askBeforeClose', true) || !busy.length) return true
-      setPending(busy); setAskAgain(true); setError('')
+      const dirty = dirtyBufferKeys()
+      if (!dirty.length && !busyThreads()) return true
+      setUnsaved(dirty.length ? dirty : null); setPending(dirty.length ? null : busyThreads()); setAskAgain(true); setError('')
       return new Promise<boolean>((done) => { resolve.current = done })
     })
     // Screenshot fixture (visual/screens/shell.gpuix.ts): raise the guard over the first two seeded threads.
@@ -47,8 +56,38 @@ export function CloseGuard() {
     resolve.current = null
     // An allowed decision removes the native window immediately; do not queue
     // a React commit against a renderer whose window has gone.
-    if (!allow) setPending(null)
+    if (!allow) { setPending(null); setUnsaved(null) }
     done?.(allow)
+  }
+  // The unsaved files are settled: go on to the working threads, or close.
+  const afterFiles = () => {
+    const busy = busyThreads()
+    if (!busy) { finish(true); return }
+    setUnsaved(null); setPending(busy); setError('')
+  }
+  if (unsaved) {
+    const names = unsaved.map((key) => getBuffer(key)?.path.split('/').pop() ?? '').filter(Boolean)
+    const saveAll = async () => {
+      setStopping(true); setError('')
+      const saved = await Promise.all(unsaved.map((key) => saveBuffer(key)))
+      if (!resolve.current) return
+      setStopping(false)
+      if (saved.every(Boolean) && !dirtyBufferKeys().length) afterFiles()
+      else setError('Unable to save every file. Open its tab to see why, or close without saving.')
+    }
+    return <Dialog testId="close-guard-files" width={448} onClose={() => { if (!stopping) finish(false) }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 16, paddingRight: 16, paddingTop: 16, paddingBottom: 8 }}>
+        <Label color={theme.text} size={18} weight={600} lineHeight={22}>{names.length === 1 ? `Save changes to ${names[0]}?` : `Save changes to ${names.length} files?`}</Label>
+        <Label color={theme.textSecondary} size={14} lineHeight={19}>{names.length > 1 ? `${names.slice(0, 4).join(', ')}${names.length > 4 ? ` and ${names.length - 4} more` : ''}. ` : ''}Your edits are lost if you close without saving.</Label>
+      </div>
+      {error && <div style={{ paddingLeft: 16, paddingRight: 16, paddingTop: 8 }}><Label color={theme.red} size={12}>{error}</Label></div>}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 16, paddingRight: 16, paddingTop: 12, paddingBottom: 12 }}>
+        <Button size="lg" variant="secondary" danger testId="close-guard-files-discard" disabled={stopping} onClick={afterFiles}>Don't save</Button>
+        <div style={{ flexGrow: 1 }} />
+        <Button size="lg" variant="secondary" testId="close-guard-files-cancel" disabled={stopping} onClick={() => finish(false)}>Cancel</Button>
+        <Button size="lg" variant="primary" testId="close-guard-files-save" disabled={stopping} onClick={() => void saveAll()}>{stopping ? 'Saving…' : 'Save'}</Button>
+      </div>
+    </Dialog>
   }
   if (!pending) return null
   const cancel = () => { if (!stopping) finish(false) }

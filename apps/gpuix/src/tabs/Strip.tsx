@@ -22,7 +22,8 @@ import { usePreview } from '../preview/store.ts'
 import { useFocusedPane, useGroup, useSplitRoot } from '../split/store.ts'
 import { ink, ProviderMark, useTheme } from '../ui.tsx'
 import { CHAT, tabKey, type Tab } from './model.ts'
-import { closeTabAction, keepTab, openTab, selectTab } from './open.ts'
+import { closeTabAction, fileTabBuffer, keepTab, openTab, selectTab } from './open.ts'
+import { useDirtyKeys } from '../dock/fileBuffers.ts'
 import { beginTabsDrag, endTabsPress, releaseStrip, stripRegistry, trackTabsPress, unregisterTab, useTabsDrop } from './drag.tsx'
 
 const ICONS = { browser: glyph(BrowserIcon), diagram: glyph(FlowchartIcon), image: glyph(Image01Icon) }
@@ -45,13 +46,15 @@ export function useTabItems(threadId: string | null, tabs: Tab[], preview: strin
   const tasks = useTasks((s) => s.tasks)
   const previewState = usePreview(threadId ?? '')
   const page = previewState.pageTitle || previewState.entries[previewState.index]?.title
+  const dirtyKeys = useDirtyKeys()
+  const dirty = useMemo(() => new Set(dirtyKeys.split('\n')), [dirtyKeys])
   return useMemo(() => tabs.map((tab): TabsItem => {
     const key = tabKey(tab)
     const common = { key, preview: preview === key, testId: `tab-${key}` }
     switch (tab.kind) {
       // A dot on the chat while an approval waits there (it is hidden behind a document tab).
       case 'chat': return { ...common, pinned: true, label: thread?.title || 'Untitled', mark: thread?.provider.kind, testId: 'tab-chat', dirty: tabs.length > 1 && thread?.status === 'awaiting-approval', tooltip: thread?.status === 'awaiting-approval' ? `${thread.title || 'Untitled'} · waiting for approval` : undefined }
-      case 'file': return { ...common, label: base(tab.path), icon: T.file, tooltip: tab.line ? `${tab.path}:${tab.line}` : tab.path }
+      case 'file': { const unsaved = dirty.has(fileTabBuffer(threadId, tab) ?? ''); return { ...common, label: base(tab.path), icon: T.file, dirty: unsaved, tooltip: `${tab.line ? `${tab.path}:${tab.line}` : tab.path}${unsaved ? ' · unsaved' : ''}` } }
       case 'diff': return tab.path ? { ...common, label: base(tab.path), icon: DOCK_ICONS.changes, tooltip: `Changes in ${tab.path}` } : { ...common, label: 'Changes', icon: DOCK_ICONS.changes }
       case 'terminal': return tab.cli ? { ...common, label: tab.title || 'Terminal', mark: tab.cli } : { ...common, label: tab.title || 'Terminal', icon: DOCK_ICONS.terminal }
       case 'preview': return { ...common, label: page || 'Browser', icon: ICONS.browser, tooltip: page ? `Browser · ${page}` : 'Browser' }
@@ -69,7 +72,7 @@ export function useTabItems(threadId: string | null, tabs: Tab[], preview: strin
         return { ...common, label: child?.title || tab.title || 'Agent', mark: child?.provider.kind, ...(phase === 'working' ? { dirty: true } : phase === 'done' ? { detail: 'Done' } : phase === 'failed' ? { detail: 'Failed' } : {}) }
       }
     }
-  }), [tabs, preview, thread?.title, thread?.provider.kind, children, threads, notes, tasks, page])
+  }), [tabs, preview, thread?.title, thread?.provider.kind, children, threads, notes, tasks, page, dirty, threadId])
 }
 
 /**

@@ -17,6 +17,8 @@ import { fileIconColors } from '../native/file-icon-colors.ts'
 import { useGlass } from '../platform/glass.ts'
 import { getClient, usePaneAccess } from '../state.ts'
 import { openTabFromPane } from '../tabs/open.ts'
+import { isImageFile, resolveWorkspaceFile, underWorkspace } from './fileLinks.ts'
+import { ThreadImagePreview } from './ThreadImage.tsx'
 import { FONT_MONO, FONT_UI } from '../theme.ts'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { Collapse } from '../motion/kit.tsx'
@@ -188,22 +190,28 @@ function FileChip({ path, threadId, failed }: { path: string; threadId: ThreadId
   const kind = getFileIconName(path)
   const color = fileIconColors[kind] ?? (kind === 'vercel' ? t.text : fileIconColors['code-brackets']!)
   const well = t.variant === 'dark' ? `rgba(0, 0, 0, ${g.on ? 0.32 : 0.16})` : `rgba(255, 255, 255, ${g.on ? 0.32 : 0.16})`
+  const [image, setImage] = useState(false)
   const open = async () => {
+    // An image opens in the viewer, wherever it is: the daemon serves it from the workspace, from the folder its harness keeps
+    // this session's pasted images in, or when a message names it (`ThreadImagePreview`).
+    if (isImageFile(path)) { setImage(true); return }
     try {
       const cwd = pane.get().open.thread?.cwd
-      const relative = cwd && path.startsWith(`${cwd.replace(/\/+$/, '')}/`) ? path.slice(cwd.replace(/\/+$/, '').length + 1) : !path.startsWith('/') ? path
-        : (await getClient()?.call('threads.files.resolve', { thread_id: threadId, paths: [path] }))?.paths[0]
+      const relative = underWorkspace(path, cwd) ?? await resolveWorkspaceFile(getClient(), threadId, path) ?? (path.startsWith('/') ? null : path)
       if (!relative) throw new Error(`${basename(path)} is outside this thread's workspace. Ask the agent to copy it into the workspace.`)
       openTabFromPane(pane.id, { kind: 'file', path: relative, root: 'thread' })
     } catch (e) { reportError('Unable to open the file', e) }
   }
   return (
+    <>
     <div testId={`file-chip-${path}`} onClick={() => void open()} style={{ display: 'flex', alignItems: 'center', gap: 6, height: 22, paddingLeft: 1, paddingRight: 6, borderRadius: 5, backgroundColor: ink(t, 0.06), flexShrink: 1, minWidth: 0, cursor: 'pointer', hover: { backgroundColor: ink(t, 0.1) } }}>
       <div style={{ display: 'flex', width: 20, height: 20, borderRadius: 4, alignItems: 'center', justifyContent: 'center', backgroundColor: well, flexShrink: 0 }}>
         <Icon source={menuFileIcons[kind] ?? menuFileIcons['code-brackets']!} size={14} color={color} />
       </div>
       <Label color={failed ? destructive(t, 0.85) : fg(t, 0.85)} size={12} lineHeight={18} truncate>{basename(path)}</Label>
     </div>
+    {image && <ThreadImagePreview threadId={threadId} source={path} onClose={() => setImage(false)} />}
+    </>
   )
 }
 

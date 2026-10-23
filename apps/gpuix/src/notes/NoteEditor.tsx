@@ -210,7 +210,7 @@ export function NoteEditor({ id, compact = false, width, onClose }: { id: string
               <Label color={k.fg4} size={NOTES_META} lineHeight={19.5}>·</Label>
               <div testId="note-save-status" onClick={() => { if (snap.status === 'error') void session.flush() }}><SwapOnChange active={`save:${saveEra}`} style={{ justifyContent: 'flex-start' }}><Label color={snap.status === 'error' ? t.red : k.fg3} size={NOTES_META} lineHeight={19.5}>{status}</Label></SwapOnChange></div>
             </div>
-            <input ref={title} testId="note-title" autoFocus={!snap.title && !snap.body && !deleted} aria-label="Title" value={snap.title} placeholder="Untitled" readOnly={deleted || note?.scope === 'thread'} interceptKeys={['down']}
+            <input ref={title} testId="note-title" autoFocus={!snap.title && !snap.body && !deleted} aria-label="Title" value={snap.title} placeholder="Untitled" readOnly={deleted} interceptKeys={['down']}
               onChange={(e) => session.edit({ title: (e.value ?? '').replace(/\s*\n\s*/g, ' ').slice(0, 300) })} onBlur={() => void session.flush()}
               onSubmit={() => editor.current?.focus('start')}
               onKeyDown={(e) => { if (e.key === 'down' && !e.modifiers?.shift) { e.preventDefault(); editor.current?.focus('start') } }}

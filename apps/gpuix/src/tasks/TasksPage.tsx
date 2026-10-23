@@ -17,22 +17,27 @@ import { useCurrentSpaceId, useSpaceProjects } from '../spaces/current.ts'
 import { inSpace } from '../../../../packages/kybern-client/src/spaces.ts'
 import { useApp } from '../state.ts'
 import { selectOwnsEscape } from '../settings/controls.tsx'
+import { pickerOwnsEscape } from '../composer/Menu.tsx'
 import { Button } from '../kit/Button.tsx'
 import { Kbd } from '../kit/Kbd.tsx'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { Rise } from '../motion/kit.tsx'
+import { useGlass } from '../platform/glass.ts'
 import { Presence } from '../motion/Presence.tsx'
 import { EASE } from '../motion/tokens.ts'
-import { PATCHED_NATIVE } from '../native/local-build.ts'
+import { EDGE_FADE, PATCHED_NATIVE } from '../native/local-build.ts'
 import { cancelTaskDrag, draggingTask, escapeTaskDrag } from './drag.tsx'
 import { TaskList, TaskBoard } from './TaskList.tsx'
 import { TaskDetail } from './TaskDetail.tsx'
 import { TaskMenus } from './TaskMenus.tsx'
+import { footVisible } from './batch.ts'
+import { DockShell, dockRoom } from './DockShell.tsx'
 import { RunComposer } from './RunComposer.tsx'
 import {
   deleteTasks,
   dockEscapedJustNow,
   isTaskTyping,
+  markDockEscape,
   taskTyping,
   openTask,
   pick,
@@ -46,6 +51,7 @@ import {
 
 export function TasksPage() {
   const t = useTheme()
+  const g = useGlass()
   const s = useTasks((s) => s)
   const everyProject = useApp((s) => s.projects)
   const projects = useSpaceProjects()
@@ -110,7 +116,7 @@ export function TasksPage() {
           quickAdd()
           return true
         }
-        if (selectOwnsEscape() || s.menu) return
+        if (selectOwnsEscape() || pickerOwnsEscape() || s.menu) return
         const current = s.openId ?? s.focused
         const targets = !s.openId && s.selected.size ? [...s.selected] : current ? [current] : []
         const instant = () => setNav({ keyboardNav: true })
@@ -122,6 +128,11 @@ export function TasksPage() {
         if (cmd && key === 'enter' && !s.composer && targets.length && !isTaskTyping()) {
           instant()
           setTasks({ composer: targets })
+          return true
+        }
+        // Esc puts the composer away and leaves the selection (and its hints) as it was; the dock's own Esc has usually done it already.
+        if (key === 'escape' && s.composer && !s.openId) {
+          if (!dockEscapedJustNow()) { instant(); setTasks({ composer: null }) }
           return true
         }
         if (isTaskTyping() || s.quick || s.composer) return
@@ -193,9 +204,15 @@ export function TasksPage() {
       }),
     [sequence, columns],
   )
+  // The batch composer floats over the list's foot; a task's own page hosts its dock (`TaskDock`).
+  const docked = !!s.composer && !(task && s.composer.length === 1 && s.composer[0] === task.id)
+  // Kept between openings, so the list's room is right from the first frame of the next one.
+  const [dockHeight, setDockHeight] = useState(150)
+  const room = dockRoom(g.on, dockHeight)
+  const foot = footVisible({ selected: selected.length, composer: !!s.composer, showHints: s.prefs.showHints })
   const projectName = (task: { project_id?: string | null }) => projects.find((p) => p.id === task.project_id)?.name ?? 'Global'
   return (
-    <div testId="page-tasks" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, width: '100%' }}>
+    <div testId="page-tasks" style={{ position: 'relative', display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, width: '100%' }}>
       {task ? (
         <DetailEnter key={task.id}><TaskDetail task={task} sequence={sequence} /></DetailEnter>
       ) : (
@@ -228,22 +245,27 @@ export function TasksPage() {
               </Label>
               <Button variant="primary" onClick={() => quickAdd()}>New task</Button>
             </div>
-          ) : s.prefs.view === 'board' ? (
-            <TaskBoard columns={columns} sequence={sequence} projectName={projectName} />
           ) : (
-            <TaskList groups={groups} sequence={sequence} projectName={projectName} />
+            // While the batch composer floats over the foot of the page the list leaves room for it (`dockRoom`).
+            <div edgeFade={docked && g.on && EDGE_FADE ? { bottom: 24 } : undefined} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, width: '100%', marginBottom: docked ? room.inset : 0, overflow: 'hidden' }}>
+              {s.prefs.view === 'board' ? (
+                <TaskBoard columns={columns} sequence={sequence} projectName={projectName} footer={docked ? room.spacer : 0} />
+              ) : (
+                <TaskList groups={groups} sequence={sequence} projectName={projectName} footer={docked ? room.spacer : 0} />
+              )}
+            </div>
           )}
-          <SelectionBar ids={selected} show={selected.length > 0 && !s.composer} hints={s.prefs.showHints} />
+          <SelectionBar ids={selected} show={foot.bar} hints={s.prefs.showHints} />
           {!selected.length && s.focused && s.menu && (
             <div style={{ display: 'flex', padding: 8 }}>
               <TaskMenus ids={[s.focused]} property={s.menu} />
             </div>
           )}
-          {s.prefs.showHints && <Hints selecting={selected.length > 0} />}
+          {foot.hints && <Hints selecting={selected.length > 0} />}
         </>
       )}
       {/* An open task hosts its own dock (`TaskDock`); the list and board show the batch composer here. */}
-      <RunDock show={!!s.composer && !(task && s.composer.length === 1 && s.composer[0] === task.id)}>{s.composer ? <RunComposer key={s.composer.join(',')} ids={s.composer} /> : null}</RunDock>
+      <RunDock show={docked} onHeight={setDockHeight}>{s.composer ? <RunComposer key="batch" ids={s.composer} /> : null}</RunDock>
     </div>
   )
 }
@@ -258,16 +280,20 @@ function DetailEnter({ children }: { children: ReactNode }) {
 }
 
 /**
- * The run composer and batch composer dock (`dockMotion.ts`): in from 16 px low over 260 ms on `--ease-drawer`, out 10 px low over 160 ms;
- * ⌘↵ shows and hides it at once. Reduce Motion fades.
+ * The batch composer's dock (`dockMotion.ts`), in `TaskDock`'s shell: in from 16 px low over 260 ms on `--ease-drawer`, out 10 px low
+ * over 160 ms; ⌘↵ shows and hides it at once. Reduce Motion fades. Esc inside it puts it away.
  */
-function RunDock({ show, children }: { show: boolean; children: ReactNode }) {
+function RunDock({ show, onHeight, children }: { show: boolean; onHeight: (height: number) => void; children: ReactNode }) {
   const keyboard = getNav().keyboardNav
   const drawer = [...EASE.drawer] as [number, number, number, number]
   const enter = keyboard || !PATCHED_NATIVE ? undefined : REDUCED_MOTION
     ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: 0.15, ease: drawer } }
     : { initial: { opacity: 0, translateY: 16 }, animate: { opacity: 1, translateY: 0 }, transition: { duration: 0.26, ease: drawer } }
-  return <Presence show={show} enter={enter} exit={{ to: REDUCED_MOTION ? { opacity: 0 } : { opacity: 0, translateY: 10 }, duration: keyboard ? 0 : 0.16, ease: EASE.drawer }}>{children}</Presence>
+  return (
+    <Presence show={show} enter={enter} exit={{ to: REDUCED_MOTION ? { opacity: 0 } : { opacity: 0, translateY: 10 }, duration: keyboard ? 0 : 0.16, ease: EASE.drawer }} style={{ position: 'absolute', left: 0, right: 0, bottom: 0 }}>
+      <DockShell inline onHeight={onHeight} onEscape={() => { markDockEscape(); setTasks({ composer: null }) }}>{children}</DockShell>
+    </Presence>
+  )
 }
 
 function Hints({ selecting }: { selecting: boolean }) {

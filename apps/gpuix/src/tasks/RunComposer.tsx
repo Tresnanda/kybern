@@ -10,12 +10,13 @@ import type {
 import { ComposerView } from '../Composer.tsx'
 import { ensureLoaded, loadProviders, useComposer } from '../composer/store.ts'
 import { openThread } from '../nav/history.ts'
-import { Segmented } from '../kit/Segmented.tsx'
 import { getClient, useApp } from '../state.ts'
 import { load, save } from '../shell/persist.ts'
 import { toast } from '../shell/toasts.tsx'
 import { Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { BranchTrayChip, parentPath, ProjectPickChip, TrayFrame, WorkspaceTrayChip } from '../composer/Tray.tsx'
+import { removeFromRun } from './batch.ts'
+import { BatchModeChip, TasksChip } from './BatchChips.tsx'
 import { ContextChip, runState, TrayButton, TrayHide } from './DockParts.tsx'
 import { DURATION, EASE } from '../motion/tokens.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
@@ -36,7 +37,11 @@ export function RunComposer({ ids, onEmptyChange }: { ids: string[]; onEmptyChan
   const t = useTheme()
   const tasks = useTasks((s) => s.tasks)
   const picked = ids.flatMap((id) => (tasks[id] ? [tasks[id]!] : []))
-  const single = picked.length === 1 ? picked[0] : undefined
+  // A run opened on several tasks stays a batch when removals leave one (its tray keeps the tasks chip), so it never turns into a follow-up.
+  const [batch] = useState(ids.length > 1)
+  // The draft belongs to the set the composer opened on, so removing a task keeps what was typed.
+  const [draftIds] = useState(ids.join(','))
+  const single = !batch && picked.length === 1 ? picked[0] : undefined
   const run = single ? latestRun(single) : null
   const live = isLiveRun(run)
   const [kind, setKind] = useState<'run' | 'followup'>(() => (run && (live || single?.status === 'needs_review') ? 'followup' : 'run'))
@@ -67,9 +72,12 @@ export function RunComposer({ ids, onEmptyChange }: { ids: string[]; onEmptyChan
   const model = followup ? run?.model : choices.model
   const worktree = !!project?.is_git && (choices.useWorktree ?? true)
   const [branches, setBranches] = useState<GitBranchesResult | null>(null)
-  const [notes, setNotes] = useState(() => [
-    ...new Set(picked.flatMap((task) => [...task.note_ids, ...(task.source_note_id ? [task.source_note_id] : [])])),
-  ])
+  // The linked notes of the picked tasks, less the ones removed from this run (a removed task takes its notes along).
+  const [droppedNotes, setDroppedNotes] = useState(false)
+  const notes = useMemo(
+    () => droppedNotes ? [] : [...new Set(picked.flatMap((task) => [...task.note_ids, ...(task.source_note_id ? [task.source_note_id] : [])]))],
+    [droppedNotes, picked.map((task) => task.id).join(',')],
+  )
   const needsProject = picked.some((task) => task.scope === 'global')
   const incompatible = batchMode === 'combined' && new Set(picked.map((task) => task.project_id ?? projectId)).size > 1
   useEffect(() => {
@@ -147,6 +155,10 @@ export function RunComposer({ ids, onEmptyChange }: { ids: string[]; onEmptyChan
   const wasFollowup = useRef(followup)
   if (wasFollowup.current !== followup) { wasFollowup.current = followup; switched.current = true }
   const panelIn = switched.current && PATCHED_NATIVE ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: REDUCED_MOTION ? DURATION.quick : 0.18, ease: [...EASE.out] as [number, number, number, number] } } : undefined
+  // Dropping a task from the run also drops it from the selection; the last one closes the composer.
+  const removeTask = (id: string) => {
+    setTasks(removeFromRun(ids, taskState().selected, id))
+  }
   const hide = <TrayHide testId="task-composer-close" onClick={() => setTasks({ composer: null })} />
   const pendingText = !followup ? single?.pending_followup?.trim() : ''
   const lineStyle = { display: 'flex', alignItems: 'center', gap: 6, width: '93.33%', minHeight: 24, paddingBottom: 6 } as const
@@ -167,22 +179,7 @@ export function RunComposer({ ids, onEmptyChange }: { ids: string[]; onEmptyChan
               {!followup && notes.length > 0 && (
                 <div style={lineStyle}>
                   <Label color={t.textTertiary} size={12} style={{ flexGrow: 1 }}>{`${notes.length} linked ${notes.length === 1 ? 'note' : 'notes'} included`}</Label>
-                  <TrayButton label="Remove notes" onClick={() => setNotes([])} />
-                </div>
-              )}
-              {!followup && !single && (
-                <div style={lineStyle}>
-                  <Segmented
-                    size="sm"
-                    tone="neutral"
-                    aria-label="Run tasks"
-                    value={batchMode}
-                    onChange={(value) => setBatchMode(value as TaskBatchMode)}
-                    options={[
-                      { value: 'separate', label: 'Separate runs' },
-                      { value: 'combined', label: 'One run' },
-                    ]}
-                  />
+                  <TrayButton label="Remove notes" onClick={() => setDroppedNotes(true)} />
                 </div>
               )}
               {incompatible && !followup && (
@@ -193,7 +190,8 @@ export function RunComposer({ ids, onEmptyChange }: { ids: string[]; onEmptyChan
             </div>
             <TrayFrame testId="task-dock-tray">
               <div key={followup ? 'followup' : 'run'} paintTransform={panelIn} style={{ display: 'flex', alignItems: 'center', gap: 6, flexGrow: 1, minWidth: 0 }}>
-                {single ? <ContextChip task={single} /> : <Label color={t.textSecondary} size={13} lineHeight={18} style={{ paddingLeft: 8, paddingRight: 8, flexShrink: 0 }}>{`${picked.length} tasks`}</Label>}
+                {single ? <ContextChip task={single} /> : <TasksChip tasks={picked} onRemove={removeTask} />}
+                {!followup && !single && picked.length > 1 && <BatchModeChip value={batchMode} onChange={setBatchMode} />}
                 {followup && run && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 8, paddingRight: 8, flexShrink: 1, minWidth: 0 }}>
                     <ProviderMark kind={run.provider.kind} size={13} />
@@ -227,7 +225,7 @@ export function RunComposer({ ids, onEmptyChange }: { ids: string[]; onEmptyChan
             </TrayFrame>
           </>
         }
-        draftKey={single ? `${followup ? 'task-followup' : 'task'}:${single.id}` : `task-batch:${ids.join(',')}`}
+        draftKey={single ? `${followup ? 'task-followup' : 'task'}:${single.id}` : `task-batch:${draftIds}`}
         projectId={projectId || undefined}
         currentThreadId={followup ? run?.thread_id : undefined}
         placeholder={

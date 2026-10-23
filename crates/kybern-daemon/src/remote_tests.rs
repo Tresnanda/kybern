@@ -1786,19 +1786,32 @@ async fn chat_file_links_read_the_connected_thread_workspace() {
         "./docs/../2026-09-10-hermes-prompt.md".into(),
         worktree.join("2026-09-10-hermes-prompt.md").to_string_lossy().into_owned(),
     ] {
-        let file = client.call::<ThreadFileRead>(ThreadFileReadParams { thread_id: thread.id, path, max_bytes: 128000 }).await.unwrap();
+        let file = client
+            .call::<ThreadFileRead>(ThreadFileReadParams { thread_id: thread.id, path, max_bytes: 128000, if_version: None })
+            .await
+            .unwrap();
         assert_eq!(file.content, content);
         assert!(!file.truncated);
     }
     let code = client
-        .call::<ThreadFileRead>(ThreadFileReadParams { thread_id: thread.id, path: "docs/My File.ts".into(), max_bytes: 5 })
+        .call::<ThreadFileRead>(ThreadFileReadParams {
+            thread_id: thread.id,
+            path: "docs/My File.ts".into(),
+            max_bytes: 5,
+            if_version: None,
+        })
         .await
         .unwrap();
     assert_eq!(code.content, "const");
     assert!(code.truncated);
     assert!(
         client
-            .call::<ThreadFileRead>(ThreadFileReadParams { thread_id: thread.id, path: "binary.bin".into(), max_bytes: 128000 })
+            .call::<ThreadFileRead>(ThreadFileReadParams {
+                thread_id: thread.id,
+                path: "binary.bin".into(),
+                max_bytes: 128000,
+                if_version: None
+            })
             .await
             .unwrap()
             .binary
@@ -1806,7 +1819,12 @@ async fn chat_file_links_read_the_connected_thread_workspace() {
     for path in ["../2026-09-10-hermes-prompt.md", ".env", "missing.md"] {
         assert!(
             client
-                .call::<ThreadFileRead>(ThreadFileReadParams { thread_id: thread.id, path: path.into(), max_bytes: 128000 })
+                .call::<ThreadFileRead>(ThreadFileReadParams {
+                    thread_id: thread.id,
+                    path: path.into(),
+                    max_bytes: 128000,
+                    if_version: None
+                })
                 .await
                 .is_err()
         );
@@ -1816,11 +1834,70 @@ async fn chat_file_links_read_the_connected_thread_workspace() {
         std::os::unix::fs::symlink(host.root.join("2026-09-10-hermes-prompt.md"), worktree.join("escape.md")).unwrap();
         assert!(
             client
-                .call::<ThreadFileRead>(ThreadFileReadParams { thread_id: thread.id, path: "escape.md".into(), max_bytes: 128000 })
+                .call::<ThreadFileRead>(ThreadFileReadParams {
+                    thread_id: thread.id,
+                    path: "escape.md".into(),
+                    max_bytes: 128000,
+                    if_version: None
+                })
                 .await
                 .is_err()
         );
     }
+    // Saving goes through the same workspace; a stale version is a conflict.
+    let code = client
+        .call::<ThreadFileRead>(ThreadFileReadParams {
+            thread_id: thread.id,
+            path: "docs/My File.ts".into(),
+            max_bytes: 128000,
+            if_version: None,
+        })
+        .await
+        .unwrap();
+    let saved = client
+        .call::<ThreadFileWrite>(ThreadFileWriteParams {
+            thread_id: thread.id,
+            path: "docs/My File.ts".into(),
+            content: "const connected = false;\n".into(),
+            expected_version: code.version.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(worktree.join("docs/My File.ts")).unwrap(), "const connected = false;\n");
+    let stale = client
+        .call::<ThreadFileWrite>(ThreadFileWriteParams {
+            thread_id: thread.id,
+            path: "docs/My File.ts".into(),
+            content: "lost".into(),
+            expected_version: code.version,
+        })
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(stale.contains(&format!("code {}", codes::CONFLICT)), "{stale}");
+    for path in [".env", "../2026-09-10-hermes-prompt.md"] {
+        assert!(
+            client
+                .call::<ThreadFileWrite>(ThreadFileWriteParams {
+                    thread_id: thread.id,
+                    path: path.into(),
+                    content: "x".into(),
+                    expected_version: None
+                })
+                .await
+                .is_err()
+        );
+    }
+    let unchanged = client
+        .call::<ThreadFileRead>(ThreadFileReadParams {
+            thread_id: thread.id,
+            path: "docs/My File.ts".into(),
+            max_bytes: 128000,
+            if_version: Some(saved.version),
+        })
+        .await
+        .unwrap();
+    assert!(unchanged.unchanged);
     let other = Host::start().await;
     assert!(
         other
@@ -1829,7 +1906,8 @@ async fn chat_file_links_read_the_connected_thread_workspace() {
             .call::<ThreadFileRead>(ThreadFileReadParams {
                 thread_id: thread.id,
                 path: "2026-09-10-hermes-prompt.md".into(),
-                max_bytes: 128000
+                max_bytes: 128000,
+                if_version: None,
             })
             .await
             .is_err()

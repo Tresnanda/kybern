@@ -416,7 +416,8 @@ try {
       }
       await app.getByTestId('task-batch-open').waitFor()
       await click(app.getByTestId('task-batch-open'))
-      await click(app.getByText('One run'))
+      await click(app.getByTestId('task-batch-mode'))
+      await click(app.getByTestId('task-batch-mode-combined'))
       await app.getByTestId('composer').fill('Reply with OK only. Do not edit files or use tools.')
       await dismissToasts()
       console.log('SEND')

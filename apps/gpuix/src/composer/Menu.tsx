@@ -284,6 +284,11 @@ interface MenuContextValue {
 
 const MenuContext = createContext<MenuContextValue | null>(null)
 
+/** Esc belongs to a picker menu while one is open, and for the press that closed it (a window shortcut must not take the same one). */
+let openPickers = 0
+let pickerClosedAt = -Infinity
+export const pickerOwnsEscape = () => openPickers > 0 || performance.now() - pickerClosedAt < 100
+
 export interface PickerMenuProps {
   /** The trigger; receives whether the menu is open. */
   trigger: (open: boolean) => ReactNode
@@ -293,6 +298,8 @@ export interface PickerMenuProps {
   side?: 'top' | 'bottom'
   align?: 'start' | 'center' | 'end'
   sideOffset?: number
+  /** Moves the panel along its alignment axis. */
+  alignOffset?: number
   /** Fixed panel width (`w-[26rem]`); otherwise `minWidth` and content decide. */
   width?: number
   minWidth?: number
@@ -314,6 +321,7 @@ export function PickerMenu({
   side = 'top',
   align = 'start',
   sideOffset = 4,
+  alignOffset,
   width,
   minWidth = 128,
   padding = 4,
@@ -331,6 +339,12 @@ export function PickerMenu({
   const triggerRef = useRef<PublicInstance | null>(null)
   const pressedWhileOpen = useRef(false)
   const dismissedByOutside = useRef(false)
+
+  useEffect(() => {
+    if (!open) return
+    openPickers++
+    return () => { openPickers--; pickerClosedAt = performance.now() }
+  }, [open])
 
   const setOpen = useCallback(
     (next: boolean) => {
@@ -406,6 +420,7 @@ export function PickerMenu({
           side={side}
           align={align}
           sideOffset={sideOffset}
+          alignOffset={alignOffset}
           collisionPadding={8}
           tabIndex={0}
           autoFocus
@@ -418,7 +433,8 @@ export function PickerMenu({
             setOpen(false)
           }}
           onKeyDown={(e) => {
-            if (e.key === 'escape') setOpen(false)
+            // Esc closes the menu only: a dock or dialog around the chip must not take the same press.
+            if (e.key === 'escape') { e.preventDefault(); setOpen(false) }
             else if (e.key === 'down' || (e.key === 'n' && e.modifiers?.ctrl)) move(1)
             else if (e.key === 'up' || (e.key === 'p' && e.modifiers?.ctrl)) move(-1)
             else if ((e.key === 'enter' || e.key === 'space') && active) pick(active)

@@ -1,4 +1,5 @@
 import { openTabFromPane } from '../tabs/open.ts'
+import { resolveWorkspaceFile } from './fileLinks.ts'
 import { useTranscriptRowLease } from './Window.tsx'
 // Native GFM keeps prose, tables and syntax highlighting in single bounded
 // nodes. Code expansion contributes rows to the OUTER transcript virtual list.
@@ -284,9 +285,12 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
       if (link.kind === 'file') {
         const threadId = pane.get().selectedId
         if (!threadId) return
-        if (!openTabFromPane(pane.id, { kind: 'file', path: link.path, root: 'thread', ...(link.line ? { line: link.line } : {}) })) {
-          const file = await client.call('threads.files.read', { thread_id: threadId, path: link.path })
-          setPreview({ title: link.line ? `${link.path}:${link.line}` : link.path, text: file.content, code: true, line: link.line, markdown: MARKDOWN_FILE.test(link.path) })
+        // The path as the workspace spells it (an agent writes from its shell's folder); one the daemon cannot place opens as written,
+        // and the tab says why.
+        const path = await resolveWorkspaceFile(client, threadId, link.path) ?? link.path
+        if (!openTabFromPane(pane.id, { kind: 'file', path, root: 'thread', ...(link.line ? { line: link.line } : {}) })) {
+          const file = await client.call('threads.files.read', { thread_id: threadId, path })
+          setPreview({ title: link.line ? `${path}:${link.line}` : path, text: file.content, code: true, line: link.line, markdown: MARKDOWN_FILE.test(path) })
         }
       } else if (link.kind === 'kybern') {
         if (link.target === 'note') { if (!openTabFromPane(pane.id, { kind: 'note', id: link.id })) openNote(link.id) }

@@ -36,13 +36,15 @@ import {
   type ProviderInstance,
   type ProviderKind,
   type ProviderStatus,
+  type TaskItem,
   type Thread,
   type UserMessage,
 } from '../../../packages/kybern-client/src/types.ts'
 import { Icon } from './icons.tsx'
 import { MatrixLoader } from './MatrixLoader.tsx'
 import { Spinner } from './kit/Spinner.tsx'
-import { getClient, setThreadOpen, usePaneCompact, focusPane, getFocusedPaneId, usePaneAccess, getPane, selectPaneThread, setPane, set, useApp } from './state.ts'
+import { upsert as upsertTask } from './tasks/store.ts'
+import { getClient, refreshLists, setThreadOpen, usePaneCompact, focusPane, getFocusedPaneId, usePaneAccess, getPane, selectPaneThread, setPane, set, useApp } from './state.ts'
 import { useCurrentSpaceId } from './spaces/current.ts'
 import { FONT_UI } from './theme.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from './ui.tsx'
@@ -71,6 +73,8 @@ import { DropHighlight } from './motion/DropHighlight.tsx'
 import { ImageViewer, type MorphSource } from './motion/ImageMorph.tsx'
 import { PATCHED_NATIVE } from './native/local-build.ts'
 import { usePendingSends } from './composer/pending.ts'
+import type { LayoutRect } from './native/layout.ts'
+import type { PaintTransformProps } from '@gpuix/native/host'
 
 import { hoverPressTransform } from './motion/press.ts'
 import {
@@ -101,7 +105,7 @@ import { alreadyAttachedText, contentHash, newFiles } from './composer/attached.
 export const COMPOSER_RADIUS = 19.2
 const DEFAULT_PLACEHOLDER = 'Ask anything, @ to mention, $ skills, or / commands'
 
-export function Composer({ thread, tray }: { thread: Thread | null; tray?: ReactNode }) {
+export function Composer({ thread, tray, placeholderEnter }: { thread: Thread | null; tray?: ReactNode; placeholderEnter?: PaintTransformProps }) {
   const status = useApp((s) => s.status)
   useEffect(() => {
     if (status === 'open') ensureLoaded()
@@ -109,12 +113,12 @@ export function Composer({ thread, tray }: { thread: Thread | null; tray?: React
   // The open transcript folds `thread_updated` events, so its copy carries the
   // live status; the thread list only refreshes on `projects`/list changes.
   const live = useApp((s) => (!thread ? null : s.open.thread?.id === thread.id ? s.open.thread : s.threads.find((th) => th.id === thread.id) ?? thread))
-  return live ? <ThreadComposer key={live.id} thread={live} /> : <DraftComposer tray={tray} />
+  return live ? <ThreadComposer key={live.id} thread={live} placeholderEnter={placeholderEnter} /> : <DraftComposer tray={tray} />
 }
 
 // ---- wiring: an open thread ----
 
-function ThreadComposer({ thread }: { thread: Thread }) {
+function ThreadComposer({ thread, placeholderEnter }: { thread: Thread; placeholderEnter?: PaintTransformProps }) {
   const pane = usePaneAccess()
   const threadId = thread.id
   // A send the daemon has not answered yet already counts as the running turn: the next Enter queues behind it.
@@ -201,6 +205,7 @@ function ThreadComposer({ thread }: { thread: Thread }) {
       onProviderChange={coordinator ? running ? undefined : (next, choice) => switchHarness(next, choice?.model, choice?.effort) : (next, choice) => chooseTarget(next, choice?.model, choice?.effort, !choice?.pinAccount)}
       catalogLoading={catalogLoading === catalogKey}
       onReloadModels={(force) => loadCatalog(threadId, provider, thread.project_id, force).then(() => {})}
+      placeholderEnter={placeholderEnter}
     />
   )
 }
@@ -246,8 +251,27 @@ export function useDraftTarget() {
   return { draft, projectId, project, provider, pinAccount, mode, status, useWorktree, choice: provider ? draft.models[provider.kind] : undefined }
 }
 
-function DraftComposer({ tray }: { tray?: ReactNode }) {
+/** What the new chat screen (`Draft.tsx`) adds to the draft composer: an attached Up next task, the pick-up's keyboard entry
+ *  and the launch record for the send transition. */
+export interface DraftExtras {
+  /** Sends through `tasks.items.send` (Send to agent) instead of `threads.create`; Send works with nothing typed. */
+  task?: TaskItem | null
+  placeholder?: string
+  onEmptyDown?: () => boolean
+  focusRef?: (focus: () => void) => void
+  /** The send has a thread id: record where the prompt was, before the page switches. */
+  onLaunch?: (threadId: string, snapshot: ComposerSnapshot | undefined) => void
+  /** The send started the task's run. */
+  onTaskSent?: () => void
+}
+
+export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?: DraftExtras }) {
   const pane = usePaneAccess()
+  // The new chat mounts this directly (not through `Composer`), so it loads the agents itself.
+  const status = useApp((s) => s.status)
+  useEffect(() => {
+    if (status === 'open') ensureLoaded()
+  }, [status])
   const providers = useComposer((d) => d.providers)
   const loading = useComposer((d) => d.providersLoading)
   const accounts = useComposer((d) => d.accounts)
@@ -259,9 +283,13 @@ function DraftComposer({ tray }: { tray?: ReactNode }) {
     <ComposerView
       key={`${coordinator ? 'coordinator' : 'project'}:${projectId ?? 'free'}`}
       draftKey={`${coordinator ? 'coordinator' : 'project'}:${projectId ?? 'free'}`}
-      placeholder={coordinator ? 'Describe the outcome, constraints, and what success looks like' : undefined}
+      placeholder={extras.placeholder ?? (coordinator ? 'Describe the outcome, constraints, and what success looks like' : undefined)}
       projectId={projectId ?? undefined}
       above={tray}
+      launch
+      allowEmptySend={!!extras.task}
+      onEmptyDown={extras.onEmptyDown}
+      focusRef={extras.focusRef}
       mode={mode}
       onModeChange={(m) => patchDraft({ mode: m })}
       provider={provider}
@@ -286,15 +314,50 @@ function DraftComposer({ tray }: { tray?: ReactNode }) {
       onReloadModels={(force) => loadProviders(force, projectId ?? undefined).then(() => {})}
       sendDisabled={!provider || (coordinator && !projectId)}
       sendDisabledReason={!provider ? 'Choose an available agent before sending.' : coordinator && !projectId ? 'Choose a project for the Coordinator.' : undefined}
-      onSend={async (message) => {
+      onSend={async (message, _delivery, snapshot) => {
         if (!provider) return
+        const launched = (threadId: string) => {
+          // The prompt now belongs to the thread: drop the saved draft before the page switches, so no composer reloads it.
+          drafts.delete(`${pane.id}:${coordinator ? 'coordinator' : 'project'}:${projectId ?? 'free'}`)
+          extras.onLaunch?.(threadId, snapshot)
+        }
+        const task = extras.task
+        if (task && !coordinator) {
+          // `RunComposer`'s single-task send: the thread is recorded as the task's next run and the task becomes running.
+          const client = getClient(), owner = activeEnvironment(), generation = getPane(pane.id)?.generation
+          if (!client) throw new Error('Reconnect and try again.')
+          const pending = task.pending_followup?.trim()
+          const result = await client.call('tasks.items.send', {
+            id: task.id,
+            provider: pinAccount ? provider : { ...provider, instance: 'default' },
+            model: choice?.model,
+            effort: choice?.effort,
+            permission_mode: mode,
+            use_worktree: useWorktree,
+            base_branch: useWorktree ? draft.baseBranch ?? null : null,
+            project_id: projectId,
+            message: pending ? { ...message, parts: [{ type: 'text', text: pending }, ...message.parts] } : message,
+            note_ids: [...new Set([...task.note_ids, ...(task.source_note_id ? [task.source_note_id] : [])])],
+          })
+          upsertTask(result.task)
+          extras.onTaskSent?.()
+          if (owner !== activeEnvironment() || getPane(pane.id)?.generation !== generation) return
+          launched(result.thread_id)
+          await refreshLists()
+          if (getPane(pane.id)?.generation === generation) void selectPaneThread(pane.id, result.thread_id)
+          return
+        }
         if (coordinator) {
           const client = getClient()!, owner = activeEnvironment(), generation = getPane(pane.id)?.generation
           const available = providers.find(p => p.kind === provider.kind && p.available)
           if (!projectId || !available) throw new Error('Choose a project and an available harness.')
           if (starter.current?.client !== client) starter.current = { client, controller: createCoordinatorStarter((method, params) => client.call(method, params), () => crypto.randomUUID()) }
-          const result = await starter.current.controller.send({ projectId, provider: available, instance: provider.instance, model: choice?.model, effort: choice?.effort, permissionMode: mode }, message)
-          if (owner === activeEnvironment() && getPane(pane.id)?.generation === generation) { const state = pane.get(); set({ threads: [...state.threads.filter(t => t.id !== result.thread.id), result.thread] }); void selectPaneThread(pane.id, result.thread.id) }
+          // A Coordinator plans the attached task rather than running it: the task goes in as a mention, which the daemon
+          // expands for the provider.
+          const lead = task ? [{ type: 'mention' as const, name: task.key, path: `kybern://task/${task.id}`, display_name: `${task.key} ${task.title}` }] : []
+          const result = await starter.current.controller.send({ projectId, provider: available, instance: provider.instance, model: choice?.model, effort: choice?.effort, permissionMode: mode }, lead.length ? { ...message, parts: [...lead, ...message.parts] } : message)
+          if (task) extras.onTaskSent?.()
+          if (owner === activeEnvironment() && getPane(pane.id)?.generation === generation) { launched(result.thread.id); const state = pane.get(); set({ threads: [...state.threads.filter(t => t.id !== result.thread.id), result.thread] }); void selectPaneThread(pane.id, result.thread.id) }
           return
         }
         await createThread({
@@ -308,6 +371,7 @@ function DraftComposer({ tray }: { tray?: ReactNode }) {
           useWorktree,
           baseBranch: draft.baseBranch ?? undefined,
           message,
+          onCreated: launched,
         })
       }}
     />
@@ -357,7 +421,7 @@ export interface ComposerViewProps {
    *  in flight, not Stop (there is no turn to stop yet). */
   starting?: boolean
   onStop?: () => void
-  onSend: (message: UserMessage, delivery: 'send' | 'queue' | 'steer') => Promise<void>
+  onSend: (message: UserMessage, delivery: 'send' | 'queue' | 'steer', snapshot?: ComposerSnapshot) => Promise<void>
   canSteer?: boolean
   sendDisabled?: boolean
   sendDisabledReason?: string
@@ -379,6 +443,29 @@ export interface ComposerViewProps {
   above?: ReactNode
   /** The draft (text and attachments) became empty or non-empty; the task dock collapses an empty one when the page is clicked. */
   onEmptyChange?: (empty: boolean) => void
+  /** The new chat: the prompt and its attachments stay in place (read-only) until the send resolves, so the thread page can
+   *  carry them away (`draft/Morph.tsx`), and `onSend` receives where they were on screen. */
+  launch?: boolean
+  /** Send is enabled with nothing typed (a task is attached: the run starts from the task). */
+  allowEmptySend?: boolean
+  /** ↓ in an empty editor with no completion open; true when it moved focus elsewhere (the new chat's pick-up). */
+  onEmptyDown?: () => boolean
+  /** Receives a function that focuses the editor (focus comes back from the pick-up). */
+  focusRef?: (focus: () => void) => void
+  /** The placeholder's entrance (the thread composer holds it while a prompt flies off the card). */
+  placeholderEnter?: PaintTransformProps
+}
+
+/** Where the prompt was when Send was pressed (window coordinates; `ComposerViewProps.launch`). */
+export interface ComposerSnapshot {
+  card: LayoutRect | null
+  editor: LayoutRect | null
+  text: string
+  /** Visual lines in the editor. */
+  lines: number
+  /** The editor had more lines than it shows. */
+  scrolled: boolean
+  images: { id: string; src: string; rect: LayoutRect }[]
 }
 
 const MIN_ROWS = 2
@@ -452,15 +539,17 @@ export function ComposerView(input: ComposerViewProps) {
   }, [connected])
 
   const empty = text.trim().length === 0 && attachments.length === 0
+  const tileNodes = useRef(new Map<string, PublicInstance>())
   useEffect(() => { props.onEmptyChange?.(empty) }, [empty])
   useEffect(() => { setComposerEmpty(props.draftKey, empty); return () => setComposerEmpty(props.draftKey, true) }, [props.draftKey, empty])
   const permissionUnsupported = provider?.kind !== 'cursor' && !!providers.find(p => p.kind === provider?.kind && !p.supported_permission_modes.includes(mode))
-  const disabledReason = !connected ? 'Reconnect to send a message.' : props.readOnly ? 'This conversation is read-only.' : props.sendDisabled ? props.sendDisabledReason ?? 'Sending is unavailable.' : permissionUnsupported ? 'Choose a permission mode supported by this agent.' : sending ? 'Sending…' : uploading > 0 ? 'Wait for attachments to finish uploading.' : empty ? 'Write a message or attach a file.' : null
+  const disabledReason = !connected ? 'Reconnect to send a message.' : props.readOnly ? 'This conversation is read-only.' : props.sendDisabled ? props.sendDisabledReason ?? 'Sending is unavailable.' : permissionUnsupported ? 'Choose a permission mode supported by this agent.' : sending ? 'Sending…' : uploading > 0 ? 'Wait for attachments to finish uploading.' : empty && !props.allowEmptySend ? 'Write a message or attach a file.' : null
   const canSend = !disabledReason
 
   const focusEditor = () => {
     if (editor.current) renderer.focusElement?.(editor.current.id)
   }
+  useEffect(() => { props.focusRef?.(focusEditor) })
 
   const attachmentRefs = useMemo<AttachmentReference[]>(
     () => attachments.map((a) => ({ token: `@${a.label}`, part: { type: 'attachment', asset_id: a.id, name: a.name, media_type: a.media_type, size: a.size } })),
@@ -530,15 +619,27 @@ export function ComposerView(input: ComposerViewProps) {
     // bubble and report a rejection there (`composer/pending.ts`); other callers get the draft back with the error.
     const parts = buildParts(), draft = { text, attachments }
     rememberSentDraft(parts, { text, attachments, references: completion.snapshot() })
+    // The new chat keeps the prompt where it is until the thread exists; the thread page then carries it off.
+    const hold = !!props.launch
+    const snapshot = hold ? snapshotNow() : undefined
     setSending(true)
     setError(null)
-    setText('')
-    setAttachments([])
-    drafts.delete(props.draftKey)
+    if (!hold) {
+      setText('')
+      setAttachments([])
+      drafts.delete(props.draftKey)
+    }
     focusEditor()
     try {
-      await props.onSend({ parts }, running ? (delivery === 'steer' && props.canSteer ? 'steer' : 'queue') : 'send')
+      await props.onSend({ parts }, running ? (delivery === 'steer' && props.canSteer ? 'steer' : 'queue') : 'send', snapshot)
       completion.reset()
+      if (hold) {
+        // The page has usually switched already; clear what this composer saved so the next new chat starts empty.
+        drafts.delete(props.draftKey)
+        saveEnvironmentPreference('kybern.composer.drafts', [...drafts].slice(-100))
+        setText('')
+        setAttachments([])
+      }
     } catch (e) {
       // Only into an empty composer: what was typed meanwhile is never overwritten.
       setText((current) => current || draft.text)
@@ -548,6 +649,27 @@ export function ComposerView(input: ComposerViewProps) {
       setSending(false)
     }
   }
+  /** Where the card, the editor and the image tiles are (`launch`); one bounds read each, never per frame. */
+  const snapshotNow = (): ComposerSnapshot => {
+    const bounds = (node: PublicInstance | null | undefined) => (node ? renderer.getElementBounds?.(node.id) ?? null : null)
+    const editorRect = bounds(editor.current)
+    const lines = editorRect ? Math.max(1, Math.round(editorRect.height / LINE_HEIGHT)) : 1
+    const shown = Math.max(1, text.split('\n').length)
+    return {
+      card: bounds(card.current),
+      editor: editorRect,
+      text,
+      lines,
+      scrolled: lines >= maxRows && shown > lines,
+      images: attachments.flatMap((a) => {
+        if (!a.media_type.startsWith('image/')) return []
+        const rect = bounds(tileNodes.current.get(a.id))
+        // The image paints inside the tile's 1 px border.
+        return rect ? [{ id: a.id, src: a.path, rect: { x: rect.x + 1, y: rect.y + 1, width: rect.width - 2, height: rect.height - 2 } }] : []
+      }),
+    }
+  }
+
   useEffect(() => onComposerRestore(props.draftKey, (draft) => {
     // A label the draft's own attachments took meanwhile is renumbered, in the restored text too.
     const taken = attachmentsNow.current.map((a) => a.label), renamed = new Map<string, string>()
@@ -668,11 +790,12 @@ export function ComposerView(input: ComposerViewProps) {
             uploading={uploading}
             onRemove={(a) => setAttachments((list) => list.filter((item) => item.id !== a.id))}
             onPreviewClose={focusEditor}
+            tileNodes={tileNodes.current}
           />
           <div style={{ position: 'relative', display: 'flex' }}>
             {/* GPUIX paints its own placeholder in a fixed grey; this one is the kit's muted × 40%. */}
             {!text && (
-              <div testId="composer-placeholder" style={{ position: 'absolute', top: 0, left: 0, right: 0, pointerEvents: 'none' }}>
+              <div testId="composer-placeholder" paintTransform={props.placeholderEnter} style={{ position: 'absolute', top: 0, left: 0, right: 0, pointerEvents: 'none' }}>
                 <Label color={muted(t, 0.4)} lineHeight={19.6} truncate>
                   {props.placeholder ?? DEFAULT_PLACEHOLDER}
                 </Label>
@@ -690,7 +813,7 @@ export function ComposerView(input: ComposerViewProps) {
               autoFocus={!pane.frozen && getFocusedPaneId() === pane.id}
               onFocus={() => { if (!pane.frozen) focusPane(pane.id) }}
               value={text}
-              readOnly={props.readOnly}
+              readOnly={props.readOnly || (!!props.launch && sending)}
               minRows={MIN_ROWS}
               maxRows={maxRows}
               onClick={readSelection}
@@ -729,6 +852,10 @@ export function ComposerView(input: ComposerViewProps) {
                 }
                 if ((e.key === 'up' || e.key === 'down') && (e.modifiers?.cmd || e.modifiers?.alt || e.modifiers?.ctrl || e.modifiers?.shift)) return
                 if (completion.onKey(e.key ?? '', !!e.modifiers?.shift, !!e.modifiers?.ctrl, !!(e.modifiers?.alt || e.modifiers?.cmd))) {
+                  e.preventDefault()
+                  return
+                }
+                if (e.key === 'down' && empty && props.onEmptyDown?.()) {
                   e.preventDefault()
                   return
                 }
@@ -977,7 +1104,7 @@ function RunningControls({
 }
 
 /** Image tiles and file cards above the editor (`Composer.tsx:1143-1171`). */
-export function Attachments({ items, uploading, onRemove, onPreviewClose }: { items: Attachment[]; uploading: number; onRemove: (a: Attachment) => void; onPreviewClose?: () => void }) {
+export function Attachments({ items, uploading, onRemove, onPreviewClose, tileNodes }: { items: Attachment[]; uploading: number; onRemove: (a: Attachment) => void; onPreviewClose?: () => void; tileNodes?: Map<string, PublicInstance> }) {
   const t = useTheme()
   const g = useGlass()
   const renderer = useGpuixRequired()
@@ -1019,7 +1146,7 @@ export function Attachments({ items, uploading, onRemove, onPreviewClose }: { it
         <Pop>
           {a.media_type.startsWith('image/') ? (
             <div
-              ref={(node) => { if (node) tiles.current.set(a.id, node); else tiles.current.delete(a.id) }}
+              ref={(node) => { if (node) { tiles.current.set(a.id, node); tileNodes?.set(a.id, node) } else { tiles.current.delete(a.id); tileNodes?.delete(a.id) } }}
               testId={`attachment-${a.label}`}
               role="button"
               tabIndex={0}

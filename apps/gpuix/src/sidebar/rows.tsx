@@ -63,8 +63,14 @@ function useWasRevealed(reveal: boolean) {
 export const INSET = { paddingLeft: 6, paddingRight: 6 } as const
 /** `pr-[4.75rem]`: room for the revealed actions. */
 const ACTIONS_PAD = 76
-/** The project row's trailing room: the 20px New thread button at 6px from the edge, 4px clear of the title. */
+/** The project row's trailing room for the New thread button, 4px clear of the title. */
 const PROJECT_PAD = 24
+/**
+ * Where a row's trailing `sm` buttons sit: centred on the row's height (never a fixed `top`, which drifts when the
+ * kit's control height changes), with the 15px glyph 8.5px from the edge, the row's own padding. The project row's
+ * activity glyph then ends 6px before the New thread glyph (`PROJECT_PAD - 2` from the row padding).
+ */
+const TRAILING = { position: 'absolute', top: 0, bottom: 0, right: 4, display: 'flex', alignItems: 'center' } as const
 
 export const accent = (t: Theme) => t.v('--sidebar-accent')
 export const accentActive = (t: Theme) => t.v('--sidebar-accent-active')
@@ -240,7 +246,7 @@ export const SectionLabel = memo(function SectionLabel({ text = 'Projects' }: { 
           </>
         )}
         {/* Creation affordances stay on screen (muted, brighter under the pointer): Filter and Add project are not hover reveals. */}
-        <div style={{ position: 'absolute', top: 4, right: 6, display: 'flex', alignItems: 'center' }}>
+        <div style={TRAILING}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <Menu
               open={menuOpen}
@@ -404,7 +410,7 @@ export const ProjectHeader = memo(function ProjectHeader({
             <Chevron open={open} color={ink(t, 0.8)} />
           </Reveal>
         </div>
-        <div style={{ position: 'absolute', top: 4, right: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ ...TRAILING, gap: 6 }}>
           {/* A creation affordance: always on screen, muted until the pointer is on it. */}
           <SidebarIconButton icon={N.newThread} size="sm" glyph={15} label="New thread" tooltip="New thread" onClick={() => newThread(project.id)} testId={`project-new-${project.id}`} />
         </div>

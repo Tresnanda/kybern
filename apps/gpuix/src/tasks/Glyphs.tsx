@@ -56,7 +56,8 @@ function StatusGlyphBody({ status, mono = false }: { status: TaskStatus; mono?: 
   if (status === 'running' && !mono) return NATIVE_PAINT_ANIMATIONS ? <RunningGlyph ring={wrap(ring)} color={color} /> : <LegacyRunningGlyph source={wrap(body)} color={color} />
   return <svg source={wrap(body)} style={{ width: 14, height: 14, color, flexShrink: 0, pointerEvents: 'none' }} />
 }
-export function PriorityGlyph({ priority }: { priority: TaskPriority }) {
+/** `color` tints every priority (an attached task's chip); otherwise urgent is red and the rest are tertiary ink. */
+export function PriorityGlyph({ priority, color }: { priority: TaskPriority; color?: string }) {
   const t = useTheme()
   const body =
     priority === 0
@@ -72,7 +73,7 @@ export function PriorityGlyph({ priority }: { priority: TaskPriority }) {
   return (
     <svg
       source={wrap(body)}
-      style={{ width: 14, height: 14, color: priority === 1 ? t.taskUrgent : t.textTertiary, pointerEvents: 'none' }}
+      style={{ width: 14, height: 14, color: color ?? (priority === 1 ? t.taskUrgent : t.textTertiary), pointerEvents: 'none' }}
     />
   )
 }

@@ -408,6 +408,8 @@ export async function createThread(opts: {
   useWorktree: boolean
   baseBranch?: string
   message: UserMessage
+  /** The daemon answered with the thread, before the lists refresh and the pane switches to it. */
+  onCreated?: (id: string) => void
 }) {
   const client = rpc()
   const paneId = opts.paneId ?? getFocusedPaneId()
@@ -424,6 +426,7 @@ export async function createThread(opts: {
     message: opts.message,
   })
   if (getClient() !== client) return t.id
+  opts.onCreated?.(t.id)
   await refreshLists()
   if (getClient() === client && getPane(paneId)?.generation === generation) void selectPaneThread(paneId, t.id)
   return t.id

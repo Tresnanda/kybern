@@ -228,9 +228,125 @@ pub async fn list_dir(root: &Path, rel: &str) -> Result<Vec<kybern_protocol::met
     Ok(entries)
 }
 
-/// Resolve chat links against the thread cwd. Canonical containment also rejects
-/// symlinks escaping the workspace; the existing file browser policy still applies.
-pub async fn read_thread_file(root: &Path, source: &str, max_bytes: u64) -> Result<kybern_protocol::methods::FilesReadResult> {
+/// What a chat link or file reference names in a thread's workspace.
+enum Reference {
+    /// An openable file, relative to the workspace root.
+    Found(String),
+    /// A file that exists but lies outside the workspace.
+    Outside,
+    /// A relative path that more than one workspace file ends with.
+    Ambiguous,
+    Missing,
+}
+
+/// `path` without a trailing line location (`#L10`, `#L10-L20`, `#L10C2`, `:10`, `:10:5`), and the line it named.
+pub fn split_location(path: &str) -> (&str, Option<u32>) {
+    fn digits(text: &str) -> Option<u32> {
+        (!text.is_empty() && text.bytes().all(|b| b.is_ascii_digit())).then(|| text.parse().ok()).flatten()
+    }
+    // `10`, `10C2`, `10-L20`, `10-20C3`: a line, then an optional column, then an optional end line.
+    fn fragment(text: &str) -> Option<u32> {
+        let (start, end) = match text.split_once('-') {
+            Some((start, end)) => (start, Some(end.strip_prefix('L').unwrap_or(end))),
+            None => (text, None),
+        };
+        let line =
+            |part: &str| digits(part.split_once('C').map_or(part, |(line, column)| if digits(column).is_some() { line } else { "" }));
+        let first = line(start)?;
+        end.is_none_or(|end| line(end).is_some()).then_some(first)
+    }
+    if let Some(at) = path.rfind("#L")
+        && let Some(line) = fragment(&path[at + 2..])
+    {
+        return (&path[..at], Some(line));
+    }
+    if let Some((rest, last)) = path.rsplit_once(':')
+        && let Some(line) = digits(last)
+    {
+        // `file:10:5` names a column too.
+        if let Some((file, middle)) = rest.rsplit_once(':')
+            && let Some(line) = digits(middle)
+        {
+            return (file, Some(line));
+        }
+        return (rest, Some(line));
+    }
+    (path, None)
+}
+
+/// Resolve one reference against the workspace root. The root is the only base: a link is written for the reader of the
+/// conversation, and the folder the agent's shell happened to be in (`cd apps/gpuix/src` in a turn) is not recorded
+/// anywhere the daemon can see. A path that does not exist from the root still opens when exactly one workspace file ends
+/// with it, which is how an agent's `sidebar/rows.tsx` (written from its shell folder) finds `apps/gpuix/src/sidebar/rows.tsx`.
+async fn resolve_reference(
+    indexes: &FileIndexCache,
+    cwd: &Path,
+    root: &Path,
+    index: &mut Option<Arc<Vec<String>>>,
+    path: &str,
+) -> Result<Reference> {
+    let path = path.trim();
+    if path.is_empty() || path.contains(['\0', '\\']) {
+        return Ok(Reference::Missing);
+    }
+    // A file really named `a:1` or `a#L1` wins over the location reading.
+    let (clean, _) = split_location(path);
+    for candidate in [path, clean] {
+        if candidate.is_empty() {
+            continue;
+        }
+        if let Some(found) = existing_file(root, candidate).await {
+            return Ok(Reference::Found(found));
+        }
+        if let Ok(canon) = tokio::fs::canonicalize(root.join(candidate)).await
+            && canon.is_file()
+            && !canon.starts_with(root)
+        {
+            return Ok(Reference::Outside);
+        }
+    }
+    if clean.is_empty() || clean.starts_with('/') {
+        return Ok(Reference::Missing);
+    }
+    if index.is_none() {
+        *index = Some(indexes.list(cwd).await?);
+    }
+    let name = clean.trim_start_matches("./");
+    let suffix = format!("/{name}");
+    let mut matches = index.as_ref().unwrap().iter().filter(|file| *file == name || file.ends_with(&suffix));
+    Ok(match (matches.next(), matches.next()) {
+        (Some(only), None) if resolve(root, only).is_ok_and(|path| path.is_file()) => Reference::Found(only.clone()),
+        (Some(_), Some(_)) => Reference::Ambiguous,
+        _ => Reference::Missing,
+    })
+}
+
+/// Resolve chat links against the thread's workspace root (its worktree, when it has one). Canonical containment also
+/// rejects symlinks escaping the workspace; the existing file browser policy still applies. `source` may carry a
+/// `#L10` or `:10` location, which only the client uses.
+pub async fn read_thread_file(
+    indexes: &FileIndexCache,
+    cwd: &Path,
+    source: &str,
+    max_bytes: u64,
+    if_version: Option<&str>,
+) -> Result<kybern_protocol::methods::FilesReadResult> {
+    let root = tokio::fs::canonicalize(cwd).await?;
+    match resolve_reference(indexes, cwd, &root, &mut None, source).await? {
+        Reference::Found(relative) => read_file(&root, &relative, max_bytes.clamp(1, MAX_WRITE_BYTES as u64), if_version).await,
+        Reference::Outside => {
+            Err(anyhow::anyhow!("This file is outside the conversation's workspace. Ask the agent to copy it into the workspace."))
+        }
+        Reference::Ambiguous => Err(anyhow::anyhow!("Several files match this path. Ask the agent for the path from the workspace root.")),
+        Reference::Missing => Err(anyhow::anyhow!("File not found. Check the path or ask the agent to recreate it.")),
+    }
+}
+
+/// `source` (relative to the thread cwd or absolute inside it) as a path
+/// relative to the canonical cwd. Canonical containment rejects symlinks that
+/// escape the workspace. Writes use this exact form only: a tab saves the root-relative
+/// path `threads.files.resolve` gave it, never a suffix match.
+async fn thread_relative(root: &Path, source: &str) -> Result<(std::path::PathBuf, String)> {
     let root = tokio::fs::canonicalize(root).await?;
     let candidate = root.join(source);
     let path = tokio::fs::canonicalize(candidate)
@@ -238,8 +354,21 @@ pub async fn read_thread_file(root: &Path, source: &str, max_bytes: u64) -> Resu
         .map_err(|_| anyhow::anyhow!("File not found. Check the path or ask the agent to recreate it."))?;
     let relative = path
         .strip_prefix(&root)
-        .map_err(|_| anyhow::anyhow!("This file is outside the conversation's workspace. Ask the agent to copy it into the workspace."))?;
-    read_file(&root, &relative.to_string_lossy(), max_bytes.clamp(1, 1024 * 1024)).await
+        .map_err(|_| anyhow::anyhow!("This file is outside the conversation's workspace. Ask the agent to copy it into the workspace."))?
+        .to_string_lossy()
+        .into_owned();
+    Ok((root, relative))
+}
+
+/// Save an existing file of a conversation workspace; see `write_file`.
+pub async fn write_thread_file(
+    root: &Path,
+    source: &str,
+    content: String,
+    expected_version: Option<&str>,
+) -> Result<kybern_protocol::methods::FilesWriteResult> {
+    let (root, relative) = thread_relative(root, source).await?;
+    write_file(&root, &relative, content, expected_version).await
 }
 
 /// Most paths one `threads.files.resolve` call may ask about.
@@ -254,25 +383,10 @@ pub async fn resolve_thread_files(indexes: &FileIndexCache, cwd: &Path, paths: &
     let mut index = None;
     let mut out = Vec::with_capacity(paths.len());
     for path in paths {
-        let path = path.trim();
-        if path.is_empty() || path.contains(['\0', '\\']) {
-            out.push(None);
-            continue;
-        }
-        let mut found = existing_file(&root, path).await;
-        if found.is_none() && !path.starts_with('/') {
-            if index.is_none() {
-                index = Some(indexes.list(cwd).await?);
-            }
-            let name = path.trim_start_matches("./");
-            let suffix = format!("/{name}");
-            let mut matches = index.as_ref().unwrap().iter().filter(|file| *file == name || file.ends_with(&suffix));
-            found = match (matches.next(), matches.next()) {
-                (Some(only), None) => resolve(&root, only).is_ok_and(|path| path.is_file()).then(|| only.clone()),
-                _ => None,
-            };
-        }
-        out.push(found);
+        out.push(match resolve_reference(indexes, cwd, &root, &mut index, path).await? {
+            Reference::Found(found) => Some(found),
+            _ => None,
+        });
     }
     Ok(out)
 }
@@ -284,15 +398,52 @@ async fn existing_file(root: &Path, path: &str) -> Option<String> {
     (canon.is_file() && resolve(root, &relative).is_ok()).then_some(relative)
 }
 
+/// Largest file a client may save (the editor's syntax limit).
+pub const MAX_WRITE_BYTES: usize = 2 * 1024 * 1024;
+
+/// An opaque on-disk version: modification time (ns), size and, on Unix, the inode and change time. Cheap to read. Timestamps
+/// can be coarse (a same-length save within one clock tick keeps both), so the inode is what makes an atomic replace always
+/// change it, and the change time catches in-place writes that restore the old modification time.
+fn file_version(meta: &std::fs::Metadata) -> String {
+    let modified =
+        meta.modified().ok().and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok()).map(|time| time.as_nanos()).unwrap_or(0);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        format!("{modified:x}-{:x}-{:x}-{:x}.{:x}", meta.len(), meta.ino(), meta.ctime(), meta.ctime_nsec())
+    }
+    #[cfg(not(unix))]
+    format!("{modified:x}-{:x}", meta.len())
+}
+
 /// Read up to `max_bytes` of a project file; binary files return no content.
-pub async fn read_file(root: &Path, rel: &str, max_bytes: u64) -> Result<kybern_protocol::methods::FilesReadResult> {
+/// When the file's version still equals `if_version`, nothing is read.
+pub async fn read_file(
+    root: &Path,
+    rel: &str,
+    max_bytes: u64,
+    if_version: Option<&str>,
+) -> Result<kybern_protocol::methods::FilesReadResult> {
     use std::io::Read;
     let path = resolve(root, rel)?;
     if !path.is_file() {
         anyhow::bail!("not a file: {rel}");
     }
+    let if_version = if_version.map(str::to_owned);
     tokio::task::spawn_blocking(move || -> Result<kybern_protocol::methods::FilesReadResult> {
-        let size = std::fs::metadata(&path)?.len();
+        let meta = std::fs::metadata(&path)?;
+        let size = meta.len();
+        let version = file_version(&meta);
+        if if_version.as_deref() == Some(version.as_str()) {
+            return Ok(kybern_protocol::methods::FilesReadResult {
+                content: String::new(),
+                truncated: false,
+                binary: false,
+                size,
+                version: Some(version),
+                unchanged: true,
+            });
+        }
         let mut file = std::fs::File::open(&path)?;
         let mut buf = Vec::with_capacity(size.min(max_bytes) as usize);
         file.by_ref().take(max_bytes).read_to_end(&mut buf)?;
@@ -303,10 +454,90 @@ pub async fn read_file(root: &Path, rel: &str, max_bytes: u64) -> Result<kybern_
             truncated: size > max_bytes,
             binary,
             size,
+            version: Some(version),
+            unchanged: false,
         })
     })
     .await?
 }
+
+/// Replace an existing project file with `content`: same directory temp file,
+/// fsync, permissions kept, then an atomic rename over the original. Paths go
+/// through `resolve` (no `..`, hidden or generated folders, or symlink
+/// escapes). A symlinked file is written through to its target, which must
+/// itself pass `resolve`, so a link cannot reach `.env` or `.git`. With
+/// `expected_version`, a file that changed since is left alone and the write
+/// fails with a conflict; daemon saves are serialized so two clients racing on
+/// one version cannot both win.
+pub async fn write_file(
+    root: &Path,
+    rel: &str,
+    content: String,
+    expected_version: Option<&str>,
+) -> Result<kybern_protocol::methods::FilesWriteResult> {
+    use std::io::Write;
+    anyhow::ensure!(content.len() <= MAX_WRITE_BYTES, "This file is over 2 MiB. Edit it in your editor instead.");
+    let path = resolve(root, rel)?;
+    let target = std::fs::canonicalize(&path)?;
+    if !target.is_file() {
+        anyhow::bail!("not a file: {rel}");
+    }
+    let canon_root = std::fs::canonicalize(root)?;
+    let real = target.strip_prefix(&canon_root).map_err(|_| anyhow::anyhow!("path must stay inside the project"))?;
+    resolve(&canon_root, &real.to_string_lossy())?;
+    let expected = expected_version.map(str::to_owned);
+    let rel = rel.to_string();
+    tokio::task::spawn_blocking(move || -> Result<kybern_protocol::methods::FilesWriteResult> {
+        use std::io::Read;
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        static SAVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _saving = SAVING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let meta = std::fs::metadata(&target)?;
+        if let Some(expected) = expected
+            && expected != file_version(&meta)
+        {
+            return Err(WriteConflict.into());
+        }
+        // The editor shows a lossy UTF-8 decoding, so saving over a file in another encoding would replace its every
+        // non-UTF-8 byte; such files (and binary ones) are refused. A cut inside a character at the cap is fine.
+        let mut existing = Vec::with_capacity((meta.len() as usize).min(4 * MAX_WRITE_BYTES));
+        std::fs::File::open(&target)?.take(4 * MAX_WRITE_BYTES as u64).read_to_end(&mut existing)?;
+        anyhow::ensure!(!existing[..existing.len().min(8192)].contains(&0), "This is a binary file. Edit it in your editor instead.");
+        anyhow::ensure!(
+            std::str::from_utf8(&existing).map_or_else(|error| error.error_len().is_none(), |_| true),
+            "This file is not UTF-8 text. Edit it in your editor instead."
+        );
+        let dir = target.parent().ok_or_else(|| anyhow::anyhow!("not a file: {rel}"))?;
+        let name = target.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        let unique = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let temp = dir.join(format!(".{name}.kybern-{}-{unique}.tmp", std::process::id()));
+        let written = (|| -> std::io::Result<()> {
+            // `create_new` never follows a planted link; the original's mode is set before any content lands.
+            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temp)?;
+            file.set_permissions(meta.permissions())?;
+            file.write_all(content.as_bytes())?;
+            file.sync_all()?;
+            std::fs::rename(&temp, &target)
+        })();
+        if let Err(error) = written {
+            let _ = std::fs::remove_file(&temp);
+            return Err(error.into());
+        }
+        let meta = std::fs::metadata(&target)?;
+        Ok(kybern_protocol::methods::FilesWriteResult { version: file_version(&meta), size: meta.len() })
+    })
+    .await?
+}
+
+/// The file changed on disk after the client read it.
+#[derive(Debug)]
+pub struct WriteConflict;
+impl std::fmt::Display for WriteConflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("The file changed on disk since you opened it. Reload it, or save again to overwrite.")
+    }
+}
+impl std::error::Error for WriteConflict {}
 
 fn is_subsequence(needle: &str, haystack: &str) -> bool {
     let mut chars = needle.chars();
@@ -361,7 +592,85 @@ pub async fn browse_directories(path: Option<String>) -> anyhow::Result<kybern_p
 mod tests {
     use std::sync::Arc;
 
-    use super::{CachedIndex, FileIndexCache, MAX_INDEX_SLOTS, rank, resolve_thread_files};
+    use super::{
+        CachedIndex, FileIndexCache, MAX_INDEX_SLOTS, WriteConflict, rank, read_file, read_thread_file, resolve_thread_files,
+        split_location, write_file, write_thread_file,
+    };
+
+    #[tokio::test]
+    async fn writes_replace_files_atomically_and_detect_changes_on_disk() {
+        let base = std::env::temp_dir().join(format!("kybern-write-test-{}", uuid::Uuid::new_v4()));
+        let root = base.join("project");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/app.ts"), "const a = 1;\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(root.join("src/app.ts"), std::fs::Permissions::from_mode(0o750)).unwrap();
+        }
+        let read = read_file(&root, "src/app.ts", 1024, None).await.unwrap();
+        let version = read.version.clone().unwrap();
+        // A matching `if_version` skips the read.
+        let same = read_file(&root, "src/app.ts", 1024, Some(&version)).await.unwrap();
+        assert!(same.unchanged && same.content.is_empty());
+
+        let saved = write_file(&root, "src/app.ts", "const a = 2;\n".into(), Some(&version)).await.unwrap();
+        assert_ne!(saved.version, version);
+        assert_eq!(saved.size, 13);
+        assert_eq!(std::fs::read_to_string(root.join("src/app.ts")).unwrap(), "const a = 2;\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(root.join("src/app.ts")).unwrap().permissions().mode() & 0o777, 0o750);
+        }
+        let after = read_file(&root, "src/app.ts", 1024, Some(&version)).await.unwrap();
+        assert!(!after.unchanged);
+        assert_eq!(after.version.as_deref(), Some(saved.version.as_str()));
+        // No temp file is left behind.
+        assert_eq!(std::fs::read_dir(root.join("src")).unwrap().count(), 1);
+
+        // The old version is stale now: a write based on it is a conflict and changes nothing.
+        let conflict = write_file(&root, "src/app.ts", "lost".into(), Some(&version)).await.unwrap_err();
+        assert!(conflict.is::<WriteConflict>());
+        assert_eq!(std::fs::read_to_string(root.join("src/app.ts")).unwrap(), "const a = 2;\n");
+        // Without a version the write overwrites ("Keep mine").
+        write_file(&root, "src/app.ts", "mine".into(), None).await.unwrap();
+        assert_eq!(std::fs::read_to_string(root.join("src/app.ts")).unwrap(), "mine");
+
+        std::fs::write(root.join(".env"), "SECRET=1").unwrap();
+        std::fs::write(root.join("blob.bin"), b"\0\x01").unwrap();
+        std::fs::write(root.join("latin1.txt"), b"caf\xe9\n").unwrap();
+        std::fs::write(base.join("outside.ts"), "x").unwrap();
+        std::fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
+        std::fs::write(root.join("node_modules/pkg/index.js"), "x").unwrap();
+        for path in ["../outside.ts", ".env", "missing.ts", "src", "node_modules/pkg/index.js", "blob.bin", "latin1.txt"] {
+            assert!(write_file(&root, path, "x".into(), None).await.is_err(), "{path} must not be writable");
+        }
+        assert!(write_file(&root, "src/app.ts", "x".repeat(super::MAX_WRITE_BYTES + 1), None).await.is_err());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(base.join("outside.ts"), root.join("escape.ts")).unwrap();
+            assert!(write_file(&root, "escape.ts", "x".into(), None).await.is_err());
+            assert!(write_thread_file(&root, "escape.ts", "x".into(), None).await.is_err());
+            assert_eq!(std::fs::read_to_string(base.join("outside.ts")).unwrap(), "x");
+            // A link inside the project may not reach a hidden or generated file either.
+            std::os::unix::fs::symlink(root.join(".env"), root.join("src/env.ts")).unwrap();
+            assert!(write_file(&root, "src/env.ts", "x".into(), None).await.is_err());
+            assert_eq!(std::fs::read_to_string(root.join(".env")).unwrap(), "SECRET=1");
+            std::fs::remove_file(root.join("src/env.ts")).unwrap();
+        }
+
+        // Thread files resolve against the cwd, absolute paths inside it included.
+        let absolute = std::fs::canonicalize(root.join("src/app.ts")).unwrap();
+        let indexes = FileIndexCache::default();
+        let thread = read_thread_file(&indexes, &root, &absolute.to_string_lossy(), 1024, None).await.unwrap();
+        let saved = write_thread_file(&root, &absolute.to_string_lossy(), "thread".into(), thread.version.as_deref()).await.unwrap();
+        assert_eq!(std::fs::read_to_string(&absolute).unwrap(), "thread");
+        assert!(write_thread_file(&root, "../outside.ts", "x".into(), None).await.is_err());
+        assert!(write_thread_file(&root, "src/app.ts", "x".into(), thread.version.as_deref()).await.unwrap_err().is::<WriteConflict>());
+        assert!(read_thread_file(&indexes, &root, "src/app.ts", 1024, Some(&saved.version)).await.unwrap().unchanged);
+        std::fs::remove_dir_all(base).unwrap();
+    }
 
     #[tokio::test]
     async fn resolves_answer_file_references_against_the_workspace() {
@@ -412,6 +721,63 @@ mod tests {
             ]
             .map(|path| path.map(String::from))
         );
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn splits_line_locations_off_a_path() {
+        for (path, expected) in [
+            ("apps/gpuix/src/sidebar/rows.tsx#L390", ("apps/gpuix/src/sidebar/rows.tsx", Some(390))),
+            ("rows.tsx#L10-L20", ("rows.tsx", Some(10))),
+            ("rows.tsx#L10-20", ("rows.tsx", Some(10))),
+            ("rows.tsx#L10C4-L12C2", ("rows.tsx", Some(10))),
+            ("src/a.rs:42", ("src/a.rs", Some(42))),
+            ("src/a.rs:42:7", ("src/a.rs", Some(42))),
+            ("src/a.rs", ("src/a.rs", None)),
+            ("src/a.rs#readme", ("src/a.rs#readme", None)),
+            ("src/a.rs#L", ("src/a.rs#L", None)),
+            ("src/a.rs#L1x", ("src/a.rs#L1x", None)),
+            ("src/a.rs:", ("src/a.rs:", None)),
+        ] {
+            assert_eq!(split_location(path), expected, "{path}");
+        }
+    }
+
+    /// ADE-66: the agent had `cd`'d into `apps/gpuix/src` and wrote its links from there.
+    #[tokio::test]
+    async fn opens_links_from_the_workspace_root_whatever_folder_the_agent_was_in() {
+        let base = std::env::temp_dir().join(format!("kybern-thread-file-test-{}", uuid::Uuid::new_v4()));
+        let dir = &base.join("workspace");
+        for file in ["apps/gpuix/src/sidebar/rows.tsx", "apps/gpuix/src/ui.tsx", "crates/x/src/ui.tsx", "weird:3.txt"] {
+            std::fs::create_dir_all(dir.join(file).parent().unwrap()).unwrap();
+            std::fs::write(dir.join(file), format!("// {file}")).unwrap();
+        }
+        std::fs::write(base.join("outside.png"), "x").unwrap();
+        let indexes = FileIndexCache::default();
+        let read = |source: String| {
+            let indexes = indexes.clone();
+            async move { read_thread_file(&indexes, dir, &source, 1024, None).await.map(|file| file.content).map_err(|e| e.to_string()) }
+        };
+        let rows = "// apps/gpuix/src/sidebar/rows.tsx";
+        // From the root, with and without a location.
+        assert_eq!(read("apps/gpuix/src/sidebar/rows.tsx".into()).await.as_deref(), Ok(rows));
+        assert_eq!(read("apps/gpuix/src/sidebar/rows.tsx#L390".into()).await.as_deref(), Ok(rows));
+        assert_eq!(read("apps/gpuix/src/sidebar/rows.tsx:390:2".into()).await.as_deref(), Ok(rows));
+        assert_eq!(read("./apps/gpuix/src/sidebar/rows.tsx#L3-L9".into()).await.as_deref(), Ok(rows));
+        // Absolute, inside the workspace.
+        let absolute = std::fs::canonicalize(dir).unwrap().join("apps/gpuix/src/sidebar/rows.tsx");
+        assert_eq!(read(format!("{}#L1", absolute.display())).await.as_deref(), Ok(rows));
+        // Written from the shell's folder: the only file that ends with it.
+        assert_eq!(read("sidebar/rows.tsx#L390".into()).await.as_deref(), Ok(rows));
+        // Two files end with it: say so instead of guessing.
+        assert!(read("src/ui.tsx".into()).await.unwrap_err().starts_with("Several files match"));
+        assert_eq!(read("gpuix/src/ui.tsx".into()).await.as_deref(), Ok("// apps/gpuix/src/ui.tsx"));
+        // A file whose name contains a location-like suffix still opens as itself.
+        assert_eq!(read("weird:3.txt".into()).await.as_deref(), Ok("// weird:3.txt"));
+        // Missing and outside answer differently, and a relative escape stays refused.
+        assert!(read("sidebar/missing.tsx#L1".into()).await.unwrap_err().starts_with("File not found"));
+        assert!(read(base.join("outside.png").display().to_string()).await.unwrap_err().contains("outside the conversation's workspace"));
+        assert!(read("../outside.png".into()).await.unwrap_err().contains("outside the conversation's workspace"));
         std::fs::remove_dir_all(&base).unwrap();
     }
 

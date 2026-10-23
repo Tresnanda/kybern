@@ -34,7 +34,7 @@ pub async fn read(state: &AppState, params: ArtifactReadParams) -> Result<FilesR
     if !matches!(extension.as_str(), "html" | "htm" | "md" | "markdown" | "svg") {
         bail!("Preview an HTML, Markdown, or SVG file.");
     }
-    crate::files::read_file(&root, &relative.to_string_lossy(), 1024 * 1024).await
+    crate::files::read_file(&root, &relative.to_string_lossy(), 1024 * 1024, None).await
 }
 
 pub async fn issue(state: &AppState, params: ArtifactReadParams) -> Result<String> {

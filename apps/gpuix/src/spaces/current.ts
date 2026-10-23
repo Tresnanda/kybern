@@ -1,11 +1,13 @@
 // The active space (`docs/specs/spaces.md` §7.2–7.3). Client state: the daemon has no
 // current space. Views follow projects, so opening anything that lives in another
-// space makes that space active.
+// space makes that space active. A space remembers its chat (thread or draft), never
+// a page: switching keeps the page and swaps the chat behind it, so Home always
+// shows the active space.
 import { useMemo, useSyncExternalStore } from 'react'
 import { orderProjects } from '@/state/sidebarOrganize'
 import { inSpace, spaceOfProject } from '../../../../packages/kybern-client/src/spaces.ts'
 import { isFreeChatProject, type Project, type Space, type SpaceId } from '../../../../packages/kybern-client/src/types.ts'
-import { applyEntry, currentEntry, isNavEntryValid, newThread, sameNavEntry } from '../nav/history.ts'
+import { currentEntry, goPage, isNavEntryValid, sameNavEntry, selectChat } from '../nav/history.ts'
 import { getNav, setNav, subscribeNav, type NavEntry } from '../nav/store.ts'
 import { getState, subscribe, useApp } from '../state.ts'
 import { onEnvironmentChange } from '../shell/environment.ts'
@@ -89,29 +91,61 @@ function firstProjectOf(spaceId: SpaceId): Project | undefined {
   return orderProjects(projects, getNav().projectOrder)[0]
 }
 
+/** The chat behind any page: the selected thread, else the draft. */
+function chatEntry(): NavEntry {
+  const s = getState()
+  return s.selectedId ? { kind: 'thread', id: s.selectedId } : { kind: 'draft', draft: s.draft }
+}
+
+/** The chat a space shows: the one it last had (when it still exists and belongs), else its first project's draft, else a free chat. */
+function chatOf(spaceId: SpaceId): NavEntry | undefined {
+  const remembered = getNav().spaceViews[spaceId]
+  if (remembered && (remembered.kind === 'thread' || remembered.kind === 'draft') && isNavEntryValid(remembered) && entryBelongs(remembered, spaceId)) return remembered
+  const first = firstProjectOf(spaceId)
+  return first ? { kind: 'draft', draft: { projectId: first.id } } : undefined
+}
+
+/** Select `chat` without letting `reconcile` react to the intermediate state. */
+function selectQuietly(chat: NavEntry | undefined) {
+  switching = true
+  try {
+    selectChat(chat)
+  } finally {
+    switching = false
+  }
+}
+
 /**
- * Make `id` the active space. The view it last showed comes back (when it still exists and
- * belongs to it); otherwise Home with the draft of its first project, or a free chat.
- * Nothing about a switch animates.
+ * Make `id` the active space. The page stays (Tasks shows the new space's tasks);
+ * the chat behind it becomes the one the space last showed, or its first project's
+ * draft, or a free chat. Nothing about a switch animates.
  */
 export function switchSpace(id: SpaceId, via: 'pointer' | 'keyboard'): boolean {
   const { spaces } = getSpaces()
   if (id === currentSpaceId() || !spaces.some((space) => space.id === id)) return false
   if (via === 'keyboard') setNav({ keyboardNav: true })
   const previous = currentSpaceId()
-  const entry = currentEntry()
+  const chat = chatEntry()
   const spaceViews = { ...getNav().spaceViews }
-  if (previous && entry && entryBelongs(entry, previous)) spaceViews[previous] = entry
+  if (previous && entryBelongs(chat, previous)) spaceViews[previous] = chat
   switching = true
   try {
     setNav({ spaceId: id, spaceViews, settingsOpen: false, paletteOpen: false })
-    const remembered = spaceViews[id]
-    if (remembered && isNavEntryValid(remembered) && entryBelongs(remembered, id)) applyEntry(remembered)
-    else newThread(firstProjectOf(id)?.id)
+    selectChat(chatOf(id))
   } finally {
     switching = false
   }
   for (const listener of switched) listener()
+  return true
+}
+
+/** A space tile or shortcut: another space switches; the active one goes to its Home. */
+export function activateSpace(id: SpaceId, via: 'pointer' | 'keyboard'): boolean {
+  if (switchSpace(id, via)) return true
+  if (id !== currentSpaceId()) return false
+  if (via === 'keyboard') setNav({ keyboardNav: true })
+  const nav = getNav()
+  if (nav.page !== 'home' || nav.settingsOpen) goPage('home')
   return true
 }
 
@@ -150,9 +184,15 @@ function reconcile() {
   // The effective id may be a fallback (a stale saved one): write it back so it persists.
   const effective = currentSpaceId()
   if (effective && getSpaces().supported === true && getNav().spaceId !== effective) setNav({ spaceId: effective })
-  const entry = currentEntry()
-  if (effective && entry && entryBelongs(entry, effective) && !sameNavEntry(getNav().spaceViews[effective], entry)) {
-    setNav({ spaceViews: { ...getNav().spaceViews, [effective]: entry } })
+  if (!effective) return
+  // Behind a page the chat must stay in this space, or Home would pull another one in.
+  let chat = chatEntry()
+  if (getNav().page !== 'home' && !entryBelongs(chat, effective)) {
+    selectQuietly(chatOf(effective))
+    chat = chatEntry()
+  }
+  if (entryBelongs(chat, effective) && !sameNavEntry(getNav().spaceViews[effective], chat)) {
+    setNav({ spaceViews: { ...getNav().spaceViews, [effective]: chat } })
   }
 }
 

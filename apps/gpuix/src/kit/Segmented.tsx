@@ -65,10 +65,12 @@ export function Segmented({ options, value, onChange, busy = false, 'aria-label'
   const focus = useFocusRing()
   const layoutKey = options.map((o) => `${o.value}:${o.label}:${o.count ?? ''}`).join(',') + `|${textSize}|${padX}|${fill}`
 
-  // Measure each segment after layout (offsets from the track's padding box), retrying until GPUI has laid it out.
+  // Measure each segment after layout (offsets from the track's padding box), retrying until GPUI has laid it out. A changed
+  // label or count still reports the previous frame's bounds here, so keep reading until two frames agree.
   useLayoutEffect(() => {
     let tries = 0
     let timer: ReturnType<typeof setTimeout> | undefined
+    let last = ''
     const measure = () => {
       const root = track.current ? renderer.getElementBounds?.(track.current.id) : null
       const next: Record<string, Box> = {}
@@ -78,7 +80,11 @@ export function Segmented({ options, value, onChange, busy = false, 'aria-label'
         if (!root || !r || r.width === 0) { if (++tries < 20) timer = setTimeout(measure, 16); return }
         next[o.value] = { x: r.x - root.x, w: r.width }
       }
+      const key = JSON.stringify(next)
+      if (key === last) return
+      last = key
       setBoxes(next)
+      if (++tries < 20) timer = setTimeout(measure, 16)
     }
     measure()
     return () => clearTimeout(timer)

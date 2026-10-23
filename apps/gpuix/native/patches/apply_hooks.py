@@ -577,6 +577,7 @@ run_hook("large_alloc_hooks.py")
 
 run_hook("code_memory_hooks.py")
 run_hook("code_small_hooks.py")
+run_hook("code_editor_hooks.py")
 run_hook("link_hover_hooks.py")
 run_hook("paint_clip_hooks.py")
 

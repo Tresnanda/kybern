@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.13.0
+
+<!-- kybern-release-title: Edit files in tabs and start chats from a new home in Kybern GPUIX -->
+<!-- kybern-release-summary: Edit files right in their tabs, start new chats from a redesigned screen that picks up recent threads and open tasks, and use split views whose title bars respond again. -->
+
+- Edit files right in their tabs: type straight into any file with live syntax colours, find with ⌘F, Tab and Shift-Tab indenting and paired brackets and quotes. ⌘S saves, an unsaved tab shows a dot and asks before it closes, and when an agent changes a file you're editing, a bar offers **Reload** or **Keep mine**. Markdown previews show your unsaved text. Files over 2 MB and binary files open read-only.
+- Open a file in Cursor, Zed, Xcode or another editor on your Mac from the tab's ⋯ menu, at the line you're on; ⌘⇧O opens it in your default editor, which you can set in Settings.
+- Read long lines in file tabs without scrolling sideways: code wraps like the chat does, with line numbers kept on each line. Turn it off with **Wrap lines** in the tab's ⋯ menu or in Settings.
+- Start new chats from a redesigned screen: **Let's work in** over the project name, which is the project picker, with the composer in the middle of the window. Under it, **Continue** lists your three most recent threads in the project and **Up next** its top open tasks; click a task to send it to an agent with your instructions. When you send, your message rises into the new thread as the composer moves into place.
+- Click everything in a split view's title bar again: tabs, **+**, Hand off and each pane's ⋯ menu had stopped responding. ⌘⇧W closes the focused pane, and ⌘W on a split pane's chat tab closes that pane instead of the window. Hand off also responds again in a single pane.
+- Stay in your space: Home shows the current space's threads instead of jumping to the last space you were in, and switching spaces keeps you on the page you're on.
+- Send several tasks to an agent from one floating composer: a chip lists the selected tasks (remove any of them there) and another picks separate runs or one run.
+- Open file links in chats reliably: links go to the right line, links an agent wrote from a subfolder still open, and pasted images open in the viewer.
+- Rename notes created inside a thread.
+- Fix the Explorer search field overlapping the file tree in long projects, and the sidebar's New thread and filter buttons sitting 2 pt low.
+
 ## 0.12.1
 
 <!-- kybern-release-title: Kybern GPUIX stays light through long agent runs -->

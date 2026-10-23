@@ -134,7 +134,9 @@ expression: names
 - files.search
 - files.list
 - files.read
+- files.write
 - threads.files.read
+- threads.files.write
 - threads.files.resolve
 - skills.list
 - integrations.list

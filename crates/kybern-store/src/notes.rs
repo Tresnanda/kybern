@@ -210,19 +210,19 @@ impl Store {
                     if note.summary.deleted_at.is_some() {
                         return Err(NoteError::Deleted.into());
                     }
-                    let is_thread = note.summary.scope == NoteScope::Thread;
-                    // A thread note is titled after its thread; the title is never edited.
-                    let title = title.filter(|_| !is_thread);
-                    if title.is_none_or(|title| title == note.summary.title) && body.is_none_or(|body| body == note.body) {
+                    // A thread note is titled after its thread until its own title is edited; from then on it keeps that title.
+                    let renamed = title.is_some_and(|title| title != note.summary.title);
+                    if !renamed && body.is_none_or(|body| body == note.body) {
                         return Ok(note);
                     }
                     if note.summary.revision != expected_revision {
                         return Err(NoteError::Conflict.into());
                     }
-                    let snapshot = if is_thread { note.summary.title.clone() } else { title.unwrap_or(&note.summary.title).to_owned() };
+                    let snapshot = title.unwrap_or(&note.summary.title).to_owned();
                     tx.execute(
-                        "UPDATE notes SET title = ?2, body = ?3, revision = revision + 1, updated_at = ?4 WHERE id = ?1",
-                        params![note.summary.id.to_string(), snapshot, body.unwrap_or(&note.body), Utc::now().to_rfc3339()],
+                        "UPDATE notes SET title = ?2, body = ?3, revision = revision + 1, updated_at = ?4,
+                            title_edited = title_edited OR ?5 WHERE id = ?1",
+                        params![note.summary.id.to_string(), snapshot, body.unwrap_or(&note.body), Utc::now().to_rfc3339(), renamed],
                     )?;
                     expect_note(&tx, note.summary.id)?
                 }
@@ -473,7 +473,7 @@ fn check_project(c: &Connection, id: ProjectId) -> Result<()> {
 }
 
 const NOTE_SELECT: &str = "SELECT n.id, n.scope, n.project_id, n.thread_id,
-        CASE WHEN n.scope = 'thread' THEN COALESCE(t.title, n.title) ELSE n.title END,
+        CASE WHEN n.scope = 'thread' AND n.title_edited = 0 THEN COALESCE(t.title, n.title) ELSE n.title END,
         n.body, n.pinned, n.revision, n.created_at, n.updated_at, n.deleted_at, n.origin, n.created_by_thread_id, n.project_role
     FROM notes n LEFT JOIN threads t ON t.id = n.thread_id";
 
@@ -803,6 +803,12 @@ mod tests {
         renamed.title = "Fix SSO login".into();
         store.thread_upsert(&renamed).unwrap();
         assert_eq!(store.note_get(created.summary.id).unwrap().unwrap().summary.title, "Fix SSO login");
+        // Once the note itself is renamed it keeps its own title, also when the thread is renamed again.
+        let titled = store.note_update(NoteTarget::Id(created.summary.id), 1, Some("Login plan"), None).unwrap();
+        assert_eq!((titled.summary.title.as_str(), titled.summary.revision), ("Login plan", 2));
+        renamed.title = "Fix SSO login (again)".into();
+        store.thread_upsert(&renamed).unwrap();
+        assert_eq!(store.note_get(created.summary.id).unwrap().unwrap().summary.title, "Login plan");
         assert!(matches!(note_error(store.note_update(NoteTarget::Thread(Uuid::now_v7()), 0, None, Some("x"))), NoteError::NotFound(_)));
     }
 

@@ -2171,12 +2171,35 @@ export interface FilesReadParams {
   project_id: ProjectId;
   path: string;
   max_bytes?: number;
+  /** A `version` from an earlier read: an unchanged file returns `unchanged` with no content. */
+  if_version?: string;
 }
 
 export interface ThreadFileReadParams {
   thread_id: ThreadId;
   path: string;
   max_bytes?: number;
+  if_version?: string;
+}
+
+/** Replace an existing text file (atomically). `expected_version` makes a newer file on disk a CONFLICT error. */
+export interface FilesWriteParams {
+  project_id: ProjectId;
+  path: string;
+  content: string;
+  expected_version?: string;
+}
+
+export interface ThreadFileWriteParams {
+  thread_id: ThreadId;
+  path: string;
+  content: string;
+  expected_version?: string;
+}
+
+export interface FilesWriteResult {
+  version: string;
+  size: number;
 }
 
 export interface ThreadFilesResolveParams {
@@ -2195,6 +2218,10 @@ export interface FilesReadResult {
   truncated: boolean;
   binary: boolean;
   size: number;
+  /** Opaque on-disk version (modification time and size). */
+  version?: string;
+  /** True when `if_version` still matched; `content` is empty. */
+  unchanged?: boolean;
 }
 
 export type SkillScope =
@@ -2328,7 +2355,9 @@ export interface Methods {
   "files.search": [FilesSearchParams, FilesSearchResult];
   "files.list": [FilesListParams, FilesListResult];
   "files.read": [FilesReadParams, FilesReadResult];
+  "files.write": [FilesWriteParams, FilesWriteResult];
   "threads.files.read": [ThreadFileReadParams, FilesReadResult];
+  "threads.files.write": [ThreadFileWriteParams, FilesWriteResult];
   "threads.files.resolve": [ThreadFilesResolveParams, ThreadFilesResolveResult];
   "skills.list": [SkillsListParams, SkillsListResult];
   "threads.visuals.publish": [{ thread_id: ThreadId; html: string; title: string; height: number }, { visual: HtmlVisual }];

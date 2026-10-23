@@ -29,6 +29,8 @@ import { revealTransform, Rise } from '../motion/kit.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { copyText, useRowState } from './store.ts'
 import { SwapOnChange, useFresh } from './motion.tsx'
+import { claimFlight, reportFlightTarget, useFlightHidden } from '../draft/store.ts'
+import { observeElementBounds, type LayoutRect } from '../native/layout.ts'
 import { TokenText, tokenSegments } from './InlineTokens.tsx'
 
 /** `MessageActionButton` + `CopyAction`: a 2em square, copy glyph swapping to a
@@ -91,6 +93,22 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
   const [overflowing, setOverflowing] = useState(false)
   // Decided once on mount: only a bubble sent just now plays the send animation.
   const fresh = useFresh(at)
+  // The new chat's first message: a stand-in flies here from the composer (`draft/Morph.tsx`). This row mounts invisible at its
+  // final place, reports where its text box and images are, and shows itself in the frame the stand-in lands.
+  const [flight] = useState(() => fresh && !pending && claimFlight(at))
+  const flightHidden = useFlightHidden(at, flight)
+  const fillNode = useRef<PublicInstance | null>(null)
+  const fileNodes = useRef<(PublicInstance | null)[]>([])
+  useEffect(() => {
+    if (!flight) return
+    const rects: { text: LayoutRect | null; images: (LayoutRect | null)[] } = { text: null, images: [] }
+    const report = () => reportFlightTarget(at, { text: rects.text, images: rects.images.filter((r): r is LayoutRect => !!r) })
+    const stops = [
+      ...(fillNode.current ? [observeElementBounds(renderer, { id: fillNode.current.id }, (e) => { rects.text = e.rect; report() })] : []),
+      ...fileNodes.current.flatMap((node, i) => node ? [observeElementBounds(renderer, { id: node.id }, (e) => { rects.images[i] = e.rect; report() })] : []),
+    ]
+    return () => stops.forEach((stop) => stop())
+  }, [flight, at, renderer])
   const text = useMemo(() => messageText(parts), [parts])
   // Short one-line messages with `code` spans get chips like desktop's inline code.
   const chips = useMemo(() => {
@@ -127,7 +145,7 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
         </div>
       )}
       {(text || files.length > 0) && (
-        <Rise kind="send" play={fresh} style={{ alignItems: 'flex-end', width: '100%' }}>
+        <Rise kind="send" play={fresh && !flight} paint={flight ? { initial: false, animate: { opacity: flightHidden ? 0 : 1 }, transition: { duration: 0 }, retain: true } : undefined} style={{ alignItems: 'flex-end', width: '100%' }}>
           <div
             testId="user-bubble"
             onMouseEnter={() => setHover(true)}
@@ -136,27 +154,27 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
           >
             {files.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8, maxWidth: 240, marginBottom: 4 }}>
-                {files.map((p, i) =>
+                {files.map((p, i) => flight ? (
+                  // Only on the flight's row: a box per file, so its rect can be reported (the structure never changes after mount).
+                  <div key={p.type === 'attachment' ? p.asset_id : i} ref={p.type === 'image' || p.media_type.startsWith('image/') ? (node) => { fileNodes.current[i] = node } : undefined} style={{ display: 'flex' }}>
+                    {p.type === 'image' ? <ResponseImage source={`data:${p.media_type};base64,${p.data}`} label={`Attached image ${i + 1}`} thumbnail at={at} />
+                      : p.media_type.startsWith('image/') ? <AttachmentImage assetId={p.asset_id} name={p.name} />
+                      : <FileChip name={p.name} />}
+                  </div>
+                ) :
                   p.type === 'image' ? (
                     <ResponseImage key={i} source={`data:${p.media_type};base64,${p.data}`} label={`Attached image ${i + 1}`} thumbnail at={at} />
                   ) : p.media_type.startsWith('image/') ? (
                     <AttachmentImage key={p.asset_id} assetId={p.asset_id} name={p.name} />
                   ) : (
-                    <div
-                      key={i}
-                      style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, maxWidth: 256, paddingLeft: 8, paddingRight: 8, borderRadius: 14, borderWidth: 1, borderColor: t.border, backgroundColor: raisedFill(g, t.composer) }}
-                    >
-                      <Icon source={T.file} size={14} color={t.text} />
-                      <Label color={t.text} size={13} weight={500} truncate>
-                        {p.name}
-                      </Label>
-                    </div>
+                    <FileChip key={i} name={p.name} />
                   ),
                 )}
               </div>
             )}
             {text && (
               <div
+                ref={flight ? (node) => { fillNode.current = node } : undefined}
                 style={{
                   display: 'flex',
                   flexDirection: 'column',
@@ -219,6 +237,20 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
     </div>
   )
 })
+
+/** A non-image attachment above the bubble. */
+function FileChip({ name }: { name: string }) {
+  const t = useTheme()
+  const g = useGlass()
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, maxWidth: 256, paddingLeft: 8, paddingRight: 8, borderRadius: 14, borderWidth: 1, borderColor: t.border, backgroundColor: raisedFill(g, t.composer) }}>
+      <Icon source={T.file} size={14} color={t.text} />
+      <Label color={t.text} size={13} weight={500} truncate>
+        {name}
+      </Label>
+    </div>
+  )
+}
 
 /** An inline bubble for a message sent mid-turn (`WorkRow` case "user"). */
 export function MidTurnMessage({ parts, at }: { parts: ContentPart[]; at: string }) {
