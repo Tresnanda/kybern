@@ -52,8 +52,8 @@ the thread open, 344 → 279 MB with the lightbox open. Inline images are sharpe
 before (ImageIO resampling instead of GPU minification); the lightbox is full
 resolution.
 
-Not reproduced: the JS-side 459 MB after 8 hours. A replay grows it by about 20 MB and
-it stays flat across rounds. The memory log is there to catch that in a real session.
+An in-process replay grows the JS side by about 20 MB and stays flat across rounds. The
+459 MB after 8 hours comes from live turns instead (see the live-turn leak below).
 
 ## A normal session on this branch (with the image fix)
 
