@@ -1563,7 +1563,14 @@ impl RichEditorState {
             }
             return;
         }
-        let (da, db) = (lay.disp.m2d(a), lay.disp.m2d(b));
+        self.display_rects(index, lay.disp.m2d(a), lay.disp.m2d(b), out, full_end);
+    }
+
+    /// `range_rects` over display offsets. Inline code washes use it directly: a code run's model start maps to the end of
+    /// the text before its padding room, which a wrap can leave alone on the previous line as an empty chip (ADE-71).
+    fn display_rects(&self, index: usize, da: usize, db: usize, out: &mut Vec<Bounds<Pixels>>, full_end: bool) {
+        let Some(place) = self.places.get(index).copied() else { return };
+        let Some(lay) = self.lay(index) else { return };
         let lh = lay.style.line_h;
         let sliver = self.theme.size * 0.3;
         let mut y = place.ty;
@@ -1595,7 +1602,7 @@ impl RichEditorState {
             }
             y += f32::from(line.size(px(lh)).height);
         }
-        if lay.lines.is_empty() && (full_end || db > 0) && a <= b {
+        if lay.lines.is_empty() && (full_end || db > 0) && da <= db {
             out.push(Bounds::new(point(px(place.tx), px(place.ty)), size(px(sliver), px(lh))));
         }
     }
@@ -3007,9 +3014,8 @@ fn paint_doc(editor: &mut RichEditorState, bounds: Bounds<Pixels>, caret_on: boo
         }
         // Inline code washes and chip hovers sit under the text.
         for range in &lay.disp.codes {
-            let (a, b) = (lay.disp.d2m(range.start), lay.disp.d2m(range.end));
             let mut rects = Vec::new();
-            editor.range_rects(index, a, b, &mut rects, false);
+            editor.display_rects(index, range.start, range.end, &mut rects, false);
             for r in rects {
                 let pad_y = 0.13 * em * 0.833;
                 let pad_x = 0.33 * em * 0.833;
