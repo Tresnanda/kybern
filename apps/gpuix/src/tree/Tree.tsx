@@ -47,9 +47,16 @@ export const ARRIVAL = {
   stagger: 0.065,
   /** A new run row after narration waits this long, so the prose settles first. */
   first: 0.09,
+  /** The longest a queued arrival waits: a burst (a reconnect's catch-up, several calls in one batch) lands together after it. */
+  cap: 0.26,
   rowEase: [0.16, 1, 0.3, 1] as [number, number, number, number],
   drawEase: [0.22, 1, 0.36, 1] as [number, number, number, number],
 } as const
+
+/** When (ms) an arrival starts, given when the previous one did: `ARRIVAL.stagger` after it, never later than `ARRIVAL.cap` from now. */
+export function nextArrival(previous: number, now: number): number {
+  return Math.min(now + ARRIVAL.cap * 1000, Math.max(now, previous + ARRIVAL.stagger * 1000))
+}
 
 /** A row arriving on its own (not in a group): fade and rise `ARRIVAL.rise` px after `delay` seconds; Reduce Motion fades. */
 export function arrivalTransform(delay = 0, gen?: number): PaintTransformProps | undefined {
@@ -265,7 +272,7 @@ export function TreeGroup({ x, tickEnd, inset = 0, gap = 0, open = true, rise, a
   // When the last arrival starts (ms, `performance.now()`): rows mounting in one batch queue up behind it.
   const queue = useRef(0)
   const schedule = useMemo(() => (arrive ? () => {
-    const now = performance.now(), start = Math.max(now, queue.current + ARRIVAL.stagger * 1000)
+    const now = performance.now(), start = nextArrival(queue.current, now)
     queue.current = start
     return (start - now) / 1000
   } : undefined), [arrive])

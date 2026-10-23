@@ -193,7 +193,7 @@ function FileChip({ path, threadId, failed }: { path: string; threadId: ThreadId
       const cwd = pane.get().open.thread?.cwd
       const relative = cwd && path.startsWith(`${cwd.replace(/\/+$/, '')}/`) ? path.slice(cwd.replace(/\/+$/, '').length + 1) : !path.startsWith('/') ? path
         : (await getClient()?.call('threads.files.resolve', { thread_id: threadId, paths: [path] }))?.paths[0]
-      if (!relative) throw new Error(`${basename(path)} is outside this thread's workspace.`)
+      if (!relative) throw new Error(`${basename(path)} is outside this thread's workspace. Ask the agent to copy it into the workspace.`)
       openTabFromPane(pane.id, { kind: 'file', path: relative, root: 'thread' })
     } catch (e) { reportError('Unable to open the file', e) }
   }
