@@ -934,6 +934,7 @@ function RunningControls({
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
       <PickerChip
+        bare
         testId="queue"
         chevron={false}
         disabled={!canSend}

@@ -72,6 +72,7 @@ export function PermissionPicker({
       disabled={locked}
       trigger={(open) => (
         <PickerChip
+          bare
           truncate
           open={open}
           chevron={showLabel}

@@ -5,7 +5,9 @@
 //
 // `quiet` is the Tasks/Notes property picker (`.prop`, spec §2.2): transparent at rest with the chevron hidden; hover shows a
 // neutral ink fill and the chevron. `neutral` keeps a selected chip in ink instead of the accent tint (Tasks and Notes keep
-// their selection neutral; spec §5 would tint it).
+// their selection neutral; spec §5 would tint it). `bare` is a chip that sits on another surface (the composer footer and the
+// tray above it): no fill at rest, so the row reads as plain controls; hover and an open menu show the fill, and the chevron
+// stays.
 import type { StyleDesc } from '@gpuix/react'
 import { useState, type ReactNode } from 'react'
 import { Icon } from '../icons.tsx'
@@ -37,6 +39,8 @@ export interface PickerChipProps {
   selected?: boolean
   neutral?: boolean
   quiet?: boolean
+  /** No fill at rest; hover and an open menu fill it (composer footer and tray chips). */
+  bare?: boolean
   /** An unselected chip reads in secondary ink until hovered (a filter row), instead of full ink. */
   muted?: boolean
   size?: 'sm' | 'md'
@@ -52,14 +56,14 @@ export interface PickerChipProps {
   style?: StyleDesc
 }
 
-export function PickerChip({ children, icon, mark, dot, lead, secondary, chevron = true, open = false, selected = false, neutral = false, quiet = false, muted = false, size = 'md', disabled = false, truncate = false, maxWidth, onClick, onKeyboard, label, testId, style }: PickerChipProps) {
+export function PickerChip({ children, icon, mark, dot, lead, secondary, chevron = true, open = false, selected = false, neutral = false, quiet = false, bare = false, muted = false, size = 'md', disabled = false, truncate = false, maxWidth, onClick, onKeyboard, label, testId, style }: PickerChipProps) {
   const t = useTheme()
   const c = useControls()
   const g = CONTROL[size]
   const [hover, setHover] = useState(false)
   const lit = hover && !disabled
   const selectedBg = neutral || quiet ? c.ink(0.12) : c.chip.selBg
-  const rest = selected ? selectedBg : open ? (quiet ? c.prop.hover : c.chip.open) : quiet ? 'rgba(0, 0, 0, 0)' : c.chip.bg
+  const rest = selected ? selectedBg : open ? (quiet ? c.prop.hover : c.chip.open) : quiet || bare ? 'rgba(0, 0, 0, 0)' : c.chip.bg
   const hoverBg = selected ? selectedBg : quiet ? c.prop.hover : c.chip.hover
   const fg = disabled ? c.disabled.fg : selected && !neutral && !quiet ? c.chip.selFg : muted && !selected && !lit && !open ? t.textSecondary : t.text
   const glyphColor = disabled ? c.disabled.fg : selected && !neutral && !quiet ? c.chip.selFg : lit ? t.text : t.iconSecondary

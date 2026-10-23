@@ -138,7 +138,7 @@ export function ModelPicker(props: ModelPickerProps) {
         }}
         style={{ display: 'flex', minWidth: 0, flexShrink: 1 }}
       >
-        <PickerChip truncate open={open} disabled={!enabled} chevron={enabled && fit.model} {...(props.lead ? { lead: props.lead } : { mark: props.provider.kind })}>
+        <PickerChip bare truncate open={open} disabled={!enabled} chevron={enabled && fit.model} {...(props.lead ? { lead: props.lead } : { mark: props.provider.kind })}>
           {props.label(t.text)}
         </PickerChip>
       </div>
