@@ -2,7 +2,7 @@
 // should hold the tab (the one that already has it, else the focused group of that thread, else the thread's first group),
 // and a thread with no group on screen just remembers the tab for when it is shown.
 import { getClient, getFocusedPaneId, focusPane, getPaneState, selectThread, setPaneAlias } from '../state.ts'
-import { closeTab, getGroup, getGroups, groupsOfThread, moveTabToGroup, reopenClosedTab, splitTab, updateGroup, updateMemory, getSplitRoot, splitFocusedPane, type SplitDirection } from '../split/store.ts'
+import { closePane, closeTab, collectThreadPanes, getGroup, getGroups, groupsOfThread, moveTabToGroup, reopenClosedTab, splitTab, updateGroup, updateMemory, getSplitRoot, splitFocusedPane, type SplitDirection } from '../split/store.ts'
 import { activateIn, CHAT, cycleIn, hasTab, normalizeTab, numberIn, openIn, permanentIn, reorderIn, tabKey, type Tab } from './model.ts'
 import { getNav, setNav } from '../nav/store.ts'
 
@@ -95,14 +95,25 @@ export function tabsInView(): boolean {
   return nav.page === 'home' && !nav.settingsOpen && !nav.paletteOpen
 }
 
-/** ⌘W: the focused group's active tab. Returns false on the chat tab (today's behaviour applies) and while the tabs are not on
- *  screen, so a tab the reader cannot see is never closed. */
+/** ⌘W: the focused group's active tab. On the chat tab (or an empty pane) of a split it closes the pane (ADE-67); in a single
+ *  pane it returns false (the window closes), as it does while the tabs are not on screen, so a tab the reader cannot see is
+ *  never closed. */
 export function closeActiveTab(): boolean {
   if (!tabsInView()) return false
   const focused = focusedGroup()
-  if (!focused || focused.group.active === CHAT) return false
+  if (!focused || focused.group.active === CHAT) return closeFocusedPane()
   setNav({ keyboardNav: true })
   closeTabAction(focused.leaf, focused.group.active)
+  return true
+}
+/** ⌘⇧W (ADE-67): close the focused pane. False in a single pane and while the tabs are not on screen. */
+export function closeFocusedPane(): boolean {
+  if (!tabsInView()) return false
+  const leaf = getFocusedPaneId()
+  const root = getSplitRoot()
+  if (root.kind === 'leaf' || !collectThreadPanes(root).some((pane) => pane.id === leaf)) return false
+  setNav({ keyboardNav: true })
+  closePane(leaf)
   return true
 }
 export function reopenTab(): boolean {

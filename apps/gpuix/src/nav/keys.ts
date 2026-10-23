@@ -1,11 +1,11 @@
-import { closeActiveTab, cycleTabs, focusGroupToward, numberTab, reopenTab, splitActive } from '../tabs/open.ts'
+import { closeActiveTab, closeFocusedPane, cycleTabs, focusGroupToward, numberTab, reopenTab, splitActive } from '../tabs/open.ts'
 import { paneRects } from '../split/Workspace.tsx'
 // Window shortcuts (`App.tsx` `useHotkey` + `state/navigation.ts`): ⌘N new chat,
 // ⌘B thread panel, ⌘K search, ⌘[ / ⌘] back and forward, ⌘↑ a subagent's
 // parent, ⌘, Settings. In-thread tabs (ADE-54): ⌘1 the chat, ⌘2–⌘9 the tabs (⌘9 the
-// last), ⌃Tab / ⌃⇧Tab cycle, ⌘W closes the tab (never the thread), ⌘⇧T reopens the
-// last closed one, ⌘\ / ⌘⇧\ move the tab into a new group (on the chat: a second
-// thread pane), ⌘⌥←/→/↑/↓ focus the next group. They work while typing, like the desktop's
+// last), ⌃Tab / ⌃⇧Tab cycle, ⌘W closes the tab (never the thread; on a split's chat
+// tab, the pane), ⌘⇧W closes the focused pane, ⌘⇧T reopens the last closed one,
+// ⌘\ / ⌘⇧\ move the tab into a new group (on the chat: a second thread pane), ⌘⌥←/→/↑/↓ focus the next group. They work while typing, like the desktop's
 // `allowInInput`. Nothing they change animates: they set `keyboardNav` first.
 //
 // `main.tsx` passes `onWindowKeyDown` to `render()`. Other surfaces can add
@@ -51,6 +51,7 @@ function shortcut(event: EventPayload): boolean {
   const home = nav.page === 'home' && !nav.settingsOpen
   if (key === '\\' && home && !nav.paletteOpen) { splitActive(m.shift ? 'vertical' : 'horizontal'); return true }
   if (key === 't' && m.shift && home && !nav.paletteOpen) return reopenTab()
+  if (key === 'w' && m.shift && home && !nav.paletteOpen) return closeFocusedPane()
   if (m.shift) return false
   if (home && !nav.paletteOpen && key && /^[1-9]$/.test(key)) return numberTab(Number(key))
   if (key === 'w' && home && !nav.paletteOpen) return closeActiveTab()
@@ -109,5 +110,5 @@ const isShortcut = (event: EventPayload) => {
   const m = event.modifiers
   if (m?.ctrl && !m.cmd && !m.alt && event.key === 'tab') return true
   if (m?.cmd && m.alt && !m.ctrl && (event.key === 'left' || event.key === 'right' || event.key === 'up' || event.key === 'down')) return true
-  return !!m?.cmd && !m.ctrl && !m.alt && (!m.shift || event.key === '\\' || event.key === 't')
+  return !!m?.cmd && !m.ctrl && !m.alt && (!m.shift || event.key === '\\' || event.key === 't' || event.key === 'w')
 }
