@@ -8,6 +8,9 @@
 // - A child arriving in an open group draws its slice and elbow; the old last child's elbow turns into a tee whose
 //   stem runs on down to it, so the elbow travels to the new last row.
 // - Rows remounted by a virtual list, or a group shown already open, paint at rest.
+// - In a group with `arrive` (a live run's members), a new row fades and rises 4 px over 360 ms (ease-out-expo) while
+//   its connector draws over 480 ms (ease-out-quint), 65 ms after the previous arrival; no blur (`ARRIVAL`, zeron's
+//   tool-row reveal).
 // Reduce Motion: a 150 ms fade, no drawing, no stagger.
 import type { PaintTransformProps, PaintTransformValue } from '@gpuix/native/host'
 import { createContext, memo, useContext, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -36,6 +39,25 @@ export const TREE_MOTION = {
   rowLeave: 0.09,
 } as const
 
+/** Seconds, from zeron's transcript (`TOOL_ROW_REVEAL`, `TOOL_CONNECTOR_REVEAL`, `TOOL_ROW_STAGGER_MS`, `TOOL_FIRST_ROW_DELAY_MS`). */
+export const ARRIVAL = {
+  rise: 4,
+  row: 0.36,
+  draw: 0.48,
+  stagger: 0.065,
+  /** A new run row after narration waits this long, so the prose settles first. */
+  first: 0.09,
+  rowEase: [0.16, 1, 0.3, 1] as [number, number, number, number],
+  drawEase: [0.22, 1, 0.36, 1] as [number, number, number, number],
+} as const
+
+/** A row arriving on its own (not in a group): fade and rise `ARRIVAL.rise` px after `delay` seconds; Reduce Motion fades. */
+export function arrivalTransform(delay = 0, gen?: number): PaintTransformProps | undefined {
+  if (!PATCHED_NATIVE) return undefined
+  if (REDUCED_MOTION) return { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.quick, delay, ease: bezier(EASE.out) }, ...(gen === undefined ? {} : { generation: gen }) }
+  return { initial: { opacity: 0, translateY: ARRIVAL.rise }, animate: { opacity: 1, translateY: 0 }, transition: { duration: ARRIVAL.row, delay, ease: ARRIVAL.rowEase }, ...(gen === undefined ? {} : { generation: gen }) }
+}
+
 /** The connector colour: a quiet hairline a little stronger than `--color-border`, since it is one device pixel wide. */
 export function treeLine(t: Theme): string {
   return t.contrast ? ink(t, 0.42) : ink(t, t.variant === 'dark' ? 0.2 : 0.22)
@@ -50,6 +72,8 @@ export interface TreeMotionState {
   rise?: number
   /** Seconds before the first child starts (the parent's own stem drawing first). */
   lead?: number
+  /** A live arrival in an `arrive` group: `ARRIVAL` timings after `lead`. */
+  arrival?: boolean
 }
 export const TreeMotion = createContext<TreeMotionState | null>(null)
 
@@ -88,15 +112,17 @@ function rowStart(motion: TreeMotionState) {
   return (motion.lead ?? m.lead) + Math.min(motion.index, m.cap) * m.step
 }
 
-function drawTransform(segment: Segment, kind: 'in' | 'out' | 'rest', start: number, gen: number, change = false): PaintTransformProps | undefined {
+function drawTransform(segment: Segment, kind: 'in' | 'out' | 'rest', start: number, gen: number, change = false, arrival = false): PaintTransformProps | undefined {
   if (!PATCHED_NATIVE) return undefined
   if (kind === 'rest') return { initial: false, animate: REST[segment.draw], transition: { duration: DURATION.quick, ease: bezier(EASE.out) }, origin: ORIGIN[segment.draw], generation: gen }
   if (REDUCED_MOTION) {
     return kind === 'in'
-      ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.quick, ease: bezier(EASE.out) }, generation: gen }
+      ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.quick, delay: arrival ? start : 0, ease: bezier(EASE.out) }, generation: gen }
       : { initial: false, animate: { opacity: 0 }, transition: { duration: 0.1, ease: bezier(EASE.out) }, generation: gen }
   }
   const m = TREE_MOTION
+  // An arrival draws every piece with its row, over zeron's longer connector reveal.
+  if (arrival && kind === 'in') return { initial: HIDDEN[segment.draw], animate: REST[segment.draw], keyframes: DRAW_KEYS, transition: { duration: ARRIVAL.draw, delay: start, ease: ARRIVAL.drawEase }, origin: ORIGIN[segment.draw], generation: gen }
   // A piece added to a settled row (the old last child's tee) starts at once: the elbow it replaces is already gone.
   const delay = start + (change && segment.key === 'tee' ? 0 : segmentDelay(segment, kind === 'out'))
   return kind === 'in'
@@ -134,11 +160,11 @@ export const TreeLines = memo(function TreeLines({ shape, motion: own }: { shape
       l.animated.set(segment.key, ++generation)
       transform = drawTransform(segment, 'rest', 0, l.animated.get(segment.key)!)
     } else if (l.animated.has(segment.key)) {
-      transform = drawTransform(segment, l.leaving ? 'rest' : 'in', start, l.animated.get(segment.key)!)
+      transform = drawTransform(segment, l.leaving ? 'rest' : 'in', start, l.animated.get(segment.key)!, false, !!motion?.arrival)
     } else if ((first && motion?.mode === 'enter') || (!first && !l.mounted!.has(segment.key))) {
       l.animated.set(segment.key, ++generation)
       // A piece added after mount (the old last row's tee) draws as soon as it appears; the arriving row follows.
-      transform = drawTransform(segment, 'in', first ? start : 0, l.animated.get(segment.key)!, !first)
+      transform = drawTransform(segment, 'in', first ? start : 0, l.animated.get(segment.key)!, !first, !!motion?.arrival)
     }
     transforms.set(segment.key, transform)
   }
@@ -177,6 +203,7 @@ function riseTransform(motion: TreeMotionState | null, fresh: boolean, gen: numb
       : { initial: false, animate: { opacity: 0, translateY: -2 }, transition: { duration: m.rowLeave, delay: start, ease: bezier(EASE.out) }, generation: gen }
   }
   if (!fresh) return undefined
+  if (motion.arrival) return arrivalTransform(start, gen)
   if (REDUCED_MOTION) return { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.quick, ease: bezier(EASE.out) }, generation: gen }
   const rise = motion.rise ?? DISTANCE.micro
   const initial: PaintTransformValue = rise ? { opacity: 0, translateY: rise, blur: BLUR.small } : { opacity: 0 }
@@ -213,6 +240,8 @@ interface GroupState {
   mode: 'enter' | 'leave' | null
   mountedAt: number
   rise?: number
+  /** `arrive` groups: seconds a row arriving now waits (`ARRIVAL.stagger` after the previous arrival). */
+  arrive?: () => number
 }
 const Group = createContext<GroupState | null>(null)
 
@@ -229,11 +258,18 @@ export const ARRIVAL_LEAD = 0.05
  * Children of a parent row, hung from one stem at `x` (the parent icon's centre, relative to the items' left edge).
  * Pass `open` when the group stays mounted while its container collapses, so its rows draw out in reverse.
  */
-export function TreeGroup({ x, tickEnd, inset = 0, gap = 0, open = true, rise, children }: { x: number; tickEnd: number; inset?: number; gap?: number; open?: boolean; rise?: number; children: ReactNode }) {
+export function TreeGroup({ x, tickEnd, inset = 0, gap = 0, open = true, rise, arrive = false, children }: { x: number; tickEnd: number; inset?: number; gap?: number; open?: boolean; rise?: number; /** Rows that arrive later use `ARRIVAL` (fade, 4 px rise, 65 ms stagger) instead of their own entrance. */ arrive?: boolean; children: ReactNode }) {
   const [mountedAt] = useState(() => performance.now())
   const [entered] = useState(() => mountedAt - openedAt < OPEN_WINDOW_MS)
   const mode = !open ? 'leave' : entered ? 'enter' : null
-  const value = useMemo<GroupState>(() => ({ x, tickEnd, inset, gap, mode, mountedAt, rise }), [x, tickEnd, inset, gap, mode, mountedAt, rise])
+  // When the last arrival starts (ms, `performance.now()`): rows mounting in one batch queue up behind it.
+  const queue = useRef(0)
+  const schedule = useMemo(() => (arrive ? () => {
+    const now = performance.now(), start = Math.max(now, queue.current + ARRIVAL.stagger * 1000)
+    queue.current = start
+    return (start - now) / 1000
+  } : undefined), [arrive])
+  const value = useMemo<GroupState>(() => ({ x, tickEnd, inset, gap, mode, mountedAt, rise, arrive: schedule }), [x, tickEnd, inset, gap, mode, mountedAt, rise, schedule])
   return <Group.Provider value={value}>{children}</Group.Provider>
 }
 
@@ -245,19 +281,20 @@ const SlotContext = createContext<Slot | null>(null)
  * extra flex level around Markdown multiplies its measuring (a three-level wrapper cost a 12 s first layout). `anchor` is
  * the y of the row's icon centre; prose rows join as `pass` (the stem runs past them).
  */
-export function TreeItem({ joint, last, index, count, anchor, tickEnd, children }: { joint: Joint; last: boolean; index: number; count: number; anchor: number; tickEnd?: number; children: ReactNode }) {
+export function TreeItem({ joint, last, index, count, anchor, tickEnd, fresh = true, children }: { joint: Joint; last: boolean; index: number; count: number; anchor: number; tickEnd?: number; /** False: the row is history (remounted, or older than a live arrival), so it never animates in. */ fresh?: boolean; children: ReactNode }) {
   const group = useContext(Group)
   // A row that mounts well after its group is a new arrival (a live tool call): it draws in alone.
-  const [arrived] = useState(() => !!group && performance.now() - group.mountedAt > 100)
+  const [arrived] = useState(() => !!group && fresh && performance.now() - group.mountedAt > 100)
+  const [delay] = useState(() => (arrived && group?.arrive ? group.arrive() : null))
   const slot = useMemo<Slot | null>(() => {
     if (!group) return null
     const shape: TreeShape = { branch: { x: group.x, joint, last, tickEnd: tickEnd ?? group.tickEnd }, anchor, top: index === 0 ? -group.inset : 0, overlap: group.gap }
     // Only its connectors draw on arrival: a live row brings its own entrance (`Rise`).
     const motion: TreeMotionState | null = group.mode === 'leave' ? { mode: 'leave', index, count, rise: group.rise }
-      : arrived ? { mode: 'enter', index: 0, count: 1, rise: 0, lead: ARRIVAL_LEAD }
+      : arrived ? (delay !== null ? { mode: 'enter', index: 0, count: 1, lead: delay, arrival: true } : { mode: 'enter', index: 0, count: 1, rise: 0, lead: ARRIVAL_LEAD })
       : group.mode === 'enter' ? { mode: 'enter', index, count, rise: group.rise } : null
     return { shape, motion }
-  }, [group, joint, last, index, count, anchor, tickEnd, arrived])
+  }, [group, joint, last, index, count, anchor, tickEnd, arrived, delay])
   return <SlotContext.Provider value={slot}>{children}</SlotContext.Provider>
 }
 

@@ -19,7 +19,7 @@ import { calendarDateKey, calendarDateLabel, elapsedSince, plural } from '../../
 import { clockTime } from './clock.ts'
 import { isImageGenerationTool } from '../../../desktop/src/lib/toolActivity.ts'
 import { responseImages } from '../../../desktop/src/lib/responseImages.ts'
-import { isAgentLaunchBlock, isDelegationLaunchBlock, isOrchestrationBlock } from '../../../desktop/src/lib/workChunks.ts'
+import { chunkRuns, isAgentLaunchBlock, isDelegationLaunchBlock, isOrchestrationBlock } from '../../../desktop/src/lib/workChunks.ts'
 import { buildWorkHierarchy, shouldRevealLiveText, type Block, type TurnGroup } from '../../../../packages/kybern-client/src/transcript.ts'
 import type { ContentPart, Diff, RuntimeTask, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { removePending, usePendingSend } from '../composer/pending.ts'
@@ -155,6 +155,8 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
       (b.kind === 'assistant' && !b.complete && (b.id === group.liveThinkingId || shouldRevealLiveText(b.text, b.complete))) ||
       (b.kind === 'approval' && !b.decision),
   )
+  // Between calls the newest run says "thinking" in its tail, instead of a separate row blinking in under it.
+  const endsInRun = useMemo(() => running && !hasLiveWork && chunkRuns(hierarchy.roots, tasksByToolCall).at(-1)?.kind === 'run', [running, hasLiveWork, hierarchy, tasksByToolCall])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -172,11 +174,11 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
           <WorkingHeader since={group.user?.at ?? group.work[0]?.at ?? ''} />
           {hierarchy.roots.length > 0 && (
             <div style={{ marginTop: 4 }}>
-              <WorkRows compact blocks={hierarchy.roots} ctx={ctx} tone="bright" liveTextId={group.liveTextId} liveThinkingId={group.liveThinkingId} />
+              <WorkRows compact blocks={hierarchy.roots} ctx={ctx} tone="bright" liveTextId={group.liveTextId} liveThinkingId={group.liveThinkingId} waiting={endsInRun} />
             </div>
           )}
           {/* `thinkingRow`: `t-row-enter` each time it mounts. */}
-          {!hasLiveWork && (
+          {!hasLiveWork && !endsInRun && (
             <Rise kind="row" style={{ marginTop: 6 }}>
               <Shimmer text="Thinking" color={muted(t)} lineHeight={TEXT.lineHeight} />
             </Rise>

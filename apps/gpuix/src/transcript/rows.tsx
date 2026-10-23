@@ -7,18 +7,19 @@ import { openThread } from '../nav/history.ts'
 import { secretRequestInput, secretOutcomeLine, secretPartsText } from '../../../../packages/kybern-client/src/secretRequest.ts'
 import { coordinatorCardLine, cardPartsText } from '../../../../packages/kybern-client/src/coordinatorCards.ts'
 // Work rows inside a turn (`views/Transcript.tsx` WorkRows → ToolRow/WorkRow):
-// tool calls with their expandable result, runs of settled tools folded into
-// one summary row (`chunkWork` + `summarizeToolCalls`), nested child calls
+// tool calls with their expandable result, the work between two pieces of
+// narration folded into one summary row (`chunkRuns`, `WorkRun.tsx`), nested child calls
 // (`buildWorkHierarchy`), reasoning, approvals, notices, runtime tasks, and
 // compact subagent and delegation groups. Labels and icons come from the
 // desktop's own helpers.
 import { memo, useEffect, useMemo, useState } from 'react'
-import { toolLine, toolVisualKind, summarizeToolCalls, type ToolVisualKind } from '../../../desktop/src/lib/toolActivity.ts'
+import { toolLine, toolVisualKind, type ToolVisualKind } from '../../../desktop/src/lib/toolActivity.ts'
 import { toolSurface, surfaceHasOutputText, surfaceOutputText, type ToolSurface } from '../../../desktop/src/lib/toolSurface.ts'
 import { hasOutputText, outputText } from '../../../desktop/src/lib/format.ts'
 import { responseImages } from '../../../desktop/src/lib/responseImages.ts'
 import { agentItemWriteResult, agentItemLabel, agentItemResultText, agentItemTool, parseAgentItemResult } from '../../../desktop/src/lib/agentItemTools.ts'
-import { chunkKey, chunkWork, isAgentLaunchBlock, isDelegationLaunchBlock, type WorkChunk } from '../../../desktop/src/lib/workChunks.ts'
+import { chunkKey, chunkRuns, isAgentLaunchBlock, isDelegationLaunchBlock, type WorkChunk } from '../../../desktop/src/lib/workChunks.ts'
+import { RUN_ANCHOR, RUN_TICK_END, WorkRunRow } from './WorkRun.tsx'
 import { orchestrationLabel, orchestrationTool, parseDelegateInput, parseDelegateResult, parseSendInput } from '../../../../packages/kybern-client/src/orchestrationTools.ts'
 import { isPreviewOpenTool, previewToolLabel } from '../../../../packages/kybern-client/src/previewTool.ts'
 import { computerConsent, connectorApproval, isUserInput, notesTasksConsent } from '../../../../packages/kybern-client/src/userInput.ts'
@@ -38,7 +39,7 @@ import { ResponseImage } from './images.tsx'
 import { MidTurnMessage } from './bubble.tsx'
 import { cachedMarkdownTheme, Chevron, CODE, destructive, fg, muted, Para, ROW_LINE, RowIcon, TEXT } from './kit.tsx'
 import { Collapse, Rise } from '../motion/kit.tsx'
-import { markTreeOpen, NoTreeSlot, TICK_GAP, TreeBox, TreeGroup, TreeItem, TreeLines, useTreeSlot, type Joint, type TreeShape } from '../tree/Tree.tsx'
+import { markTreeOpen, TICK_GAP, TreeBox, TreeGroup, TreeItem, TreeLines, useTreeSlot, type Joint, type TreeShape } from '../tree/Tree.tsx'
 import { useLoopVisibility } from '../native/loop-visibility.ts'
 import { Shimmer, SwapOnChange, useFresh, useSmoothText, useStreamEffects } from './motion.tsx'
 import { hydrateToolOutput, useRowState, usePacedAssistant, type ToolBlock } from './store.ts'
@@ -153,12 +154,12 @@ export function approvalRowText(approval: ApprovalRequest, decision: ApprovalDec
   return `${decision ? (decision.decision === 'deny' ? 'Declined ' : 'Approved ') : 'Waiting to approve '}${approval.summary || approval.tool_name}`
 }
 
-const isTaskActive = (task: RuntimeTask) => task.status === 'pending' || task.status === 'running' || task.status === 'waiting' || task.status === 'stopping'
+export const isTaskActive = (task: RuntimeTask) => task.status === 'pending' || task.status === 'running' || task.status === 'waiting' || task.status === 'stopping'
 
 // ---- row lists ----
 
-/** Rows for a block list. `compact` folds settled tool runs and launch groups
- *  like the desktop's settled and live work; nested activity lists every row. */
+/** Rows for a block list. `compact` folds the work between narration into runs and launches into groups
+ *  (`chunkRuns`); nested activity lists every row. */
 export const WorkRows = memo(function WorkRows({
   blocks,
   ctx,
@@ -166,6 +167,7 @@ export const WorkRows = memo(function WorkRows({
   liveTextId = null,
   liveThinkingId = null,
   compact = false,
+  waiting = false,
 }: {
   blocks: readonly Block[]
   ctx: RowContext
@@ -173,9 +175,11 @@ export const WorkRows = memo(function WorkRows({
   liveTextId?: string | null
   liveThinkingId?: string | null
   compact?: boolean
+  /** A live turn with nothing in flight: a trailing run says "thinking" (`Turn` drops its own "Thinking" row). */
+  waiting?: boolean
 }) {
   const chunks = useMemo<WorkChunk[]>(
-    () => (compact ? chunkWork(blocks, ctx.tasksByToolCall) : blocks.map((block) => ({ kind: 'single', block }))),
+    () => (compact ? chunkRuns(blocks, ctx.tasksByToolCall) : blocks.map((block) => ({ kind: 'single', block }))),
     [blocks, ctx.tasksByToolCall, compact],
   )
   // Inside a disclosure (`TreeGroup`) every row hangs from the parent's stem; outside one `TreeItem` adds nothing.
@@ -196,9 +200,11 @@ export const WorkRows = memo(function WorkRows({
               tone={tone}
               live={chunk.block.kind === 'assistant' && chunk.block.id === liveTextId}
               thinking={chunk.block.kind === 'assistant' && chunk.block.id === liveThinkingId}
+              // Its reasoning is the last member of the run just above (`chunkRuns`): only the narration is left here.
+              textOnly={i > 0 && chunks[i - 1]!.kind === 'run' && (chunks[i - 1] as Extract<WorkChunk, { kind: 'run' }>).blocks.at(-1) === chunk.block}
             />
-          ) : chunk.kind === 'tools' ? (
-            <ToolGroupRow blocks={chunk.blocks} ctx={ctx} />
+          ) : chunk.kind === 'run' || chunk.kind === 'tools' ? (
+            <WorkRunRow blocks={chunk.blocks} ctx={ctx} liveThinkingId={liveThinkingId} waiting={waiting && i === chunks.length - 1} />
           ) : (
             <LaunchGroupRow kind={chunk.kind} blocks={chunk.blocks} ctx={ctx} />
           )}
@@ -212,7 +218,7 @@ export const WorkRows = memo(function WorkRows({
  *  icon). Prose, images and mid-turn messages are not steps, so the stem runs past them (`pass`); a reasoning block
  *  is a step through its "Thought" row. */
 function treePlace(chunk: WorkChunk): { joint: Joint; anchor: number; tickEnd?: number } {
-  if (chunk.kind === 'tools') return { joint: 'node', anchor: 16 }
+  if (chunk.kind === 'run' || chunk.kind === 'tools') return { joint: 'node', anchor: RUN_ANCHOR, tickEnd: RUN_TICK_END }
   // `LaunchGroupRow`: 6px padding, then a 36px header around its 24px badge (its 4px margins sit outside the box).
   if (chunk.kind !== 'single') return { joint: 'node', anchor: 24, tickEnd: -TICK_GAP }
   const block = chunk.block
@@ -311,52 +317,21 @@ function RowLine({
   )
 }
 
-/** Two or more settled tools: one summary row ("Ran 3 commands, read 2 files"). */
-const ToolGroupRow = memo(function ToolGroupRow({ blocks, ctx }: { blocks: ToolBlock[]; ctx: RowContext }) {
-  const [open, setOpen] = useRowState(`group:${blocks[0]!.id}`, false)
-  const summary = useMemo(() => summarizeToolCalls(blocks.map((b) => ({ call: b.call, complete: b.complete, isError: b.isError }))), [blocks])
-  const tree = useTreeSlot()
-  if (!summary)
-    return (
-      <TreeBox>
-        <NoTreeSlot>
-          {blocks.map((block) => (
-            <ToolRow key={block.id} block={block} ctx={ctx} />
-          ))}
-        </NoTreeSlot>
-      </TreeBox>
-    )
-  return (
-    <div paintTransform={tree.rise} style={{ position: 'relative', display: 'flex', flexDirection: 'column', paddingTop: 4, paddingBottom: 4 }}>
-      <RowLine testId="tool-group" icon={workIcon(summary.visual, false)} label={summary.label} chevron={open ? 'open' : 'closed'} stem={open} onClick={() => { if (!open) markTreeOpen(); setOpen(!open) }} />
-      <Collapse open={open}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingTop: 2, marginLeft: 22 }}>
-          <TreeGroup {...GROUP_TREE} inset={2} gap={2} open={open}>
-            {blocks.map((block, i) => (
-              <TreeItem key={block.id} joint="node" last={i === blocks.length - 1} index={i} count={blocks.length} anchor={16}>
-                <ToolRow block={block} ctx={ctx} />
-              </TreeItem>
-            ))}
-          </TreeGroup>
-        </div>
-      </Collapse>
-      {tree.lines}
-    </div>
-  )
-})
-
 export const WorkRow = memo(function WorkRow({
   block,
   ctx,
   tone = 'muted',
   live = false,
   thinking = false,
+  textOnly = false,
 }: {
   block: Block
   ctx: RowContext
   tone?: 'bright' | 'muted'
   live?: boolean
   thinking?: boolean
+  /** An assistant block whose reasoning is shown in the run above it. */
+  textOnly?: boolean
 }) {
   const t = useTheme()
   const tree = useTreeSlot()
@@ -366,7 +341,7 @@ export const WorkRow = memo(function WorkRow({
     case 'image':
       return <TreeBox><ResponseImage source={block.source} at={block.at} /></TreeBox>
     case 'assistant':
-      return <AssistantWorkRow block={block} tone={tone} live={live} thinkingLive={thinking} />
+      return <AssistantWorkRow block={block} tone={tone} live={live} thinkingLive={thinking} textOnly={textOnly} />
     case 'runtime_task':
       return <RuntimeTaskRow task={block.task} thread={block.task.kind === 'agent' ? launchThread(block, ctx) : undefined} />
     case 'approval': {
@@ -410,40 +385,42 @@ export const WorkRow = memo(function WorkRow({
 
 // ---- tool rows ----
 
+/** What a tool row shows: its activity, glyph, surface, Kybern item, screenshots and label, and whether it has output. */
+export function toolView(block: ToolBlock, active: boolean) {
+  const complete = block.complete && !active
+  const activity = toolLine(block.call, complete)
+  const visual = toolVisualKind(block.call, activity)
+  const surface = toolSurface(block.call, block.output)
+  const item = agentItemTool(block.call.name)
+  const orchestration = orchestrationTool(block.call.name)
+  const itemResult = item && block.complete && !block.isError ? parseAgentItemResult(block.output) : null
+  const screenshots = surface?.screenshots ?? responseImages(block.output).map((image) => image.source)
+  const hasText = surface ? surfaceHasOutputText(block.output) : hasOutputText(block.output, block.stream)
+  const label = isPreviewOpenTool(block.call.name)
+    ? previewToolLabel(block.call.input, complete, block.isError)
+    : orchestration
+      ? orchestrationLabel(orchestration, complete, block.isError)
+      : item
+        ? agentItemLabel(item, block.call.input, itemResult, complete, block.isError)
+        : surface
+          ? surfaceLabel(surface, block.call.input, complete, block.isError)
+          : workLabel(activity, block.call.name, complete, block.isError)
+  const hasOutput = hasText || screenshots.length > 0 || !!block.outputOmitted || !!block.streamOmitted
+  return { activity, visual, surface, item, itemResult, screenshots, label, hasOutput }
+}
+
 const ToolRow = memo(function ToolRow({ block, ctx }: { block: ToolBlock; ctx: RowContext }) {
   const t = useTheme()
   const [open, setOpen] = useRowState(`tool:${block.id}`, false)
   const task = ctx.tasksByToolCall.get(block.call.id)
   const active = !!task && isTaskActive(task)
-  const view = useMemo(() => {
-    const complete = block.complete && !active
-    const activity = toolLine(block.call, complete)
-    const visual = toolVisualKind(block.call, activity)
-    const surface = toolSurface(block.call, block.output)
-    const item = agentItemTool(block.call.name)
-    const orchestration = orchestrationTool(block.call.name)
-    const itemResult = item && block.complete && !block.isError ? parseAgentItemResult(block.output) : null
-    const screenshots = surface?.screenshots ?? responseImages(block.output).map((image) => image.source)
-    const hasText = surface ? surfaceHasOutputText(block.output) : hasOutputText(block.output, block.stream)
-    const label = isPreviewOpenTool(block.call.name)
-      ? previewToolLabel(block.call.input, complete, block.isError)
-      : orchestration
-        ? orchestrationLabel(orchestration, complete, block.isError)
-        : item
-          ? agentItemLabel(item, block.call.input, itemResult, complete, block.isError)
-          : surface
-            ? surfaceLabel(surface, block.call.input, complete, block.isError)
-            : workLabel(activity, block.call.name, complete, block.isError)
-    const hasOutput = hasText || screenshots.length > 0 || !!block.outputOmitted || !!block.streamOmitted
-    return { activity, visual, surface, item, itemResult, screenshots, label, hasOutput }
-  }, [block, active])
+  const view = useMemo(() => toolView(block, active), [block, active])
   const children = ctx.childrenByParent.get(block.call.id) ?? []
   // A launch whose child thread is known opens it (`SubagentLaunchRow`, `DelegationLaunchRow`).
   const child = isAgentLaunchBlock(block, task) || isDelegationLaunchBlock(block) ? launchThread(block, ctx) : undefined
   const opensActivity = isAgentLaunchBlock(block, task) || !!child
   const canExpand = !opensActivity && (children.length > 0 || view.hasOutput)
   const tone = block.isError ? destructive(t, 0.8) : muted(t)
-  const nested = view.activity.kind === 'delegate' ? 'Subagent activity' : 'Nested activity'
   // Decided once on mount: only a row that just arrived plays `t-row-enter`.
   const fresh = useFresh(block.at)
   const tree = useTreeSlot()
@@ -470,37 +447,44 @@ const ToolRow = memo(function ToolRow({ block, ctx }: { block: ToolBlock; ctx: R
         onClick={child ? () => openThread(child.id) : canExpand ? () => { if (!open) markTreeOpen(); setOpen(!open) } : undefined}
       />
       {view.item?.write && agentItemWriteResult(view.itemResult) && (!ctx.inlineItemIds || ctx.inlineItemIds.has(block.call.id)) && <AgentItemCard result={agentItemWriteResult(view.itemResult)!} />}
-      {canExpand && (
-        <Collapse open={open} testId={`tool-panel-${block.call.id}`}>
-        <div style={{ display: 'flex', flexDirection: 'column', marginLeft: 22, paddingTop: 6, minWidth: 0 }}>
-          {children.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', paddingBottom: view.hasOutput ? 10 : 0 }}>
-              <Label color={muted(t, 0.45)} size={11} lineHeight={20} style={{ paddingBottom: 2 }}>
-                {nested}
-              </Label>
-              {/* The stem passes the label: the first child's slice reaches up over the panel's padding and the label. */}
-              <TreeGroup {...GROUP_TREE} inset={6 + 22} gap={2} open={open}>
-                <WorkRows blocks={children} ctx={ctx} />
-              </TreeGroup>
-            </div>
-          )}
-          {view.hasOutput && (
-            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-              {children.length > 0 && (
-                <Label color={muted(t, 0.45)} size={11} lineHeight={20} style={{ paddingBottom: 4 }}>
-                  Result
-                </Label>
-              )}
-              <ToolResult block={block} threadId={ctx.threadId} surface={view.surface} item={!!view.item} screenshots={view.screenshots} />
-            </div>
-          )}
-        </div>
-        </Collapse>
-      )}
+      {canExpand && <ToolPanel block={block} ctx={ctx} view={view} open={open} nested={children} />}
       {tree.lines}
     </Rise>
   )
 })
+
+/** A tool row's disclosure: its nested calls ("Nested activity"), then its result. */
+export function ToolPanel({ block, ctx, view, open, nested }: { block: ToolBlock; ctx: RowContext; view: ReturnType<typeof toolView>; open: boolean; nested: ToolBlock[] }) {
+  const t = useTheme()
+  const label = view.activity.kind === 'delegate' ? 'Subagent activity' : 'Nested activity'
+  return (
+    <Collapse open={open} testId={`tool-panel-${block.call.id}`}>
+      <div style={{ display: 'flex', flexDirection: 'column', marginLeft: 22, paddingTop: 6, minWidth: 0 }}>
+        {nested.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', paddingBottom: view.hasOutput ? 10 : 0 }}>
+            <Label color={muted(t, 0.45)} size={11} lineHeight={20} style={{ paddingBottom: 2 }}>
+              {label}
+            </Label>
+            {/* The stem passes the label: the first child's slice reaches up over the panel's padding and the label. */}
+            <TreeGroup {...GROUP_TREE} inset={6 + 22} gap={2} open={open}>
+              <WorkRows blocks={nested} ctx={ctx} />
+            </TreeGroup>
+          </div>
+        )}
+        {view.hasOutput && (
+          <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+            {nested.length > 0 && (
+              <Label color={muted(t, 0.45)} size={11} lineHeight={20} style={{ paddingBottom: 4 }}>
+                Result
+              </Label>
+            )}
+            <ToolResult block={block} threadId={ctx.threadId} surface={view.surface} item={!!view.item} screenshots={view.screenshots} />
+          </div>
+        )}
+      </div>
+    </Collapse>
+  )
+}
 
 /** Lines a collapsed result shows: the desktop's `max-h-72` (288px) at 21px rows. */
 const PREVIEW_LINES = TOOL_RESULT_LINE_LIMIT
@@ -597,11 +581,11 @@ function ToolResult({ block, threadId, surface, item, screenshots }: { block: To
 
 // ---- reasoning and interim prose ----
 
-const AssistantWorkRow = memo(function AssistantWorkRow({ block, tone, live, thinkingLive }: { block: Extract<Block, { kind: 'assistant' }>; tone: 'bright' | 'muted'; live: boolean; thinkingLive: boolean }) {
+const AssistantWorkRow = memo(function AssistantWorkRow({ block, tone, live, thinkingLive, textOnly }: { block: Extract<Block, { kind: 'assistant' }>; tone: 'bright' | 'muted'; live: boolean; thinkingLive: boolean; textOnly: boolean }) {
   block = usePacedAssistant(block)
   const t = useTheme()
   const [open, setOpen] = useRowState(`thinking:${block.id}`, false)
-  const hasThinking = block.thinking.trim().length > 0
+  const hasThinking = !textOnly && block.thinking.trim().length > 0
   const hasText = block.text.trim().length > 0
   const showText = hasText && (!live || block.complete || shouldRevealLiveText(block.text, block.complete))
   // Only the segment receiving deltas is paced; settled prose renders whole.

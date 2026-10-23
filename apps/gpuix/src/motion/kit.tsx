@@ -313,7 +313,7 @@ export function Collapse({ open, children, height: known, testId, closeDuration 
 let swapGeneration = 3_000_000
 
 /** `t-text-swap` (`motion.css:206`) and `t-icon-swap` (`:250`): [incoming, outgoing] start/end values and timings. */
-function swapTransforms(kind: 'text' | 'icon', generation: number): { enter: PaintTransformProps; leave: PaintTransformProps } | undefined {
+function swapTransforms(kind: 'text' | 'icon', generation: number, blur = true): { enter: PaintTransformProps; leave: PaintTransformProps } | undefined {
   if (!PATCHED_NATIVE || REDUCED_MOTION) return undefined
   if (kind === 'icon') {
     const hidden: PaintTransformValue = { opacity: 0, scale: 0.6, blur: BLUR.small }
@@ -323,8 +323,8 @@ function swapTransforms(kind: 'text' | 'icon', generation: number): { enter: Pai
       leave: { initial: restOf(hidden), animate: hidden, transition, generation },
     }
   }
-  const entering: PaintTransformValue = { opacity: 0, translateY: DISTANCE.micro, blur: BLUR.small }
-  const leaving: PaintTransformValue = { opacity: 0, translateY: -DISTANCE.micro, blur: BLUR.small }
+  const entering: PaintTransformValue = { opacity: 0, translateY: DISTANCE.micro, ...(blur ? { blur: BLUR.small } : {}) }
+  const leaving: PaintTransformValue = { opacity: 0, translateY: -DISTANCE.micro, ...(blur ? { blur: BLUR.small } : {}) }
   return {
     enter: { initial: entering, animate: restOf(entering), transition: tween(DURATION.fast, EASE.smoothOut) },
     leave: { initial: restOf(leaving), animate: leaving, transition: tween(DURATION.quick, EASE.inOut), generation },
@@ -344,9 +344,10 @@ function swapTransforms(kind: 'text' | 'icon', generation: number): { enter: Pai
  * copy of what was rendered last, unmounted when its exit completes. A change during an exit drops the older copy at once
  * (never more than two). `still` skips the entrance of the first state only (the desktop's "the first paint renders without
  * motion"); callers that keep one `Swap` mounted for the life of a control pass it. Reduce Motion: a 150 ms opacity fade of
- * the incoming state, no copy kept. Stock addon: the new state just replaces the old.
+ * the incoming state, no copy kept. Stock addon: the new state just replaces the old. `blur={false}` drops the text swap's
+ * blur (a blur settle re-renders the window: use it for text that changes often, like a live count).
  */
-export function Swap({ active, children, style, kind = 'text', still = false, innerStyle, leavingStyle }: {
+export function Swap({ active, children, style, kind = 'text', still = false, innerStyle, leavingStyle, blur = true }: {
   active: string
   children: ReactNode
   style?: StyleDesc
@@ -356,18 +357,19 @@ export function Swap({ active, children, style, kind = 'text', still = false, in
   innerStyle?: StyleDesc
   /** Extra style for the outgoing copy only (`right: 0` keeps a truncating title inside the wrapper while it leaves). */
   leavingStyle?: StyleDesc
+  blur?: boolean
 }) {
   const first = useRef(active)
   const changed = useRef(false)
   if (active !== first.current) changed.current = true
   const last = useRef<{ key: string; node: ReactNode }>({ key: active, node: children })
   const [leaving, setLeaving] = useState<{ id: number; node: ReactNode } | null>(null)
-  const transforms = swapTransforms(kind, 0)
+  const transforms = swapTransforms(kind, 0, blur)
   if (last.current.key !== active) {
     if (transforms && PATCHED_NATIVE && !REDUCED_MOTION) setLeaving({ id: ++swapGeneration, node: last.current.node })
     last.current = { key: active, node: children }
   } else last.current.node = children
-  const out = leaving ? swapTransforms(kind, leaving.id) : undefined
+  const out = leaving ? swapTransforms(kind, leaving.id, blur) : undefined
   const fade = REDUCED_MOTION && PATCHED_NATIVE && !(still && !changed.current) ? REDUCED_FADE : undefined
   const enter = still && !changed.current ? undefined : transforms?.enter ?? fade
   const base = { position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', ...style } as const
@@ -398,8 +400,8 @@ export function Swap({ active, children, style, kind = 'text', still = false, in
  * change cross-swaps, including the very first one (the previous state is kept for its exit). Use this, not a plain div
  * until the first change and a `Swap` after it: that would lose the outgoing state of the first change.
  */
-export function SwapOnChange({ active, children, style, kind = 'text', innerStyle, leavingStyle }: { active: string; children: ReactNode; style?: StyleDesc; kind?: 'text' | 'icon'; innerStyle?: StyleDesc; leavingStyle?: StyleDesc }) {
-  return <Swap active={active} style={style} kind={kind} innerStyle={innerStyle} leavingStyle={leavingStyle} still>{children}</Swap>
+export function SwapOnChange({ active, children, style, kind = 'text', innerStyle, leavingStyle, blur }: { active: string; children: ReactNode; style?: StyleDesc; kind?: 'text' | 'icon'; innerStyle?: StyleDesc; leavingStyle?: StyleDesc; blur?: boolean }) {
+  return <Swap active={active} style={style} kind={kind} innerStyle={innerStyle} leavingStyle={leavingStyle} blur={blur} still>{children}</Swap>
 }
 
 // ─── Embedded documents ───────────────────────────────────────────────────
