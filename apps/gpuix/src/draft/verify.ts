@@ -175,8 +175,29 @@ async function morph(look: Look, name: string, prompt: string, image?: string, e
 await morph('dark', 'morph-two-lines', 'Make the lightbox zoom follow trackpad pinch on Safari, and keep the image sharp while it scales. Check the gallery grid too, and the thumbnails on the detail page.')
 await morph('dark', 'morph-reduced', 'Make the lightbox zoom follow trackpad pinch on Safari, and keep the image sharp while it scales.', undefined, { KYBERN_REDUCED_MOTION: '1' })
 const image = path.join(SCRATCH, 'morph-image.png')
-Bun.spawnSync(['cp', '/Users/mymac/.kybern/worktrees/ade/01a1675c-963c-7cd1-bd2c-7e3629c97bbb/apps/desktop/public/release-background.png', image])
+Bun.spawnSync(['cp', path.join(ROOT, '../desktop/public/release-background.png'), image])
 await morph('dark', 'morph-image', 'Use this as the gallery header background.', image)
+
+// ---- Up next → Send with nothing typed: the task's run starts through tasks.items.send and the thread opens ----
+{
+  const f = await launch('dark')
+  try {
+    const pickup = await f.app.getByTestId('draft-pickup').bounds()
+    const row = { x: pickup.x + pickup.width * 0.75, y: pickup.y + 20 + 4 + 16 }
+    await f.app.mouse.move(row); await f.app.mouse.down(row); await f.app.mouse.up(row)
+    await settle(f)
+    await f.app.getByTestId('draft-attached-task').waitFor()
+    await f.app.getByTestId('send').click()
+    await until(async () => { await settle(f, 50); return (await f.app.getByTestId('draft').count()) === 0 }, 'task thread opens', 20000)
+    // The daemon creates the run's thread first and then appends its message (the task as a mention): wait for that bubble.
+    await until(async () => { await settle(f, 50); return (await f.app.getByTestId('user-bubble').count()) > 0 }, 'the task message', 10000)
+    await settle(f, 600)
+    await f.app.screenshot({ path: `${out}/task-send-thread.png` })
+    const { tasks } = await daemon.call('tasks.items.list', {}) as { tasks: { key: string; status: string; runs: unknown[] }[] }
+    const sent = tasks.find((t) => t.key.endsWith('-1') && t.runs.length > 0)
+    report.taskSend = sent ? { key: sent.key, status: sent.status, runs: sent.runs.length } : 'no run recorded'
+  } finally { await f.close() }
+}
 
 // ---- frame intervals of one flight on whole-window glass (scene submissions, real time; the card keeps its frost) ----
 {
