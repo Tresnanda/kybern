@@ -43,14 +43,20 @@ function useCountContext() {
   return useTasks((s) => `${s.prefs.filter}|${s.prefs.view}|${s.prefs.grouping}|${s.prefs.showDone}|${s.prefs.showCanceled}|${s.query}`)
 }
 
+/** The empty slot after the last row of a list or column. */
+const footerEntry = (height: number): TaskWindowEntry => ({ key: 'dock-room', height, render: () => <div style={{ height }} /> })
+
 export function TaskList({
   groups,
   sequence,
   projectName,
+  footer = 0,
 }: {
   groups: TaskGroup[]
   sequence: string[]
   projectName: (task: TaskItem) => string
+  /** Room after the last row, so a floating dock never covers it (`dockRoom`). */
+  footer?: number
 }) {
   const t = useTheme()
   const p = useTasks((s) => s.prefs)
@@ -142,7 +148,7 @@ export function TaskList({
       testId="task-list-viewport"
       style={{ display: 'flex', flexGrow: 1, minHeight: 0, width: '100%', userSelect: 'none' }}
     >
-      <TaskWindow testId="task-list" entries={entries} />
+      <TaskWindow testId="task-list" entries={footer > 0 ? [...entries, footerEntry(footer)] : entries} />
     </div>
   )
 }
@@ -382,10 +388,13 @@ export function TaskBoard({
   columns,
   sequence,
   projectName,
+  footer = 0,
 }: {
   columns: { status: TaskStatus; tasks: TaskItem[] }[]
   sequence: string[]
   projectName: (task: TaskItem) => string
+  /** Room after the last card of each column, so a floating dock never covers it (`dockRoom`). */
+  footer?: number
 }) {
   const t = useTheme()
   const size = useWindowSize({ intervalMs: 300 })
@@ -436,6 +445,7 @@ export function TaskBoard({
                 ? [{ key: `quick:${quick.nonce}`, height: 96, pinned: true, render: () => <QuickAdd request={quick} card /> }]
                 : []),
               ...column.tasks.map((task) => ({ key: task.id, height: 71, intrinsic: true, render: () => <TaskRow task={task} sequence={sequence} project={projectName(task)} card /> })),
+              ...(footer > 0 ? [footerEntry(footer)] : []),
             ]}
           />
         </div>
