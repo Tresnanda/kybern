@@ -329,16 +329,46 @@ pub async fn read_thread_file(
     cwd: &Path,
     source: &str,
     max_bytes: u64,
+    if_version: Option<&str>,
 ) -> Result<kybern_protocol::methods::FilesReadResult> {
     let root = tokio::fs::canonicalize(cwd).await?;
     match resolve_reference(indexes, cwd, &root, &mut None, source).await? {
-        Reference::Found(relative) => read_file(&root, &relative, max_bytes.clamp(1, 1024 * 1024)).await,
+        Reference::Found(relative) => read_file(&root, &relative, max_bytes.clamp(1, MAX_WRITE_BYTES as u64), if_version).await,
         Reference::Outside => {
             Err(anyhow::anyhow!("This file is outside the conversation's workspace. Ask the agent to copy it into the workspace."))
         }
         Reference::Ambiguous => Err(anyhow::anyhow!("Several files match this path. Ask the agent for the path from the workspace root.")),
         Reference::Missing => Err(anyhow::anyhow!("File not found. Check the path or ask the agent to recreate it.")),
     }
+}
+
+/// `source` (relative to the thread cwd or absolute inside it) as a path
+/// relative to the canonical cwd. Canonical containment rejects symlinks that
+/// escape the workspace. Writes use this exact form only: a tab saves the root-relative
+/// path `threads.files.resolve` gave it, never a suffix match.
+async fn thread_relative(root: &Path, source: &str) -> Result<(std::path::PathBuf, String)> {
+    let root = tokio::fs::canonicalize(root).await?;
+    let candidate = root.join(source);
+    let path = tokio::fs::canonicalize(candidate)
+        .await
+        .map_err(|_| anyhow::anyhow!("File not found. Check the path or ask the agent to recreate it."))?;
+    let relative = path
+        .strip_prefix(&root)
+        .map_err(|_| anyhow::anyhow!("This file is outside the conversation's workspace. Ask the agent to copy it into the workspace."))?
+        .to_string_lossy()
+        .into_owned();
+    Ok((root, relative))
+}
+
+/// Save an existing file of a conversation workspace; see `write_file`.
+pub async fn write_thread_file(
+    root: &Path,
+    source: &str,
+    content: String,
+    expected_version: Option<&str>,
+) -> Result<kybern_protocol::methods::FilesWriteResult> {
+    let (root, relative) = thread_relative(root, source).await?;
+    write_file(&root, &relative, content, expected_version).await
 }
 
 /// Most paths one `threads.files.resolve` call may ask about.
@@ -368,15 +398,45 @@ async fn existing_file(root: &Path, path: &str) -> Option<String> {
     (canon.is_file() && resolve(root, &relative).is_ok()).then_some(relative)
 }
 
+/// Largest file a client may save (the editor's syntax limit).
+pub const MAX_WRITE_BYTES: usize = 2 * 1024 * 1024;
+
+/// An opaque on-disk version: modification time (ns) and size. Cheap to read,
+/// and an atomic replace always changes it.
+fn file_version(meta: &std::fs::Metadata) -> String {
+    let modified =
+        meta.modified().ok().and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok()).map(|time| time.as_nanos()).unwrap_or(0);
+    format!("{modified:x}-{:x}", meta.len())
+}
+
 /// Read up to `max_bytes` of a project file; binary files return no content.
-pub async fn read_file(root: &Path, rel: &str, max_bytes: u64) -> Result<kybern_protocol::methods::FilesReadResult> {
+/// When the file's version still equals `if_version`, nothing is read.
+pub async fn read_file(
+    root: &Path,
+    rel: &str,
+    max_bytes: u64,
+    if_version: Option<&str>,
+) -> Result<kybern_protocol::methods::FilesReadResult> {
     use std::io::Read;
     let path = resolve(root, rel)?;
     if !path.is_file() {
         anyhow::bail!("not a file: {rel}");
     }
+    let if_version = if_version.map(str::to_owned);
     tokio::task::spawn_blocking(move || -> Result<kybern_protocol::methods::FilesReadResult> {
-        let size = std::fs::metadata(&path)?.len();
+        let meta = std::fs::metadata(&path)?;
+        let size = meta.len();
+        let version = file_version(&meta);
+        if if_version.as_deref() == Some(version.as_str()) {
+            return Ok(kybern_protocol::methods::FilesReadResult {
+                content: String::new(),
+                truncated: false,
+                binary: false,
+                size,
+                version: Some(version),
+                unchanged: true,
+            });
+        }
         let mut file = std::fs::File::open(&path)?;
         let mut buf = Vec::with_capacity(size.min(max_bytes) as usize);
         file.by_ref().take(max_bytes).read_to_end(&mut buf)?;
@@ -387,10 +447,76 @@ pub async fn read_file(root: &Path, rel: &str, max_bytes: u64) -> Result<kybern_
             truncated: size > max_bytes,
             binary,
             size,
+            version: Some(version),
+            unchanged: false,
         })
     })
     .await?
 }
+
+/// Replace an existing project file with `content`: same directory temp file,
+/// fsync, permissions kept, then an atomic rename over the original. Paths go
+/// through `resolve` (no `..`, hidden or generated folders, or symlink
+/// escapes). A symlinked file is written through to its target, which
+/// `resolve` already proved is inside the root. With `expected_version`, a file
+/// that changed since is left alone and the write fails with a conflict.
+pub async fn write_file(
+    root: &Path,
+    rel: &str,
+    content: String,
+    expected_version: Option<&str>,
+) -> Result<kybern_protocol::methods::FilesWriteResult> {
+    use std::io::Write;
+    anyhow::ensure!(content.len() <= MAX_WRITE_BYTES, "This file is over 2 MiB. Edit it in your editor instead.");
+    let path = resolve(root, rel)?;
+    let target = std::fs::canonicalize(&path)?;
+    if !target.is_file() {
+        anyhow::bail!("not a file: {rel}");
+    }
+    let expected = expected_version.map(str::to_owned);
+    let rel = rel.to_string();
+    tokio::task::spawn_blocking(move || -> Result<kybern_protocol::methods::FilesWriteResult> {
+        use std::io::Read;
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let meta = std::fs::metadata(&target)?;
+        if let Some(expected) = expected
+            && expected != file_version(&meta)
+        {
+            return Err(WriteConflict.into());
+        }
+        let mut probe = Vec::with_capacity(8192);
+        std::fs::File::open(&target)?.take(8192).read_to_end(&mut probe)?;
+        anyhow::ensure!(!probe.contains(&0), "This is a binary file. Edit it in your editor instead.");
+        let dir = target.parent().ok_or_else(|| anyhow::anyhow!("not a file: {rel}"))?;
+        let name = target.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        let unique = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let temp = dir.join(format!(".{name}.kybern-{}-{unique}.tmp", std::process::id()));
+        let written = (|| -> std::io::Result<()> {
+            let mut file = std::fs::File::create(&temp)?;
+            file.write_all(content.as_bytes())?;
+            file.set_permissions(meta.permissions())?;
+            file.sync_all()?;
+            std::fs::rename(&temp, &target)
+        })();
+        if let Err(error) = written {
+            let _ = std::fs::remove_file(&temp);
+            return Err(error.into());
+        }
+        let meta = std::fs::metadata(&target)?;
+        Ok(kybern_protocol::methods::FilesWriteResult { version: file_version(&meta), size: meta.len() })
+    })
+    .await?
+}
+
+/// The file changed on disk after the client read it.
+#[derive(Debug)]
+pub struct WriteConflict;
+impl std::fmt::Display for WriteConflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("The file changed on disk since you opened it. Reload it, or save again to overwrite.")
+    }
+}
+impl std::error::Error for WriteConflict {}
 
 fn is_subsequence(needle: &str, haystack: &str) -> bool {
     let mut chars = needle.chars();
@@ -445,7 +571,79 @@ pub async fn browse_directories(path: Option<String>) -> anyhow::Result<kybern_p
 mod tests {
     use std::sync::Arc;
 
-    use super::{CachedIndex, FileIndexCache, MAX_INDEX_SLOTS, rank, read_thread_file, resolve_thread_files, split_location};
+    use super::{
+        CachedIndex, FileIndexCache, MAX_INDEX_SLOTS, WriteConflict, rank, read_file, read_thread_file, resolve_thread_files,
+        split_location, write_file, write_thread_file,
+    };
+
+    #[tokio::test]
+    async fn writes_replace_files_atomically_and_detect_changes_on_disk() {
+        let base = std::env::temp_dir().join(format!("kybern-write-test-{}", uuid::Uuid::new_v4()));
+        let root = base.join("project");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/app.ts"), "const a = 1;\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(root.join("src/app.ts"), std::fs::Permissions::from_mode(0o750)).unwrap();
+        }
+        let read = read_file(&root, "src/app.ts", 1024, None).await.unwrap();
+        let version = read.version.clone().unwrap();
+        // A matching `if_version` skips the read.
+        let same = read_file(&root, "src/app.ts", 1024, Some(&version)).await.unwrap();
+        assert!(same.unchanged && same.content.is_empty());
+
+        let saved = write_file(&root, "src/app.ts", "const a = 2;\n".into(), Some(&version)).await.unwrap();
+        assert_ne!(saved.version, version);
+        assert_eq!(saved.size, 13);
+        assert_eq!(std::fs::read_to_string(root.join("src/app.ts")).unwrap(), "const a = 2;\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(root.join("src/app.ts")).unwrap().permissions().mode() & 0o777, 0o750);
+        }
+        let after = read_file(&root, "src/app.ts", 1024, Some(&version)).await.unwrap();
+        assert!(!after.unchanged);
+        assert_eq!(after.version.as_deref(), Some(saved.version.as_str()));
+        // No temp file is left behind.
+        assert_eq!(std::fs::read_dir(root.join("src")).unwrap().count(), 1);
+
+        // The old version is stale now: a write based on it is a conflict and changes nothing.
+        let conflict = write_file(&root, "src/app.ts", "lost".into(), Some(&version)).await.unwrap_err();
+        assert!(conflict.is::<WriteConflict>());
+        assert_eq!(std::fs::read_to_string(root.join("src/app.ts")).unwrap(), "const a = 2;\n");
+        // Without a version the write overwrites ("Keep mine").
+        write_file(&root, "src/app.ts", "mine".into(), None).await.unwrap();
+        assert_eq!(std::fs::read_to_string(root.join("src/app.ts")).unwrap(), "mine");
+
+        std::fs::write(root.join(".env"), "SECRET=1").unwrap();
+        std::fs::write(root.join("blob.bin"), b"\0\x01").unwrap();
+        std::fs::write(base.join("outside.ts"), "x").unwrap();
+        std::fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
+        std::fs::write(root.join("node_modules/pkg/index.js"), "x").unwrap();
+        for path in ["../outside.ts", ".env", "missing.ts", "src", "node_modules/pkg/index.js", "blob.bin"] {
+            assert!(write_file(&root, path, "x".into(), None).await.is_err(), "{path} must not be writable");
+        }
+        assert!(write_file(&root, "src/app.ts", "x".repeat(super::MAX_WRITE_BYTES + 1), None).await.is_err());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(base.join("outside.ts"), root.join("escape.ts")).unwrap();
+            assert!(write_file(&root, "escape.ts", "x".into(), None).await.is_err());
+            assert!(write_thread_file(&root, "escape.ts", "x".into(), None).await.is_err());
+            assert_eq!(std::fs::read_to_string(base.join("outside.ts")).unwrap(), "x");
+        }
+
+        // Thread files resolve against the cwd, absolute paths inside it included.
+        let absolute = std::fs::canonicalize(root.join("src/app.ts")).unwrap();
+        let indexes = FileIndexCache::default();
+        let thread = read_thread_file(&indexes, &root, &absolute.to_string_lossy(), 1024, None).await.unwrap();
+        let saved = write_thread_file(&root, &absolute.to_string_lossy(), "thread".into(), thread.version.as_deref()).await.unwrap();
+        assert_eq!(std::fs::read_to_string(&absolute).unwrap(), "thread");
+        assert!(write_thread_file(&root, "../outside.ts", "x".into(), None).await.is_err());
+        assert!(write_thread_file(&root, "src/app.ts", "x".into(), thread.version.as_deref()).await.unwrap_err().is::<WriteConflict>());
+        assert_eq!(read_thread_file(&indexes, &root, "src/app.ts", 1024, Some(&saved.version)).await.unwrap().unchanged, true);
+        std::fs::remove_dir_all(base).unwrap();
+    }
 
     #[tokio::test]
     async fn resolves_answer_file_references_against_the_workspace() {
@@ -531,7 +729,7 @@ mod tests {
         let indexes = FileIndexCache::default();
         let read = |source: String| {
             let indexes = indexes.clone();
-            async move { read_thread_file(&indexes, dir, &source, 1024).await.map(|file| file.content).map_err(|e| e.to_string()) }
+            async move { read_thread_file(&indexes, dir, &source, 1024, None).await.map(|file| file.content).map_err(|e| e.to_string()) }
         };
         let rows = "// apps/gpuix/src/sidebar/rows.tsx";
         // From the root, with and without a location.

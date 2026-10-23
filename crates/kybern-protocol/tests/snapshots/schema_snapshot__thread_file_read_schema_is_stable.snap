@@ -21,6 +21,13 @@ expression: schema_for!(ThreadFileReadParams)
       "format": "uint64",
       "minimum": 0,
       "default": 524288
+    },
+    "if_version": {
+      "description": "See `FilesReadParams::if_version`.",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "required": [

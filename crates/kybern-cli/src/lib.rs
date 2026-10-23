@@ -462,6 +462,27 @@ enum Cmd {
     Cat { project: String, path: String },
     /// Read a linked file relative to a conversation workspace.
     ThreadCat { thread: String, path: String },
+    /// Replace an existing project file's contents.
+    Write {
+        project: String,
+        path: String,
+        /// A file to read the new contents from; `-` (the default) is stdin.
+        #[arg(long, default_value = "-")]
+        from: String,
+        /// Fail instead of overwriting when the file is no longer at this version.
+        #[arg(long)]
+        expected_version: Option<String>,
+    },
+    /// Replace an existing file's contents in a conversation workspace.
+    ThreadWrite {
+        thread: String,
+        path: String,
+        /// A file to read the new contents from; `-` (the default) is stdin.
+        #[arg(long, default_value = "-")]
+        from: String,
+        #[arg(long)]
+        expected_version: Option<String>,
+    },
     /// Show which file references name a file in a conversation workspace.
     ThreadResolve {
         thread: String,
@@ -1996,7 +2017,9 @@ pub async fn run() -> Result<()> {
             }
         }
         Cmd::ThreadCat { thread, path } => {
-            let r = client.call::<ThreadFileRead>(ThreadFileReadParams { thread_id: thread.parse()?, path, max_bytes: 512 * 1024 }).await?;
+            let r = client
+                .call::<ThreadFileRead>(ThreadFileReadParams { thread_id: thread.parse()?, path, max_bytes: 512 * 1024, if_version: None })
+                .await?;
             if r.binary {
                 eprintln!("binary file, {} bytes", r.size);
             } else {
@@ -2013,8 +2036,22 @@ pub async fn run() -> Result<()> {
                 println!("{path}\t{}", resolved.as_deref().unwrap_or("(no file)"));
             }
         }
+        Cmd::Write { project, path, from, expected_version } => {
+            let content = read_input(&from)?;
+            let r = client.call::<FilesWrite>(FilesWriteParams { project_id: project.parse()?, path, content, expected_version }).await?;
+            println!("{}  {} bytes", r.version, r.size);
+        }
+        Cmd::ThreadWrite { thread, path, from, expected_version } => {
+            let content = read_input(&from)?;
+            let r = client
+                .call::<ThreadFileWrite>(ThreadFileWriteParams { thread_id: thread.parse()?, path, content, expected_version })
+                .await?;
+            println!("{}  {} bytes", r.version, r.size);
+        }
         Cmd::Cat { project, path } => {
-            let r = client.call::<FilesRead>(FilesReadParams { project_id: project.parse()?, path, max_bytes: 512 * 1024 }).await?;
+            let r = client
+                .call::<FilesRead>(FilesReadParams { project_id: project.parse()?, path, max_bytes: 512 * 1024, if_version: None })
+                .await?;
             if r.binary {
                 eprintln!("binary file, {} bytes", r.size);
             } else {

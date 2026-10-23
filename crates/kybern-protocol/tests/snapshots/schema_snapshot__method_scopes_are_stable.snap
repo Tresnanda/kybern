@@ -266,8 +266,12 @@ expression: scopes
   - "orchestration:read"
 - - files.read
   - "orchestration:read"
+- - files.write
+  - "orchestration:operate"
 - - threads.files.read
   - "orchestration:read"
+- - threads.files.write
+  - "orchestration:operate"
 - - threads.files.resolve
   - "orchestration:read"
 - - skills.list

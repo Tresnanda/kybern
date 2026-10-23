@@ -1949,6 +1949,10 @@ pub struct FilesReadParams {
     pub path: String,
     #[serde(default = "default_files_read_max")]
     pub max_bytes: u64,
+    /// A `version` from an earlier read: when the file still has it, the
+    /// result is `unchanged` with no content (a cheap "changed on disk" check).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub if_version: Option<String>,
 }
 fn default_files_read_max() -> u64 {
     512 * 1024
@@ -1963,8 +1967,37 @@ pub struct FilesReadResult {
     pub binary: bool,
     /// Full size on disk in bytes.
     pub size: u64,
+    /// Opaque on-disk version (modification time and size). Pass it back as
+    /// `if_version` or as a write's `expected_version`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// True when `if_version` still matched; `content` is then empty.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unchanged: bool,
 }
 method!(FilesRead, "files.read", Some(Scope::OrchestrationRead), FilesReadParams, FilesReadResult);
+
+/// Replace the contents of an existing text file of a project (atomically).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FilesWriteParams {
+    pub project_id: ProjectId,
+    /// File relative to the project root.
+    pub path: String,
+    /// The new UTF-8 contents, at most 2 MiB.
+    pub content: String,
+    /// The `version` the edit was based on. When the file changed since, the
+    /// write fails with a conflict instead of overwriting it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_version: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FilesWriteResult {
+    /// The file's new on-disk version.
+    pub version: String,
+    /// Size on disk in bytes.
+    pub size: u64,
+}
+method!(FilesWrite, "files.write", Some(Scope::OrchestrationOperate), FilesWriteParams, FilesWriteResult);
 
 /// Read a linked file inside the conversation's workspace, including its worktree.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1974,8 +2007,26 @@ pub struct ThreadFileReadParams {
     pub path: String,
     #[serde(default = "default_files_read_max")]
     pub max_bytes: u64,
+    /// See `FilesReadParams::if_version`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub if_version: Option<String>,
 }
 method!(ThreadFileRead, "threads.files.read", Some(Scope::OrchestrationRead), ThreadFileReadParams, FilesReadResult);
+
+/// Replace the contents of an existing text file inside the conversation's
+/// workspace (the same files `threads.files.read` opens), atomically.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadFileWriteParams {
+    pub thread_id: ThreadId,
+    /// Relative to the thread cwd, or an absolute path inside it.
+    pub path: String,
+    /// The new UTF-8 contents, at most 2 MiB.
+    pub content: String,
+    /// See `FilesWriteParams::expected_version`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_version: Option<String>,
+}
+method!(ThreadFileWrite, "threads.files.write", Some(Scope::OrchestrationOperate), ThreadFileWriteParams, FilesWriteResult);
 
 /// Find which of an answer's file references name a file in the conversation's
 /// workspace, so a client can show them as file links.
@@ -3087,7 +3138,9 @@ registry!(
     FilesSearch,
     FilesList,
     FilesRead,
+    FilesWrite,
     ThreadFileRead,
+    ThreadFileWrite,
     ThreadFilesResolve,
     SkillsList,
     IntegrationsList,

@@ -723,14 +723,36 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         FilesRead::NAME => {
             let p: FilesReadParams = parse(params)?;
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
-            ok(crate::files::read_file(std::path::Path::new(&project.path), &p.path, p.max_bytes).await.map_err(bad)?)
+            ok(crate::files::read_file(std::path::Path::new(&project.path), &p.path, p.max_bytes, p.if_version.as_deref())
+                .await
+                .map_err(bad)?)
+        }
+        FilesWrite::NAME => {
+            let p: FilesWriteParams = parse(params)?;
+            let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+            ok(crate::files::write_file(std::path::Path::new(&project.path), &p.path, p.content, p.expected_version.as_deref())
+                .await
+                .map_err(write_error)?)
         }
         ThreadFileRead::NAME => {
             let p: ThreadFileReadParams = parse(params)?;
             let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
-            ok(crate::files::read_thread_file(&state.file_indexes, std::path::Path::new(&thread.cwd), &p.path, p.max_bytes)
+            ok(crate::files::read_thread_file(
+                &state.file_indexes,
+                std::path::Path::new(&thread.cwd),
+                &p.path,
+                p.max_bytes,
+                p.if_version.as_deref(),
+            )
+            .await
+            .map_err(bad)?)
+        }
+        ThreadFileWrite::NAME => {
+            let p: ThreadFileWriteParams = parse(params)?;
+            let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            ok(crate::files::write_thread_file(std::path::Path::new(&thread.cwd), &p.path, p.content, p.expected_version.as_deref())
                 .await
-                .map_err(bad)?)
+                .map_err(write_error)?)
         }
         ThreadFilesResolve::NAME => {
             let p: ThreadFilesResolveParams = parse(params)?;
@@ -989,6 +1011,12 @@ fn preview_error(error: crate::previews::PreviewError) -> RpcError {
         _ => codes::INVALID_PARAMS,
     };
     RpcError::new(code, error.message).with_data(serde_json::json!({ "code": error.code }))
+}
+
+/// A save that lost the race with another writer is a conflict, so clients can
+/// offer Reload instead of showing a plain error.
+fn write_error(e: anyhow::Error) -> RpcError {
+    if e.is::<crate::files::WriteConflict>() { RpcError::new(codes::CONFLICT, e.to_string()) } else { bad(e) }
 }
 
 /// User-facing failures from the orchestrator: not found, busy, bad input.
