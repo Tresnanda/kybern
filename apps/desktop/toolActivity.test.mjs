@@ -14,7 +14,7 @@ registerHooks({
 // Static imports would hoist above the hook, so these load after it.
 const { buildStructuredTextParts } = await import("./src/lib/composerTokens.ts")
 const { getAttachmentIconName, getFileIconName } = await import("./src/lib/kit/fileIcons.ts")
-const { isImageGenerationTool, humanizeToolName, isAgentLaunchTool, runtimeActivityPrompt, runtimeActivityResult, summarizeToolCalls, toolLine, toolVisualKind } = await import("./src/lib/toolActivity.ts")
+const { isImageGenerationTool, humanizeToolName, isAgentLaunchTool, runtimeActivityPrompt, runtimeActivityResult, summarizeToolCalls, toolLine, toolLineCounts, toolSummaryPhrases, toolTarget, toolVisualKind } = await import("./src/lib/toolActivity.ts")
 
 const call = (name, input) => ({ id: "tool-1", name, input })
 
@@ -130,7 +130,7 @@ test("work summaries distinguish delegation from work run by the main agent", ()
         isError: false,
       },
     ])?.label,
-    "Ran 1 command and delegated 1 task"
+    "Ran 1 command · delegated 1 task"
   )
 })
 
@@ -281,7 +281,7 @@ test("settled contiguous tools collapse into a plain-language summary", () => {
     { call: call("bash", { command: "pnpm test" }), complete: true, isError: false },
   ])
   assert.deepEqual(summary, {
-    label: "Ran 1 command and read 2 files",
+    label: "Ran 1 command · read 2 files",
     visual: "read",
     entryCount: 4,
   })
@@ -363,6 +363,45 @@ test("Kybern notes and tasks tools get their own labels, icons and summary", () 
   const settled = (name, input) => ({ call: call(name, input), complete: true, isError: false })
   assert.equal(
     summarizeToolCalls([settled("mcp__kybern__kybern_notes_search", { query: "x" }), settled("mcp__kybern__kybern_task_read", { task: "ADE-1" }), settled("mcp__kybern__kybern_note_read", {})]).label,
-    "Ran 1 search and read 2 notes and tasks",
+    "Searched 1 time · read 2 notes and tasks",
   )
+})
+
+test("summaries put what changed first and join phrases with a middle dot", () => {
+  const settled = (name, input) => ({ call: call(name, input), complete: true, isError: false })
+  assert.equal(
+    summarizeToolCalls([
+      settled("Read", { file_path: "src/a.ts" }),
+      settled("Grep", { pattern: "x" }),
+      settled("Bash", { command: "pnpm test" }),
+      settled("Edit", { file_path: "src/a.ts", old_string: "a", new_string: "b" }),
+      settled("Read", { file_path: "src/b.ts" }),
+      settled("Grep", { pattern: "y" }),
+    ])?.label,
+    "Edited 1 file · ran 1 command · read 2 files · searched 2 times",
+  )
+  assert.deepEqual(toolSummaryPhrases([settled("Grep", { pattern: "x" })]), ["searched 1 time"], "one call still counts, lower case")
+  assert.deepEqual(toolSummaryPhrases([]), [])
+})
+
+test("tool targets name the files, command or query a chip shows", () => {
+  assert.deepEqual(toolTarget(call("Read", { file_path: "/w/src/Hero.tsx" })), { kind: "files", paths: ["/w/src/Hero.tsx"] })
+  assert.deepEqual(toolTarget(call("Edit", { file_path: "/w/a.ts", old_string: "a", new_string: "b" })), { kind: "files", paths: ["/w/a.ts"] })
+  assert.deepEqual(toolTarget(call("apply_patch", { changes: [{ path: "/w/a.ts" }, { path: "/w/b.ts" }] })), { kind: "files", paths: ["/w/a.ts", "/w/b.ts"] })
+  assert.deepEqual(toolTarget(call("Bash", { command: "bun test" })), { kind: "command", command: "bun test" })
+  assert.deepEqual(toolTarget(call("shell", { command: `/bin/zsh -lc "pnpm typecheck"` })), { kind: "command", command: "pnpm typecheck" })
+  assert.deepEqual(toolTarget(call("Bash", { command: "cat src/system.css" })), { kind: "files", paths: ["src/system.css"] }, "a reading command names its file")
+  assert.deepEqual(toolTarget(call("Grep", { pattern: "chunkWork", path: "src" })), { kind: "query", query: "chunkWork", scope: "src" })
+  assert.deepEqual(toolTarget(call("Bash", { command: "rg useFresh src" })), { kind: "query", query: "useFresh" })
+  assert.deepEqual(toolTarget(call("WebSearch", { query: "gpui list" })), { kind: "query", query: "gpui list", scope: "the web" })
+  assert.equal(toolTarget(call("Bash", { command: "git status" })), null, "git status keeps its own label")
+  assert.equal(toolTarget(call("TodoWrite", { todos: [] })), null)
+})
+
+test("line counts of an edit skip the lines both sides share", () => {
+  assert.deepEqual(toolLineCounts(call("Edit", { file_path: "a", old_string: "a\nb\nc", new_string: "a\nB\nc\nd" })), { additions: 2, deletions: 1 })
+  assert.deepEqual(toolLineCounts(call("MultiEdit", { file_path: "a", edits: [{ old_string: "x", new_string: "y" }, { old_string: "", new_string: "z\nw" }] })), { additions: 3, deletions: 1 })
+  assert.deepEqual(toolLineCounts(call("Write", { file_path: "a", content: "one\ntwo\n" })), { additions: 2, deletions: 0 })
+  assert.deepEqual(toolLineCounts(call("apply_patch", { changes: [{ path: "a", diff: "--- a\n+++ a\n@@\n-old\n+new\n+more\n ctx" }] })), { additions: 2, deletions: 1 })
+  assert.equal(toolLineCounts(call("Read", { file_path: "a" })), null)
 })
