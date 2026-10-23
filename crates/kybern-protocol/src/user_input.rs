@@ -154,7 +154,8 @@ pub fn user_input_questions(tool_name: &str, input: &Value) -> Vec<UserInputQues
             .filter_map(|q| {
                 let question = text(q, "question")?;
                 Some(UserInputQuestion {
-                    id: question.clone(),
+                    // Claude keys answers by the exact text, padding included; only the shown text is trimmed.
+                    id: q.get("question").and_then(Value::as_str).map_or_else(|| question.clone(), str::to_owned),
                     header: text(q, "header"),
                     question,
                     options: options(q.get("options")),
@@ -268,11 +269,10 @@ impl ApprovalRequest {
 
     /// Whether a delegating agent may answer this request for the user: a plain question with no
     /// hidden answer. Never an approval, a password, a secret, a sign-in, a permission, a pick or a form.
+    /// Pi's `ui_select`, `ui_input` and `ui_editor` stay with the user: any extension raises them, for a
+    /// confirmation ("Allow?") or a key as often as for a question, and nothing marks which.
     pub fn agent_answerable(&self) -> bool {
-        matches!(
-            self.tool_name.as_str(),
-            "AskUserQuestion" | "request_user_input" | "opencode_question" | CURSOR_QUESTION_TOOL | "ui_select" | "ui_input" | "ui_editor"
-        ) && {
+        matches!(self.tool_name.as_str(), "AskUserQuestion" | "request_user_input" | "opencode_question" | CURSOR_QUESTION_TOOL) && {
             let questions = self.user_input_questions();
             !questions.is_empty() && questions.iter().all(|question| !question.secret)
         }
@@ -429,6 +429,8 @@ mod tests {
             json!({"questions":[{"question":"Which layout?","header":"Layout","multiSelect":false,"options":[{"label":"A","description":"Grid","preview":"```css\ngrid\n```"},{"label":"B"}]}]}),
         );
         assert_eq!(claude.questions[0].id, "Which layout?");
+        let padded = request("AskUserQuestion", json!({"questions":[{"question":"Which **one**?\n","options":[{"label":"A"}]}]}));
+        assert_eq!((padded.questions[0].id.as_str(), padded.questions[0].question.as_str()), ("Which **one**?\n", "Which **one**?"));
         assert_eq!(claude.questions[0].options[0].preview.as_deref(), Some("```css\ngrid\n```"));
         assert!(claude.questions[0].allow_custom && claude.questions[0].attachments);
 
@@ -470,9 +472,17 @@ mod tests {
         assert_eq!(request(PERMISSION_REQUEST_TOOL, json!({})).pending_kind(), PendingRequestKind::Approval);
         let consent = request("mcp_elicitation", json!({"_meta":{"codex_approval_kind":"mcp_tool_call"}}));
         assert_eq!(consent.pending_kind(), PendingRequestKind::Approval);
-        for tool in
-            [SECRET_REQUEST_TOOL, "kybern_askpass", "kybern_request_login", "kybern_request_pick", "Bash", "mcp_elicitation", "ui_confirm"]
-        {
+        for tool in [
+            SECRET_REQUEST_TOOL,
+            "kybern_askpass",
+            "kybern_request_login",
+            "kybern_request_pick",
+            "Bash",
+            "mcp_elicitation",
+            "ui_confirm",
+            "ui_select",
+            "ui_input",
+        ] {
             assert!(!request(tool, json!({"questions":[{"question":"Q","options":["a"]}]})).agent_answerable(), "{tool}");
         }
     }

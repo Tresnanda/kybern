@@ -23,4 +23,7 @@ test('a real approval and a question keep their own words', () => {
   expect(waitingLine(card('AskUserQuestion', { questions: [], deadline: {} }, 'Which database?'), 'Claude')).toBe('Claude is waiting for your answer: Which database?')
   expect(questionLine(card('AskUserQuestion', {}, 'Which database?'), 'Claude')).toBe('Claude is waiting for your answer: Which database?')
   expect(questionLine(card('AskUserQuestion', {}, "Answer the agent's questions"), 'Codex')).toBe('Codex is waiting for your answers')
+  const asked = { ...card('AskUserQuestion', {}, 'AskUserQuestion'), questions: [{ id: 'Which fruit?', question: 'Which fruit?\nPick one.', options: [] }] } as unknown as ApprovalRequest
+  expect(questionLine(asked, 'Claude')).toBe('Claude is waiting for your answer: Which fruit?')
+  expect(questionLine(card('AskUserQuestion', {}, 'AskUserQuestion'), 'Claude')).toBe('Claude is waiting for your answers')
 })

@@ -81,7 +81,9 @@ impl Exposure {
         let cancelled = stop.clone();
         tokio::spawn(async move {
             let shutdown = async move { cancelled.cancelled().await };
-            if let Err(error) = axum::serve(listener, router).with_graceful_shutdown(shutdown).await {
+            if let Err(error) =
+                axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).with_graceful_shutdown(shutdown).await
+            {
                 tracing::warn!(%addr, %error, "Tailscale listener ended");
             }
         });

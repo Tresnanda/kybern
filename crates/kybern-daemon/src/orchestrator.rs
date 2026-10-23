@@ -608,6 +608,25 @@ impl Orchestrator {
     }
 }
 
+/// The file extension for an uploaded asset: its name's own (short and alphanumeric), else one for its media type.
+fn asset_extension(name: &str, media_type: &str) -> Option<String> {
+    let own = std::path::Path::new(name).extension().and_then(|ext| ext.to_str()).map(str::to_ascii_lowercase);
+    if let Some(ext) = own.filter(|ext| (1..=5).contains(&ext.len()) && ext.chars().all(|c| c.is_ascii_alphanumeric())) {
+        return Some(ext);
+    }
+    let ext = match media_type.split(';').next().unwrap_or("").trim() {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/heic" => "heic",
+        "application/pdf" => "pdf",
+        "text/plain" => "txt",
+        _ => return None,
+    };
+    Some(ext.into())
+}
+
 /// Computer-use consent for one tool call, bound to its owning turn.
 struct ComputerConsent<'a> {
     orchestrator: &'a Orchestrator,
@@ -2425,9 +2444,18 @@ impl Orchestrator {
             return None;
         }
         if let Some(id) = attachment.asset_id {
-            self.inner.store.asset_get(id).ok().flatten()?;
+            let info = self.inner.store.asset_get(id).ok().flatten()?;
             let path = self.inner.paths.assets.join(id.to_string());
-            return path.is_file().then(|| path.to_string_lossy().into_owned());
+            if !path.is_file() {
+                return None;
+            }
+            // Agents tell an image by its extension (Claude's Read does), and assets are stored by id alone: hand over a
+            // hard link named `<id>.<ext>` beside it.
+            let named = asset_extension(&info.name, &info.media_type).map(|ext| self.inner.paths.assets.join(format!("{id}.{ext}")));
+            if let Some(named) = named.filter(|named| named.is_file() || std::fs::hard_link(&path, named).is_ok()) {
+                return Some(named.to_string_lossy().into_owned());
+            }
+            return Some(path.to_string_lossy().into_owned());
         }
         let path = std::path::Path::new(attachment.path.as_deref()?);
         (path.is_absolute() && path.exists()).then(|| path.to_string_lossy().into_owned())
@@ -3072,14 +3100,11 @@ impl Orchestrator {
         // sign-in, a permission request or a question with a deadline while the user is
         // still deciding. The daemon bounds every call itself (the longest waits are a few
         // hours), so leave the limit to it unless the user set their own. Newer Claude Code
-        // also aborts a call with no progress for 300 s (`CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT`),
-        // which ended questions the user had not answered within five minutes.
-        if thread.provider.kind == ProviderKind::ClaudeCode {
-            for key in ["MCP_TOOL_TIMEOUT", "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT"] {
-                if !provider_settings.env.contains_key(key) {
-                    provider_settings.env.insert(key.into(), "21600000".into());
-                }
-            }
+        // also aborts a call with no progress for 5 min; the `timeout` of Kybern's own server
+        // entry (`claude.rs`) lifts that for Kybern alone. `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT`
+        // stays unset: it would let every other MCP server of the user hang a turn for hours.
+        if thread.provider.kind == ProviderKind::ClaudeCode && !provider_settings.env.contains_key("MCP_TOOL_TIMEOUT") {
+            provider_settings.env.insert("MCP_TOOL_TIMEOUT".into(), "21600000".into());
         }
         // Commands in the session can ask for a password through a private card.
         // Codex runs commands in a sandbox that can't reach the daemon outside

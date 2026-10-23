@@ -54,7 +54,7 @@ pub(crate) fn tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
             description: concat!(
                 "Answer a question one of your delegated agents is waiting on, for the user. Answer only when the answer follows from your task or ",
                 "the user's instructions; otherwise leave it to the user, who sees it in Kybern. The first answer wins: if the user answered first you get ",
-                "status \"already_answered\". answers holds one entry per question: its id from kybern_pending_questions and the chosen option labels ",
+                "status \"already_answered\" (\"closed\" if it closed unanswered). answers holds one entry per question: its id from kybern_pending_questions and the chosen option labels ",
                 "(or your own text where the question allows it). The record shows that you answered."
             )
             .into(),
@@ -145,7 +145,7 @@ fn refusal(approval: &ApprovalRequest, child: &Thread) -> String {
         LOGIN_REQUEST_TOOL => "a sign-in",
         PERMISSION_REQUEST_TOOL => "a macOS permission",
         PICK_REQUEST_TOOL => "a request to point at something",
-        "mcp_elicitation" | "ui_confirm" => "a form or confirmation",
+        "mcp_elicitation" | "ui_confirm" | "ui_select" | "ui_input" | "ui_editor" => "a form or confirmation",
         _ if approval.pending_kind() == PendingRequestKind::Approval => "an approval",
         _ => "a request with a hidden answer",
     };
@@ -204,7 +204,7 @@ impl Orchestrator {
             bail!(refusal(&approval, &child));
         }
         if resolved {
-            return Ok(json!({ "status": "already_answered", "note": "It was answered before your answer arrived. Nothing was changed." }));
+            return Ok(self.too_late(approval.id));
         }
         let questions = approval.user_input_questions();
         let mut answers = Vec::new();
@@ -229,9 +229,21 @@ impl Orchestrator {
             Ok(()) => Ok(json!({ "status": "answered", "thread_id": child.id, "title": child.title })),
             Err(error) if self.inner.store.approval_get(approval.id)?.is_some_and(|(_, resolved)| resolved) => {
                 tracing::debug!(%error, "a child question was answered first");
-                Ok(json!({ "status": "already_answered", "note": "It was answered before your answer arrived. Nothing was changed." }))
+                Ok(self.too_late(approval.id))
             }
             Err(error) => Err(error),
+        }
+    }
+
+    /// The reply to an answer that came after the question closed: answered by someone else, or closed without an answer
+    /// (the child stopped, its turn ended, the daemon restarted).
+    fn too_late(&self, approval_id: ApprovalId) -> Value {
+        match self.inner.store.approval_decision(approval_id).ok().flatten() {
+            Some(ApprovalDecision::Deny { .. }) => json!({
+                "status": "closed",
+                "note": "It closed without an answer (dismissed, or the agent stopped), so nothing was changed. Check the agent with kybern_agent_status.",
+            }),
+            _ => json!({ "status": "already_answered", "note": "It was answered before your answer arrived. Nothing was changed." }),
         }
     }
 
@@ -288,7 +300,7 @@ impl Orchestrator {
         let deadline =
             if approval.input.pointer("/deadline/ends_at").is_some() { " (it picks its default if nobody answers in time)" } else { "" };
         let body = format!(
-            "Your agent \"{}\" (task {}, thread {}) is waiting on a question{deadline}: \"{first}\". Read it with {LIST_TOOL} and answer it with {ANSWER_TOOL} if the answer follows from your task or the user's instructions; otherwise leave it to the user, who sees it in Kybern. If it is no longer pending, it was answered.",
+            "Your agent \"{}\" (task {}, thread {}) is waiting on a question{deadline}: \"{first}\". Read it with {LIST_TOOL} and answer it with {ANSWER_TOOL} if the answer follows from your task or the user's instructions; otherwise leave it to the user, who sees it in Kybern. If it is no longer pending, it was answered or closed.",
             child.title, info.task_id, child.id
         );
         let now = Utc::now();
@@ -323,20 +335,25 @@ impl Orchestrator {
         Ok(())
     }
 
-    /// Questions waiting below these delegations, for a wait that returns early. They count as delivered.
+    /// Questions waiting below these delegations, for a wait that returns early. They count as delivered. Empty unless one
+    /// of them is new to the caller: a parent that left a question to the user and waits again must not wake on it again.
     pub(super) fn waiting_questions(&self, threads: &[Thread]) -> Vec<Value> {
-        let mut out = Vec::new();
+        let (mut out, mut fresh) = (Vec::new(), false);
         for thread in threads {
             let mut below = vec![thread.clone()];
             below.extend(self.delegation_descendants(thread.id).unwrap_or_default());
             for child in below {
                 for approval in self.inner.store.approvals_pending(Some(child.id)).unwrap_or_default() {
                     if approval.agent_answerable() {
-                        self.inner.delegation.questions.lock().unwrap_or_else(|error| error.into_inner()).inline.insert(approval.id);
+                        fresh |=
+                            self.inner.delegation.questions.lock().unwrap_or_else(|error| error.into_inner()).inline.insert(approval.id);
                         out.push(question_view(&child, &approval));
                     }
                 }
             }
+        }
+        if !fresh {
+            out.clear();
         }
         out
     }

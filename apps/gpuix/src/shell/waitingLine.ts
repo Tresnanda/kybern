@@ -44,6 +44,10 @@ export const isSummonedCard = (approval: ApprovalRequest) =>
 
 /** A question (`user_input_requested`): the first question when there is one. */
 export function questionLine(approval: ApprovalRequest, agent: string): string {
+  // The question itself when the daemon sent it (Claude's summary is only the tool name, "AskUserQuestion"), first line, clipped.
+  const asked = approval.questions?.[0]?.question.trim().split('\n')[0]?.trim()
   const summary = approval.summary.trim()
-  return summary && summary !== 'Answer the agent\'s questions' ? `${agent} is waiting for your answer: ${summary}` : `${agent} is waiting for your answers`
+  const text = asked ? asked.length > 120 ? `${asked.slice(0, 119)}…` : asked
+    : summary && summary !== approval.tool_name && summary !== 'Answer the agent\'s questions' ? summary : ''
+  return text ? `${agent} is waiting for your answer: ${text}` : `${agent} is waiting for your answers`
 }

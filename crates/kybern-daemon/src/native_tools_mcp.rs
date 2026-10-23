@@ -179,8 +179,10 @@ pub(crate) fn routes() -> Router<AppState> {
 /// `kybern askpass`: one prompt from a command in an agent session. The reply
 /// is `{"answer": ...}` or `{"cancelled": true, "message": ...}`; it is never
 /// cached, logged or kept.
-async fn handle_askpass(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
-    if headers.contains_key(header::ORIGIN) {
+async fn handle_askpass(State(state): State<AppState>, extensions: axum::http::Extensions, headers: HeaderMap, body: Bytes) -> Response {
+    // Loopback only: the Tailscale listener serves the same routes, and a prompt never comes from another machine.
+    let peer = extensions.get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|info| info.0);
+    if headers.contains_key(header::ORIGIN) || !peer.is_some_and(|peer| peer.ip().is_loopback()) {
         return no_store(StatusCode::FORBIDDEN.into_response());
     }
     let session = headers
@@ -198,7 +200,20 @@ async fn handle_askpass(State(state): State<AppState>, headers: HeaderMap, body:
     let Ok(Body { prompt, pid }) = serde_json::from_slice::<Body>(&body) else {
         return no_store(StatusCode::BAD_REQUEST.into_response());
     };
-    let reply = state.orchestrator.ask_prompt(session.thread_id, session.session_instance_id, prompt, pid).await;
+    // The pid is the client's word: it must own this very connection, or any process with the token could borrow a real
+    // sudo's helper to raise a card whose answer comes back to it.
+    let owned = match peer {
+        Some(peer) => tokio::task::spawn_blocking(move || crate::askpass::connection_owned_by(pid, peer)).await.unwrap_or(false),
+        None => false,
+    };
+    let reply = if owned {
+        state.orchestrator.ask_prompt(session.thread_id, session.session_instance_id, prompt, pid).await
+    } else {
+        crate::orchestrator::PromptReply::Cancelled(
+            "Kybern only shows a password prompt that sudo, ssh or git asked for. Run the real command (for example `sudo -A …`) instead."
+                .into(),
+        )
+    };
     let value = match reply {
         crate::orchestrator::PromptReply::Answer(answer) => json!({ "answer": answer }),
         crate::orchestrator::PromptReply::Cancelled(message) => json!({ "cancelled": true, "message": message }),

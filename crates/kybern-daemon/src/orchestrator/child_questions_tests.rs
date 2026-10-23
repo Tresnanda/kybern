@@ -48,6 +48,8 @@ async fn a_childs_question_ends_the_wait_and_the_first_answer_wins() {
     assert_eq!(waited["has_pending_question"], true, "{waited}");
     assert_eq!(waited["pending_questions"][0]["request_id"], json!(card.id));
     assert_eq!(waited["wait_timed_out"], false);
+    let rewait = t.tool("kybern_agent_wait", json!({ "timeout_ms": 200 })).await.unwrap();
+    assert_eq!(rewait["wait_timed_out"], true, "a question already shown does not end the next wait: {rewait}");
 
     let listed = t.tool("kybern_pending_questions", json!({})).await.unwrap();
     assert_eq!(listed["questions"][0]["questions"][0]["id"], "Which palette?");
@@ -117,4 +119,24 @@ async fn a_queued_notice_is_taken_back_when_the_user_answers_first() {
     let card = pending_card(&t, &child, "AskUserQuestion").await;
     t.fixture.orchestrator.respond_approval(card.id, ApprovalDecision::Submit { response: json!({ "answers": { "Which name?": "Elm" } }) }).await.unwrap();
     eventually(|| async { (!notice(&t)).then_some(()) }).await;
+}
+
+#[tokio::test]
+async fn an_answer_to_a_question_that_closed_unanswered_says_closed() {
+    let t = Delegating::new().await;
+    let result = t.delegate(json!({"task": "Name the file"})).await;
+    let child = t.delegation(&result["task_id"]);
+    let agent = t.agent("Name the file").await;
+    child_asks(&agent, "q1", "AskUserQuestion", json!({ "questions": [{ "question": "Which name?", "options": [{"label": "a.txt"}] }] })).await;
+    let card = pending_card(&t, &child, "AskUserQuestion").await;
+    t.fixture.orchestrator.respond_approval(card.id, ApprovalDecision::Deny { reason: None }).await.unwrap();
+    let late = t.tool("kybern_answer_question", json!({ "request_id": card.id, "answers": [{ "answers": ["a.txt"] }] })).await.unwrap();
+    assert_eq!(late["status"], "closed", "{late}");
+}
+
+#[test]
+fn an_answers_image_keeps_an_extension_the_agent_can_read() {
+    assert_eq!(super::asset_extension("Shot.PNG", "image/png").as_deref(), Some("png"));
+    assert_eq!(super::asset_extension("attachment", "image/jpeg").as_deref(), Some("jpg"));
+    assert_eq!(super::asset_extension("notes.a b", "application/octet-stream"), None);
 }

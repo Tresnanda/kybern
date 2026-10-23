@@ -236,7 +236,8 @@ pub async fn run() -> Result<()> {
         shutdown_token.cancel();
         tracing::info!("shutting down");
     };
-    axum::serve(listener, app).with_graceful_shutdown(shutdown).await?;
+    // The askpass endpoint checks which process holds the connection (`askpass::connection_owned_by`).
+    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(shutdown).await?;
     queue_worker.abort();
     notes_worker.abort();
     let _ = maintenance_worker.await;

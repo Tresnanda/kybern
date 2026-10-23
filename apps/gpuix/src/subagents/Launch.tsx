@@ -32,7 +32,10 @@ export function LaunchMember({ block, thread, task, delegated = false, grouped =
   const rawProvider = thread?.provider.kind ?? result?.provider ?? input?.provider
   const provider = providers.includes(rawProvider ?? '') ? rawProvider as ProviderKind : 'claude-code'
   const title = thread?.title || task?.title || (call ? delegated ? delegateTitle(call.call.input, result) : toolLine(call.call, call.complete).detail : '') || 'Subagent'
-  const state = thread?.subagent ? { phase: subagentThreadPhase(thread), word: subagentPhaseWord(thread) } : result?.status && !thread ? delegationState(result.status) : launchState(thread, { complete: call?.complete ?? true, isError: call?.isError ?? task?.status === 'failed' })
+  const known = thread?.subagent ? { phase: subagentThreadPhase(thread), word: subagentPhaseWord(thread) } : result?.status && !thread ? delegationState(result.status) : launchState(thread, { complete: call?.complete ?? true, isError: call?.isError ?? task?.status === 'failed' })
+  // A delegated agent waiting on a request says so, a question as "Needs input" (the sidebar's words), even before its thread loads.
+  const pending = useNav(s => delegated && id ? s.pending[id]?.own : undefined)
+  const state = pending && (known.phase === 'working' || known.phase === 'waiting') ? { phase: 'waiting' as const, word: pending === 'question' ? 'Needs input' : 'Needs approval' } : known
   const info = thread?.delegation
   const meta = [delegated ? delegationRoleLabel(info?.role ?? input?.role ?? 'general') : subagentTypeLabel(thread?.subagent?.agent_type), thread?.model ?? result?.model ?? input?.model, delegated ? info ? workspaceLabel(info) : (result?.workspace ?? input?.workspace) === 'worktree' ? 'Own worktree' : 'Shared checkout' : null].filter(Boolean).join(' · ')
   const start = thread?.subagent ? subagentSpan(thread) : thread ? { startedAt: childStartedAt(thread), endedAt: childEndedAt(thread) } : state.phase === 'working' ? { startedAt: Date.parse(block.at), endedAt: null } : null

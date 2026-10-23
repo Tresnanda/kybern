@@ -120,7 +120,9 @@ pub fn classify(prompt: &str, command: Option<&str>) -> Classified {
     }
     let purpose = if lower.contains("passphrase") {
         "ssh_passphrase"
-    } else if lower.contains("[sudo]") || program == Some("sudo") {
+    } else if program == Some("sudo") {
+        // Only when sudo is the one asking: the prompt text is the asker's to choose, and a custom `GIT_ASKPASS` under git
+        // could word its prompt like sudo's to get the Mac password.
         "sudo"
     } else {
         "other"
@@ -230,6 +232,57 @@ pub fn asked_by_trusted_program(helper_pid: u32) -> bool {
     proc_of(helper_pid).and_then(|helper| executable_of(helper.ppid)).is_some_and(|path| is_trusted_asker(&path))
 }
 
+/// Whether process `pid` holds the client end of the loopback connection that arrived from `peer`, so the pid an askpass
+/// request names is really the process that sent it.
+pub fn connection_owned_by(pid: u32, peer: std::net::SocketAddr) -> bool {
+    if pid == 0 || !peer.ip().is_loopback() {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(owned) = linux_connection_owned_by(pid, peer) {
+        return owned;
+    }
+    // `lsof -F n` prints each socket as `n<local>-><remote>`; the client's local end is the daemon's peer.
+    // The system copy on macOS, so a PATH entry cannot answer for it.
+    let lsof = if cfg!(target_os = "macos") { "/usr/sbin/lsof" } else { "lsof" };
+    let Ok(output) = std::process::Command::new(lsof)
+        .args(["-nP", "-a", "-p", &pid.to_string(), &format!("-iTCP@{}:{}", lsof_host(peer.ip()), peer.port()), "-Fn"])
+        .output()
+    else {
+        return false;
+    };
+    let local = format!("n{}->", lsof_addr(peer));
+    String::from_utf8_lossy(&output.stdout).lines().any(|line| line.starts_with(&local))
+}
+
+fn lsof_host(ip: std::net::IpAddr) -> String {
+    match ip {
+        std::net::IpAddr::V4(ip) => ip.to_string(),
+        std::net::IpAddr::V6(ip) => format!("[{ip}]"),
+    }
+}
+
+fn lsof_addr(addr: std::net::SocketAddr) -> String {
+    format!("{}:{}", lsof_host(addr.ip()), addr.port())
+}
+
+/// The IPv4 case from `/proc`: the socket inode of the connection whose local end is `peer`, among `pid`'s descriptors.
+/// `None` when it cannot tell (IPv6, no `/proc`): `lsof` decides then.
+#[cfg(target_os = "linux")]
+fn linux_connection_owned_by(pid: u32, peer: std::net::SocketAddr) -> Option<bool> {
+    let std::net::IpAddr::V4(ip) = peer.ip() else { return None };
+    let local = format!("{:08X}:{:04X}", u32::from_le_bytes(ip.octets()), peer.port());
+    let table = std::fs::read_to_string("/proc/net/tcp").ok()?;
+    let inode = table.lines().skip(1).find_map(|line| {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        (fields.get(1) == Some(&local.as_str())).then(|| fields.get(9).map(|inode| inode.to_string())).flatten()
+    });
+    let Some(inode) = inode else { return Some(false) };
+    let target = format!("socket:[{inode}]");
+    let fds = std::fs::read_dir(format!("/proc/{pid}/fd")).ok()?;
+    Some(fds.flatten().any(|fd| std::fs::read_link(fd.path()).is_ok_and(|link| link.to_string_lossy() == target)))
+}
+
 /// Whether the process still exists.
 pub fn process_alive(pid: u32) -> bool {
     // SAFETY: signal 0 only checks for the process; nothing is delivered.
@@ -330,6 +383,20 @@ mod tests {
     }
 
     #[test]
+    fn a_connection_belongs_to_the_process_that_opened_it() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (_server, peer) = listener.accept().unwrap();
+        assert_eq!(client.local_addr().unwrap(), peer);
+        assert!(connection_owned_by(std::process::id(), peer), "this process opened it");
+        let mut other = std::process::Command::new("/bin/sleep").arg("5").spawn().unwrap();
+        assert!(!connection_owned_by(other.id(), peer), "another process did not");
+        let _ = other.kill();
+        let _ = other.wait();
+        assert!(!connection_owned_by(std::process::id(), "127.0.0.1:1".parse().unwrap()));
+    }
+
+    #[test]
     fn this_process_is_alive_and_a_bogus_one_is_not() {
         assert!(process_alive(std::process::id()));
         assert!(!process_alive(999_999));
@@ -347,7 +414,8 @@ mod tests {
         assert_eq!(host.key_type.as_deref(), Some("ED25519"));
         assert_eq!(host.fingerprint.as_deref(), Some("SHA256:abc/DEF+123"));
         assert_eq!(classify("Enter passphrase for key '/Users/me/.ssh/id_ed25519': ", None).purpose, "ssh_passphrase");
-        assert_eq!(classify("[sudo] password for me: ", None).purpose, "sudo");
+        assert_eq!(classify("[sudo] password for me: ", Some("sudo -A true")).purpose, "sudo");
+        assert_eq!(classify("[sudo] password for me: ", Some("git ls-remote https://example.net/repo")).purpose, "other");
         assert_eq!(classify("Password:", Some("/usr/bin/sudo -A true")).purpose, "sudo");
         let user = classify("Username for 'https://git.studio-example.net': ", None);
         assert_eq!((user.purpose, user.secret, user.host.as_deref()), ("git_username", false, Some("git.studio-example.net")));

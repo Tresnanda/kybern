@@ -237,7 +237,8 @@ async fn a_password_prompt_is_a_private_card_whose_answer_is_never_stored() {
     let (request, _) = fixture.store.approval_get(card).unwrap().unwrap();
     assert_eq!(request.tool_name, PROMPT_REQUEST_TOOL);
     assert!(request.is_user_input());
-    assert_eq!(request.input["purpose"], "sudo");
+    // The test process stands in for the asker, and it is not sudo: the prompt's own words cannot make it a sudo card.
+    assert_eq!(request.input["purpose"], "other");
     assert_eq!(request.input["secret"], true);
     assert_eq!(request.input["attempt"], 1);
     assert_eq!(request.input["harness"], thread.provider.kind.display_name());
