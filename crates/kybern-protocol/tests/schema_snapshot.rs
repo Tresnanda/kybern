@@ -58,6 +58,7 @@ fn wire_examples_roundtrip() {
         payload: EventPayload::ApprovalResolved {
             approval_id: uuid::Uuid::nil(),
             decision: ApprovalDecision::Deny { reason: Some("no".into()) },
+            answered_by: None,
         },
     };
     let json = serde_json::to_value(&ev).unwrap();

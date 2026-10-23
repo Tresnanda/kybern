@@ -16,6 +16,7 @@ pub mod methods;
 pub mod model;
 pub mod rpc;
 pub mod thread_read;
+pub mod user_input;
 
 pub use auth::*;
 pub use event::*;
@@ -23,6 +24,7 @@ pub use integrations::*;
 pub use model::*;
 pub use rpc::*;
 pub use thread_read::*;
+pub use user_input::*;
 
 /// Bumped on breaking wire changes.
 pub const PROTOCOL_VERSION: u32 = 1;

@@ -1269,6 +1269,12 @@ pub struct ThreadActivitySummary {
     /// at startup: a delegated child is no runtime task of its parent, so `active_agents` never counts it.
     #[serde(default)]
     pub active_children: u32,
+    /// What this thread's oldest waiting request asks for, if one waits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_request: Option<crate::PendingRequestKind>,
+    /// A delegated descendant waits on the user: `question` when any of them asks one, else `approval`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_child_request: Option<crate::PendingRequestKind>,
 }
 
 /// A pending or resolved request for the user to approve a tool call.
@@ -1289,6 +1295,11 @@ pub struct ApprovalRequest {
     #[serde(default)]
     pub suggestions: Vec<Value>,
     pub created_at: DateTime<Utc>,
+    /// The request's questions in one shape for every harness (see
+    /// [`crate::user_input_questions`]); empty when it is not a question.
+    /// Older clients keep reading `input`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub questions: Vec<crate::UserInputQuestion>,
 }
 
 /// `tool_name` of the daemon-raised approval behind the `kybern_request_secret`
@@ -1650,6 +1661,7 @@ pub fn is_user_input_tool(tool_name: &str) -> bool {
             | COORDINATOR_SETTINGS_TOOL
             | "request_user_input"
             | "opencode_question"
+            | crate::CURSOR_QUESTION_TOOL
             | "mcp_elicitation"
             | "ui_select"
             | "ui_confirm"
@@ -1687,13 +1699,38 @@ impl ApprovalRequest {
                         response.get("answers").and_then(|a| a.get(index))
                     };
                     let valid = if self.tool_name == "AskUserQuestion" {
-                        answer.and_then(Value::as_str).is_some_and(|s| !s.trim().is_empty())
+                        // A multi-select answer is a list of labels; Claude also takes the older comma-joined text.
+                        answer.is_some_and(|answer| match answer {
+                            Value::String(s) => !s.trim().is_empty(),
+                            Value::Array(items) => {
+                                !items.is_empty() && items.iter().all(|v| v.as_str().is_some_and(|s| !s.trim().is_empty()))
+                            }
+                            _ => false,
+                        })
                     } else {
                         answer
                             .and_then(Value::as_array)
                             .is_some_and(|a| !a.is_empty() && a.iter().all(|v| v.as_str().is_some_and(|s| !s.trim().is_empty())))
                     };
                     if !valid {
+                        return Err(invalid());
+                    }
+                }
+            }
+            crate::CURSOR_QUESTION_TOOL => {
+                let questions = self.user_input_questions();
+                let answers = response.get("answers").and_then(Value::as_array).ok_or_else(invalid)?;
+                for question in &questions {
+                    let chosen = answers
+                        .iter()
+                        .find(|answer| answer.get("questionId").and_then(Value::as_str) == Some(question.id.as_str()))
+                        .and_then(|answer| answer.get("selectedOptionIds"))
+                        .and_then(Value::as_array)
+                        .ok_or_else(invalid)?;
+                    let known = |id: &Value| {
+                        question.options.iter().any(|option| Some(option.value.as_deref().unwrap_or(&option.label)) == id.as_str())
+                    };
+                    if chosen.is_empty() || (!question.multi_select && chosen.len() > 1) || !chosen.iter().all(known) {
                         return Err(invalid());
                     }
                 }
@@ -2094,6 +2131,9 @@ pub enum TranscriptEntry {
         /// Allowed by Full access without asking the user.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         auto: bool,
+        /// The delegating agent that answered for the user.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        answered_by: Option<crate::RequestAnswerer>,
     },
     TurnSummary {
         turn_id: TurnId,
@@ -2958,6 +2998,7 @@ mod orchestration_tests {
             summary: String::new(),
             suggestions: vec![],
             created_at: Utc::now(),
+            questions: Vec::new(),
         }
     }
 

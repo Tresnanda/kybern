@@ -1,4 +1,5 @@
 import { openTab } from '../tabs/open.ts'
+import { expiredQuestion } from '../../../../packages/kybern-client/src/requestCards.ts'
 import type { PublicInstance } from '@gpuix/react'
 import { chooseTab, setDock } from '../dock/store.ts'
 import { getFileIconName } from '../../../desktop/src/lib/kit/fileIcons.ts'
@@ -125,7 +126,10 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
       if (
         (block.kind === 'tool' && isAgentLaunchBlock(block, tasksByToolCall.get(block.call.id))) ||
         (block.kind === 'runtime_task' && block.task.kind === 'agent') ||
-        isOrchestrationBlock(block)
+        isOrchestrationBlock(block) ||
+        // A question a restart cut off still wants an answer (its "Reply in chat"), and an answer an agent gave for the user
+        // ("Answered by Coordinator") is the user's to see: both stay outside the fold.
+        (block.kind === 'approval' && (expiredQuestion(block.approval, block.decision) || !!block.answeredBy))
       )
         agentBlocks.push(block)
       else if (block.kind !== 'visual') disclosureBlocks.push(block)

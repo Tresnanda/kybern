@@ -816,6 +816,17 @@ expression: schema_for!(ThreadEvent)
         "decision": {
           "$ref": "#/$defs/ApprovalDecision"
         },
+        "answered_by": {
+          "description": "The delegating agent that answered for the user (`kybern_answer_question`); absent when the user did.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequestAnswerer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "kind": {
           "type": "string",
           "const": "approval_resolved"
@@ -2836,6 +2847,13 @@ expression: schema_for!(ThreadEvent)
         "created_at": {
           "type": "string",
           "format": "date-time"
+        },
+        "questions": {
+          "description": "The request's questions in one shape for every harness (see\n[`crate::user_input_questions`]); empty when it is not a question.\nOlder clients keep reading `input`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UserInputQuestion"
+          }
         }
       },
       "required": [
@@ -2846,6 +2864,88 @@ expression: schema_for!(ThreadEvent)
         "input",
         "summary",
         "created_at"
+      ]
+    },
+    "UserInputQuestion": {
+      "description": "One question of a request, whatever harness asked it.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The key the answer goes under: the question text for Claude, the harness's id otherwise.",
+          "type": "string"
+        },
+        "header": {
+          "description": "A very short label, e.g. \"Layout\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "question": {
+          "description": "The question. Markdown.",
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UserInputOption"
+          },
+          "default": []
+        },
+        "multi_select": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_custom": {
+          "description": "The user may write their own answer.",
+          "type": "boolean",
+          "default": false
+        },
+        "secret": {
+          "description": "The answer is hidden in the transcript (Codex `isSecret`).",
+          "type": "boolean",
+          "default": false
+        },
+        "attachments": {
+          "description": "The harness can take files and images with the answer (as paths in the text).",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "id",
+        "question"
+      ]
+    },
+    "UserInputOption": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "preview": {
+          "description": "Text or code to show while the option is focused (Claude's `preview`). Markdown.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "description": "The harness's own id for the option, when it answers with ids (Cursor).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "label"
       ]
     },
     "ApprovalDecision": {
@@ -2908,6 +3008,23 @@ expression: schema_for!(ThreadEvent)
             "decision"
           ]
         }
+      ]
+    },
+    "RequestAnswerer": {
+      "description": "Who answered a request when it was not the user: a delegating agent.",
+      "type": "object",
+      "properties": {
+        "thread_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "title"
       ]
     },
     "StopReason": {

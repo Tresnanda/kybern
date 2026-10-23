@@ -356,8 +356,16 @@ fn order_runtime_group(tasks: Vec<RuntimeTask>, newest_first: bool) -> Vec<Runti
 }
 
 pub fn project_thread_activity(thread_id: ThreadId, tasks: &[RuntimeTask]) -> ThreadActivitySummary {
-    let mut summary =
-        ThreadActivitySummary { thread_id, state: None, active_agents: 0, active_processes: 0, active_monitors: 0, active_children: 0 };
+    let mut summary = ThreadActivitySummary {
+        thread_id,
+        state: None,
+        active_agents: 0,
+        active_processes: 0,
+        active_monitors: 0,
+        active_children: 0,
+        pending_request: None,
+        pending_child_request: None,
+    };
     for task in tasks.iter().filter(|task| task.status.is_active()) {
         match task.kind {
             RuntimeTaskKind::Agent => summary.active_agents += 1,
@@ -676,7 +684,14 @@ fn apply_transcript_event(
             }
             EventPayload::ApprovalRequested { approval } | EventPayload::UserInputRequested { approval } => {
                 let Some(turn_id) = turn_id else { continue };
-                out.push(TranscriptEntry::Approval { turn_id, seq: ev.seq, approval: approval.clone(), decision: None, auto: false });
+                out.push(TranscriptEntry::Approval {
+                    turn_id,
+                    seq: ev.seq,
+                    approval: approval.clone(),
+                    decision: None,
+                    auto: false,
+                    answered_by: None,
+                });
             }
             EventPayload::ApprovalAutoAllowed { approval } => {
                 let Some(turn_id) = turn_id else { continue };
@@ -686,13 +701,15 @@ fn apply_transcript_event(
                     approval: approval.clone(),
                     decision: Some(ApprovalDecision::AllowOnce),
                     auto: true,
+                    answered_by: None,
                 });
             }
-            EventPayload::ApprovalResolved { approval_id, decision } => {
-                if let Some(TranscriptEntry::Approval { decision: d, .. }) =
+            EventPayload::ApprovalResolved { approval_id, decision, answered_by } => {
+                if let Some(TranscriptEntry::Approval { decision: d, answered_by: by, .. }) =
                     out.iter_mut().rev().find(|e| matches!(e, TranscriptEntry::Approval { approval, .. } if approval.id == *approval_id))
                 {
                     *d = Some(decision.clone());
+                    *by = answered_by.clone();
                 }
             }
             EventPayload::RuntimeTaskStarted { task }

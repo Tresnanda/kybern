@@ -1,15 +1,57 @@
-import type { ApprovalRequest, ContentPart } from "./types.ts"
+import { COORDINATOR_BRIEF_TOOL, COORDINATOR_SETTINGS_TOOL, CURSOR_QUESTION_TOOL, LOGIN_REQUEST_TOOL, NORMALIZED_ANSWERS_KEY, PICK_REQUEST_TOOL, PROMPT_REQUEST_TOOL, SECRET_REQUEST_TOOL, VISUAL_ANSWER_TOOL, type ApprovalRequest, type PendingRequestKind, type ContentPart, type UserInputAnswer, type UserInputAttachment } from "./types.ts"
 
 export const record = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}
 export const string = (value: unknown): string => typeof value === "string" ? value : ""
 export const array = (value: unknown): unknown[] => Array.isArray(value) ? value : []
 
-export function isUserInput(approval: ApprovalRequest): boolean {
-  return ["AskUserQuestion", "request_user_input", "opencode_question", "mcp_elicitation", "ui_select", "ui_confirm", "ui_input", "ui_editor"].includes(approval.tool_name)
+export function isUserInput(approval: Pick<ApprovalRequest, "tool_name">): boolean {
+  return ["AskUserQuestion", "request_user_input", "opencode_question", CURSOR_QUESTION_TOOL, "mcp_elicitation", "ui_select", "ui_confirm", "ui_input", "ui_editor"].includes(approval.tool_name)
 }
 
-export function questionsFor(approval: ApprovalRequest) {
+export interface QuestionOption {
+  label: string
+  description: string
+  /** Text or code to show while the option is focused. Markdown. */
+  preview?: string
+}
+
+/** One question of a request, as the cards draw it. */
+export interface QuestionSpec {
+  id: string
+  /** The question. Markdown. */
+  title: string
+  header: string
+  multiple: boolean
+  custom: boolean
+  secret: boolean
+  options: QuestionOption[]
+  /** The harness can take images and files with the answer; only daemons that send `questions` say so. */
+  attachments?: boolean
+}
+
+const option = (item: unknown): QuestionOption => {
+  if (typeof item === "string") return { label: item, description: "" }
+  const preview = string(record(item).preview)
+  return { label: string(record(item).label), description: string(record(item).description), ...(preview.trim() ? { preview } : {}) }
+}
+
+/** The request's questions: the daemon's normalized `questions` when it sends them, else read from the harness's `input`.
+ *  Pi's dialogs (`ui_*`) and MCP forms keep their own form. */
+export function questionsFor(approval: Pick<ApprovalRequest, "tool_name" | "input" | "questions">): QuestionSpec[] {
+  if (approval.tool_name.startsWith("ui_")) return []
+  if (approval.questions?.length) {
+    return approval.questions.map((q) => ({
+      id: q.id,
+      title: q.question,
+      header: q.header ?? "",
+      multiple: q.multi_select,
+      custom: q.allow_custom,
+      secret: q.secret,
+      attachments: q.attachments,
+      options: q.options.map((o) => ({ label: o.label, description: o.description ?? "", ...(o.preview?.trim() ? { preview: o.preview } : {}) })),
+    }))
+  }
   return array(record(approval.input).questions).map((item, index) => {
     const question = record(item)
     return {
@@ -19,18 +61,45 @@ export function questionsFor(approval: ApprovalRequest) {
       multiple: question.multiSelect === true || question.multiple === true,
       custom: question.custom !== false,
       secret: question.isSecret === true,
-      options: array(question.options).map((item) => typeof item === "string" ? { label: item, description: "" } : { label: string(record(item).label), description: string(record(item).description) }),
+      options: array(question.options).map(option),
     }
   })
 }
 
-export function questionResponse(approval: ApprovalRequest, answers: string[][]): unknown {
+/** The harness's own response to `answers` (one list per question, in order). A multi-select Claude answer is the list of
+ *  labels, never a comma-joined string, so a label with a comma stays whole. */
+export function questionResponse(approval: Pick<ApprovalRequest, "tool_name" | "input" | "questions">, answers: string[][]): unknown {
   const questions = questionsFor(approval)
   if (answers.length !== questions.length || answers.some((answer) => !answer.length || answer.some((s) => !s.trim()))) throw new Error("Answer each question before continuing.")
   if (approval.tool_name === "opencode_question") return { answers }
-  if (approval.tool_name === "AskUserQuestion") return { answers: Object.fromEntries(questions.map((q, i) => [q.title, answers[i]!.join(", ")])) }
+  if (approval.tool_name === "AskUserQuestion") return { answers: Object.fromEntries(questions.map((q, i) => [q.title, q.multiple ? answers[i]! : answers[i]!.join(", ")])) }
+  if (approval.tool_name === CURSOR_QUESTION_TOOL) {
+    const ids = approval.questions ?? []
+    return { answers: questions.map((q, i) => ({ questionId: q.id, selectedOptionIds: answers[i]!.map((label) => ids[i]?.options.find((o) => o.label === label)?.value ?? label) })) }
+  }
   return { answers: Object.fromEntries(questions.map((q, i) => [q.id, { answers: answers[i] }])) }
 }
+
+/** Answers the daemon turns into the harness's own response, attachments included (`kybern_answers`). Needs a daemon that sent `questions`. */
+export function normalizedResponse(questions: Pick<QuestionSpec, "id">[], answers: string[][], attachments: UserInputAttachment[][] = []): { [NORMALIZED_ANSWERS_KEY]: UserInputAnswer[] } {
+  if (answers.length !== questions.length || answers.some((answer, i) => !answer.some((s) => s.trim()) && !attachments[i]?.length)) throw new Error("Answer each question before continuing.")
+  return {
+    [NORMALIZED_ANSWERS_KEY]: questions.map((q, i) => ({
+      id: q.id,
+      answers: answers[i]!.map((s) => s.trim()).filter(Boolean),
+      ...(attachments[i]?.length ? { attachments: attachments[i] } : {}),
+    })),
+  }
+}
+
+/** Whether a request waits for an answer (a question, a form, a sign-in, a secret) or an approval; `ApprovalRequest::pending_kind`. */
+export function pendingKind(approval: Pick<ApprovalRequest, "tool_name" | "input">): PendingRequestKind {
+  const answers = isUserInput(approval) || [SECRET_REQUEST_TOOL, VISUAL_ANSWER_TOOL, PICK_REQUEST_TOOL, LOGIN_REQUEST_TOOL, PROMPT_REQUEST_TOOL, COORDINATOR_BRIEF_TOOL, COORDINATOR_SETTINGS_TOOL].includes(approval.tool_name)
+  return answers && !connectorApproval(approval as ApprovalRequest) ? "question" : "approval"
+}
+
+/** The daemon's reason when a restart cut a request off. */
+export const DAEMON_RESTARTED = "daemon restarted"
 
 /** A harness asking for consent to drive an app on this machine, sent as an MCP elicitation. */
 export interface ConnectorApproval {

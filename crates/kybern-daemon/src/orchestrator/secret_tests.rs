@@ -259,6 +259,7 @@ async fn secret_answers_to_codex_questions_are_delivered_but_never_stored() {
         summary: "Answer the agent's questions".into(),
         suggestions: vec![],
         created_at: chrono::Utc::now(),
+        questions: Vec::new(),
     };
     fixture.store.approval_insert(&approval).unwrap();
     fixture.orchestrator.emit(thread.id, Some(turn_id), EventPayload::UserInputRequested { approval: approval.clone() }).unwrap();

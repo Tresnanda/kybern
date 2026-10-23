@@ -38,6 +38,8 @@ fn main() {
     add::<PromptRequestInput>(&mut types, "PromptRequestInput");
     add::<PermissionRequestInput>(&mut types, "PermissionRequestInput");
     add::<QuestionDeadline>(&mut types, "QuestionDeadline");
+    add::<UserInputQuestion>(&mut types, "UserInputQuestion");
+    add::<UserInputAnswer>(&mut types, "UserInputAnswer");
     add::<ProviderStatus>(&mut types, "ProviderStatus");
     add::<Scope>(&mut types, "Scope");
     add::<Checkpoint>(&mut types, "Checkpoint");

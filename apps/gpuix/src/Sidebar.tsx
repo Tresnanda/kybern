@@ -373,9 +373,10 @@ function NotificationBell() {
   const threads = useMemo(() => allThreads.filter((thread) => inSpace(thread.project_id, everyProject, spaceId)), [allThreads, everyProject, spaceId])
   const unread = useNav((s) => s.unread)
   const attentionDismissals = useNav((s) => s.attentionDismissals)
+  const pending = useNav((s) => s.pending)
   const active = useNav((s) => s.attentionFilter)
   const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null)
-  const items = useMemo(() => attentionItems(threads, { unread, attentionDismissals }), [threads, unread, attentionDismissals])
+  const items = useMemo(() => attentionItems(threads, { unread, attentionDismissals, pending }), [threads, unread, attentionDismissals, pending])
   const top = items[0]?.kind
   const toggle = () => setNav({ attentionFilter: !getNav().attentionFilter })
   const dismissAll = () => {

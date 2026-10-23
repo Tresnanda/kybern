@@ -2,7 +2,9 @@
 // clients read them: the card's input, its copy, the countdown and the one line a settled card leaves in the transcript.
 // Contract: the doc comments on `LOGIN_REQUEST_TOOL`, `PROMPT_REQUEST_TOOL`, `PERMISSION_REQUEST_TOOL`, `QuestionDeadline` and
 // `RequestProgress` in `types.ts`. A secret never passes through here; records show the command, never a value.
+import { DAEMON_RESTARTED, questionsFor } from "./userInput.ts"
 import {
+  CURSOR_QUESTION_TOOL,
   LOGIN_REQUEST_TOOL,
   PERMISSION_REQUEST_TOOL,
   PROMPT_REQUEST_TOOL,
@@ -12,6 +14,7 @@ import {
   type PermissionRequestInput,
   type PromptRequestInput,
   type QuestionDeadline,
+  type RequestAnswerer,
   type RequestProgress,
 } from "./types.ts"
 
@@ -253,6 +256,36 @@ export function defaultOption(deadline: QuestionDeadline | null, question: { tit
   return label === undefined ? -1 : question.options.findIndex((option) => option.label === label)
 }
 
+/** The follow-up "Reply in chat" sends for a question a restart cut off. */
+export function replyInChatMessage(question: string, answer: string): string {
+  return `For “${question.replace(/\s+/g, " ").trim()}”: ${answer}`
+}
+
+/** A question a daemon restart cut off: the harness forgot it, so an answer can only go as a message. */
+export function expiredQuestion(approval: Pick<ApprovalRequest, "tool_name" | "input" | "questions">, decision: ApprovalDecision | null): boolean {
+  return decision?.decision === "deny" && decision.reason === DAEMON_RESTARTED && questionsFor(approval).length > 0
+}
+
+/** The labels or text a submitted question answer chose, for its record. Attachment lines are left out. */
+export function chosenAnswers(approval: Pick<ApprovalRequest, "tool_name" | "questions">, decision: ApprovalDecision | null): string[] {
+  if (decision?.decision !== "submit") return []
+  const response = record(decision.response)
+  const answers = response?.answers
+  const strings = (value: unknown): string[] => (Array.isArray(value) ? value.flatMap(strings) : typeof value === "string" ? [value] : [])
+  let out: string[]
+  if (approval.tool_name === CURSOR_QUESTION_TOOL) {
+    const options = (approval.questions ?? []).flatMap((q) => q.options)
+    out = (Array.isArray(answers) ? answers : []).flatMap((a) => strings(record(a)?.selectedOptionIds).map((id) => options.find((o) => (o.value ?? o.label) === id)?.label ?? id))
+  } else if (approval.tool_name === "request_user_input") {
+    out = Object.values(record(answers) ?? {}).flatMap((a) => strings(record(a)?.answers))
+  } else if (approval.tool_name.startsWith("ui_")) {
+    out = strings(response?.value)
+  } else {
+    out = strings(Array.isArray(answers) ? answers : Object.values(record(answers) ?? {}))
+  }
+  return out.filter((answer) => !answer.startsWith("Attached "))
+}
+
 /** The follow-up "Change answer" queues. */
 export function changeAnswerMessage(question: string, chose: string, rather: string): string {
   return `I'd rather have “${rather}” for “${question}” instead of “${chose}”.`
@@ -376,8 +409,24 @@ function autoRecord(auto: AutoAnswer, locale?: string): RequestRecord {
   return { glyph: "clock", parts, detail: auto.waitedSeconds > 0 ? `no answer within ${waitText(auto.waitedSeconds)}` : undefined, tone: "done" }
 }
 
-/** The line a summoned card leaves in the transcript, or null for any other approval. `live` is false once the turn is over. */
-export function requestRecord(approval: ApprovalRequest, decision: ApprovalDecision | null, live = true, locale?: string): RequestRecord | null {
+function answeredByRecord(approval: ApprovalRequest, decision: ApprovalDecision, by: RequestAnswerer): RequestRecord {
+  const chosen = chosenAnswers(approval, decision)
+  return { glyph: "check", parts: [{ text: "Answered by " }, { text: by.title || "an agent", strong: true }], detail: chosen.length ? chosen.map((answer) => `“${answer}”`).join(", ") : undefined, tone: "done" }
+}
+
+/** A question a restart cut off. Questions with options get a "Reply in chat" button; a free-text one is answered in the composer. */
+const expiredRecord = (approval: ApprovalRequest): RequestRecord => ({
+  glyph: "clock",
+  parts: [{ text: "This question expired when Kybern restarted." }],
+  detail: questionsFor(approval).some((q) => q.options.length && !q.secret) ? undefined : "answer it in the chat instead",
+  tone: "ended",
+})
+
+/** The line a summoned card leaves in the transcript, or null for any other approval. `live` is false once the turn is over.
+ *  `answeredBy` names the delegating agent that answered a question for the user. */
+export function requestRecord(approval: ApprovalRequest, decision: ApprovalDecision | null, live = true, locale?: string, answeredBy?: RequestAnswerer | null): RequestRecord | null {
+  if (answeredBy && decision?.decision === "submit") return answeredByRecord(approval, decision, answeredBy)
+  if (expiredQuestion(approval, decision)) return expiredRecord(approval)
   const login = loginRequestInput(approval)
   if (login) return loginRecord(login, decision, live)
   const prompt = promptRequestInput(approval)

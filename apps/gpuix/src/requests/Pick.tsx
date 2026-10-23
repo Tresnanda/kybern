@@ -6,15 +6,13 @@
 // page (`pick/pickerScript.ts`); this card only starts it and follows it (`pick/controller.ts`).
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useGpuixRequired } from '@gpuix/react'
-import { spawn } from 'node:child_process'
-import { readFileSync, rmSync, statSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join, basename } from 'node:path'
+import type { ChildProcess } from 'node:child_process'
+import { basename } from 'node:path'
 import type { ApprovalRequest, FileEntry, PickRequestInput } from '../../../../packages/kybern-client/src/types.ts'
 import { isElementPick, pickOverlayLabel, pickTitle } from '../../../../packages/kybern-client/src/pickRequest.ts'
 import { Icon, ICONS } from '../icons.tsx'
 import { G } from '../composer/glyphs.ts'
-import { uploadBytes } from '../composer/store.ts'
+import { captureWindow, uploadImage, uploadImageFile, type UploadedImage } from './attach.ts'
 import { clipboardAttachments } from '../composer/clipboard.ts'
 import { DropHighlight } from '../motion/DropHighlight.tsx'
 import { Button } from '../kit/Button.tsx'
@@ -295,10 +293,8 @@ const formatSize = (bytes: number) => bytes < 1024 ? `${bytes} B` : bytes < 1024
 
 // ---- image ----
 
-const IMAGE_TYPES: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', heic: 'image/heic', avif: 'image/avif', pdf: 'application/pdf' }
-
-/** An uploaded file the card holds before it is sent, with a picture to show (PDFs and HEIC show their name only). */
-interface Held { assetId: string; name: string; size: number; preview: string | null }
+/** An uploaded file the card holds before it is sent. */
+type Held = UploadedImage
 
 function ImagePick({ approval, input, badge }: { approval: ApprovalRequest; input: PickRequestInput; badge?: string }) {
   const k = useCardTokens()
@@ -311,16 +307,13 @@ function ImagePick({ approval, input, badge }: { approval: ApprovalRequest; inpu
 
   const hold = async (name: string, mediaType: string, bytes: Uint8Array) => {
     setBusy(true); setError('')
-    try {
-      const asset = await uploadBytes(name, mediaType, bytes)
-      setHeld({ assetId: asset.id, name, size: bytes.byteLength, preview: /^image\/(png|jpeg|gif|webp)$/.test(mediaType) ? `data:${mediaType};base64,${Buffer.from(bytes).toString('base64')}` : null })
-    } catch (e) { setError(`Unable to attach that. ${errorText(e)}`) }
+    try { setHeld(await uploadImage(name, mediaType, bytes)) } catch (e) { setError(`Unable to attach that. ${errorText(e)}`) }
     finally { setBusy(false) }
   }
   const addPath = async (path: string) => {
-    const mediaType = IMAGE_TYPES[path.split('.').pop()?.toLowerCase() ?? '']
-    if (!mediaType) { setError('Choose a PNG, JPEG, GIF, WebP, HEIC or PDF file.'); return }
-    try { await hold(basename(path), mediaType, readFileSync(path)) } catch (e) { setError(`Unable to read that file. ${errorText(e)}`) }
+    setBusy(true); setError('')
+    try { setHeld(await uploadImageFile(path)) } catch (e) { setError(`Unable to attach that. ${errorText(e)}`) }
+    finally { setBusy(false) }
   }
   const choose = async () => {
     const paths = await renderer.promptForPaths?.({ files: true, multiple: false, prompt: 'Choose' })
@@ -435,28 +428,18 @@ function WindowPick({ approval, input, badge }: { approval: ApprovalRequest; inp
   const [blocked, setBlocked] = useState(() => screenRecordingGranted() === false)
   // "Capture anyway": this process may only see the grant after a restart, while `screencapture` sees it at once.
   const unchecked = useRef(false)
-  const child = useRef<ReturnType<typeof spawn> | null>(null)
+  const child = useRef<ChildProcess | null>(null)
   useEffect(() => () => { child.current?.kill() }, [])
 
   const capture = () => {
     if (capturing) return
     if (!unchecked.current && screenRecordingGranted() === false) { setBlocked(true); return }
-    const path = join(tmpdir(), `kybern-window-${crypto.randomUUID()}.png`)
     setCapturing(true); setError('')
-    // The system's own capture: click a window (press space to switch to windows), or drag an area. Esc cancels.
-    const proc = spawn('screencapture', ['-i', '-W', '-o', '-x', path], { stdio: 'ignore' })
-    child.current = proc
-    proc.on('error', () => { setCapturing(false); setError('Unable to start the capture. Try again, or decline and describe the window.') })
-    proc.on('close', async () => {
-      child.current = null
-      try {
-        if (!statSync(path, { throwIfNoEntry: false })?.size) { setCapturing(false); return }
-        const bytes = readFileSync(path)
-        const asset = await uploadBytes('window.png', 'image/png', bytes)
-        setHeld({ assetId: asset.id, preview: `data:image/png;base64,${bytes.toString('base64')}`, size: bytes.byteLength })
-      } catch (e) { setError(`Unable to save the capture. ${errorText(e)}`) }
-      finally { setCapturing(false); try { rmSync(path, { force: true }) } catch { /* gone */ } }
-    })
+    captureWindow(proc => { child.current = proc }).then(async (bytes) => {
+      if (!bytes) return
+      const image = await uploadImage('window.png', 'image/png', bytes)
+      setHeld({ assetId: image.assetId, preview: image.preview ?? '', size: image.size })
+    }).catch(e => setError(`Unable to save the capture. ${errorText(e)} Try again, or decline and describe the window.`)).finally(() => setCapturing(false))
   }
   const send = async () => {
     if (!held || sending) return

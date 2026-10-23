@@ -5,7 +5,8 @@ const questions = [{ id: "sections", question: "Which sections?", multiSelect: t
 test("questions encode Claude text keys, Codex ids and OpenCode ordered arrays", () => {
   const answers = [["Intro", "Custom section"]]
   const approval = (tool_name) => ({ tool_name, input: { questions } })
-  assert.deepEqual(questionResponse(approval("AskUserQuestion"), answers), { answers: { "Which sections?": "Intro, Custom section" } })
+  assert.deepEqual(questionResponse(approval("AskUserQuestion"), answers), { answers: { "Which sections?": ["Intro", "Custom section"] } }, "a multi-select answer keeps each label whole")
+  assert.deepEqual(questionResponse({ tool_name: "AskUserQuestion", input: { questions: [{ question: "One?", options: [{ label: "A, B" }] }] } }, [["A, B"]]), { answers: { "One?": "A, B" } })
   assert.deepEqual(questionResponse(approval("request_user_input"), answers), { answers: { sections: { answers: answers[0] } } })
   assert.deepEqual(questionResponse(approval("opencode_question"), answers), { answers })
 })
@@ -49,4 +50,22 @@ test("notes and tasks consent reads the daemon's approval and ignores other tool
   assert.equal(update.preview, "")
   assert.equal(notesTasksConsent({ tool_name: "kybern_notes_tasks", summary: "", input: { action: "delete_task" } }), null)
   assert.equal(notesTasksConsent({ tool_name: "kybern_computer_use", summary: "", input: { app: "Notes" } }), null)
+})
+
+import { normalizedResponse } from "./src/lib/userInput.ts"
+
+test("normalized questions win over input and carry previews, Cursor ids and attachments", () => {
+  const approval = {
+    tool_name: "cursor_ask_question",
+    input: { questions: [{ id: "scope", prompt: "Which scope?", options: [{ id: "w", label: "Workspace" }] }] },
+    questions: [{ id: "scope", question: "Which **scope**?", options: [{ label: "Workspace", value: "w", preview: "```\nall\n```" }], multi_select: false, allow_custom: false, secret: false, attachments: false }],
+  }
+  const [spec] = questionsFor(approval)
+  assert.equal(spec.title, "Which **scope**?")
+  assert.equal(spec.options[0].preview, "```\nall\n```")
+  assert.deepEqual(questionResponse(approval, [["Workspace"]]), { answers: [{ questionId: "scope", selectedOptionIds: ["w"] }] })
+  const image = { kind: "image", name: "shot.png", asset_id: "a1" }
+  assert.deepEqual(normalizedResponse([{ id: "q" }], [[]], [[image]]), { kybern_answers: [{ id: "q", answers: [], attachments: [image] }] })
+  assert.throws(() => normalizedResponse([{ id: "q" }], [[" "]]), /Answer each question/)
+  assert.deepEqual(questionsFor({ tool_name: "ui_select", input: {}, questions: [{ id: "value", question: "Where?", options: [], multi_select: false, allow_custom: true, secret: false, attachments: true }] }), [], "Pi dialogs keep their form")
 })

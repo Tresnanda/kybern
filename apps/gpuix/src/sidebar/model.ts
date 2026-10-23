@@ -18,7 +18,7 @@ import {
   type Thread,
   type ThreadActivityState,
 } from '../../../../packages/kybern-client/src/types.ts'
-import type { NavState, SidebarFilter } from '../nav/store.ts'
+import type { NavState, SidebarFilter, ThreadPending } from '../nav/store.ts'
 
 export const MAX_PROJECT_THREADS = 8
 
@@ -61,11 +61,21 @@ export type Row =
   | { kind: 'empty-space'; key: string; onlySpace: boolean }
   | { kind: 'recents'; key: string; open: boolean }
 
-/** Desktop `threadAttentionKind` over this app's unread marks and dismissals. */
-export function attentionKind(thread: Thread, nav: Pick<NavState, 'unread' | 'attentionDismissals'>): AttentionKind | null {
+/**
+ * The badge of a row that waits on the reader: "Needs input" for a question (its own, or a delegated agent's), "Pending
+ * approval" for an approval. A thread's own request comes first; an older daemon without kinds still says "Pending".
+ */
+export function pendingBadge(status: Thread['status'], pending: ThreadPending | undefined): string | null {
+  if (status === 'awaiting-approval') return !pending?.own ? 'Pending' : pending.own === 'question' ? 'Needs input' : 'Pending approval'
+  if (pending?.child) return pending.child === 'question' ? 'Needs input' : 'Pending approval'
+  return null
+}
+
+/** Desktop `threadAttentionKind` over this app's unread marks and dismissals. A delegated agent that waits blocks its parent. */
+export function attentionKind(thread: Thread, nav: Pick<NavState, 'unread' | 'attentionDismissals'> & Partial<Pick<NavState, 'pending'>>): AttentionKind | null {
   if (thread.parent_thread_id || thread.subagent || thread.status === 'archived') return null
   const kind: AttentionKind | null =
-    thread.status === 'awaiting-approval' ? 'blocked' : thread.status === 'failed' ? 'failed' : thread.status === 'idle' && nav.unread[thread.id] ? 'done' : null
+    thread.status === 'awaiting-approval' || nav.pending?.[thread.id]?.child ? 'blocked' : thread.status === 'failed' ? 'failed' : thread.status === 'idle' && nav.unread[thread.id] ? 'done' : null
   if (!kind) return null
   const dismissed = nav.attentionDismissals[thread.id]
   if (kind !== 'done' && dismissed !== undefined && thread.last_seq <= dismissed) return null
@@ -75,7 +85,7 @@ export function attentionKind(thread: Thread, nav: Pick<NavState, 'unread' | 'at
 const RANK: Record<AttentionKind, number> = { blocked: 0, failed: 1, done: 2 }
 
 /** Every thread that needs attention, most urgent first (`selectAttentionItems`). */
-export function attentionItems(threads: readonly Thread[], nav: Pick<NavState, 'unread' | 'attentionDismissals'>) {
+export function attentionItems(threads: readonly Thread[], nav: Pick<NavState, 'unread' | 'attentionDismissals'> & Partial<Pick<NavState, 'pending'>>) {
   const items: { thread: Thread; kind: AttentionKind }[] = []
   for (const thread of threads) {
     const kind = attentionKind(thread, nav)
@@ -135,7 +145,7 @@ export interface SidebarInput {
   nav: Pick<
     NavState,
     'children' | 'activity' | 'unread' | 'dismissed' | 'filter' | 'attentionFilter' | 'projectOrder' | 'composerDrafts' | 'attentionDismissals'
-  >
+  > & Partial<Pick<NavState, 'pending'>>
   now: number
   /** The active space; null when the daemon has no spaces. `name` is set only with two or more spaces. */
   space?: { id: string | null; name: string | null; count: number }
@@ -204,7 +214,7 @@ export function buildRows(input: SidebarInput): Row[] {
       const coordinator = input.threads.find((t) => t.coordinator_project_id === project.id)
       const open = shown ? true : !input.collapsed[project.id]
       const running = threads.some((t) => t.status === 'running')
-      const waiting = threads.some((t) => t.status === 'awaiting-approval')
+      const waiting = threads.some((t) => t.status === 'awaiting-approval' || nav.pending?.[t.id]?.child)
       const activity = threads.some((t) => nav.activity[t.id] === 'working')
         ? 'working'
         : threads.some((t) => nav.activity[t.id] === 'monitoring')

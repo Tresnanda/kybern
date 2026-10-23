@@ -41,6 +41,9 @@ pub(crate) fn is_tool(name: &str) -> bool {
     TOOL_NAMES.contains(&name)
 }
 
+/// What a wait that ended on a child's question tells the caller.
+const QUESTION_NOTE: &str = "An agent is waiting on a question. Answer it with kybern_answer_question if the answer follows from your task or the user's instructions; otherwise tell the user it is waiting in Kybern.";
+
 /// Child result text kept on the thread (UTF-8 bytes).
 const RESULT_CAP: usize = 16 * 1024;
 /// Result text returned by `kybern_agent_status`.
@@ -93,15 +96,17 @@ pub(super) struct DelegationState {
     pending: std::sync::Mutex<HashMap<ThreadId, PendingBatch>>,
     /// Tasks whose outcome a blocked `wait` call already returned; skipped in batches.
     inline_delivered: std::sync::Mutex<HashSet<Uuid>>,
-    /// Notified after every delegation change so `wait` calls re-check.
-    changed: Notify,
+    /// Notified after every delegation change, and when a child asks a question, so `wait` calls re-check.
+    pub(super) changed: Notify,
     /// Serializes the limit check with the insert, per delegating thread, so
     /// parallel delegations cannot overshoot while other parents are not held up
     /// behind a slow worktree snapshot.
     create: std::sync::Mutex<HashMap<ThreadId, std::sync::Arc<tokio::sync::Mutex<()>>>>,
     /// Threads being stopped or archived: they may not delegate any more work.
     stopping: std::sync::Mutex<HashMap<ThreadId, usize>>,
-    debounce_ms: std::sync::atomic::AtomicU64,
+    pub(super) debounce_ms: std::sync::atomic::AtomicU64,
+    /// Children's questions a wait returned, and notices that can still be taken back.
+    pub(super) questions: std::sync::Mutex<super::child_questions::ChildQuestions>,
     /// How long `kybern_agent_capabilities` waits for a fresh harness catalog.
     catalog_budget_ms: std::sync::atomic::AtomicU64,
 }
@@ -115,6 +120,7 @@ impl Default for DelegationState {
             create: Default::default(),
             stopping: Default::default(),
             debounce_ms: std::sync::atomic::AtomicU64::new(DEFAULT_DEBOUNCE_MS),
+            questions: Default::default(),
             catalog_budget_ms: std::sync::atomic::AtomicU64::new(CATALOG_BUDGET_MS),
         }
     }
@@ -522,7 +528,7 @@ impl Orchestrator {
     }
 
     /// Whether `ancestor` sits above `child` in the parent chain.
-    fn is_descendant_of(&self, ancestor: ThreadId, child: &Thread) -> Result<bool> {
+    pub(super) fn is_descendant_of(&self, ancestor: ThreadId, child: &Thread) -> Result<bool> {
         let mut cursor = child.parent_thread_id;
         for _ in 0..16 {
             match cursor {
@@ -950,10 +956,12 @@ impl Orchestrator {
         );
         let mut thread = child;
         let mut timed_out = false;
+        let mut questions = Vec::new();
         if mode == DelegateMode::Wait && thread.delegation.as_ref().is_some_and(|info| info.status == DelegationStatus::Running) {
             let task_id = thread.delegation.as_ref().map(|info| info.task_id).expect("checked above");
-            let (mut threads, waited_out) = self.wait_for_delegations(&[task_id], timeout).await?;
+            let (mut threads, waited_out, asked) = self.wait_for_delegations(&[task_id], timeout).await?;
             timed_out = waited_out;
+            questions = asked;
             if let Some(updated) = threads.pop() {
                 thread = updated;
             }
@@ -979,7 +987,11 @@ impl Orchestrator {
         if let Some(error) = &info.error {
             object.insert("error".into(), json!(error));
         }
-        if timed_out {
+        if !questions.is_empty() {
+            object.insert("has_pending_question".into(), json!(true));
+            object.insert("pending_questions".into(), json!(questions));
+            object.insert("note".into(), json!(QUESTION_NOTE));
+        } else if timed_out {
             object.insert("wait_timed_out".into(), json!(true));
             object.insert(
                 "note".into(),
@@ -1045,20 +1057,26 @@ impl Orchestrator {
         if task_ids.is_empty() {
             return Ok(json!({ "agents": [], "wait_timed_out": false, "note": "None of your agents is running." }));
         }
-        let (threads, timed_out) = self.wait_for_delegations(&task_ids, timeout).await?;
+        let (threads, timed_out, questions) = self.wait_for_delegations(&task_ids, timeout).await?;
         self.mark_inline_delivered(&threads.iter().collect::<Vec<_>>());
         let mut response = json!({
             "agents": threads.iter().map(|thread| delegation_view(thread, RESULT_CAP)).collect::<Vec<_>>(),
             "wait_timed_out": timed_out,
         });
-        if timed_out {
+        if !questions.is_empty() {
+            response["has_pending_question"] = json!(true);
+            response["pending_questions"] = json!(questions);
+            response["note"] = json!(QUESTION_NOTE);
+        } else if timed_out {
             response["note"] = json!("Some agents are still running. End your turn: Kybern wakes you with their results.");
         }
         Ok(response)
     }
 
-    /// Block until every listed delegation leaves `running`, or the timeout.
-    async fn wait_for_delegations(&self, task_ids: &[Uuid], timeout: Duration) -> Result<(Vec<Thread>, bool)> {
+    /// Block until every listed delegation leaves `running`, one of them (or an agent below it)
+    /// waits on a question the caller may answer, or the timeout. Returns the threads, whether
+    /// the wait timed out, and the waiting questions.
+    async fn wait_for_delegations(&self, task_ids: &[Uuid], timeout: Duration) -> Result<(Vec<Thread>, bool, Vec<Value>)> {
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
             let notified = self.inner.delegation.changed.notified();
@@ -1073,7 +1091,11 @@ impl Orchestrator {
             let running =
                 threads.iter().any(|thread| thread.delegation.as_ref().is_some_and(|info| info.status == DelegationStatus::Running));
             if !running {
-                return Ok((threads, false));
+                return Ok((threads, false, Vec::new()));
+            }
+            let questions = self.waiting_questions(&threads);
+            if !questions.is_empty() {
+                return Ok((threads, false, questions));
             }
             if tokio::time::timeout_at(deadline, notified).await.is_err() {
                 // Query once more so a result persisted at the boundary is not reported as a timeout.
@@ -1083,7 +1105,7 @@ impl Orchestrator {
                     .collect::<Vec<_>>();
                 let still_running =
                     threads.iter().any(|thread| thread.delegation.as_ref().is_some_and(|info| info.status == DelegationStatus::Running));
-                return Ok((threads, still_running));
+                return Ok((threads, still_running, Vec::new()));
             }
         }
     }

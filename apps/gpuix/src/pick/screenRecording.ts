@@ -25,3 +25,8 @@ export const KYBERN_SCREEN_RECORDING: PermissionRequestInput = {
   relaunch: true,
   detects: true,
 }
+
+/** Open System Settings at Screen Recording (the Attach menu of a question, which has no card of its own to wait in). */
+export function openScreenRecordingSettings(): void {
+  try { Bun.spawn(['open', KYBERN_SCREEN_RECORDING.url], { stdout: 'ignore', stderr: 'ignore' }) } catch { /* System Settings did not open; the error line says what to do. */ }
+}

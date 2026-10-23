@@ -189,6 +189,14 @@ struct CursorAskQuestionResponse {
     outcome: Value,
 }
 
+/// Cursor's answer to `cursor/ask_question`: the chosen option ids, or skipped when the user declined.
+fn question_outcome(answer: Option<Value>) -> Value {
+    match answer.and_then(|response| response.get("answers").cloned()) {
+        Some(answers) => json!({ "outcome": "answered", "answers": answers }),
+        None => json!({ "outcome": "skipped", "reason": "The user chose not to answer. Continue without asking again." }),
+    }
+}
+
 /// Cursor extension: the agent proposes a plan.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonRpcRequest)]
 #[request(method = "cursor/create_plan", response = CursorCreatePlanResponse)]
@@ -248,6 +256,7 @@ impl AgentDriver for CursorAcpDriver {
         let shared = Arc::new(Shared {
             events: events_tx.clone(),
             pending: Mutex::new(std::collections::HashMap::new()),
+            questions: Mutex::new(std::collections::HashMap::new()),
             mode: config.permission_mode,
         });
         let (finished, closed) = tokio::sync::watch::channel(());
@@ -273,6 +282,8 @@ struct Shared {
     events: mpsc::Sender<DriverEvent>,
     /// Pending permission requests: request id -> responder sender with the chosen option id.
     pending: Mutex<std::collections::HashMap<String, oneshot::Sender<Option<String>>>>,
+    /// Pending `cursor/ask_question` cards: request id -> the answer (`{answers: [...]}`), or `None` when declined.
+    questions: Mutex<std::collections::HashMap<String, oneshot::Sender<Option<Value>>>>,
     mode: PermissionMode,
 }
 
@@ -495,11 +506,30 @@ async fn run_connection(
         )
         .on_receive_request(
             async move |req: CursorAskQuestionRequest, responder, _cx| {
-                let _ = shared_tools
+                // A question card, never auto-answered: Kybern's own permission mode does not apply to questions.
+                let shared = shared_tools.clone();
+                let request_id = uuid::Uuid::new_v4().simple().to_string();
+                let (tx, rx) = oneshot::channel();
+                shared.questions.lock().await.insert(request_id.clone(), tx);
+                let summary = req
+                    .questions
+                    .first()
+                    .and_then(|question| question.get("prompt"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| "Answer the agent's questions".into());
+                let _ = shared
                     .events
-                    .send(DriverEvent::Notice { level: NoticeLevel::Warning, text: "Cursor asked a question kybern cannot relay yet".into(), data: Some(json!({ "title": req.title, "questions": req.questions })) })
+                    .send(DriverEvent::PermissionRequest {
+                        request_id,
+                        tool_call_id: Some(req.tool_call_id.clone()),
+                        tool_name: kybern_protocol::CURSOR_QUESTION_TOOL.into(),
+                        input: json!({ "title": req.title, "questions": req.questions }),
+                        summary,
+                        suggestions: vec![],
+                    })
                     .await;
-                responder.respond(CursorAskQuestionResponse { outcome: json!({ "outcome": "skipped", "reason": "not supported by client" }) })
+                responder.respond(CursorAskQuestionResponse { outcome: question_outcome(rx.await.ok().flatten()) })
             },
             on_receive_request!(),
         )
@@ -667,8 +697,15 @@ impl AgentSession for Handle {
     }
 
     async fn respond_permission(&self, request_id: &str, decision: &ApprovalDecision) -> Result<()> {
+        if let Some(tx) = self.shared.questions.lock().await.remove(request_id) {
+            let _ = tx.send(match decision {
+                ApprovalDecision::Submit { response } => Some(response.clone()),
+                _ => None,
+            });
+            return Ok(());
+        }
         if matches!(decision, ApprovalDecision::Submit { .. }) {
-            return Err(DriverError::Unsupported("Cursor ACP does not expose structured questions".into()));
+            return Err(DriverError::Unsupported("Cursor only takes an answer to its own questions".into()));
         }
         let Some(tx) = self.shared.pending.lock().await.remove(request_id) else {
             return Err(DriverError::Protocol(format!("no pending approval {request_id}")));
@@ -709,6 +746,16 @@ mod tests {
         let blocks = blocks(&message);
         let ContentBlock::Text(text) = &blocks[0] else { panic!("expected text block") };
         assert_eq!(text.text, "/review");
+    }
+
+    #[test]
+    fn cursor_questions_answer_with_option_ids_or_skip() {
+        let answers = serde_json::json!([{ "questionId": "scope", "selectedOptionIds": ["session"] }]);
+        assert_eq!(
+            super::question_outcome(Some(serde_json::json!({ "answers": answers }))),
+            serde_json::json!({ "outcome": "answered", "answers": answers })
+        );
+        assert_eq!(super::question_outcome(None)["outcome"], "skipped");
     }
 }
 

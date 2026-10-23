@@ -593,7 +593,64 @@ export interface ThreadActivitySummary {
   active_monitors: number;
   /** Running delegated children; absent from older daemons. */
   active_children?: number;
+  /** What this thread's oldest waiting request asks for. */
+  pending_request?: PendingRequestKind | null;
+  /** A delegated descendant waits on the user: `question` when any of them asks one. */
+  pending_child_request?: PendingRequestKind | null;
 }
+
+/** Whether a waiting request asks the user to answer or to approve. */
+export type PendingRequestKind = "approval" | "question";
+
+/** One question of a request, in one shape for every harness (`kybern_protocol::UserInputQuestion`). */
+export interface UserInputQuestion {
+  /** The key the answer goes under. */
+  id: string;
+  header?: string | null;
+  /** Markdown. */
+  question: string;
+  options: UserInputOption[];
+  multi_select: boolean;
+  allow_custom: boolean;
+  secret: boolean;
+  /** The harness can take images and files with the answer. */
+  attachments: boolean;
+}
+
+export interface UserInputOption {
+  label: string;
+  description?: string | null;
+  /** Text or code shown while the option is focused. Markdown. */
+  preview?: string | null;
+  /** The harness's own id for the option (Cursor). */
+  value?: string | null;
+}
+
+/** A file or picture sent with an answer. */
+export interface UserInputAttachment {
+  kind: "image" | "file" | "window";
+  name: string;
+  asset_id?: AssetId | null;
+  /** Absolute path, for a file. */
+  path?: string | null;
+}
+
+/** The answer to one question; sent as `{ kybern_answers: UserInputAnswer[] }` and turned into the harness's own response by the daemon. */
+export interface UserInputAnswer {
+  id: string;
+  answers: string[];
+  attachments?: UserInputAttachment[];
+}
+
+/** The delegating agent that answered a request for the user. */
+export interface RequestAnswerer {
+  thread_id: ThreadId;
+  title: string;
+}
+
+export const NORMALIZED_ANSWERS_KEY = "kybern_answers";
+/** `tool_name` of a question Cursor asks through `cursor/ask_question`. */
+export const CURSOR_QUESTION_TOOL = "cursor_ask_question";
 
 export interface ApprovalRequest {
   id: ApprovalId;
@@ -606,6 +663,8 @@ export interface ApprovalRequest {
   summary: string;
   suggestions: JsonValue[];
   created_at: DateTime;
+  /** The questions in one shape for every harness; absent when it is not a question, or from an older daemon. */
+  questions?: UserInputQuestion[];
 }
 
 /** `tool_name` of the daemon's card asking the user for one secret (`kybern_request_secret`). `input` is a `SecretRequestInput`. The answer is `{ decision: "submit", response: { secret } }` or a deny; stored and broadcast copies carry `REDACTED_SECRET` instead of the value. */
@@ -899,6 +958,8 @@ export type TranscriptEntry =
       decision?: ApprovalDecision | null;
       /** Allowed by Full access without asking the user. */
       auto?: boolean;
+      /** The delegating agent that answered for the user. */
+      answered_by?: RequestAnswerer | null;
     }
   | {
       role: "turn_summary";
@@ -1056,6 +1117,8 @@ export type EventPayload =
       kind: "approval_resolved";
       approval_id: ApprovalId;
       decision: ApprovalDecision;
+      /** The delegating agent that answered for the user; absent when the user did. */
+      answered_by?: RequestAnswerer | null;
     }
   /** A harness permission request Kybern allowed because the thread is in Full access. */
   | { kind: "approval_auto_allowed"; approval: ApprovalRequest }

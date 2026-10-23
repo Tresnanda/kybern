@@ -4,6 +4,7 @@
 
 import { subagentPhase } from "./subagents.ts";
 import type {
+  PendingRequestKind,
   AgentResultItem,
   ContentPart,
   DelegationInfo,
@@ -73,12 +74,14 @@ function delegationPhase(status: DelegationStatus): ChildPhase {
   }
 }
 
-/** What a Lineage row says about one child: its glyph phase and the word that goes with it. */
-export function childState(thread: LineageThread): { phase: ChildPhase; word: string } {
+/** What a Lineage row says about one child: its glyph phase and the word that goes with it. `pending` is what its waiting
+ *  request asks for (`ThreadActivitySummary.pending_request`): a question says "Needs input", anything else "Needs approval". */
+export function childState(thread: LineageThread, pending?: PendingRequestKind | null): { phase: ChildPhase; word: string } {
+  const waiting = pending === "question" ? "Needs input" : "Needs approval";
   if (thread.delegation) {
     const info = thread.delegation;
     // A child that needs an answer is not "working": nothing moves until you open it.
-    if (info.status === "running" && thread.status === "awaiting-approval") return { phase: "waiting", word: "Needs approval" };
+    if (info.status === "running" && thread.status === "awaiting-approval") return { phase: "waiting", word: waiting };
     return { phase: delegationPhase(info.status), word: delegationStatusWord(info.status) };
   }
   if (thread.subagent) {
@@ -93,7 +96,7 @@ export function childState(thread: LineageThread): { phase: ChildPhase; word: st
     case "running":
       return { phase: "working", word: "Working" };
     case "awaiting-approval":
-      return { phase: "waiting", word: "Needs approval" };
+      return { phase: "waiting", word: waiting };
     case "failed":
       return { phase: "failed", word: "Failed" };
     default:

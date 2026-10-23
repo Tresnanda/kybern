@@ -35,7 +35,7 @@ import { raisedFill, useGlass } from '../platform/glass.ts'
 import type { Theme } from '../theme.ts'
 import { beginProjectDrag, consumeProjectDrag, endProjectPending, trackProjectDrag } from './reorder.tsx'
 import { leftSource } from '../drag/leave.ts'
-import { filterSummary, isFiltering, providerLabel, threadAgents } from './model.ts'
+import { filterSummary, isFiltering, pendingBadge, providerLabel, threadAgents } from './model.ts'
 import { popAnimation, popTransform, usePopOnChange } from '../kit/Pop.tsx'
 import { Chevron } from '../motion/Chevron.tsx'
 import { SwapOnChange } from '../motion/kit.tsx'
@@ -483,9 +483,10 @@ export const ThreadRow = memo(function ThreadRow({
   const inSplit = collectThreadPanes(splitRoot).some((pane) => pane.threadId === thread.id)
   const { renderer } = useGpuix()
   const rowRef = useRef<PublicInstance | null>(null)
-  const hasGlyph = thread.status !== 'idle' || !!activity || unread
+  const badge = pendingBadge(thread.status, useNav((s) => s.pending[thread.id]))
+  const hasGlyph = thread.status !== 'idle' || !!activity || unread || !!badge
   const reveal = hover && !renaming
-  const pendingPop = usePopOnChange(thread.status === 'awaiting-approval')
+  const pendingPop = usePopOnChange(!!badge)
   const wasRevealed = useWasRevealed(reveal)
   const tree = useRowTree({ depth, last, rails, open: nested && childrenOpen && childCount > 0, toggle: childCount > 0, anchor: 16 })
   const commitRename = () => {
@@ -547,9 +548,9 @@ export const ThreadRow = memo(function ThreadRow({
               </TitleSwap>
             )}
             {hasDraft && !renaming && <DraftMarker />}
-            {thread.status === 'awaiting-approval' && (
+            {badge && (
               <Label color={amberText(t)} size={10} weight={500} style={{ flexShrink: 0 }} paintAnimation={pendingPop ? popAnimation() : undefined}>
-                Pending
+                {badge}
               </Label>
             )}
           </div>
@@ -572,7 +573,7 @@ export const ThreadRow = memo(function ThreadRow({
         {!reveal && (
           <div style={{ position: 'absolute', top: 0, bottom: 0, right: 6, display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>
             <FadeBack play={wasRevealed} style={{ width: 15 }}>
-              <StatusGlyph status={thread.status} activity={activity} unread={unread} pinned={thread.pinned} />
+              <StatusGlyph status={badge ? 'awaiting-approval' : thread.status} activity={activity} unread={unread} pinned={thread.pinned} />
             </FadeBack>
           </div>
         )}
@@ -695,7 +696,8 @@ export const ChildRow = memo(function ChildRow({
   }, [working, selected, leaveAsked, completedAt, thread.id])
 
   const reveal = hover && !working && !leaving
-  const pendingPop = usePopOnChange(thread.status === 'awaiting-approval')
+  const badge = pendingBadge(thread.status, useNav((s) => s.pending[thread.id]))
+  const pendingPop = usePopOnChange(!!badge)
   const wasRevealed = useWasRevealed(reveal)
   const tree = useRowTree({ depth: level, last, rails, open: childrenOpen && childCount > 0, toggle: childCount > 0, anchor: 17 })
   const body = (
@@ -729,9 +731,9 @@ export const ChildRow = memo(function ChildRow({
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexGrow: 1, minWidth: 0 }}>
             {/* A little quieter than its parent, so the parent stays dominant. */}
             <MarqueeLabel hover={hover} text={thread.title || (delegated ? 'Agent' : 'Subagent')} color={selected ? t.text : ink(t, 0.82)} />
-            {thread.status === 'awaiting-approval' && (
+            {badge && (
               <Label color={amberText(t)} size={10} weight={500} style={{ flexShrink: 0 }} paintAnimation={pendingPop ? popAnimation() : undefined}>
-                Pending
+                {badge}
               </Label>
             )}
           </div>

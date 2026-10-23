@@ -1411,6 +1411,7 @@ mod tests {
             summary: "bash: ls".into(),
             suggestions: Vec::new(),
             created_at: Utc::now(),
+            questions: Vec::new(),
         }
     }
 

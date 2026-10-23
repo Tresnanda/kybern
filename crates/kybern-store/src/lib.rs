@@ -53,7 +53,7 @@ fn snake(value: impl serde::Serialize) -> Result<String> {
 /// The persistence boundary for secret answers: an `ApprovalResolved` event
 /// never stores or broadcasts the value of a secret answer, whoever emits it.
 fn redact_resolved_approval(c: &Connection, payload: &mut EventPayload) -> Result<()> {
-    let EventPayload::ApprovalResolved { approval_id, decision } = payload else { return Ok(()) };
+    let EventPayload::ApprovalResolved { approval_id, decision, .. } = payload else { return Ok(()) };
     if matches!(decision, ApprovalDecision::Submit { .. })
         && let Some(approval) = approval_row(c, *approval_id)?
     {

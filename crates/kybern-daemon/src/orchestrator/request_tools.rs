@@ -69,8 +69,10 @@ pub(crate) fn tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
                 "can wait, pick or change the answer later). Never use a deadline for anything risky or irreversible. Without deadline_seconds the ",
                 "question waits up to an hour. status is \"answered\", \"auto_answered\" (the deadline passed, so the answers are your defaults), ",
                 "\"declined\" (the user chose not to answer: continue without asking again), \"cancelled\" (the run ended) or \"timed_out\". ",
-                "Result: {status, answers: {question: label}, waited_seconds?}. Not for passwords, secrets, sign-ins or permissions: those have their own tools ",
-                "and never auto-answer."
+                "Result: {status, answers: {question: label, or [labels] for multi_select}, attachments?: {question: [{kind, path}]}, waited_seconds?}; ",
+                "the user may attach images or files to an answer. The question is Markdown. An option's preview is text or a fenced code block shown ",
+                "while the option is focused; for anything richer, publish a visual with await_answer instead. Not for passwords, secrets, sign-ins or ",
+                "permissions: those have their own tools and never auto-answer."
             )
             .into(),
             input_schema: json!({
@@ -79,11 +81,11 @@ pub(crate) fn tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
                     "questions": {"type":"array","minItems":1,"maxItems":4,"items":{
                         "type":"object","additionalProperties":false,
                         "properties":{
-                            "question":{"type":"string","minLength":1,"maxLength":300},
+                            "question":{"type":"string","minLength":1,"maxLength":1000,"description":"Markdown."},
                             "header":{"type":["string","null"],"maxLength":12,"description":"A very short label for the question, e.g. \"Layout\"."},
                             "options":{"type":"array","minItems":2,"maxItems":6,"items":{
                                 "type":"object","additionalProperties":false,
-                                "properties":{"label":{"type":"string","minLength":1,"maxLength":80},"description":{"type":["string","null"],"maxLength":300}},
+                                "properties":{"label":{"type":"string","minLength":1,"maxLength":80},"description":{"type":["string","null"],"maxLength":300},"preview":{"type":["string","null"],"maxLength":MAX_OPTION_PREVIEW_BYTES,"description":"Text or a fenced code block to show while this option is focused."}},
                                 "required":["label"]}},
                             "multi_select":{"type":["boolean","null"],"description":"Allow several options. Not with a default."},
                             "default":{"type":["string","null"],"description":"The label to pick when the deadline passes. Required for every question when deadline_seconds is set."}
@@ -332,6 +334,8 @@ struct AskOption {
     label: String,
     #[serde(default)]
     description: Option<String>,
+    #[serde(default)]
+    preview: Option<String>,
 }
 
 /// A validated `kybern_ask_user` call: the card's questions and, when the
@@ -353,8 +357,14 @@ pub(crate) fn parse_ask(arguments: Value) -> Result<Ask> {
     let mut defaults = std::collections::BTreeMap::new();
     for (index, question) in raw.questions.iter().enumerate() {
         let text = question.question.trim();
-        if text.is_empty() || text.chars().count() > 300 {
-            bail!("Each question must be 1 to 300 characters.");
+        if text.is_empty() || text.chars().count() > 1000 {
+            bail!("Each question must be 1 to 1000 characters.");
+        }
+        if question.options.iter().any(|option| option.preview.as_ref().is_some_and(|preview| preview.len() > MAX_OPTION_PREVIEW_BYTES)) {
+            bail!(
+                "Option previews must be at most {} KB. Shorten them, or publish a visual with await_answer.",
+                MAX_OPTION_PREVIEW_BYTES / 1024
+            );
         }
         if question.options.len() < 2 || question.options.len() > 6 {
             bail!("Question {} needs two to six options.", index + 1);
@@ -379,10 +389,16 @@ pub(crate) fn parse_ask(arguments: Value) -> Result<Ask> {
             "question": text,
             "header": header,
             "multiSelect": multi,
-            "options": question.options.iter().map(|option| json!({
-                "label": option.label.trim(),
-                "description": option.description.as_deref().map(str::trim).unwrap_or(""),
-            })).collect::<Vec<_>>(),
+            "options": question.options.iter().map(|option| {
+                let mut item = json!({
+                    "label": option.label.trim(),
+                    "description": option.description.as_deref().map(str::trim).unwrap_or(""),
+                });
+                if let Some(preview) = option.preview.as_deref().filter(|preview| !preview.trim().is_empty()) {
+                    item["preview"] = json!(preview);
+                }
+                item
+            }).collect::<Vec<_>>(),
         }));
     }
     if let Some(seconds) = raw.deadline_seconds {
@@ -526,7 +542,11 @@ impl Orchestrator {
                 decided = wait_decision(&mut decision) => {
                     return Ok(match &decided {
                         Some(ApprovalDecision::Submit { response }) => {
-                            json!({ "status": "answered", "answers": response.get("answers").cloned().unwrap_or(json!({})) })
+                            let mut result = json!({ "status": "answered", "answers": response.get("answers").cloned().unwrap_or(json!({})) });
+                            if let Some(attachments) = response.get("attachments").filter(|attachments| attachments.is_object()) {
+                                result["attachments"] = attachments.clone();
+                            }
+                            result
                         }
                         other => json!({ "status": deny_status(other) }),
                     });

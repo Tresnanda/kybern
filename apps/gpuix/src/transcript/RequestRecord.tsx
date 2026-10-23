@@ -1,8 +1,9 @@
 // The one line a summoned card leaves in the transcript (sign-in, password prompt, macOS permission, a question answered by its
 // deadline), drawn from the resolved approval (`requestRecord`). It never contains a secret: a password record names the command.
-// An automatic answer carries "Change answer", which queues a follow-up with another option.
+// An automatic answer carries "Change answer", which queues a follow-up with another option. A question a daemon restart cut off
+// carries "Reply in chat", which sends the chosen option as a message (the harness no longer waits for the card).
 import type { ApprovalDecision, ApprovalRequest } from '../../../../packages/kybern-client/src/types.ts'
-import { autoAnswer, changeAnswerMessage, loginRequestInput, permissionRequestInput, recordText, type RecordGlyph, type RequestRecord } from '../../../../packages/kybern-client/src/requestCards.ts'
+import { autoAnswer, changeAnswerMessage, expiredQuestion, replyInChatMessage, loginRequestInput, permissionRequestInput, recordText, type RecordGlyph, type RequestRecord } from '../../../../packages/kybern-client/src/requestCards.ts'
 import { questionsFor } from '../../../../packages/kybern-client/src/userInput.ts'
 import { sendToThread } from '../composer/store.ts'
 import { Button } from '../kit/Button.tsx'
@@ -49,6 +50,26 @@ function ChangeAnswer({ approval, decision }: { approval: ApprovalRequest; decis
   )
 }
 
+/** Every option of a question a restart cut off, to send as a message. Free-text questions are answered in the composer. */
+function ReplyInChat({ approval }: { approval: ApprovalRequest }) {
+  const questions = questionsFor(approval).filter((q) => q.options.length && !q.secret)
+  if (!questions.length) return null
+  const send = (question: string, answer: string) =>
+    void sendToThread(approval.thread_id, { parts: [{ type: 'text', text: replyInChatMessage(question, answer) }] }, 'queue').catch((e) => reportError('Unable to send your reply. Try again', e))
+  return (
+    <Menu testId="record-reply-menu" align="end" minWidth={220} fit="switch" trigger={() => <Button variant="ghost" size="sm" testId="record-reply-in-chat">Reply in chat</Button>}>
+      {questions.map((q) => (
+        <div key={q.id} style={{ display: 'flex', flexDirection: 'column' }}>
+          {questions.length > 1 && <MenuLabel>{q.header || q.title}</MenuLabel>}
+          {q.options.map((o) => (
+            <MenuItem key={o.label} id={`${q.id}:${o.label}`} label={o.label} testId={`record-reply-${o.label}`} onSelect={() => send(q.title, o.label)} />
+          ))}
+        </div>
+      ))}
+    </Menu>
+  )
+}
+
 export function RequestRecordRow({ approval, decision, record }: { approval: ApprovalRequest; decision: ApprovalDecision | null; record: RequestRecord }) {
   const t = useTheme()
   const declined = record.tone === 'declined'
@@ -65,6 +86,7 @@ export function RequestRecordRow({ approval, decision, record }: { approval: App
         {record.detail && <Label color={t.textTertiary} size={13} lineHeight={ROW_LINE} truncate style={{ flexShrink: 1, minWidth: 0 }}>{` · ${record.detail}`}</Label>}
       </div>
       {decision && autoAnswer(decision) && <ChangeAnswer approval={approval} decision={decision} />}
+      {expiredQuestion(approval, decision) && <ReplyInChat approval={approval} />}
     </div>
   )
 }

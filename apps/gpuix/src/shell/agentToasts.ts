@@ -8,7 +8,10 @@ import { environmentKey, onEnvironmentChange } from './environment.ts'
 // The same rules as the desktop: top-level threads only, nothing for events that
 // predate this window, one announcement per event sequence, the "Finished
 // working" toast once per turn, and nothing at all when the daemon's `notifications` setting is off.
-import type { Settings, ThreadEvent, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
+// A delegated agent's question or approval is announced on its top-level thread
+// ("Fix login · Parser audit needs your input"), since nobody watches the agent's own thread.
+// Questions say "Needs your input", approvals "Needs approval: …".
+import type { ApprovalRequest, Settings, Thread, ThreadEvent, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { openThread } from '../nav/history.ts'
 import { onLiveEvent } from '../nav/live.ts'
 import { getNav, subscribeNav } from '../nav/store.ts'
@@ -21,6 +24,22 @@ import { questionLine, waitingLine } from './waitingLine.ts'
 import { agentName } from '../requests/model.ts'
 
 const DONE_MS = 6000
+
+/** The top-level thread a delegated agent works for, or null for a thread that is not a delegated agent. */
+function rootOf(threadId: ThreadId): { root: Thread; child: Thread } | null {
+  const children = getNav().children
+  const child = children[threadId]
+  if (!child?.delegation) return null
+  let cursor: Thread | undefined = child
+  for (let depth = 0; cursor && depth < 8; depth++) {
+    const parent: ThreadId | null | undefined = cursor.parent_thread_id
+    if (!parent) return null
+    const top = getState().threads.find((t) => t.id === parent)
+    if (top) return { root: top, child }
+    cursor = children[parent]
+  }
+  return null
+}
 
 let started = false
 let owner: ReturnType<typeof getClient> = null
@@ -92,14 +111,18 @@ export function startAgentToasts() {
             ? 'done'
             : null
     if (!kind || !enabled) return
-    const thread = getState().threads.find((t) => t.id === event.thread_id)
-    // Child and subagent threads are not in the list: the desktop's `threadCanNotify`.
+    const own = getState().threads.find((t) => t.id === event.thread_id)
+    // Child and subagent threads are not in the list: the desktop's `threadCanNotify`. A delegated agent's request is the exception.
+    const delegated = !own && kind === 'blocked' ? rootOf(event.thread_id) : null
+    const thread = own ?? delegated?.root
     if (!thread) return
+    // A delegated agent speaks under its own name ("Parser audit is waiting for your answer").
+    const delegatedName = delegated ? delegated.child.title || 'An agent' : undefined
     // Replayed history updates the transcript without replaying old alerts.
     if (Date.parse(event.at) < startedAt || event.seq <= (announced.get(event.thread_id) ?? 0)) return
     announced.set(event.thread_id, event.seq)
     const nav = getNav()
-    const viewing = getState().selectedId === event.thread_id && nav.page === 'home' && !nav.settingsOpen
+    const viewing = (getState().selectedId === event.thread_id || (!!delegated && getState().selectedId === thread.id)) && nav.page === 'home' && !nav.settingsOpen
     if (viewing && isWindowVisible() && isWindowFocused()) return
     if (kind === 'done') {
       if (event.turn_id && finished.get(event.thread_id) === event.turn_id) return
@@ -107,7 +130,7 @@ export function startAgentToasts() {
     }
     const title = thread.title || 'Thread'
     const named = agentName(thread.provider.kind)
-    const agent = named.charAt(0).toUpperCase() + named.slice(1)
+    const agent = delegatedName ?? named.charAt(0).toUpperCase() + named.slice(1)
     if (!isWindowFocused()) {
       const id = `agent:${event.thread_id}:${event.seq}`
       targets.set(id, { environment: environmentKey(), thread: event.thread_id })

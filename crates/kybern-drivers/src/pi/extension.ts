@@ -45,6 +45,8 @@ const APP_TOOL_NAMES = new Set([
   "kybern_agent_status",
   "kybern_agent_cancel",
   "kybern_agent_wait",
+  "kybern_pending_questions",
+  "kybern_answer_question",
   "kybern_thread_interrupt",
   "kybern_computer_apps",
   "kybern_computer_observe",

@@ -206,6 +206,9 @@ pub enum EventPayload {
     ApprovalResolved {
         approval_id: ApprovalId,
         decision: ApprovalDecision,
+        /// The delegating agent that answered for the user (`kybern_answer_question`); absent when the user did.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        answered_by: Option<crate::RequestAnswerer>,
     },
     /// A harness permission request that Kybern allowed without asking,
     /// because the thread is in Full access. Never raised for questions.

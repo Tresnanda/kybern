@@ -25,6 +25,7 @@ use crate::settings::SettingsStore;
 mod accounts;
 mod agent_items;
 mod askpass;
+mod child_questions;
 mod delegation;
 mod lead;
 mod lead_git;
@@ -323,6 +324,9 @@ impl Orchestrator {
             }
             if delegation::is_tool(name) {
                 return self.execute_agent_tool(&thread, turn_id, &live, name, arguments).await;
+            }
+            if child_questions::is_tool(name) {
+                return self.execute_child_question_tool(&thread, name, arguments).await;
             }
             if messaging::is_tool(name) {
                 return self.execute_messaging_tool(&thread, turn_id, &live, name, arguments).await;
@@ -1095,7 +1099,7 @@ impl Orchestrator {
             for a in self.inner.store.approvals_pending(Some(t.id))? {
                 let decision = ApprovalDecision::Deny { reason: Some("daemon restarted".into()) };
                 self.inner.store.approval_resolve(a.id, &decision)?;
-                self.emit(t.id, Some(a.turn_id), EventPayload::ApprovalResolved { approval_id: a.id, decision })?;
+                self.emit(t.id, Some(a.turn_id), EventPayload::ApprovalResolved { approval_id: a.id, decision, answered_by: None })?;
             }
             // A restart is not the agent's failure: end the turn as interrupted and
             // leave the thread idle so its queue keeps draining.
@@ -1152,6 +1156,12 @@ impl Orchestrator {
             self.inner.queue_wakeup.notify_one();
         }
         let _ = self.inner.events.send(ev.clone());
+        if matches!(
+            ev.payload,
+            EventPayload::ApprovalRequested { .. } | EventPayload::UserInputRequested { .. } | EventPayload::ApprovalResolved { .. }
+        ) {
+            self.track_child_question(&ev);
+        }
         if task_order.is_some() {
             self.track_task_run(&ev);
         }
@@ -2346,10 +2356,23 @@ impl Orchestrator {
     }
 
     pub async fn respond_approval(&self, approval_id: ApprovalId, decision: ApprovalDecision) -> Result<()> {
+        self.respond_approval_as(approval_id, decision, None).await
+    }
+
+    /// Answer a request. `answered_by` names a delegating agent answering for the user.
+    /// A `kybern_answers` response (normalized answers, attachments included) is turned
+    /// into the harness's own response first.
+    pub(super) async fn respond_approval_as(
+        &self,
+        approval_id: ApprovalId,
+        decision: ApprovalDecision,
+        answered_by: Option<RequestAnswerer>,
+    ) -> Result<()> {
         let (approval, resolved) = self.inner.store.approval_get(approval_id)?.ok_or_else(|| anyhow!("approval not found"))?;
         if resolved {
-            return Err(anyhow!("approval already resolved"));
+            return Err(anyhow!("This request was already answered."));
         }
+        let decision = self.native_answer(&approval, decision)?;
         approval.validate_decision(&decision).map_err(|message| anyhow!(message))?;
         let live =
             self.inner.sessions.lock().await.get(&approval.thread_id).cloned().ok_or_else(|| anyhow!("thread has no live session"))?;
@@ -2369,7 +2392,7 @@ impl Orchestrator {
         if daemon_owned {
             live.touch();
             self.inner.store.approval_resolve(approval_id, &decision)?;
-            self.emit(approval.thread_id, Some(approval.turn_id), EventPayload::ApprovalResolved { approval_id, decision })?;
+            self.emit(approval.thread_id, Some(approval.turn_id), EventPayload::ApprovalResolved { approval_id, decision, answered_by })?;
             self.restore_running_after_approval(approval.thread_id, &live).await?;
             return Ok(());
         }
@@ -2380,9 +2403,34 @@ impl Orchestrator {
         pending.remove(&approval_id);
         drop(pending);
         self.inner.store.approval_resolve(approval_id, &decision)?;
-        self.emit(approval.thread_id, Some(approval.turn_id), EventPayload::ApprovalResolved { approval_id, decision })?;
+        self.emit(approval.thread_id, Some(approval.turn_id), EventPayload::ApprovalResolved { approval_id, decision, answered_by })?;
         self.restore_running_after_approval(approval.thread_id, &live).await?;
         Ok(())
+    }
+
+    /// The harness's own response for normalized answers (`{"kybern_answers": [...]}`); any other decision unchanged.
+    fn native_answer(&self, approval: &ApprovalRequest, decision: ApprovalDecision) -> Result<ApprovalDecision> {
+        let ApprovalDecision::Submit { response } = &decision else { return Ok(decision) };
+        let Some(answers) = response.get(NORMALIZED_ANSWERS_KEY) else { return Ok(decision) };
+        let answers: Vec<UserInputAnswer> =
+            serde_json::from_value(answers.clone()).map_err(|_| anyhow!("The answers could not be read. Answer the question again."))?;
+        let response =
+            encode_answers(approval, &answers, |attachment| self.attachment_path(attachment)).map_err(|message| anyhow!(message))?;
+        Ok(ApprovalDecision::Submit { response })
+    }
+
+    /// Where an answer's attachment is on disk: an uploaded asset, or a file the user chose.
+    fn attachment_path(&self, attachment: &UserInputAttachment) -> Option<String> {
+        if !matches!(attachment.kind.as_str(), "image" | "file" | "window") {
+            return None;
+        }
+        if let Some(id) = attachment.asset_id {
+            self.inner.store.asset_get(id).ok().flatten()?;
+            let path = self.inner.paths.assets.join(id.to_string());
+            return path.is_file().then(|| path.to_string_lossy().into_owned());
+        }
+        let path = std::path::Path::new(attachment.path.as_deref()?);
+        (path.is_absolute() && path.exists()).then(|| path.to_string_lossy().into_owned())
     }
 
     async fn restore_running_after_approval(&self, thread_id: ThreadId, live: &LiveSession) -> Result<()> {
@@ -2519,7 +2567,9 @@ impl Orchestrator {
             summary,
             suggestions: Vec::new(),
             created_at: Utc::now(),
-        };
+            questions: Vec::new(),
+        }
+        .with_questions();
         let (sender, receiver) = tokio::sync::watch::channel(None);
         let card = approval.id;
         approvals.insert(card, DaemonApproval { turn_id, key, decision: sender, consumed_by: None });
@@ -2553,7 +2603,7 @@ impl Orchestrator {
         }
         entry.decision.send_replace(Some(decision.clone()));
         self.inner.store.approval_resolve(card, &decision)?;
-        self.emit(thread_id, Some(turn_id), EventPayload::ApprovalResolved { approval_id: card, decision })?;
+        self.emit(thread_id, Some(turn_id), EventPayload::ApprovalResolved { approval_id: card, decision, answered_by: None })?;
         self.restore_running_after_approval(thread_id, live).await?;
         Ok(true)
     }
@@ -2585,7 +2635,7 @@ impl Orchestrator {
             let decision = ApprovalDecision::Deny { reason: Some("turn ended".into()) };
             entry.decision.send_replace(Some(decision.clone()));
             self.inner.store.approval_resolve(id, &decision)?;
-            self.emit(thread_id, Some(turn_id), EventPayload::ApprovalResolved { approval_id: id, decision })?;
+            self.emit(thread_id, Some(turn_id), EventPayload::ApprovalResolved { approval_id: id, decision, answered_by: None })?;
         }
         let mut pending = live.pending.lock().await;
         let ids = pending.keys().copied().collect::<Vec<_>>();
@@ -2599,7 +2649,7 @@ impl Orchestrator {
                 let _ = live.session.respond_permission(&provider_id, &decision).await;
             }
             self.inner.store.approval_resolve(id, &decision)?;
-            self.emit(thread_id, Some(turn_id), EventPayload::ApprovalResolved { approval_id: id, decision })?;
+            self.emit(thread_id, Some(turn_id), EventPayload::ApprovalResolved { approval_id: id, decision, answered_by: None })?;
         }
         Ok(())
     }
@@ -3021,9 +3071,15 @@ impl Orchestrator {
         // Claude Code gives up on an MCP tool call after about a minute, which would end a
         // sign-in, a permission request or a question with a deadline while the user is
         // still deciding. The daemon bounds every call itself (the longest waits are a few
-        // hours), so leave the limit to it unless the user set their own.
-        if thread.provider.kind == ProviderKind::ClaudeCode && !provider_settings.env.contains_key("MCP_TOOL_TIMEOUT") {
-            provider_settings.env.insert("MCP_TOOL_TIMEOUT".into(), "21600000".into());
+        // hours), so leave the limit to it unless the user set their own. Newer Claude Code
+        // also aborts a call with no progress for 300 s (`CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT`),
+        // which ended questions the user had not answered within five minutes.
+        if thread.provider.kind == ProviderKind::ClaudeCode {
+            for key in ["MCP_TOOL_TIMEOUT", "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT"] {
+                if !provider_settings.env.contains_key(key) {
+                    provider_settings.env.insert(key.into(), "21600000".into());
+                }
+            }
         }
         // Commands in the session can ask for a password through a private card.
         // Codex runs commands in a sandbox that can't reach the daemon outside
@@ -3892,6 +3948,7 @@ impl Orchestrator {
                             summary,
                             suggestions,
                             created_at: Utc::now(),
+                            questions: Vec::new(),
                         };
                         self.emit(thread_id, Some(turn_id), EventPayload::ApprovalAutoAllowed { approval })?;
                     }
@@ -3922,7 +3979,9 @@ impl Orchestrator {
                     summary,
                     suggestions,
                     created_at: Utc::now(),
-                };
+                    questions: Vec::new(),
+                }
+                .with_questions();
                 self.inner.store.approval_insert(&approval)?;
                 live.pending.lock().await.insert(approval.id, request_id);
                 let event = if approval.is_user_input() {
@@ -3943,7 +4002,7 @@ impl Orchestrator {
                     pending.remove(&approval_id);
                     let decision = ApprovalDecision::Deny { reason: Some("withdrawn by provider".into()) };
                     self.inner.store.approval_resolve(approval_id, &decision)?;
-                    self.emit(thread_id, turn_id, EventPayload::ApprovalResolved { approval_id, decision })?;
+                    self.emit(thread_id, turn_id, EventPayload::ApprovalResolved { approval_id, decision, answered_by: None })?;
                     if pending.is_empty()
                         && let Some(mut thread) = self.inner.store.thread_get(thread_id)?
                         && thread.status == ThreadStatus::AwaitingApproval
@@ -4341,6 +4400,10 @@ pub(crate) fn request_call_budget(name: &str, arguments: &serde_json::Value) -> 
 }
 
 /// The summoned-card tools offered to agent sessions.
+pub(crate) fn child_question_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
+    child_questions::tool_definitions()
+}
+
 pub(crate) fn request_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
     let mut tools = vec![login_request::tool_definition()];
     tools.extend(request_tools::tool_definitions());
@@ -7801,6 +7864,7 @@ for line in sys.stdin:
     }
 
     include!("orchestrator/delegation_tests.rs");
+    include!("orchestrator/child_questions_tests.rs");
     include!("orchestrator/secret_tests.rs");
     include!("orchestrator/request_tests.rs");
     include!("orchestrator/lead_git_tests.rs");

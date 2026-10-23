@@ -91,6 +91,8 @@ const LEAD_TOOLS: &[&str] = &[
     "kybern_agent_status",
     "kybern_agent_cancel",
     "kybern_agent_wait",
+    "kybern_pending_questions",
+    "kybern_answer_question",
     "kybern_thread_send",
     "kybern_thread_read",
     "kybern_thread_interrupt",

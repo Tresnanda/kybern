@@ -271,18 +271,39 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             } else if !p.include_subagents {
                 threads.retain(|thread| thread.subagent.is_none() && thread.delegation.is_none());
             }
-            let activity = threads
+            let (own_pending, child_pending) = pending_request_kinds(&state.store).map_err(internal)?;
+            let mut activity: Vec<ThreadActivitySummary> = threads
                 .iter()
                 .map(|thread| {
                     let tasks = state.store.runtime_tasks_for_thread(thread.id).map_err(internal)?;
                     let mut summary = kybern_store::project_thread_activity(thread.id, &tasks);
                     summary.active_children = running_children.get(&thread.id).copied().unwrap_or(0);
+                    summary.pending_request = own_pending.get(&thread.id).copied();
+                    summary.pending_child_request = child_pending.get(&thread.id).copied();
                     Ok(summary)
                 })
                 .collect::<Result<Vec<_>, RpcError>>()?
                 .into_iter()
-                .filter(|summary| summary.state.is_some() || summary.active_children > 0)
+                .filter(|summary| {
+                    summary.state.is_some()
+                        || summary.active_children > 0
+                        || summary.pending_request.is_some()
+                        || summary.pending_child_request.is_some()
+                })
                 .collect();
+            // Delegated agents are left out of the list, but their rows say what they wait on: add their kinds alone.
+            let mut waiting: Vec<_> = own_pending.iter().filter(|(id, _)| !threads.iter().any(|thread| thread.id == **id)).collect();
+            waiting.sort_by_key(|(id, _)| **id);
+            activity.extend(waiting.into_iter().map(|(id, kind)| ThreadActivitySummary {
+                thread_id: *id,
+                state: None,
+                active_agents: 0,
+                active_processes: 0,
+                active_monitors: 0,
+                active_children: 0,
+                pending_request: Some(*kind),
+                pending_child_request: child_pending.get(id).copied(),
+            }));
             ok(ThreadsListResult { threads, activity })
         }
         ThreadsSearch::NAME => {
@@ -1127,4 +1148,26 @@ fn hostname() -> String {
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "unknown".into())
+}
+
+type PendingKinds = std::collections::HashMap<ThreadId, PendingRequestKind>;
+
+/// Each thread's oldest waiting request kind, and for each delegating ancestor what its
+/// delegated descendants wait on (a question outranks an approval).
+fn pending_request_kinds(store: &kybern_store::Store) -> anyhow::Result<(PendingKinds, PendingKinds)> {
+    let mut own = PendingKinds::new();
+    let mut below = PendingKinds::new();
+    for approval in store.approvals_pending(None)? {
+        let kind = approval.pending_kind();
+        own.entry(approval.thread_id).or_insert(kind);
+        let mut cursor = store.thread_get(approval.thread_id)?;
+        for _ in 0..16 {
+            let Some(thread) = cursor.filter(|thread| thread.delegation.is_some()) else { break };
+            let Some(parent) = thread.parent_thread_id else { break };
+            let entry = below.entry(parent).or_insert(kind);
+            *entry = (*entry).max(kind);
+            cursor = store.thread_get(parent)?;
+        }
+    }
+    Ok((own, below))
 }

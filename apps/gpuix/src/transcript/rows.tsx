@@ -1,4 +1,6 @@
 import { ProviderMark } from '../ui.tsx'
+import { getState } from '../state.ts'
+import { getNav } from '../nav/store.ts'
 import { PanelPresence, PanelEnter } from '../requests/Panel.tsx'
 import { LaunchMember, PinRow } from '../subagents/Launch.tsx'
 import { AgentItemCard } from '../coordinator/AgentItem.tsx'
@@ -32,7 +34,7 @@ import { computerConsent, connectorApproval, isUserInput, notesTasksConsent } fr
 import { shouldRevealLiveText, type Block } from '../../../../packages/kybern-client/src/transcript.ts'
 import { findSubagentFor, subagentCounts, subagentGroupDefaultOpen, subagentGroupTitle, subagentPhase, subagentStatusSegments, subagentThreadPhase, type SubagentPhase } from '../../../../packages/kybern-client/src/subagents.ts'
 import { launchCounts, launchGroupDefaultOpen, launchGroupTitle, launchState } from '../../../../packages/kybern-client/src/delegations.ts'
-import type { ApprovalDecision, ApprovalRequest, JsonValue, RuntimeTask, Thread, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
+import type { ApprovalDecision, ApprovalRequest, JsonValue, RequestAnswerer, RuntimeTask, Thread, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { TOOL_RESULT_CHAR_LIMIT, TOOL_RESULT_LINE_LIMIT } from '../../../desktop/src/lib/toolResultText.ts'
 import { BoundedMarkdown, TextDetail } from './markdown.tsx'
 import { Icon } from '../icons.tsx'
@@ -371,7 +373,7 @@ export const WorkRow = memo(function WorkRow({
       return <RuntimeTaskRow task={block.task} thread={block.task.kind === 'agent' ? launchThread(block, ctx) : undefined} />
     case 'approval': {
       // An undecided card is waiting: the daemon resolves it when the turn ends.
-      const record = block.auto ? null : requestRecord(block.approval, block.decision, true)
+      const record = block.auto ? null : requestRecord(block.approval, block.decision, true, undefined, block.answeredBy && answererNow(block.answeredBy))
       if (record) return (
         <div paintTransform={tree.rise} style={{ position: 'relative', display: 'flex', alignItems: 'center', paddingTop: 4, paddingBottom: 4, minWidth: 0 }}>
           <RequestRecordRow approval={block.approval} decision={block.decision} record={record} />
@@ -772,3 +774,10 @@ const LaunchGroupRow = memo(function LaunchGroupRow({ kind, blocks, ctx }: { kin
 })
 
 export { isDelegationLaunchBlock }
+
+/** The agent that answered for the user, under its current name (titles change after the answer); the lead is "Coordinator". */
+function answererNow(by: RequestAnswerer): RequestAnswerer {
+  const thread = getState().threads.find((t) => t.id === by.thread_id) ?? getNav().children[by.thread_id]
+  if (!thread) return by
+  return { ...by, title: thread.coordinator_project_id ? 'Coordinator' : thread.title || by.title }
+}
