@@ -139,7 +139,7 @@ function Fixture() {
         <SentToRow block={sendBlock} threadId={parent().id} />
         <DelegatedResults items={[resultItem]} at={at} />
       </virtual-list> : selected === 'item' ? <AgentItemCard result={{ kind: 'note', action: 'created', id: 'note', title: 'Permission review', scope: 'project', projectId: 'fixture', threadId: parent().id, createdByThread: parent().id }} inset={false} /> : selected.startsWith('native') ? <NativeSubagentComposer key={activeThread.id + selected} thread={activeThread} /> : selected === 'readonly' ? <SubagentBar thread={activeThread} /> : <ThreadRequests />}
-      {!['secret', 'question', 'question-multi', 'brief', 'settings', 'native-live', 'native-failed', 'readonly', 'details', 'item'].includes(selected) && <ComposerView draftKey="fixture" provider={parent().provider} providers={[]} accounts={[]} mode="supervised" onModeChange={() => {}} catalogLoading={false} onReloadModels={async () => {}} onSend={async () => {}} />}
+      {!['secret', 'question', 'question-multi', 'brief', 'settings', 'native-live', 'native-failed', 'readonly', 'details', 'item'].includes(selected) && <ComposerView draftKey="fixture" currentThreadId={activeThread.id} provider={parent().provider} providers={[]} accounts={[]} mode="supervised" onModeChange={() => {}} catalogLoading={false} onReloadModels={async () => {}} onSend={async () => {}} />}
       <Label color={t.textTertiary} size={10}>Native fixture · all actions stay in memory</Label>
     </div>
   </div>

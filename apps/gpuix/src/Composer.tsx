@@ -51,7 +51,8 @@ import { frostBackdrop, frostFill, raisedFill, useGlass } from './platform/glass
 import { addWindowKeyHandler } from './nav/keys.ts'
 import { keyboardAnswer } from './requests/Panel.tsx'
 import { isUserInput, connectorApproval } from '../../../packages/kybern-client/src/userInput.ts'
-import { answerApproval } from './transcript/Requests.tsx'
+import { handleCardKey, isRowCard } from './requests/actions.ts'
+import { focusCard, setComposerEmpty } from './requests/ui.ts'
 import { useControls } from './kit/controls.ts'
 import { IconButton } from './kit/IconButton.tsx'
 import { PickerChip } from './kit/PickerChip.tsx'
@@ -453,6 +454,7 @@ export function ComposerView(input: ComposerViewProps) {
 
   const empty = text.trim().length === 0 && attachments.length === 0
   useEffect(() => { props.onEmptyChange?.(empty) }, [empty])
+  useEffect(() => { setComposerEmpty(props.draftKey, empty); return () => setComposerEmpty(props.draftKey, true) }, [props.draftKey, empty])
   const permissionUnsupported = provider?.kind !== 'cursor' && !!providers.find(p => p.kind === provider?.kind && !p.supported_permission_modes.includes(mode))
   const disabledReason = !connected ? 'Reconnect to send a message.' : props.readOnly ? 'This conversation is read-only.' : props.sendDisabled ? props.sendDisabledReason ?? 'Sending is unavailable.' : permissionUnsupported ? 'Choose a permission mode supported by this agent.' : sending ? 'Sending…' : uploading > 0 ? 'Wait for attachments to finish uploading.' : empty ? 'Write a message or attach a file.' : null
   const canSend = !disabledReason
@@ -492,11 +494,14 @@ export function ComposerView(input: ComposerViewProps) {
     if (pane.frozen || !editor.current || renderer.getFocusedElementId?.() !== editor.current.id) return false
     const m = e.modifiers
     if (m?.cmd || m?.alt || m?.ctrl || m?.shift) return false
-    if (!empty || sending || !props.currentThreadId || !/^[1-4]$/.test(e.key ?? '')) return false
+    if (!empty || sending || !props.currentThreadId || !/^([1-9]|escape|up|down)$/.test(e.key ?? '')) return false
     const approval = pane.get().open.pendingApprovals[0]
-    if (!approval) return false
+    if (!approval || !isRowCard(approval)) return false
+    // Return is never taken from the composer, so a stray Enter cannot approve anything; ↑ ↓ hand the keyboard to the card.
+    if (e.key === 'up' || e.key === 'down') { focusCard(); return handleCardKey(approval, props.currentThreadId, e.key) }
     keyboardAnswer()
-    if (!answerApproval(approval, props.currentThreadId, Number(e.key))) return false
+    if (!handleCardKey(approval, props.currentThreadId, e.key!)) return false
+    if (!/^[1-9]$/.test(e.key!)) return true
     approvalDigit.current = e.key!
     // GPUIX 0.10 delivers events asynchronously and cannot prevent native text
     // insertion. Remove only the exact consumed digit, never subsequent typing.

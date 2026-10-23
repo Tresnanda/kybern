@@ -5,7 +5,7 @@ import { settingValueLabel } from '../../../../packages/kybern-client/src/coordi
 import { useNav } from '../nav/store.ts'
 import { addWindowKeyHandler } from '../nav/keys.ts'
 import { keyboardAnswer } from '../requests/Panel.tsx'
-import { PanelBody, PromptLine, Tile } from '../transcript/Requests.tsx'
+import { CardShell, GLYPHS, HintText, Hints, RequestHeader } from '../requests/Card.tsx'
 import { Para, muted, cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { Button } from '../kit/Button.tsx'
 import { Checkbox } from '../kit/Checkbox.tsx'
@@ -38,9 +38,10 @@ export function CoordinatorCard({ approval, count }: { approval: ApprovalRequest
   const copy = git && gitCardCopy(git)
   const checks = git?.op === 'merge_pr' ? checksLabel(git.checks) : null
   const title = brief ? brief.replaces ? COPY.briefReplaceTitle : COPY.briefTitle : settings ? COPY.settingsTitle : copy ? cardPartsText(copy.title) : approval.summary
-  return <PanelBody testId="coordinator-card">
-    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}><Tile source={brief ? T.note : settings ? ICONS.settings : T.github} /><div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><PromptLine prompt={title} count={count} />
-    <Para color={muted(t, .65)} size={12}>{brief ? COPY.briefDetail : settings ? COPY.settingsDetail : copy ? cardPartsText(copy.detail) : ''}</Para></div></div>
+  const glyph = brief ? T.note : settings ? ICONS.settings : T.github
+  const detail = brief ? COPY.briefDetail : settings ? COPY.settingsDetail : copy ? cardPartsText(copy.detail) : ''
+  return <CardShell testId="coordinator-card" stealFocus={false}>
+    <RequestHeader glyph={glyph} title={title} badge={count > 1 ? `1 of ${count}` : undefined} meta={detail || undefined} />
     {brief && <div style={{ display: 'flex', flexDirection: 'column', marginTop: 10 }}><TextArea label="Coordinator brief" testId="coordinator-brief" value={text} onChange={v => { if (!busy) setText(v) }} minRows={4} maxRows={10} /></div>}
     {settings && <>
       {settings.reason && <Para color={muted(t)} size={12}>{settings.reason}</Para>}
@@ -59,11 +60,13 @@ export function CoordinatorCard({ approval, count }: { approval: ApprovalRequest
     </>}
     {git?.op === 'open_pr' && <div style={{ marginTop: 10 }}><Para color={t.text} size={13} weight={500}>{git.title}</Para><markdown source={git.body} theme={cachedMarkdownTheme(t)} style={{ userSelect: 'text', color: t.text, maxHeight: 220, overflowY: 'scroll' }} /></div>}
     {git?.op === 'merge_pr' && <Para color={checks?.tone === 'bad' ? t.red : muted(t)} size={12}>{`${checks?.text ?? 'No checks reported'} · ${mergeMethodLabel(git.method)}`}</Para>}
-    {error && <Para color={t.red} size={12}>{error}</Para>}
-    <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', marginTop: 12 }}>
-      {(brief || git?.op === 'merge_pr') && <Para color={muted(t, .65)} size={11} style={{ flexGrow: 1 }}>{brief ? COPY.briefFootnote : COPY.mergeWarning}</Para>}
-      <Button variant="ghost" onKeyboard={keyboardAnswer} testId="coordinator-decline" disabled={busy} onClick={() => void respond({ decision: 'deny' })}>{COPY.decline}</Button>
-      <Button variant="primary" swap onKeyboard={keyboardAnswer} kbd={brief ? '⌘↵' : undefined} testId="coordinator-accept" disabled={busy || (!!brief && !text.trim()) || (!!settings && !accepted.size)} onClick={() => void accept()}>{busy ? COPY.saving : brief ? COPY.briefSave : settings ? `Apply ${accepted.size} ${accepted.size === 1 ? 'change' : 'changes'}` : copy?.action}</Button>
-    </div>
-  </PanelBody>
+    {error && <Para color={t.red} size={12} style={{ marginTop: 6 }}>{error}</Para>}
+    <Hints
+      left={brief || git?.op === 'merge_pr' ? <HintText>{brief ? COPY.briefFootnote : COPY.mergeWarning}</HintText> : <div />}
+      right={<div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+        <Button variant="ghost" size="sm" onKeyboard={keyboardAnswer} testId="coordinator-decline" disabled={busy} onClick={() => void respond({ decision: 'deny' })}>{COPY.decline}</Button>
+        <Button variant="primary" size="sm" swap onKeyboard={keyboardAnswer} kbd={brief ? '⌘↵' : undefined} testId="coordinator-accept" disabled={busy || (!!brief && !text.trim()) || (!!settings && !accepted.size)} onClick={() => void accept()}>{busy ? COPY.saving : brief ? COPY.briefSave : settings ? `Apply ${accepted.size} ${accepted.size === 1 ? 'change' : 'changes'}` : copy?.action}</Button>
+      </div>}
+    />
+  </CardShell>
 }
