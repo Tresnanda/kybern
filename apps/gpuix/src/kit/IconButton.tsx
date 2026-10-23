@@ -34,11 +34,17 @@ export interface IconButtonProps {
   /** Focus reporters (a row that keeps its actions showing while one is focused). */
   onFocus?: () => void
   onBlur?: () => void
+  /** Pointer reporters, composed with the button's own hover (a `Tip` around the button passes its trigger handlers here). */
+  onMouseEnter?: () => void
+  onMouseLeave?: () => void
+  onMouseDown?: () => void
+  /** Overrides the focus stop (-1 inside a trigger that is the stop itself, a `Menu`'s). */
+  tabIndex?: number
   testId?: string
   style?: StyleDesc
 }
 
-export function IconButton({ icon, label, size = 'md', active = false, secondary = false, disabled = false, onClick, onKeyboard, glyph, color, children, onFocus, onBlur, testId, style }: IconButtonProps) {
+export function IconButton({ icon, label, size = 'md', active = false, secondary = false, disabled = false, onClick, onKeyboard, glyph, color, children, onFocus, onBlur, onMouseEnter, onMouseLeave, onMouseDown, tabIndex, testId, style }: IconButtonProps) {
   const t = useTheme()
   const c = useControls()
   const g = CONTROL[size]
@@ -50,7 +56,7 @@ export function IconButton({ icon, label, size = 'md', active = false, secondary
     <div
       testId={testId}
       role="button"
-      tabIndex={disabled || !onClick ? -1 : 0}
+      tabIndex={tabIndex ?? (disabled || !onClick ? -1 : 0)}
       aria-label={label}
       aria-pressed={active || undefined}
       aria-disabled={disabled || undefined}
@@ -58,8 +64,9 @@ export function IconButton({ icon, label, size = 'md', active = false, secondary
       onKeyDown={onClick ? (e) => { if (!disabled && (e.key === 'enter' || e.key === 'space')) { onKeyboard?.(); onClick() } } : undefined}
       onFocus={onFocus}
       onBlur={onBlur}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
+      onMouseEnter={() => { setHover(true); onMouseEnter?.() }}
+      onMouseLeave={() => { setHover(false); onMouseLeave?.() }}
+      onMouseDown={onMouseDown}
       paintTransform={pressTransform(!disabled && !!onClick, SCALE.large)}
       style={{
         display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,

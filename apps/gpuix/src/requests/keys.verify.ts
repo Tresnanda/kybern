@@ -89,7 +89,7 @@ try {
   await app.getByTestId('question-panel').press('2')
   await app.getByTestId('question-panel').press('enter')
   await settle()
-  await app.getByText('Question 2 of 2').waitFor({ timeoutMs: 5000 })
+  await app.getByText('2 of 2').waitFor({ timeoutMs: 5000 })
   console.log('ok: question digit and Return')
 
   // 8. ⌘E expands a clamped chain (all 8 lines), and again collapses it; a short command has nothing to expand.

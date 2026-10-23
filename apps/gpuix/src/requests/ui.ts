@@ -48,7 +48,11 @@ export const someoneIsTyping = (): boolean => typing.size > 0
 
 /** Moves keyboard focus to the card on screen (↑ ↓ in the empty composer). Set by the card's root while it is mounted. */
 let focusRoot: (() => void) | null = null
-export const registerCardFocus = (focus: (() => void) | null) => { focusRoot = focus }
+/** Returns the unregister; a card that leaves after the next one arrived (its exit runs on) leaves the newer one registered. */
+export const registerCardFocus = (focus: () => void) => {
+  focusRoot = focus
+  return () => { if (focusRoot === focus) focusRoot = null }
+}
 export const focusCard = () => focusRoot?.()
 
 /** Key handlers of cards that are not built from `approvalCard` rows (sign-in, permission): the empty composer routes digits,

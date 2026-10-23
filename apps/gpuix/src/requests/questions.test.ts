@@ -3,7 +3,7 @@ import type { ApprovalRequest } from '../../../../packages/kybern-client/src/typ
 import { chosenAnswers, expiredQuestion, recordText, replyInChatMessage, requestRecord } from '../../../../packages/kybern-client/src/requestCards.ts'
 import { pendingKind } from '../../../../packages/kybern-client/src/userInput.ts'
 import { pendingBadge } from '../sidebar/model.ts'
-import { titleOnly } from './Question.tsx'
+import { splitQuestion } from './Question.tsx'
 
 const question = (extra: Partial<ApprovalRequest> = {}): ApprovalRequest => ({
   id: 'a1', thread_id: 't1', turn_id: 'u1', tool_name: 'AskUserQuestion', summary: 'Which palette?', suggestions: [], created_at: '2026-10-23T10:00:00Z',
@@ -56,9 +56,13 @@ describe('needs input versus pending approval', () => {
   })
 })
 
-test('a short plain question is the card title; Markdown or long text is a body', () => {
-  expect(titleOnly('Which layout should the dashboard use?')).toBe(true)
-  expect(titleOnly('Use `grid` or `flex`?')).toBe(false)
-  expect(titleOnly('Pick one:\n- A\n- B')).toBe(false)
-  expect(titleOnly('x'.repeat(121))).toBe(false)
+test('the question\'s first paragraph is the title, as plain text; the rest is the Markdown body', () => {
+  expect(splitQuestion('Which layout should the dashboard use?')).toEqual({ title: 'Which layout should the dashboard use?', body: '' })
+  expect(splitQuestion('Which **layout** should the settings page use?\n\nWe render it at `1280×800`; pick the one that reads best.'))
+    .toEqual({ title: 'Which layout should the settings page use?', body: 'We render it at `1280×800`; pick the one that reads best.' })
+  expect(splitQuestion('Use `grid` or `flex`?')).toEqual({ title: 'Use grid or flex?', body: '' })
+  expect(splitQuestion('Pick one:\n- A\n- B')).toEqual({ title: 'Pick one:', body: '- A\n- B' })
+  // A question that opens with a block, or a paragraph too long for a title, stays whole under its header word.
+  expect(splitQuestion('- A\n- B', 'Layout')).toEqual({ title: 'Layout', body: '- A\n- B' })
+  expect(splitQuestion('x'.repeat(201))).toEqual({ title: 'Question', body: 'x'.repeat(201) })
 })
