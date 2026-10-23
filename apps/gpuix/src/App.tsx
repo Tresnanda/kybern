@@ -354,6 +354,7 @@ function ThreadPage({ selectedId }: { selectedId: string }) {
           <Transcript />
         </ErrorBoundary>
       )}
+      {motion.under}
       <div ref={measureComposerOverlay} {...motion.overlay} style={{ position: 'absolute', left: 0, right: 0, bottom: 0, display: 'flex', justifyContent: 'center', paddingLeft: gutter, paddingRight: gutter, paddingBottom: 16 }}>
         {/* Pending approvals and questions stack on the composer; a blocking one replaces it. */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', maxWidth: COLUMN, position: 'relative' }}>
@@ -366,7 +367,7 @@ function ThreadPage({ selectedId }: { selectedId: string }) {
           )}
         </div>
       </div>
-      {motion.layer}
+      {motion.over}
     </>
   )
 }

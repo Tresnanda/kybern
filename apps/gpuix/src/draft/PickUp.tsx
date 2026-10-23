@@ -209,7 +209,7 @@ function UpNextRow({ task, attached, nodeRef, onClick, onKeyDown, frozen }: { ta
       {(hover) => (
         <>
           <PriorityGlyph priority={task.priority} />
-          <Label color={t.textTertiary} size={12} lineHeight={16} style={{ width: 46, flexShrink: 0, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' } as never}>{task.key}</Label>
+          <Label color={t.textTertiary} size={12} lineHeight={16} style={{ minWidth: 46, flexShrink: 0, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' } as never}>{task.key}</Label>
           <Label color={t.text} size={13} lineHeight={18} truncate style={{ flexGrow: 1 }}>{title}</Label>
           {(attached || hover) && (
             <Label color={attached ? c.accentFg : t.textSecondary} size={12} lineHeight={16} style={{ flexShrink: 0 }}>

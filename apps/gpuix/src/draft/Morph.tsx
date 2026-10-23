@@ -20,8 +20,13 @@ import { REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { clearFlight, endFlight, startFlight, takeLaunch, useFlightTarget, type Launch } from './store.ts'
 
 type Shift = { translateX: number; translateY: number }
-/** The flight: critically damped, interruptible, no overshoot. */
-const FLIGHT = { type: 'spring', duration: DURATION.spring, bounce: 0 } as const
+/**
+ * The flight: critically damped (no overshoot), interruptible, with a 0.45 s response (ω = 2π / 0.45): 11 % at 40 ms, 36 % at
+ * 90, 62 % at 150, 94 % at 320, settled by 450. A `duration: 0.45, bounce: 0` spring settles in 0.45 s and runs about twice as
+ * fast early on, so the physical form is spelled out.
+ */
+const OMEGA = (2 * Math.PI) / DURATION.spring
+const FLIGHT = { type: 'spring', stiffness: OMEGA * OMEGA, damping: 2 * OMEGA, mass: 1 } as const
 /** The thread composer's card rests 16 above the pane's bottom (`ConversationPage`). */
 const REST_INSET = 16
 /** How long the page waits for the real bubble's place before the composer goes anyway (the prompt then fades). */
@@ -42,8 +47,10 @@ export interface LaunchMotion {
   placeholderEnter?: PaintTransformProps
   /** Drawn first inside the composer overlay, above the card, under it in z-order. */
   trayGhost: ReactNode
-  /** Drawn over the page. */
-  layer: ReactNode
+  /** Drawn under the composer: the dissolving headline and pick-up (their blur must never pass over the moving card). */
+  under: ReactNode
+  /** Drawn over everything: the prompt and images in flight. */
+  over: ReactNode
 }
 
 /** Claims this pane's launch for `threadId` once, on mount; null for every ordinary thread open. */
@@ -75,15 +82,16 @@ export function useLaunchMotion(launch: Launch | null): LaunchMotion {
   const [ghost, setGhost] = useState(!!launch?.tray)
   useEffect(() => {
     if (!launch) return
+    // Timers, not motion events: a hidden window delivers no completion, and neither layer may outlive its fade.
     const a = setTimeout(() => setExits(false), 220), b = setTimeout(() => setGhost(false), 180)
     return () => { clearTimeout(a); clearTimeout(b) }
   }, [launch])
-  if (!launch) return { trayGhost: null, layer: null }
+  if (!launch) return { trayGhost: null, under: null, over: null }
 
   const delta = launch.cardTop + launch.cardHeight - (launch.paneHeight - REST_INSET)
   const overlay = REDUCED_MOTION
     ? { paintTransform: { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: out(DURATION.quick) } }
-    : { paintTranslate: { initial: { translateX: 0, translateY: delta }, animate: { translateX: 0, translateY: go ? 0 : delta }, transition: FLIGHT } }
+    : { paintTranslate: { initial: { translateX: 0, translateY: delta }, animate: { translateX: 0, translateY: go ? 0 : delta }, transition: FLIGHT }}
   const placeholderEnter: PaintTransformProps = REDUCED_MOTION
     ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: out(DURATION.quick) }
     // Held while the prompt leaves the card, so it never shows through the departing text.
@@ -101,7 +109,7 @@ export function useLaunchMotion(launch: Launch | null): LaunchMotion {
       {launch.tray}
     </div>
   ) : null
-  const layer = (
+  const under = (
     <>
       {exits && launch.exit({ headline: exitPaint(-12), pickup: exitPaint(12) })}
       {(launch.textFades || REDUCED_MOTION) && launch.textRect && launch.textValue.trim() && exits && (
@@ -121,10 +129,10 @@ export function useLaunchMotion(launch: Launch | null): LaunchMotion {
           <img src={image.src} objectFit="cover" style={{ width: image.rect.width, height: image.rect.height, borderRadius: 11 }} />
         </div>
       ))}
-      {flying && <Flight launch={launch} go={go} gaveUp={gaveUp && !target} />}
     </>
   )
-  return { overlay, placeholderEnter, trayGhost, layer }
+  const over = flying ? <Flight launch={launch} go={go} gaveUp={gaveUp && !target} /> : null
+  return { overlay, placeholderEnter, trayGhost, under, over }
 }
 
 /** The stand-in bubble and the image flyers, landing on the real row. */
@@ -133,6 +141,13 @@ function Flight({ launch, go, gaveUp }: { launch: Launch; go: boolean; gaveUp: b
   const g = useGlass()
   const target = useFlightTarget(launch.threadId)
   const [landed, setLanded] = useState(false)
+  // The ghost's blur is a pass over whatever is under it (the stand-in): it must leave once faded, not rest at 2 pt.
+  const [ghost, setGhost] = useState(true)
+  useEffect(() => {
+    if (!go) return
+    const id = setTimeout(() => setGhost(false), 110)
+    return () => clearTimeout(id)
+  }, [go])
   const pending = useRef(0)
   const text = launch.text
   // The stand-in's box: its first line centred on the editor's first line, its text on the editor's left edge.
@@ -172,23 +187,23 @@ function Flight({ launch, go, gaveUp }: { launch: Launch; go: boolean; gaveUp: b
           onMotionComplete={() => { if (go && textTo) land() }}
           style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0 }}
         >
-          {/* The ghost: the editor's own wrap, leaving with a 2 pt blur while the bubble's wrap settles in over it (90 ms). */}
-          {!short && (
+          {/* The stand-in: `UserBubble`'s text box (fill = the composer's own, so it shows only as it clears the card). */}
+          <div style={{ position: 'absolute', left: start.x, top: start.y, display: 'flex', maxWidth: column * 0.8 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', paddingLeft: 12, paddingRight: 12, paddingTop: 6, paddingBottom: 6, borderRadius: 12.8, borderWidth: 1, borderColor: 'rgba(0, 0, 0, 0)', backgroundColor: fill, minWidth: 0 }}>
+              <div paintTransform={short ? undefined : { initial: { opacity: 0, blur: 2 }, animate: go ? { opacity: 1, blur: 0 } : { opacity: 0, blur: 2 }, transition: out(0.09) }} style={{ display: 'flex', flexDirection: 'column' }}>
+                <text style={{ color: t.text, fontSize: TEXT.size, lineHeight: TEXT.lineHeight, fontFamily: FONT_UI }}>{text.value}</text>
+              </div>
+            </div>
+          </div>
+          {/* The ghost, drawn over the stand-in (whose fill would hide it): the editor's own wrap, leaving with a 2 pt blur while the bubble's wrap settles in over it (90 ms). */}
+          {!short && ghost && (
             <div
-              paintTransform={{ initial: { opacity: 1, blur: 0 }, animate: { opacity: 0, blur: 2 }, transition: out(0.09) }}
+              paintTransform={{ initial: { opacity: 1, blur: 0 }, animate: go ? { opacity: 0, blur: 2 } : { opacity: 1, blur: 0 }, transition: out(0.09) }}
               style={{ position: 'absolute', left: text.rect.x, top: text.rect.y, width: text.rect.width }}
             >
               <text style={{ color: t.text, fontSize: 14, lineHeight: EDITOR_LINE, fontFamily: FONT_UI }}>{text.value}</text>
             </div>
           )}
-          {/* The stand-in: `UserBubble`'s text box (fill = the composer's own, so it shows only as it clears the card). */}
-          <div style={{ position: 'absolute', left: start.x, top: start.y, display: 'flex', maxWidth: column * 0.8 }}>
-            <div style={{ display: 'flex', flexDirection: 'column', paddingLeft: 12, paddingRight: 12, paddingTop: 6, paddingBottom: 6, borderRadius: 12.8, borderWidth: 1, borderColor: 'rgba(0, 0, 0, 0)', backgroundColor: fill, minWidth: 0 }}>
-              <div paintTransform={short ? undefined : { initial: { opacity: 0, blur: 2 }, animate: { opacity: 1, blur: 0 }, transition: out(0.09) }} style={{ display: 'flex', flexDirection: 'column' }}>
-                <text style={{ color: t.text, fontSize: TEXT.size, lineHeight: TEXT.lineHeight, fontFamily: FONT_UI }}>{text.value}</text>
-              </div>
-            </div>
-          </div>
         </div>
       )}
       {images.map((image, i) => {

@@ -49,14 +49,17 @@ export function heroType(name: string): { size: 34 | 28 | 24; lineHeight: number
 }
 
 /**
- * The hero chevron for a name size: the glyph box is about half the type size, its stroke follows the 600-weight stems, and
- * `nudge` moves its centre from the line box's centre down onto the middle of the lowercase body (baseline to x-height),
- * where a lowercase project name's optical centre sits. Values were set by eye on zoomed captures at each size.
+ * The hero chevron for a name size, as the glyph's own ink (its SVG has no side bearings): `width` about 0.45 em, `stroke` in
+ * points following the 600-weight stems, `gap` the visible space after the last letter, and `nudge` how far its centre sits
+ * below the line box's centre, onto the middle of the lowercase body (baseline to x-height), where a lowercase project name's
+ * optical centre is. Measured on 2× captures at each size (`verify.ts`, `chevron-*.png`).
  */
-export function heroChevron(size: 34 | 28 | 24): { box: number; stroke: number; nudge: number; gap: number } {
-  if (size === 34) return { box: 18, stroke: 2.6, nudge: 3, gap: 8 }
-  if (size === 28) return { box: 15, stroke: 2.7, nudge: 2.5, gap: 7 }
-  return { box: 13, stroke: 2.8, nudge: 2, gap: 6 }
+export function heroChevron(size: 34 | 28 | 24): { width: number; stroke: number; nudge: number; gap: number } {
+  // The x-height band's centre sits 4.2 / 3.2 / 2.3 pt below the line box's centre at 34 / 28 / 24 pt; a letter's side bearing
+  // adds about 2 pt to `gap`, so the visible gap is about 0.3 em.
+  if (size === 34) return { width: 15, stroke: 2.2, nudge: 4.25, gap: 8 }
+  if (size === 28) return { width: 12.5, stroke: 1.9, nudge: 3.25, gap: 6.5 }
+  return { width: 11, stroke: 1.7, nudge: 2.25, gap: 5.5 }
 }
 
 /** Rows per group that fit between the card's bottom (+32) and the pane's bottom (−24): `floor((space − 24) / 32)`, at most 3. */

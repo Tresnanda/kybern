@@ -298,6 +298,8 @@ export interface PickerMenuProps {
   side?: 'top' | 'bottom'
   align?: 'start' | 'center' | 'end'
   sideOffset?: number
+  /** Moves the panel along its alignment axis. */
+  alignOffset?: number
   /** Fixed panel width (`w-[26rem]`); otherwise `minWidth` and content decide. */
   width?: number
   minWidth?: number
@@ -319,6 +321,7 @@ export function PickerMenu({
   side = 'top',
   align = 'start',
   sideOffset = 4,
+  alignOffset,
   width,
   minWidth = 128,
   padding = 4,
@@ -417,6 +420,7 @@ export function PickerMenu({
           side={side}
           align={align}
           sideOffset={sideOffset}
+          alignOffset={alignOffset}
           collisionPadding={8}
           tabIndex={0}
           autoFocus

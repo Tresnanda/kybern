@@ -267,6 +267,11 @@ export interface DraftExtras {
 
 export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?: DraftExtras }) {
   const pane = usePaneAccess()
+  // The new chat mounts this directly (not through `Composer`), so it loads the agents itself.
+  const status = useApp((s) => s.status)
+  useEffect(() => {
+    if (status === 'open') ensureLoaded()
+  }, [status])
   const providers = useComposer((d) => d.providers)
   const loading = useComposer((d) => d.providersLoading)
   const accounts = useComposer((d) => d.accounts)

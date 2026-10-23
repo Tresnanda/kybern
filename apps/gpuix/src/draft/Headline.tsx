@@ -41,15 +41,17 @@ export function Headline({ projects, projectId, name, coordinator, onPick, froze
             testId="heading-project"
             side="bottom"
             align="center"
+            // GPUIX puts a centred layer's far edge on the trigger's centre (`Tip`): half the width brings it back.
+            alignOffset={170}
             sideOffset={6}
-            minWidth={340}
+            width={340}
             rootStyle={{ maxWidth: COLUMN - 48 }}
             trigger={(open) => [...label].length > 40
               ? <Tip label={label} side="bottom" size={Math.min(COLUMN - 48, [...label].length * 13)}><div style={{ display: 'flex', minWidth: 0 }}>{hero(open)}</div></Tip>
               : hero(open)}
           >
             {projects.map((p) => (
-              <PickerItem key={p.id} id={p.id} onSelect={() => onPick(p.id)}>
+              <PickerItem key={p.id} id={p.id} testId={`heading-project-${p.id}`} onSelect={() => onPick(p.id)}>
                 <Icon name="folder" size={18} color={t.text} style={{ opacity: 0.8 }} />
                 <Label color={t.text} truncate style={{ flexGrow: 1 }}>{p.name}</Label>
                 {p.id === projectId && <Icon source={G.checkBold} size={14} color={t.text} />}
@@ -58,7 +60,7 @@ export function Headline({ projects, projectId, name, coordinator, onPick, froze
             {/* A Coordinator always has a project. */}
             {!coordinator && <PickerSeparator />}
             {!coordinator && (
-              <PickerItem id="free" onSelect={() => onPick(null)}>
+              <PickerItem id="free" testId="heading-project-free" onSelect={() => onPick(null)}>
                 <Icon source={G.message} size={18} color={t.text} style={{ opacity: 0.8 }} />
                 <Label color={t.text} truncate style={{ flexGrow: 1 }}>Free chat</Label>
                 {!projectId && <Icon source={G.checkBold} size={14} color={t.text} />}
@@ -76,9 +78,10 @@ export function Headline({ projects, projectId, name, coordinator, onPick, froze
   )
 }
 
-/** A chevron-down drawn for the hero: its stroke follows the 600-weight stems instead of the 1.5 of the 24 px icon set. */
-const chevronSvg = (stroke: number) =>
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"><path d="M5 8.75 12 15.75 19 8.75" stroke="currentColor" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+/** A chevron-down drawn for the hero, cropped to its ink (16 × 9), so the gap and centring are the glyph's own; its stroke
+ *  follows the 600-weight stems instead of the 1.5 of the 24 px icon set. `stroke` is in points at `width`. */
+const chevronSvg = (width: number, stroke: number) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 9" fill="none"><path d="M1.75 1.75 8 7.25 14.25 1.75" stroke="currentColor" stroke-width="${(stroke * 16) / width}" stroke-linecap="round" stroke-linejoin="round"/></svg>`
 
 /**
  * The hero picker's trigger (spec: 46 tall, 0 10 0 14, `RADIUS.lg`): hug-width, so a project change swaps the label with the
@@ -117,8 +120,8 @@ function HeroTrigger({ name, open }: { name: string; open: boolean }) {
       {/* Centred on the lowercase body (baseline to x-height), not the line box: `nudge` points down from the box's centre. */}
       <svg
         testId="draft-hero-chevron"
-        source={chevronSvg(chevron.stroke)}
-        style={{ width: chevron.box, height: chevron.box, flexShrink: 0, marginTop: chevron.nudge * 2, color: hover || open ? t.textSecondary : t.textTertiary, pointerEvents: 'none' }}
+        source={chevronSvg(chevron.width, chevron.stroke)}
+        style={{ width: chevron.width, height: (chevron.width * 9) / 16, flexShrink: 0, marginTop: chevron.nudge * 2, color: hover || open ? t.textSecondary : t.textTertiary, pointerEvents: 'none' }}
       />
     </div>
   )
