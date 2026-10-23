@@ -271,7 +271,16 @@ export function FileCode({ content, path, line }: { content: string; path: strin
   useEffect(() => {
     if (!document || !line || !list.current) return
     const at = Math.max(0, line - 4)
-    ;(renderer as { scrollToItem?: (id: number, index: number, offset?: number) => void }).scrollToItem?.(list.current.id, Math.floor(at / 64), (at % 64) * 20)
+    const id = list.current.id, item = Math.floor(at / 64), offset = (at % 64) * 20
+    const native = renderer as { scrollToItem?: (id: number, index: number, offset?: number) => void; getListScrollTop?: (id: number) => number[] | null }
+    // A scroll asked before the list has laid out its first rows is dropped, so it is asked again until the list sits on the line's chunk.
+    let tries = 0
+    const timer = setInterval(() => {
+      native.scrollToItem?.(id, item, offset)
+      if (native.getListScrollTop?.(id)?.[0] === item || ++tries >= 20) clearInterval(timer)
+    }, 50)
+    native.scrollToItem?.(id, item, offset)
+    return () => clearInterval(timer)
   }, [document, line, renderer])
   if (error) return <ErrorLine error={error} retry={() => setRetry(n => n + 1)} />
   if (!document) return <LoadingLines testId="dock-source-loading" />
