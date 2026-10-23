@@ -11,6 +11,24 @@ const { openTab } = await import('../../src/tabs/open.ts')
 const { heapStats } = await import('bun:jsc')
 type Event = Parameters<typeof applyEvent>[1]
 
+// What the app asks of the daemon while live turns run: RPC methods with response sizes.
+const calls = new Map<string, { n: number; bytes: number }>()
+const spawned = new Map<string, number>()
+let wrapped: unknown = null
+const wrap = () => {
+  const client = state.getClient() as { call: (method: string, params: unknown) => Promise<unknown> } | null
+  if (!client || client === wrapped) return
+  wrapped = client
+  const original = client.call.bind(client)
+  client.call = async (method, params) => {
+    const result = await original(method, params)
+    const entry = calls.get(method) ?? { n: 0, bytes: 0 }
+    entry.n++; try { entry.bytes += JSON.stringify(result)?.length ?? 0 } catch { /* Not JSON. */ }
+    calls.set(method, entry)
+    return result
+  }
+}
+setInterval(wrap, 250)
 let replay: { done: boolean; applied: number; total: number } = { done: true, applied: 0, total: 0 }
 const server = Bun.serve({ hostname: '127.0.0.1', port: 0, idleTimeout: 255, async fetch(req) {
   const body = await req.json() as { action: string; thread?: string; perFrame?: number; frameMs?: number; pages?: number; tab?: Parameters<typeof openTab>[1]; file?: string }
@@ -37,6 +55,11 @@ const server = Bun.serve({ hostname: '127.0.0.1', port: 0, idleTimeout: 255, asy
     }
     return Response.json({ updates })
   }
+  if (body.action === 'activity') {
+    const out = { calls: Object.fromEntries([...calls].sort((a, b) => b[1].bytes - a[1].bytes)), spawned: Object.fromEntries(spawned) }
+    calls.clear(); spawned.clear()
+    return Response.json(out)
+  }
   if (body.action === 'snapshot') { Bun.gc(true); await Bun.write(body.file!, JSON.stringify(Bun.generateHeapSnapshot())); return Response.json({ file: body.file }) }
   if (body.action === 'replay') {
     const id = body.thread!, client = state.getClient()!
@@ -46,8 +69,14 @@ const server = Bun.serve({ hostname: '127.0.0.1', port: 0, idleTimeout: 255, asy
     const { thread } = await client.call('threads.get', { thread_id: id, transcript_limit: 1, include_tool_output: false })
     for (const until = Date.now() + 30000; events.at(-1)?.seq !== thread.last_seq && Date.now() < until;) await Bun.sleep(100)
     sub.unsubscribe()
+    // `last`: only the newest events (one pass of a long log). `running`: the thread shows as running meanwhile, as in a
+    // live turn (status, working rows, live reply), instead of an idle thread whose transcript grows.
+    const { last, running } = body as { last?: number; running?: boolean }
+    if (last) events.splice(0, Math.max(0, events.length - last))
+    const status = (value: string) => state.set({ threads: state.getState().threads.map(t => t.id === id ? { ...t, status: value } as typeof t : t) })
     replay = { done: false, applied: 0, total: events.length }
-    let open = { ...emptyThreadState(), thread, loaded: true }
+    let open = { ...emptyThreadState(), thread: running ? { ...thread, status: 'running' } as typeof thread : thread, loaded: true }
+    if (running) status('running')
     state.setThreadOpen(id, open)
     const perFrame = body.perFrame ?? 4, frameMs = body.frameMs ?? 16
     void (async () => {
@@ -59,6 +88,7 @@ const server = Bun.serve({ hostname: '127.0.0.1', port: 0, idleTimeout: 255, asy
         }
         await Bun.sleep(frameMs)
       }
+      if (running) { status('idle'); state.setThreadOpen(id, { ...open, thread: open.thread ? { ...open.thread, status: 'idle' } as typeof thread : open.thread }) }
       replay.done = true
     })()
   }

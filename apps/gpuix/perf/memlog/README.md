@@ -52,8 +52,7 @@ the thread open, 344 → 279 MB with the lightbox open. Inline images are sharpe
 before (ImageIO resampling instead of GPU minification); the lightbox is full
 resolution.
 
-An in-process replay grows the JS side by about 20 MB and stays flat across rounds. The
-459 MB after 8 hours comes from live turns instead (see the live-turn leak below).
+The 459 MB after 8 hours came from live turns instead (see the live-turn leak below).
 
 ## A normal session on this branch (with the image fix)
 
@@ -72,38 +71,46 @@ with three history pages each, the orchestrator streamed in process, six documen
 The live JS heap stays at 24–41 MB; transcripts, Markdown caches and the file cache are
 not the large retainers.
 
-## The live-turn leak (open)
+## The live-turn leak: development React (fixed)
 
 The installed app grew from 459 to 554 MB in `App-Specific Tag 1` in one hour of live
-agent turns, and stayed flat while nothing streamed. `live.ts` reproduces it through the
+agent turns and stayed flat while nothing streamed. `live.ts` reproduces it through the
 real path: the scratch daemon's Claude binary is `apps/desktop/scripts/profile-replay-driver.py`
 (settings `providers.claude-code.binary`, `KYBERN_PERF_REPLAY_JSONL` on the daemon), so
 each `PROFILE_REPLAY` message streams a recorded session through the driver, store and
-WebSocket while the app watches the thread.
+WebSocket while the app watches the thread. `real.ts` with `KYBERN_MEMLOG_LAST` and
+`KYBERN_MEMLOG_ROUNDS` reproduces it in process, without the daemon.
 
-| Live pass (orchestrator session, window painting) | Tag 1 | Footprint | Live JS heap |
-|---|---:|---:|---:|
-| open | 116 | 260 | 39 |
-| after pass 1 | 148 | 355 (peak 485) | 34 |
-| after pass 2 | 191 | 399 | 34 |
-| after pass 3 | 231 | 439 | 36 |
+Cause: the packaged app ran React's development build. `scripts/package-app.ts` never
+defined `NODE_ENV`, so the bundle kept `react-reconciler.development.js` (9
+`performance.measure` call sites; 0 with the define). React 19.2's development build
+records a `performance.measure` entry for every component it renders, and nothing
+clears them; each streamed token re-renders rows. A heap snapshot after three replays
+held 46 MB in the `Performance` object and 2,578 owner-stack `Error`s. The entries live
+in Bun's allocator, so the GC'd heap (24–41 MB) never showed them.
 
-About 40 MB per pass, never returned, while the live heap stays flat. Ruled out:
-- **The WebSocket client.** `socket.ts`, the same client with no UI: 11,085 events, Tag 1 flat at about 8.5 MB.
-- **The native streaming-document API.** `doc-churn.ts`, without painting: 12,350 updates, flat.
-- **JS objects.** The full-GC heap is constant.
-- **The addon's private mimalloc.** `malloc_history` puts every 128 MB Tag 1 region in Bun's own allocator, reserved at launch, which backs JSC strings and napi buffers.
+Fix: `package-app.ts` defines `process.env.NODE_ENV` as `production`. A development run
+(`bun src/main.tsx`) clears the entries every 10 s (`main.tsx`). Nothing in the app reads
+them.
 
-The growth needs painted frames of a live reply: with the display asleep the
-frame clock stops, the virtual list lays out nothing, and passes do not grow (forced
-captures and `KYBERN_STREAM_EVENT_FRAME=0` do not substitute). The in-process replay
-(`real.ts`) never marks the thread running, so it does not mount the live row
-(`StreamMarkdown` document mode, `useSmoothText`, caret and word fades).
+| Live passes, window painting | Tag 1 (dev → production) | Footprint (dev → production) |
+|---|---:|---:|
+| open | 115 → 111 | 215 → 214 |
+| after pass 1 | 213 → 139 | 356 → 273 |
+| after pass 2 | 271 → 146 | 415 → 292 |
+| after pass 3 | — → 149 | — → **299** |
 
-Next, with a display awake: one pass each with `KYBERN_STREAM_DOCUMENT=0`,
-`KYBERN_SMOOTH_STREAM=0`, `KYBERN_REDUCED_MOTION=1` and `KYBERN_COMPOSITOR_LOOPS=0`
-(`perf/memlog/live.ts <label> <thread> 2 2`), then `MallocStackLogging=lite` and
-`malloc_history -callTree -invert` on the run that grows, to name the napi entry point.
+In process, three rounds of one pass: dev 117 → 146 → 197 → 347; production 104 → 134 →
+162 → 161, 295 MB footprint idle.
+
+What it was not (each measured): the WebSocket client (`socket.ts`: 11,085 events, flat),
+the native streaming-document API (`doc-churn.ts`: 12,350 updates, flat), RPC traffic
+(about 95 KB a pass), and the addon's private mimalloc (`KYBERN_MEMLOG_TAG1_STACKS=1`: the
+growing regions are Bun's own 128 MB reservations). The growth needs painted frames:
+with the display asleep, or with a document tab covering the chat, nothing grows.
+
+Still open: transient peaks of 406–470 MB while a pass streams (the replay is faster than
+a real agent), and the heavy fixture (`perf/ramfix/retained.ts`) on this branch.
 
 ## Running
 

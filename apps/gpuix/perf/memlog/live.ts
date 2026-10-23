@@ -62,8 +62,11 @@ try {
   }
   while (!(await call('bench', 'state')).listsLoaded) await Bun.sleep(50)
   await assertTestDisplayWindow(f.pid)
-  await call('bench', 'open', { thread }); await Bun.sleep(4000)
+  await call('bench', 'open', { thread })
+  // The chat itself: a remembered document tab would hide the live reply.
+  await call('memlog', 'tab', { tab: { kind: 'chat' } }); await Bun.sleep(4000)
   await sample('open', true)
+  await call('memlog', 'activity')
   for (let pass = 1; pass <= Number(passesArg); pass++) {
     await run(['send', '--detach', thread, 'PROFILE_REPLAY'])
     const until = Date.now() + Number(minutesArg) * 60000
@@ -78,6 +81,7 @@ try {
       if ((await call('bench', 'state')).threads?.find?.((t: { id: string; status: string }) => t.id === thread)?.status === 'idle') break
     }
     forcing = false; await force
+    writeFileSync(path.join(out, `activity-${pass}.json`), JSON.stringify(await call('memlog', 'activity'), null, 2))
     await run(['interrupt', thread]); await Bun.sleep(5000)
     await sample(`pass-${pass}-end`, true)
   }
