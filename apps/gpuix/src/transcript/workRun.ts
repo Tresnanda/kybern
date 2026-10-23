@@ -19,14 +19,29 @@ export const basename = (path: string) => path.replace(/[\\/]+$/, '').split(/[\\
 const lower = (text: string) => text.charAt(0).toLowerCase() + text.slice(1)
 const upper = (text: string) => text.charAt(0).toUpperCase() + text.slice(1)
 
+/** A call's action with its target, or null when it names none. Long commands and queries are cut so a summary stays one line. */
+function action(call: ToolCall, complete: boolean, max = Infinity): string | null {
+  const activity = toolLine(call, complete)
+  const target = toolTarget(call, activity)
+  const cut = (text: string) => text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text
+  if (target?.kind === 'files') return `${activity.verb} ${basename(target.paths[0]!)}${target.paths.length > 1 ? ` and ${target.paths.length - 1} more` : ''}`
+  if (target?.kind === 'command') return `${activity.verb} ${cut(target.command)}`
+  if (target?.kind === 'query') return `${activity.verb} for ${cut(target.query)}`
+  return null
+}
+
 /** The call in flight, in present tense: "Reading Requests.tsx", "Running bun test", "Searching for chunkWork". */
 export function liveAction(call: ToolCall): string {
+  const named = action(call, false)
+  if (named) return named
   const activity = toolLine(call, false)
-  const target = toolTarget(call, activity)
-  if (target?.kind === 'files') return `${activity.verb} ${basename(target.paths[0]!)}${target.paths.length > 1 ? ` and ${target.paths.length - 1} more` : ''}`
-  if (target?.kind === 'command') return `${activity.verb} ${target.command}`
-  if (target?.kind === 'query') return `${activity.verb} for ${target.query}`
   return activity.detail ? `${activity.verb} ${activity.detail}` : activity.verb
+}
+
+/** Settled calls that all did one thing ("Read system.css", "Ran bun test"), in past tense: a count only reads well from two. */
+function soleAction(calls: readonly ToolCall[]): string | null {
+  const first = calls[0] && action(calls[0], true, 48)
+  return first && calls.every((call) => action(call, true, 48) === first) ? first : null
 }
 
 /** The summary of a run's blocks. `liveThinkingId` is the reasoning still streaming, if it is in this run; `waiting`: the
@@ -51,7 +66,8 @@ export function runSummary(blocks: readonly Block[], liveThinkingId: string | nu
     else if (block.kind === 'assistant' && block.id === liveThinkingId) live = 'Thinking'
   }
   if (live === null && waiting) live = 'Thinking'
-  const phrases = toolSummaryPhrases(settled)
+  const sole = soleAction(settled.map((item) => item.call))
+  const phrases = sole ? [sole] : toolSummaryPhrases(settled)
   if (background > 0) phrases.push(`started ${background} background ${background === 1 ? 'task' : 'tasks'}`)
   const label = phrases.length > 0 ? joinSummaryPhrases(phrases) : !live && !failed ? (thought ? 'Thought' : 'Used tools') : ''
   return {
