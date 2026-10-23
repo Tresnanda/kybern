@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.14.0
+
+<!-- kybern-release-title: Agents ask for what they need, right in the chat, in Kybern GPUIX -->
+<!-- kybern-release-summary: Inline visuals rest as pictures and can ask you to choose, agents ask you to sign in, enter a password, point at something or grant a permission in one card, and pasted keys stay out of the chat. -->
+
+- Read inline visuals as part of the chat: an agent's page now rests as a picture under the reply, with its title and actions on a caption line, and scrolls and fades like any message. Click it, or a button or toggle in it, and it comes alive in place; Esc, Done or scrolling away turns it back into a picture. Tall visuals stop at 480 pt with **Show more**, and **Open in tab** keeps what you changed.
+- Answer an agent through its visual: when it shows options ("pick a layout", "tune these, then apply"), choose in the page and press **Send**, skip it, or just type a reply. The agent picks up from your answer.
+- Sign in without leaving the chat: when an agent needs gh, vercel, supabase, npm, gcloud, fly, wrangler or eas, a card signs you in through the browser and the agent carries on. A **Sign in** chip also appears on a command that failed because you weren't signed in.
+- Enter sudo, SSH and git passwords in a private card that shows exactly which command is asking. Kybern never stores or answers them for you, and an SSH host key always waits for your yes or no. Commands that need to ask you something else open in a terminal tab.
+- Point instead of describing: an agent can ask you to click an element in the Preview or a visual, pick a file or folder, drop an image or capture a window. ⌥-click an element yourself to add it to your message.
+- Keep pasted keys out of the chat: paste an API key into the composer and Kybern offers to store it in your project's git-ignored env file, leaving a `$NAME` chip the agent can use.
+- Let agents keep going while you're away: a question can carry a default and a calm countdown, which pauses while you're looking at it. Set the longest wait, or turn it off, in Settings.
+- Grant macOS permissions from one card: when an app needs the camera, screen recording or another privacy permission, the card opens the right pane in System Settings and continues once it's granted.
+- Type in the composer after clicking in a visual or the Preview: the keyboard comes back on its own, and Esc in a page hands it back too. No more silent beeps.
+- Fix the whole window ignoring clicks after closing an image opened from a file chip with its X button.
+- Scroll tall images to the bottom in the image viewer and image tabs; they used to cut off part way down.
+- Keep delegated agents in the sidebar after you reopen Kybern while they're still working.
+- Fix the note title, the `@`, `$` and `/` menu, dragged tabs and tasks, and the update card staying opaque on glass, and an empty code chip appearing where a line wraps.
+
 ## 0.13.0
 
 <!-- kybern-release-title: Edit files in tabs and start chats from a new home in Kybern GPUIX -->
