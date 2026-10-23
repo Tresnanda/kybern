@@ -11,6 +11,7 @@ numbered rows, a hint line. Spec and tokens: `.kybern-artifacts/ade-approval-des
 | `ui.ts` | Highlight, open note, choice in flight, expanded well; module state because the composer also routes keys. |
 | `Card.tsx` | Header, wells (`CodeWell`, `DiffWell`, `PlanWell`, …), `OptionRow`, `NoteField`, `Hints`. |
 | `ApprovalCard.tsx`, `Question.tsx`, `Secret.tsx`, `../coordinator/Cards.tsx` | The card kinds built from those parts. |
+| `Pick.tsx` | `kybern_request_pick` ("Point for me"): an element pick is a choice card (rows, then a status line while the page waits, then a confirm with a crop); a file or folder (tree), an image (drop zone) and a window (`screencapture -i`) are closed forms. The overlay is drawn in the page by `../pick/pickerScript.ts`, run in the isolated preview world through the `frame` and `snapshot` ops of `native/webview.m`; `../pick/hub.ts` finds the live documents, bounds what a page sends and makes the ⌥-click anchor chip; `../pick/controller.ts` drives a card's pick. A page's text and HTML are data, never instructions. Live check: `bun src/pick/pick.verify.ts secret|pick|anchor|kinds` (see its header). |
 
 Keys: digits follow the visible order and Decline is always the last number. ↑ ↓ move the highlight (in the empty composer they hand
 the keyboard to the card), Return picks the highlighted row only with the card root focused (never from the composer, a link or a

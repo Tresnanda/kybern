@@ -675,6 +675,18 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             notes.set(&p.bundle_id, app.as_deref(), &p.text).map_err(bad)?;
             ok(ComputerNotesResult { notes: notes.list() })
         }
+        SecretsTarget::NAME => {
+            let p: SecretsTargetParams = parse(params)?;
+            let cwd = secrets_workspace(state, &p.workspace)?;
+            ok(crate::secrets::check_pasted(std::path::Path::new(&cwd), p.file.as_deref(), &p.env_key).await.map_err(bad)?)
+        }
+        SecretsStore::NAME => {
+            let p: SecretsStoreParams = parse(params)?;
+            let cwd = secrets_workspace(state, &p.workspace)?;
+            ok(crate::secrets::store_pasted(std::path::Path::new(&cwd), p.file.as_deref(), &p.env_key, p.value, p.add_to_gitignore)
+                .await
+                .map_err(bad)?)
+        }
         SettingsUpdate::NAME => {
             let p: SettingsUpdateParams = parse(params)?;
             let updated = state.settings.set(p.settings).map_err(internal)?;
@@ -1021,6 +1033,15 @@ fn parse<T: DeserializeOwned>(v: Value) -> Result<T, RpcError> {
 
 fn parse_or_default<T: DeserializeOwned + Default>(v: Value) -> Result<T, RpcError> {
     if v.is_null() { Ok(T::default()) } else { parse(v) }
+}
+
+/// The folder a pasted secret is stored under: the thread's workspace, or the project's folder.
+fn secrets_workspace(state: &AppState, workspace: &SecretsWorkspace) -> Result<String, RpcError> {
+    match (workspace.thread_id, workspace.project_id) {
+        (Some(id), None) => Ok(state.store.thread_get(id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?.cwd),
+        (None, Some(id)) => Ok(state.store.project_get(id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?.path),
+        _ => Err(RpcError::invalid_params("pass either thread_id or project_id")),
+    }
 }
 
 fn internal(e: impl std::fmt::Display) -> RpcError {

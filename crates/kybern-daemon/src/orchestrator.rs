@@ -31,6 +31,7 @@ mod lead_proposals;
 mod messaging;
 mod notes;
 mod omp_recovery;
+mod pick_request;
 mod secret_request;
 mod spaces;
 mod subagent_messaging;
@@ -298,6 +299,9 @@ impl Orchestrator {
             }
             if crate::secrets::is_tool(name) {
                 return self.execute_request_secret(&thread, turn_id, &live, arguments).await;
+            }
+            if crate::pick::is_tool(name) {
+                return self.execute_request_pick(&thread, turn_id, &live, arguments).await;
             }
             if crate::lead_git::is_tool(name) {
                 return self.execute_lead_git(&thread, turn_id, &live, arguments).await;
@@ -570,12 +574,21 @@ impl Orchestrator {
     /// Everything else passes through unchanged; the stored message keeps the chips.
     fn provider_message<'a>(&self, message: &'a UserMessage, live: &LiveSession) -> std::borrow::Cow<'a, UserMessage> {
         let computer = crate::computer::ComputerUse::expand_mention(message, live.computer_tools);
-        match self.expand_item_mentions(computer.as_ref().unwrap_or(message)) {
+        let items = match self.expand_item_mentions(computer.as_ref().unwrap_or(message)) {
             Some(expanded) => std::borrow::Cow::Owned(expanded),
             None => match computer {
                 Some(expanded) => std::borrow::Cow::Owned(expanded),
                 None => std::borrow::Cow::Borrowed(message),
             },
+        };
+        let (store, assets) = (&self.inner.store, &self.inner.paths.assets);
+        match crate::chips::expand(&items, |id| {
+            let id: AssetId = id.parse().ok()?;
+            store.asset_get(id).ok().flatten()?;
+            Some(assets.join(id.to_string()))
+        }) {
+            Some(expanded) => std::borrow::Cow::Owned(expanded),
+            None => items,
         }
     }
 }
@@ -3422,6 +3435,7 @@ impl Orchestrator {
                 let timeout = if let Some(budget) = crate::secrets::call_budget(&name, &arguments)
                     .or_else(|| crate::lead_git::call_budget(&name, &arguments))
                     .or_else(|| crate::visuals::call_budget(&name, &arguments))
+                    .or_else(|| crate::pick::call_budget(&name, &arguments))
                 {
                     budget
                 } else if delegation::BLOCKING_TOOLS.contains(&name.as_str())

@@ -1345,6 +1345,44 @@ pub struct VisualAnswerInput {
     pub schema: Option<Value>,
 }
 
+/// `tool_name` of the daemon-raised approval behind the `kybern_request_pick`
+/// tool: the agent asks the user to point at something (an element in the
+/// Preview or an inline visual, a file or folder, an image, a window) instead
+/// of describing it.
+///
+/// `input` is a [`PickRequestInput`]. The answer is
+/// `ApprovalDecision::Submit { response }` with the picked target (see
+/// [`PickKind`] for the shape per kind) or `Deny`.
+pub const PICK_REQUEST_TOOL: &str = "kybern_request_pick";
+/// Largest answer, in bytes of JSON, a pick card may submit.
+pub const MAX_PICK_RESPONSE_BYTES: usize = 48 * 1024;
+
+/// What the user is asked to point at, and the `response` object the card submits for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PickKind {
+    /// An element in the Preview page. `{selector, tag, text?, box:{x,y,width,height}, html?, page_url?, screenshot_asset?}`.
+    PreviewElement,
+    /// An element in an inline visual. Same as `preview_element` plus `id` (the element's `data-kybern-id`, when it has one).
+    VisualElement,
+    /// A file in the workspace. `{path}`, workspace-relative.
+    File,
+    /// A folder in the workspace. `{path}`, workspace-relative (`.` is the workspace itself).
+    Folder,
+    /// An image the user drops, pastes or chooses. `{asset_id, name}`.
+    Image,
+    /// A window or screen area the user captures. `{asset_id, app?, title?}`.
+    Window,
+}
+
+/// The `input` of a [`PICK_REQUEST_TOOL`] approval.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PickRequestInput {
+    pub kind: PickKind,
+    /// What the agent needs, in a sentence the user can act on.
+    pub prompt: String,
+}
+
 /// `tool_name` of the daemon-raised approval behind `kybern_coordinator_propose_brief`:
 /// the card "Save this as the project brief?" holds the Coordinator's proposed
 /// text, which the user can edit. This card is the only way agent text reaches
@@ -1406,6 +1444,7 @@ pub fn is_user_input_tool(tool_name: &str) -> bool {
         "AskUserQuestion"
             | SECRET_REQUEST_TOOL
             | VISUAL_ANSWER_TOOL
+            | PICK_REQUEST_TOOL
             | COORDINATOR_BRIEF_TOOL
             | COORDINATOR_SETTINGS_TOOL
             | "request_user_input"
@@ -1508,6 +1547,12 @@ impl ApprovalRequest {
                 }
                 if let Some(schema) = self.input.get("schema").filter(|schema| schema.is_object()) {
                     validate_answer_value(schema, answer)?;
+                }
+            }
+            PICK_REQUEST_TOOL => {
+                let small = serde_json::to_vec(response).is_ok_and(|bytes| bytes.len() <= MAX_PICK_RESPONSE_BYTES);
+                if !(response.is_object() && small) {
+                    return Err("Pick something again, or decline.".into());
                 }
             }
             COORDINATOR_BRIEF_TOOL => {

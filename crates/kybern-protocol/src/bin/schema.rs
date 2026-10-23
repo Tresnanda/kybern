@@ -173,6 +173,8 @@ fn main() {
     method::<ComputerFrameGet>(&mut methods);
     method::<ComputerNotesList>(&mut methods);
     method::<ComputerNoteSet>(&mut methods);
+    method::<SecretsTarget>(&mut methods);
+    method::<SecretsStore>(&mut methods);
     method::<UsageSummary>(&mut methods);
     method::<UsageLimits>(&mut methods);
     method::<PairingCreate>(&mut methods);

@@ -2,6 +2,7 @@
 // composer's, so the same choice sends the same RPC however it was made.
 import type { ApprovalDecision, ApprovalRequest, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { isUserInput, connectorApproval } from '../../../../packages/kybern-client/src/userInput.ts'
+import { pickRequestInput } from '../../../../packages/kybern-client/src/pickRequest.ts'
 import { secretRequestInput } from '../../../../packages/kybern-client/src/secretRequest.ts'
 import { briefProposalInput, leadGitCardInput, settingsProposalInput } from '../../../../packages/kybern-client/src/coordinatorCards.ts'
 import { sendToThread } from '../composer/store.ts'
@@ -15,7 +16,7 @@ import { getCardUi, patchCardUi } from './ui.ts'
 
 /** Whether the first pending request is a tool approval or consent the card answers with numbered rows (not a form or question). */
 export function isRowCard(approval: ApprovalRequest): boolean {
-  if (secretRequestInput(approval) || briefProposalInput(approval) || settingsProposalInput(approval) || leadGitCardInput(approval)) return false
+  if (secretRequestInput(approval) || pickRequestInput(approval) || briefProposalInput(approval) || settingsProposalInput(approval) || leadGitCardInput(approval)) return false
   return !isUserInput(approval) || !!connectorApproval(approval)
 }
 

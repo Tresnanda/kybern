@@ -113,6 +113,66 @@ export function taskMentionPart(task: { id: string; key: string; title: string }
   return { type: "mention", name: title, path: taskMentionPath(task.id), display_name: task.key ? `${task.key} ${title}` : title }
 }
 
+/** A secret the user pasted and Kybern stored privately: the daemon turns `kybern://secret/<KEY>?file=<file>` into the name and file, never a value. */
+export const SECRET_MENTION_PREFIX = "kybern://secret/"
+/** An element the user ⌥-clicked in the Preview or a visual: `kybern://anchor/<base64url JSON>`, expanded by the daemon into bounded page data. */
+export const ANCHOR_MENTION_PREFIX = "kybern://anchor/"
+
+/** What an anchor chip carries; every field is bounded again by the daemon. */
+export interface AnchorPayload {
+  selector: string
+  tag?: string
+  text?: string
+  html?: string
+  page_url?: string
+  /** The element's `data-kybern-id`, when it is in an inline visual. */
+  id?: string
+  box?: { x: number; y: number; width: number; height: number }
+  /** The daemon asset of the element's crop. */
+  screenshot_asset?: string
+}
+
+const toBase64Url = (text: string): string => {
+  let binary = ""
+  for (const byte of new TextEncoder().encode(text)) binary += String.fromCharCode(byte)
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
+}
+const fromBase64Url = (value: string): string => {
+  const binary = atob(value.replace(/-/g, "+").replace(/_/g, "/"))
+  return new TextDecoder().decode(Uint8Array.from(binary, (char) => char.charCodeAt(0)))
+}
+
+/** The mention part for a stored secret. The chip reads as `$KEY`; the value is in the file only. */
+export function secretMentionPart(secret: { key: string; file: string }): MentionPart {
+  const file = secret.file === ".env" ? "" : `?file=${encodeURIComponent(secret.file)}`
+  return { type: "mention", name: secret.key, path: `${SECRET_MENTION_PREFIX}${secret.key}${file}`, display_name: secret.key }
+}
+
+/** The mention part for a pointed-at element. */
+export function anchorMentionPart(label: string, payload: AnchorPayload): MentionPart {
+  const name = mentionLabel(label, "Element")
+  return { type: "mention", name, path: `${ANCHOR_MENTION_PREFIX}${toBase64Url(JSON.stringify(payload))}`, display_name: name }
+}
+
+/** What a composer chip path stands for, or null for any other path. */
+export function parseComposerChip(path: string): { kind: "secret"; key: string; file: string } | { kind: "anchor"; payload: AnchorPayload } | null {
+  if (path.startsWith(SECRET_MENTION_PREFIX)) {
+    const [key = "", query = ""] = path.slice(SECRET_MENTION_PREFIX.length).split("?")
+    if (!key) return null
+    const file = /(?:^|&)file=([^&]*)/.exec(query)?.[1]
+    let decoded = ".env"
+    try { if (file) decoded = decodeURIComponent(file) } catch { /* keep the default */ }
+    return { kind: "secret", key, file: decoded }
+  }
+  if (path.startsWith(ANCHOR_MENTION_PREFIX)) {
+    try {
+      const payload = JSON.parse(fromBase64Url(path.slice(ANCHOR_MENTION_PREFIX.length))) as AnchorPayload
+      return payload && typeof payload === "object" && typeof payload.selector === "string" ? { kind: "anchor", payload } : null
+    } catch { return null }
+  }
+  return null
+}
+
 /** Kybern's own consent for computer use, asked by the daemon rather than a harness. */
 export function computerConsent(approval: ApprovalRequest): { app: string; foreground: boolean } | null {
   if (approval.tool_name !== "kybern_computer_use") return null

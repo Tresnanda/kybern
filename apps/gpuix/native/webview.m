@@ -101,6 +101,9 @@ static BOOL releaseFocus(NSWindow *window) {
 - (void)userContentController:(WKUserContentController *)controller didReceiveScriptMessage:(WKScriptMessage *)message {
   if ([message.name isEqual:@"kybernFrame"] && !message.frameInfo.isMainFrame) {
     self.childFrame = message.frameInfo;
+    // A dictionary comes from the picker (`src/pick/pickerScript.ts`, run in this isolated world): the page's own scripts
+    // cannot reach this handler. Its fields are page data and stay untrusted, so the client bounds them again.
+    if ([message.body isKindOfClass:NSDictionary.class]) { emit(@{@"id":self.identifier,@"generation":self.generation,@"type":@"frameMessage",@"data":message.body}); return; }
     emit(@{@"id":self.identifier,@"generation":self.generation,@"type":@"navigation",@"url":message.frameInfo.request.URL.absoluteString ?: @""}); return;
   }
   // The untrusted child has the same handler name but cannot send host events.
@@ -346,6 +349,46 @@ void kybern_web_command(const char *json) {
         BOOL written = png && [png writeToFile:path atomically:YES];
         emit(@{@"id":identifier,@"generation":generation,@"type":@"snapshot",@"token":token,@"ok":@(written),@"path":written ? path : @"",
                @"width":@(cg ? CGImageGetWidth(cg) : 0),@"height":@(cg ? CGImageGetHeight(cg) : 0),@"message":error.localizedDescription ?: @""});
+      }];
+      return;
+    }
+    if ([op isEqual:@"frame"]) {
+      // Runs `script` in the page's frame, in the isolated `KybernPreview` world: the DOM is shared, JavaScript globals are
+      // not, so the page cannot call or replace what runs here. The result (when `rid` is set) comes back as `frameResult`.
+      NSString *script = cmd[@"script"], *rid = cmd[@"rid"];
+      void (^fail)(NSString *) = ^(NSString *message) { if (rid) emit(@{@"id":identifier,@"generation":host.generation,@"type":@"frameResult",@"rid":rid,@"ok":@NO,@"message":message}); };
+      if (![script isKindOfClass:NSString.class] || !host.childFrame) { fail(@"The page has not loaded yet."); return; }
+      [host.web evaluateJavaScript:script inFrame:host.childFrame inContentWorld:[WKContentWorld worldWithName:@"KybernPreview"] completionHandler:^(id value, NSError *error) {
+        if (!rid) return;
+        if (error) { fail(error.localizedDescription ?: @"The page did not run the script."); return; }
+        id result = value && [NSJSONSerialization isValidJSONObject:@[value]] ? value : [NSNull null];
+        emit(@{@"id":identifier,@"generation":host.generation,@"type":@"frameResult",@"rid":rid,@"ok":@YES,@"value":result});
+      }];
+      return;
+    }
+    if ([op isEqual:@"snapshotRect"]) {
+      // A PNG of a rectangle of the page (CSS pixels in the child frame's viewport) written to `path` under the temp folder.
+      // The wrapper scales and offsets the child (device mode), so its box is read first.
+      NSString *rid = cmd[@"rid"], *path = cmd[@"path"];
+      void (^fail)(NSString *) = ^(NSString *message) { if (rid) emit(@{@"id":identifier,@"generation":host.generation,@"type":@"snapshotRect",@"rid":rid,@"ok":@NO,@"message":message}); };
+      if (![path isKindOfClass:NSString.class] || ![path hasPrefix:NSTemporaryDirectory()] || ![path.pathExtension isEqual:@"png"]) { fail(@"The snapshot path is not allowed."); return; }
+      double rx = [cmd[@"x"] doubleValue], ry = [cmd[@"y"] doubleValue], rw = [cmd[@"width"] doubleValue], rh = [cmd[@"height"] doubleValue];
+      NSString *probe = @"(()=>{const f=document.querySelector('iframe');if(!f)return null;const r=f.getBoundingClientRect();return [r.left,r.top,r.width/(f.offsetWidth||r.width||1)]})()";
+      [host.web evaluateJavaScript:probe completionHandler:^(id box, NSError *error) {
+        NSArray *frame = [box isKindOfClass:NSArray.class] && [box count] == 3 ? box : @[@0, @0, @1];
+        double scale = [frame[2] doubleValue] > 0 ? [frame[2] doubleValue] : 1;
+        NSRect wanted = NSMakeRect([frame[0] doubleValue] + rx * scale, [frame[1] doubleValue] + ry * scale, MAX(1, rw * scale), MAX(1, rh * scale));
+        wanted = NSIntersectionRect(wanted, host.web.bounds);
+        if (NSIsEmptyRect(wanted)) { fail(@"The element is not on screen."); return; }
+        WKSnapshotConfiguration *config = [WKSnapshotConfiguration new];
+        config.rect = wanted; config.snapshotWidth = @(MIN(1200, wanted.size.width * 2));
+        [host.web takeSnapshotWithConfiguration:config completionHandler:^(NSImage *image, NSError *snapError) {
+          if (!image) { fail(snapError.localizedDescription ?: @"The page could not be captured."); return; }
+          NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithData:image.TIFFRepresentation];
+          NSData *png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+          if (!png || ![png writeToFile:path atomically:YES]) { fail(@"The capture could not be saved."); return; }
+          emit(@{@"id":identifier,@"generation":host.generation,@"type":@"snapshotRect",@"rid":rid ?: @"",@"ok":@YES,@"path":path,@"width":@(wanted.size.width),@"height":@(wanted.size.height)});
+        }];
       }];
       return;
     }

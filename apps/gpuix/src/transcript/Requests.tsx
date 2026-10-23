@@ -6,12 +6,14 @@
 // `threads.interrupt`) are the desktop's.
 import { useEffect, type ReactNode } from 'react'
 import { isUserInput, connectorApproval } from '../../../../packages/kybern-client/src/userInput.ts'
+import { isElementPick, pickRequestInput } from '../../../../packages/kybern-client/src/pickRequest.ts'
 import { secretRequestInput } from '../../../../packages/kybern-client/src/secretRequest.ts'
 import { briefProposalInput, leadGitCardInput, settingsProposalInput } from '../../../../packages/kybern-client/src/coordinatorCards.ts'
 import type { ApprovalRequest, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { PanelEnter, PanelPresence } from '../requests/Panel.tsx'
 import { SecretRequestPanel } from '../requests/Secret.tsx'
 import { isVisualAnswerCard, useVisualAnswerStub, VisualAnswerStub } from '../requests/VisualAnswer.tsx'
+import { PickRequestPanel } from '../requests/Pick.tsx'
 import { ActivityPanels, useRequestActivity } from '../requests/Activity.tsx'
 import { ComposerTray, trayVisible } from '../requests/ComposerTray.tsx'
 import { loadQueue, useComposer } from '../composer/store.ts'
@@ -37,7 +39,9 @@ export function useBlockingRequest(): boolean {
   })
 }
 
-const ownForm = (a: ApprovalRequest) => !!secretRequestInput(a) || !!briefProposalInput(a) || !!settingsProposalInput(a)
+/** A pick of an element is a choice card (the composer stays); a file, image or window is a closed form. */
+const closedPick = (a: ApprovalRequest) => { const pick = pickRequestInput(a); return !!pick && !isElementPick(pick.kind) }
+const ownForm = (a: ApprovalRequest) => !!secretRequestInput(a) || closedPick(a) || !!briefProposalInput(a) || !!settingsProposalInput(a)
 
 /** The open thread's pending approval or question, or nothing. */
 export function ThreadRequests() {
@@ -134,6 +138,8 @@ export function StackedPanel({ children, closed }: { children: ReactNode; closed
 
 function ApprovalRequestCard({ threadId, approval, count }: { threadId: ThreadId; approval: ApprovalRequest; count: number }) {
   if (isVisualAnswerCard(approval)) return <VisualAnswerStub approval={approval} count={count} />
+  const pick = pickRequestInput(approval)
+  if (pick) return <PickRequestPanel approval={approval} input={pick} count={count} />
   const secret = secretRequestInput(approval)
   if (secret) return <SecretRequestPanel approval={approval} input={secret} count={count} />
   if (briefProposalInput(approval) || settingsProposalInput(approval) || leadGitCardInput(approval)) return <CoordinatorCard approval={approval} count={count} />

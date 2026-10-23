@@ -114,6 +114,8 @@ expression: names
 - computer.frame
 - computer.notes.list
 - computer.notes.set
+- secrets.target
+- secrets.store
 - usage.summary
 - usage.limits
 - access.pairing.create

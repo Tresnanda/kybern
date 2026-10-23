@@ -631,6 +631,21 @@ export interface SecretRequestInput {
   placeholder?: string | null;
 }
 
+/** `tool_name` of the daemon's card asking the user to point at something (`kybern_request_pick`). `input` is a `PickRequestInput`. The answer is `{ decision: "submit", response }` with the picked target (shape per `PickKind`) or a deny. */
+export const PICK_REQUEST_TOOL = "kybern_request_pick";
+/** Largest answer, in bytes of JSON, a pick card may submit. */
+export const MAX_PICK_RESPONSE_BYTES = 48 * 1024;
+
+/** What the user is asked to point at. */
+export type PickKind = "preview_element" | "visual_element" | "file" | "folder" | "image" | "window";
+
+/** The `input` of a `PICK_REQUEST_TOOL` approval. */
+export interface PickRequestInput {
+  kind: PickKind;
+  /** What the agent needs, in a sentence the user can act on. */
+  prompt: string;
+}
+
 /**
  * `tool_name` of the Coordinator's "Save this as the project brief?" card. `input` is a
  * `BriefProposalInput`; the answer is `{ decision: "submit", response: { text } }` with the
@@ -1925,6 +1940,47 @@ export interface ComputerNoteSetParams {
   app?: string | null;
 }
 
+/** Where `secrets.target` and `secrets.store` look. Pass exactly one. */
+export interface SecretsWorkspace {
+  thread_id?: string | null;
+  project_id?: string | null;
+}
+
+export interface SecretsTargetParams extends SecretsWorkspace {
+  env_key: string;
+  /** Env file relative to the workspace. Default `.env`. */
+  file?: string | null;
+}
+
+/** What storing into a file would do, checked without a value. */
+export interface SecretsTargetResult {
+  file: string;
+  /** The key is already in the file; storing replaces it. */
+  replaces: boolean;
+  /** Git ignores the file (true outside a repository). */
+  ignored: boolean;
+  /** Git tracks the file, so it can never take a secret. */
+  tracked: boolean;
+  /** The file already exists. */
+  exists: boolean;
+}
+
+export interface SecretsStoreParams extends SecretsWorkspace {
+  env_key: string;
+  /** The secret. Written to the file and never stored, traced or returned. */
+  value: string;
+  file?: string | null;
+  /** Add the file to the `.gitignore` beside it first, when git does not ignore it yet. */
+  add_to_gitignore?: boolean;
+}
+
+export interface SecretsStoreResult {
+  env_key: string;
+  file: string;
+  replaced: boolean;
+  gitignore_updated: boolean;
+}
+
 export interface SettingsUpdateParams {
   settings: Settings;
 }
@@ -2457,6 +2513,8 @@ export interface Methods {
   "computer.frame": [ComputerFrameParams, ComputerFrameResult];
   "computer.notes.list": [Empty, ComputerNotesResult];
   "computer.notes.set": [ComputerNoteSetParams, ComputerNotesResult];
+  "secrets.target": [SecretsTargetParams, SecretsTargetResult];
+  "secrets.store": [SecretsStoreParams, SecretsStoreResult];
   "usage.summary": [UsageSummaryParams, UsageSummaryResult];
   "usage.limits": [UsageLimitsParams, UsageLimitsResult];
   "git.status": [GitStatusParams, GitStatus];

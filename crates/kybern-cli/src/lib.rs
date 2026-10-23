@@ -397,6 +397,18 @@ enum Cmd {
         #[command(subcommand)]
         cmd: Option<ComputerCmd>,
     },
+    /// Save a secret to a git-ignored env file in a thread's workspace; the value is read from stdin.
+    SecretStore {
+        thread: String,
+        /// The variable to set, e.g. STRIPE_SECRET_KEY.
+        key: String,
+        /// Env file relative to the workspace.
+        #[arg(long, default_value = ".env")]
+        file: String,
+        /// Add the file to the .gitignore beside it when git does not ignore it yet.
+        #[arg(long)]
+        add_to_gitignore: bool,
+    },
     /// Token usage and cost.
     Usage {
         #[arg(long, value_parser = ["provider", "model", "day", "thread"], default_value = "provider")]
@@ -1781,6 +1793,27 @@ pub async fn run() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&r)?);
             }
         },
+        Cmd::SecretStore { thread, key, file, add_to_gitignore } => {
+            let mut value = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut value)?;
+            let value = value.trim_end_matches(['\n', '\r']).to_owned();
+            let result = client
+                .call::<SecretsStore>(SecretsStoreParams {
+                    workspace: SecretsWorkspace { thread_id: Some(thread.parse()?), project_id: None },
+                    env_key: key,
+                    value,
+                    file: Some(file),
+                    add_to_gitignore,
+                })
+                .await?;
+            println!(
+                "Stored {} in {}{}{}.",
+                result.env_key,
+                result.file,
+                if result.replaced { " (replaced)" } else { "" },
+                if result.gitignore_updated { " and added it to .gitignore" } else { "" }
+            );
+        }
         Cmd::Computer { cmd } => {
             let status = match cmd.unwrap_or(ComputerCmd::Doctor) {
                 ComputerCmd::Status => {

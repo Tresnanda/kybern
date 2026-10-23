@@ -25,7 +25,7 @@ import { load as loadEnvironmentPreference, save as saveEnvironmentPreference } 
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { formatEffort, PROVIDER_LABEL } from '@/lib/format'
-import { nextAttachmentLabel, type AttachmentReference } from '../../../packages/kybern-client/src/composerTokens.ts'
+import { createComposerMentionReference, nextAttachmentLabel, type AttachmentReference } from '../../../packages/kybern-client/src/composerTokens.ts'
 import { findModel, modelQualifier, selectedVariant, selectorEffort, triggerTraits, variantSelector } from '../../../packages/kybern-client/src/models.ts'
 import { promptText } from '../../../packages/kybern-client/src/prompts.ts'
 import {
@@ -64,6 +64,10 @@ import { PickerChip } from './kit/PickerChip.tsx'
 import { G } from './composer/glyphs.ts'
 import { muted, PickerItem, PickerMenu } from './composer/Menu.tsx'
 import { useCompletion } from './composer/Completion.tsx'
+import { findSecret, scanInsert, type SecretMatch } from './composer/secretCatcher.ts'
+import { SecretDetected, SecretNameForm, type SecretWorkspace, type StoredSecret } from './composer/SecretCatch.tsx'
+import { secretMentionPart, type MentionPart } from '../../../packages/kybern-client/src/userInput.ts'
+import { PanelEnter, PanelPresence } from './requests/Panel.tsx'
 import { useThreadCommands } from './composer/commands.ts'
 import { tokenIcon } from './composer/token-icons.ts'
 import { accountLead, ModelPicker, ModelTriggerLabel } from './composer/ModelPicker.tsx'
@@ -85,6 +89,7 @@ import {
   ensureLoaded,
   errorText,
   onComposerRestore,
+  onComposerInsertChip,
   rememberSentDraft,
   getData,
   interruptThread,
@@ -417,6 +422,9 @@ const drafts = new Map<string, { text: string; attachments: Attachment[] }>(load
 onEnvironmentLeaving(() => saveEnvironmentPreference('kybern.composer.drafts', [...drafts].slice(-100)))
 onEnvironmentChange(() => { drafts.clear(); for (const [key, value] of loadEnvironmentPreference<[string, { text: string; attachments: Attachment[] }][] >('kybern.composer.drafts', [])) drafts.set(key, value) })
 
+/** Pasted keys the person chose to keep as text (this session, in memory only): they are not flagged again. */
+const keptSecrets = new Set<string>()
+
 export interface ComposerViewProps {
   draftKey: string
   /** Enables @ files and the skill catalog (`views/Composer.tsx` `projectId`). */
@@ -509,6 +517,12 @@ export function ComposerView(input: ComposerViewProps) {
   const [error, setError] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<string | null>(null)
   const pastePending = useRef(false)
+  // The pasted-secret catcher (`composer/SecretCatch.tsx`): while it holds a key, nothing is saved as a draft or sent.
+  const [secretCatch, setSecretCatch] = useState<{ match: SecretMatch; phase: 'detected' | 'name' } | null>(null)
+  const secretCatchRef = useRef(secretCatch)
+  secretCatchRef.current = secretCatch
+  const textNow = useRef(text)
+  const submitLatest = useRef<() => Promise<void>>(async () => {})
   const [promptMode, setPromptMode] = useState<'queue' | 'steer'>('queue')
   const [changingModel, setChangingModel] = useState(false)
   const editor = useRef<PublicInstance | null>(null)
@@ -534,10 +548,52 @@ export function ComposerView(input: ComposerViewProps) {
   const steering = !!running && !!props.canSteer && promptMode === 'steer'
 
   useEffect(() => {
+    // A caught key is never written to a draft: the text stays out of storage until the person chooses.
+    if (secretCatch) return
     if (text || attachments.length) drafts.set(props.draftKey, { text, attachments })
     else drafts.delete(props.draftKey)
     saveEnvironmentPreference('kybern.composer.drafts', [...drafts].slice(-100))
-  }, [text, attachments, props.draftKey])
+  }, [text, attachments, props.draftKey, !!secretCatch])
+
+  // The caught text left the draft (deleted, or edited into something else): the strip goes with it.
+  useEffect(() => {
+    textNow.current = text
+    const current = secretCatchRef.current
+    if (!current) return
+    const again = findSecret(text)
+    if (!again || again.value !== current.match.value) setSecretCatch(null)
+    else if (again.start !== current.match.start || again.end !== current.match.end) setSecretCatch({ ...current, match: { ...current.match, start: again.start, end: again.end } })
+  }, [text])
+
+  const secretWorkspace = useMemo<SecretWorkspace | null>(
+    () => props.currentThreadId ? { thread_id: props.currentThreadId } : props.projectId ? { project_id: props.projectId } : null,
+    [props.currentThreadId, props.projectId],
+  )
+  const keepSecret = (send: boolean) => {
+    const current = secretCatchRef.current
+    if (!current) return
+    keptSecrets.add(current.match.value)
+    setSecretCatch(null)
+    if (send) setTimeout(() => void submitLatest.current(), 0)
+  }
+  /** The key is in the file: its run in the text becomes a `$NAME` chip, which is all the agent receives. */
+  const secretStored = (stored: StoredSecret) => {
+    const current = secretCatchRef.current
+    if (!current) return
+    const located = findSecret(textNow.current)
+    const match = located && located.value === current.match.value ? located : current.match
+    const source = textNow.current
+    const token = `$${stored.name}`
+    const reference = completion.addChip(secretMentionPart({ key: stored.name, file: stored.file }), token)
+    const lead = match.start > 0 && !/\s/.test(source[match.start - 1]!) ? ' ' : ''
+    const trail = /\s/.test(source[match.end] ?? '') ? '' : ' '
+    setSecretCatch(null)
+    if (!edit(match.start, match.end, `${lead}${token}${trail}`, [reference])) {
+      setText(`${source.slice(0, match.start)}${lead}${token}${trail}${source.slice(match.end)}`)
+      focusEditor()
+    }
+    setFeedback(`Stored ${stored.name} in ${stored.file}${stored.gitignoreUpdated ? ' and added it to .gitignore' : ''}`)
+  }
 
   // Automation: the native file picker cannot be driven, so a test run can name
   // files to attach on mount (`KYBERN_GPUIX_ATTACH=/a.png,/b.pdf`).
@@ -552,7 +608,7 @@ export function ComposerView(input: ComposerViewProps) {
   useEffect(() => { props.onEmptyChange?.(empty) }, [empty])
   useEffect(() => { setComposerEmpty(props.draftKey, empty); return () => setComposerEmpty(props.draftKey, true) }, [props.draftKey, empty])
   const permissionUnsupported = provider?.kind !== 'cursor' && !!providers.find(p => p.kind === provider?.kind && !p.supported_permission_modes.includes(mode))
-  const disabledReason = !connected ? 'Reconnect to send a message.' : props.readOnly ? 'This conversation is read-only.' : props.sendDisabled ? props.sendDisabledReason ?? 'Sending is unavailable.' : permissionUnsupported ? 'Choose a permission mode supported by this agent.' : sending ? 'Sending…' : uploading > 0 ? 'Wait for attachments to finish uploading.' : empty && !props.allowEmptySend ? 'Write a message or attach a file.' : null
+  const disabledReason = secretCatch ? 'Choose what to do with the key first.' : !connected ? 'Reconnect to send a message.' : props.readOnly ? 'This conversation is read-only.' : props.sendDisabled ? props.sendDisabledReason ?? 'Sending is unavailable.' : permissionUnsupported ? 'Choose a permission mode supported by this agent.' : sending ? 'Sending…' : uploading > 0 ? 'Wait for attachments to finish uploading.' : empty && !props.allowEmptySend ? 'Write a message or attach a file.' : null
   const canSend = !disabledReason
 
   const focusEditor = () => {
@@ -618,7 +674,7 @@ export function ComposerView(input: ComposerViewProps) {
   }
 
   const submit = async (delivery: 'queue' | 'steer' = promptMode) => {
-    if (!canSend || tokenEditor.current?.selection().composing) return
+    if (!canSend || secretCatchRef.current || tokenEditor.current?.selection().composing) return
     const status = provider ? providers.find((p) => p.kind === provider.kind) : undefined
     if (status && provider?.kind !== 'cursor' && !status.supported_permission_modes.includes(mode)) {
       setError('Choose a supported permission mode for the selected agent before sending.')
@@ -658,6 +714,7 @@ export function ComposerView(input: ComposerViewProps) {
       setSending(false)
     }
   }
+  submitLatest.current = () => submit()
   /** Where the card, the editor and the image tiles are (`launch`); one bounds read each, never per frame. */
   const snapshotNow = (): ComposerSnapshot => {
     const bounds = (node: PublicInstance | null | undefined) => (node ? renderer.getElementBounds?.(node.id) ?? null : null)
@@ -694,6 +751,22 @@ export function ComposerView(input: ComposerViewProps) {
     if (draft.references) completion.restore(draft.references)
     focusEditor()
   }), [props.draftKey])
+
+  // An element ⌥-clicked in the Preview or a visual lands here as a chip at the caret (`pick/hub.ts`).
+  const insertChip = (part: MentionPart) => {
+    if (props.readOnly) return
+    const reference = createComposerMentionReference(part, completion.snapshot().mentions)
+    const chip = completion.addChip(part, reference.token)
+    const source = textNow.current
+    const at = tokenEditor.current?.selection().end ?? source.length
+    const lead = at > 0 && !/\s/.test(source[at - 1]!) ? ' ' : ''
+    const trail = /\s/.test(source[at] ?? '') ? '' : ' '
+    // A composer whose tab is behind another has no laid-out editor to edit: the text state takes the chip instead.
+    if (!edit(at, at, `${lead}${reference.token}${trail}`, [chip])) setText(`${source.slice(0, at)}${lead}${reference.token}${trail}${source.slice(at)}`)
+  }
+  const insertChipLatest = useRef(insertChip)
+  insertChipLatest.current = insertChip
+  useEffect(() => onComposerInsertChip(props.draftKey, part => insertChipLatest.current(part)), [props.draftKey])
 
   const addClipboardImage = async (image: ClipboardImage) => {
     const hash = contentHash(image.data)
@@ -765,6 +838,13 @@ export function ComposerView(input: ComposerViewProps) {
   return (
     <div ref={measureOverlay} testId="composer-overlay" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', maxWidth: 736 }}>
       {props.above}
+      <PanelPresence show={!!secretCatch}>
+        <PanelEnter>
+          {secretCatch && (secretCatch.phase === 'detected' || !secretWorkspace
+            ? <SecretDetected match={secretCatch.match} workspace={secretWorkspace} onKeep={() => keepSecret(false)} onStore={() => setSecretCatch({ ...secretCatch, phase: 'name' })} />
+            : <SecretNameForm key={secretCatch.match.value.length} match={secretCatch.match} workspace={secretWorkspace} onCancel={() => { setSecretCatch({ ...secretCatch, phase: 'detected' }); focusEditor() }} onStored={secretStored} />)}
+        </PanelEnter>
+      </PanelPresence>
       <div
         ref={(el) => {
           card.current = el
@@ -813,6 +893,7 @@ export function ComposerView(input: ComposerViewProps) {
             <TokenTextarea
               editorRef={tokenEditor}
               onEditorError={setError}
+              wash={secretCatch?.phase === 'detected' ? { start: secretCatch.match.start, end: secretCatch.match.end } : null}
               references={[...completion.tokens, ...attachmentRefs.map(r => ({ token: r.token, label: r.token.slice(1), icon: tokenIcon('attachment', r.token) }))]}
               nativeRef={(el) => {
                 editor.current = el
@@ -831,7 +912,14 @@ export function ComposerView(input: ComposerViewProps) {
                 setFeedback(pastePending.current ? 'Pasted text' : null)
                 pastePending.current = false
                 if (approvalDigit.current && e.value === approvalDigit.current) setText('')
-                else setText(e.value ?? '')
+                else {
+                  const next = e.value ?? ''
+                  // Every way text arrives (⌘V, the menu, a drop) comes through here, so the scan reads what was inserted.
+                  const hit = props.readOnly || secretCatchRef.current ? null : scanInsert(textNow.current, next)
+                  if (hit && !keptSecrets.has(hit.value)) setSecretCatch({ match: hit, phase: 'detected' })
+                  textNow.current = next
+                  setText(next)
+                }
                 if (error) setError(null)
               }}
               onKeyDown={(e) => {
@@ -853,6 +941,16 @@ export function ComposerView(input: ComposerViewProps) {
                 // Marked IME input bypasses native interception. Do not turn
                 // its ordinary key notification into a completion or send.
                 if (['up', 'down', 'enter', 'tab', 'escape'].includes(e.key ?? '') && (e as typeof e & { requestId?: number }).requestId == null) return
+                // A caught key: ↵ goes to the name form (the message is not sent: a key must not go out by habit), ⌘↵ keeps it
+                // as text and sends, Esc keeps it as text.
+                const caught = secretCatchRef.current
+                if (caught && e.key === 'enter' && e.modifiers?.cmd) { e.preventDefault(); keepSecret(true); return }
+                if (caught?.phase === 'detected' && e.key === 'enter' && !e.modifiers?.shift && !e.modifiers?.alt && !e.modifiers?.ctrl) {
+                  e.preventDefault()
+                  if (secretWorkspace) setSecretCatch({ ...caught, phase: 'name' })
+                  return
+                }
+                if (caught && e.key === 'escape') { e.preventDefault(); keepSecret(false); return }
                 // ⌘↵ steers even when a completion menu is open.
                 if (e.key === 'enter' && e.modifiers?.cmd && !e.modifiers.shift) {
                   e.preventDefault()

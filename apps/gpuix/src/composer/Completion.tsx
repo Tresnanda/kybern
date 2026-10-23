@@ -480,6 +480,12 @@ export function useCompletion({
     setThreadRefs([])
     setMentionRefs([])
   }
+  /** A chip the composer itself makes (a stored secret, a pointed-at element): registered as a mention, shown as `token`. */
+  const addChip = (part: ComposerMentionReference['part'], token: string): TokenReference => {
+    const reference = { token, part }
+    setMentionRefs(list => [...list.filter(r => r.part.path !== part.path && r.token !== token), reference])
+    return mentionReference(reference)
+  }
   const snapshot = (): DraftReferences => ({ mentioned, picked, threads: threadRefs, mentions: mentionRefs })
   /** Adds a sent draft's chips back (a failed send's Edit); setters only, so a stale closure is safe. */
   const restore = (refs: DraftReferences) => {
@@ -514,7 +520,7 @@ export function useCompletion({
     ...[...mentioned].map(fileReference),
     ...[...picked.values()].map(skillReference),
   ].filter(r => text.includes(r.token))
-  return { menu, onKey, buildParts, reset, snapshot, restore, tokens, open: open && items.length > 0 }
+  return { menu, onKey, buildParts, reset, snapshot, restore, addChip, tokens, open: open && items.length > 0 }
 }
 
 const NO_NOTES: NoteSummary[] = []

@@ -276,6 +276,7 @@ async fn handle(State(state): State<AppState>, headers: HeaderMap, body: Bytes) 
                 return rpc_error(id, -32000, "Too many concurrent tool requests", StatusCode::TOO_MANY_REQUESTS);
             };
             let budget = crate::secrets::call_budget(name, &arguments)
+                .or_else(|| crate::pick::call_budget(name, &arguments))
                 .or_else(|| crate::lead_git::call_budget(name, &arguments))
                 .or_else(|| crate::visuals::call_budget(name, &arguments))
                 .unwrap_or(Duration::from_secs(65));

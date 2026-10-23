@@ -12,6 +12,7 @@ import { connect } from './state.ts'
 import { startSplitView } from './split/store.ts'
 import { ThemeProvider, VARIANT } from './ui.tsx'
 import { startPerfProbe } from './perf/probe.ts'
+import { startPickHub } from './pick/hub.ts'
 import { getAccessibilityDisplay } from './platform/material.ts'
 import { resolveScope, type ThemeVariant } from './platform/translucency.ts'
 import { backingFor, installWindowMaterial } from './shell/windowMaterial.ts'
@@ -34,6 +35,8 @@ function Fonts({ children }: { children: ReactNode }) {
     installFrameSource(renderer)
     // Focus that GPUIX moves takes the keyboard back from a clicked web document (`native/focusHandback.ts`).
     installFocusHandback(renderer)
+    // Point for me: the picker in the Preview and visuals, and ⌥-click anchors (`pick/hub.ts`).
+    startPickHub()
     // `registerFont` landed after @gpuix/native 0.10.0; until then the UI
     // falls back to installed fonts (SF Pro, Menlo).
     const register = (renderer as { registerFont?: (bytes: Uint8Array) => void }).registerFont

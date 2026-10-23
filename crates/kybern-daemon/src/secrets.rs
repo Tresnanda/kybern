@@ -160,20 +160,41 @@ pub(crate) struct SecretTarget {
 
 /// Resolve and check the file before any prompt. Every failure says what to do next.
 pub(crate) async fn resolve_target(cwd: &Path, file: &str, env_key: &str) -> Result<SecretTarget> {
-    let root = tokio::fs::canonicalize(cwd).await.map_err(|_| {
-        anyhow!("This chat's workspace folder is missing. Ask the user to restore it, then call kybern_request_secret again.")
-    })?;
+    let check = inspect_target(cwd, file, env_key, "call kybern_request_secret again").await?;
+    if check.in_repo && !check.ignored {
+        let file = &check.target.display;
+        bail!("`{file}` is not ignored by git. Add it to .gitignore, then call kybern_request_secret again.");
+    }
+    Ok(check.target)
+}
+
+/// A checked target and what git says about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TargetCheck {
+    pub target: SecretTarget,
+    /// The file sits in a git work tree.
+    pub in_repo: bool,
+    /// Git ignores the file (always true outside a repository).
+    pub ignored: bool,
+    /// Git tracks the file, so a secret written to it would be committed.
+    pub tracked: bool,
+    /// The file already exists.
+    pub exists: bool,
+}
+
+/// [`resolve_target`] without the ignore requirement: reports what git says
+/// instead. `again` ends each error's next step ("try again").
+pub(crate) async fn inspect_target(cwd: &Path, file: &str, env_key: &str, again: &str) -> Result<TargetCheck> {
+    let root = tokio::fs::canonicalize(cwd)
+        .await
+        .map_err(|_| anyhow!("This chat's workspace folder is missing. Ask the user to restore it, then {again}."))?;
     let requested = Path::new(file);
     let joined = if requested.is_absolute() { requested.to_path_buf() } else { root.join(requested) };
-    let outside = || {
-        anyhow!(
-            "`{file}` is outside this workspace. Use a path inside the workspace folder, such as `.env`, then call kybern_request_secret again."
-        )
-    };
+    let outside = || anyhow!("`{file}` is outside this workspace. Use a path inside the workspace folder, such as `.env`, then {again}.");
     let name = joined
         .file_name()
         .map(ToOwned::to_owned)
-        .ok_or_else(|| anyhow!("`{file}` does not name a file. Pass a file name such as `.env`, then call kybern_request_secret again."))?;
+        .ok_or_else(|| anyhow!("`{file}` does not name a file. Pass a file name such as `.env`, then {again}."))?;
     let parent = joined.parent().ok_or_else(outside)?;
     let parent = match tokio::fs::canonicalize(parent).await {
         Ok(parent) => parent,
@@ -183,10 +204,10 @@ pub(crate) async fn resolve_target(cwd: &Path, file: &str, env_key: &str) -> Res
             if requested.components().any(|part| matches!(part, std::path::Component::ParentDir)) {
                 return Err(outside());
             }
-            bail!("The folder for `{file}` does not exist. Create it first, then call kybern_request_secret again.");
+            bail!("The folder for `{file}` does not exist. Create it first, then {again}.");
         }
         Err(error) => {
-            bail!("Cannot open the folder for `{file}` ({}). Check its permissions, then call kybern_request_secret again.", error.kind())
+            bail!("Cannot open the folder for `{file}` ({}). Check its permissions, then {again}.", error.kind())
         }
     };
     if !parent.starts_with(&root) {
@@ -197,46 +218,48 @@ pub(crate) async fn resolve_target(cwd: &Path, file: &str, env_key: &str) -> Res
 
     let existing = match tokio::fs::symlink_metadata(&path).await {
         Ok(metadata) if metadata.file_type().is_symlink() => {
-            bail!("`{file}` is a symbolic link. Point file at the real file inside the workspace, then call kybern_request_secret again.")
+            bail!("`{file}` is a symbolic link. Point file at the real file inside the workspace, then {again}.")
         }
         Ok(metadata) if !metadata.is_file() => {
-            bail!("`{file}` is not a regular file. Choose an env file such as `.env`, then call kybern_request_secret again.")
+            bail!("`{file}` is not a regular file. Choose an env file such as `.env`, then {again}.")
         }
         Ok(metadata) if metadata.len() > MAX_ENV_FILE_BYTES => {
-            bail!("`{file}` is larger than 1 MiB, so it is not an env file. Choose another file, then call kybern_request_secret again.")
+            bail!("`{file}` is larger than 1 MiB, so it is not an env file. Choose another file, then {again}.")
         }
         Ok(_) => Some(
             tokio::fs::read(&path)
                 .await
-                .map_err(|error| {
-                    anyhow!("Cannot read `{file}` ({}). Check its permissions, then call kybern_request_secret again.", error.kind())
-                })
+                .map_err(|error| anyhow!("Cannot read `{file}` ({}). Check its permissions, then {again}.", error.kind()))
                 .and_then(|bytes| {
-                    String::from_utf8(bytes)
-                        .map_err(|_| anyhow!("`{file}` is not UTF-8 text. Choose an env file, then call kybern_request_secret again."))
+                    String::from_utf8(bytes).map_err(|_| anyhow!("`{file}` is not UTF-8 text. Choose an env file, then {again}."))
                 })?,
         ),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => bail!("Cannot inspect `{file}` ({}). Check its permissions, then call kybern_request_secret again.", error.kind()),
+        Err(error) => bail!("Cannot inspect `{file}` ({}). Check its permissions, then {again}.", error.kind()),
     };
 
-    if Repo::is_repo(&parent).await {
+    let in_repo = Repo::is_repo(&parent).await;
+    let (mut ignored, mut tracked) = (true, false);
+    if in_repo {
+        let repo = Repo::new(&parent);
         // "./" keeps a file name from being read as a pathspec or an option.
-        let ignored = Repo::new(&parent).is_ignored(&format!("./{name}")).await.map_err(|error| {
-            anyhow!("Could not ask git whether `{file}` is ignored ({error}). Fix the repository, then call kybern_request_secret again.")
-        })?;
-        if !ignored {
-            bail!("`{file}` is not ignored by git. Add it to .gitignore, then call kybern_request_secret again.");
-        }
+        ignored = repo
+            .is_ignored(&format!("./{name}"))
+            .await
+            .map_err(|error| anyhow!("Could not ask git whether `{file}` is ignored ({error}). Fix the repository, then {again}."))?;
+        tracked = repo.is_tracked(&format!("./{name}")).await.unwrap_or(false);
     }
 
     // Fail before asking when the folder cannot take the write the answer needs.
-    drop(TempFile::create(&path).map_err(|error| {
-        anyhow!("Kybern cannot write next to `{file}` ({}). Make the folder writable, then call kybern_request_secret again.", error.kind())
-    })?);
+    drop(
+        TempFile::create(&path)
+            .map_err(|error| anyhow!("Kybern cannot write next to `{file}` ({}). Make the folder writable, then {again}.", error.kind()))?,
+    );
 
     let display = path.strip_prefix(&root).map(display_path).unwrap_or_else(|_| name.clone());
-    Ok(SecretTarget { replaces: existing.as_deref().is_some_and(|text| env_has_key(text, env_key)), path, display })
+    let exists = existing.is_some();
+    let target = SecretTarget { replaces: existing.as_deref().is_some_and(|text| env_has_key(text, env_key)), path, display };
+    Ok(TargetCheck { target, in_repo, ignored, tracked, exists })
 }
 
 fn display_path(relative: &Path) -> String {
@@ -380,6 +403,109 @@ pub(crate) fn write_env_value(path: &Path, key: &str, value: &str) -> Result<boo
     std::fs::rename(&temp.path, path).context("replace the env file")?;
     temp.keep = true;
     Ok(replaced)
+}
+
+// ---- pasted secrets ----
+
+const TRY_AGAIN: &str = "try again";
+
+/// What storing `env_key` in `file` would do, for the composer's strip. Never sees a value.
+pub(crate) async fn check_pasted(cwd: &Path, file: Option<&str>, env_key: &str) -> Result<kybern_protocol::methods::SecretsTargetResult> {
+    if !valid_key(env_key) {
+        bail!("Use letters, digits and underscores for the name, and do not start with a digit.");
+    }
+    let check = inspect_target(cwd, file_or_default(file), env_key, TRY_AGAIN).await?;
+    Ok(kybern_protocol::methods::SecretsTargetResult {
+        file: check.target.display,
+        replaces: check.target.replaces,
+        ignored: check.ignored,
+        tracked: check.tracked,
+        exists: check.exists,
+    })
+}
+
+/// Save a secret the user pasted into the composer. Same file rules as the
+/// request card (inside the workspace, ignored by git), plus: a tracked file is
+/// always refused, and `add_to_gitignore` first lists the file in the
+/// `.gitignore` beside it. The value goes only to the file.
+pub(crate) async fn store_pasted(
+    cwd: &Path,
+    file: Option<&str>,
+    env_key: &str,
+    value: String,
+    add_to_gitignore: bool,
+) -> Result<kybern_protocol::methods::SecretsStoreResult> {
+    if !valid_key(env_key) {
+        bail!("Use letters, digits and underscores for the name, and do not start with a digit.");
+    }
+    if value.is_empty() || value.len() > kybern_protocol::MAX_SECRET_BYTES || value.contains('\0') {
+        bail!("Paste a value of up to {} KiB.", kybern_protocol::MAX_SECRET_BYTES / 1024);
+    }
+    let mut check = inspect_target(cwd, file_or_default(file), env_key, TRY_AGAIN).await?;
+    if check.tracked {
+        let name = &check.target.display;
+        bail!(
+            "Git tracks `{name}`, so a key stored there would be committed. Choose a file Git ignores, such as `.env.local`, then try again."
+        );
+    }
+    let mut gitignore_updated = false;
+    if check.in_repo && !check.ignored {
+        let name = check.target.display.clone();
+        if !add_to_gitignore {
+            bail!("`{name}` is not ignored by git. Add it to .gitignore, then try again.");
+        }
+        let file_name = check.target.path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        let folder = check.target.path.parent().map(Path::to_path_buf).unwrap_or_default();
+        let entry = format!("/{file_name}");
+        let ignore_file = folder.join(".gitignore");
+        let line = entry.clone();
+        tokio::task::spawn_blocking(move || append_gitignore(&ignore_file, &line))
+            .await
+            .map_err(|_| anyhow!("Kybern could not update .gitignore. Add `{entry}` to it yourself, then try again."))??;
+        gitignore_updated = true;
+        check = inspect_target(cwd, file_or_default(file), env_key, TRY_AGAIN).await?;
+        if !check.ignored {
+            bail!("`{name}` is still not ignored by git after updating .gitignore. Check your ignore rules, then try again.");
+        }
+    }
+    let target = check.target;
+    let (path, key) = (target.path.clone(), env_key.to_owned());
+    let replaced = tokio::task::spawn_blocking(move || write_env_value(&path, &key, &value))
+        .await
+        .map_err(|_| anyhow!("Kybern could not save the key. Nothing was written; try again."))?
+        .map_err(|error| {
+            anyhow!(
+                "Kybern could not save the key to {}: {error:#}. The value was discarded; fix the problem, then try again.",
+                target.display
+            )
+        })?;
+    Ok(kybern_protocol::methods::SecretsStoreResult { env_key: env_key.to_owned(), file: target.display, replaced, gitignore_updated })
+}
+
+fn file_or_default(file: Option<&str>) -> &str {
+    file.map(str::trim).filter(|file| !file.is_empty()).unwrap_or(DEFAULT_FILE)
+}
+
+/// Append `line` to `.gitignore` unless a line already says it. Keeps the file's other content.
+fn append_gitignore(path: &Path, line: &str) -> Result<()> {
+    let _guard = ENV_WRITE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut text = match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            bail!("`.gitignore` is not a regular file. Add `{line}` to your ignore rules yourself, then try again.")
+        }
+        Ok(_) => std::fs::read_to_string(path).map_err(|_| anyhow!("Cannot read .gitignore. Check its permissions, then try again."))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error).context("inspect .gitignore"),
+    };
+    if text.lines().any(|existing| existing.trim() == line) {
+        return Ok(());
+    }
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(line);
+    text.push('\n');
+    std::fs::write(path, text).context("write .gitignore")
 }
 
 #[cfg(test)]
@@ -543,6 +669,61 @@ mod tests {
     fn git(dir: &Path, args: &[&str]) {
         let status = std::process::Command::new("git").arg("-C").arg(dir).args(args).status().unwrap();
         assert!(status.success(), "git {args:?}");
+    }
+
+    #[tokio::test]
+    async fn pasted_keys_go_to_an_ignored_file_and_never_to_a_tracked_one() {
+        let dir = Dir::new();
+        // Outside a repository any file inside the workspace works, and the check never needs a value.
+        let check = check_pasted(&dir.0, None, "STRIPE_SECRET_KEY").await.unwrap();
+        assert_eq!((check.file.as_str(), check.ignored, check.tracked, check.exists, check.replaces), (".env", true, false, false, false));
+        let stored = store_pasted(&dir.0, Some(".env.local"), "STRIPE_SECRET_KEY", "sk_live_abc".into(), false).await.unwrap();
+        assert_eq!((stored.file.as_str(), stored.replaced, stored.gitignore_updated), (".env.local", false, false));
+        assert_eq!(std::fs::read_to_string(dir.path(".env.local")).unwrap(), "STRIPE_SECRET_KEY=sk_live_abc\n");
+        let again = store_pasted(&dir.0, Some(".env.local"), "STRIPE_SECRET_KEY", "sk_live_def".into(), false).await.unwrap();
+        assert!(again.replaced);
+        assert!(check_pasted(&dir.0, Some(".env.local"), "STRIPE_SECRET_KEY").await.unwrap().replaces);
+
+        // In a repository an unignored file is refused until the person lets Kybern list it.
+        git(&dir.0, &["init", "-q"]);
+        let error = store_pasted(&dir.0, Some("app.secrets"), "K", "v".into(), false).await.unwrap_err().to_string();
+        assert!(error.contains("`app.secrets` is not ignored by git. Add it to .gitignore, then try again."), "{error}");
+        assert!(!check_pasted(&dir.0, Some("app.secrets"), "K").await.unwrap().ignored);
+        let stored = store_pasted(&dir.0, Some("app.secrets"), "K", "v".into(), true).await.unwrap();
+        assert!(stored.gitignore_updated);
+        assert_eq!(std::fs::read_to_string(dir.path(".gitignore")).unwrap(), "/app.secrets\n");
+        assert_eq!(std::fs::read_to_string(dir.path("app.secrets")).unwrap(), "K=v\n");
+        // Listing it twice does not duplicate the line, and an existing .gitignore keeps its other lines.
+        dir.write(".gitignore", "target");
+        store_pasted(&dir.0, Some("other"), "K", "v".into(), true).await.unwrap();
+        assert_eq!(std::fs::read_to_string(dir.path(".gitignore")).unwrap(), "target\n/other\n");
+        append_gitignore(&dir.path(".gitignore"), "/other").unwrap();
+        assert_eq!(std::fs::read_to_string(dir.path(".gitignore")).unwrap(), "target\n/other\n");
+
+        // A tracked file is refused even when .gitignore lists it.
+        dir.write("tracked.env", "A=1\n");
+        git(&dir.0, &["add", "-f", "tracked.env"]);
+        dir.write(".gitignore", "tracked.env\n");
+        assert!(check_pasted(&dir.0, Some("tracked.env"), "K").await.unwrap().tracked);
+        let error = store_pasted(&dir.0, Some("tracked.env"), "K", "v".into(), true).await.unwrap_err().to_string();
+        assert!(error.contains("Git tracks `tracked.env`"), "{error}");
+        assert_eq!(std::fs::read_to_string(dir.path("tracked.env")).unwrap(), "A=1\n");
+    }
+
+    #[tokio::test]
+    async fn pasted_keys_are_validated_before_anything_is_written() {
+        let dir = Dir::new();
+        assert!(
+            store_pasted(&dir.0, None, "1BAD", "v".into(), false)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("letters, digits and underscores")
+        );
+        assert!(store_pasted(&dir.0, None, "OK", String::new(), false).await.is_err());
+        assert!(store_pasted(&dir.0, None, "OK", "a\0b".into(), false).await.is_err());
+        assert!(store_pasted(&dir.0, Some("../outside"), "OK", "v".into(), false).await.is_err());
+        assert!(!dir.path(".env").exists());
     }
 
     #[tokio::test]

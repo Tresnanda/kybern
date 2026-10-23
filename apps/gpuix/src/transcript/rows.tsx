@@ -4,6 +4,7 @@ import { LaunchMember, PinRow } from '../subagents/Launch.tsx'
 import { AgentItemCard } from '../coordinator/AgentItem.tsx'
 import { SentToRow } from './Messages.tsx'
 import { openThread } from '../nav/history.ts'
+import { pickRecordText, pickRequestInput } from '../../../../packages/kybern-client/src/pickRequest.ts'
 import { secretRequestInput, secretOutcomeLine, secretPartsText } from '../../../../packages/kybern-client/src/secretRequest.ts'
 import { answerRowText, visualAnswerInput } from '../../../../packages/kybern-client/src/visualAnswer.ts'
 import { coordinatorCardLine, cardPartsText } from '../../../../packages/kybern-client/src/coordinatorCards.ts'
@@ -138,6 +139,8 @@ export function approvalRowText(approval: ApprovalRequest, decision: ApprovalDec
   if (secret) return secretPartsText(secretOutcomeLine(secret, decision, live))
   const asked = visualAnswerInput(approval)
   if (asked) return answerRowText(asked.title, decision)
+  const pick = pickRequestInput(approval)
+  if (pick) return pickRecordText(pick, decision, live)
   const coordinator = coordinatorCardLine(approval, decision, live)
   if (coordinator) return cardPartsText(coordinator)
   const connector = connectorApproval(approval)

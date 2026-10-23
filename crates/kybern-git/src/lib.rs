@@ -185,6 +185,23 @@ impl Repo {
         }
     }
 
+    /// Whether git tracks `path` (in the index), so writing a secret to it would put the secret in commits.
+    pub async fn is_tracked(&self, path: &str) -> Result<bool> {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&self.workdir)
+            .args(["ls-files", "--error-unmatch", "--"])
+            .arg(path)
+            .envs(self.env.iter().map(|(k, v)| (k, v)))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .await
+            .context("run git")?;
+        Ok(out.status.success())
+    }
+
     pub async fn toplevel(&self) -> Result<PathBuf> {
         Ok(PathBuf::from(self.git(&["rev-parse", "--show-toplevel"]).await?))
     }

@@ -9,6 +9,8 @@ export type WebEvent = { id: string; generation?: number; type: string; message?
 let bridge: ReturnType<typeof load> | undefined, wake: JSCallback | undefined
 let nextGeneration = 0
 let pointerCaptures = 0
+/** Documents that were created and not yet destroyed (the picker looks for the live visuals of a thread). */
+const live = new Set<string>()
 const listeners = new Set<(event: WebEvent) => void>()
 const occlusions = new Map<number, { rect: LayoutRect; radius: number; dim: number; order: number; inputOnly: boolean }>()
 function load(file: string) {
@@ -17,6 +19,24 @@ function load(file: string) {
     kybern_web_next: { args: [], returns: FFIType.cstring },
     kybern_web_command: { args: [FFIType.ptr], returns: FFIType.void },
   })
+}
+let requestId = 0
+const pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>()
+/** One native request, answered by a `frameResult` or `snapshot` event with its `rid`. */
+function request(rid: string, send: () => void, timeoutMs = 8000): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { pending.delete(rid); reject(new Error('The page did not answer. Reload it and try again.')) }, timeoutMs)
+    pending.set(rid, { resolve, reject, timer })
+    try { send() } catch (error) { clearTimeout(timer); pending.delete(rid); reject(error as Error) }
+  })
+}
+function settle(event: WebEvent) {
+  const rid = (event as WebEvent & { rid?: string }).rid, entry = rid ? pending.get(rid) : undefined
+  if (!rid || !entry) return
+  pending.delete(rid); clearTimeout(entry.timer)
+  const raw = event as WebEvent & { ok?: boolean; value?: unknown; path?: string; width?: number; height?: number }
+  if (raw.ok) entry.resolve(event.type === 'snapshotRect' ? { path: raw.path, width: raw.width, height: raw.height } : raw.value)
+  else entry.reject(new Error(event.message || 'The page could not do that.'))
 }
 function initialize() {
   if (bridge) return
@@ -30,6 +50,7 @@ function initialize() {
       const raw = loaded.symbols.kybern_web_next()
       if (!raw) break
       const event = JSON.parse(String(raw)) as WebEvent
+      if (event.type === 'frameResult' || event.type === 'snapshotRect') settle(event)
       for (const listener of listeners) { try { listener(event) } catch (e) { console.error('[webview]', e) } }
     }
   }, { args: [], returns: FFIType.void, threadsafe: true })
@@ -74,6 +95,7 @@ export const webHost = {
   create(id: string, url: string, kind: 'file' | 'server' | 'visual') {
     const generation = ++nextGeneration
     command({ op: 'create', id, category: kind === 'visual' ? 'visual' : 'preview', generation, allowedOrigins: [new URL(url).origin], html: webDocument(url, kind) })
+    live.add(id)
     return generation
   },
   place(id: string, rect: LayoutRect, clip: LayoutRect, logical: { width: number; height: number; scale: number; left: number; top: number; radius?: number; roundedClips?: RoundedLayoutClip[] | null }, visible = true, layer = 0) {
@@ -103,7 +125,24 @@ export const webHost = {
   theme(id: string, theme: unknown) { command({ op: 'post', id, script: `window.kybernTheme?.(${JSON.stringify(theme)})` }) },
   navigate(id: string, url: string) { command({ op: 'navigate', id, url }) },
   action(id: string, action: 'reload' | 'back' | 'forward' | 'stop') { command({ op: 'action', id, action }) },
-  destroy(id: string) { if (bridge) command({ op: 'destroy', id }) },
+  destroy(id: string) { live.delete(id); if (bridge) command({ op: 'destroy', id }) },
+  /** Ids of the documents that exist now (created, not destroyed). */
+  documents(): string[] { return [...live] },
+  /** Give the document the keyboard (picking: Esc is read by the page). */
+  focus(id: string) { if (bridge) command({ op: 'focus', id }) },
+  /**
+   * Run `script` in the page's frame in Kybern's isolated world (`native/webview.m` `frame`): the page shares the DOM but cannot
+   * reach this script's globals. Resolves with the script's JSON value; rejects when the page has not loaded or the script throws.
+   */
+  frame(id: string, script: string): Promise<unknown> {
+    const rid = String(++requestId)
+    return request(rid, () => command({ op: 'frame', id, script, rid }))
+  },
+  /** A PNG of a rectangle of the page (CSS pixels in the page's viewport) saved to `path`, which must be under the temp folder. */
+  snapshotRect(id: string, rect: { x: number; y: number; width: number; height: number }, path: string): Promise<{ path: string; width: number; height: number }> {
+    const rid = String(++requestId)
+    return request(rid, () => command({ op: 'snapshotRect', id, rid, path, ...rect })) as Promise<{ path: string; width: number; height: number }>
+  },
   capturePointer() {
     if (++pointerCaptures === 1 && bridge) command({ op: 'capture', id: '', active: true })
     let live = true

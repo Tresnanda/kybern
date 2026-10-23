@@ -1361,6 +1361,69 @@ pub struct ComputerNoteSetParams {
 // Notes reach every later agent session, like settings do.
 method!(ComputerNoteSet, "computer.notes.set", Some(Scope::OrchestrationOperate), ComputerNoteSetParams, ComputerNotesResult);
 
+// ---- pasted secrets ----
+
+/// Where `secrets.store` and `secrets.target` look: a thread's workspace, or the
+/// project's folder for a chat that has not started yet. Pass exactly one.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct SecretsWorkspace {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<ThreadId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SecretsTargetParams {
+    #[serde(flatten)]
+    pub workspace: SecretsWorkspace,
+    pub env_key: String,
+    /// Env file relative to the workspace. Default `.env`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+}
+
+/// What storing into a file would do, checked without a value.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SecretsTargetResult {
+    /// The file relative to the workspace, e.g. `.env`.
+    pub file: String,
+    /// The key is already in the file; storing replaces it.
+    pub replaces: bool,
+    /// Git ignores the file (true outside a repository).
+    pub ignored: bool,
+    /// Git tracks the file, so it can never take a secret.
+    pub tracked: bool,
+    /// The file already exists.
+    pub exists: bool,
+}
+method!(SecretsTarget, "secrets.target", Some(Scope::OrchestrationOperate), SecretsTargetParams, SecretsTargetResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SecretsStoreParams {
+    #[serde(flatten)]
+    pub workspace: SecretsWorkspace,
+    pub env_key: String,
+    /// The secret. Written to the file and never stored, traced or returned.
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// Add the file to the `.gitignore` next to it first, when git does not ignore it yet.
+    #[serde(default)]
+    pub add_to_gitignore: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SecretsStoreResult {
+    pub env_key: String,
+    pub file: String,
+    pub replaced: bool,
+    /// The daemon added the file to `.gitignore`.
+    pub gitignore_updated: bool,
+}
+// Writes a file in the workspace, like a settings change, so it needs the same scope as the card's answer.
+method!(SecretsStore, "secrets.store", Some(Scope::OrchestrationOperate), SecretsStoreParams, SecretsStoreResult);
+
 // ---- usage ----
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
@@ -3169,6 +3232,8 @@ registry!(
     ComputerFrameGet,
     ComputerNotesList,
     ComputerNoteSet,
+    SecretsTarget,
+    SecretsStore,
     UsageSummary,
     UsageLimits,
     PairingCreate,

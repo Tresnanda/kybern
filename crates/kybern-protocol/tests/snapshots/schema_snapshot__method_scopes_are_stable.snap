@@ -226,6 +226,10 @@ expression: scopes
   - "orchestration:read"
 - - computer.notes.set
   - "orchestration:operate"
+- - secrets.target
+  - "orchestration:operate"
+- - secrets.store
+  - "orchestration:operate"
 - - usage.summary
   - "orchestration:read"
 - - usage.limits
