@@ -85,7 +85,10 @@ export function VisualSlot({ id, height, active, radius = 0 }: { id: string; hei
     }
     placements.set(id, place)
     const stop = observeElementBounds(renderer, ref.current.id, bounds => { latest = bounds; place() })
-    return () => { stop(); if (placements.get(id) === place) { placements.delete(id); webHost.hide(id) } }
+    // The native host is created once the frame ticket arrives, often after the box was first placed (a place for a
+    // host that does not exist yet is dropped): place it again when it exists, or the page stays blank and unclickable.
+    const unsubscribe = webHost.subscribe(event => { if (event.id === id && (event.type === 'created' || event.type === 'loaded') && placements.get(id) === place) place() })
+    return () => { stop(); unsubscribe(); if (placements.get(id) === place) { placements.delete(id); webHost.hide(id) } }
   }, [renderer, id, layer, active, radius])
   return <div ref={ref} testId="visual-frame" style={{ height, width: '100%', flexShrink: 0 }} />
 }
