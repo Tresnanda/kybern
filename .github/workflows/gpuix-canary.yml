@@ -91,7 +91,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
-          toolchain: stable
+          toolchain: "1.99.1"
           targets: aarch64-apple-darwin
       - name: Install the GPUIX Rust toolchain
         run: rustup toolchain install 1.97.1 --profile minimal --target aarch64-apple-darwin

@@ -71,7 +71,7 @@ jobs:
             libvulkan1 mesa-vulkan-drivers vulkan-tools xvfb xauth imagemagick fonts-dejavu-core
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
-          toolchain: stable
+          toolchain: "1.99.1"
       - name: Install the GPUIX Rust toolchain
         run: rustup toolchain install 1.97.1 --profile minimal
       - uses: oven-sh/setup-bun@v2
