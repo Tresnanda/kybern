@@ -16,6 +16,7 @@ import { alpha, muted, Para } from './kit.tsx'
 import { useFresh } from './motion.tsx'
 import { usePaneAccess } from '../state.ts'
 import { openTabFromPane } from '../tabs/open.ts'
+import { useImageFiles } from './imageFiles.ts'
 
 const sizes = new Map<string, { width: number; height: number } | null>()
 
@@ -117,6 +118,8 @@ export function ResponseImage({ source, tabSource, label = 'Agent image', compac
     )
   const width = thumbnail ? 64 : Math.min(280, size?.width ?? 280)
   const height = thumbnail ? 64 : size ? Math.round((width * size.height) / size.width) : 210
+  // Painted from a file at most twice the slot wide; the viewer opens the original (`imageFiles.ts`).
+  const files = useImageFiles(src, width * 2, size?.width ?? null)
   return (
     <>
     <Rise kind="image" play={fresh} hold={!decoded} style={{ flexShrink: 0 }}>
@@ -130,11 +133,11 @@ export function ResponseImage({ source, tabSource, label = 'Agent image', compac
       onKeyDown={event => { if (event.key === 'enter' || event.key === 'space') viewer.show(false) }}
       style={{ display: 'flex', width, height, cursor: 'pointer', marginTop: compact || thumbnail ? 0 : 12, marginBottom: compact || thumbnail ? 0 : 12, flexShrink: 0, opacity: viewer.away ? 0 : 1 }}
     >
-      <img src={src} alt={label} objectFit={thumbnail ? "cover" : "contain"} onLoad={decoded ? undefined : () => setDecoded(true)}
-        style={{ width, height, borderRadius: compact ? 8 : 12, borderWidth: 1, borderColor: outline, pointerEvents: 'none' }} />
+      {files && <img src={files.inline} alt={label} objectFit={thumbnail ? "cover" : "contain"} onLoad={decoded ? undefined : () => setDecoded(true)}
+        style={{ width, height, borderRadius: compact ? 8 : 12, borderWidth: 1, borderColor: outline, pointerEvents: 'none' }} />}
     </div>
     </Rise>
-    {viewer.open && <ImageViewer testId="image-lightbox" src={src} label={label} from={viewer.open.from} source={viewer.source} finalFocus={() => {
+    {viewer.open && <ImageViewer testId="image-lightbox" src={files?.full ?? src} label={label} from={viewer.open.from} source={viewer.source} finalFocus={() => {
       const trigger = viewer.node.current
       if (trigger) {
         if (restoreFocus) restoreFocus(trigger.id)

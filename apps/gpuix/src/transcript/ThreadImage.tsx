@@ -20,23 +20,22 @@ import { Button } from '../kit/Button.tsx'
 import { ImageLightbox, ResponseImage } from './images.tsx'
 import { ImageViewer } from '../motion/ImageMorph.tsx'
 import { openTab } from '../tabs/open.ts'
+import { storeImageBytes } from './imageFiles.ts'
 
 /** Retried once after this, for an image the agent wrote moments before its reply arrived. */
 const RETRY_MS = 1500
-const CACHE_BYTES = 48 * 1024 * 1024
+const CACHE_ENTRIES = 256
 
-type Loaded = { source: string; bytes: number }
+/** `source`: the image as a cached file (`imageFiles.ts`), never a `data:` URL. */
+type Loaded = { source: string }
 type Failure = { status: number; reason: string }
 const cache = new Map<string, Loaded>()
-let cached = 0
-onEnvironmentChange(() => { cache.clear(); cached = 0 })
+onEnvironmentChange(() => cache.clear())
 
 function remember(key: string, value: Loaded) {
-  if (value.bytes > CACHE_BYTES / 4) return
-  const prior = cache.get(key)
-  if (prior) { cached -= prior.bytes; cache.delete(key) }
-  while (cache.size && cached + value.bytes > CACHE_BYTES) { const oldest = cache.keys().next().value!; cached -= cache.get(oldest)!.bytes; cache.delete(oldest) }
-  cache.set(key, value); cached += value.bytes
+  cache.delete(key)
+  cache.set(key, value)
+  while (cache.size > CACHE_ENTRIES) cache.delete(cache.keys().next().value!)
 }
 
 /** What the reader is told, by the daemon's answer. */
@@ -59,8 +58,7 @@ async function load(threadId: string, source: string, signal: AbortSignal): Prom
   if (!response.ok) throw imageFailure(response.status, await response.text().catch(() => ''))
   const media = response.headers.get('content-type')?.split(';')[0] ?? ''
   if (!media.startsWith('image/')) throw imageFailure(415, '')
-  const data = await response.arrayBuffer()
-  return { source: `data:${media};base64,${Buffer.from(data).toString('base64')}`, bytes: data.byteLength }
+  return { source: await storeImageBytes(new Uint8Array(await response.arrayBuffer()), media) }
 }
 
 export function useThreadImage(threadId: string | null, source: string) {
