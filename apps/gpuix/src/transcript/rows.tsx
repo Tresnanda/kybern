@@ -12,7 +12,7 @@ import { coordinatorCardLine, cardPartsText } from '../../../../packages/kybern-
 // (`buildWorkHierarchy`), reasoning, approvals, notices, runtime tasks, and
 // compact subagent and delegation groups. Labels and icons come from the
 // desktop's own helpers.
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { toolLine, toolVisualKind, type ToolVisualKind } from '../../../desktop/src/lib/toolActivity.ts'
 import { toolSurface, surfaceHasOutputText, surfaceOutputText, type ToolSurface } from '../../../desktop/src/lib/toolSurface.ts'
 import { hasOutputText, outputText } from '../../../desktop/src/lib/format.ts'
@@ -178,10 +178,19 @@ export const WorkRows = memo(function WorkRows({
   /** A live turn with nothing in flight: a trailing run says "thinking" (`Turn` drops its own "Thinking" row). */
   waiting?: boolean
 }) {
-  const chunks = useMemo<WorkChunk[]>(
-    () => (compact ? chunkRuns(blocks, ctx.tasksByToolCall) : blocks.map((block) => ({ kind: 'single', block }))),
-    [blocks, ctx.tasksByToolCall, compact],
-  )
+  // A streamed event re-chunks the turn; runs whose members did not change keep their chunk object, so their memoized
+  // rows skip the render (only the run that grew, or whose call settled, recounts its summary).
+  const previous = useRef(new Map<string, WorkChunk>())
+  const chunks = useMemo<WorkChunk[]>(() => {
+    if (!compact) return blocks.map((block) => ({ kind: 'single', block }))
+    const next = chunkRuns(blocks, ctx.tasksByToolCall).map((chunk) => {
+      if (chunk.kind === 'single') return chunk
+      const old = previous.current.get(chunkKey(chunk))
+      return old && old.kind === chunk.kind && old.blocks.length === chunk.blocks.length && old.blocks.every((block, i) => block === chunk.blocks[i]) ? old : chunk
+    })
+    previous.current = new Map(next.flatMap((chunk) => (chunk.kind === 'single' ? [] : [[chunkKey(chunk), chunk] as const])))
+    return next
+  }, [blocks, ctx.tasksByToolCall, compact])
   // Inside a disclosure (`TreeGroup`) every row hangs from the parent's stem; outside one `TreeItem` adds nothing.
   const places = useMemo(() => {
     const list = chunks.map(treePlace)
@@ -204,7 +213,8 @@ export const WorkRows = memo(function WorkRows({
               textOnly={i > 0 && chunks[i - 1]!.kind === 'run' && (chunks[i - 1] as Extract<WorkChunk, { kind: 'run' }>).blocks.at(-1) === chunk.block}
             />
           ) : chunk.kind === 'run' || chunk.kind === 'tools' ? (
-            <WorkRunRow blocks={chunk.blocks} ctx={ctx} liveThinkingId={liveThinkingId} waiting={waiting && i === chunks.length - 1} />
+            // Streaming reasoning is always a run's last member: only that run hears about it.
+            <WorkRunRow blocks={chunk.blocks} ctx={ctx} liveThinkingId={chunk.blocks.at(-1)?.id === liveThinkingId ? liveThinkingId : null} waiting={waiting && i === chunks.length - 1} />
           ) : (
             <LaunchGroupRow kind={chunk.kind} blocks={chunk.blocks} ctx={ctx} />
           )}
