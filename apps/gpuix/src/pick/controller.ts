@@ -27,8 +27,8 @@ const NO_PAGE: Record<PickSource, string> = {
   visual: 'No visual is showing in this chat. Scroll to it and click it once, then pick again.',
 }
 
-/** Row 1: draw the overlay in the Preview or every showing visual of the thread. */
-export async function beginElementPick(approval: ApprovalRequest, source: PickSource) {
+/** Row 1: draw the overlay in the Preview or every showing visual of the thread. `label` is the page's bar ("Click the element Claude means"). */
+export async function beginElementPick(approval: ApprovalRequest, source: PickSource, label: string) {
   endPick(approval.id)
   const threadId = approval.thread_id
   if (source === 'preview') showPreview(threadId, false)
@@ -48,7 +48,7 @@ export async function beginElementPick(approval: ApprovalRequest, source: PickSo
     })
   })
   running.set(approval.id, { hosts, off, source, threadId })
-  try { await Promise.all(hosts.map(startPicking)) }
+  try { await Promise.all(hosts.map(host => startPicking(host, label))) }
   catch { endPick(approval.id); patchPickUi(approval.id, { phase: 'ask', error: 'The page is not ready to pick from. Reload it, then pick again.' }) }
 }
 

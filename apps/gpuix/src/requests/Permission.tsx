@@ -26,7 +26,7 @@ export function permissionView(phase: string | undefined): 'ask' | 'wait' | 'off
 }
 
 /** The app, its bundle id or path, and the exact pane. */
-function AppWell({ input }: { input: PermissionRequestInput }) {
+export function AppWell({ input }: { input: PermissionRequestInput }) {
   const k = useCardTokens()
   const id = input.bundle_id ?? input.app_path
   return (

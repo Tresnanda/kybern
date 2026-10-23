@@ -66,6 +66,7 @@ const APP_TOOL_NAMES = new Set([
   "kybern_ask_user",
   "kybern_request_permission",
   "kybern_run_in_terminal",
+  "kybern_request_pick",
   "kybern_git",
   "kybern_coordinator_propose_brief",
   "kybern_coordinator_propose_settings",
@@ -116,6 +117,10 @@ function requestToolTimeoutMs(name, args) {
     case "kybern_ask_user": {
       const deadline = Number.isFinite(args?.deadline_seconds) ? Math.min(Math.max(args.deadline_seconds, 0), 14400) : 0;
       return (3600 + deadline + 60) * 1000;
+    }
+    case "kybern_request_pick": {
+      const wait = Number.isFinite(args?.timeout_seconds) ? Math.min(Math.max(args.timeout_seconds, 10), 3600) : 900;
+      return (wait + 60) * 1000;
     }
     case "kybern_run_in_terminal": {
       const wait = Number.isFinite(args?.timeout_seconds) ? Math.min(Math.max(args.timeout_seconds, 10), 1800) : 600;

@@ -86,9 +86,9 @@ export function startPickHub() {
 export const installPicker = (hostId: string) => webHost.frame(hostId, PICKER_SOURCE)
 
 /** Draw the overlay in the page and hand it the keyboard, so Esc reaches it. */
-export async function startPicking(hostId: string) {
+export async function startPicking(hostId: string, label: string) {
   await installPicker(hostId)
-  await webHost.frame(hostId, 'window.__kybernPicker.start()')
+  await webHost.frame(hostId, `window.__kybernPicker.start(${JSON.stringify(label)})`)
   webHost.focus(hostId)
 }
 

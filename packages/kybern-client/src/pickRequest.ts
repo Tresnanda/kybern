@@ -17,15 +17,20 @@ export function pickRequestInput(approval: Pick<ApprovalRequest, "tool_name" | "
 
 export const isElementPick = (kind: PickKind): boolean => kind === "preview_element" || kind === "visual_element";
 
-/** The card's title for each kind. */
-export const PICK_TITLE: Record<PickKind, string> = {
-  preview_element: "Point to the element Claude means",
-  visual_element: "Point to the element Claude means",
-  file: "Pick the file Claude should use",
-  folder: "Pick the folder Claude should use",
-  image: "Drop the image Claude should look at",
-  window: "Choose the window to capture",
-};
+/** The card's title for each kind; `agent` is the harness's short name ("Claude", "Codex"). */
+export function pickTitle(kind: PickKind, agent: string): string {
+  switch (kind) {
+    case "preview_element":
+    case "visual_element": return `Point to the element ${agent} means`;
+    case "file": return `Pick the file ${agent} should use`;
+    case "folder": return `Pick the folder ${agent} should use`;
+    case "image": return `Drop the image ${agent} should look at`;
+    case "window": return "Choose the window to capture";
+  }
+}
+
+/** The bar the page shows while picking. */
+export const pickOverlayLabel = (agent: string) => `Click the element ${agent} means`;
 
 /** The one quiet line a pick request leaves in the transcript. */
 export function pickRecordText(input: PickRequestInput, decision: ApprovalDecision | null, live = true): string {

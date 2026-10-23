@@ -84,7 +84,7 @@ export const PICKER_SOURCE = String.raw`(function () {
     '.stop kbd{font:600 10.5px/16px -apple-system,system-ui,sans-serif;padding:0 5px;border-radius:5px;background:rgba(255,255,255,.14)}' +
     '@media (prefers-reduced-motion: reduce){.dim,.bar{transition:opacity 150ms linear}.bar{transform:translate(-50%,0)}}';
 
-  function build() {
+  function build(text) {
     var host = document.createElement('div');
     host.style.cssText = 'all:initial;position:fixed;inset:0;z-index:2147483647;pointer-events:none;';
     var root = host.attachShadow({ mode: 'closed' });
@@ -93,7 +93,7 @@ export const PICKER_SOURCE = String.raw`(function () {
     var ring = document.createElement('div'); ring.className = 'ring'; root.appendChild(ring);
     var tag = document.createElement('div'); tag.className = 'tag'; root.appendChild(tag);
     var bar = document.createElement('div'); bar.className = 'bar';
-    var label = document.createElement('span'); label.textContent = 'Click the element Claude means'; bar.appendChild(label);
+    var label = document.createElement('span'); label.textContent = text || 'Click the element you mean'; bar.appendChild(label);
     var stop = document.createElement('button'); stop.className = 'stop'; stop.type = 'button';
     stop.appendChild(document.createTextNode('Stop'));
     var kbd = document.createElement('kbd'); kbd.textContent = 'esc'; stop.appendChild(kbd);
@@ -168,9 +168,9 @@ export const PICKER_SOURCE = String.raw`(function () {
   function finish(event, payload) { teardown(); post(event, payload); }
 
   window[KEY] = {
-    start: function () {
+    start: function (text) {
       if (picking) return 'picking';
-      picking = true; depth = 0; lastTarget = null; overlay = build(); listen(true);
+      picking = true; depth = 0; lastTarget = null; overlay = build(typeof text === 'string' ? text : ''); listen(true);
       try { window.focus(); } catch (error) {}
       return 'picking';
     },

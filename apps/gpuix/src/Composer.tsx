@@ -68,6 +68,7 @@ import { G } from './composer/glyphs.ts'
 import { muted, PickerItem, PickerMenu } from './composer/Menu.tsx'
 import { useCompletion } from './composer/Completion.tsx'
 import { findSecret, scanInsert, type SecretMatch } from './composer/secretCatcher.ts'
+import { isSummonedCard } from './shell/waitingLine.ts'
 import { SecretDetected, SecretNameForm, type SecretWorkspace, type StoredSecret } from './composer/SecretCatch.tsx'
 import { secretMentionPart, type MentionPart } from '../../../packages/kybern-client/src/userInput.ts'
 import { PanelEnter, PanelPresence } from './requests/Panel.tsx'
@@ -193,7 +194,8 @@ function ThreadComposer({ thread, placeholderEnter }: { thread: Thread; placehol
       placeholder={
         approval
           ? isVisualAnswerCard(approval) ? ANSWER_COPY.placeholder
-          : isUserInput(approval) && !connectorApproval(approval) ? 'Answer the questions above' : 'Resolve this approval request to continue'
+          : isUserInput(approval) && !connectorApproval(approval) ? 'Answer the questions above'
+          : isSummonedCard(approval) ? 'Choose above to continue' : 'Resolve this approval request to continue'
           : running
             ? 'Ask for follow-up changes'
             : coordinator

@@ -11,7 +11,7 @@ import { readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, basename } from 'node:path'
 import type { ApprovalRequest, FileEntry, PickRequestInput } from '../../../../packages/kybern-client/src/types.ts'
-import { PICK_TITLE, isElementPick } from '../../../../packages/kybern-client/src/pickRequest.ts'
+import { isElementPick, pickOverlayLabel, pickTitle } from '../../../../packages/kybern-client/src/pickRequest.ts'
 import { Icon, ICONS } from '../icons.tsx'
 import { G } from '../composer/glyphs.ts'
 import { uploadBytes } from '../composer/store.ts'
@@ -26,12 +26,18 @@ import { FONT_MONO } from '../theme.ts'
 import { respondApproval } from '../transcript/store.ts'
 import { Label } from '../ui.tsx'
 import { cancelTurn } from './actions.ts'
-import { CancelLink, CardShell, HintText, Hints, Kbd, OptionList, OptionRow, RequestHeader, useCardTokens, Well } from './Card.tsx'
+import { CancelLink, CardShell, HintText, Hints, Kbd, OptionList, OptionRow, RequestHeader, StatusRow, useCardTokens, Well } from './Card.tsx'
 import { keyboardAnswer } from './Panel.tsx'
 import { beginElementPick, declinePick, endPick, sendElementPick, stopElementPick } from '../pick/controller.ts'
 import { forgetPickUi, patchPickUi, usePickUi } from '../pick/store.ts'
 import { addWindowKeyHandler } from '../nav/keys.ts'
-import { openScreenRecordingSettings, screenRecordingGranted } from '../pick/screenRecording.ts'
+import { KYBERN_SCREEN_RECORDING, screenRecordingGranted } from '../pick/screenRecording.ts'
+import { openSystemSettings } from '../settings/external.ts'
+import { permissionTitle, permissionWaitingLine } from '../../../../packages/kybern-client/src/requestCards.ts'
+import { agentFor } from './choices.tsx'
+import { paneGlyph } from './glyphs.ts'
+import { AppWell } from './Permission.tsx'
+import { PhaseIn } from './summoned.tsx'
 
 const quote = (text: string) => `“${text}”`
 const DECLINE = 'Decline'
@@ -105,8 +111,8 @@ function ElementPick({ approval, input, badge }: { approval: ApprovalRequest; in
   useEffect(() => () => { endPick(approval.id); forgetPickUi(approval.id) }, [approval.id])
   const confirming = ui.phase === 'confirm' || ui.phase === 'sending'
   const rows = confirming
-    ? [{ label: 'Send this element', run: () => void sendElementPick(approval) }, { label: 'Pick again', run: () => void beginElementPick(approval, source) }, { label: DECLINE, run: () => void declinePick(approval) }]
-    : [{ label: source === 'preview' ? 'Pick in the Preview' : 'Pick in the visual', run: () => void beginElementPick(approval, source) }, { label: DECLINE, run: () => void declinePick(approval) }]
+    ? [{ label: 'Send this element', run: () => void sendElementPick(approval) }, { label: 'Pick again', run: () => void beginElementPick(approval, source, pickOverlayLabel(agentFor(approval))) }, { label: DECLINE, run: () => void declinePick(approval) }]
+    : [{ label: source === 'preview' ? 'Pick in the Preview' : 'Pick in the visual', run: () => void beginElementPick(approval, source, pickOverlayLabel(agentFor(approval))) }, { label: DECLINE, run: () => void declinePick(approval) }]
   const highlight = Math.min(ui.highlight, rows.length - 1)
   const waiting = ui.phase === 'picking' || ui.phase === 'capturing'
   const choose = (index: number, keyboard: boolean) => { if (keyboard) keyboardAnswer(); patchPickUi(approval.id, { highlight: index }); rows[index]?.run() }
@@ -133,7 +139,7 @@ function ElementPick({ approval, input, badge }: { approval: ApprovalRequest; in
   }, [picked])
   return (
     <CardShell testId="pick-panel" onKey={onKey}>
-      <RequestHeader glyph={G.target} title={confirming ? 'Send this element to Claude?' : PICK_TITLE[input.kind]} chip={{ label: source === 'preview' ? 'Preview' : 'Visual' }} badge={badge} meta={confirming || !input.prompt ? undefined : quote(input.prompt)} />
+      <RequestHeader glyph={G.target} title={confirming ? `Send this element to ${agentFor(approval)}?` : pickTitle(input.kind, agentFor(approval))} chip={{ label: source === 'preview' ? 'Preview' : 'Visual' }} badge={badge} meta={confirming || !input.prompt ? undefined : quote(input.prompt)} />
       {confirming && picked && (
         <Well style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
           {picked.shot ? <Thumb src={picked.shot.dataUri} /> : null}
@@ -143,7 +149,7 @@ function ElementPick({ approval, input, badge }: { approval: ApprovalRequest; in
       {waiting ? (
         <StatusLine glyph={ui.phase === 'picking' ? G.pointer : undefined} spinner={ui.phase === 'capturing'} label={ui.phase === 'picking' ? `Click the element in the ${where}` : 'Capturing the element…'} trailing={ui.phase === 'picking' ? '⌘ click selects the parent' : undefined} />
       ) : (
-        <OptionList label={PICK_TITLE[input.kind]}>
+        <OptionList label={pickTitle(input.kind, agentFor(approval))}>
           {rows.map((row, i) => (
             <OptionRow key={row.label} n={i + 1} label={[{ text: row.label }]} testId={`pick-row-${i + 1}`} highlighted={highlight === i && (ui.phase !== 'sending' || i === 0)} dim={ui.phase === 'sending' && i !== 0} sending={ui.phase === 'sending' && i === 0} disabled={ui.phase === 'sending'} onClick={() => choose(i, false)} />
           ))}
@@ -239,7 +245,7 @@ function PathPick({ approval, input, badge }: { approval: ApprovalRequest; input
     setError(`Choose something inside ${root ? basename(root) : 'this workspace'}, or decline and say where it is.`)
   }
   const label = selected === null ? null : selected === '' ? 'the workspace' : basename(selected)
-  const header = PICK_TITLE[input.kind]
+  const header = pickTitle(input.kind, agentFor(approval))
   return (
     <CardShell testId="pick-panel" stealFocus={false}>
       <RequestHeader glyph={folder ? ICONS.folder : G.file} title={header} chip={thread?.cwd ? { label: thread.cwd.split('/').slice(-2).join('/'), mono: true } : undefined} badge={badge} meta={input.prompt ? quote(input.prompt) : undefined} />
@@ -336,7 +342,7 @@ function ImagePick({ approval, input, badge }: { approval: ApprovalRequest; inpu
   }
   return (
     <CardShell testId="pick-panel" stealFocus={false} onKey={e => (e.key === 'enter' && held ? (void send(), true) : false)}>
-      <RequestHeader glyph={G.image} title={PICK_TITLE.image} badge={badge} meta={input.prompt ? quote(input.prompt) : undefined} />
+      <RequestHeader glyph={G.image} title={pickTitle('image', agentFor(approval))} badge={badge} meta={input.prompt ? quote(input.prompt) : undefined} />
       <div testId="pick-drop" onFileDragChange={e => setOver(!!e.hovered)} onFileDrop={e => { setOver(false); if (e.paths?.[0]) void addPath(e.paths[0]) }}
         style={{ position: 'relative', display: 'flex', flexDirection: held ? 'row' : 'column', alignItems: 'center', justifyContent: held ? 'flex-start' : 'center', gap: held ? 12 : 6, minHeight: 112, marginTop: 10, paddingLeft: 14, paddingRight: 14, borderRadius: 11, backgroundColor: over ? k.c.acc(0.10) : k.wellFill, borderWidth: 1.5, borderColor: over ? k.c.acc(0.7) : k.c.ink(0.12), borderStyle: held ? 'solid' : 'dashed' }}>
         <DropHighlight over={over} radius={11} color={k.c.acc(0.7)} width={1.5} />
@@ -377,6 +383,49 @@ function PasteListener({ onPaste }: { onPaste: () => boolean }) {
 
 // ---- window ----
 
+/**
+ * Screen Recording is off for Kybern: the permission card's ask and wait phases come first (`Permission.tsx`, spec `cards/spec.md`
+ * §6), drawn here because the grant is the client's, not the agent's app. Without it `screencapture` returns the desktop with no
+ * windows. While waiting, Kybern checks every 2 s; "Capture anyway" covers macOS reporting the grant only after a restart.
+ */
+function ScreenRecordingStep({ approval, input, badge, onReady }: { approval: ApprovalRequest; input: PickRequestInput; badge?: string; onReady: (anyway: boolean) => void }) {
+  const k = useCardTokens()
+  const [waiting, setWaiting] = useState(false)
+  const [error, setError] = useState('')
+  const permission = KYBERN_SCREEN_RECORDING
+  useEffect(() => {
+    if (!waiting) return
+    const timer = setInterval(() => { if (screenRecordingGranted() !== false) onReady(false) }, 2000)
+    return () => clearInterval(timer)
+  }, [waiting])
+  const open = () => {
+    setError('')
+    openSystemSettings(permission.url).then(() => setWaiting(true), () => setError(`Unable to open System Settings. Open ${permission.pane_label} yourself, then capture anyway.`))
+  }
+  const asked = input.prompt ? ` ${agentFor(approval)} asked: ${quote(input.prompt)}` : ''
+  return (
+    <CardShell testId="pick-panel" stealFocus={false} onKey={e => (e.key === 'enter' ? (waiting ? onReady(true) : open(), true) : false)}>
+      <RequestHeader glyph={ICONS.window} tileMark={<Icon source={paneGlyph(permission.pane)} size={14} color={k.t.text} />} title={permissionTitle(permission)} chip={{ label: 'macOS' }} badge={badge} error={error || undefined}
+        meta={`Turn on Screen Recording to capture a window. Without it the capture holds no windows.${asked}`} />
+      <PhaseIn phase={waiting ? 'wait' : 'ask'}>
+        <AppWell input={permission} />
+        {waiting && <StatusRow testId="pick-permission-status" label={permissionWaitingLine(permission)} />}
+        <Hints
+          left={<HintText>{waiting ? 'If macOS offers Quit & Reopen, this card is still here after.' : 'Kybern checks every 2 s once System Settings is open.'}</HintText>}
+          right={
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+              <Button variant="ghost" size="sm" testId="pick-decline" onKeyboard={keyboardAnswer} onClick={() => void declinePick(approval)}>{DECLINE}</Button>
+              {waiting
+                ? <Button variant="secondary" size="sm" kbd="↵" testId="pick-capture-anyway" onClick={() => onReady(true)}>Capture anyway</Button>
+                : <Button variant="primary" size="sm" kbd="↵" testId="pick-settings" onClick={open}>Open System Settings</Button>}
+            </div>
+          }
+        />
+      </PhaseIn>
+    </CardShell>
+  )
+}
+
 function WindowPick({ approval, input, badge }: { approval: ApprovalRequest; input: PickRequestInput; badge?: string }) {
   const k = useCardTokens()
   const [held, setHeld] = useState<{ assetId: string; preview: string; size: number } | null>(null)
@@ -384,14 +433,14 @@ function WindowPick({ approval, input, badge }: { approval: ApprovalRequest; inp
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const [blocked, setBlocked] = useState(() => screenRecordingGranted() === false)
+  // "Capture anyway": this process may only see the grant after a restart, while `screencapture` sees it at once.
+  const unchecked = useRef(false)
   const child = useRef<ReturnType<typeof spawn> | null>(null)
   useEffect(() => () => { child.current?.kill() }, [])
 
   const capture = () => {
     if (capturing) return
-    const granted = screenRecordingGranted()
-    setBlocked(granted === false)
-    if (granted === false) { setError('Screen Recording is off for Kybern. Turn it on in System Settings, then capture again.'); return }
+    if (!unchecked.current && screenRecordingGranted() === false) { setBlocked(true); return }
     const path = join(tmpdir(), `kybern-window-${crypto.randomUUID()}.png`)
     setCapturing(true); setError('')
     // The system's own capture: click a window (press space to switch to windows), or drag an area. Esc cancels.
@@ -415,9 +464,10 @@ function WindowPick({ approval, input, badge }: { approval: ApprovalRequest; inp
     try { await respondApproval(approval.id, { decision: 'submit', response: { asset_id: held.assetId, name: 'window.png' } }) }
     catch (e) { setSending(false); setError(errorText(e)) }
   }
+  if (blocked && !held) return <ScreenRecordingStep approval={approval} input={input} badge={badge} onReady={(anyway) => { unchecked.current = anyway; setBlocked(false) }} />
   return (
     <CardShell testId="pick-panel" stealFocus={false} onKey={e => (e.key === 'enter' ? (held ? void send() : capture(), true) : false)}>
-      <RequestHeader glyph={ICONS.window} title={PICK_TITLE.window} chip={{ label: 'Screen Recording' }} badge={badge} meta={input.prompt ? quote(input.prompt) : undefined} />
+      <RequestHeader glyph={ICONS.window} title={pickTitle('window', agentFor(approval))} chip={{ label: 'Screen Recording' }} badge={badge} meta={input.prompt ? quote(input.prompt) : undefined} />
       {held ? (
         <Well style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
           <Thumb src={held.preview} width={132} height={80} />
@@ -425,12 +475,12 @@ function WindowPick({ approval, input, badge }: { approval: ApprovalRequest; inp
         </Well>
       ) : (
         <Well>
-          <Label color={k.t.textSecondary} size={12.5} lineHeight={18}>{capturing ? 'Click a window to capture it, or press space and click, or drag an area. Esc cancels.' : blocked ? 'Screen Recording is off for Kybern, so the capture would be empty. Turn it on, then capture.' : 'Kybern opens the system capture: click a window, press space to switch between a window and an area.'}</Label>
+          <Label color={k.t.textSecondary} size={12.5} lineHeight={18}>{capturing ? 'Click a window to capture it, or press space and click, or drag an area. Esc cancels.' : 'Kybern opens the system capture: click a window, press space to switch between a window and an area.'}</Label>
         </Well>
       )}
       <Hints
         error={error}
-        left={capturing ? <HintText>Waiting for the capture…</HintText> : blocked ? <QuietAction testId="pick-settings" label="Open System Settings" onClick={openScreenRecordingSettings} /> : <HintText>The picture goes to Claude, nothing else.</HintText>}
+        left={capturing ? <HintText>Waiting for the capture…</HintText> : <HintText>{`The picture goes to ${agentFor(approval)}, nothing else.`}</HintText>}
         right={
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
             <Button variant="ghost" size="sm" testId="pick-decline" disabled={sending} onKeyboard={keyboardAnswer} onClick={() => void declinePick(approval)}>{DECLINE}</Button>

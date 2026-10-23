@@ -54,7 +54,12 @@ try {
   const steps: { step: string; ok: boolean; detail: string }[] = []
   const expect = (step: string, ok: boolean, detail: unknown) => { steps.push({ step, ok, detail: JSON.stringify(detail) }); console.log(`${ok ? 'ok  ' : 'FAIL'} ${step}: ${JSON.stringify(detail)}`) }
   try {
-    await wait(() => !!lastPage('kybern-visual-size'), 'visual layout'); await a.getByTestId('composer').waitFor(); await Bun.sleep(1200)
+    // A visual rests as a picture (ADE-69 A′): a press on empty space wakes it in place.
+    await a.getByTestId('visual-picture').waitFor({ timeoutMs: 20000 }); await a.getByTestId('composer').waitFor(); await Bun.sleep(600)
+    const figure = await a.getByTestId('visual-figure').bounds()
+    // Automation wakes it: the AppKit input helper learns its target window from the first web view.
+    await a.mouse.click({ x: figure.x + figure.width - 40, y: figure.y + figure.height / 2 })
+    await wait(() => !!lastPage('kybern-visual-size'), 'visual layout'); await Bun.sleep(1200)
     const frame = await a.getByTestId('visual-frame').bounds(), composer = await a.getByTestId('composer').bounds()
     await a.screenshot({ path: path.join(out, `app-loaded-${report ? 'before' : 'after'}.png`) })
     const pressComposer = () => send({ op: 'press', x: composer.x + composer.width / 2, y: composer.y + composer.height / 2 })

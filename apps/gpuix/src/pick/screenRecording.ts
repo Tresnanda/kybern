@@ -1,8 +1,8 @@
 // Whether Kybern may record the screen, and the way to turn it on. `screencapture` (the window capture of a pick) returns the
-// desktop without any window until the grant exists. The permission card (macOS permission requests, Camera to Screen
-// Recording) replaces `ensureScreenRecording` when it lands; this is the small interface the pick card calls until then.
+// desktop without any window until the grant exists, so the window pick first shows the permission card's ask and wait
+// phases (`requests/Pick.tsx` `ScreenRecordingStep`).
 import { dlopen, FFIType } from 'bun:ffi'
-import { spawn } from 'node:child_process'
+import type { PermissionRequestInput } from '../../../../packages/kybern-client/src/types.ts'
 
 /** True or false from CoreGraphics; null when it cannot be asked (not macOS, or the symbol is missing). */
 export function screenRecordingGranted(): boolean | null {
@@ -12,11 +12,16 @@ export function screenRecordingGranted(): boolean | null {
   } catch { return null }
 }
 
-export function openScreenRecordingSettings() {
-  spawn('open', ['x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'], { stdio: 'ignore', detached: true }).unref()
-}
-
-/** Resolves true when capture can proceed. Unknown (null) proceeds: the capture itself shows what is wrong. */
-export async function ensureScreenRecording(): Promise<boolean> {
-  return screenRecordingGranted() !== false
+/** The permission card's input for Kybern's own Screen Recording grant (what `kybern_request_permission` would send). */
+export const KYBERN_SCREEN_RECORDING: PermissionRequestInput = {
+  pane: 'screen_recording',
+  app: 'Kybern GPUIX',
+  bundle_id: 'dev.kybern.gpuix',
+  app_path: null,
+  reason: '',
+  pane_label: 'Privacy & Security › Screen & System Audio Recording',
+  url: 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
+  needs_app_added: false,
+  relaunch: true,
+  detects: true,
 }

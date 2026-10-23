@@ -125,7 +125,7 @@ export function SecretNameForm({ match, workspace, onCancel, onStored }: { match
           <Icon source={G.key} size={14} color={t.textSecondary} />
           <Label color={t.text} size={13} lineHeight={18} weight={500} style={{ flexShrink: 0 }}>Store the key privately</Label>
           <div style={{ flexGrow: 1 }} />
-          <Label color={t.textTertiary} size={12} lineHeight={16} truncate>Claude gets the name, never the value</Label>
+          <Label color={t.textTertiary} size={12} lineHeight={16} truncate>The agent gets the name, never the value</Label>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <TextField
