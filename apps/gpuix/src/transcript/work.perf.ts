@@ -13,7 +13,7 @@
 //
 // Mounted host elements and components under the transcript are counted after each window (`counters`, a fiber walk).
 import '../native/local-build.ts'
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { distribution } from '../../perf/bench/model.ts'
@@ -68,7 +68,9 @@ for (const [i, variant] of (['before', 'after', 'after', 'before'] as const).ent
     await Bun.sleep(8000)
     for (let w = 0; w < windows; w++) {
       const mark = t.mark()
-      const sample = execFileSync('bun', [path.join(GPUIX, 'perf/sample.ts'), String(seconds), `GPUIX=${run.pid}`], { encoding: 'utf8' })
+      // Asynchronously: a blocking sampler would hold the app's stderr (frame and draw lines) until after `t.result` reads it.
+      const sample = await new Promise<string>((resolve, reject) => execFile('bun', [path.join(GPUIX, 'perf/sample.ts'), String(seconds), `GPUIX=${run.pid}`], { encoding: 'utf8' }, (error, stdout) => error ? reject(error) : resolve(stdout)))
+      await Bun.sleep(50)
       const r = t.result(mark)
       const costs = t.costs.slice(mark.costs)
       const state = await work('counters').catch(() => ({}))
