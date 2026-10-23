@@ -21,7 +21,7 @@ import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { basename } from '../../../desktop/src/lib/format.ts'
 import { splitChecklistPreview } from '../../../desktop/src/lib/agentItemTools.ts'
 import { clampRows, commandRows, shellTokens, type CodeRow, type TokenKind } from './shell.ts'
-import type { CardModel, DiffLine, DiffSpec, GrantLine, Part, RowSpec, WellSpec } from './model.ts'
+import type { CardModel, DiffLine, DiffSpec, GrantLine, Part, WellSpec } from './model.ts'
 import { registerCardFocus, someoneIsTyping } from './ui.ts'
 
 /** The colours of the card's parts: Direction C's ink and accent alphas, with the glass and light variants of the well. */
@@ -284,12 +284,11 @@ export function FileWell({ path }: { path: string }) {
 /** One line per permission: its glyph, name and what it covers. */
 export function GrantWell({ lines }: { lines: GrantLine[] }) {
   const k = useCardTokens()
-  const glyph = { network: ICONS.shield, folder: ICONS.folder, tool: ICONS.shield } as const
   return (
     <Well>
       {lines.map((line, i) => (
         <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 24, minWidth: 0 }}>
-          <Icon source={line.glyph === 'folder' ? glyph.folder : line.glyph === 'network' ? T.globe : T.hammer} size={14} color={k.t.textSecondary} />
+          <Icon source={line.glyph === 'folder' ? ICONS.folder : line.glyph === 'network' ? T.globe : T.hammer} size={14} color={k.t.textSecondary} />
           <Label color={k.t.text} size={13} lineHeight={18} weight={500}>{line.name}</Label>
           <div style={{ flexGrow: 1 }} />
           {line.target && <Label color={k.t.textSecondary} size={11.5} lineHeight={16} font={FONT_MONO} truncate>{line.target}</Label>}
@@ -441,8 +440,6 @@ export function NoteField({ agent, value, onChange, onSend, onBack }: { agent: s
 export function OptionList({ children, label }: { children: ReactNode; label: string }) {
   return <div role="radiogroup" aria-label={label} style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 10, minWidth: 0 }}>{children}</div>
 }
-
-export const rowsOf = (card: CardModel): RowSpec[] => card.rows
 
 // ---- hint line ----
 

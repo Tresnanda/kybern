@@ -26,6 +26,8 @@ import { AgentItemCard } from '../coordinator/AgentItem.tsx'
 import { LaunchMember } from '../subagents/Launch.tsx'
 import type { ToolBlock } from '../transcript/store.ts'
 import { onWindowKeyDown } from '../nav/keys.ts'
+// Evidence only: a picture behind the window, so whole-window glass has something to frost (`shots.ts` sets it).
+const WALLPAPER = process.env.FIXTURE_WALLPAPER
 const at = '2026-10-15T06:00:00Z'
 let mode = 'secret', sequence = 0
 let nativeMessages: SubagentMessage[] = []
@@ -127,7 +129,8 @@ function Fixture() {
   const activeThread = useApp(s => s.open.thread)!
   if (page === 'notes') return <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: t.surface }}><Button testId="fixture-back" onClick={() => setNav({ page: 'home' })}>Back</Button><NotesPage /></div>
   if (page === 'tasks') return <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: t.surface }}><Button testId="fixture-back" onClick={() => setNav({ page: 'home' })}>Back</Button><TasksPage /></div>
-  return <div testId="fixture-ready" style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: t.surface }}>
+  return <div testId="fixture-ready" style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', position: 'relative', backgroundColor: WALLPAPER ? 'rgba(0, 0, 0, 0)' : t.surface }}>
+    {WALLPAPER && <img src={WALLPAPER} alt="" objectFit="cover" style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%' }} />}
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: 18 }}>{['secret', 'approval', 'command', 'long', 'edit', 'plan', 'connector', 'computer', 'computer-fg', 'note', 'grant', 'question', 'question-multi', 'queue', 'sending', 'codex-command', 'activity', 'permissions', 'limit', 'brief', 'settings', 'merge', 'native-live', 'native-failed', 'readonly', 'details', 'item', 'task-item', 'task-chip'].map(name => <Button key={name} testId={`fixture-${name}`} variant={selected === name ? 'secondary' : 'ghost'} onClick={() => { choose(name); show(name) }}>{name}</Button>)}</div>
     <div style={{ flexGrow: 1 }} />
     {[...new Set(calls)].map(method => <div key={method} testId={`rpc-${method}`} style={{ width: 1, height: 1 }} />)}

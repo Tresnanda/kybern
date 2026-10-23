@@ -91,4 +91,17 @@ try {
   await settle()
   await app.getByText('Question 2 of 2').waitFor({ timeoutMs: 5000 })
   console.log('ok: question digit and Return')
+
+  // 8. ⌘E expands a clamped chain (all 8 lines), and again collapses it; a short command has nothing to expand.
+  await mode('long')
+  assert.ok(await has('approval-expand'), 'a long chain clamps')
+  await app.getByTestId('approval-panel').press('cmd-e')
+  await settle()
+  await app.screenshot({ path: `${out}/after-long-expanded-dark.png` })
+  assert.equal(await app.getByTestId('approval-expand').count(), 1)
+  assert.ok((await app.call('getPaintedText', {})).text.join('\n').includes('Show less'), '⌘E expands the well')
+  await app.getByTestId('approval-panel').press('cmd-e')
+  await settle()
+  assert.ok((await app.call('getPaintedText', {})).text.join('\n').includes('Show all 8 lines'), '⌘E collapses it again')
+  console.log('ok: ⌘E expands and collapses the long chain')
 } finally { console.log(fixture.diagnostics().slice(-400)); await fixture.close(); rmSync(scratch, { recursive: true, force: true }) }
