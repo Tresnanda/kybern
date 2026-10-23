@@ -163,7 +163,8 @@ function applyActivity(summaries: ThreadActivitySummary[] | undefined) {
   const activity: NavState['activity'] = {}
   for (const summary of summaries ?? []) {
     if (summary.state) activity[summary.thread_id] = summary.state
-    if (summary.active_agents > 0) void loadChildren(summary.thread_id)
+    // Delegated children are no runtime tasks of their parent: they count in `active_children` (ADE-74).
+    if (summary.active_agents > 0 || (summary.active_children ?? 0) > 0) void loadChildren(summary.thread_id)
   }
   const current = getNav().activity
   const same =

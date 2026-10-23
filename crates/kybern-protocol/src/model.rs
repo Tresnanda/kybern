@@ -1265,6 +1265,10 @@ pub struct ThreadActivitySummary {
     pub active_agents: u32,
     pub active_processes: u32,
     pub active_monitors: u32,
+    /// Running delegated children (Kybern delegation, not provider subagents). Clients load a parent's children from this
+    /// at startup: a delegated child is no runtime task of its parent, so `active_agents` never counts it.
+    #[serde(default)]
+    pub active_children: u32,
 }
 
 /// A pending or resolved request for the user to approve a tool call.

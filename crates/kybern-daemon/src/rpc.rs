@@ -253,6 +253,17 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         ThreadsList::NAME => {
             let p: ThreadsListParams = parse_or_default(params)?;
             let mut threads = state.store.threads_list(p.project_id, p.include_archived).map_err(internal)?;
+            // Counted before the children are filtered out: a parent whose delegated children still run must say so, or a
+            // client that starts while they work never lists them.
+            let mut running_children: std::collections::HashMap<ThreadId, u32> = std::collections::HashMap::new();
+            for thread in &threads {
+                if let Some(delegation) = &thread.delegation
+                    && delegation.status == DelegationStatus::Running
+                    && thread.status != ThreadStatus::Archived
+                {
+                    *running_children.entry(delegation.parent_thread_id).or_default() += 1;
+                }
+            }
             // Subagent and delegated threads are opt-in: older clients must never list one as a normal thread.
             if let Some(parent) = p.parent_thread_id {
                 threads
@@ -264,11 +275,13 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 .iter()
                 .map(|thread| {
                     let tasks = state.store.runtime_tasks_for_thread(thread.id).map_err(internal)?;
-                    Ok(kybern_store::project_thread_activity(thread.id, &tasks))
+                    let mut summary = kybern_store::project_thread_activity(thread.id, &tasks);
+                    summary.active_children = running_children.get(&thread.id).copied().unwrap_or(0);
+                    Ok(summary)
                 })
                 .collect::<Result<Vec<_>, RpcError>>()?
                 .into_iter()
-                .filter(|summary| summary.state.is_some())
+                .filter(|summary| summary.state.is_some() || summary.active_children > 0)
                 .collect();
             ok(ThreadsListResult { threads, activity })
         }

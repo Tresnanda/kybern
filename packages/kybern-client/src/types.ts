@@ -591,6 +591,8 @@ export interface ThreadActivitySummary {
   active_agents: number;
   active_processes: number;
   active_monitors: number;
+  /** Running delegated children; absent from older daemons. */
+  active_children?: number;
 }
 
 export interface ApprovalRequest {

@@ -356,7 +356,8 @@ fn order_runtime_group(tasks: Vec<RuntimeTask>, newest_first: bool) -> Vec<Runti
 }
 
 pub fn project_thread_activity(thread_id: ThreadId, tasks: &[RuntimeTask]) -> ThreadActivitySummary {
-    let mut summary = ThreadActivitySummary { thread_id, state: None, active_agents: 0, active_processes: 0, active_monitors: 0 };
+    let mut summary =
+        ThreadActivitySummary { thread_id, state: None, active_agents: 0, active_processes: 0, active_monitors: 0, active_children: 0 };
     for task in tasks.iter().filter(|task| task.status.is_active()) {
         match task.kind {
             RuntimeTaskKind::Agent => summary.active_agents += 1,
