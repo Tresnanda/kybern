@@ -62,7 +62,8 @@ import { Toaster } from './shell/toasts.tsx'
 import { AppUpdateSurface } from './platform/UpdateSurface.tsx'
 import { TranscriptReleased } from './platform/TranscriptReleased.tsx'
 import { installWindowSurface, useTranscriptReleased } from './platform/surface.ts'
-import { useApp, usePaneCompact } from './state.ts'
+import { useApp, usePaneAccess, usePaneCompact } from './state.ts'
+import { useLaunch, useLaunchMotion } from './draft/Morph.tsx'
 import { COLUMN, GUTTER, Transcript } from './Transcript.tsx'
 import { ThreadRequests, useBlockingRequest } from './transcript/Requests.tsx'
 import { Label, REDUCED_MOTION, useMaterial, useTheme } from './ui.tsx'
@@ -327,14 +328,25 @@ function HomePage() {
 }
 
 function ConversationPage() {
+  const selectedId = useApp((s) => s.selectedId)
+  if (!selectedId) return <Draft />
+  return <ThreadPage selectedId={selectedId} />
+}
+
+/** An open thread: the transcript with the composer floating at the bottom. Mounted from the new chat, it plays the send
+ *  transition its launch describes (`draft/Morph.tsx`). */
+function ThreadPage({ selectedId }: { selectedId: string }) {
   const gutter = usePaneCompact() ? 20 : GUTTER
   const measureComposerOverlay = useMeasureComposerOverlay(1)
   const thread = useApp((s) => s.open.thread)
-  const selectedId = useApp((s) => s.selectedId)
   const blocking = useBlockingRequest()
   // A hidden window releases its transcript (`platform/surface.ts`).
   const released = useTranscriptReleased()
-  if (!selectedId) return <Draft />
+  const pane = usePaneAccess()
+  // Until the transcript loads, the listed thread already gives the composer its thread (no draft composer flashes in).
+  const listed = useApp((s) => (s.open.thread ? null : s.threads.find((th) => th.id === selectedId && !th.subagent) ?? null))
+  const launch = useLaunch(pane.id, selectedId)
+  const motion = useLaunchMotion(launch)
   return (
     <>
       {released ? <TranscriptReleased /> : (
@@ -342,17 +354,19 @@ function ConversationPage() {
           <Transcript />
         </ErrorBoundary>
       )}
-      <div ref={measureComposerOverlay} style={{ position: 'absolute', left: 0, right: 0, bottom: 0, display: 'flex', justifyContent: 'center', paddingLeft: gutter, paddingRight: gutter, paddingBottom: 16 }}>
+      <div ref={measureComposerOverlay} {...motion.overlay} style={{ position: 'absolute', left: 0, right: 0, bottom: 0, display: 'flex', justifyContent: 'center', paddingLeft: gutter, paddingRight: gutter, paddingBottom: 16 }}>
         {/* Pending approvals and questions stack on the composer; a blocking one replaces it. */}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', maxWidth: COLUMN }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', maxWidth: COLUMN, position: 'relative' }}>
+          {motion.trayGhost}
           {!thread?.subagent && <ThreadRequests />}
           {!blocking && (
             <ErrorBoundary label="the composer" compact>
-              {thread?.subagent ? thread.provider.kind === 'claude-code' ? <NativeSubagentComposer key={thread.id} thread={thread} /> : <SubagentBar thread={thread} /> : <Composer thread={thread} />}
+              {thread?.subagent ? thread.provider.kind === 'claude-code' ? <NativeSubagentComposer key={thread.id} thread={thread} /> : <SubagentBar thread={thread} /> : <Composer thread={thread ?? listed} placeholderEnter={motion.placeholderEnter} />}
             </ErrorBoundary>
           )}
         </div>
       </div>
+      {motion.layer}
     </>
   )
 }
