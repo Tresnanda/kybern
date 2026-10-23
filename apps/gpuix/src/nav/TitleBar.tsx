@@ -136,18 +136,28 @@ export function TitleBar({ panelOpen }: { panelOpen: boolean }) {
         <div style={{ position: 'absolute', left: RAIL + sidebarWidth, top: 13, width: 1, height: 20, backgroundColor: t.variant === 'dark' ? 'rgba(255, 255, 255, 0.09)' : 'rgba(0, 0, 0, 0.10)' }} />
       )}
       {settingsOpen && <SettingsBreadcrumb />}
-      {!settingsOpen && page === 'home' && splitRoot.kind === 'split' && <SplitStrips panelOpen={panelOpen} />}
-      <motion.div
-        windowDrag
-        initial={false}
-        animate={{ left: panelless ? LEADING_X : titleStart }}
-        transition={REDUCED_MOTION || instant || resizing ? { duration: 0 } : drawerSlide(panelOpen)}
-        style={{ position: 'absolute', top: 0, right: 8, height: TITLEBAR, display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 20, paddingRight: 12 }}
-      >
-        {!settingsOpen && page === 'home' && (splitRoot.kind === 'split' ? <><div windowDrag style={{ flexGrow: 1, height: '100%' }} /><PanelToggles /></> : <ThreadHeader />)}
-        {!settingsOpen && page === 'notes' && <NotesBar />}
-        {!settingsOpen && page === 'tasks' && <TasksBar />}
-      </motion.div>
+      {!settingsOpen && page === 'home' && splitRoot.kind === 'split' ? (
+        // Split (ADE-67): only the toggles, in the room `SplitStrips` leaves them. A drag region painted over the strips
+        // takes every press there first (bubble order is topmost first) and moves the window instead.
+        <>
+          <SplitStrips panelOpen={panelOpen} />
+          <div testId="split-toggles" style={{ position: 'absolute', top: 0, right: 8, height: TITLEBAR, display: 'flex', alignItems: 'center', gap: 8, paddingRight: 12 }}>
+            <PanelToggles />
+          </div>
+        </>
+      ) : (
+        <motion.div
+          windowDrag
+          initial={false}
+          animate={{ left: panelless ? LEADING_X : titleStart }}
+          transition={REDUCED_MOTION || instant || resizing ? { duration: 0 } : drawerSlide(panelOpen)}
+          style={{ position: 'absolute', top: 0, right: 8, height: TITLEBAR, display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 20, paddingRight: 12 }}
+        >
+          {!settingsOpen && page === 'home' && <ThreadHeader />}
+          {!settingsOpen && page === 'notes' && <NotesBar />}
+          {!settingsOpen && page === 'tasks' && <TasksBar />}
+        </motion.div>
+      )}
     </div>
   )
 }
@@ -335,8 +345,9 @@ export const ThreadHeader = memo(function ThreadHeader({ leafId: given, size = '
             minWidth={192}
             testId={paneId ? `handoff-menu-${paneId}` : 'handoff-menu'}
             trigger={() => (
+              // No `pointerEvents: 'auto'`: it would occlude the menu's own trigger, so the press never opened it (ADE-67).
               <Tip label="Hand off" side="bottom" disabled={!compactHandoff}>
-                <Button variant="ghost" icon="handoff" label="Hand off" size={size} style={{ pointerEvents: 'auto' }}>
+                <Button variant="ghost" icon="handoff" label="Hand off" size={size}>
                   {compactHandoff ? undefined : 'Hand off'}
                 </Button>
               </Tip>
@@ -362,7 +373,7 @@ export const ThreadHeader = memo(function ThreadHeader({ leafId: given, size = '
 
           <MenuItem id="split-right" testId={paneId ? `pane-right-${paneId}` : "header-split-right"} disabled={paneId ? !canSplitPane(root, paneId, 'horizontal') : false} icon={N.splitRight} label="Split right" shortcut="⌘\" onSelect={() => split('horizontal')} />
           <MenuItem id="split-down" testId={paneId ? `pane-down-${paneId}` : "header-split-down"} disabled={paneId ? !canSplitPane(root, paneId, 'vertical') : false} icon={N.splitDown} label="Split down" shortcut="⌘⇧\" onSelect={() => split('vertical')} />
-          {paneId && <><MenuItem id="expand-pane" label="Expand this pane" onSelect={() => maximizePane(paneId)} /><MenuItem id="close-pane" testId={`pane-close-${paneId}`} label="Close pane" icon={N.x} onSelect={() => closePane(paneId)} /></>}
+          {paneId && <><MenuItem id="expand-pane" label="Expand this pane" onSelect={() => maximizePane(paneId)} /><MenuItem id="close-pane" testId={`pane-close-${paneId}`} label="Close pane" icon={N.x} shortcut="⌘⇧W" onSelect={() => closePane(paneId)} /></>}
           {thread.subagent && (
             <>
               <MenuSeparator />
@@ -450,10 +461,10 @@ function PanelToggles() {
   )
 }
 
-/** A plain header chip (`ChatHeaderButton tone="plain"`). */
-function HeaderChip({ children, onClick, testId }: { children: ReactNode; onClick: () => void; testId?: string }) {
+/** A plain header chip (`ChatHeaderButton tone="plain"`). Without `onClick` it is a menu trigger and leaves the press to the menu. */
+function HeaderChip({ children, onClick, testId }: { children: ReactNode; onClick?: () => void; testId?: string }) {
   return (
-    <Button variant="ghost" testId={testId} onClick={onClick} style={{ gap: 6, maxWidth: 176, paddingLeft: 6, paddingRight: 6, pointerEvents: 'auto' }}>
+    <Button variant="ghost" testId={testId} onClick={onClick} style={{ gap: 6, maxWidth: 176, paddingLeft: 6, paddingRight: 6, ...(onClick ? { pointerEvents: 'auto' as const } : {}) }}>
       {children}
     </Button>
   )
@@ -474,7 +485,7 @@ function Breadcrumb({ thread, ancestors }: { thread: Thread; ancestors: Thread[]
             </Label>
           </HeaderChip>
           {index === 0 && ancestors.length >= 3 && (
-            <Menu minWidth={200} trigger={() => <HeaderChip onClick={() => {}}><Label color={t.textSecondary}>…</Label></HeaderChip>}>
+            <Menu minWidth={200} trigger={() => <HeaderChip><Label color={t.textSecondary}>…</Label></HeaderChip>}>
               {ancestors.slice(1, -1).map(parent => <MenuItem id={parent.id} key={parent.id} label={parent.title || 'Subagent'} onSelect={() => openThread(parent.id)} />)}
             </Menu>
           )}

@@ -344,7 +344,12 @@ composer's `interceptKeys` consumes never reaches the window handler.
 click calls `Window::zoom_window()`. This is a native gesture, not JS position
 updates. The title bar opts in; its buttons and rename target explicitly use
 `pointerEvents: 'auto'` to occlude the drag hitbox. A custom interactive child
-inside a drag region must do the same.
+inside a drag region must do the same, except a menu trigger's content: it
+would occlude the trigger itself, so the press never opens the menu (ADE-67:
+Hand off). A drag region must also never be painted over sibling controls:
+bubble listeners run topmost first, so its mouse-down starts the window move
+and stops propagation before the controls below see the press (ADE-67: the
+split title bar).
 
 Anchors: `lib.rs` → `mod cache_island;`; `renderer.rs` → `// Wire up events.`.
 Implementation: `patches/window_drag.rs`; React forwarding includes `motion.div`.
