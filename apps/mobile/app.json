@@ -23,17 +23,24 @@
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
         }
-      }
+      },
+      "icon": "./assets/kybern.icon"
     },
     "android": {
       "package": "dev.kybern.mobile",
-      "permissions": ["android.permission.CAMERA"]
+      "permissions": ["android.permission.CAMERA"],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/android-icon/icon-foreground.png",
+        "monochromeImage": "./assets/android-icon/icon-monochrome.png",
+        "backgroundColor": "#F4F2EE"
+      }
     },
     "plugins": [
       "expo-router",
       "expo-secure-store",
       "./plugins/withSceneLifecycle",
       "./plugins/withAndroidLocalNetworking",
+      "./plugins/withAndroidNightIcon",
       [
         "expo-camera",
         {
