@@ -20,6 +20,9 @@ import {
 } from "../src/state/runtime";
 import { optimisticThread } from "../../../packages/kybern-client/src/newChat";
 import { newThreadId } from "../src/state/ids";
+import { emptyGroupDraft } from "../src/state/groups";
+import { isGroupProject } from "../../../packages/kybern-client/src/groups";
+import { GroupWorkspace } from "../src/features/GroupWorkspace";
 import {
   Button,
   ErrorBanner,
@@ -78,6 +81,7 @@ export default function Configure() {
           permission: thread.permission_mode,
           worktree: !!thread.worktree,
           baseBranch: "",
+          ...emptyGroupDraft,
         }
       : getDraft(),
   );
@@ -98,7 +102,7 @@ export default function Configure() {
   };
   useEffect(() => {
     let alive = true;
-    if (options.projectId && !threadId)
+    if (options.projectId && !threadId && !isGroupProject(project))
       void rpc("git.branches", { project_id: options.projectId })
         .then((r) => {
           if (alive) setBranches(r.branches);
@@ -396,7 +400,10 @@ export default function Configure() {
             ),
           )}
       </Group>
-      {!threadId && project?.is_git && (
+      {!threadId && project && isGroupProject(project) && (
+        <GroupWorkspace project={project} options={options} patch={patch} />
+      )}
+      {!threadId && project?.is_git && !isGroupProject(project) && (
         <Group title="Workspace">
           <Row
             title="Use a worktree"

@@ -10,6 +10,8 @@ import { setDraft, useDraft } from "../src/state/draft";
 import { type UserMessage } from "../src/state/protocol";
 import { rpc, startNewChat, useApp } from "../src/state/runtime";
 import { newThreadId } from "../src/state/ids";
+import { groupCreateFields, supportsWorktree } from "../src/state/groups";
+import { isGroupProject } from "../../../packages/kybern-client/src/groups";
 import { optimisticThread } from "../../../packages/kybern-client/src/newChat";
 import { useLayout } from "../src/state/layout";
 import { Brand } from "../src/ui/Brand";
@@ -93,7 +95,7 @@ export default function Home() {
     const threadId = newThreadId();
     const messageId = newThreadId();
     const provider = { kind: draft.provider, instance: draft.instance };
-    const worktree = draft.worktree && project.is_git;
+    const worktree = draft.worktree && supportsWorktree(project);
     startNewChat(
       {
         threadId,
@@ -118,7 +120,9 @@ export default function Home() {
           use_worktree: worktree,
           ...(draft.model ? { model: draft.model } : {}),
           ...(draft.effort ? { effort: draft.effort } : {}),
-          ...(draft.baseBranch ? { base_branch: draft.baseBranch } : {}),
+          // A group names a base branch per repository instead.
+          ...(draft.baseBranch && !isGroupProject(project) ? { base_branch: draft.baseBranch } : {}),
+          ...groupCreateFields(project, draft, worktree),
           message: first,
           thread_id: threadId,
           message_id: id,

@@ -1,6 +1,8 @@
 import { useSyncExternalStore } from "react";
 import type { PermissionMode, ProviderKind } from "./protocol";
-export interface DraftOptions {
+import { emptyGroupDraft, type GroupDraft } from "./groups";
+/** Group choices (`GroupDraft`) apply only to the project they were made for. */
+export interface DraftOptions extends GroupDraft {
   projectId: string;
   provider: ProviderKind;
   instance: string;
@@ -19,6 +21,7 @@ let draft: DraftOptions = {
   permission: "supervised",
   worktree: true,
   baseBranch: "",
+  ...emptyGroupDraft,
 };
 const listeners = new Set<() => void>();
 export function setDraft(patch: Partial<DraftOptions>) {
