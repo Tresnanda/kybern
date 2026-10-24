@@ -93,13 +93,16 @@ pub(crate) fn tool_definition() -> kybern_drivers::NativeToolDefinition {
             "A declined card means do not retry unless the user asks. ",
             "create_branch and switch wait until agents working in this checkout have finished; switch also needs a clean tree. ",
             "Commits use the repository's git identity. Not available: tags, releases, force push, rebase, reset, deleting branches. ",
-            "Agents you delegate to never commit in this checkout; you review, commit and land their work."
+            "Agents you delegate to never commit in this checkout; you review, commit and land their work. ",
+            "Group projects hold several repositories: pass repo to act on one; status, log, diff and branches without repo cover every repository, ",
+            "and merge_child merges every repository the agent changed, or none if any conflicts."
         )
         .into(),
         input_schema: json!({
             "type": "object", "additionalProperties": false,
             "properties": {
                 "op": {"enum": ["status","log","diff","branches","create_branch","switch","commit","merge_child","push","open_pr","merge_pr"]},
+                "repo": {"type":["string","null"],"description":"Group projects: the repository to act on. Omit for status, log, diff and branches to get every repository."},
                 "limit": {"type":["integer","null"],"minimum":1,"maximum":MAX_LOG,"description":"log: how many commits. Default 20."},
                 "staged": {"type":["boolean","null"],"description":"diff: only staged changes."},
                 "path": {"type":["string","null"],"description":"diff: limit to one repository-relative path."},
@@ -124,6 +127,10 @@ pub(crate) fn tool_definition() -> kybern_drivers::NativeToolDefinition {
 #[serde(deny_unknown_fields)]
 struct RawArgs {
     op: String,
+    /// Read by `repo_arg`; `Op` itself is the same for every repository.
+    #[serde(default)]
+    #[allow(dead_code)]
+    repo: Option<String>,
     #[serde(default)]
     limit: Option<u64>,
     #[serde(default)]
@@ -170,7 +177,7 @@ impl MergeMethod {
 }
 
 /// A validated call.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Op {
     Status,
     Log { limit: usize },
@@ -296,6 +303,21 @@ impl Op {
     }
 }
 
+/// The `repo` argument: a member path relative to the group folder, `*` (every
+/// repository) or `None`. Validated like other paths; `.` is the folder itself.
+pub(crate) fn repo_arg(arguments: &Value) -> Result<Option<String>> {
+    let Some(value) = arguments.get("repo").filter(|value| !value.is_null()) else { return Ok(None) };
+    let repo = value.as_str().ok_or_else(|| anyhow!("repo must be a repository path such as \"api\"."))?.trim();
+    if repo.is_empty() {
+        return Ok(None);
+    }
+    if repo == "*" || repo == "." {
+        return Ok(Some(repo.to_owned()));
+    }
+    let repo = relative_path(repo)?;
+    Ok(Some(repo.trim_start_matches("./").trim_end_matches('/').to_owned()))
+}
+
 /// What a push will do, shown on the card.
 #[derive(Debug, Clone)]
 pub(crate) struct PushPlan {
@@ -330,6 +352,9 @@ pub(crate) struct Git {
     pub repo: Repo,
     cwd: PathBuf,
     gh: String,
+    /// Paths of nested repositories this checkout must leave alone: the other
+    /// members, when this is a group folder that is itself a repository.
+    exclude: Vec<String>,
 }
 
 impl Git {
@@ -337,7 +362,25 @@ impl Git {
         ensure!(Repo::is_repo(cwd).await, "This project is not a git repository. Ask the user to run `git init` in it, then try again.");
         let env = config.git_env.lock().unwrap_or_else(|error| error.into_inner()).clone();
         let gh = config.gh.lock().unwrap_or_else(|error| error.into_inner()).clone().unwrap_or_else(|| "gh".into());
-        Ok(Git { repo: Repo::new(cwd).with_env(env), cwd: cwd.to_path_buf(), gh })
+        Ok(Git { repo: Repo::new(cwd).with_env(env), cwd: cwd.to_path_buf(), gh, exclude: Vec::new() })
+    }
+
+    /// The same checkout, leaving the nested repositories at `exclude` out of
+    /// status, diffs, clean checks and commits.
+    pub(crate) fn excluding(mut self, exclude: Vec<String>) -> Git {
+        self.exclude = exclude;
+        self
+    }
+
+    fn is_excluded(&self, path: &str) -> bool {
+        let path = path.trim_end_matches('/');
+        self.exclude.iter().any(|nested| path == nested || path.starts_with(&format!("{nested}/")))
+    }
+
+    async fn entries(&self) -> Result<Vec<kybern_git::StatusEntry>> {
+        let mut entries = self.repo.status_entries().await?;
+        entries.retain(|entry| !self.is_excluded(&entry.path));
+        Ok(entries)
     }
 
     pub(crate) async fn current_branch(&self) -> Option<String> {
@@ -364,7 +407,7 @@ impl Git {
     }
 
     async fn require_clean(&self, why: &str) -> Result<()> {
-        let changes = self.repo.status_entries().await?.len();
+        let changes = self.entries().await?.len();
         ensure!(changes == 0, "There are {changes} uncommitted changes. Commit them first with op commit, then {why}.");
         Ok(())
     }
@@ -373,7 +416,7 @@ impl Git {
 
     pub(crate) async fn status(&self) -> Result<Value> {
         let branch = self.current_branch().await;
-        let entries = self.repo.status_entries().await?;
+        let entries = self.entries().await?;
         let (upstream, ahead_behind) = match &branch {
             Some(branch) => (self.repo.upstream(branch).await, self.repo.ahead_behind(branch).await),
             None => (None, None),
@@ -424,14 +467,14 @@ impl Git {
         let files: Vec<Value> = diff
             .files
             .iter()
+            .filter(|file| !self.is_excluded(&file.path))
             .take(MAX_CHANGES)
             .map(|file| json!({"path": file.path, "additions": file.additions, "deletions": file.deletions, "binary": file.binary}))
             .collect();
         let untracked: Vec<String> = if staged {
             Vec::new()
         } else {
-            self.repo
-                .status_entries()
+            self.entries()
                 .await?
                 .into_iter()
                 .filter(|entry| entry.code == "??")
@@ -506,7 +549,14 @@ impl Git {
     pub(crate) async fn commit(&self, message: &str, paths: Option<&[String]>) -> Result<Value> {
         let branch = self.require_feature_branch().await?;
         self.require_identity().await?;
-        ensure!(!self.repo.status_entries().await?.is_empty(), "Nothing to commit: the working tree is clean.");
+        ensure!(!self.entries().await?.is_empty(), "Nothing to commit: the working tree is clean.");
+        // "Every change" in a group folder that is a repository never adds the nested ones.
+        let everything: Vec<String> = if paths.is_none() && !self.exclude.is_empty() {
+            std::iter::once(".".to_owned()).chain(kybern_git::exclude_pathspecs(&self.exclude)).collect()
+        } else {
+            Vec::new()
+        };
+        let paths = if everything.is_empty() { paths } else { Some(everything.as_slice()) };
         let commit = self.repo.commit(message, paths).await?;
         Ok(json!({
             "status": "committed",
@@ -515,6 +565,13 @@ impl Git {
             "short": commit.chars().take(8).collect::<String>(),
             "subject": message.lines().next().unwrap_or(""),
         }))
+    }
+
+    /// What every merge needs, checked in each repository of a group before any merges.
+    pub(crate) async fn preflight_merge(&self) -> Result<()> {
+        self.require_feature_branch().await?;
+        self.require_identity().await?;
+        self.require_clean("merge").await
     }
 
     /// Merge a worktree agent's branch into the current one.

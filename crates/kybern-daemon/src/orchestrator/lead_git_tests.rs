@@ -544,3 +544,178 @@ async fn a_card_the_turn_outlives_is_cancelled_and_nothing_is_pushed() {
     assert!(git_in(&remote, &["branch", "--list", "feat"]).is_empty());
     assert!(t.fixture.store.approval_get(card).unwrap().unwrap().1, "the card was resolved");
 }
+
+/// A group project's Coordinator working in the group folder `acme`, which is
+/// itself a repository holding the member repositories `api` and `web`.
+struct GroupLead {
+    lead: LeadRepo,
+    group: std::path::PathBuf,
+    project: Project,
+}
+
+fn init_member(dir: &std::path::Path, file: &str) {
+    std::fs::create_dir_all(dir).unwrap();
+    git_in(dir, &["init", "-q"]);
+    git_in(dir, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git_in(dir, &["config", "user.name", "Lead Test"]);
+    git_in(dir, &["config", "user.email", "lead@example.com"]);
+    std::fs::write(dir.join(file), "base\n").unwrap();
+    git_in(dir, &["add", file]);
+    git_in(dir, &["commit", "-q", "-m", "init"]);
+}
+
+impl GroupLead {
+    async fn new() -> Self {
+        let mut lead = LeadRepo::new().await;
+        let group = lead.fixture.root.join("acme");
+        init_member(&group, "README.md");
+        init_member(&group.join("api"), "a.rs");
+        init_member(&group.join("web"), "w.ts");
+        let mut project = lead.fixture.project.clone();
+        project.id = Uuid::now_v7();
+        project.name = "acme".into();
+        project.path = group.to_string_lossy().into_owned();
+        project.kind = ProjectKind::Group;
+        project.members = [".", "api", "web"]
+            .iter()
+            .map(|path| ProjectMember { path: (*path).into(), name: (*path).into(), status: MemberStatus::Ok })
+            .collect();
+        lead.fixture.store.project_insert(&project).unwrap();
+        let project = lead.fixture.store.project_get(project.id).unwrap().unwrap();
+        lead.thread.project_id = project.id;
+        lead.thread.coordinator_project_id = Some(project.id);
+        lead.thread.cwd = project.path.clone();
+        lead.fixture.store.thread_upsert(&lead.thread).unwrap();
+        Self { lead, group, project }
+    }
+
+    /// A finished worktree agent of this group: on `kybern/<id>` in each named
+    /// member, with `file` committed there.
+    fn group_child(&self, edits: &[(&str, &str, &str)]) -> Thread {
+        let id = Uuid::now_v7();
+        let branch = format!("kybern/{id}");
+        let container = self.lead.fixture.root.join(format!("group-wt-{id}"));
+        let mut members = Vec::new();
+        for member in &self.project.members {
+            let edit = edits.iter().find(|(repo, _, _)| *repo == member.path);
+            let source = super::group_git::member_dir(&self.group, &member.path);
+            let mut entry = ThreadMember {
+                path: member.path.clone(),
+                name: member.name.clone(),
+                included: edit.is_some(),
+                source_path: source.to_string_lossy().into_owned(),
+                worktree: None,
+                base_branch: Some("main".into()),
+                base_commit: None,
+                worktree_state: None,
+                missing: false,
+            };
+            if let Some((_, file, content)) = edit {
+                let tree = super::group_git::member_dir(&container, &member.path);
+                git_in(&source, &["worktree", "add", "-q", "-b", &branch, &tree.to_string_lossy(), "HEAD"]);
+                std::fs::write(tree.join(file), content).unwrap();
+                git_in(&tree, &["add", file]);
+                git_in(&tree, &["commit", "-q", "-m", "child work"]);
+                entry.worktree = Some(WorktreeInfo { path: tree.to_string_lossy().into_owned(), branch: branch.clone() });
+            }
+            members.push(entry);
+        }
+        let mut child = self.lead.child(DelegationWorkspace::Worktree, DelegationStatus::Completed, Some(branch), &container);
+        child.project_id = self.project.id;
+        child.members = members;
+        self.lead.fixture.store.thread_upsert(&child).unwrap();
+        child
+    }
+
+    fn feature_branches(&self) {
+        for repo in ["api", "web"] {
+            git_in(&self.group.join(repo), &["switch", "-q", "-c", "feat"]);
+        }
+    }
+}
+
+#[tokio::test]
+async fn group_read_ops_cover_every_repository_and_the_folder_leaves_members_out() {
+    let g = GroupLead::new().await;
+    std::fs::write(g.group.join("api/new.rs"), "x\n").unwrap();
+    let status = g.lead.ok(json!({"op": "status"})).await;
+    let repos = status["repos"].as_array().unwrap();
+    assert_eq!(repos.iter().map(|r| r["repo"].clone()).collect::<Vec<_>>(), [json!("."), json!("api"), json!("web")]);
+    assert_eq!(repos[0]["clean"], json!(true), "the folder's status leaves the nested repositories out: {}", repos[0]);
+    assert_eq!(repos[1]["changes"], json!([{"code": "??", "path": "new.rs"}]));
+    assert_eq!(repos[2]["branch"], json!("main"));
+
+    let one = g.lead.ok(json!({"op": "status", "repo": "api"})).await;
+    assert_eq!((one["repo"].clone(), one["clean"].clone()), (json!("api"), json!(false)));
+    let branches = g.lead.ok(json!({"op": "branches"})).await;
+    assert_eq!(branches["repos"].as_array().unwrap().len(), 3);
+
+    std::fs::remove_dir_all(g.group.join("web")).unwrap();
+    let status = g.lead.ok(json!({"op": "log"})).await;
+    assert_eq!(status["repos"][2], json!({"repo": "web", "name": "web", "error": "web is missing"}));
+}
+
+#[tokio::test]
+async fn group_mutating_ops_need_a_repository() {
+    let g = GroupLead::new().await;
+    for args in [
+        json!({"op": "commit", "message": "m"}),
+        json!({"op": "create_branch", "name": "feat"}),
+        json!({"op": "switch", "branch": "main"}),
+        json!({"op": "push"}),
+    ] {
+        assert_eq!(g.lead.error(args).await, "Name the repository: ., api or web.");
+    }
+    assert_eq!(
+        g.lead.error(json!({"op": "status", "repo": "infra"})).await,
+        "infra isn't a repository of this project. Name one of: ., api or web."
+    );
+    assert!(g.lead.error(json!({"op": "open_pr", "title": "T", "repo": "*"})).await.contains("Create pull requests"));
+
+    // A commit in the folder itself never adds the nested repositories.
+    g.lead.ok(json!({"op": "create_branch", "name": "feat", "repo": "."})).await;
+    std::fs::write(g.group.join("notes.md"), "n\n").unwrap();
+    std::fs::write(g.group.join("api/a.rs"), "edited\n").unwrap();
+    let committed = g.lead.ok(json!({"op": "commit", "message": "Notes", "repo": "."})).await;
+    assert_eq!((committed["status"].clone(), committed["repo"].clone()), (json!("committed"), json!(".")));
+    assert_eq!(git_in(&g.group, &["show", "--name-only", "--format=", "HEAD"]), "notes.md");
+    assert_eq!(git_in(&g.group.join("api"), &["status", "--porcelain"]), "M a.rs");
+}
+
+#[tokio::test]
+async fn group_merge_child_merges_every_changed_repository() {
+    let g = GroupLead::new().await;
+    let child = g.group_child(&[("api", "b.rs", "from api\n"), ("web", "b.ts", "from web\n")]);
+    let args = json!({"op": "merge_child", "thread_id": child.id});
+    // Every member is checked before any merges: web is still on main.
+    git_in(&g.group.join("api"), &["switch", "-q", "-c", "feat"]);
+    let error = g.lead.error(args.clone()).await;
+    assert!(error.starts_with("web: ") && error.contains("Nothing was merged"), "{error}");
+    assert!(!g.group.join("api/b.rs").exists());
+    git_in(&g.group.join("web"), &["switch", "-q", "-c", "feat"]);
+
+    let merged = g.lead.ok(args.clone()).await;
+    assert_eq!(merged["status"], json!("merged"), "{merged}");
+    assert_eq!(merged["repos"].as_array().unwrap().len(), 2);
+    assert_eq!(std::fs::read_to_string(g.group.join("api/b.rs")).unwrap(), "from api\n");
+    assert_eq!(std::fs::read_to_string(g.group.join("web/b.ts")).unwrap(), "from web\n");
+    let again = g.lead.ok(args).await;
+    assert_eq!(again["status"], json!("already_merged"), "{again}");
+}
+
+#[tokio::test]
+async fn group_merge_child_merges_nothing_when_one_repository_conflicts() {
+    let g = GroupLead::new().await;
+    let child = g.group_child(&[("api", "b.rs", "from api\n"), ("web", "w.ts", "child edit\n")]);
+    g.feature_branches();
+    std::fs::write(g.group.join("web/w.ts"), "lead edit\n").unwrap();
+    git_in(&g.group.join("web"), &["commit", "-q", "-am", "Lead edit"]);
+    let api_head = git_in(&g.group.join("api"), &["rev-parse", "HEAD"]);
+
+    let result = g.lead.ok(json!({"op": "merge_child", "thread_id": child.id})).await;
+    assert_eq!(result["status"], json!("conflict"), "{result}");
+    assert_eq!(result["conflicts"], json!([{"repo": "web", "paths": ["w.ts"]}]));
+    assert_eq!(git_in(&g.group.join("api"), &["rev-parse", "HEAD"]), api_head, "the clean repository was not merged either");
+    assert_eq!(git_in(&g.group.join("web"), &["status", "--porcelain"]), "");
+    assert_eq!(std::fs::read_to_string(g.group.join("web/w.ts")).unwrap(), "lead edit\n");
+}
