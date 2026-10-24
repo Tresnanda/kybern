@@ -1,7 +1,16 @@
 # Keep the mobile app and shared client sources in the EAS monorepo archive.
+# Everything else at the root stays out, local artifacts and traces especially:
+# they can hold screenshots of private conversations.
 /target/
 /dist/
 /artifacts/
+/.artifacts/
+/perf-artifacts/
+/.kybern-artifacts/
+/previews/
+/.screenshots/
+/.cursor/
+/CONTEXT.md
 /docs/
 /assets/
 /crates/
@@ -12,11 +21,6 @@
 /.cargo/
 /apps/desktop/
 /apps/gpuix/
-# Local agent artifacts, previews and notes: private, never uploaded.
-/.kybern-artifacts/
-/previews/
-/CONTEXT.md
-/.screenshots/
 **/node_modules/
 /apps/mobile/.expo/
 /apps/mobile/dist/
