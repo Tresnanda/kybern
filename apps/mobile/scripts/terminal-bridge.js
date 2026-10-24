@@ -4,7 +4,7 @@ const terminal = new Terminal({
   cursorStyle: "bar",
   cursorInactiveStyle: "bar",
   screenReaderMode: true,
-  fontFamily: "Menlo,monospace",
+  fontFamily: "ui-monospace,Menlo,monospace",
   cursorBlink: false,
   scrollback: 3000,
   theme: {
@@ -19,10 +19,13 @@ terminal.loadAddon(fit);
 terminal.open(document.getElementById("terminal"));
 const send = (value) =>
   window.ReactNativeWebView.postMessage(JSON.stringify(value));
-window.writeOutput = (data) =>
+window.writeOutput = (data) => {
   terminal.write(Uint8Array.from(atob(data), (c) => c.charCodeAt(0)));
+  stale = true;
+};
 window.resetTerminal = () => {
   terminal.reset();
+  stale = true;
   send({ type: "resize", cols: terminal.cols, rows: terminal.rows });
 };
 // The native input owns the software keyboard. WKWebView programmatic focus
@@ -32,6 +35,46 @@ terminal.textarea?.addEventListener("focus", () => {
   send({ type: "focus" });
 });
 window.blurTerminal = () => terminal.blur();
+// Scrollback search (no addon): scan the buffer's lines, select a hit and scroll it
+// to the middle. A new query starts at the newest hit; `step` moves -1 up, +1 down.
+let hits = [];
+let at = -1;
+let lastQuery = "";
+let stale = false;
+const scan = (q) => {
+  hits = [];
+  const buffer = terminal.buffer.active;
+  for (let y = 0; y < buffer.length; y++) {
+    const text = buffer.getLine(y)?.translateToString(true).toLowerCase() ?? "";
+    for (let x = text.indexOf(q); x >= 0; x = text.indexOf(q, x + 1)) hits.push([y, x]);
+  }
+  stale = false;
+};
+window.findInTerminal = (query, step) => {
+  const q = String(query || "").toLowerCase();
+  if (!q) {
+    hits = [];
+    at = -1;
+    lastQuery = "";
+    terminal.clearSelection();
+    send({ type: "search", index: 0, total: 0 });
+    return;
+  }
+  if (q !== lastQuery) {
+    lastQuery = q;
+    scan(q);
+    at = hits.length - 1;
+  } else {
+    if (stale) scan(q);
+    if (hits.length) at = (Math.min(Math.max(at, 0), hits.length - 1) + step + hits.length) % hits.length;
+  }
+  if (at >= 0) {
+    const [y, x] = hits[at];
+    terminal.select(x, y, q.length);
+    terminal.scrollToLine(Math.max(0, y - Math.floor(terminal.rows / 2)));
+  } else terminal.clearSelection();
+  send({ type: "search", index: at + 1, total: hits.length });
+};
 window.setTerminalTheme = ({ dark, ...theme }) => {
   terminal.options.theme = {
     ...theme,

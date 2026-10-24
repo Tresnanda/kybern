@@ -126,6 +126,18 @@ export function ageLabel(at: string, now: number) {
   return `${Math.floor(minutes / 10080)}w`;
 }
 
+/** Whole phrases for a page line: "Created just now", "Created 3 hours ago", "Updated 2 weeks ago" (ux-app L1). */
+export function agoPhrase(verb: string, at: string, now: number) {
+  const minutes = Math.max(0, (now - Date.parse(at)) / 60_000);
+  if (Number.isNaN(minutes)) return "";
+  const unit = (n: number, one: string) => `${verb} ${n} ${one}${n === 1 ? "" : "s"} ago`;
+  if (minutes < 1) return `${verb} just now`;
+  if (minutes < 60) return unit(Math.floor(minutes), "minute");
+  if (minutes < 1440) return unit(Math.floor(minutes / 60), "hour");
+  if (minutes < 1440 * 14) return unit(Math.floor(minutes / 1440), "day");
+  return unit(Math.floor(minutes / 10080), "week");
+}
+
 // ---- the list ----
 
 const time = (at: string) => {
@@ -202,6 +214,33 @@ export function scopeTasks(tasks: TaskItem[], projectId?: string | null) {
   return tasks.filter(
     (task) => task.scope === "project" && task.project_id === projectId,
   );
+}
+
+/**
+ * Home's Up next: the project's to-do and inbox tasks no run is working on.
+ * Urgent → high → medium → low → none, then to-do before inbox, then rank, then
+ * the latest edit. Mirrors the desktop's `upNextTasks` (gpuix draft/model.ts).
+ */
+export function upNextTasks(tasks: Iterable<TaskItem>, projectId: string | null, limit = 3): TaskItem[] {
+  if (!projectId) return [];
+  const open: TaskItem[] = [];
+  for (const task of tasks)
+    if (
+      task.scope === "project" &&
+      task.project_id === projectId &&
+      (task.status === "todo" || task.status === "inbox") &&
+      !isLiveRun(latestRun(task))
+    )
+      open.push(task);
+  return open
+    .sort(
+      (a, b) =>
+        priorityWeight(a.priority) - priorityWeight(b.priority) ||
+        (a.status === b.status ? 0 : a.status === "todo" ? -1 : 1) ||
+        a.rank - b.rank ||
+        b.updated_at.localeCompare(a.updated_at),
+    )
+    .slice(0, limit);
 }
 
 /** "2 running · 1 to review" for the navigation rows; empty when nothing is active. */
@@ -341,6 +380,40 @@ export function formatTokens(tokens: number) {
   if (tokens < 100) return "0.1k";
   if (tokens < 10_000) return `${(Math.round(tokens / 100) / 10).toFixed(1)}k`;
   return `${Math.round(tokens / 1000)}k`;
+}
+
+/**
+ * The opening message for several tasks at once. The daemon puts each task's
+ * mention at the start, so the words only say how to work through them.
+ */
+export function batchPrompt(mode: "separate" | "combined") {
+  return mode === "combined"
+    ? "Work through these tasks one at a time. Check each one's acceptance criteria before you finish."
+    : "Work on this task. Check its acceptance criteria before you finish.";
+}
+
+/**
+ * Why Start is disabled, in the order a person can fix it, or "" when it can
+ * start (ux-app H5). Each reason names what to do next.
+ */
+export function sendBlocker(input: {
+  connected: boolean;
+  computer: string;
+  anyAgent: boolean;
+  agentReady: boolean;
+  agentName: string;
+  hasProject: boolean;
+  mixedProjects: boolean;
+  prompt: string;
+}) {
+  if (!input.connected) return "Connect to your computer to start.";
+  if (!input.anyAgent) return `Set up an agent on ${input.computer} to send tasks.`;
+  if (!input.agentReady)
+    return `${input.agentName} isn't set up on ${input.computer}. Choose another agent.`;
+  if (!input.hasProject) return "Choose a project to start.";
+  if (input.mixedProjects) return "One run needs tasks from one project. Choose separate runs.";
+  if (!input.prompt.trim()) return "Write a prompt to start.";
+  return "";
 }
 
 // ---- Send to agent defaults ----

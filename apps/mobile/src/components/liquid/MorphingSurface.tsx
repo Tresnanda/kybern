@@ -19,23 +19,29 @@ import Animated, {
 } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
 import { useTheme } from "../../ui/theme";
-import { SHEET, SHEET_OUTLINE } from "./motion";
+import { DURATION, SHEET, SHEET_OUTLINE } from "./motion";
+
+/** `radius.xl`: sheets and dialogs. */
+const SHEET_RADIUS = 28;
 
 export function MorphingBackdrop({
   open,
   onPress,
   label,
+  tone = "backdrop",
 }: {
   open: boolean;
   onPress: () => void;
   label?: string;
+  /** `backdrop` for dialogs, `scrim` (32 %) under sheets. */
+  tone?: "backdrop" | "scrim";
 }) {
   const { colors } = useTheme();
   const fade = useSharedValue(0);
   useEffect(() => {
     fade.set(
       withTiming(open ? 1 : 0, {
-        duration: 140,
+        duration: DURATION.scrim,
         reduceMotion: ReduceMotion.Never,
       }),
     );
@@ -53,7 +59,7 @@ export function MorphingBackdrop({
         pointerEvents="none"
         style={[
           StyleSheet.absoluteFill,
-          { backgroundColor: colors.backdrop },
+          { backgroundColor: colors[tone] },
           style,
         ]}
       />
@@ -74,7 +80,10 @@ export function MorphingSurface({
   offset: externalOffset,
   releaseVelocity,
   touchBias,
+  background,
 }: PropsWithChildren<{
+  /** The page colour inside the sheet, so its header and body are one surface. */
+  background?: string;
   open: boolean;
   onClosed: () => void;
   style?: StyleProp<ViewStyle>;
@@ -186,10 +195,10 @@ export function MorphingSurface({
     return {
       width: bounds.width - inset * 2,
       height: visualHeight.get() + lag,
-      borderTopLeftRadius: 28 + pull * (0.45 + bias * 0.25),
-      borderTopRightRadius: 28 + pull * (0.45 - bias * 0.25),
-      borderBottomLeftRadius: 28 + pull * (0.2 - bias * 0.12),
-      borderBottomRightRadius: 28 + pull * (0.2 + bias * 0.12),
+      borderTopLeftRadius: SHEET_RADIUS + pull * (0.45 + bias * 0.25),
+      borderTopRightRadius: SHEET_RADIUS + pull * (0.45 - bias * 0.25),
+      borderBottomLeftRadius: SHEET_RADIUS + pull * (0.2 - bias * 0.12),
+      borderBottomRightRadius: SHEET_RADIUS + pull * (0.2 + bias * 0.12),
       transform: [{ translateX: inset }],
     };
   });
@@ -229,7 +238,7 @@ export function MorphingSurface({
                 position: "absolute",
                 left: 0,
                 top: 0,
-                backgroundColor: colors.surface,
+                backgroundColor: background ?? colors.surface,
                 borderWidth: 1,
                 borderColor: colors.line,
                 boxShadow: "0 8px 36px #00000025",
@@ -267,7 +276,7 @@ export function MorphingSurface({
             {
               flexGrow: 1,
               flexShrink: 1,
-              borderRadius: 28,
+              borderRadius: SHEET_RADIUS,
               overflow: "hidden",
               backgroundColor: colors.surface,
               borderWidth: 1,

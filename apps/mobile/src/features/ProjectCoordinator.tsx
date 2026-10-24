@@ -3,7 +3,7 @@
 // and "Redo setup". Every change sends the whole override object with
 // `projects.update { coordinator }`; it shows at once and goes back if the computer refuses.
 import { router } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { View } from "react-native";
 import {
   AUTONOMY_OPTIONS,
@@ -18,29 +18,17 @@ import {
 } from "../../../../packages/kybern-client/src/coordinatorSettings";
 import type { CoordinatorOverrides, OrchestrationSettings } from "../state/protocol";
 import { errorText, rpc, useApp } from "../state/runtime";
-import { Alert } from "../ui/Alert";
-import { ErrorBanner, Icon, T, Tap, styles } from "../ui/primitives";
+import { useSettings } from "../state/settings";
+import { confirm } from "../ui/Alert";
+import { InsetGroup, ListRow, SectionFooter, SectionHeader } from "../ui/List";
+import type { MenuItem } from "../ui/menuModel";
+import { ErrorBanner } from "../ui/primitives";
 import { ProviderMark } from "../ui/ProviderMark";
-import { Segmented } from "../ui/Segmented";
 import { Toggle } from "../ui/Toggle";
-import { useTheme } from "../ui/theme";
-import { Pill } from "./NoteView";
 
-/** The computer's global Coordinator defaults, read once per sheet. */
+/** The computer's global Coordinator defaults, live (`settings.changed`). */
 export function useOrchestrationDefaults(): OrchestrationSettings | null {
-  const app = useApp();
-  const [settings, setSettings] = useState<OrchestrationSettings | null>(null);
-  useEffect(() => {
-    if (app.status !== "open") return;
-    let live = true;
-    rpc("settings.get", {})
-      .then((value) => live && setSettings(value.orchestration))
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [app.status]);
-  return settings;
+  return useSettings().settings?.orchestration ?? null;
 }
 
 /** Send the project's whole override object; `null` clears it. */
@@ -49,7 +37,6 @@ export function saveProjectCoordinator(projectId: string, next: CoordinatorOverr
 }
 
 export function ProjectCoordinatorSection({ projectId }: { projectId: string }) {
-  const { colors } = useTheme();
   const app = useApp();
   const saved = app.projects.find((project) => project.id === projectId)?.coordinator ?? null;
   const global = useOrchestrationDefaults();
@@ -69,82 +56,84 @@ export function ProjectCoordinatorSection({ projectId }: { projectId: string }) 
   const setField = <K extends CoordinatorField>(field: K, value: CoordinatorOverrides[K]) => write(withOverrideField(overrides, field, value));
 
   const redo = () =>
-    Alert.alert(COORDINATOR_SETTINGS_COPY.redoTitle, COORDINATOR_SETTINGS_COPY.redoDetail, [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: COORDINATOR_SETTINGS_COPY.redo,
-        onPress: () => {
-          setError("");
-          rpc("coordinator.setup", { project_id: projectId }).catch((e) => setError(`${COORDINATOR_SETTINGS_COPY.redoFailed}. ${errorText(e)}`));
-        },
+    confirm({
+      title: COORDINATOR_SETTINGS_COPY.redoTitle,
+      message: COORDINATOR_SETTINGS_COPY.redoDetail,
+      confirm: COORDINATOR_SETTINGS_COPY.redo,
+      destructive: false,
+      onConfirm: () => {
+        setError("");
+        rpc("coordinator.setup", { project_id: projectId }).catch((e) => setError(`${COORDINATOR_SETTINGS_COPY.redoFailed}. ${errorText(e)}`));
       },
-    ]);
+    });
   const reset = () =>
-    Alert.alert(COORDINATOR_SETTINGS_COPY.resetTitle, COORDINATOR_SETTINGS_COPY.resetDetail, [
-      { text: "Cancel", style: "cancel" },
-      { text: COORDINATOR_SETTINGS_COPY.reset, style: "destructive", onPress: () => write(null) },
-    ]);
+    confirm({
+      title: COORDINATOR_SETTINGS_COPY.resetTitle,
+      message: COORDINATOR_SETTINGS_COPY.resetDetail,
+      confirm: COORDINATOR_SETTINGS_COPY.reset,
+      onConfirm: () => write(null),
+    });
+  const choice = <V extends string>(options: readonly { value: V; label: string }[], value: V, field: CoordinatorField): MenuItem[] =>
+    options.map((option) => ({
+      title: option.label,
+      checked: option.value === value,
+      onPress: () => setField(field, option.value as never),
+    }));
 
   return (
-    <View style={{ marginTop: 12 }}>
-      <View style={[styles.spread, { minHeight: 44, paddingTop: 12 }]}>
-        <T variant="caption" tone="secondary" accessibilityRole="header">{COORDINATOR_SETTINGS_COPY.section}</T>
-        <Pill label={COORDINATOR_SETTINGS_COPY.redo} onPress={redo} />
-      </View>
-      <View style={{ gap: 18, padding: 14, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface }}>
-        <View style={{ gap: 8 }}>
-          <T variant="caption" tone="secondary">{COORDINATOR_SETTINGS_COPY.autonomy}</T>
-          <Segmented label={COORDINATOR_SETTINGS_COPY.autonomy} options={AUTONOMY_OPTIONS} value={effective.lead_autonomy} disabled={!!pending} onChange={(value) => setField("lead_autonomy", value)} />
-          <T variant="caption" tone="muted">{autonomyHint(effective.lead_autonomy)}</T>
-        </View>
-        <View style={{ gap: 8 }}>
-          <T variant="caption" tone="secondary">{COORDINATOR_SETTINGS_COPY.workspace}</T>
-          <Segmented label={COORDINATOR_SETTINGS_COPY.workspace} options={WORKSPACE_OPTIONS} value={effective.lead_workspace} disabled={!!pending} onChange={(value) => setField("lead_workspace", value)} />
-        </View>
-        <View style={[styles.line, { gap: 12 }]}>
-          <View style={{ flex: 1, gap: 2 }}>
-            <T variant="label">{COORDINATOR_SETTINGS_COPY.push}</T>
-            <T variant="caption" tone="secondary">{COORDINATOR_SETTINGS_COPY.pushDetail}</T>
-          </View>
-          <Toggle
-            value={effective.lead_push_without_asking}
-            disabled={!!pending}
-            onValueChange={(value) => setField("lead_push_without_asking", value)}
-            accessibilityLabel={COORDINATOR_SETTINGS_COPY.push}
-          />
-        </View>
-        <View style={{ gap: 4 }}>
-          <T variant="caption" tone="secondary">{COORDINATOR_SETTINGS_COPY.models}</T>
-          <View>
-            {COORDINATOR_ROLES.map(({ role, label }, index) => {
-              const chip = roleChip(role, global, overrides, app.providers, "project");
-              return (
-                <Tap
-                  key={role}
-                  static
-                  label={`${label} model: ${chip.label}. Change`}
-                  disabled={!!pending}
-                  onPress={() => router.push({ pathname: "/coordinator-model", params: { projectId, role } })}
-                  style={[styles.line, { minHeight: 48, gap: 8, borderTopWidth: index ? 1 : 0, borderColor: colors.line }]}
-                >
-                  <T style={{ flex: 1 }}>{label}</T>
-                  {chip.kind !== "coordinator" && chip.provider && <ProviderMark kind={chip.provider.kind} size={14} />}
-                  <T variant="caption" tone={chip.kind === "set" ? "ink" : "muted"} numberOfLines={1} style={{ flexShrink: 1, maxWidth: "60%" }}>
-                    {chip.label}
-                  </T>
-                  <Icon name="chevron.right" size={12} color={colors.muted} />
-                </Tap>
-              );
-            })}
-          </View>
-        </View>
-        <View style={[styles.spread, { gap: 8 }]}>
-          <T variant="caption" tone="muted" style={{ flex: 1 }}>{COORDINATOR_SETTINGS_COPY.defaultsFrom}</T>
-          <Tap label={COORDINATOR_SETTINGS_COPY.reset} disabled={!overrides || !!pending} onPress={reset} style={{ paddingHorizontal: 6, alignItems: "center" }}>
-            <T variant="label" tone="accent">{COORDINATOR_SETTINGS_COPY.reset}</T>
-          </Tap>
-        </View>
-      </View>
+    <View>
+      <SectionHeader
+        title={COORDINATOR_SETTINGS_COPY.section}
+        inset
+        action={{ title: COORDINATOR_SETTINGS_COPY.redo, onPress: redo }}
+      />
+      <InsetGroup>
+        <ListRow
+          title={COORDINATOR_SETTINGS_COPY.autonomy}
+          subtitle={autonomyHint(effective.lead_autonomy)}
+          value={AUTONOMY_OPTIONS.find((o) => o.value === effective.lead_autonomy)?.label}
+          valueMenu={choice(AUTONOMY_OPTIONS, effective.lead_autonomy, "lead_autonomy")}
+          disabled={!!pending}
+        />
+        <ListRow
+          title={COORDINATOR_SETTINGS_COPY.workspace}
+          value={WORKSPACE_OPTIONS.find((o) => o.value === effective.lead_workspace)?.label}
+          valueMenu={choice(WORKSPACE_OPTIONS, effective.lead_workspace, "lead_workspace")}
+          disabled={!!pending}
+        />
+        <ListRow
+          title={COORDINATOR_SETTINGS_COPY.push}
+          subtitle={COORDINATOR_SETTINGS_COPY.pushDetail}
+          trailing={
+            <Toggle
+              value={effective.lead_push_without_asking}
+              disabled={!!pending}
+              onValueChange={(value) => setField("lead_push_without_asking", value)}
+              accessibilityLabel={COORDINATOR_SETTINGS_COPY.push}
+            />
+          }
+        />
+      </InsetGroup>
+      <SectionHeader title={COORDINATOR_SETTINGS_COPY.models} inset />
+      <InsetGroup>
+        {COORDINATOR_ROLES.map(({ role, label }) => {
+          const chip = roleChip(role, global, overrides, app.providers, "project");
+          return (
+            <ListRow
+              key={role}
+              title={label}
+              leading={chip.kind !== "coordinator" && chip.provider ? <ProviderMark kind={chip.provider.kind} size={18} /> : undefined}
+              value={chip.label}
+              chevron
+              disabled={!!pending}
+              label={`${label} model: ${chip.label}. Change`}
+              onPress={() => router.push({ pathname: "/coordinator-model", params: { projectId, role } })}
+            />
+          );
+        })}
+        <ListRow title={COORDINATOR_SETTINGS_COPY.reset} destructive disabled={!overrides || !!pending} onPress={reset} />
+      </InsetGroup>
+      <SectionFooter inset>{COORDINATOR_SETTINGS_COPY.defaultsFrom}</SectionFooter>
       <ErrorBanner error={error} />
     </View>
   );

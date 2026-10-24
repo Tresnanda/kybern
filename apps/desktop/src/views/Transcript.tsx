@@ -2,10 +2,10 @@ import { useFollowingHistory } from "@/lib/useFollowingHistory"
 import { useEarlierHistory } from "@/lib/useEarlierHistory"
 import { ImageThreadContext } from "@/lib/imageThread"
 import { ResponseImage } from "@/components/kybern/ResponseImage"
-import { responseImages } from "@/lib/responseImages"
-import { surfaceOutputText, surfaceHasOutputText, toolSurface, type ToolSurface } from "@/lib/toolSurface"
+import { responseImages } from "../../../../packages/kybern-client/src/responseImages.ts"
+import { surfaceOutputText, surfaceHasOutputText, toolSurface, type ToolSurface } from "../../../../packages/kybern-client/src/toolSurface.ts"
 import { computerConsent, connectorApproval, isUserInput, notesTasksConsent, parseKybernMention } from "@/lib/userInput"
-import { agentItemLabel, agentItemResultText, agentItemTool, agentItemWriteResult, parseAgentItemResult, placeItemCards, type AgentItemTool, type AgentItemWrite } from "@/lib/agentItemTools"
+import { agentItemLabel, agentItemResultText, agentItemTool, agentItemWriteResult, parseAgentItemResult, placeItemCards, type AgentItemTool, type AgentItemWrite } from "../../../../packages/kybern-client/src/agentItemTools.ts"
 import { VisualReply } from "./VisualReply"
 import { SecretRequestLine } from "./SecretRequestPanel"
 import { CoordinatorCardLine, SystemRowLine } from "./coordinator/CoordinatorRows"
@@ -43,7 +43,8 @@ import {
   getChatTranscriptTextStyle,
 } from "@/components/kit/chat/chatTypography"
 import { calendarDateKey, calendarDateLabel, clockTime, elapsedSince, hasOutputText, outputText, plural, toolLine } from "@/lib/format"
-import { isImageGenerationTool, runtimeActivityPrompt, runtimeActivityResult, summarizeToolCalls, toolVisualKind, type ToolVisualKind } from "@/lib/toolActivity"
+import { runtimeTaskStatusWord } from "../../../../packages/kybern-client/src/statusWords.ts"
+import { isImageGenerationTool, runtimeActivityPrompt, runtimeActivityResult, summarizeToolCalls, toolVisualKind, type ToolVisualKind } from "../../../../packages/kybern-client/src/toolActivity.ts"
 import { copyText, useSmoothStream, useTicker } from "@/lib/hooks"
 import { MessageScroller, type MessageNavigationModel, type MessageScrollerController } from "@/components/beui/message-scroller"
 import { VirtualRows, type VirtualRowsController } from "@/components/kybern/VirtualRows"
@@ -163,17 +164,6 @@ function clockDuration(ms: number): string {
   return rm ? `${h}h ${rm}m` : `${h}h`
 }
 
-function runtimeTaskStatusLabel(task: RuntimeTask): string {
-  if (task.status === "pending") return "Starting"
-  if (task.status === "running") return task.backgrounded ? "Running in background" : "Running"
-  if (task.status === "waiting") return task.backgrounded ? "Monitoring in background" : "Waiting"
-  if (task.status === "stopping") return "Stopping"
-  if (task.status === "completed") return "Completed"
-  if (task.status === "failed") return "Failed"
-  if (task.status === "stopped") return "Stopped"
-  return "Interrupted"
-}
-
 function settledWorkPresentation(blocks: readonly Block[], tasks: readonly RuntimeTask[]): SettledWorkPresentation {
   const tasksByToolCall = new Map(tasks.flatMap((task) => (task.tool_call_id ? [[task.tool_call_id, task] as const] : [])))
   const hierarchy = buildWorkHierarchy(blocks)
@@ -241,7 +231,7 @@ function resolveAgentActivityDetail(groups: readonly TurnGroup[], tasks: readonl
   const fallbackTitle = kind === "process" ? "Background process" : kind === "monitor" ? "Monitor" : "Delegated task"
   const title = task?.title || activity?.detail || fallbackTitle
   const summary = task?.detail && task.detail.trim() !== title.trim() ? task.detail : null
-  const status = task ? runtimeTaskStatusLabel(task) : block?.isError ? "Failed" : block?.complete ? "Completed" : "Working"
+  const status = task ? runtimeTaskStatusWord(task.status, task.backgrounded) : block?.isError ? "Failed" : block?.complete ? "Completed" : "Working"
   const metadata = [status, task?.model, task?.backgrounded ? "Background" : null].filter((value): value is string => !!value).join(" · ")
   const tasksByToolCall = new Map(tasks.flatMap((candidate) => (candidate.tool_call_id ? [[candidate.tool_call_id, candidate] as const] : [])))
 
@@ -668,7 +658,7 @@ function RuntimeTaskActivityEntry({ task, navigable, onOpenAgentActivity }: { ta
       </span>
       <div className="min-w-0 flex-1">
         <p className="truncate leading-6 text-muted-foreground transition-colors group-hover/tool-row:text-foreground" style={CHAT_FONT}>
-          {noun} {runtimeTaskStatusLabel(task).toLowerCase()}{navigable ? ` · ${task.title}` : ""}
+          {noun} {runtimeTaskStatusWord(task.status, task.backgrounded).toLowerCase()}{navigable ? ` · ${task.title}` : ""}
         </p>
         {detail && <p className="truncate font-system-ui text-[11px] leading-4 text-muted-foreground/52">{detail}</p>}
       </div>

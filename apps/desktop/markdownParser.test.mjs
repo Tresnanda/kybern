@@ -15,7 +15,7 @@ registerHooks({ resolve(specifier, context, next) {
   return next(specifier, context)
 } })
 const { createMarkdownParser, sameMarkdownNode } = await import("./src/lib/markdownParser.ts")
-const { imageSource } = await import("./src/lib/responseImages.ts")
+const { imageSource } = await import("../../packages/kybern-client/src/responseImages.ts")
 const urlTransform = (url, key) => key === "src" ? (imageSource(url) ? url : "") : key === "href" && chatLink(url).kind === "file" ? url : defaultUrlTransform(url)
 const render = (result) => renderToStaticMarkup(toJsxRuntime({ type: "root", children: result.blocks.map(b => b.node) }, { Fragment: React.Fragment, jsx, jsxs }))
 const expected = (source) => renderToStaticMarkup(React.createElement(ReactMarkdown, { children: source, remarkPlugins: [remarkGfm], urlTransform }))

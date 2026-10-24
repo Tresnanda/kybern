@@ -35,19 +35,13 @@ import {
 } from "../src/ui/AndroidNavigation";
 import { SendTransitionProvider } from "../src/components/liquid/SendTransition";
 import { DialogHost } from "../src/ui/Alert";
+import { sheetOptions } from "../src/ui/Sheet";
+import { ToastHost } from "../src/ui/Toast";
+import { PreviewRequests } from "../src/features/Preview";
 
 // A sheet opened from a deep link still needs a destination to dismiss to.
 export const unstable_settings = { anchor: "index" };
 
-const androidSheet =
-  Platform.OS === "android"
-    ? {
-        presentation: "transparentModal" as const,
-        headerShown: false,
-        animation: "none" as const,
-        contentStyle: { backgroundColor: "transparent" },
-      }
-    : {};
 
 // The split shell. To keep the sidebar collapse/reveal buttery, the detail is a
 // FIXED-width layer that only ever slides (a transform) — never resizes — so the
@@ -152,7 +146,7 @@ function Shell({ children }: { children: ReactNode }) {
                 top: 0,
                 bottom: 0,
                 left: 0,
-                backgroundColor: colors.background,
+                // The sidebar draws its own material.
                 borderRightWidth: 0.5,
                 borderColor: colors.line,
               },
@@ -199,7 +193,9 @@ function Navigation() {
   const { width } = useWindowDimensions();
   // On tablet iOS centers a form sheet; a full-height detent fills the screen so
   // it reads as grounded rather than a card floating in the middle.
-  const sheetDetents = width >= SPLIT_MIN_WIDTH ? [1] : [0.75, 1];
+  const sheet = sheetOptions({
+    detents: width >= SPLIT_MIN_WIDTH ? [1] : [0.75, 1],
+  });
   useEffect(() => {
     void boot();
     hydrateLayout();
@@ -224,7 +220,6 @@ function Navigation() {
               : undefined,
           headerStyle: { backgroundColor: colors.background },
           headerTintColor: colors.ink,
-          headerTitleStyle: { fontSize: 17, fontWeight: "500" },
           contentStyle: { backgroundColor: colors.background },
           headerBackButtonDisplayMode: "minimal",
           animation: reduced ? "fade" : "default",
@@ -251,33 +246,33 @@ function Navigation() {
           name="connect"
           options={{
             title: "Connect a computer",
-            presentation: "modal",
-            ...androidSheet,
+            ...(Platform.OS === "android" ? sheet : { presentation: "modal" as const }),
           }}
         />
         <Stack.Screen
           name="configure"
           options={{
             title: "Thread setup",
-            presentation: "formSheet",
-            sheetAllowedDetents: sheetDetents,
-            sheetGrabberVisible: true,
-            ...androidSheet,
+            ...sheet,
           }}
         />
         <Stack.Screen name="tasks" options={{ title: "Agents & processes" }} />
+        <Stack.Screen name="agents" options={{ title: "Agents & processes", ...sheet }} />
+        <Stack.Screen name="queued" options={{ title: "Queued messages", ...sheet }} />
         <Stack.Screen
           name="thread-picker"
           options={{
             title: "Reference conversation",
-            presentation: "formSheet",
-            sheetAllowedDetents: sheetDetents,
-            sheetGrabberVisible: true,
-            ...androidSheet,
+            ...sheet,
           }}
         />
         <Stack.Screen name="file" options={{ title: "File" }} />
         <Stack.Screen name="workspace" options={{ title: "Workspace" }} />
+        <Stack.Screen name="pulls" options={{ title: "Pull requests", headerLargeTitleEnabled: true }} />
+        <Stack.Screen name="pull" options={{ title: "" }} />
+        <Stack.Screen name="pull-review" options={{ title: "Review", ...sheet }} />
+        <Stack.Screen name="pull-send" options={{ title: "Send to agent", ...sheet }} />
+        <Stack.Screen name="preview" options={{ title: "Preview" }} />
         <Stack.Screen
           name="integrations"
           options={{ title: "Connectors and plugins" }}
@@ -288,10 +283,7 @@ function Navigation() {
           name="project-picker"
           options={{
             title: "Choose project",
-            presentation: "formSheet",
-            sheetAllowedDetents: sheetDetents,
-            sheetGrabberVisible: true,
-            ...androidSheet,
+            ...sheet,
           }}
         />
         <Stack.Screen name="add-project" options={{ title: "Add project" }} />
@@ -299,25 +291,26 @@ function Navigation() {
           name="capabilities"
           options={{
             title: "Add to message",
-            presentation: "formSheet",
-            sheetAllowedDetents: sheetDetents,
-            sheetGrabberVisible: true,
-            ...androidSheet,
+            ...sheet,
           }}
         />
         <Stack.Screen
           name="composer-options"
           options={{
-            presentation: "formSheet",
-            sheetAllowedDetents: sheetDetents,
-            sheetGrabberVisible: true,
-            ...androidSheet,
+            ...sheet,
           }}
         />
         <Stack.Screen name="settings-detail" options={{ title: "Settings" }} />
         <Stack.Screen name="settings" options={{ title: "Settings" }} />
+        <Stack.Screen name="settings-agent" options={{ title: "Agent" }} />
+        <Stack.Screen name="settings-role" options={{ title: "Model", ...sheet }} />
+        <Stack.Screen name="computer-note" options={{ title: "App note" }} />
+        <Stack.Screen name="computer-live" options={{ title: "Live view" }} />
         <Stack.Screen name="app-updates" options={{ title: "App updates" }} />
-        <Stack.Screen name="projects" options={{ title: "Projects" }} />
+        <Stack.Screen name="projects" options={{ title: "Projects", headerLargeTitleEnabled: true }} />
+        <Stack.Screen name="project" options={{ title: "Project" }} />
+        <Stack.Screen name="spaces" options={{ title: "Spaces" }} />
+        <Stack.Screen name="space-edit" options={{ title: "New space", ...sheet }} />
         <Stack.Screen
           name="notes"
           options={{ title: "Notes", headerLargeTitleEnabled: true }}
@@ -332,47 +325,39 @@ function Navigation() {
           name="todo-send"
           options={{
             title: "Send to agent",
-            presentation: "formSheet",
-            sheetAllowedDetents: sheetDetents,
-            sheetGrabberVisible: true,
-            ...androidSheet,
+            ...sheet,
           }}
         />
         <Stack.Screen
           name="project-space"
           options={{
             title: "Project",
-            presentation: "formSheet",
-            sheetAllowedDetents: sheetDetents,
-            sheetGrabberVisible: true,
-            ...androidSheet,
+            ...sheet,
           }}
         />
         <Stack.Screen
           name="coordinator-model"
           options={{
             title: "Model",
-            presentation: "formSheet",
-            sheetAllowedDetents: sheetDetents,
-            sheetGrabberVisible: true,
-            ...androidSheet,
+            ...sheet,
           }}
         />
         <Stack.Screen
           name="note-move"
           options={{
             title: "Move note",
-            presentation: "formSheet",
-            sheetAllowedDetents: sheetDetents,
-            sheetGrabberVisible: true,
-            ...androidSheet,
+            ...sheet,
           }}
         />
         <Stack.Screen name="activity" options={{ title: "Activity" }} />
         <Stack.Screen name="sessions" options={{ title: "Resume a session" }} />
         <Stack.Screen name="pair" options={{ headerShown: false }} />
+        <Stack.Screen name="dev-kit" options={{ title: "Design kit" }} />
+        <Stack.Screen name="dev-sheet" options={{ title: "Sheet", ...sheet }} />
       </Stack>
       </Shell>
+      <PreviewRequests />
+      <ToastHost />
       <DialogHost />
     </View>
   );

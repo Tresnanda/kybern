@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { toolLine } from '../../../desktop/src/lib/toolActivity.ts'
+import { toolLine } from '../../../../packages/kybern-client/src/toolActivity.ts'
 
 const bash = (command: string) => toolLine({ id: 'call', name: 'Bash', input: { command } } as Parameters<typeof toolLine>[0])
 

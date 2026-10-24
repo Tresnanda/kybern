@@ -6,7 +6,8 @@ import { ChatFileContext } from "../state/chatFileContext";
 import { Alert } from "./Alert";
 import { Image, Linking, ScrollView, Text, View } from "react-native";
 import { Icon, IconButton, T, styles } from "./primitives";
-import { useTheme } from "./theme";
+import { MONO, radius, useTheme } from "./theme";
+import { MermaidBlock } from "./Mermaid";
 import { taskLinkId } from "../state/tasksModel";
 import { TaskRef } from "./TaskRef";
 import { NoteRef } from "./NoteRef";
@@ -73,12 +74,14 @@ function Inline({ text, checklist }: { text: string; checklist?: boolean }) {
               <Text
                 key={i}
                 style={{
-                  fontFamily: "Menlo",
-                  fontSize: 14,
-                  backgroundColor: colors.raised,
+                  fontFamily: MONO,
+                  // 0.88 em of the 17 pt reading text, on the code fill; nested text cannot pad, so thin spaces do.
+                  fontSize: 15,
+                  backgroundColor: colors.code,
+                  color: colors.ink,
                 }}
               >
-                {part.slice(1, -1)}
+                {`\u2009${part.slice(1, -1)}\u2009`}
               </Text>
             );
           const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(part);
@@ -140,13 +143,13 @@ export const Code = memo(function Code({
     <View
       style={{
         backgroundColor: colors.code,
-        borderRadius: 16,
+        borderRadius: radius.md,
+        borderCurve: "continuous",
         overflow: "hidden",
-        marginVertical: 8,
       }}
     >
       <View style={[styles.spread, { paddingStart: 15, paddingEnd: 4 }]}>
-        <T variant="caption" tone="secondary">
+        <T variant="footnote" tone="secondary">
           {language || (diff ? "Changes" : "Code")}
         </T>
         <IconButton
@@ -162,7 +165,7 @@ export const Code = memo(function Code({
         <Text
           selectable
           style={{
-            fontFamily: "Menlo",
+            fontFamily: MONO,
             fontSize: 13,
             lineHeight: 21,
             color: colors.ink,
@@ -207,10 +210,16 @@ export const Markdown = memo(function Markdown({
         {sections.filter(Boolean).map((section, s) => {
           if (section.startsWith("```")) {
             const first = section.indexOf("\n");
+            const language = section.slice(3, first < 0 ? undefined : first).trim();
+            // A finished mermaid fence is drawn; one still streaming stays code.
+            if (language === "mermaid" && first >= 0 && section.trimEnd().endsWith("```")) {
+              const source = section.slice(first + 1).replace(/```\s*$/, "").trim();
+              return <MermaidBlock key={`mermaid:${s}`} source={source} code={<Code text={source} language="mermaid" />} />;
+            }
             return (
               <Code
                 key={`code:${s}`}
-                language={section.slice(3, first < 0 ? undefined : first).trim()}
+                language={language}
                 text={
                   first < 0
                     ? ""
@@ -254,7 +263,7 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
           resizeMode="contain"
         />
         {!!picture[1] && (
-          <T variant="caption" tone="secondary">
+          <T variant="footnote" tone="secondary">
             {picture[1]}
           </T>
         )}
@@ -295,7 +304,7 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
             >
               {row.map((cell, c) => (
                 <View key={c} style={{ width: 180, padding: 12 }}>
-                  <T selectable variant={r === 0 ? "label" : "caption"}>
+                  <T selectable variant={r === 0 ? "label" : "footnote"}>
                     <Inline text={cell} />
                   </T>
                 </View>
@@ -306,15 +315,24 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
       </ScrollView>
     );
   }
-  if (/^#{1,6}\s/.test(para))
+  if (/^#{1,6}\s/.test(para)) {
+    // Headings step down with their level (ux-app M17): h1 22, h2 19, h3 17,
+    // h4–h6 15 in `secondary`. A screen's own title stays the only larger line.
+    const level = para.indexOf(" ");
     return (
       <T
-        variant={para.startsWith("# ") ? "title" : "heading"}
-        style={{ marginTop: 12 }}
+        variant={level === 1 ? "title" : level <= 3 ? "headline" : "label"}
+        tone={level >= 4 ? "secondary" : "ink"}
+        style={[
+          { marginTop: 12 },
+          level === 2 ? { fontSize: 19, lineHeight: 24 } : null,
+          level >= 4 ? { fontWeight: "600" } : null,
+        ]}
       >
         <Inline text={para.replace(/^#{1,6}\s/, "")} />
       </T>
     );
+  }
   if (/^[-*_]{3,}$/.test(para))
     return (
       <View
@@ -334,7 +352,7 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
           paddingStart: 16,
         }}
       >
-        <T tone="secondary" selectable>
+        <T variant="prose" tone="secondary" selectable>
           <Inline text={para.replace(/^> ?/gm, "")} />
         </T>
       </View>
@@ -371,12 +389,13 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
                 </View>
               ) : (
                 match && (
-                  <T tone="secondary" style={{ minWidth: 15 }}>
+                  <T variant="prose" tone="secondary" style={{ minWidth: 15 }}>
                     {/\d/.test(match[2]!) ? match[2] : "•"}
                   </T>
                 )
               )}
               <T
+                variant="prose"
                 selectable
                 tone={checked ? "secondary" : "ink"}
                 style={{
@@ -392,7 +411,7 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
       </View>
     );
   return (
-    <T selectable>
+    <T variant="prose" selectable>
       <Inline text={para} />
     </T>
   );

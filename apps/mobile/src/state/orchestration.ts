@@ -7,6 +7,7 @@ import type {
   ThreadMessagePurpose,
   UserMessage,
 } from "./protocol";
+import { childState, isChildWorking } from "../../../../packages/kybern-client/src/delegations.ts";
 
 const PURPOSES: Record<ThreadMessagePurpose, string> = {
   task: "Task",
@@ -24,13 +25,6 @@ const DELEGATION: Record<DelegationStatus, string> = {
   interrupted: "Interrupted",
 };
 
-const THREAD: Record<Thread["status"], string> = {
-  idle: "Idle",
-  running: "Running",
-  "awaiting-approval": "Needs approval",
-  failed: "Failed",
-  archived: "Archived",
-};
 
 export type OrchestrationPart = ThreadMessagePart | Extract<ContentPart, { type: "agent_results" }>;
 
@@ -44,7 +38,8 @@ export function hasOrchestrationParts(message: UserMessage) {
 
 export const purposeLabel = (purpose: ThreadMessagePurpose) => PURPOSES[purpose] ?? "Message";
 
-export const delegationStatusWord = (status: DelegationStatus) => DELEGATION[status] ?? "Unknown";
+export const delegationStatusWord = (status: DelegationStatus) =>
+  DELEGATION[status] ?? "Unknown";
 
 /** "Task · Reviewer": who sent it and why. Kybern itself sends with no thread. */
 export function threadMessageHeading(part: ThreadMessagePart) {
@@ -73,20 +68,14 @@ export function resultLocation(item: AgentResultItem) {
   return files > 0 ? `${files} ${files === 1 ? "file" : "files"} touched` : "";
 }
 
-/** Status word of a child row: delegation outcome, subagent task state, or the thread's own status. */
+/** Status word of a child row, from the shared vocabulary (`childState`). */
 export function childStatusWord(thread: Thread) {
-  if (thread.delegation) return delegationStatusWord(thread.delegation.status);
-  if (thread.subagent) {
-    const status = thread.subagent.status;
-    return status.charAt(0).toUpperCase() + status.slice(1);
-  }
-  return THREAD[thread.status] ?? "Idle";
+  return childState(thread).word;
 }
 
+/** Still working or waiting on the reader. */
 export function childIsRunning(thread: Thread) {
-  if (thread.delegation) return thread.delegation.status === "running";
-  if (thread.subagent) return ["pending", "running", "waiting", "stopping"].includes(thread.subagent.status);
-  return thread.status === "running" || thread.status === "awaiting-approval";
+  return isChildWorking(thread);
 }
 
 /** Oldest first, so the list reads in the order the agents were started. */

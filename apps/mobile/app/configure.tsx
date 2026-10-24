@@ -244,7 +244,7 @@ export default function Configure() {
       <View style={{ flex: 1, gap: 3 }}>
         <T variant="label">{title}</T>
         {detail && (
-          <T variant="caption" tone="secondary">
+          <T variant="footnote" tone="secondary">
             {detail}
           </T>
         )}
@@ -275,7 +275,7 @@ export default function Configure() {
               ),
             )}
           {!app.projects.length && (
-            <Button secondary onPress={() => router.push("/projects")}>
+            <Button onPress={() => router.push("/projects")}>
               Add a project
             </Button>
           )}
@@ -306,7 +306,7 @@ export default function Configure() {
               <View style={{ flex: 1 }}>
                 <T variant="label">{p.display_name}</T>
                 {!p.available && (
-                  <T variant="caption" tone="secondary">
+                  <T variant="footnote" tone="secondary">
                     Set up this agent on your computer.
                   </T>
                 )}
@@ -347,7 +347,7 @@ export default function Configure() {
               returnKeyType="search"
             />
             {!visibleModels.length && !customId && (
-              <T variant="caption" tone="secondary">
+              <T variant="footnote" tone="secondary">
                 No models match your search.
               </T>
             )}
@@ -444,7 +444,7 @@ export default function Configure() {
         </Group>
       )}
       <ErrorBanner error={error} />
-      <Button
+      <Button role="prominent"
         onPress={() => void save()}
         busy={busy}
         disabled={!provider?.available || !project}

@@ -9,7 +9,7 @@ import {
   useSyncExternalStore,
   type ComponentProps,
 } from "react";
-import { View, useWindowDimensions } from "react-native";
+import { StyleSheet, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
@@ -26,6 +26,8 @@ import {
 import { IconButton, T } from "./primitives";
 import { useTheme } from "./theme";
 import { SHEET } from "../components/liquid/motion";
+import { haptics } from "./haptics";
+import { SheetGrabber } from "./Sheet";
 
 type ScreenLayoutProps = Parameters<
   NonNullable<ComponentProps<typeof Stack>["screenLayout"]>
@@ -71,7 +73,7 @@ export function AndroidHeader({
     <View
       importantForAccessibility={focused ? "auto" : "no-hide-descendants"}
       style={{
-        paddingTop: sheet ? 8 : insets.top,
+        paddingTop: sheet ? 0 : insets.top,
         paddingHorizontal: 16,
         backgroundColor: sheet ? "transparent" : colors.background,
       }}
@@ -97,7 +99,7 @@ export function AndroidHeader({
           {typeof options.headerTitle === "function" ? (
             options.headerTitle({ children: title, tintColor: colors.ink })
           ) : (
-            <T variant="heading" accessibilityRole="header">
+            <T variant="title" accessibilityRole="header" numberOfLines={1}>
               {title}
             </T>
           )}
@@ -168,6 +170,7 @@ export function AndroidSheet({ children, ...props }: ScreenLayoutProps) {
           releaseVelocity.set(event.velocityY);
           if (event.translationY < -80 || event.velocityY < -900) {
             scheduleOnRN(expand);
+            scheduleOnRN(haptics.threshold);
             drag.set(
               withSpring(0, {
                 ...SHEET,
@@ -197,6 +200,13 @@ export function AndroidSheet({ children, ...props }: ScreenLayoutProps) {
     if (allowRemove && pending.current)
       props.navigation.dispatch(pending.current);
   }, [allowRemove, props.navigation]);
+  // The sheet takes the page's colour (`headerStyle.backgroundColor`, the same
+  // option a grouped page sets for iOS) so the header is part of one surface
+  // under the sheet's rounded top, never a lighter block above the page.
+  const { colors } = useTheme();
+  const page =
+    (StyleSheet.flatten(props.options.headerStyle) as { backgroundColor?: string } | undefined)
+      ?.backgroundColor ?? colors.surface;
   const detents = props.options.sheetAllowedDetents;
   const compactHeight =
     Array.isArray(detents) && typeof detents[0] === "number" ? detents[0] : 0.9;
@@ -213,7 +223,7 @@ export function AndroidSheet({ children, ...props }: ScreenLayoutProps) {
         }}
         accessibilityViewIsModal
       >
-        <MorphingBackdrop open={open} onPress={dismiss} label="Dismiss sheet" />
+        <MorphingBackdrop open={open} onPress={dismiss} label="Dismiss sheet" tone="scrim" />
         <View
           pointerEvents="box-none"
           style={[
@@ -234,10 +244,12 @@ export function AndroidSheet({ children, ...props }: ScreenLayoutProps) {
             offset={drag}
             touchBias={touchBias}
             releaseVelocity={releaseVelocity}
+            background={typeof page === "string" ? page : colors.surface}
             style={{ flex: 1 }}
           >
             <GestureDetector gesture={gesture}>
               <View collapsable={false}>
+                <SheetGrabber />
                 <AndroidHeader
                   {...props}
                   sheet

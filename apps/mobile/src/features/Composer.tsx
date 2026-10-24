@@ -59,7 +59,11 @@ import {
   T,
   Tap,
 } from "../ui/primitives";
-import { type, useTheme } from "../ui/theme";
+import { gutter, radius, type, useTheme } from "../ui/theme";
+import { MenuPanel, type MenuItem } from "../ui/ActionMenu";
+import { measureTrigger } from "../ui/measure";
+import { PROVIDER_DISPLAY_NAME } from "../state/protocol";
+import { SendButton } from "./ComposerControls";
 import type { ThreadState } from "../state/transcript";
 import Animated, {
   FadeIn,
@@ -95,6 +99,9 @@ const ATTACH_ENTER = FadeIn.duration(140);
 const ATTACH_EXIT = FadeOut.duration(120);
 const selectCommands = (state: ThreadState) => state.providerCommands;
 
+/** "Reply to Claude…": the agent's short name. */
+const agentName = (kind: Thread["provider"]["kind"]) => PROVIDER_DISPLAY_NAME[kind].replace(/ Code$/, "");
+
 function contextLabel(part: ContentPart) {
   if (part.type === "thread_reference") return threadReferenceLabel(part);
   if (part.type === "mention") return part.display_name || part.name;
@@ -112,6 +119,7 @@ export const Composer = memo(function Composer({
   prompt,
   promptAttachments,
   onPromptConsumed,
+  placeholder: placeholderOverride,
 }: {
   thread?: Thread | null;
   onSend: (message: UserMessage) => Promise<SendReceipt | void>;
@@ -122,6 +130,8 @@ export const Composer = memo(function Composer({
   /** Attachments that come back with `prompt` (editing a message that was not sent). */
   promptAttachments?: ContentPart[];
   onPromptConsumed?: () => void;
+  /** Replaces the context placeholder (a finished subagent says so). */
+  placeholder?: string;
 }) {
   const { colors } = useTheme();
   const { width: windowWidth, fontScale } = useWindowDimensions();
@@ -652,10 +662,80 @@ export const Composer = memo(function Composer({
       },
     });
   }
+  const projectFiles = () =>
+    router.push({
+      pathname: "/workspace",
+      params: thread ? { threadId: thread.id, tab: "Files" } : { projectId: draft.projectId, tab: "Files" },
+    });
+  const addItems: MenuItem[] = [
+    {
+      title: "Attach",
+      inline: true,
+      children: [
+        { title: "Camera", icon: "camera", onPress: () => void openCamera() },
+        { title: "Photos", icon: "photo", onPress: () => void attach(true) },
+        { title: "Files", icon: "paperclip", onPress: () => void attach() },
+      ],
+    },
+    {
+      title: "Workspace",
+      inline: true,
+      children: [
+        { title: "Project files", icon: "folder", onPress: projectFiles },
+        ...(thread
+          ? [
+              {
+                title: "Terminal",
+                icon: "terminal" as const,
+                onPress: () => router.push({ pathname: "/workspace", params: { threadId: thread.id, tab: "Terminal" } }),
+              },
+            ]
+          : []),
+      ],
+    },
+    {
+      title: "Reference",
+      inline: true,
+      children: [
+        {
+          title: "Conversation",
+          icon: "text.bubble",
+          onPress: () =>
+            router.push({
+              pathname: "/thread-picker",
+              params: thread ? { threadId: thread.id, projectId: thread.project_id } : { projectId: draft.projectId },
+            }),
+        },
+        { title: "Skills and plugins", icon: "puzzlepiece.extension", onPress: () => openCapabilities("Skills") },
+      ],
+    },
+  ];
+  const modeItems: MenuItem[] = [
+    ...(onSteer
+      ? [
+          {
+            title: "Steer now",
+            subtitle: "Guide the current turn",
+            icon: "arrow.up.right" as const,
+            checked: promptMode === "steer",
+            onPress: () => setPromptMode("steer"),
+          },
+        ]
+      : []),
+    {
+      title: "Queue follow-up",
+      subtitle: "Send when this turn ends",
+      icon: "arrow.turn.down.right",
+      checked: promptMode === "queue",
+      onPress: () => setPromptMode("queue"),
+    },
+    ...(onStop ? [{ title: "Stop agent", icon: "stop.fill" as const, destructive: true, onPress: onStop }] : []),
+  ];
+  const empty = !text.trim() && !attachments.length;
   return (
     <View
       style={{
-        paddingHorizontal: 20,
+        paddingHorizontal: gutter(windowWidth),
         paddingTop: 8,
         paddingBottom: 8,
         width: "100%",
@@ -682,82 +762,11 @@ export const Composer = memo(function Composer({
           sourceIcon="plus"
           closingMotion="attachment"
           dismissLabel="Dismiss attachment menu"
+          scrim
           onClose={() => setAdding(false)}
           onClosed={finishAddClose}
         >
-          {(
-            [
-              {
-                label: "Camera",
-                icon: "camera",
-                action: () => {
-                  void openCamera();
-                },
-              },
-              {
-                label: "Photos",
-                icon: "photo",
-                action: () => {
-                  void attach(true);
-                },
-              },
-              {
-                label: "Files",
-                icon: "paperclip",
-                action: () => {
-                  void attach();
-                },
-              },
-              {
-                label: "Plugins",
-                icon: "puzzlepiece.extension",
-                action: () => openCapabilities("Plugins"),
-              },
-              {
-                label: "Project files",
-                icon: "folder",
-                action: () =>
-                  router.push({
-                    pathname: "/workspace",
-                    params: thread
-                      ? { threadId: thread.id, tab: "Files" }
-                      : { projectId: draft.projectId, tab: "Files" },
-                  }),
-              },
-              {
-                label: "Conversation",
-                icon: "text.bubble",
-                action: () =>
-                  router.push({
-                    pathname: "/thread-picker",
-                    params: thread
-                      ? { threadId: thread.id, projectId: thread.project_id }
-                      : { projectId: draft.projectId },
-                  }),
-              },
-            ] as const
-          ).map((item) => (
-            <Tap
-              key={item.label}
-              label={item.label}
-              onPress={() => chooseAddAction(item.action)}
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "flex-start",
-                gap: 16,
-                minHeight: 48,
-                paddingVertical: 10,
-                paddingHorizontal: 14,
-                borderRadius: 22,
-              }}
-            >
-              <Icon name={item.icon} size={20} />
-              <T variant="label" style={{ flexShrink: 1, fontWeight: "400" }}>
-                {item.label}
-              </T>
-            </Tap>
-          ))}
+          <MenuPanel items={addItems} onSelect={(item) => chooseAddAction(item.onPress ?? (() => {}))} />
         </MorphingMenu>
       )}
       {modeOrigin && (
@@ -767,52 +776,17 @@ export const Composer = memo(function Composer({
           placement="above"
           sourceIcon="chevron.down"
           dismissLabel="Close send options"
+          scrim
           onClose={() => setModeOpen(false)}
           onClosed={() => setModeOrigin(null)}
         >
-          {(onSteer ? (["queue", "steer"] as const) : (["queue"] as const)).map(
-            (mode) => (
-              <Tap
-                key={mode}
-                label={mode === "queue" ? "Queue follow-up" : "Steer now"}
-                selected={promptMode === mode}
-                onPress={() => {
-                  setPromptMode(mode);
-                  setModeOpen(false);
-                }}
-                style={[
-                  styles.line,
-                  {
-                    gap: 12,
-                    paddingHorizontal: 14,
-                    paddingVertical: 10,
-                    minHeight: 48,
-                  },
-                ]}
-              >
-                <T variant="label" style={{ flex: 1 }}>
-                  {mode === "queue" ? "Queue follow-up" : "Steer now"}
-                </T>
-                {promptMode === mode && <Icon name="checkmark" size={16} />}
-              </Tap>
-            ),
-          )}
-          {onStop && (
-            <Tap
-              label="Stop agent"
-              onPress={() => {
-                setModeOpen(false);
-                onStop();
-              }}
-              style={[
-                styles.line,
-                { gap: 12, paddingHorizontal: 14, minHeight: 48 },
-              ]}
-            >
-              <Icon name="stop.fill" size={16} />
-              <T variant="label">Stop agent</T>
-            </Tap>
-          )}
+          <MenuPanel
+            items={modeItems}
+            onSelect={(item) => {
+              setModeOpen(false);
+              item.onPress?.();
+            }}
+          />
         </MorphingMenu>
       )}
       {trigger && triggerKey !== dismissed && !disabled && (
@@ -821,6 +795,7 @@ export const Composer = memo(function Composer({
           projectId={thread?.project_id ?? draft.projectId}
           provider={thread?.provider.kind ?? draft.provider}
           instance={thread?.provider.instance ?? draft.instance}
+          threadId={thread?.id}
           commands={(commands ?? []).filter(
             (c) => c.name !== "compact" || !canCompact,
           )}
@@ -962,7 +937,7 @@ export const Composer = memo(function Composer({
                               size={14}
                             />
                             <T
-                              variant="caption"
+                              variant="footnote"
                               numberOfLines={1}
                               style={{ flexShrink: 1 }}
                             >
@@ -1008,11 +983,14 @@ export const Composer = memo(function Composer({
             placeholder={
               departed && sendTransition.flight
                 ? ""
-                : steering
-                  ? "Guide the current turn…"
-                  : running
-                    ? "Ask for follow-up changes…"
-                    : "Ask Kybern to build something…"
+                : (placeholderOverride ??
+                  (steering
+                    ? "Guide the current turn…"
+                    : running
+                      ? "Ask for follow-up changes…"
+                      : thread
+                        ? `Reply to ${agentName(thread.provider.kind)}…`
+                        : "Ask Kybern to build something…"))
             }
             placeholderTextColor={colors.muted}
             value={Platform.OS === "android" ? text : undefined}
@@ -1046,7 +1024,7 @@ export const Composer = memo(function Composer({
             selectionColor={colors.accent}
             style={[
               type.body,
-              {
+              { letterSpacing: 0,
                 color: androidHighlight ? "transparent" : colors.ink,
                 textAlignVertical: "top",
                 minHeight: 44,
@@ -1093,11 +1071,9 @@ export const Composer = memo(function Composer({
                     setAdding(false);
                     return;
                   }
-                  void measureSendView(addButton.current).then((rect) => {
-                    if (rect) {
-                      setAddOrigin(rect);
-                      setAdding(true);
-                    }
+                  measureTrigger(addButton.current, (rect) => {
+                    setAddOrigin(rect);
+                    setAdding(true);
                   });
                 }}
                 disabled={disabled || uploading || busy}
@@ -1112,11 +1088,9 @@ export const Composer = memo(function Composer({
                     label={`${steering ? "Steer now" : "Queue follow-up"}. Change send mode`}
                     disabled={busy}
                     onPress={() => {
-                      void measureSendView(modeButton.current).then((rect) => {
-                        if (rect) {
-                          setModeOrigin(rect);
-                          setModeOpen(true);
-                        }
+                      measureTrigger(modeButton.current, (rect) => {
+                        setModeOrigin(rect);
+                        setModeOpen(true);
                       });
                     }}
                     style={{ width: 44, alignItems: "center" }}
@@ -1131,16 +1105,11 @@ export const Composer = memo(function Composer({
                   </Tap>
                 </View>
               )}
-              <IconButton
-                name={
-                  running && onStop && !text.trim() && !attachments.length
-                    ? "stop.fill"
-                    : running && !steering
-                      ? "arrow.turn.down.right"
-                      : "arrow.up"
-                }
+              <SendButton
+                state={running && onStop && empty ? "stop" : empty ? "empty" : "ready"}
+                icon={running && !steering ? "arrow.turn.down.right" : "arrow.up"}
                 label={
-                  running && onStop && !text.trim() && !attachments.length
+                  running && onStop && empty
                     ? "Stop agent"
                     : steering
                       ? "Steer now"
@@ -1148,25 +1117,18 @@ export const Composer = memo(function Composer({
                         ? "Queue follow-up"
                         : "Send message"
                 }
-                filled
                 onPress={() => {
-                  if (running && onStop && !text.trim() && !attachments.length)
-                    onStop();
+                  if (running && onStop && empty) onStop();
                   else void send();
                 }}
-                disabled={
-                  disabled ||
-                  busy ||
-                  uploading ||
-                  (!text.trim() && !attachments.length && !(running && onStop))
-                }
+                disabled={disabled || busy || uploading || (empty && !(running && onStop))}
               />
             </View>
           }
         />
       </Animated.View>
       {(uploading || (busy && running)) && (
-        <T variant="caption" tone="secondary">
+        <T variant="footnote" tone="secondary">
           {uploading
             ? "Attaching files…"
             : steering

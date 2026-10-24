@@ -19,6 +19,7 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { isChildThread } from '../../../../packages/kybern-client/src/subagents.ts'
 import { isChildWorking } from '../../../../packages/kybern-client/src/delegations.ts'
+import { pendingOf } from '../../../../packages/kybern-client/src/threadAttention.ts'
 import {
   USAGE_LIMITS_CHANGED_NOTIFICATION,
   type Thread,
@@ -171,12 +172,8 @@ function applyActivity(summaries: ThreadActivitySummary[] | undefined) {
   const pending: NavState['pending'] = {}
   for (const summary of summaries ?? []) {
     if (summary.state) activity[summary.thread_id] = summary.state
-    if (summary.pending_request || summary.pending_child_request) {
-      pending[summary.thread_id] = {
-        ...(summary.pending_request ? { own: summary.pending_request } : {}),
-        ...(summary.pending_child_request ? { child: summary.pending_child_request } : {}),
-      }
-    }
+    const waiting = pendingOf(summary)
+    if (waiting) pending[summary.thread_id] = waiting
     // Delegated children are no runtime tasks of their parent: they count in `active_children` (ADE-74).
     if (summary.active_agents > 0 || (summary.active_children ?? 0) > 0) void loadChildren(summary.thread_id)
   }

@@ -7,7 +7,7 @@ import { memo, type CSSProperties } from "react"
 
 import { Spinner } from "@/components/kybern/bits"
 import { ReviewChangesButton } from "@/components/kit/chat/ReviewChangesButton"
-import { agentItemChangeSummary, type AgentNoteResult, type AgentTaskResult } from "@/lib/agentItemTools"
+import { agentItemChangeSummary, type AgentNoteResult, type AgentTaskResult } from "../../../../packages/kybern-client/src/agentItemTools.ts"
 import { ListChecksIcon, NoteIcon, Undo2Icon } from "@/lib/kit/icons"
 import { useTranscriptRowState } from "@/lib/transcriptRowState"
 import { cn } from "@/lib/utils"

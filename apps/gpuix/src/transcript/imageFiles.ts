@@ -13,7 +13,7 @@ import { rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { useEffect, useMemo, useState } from 'react'
-import { imageSource } from '../../../desktop/src/lib/responseImages.ts'
+import { imageSource } from '../../../../packages/kybern-client/src/responseImages.ts'
 
 const CACHE_BYTES = 256 * 1024 * 1024
 const MEMORY_ENTRIES = 512

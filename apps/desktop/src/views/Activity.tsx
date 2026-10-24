@@ -18,7 +18,8 @@ import {
   WorkflowIcon,
 } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
-import type { RuntimeTask, RuntimeTaskStatus, ThreadId } from "@/protocol"
+import type { RuntimeTask, ThreadId } from "@/protocol"
+import { runtimeTaskStatusWord } from "../../../../packages/kybern-client/src/statusWords.ts"
 import { backgroundRuntimeTask, errorText, stopRuntimeTask } from "@/state/rpc"
 import { isRuntimeTaskActive, useStore } from "@/state/store"
 
@@ -70,7 +71,7 @@ const RuntimeTaskRow = memo(function RuntimeTaskRow({ task, now }: { task: Runti
   const [action, setAction] = useState<"stop" | "background" | null>(null)
   const active = isRuntimeTaskActive(task)
   const metrics = taskMetrics(task, now)
-  const detail = task.detail || (task.last_tool_name ? `Using ${task.last_tool_name}` : statusLabel(task.status, task.backgrounded))
+  const detail = task.detail || (task.last_tool_name ? `Using ${task.last_tool_name}` : runtimeTaskStatusWord(task.status, task.backgrounded))
 
   const run = async (kind: "stop" | "background") => {
     setAction(kind)
@@ -142,17 +143,6 @@ function SettledTaskGlyph({ task }: { task: RuntimeTask }) {
   if (task.kind === "process") return <ComputerTerminalIcon className="size-3.5" />
   if (task.kind === "monitor") return <ClockIcon className="size-3.5" />
   return <RobotIcon className="size-3.5" />
-}
-
-function statusLabel(status: RuntimeTaskStatus, backgrounded: boolean): string {
-  if (status === "pending") return "Starting"
-  if (status === "running") return backgrounded ? "Running in background" : "Running"
-  if (status === "waiting") return backgrounded ? "Monitoring in background" : "Waiting"
-  if (status === "stopping") return "Stopping"
-  if (status === "completed") return "Completed"
-  if (status === "failed") return "Failed"
-  if (status === "stopped") return "Stopped"
-  return "Interrupted"
 }
 
 function taskMetrics(task: RuntimeTask, now: number): string {

@@ -1,7 +1,7 @@
-import { imageSafeValue } from "./responseImages"
+import { imageSafeValue } from "../../../../packages/kybern-client/src/responseImages.ts"
 import type { JsonValue, PermissionMode, ProviderKind, ThreadStatus } from "@/protocol"
 
-export { toolLine } from "@/lib/toolActivity"
+export { toolLine } from "../../../../packages/kybern-client/src/toolActivity.ts"
 
 export function relativeTime(iso: string, now = Date.now()): string {
   const t = Date.parse(iso)

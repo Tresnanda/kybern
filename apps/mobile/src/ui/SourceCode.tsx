@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { ScrollView, Text } from "react-native";
 import { codeTokens } from "./codeTokens";
-import { useTheme } from "./theme";
+import { type as typography, useTheme } from "./theme";
 export function SourceCode({
   text,
   language,
@@ -23,9 +23,7 @@ export function SourceCode({
       <Text
         selectable
         style={{
-          fontFamily: "Menlo",
-          fontSize: 13,
-          lineHeight: 21,
+          ...typography.mono,
           color: colors.ink,
         }}
       >

@@ -1,6 +1,7 @@
-import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { Alert } from "../ui/Alert";
+import { haptics } from "../ui/haptics";
+import type { MenuItem } from "../ui/menuModel";
 import {
   deleteTask,
   setTaskPriority,
@@ -12,7 +13,6 @@ import {
   STATUS_LABEL,
   USER_STATUSES,
   latestRun,
-  taskTitle,
 } from "../state/tasksModel";
 import type { TaskItem, TaskPriority, TaskStatus } from "../state/protocol";
 import { errorText } from "../state/runtime";
@@ -36,68 +36,59 @@ export function openThread(id: string) {
 }
 
 export function changeStatus(task: Pick<TaskItem, "id">, status: TaskStatus) {
-  void Haptics.selectionAsync();
+  haptics.select();
   attempt(() => setTaskStatus(task.id, status));
 }
 export function changePriority(
   task: Pick<TaskItem, "id">,
   priority: TaskPriority,
 ) {
-  void Haptics.selectionAsync();
+  haptics.select();
   attempt(() => setTaskPriority(task.id, priority));
 }
 
-const statusVerb: Record<TaskStatus, string> = {
-  inbox: "Move to Inbox",
-  todo: "Move to To do",
-  running: "Running",
-  needs_review: "Needs review",
-  done: "Mark done",
-  canceled: "Cancel task",
-};
-
-export function statusMenu(task: TaskItem) {
-  Alert.alert(`${task.key} status`, `Now ${STATUS_LABEL[task.status]}`, [
-    ...USER_STATUSES.filter((s) => s !== task.status).map((status) => ({
-      text: statusVerb[status],
-      onPress: () => changeStatus(task, status),
-    })),
-    { text: "Cancel", style: "cancel" as const },
-  ]);
+/** Status choices with the current one checked (a submenu, or a property row's menu). */
+export function statusMenuItems(task: TaskItem): MenuItem[] {
+  return USER_STATUSES.map((status) => ({
+    title: STATUS_LABEL[status],
+    checked: status === task.status,
+    onPress: () => {
+      if (status !== task.status) changeStatus(task, status);
+    },
+  }));
 }
 
-export function priorityMenu(task: TaskItem) {
-  Alert.alert(`${task.key} priority`, `Now ${PRIORITY_LABEL[task.priority]}`, [
-    ...PRIORITY_MENU_ORDER.filter((p) => p !== task.priority).map(
-      (priority) => ({
-        text: PRIORITY_LABEL[priority],
-        onPress: () => changePriority(task, priority),
-      }),
-    ),
-    { text: "Cancel", style: "cancel" as const },
-  ]);
+/** Priority choices with the current one checked. */
+export function priorityMenuItems(task: TaskItem): MenuItem[] {
+  return PRIORITY_MENU_ORDER.map((priority) => ({
+    title: PRIORITY_LABEL[priority],
+    checked: priority === task.priority,
+    onPress: () => {
+      if (priority !== task.priority) changePriority(task, priority);
+    },
+  }));
 }
 
-/** The menu behind a task's long-press and its "…" button. */
-export function taskMenu(
+/** The actions behind a task's long-press and its "…" button. */
+export function taskMenuItems(
   task: TaskItem,
   options: { afterDelete?: () => void } = {},
-) {
+): MenuItem[] {
   const run = latestRun(task);
-  Alert.alert(`${task.key} · ${taskTitle(task)}`, undefined, [
-    ...(task.status !== "done"
-      ? [{ text: "Mark done", onPress: () => changeStatus(task, "done") }]
-      : [{ text: "Move to To do", onPress: () => changeStatus(task, "todo") }]),
-    { text: "Change status…", onPress: () => statusMenu(task) },
-    { text: "Change priority…", onPress: () => priorityMenu(task) },
+  return [
+    task.status !== "done"
+      ? { title: "Mark done", icon: "checkmark.circle", onPress: () => changeStatus(task, "done") }
+      : { title: "Move to To do", icon: "circle", onPress: () => changeStatus(task, "todo") },
+    { title: "Status", icon: "circle.lefthalf.filled", children: statusMenuItems(task) },
+    { title: "Priority", icon: "chart.bar", children: priorityMenuItems(task) },
     run
-      ? { text: `Open run ${run.number}`, onPress: () => openThread(run.thread_id) }
-      : { text: "Send to agent…", onPress: () => openSend(task.id) },
+      ? { title: `Open run ${run.number}`, icon: "text.bubble", onPress: () => openThread(run.thread_id) }
+      : { title: "Send to agent…", icon: "paperplane", onPress: () => openSend(task.id) },
     {
-      text: "Delete task",
-      style: "destructive" as const,
+      title: "Delete task",
+      icon: "trash",
+      destructive: true,
       onPress: () => attempt(() => deleteTask(task.id), options.afterDelete),
     },
-    { text: "Cancel", style: "cancel" as const },
-  ]);
+  ];
 }

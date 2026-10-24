@@ -14,14 +14,18 @@ import {
 import { currentClient, errorText, rpc, useApp } from "../state/runtime";
 import {
   Button,
-  Empty,
   ErrorBanner,
   Field,
+  Icon,
   IconButton,
   T,
   Tap,
   styles,
 } from "../ui/primitives";
+import { MenuButton, type MenuItem } from "../ui/ActionMenu";
+import { ProviderMark } from "../ui/ProviderMark";
+import { SearchField } from "../ui/Search";
+import { radius, space } from "../ui/theme";
 
 function base64(text: string) {
   const bytes = new TextEncoder().encode(text);
@@ -56,6 +60,28 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [ready, setReady] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const [query, setQuery] = useState("");
+  const [hit, setHit] = useState({ index: 0, total: 0 });
+  // Agent CLIs installed on the computer open as their own terminal tab (desktop parity).
+  const clis = app.providers.filter((p) => p.available && p.binary_path);
+  const launchItems: MenuItem[] = [
+    { title: "Shell", icon: "terminal", onPress: () => void create() },
+    ...clis.map((p) => ({
+      title: p.display_name,
+      subtitle: "Agent CLI",
+      icon: "sparkle" as const,
+      onPress: () => void create([p.binary_path!]),
+    })),
+  ];
+  const find = (text: string, step: number) =>
+    web.current?.injectJavaScript(`window.findInTerminal(${JSON.stringify(text)}, ${step}); true;`);
+  const endSearch = () => {
+    setSearching(false);
+    setQuery("");
+    setHit({ index: 0, total: 0 });
+    find("", 0);
+  };
   const web = useRef<WebView>(null);
   const input = useRef<TextInput>(null);
   const inputQueue = useRef<Promise<unknown>>(Promise.resolve());
@@ -64,6 +90,7 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
   selectedRef.current = selected;
   const reload = useCallback(async () => {
     const r = await rpc("terminals.list", { thread_id: threadId });
+    setError("");
     setTerminals(r.terminals);
     setSelected((s) =>
       r.terminals.some((t) => t.id === s) ? s : (r.terminals[0]?.id ?? ""),
@@ -92,15 +119,24 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
     const exit = client.onNotification("terminal.exited", () => {
       if (alive) void reload().catch((e) => setError(errorText(e)));
     });
-    void client
-      .call("terminals.subscribe", { terminal_id: selected, replay: true })
-      .catch((e) => {
-        if (alive) setError(errorText(e));
-      });
+    const subscribe = () =>
+      client
+        .call("terminals.subscribe", { terminal_id: selected, replay: true })
+        .catch((e) => {
+          if (alive) setError(errorText(e));
+        });
+    // The daemon dropped output this client could not keep up with: redraw from the replay.
+    const lagged = client.onNotification("terminal.lagged", (raw) => {
+      if (!alive || (raw as { terminal_id?: string }).terminal_id !== selected) return;
+      web.current?.injectJavaScript("window.resetTerminal(); true;");
+      void subscribe();
+    });
+    void subscribe();
     return () => {
       alive = false;
       off();
       exit();
+      lagged();
       void client
         .call("terminals.unsubscribe", { terminal_id: selected })
         .catch(() => {});
@@ -114,8 +150,11 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
   }, [ready, colors, dark]);
   useEffect(() => {
     setControl(false);
+    setSearching(false);
+    setQuery("");
+    setHit({ index: 0, total: 0 });
   }, [selected]);
-  async function create() {
+  async function create(command?: string[]) {
     setBusy(true);
     setError("");
     try {
@@ -123,6 +162,7 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
         thread_id: threadId,
         cols: 48,
         rows: 24,
+        ...(command ? { command } : {}),
       });
       await reload();
       setSelected(terminal.id);
@@ -188,38 +228,39 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
   }
   return (
     <View style={{ flex: 1, gap: 4 }}>
-      <ErrorBanner error={error} />
+      {!!error && (
+        <View style={{ paddingHorizontal: space.lg }}>
+          <ErrorBanner error={error} onRetry={() => void reload().catch((e) => setError(errorText(e)))} />
+        </View>
+      )}
       {connectorLogin && selected === initialTerminalId && <View style={{ paddingHorizontal: 16, gap: 8 }}>
-        {loginUrl && <Button secondary onPress={() => void Linking.openURL(loginUrl).catch(e => setError(errorText(e)))}>Sign in on {new URL(loginUrl).hostname}</Button>}
-        <T variant="caption" tone="secondary">After signing in, paste the full redirect URL when Claude asks for it.</T>
+        {loginUrl && <Button onPress={() => void Linking.openURL(loginUrl).catch(e => setError(errorText(e)))}>Sign in on {new URL(loginUrl).hostname}</Button>}
+        <T variant="footnote" tone="secondary">After signing in, paste the full redirect URL when Claude asks for it.</T>
         <Field label="Sign-in redirect URL" hideLabel secureTextEntry autoCapitalize="none" autoCorrect={false} value={redirect} onChangeText={setRedirect} placeholder="Paste the redirect URL" />
-        <Button secondary busy={busy} disabled={!ready || !redirect.trim() || app.status !== "open"} onPress={() => void completeLogin()}>Complete sign-in</Button>
+        <Button busy={busy} disabled={!ready || !redirect.trim() || app.status !== "open"} onPress={() => void completeLogin()}>Complete sign-in</Button>
       </View>}
       {terminals.length > 0 && (
-        <View style={[styles.spread, { paddingHorizontal: 16 }]}>
+        <View style={[styles.spread, { gap: space.xs, paddingStart: space.lg, paddingEnd: space.xs }]}>
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ gap: 6 }}
+            contentContainerStyle={{ gap: space.xs }}
             keyboardShouldPersistTaps="always"
           >
             {terminals.map((t) => (
               <Tap
                 key={t.id}
-                label={`${t.title}${t.alive ? "" : ", exited"}`}
+                label={`${t.title || "Shell"}${t.alive ? "" : ", exited"}`}
                 selected={t.id === selected}
+                feedback="highlight"
                 onPress={() => setSelected(t.id)}
                 style={{
-                  paddingHorizontal: 12,
-                  borderRadius: 18,
-                  backgroundColor:
-                    selected === t.id ? colors.raised : "transparent",
+                  paddingHorizontal: space.md,
+                  borderRadius: radius.full,
+                  backgroundColor: selected === t.id ? colors.raised : "transparent",
                 }}
               >
-                <T
-                  variant="caption"
-                  tone={selected === t.id ? "ink" : "secondary"}
-                >
+                <T variant="code" tone={selected === t.id ? "ink" : "secondary"} numberOfLines={1}>
                   {t.title || "Shell"}
                   {!t.alive ? " · Exited" : ""}
                 </T>
@@ -227,40 +268,62 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
             ))}
           </ScrollView>
           {!!selected && (
-            <IconButton name="xmark" label="Close terminal" onPress={close} />
+            <IconButton
+              name="magnifyingglass"
+              label={searching ? "Hide search" : "Search scrollback"}
+              onPress={() => (searching ? endSearch() : setSearching(true))}
+            />
           )}
-          <IconButton
-            name="plus"
-            label="New terminal"
-            onPress={() => void create()}
-            disabled={busy || app.status !== "open"}
-          />
+          <MenuButton icon="plus" label="New terminal" title="Open in a new tab" items={launchItems} disabled={busy || app.status !== "open"} />
+          {!!selected && <IconButton name="xmark" label="Close terminal" onPress={close} />}
+        </View>
+      )}
+      {searching && !!selected && (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs, paddingStart: space.lg, paddingEnd: space.xs }}>
+          <View style={{ flex: 1 }}>
+            <SearchField
+              placeholder="Search scrollback"
+              value={query}
+              autoFocus
+              onChangeText={(text) => {
+                setQuery(text);
+                find(text, 0);
+              }}
+              onSubmit={() => find(query, -1)}
+            />
+          </View>
+          <T variant="footnote" tone="muted" style={{ fontVariant: ["tabular-nums"], minWidth: 44, textAlign: "center" }}>
+            {query ? (hit.total ? `${hit.index} of ${hit.total}` : "None") : ""}
+          </T>
+          <IconButton name="chevron.up" label="Previous match" disabled={!hit.total} onPress={() => find(query, -1)} />
+          <IconButton name="chevron.down" label="Next match" disabled={!hit.total} onPress={() => find(query, 1)} />
         </View>
       )}
       {!selected ? (
         <ScrollView
-          contentContainerStyle={{
-            flexGrow: 1,
-            justifyContent: "center",
-            paddingHorizontal: 24,
-            paddingBottom: 40,
-          }}
+          contentContainerStyle={{ paddingHorizontal: space.xl, paddingTop: 40, paddingBottom: space["2xl"] }}
         >
-          <View style={{ width: "100%", maxWidth: 480, alignSelf: "center" }}>
-            <Empty
-              icon="terminal"
-              title="Your shell, on hand."
-              detail="Run commands in this thread’s workspace."
-              action={
-                <Button
-                  busy={busy}
-                  disabled={app.status !== "open"}
-                  onPress={() => void create()}
-                >
-                  Open a terminal
-                </Button>
-              }
-            />
+          <View style={{ width: "100%", maxWidth: 480, alignSelf: "center", alignItems: "center", gap: space.sm }}>
+            <Icon name="terminal" size={34} color={colors.muted} />
+            <T variant="headline" accessibilityRole="header" style={{ textAlign: "center", marginTop: space.xs }}>
+              No terminal open
+            </T>
+            <T variant="subhead" tone="secondary" style={{ textAlign: "center", maxWidth: 300 }}>
+              Run commands or an agent CLI in this thread’s workspace.
+            </T>
+            <View style={{ marginTop: space.md, flexDirection: "row", gap: space.sm }}>
+              <Button busy={busy} disabled={app.status !== "open"} size="medium" onPress={() => void create()}>
+                Open terminal
+              </Button>
+              {clis.length > 0 && (
+                <MenuButton items={launchItems.slice(1)} title="Agent CLIs on your computer" label="Open an agent CLI" radius={radius.full} disabled={app.status !== "open"}>
+                  <View style={{ minHeight: 36, paddingHorizontal: space.md, flexDirection: "row", alignItems: "center", gap: space.xs }}>
+                    <T variant="label" tone="accent">Agent CLI</T>
+                    <Icon name="chevron.down" size={13} color={colors.accent} />
+                  </View>
+                </MenuButton>
+              )}
+            </View>
           </View>
         </ScrollView>
       ) : (
@@ -294,8 +357,12 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
                     data?: string;
                     cols?: number;
                     rows?: number;
+                    index?: number;
+                    total?: number;
                   };
                   if (message.type === "ready") setReady(true);
+                  if (message.type === "search")
+                    setHit({ index: Number(message.index) || 0, total: Number(message.total) || 0 });
                   if (message.type === "focus") input.current?.focus();
                   if (
                     message.type === "input" &&
@@ -343,7 +410,7 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
                 style={{
                   flexDirection: "row",
                   backgroundColor: colors.raised,
-                  borderRadius: 22,
+                  borderRadius: radius.full,
                 }}
               >
                 <Tap
@@ -351,7 +418,7 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
                   onPress={() => void send("\x1b")}
                   style={{ width: 44, alignItems: "center" }}
                 >
-                  <T variant="caption">esc</T>
+                  <T variant="code">esc</T>
                 </Tap>
                 <Tap
                   label="Control modifier"
@@ -360,11 +427,11 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
                   style={{
                     width: 48,
                     alignItems: "center",
-                    borderRadius: 22,
+                    borderRadius: radius.full,
                     backgroundColor: control ? colors.accentSoft : undefined,
                   }}
                 >
-                  <T variant="caption" tone={control ? "accent" : "ink"}>
+                  <T variant="code" tone={control ? "accent" : "ink"}>
                     ctrl
                   </T>
                 </Tap>
@@ -373,14 +440,14 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
                   onPress={() => void send("\t")}
                   style={{ width: 44, alignItems: "center" }}
                 >
-                  <T variant="caption">tab</T>
+                  <T variant="code">tab</T>
                 </Tap>
               </View>
               <View
                 style={{
                   flexDirection: "row",
                   backgroundColor: colors.raised,
-                  borderRadius: 22,
+                  borderRadius: radius.full,
                 }}
               >
                 {["~", "|", "/", "-"].map((value) => (
@@ -398,7 +465,7 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
                 style={{
                   flexDirection: "row",
                   backgroundColor: colors.raised,
-                  borderRadius: 22,
+                  borderRadius: radius.full,
                 }}
               >
                 {[
@@ -418,7 +485,7 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
                 ))}
               </View>
             </ScrollView>
-            <View style={{ backgroundColor: colors.raised, borderRadius: 22 }}>
+            <View style={{ backgroundColor: colors.raised, borderRadius: radius.full }}>
               <TextInput
                 underlineColorAndroid="transparent"
                 ref={input}

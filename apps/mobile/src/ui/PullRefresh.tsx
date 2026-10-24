@@ -18,10 +18,13 @@ export function PullRefresh({
   offset,
   refreshing,
   onRefresh,
+  label = "Refreshing",
 }: PropsWithChildren<{
   offset: SharedValue<number>;
   refreshing: boolean;
   onRefresh: () => void;
+  /** What the spinner announces ("Refreshing notes"). */
+  label?: string;
 }>) {
   const { colors } = useTheme();
   const reduced = useReducedMotion();
@@ -91,7 +94,7 @@ export function PullRefresh({
         ]}
       >
         {refreshing ? (
-          <Busy accessibilityLabel="Refreshing threads" />
+          <Busy accessibilityLabel={label} />
         ) : (
           <Icon name="arrow.clockwise" size={19} />
         )}

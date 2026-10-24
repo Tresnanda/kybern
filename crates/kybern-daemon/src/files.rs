@@ -205,25 +205,67 @@ pub fn rank(files: &[String], query: &str, limit: usize) -> Vec<String> {
     scored.into_iter().take(limit).map(|(_, _, path)| path.to_string()).collect()
 }
 
-/// Resolve `rel` under `root`, refusing anything that escapes the project.
+/// Resolve a file or folder someone named: a file tab, a chat link, an agent's
+/// read. Anything inside the project opens, dot-folders such as
+/// `.kybern-artifacts/` and `.screenshots/` and generated folders included,
+/// except what [`refusal`] keeps closed. The canonical path must stay inside
+/// the canonical root and pass the same check, so a symlink cannot reach
+/// `.git` or `.env` either. Listing a folder still hides dotfiles and
+/// generated folders (`list_dir`); that is browsing, not naming.
 fn resolve(root: &Path, rel: &str) -> Result<std::path::PathBuf> {
     let rel = rel.trim_matches('/');
     let mut path = root.to_path_buf();
-    for part in rel.split('/').filter(|p| !p.is_empty()) {
-        if part == ".." || part == "." || part.contains('\\') {
-            anyhow::bail!("path must stay inside the project");
-        }
-        if (part.starts_with('.') && !HIDDEN_ALLOWED.contains(&part)) || SKIP_DIRS.contains(&part) {
-            anyhow::bail!("hidden or generated folders are not browsable: {part}");
+    let parts: Vec<&str> = rel.split('/').filter(|p| !p.is_empty()).collect();
+    for part in &parts {
+        if *part == ".." || *part == "." || part.contains('\\') {
+            anyhow::bail!("Use the path from the workspace root, without `.`, `..` or backslashes.");
         }
         path.push(part);
     }
+    if let Some(reason) = refusal(&parts) {
+        anyhow::bail!(reason);
+    }
     let canon_root = std::fs::canonicalize(root)?;
-    let canon = std::fs::canonicalize(&path).map_err(|_| anyhow::anyhow!("no such path: {rel}"))?;
-    if !canon.starts_with(&canon_root) {
-        anyhow::bail!("path must stay inside the project");
+    let canon = std::fs::canonicalize(&path)
+        .map_err(|_| anyhow::anyhow!("{rel} does not exist. Check the path or ask the agent to recreate it."))?;
+    let real = canon.strip_prefix(&canon_root).map_err(|_| anyhow::anyhow!(OUTSIDE))?;
+    let real: Vec<String> = real.components().map(|part| part.as_os_str().to_string_lossy().into_owned()).collect();
+    if let Some(reason) = refusal(&real.iter().map(String::as_str).collect::<Vec<_>>()) {
+        anyhow::bail!(reason);
     }
     Ok(path)
+}
+
+const OUTSIDE: &str = "This path leads outside the project. Use a path inside the workspace.";
+
+/// Folders that hold credentials rather than project files.
+const CREDENTIAL_DIRS: &[&str] = &[".ssh", ".gnupg", ".aws"];
+
+/// Why Kybern will not open the file or folder at `parts` (relative to the
+/// project root), whoever names it: the repository's own `.git`, credential
+/// folders, and env files. `.env.example` and similar templates are meant to
+/// be shared and stay open.
+pub(crate) fn refusal(parts: &[&str]) -> Option<String> {
+    for part in parts {
+        let lower = part.to_ascii_lowercase();
+        if lower == ".git" {
+            return Some("Kybern doesn't open files inside .git. Use git in a terminal to inspect the repository.".into());
+        }
+        if CREDENTIAL_DIRS.contains(&lower.as_str()) {
+            return Some(format!("{part} holds credentials, so Kybern doesn't open it. Open it in your own editor if you need it."));
+        }
+    }
+    let name = parts.last()?;
+    let lower = name.to_ascii_lowercase();
+    let template = [".example", ".sample", ".template"].iter().any(|suffix| lower.ends_with(suffix));
+    ((lower.starts_with(".env") || lower.ends_with(".env")) && !template).then(|| {
+        format!("{name} may hold secrets, so Kybern doesn't open it. Open it in your own editor, or ask the agent for the variable names instead.")
+    })
+}
+
+/// Generated output, which Kybern opens but does not save into.
+fn generated_folder<'a>(parts: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    parts.into_iter().find(|part| *part != ".git" && SKIP_DIRS.contains(part))
 }
 
 const HIDDEN_ALLOWED: &[&str] = &[".github", ".claude", ".env.example", ".gitignore", ".editorconfig", ".npmrc", ".nvmrc"];
@@ -274,6 +316,8 @@ enum Reference {
     Found(String),
     /// A file that exists but lies outside the workspace.
     Outside,
+    /// A file inside the workspace that Kybern keeps closed, and why.
+    Refused(String),
     /// A relative path that more than one workspace file ends with.
     Ambiguous,
     Missing,
@@ -335,8 +379,10 @@ async fn resolve_reference(
         if candidate.is_empty() {
             continue;
         }
-        if let Some(found) = existing_file(root, candidate).await {
-            return Ok(Reference::Found(found));
+        match existing_file(root, candidate).await {
+            Some(Ok(found)) => return Ok(Reference::Found(found)),
+            Some(Err(reason)) => return Ok(Reference::Refused(reason)),
+            None => {}
         }
         if let Ok(canon) = tokio::fs::canonicalize(root.join(candidate)).await
             && canon.is_file()
@@ -377,6 +423,7 @@ pub async fn read_thread_file(
         Reference::Outside => {
             Err(anyhow::anyhow!("This file is outside the conversation's workspace. Ask the agent to copy it into the workspace."))
         }
+        Reference::Refused(reason) => Err(anyhow::anyhow!(reason)),
         Reference::Ambiguous => Err(anyhow::anyhow!("Several files match this path. Ask the agent for the path from the workspace root.")),
         Reference::Missing => Err(anyhow::anyhow!("File not found. Check the path or ask the agent to recreate it.")),
     }
@@ -431,11 +478,12 @@ pub async fn resolve_thread_files(indexes: &FileIndexCache, cwd: &Path, paths: &
     Ok(out)
 }
 
-/// `path` under `root` (canonical) when it is an openable file inside it.
-async fn existing_file(root: &Path, path: &str) -> Option<String> {
+/// `path` under `root` (canonical) when it is a file inside it: its relative
+/// path when it opens, or why it is refused.
+async fn existing_file(root: &Path, path: &str) -> Option<Result<String, String>> {
     let canon = tokio::fs::canonicalize(root.join(path)).await.ok()?;
     let relative = canon.strip_prefix(root).ok()?.to_string_lossy().into_owned();
-    (canon.is_file() && resolve(root, &relative).is_ok()).then_some(relative)
+    canon.is_file().then(|| resolve(root, &relative).map(|_| relative).map_err(|error| error.to_string()))
 }
 
 /// Largest file a client may save (the editor's syntax limit).
@@ -503,9 +551,10 @@ pub async fn read_file(
 
 /// Replace an existing project file with `content`: same directory temp file,
 /// fsync, permissions kept, then an atomic rename over the original. Paths go
-/// through `resolve` (no `..`, hidden or generated folders, or symlink
-/// escapes). A symlinked file is written through to its target, which must
-/// itself pass `resolve`, so a link cannot reach `.env` or `.git`. With
+/// through `resolve` (no `..`, `.git`, secrets or symlink escapes), and
+/// generated folders are not saved into. A symlinked file is written through
+/// to its target, which must itself pass both checks, so a link cannot reach
+/// `.env` or `.git`. With
 /// `expected_version`, a file that changed since is left alone and the write
 /// fails with a conflict; daemon saves are serialized so two clients racing on
 /// one version cannot both win.
@@ -523,8 +572,12 @@ pub async fn write_file(
         anyhow::bail!("not a file: {rel}");
     }
     let canon_root = std::fs::canonicalize(root)?;
-    let real = target.strip_prefix(&canon_root).map_err(|_| anyhow::anyhow!("path must stay inside the project"))?;
+    let real = target.strip_prefix(&canon_root).map_err(|_| anyhow::anyhow!(OUTSIDE))?;
     resolve(&canon_root, &real.to_string_lossy())?;
+    let named = rel.split('/').chain(real.components().filter_map(|part| part.as_os_str().to_str()));
+    if let Some(folder) = generated_folder(named) {
+        anyhow::bail!("{folder} holds generated files, so Kybern doesn't save into it. Change the source that generates it instead.");
+    }
     let expected = expected_version.map(str::to_owned);
     let rel = rel.to_string();
     tokio::task::spawn_blocking(move || -> Result<kybern_protocol::methods::FilesWriteResult> {
@@ -633,7 +686,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        CachedIndex, FileIndexCache, MAX_INDEX_SLOTS, WriteConflict, rank, read_file, read_thread_file, resolve_thread_files,
+        CachedIndex, FileIndexCache, MAX_INDEX_SLOTS, WriteConflict, list_dir, rank, read_file, read_thread_file, resolve_thread_files,
         split_location, write_file, write_thread_file,
     };
 
@@ -761,6 +814,117 @@ mod tests {
             ]
             .map(|path| path.map(String::from))
         );
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// ADE-74: agents link files in dot-folders such as `.kybern-artifacts/` and `.screenshots/`. Naming one opens it;
+    /// `.git`, credential folders and env files stay closed, with the reason instead of "not found".
+    #[tokio::test]
+    async fn named_files_in_dot_folders_open_and_git_and_secrets_stay_closed() {
+        let base = std::env::temp_dir().join(format!("kybern-dot-folder-test-{}", uuid::Uuid::new_v4()));
+        let dir = &base.join("workspace");
+        for file in [
+            ".kybern-artifacts/ade-74/mockup.html",
+            ".screenshots/home.png",
+            ".claude/notes/plan.md",
+            ".git/config",
+            ".git/HEAD",
+            ".ssh/id_ed25519",
+            ".env",
+            ".env.local",
+            ".envrc",
+            "apps/web/.env.production",
+            "deploy/prod.env",
+            ".env.example",
+            "apps/web/.env.sample",
+            "src/app.ts",
+            "dist/report.html",
+        ] {
+            std::fs::create_dir_all(dir.join(file).parent().unwrap()).unwrap();
+            std::fs::write(dir.join(file), format!("<!-- {file} -->")).unwrap();
+        }
+        std::fs::write(base.join("outside.html"), "x").unwrap();
+        let indexes = FileIndexCache::default();
+        let read = |source: &str| {
+            let (indexes, source) = (indexes.clone(), source.to_string());
+            async move { read_thread_file(&indexes, dir, &source, 1024, None).await.map(|file| file.content).map_err(|e| e.to_string()) }
+        };
+
+        // Chat links, project reads and saves all open agent dot-folders, and generated output opens to read.
+        for file in [
+            ".kybern-artifacts/ade-74/mockup.html",
+            ".screenshots/home.png",
+            ".claude/notes/plan.md",
+            ".env.example",
+            "apps/web/.env.sample",
+            "dist/report.html",
+        ] {
+            assert_eq!(read(file).await, Ok(format!("<!-- {file} -->")), "{file}");
+            assert_eq!(read(&format!("{file}#L1")).await, Ok(format!("<!-- {file} -->")), "{file} with a location");
+            assert!(read_file(dir, file, 1024, None).await.is_ok(), "{file} through files.read");
+        }
+        let resolved =
+            resolve_thread_files(&indexes, dir, &[".kybern-artifacts/ade-74/mockup.html".into(), ".env".into(), ".git/config".into()])
+                .await
+                .unwrap();
+        assert_eq!(resolved, [Some(".kybern-artifacts/ade-74/mockup.html".to_string()), None, None]);
+        let read_back = read_file(dir, ".kybern-artifacts/ade-74/mockup.html", 1024, None).await.unwrap();
+        write_thread_file(dir, ".kybern-artifacts/ade-74/mockup.html", "<p>edited</p>".into(), read_back.version.as_deref()).await.unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join(".kybern-artifacts/ade-74/mockup.html")).unwrap(), "<p>edited</p>");
+        let saved = write_file(dir, "dist/report.html", "x".into(), None).await.unwrap_err().to_string();
+        assert!(saved.contains("generated files"), "{saved}");
+
+        // Refusals say why, and never that an existing file is missing.
+        let refused = |message: &str, reason: &str| {
+            assert!(message.contains(reason), "{message:?} should say {reason:?}");
+            assert!(!message.contains("not found") && !message.contains("does not exist"), "{message:?}");
+        };
+        for file in [".git/config", ".git/HEAD"] {
+            refused(&read(file).await.unwrap_err(), "inside .git");
+            refused(&read_file(dir, file, 1024, None).await.unwrap_err().to_string(), "inside .git");
+            refused(&write_thread_file(dir, file, "x".into(), None).await.unwrap_err().to_string(), "inside .git");
+        }
+        refused(&read(".ssh/id_ed25519").await.unwrap_err(), "holds credentials");
+        for file in [".env", ".env.local", ".envrc", "apps/web/.env.production", "deploy/prod.env"] {
+            refused(&read(file).await.unwrap_err(), "may hold secrets");
+            refused(&read_file(dir, file, 1024, None).await.unwrap_err().to_string(), "may hold secrets");
+            refused(&write_file(dir, file, "x".into(), None).await.unwrap_err().to_string(), "may hold secrets");
+        }
+        // `..` through an agent folder reaches the same refusal, and leaving the project is still refused.
+        refused(&read(".kybern-artifacts/../.env").await.unwrap_err(), "may hold secrets");
+        refused(&read_file(dir, ".kybern-artifacts/../.env", 1024, None).await.unwrap_err().to_string(), "without `.`, `..`");
+        refused(&read_file(dir, "../outside.html", 1024, None).await.unwrap_err().to_string(), "without `.`, `..`");
+        assert!(read("../outside.html").await.unwrap_err().contains("outside the conversation's workspace"));
+        // A missing file is still reported as missing.
+        assert!(read(".kybern-artifacts/ade-74/gone.html").await.unwrap_err().starts_with("File not found"));
+        assert!(read_file(dir, ".screenshots/gone.png", 1024, None).await.unwrap_err().to_string().contains("does not exist"));
+
+        #[cfg(unix)]
+        {
+            // Links inside the project cannot reach .git, secrets or the outside, whatever they are called.
+            std::os::unix::fs::symlink(dir.join(".env"), dir.join("src/settings.txt")).unwrap();
+            std::os::unix::fs::symlink(dir.join(".git"), dir.join("src/repo")).unwrap();
+            std::os::unix::fs::symlink(base.join("outside.html"), dir.join(".kybern-artifacts/escape.html")).unwrap();
+            refused(&read("src/settings.txt").await.unwrap_err(), "may hold secrets");
+            refused(&read_file(dir, "src/settings.txt", 1024, None).await.unwrap_err().to_string(), "may hold secrets");
+            refused(&write_file(dir, "src/settings.txt", "x".into(), None).await.unwrap_err().to_string(), "may hold secrets");
+            refused(&read("src/repo/config").await.unwrap_err(), "inside .git");
+            refused(&read_file(dir, "src/repo/config", 1024, None).await.unwrap_err().to_string(), "inside .git");
+            refused(&read_file(dir, ".kybern-artifacts/escape.html", 1024, None).await.unwrap_err().to_string(), "outside the project");
+            assert!(read(".kybern-artifacts/escape.html").await.unwrap_err().contains("outside the conversation's workspace"));
+            assert_eq!(std::fs::read_to_string(dir.join(".env")).unwrap(), "<!-- .env -->");
+        }
+
+        // The tree still hides dotfiles, but a named agent folder lists, and .git does not.
+        let names = |entries: Vec<kybern_protocol::methods::FileEntry>| entries.into_iter().map(|entry| entry.name).collect::<Vec<_>>();
+        let top = names(list_dir(dir, "").await.unwrap());
+        assert!(!top.iter().any(|name| name == ".kybern-artifacts" || name == ".git" || name == ".env"), "{top:?}");
+        assert!(top.iter().any(|name| name == ".env.example"), "{top:?}");
+        assert_eq!(
+            names(list_dir(dir, ".kybern-artifacts").await.unwrap()),
+            ["ade-74", "escape.html"].map(String::from).into_iter().filter(|name| cfg!(unix) || name != "escape.html").collect::<Vec<_>>()
+        );
+        refused(&list_dir(dir, ".git").await.unwrap_err().to_string(), "inside .git");
         std::fs::remove_dir_all(&base).unwrap();
     }
 

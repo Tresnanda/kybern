@@ -1,6 +1,6 @@
 import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { View } from "react-native";
+import { ScrollView, useWindowDimensions, View } from "react-native";
 import { threadReferencePart } from "../../../packages/kybern-client/src/threadReferences";
 import { addContext } from "../src/state/draft";
 import type { Thread, ThreadSearchHit } from "../src/state/protocol";
@@ -9,19 +9,13 @@ import {
   PROVIDER_DISPLAY_NAME,
 } from "../src/state/protocol";
 import { errorText, rpc, useApp } from "../src/state/runtime";
-import {
-  Empty,
-  ErrorBanner,
-  Field,
-  Group,
-  Icon,
-  Page,
-  Row,
-  T,
-  Tap,
-  styles,
-} from "../src/ui/primitives";
-import { useTheme } from "../src/ui/theme";
+import { relativeTime } from "../src/state/threadList";
+import { InsetGroup, ListRow, SectionFooter, SectionHeader } from "../src/ui/List";
+import { Button, Empty, ErrorBanner } from "../src/ui/primitives";
+import { ProviderMark } from "../src/ui/ProviderMark";
+import { SearchField } from "../src/ui/Search";
+import { Segmented } from "../src/ui/Segmented";
+import { gutter, space, useTheme } from "../src/ui/theme";
 import { Working } from "../src/ui/Working";
 
 export default function ThreadPicker() {
@@ -31,6 +25,7 @@ export default function ThreadPicker() {
   }>();
   const app = useApp();
   const { colors } = useTheme();
+  const { width } = useWindowDimensions();
   const current = app.threads.find((thread) => thread.id === threadId);
   const initialProjectId = projectId ?? current?.project_id ?? "";
   const [scopeProjectId, setScopeProjectId] = useState(initialProjectId);
@@ -114,12 +109,11 @@ export default function ThreadPicker() {
     }
   }
 
-  const scopeName = scopeProjectId
-    ? isFreeChatProject(scopeProjectId)
+  const scopeName = initialProjectId
+    ? isFreeChatProject(initialProjectId)
       ? "Free chat"
-      : app.projects.find((project) => project.id === scopeProjectId)?.name ??
-        "This project"
-    : "All projects";
+      : app.projects.find((project) => project.id === initialProjectId)?.name ?? "This project"
+    : "This project";
   const grouped = useMemo(() => {
     const groups = new Map<string, ThreadSearchHit[]>();
     for (const hit of hits) {
@@ -138,110 +132,81 @@ export default function ThreadPicker() {
   }
 
   return (
-    <Page>
-      <View style={{ gap: 14, marginBottom: 22 }}>
-        <Field
-          label="Find a conversation"
-          placeholder="Title or message text"
-          value={query}
-          onChangeText={setQuery}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-        <View style={[styles.line, { gap: 8, flexWrap: "wrap" }]}>
-          <T variant="caption" tone="secondary">
-            Search in
-          </T>
-          <Tap
-            label={`Search in ${scopeName}`}
-            onPress={() =>
-              setScopeProjectId(scopeProjectId ? "" : initialProjectId)
-            }
-            style={[
-              styles.line,
-              {
-                minHeight: 44,
-                paddingHorizontal: 13,
-                borderRadius: 22,
-                backgroundColor: colors.raised,
-                gap: 7,
-              },
+    <ScrollView
+      style={{ flex: 1, backgroundColor: colors.grouped }}
+      keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag"
+      contentContainerStyle={{ padding: gutter(width), paddingBottom: space["2xl"], flexGrow: 1 }}
+    >
+      <View style={{ gap: space.md }}>
+        <SearchField value={query} onChangeText={setQuery} placeholder="Title or message text" />
+        {initialProjectId ? (
+          <Segmented
+            compact
+            label="Search in"
+            options={[
+              { value: "project", label: scopeName },
+              { value: "all", label: "All projects" },
             ]}
-          >
-            <Icon name={scopeProjectId ? "folder" : "person.2"} size={15} />
-            <T variant="caption">{scopeName}</T>
-            <Icon
-              name="arrow.triangle.swap"
-              size={12}
-              color={colors.secondary}
-            />
-          </Tap>
-        </View>
-        <T variant="caption" tone="secondary">
-          The reference adds the conversation’s stable ID to your message. It
-          does not start or wake that conversation.
-        </T>
+            value={scopeProjectId ? "project" : "all"}
+            onChange={(value) => setScopeProjectId(value === "project" ? initialProjectId : "")}
+          />
+        ) : null}
+        <SectionFooter>
+          {"The reference adds the conversation’s stable ID to your message. It doesn’t start or wake that conversation."}
+        </SectionFooter>
       </View>
       <ErrorBanner error={error} />
       {loading ? (
-        <Working label="Finding conversations" />
+        <View style={{ paddingTop: space.xl }}>
+          <Working label="Finding conversations" />
+        </View>
       ) : grouped.length ? (
         grouped.map(([groupProjectId, items]) => (
-          <Group
-            key={groupProjectId}
-            title={
-              isFreeChatProject(groupProjectId)
-                ? "Free chat"
-                : app.projects.find((project) => project.id === groupProjectId)
-                    ?.name ?? "Project"
-            }
-          >
-            {items.map(({ thread, snippet, matched_at: matchedAt }) => (
-              <Row
-                key={thread.id}
-                title={thread.title || "Untitled conversation"}
-                detail={[
-                  PROVIDER_DISPLAY_NAME[thread.provider.kind],
-                  thread.status === "archived" ? "Archived" : "",
-                  new Date(matchedAt ?? thread.updated_at).toLocaleString(),
-                  snippet?.replace(/\s+/g, " ").trim(),
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-                detailLines={2}
-                icon="text.bubble"
-                onPress={() => choose(thread)}
-              />
-            ))}
-          </Group>
+          <View key={groupProjectId}>
+            <SectionHeader
+              inset
+              title={
+                isFreeChatProject(groupProjectId)
+                  ? "Free chat"
+                  : app.projects.find((project) => project.id === groupProjectId)?.name ?? "Project"
+              }
+            />
+            <InsetGroup>
+              {items.map(({ thread, snippet, matched_at: matchedAt }) => (
+                <ListRow
+                  key={thread.id}
+                  title={thread.title || "Untitled conversation"}
+                  subtitle={[
+                    PROVIDER_DISPLAY_NAME[thread.provider.kind],
+                    thread.status === "archived" ? "Archived" : "",
+                    snippet?.replace(/\s+/g, " ").trim(),
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                  subtitleLines={2}
+                  meta={relativeTime(matchedAt ?? thread.updated_at)}
+                  leading={<ProviderMark kind={thread.provider.kind} size={20} />}
+                  onPress={() => choose(thread)}
+                />
+              ))}
+            </InsetGroup>
+          </View>
         ))
       ) : (
         <Empty
           icon="text.bubble"
-          title={
-            query ? "No matching conversations" : "No other conversations"
-          }
-          detail={
-            scopeProjectId
-              ? "Search all projects or start another conversation first."
-              : "Try another title or message phrase."
-          }
+          title={query.trim() ? `No conversations match “${query.trim()}”` : "No other conversations"}
+          detail={scopeProjectId ? "Search all projects or start another conversation first." : "Try another title or message phrase."}
         />
       )}
-      {nextCursor && !loading && (
-        <View style={{ marginTop: 8 }}>
-          <Tap
-            label="Load older conversations"
-            disabled={loadingMore}
-            onPress={() => void loadMore()}
-            style={{ minHeight: 48, alignItems: "center" }}
-          >
-            <T variant="label" tone="accent">
-              {loadingMore ? "Loading…" : "Load older conversations"}
-            </T>
-          </Tap>
+      {nextCursor && !loading ? (
+        <View style={{ paddingTop: space.lg, alignItems: "center" }}>
+          <Button role="plain" size="medium" busy={loadingMore} onPress={() => void loadMore()}>
+            Load older conversations
+          </Button>
         </View>
-      )}
-    </Page>
+      ) : null}
+    </ScrollView>
   );
 }

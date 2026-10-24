@@ -5,7 +5,7 @@
 // `packages/kybern-client/src/coordinatorCards.ts`, shared with desktop.
 import * as Haptics from "expo-haptics";
 import { useState } from "react";
-import { Platform, Text, TextInput, View } from "react-native";
+import { StyleSheet, Text, TextInput, View } from "react-native";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import {
   COORDINATOR_CARD_COPY,
@@ -20,18 +20,16 @@ import { settingValueLabel } from "../../../../packages/kybern-client/src/coordi
 import type { ApprovalDecision, ApprovalRequest, BriefProposalInput, LeadGitCardInput, SettingsProposalInput } from "../state/protocol";
 import { errorText, loadThread, refresh, rpc, useApp } from "../state/runtime";
 import { Button, ErrorBanner, Icon, T, Tap, styles, type IconName } from "../ui/primitives";
-import { type as typography, useTheme } from "../ui/theme";
-
-const MONO = Platform.select({ ios: "Menlo", default: "monospace" });
+import { MONO, radius, space, type as typography, useTheme } from "../ui/theme";
 
 /** Text with branch names set as code. */
-function CardText({ parts, tone = "secondary", variant = "caption" }: { parts: readonly CardTextPart[]; tone?: "secondary" | "ink"; variant?: "caption" | "label" }) {
+function CardText({ parts, tone = "secondary", variant = "footnote" }: { parts: readonly CardTextPart[]; tone?: "secondary" | "ink"; variant?: "footnote" | "label" }) {
   const { colors } = useTheme();
   return (
     <T variant={variant} tone={tone}>
       {parts.map((part, index) =>
         part.code ? (
-          <Text key={index} style={{ fontFamily: MONO, fontSize: 12, color: colors.ink, backgroundColor: colors.raised }}>
+          <Text key={index} style={{ fontFamily: MONO, color: colors.ink, backgroundColor: colors.code }}>
             {` ${part.text} `}
           </Text>
         ) : (
@@ -68,10 +66,10 @@ function CardShell({ icon, title, detail, children }: { icon: IconName; title: R
     <Animated.View
       entering={FadeIn.duration(180)}
       exiting={FadeOut.duration(140)}
-      style={{ padding: 16, borderRadius: 22, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, gap: 12 }}
+      style={{ padding: space.lg, borderRadius: radius.lg, borderCurve: "continuous", backgroundColor: colors.card, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, gap: space.md }}
     >
       <View style={[styles.line, { alignItems: "flex-start", gap: 12 }]}>
-        <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: colors.raised, alignItems: "center", justifyContent: "center" }}>
+        <View style={{ width: 32, height: 32, borderRadius: radius.sm, backgroundColor: colors.raised, alignItems: "center", justifyContent: "center" }}>
           <Icon name={icon} size={17} color={colors.secondary} />
         </View>
         <View style={{ flex: 1, gap: 4 }}>
@@ -97,7 +95,7 @@ export function BriefProposalCard({ approval, input }: { approval: ApprovalReque
     <CardShell
       icon="pencil"
       title={<T variant="label" style={{ fontWeight: "600" }}>{input.replaces ? COORDINATOR_CARD_COPY.briefReplaceTitle : COORDINATOR_CARD_COPY.briefTitle}</T>}
-      detail={<T variant="caption" tone="secondary">{COORDINATOR_CARD_COPY.briefDetail}</T>}
+      detail={<T variant="footnote" tone="secondary">{COORDINATOR_CARD_COPY.briefDetail}</T>}
     >
       <TextInput
         underlineColorAndroid="transparent"
@@ -109,19 +107,19 @@ export function BriefProposalCard({ approval, input }: { approval: ApprovalReque
         scrollEnabled
         textAlignVertical="top"
         selectionColor={colors.accent}
-        style={[typography.body, { color: colors.ink, backgroundColor: colors.raised, borderRadius: 14, padding: 12, minHeight: 120, maxHeight: 260, fontSize: 16 }]}
+        style={[typography.callout, { color: colors.ink, backgroundColor: colors.raised, borderRadius: radius.md, padding: 12, minHeight: 120, maxHeight: 260, letterSpacing: 0 }]}
       />
-      {empty && <T variant="caption" tone="secondary">{COORDINATOR_CARD_COPY.briefEmpty}</T>}
+      {empty && <T variant="footnote" tone="secondary">{COORDINATOR_CARD_COPY.briefEmpty}</T>}
       <ErrorBanner error={error} />
       <Actions>
         <View style={{ flex: 1 }}>
-          <Button secondary disabled={busy} onPress={() => void respond({ decision: "deny" })}>{COORDINATOR_CARD_COPY.decline}</Button>
+          <Button disabled={busy} onPress={() => void respond({ decision: "deny" })}>{COORDINATOR_CARD_COPY.decline}</Button>
         </View>
         <View style={{ flex: 1 }}>
-          <Button busy={busy} disabled={empty} onPress={() => void respond({ decision: "submit", response: { text } })}>{COORDINATOR_CARD_COPY.briefSave}</Button>
+          <Button role="prominent" busy={busy} disabled={empty} onPress={() => void respond({ decision: "submit", response: { text } })}>{COORDINATOR_CARD_COPY.briefSave}</Button>
         </View>
       </Actions>
-      <T variant="caption" tone="muted" style={{ textAlign: "center" }}>{COORDINATOR_CARD_COPY.briefFootnote}</T>
+      <T variant="footnote" tone="muted" style={{ textAlign: "center" }}>{COORDINATOR_CARD_COPY.briefFootnote}</T>
     </CardShell>
   );
 }
@@ -144,12 +142,12 @@ export function SettingsProposalCard({ approval, input }: { approval: ApprovalRe
       title={<T variant="label" style={{ fontWeight: "600" }}>{COORDINATOR_CARD_COPY.settingsTitle}</T>}
       detail={
         <>
-          {!!input.reason && <T variant="caption" tone="secondary">{input.reason}</T>}
-          <T variant="caption" tone="secondary">{COORDINATOR_CARD_COPY.settingsDetail}</T>
+          {!!input.reason && <T variant="footnote" tone="secondary">{input.reason}</T>}
+          <T variant="footnote" tone="secondary">{COORDINATOR_CARD_COPY.settingsDetail}</T>
         </>
       }
     >
-      <View style={{ borderRadius: 14, borderWidth: 1, borderColor: colors.line, overflow: "hidden" }}>
+      <View style={{ borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, overflow: "hidden" }}>
         {input.changes.map((change, index) => {
           const on = accepted.has(change.path);
           const oldText = settingValueLabel(change.path, change.old, app.providers);
@@ -166,8 +164,8 @@ export function SettingsProposalCard({ approval, input }: { approval: ApprovalRe
             >
               <Icon name={on ? "checkmark.square.fill" : "square"} size={18} color={on ? colors.ink : colors.muted} />
               <View style={{ flex: 1, gap: 2 }}>
-                <T variant="caption" tone="secondary">{change.label}</T>
-                <T variant="caption" tone={on ? "ink" : "secondary"}>
+                <T variant="footnote" tone="secondary">{change.label}</T>
+                <T variant="footnote" tone={on ? "ink" : "secondary"}>
                   <Text style={{ textDecorationLine: "line-through", color: colors.muted }}>{oldText}</Text>
                   {"  →  "}
                   {newText}
@@ -180,10 +178,10 @@ export function SettingsProposalCard({ approval, input }: { approval: ApprovalRe
       <ErrorBanner error={error} />
       <Actions>
         <View style={{ flex: 1 }}>
-          <Button secondary disabled={busy} onPress={() => void respond({ decision: "deny" })}>{COORDINATOR_CARD_COPY.decline}</Button>
+          <Button disabled={busy} onPress={() => void respond({ decision: "deny" })}>{COORDINATOR_CARD_COPY.decline}</Button>
         </View>
         <View style={{ flex: 1 }}>
-          <Button
+          <Button role="prominent"
             busy={busy}
             disabled={accepted.size === 0}
             onPress={() => void respond({ decision: "submit", response: { accepted: input.changes.map((change) => change.path).filter((path) => accepted.has(path)) } })}
@@ -209,27 +207,27 @@ export function GitApprovalCard({ approval, input }: { approval: ApprovalRequest
       detail={copy.detail.length ? <CardText parts={copy.detail} /> : undefined}
     >
       {input.op === "open_pr" && (!!input.title || !!input.body) && (
-        <View style={{ padding: 12, borderRadius: 14, backgroundColor: colors.raised, gap: 3 }}>
+        <View style={{ padding: space.md, borderRadius: radius.md, backgroundColor: colors.raised, gap: 3 }}>
           {!!input.title && <T variant="label">{input.title}</T>}
-          {!!input.body && <T variant="caption" tone="secondary" numberOfLines={3}>{input.body}</T>}
+          {!!input.body && <T variant="footnote" tone="secondary" numberOfLines={3}>{input.body}</T>}
         </View>
       )}
       {merge && (
         <View style={[styles.line, { gap: 6, flexWrap: "wrap" }]}>
-          {checks && <T variant="caption" tone={checks.tone === "ok" ? "positive" : checks.tone === "bad" ? "negative" : "secondary"}>{checks.text}</T>}
-          <T variant="caption" tone="secondary">· {mergeMethodLabel(input.method)}</T>
+          {checks && <T variant="footnote" tone={checks.tone === "ok" ? "positive" : checks.tone === "bad" ? "negative" : "secondary"}>{checks.text}</T>}
+          <T variant="footnote" tone="secondary">· {mergeMethodLabel(input.method)}</T>
         </View>
       )}
       <ErrorBanner error={error} />
       <Actions>
         <View style={{ flex: 1 }}>
-          <Button secondary disabled={busy} onPress={() => void respond({ decision: "deny" })}>{COORDINATOR_CARD_COPY.decline}</Button>
+          <Button disabled={busy} onPress={() => void respond({ decision: "deny" })}>{COORDINATOR_CARD_COPY.decline}</Button>
         </View>
         <View style={{ flex: 1 }}>
-          <Button busy={busy} danger={merge} onPress={() => void respond({ decision: "allow_once" })}>{copy.action}</Button>
+          <Button busy={busy} role={merge ? "destructive" : "prominent"} onPress={() => void respond({ decision: "allow_once" })}>{copy.action}</Button>
         </View>
       </Actions>
-      {merge && <T variant="caption" tone="muted" style={{ textAlign: "center" }}>{COORDINATOR_CARD_COPY.mergeWarning}</T>}
+      {merge && <T variant="footnote" tone="muted" style={{ textAlign: "center" }}>{COORDINATOR_CARD_COPY.mergeWarning}</T>}
     </CardShell>
   );
 }
@@ -258,7 +256,7 @@ export function SystemRowLine({ text }: { text: string }) {
   return (
     <View accessibilityRole="text" style={[styles.line, { gap: 10, marginVertical: 14 }]}>
       <View style={{ flex: 1, height: 1, backgroundColor: colors.line }} />
-      <T variant="caption" tone="secondary">{text}</T>
+      <T variant="footnote" tone="secondary">{text}</T>
       <View style={{ flex: 1, height: 1, backgroundColor: colors.line }} />
     </View>
   );

@@ -63,10 +63,10 @@ export default function ArtifactPreview() {
       <View style={{ paddingHorizontal: 16, paddingVertical: 8, gap: 8 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
           <View style={{ flex: 1, gap: 2 }}>
-            <T variant="caption" tone="secondary" numberOfLines={1}>
+            <T variant="footnote" tone="secondary" numberOfLines={1}>
               {path?.split("/").pop()}
             </T>
-            <T variant="caption" tone="muted">
+            <T variant="footnote" tone="muted">
               Local preview
             </T>
           </View>
@@ -85,7 +85,7 @@ export default function ArtifactPreview() {
             }}
           >
             <Icon name={code ? "doc.text" : "terminal"} size={16} />
-            <T variant="caption">{code ? "Preview" : "Source"}</T>
+            <T variant="footnote">{code ? "Preview" : "Source"}</T>
           </Tap>
         </View>
         <ErrorBanner error={error} />

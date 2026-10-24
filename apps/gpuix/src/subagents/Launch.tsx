@@ -5,7 +5,7 @@ import { delegateTitle, parseDelegateInput, parseDelegateResult } from '../../..
 import { childStartedAt, childEndedAt, conflictsLabel, delegationRoleLabel, launchState, delegationState, workspaceLabel } from '../../../../packages/kybern-client/src/delegations.ts'
 import { subagentSpan, subagentThreadPhase, subagentPhaseWord, subagentTypeLabel } from '../../../../packages/kybern-client/src/subagents.ts'
 import { defaultOverrideText } from '../../../../packages/kybern-client/src/coordinatorSettings.ts'
-import { toolLine } from '../../../desktop/src/lib/toolActivity.ts'
+import { toolLine } from '../../../../packages/kybern-client/src/toolActivity.ts'
 import { useNav } from '../nav/store.ts'
 import { openThread } from '../nav/history.ts'
 import { Icon } from '../icons.tsx'

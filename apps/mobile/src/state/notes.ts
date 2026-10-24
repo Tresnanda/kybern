@@ -21,8 +21,8 @@ export interface NotesState {
   /** The computer's daemon predates notes. */
   unsupported: boolean;
   error: string;
-  /** The most recent soft delete, offered as an Undo for a few seconds. */
-  undo: { id: string; title: string } | null;
+  /** The most recent soft delete, offered as an Undo for a few seconds. `ids` holds every note it removed. */
+  undo: { id: string; title: string; ids: string[] } | null;
 }
 const initial: NotesState = {
   notes: [],
@@ -175,12 +175,34 @@ export async function moveNote(id: string, projectId: string | null) {
     }),
   );
 }
+function offerUndo(ids: string[], title: string) {
+  clearTimeout(undoTimer);
+  publish({ undo: { id: ids[0]!, title, ids } });
+  undoTimer = setTimeout(dismissUndo, UNDO_MS);
+}
 export async function deleteNote(id: string) {
   const note = fold(await need().call("notes.delete", { id }));
-  clearTimeout(undoTimer);
-  publish({ undo: { id, title: note.title } });
-  undoTimer = setTimeout(dismissUndo, UNDO_MS);
+  offerUndo([id], note.title);
   return note;
+}
+/** Moves several notes to Recently deleted with one Undo ("Delete empty notes"). */
+export async function deleteNotes(ids: string[]) {
+  const c = need();
+  const done: string[] = [];
+  try {
+    for (const id of ids) {
+      fold(await c.call("notes.delete", { id }));
+      done.push(id);
+    }
+  } finally {
+    if (done.length) offerUndo(done, "");
+  }
+}
+/** Undoes the last delete, however many notes it removed. */
+export async function restoreNotes(ids: string[]) {
+  dismissUndo();
+  const c = need();
+  for (const id of ids) fold(await c.call("notes.restore", { id }));
 }
 export function dismissUndo() {
   clearTimeout(undoTimer);

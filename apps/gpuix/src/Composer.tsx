@@ -111,7 +111,6 @@ import {
   patchDraft,
   removeQueued,
   sendToThread,
-  STEERABLE,
   setThreadMode,
   setThreadModel,
   uploadPath,
@@ -120,6 +119,7 @@ import {
 } from './composer/store.ts'
 import { alreadyAttachedText, contentHash, newFiles } from './composer/attached.ts'
 import { isGroupProject } from '../../../packages/kybern-client/src/groups.ts'
+import { canSteer } from '../../../packages/kybern-client/src/steering.ts'
 import { choiceFor, groupCreateParams } from './groups/tray.ts'
 
 export const COMPOSER_RADIUS = 19.2
@@ -218,7 +218,7 @@ function ThreadComposer({ thread, placeholderEnter }: { thread: Thread; placehol
         const waiting = pendingVisualAnswer(threadId)
         return (waiting && replyToVisual(waiting, message)) || sendToThread(threadId, message, delivery)
       }}
-      canSteer={handoffSelected || STEERABLE.includes(thread.provider.kind)}
+      canSteer={handoffSelected || canSteer(thread.provider)}
       mode={mode}
       onModeChange={(m) => void setThreadMode(threadId, m).catch((e) => console.error('Unable to change mode:', errorText(e)))}
       provider={provider}

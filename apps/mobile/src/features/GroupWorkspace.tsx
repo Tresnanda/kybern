@@ -115,7 +115,7 @@ export function GroupWorkspace({
         />
         {section === "branches" && (
           <Animated.View entering={FadeIn.duration(160)} style={{ paddingStart: 35 }}>
-            <T variant="caption" tone="secondary" style={{ marginBottom: 4 }}>
+            <T variant="footnote" tone="secondary" style={{ marginBottom: 4 }}>
               {worktree ? `${GROUP_COPY.branchMenuWorktreeTitle}:` : GROUP_COPY.branchMenuLocalCaption}
             </T>
             {inUse.map((member) => {
@@ -131,7 +131,7 @@ export function GroupWorkspace({
                   >
                     <T variant="label" style={{ flex: 1 }} numberOfLines={1}>
                       {member.name}
-                      <T variant="caption" tone="muted">{` · ${chosen || now || "Current branch"}`}</T>
+                      <T variant="footnote" tone="muted">{` · ${chosen || now || "Current branch"}`}</T>
                     </T>
                     <Icon name={repoOpen === member.path ? "chevron.up" : "chevron.down"} size={11} color={colors.muted} />
                   </Tap>
@@ -143,7 +143,7 @@ export function GroupWorkspace({
                         setRepoOpen("");
                       })}
                       {!branches[member.path] && (
-                        <T variant="caption" tone="secondary" style={{ padding: 12 }}>
+                        <T variant="footnote" tone="secondary" style={{ padding: 12 }}>
                           Loading branches…
                         </T>
                       )}
@@ -198,12 +198,12 @@ export function GroupWorkspace({
                 );
               })}
               {lastHint && (
-                <T variant="caption" tone="warning" accessibilityLiveRegion="polite">
+                <T variant="footnote" tone="warning" accessibilityLiveRegion="polite">
                   {GROUP_COPY.lastRepository}
                 </T>
               )}
               {!!deselected.length && (
-                <T variant="caption" tone="secondary" style={{ marginTop: 2 }}>
+                <T variant="footnote" tone="secondary" style={{ marginTop: 2 }}>
                   {deselectedNote(deselected, (member) => `${project.path}/${member.path}`)}
                 </T>
               )}
@@ -212,7 +212,7 @@ export function GroupWorkspace({
         </Animated.View>
       )}
       {missing.map((member) => (
-        <T key={member.path} variant="caption" tone="warning">
+        <T key={member.path} variant="footnote" tone="warning">
           {`${member.name}: ${memberMissingLabel(project.path)}. New chats skip it.`}
         </T>
       ))}

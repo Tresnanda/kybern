@@ -13,6 +13,7 @@ import Animated, {
 } from "react-native-reanimated";
 import Svg, { Circle, G, Path, Rect } from "react-native-svg";
 import type { TaskPriority, TaskStatus } from "../state/protocol";
+import type { StatusPhase } from "../state/status";
 import { useProjects } from "../state/runtime";
 import { projectColor } from "../state/tasksModel";
 import { useTheme } from "./theme";
@@ -60,17 +61,31 @@ function BreathingPie({ color }: { color: string }) {
   return <AnimatedPath d={RUNNING_PIE} fill={color} animatedProps={props} />;
 }
 
+const PHASE_SHAPE: Record<StatusPhase, TaskStatus | "failed"> = {
+  queued: "inbox",
+  idle: "todo",
+  working: "running",
+  waiting: "needs_review",
+  done: "done",
+  stopped: "canceled",
+  failed: "failed",
+};
+
 /**
- * Dashed circle (inbox), circle (to do), half pie (running), three-quarter pie
- * (needs review), filled check (done), filled cross (canceled).
+ * Dashed circle (inbox / queued), circle (to do / idle), half pie (running /
+ * working), three-quarter pie (needs review / waiting), filled check (done),
+ * filled cross (canceled / stopped), filled "!" (failed). Pass a task `status`,
+ * or a `phase` from state/status.ts for runtime tasks, child threads and threads.
  */
 export const StatusGlyph = memo(function StatusGlyph({
   status,
+  phase,
   size = 16,
   animated = false,
   mono,
 }: {
-  status: TaskStatus;
+  status?: TaskStatus;
+  phase?: StatusPhase;
   size?: number;
   animated?: boolean;
   /** Draw in this single color (navigation rows). */
@@ -90,7 +105,8 @@ export const StatusGlyph = memo(function StatusGlyph({
     />
   );
   let body;
-  switch (status) {
+  const shape = phase ? PHASE_SHAPE[phase] : (status ?? "todo");
+  switch (shape) {
     case "inbox":
       body = ring(mono ?? c.ring, true);
       break;
@@ -141,6 +157,15 @@ export const StatusGlyph = memo(function StatusGlyph({
             strokeLinecap="round"
             strokeLinejoin="round"
           />
+        </>
+      );
+      break;
+    case "failed":
+      body = (
+        <>
+          <Circle cx="7" cy="7" r="6.5" fill={mono ?? colors.negative} />
+          <Path d="M7 3.9v3.6" stroke={colors.background} strokeWidth="1.6" strokeLinecap="round" />
+          <Circle cx="7" cy="9.9" r=".95" fill={colors.background} />
         </>
       );
       break;

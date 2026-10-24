@@ -9,6 +9,7 @@ import {
   type KybernClient,
   type TaskItem,
   type TaskItemsChangedNotification,
+  type TaskItemsSendBatchParams,
   type TaskItemsSendParams,
   type TaskPriority,
   type TaskStatus,
@@ -285,6 +286,13 @@ export async function restoreTask(id: string) {
 export async function sendTask(params: TaskItemsSendParams) {
   const result = await need().call("tasks.items.send", params);
   confirmed(result.task);
+  return result;
+}
+
+/** Starts several tasks at once: one run each (`separate`) or one shared run (`combined`). */
+export async function sendTasks(params: TaskItemsSendBatchParams) {
+  const result = await need().call("tasks.items.send_batch", params);
+  result.started.forEach(({ task }) => confirmed(task));
   return result;
 }
 

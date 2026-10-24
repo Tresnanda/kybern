@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { ApprovalRequest } from '../../../../packages/kybern-client/src/types.ts'
 import { chosenAnswers, expiredQuestion, recordText, replyInChatMessage, requestRecord } from '../../../../packages/kybern-client/src/requestCards.ts'
 import { pendingKind } from '../../../../packages/kybern-client/src/userInput.ts'
-import { pendingBadge } from '../sidebar/model.ts'
+import { pendingBadge } from '../../../../packages/kybern-client/src/threadAttention.ts'
 import { splitQuestion } from './Question.tsx'
 
 const question = (extra: Partial<ApprovalRequest> = {}): ApprovalRequest => ({

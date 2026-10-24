@@ -30,13 +30,15 @@ export function ChecklistHeader({ selected, total }: { selected: number; total: 
   )
 }
 
-export function Checklist({ candidates, selected, onToggle, loading, empty, testId = 'group-checklist' }: {
+export function Checklist({ candidates, selected, onToggle, loading, empty, maxHeight = 336, testId = 'group-checklist' }: {
   candidates: RepoCandidate[]
   selected: readonly string[]
   onToggle: (path: string) => void
   loading: boolean
   /** Shown in place of rows when the scan found nothing selectable. */
   empty?: { title: string; body: string }
+  /** The well scrolls past this height, so a folder with many repositories keeps the sheet's buttons on screen. */
+  maxHeight?: number
   testId?: string
 }) {
   const t = useTheme()
@@ -63,7 +65,7 @@ export function Checklist({ candidates, selected, onToggle, loading, empty, test
       </div>
     )
   return (
-    <div testId={testId} paintTransform={PATCHED_NATIVE ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.quick, ease: [...EASE.out] } } : undefined} style={well}>
+    <div testId={testId} paintTransform={PATCHED_NATIVE ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.quick, ease: [...EASE.out] } } : undefined} style={{ ...well, maxHeight, overflowY: 'scroll' }}>
       {candidates.map((candidate) => (
         <Rise key={candidate.path} play={!!candidate.added} kind="row">
           <CandidateRow candidate={candidate} checked={selected.includes(candidate.path)} onToggle={onToggle} />

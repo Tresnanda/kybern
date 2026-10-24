@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.15.1
+
+<!-- kybern-release-title: A redesigned Kybern mobile, and agent results that arrive on time -->
+<!-- kybern-release-summary: The mobile app is rebuilt to feel native and catches up with desktop; queued agent results no longer wait behind background tasks, and files agents link in dot-folders open. -->
+
+- Get agent results as soon as a turn ends: results from delegated agents, queued messages and messages from other threads no longer wait while a dev server or monitor keeps running in the background.
+- Open the files agents link in folders like `.kybern-artifacts/` and `.screenshots/`, in file tabs and in Preview. Files Kybern keeps closed, such as `.git` and `.env`, now say why instead of "File not found".
+- Scroll the repository list when you create a group project from a folder with many repositories, in Kybern GPUIX.
+- Use a redesigned Kybern mobile (0.1.2): native menus and sheets on iOS and opaque themed ones on Android, menus that grow out of their buttons with liquid motion, and bars that fade into the screen edge.
+- Follow work on mobile the way desktop shows it: one-line steps, running processes in one row, an Agents sheet, inline visuals, request and question cards with countdowns, held messages you can deliver or dismiss, and steering for Claude Code and Oh My Pi.
+- Switch computers and spaces from the mobile home screen, filter Notes and Tasks by space and project, see threads grouped by project with "Needs input" badges, and use space logos.
+- Do more from your phone: pull requests, a task board with batch send, quick file edits, terminal search, dev-server previews, plan usage limits, accounts, computer use status and every Settings page.
+- See the new Kybern icon on Android, shaped by your launcher, with dark and themed variants, and the Icon Composer icon on iOS.
+
 ## 0.15.0
 
 <!-- kybern-release-title: Work across several repositories in one chat, in Kybern GPUIX and on mobile -->

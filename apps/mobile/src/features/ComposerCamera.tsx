@@ -349,7 +349,6 @@ export function ComposerCamera({
                     }}
                   >
                     <Button
-                      secondary
                       disabled={busy}
                       onPress={() => {
                         setReady(false);
@@ -359,7 +358,7 @@ export function ComposerCamera({
                     >
                       Retake
                     </Button>
-                    <Button busy={busy} onPress={() => void usePhoto()}>
+                    <Button role="prominent" busy={busy} onPress={() => void usePhoto()}>
                       Use photo
                     </Button>
                   </View>

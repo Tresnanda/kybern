@@ -1,7 +1,7 @@
-import * as Haptics from "expo-haptics";
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { View } from "react-native";
 import type { TaskItem } from "../state/protocol";
+import { deleteTask } from "../state/tasks";
 import {
   PRIORITY_LABEL,
   STATUS_LABEL,
@@ -14,11 +14,12 @@ import {
   shortDuration,
   taskTitle,
 } from "../state/tasksModel";
-import { ProviderMark } from "../ui/ProviderMark";
-import { T, Tap } from "../ui/primitives";
-import { PriorityGlyph, ProjectDot, StatusGlyph } from "../ui/TaskGlyphs";
-import { useTheme } from "../ui/theme";
-import { openTask, taskMenu } from "./taskActions";
+import { useMenuSurface } from "../ui/ActionMenu";
+import { measureTrigger } from "../ui/measure";
+import { Check } from "../ui/CheckRow";
+import { ListRow, type SwipeAction } from "../ui/List";
+import { StatusGlyph } from "../ui/TaskGlyphs";
+import { attempt, changeStatus, openTask, taskMenuItems } from "./taskActions";
 
 /** A clock for elapsed times and ages; ticks once a minute while mounted. */
 export function useMinuteClock() {
@@ -30,112 +31,105 @@ export function useMinuteClock() {
   return now;
 }
 
+/** What the row says under the title: what the agent is doing, the run's diff, or where the task lives. */
+export function taskDetail(task: TaskItem, now: number, where = "") {
+  const run = latestRun(task);
+  if (task.status === "running" && run && isLiveRun(run))
+    return run.state === "waiting"
+      ? "Waiting for you"
+      : [run.activity ? shortActivity(run.activity) : "Working", shortDuration(runDuration(run, now))].join(" · ");
+  if (task.status === "needs_review" && run) return diffLabel(run.diff) || "Ready for review";
+  return where;
+}
+
 /**
  * One task: status glyph, title, then a quiet line with priority, key and either
  * what the agent is doing, the run's diff, or the project. Age sits on the right.
+ * Swipe right to finish it; swipe left for More and Delete. While selecting, the
+ * glyph becomes a check and a tap toggles the task.
  */
 export const TaskRow = memo(function TaskRow({
   task,
   projectName,
   showProject,
   now,
+  separator,
+  selecting = false,
+  selected = false,
+  onToggleSelect,
+  swipeable = true,
 }: {
   task: TaskItem;
   projectName?: string;
   showProject: boolean;
   now: number;
+  separator?: boolean;
+  selecting?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (id: string) => void;
+  /** Off where the row sits in a sideways pager (the board). */
+  swipeable?: boolean;
 }) {
-  const { colors } = useTheme();
-  const run = latestRun(task);
-  const live = task.status === "running" && isLiveRun(run);
-  const review = task.status === "needs_review" && run;
-  let detail = "";
-  if (live && run)
-    detail =
-      run.state === "waiting"
-        ? "Waiting for you"
-        : [run.activity ? shortActivity(run.activity) : "Working", shortDuration(runDuration(run, now))].join(" · ");
-  else if (review && run) detail = diffLabel(run.diff) || "Ready for review";
+  const anchor = useRef<View>(null);
+  const more = useMenuSurface();
+  const live = task.status === "running" && isLiveRun(latestRun(task));
   const where = showProject ? (task.project_id ? (projectName ?? "Project") : "Global") : "";
-  const label = [
-    task.key,
-    taskTitle(task),
-    STATUS_LABEL[task.status],
-    task.priority ? `${PRIORITY_LABEL[task.priority]} priority` : "",
-    detail,
-    where,
-  ]
+  const detail = taskDetail(task, now, where);
+  const subtitle = [task.priority ? PRIORITY_LABEL[task.priority] : "", task.key, detail]
+    .filter(Boolean)
+    .join(" · ");
+  const title = taskTitle(task);
+  const label = [title, STATUS_LABEL[task.status], subtitle, selecting ? (selected ? "selected" : "not selected") : ""]
     .filter(Boolean)
     .join(", ");
+  const menuTitle = `${task.key} · ${title}`;
+  const done = task.status === "done";
+  const leading: SwipeAction[] = [
+    done
+      ? { title: "To do", icon: "arrow.uturn.backward", tone: "accent", full: true, onPress: () => changeStatus(task, "todo") }
+      : { title: "Done", icon: "checkmark", tone: "positive", full: true, onPress: () => changeStatus(task, "done") },
+  ];
+  const trailing: SwipeAction[] = [
+    {
+      title: "More",
+      icon: "ellipsis",
+      tone: "neutral",
+      onPress: () =>
+        measureTrigger(anchor.current, (origin) =>
+          more.show({ items: taskMenuItems(task), title: menuTitle, origin, originRadius: 0 }),
+        ),
+    },
+    {
+      title: "Delete",
+      icon: "trash",
+      tone: "negative",
+      full: true,
+      onPress: () => attempt(() => deleteTask(task.id)),
+    },
+  ];
   return (
-    <Tap
-      label={label}
-      static
-      onPress={() => openTask(task.id)}
-      onLongPress={() => {
-        void Haptics.selectionAsync();
-        taskMenu(task);
-      }}
-      style={{
-        flexDirection: "row",
-        alignItems: "flex-start",
-        gap: 12,
-        paddingVertical: 11,
-      }}
-    >
-      <View style={{ paddingTop: 3 }}>
-        <StatusGlyph status={task.status} size={16} animated={live} />
-      </View>
-      <View style={{ flex: 1, gap: 3 }}>
-        <T
-          numberOfLines={2}
-          style={{ fontSize: 16, lineHeight: 22 }}
-          tone={task.status === "canceled" ? "secondary" : "ink"}
-        >
-          {taskTitle(task)}
-        </T>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-          {task.priority > 0 && (
-            <PriorityGlyph priority={task.priority} size={12} color={colors.secondary} />
-          )}
-          <T variant="caption" tone="muted" style={{ fontVariant: ["tabular-nums"] }}>
-            {task.key}
-          </T>
-          {detail ? (
-            <>
-              {run && (
-                <View style={{ marginStart: 4 }}>
-                  <ProviderMark kind={run.provider.kind} size={11} color={colors.secondary} />
-                </View>
-              )}
-              <T
-                variant="caption"
-                tone="secondary"
-                numberOfLines={1}
-                style={{ flexShrink: 1, fontVariant: ["tabular-nums"] }}
-              >
-                {detail}
-              </T>
-            </>
-          ) : where ? (
-            <>
-              <View style={{ marginStart: 4 }}>
-                <ProjectDot projectId={task.project_id} />
-              </View>
-              <T variant="caption" tone="muted" numberOfLines={1} style={{ flexShrink: 1 }}>
-                {where}
-              </T>
-            </>
-          ) : null}
-        </View>
-      </View>
-      <T
-        variant="caption"
-        tone="muted"
-        style={{ paddingTop: 2, fontVariant: ["tabular-nums"] }}
-      >
-        {ageLabel(task.updated_at, now)}
-      </T>
-    </Tap>
+    <View ref={anchor} collapsable={false}>
+      <ListRow
+        title={title}
+        titleLines={2}
+        subtitle={subtitle}
+        subtitleLines={1}
+        leading={
+          selecting ? (
+            <Check checked={selected} size={22} />
+          ) : (
+            <StatusGlyph status={task.status} size={16} animated={live} />
+          )
+        }
+        meta={ageLabel(task.updated_at, now)}
+        label={label}
+        onPress={selecting ? () => onToggleSelect?.(task.id) : () => openTask(task.id)}
+        menu={selecting ? undefined : taskMenuItems(task)}
+        menuTitle={menuTitle}
+        swipe={selecting || !swipeable ? undefined : { leading, trailing }}
+        separator={separator}
+      />
+      {more.element}
+    </View>
   );
 });

@@ -1,13 +1,15 @@
 import { router } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
-import { View } from "react-native";
+import { View, useWindowDimensions } from "react-native";
 import Animated, {
   LinearTransition,
   ReduceMotion,
 } from "react-native-reanimated";
 import type { FileEntry, Project } from "../state/protocol";
 import { errorText, rpc } from "../state/runtime";
-import { Empty, ErrorBanner, Field } from "../ui/primitives";
+import { Empty, ErrorBanner, T } from "../ui/primitives";
+import { SearchField } from "../ui/Search";
+import { gutter, space } from "../ui/theme";
 import { Working } from "../ui/Working";
 import { FileTreeRow, flattenItems } from "../components/beui/FileTree";
 
@@ -27,6 +29,7 @@ export function Files({
   const [matches, setMatches] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
+  const { width } = useWindowDimensions();
   async function load(path: string) {
     setLoading((s) => new Set(s).add(path));
     setError("");
@@ -91,20 +94,17 @@ export function Files({
         .dampingRatio(1)
         .reduceMotion(ReduceMotion.System)}
       style={{ flex: 1 }}
-      contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }}
+      contentContainerStyle={{ flexGrow: 1, paddingHorizontal: gutter(width) - space.md, paddingBottom: space["2xl"] }}
+      keyboardDismissMode="on-drag"
       data={rows}
       keyExtractor={(r) => r.item.path}
       keyboardShouldPersistTaps="handled"
       ListHeaderComponent={
-        <View style={{ gap: 12, paddingBottom: 14 }}>
-          <Field
-            label="Find a file"
-            placeholder="Search by filename"
-            value={query}
-            onChangeText={setQuery}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
+        <View style={{ gap: space.sm, paddingHorizontal: space.md, paddingTop: space.sm, paddingBottom: space.md }}>
+          <SearchField placeholder="Find a file" value={query} onChangeText={setQuery} />
+          <T variant="code" tone="muted" numberOfLines={1} ellipsizeMode="middle">
+            {query.trim() ? `Matches in ${project.name}` : project.name}
+          </T>
           <ErrorBanner error={error} onRetry={() => void load("")} />
         </View>
       }
@@ -113,10 +113,9 @@ export function Files({
           <Working label="Loading files" />
         ) : (
           <Empty
-            detail={
-              query ? "Try another filename." : "No files in this folder yet."
-            }
-            title={query ? "No matching files" : "This folder is empty"}
+            icon={query ? "magnifyingglass" : "folder"}
+            title={query ? `No files match “${query.trim()}”` : "This folder is empty"}
+            detail={query ? "Try part of the file name." : undefined}
           />
         )
       }

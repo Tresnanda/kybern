@@ -1,20 +1,15 @@
-import { router, useLocalSearchParams } from "expo-router";
+import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
-import { View } from "react-native";
+import { ScrollView } from "react-native";
 import { capabilityPart, commandText } from "../src/state/capabilities";
 import { addContext, useDraft } from "../src/state/draft";
 import type { SkillInfo } from "../src/state/protocol";
 import { errorText, rpc, useApp, useThread } from "../src/state/runtime";
-import {
-  Empty,
-  ErrorBanner,
-  Field,
-  Page,
-  Row,
-  T,
-  Tap,
-} from "../src/ui/primitives";
-import { useTheme } from "../src/ui/theme";
+import { Button, Empty, ErrorBanner, T } from "../src/ui/primitives";
+import { InsetGroup, ListRow } from "../src/ui/List";
+import { SearchField } from "../src/ui/Search";
+import { Segmented } from "../src/ui/Segmented";
+import { space, useTheme } from "../src/ui/theme";
 export default function Capabilities() {
   const { threadId, category } = useLocalSearchParams<{
     threadId?: string;
@@ -26,7 +21,9 @@ export default function Capabilities() {
   const thread = app.threads.find((t) => t.id === threadId) ?? snapshot.thread;
   const { colors } = useTheme();
   const [query, setQuery] = useState("");
-  const [tab, setTab] = useState(category ?? "Skills");
+  const [tab, setTab] = useState<"Skills" | "Plugins" | "Commands">(
+    category === "Plugins" || category === "Commands" ? category : "Skills",
+  );
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -65,100 +62,88 @@ export default function Capabilities() {
   const commands = (snapshot.providerCommands ?? []).filter((c) =>
     match(`${c.name} ${c.description}`),
   );
+  const empty = tab === "Commands" ? !commands.length : !items.length && !loading;
   return (
-    <Page>
-      <Row title="Manage connectors and plugins" icon="puzzlepiece.extension" onPress={() => router.push({ pathname: "/integrations", params: { threadId, projectId, provider } })} />
-      <Field
-        label="Search"
-        placeholder={
-          tab === "Commands" ? "Find a command" : `Find ${tab.toLowerCase()}`
-        }
+    <ScrollView
+      contentInsetAdjustmentBehavior="automatic"
+      keyboardShouldPersistTaps="handled"
+      style={{ flex: 1, backgroundColor: colors.grouped }}
+      contentContainerStyle={{ paddingHorizontal: space.lg, paddingTop: space.sm, paddingBottom: space["3xl"], gap: space.md }}
+    >
+      <Stack.Screen options={{ headerStyle: { backgroundColor: colors.grouped } }} />
+      <Segmented
+        label="Show"
+        value={tab}
+        onChange={(next) => {
+          setTab(next);
+          setQuery("");
+        }}
+        options={[
+          { value: "Skills", label: "Skills" },
+          { value: "Plugins", label: "Plugins" },
+          { value: "Commands", label: "Commands" },
+        ]}
+      />
+      <SearchField
         value={query}
         onChangeText={setQuery}
-        autoCapitalize="none"
-        autoCorrect={false}
+        placeholder={tab === "Commands" ? "Search commands" : `Search ${tab.toLowerCase()}`}
+        fill={colors.surface}
       />
-      <View
-        style={{
-          flexDirection: "row",
-          flexWrap: "wrap",
-          gap: 8,
-          marginVertical: 18,
-        }}
-      >
-        {["Skills", "Plugins", "Commands"].map((name) => (
-          <Tap
-            key={name}
-            label={name}
-            selected={tab === name}
-            onPress={() => {
-              setTab(name);
-              setQuery("");
-            }}
-            style={{
-              paddingHorizontal: 14,
-              borderRadius: 22,
-              backgroundColor: tab === name ? colors.ink : colors.raised,
-            }}
-          >
-            <T variant="caption" tone={tab === name ? "inverse" : "ink"}>
-              {name}
-            </T>
-          </Tap>
-        ))}
-      </View>
       <ErrorBanner error={error} />
-      <T variant="caption" tone="secondary" style={{ marginBottom: 12 }}>
-        {tab === "Commands"
-          ? "Choose a command to add it to your message before sending."
-          : "Choose an installed capability to include with your next message."}
-      </T>
-      {tab === "Commands"
-        ? commands.map((c) => (
-            <Row
-              key={c.name}
-              title={commandText(c.name).trim()}
-              detail={c.description}
-              detailLines={2}
-              icon="command"
-              onPress={() => {
-                addContext(threadId ?? "new", {
-                  type: "text",
-                  text: commandText(c.name),
-                });
-                router.back();
-              }}
-            />
-          ))
-        : items.map((s) => (
-            <Row
-              key={`${s.scope}:${s.path}`}
-              title={s.display_name || s.name}
-              detail={s.description || s.scope}
-              detailLines={2}
-              icon={tab === "Plugins" ? "puzzlepiece.extension" : "sparkles"}
-              onPress={() => {
-                addContext(threadId ?? "new", capabilityPart(s));
-                router.back();
-              }}
-            />
-          ))}
-      {(tab === "Commands" ? !commands.length : !items.length && !loading) && (
+      {!empty && (
+        <InsetGroup>
+          {tab === "Commands"
+            ? commands.map((c) => (
+                <ListRow
+                  key={c.name}
+                  title={commandText(c.name).trim()}
+                  mono
+                  subtitle={c.description}
+                  leading="command"
+                  onPress={() => {
+                    addContext(threadId ?? "new", { type: "text", text: commandText(c.name) });
+                    router.back();
+                  }}
+                />
+              ))
+            : items.map((s) => (
+                <ListRow
+                  key={`${s.scope}:${s.path}`}
+                  title={s.display_name || s.name}
+                  subtitle={s.description || s.scope}
+                  leading={tab === "Plugins" ? "puzzlepiece.extension" : "sparkles"}
+                  onPress={() => {
+                    addContext(threadId ?? "new", capabilityPart(s));
+                    router.back();
+                  }}
+                />
+              ))}
+        </InsetGroup>
+      )}
+      {loading && tab !== "Commands" && <T variant="footnote" tone="secondary">Loading…</T>}
+      {empty && (
         <Empty
           icon={tab === "Commands" ? "command" : "sparkles"}
-          title={query ? "No matches" : `No ${tab.toLowerCase()} available`}
+          title={query ? `No ${tab.toLowerCase()} match “${query}”` : `No ${tab.toLowerCase()} yet`}
           detail={
             query
-              ? "Try another name or description."
+              ? undefined
               : tab === "Commands"
-                ? "Commands appear after this agent starts a session, when supported by the harness."
+                ? "Commands appear once this agent starts a session, when its harness supports them."
                 : `Install ${tab.toLowerCase()} for this agent on your computer to use them here.`
           }
+          action={query ? <Button role="plain" onPress={() => setQuery("")}>Clear search</Button> : undefined}
         />
       )}
-      {loading && tab !== "Commands" && (
-        <T tone="secondary">Loading capabilities…</T>
-      )}
-    </Page>
+      <InsetGroup>
+        <ListRow
+          title="Manage connectors and plugins"
+          leading="puzzlepiece.extension"
+          chevron
+          onPress={() => router.push({ pathname: "/integrations", params: { threadId, projectId, provider } })}
+        />
+      </InsetGroup>
+    </ScrollView>
   );
 }

@@ -9,6 +9,7 @@ import { nestedThreadRows } from '../../../../packages/kybern-client/src/threadR
 import { isChildThread, visibleSubagentThreads } from '../../../../packages/kybern-client/src/subagents.ts'
 import { isChildWorking } from '../../../../packages/kybern-client/src/delegations.ts'
 import { inSpace } from '../../../../packages/kybern-client/src/spaces.ts'
+import { attentionItems } from '../../../../packages/kybern-client/src/threadAttention.ts'
 import { flatTree } from '../tree/geometry.ts'
 import {
   FREE_CHAT_PROJECT_ID,
@@ -18,11 +19,9 @@ import {
   type Thread,
   type ThreadActivityState,
 } from '../../../../packages/kybern-client/src/types.ts'
-import type { NavState, SidebarFilter, ThreadPending } from '../nav/store.ts'
+import type { NavState, SidebarFilter } from '../nav/store.ts'
 
 export const MAX_PROJECT_THREADS = 8
-
-export type AttentionKind = 'blocked' | 'failed' | 'done'
 
 export type Row =
   /** `text`: the active space's name when there are two or more; absent says "Projects". */
@@ -60,39 +59,6 @@ export type Row =
   /** A space without projects: drag one onto it, or add a folder. `onlySpace` drops the drag hint. */
   | { kind: 'empty-space'; key: string; onlySpace: boolean }
   | { kind: 'recents'; key: string; open: boolean }
-
-/**
- * The badge of a row that waits on the reader: "Needs input" for a question (its own, or a delegated agent's), "Pending
- * approval" for an approval. A thread's own request comes first; an older daemon without kinds still says "Pending".
- */
-export function pendingBadge(status: Thread['status'], pending: ThreadPending | undefined): string | null {
-  if (status === 'awaiting-approval') return !pending?.own ? 'Pending' : pending.own === 'question' ? 'Needs input' : 'Pending approval'
-  if (pending?.child) return pending.child === 'question' ? 'Needs input' : 'Pending approval'
-  return null
-}
-
-/** Desktop `threadAttentionKind` over this app's unread marks and dismissals. A delegated agent that waits blocks its parent. */
-export function attentionKind(thread: Thread, nav: Pick<NavState, 'unread' | 'attentionDismissals'> & Partial<Pick<NavState, 'pending'>>): AttentionKind | null {
-  if (thread.parent_thread_id || thread.subagent || thread.status === 'archived') return null
-  const kind: AttentionKind | null =
-    thread.status === 'awaiting-approval' || nav.pending?.[thread.id]?.child ? 'blocked' : thread.status === 'failed' ? 'failed' : thread.status === 'idle' && nav.unread[thread.id] ? 'done' : null
-  if (!kind) return null
-  const dismissed = nav.attentionDismissals[thread.id]
-  if (kind !== 'done' && dismissed !== undefined && thread.last_seq <= dismissed) return null
-  return kind
-}
-
-const RANK: Record<AttentionKind, number> = { blocked: 0, failed: 1, done: 2 }
-
-/** Every thread that needs attention, most urgent first (`selectAttentionItems`). */
-export function attentionItems(threads: readonly Thread[], nav: Pick<NavState, 'unread' | 'attentionDismissals'> & Partial<Pick<NavState, 'pending'>>) {
-  const items: { thread: Thread; kind: AttentionKind }[] = []
-  for (const thread of threads) {
-    const kind = attentionKind(thread, nav)
-    if (kind) items.push({ thread, kind })
-  }
-  return items.sort((a, b) => RANK[a.kind] - RANK[b.kind] || b.thread.updated_at.localeCompare(a.thread.updated_at))
-}
 
 /** Rows that finished and left (or were dismissed). A child that works again (a delegated child re-woken by a message)
  *  comes back: a dismissal ends that child's last run, not the child. */

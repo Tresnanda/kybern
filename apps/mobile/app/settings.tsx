@@ -1,262 +1,106 @@
-import { router } from "expo-router";
+// Settings. Phone: a grouped list of categories, each its own page. iPad: the
+// same list as a rail beside the selected page.
 import Constants from "expo-constants";
+import { Stack } from "expo-router";
 import { useState } from "react";
 import { ScrollView, View } from "react-native";
-import { activeEnvironment, useApp } from "../src/state/runtime";
-import { useLayout } from "../src/state/layout";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { appVersion } from "../src/features/settings/AppUpdates";
 import {
-  Group,
-  Icon,
-  Page,
-  Row,
-  T,
-  Tap,
-  type IconName,
-} from "../src/ui/primitives";
-import { useTheme } from "../src/ui/theme";
-import { SettingsBody, titles as SETTINGS_TITLES } from "./settings-detail";
+  SettingsBody,
+  TITLES,
+  openCategory,
+  useCategories,
+  type Category,
+  type CategoryId,
+} from "../src/features/settings/categories";
+import { useLayout } from "../src/state/layout";
+import { currentClient } from "../src/state/runtime";
+import { ListRow, SectionFooter, SectionHeader, InsetGroup } from "../src/ui/List";
+import { Page } from "../src/ui/primitives";
+import { CONTENT_MAX_WIDTH, gutter, space, useTheme } from "../src/ui/theme";
 
-type Category = {
-  category: string;
-  title: string;
-  detail: string;
-  icon: IconName;
-};
+const RAIL_WIDTH = 320;
 
-// The selectable category list shown in the wide master-detail rail.
-function SettingsRail({
-  label,
-  items,
+function versionLine() {
+  const daemon = currentClient()?.info?.version;
+  return [`Kybern for mobile ${appVersion() || Constants.nativeAppVersion || ""}`.trim(), daemon ? `Kybern ${daemon} on the computer` : null]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function Groups({
   selected,
   onSelect,
 }: {
-  label: string;
-  items: Category[];
-  selected: string;
-  onSelect: (category: string) => void;
+  selected?: CategoryId;
+  onSelect: (id: CategoryId) => void;
 }) {
-  const { colors } = useTheme();
+  const { phone, computer, computerName } = useCategories();
+  const row = (item: Category) => (
+    <ListRow
+      key={item.id}
+      title={item.title}
+      leading={item.icon}
+      subtitle={item.subtitle}
+      subtitleLines={1}
+      selected={selected === item.id}
+      chevron={!selected}
+      onPress={() => onSelect(item.id)}
+    />
+  );
   return (
-    <View style={{ marginBottom: 18 }}>
-      <T variant="caption" tone="secondary" style={{ marginBottom: 4, paddingHorizontal: 12 }}>
-        {label}
-      </T>
-      {items.map((item) => {
-        const active = item.category === selected;
-        return (
-          <Tap
-            key={item.category}
-            label={item.title}
-            selected={active}
-            onPress={() => onSelect(item.category)}
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "flex-start",
-              gap: 12,
-              paddingHorizontal: 12,
-              paddingVertical: 11,
-              borderRadius: 12,
-              backgroundColor: active ? colors.raised : undefined,
-            }}
-          >
-            <Icon
-              name={item.icon}
-              size={19}
-              color={active ? colors.ink : colors.secondary}
-            />
-            <T variant="label" numberOfLines={1} style={{ flex: 1 }}>
-              {item.title}
-            </T>
-          </Tap>
-        );
-      })}
-    </View>
+    <>
+      <SectionHeader title="On this phone" inset first />
+      <InsetGroup>{phone.map(row)}</InsetGroup>
+      <SectionHeader title={`On ${computerName}`} inset />
+      <InsetGroup>{computer.map(row)}</InsetGroup>
+      <SectionFooter inset>{versionLine()}</SectionFooter>
+    </>
   );
 }
 
 export default function SettingsScreen() {
-  const app = useApp();
-  const { colors, appearance } = useTheme();
-  const { regular } = useLayout();
-  const environment = activeEnvironment();
-  const [selected, setSelected] = useState("appearance");
-
-  const appearanceDetail =
-    appearance === "system"
-      ? "Match device"
-      : appearance === "dark"
-        ? "Dark"
-        : "Light";
-  const computersDetail = environment
-    ? `${environment.name} · ${app.status === "open" ? "Connected" : "Disconnected"}`
-    : "Connect your computer";
-  const version = `Kybern for mobile · ${Constants.expoConfig?.version ?? Constants.nativeAppVersion}`;
-
-  const phone: Category[] = [
-    {
-      category: "appearance",
-      title: "Appearance",
-      detail: appearanceDetail,
-      icon: "circle.lefthalf.filled",
-    },
-    {
-      category: "computers",
-      title: "Computers",
-      detail: computersDetail,
-      icon: "laptopcomputer",
-    },
-  ];
-  const computer: Category[] = [
-    {
-      category: "defaults",
-      title: "Thread defaults",
-      detail: "Permissions, worktrees, notifications",
-      icon: "slider.horizontal.3",
-    },
-    {
-      category: "agents",
-      title: "Agents",
-      detail: "Models and configuration",
-      icon: "sparkles",
-    },
-    {
-      category: "usage",
-      title: "Usage",
-      detail: "Costs, tokens, and turns",
-      icon: "chart.bar",
-    },
-    {
-      category: "system",
-      title: "Background & updates",
-      detail: "Power, idle limits, and versions",
-      icon: "arrow.clockwise",
-    },
-    {
-      category: "access",
-      title: "Access",
-      detail: "Paired devices and Tailscale",
-      icon: "lock.shield",
-    },
-  ];
-
-  if (regular) {
+  const { colors } = useTheme();
+  const { regular, width } = useLayout();
+  const insets = useSafeAreaInsets();
+  const [selected, setSelected] = useState<CategoryId>("appearance");
+  if (!regular)
     return (
-      <View
-        style={{
-          flex: 1,
-          flexDirection: "row",
-          backgroundColor: colors.background,
+      <Page grouped>
+        <Stack.Screen options={{ headerStyle: { backgroundColor: colors.grouped } }} />
+        <Groups onSelect={openCategory} />
+      </Page>
+    );
+  const detailWidth = width - RAIL_WIDTH;
+  return (
+    <View style={{ flex: 1, flexDirection: "row", backgroundColor: colors.grouped }}>
+      <Stack.Screen options={{ title: TITLES[selected], headerStyle: { backgroundColor: colors.grouped } }} />
+      <ScrollView
+        style={{ width: RAIL_WIDTH, flexGrow: 0, borderRightWidth: 0.5, borderColor: colors.line }}
+        contentInsetAdjustmentBehavior="automatic"
+        contentContainerStyle={{ padding: space.lg, paddingBottom: insets.bottom + space["2xl"] }}
+        showsVerticalScrollIndicator={false}
+      >
+        <Groups selected={selected} onSelect={setSelected} />
+      </ScrollView>
+      <ScrollView
+        key={selected}
+        style={{ flex: 1 }}
+        contentInsetAdjustmentBehavior="automatic"
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+        contentContainerStyle={{
+          paddingHorizontal: gutter(detailWidth),
+          paddingTop: space.lg,
+          paddingBottom: insets.bottom + space["2xl"],
+          width: "100%",
+          maxWidth: CONTENT_MAX_WIDTH,
+          alignSelf: "center",
         }}
       >
-        <View
-          style={{
-            width: 300,
-            borderRightWidth: 0.5,
-            borderColor: colors.line,
-          }}
-        >
-          <ScrollView
-            contentContainerStyle={{ padding: 14, paddingTop: 20 }}
-            showsVerticalScrollIndicator={false}
-          >
-            <SettingsRail
-              label="On this phone"
-              items={phone}
-              selected={selected}
-              onSelect={setSelected}
-            />
-            <View style={{ marginBottom: 18 }}>
-              <Tap
-                label="App updates"
-                onPress={() => router.push("/app-updates")}
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  justifyContent: "flex-start",
-                  gap: 12,
-                  paddingHorizontal: 12,
-                  paddingVertical: 11,
-                  borderRadius: 12,
-                }}
-              >
-                <Icon name="arrow.clockwise" size={19} color={colors.secondary} />
-                <T variant="label" style={{ flex: 1 }}>
-                  App updates
-                </T>
-                <Icon name="chevron.right" size={12} color={colors.muted} />
-              </Tap>
-            </View>
-            <SettingsRail
-              label={environment ? `On ${environment.name}` : "On your computer"}
-              items={computer}
-              selected={selected}
-              onSelect={setSelected}
-            />
-          </ScrollView>
-        </View>
-        <ScrollView
-          style={{ flex: 1 }}
-          contentInsetAdjustmentBehavior="automatic"
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="interactive"
-          contentContainerStyle={{
-            padding: 24,
-            width: "100%",
-            maxWidth: 760,
-            alignSelf: "center",
-          }}
-        >
-          <T variant="title" style={{ marginBottom: 18 }}>
-            {SETTINGS_TITLES[selected] ?? "Settings"}
-          </T>
-          <SettingsBody category={selected} />
-          <T variant="caption" tone="muted" style={{ marginTop: 24 }}>
-            {version}
-          </T>
-        </ScrollView>
-      </View>
-    );
-  }
-
-  const card = {
-    backgroundColor: colors.raised,
-    borderRadius: 24,
-    paddingHorizontal: 18,
-  };
-  const row = (item: Category) => (
-    <Row
-      key={item.category}
-      title={item.title}
-      detail={item.detail}
-      icon={item.icon}
-      onPress={() =>
-        router.push({
-          pathname: "/settings-detail",
-          params: { category: item.category },
-        })
-      }
-    />
-  );
-  return (
-    <Page>
-      <Group title="On this phone">
-        <View style={card}>
-          {phone.map(row)}
-          <Row
-            title="App updates"
-            detail="Check for updates to Kybern on this phone"
-            icon="arrow.clockwise"
-            onPress={() => router.push("/app-updates")}
-          />
-        </View>
-      </Group>
-      <Group title={environment ? `On ${environment.name}` : "On your computer"}>
-        <View style={card}>{computer.map(row)}</View>
-      </Group>
-      <T variant="caption" tone="muted">
-        {version}
-      </T>
-    </Page>
+        <SettingsBody category={selected} />
+      </ScrollView>
+    </View>
   );
 }

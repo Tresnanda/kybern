@@ -3,29 +3,38 @@ import { ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
   useAnimatedStyle,
+  useReducedMotion,
   useSharedValue,
   withSpring,
+  withTiming,
 } from "react-native-reanimated";
-import { PANE } from "../components/liquid/motion";
+import { scheduleOnRN } from "react-native-worklets";
+import { DURATION, PANE } from "../components/liquid/motion";
 import { type InspectorTab, useLayout } from "../state/layout";
-import { taskActive, useApp, useThread } from "../state/runtime";
+import { useApp, useThread } from "../state/runtime";
 import { Changes } from "./Changes";
 import { Files } from "./Files";
 import { Terminal } from "./Terminal";
-import { TaskRow } from "./Tasks";
+import { AgentsList, useAgents, type AgentsSegment } from "./AgentsSheet";
 import { Empty, Icon, IconButton, styles, T, Tap } from "../ui/primitives";
 import type { IconName } from "../ui/icons";
-import { useTheme } from "../ui/theme";
+import { radius, space, useTheme } from "../ui/theme";
+import { PreviewPane } from "./Preview";
+import { ThreadNotes } from "./ThreadNotes";
 
 const TABS: { key: InspectorTab; label: string; icon: IconName }[] = [
-  { key: "changes", label: "Diff", icon: "arrow.triangle.branch" },
+  { key: "changes", label: "Changes", icon: "doc.badge.plus" },
   { key: "files", label: "Files", icon: "folder" },
   { key: "terminal", label: "Terminal", icon: "terminal" },
-  { key: "tasks", label: "Tasks", icon: "person.2" },
+  { key: "preview", label: "Preview", icon: "globe" },
+  { key: "tasks", label: "Agents", icon: "person.2" },
+  { key: "notes", label: "Notes", icon: "square.and.pencil" },
 ];
+/** Below this segment width the strip shows icons only (the active tab is named for VoiceOver). */
+const LABEL_MIN = 84;
 
-// The right dock, mirroring the desktop RightPanel: a tab strip over Changes /
-// Files / Terminal / Tasks panes. Panes are mounted lazily on first visit and
+// The right dock, mirroring the desktop RightPanel: a tab strip over Changes / Files /
+// Terminal / Preview / Agents / Notes panes (P2-13). Panes are mounted lazily on first visit and
 // then kept mounted (toggled by opacity, never unmounted) so the terminal's
 // WebView session and each pane's scroll/selection survive tab switches.
 function Inspector({ threadId }: { threadId: string }) {
@@ -48,6 +57,7 @@ function Inspector({ threadId }: { threadId: string }) {
 
   const [stripWidth, setStripWidth] = useState(0);
   const seg = stripWidth / TABS.length;
+  const labels = seg >= LABEL_MIN;
   const index = Math.max(
     0,
     TABS.findIndex((t) => t.key === inspectorTab),
@@ -61,9 +71,8 @@ function Inspector({ threadId }: { threadId: string }) {
     transform: [{ translateX: pillX.value }],
   }));
 
-  const topLevelTasks = snapshot.tasks
-    .filter((t) => !t.parent_id || !snapshot.tasks.some((p) => p.id === t.parent_id))
-    .sort((a, b) => Number(taskActive(b)) - Number(taskActive(a)));
+  const agents = useAgents(thread, snapshot.tasks, { active: inspectorTab === "tasks", live: inspectorTab === "tasks" });
+  const [segment, setSegment] = useState<AgentsSegment>("agents");
 
   return (
     <View
@@ -95,7 +104,7 @@ function Inspector({ threadId }: { threadId: string }) {
                   position: "absolute",
                   top: 0,
                   bottom: 0,
-                  borderRadius: 11,
+                  borderRadius: radius.full,
                   backgroundColor: colors.raised,
                 },
                 pill,
@@ -110,7 +119,7 @@ function Inspector({ threadId }: { threadId: string }) {
                   key={tab.key}
                   label={tab.label}
                   selected={active}
-                  static
+                  feedback="none"
                   onPress={() => setInspectorTab(tab.key)}
                   style={{
                     flex: 1,
@@ -123,12 +132,14 @@ function Inspector({ threadId }: { threadId: string }) {
                 >
                   <Icon
                     name={tab.icon}
-                    size={15}
+                    size={labels ? 15 : 18}
                     color={active ? colors.ink : colors.secondary}
                   />
-                  <T variant="caption" tone={active ? "ink" : "secondary"}>
-                    {tab.label}
-                  </T>
+                  {labels && (
+                    <T variant="footnote" tone={active ? "ink" : "secondary"} numberOfLines={1}>
+                      {tab.label}
+                    </T>
+                  )}
                 </Tap>
               );
             })}
@@ -162,13 +173,25 @@ function Inspector({ threadId }: { threadId: string }) {
             >
               {tab.key === "changes" && (
                 <ScrollView
-                  contentContainerStyle={{
-                    padding: 16,
-                    paddingBottom: insets.bottom + 24,
-                  }}
+                  style={{ backgroundColor: colors.grouped }}
+                  contentContainerStyle={{ paddingTop: space.sm, paddingBottom: insets.bottom + space.xl }}
                   keyboardShouldPersistTaps="handled"
                 >
                   <Changes threadId={threadId} />
+                </ScrollView>
+              )}
+              {tab.key === "preview" && (
+                <View style={{ flex: 1, paddingBottom: insets.bottom }}>
+                  <PreviewPane threadId={threadId} />
+                </View>
+              )}
+              {tab.key === "notes" && (
+                <ScrollView
+                  contentContainerStyle={{ padding: space.lg, paddingBottom: insets.bottom + space.xl }}
+                  keyboardShouldPersistTaps="handled"
+                  keyboardDismissMode="interactive"
+                >
+                  <ThreadNotes threadId={threadId} />
                 </ScrollView>
               )}
               {tab.key === "files" &&
@@ -193,16 +216,7 @@ function Inspector({ threadId }: { threadId: string }) {
                     paddingBottom: insets.bottom + 24,
                   }}
                 >
-                  {topLevelTasks.map((t) => (
-                    <TaskRow key={t.id} task={t} />
-                  ))}
-                  {!topLevelTasks.length && (
-                    <Empty
-                      icon="person.2"
-                      title="No tasks yet"
-                      detail="Agents and background processes appear here when the harness starts them."
-                    />
-                  )}
+                  <AgentsList threadId={threadId} model={agents} segment={segment} onSegment={setSegment} />
                 </ScrollView>
               )}
             </View>
@@ -213,32 +227,45 @@ function Inspector({ threadId }: { threadId: string }) {
   );
 }
 
-// Animated column wrapper. The inspector is mounted on first open and then kept
-// mounted so reopening (and any running terminal) is instant; the column width
-// springs between 0 and the resolved inspector width, sliding in from the right.
+// The column on wide layouts (ux-thread M11). The inspector is an absolute layer that
+// slides with translateX on the PANE spring; the conversation's width changes once —
+// as the inspector starts to open, and after it has finished closing — so the
+// transcript and its Markdown never re-lay-out on every frame. The inspector is
+// mounted on first open and then kept mounted so reopening (and any running
+// terminal) is instant.
 export function InspectorColumn({ threadId }: { threadId: string }) {
   const { regular, inspectorOpen, inspectorWidth } = useLayout();
+  const reduced = useReducedMotion();
   const shown = regular && inspectorOpen;
   const opened = useRef(false);
   if (shown) opened.current = true;
+  const [committed, setCommitted] = useState(shown);
   const progress = useSharedValue(shown ? 1 : 0);
   useEffect(() => {
-    progress.value = withSpring(shown ? 1 : 0, PANE);
-  }, [shown, progress]);
-  const container = useAnimatedStyle(() => ({
-    width: progress.value * inspectorWidth,
-  }));
-  const content = useAnimatedStyle(() => ({
-    opacity: progress.value,
-    transform: [{ translateX: (1 - progress.value) * inspectorWidth }],
-  }));
+    if (shown) setCommitted(true);
+    const done = (finished?: boolean) => {
+      "worklet";
+      if (finished && !shown) scheduleOnRN(setCommitted, false);
+    };
+    progress.value = reduced
+      ? withTiming(shown ? 1 : 0, { duration: DURATION.enter }, done)
+      : withSpring(shown ? 1 : 0, PANE, done);
+  }, [shown, progress, reduced]);
+  const content = useAnimatedStyle(() =>
+    reduced
+      ? { opacity: progress.value }
+      : { transform: [{ translateX: (1 - progress.value) * inspectorWidth }] },
+  );
   return (
-    <Animated.View style={[{ overflow: "hidden" }, container]}>
+    <View style={{ width: committed ? inspectorWidth : 0, overflow: "hidden" }}>
       {opened.current ? (
-        <Animated.View style={[{ width: inspectorWidth, flex: 1 }, content]}>
+        <Animated.View
+          pointerEvents={shown ? "auto" : "none"}
+          style={[{ position: "absolute", top: 0, bottom: 0, end: 0, width: inspectorWidth }, content]}
+        >
           <Inspector threadId={threadId} />
         </Animated.View>
       ) : null}
-    </Animated.View>
+    </View>
   );
 }

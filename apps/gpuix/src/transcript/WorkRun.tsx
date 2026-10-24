@@ -8,7 +8,7 @@
 // the first block's, so a growing run never remounts. No height reveal: GPUIX has no analytic row heights.
 import { memo, useMemo, useState } from 'react'
 import { getFileIconName } from '../../../desktop/src/lib/kit/fileIcons.ts'
-import { toolLineCounts, toolTarget, type ToolTarget } from '../../../desktop/src/lib/toolActivity.ts'
+import { toolLineCounts, toolTarget, type ToolTarget } from '../../../../packages/kybern-client/src/toolActivity.ts'
 import type { Block } from '../../../../packages/kybern-client/src/transcript.ts'
 import type { ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
@@ -27,7 +27,7 @@ import { Chevron, destructive, fg, muted, TEXT } from './kit.tsx'
 import { Shimmer, SwapOnChange, useFresh } from './motion.tsx'
 import { isTaskActive, ToolPanel, toolView, WorkRow, type RowContext } from './rows.tsx'
 import { reportError, useRowState, type ToolBlock } from './store.ts'
-import { basename, runSummary } from './workRun.ts'
+import { basename, runSummary } from '../../../../packages/kybern-client/src/workRun.ts'
 
 /** The summary line: 13 px at 22 px, 2 px above and below. */
 const LINE = 22

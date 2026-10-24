@@ -16,7 +16,7 @@ import {
 } from "../../../../../packages/kybern-client/src/subagents.ts"
 import { ProviderMark } from "@/components/kybern/bits"
 import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "@/components/kit/preview-card"
-import { runtimeActivityPrompt } from "@/lib/toolActivity"
+import { runtimeActivityPrompt } from "../../../../../packages/kybern-client/src/toolActivity.ts"
 import { HammerIcon } from "@/lib/kit/icons"
 import { cn } from "@/lib/utils"
 import type { Thread } from "@/protocol"

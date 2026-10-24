@@ -24,6 +24,7 @@ import Animated, {
   useSharedValue,
   useDerivedValue,
   useReducedMotion,
+  withSequence,
   withSpring,
   withTiming,
 } from "react-native-reanimated";
@@ -39,8 +40,34 @@ export type MenuOrigin = {
   width: number;
   height: number;
 };
-import { MASS, SIZE } from "./motion";
-const SPEED = 2;
+import { useOverlayOffset } from "../../ui/measure";
+import {
+  DURATION,
+  MENU_CORNER_MS,
+  MENU_DROPLET_MS,
+  MENU_LEAD,
+  MENU_MASS,
+  MENU_SIZE,
+} from "./motion";
+/** Final corner radius of a menu surface (`radius.lg`). Rows inside use `radius.md`. */
+const MENU_RADIUS = 20;
+/** Space between a trigger and the menu it opens. */
+const MENU_GAP = 6;
+/** How far a covering menu reaches past its button's edge. */
+const COVER_INSET = 4;
+/** A closing menu is the same liquid at the same tempo as its opening. */
+// It keeps its recoil (the mass overshoots the trigger and comes back, the size
+// dips under it and swells back), but it ends when the ringing is no longer
+// visible (about 1 % of the travel) rather than Reanimated's near-zero default,
+// which kept the modal and a copy of the trigger up for half a second.
+const CLOSE_SETTLED = 1e-4;
+function quicker<T extends { stiffness: number; damping: number }>(spring: T, open: boolean): T {
+  return open
+    ? spring
+    : { ...spring, energyThreshold: CLOSE_SETTLED };
+}
+/** liquid-gooey's cornerEase: the droplet resolves into the target corners. */
+const cornerEase = Easing.bezierFn(0.3, 1.05, 0.4, 1);
 const ATTACHMENT_EXIT = {
   duration: 220,
   easing: Easing.bezier(0.4, 0, 0.2, 1),
@@ -48,7 +75,7 @@ const ATTACHMENT_EXIT = {
 };
 
 export function MorphingMenu({
-  origin,
+  origin: anchor,
   anchorRef,
   open,
   onClose,
@@ -59,6 +86,10 @@ export function MorphingMenu({
   dismissLabel = "Dismiss thread menu",
   preferredWidth = 272,
   closingMotion = "spring",
+  point: touch,
+  originRadius,
+  scrim = false,
+  source,
 }: {
   origin: MenuOrigin;
   anchorRef?: AnimatedRef<View>;
@@ -66,8 +97,23 @@ export function MorphingMenu({
   onClose: () => void;
   onClosed: () => void;
   children: ReactNode;
-  placement?: "above" | "below";
-  sourceIcon?: IconName;
+  /**
+   * `below`/`above`: the thread and composer menus' fixed placements. `auto`:
+   * below the trigger when it fits, else above; a row origin (wider than the
+   * menu) opens next to the row at the touch point, a button origin grows out of
+   * the button, aligned to the side of the screen it sits on.
+   */
+  placement?: "above" | "below" | "auto";
+  /** Drawn at the origin while the surface leaves it; null for row origins. */
+  sourceIcon?: IconName | null;
+  /** A custom trigger's content (a chip, a value), redrawn at the origin like `sourceIcon`. */
+  source?: ReactNode;
+  /** Where a long press landed, in window coordinates. */
+  point?: { x: number; y: number };
+  /** The trigger's own corner radius; defaults to a capsule. */
+  originRadius?: number;
+  /** Dim the screen behind the menu (20 %). */
+  scrim?: boolean;
   dismissLabel?: string;
   preferredWidth?: number;
   closingMotion?: "spring" | "attachment";
@@ -91,33 +137,83 @@ export function MorphingMenu({
     if (Platform.OS === "ios") setVisible(false);
     else finishDismissal();
   }, [finishDismissal]);
+  // Triggers are measured inside the app's root view; the Modal draws from the
+  // screen's top. Shift into the Modal's space (a no-op on iOS and edge to edge).
+  const rootY = useOverlayOffset();
+  const origin = { ...anchor, y: anchor.y + rootY };
+  const point = touch && { x: touch.x, y: touch.y + rootY };
+  const top = insets.top + rootY + 8;
+  const bottom = height - insets.bottom - 16;
   const menuWidth = Math.min(width - 32, preferredWidth);
-  const menuX =
+  const clampX = (x: number) => Math.max(16, Math.min(x, width - 16 - menuWidth));
+  // A row is wider than the menu: open at the finger (or under the row when
+  // opened by a tap). A button: drop from it, aligned to the edge on its side.
+  const fromRow = origin.width > menuWidth;
+  // A trigger becomes the menu: the surface grows out of the button, chip or
+  // value and covers it, its corner on the trigger's corner (liquid-gooey's plus
+  // menu, iOS pull-down menus), while the trigger's glyph or content is redrawn
+  // in place and dissolves into the liquid. A long-pressed row stays visible:
+  // the menu grows from under the finger.
+  const hasSource = !!sourceIcon || source != null;
+  const cover = !fromRow && hasSource && placement !== "above";
+  const target =
+    fromRow && point ? { y: point.y - 22, height: 44 } : { y: origin.y, height: origin.height };
+  const autoTop = cover ? origin.y - COVER_INSET : target.y + target.height + MENU_GAP;
+  const autoBottom = cover ? origin.y + origin.height + COVER_INSET : target.y - MENU_GAP;
+  const roomBelow = bottom - Math.max(top, autoTop);
+  const roomAbove = autoBottom - top;
+  const resolved =
     placement === "above"
-      ? Math.max(16, Math.min(origin.x, width - 16 - menuWidth))
-      : width - 16 - menuWidth;
-  const belowY = Math.max(insets.top + 4, origin.y - 8);
+      ? "above"
+      : placement === "below" || roomBelow >= contentHeight || roomBelow >= roomAbove
+        ? "below"
+        : "above";
+  const anchorX = point?.x ?? origin.x + origin.width / 2;
+  const menuX = fromRow
+    ? clampX(anchorX - 24)
+    : placement === "above"
+      ? clampX(origin.x)
+      : anchorX > width / 2
+        ? clampX(origin.x + origin.width + (cover ? COVER_INSET : 0) - menuWidth)
+        : clampX(origin.x - (cover ? COVER_INSET : 0));
+  const belowY = Math.max(top, autoTop);
   const maxHeight = Math.max(
     44,
-    placement === "above"
-      ? origin.y - insets.top - 16
-      : height - belowY - insets.bottom - 16,
+    resolved === "below" ? bottom - belowY : (placement === "above" ? origin.y - MENU_GAP : autoBottom) - top,
   );
   const menuHeight = Math.min(contentHeight, maxHeight);
   const menuY =
-    placement === "above"
-      ? Math.max(insets.top + 4, origin.y - menuHeight - 8)
-      : belowY;
+    resolved === "below"
+      ? belowY
+      : placement === "above"
+        ? Math.max(top, origin.y - menuHeight - MENU_GAP)
+        : Math.max(top, autoBottom - menuHeight);
+  // Where the silhouette starts and ends: the trigger, or for a long-pressed
+  // row a 44 pt capsule under the finger, so a menu never swells out of a
+  // whole row or message.
+  const seed =
+    fromRow && point
+      ? {
+          x: Math.max(origin.x, Math.min(point.x - 22, origin.x + origin.width - 44)),
+          y: point.y - 22,
+          width: 44,
+          height: 44,
+        }
+      : origin;
+  const startRadius =
+    seed === origin
+      ? Math.min(originRadius ?? origin.width / 2, origin.width / 2, origin.height / 2)
+      : 22;
   // A native modal can dismiss the keyboard underneath it. Follow the actual
   // trigger rather than keeping the screen coordinates captured before opening.
   const anchorOffset = useSharedValue({ x: 0, y: 0 });
   useFrameCallback(() => {
     if (!anchorRef) return;
-    const anchor = measure(anchorRef);
-    if (anchor)
+    const live = measure(anchorRef);
+    if (live)
       anchorOffset.set({
-        x: anchor.pageX - origin.x,
-        y: anchor.pageY - origin.y,
+        x: live.pageX - anchor.x,
+        y: live.pageY - anchor.y,
       });
   });
   const anchorStyle = useAnimatedStyle(() => ({
@@ -131,7 +227,7 @@ export function MorphingMenu({
   useEffect(() => {
     if (!menuHeight) return;
     destinationHeight.set(
-      measured.current ? withSpring(menuHeight, SIZE) : menuHeight,
+      measured.current ? withSpring(menuHeight, MENU_SIZE) : menuHeight,
     );
     measured.current = true;
   }, [menuHeight, destinationHeight]);
@@ -154,8 +250,11 @@ export function MorphingMenu({
   };
   const center = useSharedValue(0);
   const size = useSharedValue(0);
-  const corners = useSharedValue(0);
+  const morph = useSharedValue(1);
   const fade = useSharedValue(0);
+  const dim = useSharedValue(0);
+  /** 1 while opening, 0 while closing: which way the content and material fade. */
+  const opening = useSharedValue(1);
   const ready = shown && contentHeight > 0;
   const attachmentExit = closingMotion === "attachment";
   useEffect(() => {
@@ -163,28 +262,39 @@ export function MorphingMenu({
     // The attachment menu needs a bounded return before opening its picker.
     // Other menus retain their original leading-mass/following-size springs.
     const boundedExit = !open && attachmentExit;
+    opening.set(open ? 1 : 0);
+    // The mass leaves first and carries momentum toward where it is going
+    // (liquid-gooey's travel lead); the size follows on a softer spring and
+    // overshoots; the corner timeline restarts with every morph.
     center.set(
       boundedExit
         ? withTiming(0, ATTACHMENT_EXIT)
-        : withSpring(open ? 1 : 0, MASS),
+        : withSpring(open ? 1 : 0, { ...quicker(MENU_MASS, open), velocity: open ? MENU_LEAD : -MENU_LEAD }),
     );
-    corners.set(
-      withTiming(open ? 1 : 0, {
-        duration: boundedExit ? ATTACHMENT_EXIT.duration : 460 / SPEED,
-        easing: boundedExit
-          ? ATTACHMENT_EXIT.easing
-          : Easing.bezier(0.3, 1.05, 0.4, 1),
-        reduceMotion: ReduceMotion.System,
-      }),
+    morph.set(
+      withSequence(
+        withTiming(0, { duration: 0 }),
+        withTiming(1, {
+          duration: boundedExit ? ATTACHMENT_EXIT.duration : MENU_CORNER_MS,
+          easing: Easing.linear,
+          reduceMotion: ReduceMotion.System,
+        }),
+      ),
     );
     size.set(
       boundedExit
         ? withTiming(0, ATTACHMENT_EXIT, (finished) => {
             if (finished && !reduced) scheduleOnRN(finishAnimation);
           })
-        : withSpring(open ? 1 : 0, SIZE, (finished) => {
+        : withSpring(open ? 1 : 0, quicker(MENU_SIZE, open), (finished) => {
             if (finished && !open && !reduced) scheduleOnRN(finishAnimation);
           }),
+    );
+    dim.set(
+      withTiming(open ? 1 : 0, {
+        duration: DURATION.scrim,
+        reduceMotion: ReduceMotion.Never,
+      }),
     );
     fade.set(
       withTiming(
@@ -206,34 +316,40 @@ export function MorphingMenu({
     attachmentExit,
     center,
     size,
-    corners,
+    morph,
     fade,
+    dim,
+    opening,
     finishAnimation,
   ]);
   const geometry = useDerivedValue(() => {
     const p = reduced ? 1 : size.get();
     const c = reduced ? 1 : center.get();
-    const w = Math.max(1, origin.width + (menuWidth - origin.width) * p);
+    const w = Math.max(1, seed.width + (menuWidth - seed.width) * p);
     const h = Math.max(
       1,
-      origin.height + (destinationHeight.get() - origin.height) * p,
+      seed.height + (destinationHeight.get() - seed.height) * p,
     );
     const x =
-      origin.x +
-      origin.width / 2 +
-      (menuX + menuWidth / 2 - origin.x - origin.width / 2) * c;
+      seed.x +
+      seed.width / 2 +
+      (menuX + menuWidth / 2 - seed.x - seed.width / 2) * c;
     const y =
-      origin.y +
-      origin.height / 2 +
-      (menuY + destinationHeight.get() / 2 - origin.y - origin.height / 2) * c;
-    const round = Math.sin(Math.PI * Math.max(0, Math.min(1, p)));
-    const r = Math.min(
-      w / 2,
-      h / 2,
-      origin.width / 2 +
-        (28 - origin.width / 2) * corners.get() +
-        round * Math.min(w, h) * 0.22,
-    );
+      seed.y +
+      seed.height / 2 +
+      (menuY + destinationHeight.get() / 2 - seed.y - seed.height / 2) * c;
+    // Corners: the seed's radius on the way out, the menu's on the way in, set
+    // by how far the size has travelled. On top, liquid-gooey's droplet: every
+    // morph rounds the body toward a pill as it starts (a short glide, never a
+    // step) and resolves back into its corners over the corner timeline.
+    const t = morph.get();
+    const settle = Math.max(0, Math.min(1, p));
+    const base = startRadius + (MENU_RADIUS - startRadius) * settle;
+    const droplet = reduced
+      ? 0
+      : Math.max(0, Math.min((t * MENU_CORNER_MS) / MENU_DROPLET_MS, 1 - cornerEase(t)));
+    const pill = Math.min(w, h) / 2;
+    const r = Math.min(pill, base + Math.max(0, pill - base) * droplet);
     return { width: w, height: h, radius: r, x: x - w / 2, y: y - h / 2 };
   });
   const shape = useAnimatedStyle(() => {
@@ -251,23 +367,48 @@ export function MorphingMenu({
     const g = geometry.get();
     return { transform: [{ translateX: -g.x }, { translateY: -g.y }] };
   });
+  // Content is never scaled: the liquid clips it. Opening, the labels arrive as
+  // the body settles; closing, they stay until the shrinking body has closed
+  // over them, so no blank surface is ever left behind.
   const contentStyle = useAnimatedStyle(() => ({
     opacity: reduced
       ? fade.get()
       : Math.min(
           attachmentExit && open ? fade.get() : 1,
-          interpolate(size.get(), [0.45, 0.9], [0, 1], "clamp"),
+          opening.get()
+            ? interpolate(size.get(), [0.2, 0.6], [0, 1], "clamp")
+            : interpolate(size.get(), [0.1, 0.45], [0, 1], "clamp"),
         ),
   }));
+  // A trigger that stays on screen (a chip, a value, a row) shows through the
+  // silhouette near its seed: the material condenses out of it on open and
+  // thins back into it on close, so no blank pill covers the trigger while the
+  // modal is torn down. Menus that redraw their source icon keep an opaque
+  // material; the attachment return fades at its source before its picker.
+  const dissolve = !hasSource;
+  /** A custom trigger is redrawn at the origin (worklets can't capture the element itself). */
+  const redrawn = !sourceIcon && source != null;
   const materialStyle = useAnimatedStyle(() => ({
-    // Only the attachment return fades at its source before the bounded exit.
-    // Standard menus preserve the original material through spring completion.
     opacity: reduced
       ? fade.get()
-      : open || !attachmentExit
-        ? 1
-        : interpolate(size.get(), [0, 0.12], [0, 1], "clamp"),
+      : dissolve
+        ? opening.get()
+          ? interpolate(size.get(), [0.05, 0.35], [0, 1], "clamp")
+          : interpolate(size.get(), [0.15, 0.5], [0, 1], "clamp")
+        : redrawn
+          ? // A redrawn custom trigger carries its own background: the surface
+            // must be gone before the body reaches the trigger's (larger) box.
+            interpolate(size.get(), [0.04, 0.22], [0, 1], "clamp")
+          : open || !attachmentExit
+            ? 1
+            : interpolate(size.get(), [0, 0.12], [0, 1], "clamp"),
   }));
+  // The menu's shadow and hairline belong to the open surface; at the trigger's
+  // size they would ring the redrawn trigger as a second outline.
+  const outlineStyle = useAnimatedStyle(() => ({
+    opacity: reduced ? 1 : interpolate(size.get(), [0.05, 0.35], [0, 1], "clamp"),
+  }));
+  const scrimStyle = useAnimatedStyle(() => ({ opacity: dim.get() }));
   const dotStyle = useAnimatedStyle(() => ({
     opacity: reduced
       ? 0
@@ -308,7 +449,7 @@ export function MorphingMenu({
           ]}
         />
       </Animated.View>
-      <Animated.View
+      {sourceIcon && <Animated.View
         pointerEvents="none"
         style={[
           {
@@ -324,7 +465,25 @@ export function MorphingMenu({
         ]}
       >
         <Icon name={sourceIcon} />
-      </Animated.View>
+      </Animated.View>}
+      {!sourceIcon && source != null && (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            {
+              position: "absolute",
+              left: origin.x,
+              top: origin.y,
+              width: origin.width,
+              height: origin.height,
+              justifyContent: "center",
+            },
+            dotStyle,
+          ]}
+        >
+          {source}
+        </Animated.View>
+      )}
       <Animated.View
         pointerEvents={open ? "auto" : "none"}
         accessibilityElementsHidden={!open}
@@ -373,14 +532,25 @@ export function MorphingMenu({
           accessibilityLabel={dismissLabel}
           onPress={onClose}
           style={StyleSheet.absoluteFill}
-        />
+        >
+          {scrim && (
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                StyleSheet.absoluteFill,
+                { backgroundColor: colors.scrimLight },
+                scrimStyle,
+              ]}
+            />
+          )}
+        </Pressable>
         <Animated.View
           pointerEvents="box-none"
           style={[StyleSheet.absoluteFill, anchorStyle]}
         >
           <Animated.View
             pointerEvents="none"
-            style={[StyleSheet.absoluteFill, materialStyle]}
+            style={[StyleSheet.absoluteFill, materialStyle, outlineStyle]}
           >
             <Animated.View
               style={[

@@ -1,9 +1,19 @@
-// A few mutually exclusive values on one opaque track: the chosen segment is a raised,
-// solid surface. Same on both platforms, so Android keeps its own themed controls and
-// menus stay readable; every segment is a full-height touch target.
-import { Platform, View } from "react-native";
+// A few mutually exclusive values on one capsule track; the chosen value sits on
+// a raised thumb that slides between segments. Used for list scopes ("All /
+// Working / Pinned / Archived") and short settings choices. The same themed
+// control on both platforms (no stock Android tabs); every segment is a 44 pt
+// target even when `compact` draws a 32 pt track.
+import { useState } from "react";
+import { View, type LayoutRectangle } from "react-native";
+import Animated, {
+  useAnimatedStyle,
+  useReducedMotion,
+  withSpring,
+} from "react-native-reanimated";
+import { RECOIL } from "../components/liquid/motion";
+import { haptics } from "./haptics";
 import { T, Tap } from "./primitives";
-import { useTheme } from "./theme";
+import { radius, useTheme } from "./theme";
 
 export function Segmented<V extends string>({
   options,
@@ -11,50 +21,102 @@ export function Segmented<V extends string>({
   onChange,
   disabled,
   label,
+  compact = false,
 }: {
   options: readonly { value: V; label: string }[];
   value: V;
   onChange: (value: V) => void;
   disabled?: boolean;
-  /** What the control chooses, for screen readers ("Before starting work"). */
+  /** What the control chooses, for screen readers ("Show threads"). */
   label: string;
+  /** 32 pt track for list filters under a header. */
+  compact?: boolean;
 }) {
   const { colors, dark } = useTheme();
+  const reduced = useReducedMotion();
+  const [frames, setFrames] = useState<Record<string, LayoutRectangle>>({});
+  const frame = frames[value];
+  const height = compact ? 32 : 40;
+  // The thumb is absolute and childless: moving and resizing it never
+  // re-lays-out the labels.
+  const thumb = useAnimatedStyle(() =>
+    frame
+      ? {
+          opacity: 1,
+          width: reduced ? frame.width : withSpring(frame.width, RECOIL),
+          transform: [{ translateX: reduced ? frame.x : withSpring(frame.x, RECOIL) }],
+        }
+      : { opacity: 0 },
+  );
   return (
     <View
       accessibilityRole="radiogroup"
       accessibilityLabel={label}
-      style={{ flexDirection: "row", padding: 3, gap: 2, borderRadius: 14, backgroundColor: colors.raised }}
+      style={{
+        flexDirection: "row",
+        padding: 2,
+        borderRadius: radius.full,
+        backgroundColor: colors.raised,
+      }}
     >
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          {
+            position: "absolute",
+            top: 2,
+            left: 0,
+            height,
+            borderRadius: radius.full,
+            backgroundColor: dark ? colors.line : colors.surface,
+            boxShadow: dark ? undefined : "0 1px 3px #0000001A",
+          },
+          thumb,
+        ]}
+      />
       {options.map((option) => {
         const selected = option.value === value;
         return (
-          <Tap
+          <View
             key={option.value}
-            label={option.label}
-            selected={selected}
-            disabled={disabled}
-            static
-            onPress={() => {
-              if (!selected) onChange(option.value);
-            }}
-            style={{
-              flex: 1,
-              minHeight: 40,
-              paddingHorizontal: 6,
-              alignItems: "center",
-              borderRadius: 11,
-              backgroundColor: selected ? (dark ? colors.line : colors.surface) : "transparent",
-              ...(selected && Platform.OS === "ios" && !dark
-                ? { shadowColor: "#000", shadowOpacity: 0.1, shadowRadius: 3, shadowOffset: { width: 0, height: 1 } }
-                : {}),
-              ...(selected && Platform.OS === "android" ? { elevation: dark ? 0 : 1 } : {}),
+            style={{ flex: 1 }}
+            onLayout={(e) => {
+              const layout = { ...e.nativeEvent.layout, x: e.nativeEvent.layout.x };
+              setFrames((old) => {
+                const prev = old[option.value];
+                return prev && prev.x === layout.x && prev.width === layout.width
+                  ? old
+                  : { ...old, [option.value]: layout };
+              });
             }}
           >
-            <T variant="caption" tone={selected ? "ink" : "secondary"} numberOfLines={1} style={selected ? { fontWeight: "600" } : undefined}>
-              {option.label}
-            </T>
-          </Tap>
+            <Tap
+              label={option.label}
+              selected={selected}
+              disabled={disabled}
+              feedback="none"
+              hitSlop={compact ? { top: 6, bottom: 6 } : undefined}
+              onPress={() => {
+                if (selected) return;
+                if (!compact) haptics.select();
+                onChange(option.value);
+              }}
+              style={{
+                minHeight: height,
+                paddingHorizontal: compact ? 10 : 8,
+                alignItems: "center",
+              }}
+            >
+              <T
+                variant={compact ? "footnote" : "subhead"}
+                tone={selected ? "ink" : "secondary"}
+                numberOfLines={1}
+                style={selected ? { fontWeight: "600" } : undefined}
+              >
+                {option.label}
+              </T>
+            </Tap>
+          </View>
         );
       })}
     </View>

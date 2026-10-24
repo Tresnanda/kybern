@@ -1,46 +1,58 @@
-import { nestedThreadRows } from "../../../packages/kybern-client/src/threadRows";
-import Animated, {
-  useSharedValue,
-  useAnimatedScrollHandler,
-} from "react-native-reanimated";
-import { PullRefresh } from "../src/ui/PullRefresh";
-import { threadHasActivity } from "../src/state/runtime";
-import {
-  filterThreads,
-  relativeTime,
-  THREAD_FILTERS,
-  type ThreadFilter,
-} from "../src/state/threadList";
-import { useLayout } from "../src/state/layout";
-import * as Haptics from "expo-haptics";
-import { router, Stack } from "expo-router";
+import { attentionItems } from "../../../packages/kybern-client/src/threadAttention";
+import Animated, { useAnimatedScrollHandler, useSharedValue } from "react-native-reanimated";
+import { router } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Platform, RefreshControl, TextInput, View } from "react-native";
-import { Alert } from "../src/ui/Alert";
-import { type Thread, PROVIDER_DISPLAY_NAME } from "../src/state/protocol";
-import { errorText, refresh, rpc, useApp } from "../src/state/runtime";
-import { useTasks } from "../src/state/tasks";
-import { activitySummary } from "../src/state/tasksModel";
+import { Platform, RefreshControl, View } from "react-native";
+import { ThreadListRow, type ThreadRowContext } from "../src/features/ThreadRows";
+import { SpaceSwitcher, useSpaceMenuItems } from "../src/features/Spaces";
+import { useLayout } from "../src/state/layout";
+import { attentionSignals, dismissAttention, useListState } from "../src/state/listState";
+import { PROVIDER_DISPLAY_NAME, type Thread } from "../src/state/protocol";
+import { errorText, refresh, threadHasActivity, useApp } from "../src/state/runtime";
+import { currentSpaceId, useSpaces } from "../src/state/spaces";
 import {
-  Empty,
-  ErrorBanner,
-  Icon,
-  IconButton,
-  Row,
-  styles,
-  T,
-  Tap,
-} from "../src/ui/primitives";
-import { ProviderMark } from "../src/ui/ProviderMark";
-import { type, useTheme } from "../src/ui/theme";
+  DEFAULT_FILTER,
+  emptyText,
+  filterThreads,
+  groupByProject,
+  isFiltering,
+  threadAgents,
+  threadRows,
+  THREAD_SCOPES,
+  type ThreadFilter,
+  type ThreadRow,
+} from "../src/state/threadList";
+import { HeaderActions } from "../src/ui/ActionMenu";
+import { ListSeparator, SectionHeader } from "../src/ui/List";
+import type { MenuItem } from "../src/ui/menuModel";
+import { Button, Empty, ErrorBanner } from "../src/ui/primitives";
+import { PullRefresh } from "../src/ui/PullRefresh";
+import { ListSearch } from "../src/ui/Search";
+import { Segmented } from "../src/ui/Segmented";
+import { CONTENT_MAX_WIDTH, space, useTheme } from "../src/ui/theme";
+
+type Item =
+  | { kind: "header"; key: string; title: string; count?: number; projectId?: string; open?: boolean }
+  | { kind: "row"; key: string; row: ThreadRow };
+
+/** Which project groups the reader folded, kept while the app runs. */
+const foldedProjects: Record<string, boolean> = {};
 
 export default function Library() {
   const app = useApp();
-  const taskActivity = activitySummary(useTasks().tasks);
+  const list = useListState();
+  const spaces = useSpaces();
+  const spaceId = currentSpaceId(spaces);
+  const spaceMenu = useSpaceMenuItems();
   const { colors } = useTheme();
   const { regular } = useLayout();
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<ThreadFilter>("All");
+  const [filter, setFilter] = useState<ThreadFilter>(DEFAULT_FILTER);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [folded, setFolded] = useState<Record<string, boolean>>(() => ({ ...foldedProjects }));
+  const fold = useCallback((projectId: string, value: boolean) => {
+    foldedProjects[projectId] = value;
+    setFolded((old) => ({ ...old, [projectId]: value }));
+  }, []);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   // On a wide layout the persistent sidebar is the thread list; this route is
@@ -48,21 +60,58 @@ export default function Library() {
   useEffect(() => {
     if (regular) router.replace("/");
   }, [regular]);
-  const rows = useMemo(
-    () =>
-      filterThreads({
-        threads: app.threads,
-        projects: app.projects,
-        activity: app.activity,
-        query,
-        filter,
-      }),
-    [app.threads, app.projects, app.activity, query, filter],
+
+  const isWorking = useCallback((t: Thread) => threadHasActivity(t, app.activity), [app.activity]);
+  const top = useMemo(
+    () => filterThreads({ threads: app.threads, projects: app.projects, spaceId, filter, isWorking }),
+    [app.threads, app.projects, spaceId, filter, isWorking],
   );
-  const [expandedThreads, setExpandedThreads] = useState<Record<string, boolean>>({});
-  const visibleRows = useMemo(() => query.trim() || filter !== "All"
-    ? rows.map(thread => ({ thread, depth: 0, childCount: 0, open: false }))
-    : nestedThreadRows(rows, expandedThreads), [rows, expandedThreads, query, filter]);
+  const children = useMemo(() => Object.values(list.children), [list.children]);
+  // Pinned first, then one foldable section per project in the user's project
+  // order (as the iPad sidebar and the desktop do). A search or filter opens
+  // every section so no match hides behind a fold.
+  const items = useMemo<Item[]>(() => {
+    const filtering = isFiltering(filter);
+    const rowItems = (threads: readonly Thread[]) =>
+      threadRows(threads, filter.archived ? [] : children, expanded, { now: Date.now() }).map(
+        (row) => ({ kind: "row" as const, key: row.thread.id, row }),
+      );
+    const pinned = filtering ? [] : top.filter((t) => t.pinned);
+    const out: Item[] = pinned.length ? [{ kind: "header", key: "h:pinned", title: "Pinned" }, ...rowItems(pinned)] : [];
+    const rest = pinned.length ? top.filter((t) => !t.pinned) : top;
+    for (const group of groupByProject(rest, app.projects, list.projectOrder)) {
+      const open = filtering || !folded[group.projectId];
+      out.push({
+        kind: "header",
+        key: `p:${group.projectId}`,
+        title: group.name,
+        count: group.threads.length,
+        projectId: group.projectId,
+        open,
+      });
+      if (open) out.push(...rowItems(group.threads));
+    }
+    return out;
+  }, [top, children, expanded, filter, folded, app.projects, list.projectOrder]);
+
+  const spaceThreads = useMemo(
+    () => filterThreads({ threads: app.threads, projects: app.projects, spaceId, filter: DEFAULT_FILTER, isWorking }),
+    [app.threads, app.projects, spaceId, isWorking],
+  );
+  const attention = useMemo(() => attentionItems(spaceThreads, attentionSignals(list)), [spaceThreads, list]);
+  const agents = useMemo(() => threadAgents(spaceThreads, filter.agent), [spaceThreads, filter.agent]);
+  const agentName = filter.agent ? (PROVIDER_DISPLAY_NAME[filter.agent] ?? filter.agent) : undefined;
+
+  const ctx = useMemo<ThreadRowContext>(
+    () => ({
+      variant: "list",
+      projectName: (id) => app.projects.find((p) => p.id === id)?.name ?? "Free chat",
+      onToggleChildren: (id, open) => setExpanded((value) => ({ ...value, [id]: open })),
+      onError: setError,
+    }),
+    [app.projects],
+  );
+
   const offset = useSharedValue(0);
   const onScroll = useAnimatedScrollHandler({
     onScroll: (event) => {
@@ -84,275 +133,160 @@ export default function Library() {
       refreshingRef.current = false;
     }
   }, []);
-  function options(t: Thread) {
-    Alert.alert(t.title || "Thread", undefined, [
-      {
-        text: t.pinned ? "Unpin thread" : "Pin thread",
-        onPress: () => {
-          void rpc("threads.update", { thread_id: t.id, pinned: !t.pinned })
-            .then(refresh)
-            .catch((e) => setError(errorText(e)));
+
+  const menu: MenuItem[] = [
+    ...spaceMenu,
+    {
+      title: "Agent",
+      icon: "sparkles",
+      subtitle: agentName ?? "All agents",
+      children: [
+        { title: "All agents", checked: !filter.agent, onPress: () => setFilter((f) => ({ ...f, agent: null })) },
+        ...agents.map<MenuItem>((kind) => ({
+          title: PROVIDER_DISPLAY_NAME[kind] ?? kind,
+          checked: filter.agent === kind,
+          onPress: () => setFilter((f) => ({ ...f, agent: kind })),
+        })),
+      ],
+    },
+    {
+      title: "Show archived",
+      icon: "archivebox",
+      checked: filter.archived,
+      onPress: () => setFilter((f) => ({ ...f, archived: !f.archived, scope: "all" })),
+    },
+    ...(attention.length
+      ? [{ title: "Mark all as read", icon: "checkmark.circle" as const, onPress: () => dismissAttention(attention.map((i) => i.thread)) }]
+      : []),
+    {
+      title: "Go to",
+      inline: true,
+      children: [
+        { title: "Projects", icon: "folder", onPress: () => router.push("/projects") },
+        { title: "Pull requests", icon: "arrow.triangle.pull", onPress: () => router.push("/pulls") },
+        {
+          title: "Activity",
+          icon: "waveform.path",
+          subtitle: app.approvals.length ? `${app.approvals.length} waiting for you` : undefined,
+          onPress: () => router.push("/activity"),
         },
-      },
-      ...(t.status !== "archived"
-        ? [
-            {
-              text: "Archive thread",
-              onPress: () => {
-                void rpc("threads.archive", { thread_id: t.id })
-                  .then(refresh)
-                  .catch((e) => setError(errorText(e)));
-              },
-            },
-          ]
-        : []),
-      { text: "Cancel", style: "cancel" },
-    ]);
-  }
+        { title: "Resume a session", icon: "clock.arrow.circlepath", onPress: () => router.push("/sessions") },
+      ],
+    },
+  ];
+
+  const empty = emptyText(filter, agentName);
+  const clear = () => setFilter((f) => ({ ...DEFAULT_FILTER, query: f.query }));
+
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
-      <Stack.Screen
-        options={{
-          headerRight: () => (
-            <View style={styles.line}>
-              {Platform.OS === "android" && (
-                <IconButton
-                  name="arrow.clockwise"
-                  label="Refresh threads"
-                  disabled={refreshing}
-                  onPress={() => void reload()}
-                />
-              )}
-              <IconButton
-                name="square.and.pencil"
-                label="Start a thread"
-                onPress={() => router.dismissTo("/")}
-              />
-            </View>
-          ),
-        }}
+      <HeaderActions
+        buttons={[
+          { icon: "gearshape", label: "Settings", onPress: () => router.push("/settings") },
+          { icon: "square.and.pencil", label: "New thread", onPress: () => router.dismissTo("/") },
+        ]}
+        menu={{ label: "More", items: menu }}
       />
-      <PullRefresh offset={offset} refreshing={refreshing} onRefresh={reload}>
+      {Platform.OS === "ios" && (
+        <ListSearch value={filter.query} onChangeText={(query) => setFilter((f) => ({ ...f, query }))} placeholder="Search threads" />
+      )}
+      <PullRefresh offset={offset} refreshing={refreshing} onRefresh={reload} label="Refreshing threads">
         <Animated.FlatList
           onScroll={onScroll}
           scrollEventThrottle={16}
-          data={visibleRows}
-          keyExtractor={(row) => row.thread.id}
+          data={items}
+          keyExtractor={(item) => item.key}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           contentInsetAdjustmentBehavior="automatic"
           contentContainerStyle={{
-            paddingHorizontal: 24,
-            paddingBottom: 40,
-            maxWidth: 760,
+            paddingBottom: space["2xl"],
+            maxWidth: CONTENT_MAX_WIDTH,
             width: "100%",
             alignSelf: "center",
+            flexGrow: 1,
           }}
           refreshControl={
             Platform.OS === "ios" ? (
-              <RefreshControl
-                refreshing={refreshing}
-                onRefresh={() => void reload()}
-                tintColor={colors.ink}
-              />
+              <RefreshControl refreshing={refreshing} onRefresh={() => void reload()} tintColor={colors.secondary} />
             ) : undefined
           }
           ListHeaderComponent={
-            <>
-              <View
-                style={{
-                  ...styles.line,
-                  backgroundColor: colors.raised,
-                  borderRadius: 15,
-                  paddingHorizontal: 13,
-                  marginVertical: 16,
-                }}
-              >
-                <Icon
-                  name="magnifyingglass"
-                  size={18}
-                  color={colors.secondary}
+            <View style={{ paddingHorizontal: space.lg, gap: space.md, paddingTop: space.sm }}>
+              {Platform.OS !== "ios" && (
+                <ListSearch value={filter.query} onChangeText={(query) => setFilter((f) => ({ ...f, query }))} placeholder="Search threads" />
+              )}
+              {filter.archived ? (
+                <SectionHeader
+                  first
+                  title={agentName ? `Archived ${agentName} threads` : "Archived threads"}
+                  action={{ title: "Done", label: "Show live threads", onPress: () => setFilter((f) => ({ ...f, archived: false })) }}
                 />
-                <TextInput
-                  underlineColorAndroid="transparent"
-                  accessibilityLabel="Search threads"
-                  placeholder="Search your threads"
-                  value={query}
-                  onChangeText={setQuery}
-                  placeholderTextColor={colors.muted}
-                  style={[
-                    type.body,
-                    { color: colors.ink, flex: 1, minHeight: 48 },
-                  ]}
+              ) : (
+                <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+                  <SpaceSwitcher />
+                  <View style={{ flex: 1 }}>
+                    <Segmented
+                      compact
+                      label="Show threads"
+                      options={THREAD_SCOPES}
+                      value={filter.scope}
+                      onChange={(scope) => setFilter((f) => ({ ...f, scope }))}
+                    />
+                  </View>
+                </View>
+              )}
+              {agentName && !filter.archived ? (
+                <SectionHeader
+                  first
+                  title={`${agentName} only`}
+                  action={{ title: "Show all", label: "Show every agent", onPress: () => setFilter((f) => ({ ...f, agent: null })) }}
                 />
-              </View>
-              <View
-                style={{
-                  flexDirection: "row",
-                  gap: 7,
-                  marginBottom: 18,
-                  flexWrap: "wrap",
-                }}
-              >
-                {THREAD_FILTERS.map((f) => (
-                  <Tap
-                    key={f}
-                    label={f}
-                    selected={f === filter}
-                    onPress={() => {
-                      setFilter(f);
-                      void Haptics.selectionAsync();
-                    }}
-                    style={{
-                      backgroundColor: filter === f ? colors.ink : undefined,
-                      paddingHorizontal: 14,
-                      borderRadius: 22,
-                    }}
-                  >
-                    <T
-                      variant="caption"
-                      tone={filter === f ? "inverse" : "secondary"}
-                    >
-                      {f}
-                    </T>
-                  </Tap>
-                ))}
-              </View>
-              <ErrorBanner error={error} />
-            </>
+              ) : null}
+              <ErrorBanner error={error} onRetry={() => void reload()} />
+            </View>
           }
-          renderItem={({ item: { thread: item, depth, childCount, open }, index }) => {
-            const project = app.projects.find((p) => p.id === item.project_id);
-            const running = threadHasActivity(item, app.activity);
-            return (
-              <View style={{ paddingStart: Math.min(depth, 2) * 16 }}>
-              <Tap
-                label={`${item.title || "Untitled thread"}, ${running ? "Working" : item.status}`}
-                onPress={() =>
-                  router.push({
-                    pathname: "/thread/[id]",
-                    params: { id: item.id },
-                  })
-                }
-                onLongPress={() => options(item)}
-                style={{
-                  paddingVertical: 18,
-                  borderTopWidth: index ? 0.5 : 0,
-                  borderColor: colors.line,
-                  gap: 8,
-                }}
-              >
-                <View style={styles.spread}>
-                  <T
-                    variant="body"
-                    style={{ flex: 1, fontWeight: "500" }}
-                    numberOfLines={2}
-                  >
-                    {item.title || "Untitled thread"}
-                  </T>
-                  {item.pinned ? (
-                    <Icon name="pin.fill" size={12} color={colors.secondary} />
-                  ) : (
-                    <T variant="caption" tone="muted">
-                      {relativeTime(item.updated_at)}
-                    </T>
-                  )}
-                </View>
-                <View style={styles.spread}>
-                  <ProviderMark kind={item.provider.kind} size={16} />
-                  <T variant="caption" tone="secondary" style={{ flex: 1 }}>
-                    {project?.name ?? "Project"} ·{" "}
-                    {PROVIDER_DISPLAY_NAME[item.provider.kind]}
-                  </T>
-                  <T
-                    variant="caption"
-                    tone={
-                      running
-                        ? "accent"
-                        : item.status === "failed"
-                          ? "negative"
-                          : "muted"
-                    }
-                  >
-                    {running
-                      ? "◌ Working"
-                      : item.status === "failed"
-                        ? "Failed"
-                        : ""}
-                  </T>
-                </View>
-              </Tap>
-              {childCount > 0 && <Tap static expanded={open}
-                label={`${open ? "Hide" : "Show"} ${childCount} helpers for ${item.title || "Untitled thread"}`}
-                onPress={() => setExpandedThreads(value => ({ ...value, [item.id]: !open }))}
-                style={[styles.line, { minHeight: 48, paddingBottom: 8, gap: 8 }]}>
-                <Icon name={open ? "chevron.down" : "chevron.right"} size={12} />
-                <T variant="caption" tone="secondary">{childCount} helpers</T>
-              </Tap>}
-              </View>
-            );
+          ItemSeparatorComponent={({ leadingItem }: { leadingItem?: Item }) => {
+            const index = leadingItem ? items.indexOf(leadingItem) : -1;
+            const next = items[index + 1];
+            return leadingItem?.kind === "row" && next?.kind === "row" ? <ListSeparator leading /> : null;
           }}
+          renderItem={({ item, index }) =>
+            item.kind === "header" ? (
+              <View style={{ paddingHorizontal: space.lg }}>
+                <SectionHeader
+                  title={item.title}
+                  first={index === 0}
+                  count={item.count}
+                  open={item.projectId ? item.open : undefined}
+                  onToggle={
+                    item.projectId && !isFiltering(filter)
+                      ? () => fold(item.projectId!, !!item.open)
+                      : undefined
+                  }
+                />
+              </View>
+            ) : (
+              <ThreadListRow row={item.row} ctx={ctx} />
+            )
+          }
           ListEmptyComponent={
             <Empty
-              title={
-                query
-                  ? "No matching threads"
-                  : filter === "All"
-                    ? "A fresh page."
-                    : `No ${filter.toLowerCase()} threads`
-              }
-              detail={
-                query
-                  ? `Nothing matches “${query}”. Try another search.`
-                  : "Start a conversation and your work will appear here."
+              icon={filter.query ? "magnifyingglass" : filter.archived ? "archivebox" : "text.bubble"}
+              title={empty.title}
+              detail={empty.detail}
+              action={
+                isFiltering({ ...filter, query: "" }) ? (
+                  <Button role="plain" size="medium" onPress={clear}>
+                    Clear filters
+                  </Button>
+                ) : !filter.query ? (
+                  <Button size="medium" icon="square.and.pencil" onPress={() => router.dismissTo("/")}>
+                    Start a thread
+                  </Button>
+                ) : undefined
               }
             />
-          }
-          ListFooterComponent={
-            <View
-              style={{
-                paddingTop: 24,
-                marginTop: 20,
-                borderTopWidth: 0.5,
-                borderColor: colors.line,
-              }}
-            >
-              <Row
-                title="Tasks"
-                icon="checklist"
-                detail={taskActivity || undefined}
-                onPress={() => router.push("/todo")}
-              />
-              <Row
-                title="Notes"
-                icon="doc.text"
-                onPress={() => router.push("/notes")}
-              />
-              <Row
-                title="Projects"
-                icon="folder"
-                onPress={() => router.push("/projects")}
-              />
-              <Row
-                title="Activity"
-                icon="waveform.path"
-                detail={
-                  app.approvals.length
-                    ? `${app.approvals.length} waiting for you`
-                    : undefined
-                }
-                onPress={() => router.push("/activity")}
-              />
-              <Row
-                title="Resume a session"
-                icon="clock.arrow.circlepath"
-                onPress={() => router.push("/sessions")}
-              />
-              <Row
-                title="Settings"
-                icon="gearshape"
-                onPress={() => router.push("/settings")}
-              />
-            </View>
           }
         />
       </PullRefresh>

@@ -16,6 +16,8 @@ import { applyIndexEvent } from "./indexProjection";
 import { ThreadCache } from "./threadCache";
 import { attachNotes, loadNotes, resetNotes } from "./notes";
 import { attachTasks, loadTasks, resetTasks } from "./tasks";
+import { attachRequestProgress } from "./requestProgress";
+import { attachPreviews } from "./previewRequests";
 import {
   KybernClient,
   PROJECTS_CHANGED_NOTIFICATION,
@@ -106,6 +108,35 @@ export function getState() {
   return state;
 }
 
+// ---- hooks for state modules that live beside this one (spaces, attention, settings, usage) ----
+
+type Attach = (client: KybernClient, isCurrent: () => boolean) => void;
+const attachHooks = new Set<Attach>();
+const readyHooks = new Set<() => void>();
+const resetHooks = new Set<() => void>();
+const eventHooks = new Set<(event: ThreadEvent) => void>();
+const openHooks = new Set<(threadId: string) => void>();
+const hook = <F,>(set: Set<F>) => (fn: F) => {
+  set.add(fn);
+  return () => {
+    set.delete(fn);
+  };
+};
+/** A new client for the active computer: subscribe to its notifications here. */
+export const onClientAttach = hook(attachHooks);
+/** The event subscription is live (first connect and every resume): load lists here. */
+export const onSubscriptionReady = hook(readyHooks);
+/** The active computer changed or disconnected for good: drop its state. */
+export const onEnvironmentReset = hook(resetHooks);
+/** Every thread event, the background ones included. */
+export const onThreadEvent = hook(eventHooks);
+/** A screen started showing this thread. */
+export const onThreadOpen = hook(openHooks);
+/** True while a screen shows this thread. */
+export function isThreadOpen(id: string) {
+  return threadListeners.has(id);
+}
+
 // ---- optimistic new chats (`packages/kybern-client/src/newChat.ts`) ----
 
 /** New chats started here whose threads the daemon may not have made yet. */
@@ -165,7 +196,7 @@ function trimSnapshots() {
     (id) => threadListeners.has(id) || loads.has(id) || historyLoads.has(id),
   );
 }
-function subscribeApp(fn: () => void) {
+export function subscribeApp(fn: () => void) {
   listeners.add(fn);
   return () => {
     listeners.delete(fn);
@@ -192,6 +223,7 @@ export function useThreadValue<T>(
       const set = threadListeners.get(id) ?? new Set();
       set.add(fn);
       threadListeners.set(id, set);
+      openHooks.forEach((open) => open(id));
       return () => {
         set.delete(fn);
         if (!set.size) {
@@ -418,6 +450,7 @@ export function connect(id: string | null) {
   snapshots.cancelReplay();
   resetNotes();
   resetTasks();
+  if (state.activeId !== id) resetHooks.forEach((reset) => reset());
   if (state.activeId === id) snapshots.invalidateAll();
   else {
     snapshots.clear();
@@ -449,6 +482,9 @@ export function connect(id: string | null) {
   client = next;
   attachNotes(next, () => generation === thisGeneration);
   attachTasks(next, () => generation === thisGeneration);
+  attachRequestProgress(next, () => generation === thisGeneration);
+  attachHooks.forEach((attach) => attach(next, () => generation === thisGeneration && client === next));
+  attachPreviews(next, () => generation === thisGeneration);
   // Projects added or removed elsewhere (desktop, CLI) arrive as the whole list.
   next.onNotification(PROJECTS_CHANGED_NOTIFICATION, (params) => {
     if (generation !== thisGeneration || client !== next) return;
@@ -483,7 +519,11 @@ export function connect(id: string | null) {
       if (
         event.kind === "runtime_task_started" ||
         event.kind === "runtime_task_updated" ||
-        event.kind === "runtime_task_completed"
+        event.kind === "runtime_task_completed" ||
+        // A request raised or answered anywhere changes which rows say "Needs input".
+        event.kind === "approval_requested" ||
+        event.kind === "user_input_requested" ||
+        event.kind === "approval_resolved"
       ) {
         clearTimeout(activityTimer);
         activityTimer = setTimeout(() => {
@@ -496,6 +536,7 @@ export function connect(id: string | null) {
             .catch(() => {});
         }, 150);
       }
+      eventHooks.forEach((tap) => tap(event));
       if (indexEvents) indexEvents.push(event);
       const nextIndex = applyIndexEvent(state, event);
       if (nextIndex !== state) publish(nextIndex);
@@ -541,6 +582,7 @@ export function connect(id: string | null) {
       });
       void loadNotes();
       void loadTasks();
+      readyHooks.forEach((ready) => ready());
       for (const id of threadListeners.keys())
         if (id)
           void loadThread(id).catch((e) => {
@@ -556,6 +598,7 @@ export function connect(id: string | null) {
       });
       void loadNotes();
       void loadTasks();
+      readyHooks.forEach((ready) => ready());
       for (const id of threadListeners.keys())
         if (id) void ensureThread(id).catch((e) => {
           if (generation === thisGeneration) publish({ error: errorText(e) });
@@ -631,6 +674,8 @@ export async function loadThread(id: string) {
   const requested = Math.max(RECENT_ENTRIES, previous?.blocks.length ?? 0);
   const request = rpc("threads.get", {
     thread_id: id,
+    // Settled tool output streams load when a step is opened (`threads.tool_output`).
+    defer_tool_stream: true,
     ...(requested <= 500 ? { transcript_limit: requested } : {}),
   })
     .then((result) => {
@@ -683,6 +728,7 @@ export async function loadEarlier(id: string) {
   publishThread(id, { ...base, loadingEarlier: true });
   record.promise = rpc("threads.get", {
     thread_id: id,
+    defer_tool_stream: true,
     transcript_limit: EARLIER_HISTORY_ENTRIES,
     before_seq: base.nextBeforeSeq,
     through_seq: base.lastSeq,
