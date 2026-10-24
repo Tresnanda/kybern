@@ -62,15 +62,16 @@ export default function SpaceEdit() {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.grouped }}>
+    <>
       <Stack.Screen options={{ title, headerStyle: { backgroundColor: colors.grouped } }} />
       {Platform.OS === "ios" && (
         <HeaderActions buttons={[{ title: commit, prominent: true, disabled: !ready, onPress: () => void save() }]} />
       )}
-      <ScrollView
-        keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{ padding: spacing.lg, gap: spacing.lg }}
-      >
+    <ScrollView
+      style={{ flex: 1, backgroundColor: colors.grouped }}
+      keyboardShouldPersistTaps="handled"
+      contentContainerStyle={{ padding: spacing.lg, gap: spacing.lg }}
+    >
         <View style={{ alignItems: "center", paddingVertical: spacing.sm }}>
           <SpaceTile space={{ name: trimmed || "?", color }} size={56} />
         </View>
@@ -80,7 +81,6 @@ export default function SpaceEdit() {
           value={name}
           onChangeText={setName}
           maxLength={SPACE_NAME_MAX}
-          autoFocus={!existing}
           returnKeyType="done"
           onSubmitEditing={() => void save()}
           error={clash ? `You already have a space named “${trimmed}”.` : undefined}
@@ -132,7 +132,7 @@ export default function SpaceEdit() {
             {commit}
           </Button>
         )}
-      </ScrollView>
-    </View>
+    </ScrollView>
+    </>
   );
 }
