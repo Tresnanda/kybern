@@ -346,7 +346,7 @@ function Followup({ task }: { task: TaskItem }) {
           maxLength={8000}
           style={[
             type.body,
-            { color: colors.ink, flex: 1, minHeight: 44, maxHeight: 180, paddingTop: 10, paddingBottom: 10 },
+            { letterSpacing: 0, color: colors.ink, flex: 1, minHeight: 44, maxHeight: 180, paddingTop: 10, paddingBottom: 10 },
           ]}
         />
         <IconButton
@@ -551,7 +551,7 @@ export default function TaskScreen() {
               onChangeText={(title) => setDraft((d) => ({ ...d, title }))}
               multiline
               maxLength={300}
-              style={[type.title, { color: colors.ink, padding: 0 }]}
+              style={[type.title, { letterSpacing: 0, color: colors.ink, padding: 0 }]}
             />
             <TextInput
               underlineColorAndroid="transparent"
@@ -565,7 +565,7 @@ export default function TaskScreen() {
               autoFocus
               textAlignVertical="top"
               scrollEnabled={false}
-              style={[type.body, { color: colors.ink, padding: 0, minHeight: 240 }]}
+              style={[type.body, { letterSpacing: 0, color: colors.ink, padding: 0, minHeight: 240 }]}
             />
             <T variant="footnote" tone="muted">
               Checklist lines (- [ ]) become the acceptance criteria.

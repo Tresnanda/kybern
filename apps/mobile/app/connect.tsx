@@ -113,12 +113,11 @@ export default function Connect() {
         ) : (
           <Field
             label="Pairing code"
+            variant="code"
             placeholder="000000"
             value={code}
             onChangeText={setCode}
-            keyboardType="number-pad"
             maxLength={6}
-            style={{ fontSize: 24, letterSpacing: 6 }}
           />
         )}
         <Field

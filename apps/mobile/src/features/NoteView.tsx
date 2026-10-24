@@ -203,7 +203,7 @@ export function NoteView({
                 onSubmitEditing={() => body.current?.focus()}
                 maxLength={300}
                 multiline
-                style={[type.title, { color: colors.ink, padding: 0 }]}
+                style={[type.title, { letterSpacing: 0, color: colors.ink, padding: 0 }]}
               />
             ))}
           <TextInput
@@ -222,7 +222,7 @@ export function NoteView({
             onChangeText={s.session.setBody.bind(s.session)}
             style={[
               type.body,
-              {
+              { letterSpacing: 0,
                 color: colors.ink,
                 padding: 0,
                 minHeight: fill ? undefined : 220,

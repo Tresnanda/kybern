@@ -23,7 +23,7 @@ import { Alert } from "../src/ui/Alert";
 import { ProviderMark } from "../src/ui/ProviderMark";
 import { Button, Icon, styles, T, Tap } from "../src/ui/primitives";
 import { ProjectDot } from "../src/ui/TaskGlyphs";
-import { type, useTheme } from "../src/ui/theme";
+import { radius, type, useTheme } from "../src/ui/theme";
 import { findModel } from "../../../packages/kybern-client/src/models";
 import { supportsWorktree } from "../src/state/groups";
 
@@ -426,13 +426,11 @@ export default function SendTask() {
           selectionColor={colors.accent}
           style={[
             type.body,
-            {
+            { letterSpacing: 0,
               color: colors.ink,
-              fontSize: 15,
-              lineHeight: 22,
               minHeight: 140,
               padding: 14,
-              borderRadius: 15,
+              borderRadius: radius.md,
               backgroundColor: colors.raised,
             },
           ]}

@@ -157,7 +157,7 @@ export default function Library() {
                   placeholderTextColor={colors.muted}
                   style={[
                     type.body,
-                    { color: colors.ink, flex: 1, minHeight: 48 },
+                    { letterSpacing: 0, color: colors.ink, flex: 1, minHeight: 48 },
                   ]}
                 />
               </View>

@@ -427,7 +427,7 @@ export default function Notes() {
               autoCorrect={false}
               returnKeyType="search"
               clearButtonMode="while-editing"
-              style={[type.body, { color: colors.ink, flex: 1, minHeight: 48 }]}
+              style={[type.body, { letterSpacing: 0, color: colors.ink, flex: 1, minHeight: 48 }]}
             />
           </View>
         }

@@ -131,7 +131,7 @@ function QuickAdd({
           submitBehavior="submit"
           onSubmitEditing={submit}
           maxLength={300}
-          style={[type.body, { color: colors.ink, flex: 1, minHeight: 48 }]}
+          style={[type.body, { letterSpacing: 0, color: colors.ink, flex: 1, minHeight: 48 }]}
         />
         {text.trim() ? (
           <IconButton name="arrow.up" label="Add task" onPress={submit} disabled={busy} />

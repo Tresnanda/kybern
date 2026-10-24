@@ -1046,7 +1046,7 @@ export const Composer = memo(function Composer({
             selectionColor={colors.accent}
             style={[
               type.body,
-              {
+              { letterSpacing: 0,
                 color: androidHighlight ? "transparent" : colors.ink,
                 textAlignVertical: "top",
                 minHeight: 44,
