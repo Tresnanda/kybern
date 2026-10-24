@@ -27,6 +27,7 @@ mod agent_items;
 mod askpass;
 mod child_questions;
 mod delegation;
+pub(crate) mod group_git;
 mod groups;
 mod lead;
 mod lead_git;
@@ -488,6 +489,11 @@ struct Inner {
     /// The project list after each change, forwarded as `projects.changed`.
     projects_changed: tokio::sync::broadcast::Sender<methods::ProjectsChangedNotification>,
     spaces_changed: tokio::sync::broadcast::Sender<methods::SpacesChangedNotification>,
+    /// Worktree preparation during `threads.create`, forwarded as `threads.workspace_progress`.
+    workspace_progress: tokio::sync::broadcast::Sender<methods::ThreadsWorkspaceProgress>,
+    /// Group worktree threads: each deselected member's state when a turn started,
+    /// compared when it ends (`group_git::OutsideBaseline`).
+    outside_baselines: std::sync::Mutex<HashMap<TurnId, Vec<group_git::OutsideBaseline>>>,
     /// Serialises space writes so name checks and inserts cannot interleave.
     space_writes: std::sync::Mutex<()>,
     /// Agent requests to show a page, forwarded as `previews.open_requested`.
@@ -822,6 +828,8 @@ impl Orchestrator {
                 tasks_changed: tokio::sync::broadcast::channel(1024).0,
                 projects_changed: tokio::sync::broadcast::channel(64).0,
                 spaces_changed: tokio::sync::broadcast::channel(64).0,
+                workspace_progress: tokio::sync::broadcast::channel(256).0,
+                outside_baselines: std::sync::Mutex::new(HashMap::new()),
                 space_writes: std::sync::Mutex::new(()),
                 preview_requests: tokio::sync::broadcast::channel(64).0,
                 requests: Default::default(),
@@ -1326,6 +1334,11 @@ impl Orchestrator {
         Ok(self.inner.store.project_get(project.id)?.unwrap_or(project))
     }
 
+    /// Worktree preparation progress of thread creates, for forwarding to connected clients.
+    pub fn subscribe_workspace_progress(&self) -> tokio::sync::broadcast::Receiver<methods::ThreadsWorkspaceProgress> {
+        self.inner.workspace_progress.subscribe()
+    }
+
     /// Changes to the project list, for forwarding to connected clients.
     pub fn subscribe_projects(&self) -> tokio::sync::broadcast::Receiver<methods::ProjectsChangedNotification> {
         self.inner.projects_changed.subscribe()
@@ -1519,7 +1532,8 @@ impl Orchestrator {
         }
         let use_worktree =
             if free_chat { false } else { params.use_worktree.or(project.worktrees_default).unwrap_or(settings.worktrees_default) };
-        if use_worktree && !project.is_git {
+        let group = project.kind == ProjectKind::Group;
+        if use_worktree && !project.is_git && !group {
             // Re-probe a stale cached flag before refusing (see `project_path_is_git`);
             // a folder `git init`-ed after registration must still support worktrees.
             if project_path_is_git(&project.path) {
@@ -1535,7 +1549,29 @@ impl Orchestrator {
         }
         let now = Utc::now();
         let base_branch = params.base_branch.clone().map(|b| b.trim().to_string()).filter(|b| !b.is_empty());
-        let worktree = if use_worktree {
+        let mut members = Vec::new();
+        let worktree = if group {
+            // `base_branch` is the primary's when the map does not name it.
+            let mut bases: std::collections::BTreeMap<String, String> = params
+                .base_branches
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(path, branch)| (path, branch.trim().to_string()))
+                .filter(|(_, branch)| !branch.is_empty())
+                .collect();
+            if let (Some(branch), Some(primary)) = (base_branch.clone(), project.members.first()) {
+                bases.entry(primary.path.clone()).or_insert(branch);
+            }
+            if use_worktree {
+                let (worktree, snapshot) = self.create_group_workspace(&project, id, params.members.as_deref(), &bases).await?;
+                members = snapshot;
+                Some(worktree)
+            } else {
+                members = self.group_local_members(&project, &bases).await?;
+                None
+            }
+        } else if use_worktree {
             Some(self.create_worktree(&project, id, base_branch.as_deref()).await?)
         } else {
             if let Some(branch) = base_branch.as_deref() {
@@ -1571,7 +1607,7 @@ impl Orchestrator {
             coordinator_project_id: None,
             subagent: None,
             delegation: None,
-            members: Vec::new(),
+            members,
         };
         self.inner.store.thread_upsert(&thread)?;
         if params.pin_account || thread.provider.instance != "default" {
@@ -1644,7 +1680,10 @@ impl Orchestrator {
         let branch = format!("kybern/{unique}");
         let dir = self.worktree_dir(project, &unique);
         std::fs::create_dir_all(dir.parent().unwrap())?;
-        Repo::new(&project.path).worktree_add(&dir, &branch, base).await?;
+        self.send_workspace_progress(thread_id, 0, 1, None);
+        let added = Repo::new(&project.path).worktree_add(&dir, &branch, base).await;
+        self.send_workspace_progress(thread_id, u32::from(added.is_ok()), 1, None);
+        added?;
         Ok(WorktreeInfo { path: dir.to_string_lossy().to_string(), branch })
     }
 
@@ -2825,6 +2864,9 @@ impl Orchestrator {
     }
 
     async fn checkpoint_locked(&self, thread: &Thread, turn_id: TurnId, which: &str) {
+        if group_git::is_group(thread) {
+            return self.group_checkpoint_locked(thread, turn_id, which).await;
+        }
         let repo = Repo::new(&thread.cwd);
         if !Repo::is_repo(std::path::Path::new(&thread.cwd)).await {
             return;
@@ -3004,6 +3046,10 @@ impl Orchestrator {
 
     pub async fn diff(&self, thread_id: ThreadId, turn_id: Option<TurnId>, include_patch: bool, path: Option<&str>) -> Result<Diff> {
         let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
+        if group_git::is_group(&thread) {
+            return group_git::group_diff(&self.inner.store, &thread, turn_id, include_patch, path, group_git::DiffCaps::UNLIMITED_FILES)
+                .await;
+        }
         let repo = Repo::new(&thread.cwd);
         if !Repo::is_repo(std::path::Path::new(&thread.cwd)).await {
             return Err(anyhow!("project is not a git repository"));
@@ -3038,6 +3084,9 @@ impl Orchestrator {
         // A finished turn's "after" snapshot may still be running, for minutes on a large tree. Wait for it without the
         // admission gate, so sends are not held back meanwhile; whatever started in that time is caught below.
         drop(self.checkpoint_lock(thread_id).lock_owned().await);
+        // A group rewind rewrites several repositories: once, under the daemon-wide workspace lock.
+        let group = self.inner.store.thread_get(thread_id)?.is_some_and(|t| group_git::is_group(&t));
+        let _workspace = if group { Some(self.inner.workspace_ops.lock().await) } else { None };
         let admission = self.session_admission(thread_id).await;
         let _admission = admission.lock().await;
         let checkpoint = self.checkpoint_lock(thread_id).lock_owned().await;
@@ -3048,8 +3097,11 @@ impl Orchestrator {
         let all = self.inner.store.checkpoints_for_thread(thread_id)?;
         let idx = all.iter().position(|c| c.turn_id == turn_id).ok_or_else(|| anyhow!("no checkpoint for that turn"))?;
         let c = all[idx].clone();
-        let repo = Repo::new(&thread.cwd);
-        repo.restore(&c.before).await?;
+        if group_git::is_group(&thread) {
+            self.group_restore(&thread, &c).await?;
+        } else {
+            Repo::new(&thread.cwd).restore(&c.before).await?;
+        }
         drop(checkpoint);
         self.emit(thread_id, Some(turn_id), EventPayload::WorkspaceReverted { to_turn_id: turn_id, commit: c.before.clone() })?;
 
