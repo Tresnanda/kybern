@@ -204,6 +204,19 @@ impl AppTools {
     async fn workspace_diff(&self, thread_id: ThreadId, args: WorkspaceDiffArgs) -> Result<Value> {
         let thread = self.thread(thread_id)?;
         ensure_relative_path(args.path.as_deref())?;
+        if crate::orchestrator::group_git::is_group(&thread) {
+            let caps = crate::orchestrator::group_git::DiffCaps { files: MAX_FILE_ENTRIES, patch_bytes: MAX_DIFF_PATCH_BYTES };
+            let diff = crate::orchestrator::group_git::group_diff(
+                &self.store,
+                &thread,
+                args.turn_id,
+                args.include_patch,
+                args.path.as_deref(),
+                caps,
+            )
+            .await?;
+            return serde_json::to_value(diff).map_err(Into::into);
+        }
         let repo = Repo::new(&thread.cwd);
         let checkpoint = match args.turn_id {
             Some(turn_id) => {
