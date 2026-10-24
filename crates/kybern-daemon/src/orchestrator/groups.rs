@@ -362,6 +362,12 @@ impl Orchestrator {
             return Err(RpcError::not_found("space"));
         }
         if let Some(existing) = self.inner.store.project_by_path(&folder_path).map_err(internal)? {
+            if existing.kind != ProjectKind::Group {
+                return Err(invalid(format!(
+                    "{} is already a single-repository project. Open it from the sidebar, or choose another folder for the group.",
+                    existing.name
+                )));
+            }
             return Ok(existing);
         }
         let label = folder_name(&folder_path);

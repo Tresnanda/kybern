@@ -135,6 +135,11 @@ async fn adding_a_group_validates_members_and_nothing_is_included_automatically(
     // Adding the folder again returns the project unchanged.
     assert_eq!(add(&["api", "web"]).unwrap().id, project.id);
     assert_eq!(member_paths(&fixture.store.project_get(project.id).unwrap().unwrap()).len(), 3);
+
+    // A folder that is already a single-repository project never silently comes back as one.
+    let api = fixture.orchestrator.add_project(acme.join("api").to_string_lossy().into_owned(), None, None).unwrap();
+    let error = invalid_message(fixture.orchestrator.add_group_project(api.path.clone(), None, None, vec![".".into(), "x".into()]));
+    assert!(error.starts_with("api is already a single-repository project."), "{error}");
 }
 
 #[tokio::test]
