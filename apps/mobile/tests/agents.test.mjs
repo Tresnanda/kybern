@@ -92,6 +92,9 @@ test("a subagent thread stands for its own agent task; nested tasks stay on thei
   assert.deepEqual(model.agents.map((row) => row.key), ["task:agent-2", "thread:sub"]);
   assert.equal(model.processes.length, 0);
   assert.equal(agentsCapsuleLabel(model), "2 agents · 1 running");
+  // Once nothing runs, the capsule leaves the bar.
+  const done = agentsModel([child], [task("agent-1", "agent", "completed", "Explore")], now);
+  assert.equal(agentsCapsuleLabel(done), null);
 });
 
 test("relative ages", () => {

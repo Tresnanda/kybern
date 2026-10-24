@@ -11,6 +11,7 @@ import { groupFilesByRepo, includedMembers, prButtonLabel } from "../../../../pa
 import { shortBranch } from "../../../../packages/kybern-client/src/delegations";
 import { useMenuSurface, type MenuItem } from "../ui/ActionMenu";
 import { measureTrigger } from "../ui/measure";
+import { openAgents } from "./AgentsSheet";
 import { Alert, confirm } from "../ui/Alert";
 import { showToast } from "../ui/Toast";
 import { IconButton } from "../ui/primitives";
@@ -233,6 +234,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
             ),
         },
         { title: "Details", icon: "slider.horizontal.3", onPress: () => navigate("More") },
+        { title: "Agents", subtitle: "Delegated agents and processes", icon: "person.2", onPress: () => openAgents(threadId!, "agents") },
         { title: "Preview", subtitle: "Dev servers and pages", icon: "globe", onPress: () => navigate("Preview") },
         { title: "Artifacts", icon: "doc", onPress: () => navigate("Artifacts") },
         { title: "Notes", icon: "square.and.pencil", onPress: () => navigate("Notes") },

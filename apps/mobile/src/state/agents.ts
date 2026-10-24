@@ -148,13 +148,14 @@ export function agentsModel(children: readonly Thread[], tasks: readonly Runtime
 
 /** The bottom-bar capsule: "15 agents · 2 running", "3 processes running". Null when nothing was started. */
 export function agentsCapsuleLabel(model: Pick<AgentsModel, "agents" | "processes" | "runningAgents" | "runningProcesses">) {
-  const agents = model.agents.length;
+  // Only live work earns a place above the composer; finished agents stay one
+  // tap away in the thread menu (Thread ▸ Agents).
   const running = model.runningAgents + model.runningProcesses;
+  if (!running) return null;
+  const agents = model.agents.length;
   if (agents) {
     const noun = agents === 1 ? "1 agent" : `${agents} agents`;
-    return running ? `${noun} · ${running} running` : noun;
+    return `${noun} · ${running} running`;
   }
-  if (model.runningProcesses)
-    return model.runningProcesses === 1 ? "1 process running" : `${model.runningProcesses} processes running`;
-  return null;
+  return model.runningProcesses === 1 ? "1 process running" : `${model.runningProcesses} processes running`;
 }

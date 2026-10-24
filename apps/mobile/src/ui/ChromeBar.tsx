@@ -4,12 +4,14 @@
 // content instead of guessing. Content scrolls under the material only;
 // interactive chrome always sits on it.
 //
-// The material hugs the screen edge like iOS 26's scroll edge effect:
-//   bottom   clear at the bar's top edge, solid EDGE_FADE (24 pt) into the bar,
-//            so content stays sharp right up to the bar and dissolves under its
-//            first row (chips, capsules), never above it.
-//   top      solid over the status bar and header, dissolving over TOP_FADE
-//            (12 pt) just below the header.
+// The material hugs the screen edge like iOS 26's scroll edge effect: it is
+// solid only at the very edge (the home indicator / status bar area) and
+// dissolves gradually across the rest of the bar, so it is densest where the
+// screen ends and content fades into it instead of hitting a block.
+//   bottom   clear at the bar's top edge, a long eased ramp across the bar,
+//            solid only over the bottom safe area.
+//   top      solid over the status bar, a long eased ramp across the header,
+//            dissolving TOP_FADE (20 pt) below it.
 //   iOS      system chrome blur + `chrome` tint through that mask (100 %
 //            `background` with Reduce Transparency). The top bar's material
 //            fades in over the first 8 pt of scroll, on the UI thread.
@@ -44,12 +46,14 @@ import Animated, {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "./theme";
 
-/** How far into a bottom bar its material takes to become solid. */
-export const EDGE_FADE = 24;
-/** How far below a top bar its material takes to dissolve. */
-export const TOP_FADE = 12;
-// Eased ramp: the first points stay nearly clear so text is not veiled early.
-const RAMP_STOPS = [0, 0.35, 0.7, 1] as const;
+/** The least a bottom bar's ramp runs, when the bar itself is short. */
+export const EDGE_FADE = 48;
+/** How far below a top bar its material keeps dissolving. */
+export const TOP_FADE = 20;
+// Eased ramp (ease-in on density): long and nearly clear at the start, so text
+// is barely veiled until close to the edge.
+const RAMP_STOPS = [0, 0.3, 0.6, 0.85, 1] as const;
+const RAMP_ALPHA = ["00", "14", "4D", "B3", "FF"] as const;
 
 /** iOS "Reduce Transparency": draw bars opaque. */
 export function useReduceTransparency() {
@@ -146,23 +150,24 @@ export function ChromeBar({
       </>
     )
   ) : null;
-  // One mask for both platforms: solid over the bar, an eased ramp on its
-  // content side (inside a bottom bar, just past a top bar).
-  const fadeLength = top ? TOP_FADE : EDGE_FADE;
+  // One mask for both platforms: solid only over the safe area at the screen's
+  // edge, an eased ramp across the rest of the bar (inside a bottom bar; across
+  // and just past a top bar).
+  const edgeInset = safeArea ? (top ? insets.top : insets.bottom) : 0;
   const ramp = (color: string) => (
     <LinearGradient
-      colors={[`${color}00`, `${color}40`, `${color}B8`, `${color}FF`]}
-      locations={RAMP_STOPS}
+      colors={RAMP_ALPHA.map((alpha) => `${color}${alpha}`) as unknown as [string, string, ...string[]]}
+      locations={RAMP_STOPS as unknown as [number, number, ...number[]]}
       start={{ x: 0, y: top ? 1 : 0 }}
       end={{ x: 0, y: top ? 0 : 1 }}
-      style={{ height: fadeLength }}
+      style={{ flex: 1, minHeight: top ? undefined : EDGE_FADE }}
     />
   );
   const shape = (color: string) => (
     <View style={{ flex: 1 }}>
-      {!top && ramp(color)}
-      <View style={{ flex: 1, backgroundColor: color }} />
-      {top && ramp(color)}
+      {top && <View style={{ height: edgeInset, backgroundColor: color }} />}
+      {ramp(color)}
+      {!top && <View style={{ height: edgeInset, backgroundColor: color }} />}
     </View>
   );
   const region = {
