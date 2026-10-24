@@ -12,6 +12,8 @@ const PARALLEL: usize = 4;
 /// Instruction files copied into a container without the group folder's own repository.
 const SHARED_FILES: [&str; 3] = ["AGENTS.md", "CLAUDE.md", ".claude"];
 const SHARED_FILES_CAP: u64 = 5 * 1024 * 1024;
+/// Turns whose deselected members are being watched at once (`record_outside_baseline`).
+const OUTSIDE_BASELINES_KEPT: usize = 256;
 /// `Project.worktree_copy` entries are the user's choice; this only stops a mistake from filling the disk.
 const COPY_CAP: u64 = 512 * 1024 * 1024;
 
@@ -432,7 +434,14 @@ impl Orchestrator {
                 status: status.unwrap_or_default(),
             });
         }
-        self.inner.outside_baselines.lock().unwrap_or_else(|p| p.into_inner()).insert(turn_id, baselines);
+        let mut all = self.inner.outside_baselines.lock().unwrap_or_else(|p| p.into_inner());
+        all.insert(turn_id, baselines);
+        // A turn that never reaches its "after" checkpoint (a crash, an interrupted admission) leaves its
+        // entry behind. Turn ids are UUID v7, so the smallest is the oldest: keep the latest turns only.
+        while all.len() > OUTSIDE_BASELINES_KEPT {
+            let Some(oldest) = all.keys().min().copied() else { break };
+            all.remove(&oldest);
+        }
     }
 
     /// After a turn of a group worktree thread: tell the user which deselected
