@@ -2,8 +2,10 @@
 // bubble) on the frame of Enter, and asks the daemon to create it in the background. The daemon
 // takes the id (`threads.create`, `tasks.items.send` and `coordinator.open` accept `thread_id` and
 // `message_id`) and answers a repeat with the same ids from the first call, so Retry after a failure
-// reuses the thread instead of leaving an orphan row and making a second one. Pure and shared by
-// the GPUIX and mobile clients.
+// reuses the thread instead of leaving an orphan row and making a second one. Daemons before 0.15.0
+// ignore the ids and name the thread themselves, so clients take this path only when
+// `clientThreadIds` says the daemon honours them, and adopt whatever id a create returns. Pure and
+// shared by the GPUIX and mobile clients.
 
 import { partToken } from "./composerTokens.ts";
 import type { MessageId, PermissionMode, ProjectId, ProviderInstance, Thread, ThreadId, UserMessage } from "./types.ts";
@@ -12,6 +14,24 @@ import type { MessageId, PermissionMode, ProjectId, ProviderInstance, Thread, Th
 export const PREPARING_WORKTREE = "Preparing worktree…";
 /** Shown when a failed create has no message of its own. */
 export const NEW_CHAT_FAILED = "The chat could not start. Retry, or edit the message.";
+
+/** The first daemon that takes the client's `thread_id` and `message_id` and answers a repeat idempotently. */
+export const CLIENT_THREAD_IDS_MIN_VERSION = "0.15.0";
+
+/** True when `version` ("0.15.0", "0.15.0-dev", "v0.16.2") is at least `minimum`. */
+export function versionAtLeast(version: string | null | undefined, minimum: string): boolean {
+  if (!version) return false;
+  const parse = (value: string) => value.replace(/^v/, "").split(/[.-]/).slice(0, 3).map((part) => Number.parseInt(part, 10) || 0);
+  const a = parse(version);
+  const b = parse(minimum);
+  for (let index = 0; index < 3; index++) {
+    if (a[index] !== b[index]) return a[index]! > b[index]!;
+  }
+  return true;
+}
+
+/** Whether a daemon of `version` makes the thread the client named. Older ones get the awaited create. */
+export const clientThreadIds = (version: string | null | undefined): boolean => versionAtLeast(version, CLIENT_THREAD_IDS_MIN_VERSION);
 
 /** A UUID v7 (RFC 9562): 48 bits of Unix milliseconds, then random bits. `fill` supplies the randomness. */
 export function uuidv7(now = Date.now(), fill: (bytes: Uint8Array<ArrayBuffer>) => void = (bytes) => crypto.getRandomValues(bytes)): string {
@@ -109,6 +129,14 @@ export interface NewChat {
   thread: Thread;
   state: NewChatState;
   error?: string;
+  /** The daemon made the thread under another id (it ignored ours): clients move to this one. */
+  adoptedId?: ThreadId;
+}
+
+/** The thread id a create answered with: a `Thread`, its id, or nothing (the client's id stands). */
+export function createdThreadId(result: Thread | ThreadId | void | null | undefined): ThreadId | undefined {
+  if (!result) return undefined;
+  return typeof result === "string" ? result : result.id;
 }
 
 export type NewChatCreate = (message: UserMessage, messageId: MessageId) => Promise<Thread | ThreadId | void>;
@@ -118,33 +146,44 @@ export type NewChatCreate = (message: UserMessage, messageId: MessageId) => Prom
  * one (optionally with an edited message and a fresh message id). A thread whose create never
  * reached the daemon has no row there, so any message to it goes through `retry` until it exists.
  */
-export function createNewChats(options: { errorText?: (error: unknown) => string; limit?: number } = {}) {
+export function createNewChats(
+  options: {
+    errorText?: (error: unknown) => string;
+    limit?: number;
+    /** A create answered with another thread id: move the page and pending message from `from` to `to`. */
+    onAdopt?: (from: ThreadId, to: ThreadId, chat: NewChat) => void;
+  } = {},
+) {
   const errorText = options.errorText ?? ((error: unknown) => (error instanceof Error ? error.message : String(error)));
   const limit = options.limit ?? 32;
   const chats = new Map<ThreadId, NewChat & { create: NewChatCreate; run?: Promise<NewChat>; attempt?: object }>();
   const listeners = new Set<() => void>();
   const emit = () => { for (const listener of [...listeners]) listener(); };
 
+  // Records are replaced, never changed in place, so `useSyncExternalStore` snapshots see each change.
   const run = (threadId: ThreadId): Promise<NewChat> => {
     const chat = chats.get(threadId)!;
     // Only the latest attempt for a thread records its outcome.
     const token = {};
-    chat.attempt = token;
     const settle = (patch: Partial<NewChat>): NewChat => {
       const current = chats.get(threadId);
       if (!current || current.attempt !== token) return current ?? chat;
-      Object.assign(current, patch);
-      current.attempt = undefined;
-      current.run = undefined;
+      const next = { ...current, ...patch, attempt: undefined, run: undefined };
+      chats.set(threadId, next);
       emit();
-      return current;
+      if (next.adoptedId) options.onAdopt?.(threadId, next.adoptedId, next);
+      return next;
     };
-    chat.run = new Promise<unknown>((resolve) => resolve(chat.create(chat.message, chat.messageId))).then(
-      () => settle({ state: "created", error: undefined }),
+    const promise = new Promise<Thread | ThreadId | void>((resolve) => resolve(chat.create(chat.message, chat.messageId))).then(
+      (result) => {
+        const id = createdThreadId(result);
+        return settle({ state: "created", error: undefined, ...(id && id !== threadId ? { adoptedId: id } : {}) });
+      },
       // A failed chat shows as failed until the daemon lists it (when it made the row before the message failed).
       (error) => settle({ state: "failed", error: errorText(error), thread: { ...chat.thread, status: "failed" } }),
     );
-    return chat.run;
+    chats.set(threadId, { ...chat, attempt: token, run: promise });
+    return promise;
   };
 
   return {
@@ -153,8 +192,8 @@ export function createNewChats(options: { errorText?: (error: unknown) => string
       return () => { listeners.delete(listener); };
     },
     get: (threadId: ThreadId | null | undefined): NewChat | undefined => (threadId ? chats.get(threadId) : undefined),
-    /** Threads to show that the daemon has not listed yet. */
-    unlisted: (): Thread[] => [...chats.values()].map((chat) => chat.thread),
+    /** Threads to show that the daemon has not listed yet. An adopted chat's thread is the daemon's under its own id. */
+    unlisted: (): Thread[] => [...chats.values()].filter((chat) => !chat.adoptedId).map((chat) => chat.thread),
     /** Whether the daemon has no row for this thread yet (its create is running or failed before it made one). */
     uncreated: (threadId: ThreadId | null | undefined) => !!threadId && chats.has(threadId) && chats.get(threadId)!.state !== "created",
     start(input: Omit<NewChat, "state" | "error">, create: NewChatCreate): Promise<NewChat> {
@@ -171,19 +210,24 @@ export function createNewChats(options: { errorText?: (error: unknown) => string
     retry(threadId: ThreadId, edit?: { message: UserMessage; messageId: MessageId }): Promise<NewChat> | null {
       const chat = chats.get(threadId);
       if (!chat || chat.state === "creating") return chat?.run ?? null;
-      if (edit) { chat.message = edit.message; chat.messageId = edit.messageId; }
-      chat.state = "creating";
-      chat.thread = { ...chat.thread, status: "running" };
-      chat.error = undefined;
+      chats.set(threadId, {
+        ...chat,
+        ...(edit ? { message: edit.message, messageId: edit.messageId } : {}),
+        state: "creating",
+        thread: { ...chat.thread, status: "running" },
+        error: undefined,
+      });
       emit();
       return run(threadId);
     },
-    /** The daemon lists the thread now: its own copy takes over. */
+    /** The daemon lists the thread now: its own copy takes over. That includes a create that failed here
+     *  after it reached the daemon (a dropped connection): the thread exists, so it loads like any other. */
     listed(threadIds: readonly ThreadId[]) {
+      const ids = new Set(threadIds);
       let changed = false;
-      for (const id of threadIds) {
-        const chat = chats.get(id);
-        if (chat && chat.state === "created") { chats.delete(id); changed = true; }
+      for (const [id, chat] of chats) {
+        if (chat.state === "creating") continue;
+        if (ids.has(id) || (chat.adoptedId && ids.has(chat.adoptedId))) { chats.delete(id); changed = true; }
       }
       if (changed) emit();
     },

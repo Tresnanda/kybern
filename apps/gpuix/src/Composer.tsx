@@ -7,8 +7,9 @@ import { type InputSelection } from './native/api.ts'
 export { useComposerOverlayHeight, useMeasureComposerOverlay } from './composer/height.ts'
 import { useMeasureComposerOverlay } from './composer/height.ts'
 import { coordinatorOpenParams, openingMessageText } from '../../../packages/kybern-client/src/coordinator.ts'
-import { optimisticThread, uuidv7, type NewChatCreate } from '../../../packages/kybern-client/src/newChat.ts'
-import { newChats } from './composer/newChats.ts'
+import { createdThreadId, optimisticThread, uuidv7, type NewChatCreate } from '../../../packages/kybern-client/src/newChat.ts'
+import { newChats, optimisticCreates } from './composer/newChats.ts'
+import { getNav } from './nav/store.ts'
 import { removePending } from './composer/pending.ts'
 import { goPage, openThread } from './nav/history.ts'
 import { setNav } from './nav/store.ts'
@@ -348,9 +349,22 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
         const threadId = uuidv7()
         const owner = activeEnvironment()
         const live = () => getClient() === client && owner === activeEnvironment()
-        const launch = (thread: Thread, worktree: boolean, create: NewChatCreate, sent: UserMessage = message) => {
+        // A daemon before 0.15.0 ignores the client's ids and names the thread itself: it gets the awaited create.
+        const optimistic = optimisticCreates(getNav().version)
+        const ids = (messageId: string) => (optimistic ? { thread_id: threadId, message_id: messageId } : {})
+        const launch = async (thread: Thread, worktree: boolean, create: NewChatCreate, sent: UserMessage = message) => {
+          const draftKey = `${pane.id}:${coordinator ? 'coordinator' : 'project'}:${projectId ?? 'free'}`
+          if (!optimistic) {
+            const id = createdThreadId(await create(sent, crypto.randomUUID()))
+            drafts.drop(draftKey)
+            if (!id || !live()) return
+            extras.onLaunch?.(id, snapshot)
+            await refreshLists()
+            if (live()) void selectPaneThread(pane.id, id)
+            return
+          }
           // The prompt now belongs to the thread: drop the saved draft before the page switches, so no composer reloads it.
-          drafts.drop(`${pane.id}:${coordinator ? 'coordinator' : 'project'}:${projectId ?? 'free'}`)
+          drafts.drop(draftKey)
           extras.onLaunch?.(threadId, snapshot)
           launchNewChat({ paneId: pane.id, threadId, thread, message: sent, worktree, create })
         }
@@ -364,7 +378,7 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
           const pending = task.pending_followup?.trim()
           const chip = { type: 'mention' as const, name: task.key, path: `kybern://task/${task.id}`, display_name: `${task.key} ${task.title}` }
           const sent = { ...message, parts: [chip, ...(pending ? [{ type: 'text' as const, text: pending }] : []), ...message.parts] }
-          launch(optimisticThread({ ...base, projectId, title: task.title }), useWorktree, async (first, messageId) => {
+          await launch(optimisticThread({ ...base, projectId, title: task.title }), useWorktree, async (first, messageId) => {
             const result = await client.call('tasks.items.send', {
               id: task.id,
               provider: account,
@@ -376,12 +390,13 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
               project_id: projectId,
               message: first,
               note_ids: [...new Set([...task.note_ids, ...(task.source_note_id ? [task.source_note_id] : [])])],
-              thread_id: threadId,
-              message_id: messageId,
+              ...ids(messageId),
             })
-            if (!live()) return
-            upsertTask(result.task)
-            extras.onTaskSent?.()
+            if (live()) {
+              upsertTask(result.task)
+              extras.onTaskSent?.()
+            }
+            return result.thread_id
           }, sent)
           return
         }
@@ -401,11 +416,13 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
             if (task) extras.onTaskSent?.()
             return
           }
+          // `coordinator.open` takes the opening words as text: an image alone would never reach it.
+          if (!openingMessageText(sent)) throw new Error('Tell the Coordinator about the project first.')
           const params = coordinatorOpenParams({ projectId, provider: available, instance: provider.instance, model: choice?.model, effort: choice?.effort, permissionMode: mode, openingMessage: openingMessageText(sent) })
           const projectName = getState().projects.find(p => p.id === projectId)?.name ?? 'Project'
-          launch(optimisticThread({ ...base, provider: params.provider, projectId, message: sent, title: `${projectName} coordinator`, coordinatorProjectId: projectId }), false, async (first, messageId) => {
-            const result = await client.call('coordinator.open', { ...params, opening_message: openingMessageText(first), thread_id: threadId, message_id: messageId })
-            if (result.thread.id === threadId) { if (task && live()) extras.onTaskSent?.(); return }
+          await launch(optimisticThread({ ...base, provider: params.provider, projectId, message: sent, title: `${projectName} coordinator`, coordinatorProjectId: projectId }), false, async (first, messageId) => {
+            const result = await client.call('coordinator.open', { ...params, opening_message: openingMessageText(first), ...ids(messageId) })
+            if (!optimistic || result.thread.id === threadId) { if (task && live()) extras.onTaskSent?.(); return result.thread.id }
             // Another client opened this project's Coordinator first: the message goes to that one, and the page follows it.
             await client.call('threads.send', { thread_id: result.thread.id, message: first, message_id: messageId })
             newChats.forget(threadId)
@@ -416,8 +433,8 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
           return
         }
         const freeChat = !projectId
-        launch(optimisticThread({ ...base, projectId: projectId ?? FREE_CHAT_PROJECT_ID }), useWorktree && !freeChat, async (first, messageId) => {
-          await client.call('threads.create', {
+        await launch(optimisticThread({ ...base, projectId: projectId ?? FREE_CHAT_PROJECT_ID }), useWorktree && !freeChat, async (first, messageId) => {
+          return await client.call('threads.create', {
             ...(projectId ? { project_id: projectId } : {}),
             provider: account,
             pin_account: pinAccount,
@@ -429,8 +446,7 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
             // A group project: the repositories this chat gets and their branches (`groups/tray.ts`), next to the client ids.
             ...(project && isGroupProject(project) ? groupCreateParams(project, choiceFor(draft.group, project.id), useWorktree) : {}),
             message: first,
-            thread_id: threadId,
-            message_id: messageId,
+            ...ids(messageId),
           })
         })
       }}

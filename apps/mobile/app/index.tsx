@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Composer } from "../src/features/Composer";
 import { setDraft, useDraft } from "../src/state/draft";
 import { type UserMessage } from "../src/state/protocol";
-import { rpc, startNewChat, useApp } from "../src/state/runtime";
+import { ensureThread, refresh, rpc, startNewChat, supportsOptimisticCreate, useApp } from "../src/state/runtime";
 import { newThreadId } from "../src/state/ids";
 import { groupCreateFields, supportsWorktree } from "../src/state/groups";
 import { isGroupProject } from "../../../packages/kybern-client/src/groups";
@@ -91,12 +91,30 @@ export default function Home() {
   }, [project?.id, app.providers, draft.projectId, draft.provider, draft.permission]);
   async function send(message: UserMessage) {
     if (!project) throw new Error("Add a project before starting a thread.");
+    const provider = { kind: draft.provider, instance: draft.instance };
+    const worktree = draft.worktree && supportsWorktree(project);
+    const params = {
+      project_id: project.id,
+      provider,
+      permission_mode: draft.permission,
+      use_worktree: worktree,
+      ...(draft.model ? { model: draft.model } : {}),
+      ...(draft.effort ? { effort: draft.effort } : {}),
+      // A group names a base branch per repository instead.
+      ...(draft.baseBranch && !isGroupProject(project) ? { base_branch: draft.baseBranch } : {}),
+      ...groupCreateFields(project, draft, worktree),
+    };
+    if (!supportsOptimisticCreate()) {
+      // An older daemon names the thread itself: wait for it, then open that thread.
+      const thread = await rpc("threads.create", { ...params, message });
+      void refresh();
+      await ensureThread(thread.id).catch(() => {});
+      return { threadId: thread.id };
+    }
     // Optimistic: the thread id is ours, so the receipt is immediate and the thread opens with the
     // message in flight while the daemon makes it. A failure shows on the thread with Retry.
     const threadId = newThreadId();
     const messageId = newThreadId();
-    const provider = { kind: draft.provider, instance: draft.instance };
-    const worktree = draft.worktree && supportsWorktree(project);
     startNewChat(
       {
         threadId,
@@ -113,21 +131,7 @@ export default function Home() {
           message,
         }),
       },
-      (first, id) =>
-        rpc("threads.create", {
-          project_id: project.id,
-          provider,
-          permission_mode: draft.permission,
-          use_worktree: worktree,
-          ...(draft.model ? { model: draft.model } : {}),
-          ...(draft.effort ? { effort: draft.effort } : {}),
-          // A group names a base branch per repository instead.
-          ...(draft.baseBranch && !isGroupProject(project) ? { base_branch: draft.baseBranch } : {}),
-          ...groupCreateFields(project, draft, worktree),
-          message: first,
-          thread_id: threadId,
-          message_id: id,
-        }),
+      (first, id) => rpc("threads.create", { ...params, message: first, thread_id: threadId, message_id: id }),
     );
     return { threadId, messageId };
   }

@@ -1,5 +1,7 @@
 import { EARLIER_HISTORY_ENTRIES } from "../../../../packages/kybern-client/src/historyPaging";
 import {
+  clientThreadIds,
+  createdThreadId,
   createNewChats,
   mergeOptimisticThreads,
   type NewChat,
@@ -134,10 +136,11 @@ export function startNewChat(chat: Omit<NewChat, "state" | "error">, create: New
     blocks: options.seed ? [{ kind: "user", id: chat.messageId, turnId: `pending:${chat.messageId}`, at, seq: 1, message: chat.message }] : [],
   });
   void newChats.start(chat, async (message, messageId) => {
-    await create(message, messageId);
-    // The daemon has the thread now: its own transcript and list entry take over.
+    const result = await create(message, messageId);
+    // The daemon has the thread now (under its own id when it ignored ours): its transcript and list entry take over.
     void refresh();
-    void loadThread(chat.threadId).catch(() => {});
+    void loadThread(createdThreadId(result) ?? chat.threadId).catch(() => {});
+    return result;
   });
 }
 function publish(patch: Partial<State>) {
@@ -223,6 +226,11 @@ export function activeEnvironment() {
 }
 export function currentClient() {
   return client;
+}
+/** True when the connected daemon makes the thread the client names (0.15.0 and later). Older
+ *  daemons ignore the ids, so new chats there wait for `threads.create` and open its thread. */
+export function supportsOptimisticCreate() {
+  return clientThreadIds(client?.info?.version);
 }
 /** True when the connected daemon understands group projects (0.15.0 and later). */
 export function supportsGroupProjects() {

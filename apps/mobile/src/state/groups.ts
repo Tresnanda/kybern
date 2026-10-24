@@ -7,6 +7,7 @@ import {
   isGroupProject,
   orderMemberPaths,
 } from "../../../../packages/kybern-client/src/groups.ts";
+import { versionAtLeast as sharedVersionAtLeast } from "../../../../packages/kybern-client/src/newChat.ts";
 import type {
   PullRequest,
   RepoCandidate,
@@ -24,16 +25,8 @@ type ProjectLike = {
 export const GROUPS_MIN_VERSION = "0.15.0";
 
 /** True when `version` ("0.15.0", "0.15.0-dev", "v0.16.2") is at least `minimum`. */
-export function versionAtLeast(version: string | null | undefined, minimum = GROUPS_MIN_VERSION): boolean {
-  if (!version) return false;
-  const parse = (value: string) => value.replace(/^v/, "").split(/[.-]/).slice(0, 3).map((part) => Number.parseInt(part, 10) || 0);
-  const a = parse(version);
-  const b = parse(minimum);
-  for (let index = 0; index < 3; index++) {
-    if (a[index] !== b[index]) return a[index]! > b[index]!;
-  }
-  return true;
-}
+export const versionAtLeast = (version: string | null | undefined, minimum = GROUPS_MIN_VERSION): boolean =>
+  sharedVersionAtLeast(version, minimum);
 
 /** Group projects always run in git repositories, even when the group folder itself is not one. */
 export const supportsWorktree = (project: ProjectLike | null | undefined): boolean =>

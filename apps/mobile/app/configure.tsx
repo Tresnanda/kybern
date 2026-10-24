@@ -16,6 +16,7 @@ import {
   refresh,
   rpc,
   startNewChat,
+  supportsOptimisticCreate,
   useApp,
 } from "../src/state/runtime";
 import { optimisticThread } from "../../../packages/kybern-client/src/newChat";
@@ -154,9 +155,24 @@ export default function Configure() {
             },
           ],
         };
+        const provider = { kind: options.provider, instance: options.instance };
+        const params = {
+          project_id: options.projectId,
+          provider,
+          permission_mode: options.permission,
+          model: options.model || undefined,
+          effort: options.effort || undefined,
+        };
+        if (!supportsOptimisticCreate()) {
+          // An older daemon names the thread itself: wait for it, then open that thread.
+          const created = await rpc("threads.create", { ...params, message });
+          void refresh();
+          router.dismiss();
+          router.push({ pathname: "/thread/[id]", params: { id: created.id } });
+          return;
+        }
         // Optimistic, as from Home: the new thread opens now and the daemon makes it behind it.
         const createdId = newThreadId();
-        const provider = { kind: options.provider, instance: options.instance };
         startNewChat(
           {
             threadId: createdId,
@@ -174,17 +190,7 @@ export default function Configure() {
               title: thread ? `${thread.title} (handoff)` : undefined,
             }),
           },
-          (first, messageId) =>
-            rpc("threads.create", {
-              project_id: options.projectId,
-              provider,
-              permission_mode: options.permission,
-              model: options.model || undefined,
-              effort: options.effort || undefined,
-              message: first,
-              thread_id: createdId,
-              message_id: messageId,
-            }),
+          (first, messageId) => rpc("threads.create", { ...params, message: first, thread_id: createdId, message_id: messageId }),
           { seed: true },
         );
         router.dismiss();

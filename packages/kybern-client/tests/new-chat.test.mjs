@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createNewChats, mergeOptimisticThreads, optimisticThread, titleFromMessage, uuidv7 } from "../src/newChat.ts";
+import { clientThreadIds, createNewChats, mergeOptimisticThreads, optimisticThread, titleFromMessage, uuidv7, versionAtLeast } from "../src/newChat.ts";
 
 const text = (value) => ({ parts: [{ type: "text", text: value }] });
 const thread = (id, extra = {}) => optimisticThread({
@@ -58,4 +58,53 @@ test("a repeat while the first create runs joins it", async () => {
   assert.equal(chats.retry("t1"), chats.get("t1") && chats.retry("t1"));
   release();
   assert.equal((await first).state, "created");
+});
+
+test("only daemons from 0.15.0 take the client's thread ids", () => {
+  assert.ok(clientThreadIds("0.15.0"));
+  assert.ok(clientThreadIds("v0.16.2"));
+  assert.ok(clientThreadIds("1.0.0"));
+  assert.ok(!clientThreadIds("0.14.9"));
+  assert.ok(!clientThreadIds(null));
+  assert.ok(versionAtLeast("0.15.0-dev", "0.15.0"));
+});
+
+test("a create answered under another id is adopted: no ghost row, and the page can follow", async () => {
+  const adopted = [];
+  const chats = createNewChats({ onAdopt: (from, to) => adopted.push([from, to]) });
+  const done = await chats.start({ threadId: "t1", messageId: "m1", message: text("hi"), worktree: false, thread: thread("t1") }, async () => ({ ...thread("server"), cwd: "/x" }));
+  assert.equal(done.state, "created");
+  assert.equal(done.adoptedId, "server");
+  assert.deepEqual(adopted, [["t1", "server"]]);
+  assert.deepEqual(chats.unlisted(), [], "the daemon's own row is the only one");
+  assert.ok(!chats.uncreated("t1"));
+  chats.listed(["server"]);
+  assert.equal(chats.get("t1"), undefined);
+  const same = await chats.start({ threadId: "t2", messageId: "m2", message: text("hi"), worktree: false, thread: thread("t2") }, async () => "t2");
+  assert.equal(same.adoptedId, undefined);
+});
+
+test("every change is a new record, so external-store snapshots re-render", async () => {
+  let fail = true;
+  const chats = createNewChats();
+  const pending = chats.start({ threadId: "t1", messageId: "m1", message: text("hi"), worktree: true, thread: thread("t1") }, async () => { if (fail) throw new Error("no"); });
+  const creating = chats.get("t1");
+  await pending;
+  const failed = chats.get("t1");
+  assert.notEqual(failed, creating);
+  assert.equal(creating.state, "creating", "an earlier snapshot never changes under a reader");
+  fail = false;
+  const retry = chats.retry("t1");
+  assert.notEqual(chats.get("t1"), failed);
+  assert.equal(failed.state, "failed");
+  await retry;
+  assert.equal(chats.get("t1").state, "created");
+});
+
+test("a create that failed here but reached the daemon is dropped once the daemon lists it", async () => {
+  const chats = createNewChats();
+  await chats.start({ threadId: "t1", messageId: "m1", message: text("hi"), worktree: false, thread: thread("t1") }, async () => { throw new Error("socket closed"); });
+  assert.equal(chats.get("t1").state, "failed");
+  chats.listed(["t1"]);
+  assert.equal(chats.get("t1"), undefined, "the daemon's thread loads like any other");
 });

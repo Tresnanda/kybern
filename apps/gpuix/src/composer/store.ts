@@ -2,7 +2,7 @@ import type { GroupChoice } from '../groups/tray.ts'
 import {readAccounts} from '../requests/accounts.ts'
 import { onEnvironmentChange, onEnvironmentLeaving } from '../shell/environment.ts'
 import { load, save } from '../shell/persist.ts'
-import { addPending, pendingFor, updatePending, type PendingSend } from './pending.ts'
+import { addPending, pendingFor, removePending, updatePending, type PendingSend } from './pending.ts'
 import { newChats } from './newChats.ts'
 import type { NewChatCreate } from '../../../../packages/kybern-client/src/newChat.ts'
 // Composer data and actions: the agent catalog, settings and accounts, the open
@@ -345,6 +345,7 @@ async function deliverPending(send: PendingSend) {
       const chat = newChats.get(send.threadId)!
       const done = await newChats.retry(send.threadId, chat.messageId === send.id ? undefined : { message: send.message, messageId: send.id })
       if (done?.state === 'failed') throw new Error(done.error)
+      if (done?.adoptedId) return adoptNewChat(getFocusedPaneId(), send.threadId, done.adoptedId, send.id)
     } else if (send.delivery === 'send') await rpc().call('threads.send', { thread_id: send.threadId, message: send.message, message_id: send.id })
     else await rpc().call('threads.steer', { thread_id: send.threadId, id: send.id, message: send.message })
     updatePending(send.threadId, send.id, { state: 'accepted' })
@@ -457,6 +458,7 @@ export function launchNewChat(opts: {
   addPending(send)
   const started = newChats.start({ threadId: opts.threadId, messageId: send.id, message: opts.message, worktree: opts.worktree, thread: opts.thread }, opts.create)
   track(opts.threadId, started.then((chat) => {
+    if (chat.adoptedId) return adoptNewChat(paneId, opts.threadId, chat.adoptedId, send.id)
     if (chat.state === 'failed') updatePending(opts.threadId, send.id, { state: 'failed', error: chat.error })
     else if (chat.messageId === send.id) updatePending(opts.threadId, send.id, { state: 'accepted' })
     // The list catches up behind the page; nothing waits for it.
@@ -464,6 +466,17 @@ export function launchNewChat(opts: {
   }))
   void selectPaneThread(paneId, opts.threadId)
   return opts.threadId
+}
+
+/** The daemon made the thread under its own id (one that ignores ours): its copy replaces the optimistic one, and a page
+ *  still showing ours follows it. */
+function adoptNewChat(paneId: string, from: ThreadId, to: ThreadId, sendId: string) {
+  const client = getClient()
+  removePending(from, sendId)
+  newChats.forget(from)
+  void refreshLists().then(() => {
+    if (getClient() === client && getPane(paneId)?.selectedId === from) void selectPaneThread(paneId, to)
+  })
 }
 
 export async function loadBranches(projectId: ProjectId) {
