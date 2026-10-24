@@ -76,6 +76,22 @@ expression: schema_for!(ThreadsCreateParams)
         }
       ]
     },
+    "thread_id": {
+      "description": "A client-chosen id for the new thread (UUID v7), so a client can show the thread before the\ndaemon answers. A repeat with the same id returns the thread the first call made, never a\nsecond one, and sends `message` only if that call did not already deliver it.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "message_id": {
+      "description": "The client's id for `message`, as `threads.send` takes it: a repeat with the same id is\nanswered from the first delivery instead of starting another turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
     "members": {
       "description": "Group projects, worktree mode: member paths to include. Omit for all.\nIgnored in local mode (the agent works in the group folder with every member).",
       "type": [
