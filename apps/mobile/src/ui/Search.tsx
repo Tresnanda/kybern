@@ -13,12 +13,15 @@ export function SearchField({
   placeholder,
   onSubmit,
   autoFocus,
+  fill,
 }: {
   value: string;
   onChangeText: (text: string) => void;
   placeholder: string;
   onSubmit?: () => void;
   autoFocus?: boolean;
+  /** Field fill; on a `grouped` page use `surface` so it reads as a field. */
+  fill?: string;
 }) {
   const { colors } = useTheme();
   const input = useRef<TextInput>(null);
@@ -31,7 +34,7 @@ export function SearchField({
         minHeight: 44,
         paddingStart: space.md,
         borderRadius: radius.sm,
-        backgroundColor: colors.raised,
+        backgroundColor: fill ?? colors.raised,
       }}
     >
       <Icon name="magnifyingglass" size={17} color={colors.muted} />

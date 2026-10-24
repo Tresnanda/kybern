@@ -1,11 +1,14 @@
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
-import { ScrollView } from "react-native";
-import { useTheme } from "../src/ui/theme";
+import { Platform, View } from "react-native";
 import { ComposerOptions } from "../src/features/ComposerControls";
 import { errorText, loadThread, useApp, useThread } from "../src/state/runtime";
 import { useLayout } from "../src/state/layout";
-import { ErrorBanner, IconButton, Page, T, Tap } from "../src/ui/primitives";
+import { ErrorBanner, IconButton, Page, T } from "../src/ui/primitives";
+import { Segmented } from "../src/ui/Segmented";
+import { space, useTheme } from "../src/ui/theme";
+
+type Section = "model" | "permissions" | "usage";
 
 export default function ComposerOptionsScreen() {
   const { threadId, section: requested } = useLocalSearchParams<{
@@ -14,7 +17,7 @@ export default function ComposerOptionsScreen() {
   }>();
   const { colors } = useTheme();
   const { regular } = useLayout();
-  const section =
+  const section: Section =
     requested === "permissions" || requested === "usage" ? requested : "model";
   const app = useApp();
   const snapshot = useThread(threadId ?? "");
@@ -28,80 +31,33 @@ export default function ComposerOptionsScreen() {
     <>
       <Stack.Screen
         options={{
-          title:
-            section === "permissions"
-              ? "Permissions"
-              : section === "usage"
-                ? "Context & usage"
-                : threadId
-                  ? "Model & reasoning"
-                  : "Agent & model",
+          title: threadId ? "Model & permissions" : "Agent & model",
+          headerStyle: { backgroundColor: colors.grouped },
           // On tablet iOS centers a form sheet as a card; a full-height detent
           // fills the screen top-to-bottom so it reads as grounded, not floating.
-          sheetAllowedDetents: regular
-            ? [1]
-            : section === "model"
-              ? [0.75, 1]
-              : section === "permissions"
-                ? [0.65, 1]
-                : [0.5, 0.75, 1],
-          headerRight: () => (
-            <IconButton
-              name="xmark"
-              label="Close composer options"
-              onPress={() => router.back()}
-            />
-          ),
+          sheetAllowedDetents: regular ? [1] : section === "model" ? [0.75, 1] : [0.6, 1],
+          // iOS draws the sheet's own grabber and dismisses with a drag; a Done
+          // button is the platform's close for a choice sheet.
+          headerRight: () =>
+            Platform.OS === "ios" ? (
+              <IconButton name="checkmark" label="Done" onPress={() => router.back()} />
+            ) : null,
         }}
       />
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={{ flexGrow: 0 }}
-        contentContainerStyle={{
-          flexGrow: 1,
-          flexDirection: "row",
-          paddingHorizontal: 16,
-          paddingBottom: 8,
-          gap: 4,
-        }}
-      >
-        {(
-          ["model", "permissions", ...(threadId ? ["usage"] : [])] as const
-        ).map((tab) => (
-          <Tap
-            key={tab}
-            label={
-              tab === "model"
-                ? "Model"
-                : tab === "permissions"
-                  ? "Permissions"
-                  : "Usage"
-            }
-            selected={section === tab}
-            onPress={() => router.setParams({ section: tab })}
-            style={{
-              flexGrow: 1,
-              flexShrink: 0,
-              paddingHorizontal: 12,
-              paddingVertical: 8,
-              alignItems: "center",
-              borderRadius: 14,
-              backgroundColor: section === tab ? colors.raised : "transparent",
-            }}
-          >
-            <T variant="footnote" tone={section === tab ? "ink" : "secondary"}>
-              {tab === "model"
-                ? "Model"
-                : tab === "permissions"
-                  ? "Permissions"
-                  : "Usage"}
-            </T>
-          </Tap>
-        ))}
-      </ScrollView>
+      <View style={{ backgroundColor: colors.grouped, paddingHorizontal: space.lg, paddingBottom: space.sm }}>
+        <Segmented<Section>
+          label="Options"
+          value={section}
+          onChange={(tab) => router.setParams({ section: tab })}
+          options={[
+            { value: "model", label: "Model" },
+            { value: "permissions", label: "Permissions" },
+            ...(threadId ? [{ value: "usage" as const, label: "Usage" }] : []),
+          ]}
+        />
+      </View>
       {threadId && !thread ? (
-        <Page>
+        <Page grouped>
           <ErrorBanner error={error} />
           <T tone="secondary">Loading thread options…</T>
         </Page>
