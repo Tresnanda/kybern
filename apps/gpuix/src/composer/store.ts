@@ -1,3 +1,4 @@
+import type { GroupChoice } from '../groups/tray.ts'
 import {readAccounts} from '../requests/accounts.ts'
 import { onEnvironmentChange, onEnvironmentLeaving } from '../shell/environment.ts'
 import { load, save } from '../shell/persist.ts'
@@ -46,6 +47,8 @@ export interface DraftChoices {
   projectId: ProjectId | null | undefined
   worktree: boolean | null
   baseBranch: string | null
+  /** Group projects: the members and per-member branches of the new chat (`groups/tray.ts`), for one project. */
+  group?: GroupChoice | null
 }
 
 export interface ComposerData {
@@ -74,7 +77,7 @@ const initialData: ComposerData = {
   catalogLoading: null,
   queued: {},
   branches: null,
-  draft: { mode: null, provider: null, models: {}, projectId: undefined, worktree: null, baseBranch: null },
+  draft: { mode: null, provider: null, models: {}, projectId: undefined, worktree: null, baseBranch: null, group: null },
   favorites: [],
   recents: {},
 }

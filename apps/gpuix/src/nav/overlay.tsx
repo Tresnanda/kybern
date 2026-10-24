@@ -559,6 +559,8 @@ export function MenuSub({
   id,
   label,
   icon,
+  hint,
+  trailing,
   children,
   width = 192,
   testId,
@@ -568,6 +570,10 @@ export function MenuSub({
   id: string
   label: string
   icon?: string
+  /** Muted text right after the label ("primary"). */
+  hint?: string
+  /** Before the chevron (a repository's branch in the composer's branch menu). */
+  trailing?: ReactNode
   children: ReactNode
   width?: number
   testId?: string
@@ -674,9 +680,15 @@ export function MenuSub({
         }}
       >
         {icon && <Icon source={icon} size={16} color={ink(t, 0.8)} />}
-        <Label color={t.text} truncate style={{ flexGrow: 1, pointerEvents: 'none' }}>
+        <Label color={t.text} truncate style={{ flexGrow: hint ? 0 : 1, flexShrink: 1, pointerEvents: 'none' }}>
           {label}
         </Label>
+        {hint && (
+          <Label color={muted(t, 0.6)} size={12} style={{ flexGrow: 1, flexShrink: 0, pointerEvents: 'none' }}>
+            {hint}
+          </Label>
+        )}
+        {trailing && <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 1, minWidth: 0, pointerEvents: 'none' }}>{trailing}</div>}
         <Icon source={N.chevronRight} size={16} color={t.text} style={{ marginRight: -2, pointerEvents: 'none' }} />
       </div>
       {open && (

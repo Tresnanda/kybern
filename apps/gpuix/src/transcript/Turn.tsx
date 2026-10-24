@@ -1,3 +1,5 @@
+import { useWorkspaceProgress } from '../groups/store.ts'
+import { workspaceProgressLabel } from '../../../../packages/kybern-client/src/groups.ts'
 import { openTab } from '../tabs/open.ts'
 import { expiredQuestion } from '../../../../packages/kybern-client/src/requestCards.ts'
 import type { PublicInstance } from '@gpuix/react'
@@ -110,6 +112,8 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
   // A new chat in worktree mode: its first turn starts once the daemon has made the worktree (`composer/newChats.ts`).
   const chat = useNewChat(threadId)
   const preparing = !!chat && chat.worktree && chat.state === 'creating' && chat.messageId === group.user?.id
+  // A group's worktrees are made one repository at a time: "Preparing worktrees… 2 of 3" (`threads.workspace_progress`).
+  const progress = useWorkspaceProgress(preparing ? threadId : null)
   // A long live turn can start before the loaded page, so its user message (and
   // with it `running`) is missing; the thread's status still says it is live.
   const running = !failed && (group.running || (threadRunning && isLast && !group.end))
@@ -191,7 +195,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
           {/* `thinkingRow`: `t-row-enter` each time it mounts. */}
           {!hasLiveWork && !endsInRun && (
             <Rise kind="row" style={{ marginTop: 6 }}>
-              <Shimmer text={preparing ? PREPARING_WORKTREE : 'Thinking'} color={muted(t)} lineHeight={TEXT.lineHeight} />
+              <Shimmer text={preparing ? (progress ? workspaceProgressLabel(progress) : PREPARING_WORKTREE) : 'Thinking'} color={muted(t)} lineHeight={TEXT.lineHeight} />
             </Rise>
           )}
         </div>

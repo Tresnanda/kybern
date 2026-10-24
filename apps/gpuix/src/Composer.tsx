@@ -118,6 +118,8 @@ import {
   useComposer,
 } from './composer/store.ts'
 import { alreadyAttachedText, contentHash, newFiles } from './composer/attached.ts'
+import { isGroupProject } from '../../../packages/kybern-client/src/groups.ts'
+import { choiceFor, groupCreateParams } from './groups/tray.ts'
 
 export const COMPOSER_RADIUS = 19.2
 const DEFAULT_PLACEHOLDER = 'Ask anything, @ to mention, $ skills, or / commands'
@@ -299,7 +301,7 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
   const providers = useComposer((d) => d.providers)
   const loading = useComposer((d) => d.providersLoading)
   const accounts = useComposer((d) => d.accounts)
-  const { projectId, provider, pinAccount, mode, useWorktree, choice, draft } = useDraftTarget()
+  const { projectId, project, provider, pinAccount, mode, useWorktree, choice, draft } = useDraftTarget()
   const coordinator = useApp(s => s.draft.purpose === 'coordinator')
 
   return (
@@ -424,6 +426,8 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
             effort: choice?.effort,
             use_worktree: useWorktree,
             base_branch: draft.baseBranch ?? undefined,
+            // A group project: the repositories this chat gets and their branches (`groups/tray.ts`), next to the client ids.
+            ...(project && isGroupProject(project) ? groupCreateParams(project, choiceFor(draft.group, project.id), useWorktree) : {}),
             message: first,
             thread_id: threadId,
             message_id: messageId,
