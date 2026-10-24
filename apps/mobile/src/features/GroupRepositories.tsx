@@ -39,9 +39,10 @@ export function GroupRepositories({ project, onChanged }: { project: Project; on
   const [state, setState] = useState<ProjectsMembersStatusResult>();
   const [copyOpen, setCopyOpen] = useState(false);
   const [copy, setCopy] = useState<string[]>(project.worktree_copy ?? []);
-  const [removed, setRemoved] = useState<{ name: string; members: string[] } | null>(null);
+  const [removed, setRemoved] = useState<{ name: string; members: string[]; after: string } | null>(null);
   const [error, setError] = useState("");
   const members = project.members ?? [];
+  const memberKey = members.map((member) => member.path).join("\n");
   useEffect(() => {
     let alive = true;
     void rpc("projects.members.status", { project_id: project.id })
@@ -50,8 +51,12 @@ export function GroupRepositories({ project, onChanged }: { project: Project; on
     return () => {
       alive = false;
     };
-  }, [project.id, members.map((member) => member.path).join("\n")]);
+  }, [project.id, memberKey]);
   useEffect(() => setCopy(project.worktree_copy ?? []), [project.id, (project.worktree_copy ?? []).join("\n")]);
+  // Undo only restores the list it removed from; any other change to the members retires it.
+  useEffect(() => {
+    if (removed && memberKey !== removed.after) setRemoved(null);
+  }, [memberKey]);
 
   async function setMembers(paths: string[]) {
     const next = await rpc("projects.update", { project_id: project.id, members: paths });
@@ -61,8 +66,9 @@ export function GroupRepositories({ project, onChanged }: { project: Project; on
   function remove(path: string, name: string) {
     const before = members.map((member) => member.path);
     setError("");
-    void setMembers(before.filter((item) => item !== path))
-      .then(() => setRemoved({ name, members: before }))
+    const after = before.filter((item) => item !== path);
+    void setMembers(after)
+      .then(() => setRemoved({ name, members: before, after: after.join("\n") }))
       .catch((e) => setError(errorText(e)));
   }
   function actions(path: string, name: string, status: string) {
@@ -75,10 +81,16 @@ export function GroupRepositories({ project, onChanged }: { project: Project; on
           : removable
             ? "Existing chats keep it. Its worktrees stay until those chats are archived."
             : GROUP_COPY.minimumReason;
-    Alert.alert(name, message, [
-      { text: GROUP_COPY.cancel, style: "cancel" },
-      ...(removable ? [{ text: GROUP_COPY.removeFromGroup, style: "destructive" as const, onPress: () => remove(path, name) }] : []),
-    ]);
+    Alert.alert(
+      name,
+      message,
+      removable
+        ? [
+            { text: GROUP_COPY.cancel, style: "cancel" },
+            { text: GROUP_COPY.removeFromGroup, style: "destructive", onPress: () => remove(path, name) },
+          ]
+        : [{ text: "OK", style: "cancel" }],
+    );
   }
   function toggleCopy(name: string) {
     const before = copy;

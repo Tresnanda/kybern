@@ -39,6 +39,12 @@ export default function Projects() {
     setError("");
     setPrsLoaded(false);
   }
+  // Follow the computer's copy, so edits made elsewhere (Add repositories…, desktop) show here.
+  useEffect(() => {
+    if (!selected) return;
+    const fresh = app.projects.find((project) => project.id === selected.id);
+    if (fresh && fresh !== selected) setSelected(fresh);
+  }, [app.projects]);
   useEffect(() => {
     let alive = true;
     if (!selected) {
