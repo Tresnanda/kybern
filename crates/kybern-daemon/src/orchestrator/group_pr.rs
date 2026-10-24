@@ -199,9 +199,30 @@ impl Orchestrator {
             }
             None => all,
         };
+        // Only repositories this chat changed: since its first checkpoint, so a
+        // member's earlier work in progress or unpushed commits never ride along.
+        let changed: Vec<String> =
+            match group_git::group_diff(&self.inner.store, &thread, None, false, None, group_git::DiffCaps::UNLIMITED_FILES).await {
+                Ok(diff) => diff.repos.into_iter().filter(|r| r.files > 0).map(|r| r.repo).collect(),
+                Err(error) => {
+                    tracing::debug!(thread_id = %thread.id, %error, "no group diff for pull requests");
+                    Vec::new()
+                }
+            };
+        let mut skipped = Vec::new();
+        let chosen: Vec<RepoTarget> = chosen
+            .into_iter()
+            .filter(|t| {
+                let keep = changed.iter().any(|repo| repo == t.repo_path());
+                if !keep && p.repos.is_some() {
+                    skipped.push(methods::RejectedFolder { path: t.repo_path().to_string(), reason: "This chat didn't change it".into() });
+                }
+                keep
+            })
+            .collect();
+        ensure!(!chosen.is_empty() || !skipped.is_empty(), "This chat hasn't changed any repository yet.");
         let names: Vec<String> = chosen.iter().map(|t| t.name.clone()).collect();
         let mut created: Vec<(RepoTarget, PullRequest, String)> = Vec::new();
-        let mut skipped = Vec::new();
         for target in chosen {
             match self.member_pr(&thread, &target, &names, &p, gh).await {
                 Ok((pr, body)) => created.push((target, pr, body)),
@@ -247,6 +268,10 @@ impl Orchestrator {
         }
         let dirty = github::has_changes_excluding(dir, &target.exclude).await;
         let base = github::default_base_with(gh, dir).await;
+        // Never commit to or push the base branch: the pull request needs its own.
+        if target.git().current_branch().await.as_deref() == Some(base.as_str()) {
+            return Err(format!("{} is on {base}. Create a branch first", target.name));
+        }
         if !(p.commit_first && dirty) && github::commits_ahead_of(dir, &base).await == 0 {
             return Err("No changes".into());
         }

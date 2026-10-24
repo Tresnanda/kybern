@@ -134,7 +134,9 @@ esac
 async fn group_pull_requests_skip_repos_without_a_remote_and_cross_link_the_rest() {
     let fixture = Fixture::new();
     let folder = fixture.root.join("acme");
-    for (name, remote) in [("api", true), ("web", true), ("infra", false)] {
+    // `ops` has the user's own work in progress and is on main; `site` is on main.
+    let repos = [("api", true), ("web", true), ("infra", false), ("ops", true), ("site", true)];
+    for (name, remote) in repos {
         let dir = folder.join(name);
         pr_init_member(&dir, "a.txt");
         if remote {
@@ -144,14 +146,25 @@ async fn group_pull_requests_skip_repos_without_a_remote_and_cross_link_the_rest
             git_in(&dir, &["remote", "add", "origin", &bare.to_string_lossy()]);
             git_in(&dir, &["push", "-q", "origin", "main"]);
         }
-        git_in(&dir, &["switch", "-q", "-c", "feat"]);
-        std::fs::write(dir.join("a.txt"), "two\n").unwrap();
+        if !matches!(name, "ops" | "site") {
+            git_in(&dir, &["switch", "-q", "-c", "feat"]);
+        }
     }
+    std::fs::write(folder.join("ops/a.txt"), "user wip\n").unwrap();
+    git_in(&folder.join("ops"), &["commit", "-qam", "unpushed"]);
+    std::fs::write(folder.join("ops/a.txt"), "more user wip\n").unwrap();
     let mut thread = fixture.thread(ThreadStatus::Idle);
     thread.title = "Add SSO to the admin console".into();
     thread.cwd = folder.to_string_lossy().into_owned();
-    thread.members = ["api", "web", "infra"].iter().map(|path| group_member(&folder, path, true, false)).collect();
+    thread.members = repos.iter().map(|(path, _)| group_member(&folder, path, true, false)).collect();
     fixture.store.thread_upsert(&thread).unwrap();
+    // The chat's turn changes api, web, infra and site, never ops.
+    let turn = Uuid::now_v7();
+    fixture.orchestrator.checkpoint(&thread, turn, "before").await;
+    for name in ["api", "web", "infra", "site"] {
+        std::fs::write(folder.join(name).join("a.txt"), "two\n").unwrap();
+    }
+    fixture.orchestrator.checkpoint(&thread, turn, "after").await;
     let (gh, log) = fake_group_gh(&fixture.root.join("gh"));
 
     let result = fixture
@@ -165,7 +178,11 @@ async fn group_pull_requests_skip_repos_without_a_remote_and_cross_link_the_rest
     let created: Vec<_> = result.pull_requests.iter().map(|p| (p.repo.as_str(), p.pull_request.number)).collect();
     assert_eq!(created, [("api", 128), ("web", 77)]);
     let skipped: Vec<_> = result.skipped.iter().map(|s| (s.path.as_str(), s.reason.as_str())).collect();
-    assert_eq!(skipped, [("infra", "No GitHub remote")]);
+    assert_eq!(skipped, [("infra", "No GitHub remote"), ("site", "site is on main. Create a branch first")]);
+    assert_eq!(git_in(&folder.join("ops"), &["status", "--porcelain"]), "M a.txt", "an untouched repository is never committed");
+    let ops = fixture.root.join("github.com/acme/ops.git");
+    assert_eq!(git_in(&ops, &["rev-parse", "main"]), git_in(&folder.join("ops"), &["rev-parse", "HEAD~1"]), "nor pushed");
+    assert_eq!(git_in(&folder.join("site"), &["status", "--porcelain"]), "M a.txt", "the base branch is never committed to");
     for name in ["api", "web"] {
         assert_eq!(git_in(&folder.join(name), &["status", "--porcelain"]), "", "{name} was committed first");
         let bare = fixture.root.join("github.com/acme").join(format!("{name}.git"));
@@ -174,7 +191,7 @@ async fn group_pull_requests_skip_repos_without_a_remote_and_cross_link_the_rest
     let calls = std::fs::read_to_string(&log).unwrap();
     assert!(calls.contains("api pr edit 128 --body-file -"), "{calls}");
     assert!(calls.contains("web pr edit 77 --body-file -"), "{calls}");
-    assert!(!calls.lines().any(|line| line.starts_with("infra pr")), "{calls}");
+    assert!(!calls.lines().any(|line| line.starts_with("infra pr") || line.starts_with("ops ") || line.starts_with("site pr")), "{calls}");
     let body = std::fs::read_to_string(fixture.root.join("gh/edit-api-128")).unwrap();
     assert_eq!(
         body,
@@ -189,4 +206,14 @@ async fn group_pull_requests_skip_repos_without_a_remote_and_cross_link_the_rest
         .await
         .unwrap_err();
     assert_eq!(unknown.to_string(), "docs isn't a repository of this chat.");
+    let untouched = fixture
+        .orchestrator
+        .pr_create_group(
+            methods::PrCreateGroupParams { thread_id: thread.id, repos: Some(vec!["ops".into()]), draft: false, commit_first: true },
+            &gh.to_string_lossy(),
+        )
+        .await
+        .unwrap();
+    assert!(untouched.pull_requests.is_empty());
+    assert_eq!(untouched.skipped[0].reason, "This chat didn't change it");
 }
