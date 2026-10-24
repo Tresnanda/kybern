@@ -1,7 +1,7 @@
 // Group thread status, commits and pull requests. Included into
 // `orchestrator::tests` for its fixture and the `git_in` helper.
 
-fn init_member(dir: &std::path::Path, file: &str) {
+fn pr_init_member(dir: &std::path::Path, file: &str) {
     std::fs::create_dir_all(dir).unwrap();
     git_in(dir, &["init", "-q"]);
     git_in(dir, &["symbolic-ref", "HEAD", "refs/heads/main"]);
@@ -31,10 +31,10 @@ fn group_member(folder: &std::path::Path, path: &str, included: bool, missing: b
 /// holding `api` and `web`, `infra` is deselected and `docs` is missing.
 fn group_with_folder_repo(fixture: &Fixture) -> (std::path::PathBuf, Thread) {
     let folder = fixture.root.join("acme");
-    init_member(&folder, "README.md");
-    init_member(&folder.join("api"), "a.rs");
-    init_member(&folder.join("web"), "w.ts");
-    init_member(&folder.join("infra"), "main.tf");
+    pr_init_member(&folder, "README.md");
+    pr_init_member(&folder.join("api"), "a.rs");
+    pr_init_member(&folder.join("web"), "w.ts");
+    pr_init_member(&folder.join("infra"), "main.tf");
     let mut thread = fixture.thread(ThreadStatus::Idle);
     thread.cwd = folder.to_string_lossy().into_owned();
     thread.members = vec![
@@ -136,7 +136,7 @@ async fn group_pull_requests_skip_repos_without_a_remote_and_cross_link_the_rest
     let folder = fixture.root.join("acme");
     for (name, remote) in [("api", true), ("web", true), ("infra", false)] {
         let dir = folder.join(name);
-        init_member(&dir, "a.txt");
+        pr_init_member(&dir, "a.txt");
         if remote {
             let bare = fixture.root.join("github.com/acme").join(format!("{name}.git"));
             std::fs::create_dir_all(&bare).unwrap();
