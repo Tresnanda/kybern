@@ -11,6 +11,12 @@
 /.github/
 /.cargo/
 /apps/desktop/
+/apps/gpuix/
+# Local agent artifacts, previews and notes: private, never uploaded.
+/.kybern-artifacts/
+/previews/
+/CONTEXT.md
+/.screenshots/
 **/node_modules/
 /apps/mobile/.expo/
 /apps/mobile/dist/
