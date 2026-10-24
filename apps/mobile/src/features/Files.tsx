@@ -14,9 +14,11 @@ import { FileTreeRow, flattenItems } from "../components/beui/FileTree";
 export function Files({
   project,
   threadId,
+  reveal,
 }: {
   project: Project;
   threadId?: string;
+  reveal?: string;
 }) {
   const [folders, setFolders] = useState<Record<string, FileEntry[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -43,6 +45,11 @@ export function Files({
   }
   useEffect(() => {
     void load("");
+    if (reveal) {
+      setExpanded(new Set([reveal]));
+      setSelected(reveal);
+      void load(reveal);
+    }
   }, [project.id]);
   useEffect(() => {
     let alive = true;

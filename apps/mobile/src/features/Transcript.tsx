@@ -34,7 +34,7 @@ function OutsideChangeRow({ block, threadId }: { block: Extract<Block, { kind: "
   const text = outsideChangeText(block.repos.map((repo) => repo.name));
   const open = () => {
     const projectId = getState().threads.find((thread) => thread.id === threadId)?.project_id;
-    if (projectId) router.push({ pathname: "/workspace", params: { projectId, tab: "Files" } });
+    if (projectId) router.push({ pathname: "/workspace", params: { projectId, tab: "Files", reveal: block.repos[0]?.repo } });
   };
   return (
     <View style={[styles.line, { gap: 8, marginVertical: 8 }]} accessibilityRole="alert">
