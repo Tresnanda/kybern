@@ -72,6 +72,15 @@ pub enum MergeOutcome {
     Conflict { paths: Vec<String> },
 }
 
+/// What `Repo::merge_tree_check` found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MergeCheck {
+    Clean,
+    Conflicts(Vec<String>),
+    /// This git cannot check without merging (older than 2.38).
+    Unknown,
+}
+
 /// One entry of `git status`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusEntry {
@@ -265,15 +274,23 @@ impl Repo {
     /// directories of `SNAPSHOT_SKIP_BYTES` or more are left out and named in
     /// the commit message, and `restore` keeps them.
     pub async fn snapshot(&self, message: &str) -> Result<String> {
+        self.snapshot_excluding(message, &[]).await
+    }
+
+    /// `snapshot`, leaving out `exclude` (paths relative to the workdir, such as
+    /// the nested repositories of a group folder). Each exclusion set keeps its
+    /// own stat-cache index.
+    pub async fn snapshot_excluding(&self, message: &str, exclude: &[String]) -> Result<String> {
         let (git_dir, location) = tokio::join!(self.git_dir(), self.git(&["rev-parse", "--show-toplevel", "--show-prefix"]));
         let git_dir = git_dir?;
         let location = location?;
         let mut lines = location.lines();
         let toplevel = PathBuf::from(lines.next().unwrap_or_default());
         let prefix = lines.next().unwrap_or_default().to_string();
-        let kept = git_dir.join(snapshot_index_name(&prefix));
+        let key = if exclude.is_empty() { prefix.clone() } else { format!("{prefix}\0{}", exclude.join("\0")) };
+        let kept = git_dir.join(snapshot_index_name(&key));
         if tokio::fs::try_exists(&kept).await.unwrap_or(false) {
-            match self.snapshot_seeded(message, &git_dir, &kept, true, &toplevel, &prefix).await {
+            match self.snapshot_seeded(message, &git_dir, &kept, true, &toplevel, &prefix, exclude).await {
                 Ok(commit) => return Ok(commit),
                 Err(error) => {
                     // A kept index must never fail every later checkpoint.
@@ -282,9 +299,10 @@ impl Repo {
                 }
             }
         }
-        self.snapshot_seeded(message, &git_dir, &kept, false, &toplevel, &prefix).await
+        self.snapshot_seeded(message, &git_dir, &kept, false, &toplevel, &prefix, exclude).await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn snapshot_seeded(
         &self,
         message: &str,
@@ -293,6 +311,7 @@ impl Repo {
         reuse: bool,
         toplevel: &Path,
         prefix: &str,
+        exclude: &[String],
     ) -> Result<String> {
         let (working_index, head) = tokio::join!(self.index_path(), self.head());
         let index = git_dir.join(format!("kybern-index-{}", uuid::Uuid::new_v4().simple()));
@@ -336,8 +355,9 @@ impl Repo {
                 }
                 self.match_tracked_ignored_files(&env).await?;
             }
-            let skipped = self.large_untracked().await?;
-            let excludes = skipped.iter().map(|entry| format!(":(exclude,literal){}", entry.path)).collect::<Vec<_>>();
+            let skipped = self.large_untracked(exclude).await?;
+            let mut excludes = skipped.iter().map(|entry| format!(":(exclude,literal){}", entry.path)).collect::<Vec<_>>();
+            excludes.extend(exclude_pathspecs(exclude));
             if !skipped.is_empty() {
                 // An earlier snapshot may still hold a path that has grown too large.
                 let literal = skipped.iter().map(|entry| format!(":(literal){}", entry.path)).collect::<Vec<_>>();
@@ -481,8 +501,14 @@ impl Repo {
     /// Untracked files and wholly untracked directories (as `git status`
     /// collapses them) of `SNAPSHOT_SKIP_BYTES` or more. Sizing stops at the
     /// limit, so a huge directory costs about as much as a small one.
-    async fn large_untracked(&self) -> Result<Vec<SkippedPath>> {
-        let out = self.git(&["ls-files", "-z", "-o", "--directory", "--exclude-standard"]).await?;
+    async fn large_untracked(&self, exclude: &[String]) -> Result<Vec<SkippedPath>> {
+        let excludes = exclude_pathspecs(exclude);
+        let mut args = vec!["ls-files", "-z", "-o", "--directory", "--exclude-standard"];
+        if !excludes.is_empty() {
+            args.extend(["--", "."]);
+            args.extend(excludes.iter().map(String::as_str));
+        }
+        let out = self.git(&args).await?;
         let workdir = self.workdir.clone();
         let entries = out.split('\0').filter(|path| !path.is_empty()).map(str::to_string).collect::<Vec<_>>();
         tokio::task::spawn_blocking(move || {
@@ -523,11 +549,32 @@ impl Repo {
     /// Paths the snapshot left out for their size, and untracked paths that
     /// are that large now, are kept.
     pub async fn restore(&self, commit: &str) -> Result<()> {
-        let (skipped, large) = tokio::join!(self.snapshot_skipped(commit), self.large_untracked());
+        let (skipped, large) = tokio::join!(self.snapshot_skipped(commit), self.large_untracked(&[]));
         let mut keep = skipped?;
         keep.extend(large?.into_iter().map(|entry| entry.path));
         self.git(&["read-tree", "--reset", "-u", commit]).await?;
         let excludes = keep.iter().map(|path| format!(":(exclude,literal){path}")).collect::<Vec<_>>();
+        let mut clean = vec!["clean", "-fd", "--", "."];
+        clean.extend(excludes.iter().map(String::as_str));
+        self.git(&clean).await?;
+        Ok(())
+    }
+
+    /// `restore`, leaving `exclude` (paths relative to the workdir) untouched.
+    /// `read-tree --reset` cannot exclude, so this restores through pathspecs.
+    pub async fn restore_excluding(&self, commit: &str, exclude: &[String]) -> Result<()> {
+        if exclude.is_empty() {
+            return self.restore(commit).await;
+        }
+        let (skipped, large) = tokio::join!(self.snapshot_skipped(commit), self.large_untracked(exclude));
+        let mut keep = skipped?;
+        keep.extend(large?.into_iter().map(|entry| entry.path));
+        let mut excludes = keep.iter().map(|path| format!(":(exclude,literal){path}")).collect::<Vec<_>>();
+        excludes.extend(exclude_pathspecs(exclude));
+        let source = format!("--source={commit}");
+        let mut args = vec!["restore", source.as_str(), "--staged", "--worktree", "--", "."];
+        args.extend(excludes.iter().map(String::as_str));
+        self.git(&args).await?;
         let mut clean = vec!["clean", "-fd", "--", "."];
         clean.extend(excludes.iter().map(String::as_str));
         self.git(&clean).await?;
@@ -541,8 +588,24 @@ impl Repo {
     /// Diff two snapshots, optionally omitting the unified patch or limiting it
     /// to one repository-relative path. Metadata is always returned.
     pub async fn diff_with_options(&self, from: &str, to: &str, include_patch: bool, path: Option<&str>) -> Result<Diff> {
+        self.diff_prefixed(from, to, include_patch, path, None).await
+    }
+
+    /// `diff_with_options` for a repository inside a larger folder: with
+    /// `prefix` (`api`), file paths and patch headers are relative to that
+    /// folder (`api/src/x.rs`). `path` stays relative to this repository.
+    pub async fn diff_prefixed(&self, from: &str, to: &str, include_patch: bool, path: Option<&str>, prefix: Option<&str>) -> Result<Diff> {
+        let prefix = prefix.map(|p| p.trim_matches('/')).filter(|p| !p.is_empty() && *p != ".");
+        let src_prefix = prefix.map(|p| format!("--src-prefix=a/{p}/"));
+        let dst_prefix = prefix.map(|p| format!("--dst-prefix=b/{p}/"));
         let args = |mode: &'static str| {
-            let mut args = vec!["diff", mode, "-M", from, to];
+            let mut args = vec!["diff", mode, "-M"];
+            if mode == "--no-color"
+                && let (Some(src), Some(dst)) = (&src_prefix, &dst_prefix)
+            {
+                args.extend([src.as_str(), dst.as_str()]);
+            }
+            args.extend([from, to]);
             if let Some(path) = path {
                 args.extend(["--", path]);
             }
@@ -587,6 +650,14 @@ impl Repo {
                 }
             }
         }
+        if let Some(prefix) = prefix {
+            for file in &mut files {
+                file.path = format!("{prefix}/{}", file.path);
+                if let Some(old) = file.old_path.as_mut() {
+                    *old = format!("{prefix}/{old}");
+                }
+            }
+        }
         Ok(Diff { from: from.into(), to: to.into(), files, patch, patch_truncated, repos: Vec::new() })
     }
 
@@ -596,6 +667,36 @@ impl Repo {
     /// (ignored files do not count).
     pub async fn is_clean(&self) -> Result<bool> {
         Ok(self.git(&["status", "--porcelain"]).await?.is_empty())
+    }
+
+    /// `git status --porcelain` lines, leaving out `exclude` (paths relative to
+    /// the workdir, such as the nested repositories of a group folder).
+    pub async fn status_porcelain(&self, exclude: &[String]) -> Result<Vec<String>> {
+        let excludes = exclude_pathspecs(exclude);
+        let mut args = vec!["status", "--porcelain", "--", "."];
+        args.extend(excludes.iter().map(String::as_str));
+        Ok(self.git(&args).await?.lines().filter(|line| !line.is_empty()).map(str::to_string).collect())
+    }
+
+    /// Whether merging `theirs` into `ours` would conflict, without touching
+    /// the working tree (`git merge-tree --write-tree`, git 2.38 or newer).
+    pub async fn merge_tree_check(&self, ours: &str, theirs: &str) -> Result<MergeCheck> {
+        let out = self.output(&["merge-tree", "--write-tree", "--name-only", "--no-messages", ours, theirs]).await?;
+        if out.success {
+            return Ok(MergeCheck::Clean);
+        }
+        // Exit status 1 with a tree id first: the merge conflicts.
+        let mut lines = out.stdout.lines();
+        let tree = lines.next().unwrap_or_default();
+        if !tree.is_empty() && tree.chars().all(|c| c.is_ascii_hexdigit()) {
+            let mut paths: Vec<String> = lines.filter(|line| !line.is_empty()).map(str::to_string).collect();
+            paths.dedup();
+            return Ok(MergeCheck::Conflicts(paths));
+        }
+        if out.stderr.contains("usage:") || out.stderr.contains("unknown option") {
+            return Ok(MergeCheck::Unknown);
+        }
+        Err(anyhow!("git merge-tree failed: {}", out.stderr))
     }
 
     /// Whether `ancestor` is reachable from `descendant` (`git merge-base
@@ -969,6 +1070,11 @@ fn truncate_utf8(value: &mut String, max_bytes: usize) -> bool {
     }
     value.truncate(end);
     true
+}
+
+/// `:(exclude,literal)<path>` pathspecs for paths relative to the workdir.
+pub fn exclude_pathspecs(paths: &[String]) -> Vec<String> {
+    paths.iter().map(|path| format!(":(exclude,literal){}", path.trim_end_matches('/'))).collect()
 }
 
 pub fn checkpoint_ref(thread_id: &str, turn_id: &str, which: &str) -> String {
@@ -1524,5 +1630,98 @@ mod review_adversarial {
         let third = repo.snapshot("third").await;
         eprintln!("third: {third:?}");
         assert!(second.is_ok() && third.is_ok());
+    }
+}
+
+#[cfg(test)]
+mod group_tests {
+    use super::*;
+
+    async fn init_repo() -> (tempfile::TempDir, Repo) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repo::new(dir.path());
+        repo.git(&["init", "-q"]).await.unwrap();
+        repo.git(&["config", "user.email", "t@t"]).await.unwrap();
+        repo.git(&["config", "user.name", "t"]).await.unwrap();
+        (dir, repo)
+    }
+
+    /// A group folder that is itself a repository, with a nested member
+    /// repository: snapshots, restores and status of the folder leave the
+    /// member alone.
+    #[tokio::test]
+    async fn excluded_nested_repository_is_never_snapshotted_or_restored() {
+        let (dir, outer) = init_repo().await;
+        let root = dir.path();
+        std::fs::write(root.join("README.md"), "outer\n").unwrap();
+        outer.git(&["add", "."]).await.unwrap();
+        outer.git(&["commit", "-q", "-m", "init"]).await.unwrap();
+        let api = root.join("api");
+        std::fs::create_dir(&api).unwrap();
+        let inner = Repo::new(&api);
+        inner.git(&["init", "-q"]).await.unwrap();
+        std::fs::write(api.join("x.rs"), "fn x() {}\n").unwrap();
+        let exclude = vec!["api".to_string()];
+
+        assert_eq!(outer.status_porcelain(&exclude).await.unwrap(), Vec::<String>::new());
+        assert_eq!(outer.status_porcelain(&[]).await.unwrap(), ["?? api/"]);
+        let before = outer.snapshot_excluding("before", &exclude).await.unwrap();
+        std::fs::write(root.join("README.md"), "outer two\n").unwrap();
+        std::fs::write(root.join("notes.txt"), "new\n").unwrap();
+        std::fs::write(api.join("x.rs"), "fn x() { 1 }\n").unwrap();
+        let after = outer.snapshot_excluding("after", &exclude).await.unwrap();
+        let diff = outer.diff(&before, &after).await.unwrap();
+        let paths: Vec<_> = diff.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["README.md", "notes.txt"], "the nested repository stays out of the folder's snapshots");
+
+        outer.restore_excluding(&before, &exclude).await.unwrap();
+        assert_eq!(std::fs::read_to_string(root.join("README.md")).unwrap(), "outer\n");
+        assert!(!root.join("notes.txt").exists());
+        assert_eq!(std::fs::read_to_string(api.join("x.rs")).unwrap(), "fn x() { 1 }\n", "restore leaves the member alone");
+        assert!(api.join(".git").exists());
+    }
+
+    #[tokio::test]
+    async fn prefixed_diff_names_files_inside_the_group_folder() {
+        let (dir, repo) = init_repo().await;
+        std::fs::write(dir.path().join("a.txt"), "one\n").unwrap();
+        repo.git(&["add", "."]).await.unwrap();
+        repo.git(&["commit", "-q", "-m", "init"]).await.unwrap();
+        let before = repo.snapshot("before").await.unwrap();
+        std::fs::write(dir.path().join("a.txt"), "one\ntwo\n").unwrap();
+        std::fs::rename(dir.path().join("a.txt"), dir.path().join("b.txt")).unwrap();
+        let after = repo.snapshot("after").await.unwrap();
+        let diff = repo.diff_prefixed(&before, &after, true, None, Some("services/api")).await.unwrap();
+        assert_eq!(diff.files.len(), 1);
+        assert_eq!(diff.files[0].path, "services/api/b.txt");
+        assert_eq!(diff.files[0].old_path.as_deref(), Some("services/api/a.txt"));
+        assert_eq!(diff.files[0].additions, 1);
+        assert!(diff.patch.contains("diff --git a/services/api/a.txt b/services/api/b.txt"), "{}", diff.patch);
+        let only = repo.diff_prefixed(&before, &after, false, Some("b.txt"), Some("services/api")).await.unwrap();
+        assert_eq!(only.files.len(), 1);
+        let plain = repo.diff_prefixed(&before, &after, true, None, Some(".")).await.unwrap();
+        assert_eq!(plain.files[0].path, "b.txt");
+    }
+
+    #[tokio::test]
+    async fn merge_tree_check_finds_conflicts_without_touching_the_tree() {
+        let (dir, repo) = init_repo().await;
+        std::fs::write(dir.path().join("a.txt"), "base\n").unwrap();
+        repo.git(&["add", "."]).await.unwrap();
+        repo.git(&["commit", "-q", "-m", "init"]).await.unwrap();
+        let main = repo.current_branch().await.unwrap();
+        repo.git(&["switch", "-q", "-c", "side"]).await.unwrap();
+        std::fs::write(dir.path().join("a.txt"), "side\n").unwrap();
+        repo.git(&["commit", "-q", "-am", "side"]).await.unwrap();
+        repo.git(&["switch", "-q", "-c", "other", &main]).await.unwrap();
+        std::fs::write(dir.path().join("b.txt"), "b\n").unwrap();
+        repo.git(&["add", "."]).await.unwrap();
+        repo.git(&["commit", "-q", "-m", "other"]).await.unwrap();
+        assert_eq!(repo.merge_tree_check("other", "side").await.unwrap(), MergeCheck::Clean);
+        repo.git(&["switch", "-q", &main]).await.unwrap();
+        std::fs::write(dir.path().join("a.txt"), "main\n").unwrap();
+        repo.git(&["commit", "-q", "-am", "main"]).await.unwrap();
+        assert_eq!(repo.merge_tree_check("HEAD", "side").await.unwrap(), MergeCheck::Conflicts(vec!["a.txt".into()]));
+        assert_eq!(std::fs::read_to_string(dir.path().join("a.txt")).unwrap(), "main\n");
     }
 }
