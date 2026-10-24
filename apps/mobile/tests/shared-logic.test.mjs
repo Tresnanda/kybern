@@ -8,3 +8,4 @@ import "../../../packages/kybern-client/tests/sign-in.test.mjs";
 import "../../../packages/kybern-client/tests/display-command.test.mjs";
 import "../../../packages/kybern-client/tests/pending-sends.test.mjs";
 import "../../../packages/kybern-client/tests/status-words.test.mjs";
+import "../../../packages/kybern-client/tests/pull-requests.test.mjs";
