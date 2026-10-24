@@ -281,9 +281,10 @@ export function useMenuSurface() {
 }
 
 /**
- * Long-press menu on a row. The child render function receives the long-press
- * handler (undefined on iOS, where the native menu owns the gesture). `surface`
- * is the row's background, used by the iOS lift preview.
+ * Long-press menu on a row. The child render function receives `onLongPress`
+ * (undefined on iOS, where the native menu owns the gesture) and `open`, which
+ * shows the same items as a themed menu from a tap (a deleted note's row).
+ * `surface` is the row's background, used by the iOS lift preview.
  */
 export function ContextMenu({
   items,
@@ -294,13 +295,14 @@ export function ContextMenu({
   children,
 }: {
   items: readonly MenuItem[];
-  /** Names the object at the top of the Android menu ("Project brief"). */
+  /** Names the object at the top of the themed menu ("Project brief"). */
   title?: string;
   surface?: string;
   radius?: number;
   style?: StyleProp<ViewStyle>;
   children: (bind: {
     onLongPress?: (event: GestureResponderEvent) => void;
+    open: (event?: GestureResponderEvent) => void;
   }) => ReactElement;
 }) {
   const { colors } = useTheme();
@@ -308,41 +310,52 @@ export function ContextMenu({
   const prefix = useId();
   const menu = useMenuSurface();
   const background = surface ?? colors.background;
-  if (Platform.OS === "ios")
-    return (
-      <NativeLinkPreview
-        nextScreenId={undefined}
-        tabPath={undefined}
-        style={{ display: "contents" }}
-        disableForceFlatten
-      >
-        <View
-          collapsable={false}
-          style={[{ backgroundColor: background, borderRadius: rowRadius }, style]}
-        >
-          {children({})}
-        </View>
-        {items.length ? nativeActions(items, prefix) : null}
-      </NativeLinkPreview>
-    );
-  const onLongPress = (event: GestureResponderEvent) => {
+  const open = (event?: GestureResponderEvent) => {
     if (!items.length) return;
-    const { pageX, pageY } = event.nativeEvent;
+    const point = event
+      ? { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY }
+      : undefined;
     anchor.current?.measureInWindow((x, y, width, height) => {
-      haptics.menu();
       menu.show({
         items,
         title,
         origin: { x, y, width, height },
-        point: { x: pageX, y: pageY },
+        point,
         originRadius: rowRadius,
       });
     });
   };
+  if (Platform.OS === "ios")
+    return (
+      <>
+        <NativeLinkPreview
+          nextScreenId={undefined}
+          tabPath={undefined}
+          style={{ display: "contents" }}
+          disableForceFlatten
+        >
+          <View
+            ref={anchor}
+            collapsable={false}
+            style={[{ backgroundColor: background, borderRadius: rowRadius }, style]}
+          >
+            {children({ open })}
+          </View>
+          {items.length ? nativeActions(items, prefix) : null}
+        </NativeLinkPreview>
+        {menu.element}
+      </>
+    );
   return (
     <>
       <View ref={anchor} collapsable={false} style={style}>
-        {children({ onLongPress })}
+        {children({
+          open,
+          onLongPress: (event) => {
+            haptics.menu();
+            open(event);
+          },
+        })}
       </View>
       {menu.element}
     </>

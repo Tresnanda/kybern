@@ -16,7 +16,6 @@ import * as Haptics from "expo-haptics";
 import { router, Stack } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, RefreshControl, TextInput, View } from "react-native";
-import { Alert } from "../src/ui/Alert";
 import { type Thread, PROVIDER_DISPLAY_NAME } from "../src/state/protocol";
 import { errorText, refresh, rpc, useApp } from "../src/state/runtime";
 import { useTasks } from "../src/state/tasks";
@@ -32,6 +31,8 @@ import {
   Tap,
 } from "../src/ui/primitives";
 import { ProviderMark } from "../src/ui/ProviderMark";
+import { ContextMenu } from "../src/ui/ActionMenu";
+import { threadMenuItems } from "../src/features/threadActions";
 import { type, useTheme } from "../src/ui/theme";
 
 export default function Library() {
@@ -84,31 +85,6 @@ export default function Library() {
       refreshingRef.current = false;
     }
   }, []);
-  function options(t: Thread) {
-    Alert.alert(t.title || "Thread", undefined, [
-      {
-        text: t.pinned ? "Unpin thread" : "Pin thread",
-        onPress: () => {
-          void rpc("threads.update", { thread_id: t.id, pinned: !t.pinned })
-            .then(refresh)
-            .catch((e) => setError(errorText(e)));
-        },
-      },
-      ...(t.status !== "archived"
-        ? [
-            {
-              text: "Archive thread",
-              onPress: () => {
-                void rpc("threads.archive", { thread_id: t.id })
-                  .then(refresh)
-                  .catch((e) => setError(errorText(e)));
-              },
-            },
-          ]
-        : []),
-      { text: "Cancel", style: "cancel" },
-    ]);
-  }
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       <Stack.Screen
@@ -225,6 +201,11 @@ export default function Library() {
             const running = threadHasActivity(item, app.activity);
             return (
               <View style={{ paddingStart: Math.min(depth, 2) * 16 }}>
+              <ContextMenu
+                items={threadMenuItems(item, { refresh, onError: setError })}
+                title={item.title || "Untitled thread"}
+              >
+              {({ onLongPress }) => (
               <Tap
                 label={`${item.title || "Untitled thread"}, ${running ? "Working" : item.status}`}
                 onPress={() =>
@@ -233,7 +214,7 @@ export default function Library() {
                     params: { id: item.id },
                   })
                 }
-                onLongPress={() => options(item)}
+                onLongPress={onLongPress}
                 style={{
                   paddingVertical: 18,
                   borderTopWidth: index ? 0.5 : 0,
@@ -281,6 +262,8 @@ export default function Library() {
                   </T>
                 </View>
               </Tap>
+              )}
+              </ContextMenu>
               {childCount > 0 && <Tap static expanded={open}
                 label={`${open ? "Hide" : "Show"} ${childCount} helpers for ${item.title || "Untitled thread"}`}
                 onPress={() => setExpandedThreads(value => ({ ...value, [item.id]: !open }))}

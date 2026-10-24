@@ -21,6 +21,8 @@ import {
 } from "../state/protocol";
 import { Empty, Icon, IconButton, Row, styles, T, Tap } from "../ui/primitives";
 import { ProviderMark } from "../ui/ProviderMark";
+import { ContextMenu } from "../ui/ActionMenu";
+import { threadMenuItems } from "./threadActions";
 import { type, useTheme } from "../ui/theme";
 import { useTasks } from "../state/tasks";
 import { activitySummary } from "../state/tasksModel";
@@ -30,16 +32,21 @@ const MAX_PROJECT_THREADS = 8;
 function ThreadRow({
   thread,
   active,
-  onOptions,
 }: {
   thread: Thread;
   active: boolean;
-  onOptions: (t: Thread) => void;
 }) {
   const app = useApp();
   const { colors } = useTheme();
   const running = threadHasActivity(thread, app.activity);
   return (
+    <ContextMenu
+      items={threadMenuItems(thread, { refresh })}
+      title={thread.title || "Untitled thread"}
+      surface={active ? colors.raised : colors.background}
+      radius={11}
+    >
+    {({ onLongPress }) => (
     <Tap
       label={`${thread.title || "Untitled thread"}, ${running ? "Working" : thread.status}`}
       selected={active}
@@ -49,7 +56,7 @@ function ThreadRow({
           params: { id: thread.id },
         })
       }
-      onLongPress={() => onOptions(thread)}
+      onLongPress={onLongPress}
       style={{
         paddingStart: 12,
         paddingEnd: 10,
@@ -80,6 +87,8 @@ function ThreadRow({
         </T>
       </View>
     </Tap>
+    )}
+    </ContextMenu>
   );
 }
 
@@ -89,14 +98,12 @@ function ProjectGroup({
   name,
   threads,
   activeId,
-  onOptions,
   disclose,
 }: {
   disclose: boolean;
   name: string;
   threads: Thread[];
   activeId?: string;
-  onOptions: (t: Thread) => void;
 }) {
   const { colors } = useTheme();
   const hasActive = threads.some((t) => t.id === activeId);
@@ -142,7 +149,7 @@ function ProjectGroup({
         <View>
           {shown.map(({ thread: t, depth, childCount, open: childrenOpen }) => (
             <View key={t.id} style={{ paddingStart: Math.min(depth, 2) * 16 }}>
-              <ThreadRow thread={t} active={t.id === activeId} onOptions={onOptions} />
+              <ThreadRow thread={t} active={t.id === activeId} />
               {childCount > 0 && <Tap static expanded={childrenOpen}
                 label={`${childrenOpen ? "Hide" : "Show"} ${childCount} helpers for ${t.title || "Untitled thread"}`}
                 onPress={() => setExpandedThreads(value => ({ ...value, [t.id]: !childrenOpen }))}
@@ -213,32 +220,6 @@ export function Sidebar() {
       }))
       .sort((a, b) => b.recent.localeCompare(a.recent));
   }, [rows, app.projects]);
-
-  function options(t: Thread) {
-    Alert.alert(t.title || "Thread", undefined, [
-      {
-        text: t.pinned ? "Unpin thread" : "Pin thread",
-        onPress: () => {
-          void rpc("threads.update", { thread_id: t.id, pinned: !t.pinned })
-            .then(refresh)
-            .catch(() => {});
-        },
-      },
-      ...(t.status !== "archived"
-        ? [
-            {
-              text: "Archive thread",
-              onPress: () => {
-                void rpc("threads.archive", { thread_id: t.id })
-                  .then(refresh)
-                  .catch(() => {});
-              },
-            },
-          ]
-        : []),
-      { text: "Cancel", style: "cancel" as const },
-    ]);
-  }
 
   return (
     <View
@@ -339,7 +320,6 @@ export function Sidebar() {
             disclose={!query.trim() && filter === "All"}
             threads={g.threads}
             activeId={activeId}
-            onOptions={options}
           />
         ))}
         {rows.length === 0 && (

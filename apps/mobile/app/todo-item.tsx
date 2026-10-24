@@ -4,14 +4,14 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ScrollView, TextInput, View } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ModeToggle } from "../src/features/NoteView";
+import { HeaderActions } from "../src/ui/ActionMenu";
 import {
   attempt,
   changePriority,
   changeStatus,
   openSend,
   openThread,
-  taskMenu,
+  taskMenuItems,
 } from "../src/features/taskActions";
 import { useMinuteClock } from "../src/features/TaskRow";
 import { TaskToast } from "../src/features/TaskToast";
@@ -511,23 +511,19 @@ export default function TaskScreen() {
 
   return (
     <KeyboardAvoidingView behavior="padding" style={{ flex: 1, backgroundColor: colors.background }}>
-      <Stack.Screen
-        options={{
-          title: task.key,
-          headerRight: () => (
-            <View style={styles.line}>
-              <ModeToggle
-                editing={editing}
-                onChange={setMode}
-                disabled={!connected || saving}
-              />
-              <IconButton
-                name="ellipsis"
-                label="Task options"
-                onPress={() => taskMenu(task, { afterDelete: () => router.back() })}
-              />
-            </View>
-          ),
+      <Stack.Screen options={{ title: task.key }} />
+      <HeaderActions
+        buttons={[
+          {
+            title: editing ? "Done" : "Edit",
+            prominent: editing,
+            disabled: !connected || saving,
+            onPress: () => setMode(!editing),
+          },
+        ]}
+        menu={{
+          label: "Task options",
+          items: taskMenuItems(task, { afterDelete: () => router.back() }),
         }}
       />
       <ScrollView

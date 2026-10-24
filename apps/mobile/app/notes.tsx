@@ -1,10 +1,10 @@
-import * as Haptics from "expo-haptics";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlatList, Platform, RefreshControl, TextInput, View } from "react-native";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { noteMenu, attempt } from "../src/features/noteActions";
+import { noteMenuItems, attempt } from "../src/features/noteActions";
+import { ContextMenu } from "../src/ui/ActionMenu";
 import {
   dismissUndo,
   loadNotes,
@@ -61,17 +61,17 @@ function NoteRow({
     : relativeTime(note.updated_at);
   const detail = deleted ? note.origin || context : context;
   return (
+    <ContextMenu items={noteMenuItems(note)} title={noteTitle(note)}>
+    {({ onLongPress, open }) => (
     <Tap
       label={`${noteTitle(note)}${badge ? `, ${badge} done` : ""}${deleted ? ", deleted" : ""}`}
-      onPress={() =>
+      feedback="highlight"
+      onPress={(event) =>
         deleted
-          ? noteMenu(note)
+          ? open(event)
           : router.push({ pathname: "/note", params: { id: note.id } })
       }
-      onLongPress={() => {
-        void Haptics.selectionAsync();
-        noteMenu(note);
-      }}
+      onLongPress={onLongPress}
       style={{
         paddingVertical: 14,
         borderTopWidth: first ? 0 : 0.5,
@@ -131,6 +131,8 @@ function NoteRow({
         </T>
       ) : null}
     </Tap>
+    )}
+    </ContextMenu>
   );
 }
 

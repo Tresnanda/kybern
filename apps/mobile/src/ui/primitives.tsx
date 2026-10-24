@@ -116,7 +116,7 @@ export function Tap({
   hitSlop,
   static: isStatic = false,
 }: PropsWithChildren<{
-  onPress?: () => void;
+  onPress?: (event: GestureResponderEvent) => void;
   onLongPress?: (event: GestureResponderEvent) => void;
   label: string;
   hint?: string;

@@ -3,8 +3,9 @@ import { useMemo, useState } from "react";
 import { ScrollView, View } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ModeToggle, NoteView } from "../src/features/NoteView";
-import { noteMenu } from "../src/features/noteActions";
+import { NoteView } from "../src/features/NoteView";
+import { noteMenuItems } from "../src/features/noteActions";
+import { HeaderActions } from "../src/ui/ActionMenu";
 import { noteMarkdown } from "../src/state/notesModel";
 import type { NoteTarget } from "../src/state/noteSession";
 import { useNoteSession } from "../src/state/useNoteSession";
@@ -79,34 +80,30 @@ export default function NoteScreen() {
       behavior="padding"
       style={{ flex: 1, backgroundColor: colors.background }}
     >
-      <Stack.Screen
-        options={{
-          title: "",
-          headerRight: () => (
-            <View style={styles.line}>
-              <ModeToggle
-                editing={editing}
-                onChange={setMode}
-                disabled={!s.loaded || s.deleted}
-              />
-              {note && (
-                <IconButton
-                  name="ellipsis"
-                  label="Note options"
-                  onPress={() =>
-                    noteMenu(
-                      { ...note, title: s.title || note.title, deleted_at: note.deleted_at },
-                      {
-                        markdown: () => noteMarkdown(s.title, s.body),
-                        afterDelete: () => router.back(),
-                      },
-                    )
-                  }
-                />
-              )}
-            </View>
-          ),
-        }}
+      <Stack.Screen options={{ title: "" }} />
+      <HeaderActions
+        buttons={[
+          {
+            title: editing ? "Done" : "Edit",
+            prominent: editing,
+            disabled: !s.loaded || s.deleted,
+            onPress: () => setMode(!editing),
+          },
+        ]}
+        menu={
+          note
+            ? {
+                label: "Note options",
+                items: noteMenuItems(
+                  { ...note, title: s.title || note.title, deleted_at: note.deleted_at },
+                  {
+                    markdown: () => noteMarkdown(s.title, s.body),
+                    afterDelete: () => router.back(),
+                  },
+                ),
+              }
+            : undefined
+        }
       />
       {editing && !s.deleted ? (
         <View

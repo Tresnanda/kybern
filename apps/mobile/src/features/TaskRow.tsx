@@ -1,4 +1,3 @@
-import * as Haptics from "expo-haptics";
 import { memo, useEffect, useState } from "react";
 import { View } from "react-native";
 import type { TaskItem } from "../state/protocol";
@@ -18,7 +17,8 @@ import { ProviderMark } from "../ui/ProviderMark";
 import { T, Tap } from "../ui/primitives";
 import { PriorityGlyph, ProjectDot, StatusGlyph } from "../ui/TaskGlyphs";
 import { useTheme } from "../ui/theme";
-import { openTask, taskMenu } from "./taskActions";
+import { ContextMenu } from "../ui/ActionMenu";
+import { openTask, taskMenuItems } from "./taskActions";
 
 /** A clock for elapsed times and ages; ticks once a minute while mounted. */
 export function useMinuteClock() {
@@ -68,14 +68,13 @@ export const TaskRow = memo(function TaskRow({
     .filter(Boolean)
     .join(", ");
   return (
+    <ContextMenu items={taskMenuItems(task)} title={`${task.key} · ${taskTitle(task)}`}>
+    {({ onLongPress }) => (
     <Tap
       label={label}
-      static
+      feedback="highlight"
       onPress={() => openTask(task.id)}
-      onLongPress={() => {
-        void Haptics.selectionAsync();
-        taskMenu(task);
-      }}
+      onLongPress={onLongPress}
       style={{
         flexDirection: "row",
         alignItems: "flex-start",
@@ -137,5 +136,7 @@ export const TaskRow = memo(function TaskRow({
         {ageLabel(task.updated_at, now)}
       </T>
     </Tap>
+    )}
+    </ContextMenu>
   );
 });
