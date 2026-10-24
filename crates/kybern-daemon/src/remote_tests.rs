@@ -2500,6 +2500,24 @@ async fn deleting_a_space_moves_its_projects_and_announces_both_lists() {
 }
 
 #[tokio::test]
+async fn the_default_space_cannot_be_deleted_but_can_be_renamed() {
+    let host = Host::start().await;
+    let client = host.client().await;
+    let personal = client.call::<SpacesList>(Empty {}).await.unwrap().spaces[0].clone();
+    assert!(personal.is_default);
+    let work = client.call::<SpacesCreate>(space_create("Work")).await.unwrap();
+    assert!(!work.is_default);
+
+    let refused = rpc_error::<SpacesDelete>(&client, SpacesDeleteParams { space_id: personal.id }).await;
+    assert!(refused.contains("Your default space can't be deleted."), "{refused}");
+    assert_eq!(client.call::<SpacesList>(Empty {}).await.unwrap().spaces.len(), 2);
+
+    let renamed = client.call::<SpacesUpdate>(SpacesUpdateParams { name: Some("Me".into()), ..space_update(personal.id) }).await.unwrap();
+    assert!((renamed.name.as_str(), renamed.is_default) == ("Me", true));
+    client.call::<SpacesDelete>(SpacesDeleteParams { space_id: work.id }).await.unwrap();
+}
+
+#[tokio::test]
 async fn space_logos_are_derived_into_square_assets_and_validated() {
     let host = Host::start().await;
     let client = host.client().await;

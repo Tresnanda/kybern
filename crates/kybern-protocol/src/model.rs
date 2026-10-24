@@ -298,6 +298,9 @@ pub struct Space {
     pub logo: SpaceLogo,
     /// 0-based order in the rail.
     pub position: u32,
+    /// Exactly one space is the default. It can be renamed and restyled but not deleted.
+    #[serde(default)]
+    pub is_default: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

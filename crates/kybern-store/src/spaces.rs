@@ -16,13 +16,15 @@ pub enum SpaceError {
     NotFound(&'static str),
     #[error("You can't delete your only space.")]
     OnlySpace,
+    #[error("Your default space can't be deleted.")]
+    DefaultSpace,
     #[error("List every space exactly once to reorder them.")]
     NotAPermutation,
     #[error("Free chat isn't in a space.")]
     FreeChat,
 }
 
-const SPACE_SELECT: &str = "SELECT id, name, color, logo, position, created_at, updated_at FROM spaces";
+const SPACE_SELECT: &str = "SELECT id, name, color, logo, position, created_at, updated_at, is_default FROM spaces";
 
 impl Store {
     /// Every space in rail order.
@@ -34,12 +36,13 @@ impl Store {
         self.with(|c| Ok(c.query_row(&format!("{SPACE_SELECT} WHERE id = ?1"), [id.to_string()], row_to_space).optional()?))
     }
 
-    /// Insert a space at the end of the rail. The stored `position` of `space` is ignored.
+    /// Insert a space at the end of the rail. The stored `position` and `is_default` of `space` are ignored:
+    /// new spaces are never the default.
     pub fn space_insert(&self, space: &Space) -> Result<Space> {
         self.with(|c| {
             c.execute(
-                "INSERT INTO spaces(id, name, color, logo, position, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, (SELECT COALESCE(MAX(position), -1) + 1 FROM spaces), ?5, ?6)",
+                "INSERT INTO spaces(id, name, color, logo, position, created_at, updated_at, is_default)
+                 VALUES (?1, ?2, ?3, ?4, (SELECT COALESCE(MAX(position), -1) + 1 FROM spaces), ?5, ?6, 0)",
                 params![
                     space.id.to_string(),
                     space.name,
@@ -79,6 +82,9 @@ impl Store {
             let index = spaces.iter().position(|s| s.id == id).ok_or(SpaceError::NotFound("space"))?;
             if spaces.len() < 2 {
                 return Err(SpaceError::OnlySpace.into());
+            }
+            if spaces[index].is_default {
+                return Err(SpaceError::DefaultSpace.into());
             }
             let target = if index == 0 { spaces[1].id } else { spaces[index - 1].id };
             let moved = tx.execute("UPDATE projects SET space_id = ?1 WHERE space_id = ?2", params![target.to_string(), id.to_string()])?;
@@ -143,6 +149,7 @@ fn row_to_space(r: &rusqlite::Row<'_>) -> rusqlite::Result<Space> {
         position: r.get::<_, i64>(4)?.max(0) as u32,
         created_at: parse_time(r.get::<_, String>(5)?)?,
         updated_at: parse_time(r.get::<_, String>(6)?)?,
+        is_default: r.get::<_, i64>(7)? != 0,
     })
 }
 
@@ -161,6 +168,7 @@ mod tests {
             color: SpaceColor::Blue,
             logo: SpaceLogo::Initials,
             position: 99,
+            is_default: false,
             created_at: now,
             updated_at: now,
         }
@@ -185,11 +193,22 @@ mod tests {
 
     fn store_with_spaces(names: &[&str]) -> (Store, Vec<Space>) {
         let store = Store::open_in_memory().unwrap();
-        // A fresh database has the migration's default space; drop it so tests control the list.
+        // A fresh database has the migration's default space; replace it so tests control the list.
+        // The last named space takes over as the default (the store refuses to delete the default).
         let seeded = store.spaces_list().unwrap();
         for n in names {
             store.space_insert(&space(n)).unwrap();
         }
+        let default = store.spaces_list().unwrap().into_iter().rev().find(|s| !seeded.iter().any(|o| o.id == s.id));
+        store
+            .with(|c| {
+                c.execute("UPDATE spaces SET is_default = 0", [])?;
+                if let Some(first) = &default {
+                    c.execute("UPDATE spaces SET is_default = 1 WHERE id = ?1", [first.id.to_string()])?;
+                }
+                Ok(())
+            })
+            .unwrap();
         for s in seeded {
             store.space_delete_moving(s.id).unwrap();
         }
@@ -235,6 +254,88 @@ mod tests {
         let chat: Option<String> =
             conn.query_row("SELECT space_id FROM projects WHERE id = ?1", [FREE_CHAT_PROJECT_ID.to_string()], |r| r.get(0)).unwrap();
         assert_eq!(chat, None);
+    }
+
+    fn defaults(store: &Store) -> Vec<String> {
+        store.spaces_list().unwrap().into_iter().filter(|s| s.is_default).map(|s| s.name).collect()
+    }
+
+    /// A v27 database as the migration left it: "Personal" plus `others`, created `age` seconds apart.
+    fn v27_database(others: &[&str], drop_personal: bool, rename_personal: Option<&str>) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        crate::schema::migrate_to(&conn, 27).unwrap();
+        for (i, name) in others.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO spaces(id, name, color, logo, position, created_at, updated_at)
+                 VALUES (?1, ?2, 'blue', '{\"kind\":\"initials\"}', ?3, ?4, ?4)",
+                params![Uuid::now_v7().to_string(), name, i as i64 + 1, format!("2999-01-01T00:00:0{i}Z")],
+            )
+            .unwrap();
+        }
+        if let Some(name) = rename_personal {
+            conn.execute("UPDATE spaces SET name = ?1 WHERE name = 'Personal'", [name]).unwrap();
+        }
+        if drop_personal {
+            conn.execute("DELETE FROM spaces WHERE name = 'Personal'", []).unwrap();
+        }
+        conn
+    }
+
+    fn default_names(conn: &Connection) -> Vec<String> {
+        let mut st = conn.prepare("SELECT name FROM spaces WHERE is_default = 1").unwrap();
+        st.query_map([], |r| r.get(0)).unwrap().collect::<Result<_, _>>().unwrap()
+    }
+
+    #[test]
+    fn a_fresh_database_has_exactly_one_default_and_new_spaces_are_not() {
+        let store = Store::open_in_memory().unwrap();
+        assert_eq!(defaults(&store), vec!["Personal"]);
+        let mut made = space("Work");
+        made.is_default = true;
+        assert!(!store.space_insert(&made).unwrap().is_default);
+        assert_eq!(defaults(&store), vec!["Personal"]);
+    }
+
+    #[test]
+    fn the_migration_defaults_the_seeded_personal_even_when_renamed() {
+        let conn = v27_database(&["Work", "Home"], false, Some("Me"));
+        crate::schema::migrate(&conn).unwrap();
+        assert_eq!(default_names(&conn), vec!["Me"]);
+        let conn = v27_database(&["Work"], false, None);
+        crate::schema::migrate(&conn).unwrap();
+        assert_eq!(default_names(&conn), vec!["Personal"]);
+    }
+
+    #[test]
+    fn the_migration_defaults_the_oldest_space_when_personal_was_deleted() {
+        let conn = v27_database(&["Work", "Home"], true, None);
+        crate::schema::migrate(&conn).unwrap();
+        assert_eq!(default_names(&conn), vec!["Work"]);
+    }
+
+    #[test]
+    fn a_second_default_is_refused_by_the_database() {
+        let store = Store::open_in_memory().unwrap();
+        let made = store.space_insert(&space("Work")).unwrap();
+        let err = store.with(|c| Ok(c.execute("UPDATE spaces SET is_default = 1 WHERE id = ?1", [made.id.to_string()])?));
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn the_default_space_cannot_be_deleted_but_can_be_renamed() {
+        let store = Store::open_in_memory().unwrap();
+        let personal = store.spaces_list().unwrap().remove(0);
+        let work = store.space_insert(&space("Work")).unwrap();
+        let err = store.space_delete_moving(personal.id).unwrap_err();
+        assert_eq!(err.downcast_ref::<SpaceError>(), Some(&SpaceError::DefaultSpace));
+        assert_eq!(err.to_string(), "Your default space can't be deleted.");
+        let mut renamed = personal.clone();
+        renamed.name = "Me".into();
+        assert!(store.space_update(&renamed).unwrap());
+        assert_eq!(defaults(&store), vec!["Me"]);
+        // A non-default space still goes.
+        assert_eq!(store.space_delete_moving(work.id).unwrap(), (personal.id, 0));
     }
 
     #[test]

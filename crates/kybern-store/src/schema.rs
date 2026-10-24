@@ -538,6 +538,17 @@ const MIGRATIONS: &[&str] = &[
     ",
     // A thread note follows its thread's title until someone renames the note itself.
     "ALTER TABLE notes ADD COLUMN title_edited INTEGER NOT NULL DEFAULT 0;",
+    // The default space cannot be deleted. v27 seeded "Personal" first, so the
+    // oldest space is the seeded one while it exists (even renamed) and the
+    // oldest survivor once it is gone. The partial index keeps it to one.
+    "
+    BEGIN;
+    ALTER TABLE spaces ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0;
+    UPDATE spaces SET is_default = 1
+      WHERE id = (SELECT id FROM spaces ORDER BY created_at, position, id LIMIT 1);
+    CREATE UNIQUE INDEX spaces_one_default ON spaces(is_default) WHERE is_default = 1;
+    COMMIT;
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

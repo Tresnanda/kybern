@@ -91,14 +91,15 @@ pub fn render(spaces: &[Space], projects: &[Project]) {
     for space in spaces {
         let count = projects.iter().filter(|project| project.space_id == Some(space.id)).count();
         println!(
-            "{}  {:<3} {:<20} {:<9} {:<18} {} project{}",
+            "{}  {:<3} {:<20} {:<9} {:<18} {} project{}{}",
             space.id,
             space.position,
             space.name,
             space.color.as_str(),
             logo_text(&space.logo),
             count,
-            if count == 1 { "" } else { "s" }
+            if count == 1 { "" } else { "s" },
+            if space.is_default { "  (default)" } else { "" }
         );
     }
 }
@@ -147,6 +148,9 @@ pub async fn run(client: &Client, cmd: SpacesCmd, json: bool) -> Result<()> {
         SpacesCmd::Delete { space, yes } => {
             let spaces = list(client).await?;
             let space_id = resolve_space(&spaces, &space)?;
+            if spaces.iter().any(|s| s.id == space_id && s.is_default) {
+                return Err(anyhow!("Your default space can't be deleted. Rename it with kybern spaces update instead."));
+            }
             if !yes {
                 if !std::io::stdin().is_terminal() {
                     return Err(anyhow!("Pass --yes to delete a space without a prompt."));
@@ -212,6 +216,7 @@ mod tests {
             color: SpaceColor::Blue,
             logo: SpaceLogo::Initials,
             position: 0,
+            is_default: false,
             created_at: now,
             updated_at: now,
         }
