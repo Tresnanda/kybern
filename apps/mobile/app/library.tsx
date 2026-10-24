@@ -166,7 +166,7 @@ export default function Library() {
       {Platform.OS === "ios" && (
         <ListSearch value={filter.query} onChangeText={(query) => setFilter((f) => ({ ...f, query }))} placeholder="Search threads" />
       )}
-      <PullRefresh offset={offset} refreshing={refreshing} onRefresh={reload}>
+      <PullRefresh offset={offset} refreshing={refreshing} onRefresh={reload} label="Refreshing threads">
         <Animated.FlatList
           onScroll={onScroll}
           scrollEventThrottle={16}
