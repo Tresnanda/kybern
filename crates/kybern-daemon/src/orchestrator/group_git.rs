@@ -543,7 +543,7 @@ impl Orchestrator {
                 .collect();
             if !ordered.iter().any(|i| members[*i].path == ".") {
                 std::fs::create_dir_all(&container)?;
-                copy_entries(&source, &container, &SHARED_FILES, SHARED_FILES_CAP);
+                copy_entries_blocking(&source, &container, &SHARED_FILES, SHARED_FILES_CAP).await;
             }
             for index in ordered {
                 let member = &mut members[index];
@@ -576,7 +576,7 @@ impl Orchestrator {
                     is_copy_entry(entry) && !members.iter().any(|m| m.path == *entry || m.path.starts_with(&format!("{entry}/")))
                 })
                 .collect();
-            copy_entries(&source, &container, &copy, COPY_CAP);
+            copy_entries_blocking(&source, &container, &copy, COPY_CAP).await;
             self.send_workspace_progress(thread_id, done, total, None);
             Ok::<_, anyhow::Error>(())
         }
@@ -673,6 +673,17 @@ pub(crate) fn copy_entries(from: &Path, to: &Path, entries: &[&str], cap: u64) {
         if let Err(error) = copy_tree(&source, &to.join(entry), &meta, &mut budget) {
             tracing::warn!(entry, %error, "could not copy into the worktree folder");
         }
+    }
+}
+
+/// `copy_entries` on the blocking pool: a `worktree_copy` entry can be hundreds of megabytes.
+async fn copy_entries_blocking(from: &Path, to: &Path, entries: &[&str], cap: u64) {
+    let (from, to) = (from.to_path_buf(), to.to_path_buf());
+    let entries: Vec<String> = entries.iter().map(|e| e.to_string()).collect();
+    let copied =
+        tokio::task::spawn_blocking(move || copy_entries(&from, &to, &entries.iter().map(String::as_str).collect::<Vec<_>>(), cap));
+    if let Err(error) = copied.await {
+        tracing::warn!(%error, "copying into the worktree folder stopped");
     }
 }
 
@@ -1013,7 +1024,7 @@ impl Orchestrator {
             if member.path != "." {
                 if !has_folder && !container.exists() {
                     std::fs::create_dir_all(&container)?;
-                    copy_entries(Path::new(&project.path), &container, &SHARED_FILES, SHARED_FILES_CAP);
+                    copy_entries_blocking(Path::new(&project.path), &container, &SHARED_FILES, SHARED_FILES_CAP).await;
                 }
                 if let Some(parent) = tree.parent() {
                     std::fs::create_dir_all(parent)?;
@@ -1033,7 +1044,7 @@ impl Orchestrator {
         }
         ensure!(primary.as_deref() == Some(receipt), "The worktree recovery ref changed. Inspect it before continuing.");
         let copy: Vec<&str> = project.worktree_copy.iter().map(String::as_str).filter(|e| is_copy_entry(e)).collect();
-        copy_entries(Path::new(&project.path), &container, &copy, COPY_CAP);
+        copy_entries_blocking(Path::new(&project.path), &container, &copy, COPY_CAP).await;
         for member in thread.members.iter_mut().filter(|m| m.included && m.worktree.is_some()) {
             member.worktree_state = None;
         }
