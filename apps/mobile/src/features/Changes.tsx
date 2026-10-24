@@ -1,7 +1,12 @@
+// Changes (ux-thread M8): the thread's changed files and the git actions on them. 44 pt file
+// rows: a status letter badge, the file name, its directory in MONO (middle-truncated) and a
+// tabular +n −m. Group threads get one section per repository. Tapping a file shows its patch
+// in place, so the screen works the same full-screen and in the iPad inspector.
+import { router } from "expo-router";
 import { useEffect, useState } from "react";
-import { Linking, View } from "react-native";
-import { Alert } from "../ui/Alert";
-import { type Diff, type GitStatus } from "../state/protocol";
+import { Linking, View, useWindowDimensions } from "react-native";
+import { confirm } from "../ui/Alert";
+import type { Diff, FileChange, FileStatus, GitStatus } from "../state/protocol";
 import { errorText, rpc, useApp } from "../state/runtime";
 import {
   changedReposLabel,
@@ -16,24 +21,134 @@ import {
   type RepoFileGroup,
 } from "../../../../packages/kybern-client/src/groups";
 import { prPlan, repoPullRows } from "../state/groups";
+import { count } from "../state/format";
 import { Code } from "../ui/Markdown";
-import {
-  Button,
-  Empty,
-  ErrorBanner,
-  Field,
-  Group,
-  Icon,
-  Row,
-  T,
-  Tap,
-  styles,
-} from "../ui/primitives";
-import { useTheme } from "../ui/theme";
+import { InsetGroup, ListRow, SectionHeader } from "../ui/List";
+import { Button, Empty, ErrorBanner, Field, Icon, IconButton, T, Tap } from "../ui/primitives";
+import { showToast } from "../ui/Toast";
+import { MONO, gutter, radius, space, useTheme, type Colors } from "../ui/theme";
 import { Working } from "../ui/Working";
+
+const BADGE: Record<FileStatus, string> = {
+  added: "A",
+  modified: "M",
+  deleted: "D",
+  renamed: "R",
+  copied: "C",
+  type_changed: "T",
+  unknown: "?",
+};
+const STATUS_WORD: Record<FileStatus, string> = {
+  added: "Added",
+  modified: "Modified",
+  deleted: "Deleted",
+  renamed: "Renamed",
+  copied: "Copied",
+  type_changed: "Type changed",
+  unknown: "Changed",
+};
+const badgeColor = (status: FileStatus, colors: Colors) =>
+  status === "added" ? colors.positive : status === "deleted" ? colors.negative : status === "modified" ? colors.warning : colors.accent;
+
+/** `a/b/c.ts` → name `c.ts`, directory `a/b`. */
+function splitPath(path: string) {
+  const at = path.lastIndexOf("/");
+  return at < 0 ? { name: path, dir: "" } : { name: path.slice(at + 1), dir: path.slice(0, at) };
+}
+
+function Counts({ additions, deletions }: { additions: number; deletions: number }) {
+  if (!additions && !deletions) return null;
+  return (
+    <View style={{ flexDirection: "row", gap: space.xs }}>
+      {additions > 0 && (
+        <T variant="footnote" tone="positive" style={{ fontVariant: ["tabular-nums"] }}>
+          +{additions}
+        </T>
+      )}
+      {deletions > 0 && (
+        <T variant="footnote" tone="negative" style={{ fontVariant: ["tabular-nums"] }}>
+          −{deletions}
+        </T>
+      )}
+    </View>
+  );
+}
+
+function ChangeRow({ file, shown, onPress, separator }: { file: FileChange; shown: string; onPress: () => void; separator: boolean }) {
+  const { colors } = useTheme();
+  const { name, dir } = splitPath(shown);
+  const tint = badgeColor(file.status, colors);
+  return (
+    <Tap
+      label={`${shown}, ${STATUS_WORD[file.status]}, ${file.additions} added, ${file.deletions} removed`}
+      feedback="highlight"
+      onPress={onPress}
+      style={{ flexDirection: "row", alignItems: "center", minHeight: 44, paddingHorizontal: space.lg, gap: space.md, backgroundColor: colors.surface }}
+    >
+      <View
+        style={{
+          width: 18,
+          height: 18,
+          borderRadius: radius.xs - 1,
+          borderWidth: 1,
+          borderColor: tint,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <T variant="caption" style={{ color: tint, fontFamily: MONO, fontWeight: "600", lineHeight: 14 }} maxFontSizeMultiplier={1.2}>
+          {BADGE[file.status]}
+        </T>
+      </View>
+      <View style={{ flex: 1, flexDirection: "row", alignItems: "baseline", gap: space.sm, minWidth: 0 }}>
+        <T variant="label" style={{ fontWeight: "400", flexShrink: 0, maxWidth: "70%" }} numberOfLines={1} ellipsizeMode="middle">
+          {name}
+        </T>
+        {dir ? (
+          <T variant="caption" tone="muted" style={{ fontFamily: MONO, flex: 1 }} numberOfLines={1} ellipsizeMode="middle">
+            {dir}
+          </T>
+        ) : (
+          <View style={{ flex: 1 }} />
+        )}
+      </View>
+      {file.binary ? (
+        <T variant="footnote" tone="muted">
+          Binary
+        </T>
+      ) : (
+        <Counts additions={file.additions} deletions={file.deletions} />
+      )}
+      {separator && (
+        <View
+          pointerEvents="none"
+          style={{ position: "absolute", bottom: 0, end: 0, start: space.lg + 18 + space.md, height: 0.5, backgroundColor: colors.line }}
+        />
+      )}
+    </Tap>
+  );
+}
+
+function FileList({ files, prefix = "", onOpen }: { files: FileChange[]; prefix?: string; onOpen: (path: string) => void }) {
+  if (!files.length) return null;
+  return (
+    <InsetGroup>
+      {files.map((file, i) => (
+        <ChangeRow
+          key={file.path}
+          file={file}
+          shown={prefix ? stripRepoPrefix(file.path, prefix) : file.path}
+          separator={i < files.length - 1}
+          onPress={() => onOpen(file.path)}
+        />
+      ))}
+    </InsetGroup>
+  );
+}
 
 export function Changes({ threadId }: { threadId: string }) {
   const { colors } = useTheme();
+  const edge = gutter(useWindowDimensions().width);
   const thread = useApp().threads.find((t) => t.id === threadId);
   const [diff, setDiff] = useState<Diff>();
   const [status, setStatus] = useState<GitStatus>();
@@ -41,12 +156,9 @@ export function Changes({ threadId }: { threadId: string }) {
   const [patch, setPatch] = useState("");
   const [truncated, setTruncated] = useState(false);
   const [message, setMessage] = useState("");
-  const [prTitle, setPrTitle] = useState("");
-  const [prBody, setPrBody] = useState("");
-  const [action, setAction] = useState("");
+  const [composing, setComposing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
   async function reload() {
     setBusy(true);
     try {
@@ -71,11 +183,7 @@ export function Changes({ threadId }: { threadId: string }) {
     setPatch("");
     setBusy(true);
     try {
-      const d = await rpc("threads.diff", {
-        thread_id: threadId,
-        path,
-        include_patch: true,
-      });
+      const d = await rpc("threads.diff", { thread_id: threadId, path, include_patch: true });
       setPatch(d.patch);
       setTruncated(!!d.patch_truncated);
     } catch (e) {
@@ -87,16 +195,9 @@ export function Changes({ threadId }: { threadId: string }) {
   async function commit() {
     setBusy(true);
     try {
-      const r = await rpc("git.commit", {
-        thread_id: threadId,
-        message: message.trim() || undefined,
-      });
-      setNotice(
-        (r.commits?.length ?? 0) > 1
-          ? `Committed ${r.commits!.length} repositories`
-          : `Committed ${r.commit.slice(0, 7)}`,
-      );
-      setAction("");
+      const r = await rpc("git.commit", { thread_id: threadId, message: message.trim() || undefined });
+      showToast((r.commits?.length ?? 0) > 1 ? `Committed ${r.commits!.length} repositories` : `Committed ${r.commit.slice(0, 7)}`);
+      setComposing(false);
       setMessage("");
       await reload();
     } catch (e) {
@@ -108,15 +209,14 @@ export function Changes({ threadId }: { threadId: string }) {
   async function createPr() {
     setBusy(true);
     try {
-      const r = await rpc("github.pr.create", {
-        thread_id: threadId,
-        title: prTitle.trim() || undefined,
-        body: prBody.trim() || undefined,
-        draft: true,
-        commit_first: false,
+      const r = await rpc("github.pr.create", { thread_id: threadId, draft: true, commit_first: true });
+      showToast(`Opened draft pull request #${r.number}`, {
+        title: "View",
+        onPress: () =>
+          thread?.project_id
+            ? router.push({ pathname: "/pull", params: { projectId: thread.project_id, number: String(r.number) } })
+            : void Linking.openURL(r.url),
       });
-      setNotice(`Created draft pull request #${r.number}`);
-      setAction("");
       await reload();
     } catch (e) {
       setError(errorText(e));
@@ -128,7 +228,7 @@ export function Changes({ threadId }: { threadId: string }) {
     setBusy(true);
     try {
       const r = await rpc("github.pr.create_group", { thread_id: threadId, draft: true, commit_first: true });
-      setNotice(prResultToast(r.pull_requests.length, r.skipped ?? []));
+      showToast(prResultToast(r.pull_requests.length, r.skipped ?? []));
       await reload();
     } catch (e) {
       setError(errorText(e));
@@ -136,243 +236,168 @@ export function Changes({ threadId }: { threadId: string }) {
       setBusy(false);
     }
   }
-  // Group threads list files under one caption per repository, unchanged ones included.
+  // Group threads list files under one header per repository, unchanged ones included.
   const members: MemberLike[] = thread?.members?.length
     ? includedMembers(thread.members)
     : (diff?.repos ?? []).map((repo) => ({ path: repo.repo, name: repo.repo }));
   const grouped = members.length && diff ? groupFilesByRepo(diff, members) : null;
-  return (
-    <View style={{ gap: 16 }}>
-      <ErrorBanner error={error} onRetry={() => void reload()} />
-      {notice && (
-        <T variant="label" tone="positive">
-          {notice}
-        </T>
-      )}
-      {status && (
-        <View style={styles.spread}>
-          <View style={[styles.line, { flexShrink: 1 }]}>
-            <Icon name="arrow.triangle.branch" size={17} />
-            {/* Middle truncation keeps the branch's start and "in N repositories" readable. */}
-            <T variant="label" numberOfLines={1} ellipsizeMode="middle" style={{ flexShrink: 1 }}>
-              {status.branch || (grouped ? "No branch" : "No Git repository")}
-              {grouped && (
-                <T variant="label" tone="secondary" style={{ fontWeight: "400" }}>
-                  {` in ${members.length} ${members.length === 1 ? "repository" : "repositories"}`}
-                </T>
-              )}
+  const files = diff?.files ?? [];
+  const adds = files.reduce((n, f) => n + f.additions, 0);
+  const dels = files.reduce((n, f) => n + f.deletions, 0);
+
+  if (selected) {
+    const { name, dir } = splitPath(selected);
+    return (
+      <View style={{ gap: space.md, paddingHorizontal: edge }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs, marginStart: -space.md }}>
+          <IconButton name="chevron.left" label="Back to changed files" onPress={() => setSelected("")} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <T variant="headline" numberOfLines={1} ellipsizeMode="middle">
+              {name}
             </T>
+            {!!dir && (
+              <T variant="code" tone="muted" numberOfLines={1} ellipsizeMode="middle" selectable>
+                {dir}
+              </T>
+            )}
           </View>
-          <Tap label="Refresh changes" onPress={() => void reload()}>
-            <Icon name="arrow.clockwise" size={17} />
-          </Tap>
+        </View>
+        <ErrorBanner error={error} />
+        <View style={{ gap: space.sm }}>
+          {busy && !patch ? (
+            <Working label="Loading diff" />
+          ) : (
+            <Code text={patch || "No text changes. This may be a binary file."} diff />
+          )}
+          {truncated && (
+            <T variant="footnote" tone="muted">
+              This patch is truncated. Review the complete diff on your computer.
+            </T>
+          )}
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ paddingHorizontal: edge }}>
+      <ErrorBanner error={error} onRetry={() => void reload()} />
+      {status && (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, marginEnd: -space.md }}>
+          <Icon name="arrow.triangle.branch" size={16} color={colors.secondary} />
+          {/* Middle truncation keeps the branch's start and end readable. */}
+          <T variant="code" numberOfLines={1} ellipsizeMode="middle" style={{ flex: 1 }}>
+            {status.branch || (grouped ? `${members.length} repositories` : "No Git repository")}
+          </T>
+          <IconButton name="arrow.clockwise" label="Refresh changes" disabled={busy} onPress={() => void reload()} />
         </View>
       )}
-      {busy && <Working label="Loading changes" />}
-      {selected ? (
-        <>
-          <Row
-            title="Back to changed files"
-            icon="arrow.left"
-            onPress={() => setSelected("")}
-          />
-          <T variant="label" selectable>
-            {selected}
-          </T>
-          <Code
-            text={
-              patch ||
-              (busy
-                ? "Loading diff…"
-                : "No text changes. This may be a binary file.")
-            }
-            diff
-          />
-          {truncated && (
-            <T variant="footnote" tone="secondary">
-              This patch is truncated. Review the complete diff on your
-              computer.
-            </T>
-          )}
-        </>
+      {busy && !diff && <Working label="Loading changes" />}
+      {grouped ? (
+        <GroupedChanges
+          groups={grouped}
+          status={status}
+          busy={busy}
+          onOpen={(path) => void file(path)}
+          onCommit={() =>
+            confirm({
+              title: "Commit changes in every repository?",
+              message: "Each repository with changes gets its own commit with a generated message.",
+              confirm: "Commit",
+              destructive: false,
+              onConfirm: () => void commit(),
+            })
+          }
+          onCreatePrs={(n) =>
+            confirm({
+              title: `${prButtonLabel(n)}?`,
+              message: "Kybern commits current changes, pushes each repository's branch and opens a linked draft pull request in each.",
+              confirm: "Create",
+              destructive: false,
+              onConfirm: () => void createGroupPrs(),
+            })
+          }
+        />
       ) : (
-        grouped ? (
-          <GroupedChanges
-            groups={grouped}
-            status={status}
-            busy={busy}
-            onOpen={(path) => void file(path)}
-            onCommit={() =>
-              Alert.alert("Commit changes in every repository?", "Each repository with changes gets its own commit with a generated message.", [
-                { text: "Cancel", style: "cancel" },
-                { text: "Commit changes", onPress: () => void commit() },
-              ])
-            }
-            onCreatePrs={(count) =>
-              Alert.alert(
-                `${prButtonLabel(count)}?`,
-                "Kybern commits current changes, pushes each repository's branch and opens a draft pull request in each, linked to the others.",
-                [
-                  { text: "Cancel", style: "cancel" },
-                  { text: prButtonLabel(count), onPress: () => void createGroupPrs() },
-                ],
-              )
-            }
-          />
-        ) : (
         <>
-          {diff?.files.length ? (
+          {files.length ? (
             <>
-              <View style={styles.line}>
+              <View style={{ flexDirection: "row", alignItems: "baseline", gap: space.sm, paddingBottom: space.sm }}>
                 <T variant="footnote" tone="secondary">
-                  {diff.files.length} changed{" "}
-                  {diff.files.length === 1 ? "file" : "files"}
+                  {count(files.length, "changed file")}
                 </T>
-                <T variant="footnote" tone="positive">
-                  +{diff.files.reduce((n, f) => n + f.additions, 0)}
-                </T>
-                <T variant="footnote" tone="negative">
-                  −{diff.files.reduce((n, f) => n + f.deletions, 0)}
-                </T>
+                <Counts additions={adds} deletions={dels} />
               </View>
-              {diff.files.map((f) => (
-                <Row
-                  key={f.path}
-                  title={f.path}
-                  detail={f.status}
-                  icon="doc.text"
-                  onPress={() => void file(f.path)}
-                  trailing={
-                    <View style={{ flexDirection: "row", gap: 5 }}>
-                      <T variant="footnote" tone="positive">
-                        +{f.additions}
-                      </T>
-                      <T variant="footnote" tone="negative">
-                        −{f.deletions}
-                      </T>
-                    </View>
-                  }
-                />
-              ))}
+              <FileList files={files} onOpen={(path) => void file(path)} />
             </>
           ) : (
-            !busy && (
-              <Empty
-                icon="checkmark.seal"
-                title="Nothing to review."
-                detail="Changes made in this workspace will appear here."
-              />
+            !busy &&
+            diff && (
+              <Empty icon="checkmark.seal" title="No changes" detail="Files this thread changes appear here." />
             )
           )}
-          {status?.pull_request && (
-            <Row
-              title={`#${status.pull_request.number} ${status.pull_request.title}`}
-              detail={status.pull_request.state}
-              icon="arrow.up.right"
-              onPress={() => void Linking.openURL(status.pull_request!.url)}
-            />
-          )}
           {status?.is_git && (
-            <Group title="Git actions">
-              <Row
-                title="Commit changes"
-                detail={
-                  status.dirty_files
-                    ? `${status.dirty_files} uncommitted files`
-                    : "Working tree is clean"
-                }
-                icon="checkmark.circle"
-                onPress={() => setAction(action === "commit" ? "" : "commit")}
-              />
-              <Row
-                title="Create a draft pull request"
-                detail="Push this branch and open a draft on GitHub."
-                icon="arrow.triangle.pull"
-                onPress={() => setAction(action === "pr" ? "" : "pr")}
-              />
-            </Group>
-          )}
-          {action === "commit" && (
-            <View style={{ gap: 14 }}>
-              <Field
-                label="Commit message"
-                value={message}
-                onChangeText={setMessage}
-                placeholder="Describe these changes"
-                multiline
-              />
-              <Button
-                busy={busy}
-                onPress={() =>
-                  Alert.alert(
-                    "Commit workspace changes?",
-                    "All current changes in this workspace will be included.",
-                    [
-                      { text: "Cancel", style: "cancel" },
-                      { text: "Commit changes", onPress: () => void commit() },
-                    ],
-                  )
-                }
-              >
-                Commit changes
-              </Button>
-            </View>
-          )}
-          {action === "pr" && (
-            <View style={{ gap: 14 }}>
-              <Field
-                label="Pull request title"
-                value={prTitle}
-                onChangeText={setPrTitle}
-                placeholder="Describe this change"
-              />
-              <Field
-                label="Description"
-                value={prBody}
-                onChangeText={setPrBody}
-                placeholder="What changed and how you tested it"
-                multiline
-              />
-              <T variant="footnote" tone="secondary">
-                Commit your changes first. Creating a pull request pushes this
-                branch to GitHub.
-              </T>
-              <Button
-                busy={busy}
-                onPress={() =>
-                  Alert.alert(
-                    "Create a draft pull request?",
-                    "This will push your committed branch to GitHub and create a draft pull request.",
-                    [
-                      { text: "Cancel", style: "cancel" },
-                      { text: "Create draft", onPress: () => void createPr() },
-                    ],
-                  )
-                }
-              >
-                Create draft pull request
-              </Button>
+            <View>
+              <SectionHeader title="Git" />
+              <InsetGroup>
+                <ListRow
+                  title="Commit changes"
+                  subtitle={status.dirty_files ? count(status.dirty_files, "uncommitted file") : "Working tree is clean"}
+                  leading="checkmark.circle"
+                  disabled={!status.dirty_files}
+                  onPress={() => setComposing((v) => !v)}
+                />
+                {status.pull_request ? (
+                  <ListRow
+                    title={`Pull request #${status.pull_request.number}`}
+                    subtitle={status.pull_request.title}
+                    subtitleLines={1}
+                    leading="arrow.triangle.pull"
+                    chevron
+                    onPress={() =>
+                      thread?.project_id
+                        ? router.push({
+                            pathname: "/pull",
+                            params: { projectId: thread.project_id, number: String(status.pull_request!.number) },
+                          })
+                        : void Linking.openURL(status.pull_request!.url)
+                    }
+                  />
+                ) : (
+                  <ListRow
+                    title="Create a draft pull request"
+                    subtitle={status.remote_url ? "Commits, pushes this branch and opens a draft on GitHub" : "Add a GitHub remote on your computer first"}
+                    leading="arrow.triangle.pull"
+                    disabled={!status.remote_url || busy}
+                    onPress={() =>
+                      confirm({
+                        title: "Create a draft pull request?",
+                        message: "Kybern commits current changes, pushes this branch and opens a draft pull request on GitHub.",
+                        confirm: "Create",
+                        destructive: false,
+                        onConfirm: () => void createPr(),
+                      })
+                    }
+                  />
+                )}
+              </InsetGroup>
+              {composing && (
+                <View style={{ gap: space.md, paddingTop: space.lg }}>
+                  <Field
+                    label="Commit message"
+                    value={message}
+                    onChangeText={setMessage}
+                    placeholder="Leave empty for a generated message"
+                    multiline
+                  />
+                  <Button role="prominent" busy={busy} onPress={() => void commit()}>
+                    Commit changes
+                  </Button>
+                </View>
+              )}
             </View>
           )}
         </>
-        )
-      )}
-    </View>
-  );
-}
-
-function Counts({ additions, deletions }: { additions: number; deletions: number }) {
-  return (
-    <View style={{ flexDirection: "row", gap: 5 }}>
-      {additions > 0 && (
-        <T variant="footnote" tone="positive" style={{ fontVariant: ["tabular-nums"] }}>
-          +{additions}
-        </T>
-      )}
-      {deletions > 0 && (
-        <T variant="footnote" tone="negative" style={{ fontVariant: ["tabular-nums"] }}>
-          −{deletions}
-        </T>
       )}
     </View>
   );
@@ -402,72 +427,71 @@ function GroupedChanges({
   const dirty = (status?.repos ?? []).filter((repo) => repo.included && repo.dirty_files > 0);
   return (
     <>
-      <View style={[styles.line, { gap: 6, marginTop: -6 }]}>
+      <View style={{ flexDirection: "row", alignItems: "baseline", gap: space.sm }}>
         <T variant="footnote" tone="secondary">
-          {files} changed {files === 1 ? "file" : "files"} · {changedReposLabel(changed.filter((group) => group.repo.path !== "").length, repos.length)}
+          {`${count(files, "changed file")} · ${changedReposLabel(changed.filter((group) => group.repo.path !== "").length, repos.length)}`}
         </T>
         <Counts additions={groups.reduce((n, g) => n + g.additions, 0)} deletions={groups.reduce((n, g) => n + g.deletions, 0)} />
       </View>
       {groups.map((group) => (
         <View key={group.repo.path || "other"}>
-          <View style={[styles.line, { gap: 6, marginTop: 6, marginBottom: group.files.length ? 2 : 10 }]}>
-            <Icon name="shippingbox" size={14} color={group.files.length ? colors.ink : colors.secondary} />
-            <T variant="footnote" tone={group.files.length ? "ink" : "secondary"} style={{ flex: 1, fontWeight: group.files.length ? "600" : "400" }}>
-              {group.repo.name}
-            </T>
-            {group.files.length ? (
-              <Counts additions={group.additions} deletions={group.deletions} />
-            ) : (
-              <T variant="footnote" tone="secondary">
-                {busy ? "" : "No changes"}
-              </T>
-            )}
+          <View style={{ flexDirection: "row", alignItems: "flex-end", gap: space.sm }}>
+            <View style={{ flex: 1 }}>
+              <SectionHeader title={group.repo.name} count={group.files.length || undefined} />
+            </View>
+            <View style={{ paddingBottom: space.sm }}>
+              {group.files.length ? (
+                <Counts additions={group.additions} deletions={group.deletions} />
+              ) : (
+                <T variant="footnote" tone="muted">
+                  {busy ? "" : "No changes"}
+                </T>
+              )}
+            </View>
           </View>
-          {group.files.map((f) => (
-            <Row
-              key={f.path}
-              title={stripRepoPrefix(f.path, group.repo.path)}
-              label={`${group.repo.name}, ${stripRepoPrefix(f.path, group.repo.path)}, ${f.status}`}
-              detail={f.status.charAt(0).toUpperCase() + f.status.slice(1)}
-              icon="doc.text"
-              onPress={() => onOpen(f.path)}
-              trailing={<Counts additions={f.additions} deletions={f.deletions} />}
-            />
-          ))}
+          <FileList files={group.files} prefix={group.repo.path} onOpen={onOpen} />
         </View>
       ))}
       {!files && !busy && (
-        <T tone="secondary">Nothing to review yet. Changes made in these repositories will appear here.</T>
+        <Empty icon="checkmark.seal" title="No changes" detail="Files changed in these repositories appear here." />
       )}
-      {!!pulls.length && (
-        <Group title="Pull requests">
-          {pulls.map((pull) => (
-            <Row
-              key={pull.repo}
-              title={`${pull.name} · #${pull.pullRequest.number} ${pull.pullRequest.title}`}
-              detail={pull.detail}
-              icon="arrow.triangle.pull"
-              onPress={() => void Linking.openURL(pull.pullRequest.url)}
-            />
-          ))}
-        </Group>
-      )}
-      <Group title="Git actions">
-        <Row
-          title="Commit changes"
-          detail={dirty.length ? `Uncommitted: ${commitDetail(dirty.reduce((n, repo) => n + repo.dirty_files, 0), dirty.length)}` : "Every repository is clean"}
-          icon="checkmark.circle"
-          onPress={dirty.length ? onCommit : undefined}
-        />
-        {!!plan.create.length && (
-          <Row
-            title={prButtonLabel(plan.create.length)}
-            detail={prCaption(plan.create, plan.unchanged, plan.noRemote)}
-            icon="arrow.triangle.pull"
-            onPress={() => onCreatePrs(plan.create.length)}
-          />
+      <View>
+        {!!pulls.length && (
+          <>
+            <SectionHeader title="Pull requests" count={pulls.length} />
+            <InsetGroup>
+              {pulls.map((pull) => (
+                <ListRow
+                  key={pull.repo}
+                  title={`${pull.name} #${pull.pullRequest.number}`}
+                  subtitle={pull.pullRequest.title}
+                  subtitleLines={1}
+                  leading="arrow.up.right"
+                  onPress={() => void Linking.openURL(pull.pullRequest.url)}
+                />
+              ))}
+            </InsetGroup>
+          </>
         )}
-      </Group>
+        <SectionHeader title="Git" />
+        <InsetGroup>
+          <ListRow
+            title="Commit changes"
+            subtitle={dirty.length ? `Uncommitted: ${commitDetail(dirty.reduce((n, repo) => n + repo.dirty_files, 0), dirty.length)}` : "Every repository is clean"}
+            leading="checkmark.circle"
+            disabled={!dirty.length}
+            onPress={onCommit}
+          />
+          {!!plan.create.length && (
+            <ListRow
+              title={prButtonLabel(plan.create.length)}
+              subtitle={prCaption(plan.create, plan.unchanged, plan.noRemote)}
+              leading="arrow.triangle.pull"
+              onPress={() => onCreatePrs(plan.create.length)}
+            />
+          )}
+        </InsetGroup>
+      </View>
     </>
   );
 }

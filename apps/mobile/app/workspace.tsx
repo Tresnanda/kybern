@@ -1,6 +1,7 @@
 import { Stack, router, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
-import { View } from "react-native";
+import { ScrollView, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Alert } from "../src/ui/Alert";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { TaskRow } from "../src/features/Tasks";
@@ -27,7 +28,7 @@ import {
   Row,
   T,
 } from "../src/ui/primitives";
-import { useTheme } from "../src/ui/theme";
+import { CONTENT_MAX_WIDTH, space, useTheme } from "../src/ui/theme";
 
 export default function Workspace() {
   const {
@@ -49,6 +50,7 @@ export default function Workspace() {
   const app = useApp();
   const snapshot = useThread(threadId ?? "");
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const thread = app.threads.find((t) => t.id === threadId) ?? snapshot.thread;
   const project = app.projects.find(
     (p) => p.id === (projectId ?? thread?.project_id),
@@ -96,28 +98,20 @@ export default function Workspace() {
     >
       <Stack.Screen
         options={{
-          title:
-            tab === "More"
-              ? "Thread details"
-              : tab === "Changes"
-                ? "Diffs"
-                : tab,
+          title: tab === "More" ? "Thread details" : tab,
+          headerStyle: { backgroundColor: tab === "Changes" ? colors.grouped : colors.background },
         }}
       />
-      <View
-        style={{
-          paddingHorizontal: 24,
-          paddingTop: 8,
-          paddingBottom: 16,
-          gap: 14,
-        }}
-      >
-        <T variant="footnote" tone="secondary">
-          {project?.name ?? "Workspace"}
-          {thread?.worktree ? ` / ${thread.worktree.branch}` : ""}
-        </T>
-      </View>
-      {tab === "Terminal" && threadId ? (
+      {tab === "Changes" && threadId ? (
+        <ScrollView
+          contentInsetAdjustmentBehavior="automatic"
+          style={{ flex: 1, backgroundColor: colors.grouped }}
+          contentContainerStyle={{ paddingTop: space.sm, paddingBottom: insets.bottom + space["2xl"], width: "100%", maxWidth: CONTENT_MAX_WIDTH, alignSelf: "center" }}
+          keyboardShouldPersistTaps="handled"
+        >
+          <Changes threadId={threadId} />
+        </ScrollView>
+      ) : tab === "Terminal" && threadId ? (
         <View style={{ flex: 1 }}>
           <Terminal key={`${app.activeId}:${threadId}:${terminalId ?? ""}`} threadId={threadId} initialTerminalId={terminalId} connectorLogin={login === "1"} />
         </View>
@@ -128,7 +122,6 @@ export default function Workspace() {
           <ErrorBanner error={error} />
           {tab === "Artifacts" && thread && <Artifacts key={`${app.activeId}:${threadId}`} thread={thread} />}
           {tab === "Notes" && threadId && <ThreadNotes key={`${app.activeId}:${threadId}`} threadId={threadId} />}
-          {tab === "Changes" && threadId && <Changes threadId={threadId} />}
           {tab === "More" && thread && (
             <>
               <Group title="Conversation">
