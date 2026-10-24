@@ -18,17 +18,23 @@ import { Terminal } from "./Terminal";
 import { AgentsList, useAgents, type AgentsSegment } from "./AgentsSheet";
 import { Empty, Icon, IconButton, styles, T, Tap } from "../ui/primitives";
 import type { IconName } from "../ui/icons";
-import { useTheme } from "../ui/theme";
+import { radius, space, useTheme } from "../ui/theme";
+import { PreviewPane } from "./Preview";
+import { ThreadNotes } from "./ThreadNotes";
 
 const TABS: { key: InspectorTab; label: string; icon: IconName }[] = [
-  { key: "changes", label: "Changes", icon: "arrow.triangle.branch" },
+  { key: "changes", label: "Changes", icon: "doc.badge.plus" },
   { key: "files", label: "Files", icon: "folder" },
   { key: "terminal", label: "Terminal", icon: "terminal" },
+  { key: "preview", label: "Preview", icon: "globe" },
   { key: "tasks", label: "Agents", icon: "person.2" },
+  { key: "notes", label: "Notes", icon: "square.and.pencil" },
 ];
+/** Below this segment width the strip shows icons only (the active tab is named for VoiceOver). */
+const LABEL_MIN = 84;
 
-// The right dock, mirroring the desktop RightPanel: a tab strip over Changes /
-// Files / Terminal / Tasks panes. Panes are mounted lazily on first visit and
+// The right dock, mirroring the desktop RightPanel: a tab strip over Changes / Files /
+// Terminal / Preview / Agents / Notes panes (P2-13). Panes are mounted lazily on first visit and
 // then kept mounted (toggled by opacity, never unmounted) so the terminal's
 // WebView session and each pane's scroll/selection survive tab switches.
 function Inspector({ threadId }: { threadId: string }) {
@@ -51,6 +57,7 @@ function Inspector({ threadId }: { threadId: string }) {
 
   const [stripWidth, setStripWidth] = useState(0);
   const seg = stripWidth / TABS.length;
+  const labels = seg >= LABEL_MIN;
   const index = Math.max(
     0,
     TABS.findIndex((t) => t.key === inspectorTab),
@@ -97,7 +104,7 @@ function Inspector({ threadId }: { threadId: string }) {
                   position: "absolute",
                   top: 0,
                   bottom: 0,
-                  borderRadius: 11,
+                  borderRadius: radius.full,
                   backgroundColor: colors.raised,
                 },
                 pill,
@@ -112,7 +119,7 @@ function Inspector({ threadId }: { threadId: string }) {
                   key={tab.key}
                   label={tab.label}
                   selected={active}
-                  static
+                  feedback="none"
                   onPress={() => setInspectorTab(tab.key)}
                   style={{
                     flex: 1,
@@ -125,12 +132,14 @@ function Inspector({ threadId }: { threadId: string }) {
                 >
                   <Icon
                     name={tab.icon}
-                    size={15}
+                    size={labels ? 15 : 18}
                     color={active ? colors.ink : colors.secondary}
                   />
-                  <T variant="footnote" tone={active ? "ink" : "secondary"}>
-                    {tab.label}
-                  </T>
+                  {labels && (
+                    <T variant="footnote" tone={active ? "ink" : "secondary"} numberOfLines={1}>
+                      {tab.label}
+                    </T>
+                  )}
                 </Tap>
               );
             })}
@@ -164,13 +173,25 @@ function Inspector({ threadId }: { threadId: string }) {
             >
               {tab.key === "changes" && (
                 <ScrollView
-                  contentContainerStyle={{
-                    padding: 16,
-                    paddingBottom: insets.bottom + 24,
-                  }}
+                  style={{ backgroundColor: colors.grouped }}
+                  contentContainerStyle={{ paddingTop: space.sm, paddingBottom: insets.bottom + space.xl }}
                   keyboardShouldPersistTaps="handled"
                 >
                   <Changes threadId={threadId} />
+                </ScrollView>
+              )}
+              {tab.key === "preview" && (
+                <View style={{ flex: 1, paddingBottom: insets.bottom }}>
+                  <PreviewPane threadId={threadId} />
+                </View>
+              )}
+              {tab.key === "notes" && (
+                <ScrollView
+                  contentContainerStyle={{ padding: space.lg, paddingBottom: insets.bottom + space.xl }}
+                  keyboardShouldPersistTaps="handled"
+                  keyboardDismissMode="interactive"
+                >
+                  <ThreadNotes threadId={threadId} />
                 </ScrollView>
               )}
               {tab.key === "files" &&

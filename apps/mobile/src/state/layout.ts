@@ -16,7 +16,7 @@ const INSPECTOR_MIN = 380;
 const INSPECTOR_MAX = 560;
 const CONVERSATION_MIN = 480;
 
-export type InspectorTab = "changes" | "files" | "terminal" | "tasks";
+export type InspectorTab = "changes" | "files" | "terminal" | "preview" | "tasks" | "notes";
 
 type LayoutState = {
   sidebarOpen: boolean;
