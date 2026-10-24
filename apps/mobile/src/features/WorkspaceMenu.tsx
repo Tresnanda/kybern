@@ -15,6 +15,7 @@ import { openAgents } from "./AgentsSheet";
 import { Alert, confirm } from "../ui/Alert";
 import { showToast } from "../ui/Toast";
 import { IconButton } from "../ui/primitives";
+import { radius, useTheme } from "../ui/theme";
 import type { Diff, GitStatus, Thread } from "../state/protocol";
 import { activeEnvironment, errorText, refresh, rpc, useApp } from "../state/runtime";
 import { type InspectorTab, useLayout } from "../state/layout";
@@ -64,6 +65,7 @@ function useWorkspaceState(thread?: Thread | null) {
 }
 
 export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
+  const { colors } = useTheme();
   const { regular, openInspector } = useLayout();
   const { git, diff, reload } = useWorkspaceState(thread);
   const menu = useMenuSurface();
@@ -262,7 +264,18 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
 
   return (
     <>
-      <View ref={anchor} collapsable={false}>
+      {/* The thread's one header button sits on its own disc, as before the redesign;
+          the menu grows out of that disc and back, and the real one hides meanwhile. */}
+      <View
+        ref={anchor}
+        collapsable={false}
+        style={{
+          borderRadius: radius.full,
+          backgroundColor: colors.surface,
+          boxShadow: "0 3px 14px #00000012",
+          opacity: menu.active ? 0 : 1,
+        }}
+      >
         <IconButton
           name="ellipsis"
           label="Thread actions"

@@ -14,6 +14,7 @@ import {
   DEFAULT_FILTER,
   emptyText,
   filterThreads,
+  groupByProject,
   isFiltering,
   threadAgents,
   threadRows,
@@ -31,8 +32,11 @@ import { Segmented } from "../src/ui/Segmented";
 import { CONTENT_MAX_WIDTH, space, useTheme } from "../src/ui/theme";
 
 type Item =
-  | { kind: "header"; key: string; title: string; count?: number }
+  | { kind: "header"; key: string; title: string; count?: number; projectId?: string; open?: boolean }
   | { kind: "row"; key: string; row: ThreadRow };
+
+/** Which project groups the reader folded, kept while the app runs. */
+const foldedProjects: Record<string, boolean> = {};
 
 export default function Library() {
   const app = useApp();
@@ -44,6 +48,11 @@ export default function Library() {
   const { regular } = useLayout();
   const [filter, setFilter] = useState<ThreadFilter>(DEFAULT_FILTER);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [folded, setFolded] = useState<Record<string, boolean>>(() => ({ ...foldedProjects }));
+  const fold = useCallback((projectId: string, value: boolean) => {
+    foldedProjects[projectId] = value;
+    setFolded((old) => ({ ...old, [projectId]: value }));
+  }, []);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   // On a wide layout the persistent sidebar is the thread list; this route is
@@ -58,18 +67,32 @@ export default function Library() {
     [app.threads, app.projects, spaceId, filter, isWorking],
   );
   const children = useMemo(() => Object.values(list.children), [list.children]);
+  // Pinned first, then one foldable section per project in the user's project
+  // order (as the iPad sidebar and the desktop do). A search or filter opens
+  // every section so no match hides behind a fold.
   const items = useMemo<Item[]>(() => {
-    const rows = threadRows(top, filter.archived ? [] : children, expanded, { now: Date.now() });
-    const pinned = !isFiltering(filter) ? rows.filter((r) => r.thread.pinned || (r.child && pinnedRoot(r, rows))) : [];
-    if (!pinned.length) return rows.map((row) => ({ kind: "row", key: row.thread.id, row }));
-    const rest = rows.filter((r) => !pinned.includes(r));
-    return [
-      { kind: "header", key: "h:pinned", title: "Pinned" },
-      ...pinned.map((row) => ({ kind: "row" as const, key: row.thread.id, row })),
-      ...(rest.length ? [{ kind: "header" as const, key: "h:recent", title: "Recent" }] : []),
-      ...rest.map((row) => ({ kind: "row" as const, key: row.thread.id, row })),
-    ];
-  }, [top, children, expanded, filter]);
+    const filtering = isFiltering(filter);
+    const rowItems = (threads: readonly Thread[]) =>
+      threadRows(threads, filter.archived ? [] : children, expanded, { now: Date.now() }).map(
+        (row) => ({ kind: "row" as const, key: row.thread.id, row }),
+      );
+    const pinned = filtering ? [] : top.filter((t) => t.pinned);
+    const out: Item[] = pinned.length ? [{ kind: "header", key: "h:pinned", title: "Pinned" }, ...rowItems(pinned)] : [];
+    const rest = pinned.length ? top.filter((t) => !t.pinned) : top;
+    for (const group of groupByProject(rest, app.projects, list.projectOrder)) {
+      const open = filtering || !folded[group.projectId];
+      out.push({
+        kind: "header",
+        key: `p:${group.projectId}`,
+        title: group.name,
+        count: group.threads.length,
+        projectId: group.projectId,
+        open,
+      });
+      if (open) out.push(...rowItems(group.threads));
+    }
+    return out;
+  }, [top, children, expanded, filter, folded, app.projects, list.projectOrder]);
 
   const spaceThreads = useMemo(
     () => filterThreads({ threads: app.threads, projects: app.projects, spaceId, filter: DEFAULT_FILTER, isWorking }),
@@ -231,7 +254,17 @@ export default function Library() {
           renderItem={({ item, index }) =>
             item.kind === "header" ? (
               <View style={{ paddingHorizontal: space.lg }}>
-                <SectionHeader title={item.title} first={index === 0} />
+                <SectionHeader
+                  title={item.title}
+                  first={index === 0}
+                  count={item.count}
+                  open={item.projectId ? item.open : undefined}
+                  onToggle={
+                    item.projectId && !isFiltering(filter)
+                      ? () => fold(item.projectId!, !!item.open)
+                      : undefined
+                  }
+                />
               </View>
             ) : (
               <ThreadListRow row={item.row} ctx={ctx} />
@@ -259,11 +292,4 @@ export default function Library() {
       </PullRefresh>
     </View>
   );
-}
-
-/** A child row belongs with its root's section. */
-function pinnedRoot(row: ThreadRow, rows: readonly ThreadRow[]) {
-  let index = rows.indexOf(row);
-  while (index > 0 && rows[index].depth > 0) index--;
-  return rows[index]?.thread.pinned ?? false;
 }

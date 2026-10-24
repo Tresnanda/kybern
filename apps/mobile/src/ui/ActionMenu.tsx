@@ -290,7 +290,9 @@ export function useMenuSurface() {
       />
     </MorphingMenu>
   ) : null;
-  return { show, close, element };
+  // While a menu is up its trigger is drawn by the morph itself: the real one
+  // hides, or the two would show as a doubled shape on the way back.
+  return { show, close, element, active: request !== null };
 }
 
 /**
@@ -414,7 +416,7 @@ export function MenuButton({
     );
   return (
     <>
-      <View ref={anchor} collapsable={false} style={style}>
+      <View ref={anchor} collapsable={false} style={[style, menu.active && { opacity: 0 }]}>
         {children ? (
           <Tap label={label} hint="Opens a menu" onPress={open} disabled={disabled} feedback="highlight" style={{ borderRadius: triggerRadius }}>
             {children}
