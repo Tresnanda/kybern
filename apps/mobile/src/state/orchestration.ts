@@ -7,6 +7,7 @@ import type {
   ThreadMessagePurpose,
   UserMessage,
 } from "./protocol";
+import { childStatus } from "./status.ts";
 
 const PURPOSES: Record<ThreadMessagePurpose, string> = {
   task: "Task",
@@ -24,13 +25,6 @@ const DELEGATION: Record<DelegationStatus, string> = {
   interrupted: "Interrupted",
 };
 
-const THREAD: Record<Thread["status"], string> = {
-  idle: "Idle",
-  running: "Running",
-  "awaiting-approval": "Needs approval",
-  failed: "Failed",
-  archived: "Archived",
-};
 
 export type OrchestrationPart = ThreadMessagePart | Extract<ContentPart, { type: "agent_results" }>;
 
@@ -44,7 +38,8 @@ export function hasOrchestrationParts(message: UserMessage) {
 
 export const purposeLabel = (purpose: ThreadMessagePurpose) => PURPOSES[purpose] ?? "Message";
 
-export const delegationStatusWord = (status: DelegationStatus) => DELEGATION[status] ?? "Unknown";
+export const delegationStatusWord = (status: DelegationStatus) =>
+  DELEGATION[status] ?? "Unknown";
 
 /** "Task · Reviewer": who sent it and why. Kybern itself sends with no thread. */
 export function threadMessageHeading(part: ThreadMessagePart) {
@@ -75,12 +70,7 @@ export function resultLocation(item: AgentResultItem) {
 
 /** Status word of a child row: delegation outcome, subagent task state, or the thread's own status. */
 export function childStatusWord(thread: Thread) {
-  if (thread.delegation) return delegationStatusWord(thread.delegation.status);
-  if (thread.subagent) {
-    const status = thread.subagent.status;
-    return status.charAt(0).toUpperCase() + status.slice(1);
-  }
-  return THREAD[thread.status] ?? "Idle";
+  return childStatus(thread).word;
 }
 
 export function childIsRunning(thread: Thread) {

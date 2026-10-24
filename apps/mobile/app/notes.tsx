@@ -33,6 +33,7 @@ import {
   Tap,
 } from "../src/ui/primitives";
 import { type, useTheme } from "../src/ui/theme";
+import { Toast } from "../src/ui/Toast";
 
 type Row =
   | { key: string; kind: "header"; title: string; subtitle?: string; count?: number; onAdd?: () => void; addLabel?: string; onToggle?: () => void; open?: boolean }
@@ -185,47 +186,18 @@ function Header({ row }: { row: Extract<Row, { kind: "header" }> }) {
 
 function UndoBar() {
   const { undo } = useNotes();
-  const { colors } = useTheme();
-  const insets = useSafeAreaInsets();
   if (!undo) return null;
   return (
-    <Animated.View
+    <Toast
       key={undo.id}
-      entering={FadeIn.duration(160)}
-      exiting={FadeOut.duration(120)}
-      accessibilityLiveRegion="polite"
-      style={{
-        position: "absolute",
-        start: 16,
-        end: 16,
-        bottom: insets.bottom + 12,
-        alignSelf: "center",
-        width: "100%",
-        maxWidth: 520,
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-        gap: 12,
-        paddingStart: 18,
-        paddingEnd: 6,
-        borderRadius: 18,
-        backgroundColor: colors.ink,
+      text="Note deleted"
+      onDismiss={dismissUndo}
+      action={{
+        title: "Undo",
+        icon: "arrow.uturn.backward",
+        onPress: () => attempt(() => restoreNote(undo.id), dismissUndo),
       }}
-    >
-      <T variant="label" tone="inverse" numberOfLines={1} style={{ flex: 1 }}>
-        Note deleted
-      </T>
-      <Tap
-        label="Undo delete"
-        onPress={() => attempt(() => restoreNote(undo.id), dismissUndo)}
-        style={[styles.line, { gap: 6, paddingHorizontal: 12 }]}
-      >
-        <Icon name="arrow.uturn.backward" size={15} color={colors.inverse} />
-        <T variant="label" tone="inverse">
-          Undo
-        </T>
-      </Tap>
-    </Animated.View>
+    />
   );
 }
 

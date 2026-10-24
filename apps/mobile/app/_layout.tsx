@@ -35,19 +35,12 @@ import {
 } from "../src/ui/AndroidNavigation";
 import { SendTransitionProvider } from "../src/components/liquid/SendTransition";
 import { DialogHost } from "../src/ui/Alert";
+import { sheetOptions } from "../src/ui/Sheet";
+import { ToastHost } from "../src/ui/Toast";
 
 // A sheet opened from a deep link still needs a destination to dismiss to.
 export const unstable_settings = { anchor: "index" };
 
-const androidSheet =
-  Platform.OS === "android"
-    ? {
-        presentation: "transparentModal" as const,
-        headerShown: false,
-        animation: "none" as const,
-        contentStyle: { backgroundColor: "transparent" },
-      }
-    : {};
 
 // The split shell. To keep the sidebar collapse/reveal buttery, the detail is a
 // FIXED-width layer that only ever slides (a transform) — never resizes — so the
@@ -199,7 +192,9 @@ function Navigation() {
   const { width } = useWindowDimensions();
   // On tablet iOS centers a form sheet; a full-height detent fills the screen so
   // it reads as grounded rather than a card floating in the middle.
-  const sheetDetents = width >= SPLIT_MIN_WIDTH ? [1] : [0.75, 1];
+  const sheet = sheetOptions({
+    detents: width >= SPLIT_MIN_WIDTH ? [1] : [0.75, 1],
+  });
   useEffect(() => {
     void boot();
     hydrateLayout();
@@ -250,18 +245,14 @@ function Navigation() {
           name="connect"
           options={{
             title: "Connect a computer",
-            presentation: "modal",
-            ...androidSheet,
+            ...(Platform.OS === "android" ? sheet : { presentation: "modal" as const }),
           }}
         />
         <Stack.Screen
           name="configure"
           options={{
             title: "Thread setup",
-            presentation: "formSheet",
-            sheetAllowedDetents: sheetDetents,
-            sheetGrabberVisible: true,
-            ...androidSheet,
+            ...sheet,
           }}
         />
         <Stack.Screen name="tasks" options={{ title: "Agents & processes" }} />
@@ -269,10 +260,7 @@ function Navigation() {
           name="thread-picker"
           options={{
             title: "Reference conversation",
-            presentation: "formSheet",
-            sheetAllowedDetents: sheetDetents,
-            sheetGrabberVisible: true,
-            ...androidSheet,
+            ...sheet,
           }}
         />
         <Stack.Screen name="file" options={{ title: "File" }} />
@@ -287,10 +275,7 @@ function Navigation() {
           name="project-picker"
           options={{
             title: "Choose project",
-            presentation: "formSheet",
-            sheetAllowedDetents: sheetDetents,
-            sheetGrabberVisible: true,
-            ...androidSheet,
+            ...sheet,
           }}
         />
         <Stack.Screen name="add-project" options={{ title: "Add project" }} />
@@ -298,19 +283,13 @@ function Navigation() {
           name="capabilities"
           options={{
             title: "Add to message",
-            presentation: "formSheet",
-            sheetAllowedDetents: sheetDetents,
-            sheetGrabberVisible: true,
-            ...androidSheet,
+            ...sheet,
           }}
         />
         <Stack.Screen
           name="composer-options"
           options={{
-            presentation: "formSheet",
-            sheetAllowedDetents: sheetDetents,
-            sheetGrabberVisible: true,
-            ...androidSheet,
+            ...sheet,
           }}
         />
         <Stack.Screen name="settings-detail" options={{ title: "Settings" }} />
@@ -331,40 +310,28 @@ function Navigation() {
           name="todo-send"
           options={{
             title: "Send to agent",
-            presentation: "formSheet",
-            sheetAllowedDetents: sheetDetents,
-            sheetGrabberVisible: true,
-            ...androidSheet,
+            ...sheet,
           }}
         />
         <Stack.Screen
           name="project-space"
           options={{
             title: "Project",
-            presentation: "formSheet",
-            sheetAllowedDetents: sheetDetents,
-            sheetGrabberVisible: true,
-            ...androidSheet,
+            ...sheet,
           }}
         />
         <Stack.Screen
           name="coordinator-model"
           options={{
             title: "Model",
-            presentation: "formSheet",
-            sheetAllowedDetents: sheetDetents,
-            sheetGrabberVisible: true,
-            ...androidSheet,
+            ...sheet,
           }}
         />
         <Stack.Screen
           name="note-move"
           options={{
             title: "Move note",
-            presentation: "formSheet",
-            sheetAllowedDetents: sheetDetents,
-            sheetGrabberVisible: true,
-            ...androidSheet,
+            ...sheet,
           }}
         />
         <Stack.Screen name="activity" options={{ title: "Activity" }} />
@@ -372,6 +339,7 @@ function Navigation() {
         <Stack.Screen name="pair" options={{ headerShown: false }} />
       </Stack>
       </Shell>
+      <ToastHost />
       <DialogHost />
     </View>
   );

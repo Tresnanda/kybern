@@ -26,6 +26,8 @@ import {
 import { IconButton, T } from "./primitives";
 import { useTheme } from "./theme";
 import { SHEET } from "../components/liquid/motion";
+import { haptics } from "./haptics";
+import { SheetGrabber } from "./Sheet";
 
 type ScreenLayoutProps = Parameters<
   NonNullable<ComponentProps<typeof Stack>["screenLayout"]>
@@ -71,7 +73,7 @@ export function AndroidHeader({
     <View
       importantForAccessibility={focused ? "auto" : "no-hide-descendants"}
       style={{
-        paddingTop: sheet ? 8 : insets.top,
+        paddingTop: sheet ? 0 : insets.top,
         paddingHorizontal: 16,
         backgroundColor: sheet ? "transparent" : colors.background,
       }}
@@ -168,6 +170,7 @@ export function AndroidSheet({ children, ...props }: ScreenLayoutProps) {
           releaseVelocity.set(event.velocityY);
           if (event.translationY < -80 || event.velocityY < -900) {
             scheduleOnRN(expand);
+            scheduleOnRN(haptics.threshold);
             drag.set(
               withSpring(0, {
                 ...SHEET,
@@ -213,7 +216,7 @@ export function AndroidSheet({ children, ...props }: ScreenLayoutProps) {
         }}
         accessibilityViewIsModal
       >
-        <MorphingBackdrop open={open} onPress={dismiss} label="Dismiss sheet" />
+        <MorphingBackdrop open={open} onPress={dismiss} label="Dismiss sheet" tone="scrim" />
         <View
           pointerEvents="box-none"
           style={[
@@ -238,6 +241,7 @@ export function AndroidSheet({ children, ...props }: ScreenLayoutProps) {
           >
             <GestureDetector gesture={gesture}>
               <View collapsable={false}>
+                <SheetGrabber />
                 <AndroidHeader
                   {...props}
                   sheet

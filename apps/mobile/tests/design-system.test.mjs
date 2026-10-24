@@ -44,3 +44,15 @@ test("plurals are chosen whole", () => {
   assert.equal(plural(1, { one: "{n} needs you", other: "{n} need you" }), "1 needs you");
   assert.equal(count(1200, "file"), "1,200 files");
 });
+
+import { childStatus, runtimeStatus, taskStatus } from "../src/state/status.ts";
+
+test("one status vocabulary across runtime tasks, children and tasks", () => {
+  assert.deepEqual(runtimeStatus("running"), { phase: "working", word: "Running", tone: "accent", active: true });
+  assert.equal(runtimeStatus("completed").word, "Finished");
+  assert.equal(runtimeStatus("interrupted").phase, "stopped");
+  assert.equal(childStatus({ status: "idle", delegation: { status: "cancelled" } }).word, "Canceled");
+  assert.equal(childStatus({ status: "awaiting-approval" }).phase, "waiting");
+  assert.equal(taskStatus("needs_review").tone, "warning");
+  assert.equal(taskStatus("done").active, false);
+});
