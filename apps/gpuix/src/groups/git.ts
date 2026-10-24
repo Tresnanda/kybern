@@ -2,6 +2,7 @@
 // per-repository rows of the environment card. Pure: `DiffPane` and the environment panel both read it.
 import { includedMembers, prButtonLabel, prCaption } from '../../../../packages/kybern-client/src/groups.ts'
 import type { Diff, GitStatus, RepoGitStatus, ThreadMember } from '../../../../packages/kybern-client/src/types.ts'
+import { isGithubRemote } from './model.ts'
 
 export interface RepoRow {
   member: ThreadMember
@@ -26,12 +27,12 @@ export interface PrPlan {
   caption: string
 }
 
-/** "Create 2 pull requests": changed repositories with a remote and no open pull request; the caption names the rest. */
+/** "Create 2 pull requests": changed repositories with a GitHub remote and no open pull request; the caption names the rest. */
 export function prPlan(rows: readonly RepoRow[]): PrPlan | null {
   const open = rows.filter((r) => r.git?.pull_request)
   const changed = rows.filter((r) => r.files > 0 && !r.git?.pull_request)
-  const ready = changed.filter((r) => !!r.git?.remote_url)
-  const noRemote = changed.filter((r) => !r.git?.remote_url)
+  const ready = changed.filter((r) => isGithubRemote(r.git?.remote_url))
+  const noRemote = changed.filter((r) => !isGithubRemote(r.git?.remote_url))
   if (!changed.length) return null
   const unchanged = rows.filter((r) => r.files === 0 && !open.includes(r))
   return {

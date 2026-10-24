@@ -172,7 +172,8 @@ export function prPlan(
   for (const repo of repos) {
     if (!repo.included || repo.pull_request) continue;
     if (!changed.has(repo.repo)) unchanged.push(repo.name);
-    else if (!repo.remote_url) noRemote.push(repo.name);
+    // The daemon opens pull requests only for github.com remotes (`has_github_remote`).
+    else if (!repo.remote_url?.includes("github.com")) noRemote.push(repo.name);
     else create.push(repo.name);
   }
   return { create, unchanged, noRemote };

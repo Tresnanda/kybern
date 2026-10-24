@@ -22,6 +22,14 @@ test('a pull request per changed repository with a remote; the rest are named', 
   expect(prPlan(repoRows([member('web')], { files: [], repos: [] }, status))).toBeNull()
 })
 
+test('a remote off GitHub gets no pull request, as the daemon skips it', () => {
+  const status = { repos: [git('api'), git('web', { remote_url: 'git@gitlab.com:acme/web.git' })] } as Pick<GitStatus, 'repos'>
+  const diff = { files: [], repos: [{ repo: 'api', from: '', to: '', files: 1, additions: 1, deletions: 0 }, { repo: 'web', from: '', to: '', files: 1, additions: 1, deletions: 0 }] }
+  const plan = prPlan(repoRows([member('api'), member('web')], diff, status))
+  expect(plan?.repos).toEqual(['api'])
+  expect(plan?.caption).toContain('web has no GitHub remote')
+})
+
 test('dirty totals across repositories', () => {
   const rows = repoRows([member('api'), member('web')], null, { repos: [git('api', { dirty_files: 4 }), git('web', { dirty_files: 2 })] })
   expect(dirtyTotals(rows)).toEqual({ files: 6, repos: 2 })

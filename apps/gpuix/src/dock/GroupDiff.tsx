@@ -141,8 +141,9 @@ export function GroupEnvironmentRows({ thread, diff, git, row, divider, title, o
 
 function RemoteRow({ r, row }: { r: RepoRow; row: Parameters<typeof GroupEnvironmentRows>[0]['row'] }) {
   const t = useTheme()
-  const slug = remoteSlug(r.git?.remote_url)
   const web = remoteWebUrl(r.git?.remote_url)
+  // A remote without a web page (a local path, a bare server) is named by the repository, and only a missing one says so.
+  const slug = web ? remoteSlug(r.git?.remote_url) : null
   const ahead = r.git?.ahead ? `↑${r.git.ahead}` : ''
   return row({
     key: r.member.path,
@@ -152,7 +153,7 @@ function RemoteRow({ r, row }: { r: RepoRow; row: Parameters<typeof GroupEnviron
     testId: `group-remote-${r.member.path}`,
     trailing: <>
       {ahead && <Label color={t.textSecondary} size={12}>{ahead}</Label>}
-      {web ? <Icon source={N.external} size={13} color={t.textSecondary} /> : <Label color={t.textTertiary} size={12}>{GROUP_COPY.noRemote}</Label>}
+      {web ? <Icon source={N.external} size={13} color={t.textSecondary} /> : !r.git?.remote_url && <Label color={t.textTertiary} size={12}>{GROUP_COPY.noRemote}</Label>}
     </>,
   })
 }

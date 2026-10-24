@@ -66,6 +66,9 @@ export function remoteSlug(url: string | null | undefined): string | null {
   return /[:/]([^/:]+\/[^/]+?)(?:\.git)?\/?$/.exec(url)?.[1] ?? null
 }
 
+/** Whether `gh` can open a pull request for this remote: the daemon skips anything not on github.com (`has_github_remote`). */
+export const isGithubRemote = (url: string | null | undefined): boolean => !!url && url.includes('github.com')
+
 /** The web page of a remote (`git@host:owner/name.git` → `https://host/owner/name`), or null for anything else. */
 export function remoteWebUrl(url: string | null | undefined): string | null {
   if (!url) return null

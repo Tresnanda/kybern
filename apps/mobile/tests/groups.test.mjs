@@ -119,4 +119,7 @@ test("create plan skips unchanged repositories and ones without a remote", () =>
     new Set(["api", "web", "ops"]),
   );
   assert.deepEqual(plan, { create: ["api"], unchanged: ["infra"], noRemote: ["web"] });
+  // The daemon skips a remote off github.com, so the plan names it instead of promising a pull request.
+  const gitlab = prPlan([{ repo: "web", name: "web", included: true, remote_url: "git@gitlab.com:a/web.git" }], new Set(["web"]));
+  assert.deepEqual(gitlab, { create: [], unchanged: [], noRemote: ["web"] });
 });
