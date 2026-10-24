@@ -4,6 +4,10 @@ A fresh Expo client for the Kybern daemon, with an Ink palette, platform-aware n
 light/dark appearance, SF Symbols, responsive text, touch feedback, and motion that
 respects Reduce Motion. The computer runs the agents; the phone controls their work.
 
+UI is built from the design system in `src/ui/`; read
+[docs/design-system.md](docs/design-system.md) before adding or changing a screen.
+In development, `exp://<host>:<port>/--/dev-kit` opens a gallery of every primitive.
+
 ## Run
 
 Requires Node, pnpm 11.25.0, and Xcode for iOS or Android Studio for Android.

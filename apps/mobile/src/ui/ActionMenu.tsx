@@ -374,11 +374,14 @@ export function MenuButton({
   children,
   style,
   disabled,
+  radius: triggerRadius = radius.sm,
 }: {
   items: readonly MenuItem[];
   title?: string;
   /** Accessible name of the trigger ("Note options"). */
   label: string;
+  /** Corner radius of a custom trigger's highlight (0 for a full-width row). */
+  radius?: number;
   icon?: IconName;
   children?: ReactNode;
   style?: StyleProp<ViewStyle>;
@@ -395,7 +398,7 @@ export function MenuButton({
         title,
         origin: { x, y, width, height },
         sourceIcon: children ? null : icon,
-        originRadius: children ? radius.sm : undefined,
+        originRadius: children ? triggerRadius : undefined,
       });
     });
   };
@@ -408,7 +411,7 @@ export function MenuButton({
         style={[style, { opacity: hidden && menu.element ? 0 : 1 }]}
       >
         {children ? (
-          <Tap label={label} hint="Opens a menu" onPress={open} disabled={disabled} feedback="highlight" style={{ borderRadius: radius.sm }}>
+          <Tap label={label} hint="Opens a menu" onPress={open} disabled={disabled} feedback="highlight" style={{ borderRadius: triggerRadius }}>
             {children}
           </Tap>
         ) : (

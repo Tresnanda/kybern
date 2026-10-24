@@ -512,7 +512,7 @@ export function ListRow(props: ListRowProps) {
   let row: ReactNode;
   if (valueMenu) {
     row = (
-      <MenuButton items={valueMenu} title={title} label={a11y} disabled={disabled} style={{ backgroundColor: background }}>
+      <MenuButton items={valueMenu} title={title} label={a11y} disabled={disabled} radius={0} style={{ backgroundColor: background }}>
         {body}
       </MenuButton>
     );
