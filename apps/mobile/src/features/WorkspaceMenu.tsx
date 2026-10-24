@@ -184,10 +184,13 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
       ? [
           git.pull_request
             ? {
-                title: `Open pull request #${git.pull_request.number}`,
+                title: `Pull request #${git.pull_request.number}`,
                 subtitle: git.pull_request.title,
-                icon: "arrow.up.right",
-                onPress: () => void Linking.openURL(git.pull_request!.url),
+                icon: "arrow.triangle.pull",
+                onPress: () =>
+                  thread?.project_id
+                    ? router.push({ pathname: "/pull", params: { projectId: thread.project_id, number: String(git.pull_request!.number) } })
+                    : void Linking.openURL(git.pull_request!.url),
               }
             : { title: "Create pull request…", icon: "arrow.triangle.pull", disabled: !remote, onPress: createPr },
         ]

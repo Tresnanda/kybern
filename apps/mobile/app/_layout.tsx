@@ -267,6 +267,10 @@ function Navigation() {
         />
         <Stack.Screen name="file" options={{ title: "File" }} />
         <Stack.Screen name="workspace" options={{ title: "Workspace" }} />
+        <Stack.Screen name="pulls" options={{ title: "Pull requests", headerLargeTitleEnabled: true }} />
+        <Stack.Screen name="pull" options={{ title: "" }} />
+        <Stack.Screen name="pull-review" options={{ title: "Review", ...sheet }} />
+        <Stack.Screen name="pull-send" options={{ title: "Send to agent", ...sheet }} />
         <Stack.Screen
           name="integrations"
           options={{ title: "Connectors and plugins" }}
