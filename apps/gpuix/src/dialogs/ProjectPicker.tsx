@@ -11,8 +11,11 @@ import { errorText } from '../nav/actions.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
+import { GROUP_COPY } from '../../../../packages/kybern-client/src/groups.ts'
+import { showDialog } from './store.ts'
 
-export function ProjectPicker({ close }: { close: () => void }) {
+/** `group`: "Choose the group folder" for a group project (L3 sheet 1): the chosen folder opens the group sheet instead of being added. */
+export function ProjectPicker({ close, group = false }: { close: () => void; group?: boolean }) {
   const t = useTheme()
   const [client] = useState(() => getClient()!)
   const [path, setPath] = useState('')
@@ -29,6 +32,7 @@ export function ProjectPicker({ close }: { close: () => void }) {
   }
   useEffect(() => { void browse(); return () => { sequence.current++ } }, [client])
   const add = async () => {
+    if (group) return showDialog({ kind: 'group', path: path.trim() })
     setBusy(true); setError('')
     try {
       // Into the active space; a folder that is a project elsewhere stays there, with a toast that offers to move it.
@@ -37,7 +41,7 @@ export function ProjectPicker({ close }: { close: () => void }) {
       close()
     } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
   }
-  return <Dialog onClose={close} width={512} testId="project-picker"><DialogHeader title="Add project" description={`Choose a folder on ${activeEnvironment().name}.`} onClose={close} />
+  return <Dialog onClose={close} width={512} testId="project-picker"><DialogHeader title={group ? GROUP_COPY.chooseGroupFolder : 'Add project'} description={group ? GROUP_COPY.addMenuGroupDetail : `Choose a folder on ${activeEnvironment().name}.`} onClose={close} />
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingLeft:16, paddingRight:16, paddingTop:0, paddingBottom:12 }}>
       <Label color={t.text} size={14}>Folder path</Label>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><TextField testId="project-picker-path" autoFocus size="lg" label="Project folder path" value={path} onChange={setPath} onSubmit={() => void browse(path)} width="100%" /><Button size="lg" variant="secondary" testId="project-picker-open" disabled={busy || !path} onClick={() => void browse(path)}>Open folder</Button></div>
@@ -49,7 +53,7 @@ export function ProjectPicker({ close }: { close: () => void }) {
         {listing?.has_more && <div key="more" style={{ padding: 12 }}><Label color={t.textSecondary} size={12}>Showing the first 1,000 folders. Enter a path to open another folder.</Label></div>}
       </virtual-list></div>
       {error && <Label color={t.red} size={12}>{error}</Label>}
-      <div style={{ display: 'flex', justifyContent: 'flex-end',paddingTop:12 }}><Button size="lg" variant="primary" testId="project-picker-add" disabled={busy || !path.trim()} onClick={() => void add()}>Add this folder</Button></div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end',paddingTop:12 }}><Button size="lg" variant="primary" testId="project-picker-add" disabled={busy || !path.trim()} onClick={() => void add()}>{group ? 'Choose this folder' : 'Add this folder'}</Button></div>
     </div>
   </Dialog>
 }

@@ -14,7 +14,8 @@ import { beginThreadDrag, trackThreadDrag, consumeThreadDrag, finishSplitDrag } 
 import { showDialog } from '../dialogs/store.ts'
 import { addGroup, addRepository } from '../groups/add.ts'
 import { useGroupsSupported } from '../groups/store.ts'
-import { GROUP_COPY } from '../../../../packages/kybern-client/src/groups.ts'
+import { GROUP_COPY, groupRowLabel, isGroupProject } from '../../../../packages/kybern-client/src/groups.ts'
+import { RepoBadge } from '../groups/RepoBadge.tsx'
 // Thread panel rows (`views/Sidebar.tsx`, `views/subagents/SubagentSidebarRow.tsx`,
 // `lib/kit/sidebarRowStyles.ts`). Rows are 28px with an 8px radius, 14px text,
 // `--sidebar-accent` on hover and `--sidebar-accent-active` when selected.
@@ -362,6 +363,7 @@ export const ProjectHeader = memo(function ProjectHeader({
   const g = useGlass()
   const renaming = useRenamingProject(project.id)
   useSidebarRowLease(renaming)
+  const group = isGroupProject(project)
   const [name, setName] = useState(project.name)
   // Esc (and Enter) end the edit before the blur they cause: only the first one counts.
   const finished = useRef(false)
@@ -393,6 +395,7 @@ export const ProjectHeader = memo(function ProjectHeader({
       <div {...bind} style={{ position: 'relative' }}>
         <div
           testId={`project-${project.id}`}
+          aria-label={group ? groupRowLabel(project.name, project.members?.length ?? 0) : project.name}
           ref={headerRef}
           onMouseDown={(e) => { if (!renaming) beginProjectDrag(project.id, e, renderer, (headerRef.current && renderer?.getElementBounds?.(headerRef.current.id)) || null) }}
           onMouseMove={trackProjectDrag}
@@ -421,7 +424,7 @@ export const ProjectHeader = memo(function ProjectHeader({
             {/* The folder fades back in as the disclosure control leaves. */}
             {!hover && (
               <FadeBack play={wasHovered}>
-                <Icon source={open ? N.folderOpen : N.folder} size={16} color={resting(t)} />
+                <Icon source={group ? N.folders : open ? N.folderOpen : N.folder} size={16} color={resting(t)} />
               </FadeBack>
             )}
           </div>
@@ -443,6 +446,7 @@ export const ProjectHeader = memo(function ProjectHeader({
                 {project.name}
               </Label>
             )}
+            {group && !renaming && <RepoBadge project={project} emphasized={active || hover} />}
             {hasDraft && !renaming && <DraftMarker />}
             {/* Room for the always-visible New thread button. */}
             <PadTween width={PROJECT_PAD} cancelGap={8} />
@@ -475,6 +479,7 @@ export const ProjectHeader = memo(function ProjectHeader({
           <MenuItem id="new" icon={N.newThread} label="New thread" onSelect={() => newThread(project.id)} />
           <MenuItem id="resume" icon={N.clock} label="Resume session" onSelect={() => setNav({ sessions: { projectId: project.id } })} />
           <MenuItem id="rename" testId="project-menu-rename" icon={N.pencil} label={PROJECT_RENAME_COPY.menu} onSelect={() => startProjectRename(project.id)} />
+          {group && <MenuItem id="repositories" testId="project-menu-repositories" icon={N.folders} label={GROUP_COPY.repositoriesMenuItem} onSelect={() => showDialog({ kind: 'repositories', projectId: project.id })} />}
           {(canMoveUp || canMoveDown) && (
             <>
               <MenuSeparator />
