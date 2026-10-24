@@ -518,7 +518,8 @@ function SendFailed({ threadId, id, error, parts }: { threadId: ThreadId; id: st
       {/* The reason wraps instead of truncating: its last clause is usually what to do next. */}
       <div testId="send-failed" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, paddingTop: 30, maxWidth: '80%' }}>
         <Label color={t.v('--destructive')} size={META.size} lineHeight={META.lineHeight} style={{ textAlign: 'right' }}>
-          {`Not sent. ${error ?? 'The daemon did not answer.'}`}
+          {/* Daemon errors may start lowercase ("thread is no longer idle"); the reason reads as its own sentence. */}
+          {`Not sent. ${error ? error.charAt(0).toUpperCase() + error.slice(1) : 'The daemon did not answer.'}`}
         </Label>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Button size="sm" testId="send-retry" onClick={() => retryPending(threadId, id)}>Retry</Button>
