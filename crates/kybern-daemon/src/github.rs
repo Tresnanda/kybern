@@ -62,6 +62,7 @@ pub async fn status(cwd: &Path) -> Result<GitStatus> {
             upstream: None,
             remote_url: None,
             pull_request: None,
+            repos: Vec::new(),
         });
     }
     let repo = Repo::new(cwd);
@@ -91,7 +92,7 @@ pub async fn status(cwd: &Path) -> Result<GitStatus> {
         }
         _ => None,
     };
-    Ok(GitStatus { is_git: true, branch, dirty_files, ahead, behind, upstream, remote_url, pull_request })
+    Ok(GitStatus { is_git: true, branch, dirty_files, ahead, behind, upstream, remote_url, pull_request, repos: Vec::new() })
 }
 
 pub(crate) fn parse_pr(v: &Value) -> Option<PullRequest> {

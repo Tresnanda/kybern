@@ -1850,6 +1850,10 @@ fn row_to_project(r: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
         space_id: r.get::<_, Option<String>>(10)?.map(parse_uuid).transpose()?,
         created_at: parse_time(r.get::<_, String>(5)?)?,
         updated_at: parse_time(r.get::<_, String>(6)?)?,
+        kind: Default::default(),
+        members: Vec::new(),
+        worktree_copy: Vec::new(),
+        instructions_offer_dismissed: false,
     })
 }
 
@@ -1882,6 +1886,7 @@ fn row_to_thread(r: &rusqlite::Row<'_>) -> rusqlite::Result<Thread> {
         coordinator_project_id: r.get::<_, Option<String>>(18)?.map(parse_uuid).transpose()?,
         subagent: r.get::<_, Option<String>>(19)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
         delegation: r.get::<_, Option<String>>(20)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
+        members: Vec::new(),
     })
 }
 
@@ -1894,6 +1899,8 @@ fn row_to_checkpoint(r: &rusqlite::Row<'_>) -> rusqlite::Result<Checkpoint> {
         created_at: parse_time(r.get::<_, String>(4)?)?,
         provider_turn_id: r.get(5)?,
         provider_turn_end: r.get(6)?,
+        repos: Vec::new(),
+        incomplete: false,
     })
 }
 
@@ -2225,6 +2232,10 @@ mod tests {
             space_id: None,
             created_at: now,
             updated_at: now,
+            kind: Default::default(),
+            members: Vec::new(),
+            worktree_copy: Vec::new(),
+            instructions_offer_dismissed: false,
         };
         store.project_insert(&project).unwrap();
         let thread = Thread {
@@ -2247,6 +2258,7 @@ mod tests {
             coordinator_project_id: None,
             subagent: None,
             delegation: None,
+            members: Vec::new(),
         };
         store.thread_upsert(&thread).unwrap();
         (store, thread)
@@ -2284,6 +2296,10 @@ mod tests {
             space_id: None,
             created_at: now,
             updated_at: now,
+            kind: Default::default(),
+            members: Vec::new(),
+            worktree_copy: Vec::new(),
+            instructions_offer_dismissed: false,
         };
         store.project_insert(&project).unwrap();
         let thread = Thread {
@@ -2306,6 +2322,7 @@ mod tests {
             coordinator_project_id: None,
             subagent: None,
             delegation: None,
+            members: Vec::new(),
         };
         let history = vec![ThreadEvent {
             seq: 999,
@@ -2357,6 +2374,10 @@ mod tests {
             space_id: None,
             created_at: now,
             updated_at: now,
+            kind: Default::default(),
+            members: Vec::new(),
+            worktree_copy: Vec::new(),
+            instructions_offer_dismissed: false,
         };
         store.project_insert(&project).unwrap();
         let mut edited = store.project_get(project.id).unwrap().unwrap();
@@ -2394,6 +2415,10 @@ mod tests {
             space_id: None,
             created_at: now,
             updated_at: now,
+            kind: Default::default(),
+            members: Vec::new(),
+            worktree_copy: Vec::new(),
+            instructions_offer_dismissed: false,
         };
         s.project_insert(&p).unwrap();
         let t = Thread {
@@ -2416,6 +2441,7 @@ mod tests {
             coordinator_project_id: None,
             subagent: None,
             delegation: None,
+            members: Vec::new(),
         };
         s.thread_upsert(&t).unwrap();
         let e = s.event_append(t.id, None, EventPayload::ThreadCreated { thread: t.clone() }).unwrap();
@@ -2490,6 +2516,10 @@ mod tests {
             space_id: None,
             created_at: now,
             updated_at: now,
+            kind: Default::default(),
+            members: Vec::new(),
+            worktree_copy: Vec::new(),
+            instructions_offer_dismissed: false,
         };
         store.project_insert(&project).unwrap();
         let thread = Thread {
@@ -2512,6 +2542,7 @@ mod tests {
             coordinator_project_id: None,
             subagent: None,
             delegation: None,
+            members: Vec::new(),
         };
         store.thread_upsert(&thread).unwrap();
         let turn = Uuid::now_v7();
@@ -3225,6 +3256,10 @@ mod orchestration_tests {
             space_id: None,
             created_at: now,
             updated_at: now,
+            kind: Default::default(),
+            members: Vec::new(),
+            worktree_copy: Vec::new(),
+            instructions_offer_dismissed: false,
         };
         store.project_insert(&project).unwrap();
         project
@@ -3252,6 +3287,7 @@ mod orchestration_tests {
             coordinator_project_id: None,
             subagent: None,
             delegation,
+            members: Vec::new(),
         }
     }
 
@@ -3702,6 +3738,10 @@ mod coordinator_upgrade_tests {
             space_id: None,
             created_at: now,
             updated_at: now,
+            kind: Default::default(),
+            members: Vec::new(),
+            worktree_copy: Vec::new(),
+            instructions_offer_dismissed: false,
         };
         store.project_insert(&project).unwrap();
         let thread = Thread {
@@ -3724,6 +3764,7 @@ mod coordinator_upgrade_tests {
             coordinator_project_id: Some(project.id),
             subagent: None,
             delegation: None,
+            members: Vec::new(),
         };
         store.thread_upsert(&thread).unwrap();
         (store, thread)

@@ -72,6 +72,12 @@ expression: scopes
   - "orchestration:operate"
 - - projects.remove
   - "orchestration:operate"
+- - projects.scan_repos
+  - "orchestration:read"
+- - projects.members.status
+  - "orchestration:read"
+- - projects.instructions.create
+  - "orchestration:operate"
 - - spaces.list
   - "orchestration:read"
 - - spaces.create
@@ -255,6 +261,8 @@ expression: scopes
 - - git.commit
   - "orchestration:operate"
 - - github.pr.create
+  - "orchestration:operate"
+- - github.pr.create_group
   - "orchestration:operate"
 - - github.pr.list
   - "orchestration:read"

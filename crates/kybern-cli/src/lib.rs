@@ -1412,7 +1412,13 @@ pub async fn run() -> Result<()> {
                     None => None,
                 };
                 let p = client
-                    .call::<ProjectsAdd>(ProjectsAddParams { path: host_path(&client, &path.to_string_lossy()).await?, name, space_id })
+                    .call::<ProjectsAdd>(ProjectsAddParams {
+                        path: host_path(&client, &path.to_string_lossy()).await?,
+                        name,
+                        space_id,
+                        kind: None,
+                        members: None,
+                    })
                     .await?;
                 if json { println!("{}", serde_json::to_string_pretty(&p)?) } else { println!("{}  {}  {}", p.id, p.name, p.path) }
             }
@@ -1430,6 +1436,9 @@ pub async fn run() -> Result<()> {
                         brief_in_all_threads: None,
                         coordinator: None,
                         space_id: Some(space_id),
+                        members: None,
+                        worktree_copy: None,
+                        instructions_offer_dismissed: None,
                     })
                     .await?;
                 if json { println!("{}", serde_json::to_string_pretty(&p)?) } else { println!("{}  moved to {space_name}", p.name) }
@@ -1474,6 +1483,8 @@ pub async fn run() -> Result<()> {
                     message: Some(UserMessage::text(prompt)),
                     thread_id: None,
                     message_id: None,
+                    members: None,
+                    base_branches: None,
                 })
                 .await?;
             eprintln!("thread {}", thread.id);
@@ -2149,7 +2160,7 @@ pub async fn run() -> Result<()> {
         }
         Cmd::Branches { project } => {
             let project_id = resolve_project(&client, &project, false).await?;
-            let r = client.call::<GitBranches>(GitBranchesParams { project_id }).await?;
+            let r = client.call::<GitBranches>(GitBranchesParams { project_id, repo: None }).await?;
             for b in r.branches {
                 let upstream = b.upstream.map(|u| format!("  -> {u}")).unwrap_or_default();
                 println!("{} {}{upstream}", if b.is_current { "*" } else { " " }, b.name);
@@ -2610,7 +2621,7 @@ async fn resolve_project(client: &Client, key: &str, add_if_missing: bool) -> Re
         return Ok(project.id);
     }
     if add_if_missing {
-        let p = client.call::<ProjectsAdd>(ProjectsAddParams { path, name: None, space_id: None }).await?;
+        let p = client.call::<ProjectsAdd>(ProjectsAddParams { path, name: None, space_id: None, kind: None, members: None }).await?;
         eprintln!("added project {} ({})", p.name, p.id);
         return Ok(p.id);
     }

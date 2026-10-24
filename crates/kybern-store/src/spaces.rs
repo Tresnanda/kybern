@@ -188,6 +188,10 @@ mod tests {
             space_id,
             created_at: now,
             updated_at: now,
+            kind: Default::default(),
+            members: Vec::new(),
+            worktree_copy: Vec::new(),
+            instructions_offer_dismissed: false,
         }
     }
 

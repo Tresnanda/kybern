@@ -53,6 +53,7 @@ impl Host {
             coordinator_project_id: None,
             subagent: None,
             delegation: None,
+            members: Vec::new(),
         };
         self.state.store.thread_upsert(&thread).unwrap();
         thread
@@ -156,6 +157,8 @@ async fn ordinary_worktree_cleanup_rpc_retains_thread_and_source_association() {
             message: None,
             thread_id: None,
             message_id: None,
+            members: None,
+            base_branches: None,
         })
         .await
         .unwrap();
@@ -772,14 +775,26 @@ async fn project_changes_reach_every_client() {
     std::fs::create_dir_all(&folder).unwrap();
 
     let added = desktop
-        .call::<ProjectsAdd>(ProjectsAddParams { path: folder.to_string_lossy().into_owned(), name: Some("Shop".into()), space_id: None })
+        .call::<ProjectsAdd>(ProjectsAddParams {
+            path: folder.to_string_lossy().into_owned(),
+            name: Some("Shop".into()),
+            space_id: None,
+            kind: None,
+            members: None,
+        })
         .await
         .unwrap();
     let announced = next_projects_changed(&phone).await;
     assert!(announced.projects.iter().any(|project| project.id == added.id && project.name == "Shop"), "the new project is announced");
     // Adding the same folder again changes nothing, so nothing is announced for it.
     desktop
-        .call::<ProjectsAdd>(ProjectsAddParams { path: folder.to_string_lossy().into_owned(), name: None, space_id: None })
+        .call::<ProjectsAdd>(ProjectsAddParams {
+            path: folder.to_string_lossy().into_owned(),
+            name: None,
+            space_id: None,
+            kind: None,
+            members: None,
+        })
         .await
         .unwrap();
 
@@ -792,6 +807,9 @@ async fn project_changes_reach_every_client() {
             brief_in_all_threads: None,
             coordinator: None,
             space_id: None,
+            members: None,
+            worktree_copy: None,
+            instructions_offer_dismissed: None,
         })
         .await
         .unwrap();
@@ -987,6 +1005,8 @@ async fn project_task_prefixes_are_assigned_edited_and_validated_over_rpc() {
             path: one.to_string_lossy().into_owned(),
             name: Some("kybern-mobile".into()),
             space_id: None,
+            kind: None,
+            members: None,
         })
         .await
         .unwrap();
@@ -995,6 +1015,8 @@ async fn project_task_prefixes_are_assigned_edited_and_validated_over_rpc() {
             path: two.to_string_lossy().into_owned(),
             name: Some("kybern-mobile".into()),
             space_id: None,
+            kind: None,
+            members: None,
         })
         .await
         .unwrap();
@@ -1008,6 +1030,9 @@ async fn project_task_prefixes_are_assigned_edited_and_validated_over_rpc() {
         brief_in_all_threads: None,
         coordinator: None,
         space_id: None,
+        members: None,
+        worktree_copy: None,
+        instructions_offer_dismissed: None,
     };
     let renamed = client.call::<ProjectsUpdate>(update(a.id, "mob")).await.unwrap();
     assert_eq!(renamed.task_prefix.as_deref(), Some("MOB"));
@@ -1028,6 +1053,9 @@ async fn project_task_prefixes_are_assigned_edited_and_validated_over_rpc() {
             brief_in_all_threads: None,
             coordinator: None,
             space_id: None,
+            members: None,
+            worktree_copy: None,
+            instructions_offer_dismissed: None,
         })
         .await
         .unwrap();
@@ -2178,6 +2206,9 @@ async fn the_coordinator_and_project_brief_work_over_rpc() {
         brief_in_all_threads: on,
         coordinator: None,
         space_id: None,
+        members: None,
+        worktree_copy: None,
+        instructions_offer_dismissed: None,
     };
     assert!(!client.call::<ProjectsUpdate>(update(None)).await.unwrap().brief_in_all_threads);
     assert!(client.call::<ProjectsUpdate>(update(Some(true))).await.unwrap().brief_in_all_threads);
@@ -2326,7 +2357,7 @@ async fn next_spaces_changed(client: &Client) -> SpacesChangedNotification {
 }
 
 fn add_params(path: &std::path::Path, space_id: Option<SpaceId>) -> ProjectsAddParams {
-    ProjectsAddParams { path: path.to_string_lossy().into_owned(), name: None, space_id }
+    ProjectsAddParams { path: path.to_string_lossy().into_owned(), name: None, space_id, kind: None, members: None }
 }
 
 fn space_create(name: &str) -> SpacesCreateParams {
@@ -2447,6 +2478,9 @@ async fn projects_are_added_to_and_moved_between_spaces() {
             brief_in_all_threads: None,
             coordinator: None,
             space_id: Some(work.id),
+            members: None,
+            worktree_copy: None,
+            instructions_offer_dismissed: None,
         })
         .await
         .unwrap();
@@ -2466,6 +2500,9 @@ async fn projects_are_added_to_and_moved_between_spaces() {
             brief_in_all_threads: None,
             coordinator: None,
             space_id: Some(work.id),
+            members: None,
+            worktree_copy: None,
+            instructions_offer_dismissed: None,
         },
     )
     .await;

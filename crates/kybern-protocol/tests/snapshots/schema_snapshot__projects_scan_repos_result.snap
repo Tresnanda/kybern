@@ -1,0 +1,119 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(ProjectsScanReposResult)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProjectsScanReposResult",
+  "type": "object",
+  "properties": {
+    "path": {
+      "description": "Canonical folder.",
+      "type": "string"
+    },
+    "name": {
+      "description": "Folder name, the default project name.",
+      "type": "string"
+    },
+    "is_git": {
+      "description": "The folder itself is a repository (listed as \".\" in `candidates`).",
+      "type": "boolean"
+    },
+    "candidates": {
+      "description": "Primary first (\".\" when present), then by path.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RepoCandidate"
+      }
+    },
+    "rejected": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RejectedFolder"
+      }
+    },
+    "existing_project_id": {
+      "description": "Set when the folder is already a project.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "truncated": {
+      "description": "The scan stopped at 200 candidates or 20,000 folders.",
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "required": [
+    "path",
+    "name",
+    "is_git",
+    "candidates"
+  ],
+  "$defs": {
+    "RepoCandidate": {
+      "description": "A git repository found inside a folder, offered as a group member.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Relative to the scanned folder, '/'-separated; \".\" for the folder itself.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "branch": {
+          "description": "Current branch, or the short SHA when detached.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detached": {
+          "type": "boolean"
+        },
+        "submodule_of": {
+          "description": "Set when this is a submodule of another candidate (that member's path).\nListed, not selectable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "project_id": {
+          "description": "Already a single project. Informational: both may exist.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "added": {
+          "description": "Came from `include` (\"Add folder…\") rather than the scan.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "name"
+      ]
+    },
+    "RejectedFolder": {
+      "description": "A folder that can't be a member, or a repository skipped by an operation,\nwith a user-facing sentence.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "reason"
+      ]
+    }
+  }
+}

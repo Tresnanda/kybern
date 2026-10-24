@@ -37,6 +37,9 @@ expression: names
 - projects.add
 - projects.update
 - projects.remove
+- projects.scan_repos
+- projects.members.status
+- projects.instructions.create
 - spaces.list
 - spaces.create
 - spaces.update
@@ -129,6 +132,7 @@ expression: names
 - git.branches
 - git.commit
 - github.pr.create
+- github.pr.create_group
 - github.pr.list
 - github.pr.detail
 - github.pr.page

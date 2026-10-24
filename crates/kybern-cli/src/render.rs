@@ -238,6 +238,11 @@ pub fn transcript(r: &ThreadsGetResult) {
             TranscriptEntry::RuntimeTask { task, .. } => println!("  ↳ {}  ({:?})", task.title, task.status),
             TranscriptEntry::Notice { text, .. } => println!("  ! {text}"),
             TranscriptEntry::Reverted { commit, .. } => println!("  ↶ reverted to {commit}"),
+            TranscriptEntry::OutsideRepoChanged { repos, .. } => {
+                for repo in repos {
+                    println!("  ! {} changed outside this chat's worktree", repo.name);
+                }
+            }
             TranscriptEntry::TurnSummary { usage, cost_usd, duration_ms, error, stop_reason, .. } => {
                 let cost = cost_usd.map(|c| format!("  ${c:.4}")).unwrap_or_default();
                 match error {

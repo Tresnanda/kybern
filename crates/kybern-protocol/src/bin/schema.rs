@@ -65,6 +65,7 @@ fn main() {
     add::<ProjectsChangedNotification>(&mut types, "ProjectsChangedNotification");
     add::<Space>(&mut types, "Space");
     add::<SpacesChangedNotification>(&mut types, "SpacesChangedNotification");
+    add::<ThreadsWorkspaceProgress>(&mut types, "ThreadsWorkspaceProgress");
 
     let mut methods = Vec::new();
     method::<DaemonInfoMethod>(&mut methods);
@@ -103,6 +104,9 @@ fn main() {
     method::<ProjectsAdd>(&mut methods);
     method::<ProjectsUpdate>(&mut methods);
     method::<ProjectsRemove>(&mut methods);
+    method::<ProjectsScanRepos>(&mut methods);
+    method::<ProjectsMembersStatus>(&mut methods);
+    method::<ProjectsInstructionsCreate>(&mut methods);
     method::<SpacesList>(&mut methods);
     method::<SpacesCreate>(&mut methods);
     method::<SpacesUpdate>(&mut methods);
@@ -195,6 +199,7 @@ fn main() {
     method::<GitBranches>(&mut methods);
     method::<GitCommit>(&mut methods);
     method::<PrCreate>(&mut methods);
+    method::<PrCreateGroup>(&mut methods);
     method::<PrList>(&mut methods);
     method::<PrDetail>(&mut methods);
     method::<PrPage>(&mut methods);

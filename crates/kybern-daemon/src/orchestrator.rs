@@ -1293,6 +1293,10 @@ impl Orchestrator {
             space_id,
             created_at: now,
             updated_at: now,
+            kind: Default::default(),
+            members: Vec::new(),
+            worktree_copy: Vec::new(),
+            instructions_offer_dismissed: false,
         };
         if let Err(error) = self.inner.store.project_insert(&project) {
             // Concurrent imports may discover the same folder before either
@@ -1393,6 +1397,7 @@ impl Orchestrator {
             coordinator_project_id: None,
             subagent: None,
             delegation: None,
+            members: Vec::new(),
         };
         let store = self.inner.store.clone();
         let (mut thread, events) = tokio::task::spawn_blocking(move || store.thread_import(thread, history.events)).await??;
@@ -1551,6 +1556,7 @@ impl Orchestrator {
             coordinator_project_id: None,
             subagent: None,
             delegation: None,
+            members: Vec::new(),
         };
         self.inner.store.thread_upsert(&thread)?;
         if params.pin_account || thread.provider.instance != "default" {
@@ -1587,6 +1593,10 @@ impl Orchestrator {
             space_id: None,
             created_at: now,
             updated_at: now,
+            kind: Default::default(),
+            members: Vec::new(),
+            worktree_copy: Vec::new(),
+            instructions_offer_dismissed: false,
         };
         match self.inner.store.project_insert(&project) {
             Ok(()) => {
@@ -2821,6 +2831,8 @@ impl Orchestrator {
                 provider_turn_id: None,
                 provider_turn_end: None,
                 created_at: Utc::now(),
+                repos: Vec::new(),
+                incomplete: false,
             },
             _ => match self.inner.store.checkpoint_get(turn_id) {
                 Ok(Some(mut c)) => {
@@ -4770,6 +4782,8 @@ mod tests {
                 message: None,
                 thread_id: None,
                 message_id: None,
+                members: None,
+                base_branches: None,
             })
             .await
             .unwrap();
@@ -4795,6 +4809,8 @@ mod tests {
                 message: None,
                 thread_id: None,
                 message_id: None,
+                members: None,
+                base_branches: None,
             })
             .await;
         assert!(rejected.is_err());
@@ -4820,6 +4836,8 @@ mod tests {
             message: Some(UserMessage::text(text)),
             thread_id: Some(thread_id),
             message_id,
+            members: None,
+            base_branches: None,
         }
     }
 
@@ -4929,6 +4947,10 @@ mod tests {
             space_id: None,
             created_at: now,
             updated_at: now,
+            kind: Default::default(),
+            members: Vec::new(),
+            worktree_copy: Vec::new(),
+            instructions_offer_dismissed: false,
         };
         store.project_insert(&project).unwrap();
         let thread = Thread {
@@ -4951,6 +4973,7 @@ mod tests {
             coordinator_project_id: None,
             subagent: None,
             delegation: None,
+            members: Vec::new(),
         };
         store.thread_upsert(&thread).unwrap();
         let (events_tx, _) = crate::bounded_broadcast::channel(32, 8 * 1024 * 1024);
@@ -5305,6 +5328,10 @@ mod tests {
                 space_id: None,
                 created_at: now,
                 updated_at: now,
+                kind: Default::default(),
+                members: Vec::new(),
+                worktree_copy: Vec::new(),
+                instructions_offer_dismissed: false,
             };
             store.project_insert(&project).unwrap();
             let (events_tx, _) = crate::bounded_broadcast::channel(64, 8 * 1024 * 1024);
@@ -5341,6 +5368,7 @@ mod tests {
                 coordinator_project_id: None,
                 subagent: None,
                 delegation: None,
+                members: Vec::new(),
             };
             self.store.thread_upsert(&thread).unwrap();
             thread

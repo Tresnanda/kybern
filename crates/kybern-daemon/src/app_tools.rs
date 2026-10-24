@@ -667,6 +667,10 @@ mod tests {
                 space_id: None,
                 created_at: now,
                 updated_at: now,
+                kind: Default::default(),
+                members: Vec::new(),
+                worktree_copy: Vec::new(),
+                instructions_offer_dismissed: false,
             };
             store.project_insert(&project).unwrap();
             let make_thread = |id| Thread {
@@ -689,6 +693,7 @@ mod tests {
                 coordinator_project_id: None,
                 subagent: None,
                 delegation: None,
+                members: Vec::new(),
             };
             let thread = make_thread(Uuid::now_v7());
             let other_thread = make_thread(Uuid::now_v7());
@@ -765,6 +770,8 @@ mod tests {
                 provider_turn_id: None,
                 provider_turn_end: None,
                 created_at: Utc::now(),
+                repos: Vec::new(),
+                incomplete: false,
             })
             .unwrap();
         let error = fixture.tools.execute(fixture.thread.id, "kybern_workspace_diff", json!({ "turn_id": turn_id })).await.unwrap_err();

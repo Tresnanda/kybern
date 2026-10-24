@@ -1036,6 +1036,26 @@ expression: schema_for!(ThreadEvent)
         "to_turn_id",
         "commit"
       ]
+    },
+    {
+      "description": "After a turn of a group worktree thread: these deselected members' original\ncheckouts changed (uncommitted files or HEAD) while the turn ran. Never reverted.",
+      "type": "object",
+      "properties": {
+        "repos": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OutsideRepoChange"
+          }
+        },
+        "kind": {
+          "type": "string",
+          "const": "outside_repo_changed"
+        }
+      },
+      "required": [
+        "kind",
+        "repos"
+      ]
     }
   ],
   "$defs": {
@@ -1148,6 +1168,13 @@ expression: schema_for!(ThreadEvent)
               "type": "null"
             }
           ]
+        },
+        "members": {
+          "description": "Group threads: the members this thread started with, in project order. Never\nchanges when the project's members change. Empty for single-repo threads.\nFor a group worktree thread `worktree.path` and `cwd` are the container\nthat holds one worktree per included member.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ThreadMember"
+          }
         }
       },
       "required": [
@@ -1746,6 +1773,73 @@ expression: schema_for!(ThreadEvent)
           "type": "string",
           "const": "kept"
         }
+      ]
+    },
+    "ThreadMember": {
+      "description": "A group thread's record of one member, fixed when the thread starts.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Member path, relative to the project folder and to the thread cwd.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "included": {
+          "description": "False when the user left this member out of a worktree chat: it has no\nworktree and the agent is told to treat `source_path` as read-only.",
+          "type": "boolean"
+        },
+        "source_path": {
+          "description": "Absolute path of the member's checkout when the thread started.",
+          "type": "string"
+        },
+        "worktree": {
+          "description": "Worktree mode: this member's worktree (path inside the container, branch `kybern/<thread-id>`).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorktreeInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "base_branch": {
+          "description": "Branch the worktree forked from (worktree) or the branch checked out at start (local).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "base_commit": {
+          "description": "Commit the worktree forked from.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "worktree_state": {
+          "description": "Set once cleanup has run for this member.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorktreeState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "missing": {
+          "description": "The member was missing or not a repository when the thread started, so\nit is not available to this thread.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "name",
+        "included",
+        "source_path"
       ]
     },
     "QueuedMessage": {
@@ -3175,6 +3269,17 @@ expression: schema_for!(ThreadEvent)
         "created_at": {
           "type": "string",
           "format": "date-time"
+        },
+        "repos": {
+          "description": "Group threads: one entry per included member, in project order. `before`\nand `after` above are the primary member's, so older clients keep working.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RepoCheckpoint"
+          }
+        },
+        "incomplete": {
+          "description": "A member could not be snapshotted; rewinding to this turn is refused.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -3182,6 +3287,62 @@ expression: schema_for!(ThreadEvent)
         "turn_id",
         "before",
         "created_at"
+      ]
+    },
+    "RepoCheckpoint": {
+      "description": "One member's snapshots for a group thread's turn.",
+      "type": "object",
+      "properties": {
+        "repo": {
+          "description": "Member path (\".\" for the group folder).",
+          "type": "string"
+        },
+        "before": {
+          "type": "string"
+        },
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo",
+        "before"
+      ]
+    },
+    "OutsideRepoChange": {
+      "description": "A deselected member whose original checkout changed during a turn of a\ngroup worktree thread (see `EventPayload::OutsideRepoChanged`).",
+      "type": "object",
+      "properties": {
+        "repo": {
+          "description": "Member path, relative to the project folder.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "source_path": {
+          "description": "Absolute path of the original checkout that changed.",
+          "type": "string"
+        },
+        "dirty_files": {
+          "description": "Files `git status --porcelain` reported changed at the end of the turn.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 0
+        },
+        "head_moved": {
+          "description": "HEAD moved during the turn (a commit, checkout or reset).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "repo",
+        "name",
+        "source_path"
       ]
     }
   }

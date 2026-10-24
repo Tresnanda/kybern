@@ -281,8 +281,95 @@ pub struct Project {
     /// The space this project belongs to. Absent only for free chat and on daemons without spaces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub space_id: Option<SpaceId>,
+    /// `group` for a parent folder of several git repositories. Absent means single.
+    #[serde(default, skip_serializing_if = "ProjectKind::is_single")]
+    pub kind: ProjectKind,
+    /// Group members in order; the first is the primary (the group folder itself
+    /// when it is a member, else the first member by path). Empty for single projects.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<ProjectMember>,
+    /// Top-level entries of the group folder (files or folders, never a member or
+    /// `.git`) the user chose to copy into each new worktree container, after
+    /// `AGENTS.md`, `CLAUDE.md` and `.claude/`. Entries missing at copy time are skipped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub worktree_copy: Vec<String>,
+    /// The user hid the "Add shared instructions" offer for this group.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub instructions_offer_dismissed: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectKind {
+    #[default]
+    Single,
+    /// A parent folder whose members are git repositories inside it.
+    Group,
+}
+
+impl ProjectKind {
+    pub fn is_single(&self) -> bool {
+        *self == ProjectKind::Single
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ProjectKind::Single => "single",
+            ProjectKind::Group => "group",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MemberStatus {
+    Ok,
+    /// The folder is gone (deleted or renamed).
+    Missing,
+    /// The folder exists but is no longer a git repository.
+    NotGit,
+}
+
+/// One git repository of a group project.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectMember {
+    /// '/'-separated, relative to `Project.path`; "." is the group folder itself.
+    pub path: String,
+    /// Display name: the last path component, or the group folder's name for ".".
+    /// Two members with the same last component get their parent segment too ("a/api").
+    pub name: String,
+    pub status: MemberStatus,
+}
+
+/// A group thread's record of one member, fixed when the thread starts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadMember {
+    /// Member path, relative to the project folder and to the thread cwd.
+    pub path: String,
+    pub name: String,
+    /// False when the user left this member out of a worktree chat: it has no
+    /// worktree and the agent is told to treat `source_path` as read-only.
+    pub included: bool,
+    /// Absolute path of the member's checkout when the thread started.
+    pub source_path: String,
+    /// Worktree mode: this member's worktree (path inside the container, branch `kybern/<thread-id>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<WorktreeInfo>,
+    /// Branch the worktree forked from (worktree) or the branch checked out at start (local).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
+    /// Commit the worktree forked from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_commit: Option<String>,
+    /// Set once cleanup has run for this member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_state: Option<WorktreeState>,
+    /// The member was missing or not a repository when the thread started, so
+    /// it is not available to this thread.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub missing: bool,
 }
 
 pub type SpaceId = Uuid;
@@ -372,7 +459,7 @@ pub enum ThreadStatus {
     Archived,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct WorktreeInfo {
     pub path: String,
     pub branch: String,
@@ -423,6 +510,12 @@ pub struct Thread {
     /// way they hide subagents.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegation: Option<DelegationInfo>,
+    /// Group threads: the members this thread started with, in project order. Never
+    /// changes when the project's members change. Empty for single-repo threads.
+    /// For a group worktree thread `worktree.path` and `cwd` are the container
+    /// that holds one worktree per included member.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<ThreadMember>,
 }
 
 /// What the delegating agent asked this child to be.
@@ -2177,6 +2270,15 @@ pub enum TranscriptEntry {
         commit: String,
         at: DateTime<Utc>,
     },
+    /// Deselected repositories of a group worktree thread changed outside its
+    /// worktree during this turn. Kybern never reverts them; clients show a quiet warning.
+    OutsideRepoChanged {
+        turn_id: TurnId,
+        #[serde(default)]
+        seq: EventSeq,
+        repos: Vec<OutsideRepoChange>,
+        at: DateTime<Utc>,
+    },
 }
 
 /// Per-provider configuration in settings.json.
@@ -2605,6 +2707,23 @@ pub struct Checkpoint {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_turn_end: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// Group threads: one entry per included member, in project order. `before`
+    /// and `after` above are the primary member's, so older clients keep working.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repos: Vec<RepoCheckpoint>,
+    /// A member could not be snapshotted; rewinding to this turn is refused.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub incomplete: bool,
+}
+
+/// One member's snapshots for a group thread's turn.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RepoCheckpoint {
+    /// Member path ("." for the group folder).
+    pub repo: String,
+    pub before: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -2628,6 +2747,10 @@ pub struct FileChange {
     pub additions: u32,
     pub deletions: u32,
     pub binary: bool,
+    /// Group threads: the member this file belongs to. `path` stays relative to the
+    /// thread cwd (`api/src/x.rs`), so links and `threads.files.read` work unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -2640,6 +2763,38 @@ pub struct Diff {
     /// True when an oversized patch was cut to the daemon's transport limit.
     #[serde(default)]
     pub patch_truncated: bool,
+    /// Group threads: per-member summary in project order, including included
+    /// members with no changes. `from`/`to` above are the primary member's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repos: Vec<RepoDiff>,
+}
+
+/// One member's totals in a group thread's diff.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RepoDiff {
+    pub repo: String,
+    pub from: String,
+    pub to: String,
+    pub files: u32,
+    pub additions: u32,
+    pub deletions: u32,
+}
+
+/// A deselected member whose original checkout changed during a turn of a
+/// group worktree thread (see `EventPayload::OutsideRepoChanged`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct OutsideRepoChange {
+    /// Member path, relative to the project folder.
+    pub repo: String,
+    pub name: String,
+    /// Absolute path of the original checkout that changed.
+    pub source_path: String,
+    /// Files `git status --porcelain` reported changed at the end of the turn.
+    #[serde(default)]
+    pub dirty_files: u32,
+    /// HEAD moved during the turn (a commit, checkout or reset).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub head_moved: bool,
 }
 
 /// Last daemon-owned harness update attempt. Persisted across client reconnects.

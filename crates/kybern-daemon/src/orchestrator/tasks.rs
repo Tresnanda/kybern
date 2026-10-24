@@ -283,6 +283,8 @@ impl Orchestrator {
                         message: None,
                         thread_id: None,
                         message_id: None,
+                        members: None,
+                        base_branches: None,
                     },
                     client_thread.unwrap_or_else(Uuid::now_v7),
                 )
@@ -544,6 +546,8 @@ impl Orchestrator {
                     message: None,
                     thread_id: None,
                     message_id: None,
+                    members: None,
+                    base_branches: None,
                 },
                 Uuid::now_v7(),
             )
@@ -1381,6 +1385,7 @@ mod tests {
                 coordinator_project_id: None,
                 subagent: None,
                 delegation: None,
+                members: Vec::new(),
             };
             self.store.thread_upsert(&thread).unwrap();
             self.store.task_run_start(task.id, thread.id, &thread.provider, thread.model.as_deref(), &[]).unwrap();
@@ -2582,6 +2587,8 @@ mod tests {
                 provider_turn_id: None,
                 provider_turn_end: None,
                 created_at: Utc::now(),
+                repos: Vec::new(),
+                incomplete: false,
             })
             .unwrap();
         std::fs::write(workspace.join("a.txt"), "one\nTWO\nthree\nfour\n").unwrap();

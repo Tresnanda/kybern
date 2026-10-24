@@ -194,6 +194,8 @@ impl Orchestrator {
                     message: None,
                     thread_id: None,
                     message_id: None,
+                    members: None,
+                    base_branches: None,
                 },
                 params.thread_id.unwrap_or_else(Uuid::now_v7),
             )

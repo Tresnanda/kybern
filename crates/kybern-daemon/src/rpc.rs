@@ -958,7 +958,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 None => state.orchestrator.generate_commit_message(&t).await.map_err(provider_err)?,
             };
             let commit = crate::github::commit_all(&cwd, &message).await.map_err(bad)?;
-            ok(GitCommitResult { commit, message })
+            ok(GitCommitResult { commit, message, commits: Vec::new() })
         }
         PrCreate::NAME => {
             let p: PrCreateParams = parse(params)?;

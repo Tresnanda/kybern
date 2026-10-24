@@ -569,7 +569,7 @@ impl Repo {
                 Some('T') => (FileStatus::TypeChanged, a, None),
                 _ => (FileStatus::Unknown, a, None),
             };
-            files.push(FileChange { path, old_path, status, additions: 0, deletions: 0, binary: false });
+            files.push(FileChange { path, old_path, status, additions: 0, deletions: 0, binary: false, repo: None });
         }
         for line in numstat.lines() {
             let mut parts = line.split('\t');
@@ -587,7 +587,7 @@ impl Repo {
                 }
             }
         }
-        Ok(Diff { from: from.into(), to: to.into(), files, patch, patch_truncated })
+        Ok(Diff { from: from.into(), to: to.into(), files, patch, patch_truncated, repos: Vec::new() })
     }
 
     // ---- state queries used by delegated-worktree cleanup ----

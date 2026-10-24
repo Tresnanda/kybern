@@ -880,6 +880,7 @@ impl Orchestrator {
             coordinator_project_id: None,
             subagent: None,
             delegation: Some(info),
+            members: Vec::new(),
         };
         let created = {
             let guard = live.turn.lock().await;

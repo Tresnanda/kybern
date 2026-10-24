@@ -2,6 +2,8 @@
 //!
 //! Adding a method means adding a struct pair here and an entry in `METHODS`.
 
+use std::collections::BTreeMap;
+
 use crate::integrations::*;
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
@@ -438,6 +440,14 @@ pub struct ProjectsAddParams {
     /// path is returned unchanged (it is not moved).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub space_id: Option<SpaceId>,
+    /// `group` adds a group project; `members` is then required. Absent means single.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ProjectKind>,
+    /// Group member paths relative to `path` (or absolute inside it). At least 2,
+    /// where "." (the folder itself, allowed only when it is a repository) counts
+    /// as one. The daemon stores them primary first: "." when present, then by path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub members: Option<Vec<String>>,
 }
 method!(ProjectsAdd, "projects.add", Some(Scope::OrchestrationOperate), ProjectsAddParams, Project);
 
@@ -467,6 +477,18 @@ pub struct ProjectsUpdateParams {
     /// Moves the project to this space.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub space_id: Option<SpaceId>,
+    /// Group projects only (an error on a single project): replaces the member
+    /// list, with the same rules as `projects.add`. Existing threads keep the
+    /// members they started with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub members: Option<Vec<String>>,
+    /// Group projects only: replaces the top-level entries copied into new
+    /// worktree containers (`Project.worktree_copy`). An empty list clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_copy: Option<Vec<String>>,
+    /// Hides (true) or brings back (false) the "Add shared instructions" offer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions_offer_dismissed: Option<bool>,
 }
 method!(ProjectsUpdate, "projects.update", Some(Scope::OrchestrationOperate), ProjectsUpdateParams, Project);
 
@@ -475,6 +497,139 @@ pub struct ProjectsRemoveParams {
     pub project_id: ProjectId,
 }
 method!(ProjectsRemove, "projects.remove", Some(Scope::OrchestrationOperate), ProjectsRemoveParams, Empty);
+
+// ---- group projects ----
+
+/// A git repository found inside a folder, offered as a group member.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RepoCandidate {
+    /// Relative to the scanned folder, '/'-separated; "." for the folder itself.
+    pub path: String,
+    pub name: String,
+    /// Current branch, or the short SHA when detached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub detached: bool,
+    /// Set when this is a submodule of another candidate (that member's path).
+    /// Listed, not selectable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submodule_of: Option<String>,
+    /// Already a single project. Informational: both may exist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    /// Came from `include` ("Add folder…") rather than the scan.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub added: bool,
+}
+
+/// A folder that can't be a member, or a repository skipped by an operation,
+/// with a user-facing sentence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RejectedFolder {
+    pub path: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectsScanReposParams {
+    /// Absolute folder on the daemon host (`~` expanded).
+    pub path: String,
+    /// Extra folders the user picked with "Add folder…" (absolute or relative to `path`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include: Vec<String>,
+    /// Folder levels to search below `path`. Default 2, max 4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<u8>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectsScanReposResult {
+    /// Canonical folder.
+    pub path: String,
+    /// Folder name, the default project name.
+    pub name: String,
+    /// The folder itself is a repository (listed as "." in `candidates`).
+    pub is_git: bool,
+    /// Primary first ("." when present), then by path.
+    pub candidates: Vec<RepoCandidate>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rejected: Vec<RejectedFolder>,
+    /// Set when the folder is already a project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub existing_project_id: Option<ProjectId>,
+    /// The scan stopped at 200 candidates or 20,000 folders.
+    #[serde(default)]
+    pub truncated: bool,
+}
+method!(ProjectsScanRepos, "projects.scan_repos", Some(Scope::OrchestrationRead), ProjectsScanReposParams, ProjectsScanReposResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectsMembersStatusParams {
+    pub project_id: ProjectId,
+}
+/// Live state of one member, for the Repositories dialog, badge tooltip and mobile.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MemberState {
+    pub path: String,
+    pub name: String,
+    pub status: MemberStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub detached: bool,
+    /// Uncommitted files (`git status --porcelain` lines).
+    #[serde(default)]
+    pub dirty_files: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_url: Option<String>,
+    /// The member's own instruction file relative to the group folder
+    /// (`api/AGENTS.md`, else `api/CLAUDE.md`), when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+}
+/// A top-level entry of the group folder that may go in `Project.worktree_copy`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct CopyCandidate {
+    /// Entry name (top level only, never a member or `.git`).
+    pub name: String,
+    pub is_dir: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectsMembersStatusResult {
+    /// In project order (primary first).
+    pub members: Vec<MemberState>,
+    /// Which shared instruction files exist in the group folder.
+    pub agents_md: bool,
+    pub claude_md: bool,
+    /// Entries the "Also copy into worktrees" picker offers, sorted by name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub copy_candidates: Vec<CopyCandidate>,
+}
+method!(
+    ProjectsMembersStatus,
+    "projects.members.status",
+    Some(Scope::OrchestrationRead),
+    ProjectsMembersStatusParams,
+    ProjectsMembersStatusResult
+);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectsInstructionsCreateParams {
+    pub project_id: ProjectId,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectsInstructionsCreateResult {
+    /// The files written in the group folder, e.g. `["AGENTS.md", "CLAUDE.md"]`.
+    /// Existing files are never overwritten.
+    pub created: Vec<String>,
+}
+method!(
+    ProjectsInstructionsCreate,
+    "projects.instructions.create",
+    Some(Scope::OrchestrationOperate),
+    ProjectsInstructionsCreateParams,
+    ProjectsInstructionsCreateResult
+);
 
 pub const PROJECTS_CHANGED_NOTIFICATION: &str = "projects.changed";
 
@@ -662,8 +817,33 @@ pub struct ThreadsCreateParams {
     /// answered from the first delivery instead of starting another turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<MessageId>,
+    /// Group projects, worktree mode: member paths to include. Omit for all.
+    /// Ignored in local mode (the agent works in the group folder with every member).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub members: Option<Vec<String>>,
+    /// Group projects: base branch per member path. Worktree: each member's fork
+    /// point. Local: the branch to switch that member's checkout to first.
+    /// `base_branch` still applies to the primary when this map does not name it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branches: Option<BTreeMap<String, String>>,
 }
 method!(ThreadsCreate, "threads.create", Some(Scope::OrchestrationOperate), ThreadsCreateParams, Thread);
+
+pub const THREADS_WORKSPACE_PROGRESS_NOTIFICATION: &str = "threads.workspace_progress";
+
+/// Params of the transient `threads.workspace_progress` notification, sent while
+/// `threads.create` prepares worktrees: before each repository and once at the
+/// end. Single-repo worktree threads send it too (`total: 1`). Not an event.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadsWorkspaceProgress {
+    pub thread_id: ThreadId,
+    /// Repositories whose worktree exists.
+    pub done: u32,
+    pub total: u32,
+    /// Member being created (its path); absent for single-repo threads and at the end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<String>,
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsGetParams {
@@ -1056,7 +1236,8 @@ pub struct ThreadsDiffParams {
     /// Include unified patch text. Defaults to true for older clients.
     #[serde(default = "default_true")]
     pub include_patch: bool,
-    /// Limit the diff to one repository-relative path.
+    /// Limit the diff to one path relative to the thread cwd. In a group thread
+    /// the path's leading member folder selects the member (`api/src/x.rs`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
 }
@@ -1695,12 +1876,30 @@ pub struct GitStatus {
     /// Open pull request for this branch, if `gh` knows one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_request: Option<PullRequest>,
+    /// Group threads: one entry per member in project order, excluded members
+    /// included (`included: false`). The fields above are the primary's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repos: Vec<RepoGitStatus>,
+}
+/// One member's git state in a group thread.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RepoGitStatus {
+    pub repo: String,
+    pub name: String,
+    pub included: bool,
+    pub status: MemberStatus,
+    /// `repos` is always empty here.
+    #[serde(flatten)]
+    pub git: GitStatus,
 }
 method!(GitStatusMethod, "git.status", Some(Scope::OrchestrationRead), GitStatusParams, GitStatus);
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GitBranchesParams {
     pub project_id: ProjectId,
+    /// Group projects: the member whose branches to list. Defaults to the primary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct BranchInfo {
@@ -1729,6 +1928,16 @@ pub struct GitCommitParams {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GitCommitResult {
+    /// The primary's commit, or the first member committed in a group thread.
+    pub commit: String,
+    pub message: String,
+    /// Group threads: every member committed, in project order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commits: Vec<RepoCommit>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RepoCommit {
+    pub repo: String,
     pub commit: String,
     pub message: String,
 }
@@ -1803,6 +2012,36 @@ fn default_true_pr() -> bool {
     true
 }
 method!(PrCreate, "github.pr.create", Some(Scope::OrchestrationOperate), PrCreateParams, PullRequest);
+
+/// Group threads: one pull request per changed member, cross-linked in their bodies.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrCreateGroupParams {
+    pub thread_id: ThreadId,
+    /// Members to open pull requests for. Default: every included member with
+    /// changes and a GitHub remote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repos: Option<Vec<String>>,
+    #[serde(default)]
+    pub draft: bool,
+    /// Commit uncommitted changes first (messages generated per member).
+    #[serde(default = "default_true_pr")]
+    pub commit_first: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RepoPullRequest {
+    pub repo: String,
+    pub pull_request: PullRequest,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrCreateGroupResult {
+    /// Created pull requests, in project order.
+    pub pull_requests: Vec<RepoPullRequest>,
+    /// Members without a pull request: `path` is the member, `reason` a sentence
+    /// such as "No GitHub remote", "No changes" or the error.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<RejectedFolder>,
+}
+method!(PrCreateGroup, "github.pr.create_group", Some(Scope::OrchestrationOperate), PrCreateGroupParams, PrCreateGroupResult);
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PrListParams {
@@ -3209,6 +3448,9 @@ registry!(
     ProjectsAdd,
     ProjectsUpdate,
     ProjectsRemove,
+    ProjectsScanRepos,
+    ProjectsMembersStatus,
+    ProjectsInstructionsCreate,
     SpacesList,
     SpacesCreate,
     SpacesUpdate,
@@ -3301,6 +3543,7 @@ registry!(
     GitBranches,
     GitCommit,
     PrCreate,
+    PrCreateGroup,
     PrList,
     PrDetail,
     PrPage,

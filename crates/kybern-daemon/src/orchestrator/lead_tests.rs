@@ -223,6 +223,9 @@ async fn children_of_the_lead_and_every_thread_with_the_switch_on_get_the_projec
         brief_in_all_threads: Some(on),
         coordinator: None,
         space_id: None,
+        members: None,
+        worktree_copy: None,
+        instructions_offer_dismissed: None,
     };
     let mut project = fixture.store.project_get(fixture.project.id).unwrap().unwrap();
     project.brief_in_all_threads = rpc(true).brief_in_all_threads.unwrap();
