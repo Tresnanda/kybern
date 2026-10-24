@@ -8144,6 +8144,7 @@ for line in sys.stdin:
     include!("orchestrator/secret_tests.rs");
     include!("orchestrator/request_tests.rs");
     include!("orchestrator/lead_git_tests.rs");
+    include!("orchestrator/group_git_tests.rs");
     include!("orchestrator/capabilities_tests.rs");
     include!("orchestrator/lead_tests.rs");
     include!("orchestrator/lead_setup_tests.rs");

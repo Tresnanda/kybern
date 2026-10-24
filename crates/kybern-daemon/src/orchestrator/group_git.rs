@@ -396,16 +396,14 @@ impl Orchestrator {
                         Err(e) => tracing::warn!(thread_id = %thread.id, repo = done.repo_path(), %e, "rewind rollback failed"),
                     }
                 }
-                let restored = if put_back.is_empty() {
-                    "Nothing else was changed.".to_string()
-                } else {
-                    format!(
-                        "{} {} put back as {} were.",
-                        join_names(&put_back),
-                        if put_back.len() == 1 { "was" } else { "were" },
-                        if put_back.len() == 1 { "it" } else { "they" }
-                    )
+                let restored = match put_back.len() {
+                    0 => "Nothing else was changed.".to_string(),
+                    1 => format!("{} was put back as it was.", put_back[0]),
+                    _ => format!("{} were put back as they were.", join_names(&put_back)),
                 };
+                // Git's first line names the problem; the rest is advice for its own CLI.
+                let error = error.to_string();
+                let error = error.lines().next().unwrap_or_default().trim_end_matches('.');
                 return Err(anyhow!(
                     "Rewind stopped: {error} in {}. {restored} Its state before the rewind is saved at {safety_ref}.",
                     target.name
@@ -756,22 +754,25 @@ mod tests {
 
     #[test]
     fn copying_skips_symlinks_missing_entries_and_existing_files() {
-        let from = tempfile::tempdir().unwrap();
-        let to = tempfile::tempdir().unwrap();
-        std::fs::write(from.path().join("AGENTS.md"), "shared").unwrap();
-        std::fs::create_dir_all(from.path().join(".claude/commands")).unwrap();
-        std::fs::write(from.path().join(".claude/settings.local.json"), "{}").unwrap();
-        std::fs::write(from.path().join(".claude/commands/go.md"), "go").unwrap();
-        std::fs::write(to.path().join("CLAUDE.md"), "kept").unwrap();
-        std::fs::write(from.path().join("CLAUDE.md"), "@AGENTS.md").unwrap();
+        let root = std::env::temp_dir().join(format!("kybern-group-copy-{}", Uuid::now_v7()));
+        let (from, to) = (root.join("from"), root.join("to"));
+        std::fs::create_dir_all(&from).unwrap();
+        std::fs::create_dir_all(&to).unwrap();
+        std::fs::write(from.as_path().join("AGENTS.md"), "shared").unwrap();
+        std::fs::create_dir_all(from.as_path().join(".claude/commands")).unwrap();
+        std::fs::write(from.as_path().join(".claude/settings.local.json"), "{}").unwrap();
+        std::fs::write(from.as_path().join(".claude/commands/go.md"), "go").unwrap();
+        std::fs::write(to.as_path().join("CLAUDE.md"), "kept").unwrap();
+        std::fs::write(from.as_path().join("CLAUDE.md"), "@AGENTS.md").unwrap();
         #[cfg(unix)]
-        std::os::unix::fs::symlink("/etc/hosts", from.path().join(".claude/link")).unwrap();
-        copy_entries(from.path(), to.path(), &SHARED_FILES, SHARED_FILES_CAP);
-        assert_eq!(std::fs::read_to_string(to.path().join("AGENTS.md")).unwrap(), "shared");
-        assert_eq!(std::fs::read_to_string(to.path().join("CLAUDE.md")).unwrap(), "kept");
-        assert!(to.path().join(".claude/settings.local.json").exists());
-        assert!(to.path().join(".claude/commands/go.md").exists());
-        assert!(std::fs::symlink_metadata(to.path().join(".claude/link")).is_err());
+        std::os::unix::fs::symlink("/etc/hosts", from.as_path().join(".claude/link")).unwrap();
+        copy_entries(from.as_path(), to.as_path(), &SHARED_FILES, SHARED_FILES_CAP);
+        assert_eq!(std::fs::read_to_string(to.as_path().join("AGENTS.md")).unwrap(), "shared");
+        assert_eq!(std::fs::read_to_string(to.as_path().join("CLAUDE.md")).unwrap(), "kept");
+        assert!(to.as_path().join(".claude/settings.local.json").exists());
+        assert!(to.as_path().join(".claude/commands/go.md").exists());
+        assert!(std::fs::symlink_metadata(to.as_path().join(".claude/link")).is_err());
+        let _ = std::fs::remove_dir_all(&root);
         assert!(is_copy_entry("Makefile") && !is_copy_entry("../x") && !is_copy_entry("a/b") && !is_copy_entry(".git"));
     }
 }
