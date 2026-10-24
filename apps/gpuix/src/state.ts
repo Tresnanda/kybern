@@ -313,8 +313,14 @@ export function refreshLists(): Promise<void> {
 
 /** The daemon's last thread list; new chats it does not list yet are shown with it (`composer/newChats.ts`). */
 let listedThreads: Thread[] = []
-function withNewChats(base = state.listsLoaded ? listedThreads : state.threads.filter(t => !newChats.get(t.id))): Thread[] {
-  const { threads, listed } = mergeOptimisticThreads(base, newChats.unlisted())
+/** Every optimistic thread object put in the list, so a merge can take them out again without touching the daemon's. */
+const optimisticThreads = new WeakSet<Thread>()
+/** The list with the new chats merged in. Without `base` it is the current list (live events and local changes included),
+ *  never the last `loadLists()` snapshot, which would bring back archived threads and old statuses and titles. */
+function withNewChats(base = state.threads.filter(t => !optimisticThreads.has(t))): Thread[] {
+  const local = newChats.unlisted()
+  for (const thread of local) optimisticThreads.add(thread)
+  const { threads, listed } = mergeOptimisticThreads(base, local)
   if (listed.length) queueMicrotask(() => newChats.listed(listed))
   return threads
 }
@@ -325,9 +331,11 @@ newChats.subscribe(() => {
   for (const [paneId, pane] of panes) {
     const id = pane.selectedId
     const chat = newChats.get(id)
-    if (!id || !chat || sessions.has(id)) continue
-    if (chat.state === 'created') void selectPaneThread(paneId, id, true).catch(error => console.error('[pane] Unable to load thread:', error))
-    else if (pane.open.thread?.status !== chat.thread.status) setPane(paneId, { open: { ...pane.open, thread: chat.thread } })
+    if (!id || sessions.has(id) || chat?.adoptedId) continue
+    // Created, or listed by the daemon after a create that failed here (a dropped reply): the daemon's thread loads.
+    const loads = chat ? chat.state === 'created' : !!pane.open.thread && optimisticThreads.has(pane.open.thread)
+    if (loads) void selectPaneThread(paneId, id, true).catch(error => console.error('[pane] Unable to load thread:', error))
+    else if (chat && pane.open.thread?.status !== chat.thread.status) setPane(paneId, { open: { ...pane.open, thread: chat.thread } })
   }
 })
 
