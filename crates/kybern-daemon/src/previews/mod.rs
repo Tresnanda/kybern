@@ -393,7 +393,7 @@ fn resolve_file(
     let in_root =
         [canonical_cwd, canonical_project].into_iter().flatten().find(|root| entry.starts_with(root) && policy.servable_thread_root(root));
     let (root, in_project) = match in_root {
-        Some(root) => (root, true),
+        Some(root) => (project_page_root(&root, &entry)?, true),
         None => (entry.parent().ok_or_else(PreviewError::not_found)?.to_path_buf(), false),
     };
     let rel = relative_entry(&root, &entry)?;
@@ -415,6 +415,25 @@ fn resolve_file(
     }
     let folder = root.to_string_lossy().into_owned();
     Ok(Resolved { info, file: None, needs_permission: Some(PreviewFolderRequest { folder, grantable: true }), grant: None })
+}
+
+/// Where a page inside the project is served from: the project root, or for a
+/// page in a dot-folder (an agent's `.kybern-artifacts/…/mockup.html`) the
+/// deepest dot-folder above it. No served path then has a dot segment, so the
+/// page reaches its own folder's files while the project's other dotfiles stay
+/// unreachable. `.git`, credential folders and env files are never served.
+fn project_page_root(root: &Path, entry: &Path) -> Result<PathBuf, PreviewError> {
+    let rel = entry.strip_prefix(root).map_err(|_| PreviewError::not_found())?;
+    let parts: Vec<&str> = rel.components().filter_map(|part| part.as_os_str().to_str()).collect();
+    if let Some(reason) = crate::files::refusal(&parts) {
+        return Err(PreviewError { code: "folder_not_grantable", message: reason });
+    }
+    let folders = &parts[..parts.len().saturating_sub(1)];
+    let mut served = root.to_path_buf();
+    if let Some(deepest) = folders.iter().rposition(|part| part.starts_with('.')) {
+        served.extend(&folders[..=deepest]);
+    }
+    Ok(served)
 }
 
 /// The entry path under `root`. Dot segments cannot be served, so refuse early.

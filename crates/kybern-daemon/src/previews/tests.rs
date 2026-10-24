@@ -194,6 +194,30 @@ fn file_inside_the_worktree_needs_no_permission() {
     }
 }
 
+/// ADE-74: an agent's mockup in `.kybern-artifacts/` previews from its own dot-folder; `.git` and secrets never do.
+#[test]
+fn a_page_in_a_project_dot_folder_is_served_from_that_folder() {
+    let work = Dir::new();
+    work.write(".kybern-artifacts/ade-74/mockup.html");
+    let resolved = resolve(".kybern-artifacts/ade-74/mockup.html", &roots(&work), &[], false, &elsewhere_policy()).unwrap();
+    assert!(resolved.needs_permission.is_none() && resolved.grant.is_none());
+    assert_eq!(resolved.file.unwrap(), FilePlan { root: work.0.join(".kybern-artifacts"), rel: "ade-74/mockup.html".into() });
+    assert!(matches!(resolved.info, PreviewTargetInfo::File { in_project: true, .. }));
+    // The deepest dot-folder is the root, so the served path never has a dot segment.
+    work.write("docs/.drafts/v2/.cache/page.html");
+    let nested = resolve("docs/.drafts/v2/.cache/page.html", &roots(&work), &[], false, &elsewhere_policy()).unwrap();
+    assert_eq!(nested.file.unwrap(), FilePlan { root: work.0.join("docs/.drafts/v2/.cache"), rel: "page.html".into() });
+    for refused in [".git/page.html", ".ssh/page.html", ".env.html"] {
+        work.write(refused);
+        let error = resolve(refused, &roots(&work), &[], false, &elsewhere_policy()).unwrap_err();
+        assert_eq!(error.code, "folder_not_grantable", "{refused}");
+        assert!(!error.message.contains("doesn't exist"), "{refused}: {}", error.message);
+    }
+    // A page that is itself a dotfile is still not served.
+    work.write("mockups/.page.html");
+    assert!(resolve("mockups/.page.html", &roots(&work), &[], false, &elsewhere_policy()).is_err());
+}
+
 #[test]
 fn project_root_outside_the_worktree_is_the_root() {
     let project = Dir::new();
@@ -322,9 +346,11 @@ fn entry_documents_and_missing_files() {
     std::fs::create_dir_all(work.0.join("dir.html")).unwrap();
     assert_eq!(resolve("./dir.html", &roots(&work), &[], false, &pol).unwrap_err().code, "unsupported_file");
     assert_eq!(resolve("./missing.html", &roots(&work), &[], false, &pol).unwrap_err().code, "not_found");
-    // Dot-segment entries cannot be served by the file route.
+    // A page in a dot-folder is served from that folder (see the dot-folder test); a dotfile page is not served.
     work.write(".private/page.html");
-    assert_eq!(resolve("./.private/page.html", &roots(&work), &[], false, &pol).unwrap_err().code, "not_found");
+    assert_eq!(resolve("./.private/page.html", &roots(&work), &[], false, &pol).unwrap().file.unwrap().rel, "page.html");
+    work.write(".page.html");
+    assert_eq!(resolve("./.page.html", &roots(&work), &[], false, &pol).unwrap_err().code, "not_found");
 }
 
 #[cfg(unix)]
