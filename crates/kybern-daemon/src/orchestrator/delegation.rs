@@ -1702,15 +1702,16 @@ impl Orchestrator {
         let dir = child.cwd.clone();
         let missing = !Path::new(&dir).exists();
         let (mut clean, mut merged, mut no_work, mut branch_exists) = (true, true, true, false);
+        let project = self.inner.store.project_get(child.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
+        let copied = super::group_git::copied_entries(&project);
+        // Files beside the member worktrees and edited copies are in no repository.
+        if !missing && !super::group_git::container_leftovers(child, &project).await?.is_empty() {
+            clean = false;
+        }
         for (member, source) in self.group_child_members(child, info) {
             let tree = &member.worktree.as_ref().unwrap().path;
             if Path::new(tree).exists() {
-                let exclude = if member.path == "." {
-                    child.members.iter().filter(|m| m.path != ".").map(|m| m.path.clone()).collect()
-                } else {
-                    Vec::new()
-                };
-                clean &= Repo::new(tree).status_porcelain(&exclude).await?.is_empty();
+                clean &= super::group_git::member_status(&member, child, &copied).await?.is_empty();
             } else if let Err(error) = source.worktree_prune().await {
                 tracing::debug!(%error, "git worktree prune failed");
             }
@@ -1754,10 +1755,19 @@ impl Orchestrator {
         // The child's last "after" snapshot may still be reading the worktree.
         let _checkpoint = self.checkpoint_lock(child.id).lock_owned().await;
         if super::group_git::is_group(child) {
+            let project = self.inner.store.project_get(child.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
+            // Even a forced removal keeps what no repository holds.
+            let leftovers = super::group_git::container_leftovers(child, &project).await?;
+            self.preserve_leftovers(child.id, Path::new(&state.dir), &leftovers)?;
+            let copied = super::group_git::copied_entries(&project);
             // Nested member worktrees go before the group folder's own.
             for (member, source) in self.group_child_members(child, info).into_iter().rev() {
                 let tree = &member.worktree.as_ref().unwrap().path;
                 if Path::new(tree).exists() {
+                    if member.path == "." {
+                        // Kybern's untracked copies would make git refuse to remove it.
+                        super::group_git::drop_copies(Path::new(tree), &copied).await;
+                    }
                     source.worktree_remove(Path::new(tree), force).await?;
                 } else if let Err(error) = source.worktree_prune().await {
                     tracing::debug!(%error, "git worktree prune failed");

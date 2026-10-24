@@ -354,6 +354,14 @@ async fn group_worktree_cleanup_saves_each_member_and_restores_the_container() {
     assert!(state.blockers.iter().any(|b| b.starts_with("Move or delete notes.md from this chat’s folder first")), "{:?}", state.blockers);
     std::fs::remove_file(container.join("notes.md")).unwrap();
 
+    // An edited copy is not Kybern's copy any more; an unchanged one is.
+    std::fs::write(container.join("Makefile"), "all: edited\n").unwrap();
+    let state = group.fixture.orchestrator.worktree_inspect(thread.id).await.unwrap();
+    assert!(state.blockers.iter().any(|b| b.starts_with("Move or delete Makefile from")), "{:?}", state.blockers);
+    std::fs::write(container.join("Makefile"), "all:\n").unwrap();
+    let state = group.fixture.orchestrator.worktree_inspect(thread.id).await.unwrap();
+    assert!(state.eligible, "{:?}", state.blockers);
+
     std::fs::write(container.join("web/app.ts"), "edited\n").unwrap();
     let state = group.fixture.orchestrator.worktree_inspect(thread.id).await.unwrap();
     assert!(!state.clean && state.blockers.is_empty(), "{:?}", state.blockers);

@@ -722,13 +722,13 @@ fn container_members(thread: &Thread) -> Vec<&ThreadMember> {
 }
 
 /// What Kybern itself put in the container besides worktrees.
-fn copied_entries(project: &Project) -> Vec<String> {
+pub(super) fn copied_entries(project: &Project) -> Vec<String> {
     SHARED_FILES.iter().map(|e| e.to_string()).chain(project.worktree_copy.iter().filter(|e| is_copy_entry(e)).cloned()).collect()
 }
 
 /// Porcelain lines of a member worktree, without the nested members of the
 /// group folder's worktree and without the untracked copies Kybern made there.
-async fn member_status(member: &ThreadMember, thread: &Thread, copied: &[String]) -> Result<Vec<String>> {
+pub(super) async fn member_status(member: &ThreadMember, thread: &Thread, copied: &[String]) -> Result<Vec<String>> {
     let tree = Repo::new(&member.worktree.as_ref().unwrap().path);
     if member.path != "." {
         return tree.status_porcelain(&[]).await;
@@ -740,12 +740,144 @@ async fn member_status(member: &ThreadMember, thread: &Thread, copied: &[String]
         .collect())
 }
 
+/// Whether `copy` still holds only what Kybern copied from `source`: every
+/// file byte-identical to its source, no symlinks and nothing added. Files the
+/// copy skipped (over the size limit) don't count as changes.
+fn same_copy(source: &Path, copy: &Path) -> bool {
+    let (Ok(copy_meta), Ok(source_meta)) = (std::fs::symlink_metadata(copy), std::fs::symlink_metadata(source)) else {
+        return false;
+    };
+    if copy_meta.is_dir() {
+        return source_meta.is_dir()
+            && std::fs::read_dir(copy)
+                .map(|entries| entries.flatten().all(|e| same_copy(&source.join(e.file_name()), &e.path())))
+                .unwrap_or(false);
+    }
+    if !copy_meta.is_file() || !source_meta.is_file() || copy_meta.len() != source_meta.len() {
+        return false;
+    }
+    same_bytes(source, copy).unwrap_or(false)
+}
+
+fn same_bytes(a: &Path, b: &Path) -> std::io::Result<bool> {
+    use std::io::Read;
+    let (mut a, mut b) = (std::io::BufReader::new(std::fs::File::open(a)?), std::io::BufReader::new(std::fs::File::open(b)?));
+    let (mut x, mut y) = ([0u8; 8192], [0u8; 8192]);
+    loop {
+        let n = a.read(&mut x)?;
+        if n == 0 {
+            return Ok(b.read(&mut y)? == 0);
+        }
+        b.read_exact(&mut y[..n])?;
+        if x[..n] != y[..n] {
+            return Ok(false);
+        }
+    }
+}
+
+/// Entries under a container without the group folder's own worktree that no
+/// member holds and that are not unchanged copies: everything at `prefix`
+/// except member worktrees, recursing into folders that only lead to nested
+/// members. Paths are '/'-separated and relative to the container.
+fn loose_entries(container: &Path, prefix: &str, members: &[String], copied: &[String], source: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(member_dir(container, if prefix.is_empty() { "." } else { prefix })) else {
+        return Vec::new();
+    };
+    let mut loose = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let rel = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
+        if members.contains(&rel) {
+            continue;
+        }
+        if members.iter().any(|m| m.starts_with(&format!("{rel}/"))) && entry.path().is_dir() {
+            loose.extend(loose_entries(container, &rel, members, copied, source));
+        } else if !(prefix.is_empty() && copied.contains(&name) && same_copy(&source.join(&name), &entry.path())) {
+            loose.push(rel);
+        }
+    }
+    loose
+}
+
+/// What removing a group container would lose that no repository keeps: files
+/// written beside the member worktrees (a plan at the container root, a note
+/// next to a nested member), and Kybern's copies (AGENTS.md, CLAUDE.md,
+/// .claude/, `worktree_copy` entries) once edited. With the group folder's own
+/// worktree, its git status covers everything except its untracked copies.
+pub(super) async fn container_leftovers(thread: &Thread, project: &Project) -> Result<Vec<String>> {
+    let container = PathBuf::from(&thread.cwd);
+    if !container.is_dir() {
+        return Ok(Vec::new());
+    }
+    let copied = copied_entries(project);
+    let source = PathBuf::from(&project.path);
+    let mut leftovers = if container_members(thread).iter().any(|m| m.path == ".") {
+        let tree = Repo::new(&container);
+        let mut changed = Vec::new();
+        for entry in &copied {
+            let path = container.join(entry);
+            if std::fs::symlink_metadata(&path).is_ok()
+                && !tree.is_tracked(entry).await.unwrap_or(true)
+                && !tokio::task::spawn_blocking({
+                    let source = source.join(entry);
+                    move || same_copy(&source, &path)
+                })
+                .await?
+            {
+                changed.push(entry.clone());
+            }
+        }
+        changed
+    } else {
+        let members: Vec<String> = container_members(thread).iter().map(|m| m.path.clone()).collect();
+        tokio::task::spawn_blocking(move || loose_entries(&container, "", &members, &copied, &source)).await?
+    };
+    leftovers.sort();
+    Ok(leftovers)
+}
+
+/// Delete Kybern's untracked copies from the group folder's worktree so git
+/// can remove it. Edited copies must already be preserved.
+pub(super) async fn drop_copies(tree_dir: &Path, copied: &[String]) {
+    let tree = Repo::new(tree_dir);
+    for entry in copied {
+        let path = tree_dir.join(entry);
+        if std::fs::symlink_metadata(&path).is_ok() && !tree.is_tracked(entry).await.unwrap_or(true) {
+            let _ = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+        }
+    }
+}
+
 impl Orchestrator {
+    /// Move `leftovers` (from `container_leftovers`) out of the container into
+    /// `<data>/worktree-recovery/<thread>/<time>/` before it is removed, so a
+    /// forced removal never deletes files no repository keeps. Returns that
+    /// folder when anything was moved.
+    pub(super) fn preserve_leftovers(&self, thread_id: ThreadId, container: &Path, leftovers: &[String]) -> Result<Option<PathBuf>> {
+        if leftovers.is_empty() {
+            return Ok(None);
+        }
+        let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%3fZ").to_string();
+        let target = self.inner.paths.root.join("worktree-recovery").join(thread_id.to_string()).join(stamp);
+        for rel in leftovers {
+            let from = member_dir(container, rel);
+            let to = member_dir(&target, rel);
+            std::fs::create_dir_all(to.parent().unwrap_or(&target))?;
+            if std::fs::rename(&from, &to).is_err() {
+                // Another volume: copy, and let the container's removal delete the original.
+                let meta = std::fs::symlink_metadata(&from)?;
+                let mut budget = u64::MAX;
+                copy_tree(&from, &to, &meta, &mut budget)?;
+            }
+        }
+        tracing::info!(%thread_id, folder = %target.display(), files = leftovers.len(), "kept files outside the repositories before removing the worktree");
+        Ok(Some(target))
+    }
+
     /// Inspect a group container: every member worktree must be clean, on its
     /// branch and merged for automatic cleanup. Blockers name the member.
     pub(super) async fn inspect_container(&self, thread: &Thread, project: &Project) -> Result<ContainerState> {
         let copied = copied_entries(project);
-        let container = PathBuf::from(&thread.cwd);
         let mut state = ContainerState { clean: true, merged: true, ignored_files: 0, blockers: Vec::new() };
         for member in container_members(thread) {
             let wt = member.worktree.as_ref().unwrap();
@@ -791,24 +923,15 @@ impl Orchestrator {
             }
             state.ignored_files += count;
         }
-        // Without the group folder's own worktree the container is a plain folder:
-        // anything there besides member worktrees and Kybern's copies would be lost.
-        if !thread.members.iter().any(|m| m.path == "." && m.included) && container.is_dir() {
-            let tops: HashSet<String> =
-                thread.members.iter().filter(|m| m.included).filter_map(|m| m.path.split('/').next().map(str::to_string)).collect();
-            let mut stray: Vec<String> = std::fs::read_dir(&container)?
-                .flatten()
-                .map(|e| e.file_name().to_string_lossy().into_owned())
-                .filter(|name| !tops.contains(name) && !copied.contains(name))
-                .collect();
-            stray.sort();
-            if !stray.is_empty() {
-                state.clean = false;
-                state.blockers.push(format!(
-                    "Move or delete {} from this chat’s folder first: they are outside every repository, so Kybern can’t keep them.",
-                    join_names(&stray)
-                ));
-            }
+        // Files beside the member worktrees and edited copies are in no repository,
+        // so no recovery ref could keep them.
+        let stray = container_leftovers(thread, project).await?;
+        if !stray.is_empty() {
+            state.clean = false;
+            state.blockers.push(format!(
+                "Move or delete {} from this chat’s folder first: they are outside every repository, so Kybern can’t keep them.",
+                join_names(&stray)
+            ));
         }
         Ok(state)
     }
@@ -847,17 +970,13 @@ impl Orchestrator {
     ) -> Result<String> {
         let container = PathBuf::from(&thread.cwd);
         let copied = copied_entries(project);
+        // Inspection refuses leftovers; anything written since still gets kept.
+        self.preserve_leftovers(thread.id, &container, &container_leftovers(thread, project).await?)?;
         for member in saved.iter().rev() {
             let source = Repo::new(&member.source);
             if member.folder {
                 // Kybern's untracked copies would make git refuse to remove the folder's worktree.
-                let tree = Repo::new(&member.tree);
-                for entry in &copied {
-                    if member.tree.join(entry).exists() && !tree.is_tracked(entry).await.unwrap_or(true) {
-                        let path = member.tree.join(entry);
-                        let _ = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
-                    }
-                }
+                drop_copies(&member.tree, &copied).await;
             }
             source.worktree_remove(&member.tree, force).await.map_err(|e| {
                 let name = thread
