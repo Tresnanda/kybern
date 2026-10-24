@@ -20,6 +20,8 @@ import {
   type IconName,
 } from "../ui/primitives";
 import { useTheme } from "../ui/theme";
+import { groupFilesByRepo, includedMembers, prButtonLabel } from "../../../../packages/kybern-client/src/groups";
+import { prPlan, repoPullRows } from "../state/groups";
 
 // Workspace menu tabs that have a live inspector pane on wide layouts, so the
 // menu can reveal them in the dock instead of pushing a full-screen route.
@@ -105,6 +107,22 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
       ],
     );
   }
+  function createGroupPrs(count: number) {
+    Alert.alert(
+      `${prButtonLabel(count)}?`,
+      "Commit current changes, push each repository's branch, and open a pull request in each, linked to the others.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: prButtonLabel(count),
+          onPress: () =>
+            void run(() =>
+              rpc("github.pr.create_group", { thread_id: threadId!, commit_first: true }),
+            ),
+        },
+      ],
+    );
+  }
   function createPr() {
     Alert.alert(
       "Create pull request?",
@@ -152,6 +170,16 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
       {trailing}
     </Tap>
   );
+  // Group threads: one row per repository for branches and pull requests.
+  const repos = (git?.repos ?? []).filter((repo) => repo.included);
+  const group = repos.length > 0;
+  const changed = new Set(
+    diff && thread?.members?.length
+      ? groupFilesByRepo(diff, includedMembers(thread.members)).filter((g) => g.files.length).map((g) => g.repo.path)
+      : (diff?.repos ?? []).filter((repo) => repo.files > 0).map((repo) => repo.repo),
+  );
+  const pulls = repoPullRows(repos);
+  const plan = prPlan(repos, changed);
   const remote = git?.remote_url
     ?.replace(/^git@([^:]+):/, "https://$1/")
     .replace(/\.git$/, "");
@@ -211,7 +239,20 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
             "laptopcomputer",
             () => navigate("Files"),
           )}
-          {!!git?.branch &&
+          {group &&
+            repos.map((repo) =>
+              row(
+                `${repo.name} · ${repo.branch ?? "no branch"}`,
+                "shippingbox",
+                () => void Clipboard.setStringAsync(repo.branch ?? ""),
+                !repo.branch,
+                <T variant="caption" tone="secondary">
+                  {repo.ahead ? `↑${repo.ahead}` : ""}
+                  {repo.behind ? ` ↓${repo.behind}` : ""}
+                </T>,
+              ),
+            )}
+          {!group && !!git?.branch &&
             row(
               git.branch,
               "arrow.triangle.branch",
@@ -222,14 +263,45 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
                 {git.behind ? ` ↓${git.behind}` : ""}
               </T>,
             )}
-          {git?.is_git &&
+          {(git?.is_git || group) &&
             row(
               "Commit changes",
               "point.topleft.down.to.point.bottomright.curvepath",
               commit,
-              !git.dirty_files,
+              group ? !repos.some((repo) => repo.dirty_files > 0) : !git?.dirty_files,
             )}
-          {!!remote && (
+          {group && (
+            <>
+              <T
+                variant="caption"
+                tone="secondary"
+                style={{
+                  paddingHorizontal: 10,
+                  paddingTop: 10,
+                  paddingBottom: 4,
+                }}
+              >
+                Pull requests
+              </T>
+              {pulls.map((pull) =>
+                row(
+                  `${pull.name} · #${pull.pullRequest.number} ${pull.pullRequest.title}`,
+                  "arrow.up.right",
+                  () => void Linking.openURL(pull.pullRequest.url),
+                ),
+              )}
+              {!!plan.create.length &&
+                row(prButtonLabel(plan.create.length), "arrow.triangle.pull", () =>
+                  createGroupPrs(plan.create.length),
+                )}
+              {!pulls.length && !plan.create.length && (
+                <T variant="caption" tone="secondary" style={{ paddingHorizontal: 10, paddingBottom: 4 }}>
+                  {changed.size ? "No changed repository has a GitHub remote." : "No changes to open a pull request for."}
+                </T>
+              )}
+            </>
+          )}
+          {!group && !!remote && (
             <>
               <T
                 variant="caption"
@@ -249,7 +321,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
               )}
             </>
           )}
-          {git?.is_git && (
+          {!group && git?.is_git && (
             <>
               <T
                 variant="caption"
