@@ -205,9 +205,12 @@ const effortWord = (effort: string | null | undefined) =>
 export function ComposerOptions({
   thread,
   section: open,
+  top,
 }: {
   thread?: Thread | null;
   section: "permissions" | "model" | "usage";
+  /** Drawn first inside the sheet's scroll view (the section control). */
+  top?: ReactNode;
 }) {
   const app = useApp();
   const draft = useDraft();
@@ -340,7 +343,7 @@ export function ComposerOptions({
 
   if (open === "permissions")
     return (
-      <Sheet>
+      <Sheet top={top}>
         <ErrorBanner error={error} />
         <InsetGroup>
           {permissionChoices(kind, thread?.provider_session_id)
@@ -365,7 +368,7 @@ export function ComposerOptions({
 
   if (open === "usage")
     return (
-      <Sheet>
+      <Sheet top={top}>
         <ErrorBanner error={error} />
         <SectionHeader title="Context" inset first />
         <InsetGroup>
@@ -412,7 +415,7 @@ export function ComposerOptions({
     );
 
   return (
-    <Sheet>
+    <Sheet top={top}>
       <ErrorBanner error={error} />
       <InsetGroup>
         <ListRow
@@ -559,7 +562,7 @@ export function ComposerOptions({
 }
 
 /** The sheet body: a grouped page. */
-function Sheet({ children }: { children: ReactNode }) {
+function Sheet({ children, top }: { children: ReactNode; top?: ReactNode }) {
   const { colors } = useTheme();
   return (
     <ScrollView
@@ -569,6 +572,7 @@ function Sheet({ children }: { children: ReactNode }) {
       style={{ flex: 1, backgroundColor: colors.grouped }}
       contentContainerStyle={{ paddingHorizontal: space.lg, paddingTop: space.sm, paddingBottom: space["3xl"] }}
     >
+      {top ? <View style={{ marginBottom: space.lg }}>{top}</View> : null}
       {children}
     </ScrollView>
   );

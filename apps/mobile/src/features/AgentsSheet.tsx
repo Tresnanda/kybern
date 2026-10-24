@@ -45,11 +45,15 @@ function useNow(live: boolean) {
  * The model for a thread's agents and processes. `live` ticks elapsed times;
  * leave it off where only counts are shown (the capsule).
  */
-export function useAgents(thread: Thread | null | undefined, tasks: readonly RuntimeTask[], { active = true, live = false } = {}): AgentsModel {
+export function useAgents(
+  thread: Thread | null | undefined,
+  tasks: readonly RuntimeTask[],
+  { active = true, live = false } = {},
+): AgentsModel & { children: Thread[] } {
   const children = useChildThreads(thread, active);
   const running = tasks.some((task) => ["pending", "running", "waiting", "stopping"].includes(task.status));
   const now = useNow(live && active && (running || children.length > 0));
-  return useMemo(() => agentsModel(children, tasks, now), [children, tasks, now]);
+  return useMemo(() => ({ ...agentsModel(children, tasks, now), children }), [children, tasks, now]);
 }
 
 function Row({ row, onOpen }: { row: AgentRow; onOpen: (row: AgentRow) => void }) {

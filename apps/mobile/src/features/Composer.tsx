@@ -761,6 +761,7 @@ export const Composer = memo(function Composer({
           sourceIcon="plus"
           closingMotion="attachment"
           dismissLabel="Dismiss attachment menu"
+          scrim
           onClose={() => setAdding(false)}
           onClosed={finishAddClose}
         >
@@ -774,6 +775,7 @@ export const Composer = memo(function Composer({
           placement="above"
           sourceIcon="chevron.down"
           dismissLabel="Close send options"
+          scrim
           onClose={() => setModeOpen(false)}
           onClosed={() => setModeOrigin(null)}
         >

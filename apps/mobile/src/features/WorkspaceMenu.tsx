@@ -8,6 +8,7 @@ import { router } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Linking, View } from "react-native";
 import { groupFilesByRepo, includedMembers, prButtonLabel } from "../../../../packages/kybern-client/src/groups";
+import { shortBranch } from "../../../../packages/kybern-client/src/delegations";
 import { useMenuSurface, type MenuItem } from "../ui/ActionMenu";
 import { Alert, confirm } from "../ui/Alert";
 import { showToast } from "../ui/Toast";
@@ -194,8 +195,8 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
 
   const items: MenuItem[] = [
     {
-      title: branch ?? computer,
-      subtitle: [branch ? computer : null, changes].filter(Boolean).join(" · ") || undefined,
+      title: branch ? shortBranch(branch) : computer,
+      subtitle: branch ? computer : undefined,
       icon: branch ? "arrow.triangle.branch" : "laptopcomputer",
       onPress: branch
         ? () => {

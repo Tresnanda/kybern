@@ -662,7 +662,7 @@ function ThreadScreenBody() {
             }}
           >
             <View style={{ paddingHorizontal: side, gap: space.sm }}>
-              <HeldMessages thread={thread} senders={app.threads} />
+              <HeldMessages thread={thread} senders={agents.children} />
               <ChildThreadBar thread={thread} />
               {running && !subagent && (
                 <StatusStrip

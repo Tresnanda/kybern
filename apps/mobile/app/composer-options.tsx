@@ -27,6 +27,18 @@ export default function ComposerOptionsScreen() {
     if (threadId && !snapshot.loaded && app.status === "open")
       void loadThread(threadId).catch((e) => setError(errorText(e)));
   }, [threadId, snapshot.loaded, app.status]);
+  const control = (
+    <Segmented<Section>
+          label="Options"
+          value={section}
+          onChange={(tab) => router.setParams({ section: tab })}
+          options={[
+            { value: "model", label: "Model" },
+            { value: "permissions", label: "Permissions" },
+            ...(threadId ? [{ value: "usage" as const, label: "Usage" }] : []),
+          ]}
+        />
+  );
   return (
     <>
       <Stack.Screen
@@ -44,25 +56,13 @@ export default function ComposerOptionsScreen() {
             ) : null,
         }}
       />
-      <View style={{ backgroundColor: colors.grouped, paddingHorizontal: space.lg, paddingBottom: space.sm }}>
-        <Segmented<Section>
-          label="Options"
-          value={section}
-          onChange={(tab) => router.setParams({ section: tab })}
-          options={[
-            { value: "model", label: "Model" },
-            { value: "permissions", label: "Permissions" },
-            ...(threadId ? [{ value: "usage" as const, label: "Usage" }] : []),
-          ]}
-        />
-      </View>
       {threadId && !thread ? (
         <Page grouped>
           <ErrorBanner error={error} />
           <T tone="secondary">Loading thread options…</T>
         </Page>
       ) : (
-        <ComposerOptions thread={thread} section={section} />
+        <ComposerOptions thread={thread} section={section} top={control} />
       )}
     </>
   );
