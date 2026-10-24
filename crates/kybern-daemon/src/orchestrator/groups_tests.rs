@@ -1,7 +1,7 @@
 // Group project tests. Included into `orchestrator::tests` so they can use its
 // fixture and the bridge capture of the Coordinator tests.
 
-fn group_git(dir: &std::path::Path, args: &[&str]) {
+fn groups_git(dir: &std::path::Path, args: &[&str]) {
     let status = std::process::Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -18,10 +18,10 @@ fn group_git(dir: &std::path::Path, args: &[&str]) {
 
 fn repo_at(dir: &std::path::Path) {
     std::fs::create_dir_all(dir).unwrap();
-    group_git(dir, &["init", "--quiet", "--initial-branch=main"]);
+    groups_git(dir, &["init", "--quiet", "--initial-branch=main"]);
     std::fs::write(dir.join("README.md"), "hi\n").unwrap();
-    group_git(dir, &["add", "README.md"]);
-    group_git(dir, &["commit", "--quiet", "-m", "init"]);
+    groups_git(dir, &["add", "README.md"]);
+    groups_git(dir, &["commit", "--quiet", "-m", "init"]);
 }
 
 /// `acme/` holding api, web and services/billing, a repository under
@@ -192,8 +192,8 @@ async fn member_status_reports_branches_changes_instruction_files_and_copy_candi
     let project = fixture.orchestrator.add_group_project(acme.to_string_lossy().into_owned(), None, None, vec![".".into(), "api".into(), "web".into()]).unwrap();
     std::fs::write(acme.join("api/new.txt"), "x").unwrap();
     std::fs::write(acme.join("README.md"), "changed\n").unwrap();
-    group_git(&acme.join("web"), &["checkout", "--quiet", "--detach"]);
-    group_git(&acme.join("api"), &["remote", "add", "origin", "https://github.com/acme/api.git"]);
+    groups_git(&acme.join("web"), &["checkout", "--quiet", "--detach"]);
+    groups_git(&acme.join("api"), &["remote", "add", "origin", "https://github.com/acme/api.git"]);
     let status = fixture.orchestrator.members_status(project.id).await.unwrap();
     let rows: Vec<(&str, Option<&str>, u32, Option<&str>)> =
         status.members.iter().map(|m| (m.path.as_str(), m.instructions.as_deref(), m.dirty_files, m.remote_url.as_deref())).collect();
