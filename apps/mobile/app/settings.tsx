@@ -42,8 +42,8 @@ function Groups({
       key={item.id}
       title={item.title}
       leading={item.icon}
-      // The rail marks the open page; the phone list shows values and pushes.
-      value={selected ? undefined : item.value}
+      subtitle={item.subtitle}
+      subtitleLines={1}
       selected={selected === item.id}
       chevron={!selected}
       onPress={() => onSelect(item.id)}
@@ -51,9 +51,9 @@ function Groups({
   );
   return (
     <>
-      <SectionHeader title="This phone" inset first />
+      <SectionHeader title="On this phone" inset first />
       <InsetGroup>{phone.map(row)}</InsetGroup>
-      <SectionHeader title={computerName} inset />
+      <SectionHeader title={`On ${computerName}`} inset />
       <InsetGroup>{computer.map(row)}</InsetGroup>
       <SectionFooter inset>{versionLine()}</SectionFooter>
     </>
@@ -68,7 +68,7 @@ export default function SettingsScreen() {
   if (!regular)
     return (
       <Page grouped>
-        <Stack.Screen options={{ headerLargeTitleEnabled: true, headerStyle: { backgroundColor: colors.grouped } }} />
+        <Stack.Screen options={{ headerStyle: { backgroundColor: colors.grouped } }} />
         <Groups onSelect={openCategory} />
       </Page>
     );

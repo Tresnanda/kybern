@@ -2,7 +2,6 @@
 // the root list shows, and the page that renders it.
 import { router } from "expo-router";
 import type { ReactNode } from "react";
-import { AUTONOMY_OPTIONS, effectiveCoordinatorSettings } from "../../../../../packages/kybern-client/src/coordinatorSettings";
 import { useAccounts } from "../../state/accounts";
 import { count } from "../../state/format";
 import { activeEnvironment, useApp } from "../../state/runtime";
@@ -19,7 +18,6 @@ import { ComputerUseSettingsPage } from "./ComputerUse";
 import { DelegationSettings } from "./Delegation";
 import { GeneralSettings } from "./General";
 import { IntegrationsSettings } from "./Integrations";
-import { connectionRoute, permissionLabel } from "./labels";
 import { SystemSettings } from "./System";
 import { UsageSettings } from "./Usage";
 
@@ -37,7 +35,7 @@ export type CategoryId =
   | "system"
   | "access";
 
-export type Category = { id: CategoryId; title: string; icon: IconName; value?: string };
+export type Category = { id: CategoryId; title: string; icon: IconName; subtitle: string };
 
 export const TITLES: Record<CategoryId, string> = {
   appearance: "Appearance",
@@ -66,32 +64,38 @@ export function useCategories(): { phone: Category[]; computer: Category[]; comp
   const { accounts, loaded } = useAccounts();
   const environment = activeEnvironment();
   const open = app.status === "open";
+  const connection = !environment ? "Not connected" : open ? "Connected" : app.status === "connecting" ? "Connecting" : "Offline";
   const phone: Category[] = [
-    { id: "appearance", title: TITLES.appearance, icon: "circle.lefthalf.filled", value: APPEARANCE_LABELS[appearance] },
+    { id: "appearance", title: TITLES.appearance, icon: "circle.lefthalf.filled", subtitle: APPEARANCE_LABELS[appearance] },
     {
       id: "computers",
       title: TITLES.computers,
       icon: "laptopcomputer",
-      value: environment ? environment.name : "Not connected",
+      subtitle: environment ? `${environment.name} · ${connection}` : "Not connected",
     },
-    { id: "updates", title: TITLES.updates, icon: "arrow.clockwise", value: appVersion() },
+    { id: "updates", title: TITLES.updates, icon: "arrow.clockwise", subtitle: "Check for updates to Kybern on this phone" },
   ];
-  const on = (value: string | undefined) => (open && settings ? value : undefined);
+  const computerUse = open && settings ? (settings.computer_use.enabled ? "On" : "Off") : null;
   const computer: Category[] = [
-    { id: "general", title: TITLES.general, icon: "slider.horizontal.3", value: on(settings ? permissionLabel(settings.default_permission_mode) : undefined) },
-    { id: "agents", title: TITLES.agents, icon: "sparkles", value: open && app.providers.length ? count(app.providers.filter((p) => p.available).length, "agent") : undefined },
+    { id: "general", title: TITLES.general, icon: "slider.horizontal.3", subtitle: "Permissions, worktrees, notifications" },
+    { id: "agents", title: TITLES.agents, icon: "sparkles", subtitle: "Models and configuration" },
+    { id: "delegation", title: TITLES.delegation, icon: "person.2", subtitle: "Coordinator, helper agents and limits" },
     {
-      id: "delegation",
-      title: TITLES.delegation,
-      icon: "person.2",
-      value: on(settings ? AUTONOMY_OPTIONS.find((o) => o.value === effectiveCoordinatorSettings(settings.orchestration, null).lead_autonomy)?.label : undefined),
+      id: "accounts",
+      title: TITLES.accounts,
+      icon: "person.crop.circle",
+      subtitle: open && loaded && accounts.length ? `Sign-ins for each agent · ${count(accounts.length, "account")}` : "Sign-ins for each agent",
     },
-    { id: "accounts", title: TITLES.accounts, icon: "person.crop.circle", value: open && loaded && accounts.length ? count(accounts.length, "account") : undefined },
-    { id: "usage", title: TITLES.usage, icon: "chart.bar" },
-    { id: "integrations", title: TITLES.integrations, icon: "puzzlepiece.extension" },
-    { id: "computer", title: TITLES.computer, icon: "display", value: on(settings ? (settings.computer_use.enabled ? "On" : "Off") : undefined) },
-    { id: "system", title: TITLES.system, icon: "clock", value: on(settings?.background.save_power_on_battery ? "Saving power" : undefined) },
-    { id: "access", title: TITLES.access, icon: "lock.shield", value: environment && open ? connectionRoute(environment.url) : undefined },
+    { id: "usage", title: TITLES.usage, icon: "chart.bar", subtitle: "Costs, tokens, and plan limits" },
+    { id: "integrations", title: TITLES.integrations, icon: "puzzlepiece.extension", subtitle: "MCP servers and plugins for each agent" },
+    {
+      id: "computer",
+      title: TITLES.computer,
+      icon: "display",
+      subtitle: computerUse ? `Let agents use apps on the computer · ${computerUse}` : "Let agents use apps on the computer",
+    },
+    { id: "system", title: TITLES.system, icon: "clock", subtitle: "Power, idle limits, and versions" },
+    { id: "access", title: TITLES.access, icon: "lock.shield", subtitle: "Paired devices and Tailscale" },
   ];
   return { phone, computer, computerName: environment?.name ?? "Your computer" };
 }
