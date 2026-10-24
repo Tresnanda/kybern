@@ -110,6 +110,7 @@ export const Composer = memo(function Composer({
   onStop,
   disabled,
   prompt,
+  promptAttachments,
   onPromptConsumed,
 }: {
   thread?: Thread | null;
@@ -118,6 +119,8 @@ export const Composer = memo(function Composer({
   onStop?: () => void;
   disabled?: boolean;
   prompt?: string;
+  /** Attachments that come back with `prompt` (editing a message that was not sent). */
+  promptAttachments?: ContentPart[];
   onPromptConsumed?: () => void;
 }) {
   const { colors } = useTheme();
@@ -310,6 +313,13 @@ export const Composer = memo(function Composer({
       input.current?.focus();
     }
   }, [prompt]);
+  const lastPromptAttachments = useRef<ContentPart[] | undefined>(undefined);
+  useEffect(() => {
+    if (promptAttachments?.length && promptAttachments !== lastPromptAttachments.current) {
+      lastPromptAttachments.current = promptAttachments;
+      setAttachments(promptAttachments);
+    }
+  }, [promptAttachments]);
   const running =
     thread?.status === "running" || thread?.status === "awaiting-approval";
   const steering = running && !!onSteer && promptMode === "steer";

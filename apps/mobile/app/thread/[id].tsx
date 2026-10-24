@@ -44,7 +44,8 @@ import {
   workDuration,
   type TurnRow,
 } from "../../src/state/turnRows";
-import type { UserMessage } from "../../src/state/protocol";
+import type { ContentPart, UserMessage } from "../../src/state/protocol";
+import { isInlinePart } from "../../src/state/inlineMessage";
 import {
   Empty,
   ErrorBanner,
@@ -137,7 +138,9 @@ const TranscriptRow = memo(function TranscriptRow({
 });
 
 const messageText = (message: UserMessage) =>
-  message.parts.map((part) => (part.type === "text" ? part.text : partToken(part) ?? "")).join("");
+  message.parts.filter((part) => part.type === "text" || isInlinePart(part)).map((part) => (part.type === "text" ? part.text : partToken(part) ?? "")).join("");
+/** A message's images and files, which go back to the composer's tray rather than its text. */
+const messageAttachments = (message: UserMessage) => message.parts.filter((part) => part.type !== "text" && !isInlinePart(part));
 
 /** A new chat whose create failed: the message stays above, with Try again (same thread id) and Edit. */
 function NewChatFailed({ chat, onEdit }: { chat: NewChat; onEdit: () => void }) {
@@ -223,6 +226,11 @@ export default function ThreadScreen() {
   const thread = app.threads.find((t) => t.id === id) ?? snapshot.thread;
   const chat = useNewChat(id);
   const [editPrompt, setEditPrompt] = useState("");
+  const [editAttachments, setEditAttachments] = useState<ContentPart[] | undefined>(undefined);
+  // The daemon made this chat under its own id (an older daemon ignores ours): follow it.
+  useEffect(() => {
+    if (chat?.adoptedId) router.replace({ pathname: "/thread/[id]", params: { id: chat.adoptedId } });
+  }, [chat?.adoptedId]);
   const fileContext = useMemo(() => ({ threadId: id, projectId: thread?.project_id }), [id, thread?.project_id]);
   const project = app.projects.find((p) => p.id === thread?.project_id);
   const queued = app.queue.filter((q) => q.thread_id === id);
@@ -447,7 +455,7 @@ export default function ThreadScreen() {
               ListFooterComponent={
                 <View style={{ gap: 16 }}>
                   {chat?.state === "failed" && (
-                    <NewChatFailed chat={chat} onEdit={() => setEditPrompt(messageText(chat.message))} />
+                    <NewChatFailed chat={chat} onEdit={() => { setEditPrompt(messageText(chat.message)); setEditAttachments(messageAttachments(chat.message)); }} />
                   )}
                   <ErrorBanner
                     error={error}
@@ -635,7 +643,8 @@ export default function ThreadScreen() {
               onStop={stop}
               onSend={send}
               prompt={editPrompt}
-              onPromptConsumed={() => setEditPrompt("")}
+              promptAttachments={editAttachments}
+              onPromptConsumed={() => { setEditPrompt(""); setEditAttachments(undefined); }}
             />
           </View>
           <View style={{ height: Math.max(12, insets.bottom) }} />
