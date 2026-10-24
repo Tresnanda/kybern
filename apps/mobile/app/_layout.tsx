@@ -145,7 +145,7 @@ function Shell({ children }: { children: ReactNode }) {
                 top: 0,
                 bottom: 0,
                 left: 0,
-                backgroundColor: colors.background,
+                // The sidebar draws its own material.
                 borderRightWidth: 0.5,
                 borderColor: colors.line,
               },
