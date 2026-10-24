@@ -122,6 +122,8 @@ export function GroupEnvironmentRows({ thread, diff, git, row, divider, title, o
     } finally { setBusy(false) }
   }
   const prs = rows.filter((r) => r.git?.pull_request)
+  // As for one repository: no checkout to read (the worktree was removed, or git is still loading), no remote or pull request rows.
+  if (!rows.some((r) => r.git?.is_git)) return null
   return (
     <>
       {divider}
