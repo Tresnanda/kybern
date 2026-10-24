@@ -38,6 +38,32 @@ export const SIZE = {
   mass: 1,
   reduceMotion: ReduceMotion.System,
 };
+// Menus morph with liquid-gooey's own character, not the near-critical UI springs
+// above: speed 1.25, bounce 0.35 (ζ ≈ 0.62). The mass carries a little momentum and
+// recoils; the size lags it and overshoots; the corners run their own timeline.
+// liquid-gooey: stiffness × speed², damping × speed × ζ(bounce)/ζ(0.5).
+const MENU_SPEED = 1.25;
+const MENU_K = (1 - 1.1 * 0.35) / 0.45;
+/** Menu morph: the centre (mass). Leads, with recoil. */
+export const MENU_MASS = {
+  stiffness: 320 * MENU_SPEED * MENU_SPEED,
+  damping: 17 * MENU_SPEED * MENU_K,
+  mass: 1,
+  reduceMotion: ReduceMotion.System,
+};
+/** Menu morph: the size. Softer than the mass, so it follows and overshoots. */
+export const MENU_SIZE = {
+  stiffness: 170 * MENU_SPEED * MENU_SPEED,
+  damping: 11.5 * MENU_SPEED * MENU_K,
+  mass: 1,
+  reduceMotion: ReduceMotion.System,
+};
+/** Menu morph: the corner timeline that starts every morph (droplet → corners). */
+export const MENU_CORNER_MS = 460 / MENU_SPEED;
+/** Menu morph: how long the droplet takes to round up (liquid-gooey's glide, dt × 8). */
+export const MENU_DROPLET_MS = 120;
+/** Menu morph: the mass's lead toward its destination (anticipation), progress/s. */
+export const MENU_LEAD = 2.4;
 /** Liquid: the corner timeline (liquid-gooey's cornerEase, 460 ms at speed 1). */
 export const CORNER = {
   duration: 460 / SPEED,

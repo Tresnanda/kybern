@@ -67,8 +67,8 @@ function mountMenu(platform, reduced, closingMotion) {
       useSharedValue: shared, useDerivedValue: (get) => ({ get }),
       useAnimatedStyle: () => ({}), useFrameCallback() {},
       useReducedMotion: () => reduced,
-      withTiming: animate, withSpring: animate,
-      Easing: { bezier: () => null }, ReduceMotion: { System: "system", Never: "never" },
+      withTiming: animate, withSpring: animate, withSequence: (...steps) => steps[steps.length - 1],
+      Easing: { bezier: () => null, bezierFn: () => (t) => t, linear: (t) => t }, ReduceMotion: { System: "system", Never: "never" },
     },
     "react-native-worklets": { scheduleOnRN: (fn) => rn.push(fn) },
     "react-native-safe-area-context": { useSafeAreaInsets: () => ({ top: 24, bottom: 20 }) },
@@ -77,7 +77,10 @@ function mountMenu(platform, reduced, closingMotion) {
     "../../ui/primitives": { Icon: "Icon" },
     "../../ui/measure": { useOverlayOffset: () => 0 },
     "../../ui/theme": { useTheme: () => ({ colors: {}, dark: true }) },
-    "./motion": { MASS: {}, SIZE: {}, DURATION: { scrim: 140 } },
+    "./motion": {
+      MENU_MASS: { stiffness: 1, damping: 1 }, MENU_SIZE: { stiffness: 1, damping: 1 },
+      MENU_CORNER_MS: 330, MENU_DROPLET_MS: 120, MENU_LEAD: 2.4, DURATION: { scrim: 140 },
+    },
   };
   const exports = {};
   runInNewContext(compiled, { exports, require: (id) => {

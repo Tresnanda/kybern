@@ -24,6 +24,7 @@ import Animated, {
   useSharedValue,
   useDerivedValue,
   useReducedMotion,
+  withSequence,
   withSpring,
   withTiming,
 } from "react-native-reanimated";
@@ -40,12 +41,26 @@ export type MenuOrigin = {
   height: number;
 };
 import { useOverlayOffset } from "../../ui/measure";
-import { DURATION, MASS, SIZE } from "./motion";
+import {
+  DURATION,
+  MENU_CORNER_MS,
+  MENU_DROPLET_MS,
+  MENU_LEAD,
+  MENU_MASS,
+  MENU_SIZE,
+} from "./motion";
 /** Final corner radius of a menu surface (`radius.lg`). Rows inside use `radius.md`. */
 const MENU_RADIUS = 20;
 /** Space between a trigger and the menu it opens. */
 const MENU_GAP = 6;
-const SPEED = 2;
+/** How far a covering menu reaches past its button's edge. */
+const COVER_INSET = 4;
+/** A closing menu is the same liquid at 1.25× the tempo: exits are shorter than entrances. */
+function quicker<T extends { stiffness: number; damping: number }>(spring: T, open: boolean): T {
+  return open ? spring : { ...spring, stiffness: spring.stiffness * 1.5625, damping: spring.damping * 1.25 };
+}
+/** liquid-gooey's cornerEase: the droplet resolves into the target corners. */
+const cornerEase = Easing.bezierFn(0.3, 1.05, 0.4, 1);
 const ATTACHMENT_EXIT = {
   duration: 220,
   easing: Easing.bezier(0.4, 0, 0.2, 1),
@@ -124,48 +139,43 @@ export function MorphingMenu({
   // A row is wider than the menu: open at the finger (or under the row when
   // opened by a tap). A button: drop from it, aligned to the edge on its side.
   const fromRow = origin.width > menuWidth;
+  // An icon button becomes the menu: the surface grows out of the button and
+  // covers it, its corner on the button's corner (liquid-gooey's plus menu, iOS
+  // pull-down menus). A chip, a value or a row stays visible: the menu drops
+  // next to it and the droplet travels there from it.
+  const cover = !fromRow && !!sourceIcon && placement !== "above";
   const target =
     fromRow && point ? { y: point.y - 22, height: 44 } : { y: origin.y, height: origin.height };
-  const autoTop = target.y + target.height + MENU_GAP;
-  const autoBottom = target.y - MENU_GAP;
-  const roomBelow = bottom - autoTop;
+  const autoTop = cover ? origin.y - COVER_INSET : target.y + target.height + MENU_GAP;
+  const autoBottom = cover ? origin.y + origin.height + COVER_INSET : target.y - MENU_GAP;
+  const roomBelow = bottom - Math.max(top, autoTop);
   const roomAbove = autoBottom - top;
   const resolved =
-    placement !== "auto"
-      ? placement
-      : roomBelow >= contentHeight || roomBelow >= roomAbove
+    placement === "above"
+      ? "above"
+      : placement === "below" || roomBelow >= contentHeight || roomBelow >= roomAbove
         ? "below"
         : "above";
   const anchorX = point?.x ?? origin.x + origin.width / 2;
-  const menuX =
-    placement === "auto"
-      ? fromRow
-        ? clampX(anchorX - 24)
-        : anchorX > width / 2
-          ? clampX(origin.x + origin.width - menuWidth)
-          : clampX(origin.x)
-      : placement === "above"
-        ? clampX(origin.x)
-        : width - 16 - menuWidth;
-  const belowY =
-    placement === "auto" ? Math.max(top, autoTop) : Math.max(top, origin.y - 8);
+  const menuX = fromRow
+    ? clampX(anchorX - 24)
+    : placement === "above"
+      ? clampX(origin.x)
+      : anchorX > width / 2
+        ? clampX(origin.x + origin.width + (cover ? COVER_INSET : 0) - menuWidth)
+        : clampX(origin.x - (cover ? COVER_INSET : 0));
+  const belowY = Math.max(top, autoTop);
   const maxHeight = Math.max(
     44,
-    placement === "auto"
-      ? resolved === "below"
-        ? roomBelow
-        : roomAbove
-      : resolved === "above"
-        ? origin.y - MENU_GAP - top
-        : bottom - belowY,
+    resolved === "below" ? bottom - belowY : (placement === "above" ? origin.y - MENU_GAP : autoBottom) - top,
   );
   const menuHeight = Math.min(contentHeight, maxHeight);
   const menuY =
     resolved === "below"
       ? belowY
-      : placement === "auto"
-        ? Math.max(top, autoBottom - menuHeight)
-        : Math.max(top, origin.y - menuHeight - MENU_GAP);
+      : placement === "above"
+        ? Math.max(top, origin.y - menuHeight - MENU_GAP)
+        : Math.max(top, autoBottom - menuHeight);
   // Where the silhouette starts and ends: the trigger, or for a long-pressed
   // row a 44 pt capsule under the finger, so a menu never swells out of a
   // whole row or message.
@@ -205,7 +215,7 @@ export function MorphingMenu({
   useEffect(() => {
     if (!menuHeight) return;
     destinationHeight.set(
-      measured.current ? withSpring(menuHeight, SIZE) : menuHeight,
+      measured.current ? withSpring(menuHeight, MENU_SIZE) : menuHeight,
     );
     measured.current = true;
   }, [menuHeight, destinationHeight]);
@@ -228,9 +238,11 @@ export function MorphingMenu({
   };
   const center = useSharedValue(0);
   const size = useSharedValue(0);
-  const corners = useSharedValue(0);
+  const morph = useSharedValue(1);
   const fade = useSharedValue(0);
   const dim = useSharedValue(0);
+  /** 1 while opening, 0 while closing: which way the content and material fade. */
+  const opening = useSharedValue(1);
   const ready = shown && contentHeight > 0;
   const attachmentExit = closingMotion === "attachment";
   useEffect(() => {
@@ -238,26 +250,31 @@ export function MorphingMenu({
     // The attachment menu needs a bounded return before opening its picker.
     // Other menus retain their original leading-mass/following-size springs.
     const boundedExit = !open && attachmentExit;
+    opening.set(open ? 1 : 0);
+    // The mass leaves first and carries momentum toward where it is going
+    // (liquid-gooey's travel lead); the size follows on a softer spring and
+    // overshoots; the corner timeline restarts with every morph.
     center.set(
       boundedExit
         ? withTiming(0, ATTACHMENT_EXIT)
-        : withSpring(open ? 1 : 0, MASS),
+        : withSpring(open ? 1 : 0, { ...quicker(MENU_MASS, open), velocity: open ? MENU_LEAD : -MENU_LEAD }),
     );
-    corners.set(
-      withTiming(open ? 1 : 0, {
-        duration: boundedExit ? ATTACHMENT_EXIT.duration : 460 / SPEED,
-        easing: boundedExit
-          ? ATTACHMENT_EXIT.easing
-          : Easing.bezier(0.3, 1.05, 0.4, 1),
-        reduceMotion: ReduceMotion.System,
-      }),
+    morph.set(
+      withSequence(
+        withTiming(0, { duration: 0 }),
+        withTiming(1, {
+          duration: boundedExit ? ATTACHMENT_EXIT.duration : MENU_CORNER_MS,
+          easing: Easing.linear,
+          reduceMotion: ReduceMotion.System,
+        }),
+      ),
     );
     size.set(
       boundedExit
         ? withTiming(0, ATTACHMENT_EXIT, (finished) => {
             if (finished && !reduced) scheduleOnRN(finishAnimation);
           })
-        : withSpring(open ? 1 : 0, SIZE, (finished) => {
+        : withSpring(open ? 1 : 0, quicker(MENU_SIZE, open), (finished) => {
             if (finished && !open && !reduced) scheduleOnRN(finishAnimation);
           }),
     );
@@ -287,9 +304,10 @@ export function MorphingMenu({
     attachmentExit,
     center,
     size,
-    corners,
+    morph,
     fade,
     dim,
+    opening,
     finishAnimation,
   ]);
   const geometry = useDerivedValue(() => {
@@ -308,14 +326,18 @@ export function MorphingMenu({
       seed.y +
       seed.height / 2 +
       (menuY + destinationHeight.get() / 2 - seed.y - seed.height / 2) * c;
-    const round = Math.sin(Math.PI * Math.max(0, Math.min(1, p)));
-    const r = Math.min(
-      w / 2,
-      h / 2,
-      startRadius +
-        (MENU_RADIUS - startRadius) * corners.get() +
-        round * Math.min(w, h) * 0.22,
-    );
+    // Corners: the seed's radius on the way out, the menu's on the way in, set
+    // by how far the size has travelled. On top, liquid-gooey's droplet: every
+    // morph rounds the body toward a pill as it starts (a short glide, never a
+    // step) and resolves back into its corners over the corner timeline.
+    const t = morph.get();
+    const settle = Math.max(0, Math.min(1, p));
+    const base = startRadius + (MENU_RADIUS - startRadius) * settle;
+    const droplet = reduced
+      ? 0
+      : Math.max(0, Math.min((t * MENU_CORNER_MS) / MENU_DROPLET_MS, 1 - cornerEase(t)));
+    const pill = Math.min(w, h) / 2;
+    const r = Math.min(pill, base + Math.max(0, pill - base) * droplet);
     return { width: w, height: h, radius: r, x: x - w / 2, y: y - h / 2 };
   });
   const shape = useAnimatedStyle(() => {
@@ -333,25 +355,32 @@ export function MorphingMenu({
     const g = geometry.get();
     return { transform: [{ translateX: -g.x }, { translateY: -g.y }] };
   });
+  // Content is never scaled: the liquid clips it. Opening, the labels arrive as
+  // the body settles; closing, they stay until the shrinking body has closed
+  // over them, so no blank surface is ever left behind.
   const contentStyle = useAnimatedStyle(() => ({
     opacity: reduced
       ? fade.get()
       : Math.min(
           attachmentExit && open ? fade.get() : 1,
-          interpolate(size.get(), [0.45, 0.9], [0, 1], "clamp"),
+          opening.get()
+            ? interpolate(size.get(), [0.2, 0.6], [0, 1], "clamp")
+            : interpolate(size.get(), [0.1, 0.45], [0, 1], "clamp"),
         ),
   }));
   // A trigger that stays on screen (a chip, a value, a row) shows through the
-  // silhouette at its seed: the material condenses out of it on open and
-  // dissolves back into it on close, so no blank pill covers the trigger while
-  // the modal is torn down. Menus that redraw their source icon keep an opaque
-  // material, the attachment return fades at its source before its picker.
+  // silhouette near its seed: the material condenses out of it on open and
+  // thins back into it on close, so no blank pill covers the trigger while the
+  // modal is torn down. Menus that redraw their source icon keep an opaque
+  // material; the attachment return fades at its source before its picker.
   const dissolve = !sourceIcon;
   const materialStyle = useAnimatedStyle(() => ({
     opacity: reduced
       ? fade.get()
       : dissolve
-        ? interpolate(size.get(), [0, 0.2], [0, 1], "clamp")
+        ? opening.get()
+          ? interpolate(size.get(), [0.05, 0.35], [0, 1], "clamp")
+          : interpolate(size.get(), [0.15, 0.5], [0, 1], "clamp")
         : open || !attachmentExit
           ? 1
           : interpolate(size.get(), [0, 0.12], [0, 1], "clamp"),

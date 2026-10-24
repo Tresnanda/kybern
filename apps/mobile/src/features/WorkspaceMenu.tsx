@@ -267,7 +267,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
           disabled={!thread}
           onPress={() => {
             void reload().catch(() => {});
-            measureTrigger(anchor.current, (origin) => menu.show({ items, origin }));
+            measureTrigger(anchor.current, (origin) => menu.show({ items, origin, sourceIcon: "ellipsis" }));
           }}
         />
       </View>

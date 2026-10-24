@@ -393,7 +393,8 @@ export function MenuButton({
 }) {
   const anchor = useRef<View>(null);
   const menu = useMenuSurface();
-  // The trigger stays put: the menu condenses out of it below (or above) and
+  // An icon button grows into the menu and back. Custom content (a value, a
+  // chip) stays put: the menu condenses out of it below (or above) and
   // dissolves back into it on close.
   const open = () =>
     measureTrigger(anchor.current, (origin) =>
@@ -402,6 +403,8 @@ export function MenuButton({
         title,
         origin,
         originRadius: children ? triggerRadius : undefined,
+        // An icon button turns into the menu; custom content stays and the menu drops beside it.
+        sourceIcon: children ? null : icon,
       }),
     );
   return (
