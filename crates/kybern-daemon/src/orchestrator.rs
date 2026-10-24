@@ -28,6 +28,7 @@ mod askpass;
 mod child_questions;
 mod delegation;
 pub(crate) mod group_git;
+mod group_pr;
 mod groups;
 mod lead;
 mod lead_git;
@@ -8146,6 +8147,7 @@ for line in sys.stdin:
     include!("orchestrator/request_tests.rs");
     include!("orchestrator/lead_git_tests.rs");
     include!("orchestrator/group_git_tests.rs");
+    include!("orchestrator/group_pr_tests.rs");
     include!("orchestrator/capabilities_tests.rs");
     include!("orchestrator/lead_tests.rs");
     include!("orchestrator/lead_setup_tests.rs");

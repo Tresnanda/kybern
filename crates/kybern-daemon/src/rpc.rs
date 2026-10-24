@@ -967,17 +967,29 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: GitStatusParams = parse(params)?;
             let t = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
             state.orchestrator.refresh_project_git(t.project_id).await.map_err(internal)?;
+            if !t.members.is_empty() {
+                return ok(state.orchestrator.group_git_status(&t).await.map_err(internal)?);
+            }
             ok(crate::github::status(std::path::Path::new(&t.cwd)).await.map_err(internal)?)
         }
         GitBranches::NAME => {
             let p: GitBranchesParams = parse(params)?;
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
             state.orchestrator.refresh_project_git(project.id).await.map_err(internal)?;
+            if project.kind == ProjectKind::Group {
+                return ok(state.orchestrator.group_branches(&project, p.repo.as_deref()).await.map_err(RpcError::invalid_params)?);
+            }
             ok(crate::github::branches(std::path::Path::new(&project.path)).await.map_err(internal)?)
         }
         GitCommit::NAME => {
             let p: GitCommitParams = parse(params)?;
             let t = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            if !t.members.is_empty() {
+                if !state.orchestrator.group_has_changes(&t).await {
+                    return Err(RpcError::invalid_params("nothing to commit"));
+                }
+                return ok(state.orchestrator.group_commit(&t, p.message).await.map_err(provider_err)?);
+            }
             let cwd = std::path::PathBuf::from(&t.cwd);
             if !crate::github::has_changes(&cwd).await {
                 return Err(RpcError::invalid_params("nothing to commit"));
@@ -992,6 +1004,11 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         PrCreate::NAME => {
             let p: PrCreateParams = parse(params)?;
             let t = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            if !t.members.is_empty() {
+                return Err(RpcError::invalid_params(
+                    "This chat spans several repositories. Use Create pull requests (github.pr.create_group).",
+                ));
+            }
             let cwd = std::path::PathBuf::from(&t.cwd);
             if !crate::github::gh_available().await {
                 return Err(RpcError::new(codes::PROVIDER_UNAVAILABLE, "GitHub CLI (gh) is not installed or not logged in"));
@@ -1013,6 +1030,13 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 }
             };
             ok(crate::github::pr_create(&cwd, &title, &body, &base, p.draft).await.map_err(bad)?)
+        }
+        PrCreateGroup::NAME => {
+            let p: PrCreateGroupParams = parse(params)?;
+            if !crate::github::gh_available().await {
+                return Err(RpcError::new(codes::PROVIDER_UNAVAILABLE, "GitHub CLI (gh) is not installed or not logged in"));
+            }
+            ok(state.orchestrator.pr_create_group(p, "gh").await.map_err(bad)?)
         }
         PrList::NAME => {
             let p: PrListParams = parse(params)?;
