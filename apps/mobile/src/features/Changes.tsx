@@ -410,7 +410,7 @@ function GroupedChanges({
       </View>
       {groups.map((group) => (
         <View key={group.repo.path || "other"}>
-          <View style={[styles.line, { gap: 6, marginTop: 6, marginBottom: 2 }]}>
+          <View style={[styles.line, { gap: 6, marginTop: 6, marginBottom: group.files.length ? 2 : 10 }]}>
             <Icon name="shippingbox" size={14} color={group.files.length ? colors.ink : colors.secondary} />
             <T variant="caption" tone={group.files.length ? "ink" : "secondary"} style={{ flex: 1, fontWeight: group.files.length ? "600" : "400" }}>
               {group.repo.name}
