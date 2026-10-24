@@ -8,6 +8,7 @@ import {
   groupFilesByRepo,
   includedMembers,
   instructionsOfferBody,
+  instructionsPreview,
   isGroupProject,
   isGroupThread,
   memberForPath,
@@ -139,4 +140,19 @@ test("an outside change after a turn becomes a row of that turn, live and from a
     pending_approvals: [],
   });
   assert.equal(seeded.blocks.find((block) => block.kind === "outside_repo_changed")?.turnId, "turn");
+});
+
+test("the instructions preview lists members and their own files", () => {
+  const { agents, claude } = instructionsPreview("acme-platform", [
+    { path: ".", instructions: null },
+    { path: "api", instructions: "api/AGENTS.md" },
+    { path: "infra" },
+  ], false);
+  assert.equal(claude, "@AGENTS.md\n");
+  assert.match(agents, /^# acme-platform\n/);
+  assert.match(agents, /- `api\/`: instructions in `api\/AGENTS.md`/);
+  assert.match(agents, /- `infra\/`: no instructions file/);
+  assert.doesNotMatch(agents, /- `\.\/`/);
+  assert.match(agents, /this folder is not a repository\./);
+  assert.match(instructionsPreview("acme", [], true).agents, /Run git inside the repository you changed\.\n/);
 });

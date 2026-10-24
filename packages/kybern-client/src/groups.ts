@@ -256,6 +256,33 @@ export function instructionsOfferBody(folderName: string, memberNames: readonly 
   return `Agents start in ${folderName}, so they read its AGENTS.md and CLAUDE.md, not the ones inside each repository. Kybern can create ${which}, listing ${joinNames(memberNames)} and telling agents to read each repository’s own instructions first.`;
 }
 
+/**
+ * The files "Create files" will write, for the offer's Preview: the daemon's template (L3 spec §2.4) with the members
+ * known now. `instructions` is each member's own file relative to the group folder (`api/AGENTS.md`), when it has one.
+ * Kybern never edits these files after creating them.
+ */
+export function instructionsPreview(
+  projectName: string,
+  members: readonly { path: string; instructions?: string | null }[],
+  folderIsGit: boolean,
+): { agents: string; claude: string } {
+  const listed = members.filter((member) => member.path !== GROUP_FOLDER_MEMBER);
+  const lines = [
+    `# ${projectName}`,
+    "",
+    folderIsGit
+      ? "This folder is a git repository, and it also contains separate repositories nested inside it. Each has its own history, branches and pull requests."
+      : "This folder groups separate git repositories. Each has its own history, branches and pull requests.",
+    "",
+    ...listed.map((member) => (member.instructions ? `- \`${member.path}/\`: instructions in \`${member.instructions}\`` : `- \`${member.path}/\`: no instructions file`)),
+    "",
+    "Before you edit files in a repository, read its instructions file.",
+    folderIsGit ? "Run git inside the repository you changed." : "Run git inside the repository you changed; this folder is not a repository.",
+    "A change across repositories needs a commit in each of them.",
+  ];
+  return { agents: `${lines.join("\n")}\n`, claude: "@AGENTS.md\n" };
+}
+
 /** "AGENTS.md already exists in acme. Open it to edit." */
 export const instructionsExistError = (file: string, folderName: string): string => `${file} already exists in ${folderName}. Open it to edit.`;
 
