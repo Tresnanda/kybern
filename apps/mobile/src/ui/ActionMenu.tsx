@@ -325,14 +325,14 @@ export function ContextMenu({
       });
     });
   };
+  // No `display: contents` on the native view (expo-router's own Link uses it):
+  // it hides the whole row from VoiceOver.
   if (Platform.OS === "ios")
     return (
       <>
         <NativeLinkPreview
           nextScreenId={undefined}
           tabPath={undefined}
-          style={{ display: "contents" }}
-          disableForceFlatten
         >
           <View
             ref={anchor}

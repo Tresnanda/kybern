@@ -253,29 +253,29 @@ function SwipeActions({
         />
       )}
       {actions.map((action) => (
-        <Tap
-          key={action.title}
-          label={action.title}
-          feedback="none"
-          onPress={() => {
-            close();
-            action.onPress();
-          }}
-          style={{
-            width: ACTION_WIDTH,
-            alignSelf: "stretch",
-            alignItems: "center",
-            gap: space.xs,
-            backgroundColor: fill(action.tone),
-          }}
-        >
-          <Animated.View style={action === outer ? lift : undefined}>
-            <Icon name={action.icon} size={20} color="#FFFFFF" />
-          </Animated.View>
-          <T variant="footnote" style={{ color: "#FFFFFF" }} numberOfLines={1}>
-            {action.title}
-          </T>
-        </Tap>
+        <View key={action.title} style={{ width: ACTION_WIDTH, alignSelf: "stretch" }}>
+          <Tap
+            label={action.title}
+            feedback="none"
+            onPress={() => {
+              close();
+              action.onPress();
+            }}
+            style={{
+              flex: 1,
+              alignItems: "center",
+              gap: space.xs,
+              backgroundColor: fill(action.tone),
+            }}
+          >
+            <Animated.View style={action === outer ? lift : undefined}>
+              <Icon name={action.icon} size={20} color="#FFFFFF" />
+            </Animated.View>
+            <T variant="caption" style={{ color: "#FFFFFF" }} numberOfLines={1}>
+              {action.title}
+            </T>
+          </Tap>
+        </View>
       ))}
     </View>
   );

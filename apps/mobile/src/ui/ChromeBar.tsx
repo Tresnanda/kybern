@@ -93,6 +93,7 @@ export function ChromeBar({
   scrollY,
   contentUnder = true,
   avoidWindowControls = true,
+  safeArea = true,
   style,
   children,
 }: PropsWithChildren<{
@@ -103,6 +104,8 @@ export function ChromeBar({
   contentUnder?: boolean;
   /** Top bars on iPad keep clear of the window controls. */
   avoidWindowControls?: boolean;
+  /** Pad the screen's safe area (off for bars inside a smaller frame). */
+  safeArea?: boolean;
   style?: StyleProp<ViewStyle>;
 }>) {
   const { colors, dark } = useTheme();
@@ -142,8 +145,8 @@ export function ChromeBar({
           start: 0,
           end: 0,
           [edge]: 0,
-          paddingTop: top ? insets.top : 0,
-          paddingBottom: top ? 0 : insets.bottom,
+          paddingTop: top && safeArea ? insets.top : 0,
+          paddingBottom: !top && safeArea ? insets.bottom : 0,
           paddingStart: top && avoidWindowControls ? windowControls : 0,
         },
         style,

@@ -303,7 +303,7 @@ export function Button({
         minHeight: large ? 48 : 36,
         // 48 pt full-width buttons nest in `lg` cards at 6 pt; smaller ones are capsules.
         borderRadius: large ? radius.md : radius.full,
-        paddingHorizontal: filled ? (large ? 20 : 14) : 4,
+        paddingHorizontal: filled ? (large ? 20 : 14) : 0,
         backgroundColor: fill,
         flexDirection: "row",
         alignItems: "center",

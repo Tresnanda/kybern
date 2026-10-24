@@ -337,6 +337,8 @@ function Navigation() {
         <Stack.Screen name="activity" options={{ title: "Activity" }} />
         <Stack.Screen name="sessions" options={{ title: "Resume a session" }} />
         <Stack.Screen name="pair" options={{ headerShown: false }} />
+        <Stack.Screen name="dev-kit" options={{ title: "Design kit" }} />
+        <Stack.Screen name="dev-sheet" options={{ title: "Sheet", ...sheet }} />
       </Stack>
       </Shell>
       <ToastHost />
