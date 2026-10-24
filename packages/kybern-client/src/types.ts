@@ -211,8 +211,48 @@ export interface Project {
   coordinator?: CoordinatorOverrides | null;
   /** The space this project belongs to. Absent only for free chat and on daemons without spaces. */
   space_id?: SpaceId | null;
+  /** `group` for a parent folder of several git repositories. Absent means single. See `isGroupProject`. */
+  kind?: ProjectKind;
+  /** Group members in order; the first is the primary (the group folder itself when it is a member, else the first by path). */
+  members?: ProjectMember[];
+  /** Top-level entries of the group folder copied into each new worktree container. */
+  worktree_copy?: string[];
+  /** The user hid the "Add shared instructions" offer for this group. */
+  instructions_offer_dismissed?: boolean;
   created_at: DateTime;
   updated_at: DateTime;
+}
+
+export type ProjectKind = "single" | "group";
+/** `missing`: the folder is gone; `not_git`: it exists but is no longer a repository. */
+export type MemberStatus = "ok" | "missing" | "not_git";
+
+/** One git repository of a group project. */
+export interface ProjectMember {
+  /** '/'-separated, relative to `Project.path`; "." is the group folder itself. */
+  path: string;
+  /** Last path component, or the group folder's name for "."; disambiguated with the parent segment when two clash. */
+  name: string;
+  status: MemberStatus;
+}
+
+/** A group thread's record of one member, fixed when the thread starts. */
+export interface ThreadMember {
+  /** Relative to the project folder and to the thread cwd. */
+  path: string;
+  name: string;
+  /** False when left out of a worktree chat: no worktree; the agent treats `source_path` as read-only. */
+  included: boolean;
+  /** Absolute path of the member's checkout when the thread started. */
+  source_path: string;
+  /** Worktree mode: this member's worktree inside the container (branch `kybern/<thread-id>`). */
+  worktree?: WorktreeInfo | null;
+  /** Branch the worktree forked from (worktree) or checked out at start (local). */
+  base_branch?: string | null;
+  base_commit?: string | null;
+  worktree_state?: WorktreeState | null;
+  /** Missing or not a repository when the thread started, so not available to it. */
+  missing?: boolean;
 }
 
 export type SpaceId = Uuid;
@@ -279,6 +319,12 @@ export interface Thread {
    * delegating thread. Hidden from ordinary thread lists like subagents.
    */
   delegation?: DelegationInfo | null;
+  /**
+   * Group threads: the members this thread started with, in project order. Never
+   * changes when the project's members change. For a group worktree thread
+   * `worktree.path` and `cwd` are the container holding one worktree per member.
+   */
+  members?: ThreadMember[];
 }
 
 export type DelegationRole = "implementation" | "research" | "review" | "design" | "test" | "general";
@@ -1000,6 +1046,14 @@ export type TranscriptEntry =
       seq: EventSeq;
       commit: string;
       at: DateTime;
+    }
+  | {
+      /** Deselected repositories of a group worktree thread changed outside its worktree during this turn. */
+      role: "outside_repo_changed";
+      turn_id: TurnId;
+      seq: EventSeq;
+      repos: OutsideRepoChange[];
+      at: DateTime;
     };
 
 export interface Checkpoint {
@@ -1010,6 +1064,16 @@ export interface Checkpoint {
   provider_turn_id?: string | null;
   provider_turn_end?: string | null;
   created_at: DateTime;
+  /** Group threads: one entry per included member. `before`/`after` above are the primary's. */
+  repos?: RepoCheckpoint[];
+  /** A member could not be snapshotted; rewinding to this turn is refused. */
+  incomplete?: boolean;
+}
+
+export interface RepoCheckpoint {
+  repo: string;
+  before: string;
+  after?: string | null;
 }
 
 export type FileStatus =
@@ -1028,6 +1092,8 @@ export interface FileChange {
   additions: number;
   deletions: number;
   binary: boolean;
+  /** Group threads: the member this file belongs to. `path` stays relative to the thread cwd (`api/src/x.rs`). */
+  repo?: string | null;
 }
 
 export interface Diff {
@@ -1036,6 +1102,28 @@ export interface Diff {
   files: FileChange[];
   patch: string;
   patch_truncated?: boolean;
+  /** Group threads: per-member totals in project order, including included members with no changes. */
+  repos?: RepoDiff[];
+}
+
+export interface RepoDiff {
+  repo: string;
+  from: string;
+  to: string;
+  files: number;
+  additions: number;
+  deletions: number;
+}
+
+/** A deselected member whose original checkout changed during a turn of a group worktree thread. */
+export interface OutsideRepoChange {
+  repo: string;
+  name: string;
+  /** Absolute path of the original checkout. */
+  source_path: string;
+  dirty_files: number;
+  /** HEAD moved during the turn (a commit, checkout or reset). */
+  head_moved?: boolean;
 }
 
 // ---- events ----
@@ -1147,7 +1235,9 @@ export type EventPayload =
       data: JsonValue | null;
     }
   | { kind: "checkpoint_updated"; checkpoint: Checkpoint }
-  | { kind: "workspace_reverted"; to_turn_id: TurnId; commit: string };
+  | { kind: "workspace_reverted"; to_turn_id: TurnId; commit: string }
+  /** After a turn of a group worktree thread: deselected members' checkouts changed. Never reverted. */
+  | { kind: "outside_repo_changed"; repos: OutsideRepoChange[] };
 
 export interface SavedSession {
   provider: ProviderKind;
@@ -1235,6 +1325,10 @@ export interface ProjectsAddParams {
   name?: string;
   /** The space for a new project; the first space when absent. An existing path is returned unchanged. */
   space_id?: SpaceId;
+  /** `group` adds a group project; `members` is then required. */
+  kind?: ProjectKind;
+  /** Member paths relative to `path` (or absolute inside it). At least 2, where "." counts as one. */
+  members?: string[];
 }
 
 export interface ProjectsUpdateParams {
@@ -1254,10 +1348,107 @@ export interface ProjectsUpdateParams {
   coordinator?: CoordinatorOverrides | null;
   /** Moves the project to this space. */
   space_id?: SpaceId;
+  /** Group projects only: replaces the member list (same rules as add). Existing threads keep theirs. */
+  members?: string[];
+  /** Group projects only: replaces the entries copied into new worktree containers. */
+  worktree_copy?: string[];
+  /** Hides (true) or brings back (false) the "Add shared instructions" offer. */
+  instructions_offer_dismissed?: boolean;
 }
 
 export interface ProjectsRemoveParams {
   project_id: ProjectId;
+}
+
+// ---- group projects ----
+
+/** A git repository found inside a folder, offered as a group member. */
+export interface RepoCandidate {
+  /** Relative to the scanned folder; "." for the folder itself. */
+  path: string;
+  name: string;
+  /** Current branch, or the short SHA when detached. */
+  branch?: string | null;
+  detached?: boolean;
+  /** A submodule of this candidate path: listed, not selectable. */
+  submodule_of?: string | null;
+  /** Already a single project (informational; both may exist). */
+  project_id?: ProjectId | null;
+  /** Came from "Add folder…" rather than the scan. */
+  added?: boolean;
+}
+
+/** A folder that can't be a member, or a repository an operation skipped, with a user-facing sentence. */
+export interface RejectedFolder {
+  path: string;
+  reason: string;
+}
+
+export interface ProjectsScanReposParams {
+  /** Absolute folder on the daemon host (`~` expanded). */
+  path: string;
+  /** Folders picked with "Add folder…" (absolute or relative to `path`). */
+  include?: string[];
+  /** Folder levels below `path`. Default 2, max 4. */
+  depth?: number;
+}
+
+export interface ProjectsScanReposResult {
+  path: string;
+  /** Folder name, the default project name. */
+  name: string;
+  is_git: boolean;
+  /** Primary first ("." when present), then by path. */
+  candidates: RepoCandidate[];
+  rejected?: RejectedFolder[];
+  /** Set when the folder is already a project. */
+  existing_project_id?: ProjectId | null;
+  /** Stopped at 200 candidates or 20,000 folders. */
+  truncated?: boolean;
+}
+
+export interface MemberState {
+  path: string;
+  name: string;
+  status: MemberStatus;
+  branch?: string | null;
+  detached?: boolean;
+  dirty_files: number;
+  remote_url?: string | null;
+  /** The member's own instruction file relative to the group folder (`api/AGENTS.md`). */
+  instructions?: string | null;
+}
+
+/** A top-level entry of the group folder that may go in `Project.worktree_copy`. */
+export interface CopyCandidate {
+  name: string;
+  is_dir: boolean;
+}
+
+export interface ProjectsMembersStatusResult {
+  members: MemberState[];
+  /** Which shared instruction files exist in the group folder. */
+  agents_md: boolean;
+  claude_md: boolean;
+  /** Entries for "Also copy into worktrees", sorted by name. */
+  copy_candidates?: CopyCandidate[];
+}
+
+export interface ProjectsInstructionsCreateResult {
+  /** Files written in the group folder, e.g. ["AGENTS.md", "CLAUDE.md"]. Never overwrites. */
+  created: string[];
+}
+
+export const THREADS_WORKSPACE_PROGRESS_NOTIFICATION = "threads.workspace_progress";
+
+/** Transient progress while `threads.create` prepares worktrees (`total: 1` for single-repo threads). */
+export interface ThreadsWorkspaceProgress {
+  thread_id: ThreadId;
+  /** Repositories whose worktree exists. */
+  done: number;
+  total: number;
+  /** Member path being created; absent for single-repo threads and at the end. */
+  current?: string | null;
 }
 
 export interface SpacesListResult {
@@ -1387,6 +1578,10 @@ export interface ThreadsCreateParams {
   thread_id?: ThreadId;
   /** The client's id for `message` (as `threads.send` `message_id`); a repeat is answered from the first delivery. */
   message_id?: MessageId;
+  /** Group projects, worktree mode: member paths to include. Omit for all; ignored in local mode. */
+  members?: string[];
+  /** Group projects: base branch per member path (worktree fork point, or the branch a local checkout switches to). */
+  base_branches?: Record<string, string>;
 }
 
 export interface ThreadsGetParams {
@@ -2320,10 +2515,22 @@ export interface GitStatus {
   upstream?: string | null;
   remote_url?: string | null;
   pull_request?: PullRequest | null;
+  /** Group threads: one entry per member in project order, excluded ones too. The fields above are the primary's. */
+  repos?: RepoGitStatus[];
+}
+
+/** One member's git state in a group thread (the `GitStatus` fields are flattened in). */
+export interface RepoGitStatus extends Omit<GitStatus, "repos"> {
+  repo: string;
+  name: string;
+  included: boolean;
+  status: MemberStatus;
 }
 
 export interface GitBranchesParams {
   project_id: ProjectId;
+  /** Group projects: the member whose branches to list. Defaults to the primary. */
+  repo?: string;
 }
 
 export interface BranchInfo {
@@ -2346,8 +2553,37 @@ export interface GitCommitParams {
 }
 
 export interface GitCommitResult {
+  /** The primary's commit, or the first member committed in a group thread. */
   commit: string;
   message: string;
+  /** Group threads: every member committed, in project order. */
+  commits?: RepoCommit[];
+}
+
+export interface RepoCommit {
+  repo: string;
+  commit: string;
+  message: string;
+}
+
+export interface PrCreateGroupParams {
+  thread_id: ThreadId;
+  /** Default: every included member with changes and a GitHub remote. */
+  repos?: string[];
+  draft?: boolean;
+  /** Defaults to true. */
+  commit_first?: boolean;
+}
+
+export interface RepoPullRequest {
+  repo: string;
+  pull_request: PullRequest;
+}
+
+export interface PrCreateGroupResult {
+  pull_requests: RepoPullRequest[];
+  /** `path` is the member; `reason` says why it got no pull request. */
+  skipped?: RejectedFolder[];
 }
 
 export interface PrCreateParams {
@@ -2653,6 +2889,9 @@ export interface Methods {
   "projects.add": [ProjectsAddParams, Project];
   "projects.update": [ProjectsUpdateParams, Project];
   "projects.remove": [ProjectsRemoveParams, Empty];
+  "projects.scan_repos": [ProjectsScanReposParams, ProjectsScanReposResult];
+  "projects.members.status": [{ project_id: ProjectId }, ProjectsMembersStatusResult];
+  "projects.instructions.create": [{ project_id: ProjectId }, ProjectsInstructionsCreateResult];
   "spaces.list": [Empty, SpacesListResult];
   "spaces.create": [SpacesCreateParams, Space];
   "spaces.update": [SpacesUpdateParams, Space];
@@ -2718,6 +2957,7 @@ export interface Methods {
   "git.branches": [GitBranchesParams, GitBranchesResult];
   "git.commit": [GitCommitParams, GitCommitResult];
   "github.pr.create": [PrCreateParams, PullRequest];
+  "github.pr.create_group": [PrCreateGroupParams, PrCreateGroupResult];
   "github.pr.list": [PrListParams, PrListResult];
   "github.pr.detail": [PrDetailParams, PrDetailResult];
   "github.pr.page": [PrPageParams, PrPageResult];

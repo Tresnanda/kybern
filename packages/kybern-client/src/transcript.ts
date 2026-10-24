@@ -9,6 +9,7 @@ import type {
   EventOrigin,
   JsonValue,
   NoticeLevel,
+  OutsideRepoChange,
   RequestAnswerer,
   RuntimeTask,
   SessionReleaseReason,
@@ -77,6 +78,8 @@ export type Block =
       error: string | null
     }
   | { kind: "reverted"; id: string; turnId: TurnId; at: string; seq: number; commit: string }
+  /** Deselected repositories of a group worktree thread changed outside its worktree during this turn. */
+  | { kind: "outside_repo_changed"; id: string; turnId: TurnId; at: string; seq: number; repos: OutsideRepoChange[] }
 
 export interface ThreadState {
   notes?: import("./types.ts").ThreadNotes
@@ -203,6 +206,8 @@ function entryToBlock(e: TranscriptEntry): Block | null {
       return { kind: "notice", id: `notice:${e.seq}`, turnId: e.turn_id, at: e.at, seq: e.seq ?? 0, level: e.level, text: e.text }
     case "reverted":
       return { kind: "reverted", id: `revert:${e.seq}`, turnId: e.turn_id, at: e.at, seq: e.seq ?? 0, commit: e.commit }
+    case "outside_repo_changed":
+      return { kind: "outside_repo_changed", id: `outside:${e.seq}`, turnId: e.turn_id, at: e.at, seq: e.seq ?? 0, repos: e.repos }
     case "turn_summary":
       return {
         kind: "turn_end",
@@ -508,6 +513,12 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
     case "workspace_reverted":
       blocks = [...blocks, { kind: "reverted", id: `revert:${ev.seq}`, turnId, at, seq: ev.seq, commit: ev.commit }]
       break
+    case "outside_repo_changed": {
+      // Recorded after the turn ends; it belongs to that turn.
+      const owner = turnId || latestTurnId(blocks)
+      if (owner) blocks = [...blocks, { kind: "outside_repo_changed", id: `outside:${ev.seq}`, turnId: owner, at, seq: ev.seq, repos: ev.repos }]
+      break
+    }
     case "provider_session_bound":
       break
     case "provider_session_released": {
@@ -725,6 +736,8 @@ export interface TurnGroup {
   approvals: Extract<Block, { kind: "approval" }>[]
   end: Extract<Block, { kind: "turn_end" }> | null
   reverted: Extract<Block, { kind: "reverted" }> | null
+  /** Group worktree threads: repositories that changed outside the worktree during this turn. */
+  outside?: Extract<Block, { kind: "outside_repo_changed" }>[]
   running: boolean
 }
 
@@ -981,6 +994,9 @@ export function groupTurns(blocks: Block[]): TurnGroup[] {
         break
       case "reverted":
         g.reverted = b
+        break
+      case "outside_repo_changed":
+        (g.outside ??= []).push(b)
         break
       default:
         g.work.push(b)
