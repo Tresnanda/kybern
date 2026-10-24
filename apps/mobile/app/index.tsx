@@ -58,6 +58,7 @@ export default function Home() {
   const connected = app.status === "open";
   const project =
     app.projects.find((p) => p.id === draft.projectId) ?? app.projects[0];
+  const workspaceLabel = draft.worktree ? "Worktree" : "This checkout";
   const recent = app.threads
     .filter((t) => t.status !== "archived")
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
@@ -335,22 +336,41 @@ export default function Home() {
           ...styles.spread,
         }}
       >
-        <Tap
-          label={project ? `Change project, ${project.name}` : "Add a project"}
-          onPress={() =>
-            router.push(connected ? "/project-picker" : "/connect")
-          }
-          style={[styles.line, { gap: 7 }]}
-        >
-          <Icon name="folder" size={15} color={colors.secondary} />
-          <T variant="caption" tone="secondary">
-            {project?.name ??
-              (connected ? "Choose a project" : "No computer connected")}
-          </T>
-          {project && (
-            <Icon name="chevron.down" size={9} color={colors.muted} />
+        <View style={[styles.line, { gap: 16, flexShrink: 1 }]}>
+          <Tap
+            label={project ? `Change project, ${project.name}` : "Add a project"}
+            onPress={() =>
+              router.push(connected ? "/project-picker" : "/connect")
+            }
+            style={[styles.line, { gap: 7, flexShrink: 1 }]}
+          >
+            <Icon name="folder" size={15} color={colors.secondary} />
+            <T variant="caption" tone="secondary" numberOfLines={1}>
+              {project?.name ??
+                (connected ? "Choose a project" : "No computer connected")}
+            </T>
+            {project && (
+              <Icon name="chevron.down" size={9} color={colors.muted} />
+            )}
+          </Tap>
+          {connected && supportsWorktree(project) && (
+            <Tap
+              label={`Thread setup, ${workspaceLabel}`}
+              onPress={() => router.push("/configure")}
+              style={[styles.line, { gap: 7 }]}
+            >
+              <Icon
+                name="arrow.triangle.branch"
+                size={15}
+                color={colors.secondary}
+              />
+              <T variant="caption" tone="secondary" numberOfLines={1}>
+                {workspaceLabel}
+              </T>
+              <Icon name="chevron.down" size={9} color={colors.muted} />
+            </Tap>
           )}
-        </Tap>
+        </View>
         {(active > 0 || app.approvals.length > 0) && (
           <Tap
             label="View agent activity"
