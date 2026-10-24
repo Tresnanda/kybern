@@ -2,7 +2,9 @@ import { Stack, router, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import { ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Alert } from "../src/ui/Alert";
+import { confirm } from "../src/ui/Alert";
+import { InsetGroup, ListRow, SectionHeader } from "../src/ui/List";
+import { showToast } from "../src/ui/Toast";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { TaskRow } from "../src/features/Tasks";
 import { Changes } from "../src/features/Changes";
@@ -19,15 +21,7 @@ import {
   useApp,
   useThread,
 } from "../src/state/runtime";
-import {
-  Button,
-  ErrorBanner,
-  Field,
-  Group,
-  Page,
-  Row,
-  T,
-} from "../src/ui/primitives";
+import { Button, Empty, ErrorBanner, Field, Page } from "../src/ui/primitives";
 import { CONTENT_MAX_WIDTH, space, useTheme } from "../src/ui/theme";
 
 export default function Workspace() {
@@ -77,11 +71,12 @@ export default function Workspace() {
       alive = false;
     };
   }, [threadId, tab, app.status]);
-  async function run(work: () => Promise<unknown>) {
+  async function run(work: () => Promise<unknown>, done?: string) {
     setBusy(true);
     setError("");
     try {
       await work();
+      if (done) showToast(done);
       await refresh();
       if (threadId) await loadThread(threadId);
     } catch (e) {
@@ -99,7 +94,7 @@ export default function Workspace() {
       <Stack.Screen
         options={{
           title: tab === "More" ? "Thread details" : tab,
-          headerStyle: { backgroundColor: tab === "Changes" || tab === "Artifacts" ? colors.grouped : colors.background },
+          headerStyle: { backgroundColor: tab === "Changes" || tab === "Artifacts" || tab === "More" ? colors.grouped : colors.background },
         }}
       />
       {tab === "Changes" && threadId ? (
@@ -118,193 +113,145 @@ export default function Workspace() {
       ) : tab === "Files" && project ? (
         <Files key={project.id} project={project} threadId={threadId} reveal={reveal} />
       ) : (
-        <Page grouped={tab === "Artifacts"}>
+        <Page grouped={tab === "Artifacts" || tab === "More"}>
           <ErrorBanner error={error} />
           {tab === "Artifacts" && thread && <Artifacts key={`${app.activeId}:${threadId}`} thread={thread} />}
           {tab === "Notes" && threadId && <ThreadNotes key={`${app.activeId}:${threadId}`} threadId={threadId} />}
           {tab === "More" && thread && (
             <>
-              <Group title="Conversation">
-                <Field
-                  label="Thread title"
-                  value={title}
-                  onChangeText={setTitle}
-                />
-                <View style={{ marginTop: 12 }}>
+              <SectionHeader title="Title" first />
+              <View style={{ gap: space.md }}>
+                <Field label="Thread title" hideLabel value={title} onChangeText={setTitle} placeholder="Name this thread" />
+                <View style={{ alignSelf: "flex-start" }}>
                   <Button
+                    size="medium"
                     busy={busy}
                     disabled={!title.trim() || title === thread.title}
-                    onPress={() =>
-                      void run(() =>
-                        rpc("threads.update", {
-                          thread_id: thread.id,
-                          title: title.trim(),
-                        }),
-                      )
-                    }
+                    onPress={() => void run(() => rpc("threads.update", { thread_id: thread.id, title: title.trim() }), "Thread renamed")}
                   >
-                    Rename thread
+                    Rename
                   </Button>
                 </View>
-                <Row
+              </View>
+              <SectionHeader title="Conversation" />
+              <InsetGroup>
+                <ListRow
                   title={thread.pinned ? "Unpin thread" : "Pin thread"}
-                  icon="pin"
+                  leading="pin"
                   onPress={() =>
-                    void run(() =>
-                      rpc("threads.update", {
-                        thread_id: thread.id,
-                        pinned: !thread.pinned,
-                      }),
+                    void run(
+                      () => rpc("threads.update", { thread_id: thread.id, pinned: !thread.pinned }),
+                      thread.pinned ? "Thread unpinned" : "Thread pinned",
                     )
                   }
                 />
-                <Row
-                  title="Agent, model, and permissions"
-                  icon="slider.horizontal.3"
-                  onPress={() =>
-                    router.push({
-                      pathname: "/configure",
-                      params: { threadId: thread.id },
-                    })
-                  }
+                <ListRow
+                  title="Agent, model and permissions"
+                  leading="slider.horizontal.3"
+                  chevron
+                  onPress={() => router.push({ pathname: "/configure", params: { threadId: thread.id } })}
                 />
-                <Row
+                <ListRow
                   title="Hand off to another agent"
-                  icon="arrow.triangle.swap"
+                  leading="arrow.triangle.swap"
+                  chevron
+                  onPress={() => router.push({ pathname: "/configure", params: { threadId: thread.id, handoff: "1" } })}
+                />
+                <ListRow
+                  title="Skills, plugins and commands"
+                  leading="sparkles"
+                  chevron
+                  onPress={() => router.push({ pathname: "/capabilities", params: { threadId: thread.id } })}
+                />
+                <ListRow
+                  title="Compact conversation"
+                  subtitle="The agent summarizes its context to make room"
+                  leading="arrow.down.right.and.arrow.up.left"
+                  onPress={() => void run(() => rpc("threads.compact", { thread_id: thread.id }), "Compacting the conversation")}
+                />
+                <ListRow
+                  title="Release agent session"
+                  subtitle="Frees resources; your next message resumes it"
+                  leading="pause.circle"
+                  onPress={() => void run(() => rpc("threads.release", { thread_id: thread.id }), "Session released")}
+                />
+                <ListRow
+                  title="Archive thread"
+                  leading="archivebox"
                   onPress={() =>
-                    router.push({
-                      pathname: "/configure",
-                      params: { threadId: thread.id, handoff: "1" },
+                    confirm({
+                      title: "Archive this thread?",
+                      message: "You can find it in the Archived filter in Threads.",
+                      confirm: "Archive",
+                      destructive: false,
+                      onConfirm: () =>
+                        void run(async () => {
+                          await rpc("threads.archive", { thread_id: thread.id });
+                          router.dismissTo("/library");
+                        }, "Thread archived"),
                     })
                   }
                 />
-                <Row
-                  title="Compact conversation"
-                  detail="Let the agent summarize context to make room."
-                  icon="arrow.down.right.and.arrow.up.left"
-                  onPress={() =>
-                    void run(() =>
-                      rpc("threads.compact", { thread_id: thread.id }),
-                    )
-                  }
-                />
-                <Row
-                  title="Release agent session"
-                  detail="Free resources. Your next message resumes the session."
-                  icon="pause.circle"
-                  onPress={() =>
-                    void run(() =>
-                      rpc("threads.release", { thread_id: thread.id }),
-                    )
-                  }
-                />
-                <Row
-                  title="Archive thread"
-                  icon="archivebox"
-                  onPress={() => Alert.alert(
-                      "Archive this thread?",
-                      "You can find it in the Archived filter in Threads.",
-                      [
-                        { text: "Cancel", style: "cancel" },
-                        {
-                          text: "Archive thread",
-                          onPress: () =>
-                            void run(async () => {
-                              await rpc("threads.archive", {
-                                thread_id: thread.id,
-                              });
-                              router.dismissTo("/library");
-                            }),
-                        },
-                      ],
-                    )
-                  }
-                />
-              </Group>
-              <Group title="Agent activity">
-                {tasks.length ? (
-                  tasks.map((task) => <TaskRow key={task.id} task={task} />)
-                ) : (
-                  <T variant="footnote" tone="secondary">
-                    No background agents or processes.
-                  </T>
-                )}
-              </Group>
-              <Group title="Agent limits">
+              </InsetGroup>
+              <SectionHeader title="Agent limits" />
+              <InsetGroup>
                 {snapshot.providerUsage?.context && (
-                  <Row
+                  <ListRow
                     title="Context used"
-                    detail={`${snapshot.providerUsage.context.used_tokens.toLocaleString()} of ${snapshot.providerUsage.context.window_tokens.toLocaleString()} tokens`}
+                    subtitle={`${snapshot.providerUsage.context.used_tokens.toLocaleString()} of ${snapshot.providerUsage.context.window_tokens.toLocaleString()} tokens`}
                   />
                 )}
                 {snapshot.providerUsage?.limits?.map((limit) => (
-                  <Row
+                  <ListRow
                     key={limit.name}
                     title={limit.name}
-                    detail={
-                      limit.resets_at
-                        ? `Resets ${new Date(limit.resets_at * 1000).toLocaleString()}`
-                        : undefined
-                    }
-                    trailing={
-                      <T variant="footnote">
-                        {Math.round(limit.used_percent)}% used
-                      </T>
-                    }
+                    subtitle={limit.resets_at ? `Resets ${new Date(limit.resets_at * 1000).toLocaleString()}` : undefined}
+                    meta={`${Math.round(limit.used_percent)}% used`}
                   />
                 ))}
-                {!snapshot.providerUsage?.context &&
-                  !snapshot.providerUsage?.limits?.length && (
-                    <T variant="footnote" tone="secondary">
-                      This agent has not reported its limits.
-                    </T>
-                  )}
-              </Group>
-              <Row
-                title="Skills, plugins, and commands"
-                icon="sparkles"
-                onPress={() =>
-                  router.push({
-                    pathname: "/capabilities",
-                    params: { threadId: thread.id },
-                  })
-                }
-              />
-              <Group title="Checkpoints">
-                {checkpoints.map((checkpoint, i) => (
-                  <Row
-                    key={checkpoint.turn_id}
-                    title={`Checkpoint ${i + 1}`}
-                    detail={new Date(checkpoint.created_at).toLocaleString()}
-                    icon="clock.arrow.circlepath"
-                    onPress={() =>
-                      Alert.alert(
-                        "Restore this checkpoint?",
-                        "Workspace files and the conversation will return to this point.",
-                        [
-                          { text: "Cancel", style: "cancel" },
-                          {
-                            text: "Restore checkpoint",
-                            style: "destructive",
-                            onPress: () =>
-                              void run(() =>
-                                rpc("threads.revert", {
-                                  thread_id: thread.id,
-                                  turn_id: checkpoint.turn_id,
-                                }),
-                              ),
-                          },
-                        ],
-                      )
-                    }
-                  />
-                ))}
-                {!checkpoints.length && (
-                  <T variant="footnote" tone="secondary">
-                    Checkpoints appear after completed turns.
-                  </T>
+                {!snapshot.providerUsage?.context && !snapshot.providerUsage?.limits?.length && (
+                  <Empty variant="inline" title="This agent has not reported its limits." />
                 )}
-              </Group>
+              </InsetGroup>
+              <SectionHeader title="Agent activity" count={tasks.length || undefined} />
+              <InsetGroup>
+                {tasks.length ? (
+                  tasks.map((task) => (
+                    <View key={task.id} style={{ paddingHorizontal: space.lg }}>
+                      <TaskRow task={task} />
+                    </View>
+                  ))
+                ) : (
+                  <Empty variant="inline" title="No background agents or processes." />
+                )}
+              </InsetGroup>
+              <SectionHeader title="Checkpoints" count={checkpoints.length || undefined} />
+              <InsetGroup>
+                {checkpoints.length ? (
+                  checkpoints.map((checkpoint, i) => (
+                    <ListRow
+                      key={checkpoint.turn_id}
+                      title={`Checkpoint ${i + 1}`}
+                      subtitle={new Date(checkpoint.created_at).toLocaleString()}
+                      leading="clock.arrow.circlepath"
+                      onPress={() =>
+                        confirm({
+                          title: `Restore checkpoint ${i + 1}?`,
+                          message: "Workspace files and the conversation return to this point.",
+                          confirm: "Restore",
+                          onConfirm: () =>
+                            void run(
+                              () => rpc("threads.revert", { thread_id: thread.id, turn_id: checkpoint.turn_id }),
+                              "Checkpoint restored",
+                            ),
+                        })
+                      }
+                    />
+                  ))
+                ) : (
+                  <Empty variant="inline" title="Checkpoints appear after completed turns." />
+                )}
+              </InsetGroup>
             </>
           )}
         </Page>
