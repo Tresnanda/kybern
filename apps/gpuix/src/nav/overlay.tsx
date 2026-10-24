@@ -263,6 +263,7 @@ export function Menu({
   rootStyle,
   fit,
   panel,
+  priority,
 }: {
   trigger: (open: boolean) => ReactNode
   children: ReactNode
@@ -279,6 +280,8 @@ export function Menu({
   fit?: 'snap' | 'switch'
   /** Overrides on the menu panel, for a popover opened from a trigger (its radius and padding). */
   panel?: StyleDesc
+  /** Layer order: a menu inside a dialog passes 7, like the kit `Select`, to sit above the dialog's card. */
+  priority?: number
 }) {
   const t = useTheme()
   const { renderer } = useGpuix()
@@ -366,6 +369,7 @@ export function Menu({
           align={align}
           sideOffset={sideOffset}
           fit={fit}
+          {...(priority !== undefined ? { priority } : {})}
           tabIndex={0}
           autoFocus
           leaving={leaving}

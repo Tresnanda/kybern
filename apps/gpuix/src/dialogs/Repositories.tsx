@@ -19,6 +19,7 @@ import {
 } from '../../../../packages/kybern-client/src/groups.ts'
 import type { MemberState, Project, ProjectMember, RepoCandidate } from '../../../../packages/kybern-client/src/types.ts'
 import { Badge } from '../kit/Badge.tsx'
+import { useEscapeLayer } from '../kit/AlertDialog.tsx'
 import { Button } from '../kit/Button.tsx'
 import { RADIUS, useControls } from '../kit/controls.ts'
 import { IconButton } from '../kit/IconButton.tsx'
@@ -69,6 +70,8 @@ function MemberList({ project, close, onAdd }: { project: Project; close: () => 
   const [error, setError] = useState('')
   const [removed, setRemoved] = useState<{ name: string; before: string[] } | null>(null)
   const [creating, setCreating] = useState(false)
+  const [copyOpen, setCopyOpen] = useState(false)
+  useEscapeLayer(copyOpen)
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => { void loadMemberStatus(project.id, true) }, [project.id])
   useEffect(() => () => { if (undoTimer.current) clearTimeout(undoTimer.current) }, [])
@@ -182,7 +185,7 @@ function MemberList({ project, close, onAdd }: { project: Project; close: () => 
               <TokenChip key={name} testId={`repositories-copy-${name}`} lead={<Icon source={status?.copy_candidates?.find((e) => e.name === name)?.is_dir === false ? N.file : N.folder} size={12} color={t.textSecondary} />} onRemove={() => void saveCopy(copy.filter((n) => n !== name))} removeLabel={`Stop copying ${name}`}>{name}</TokenChip>
             ))}
             {copy.length === 0 && <Label color={t.textTertiary} size={12} lineHeight={24}>{GROUP_COPY.alsoCopyEmpty}</Label>}
-            <Menu testId="repositories-copy-add" align="start" width={240} trigger={(open) => <Button variant="ghost" size="sm" icon={N.plus} chevron={false} disabled={!choices.length} trailing={null} label={GROUP_COPY.alsoCopyAdd} style={open ? { backgroundColor: c.ghost.hover } : undefined}>{GROUP_COPY.alsoCopyAdd}</Button>}>
+            <Menu testId="repositories-copy-add" open={copyOpen} onOpenChange={setCopyOpen} priority={7} align="start" width={240} trigger={(open) => <Button variant="ghost" size="sm" icon={N.plus} chevron={false} disabled={!choices.length} trailing={null} label={GROUP_COPY.alsoCopyAdd} style={open ? { backgroundColor: c.ghost.hover } : undefined}>{GROUP_COPY.alsoCopyAdd}</Button>}>
               {choices.map((entry) => (
                 <MenuItem key={entry.name} id={entry.name} testId={`repositories-copy-choice-${entry.name}`} icon={entry.is_dir ? N.folder : N.file} label={entry.is_dir ? `${entry.name}/` : entry.name} onSelect={() => void saveCopy([...copy, entry.name].sort())} />
               ))}
@@ -228,6 +231,8 @@ function MemberRow({ member, state, primary, first, folder, local, atMinimum, on
   const c = useControls()
   const [hover, setHover] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
+  // An open menu is the innermost overlay: a press in it, or Escape, must not close the dialog.
+  useEscapeLayer(menuOpen)
   const missing = (state?.status ?? member.status) !== 'ok'
   const sub = missing ? memberMissingLabel(folder) : remoteSlug(state?.remote_url) ?? member.path
   return (
@@ -254,7 +259,7 @@ function MemberRow({ member, state, primary, first, folder, local, atMinimum, on
         </div>
       ) : null}
       <div style={{ display: 'flex', opacity: hover || menuOpen ? 1 : 0 }}>
-        <Menu open={menuOpen} onOpenChange={setMenuOpen} align="end" width={224} testId={`repositories-menu-${member.path}`} trigger={() => <IconButton tabIndex={-1} size="sm" icon={N.ellipsis} label={`Actions for ${member.name}`} active={menuOpen} />}>
+        <Menu open={menuOpen} onOpenChange={setMenuOpen} priority={7} align="end" width={224} testId={`repositories-menu-${member.path}`} trigger={() => <IconButton tabIndex={-1} size="sm" icon={N.ellipsis} label={`Actions for ${member.name}`} active={menuOpen} />}>
           {local && <MenuItem id="reveal" icon={N.folder} label={GROUP_COPY.revealInFinder} disabled={missing} onSelect={onReveal} />}
           <MenuItem id="own" icon={N.plus} label={GROUP_COPY.addAsOwnProject} disabled={missing} onSelect={onOwnProject} />
           <MenuSeparator />

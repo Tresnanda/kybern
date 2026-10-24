@@ -98,8 +98,8 @@ export function GroupBranchChip({ project, useWorktree, still = false }: { proje
         <MenuItem key={member.path} id={`missing:${member.path}`} icon={N.alert} label={member.name} description={memberMissingLabel(folder)} disabled onSelect={() => {}} />
       ))}
       <MenuSeparator />
-      <div style={{ display: 'flex', paddingLeft: 8, paddingRight: 8, paddingTop: 2, paddingBottom: 4 }}>
-        <Label color={muted(t, 0.6)} size={12} lineHeight={16}>{useWorktree ? worktreeBranchCaption('a new kybern/ branch') : GROUP_COPY.branchMenuLocalCaption}</Label>
+      <div style={{ display: 'flex', flexDirection: 'column', paddingLeft: 8, paddingRight: 8, paddingTop: 2, paddingBottom: 4 }}>
+        <Label color={muted(t, 0.6)} size={12} lineHeight={16} style={{ maxWidth: 276 }}>{useWorktree ? worktreeBranchCaption('a new kybern/ branch') : GROUP_COPY.branchMenuLocalCaption}</Label>
       </div>
     </Menu>
   )
@@ -171,8 +171,8 @@ export function ReposChip({ project, still = false }: { project: Project; still?
           </PickerItem>
         )
       })}
-      <div style={{ display: 'flex', paddingLeft: 8, paddingRight: 8, paddingTop: 6, paddingBottom: 4 }}>
-        <Label color={muted(t, 0.6)} size={12} lineHeight={16}>{footer}</Label>
+      <div style={{ display: 'flex', flexDirection: 'column', paddingLeft: 8, paddingRight: 8, paddingTop: 6, paddingBottom: 4 }}>
+        <Label color={muted(t, 0.6)} size={12} lineHeight={16} style={{ maxWidth: 276 }}>{footer}</Label>
       </div>
     </PickerMenu>
   )

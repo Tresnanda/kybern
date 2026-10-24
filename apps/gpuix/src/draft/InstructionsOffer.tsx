@@ -53,6 +53,8 @@ export function InstructionsOffer({ project }: { project: Project | undefined })
   // Single projects render nothing here at all, so their new chat page stays exactly as it was.
   if (!group) return null
   return (
+    // Stretched to the composer's width: the column it sits in centres shrink-to-fit children, and the body must wrap.
+    <div style={{ display: 'flex', flexDirection: 'column', alignSelf: 'stretch', width: '100%' }}>
     <Collapse open={show} closeDuration={0.22}>
       <Presence show={show} exit={EXIT.row} style={{ width: '100%', paddingBottom: 16 }}>
         {group && (
@@ -70,6 +72,7 @@ export function InstructionsOffer({ project }: { project: Project | undefined })
         )}
       </Presence>
     </Collapse>
+    </div>
   )
 }
 

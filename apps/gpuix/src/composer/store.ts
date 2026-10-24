@@ -99,9 +99,12 @@ export function patch(next: Partial<ComposerData> | ((d: ComposerData) => Partia
   const previous = data
   data = { ...data, ...(typeof next === 'function' ? next(data) : next) }
   if (data.target) { targets.set(data.target.threadId, data.target); if (targets.size > 100) targets.delete(targets.keys().next().value!) }
-  if (data.draft !== previous.draft || data.favorites !== previous.favorites || data.recents !== previous.recents) save('kybern.composer.choices', { draft: data.draft, favorites: data.favorites, recents: data.recents })
+  if (data.draft !== previous.draft || data.favorites !== previous.favorites || data.recents !== previous.recents) save('kybern.composer.choices', { draft: savedDraft(data.draft), favorites: data.favorites, recents: data.recents })
   for (const l of listeners) l()
 }
+
+/** What survives a restart: a group chat's repositories and branches are picked for one chat, never remembered for the next. */
+const savedDraft = ({ group: _group, ...draft }: DraftChoices): DraftChoices => draft
 
 export function patchDraft(next: Partial<DraftChoices>, paneId = getFocusedPaneId()) {
   const draft = { ...(paneDrafts.get(paneId) ?? data.draft), ...next }
@@ -516,5 +519,5 @@ export async function uploadBytes(name: string, mediaType: string, bytes: ArrayB
   return (await response.json()) as UploadedAsset
 }
 
-onEnvironmentLeaving(() => save('kybern.composer.choices', { draft: data.draft, favorites: data.favorites, recents: data.recents }))
+onEnvironmentLeaving(() => save('kybern.composer.choices', { draft: savedDraft(data.draft), favorites: data.favorites, recents: data.recents }))
 onEnvironmentChange(() => { loadedFor = null; providerLoad = null; targetSeq.clear(); catalogSeq.clear(); targets.clear(); catalogs.clear(); catalogLoads.clear(); paneDrafts.clear(); patch({ ...initialData, ...load<Partial<Pick<ComposerData, 'draft' | 'favorites' | 'recents'>>>('kybern.composer.choices', {}) }) })
