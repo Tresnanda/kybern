@@ -50,6 +50,16 @@ export const rowInset = (leading: boolean) =>
 
 type Position = { last: boolean; inGroup: boolean };
 const RowPosition = createContext<Position>({ last: true, inGroup: false });
+/** The surface plain rows sit on, when it isn't `background` (the iPad sidebar's material). */
+const RowSurface = createContext<string | null>(null);
+
+/**
+ * Plain rows inside draw on `color` instead of `background`: pass "transparent"
+ * over a material. `lift` is the opaque colour the iOS long-press preview uses.
+ */
+export function ListSurface({ color, lift, children }: PropsWithChildren<{ color: string; lift?: string }>) {
+  return <RowSurface.Provider value={lift ? `${color}|${lift}` : color}>{children}</RowSurface.Provider>;
+}
 
 /** A rounded group of rows on a `surface`, separated from its neighbours by surface, not margin. */
 export function InsetGroup({
@@ -425,11 +435,12 @@ export function ListRow(props: ListRowProps) {
   } = props;
   const { colors } = useTheme();
   const position = useContext(RowPosition);
+  const [surface, lift] = (useContext(RowSurface) ?? "").split("|");
   const background = selected
     ? colors.accentSoft
     : position.inGroup
       ? colors.surface
-      : colors.background;
+      : surface || colors.background;
   const hasLeading = leading != null && leading !== false;
   const showSeparator = position.inGroup ? !position.last : !!separator;
   const lead = hasLeading ? (
@@ -523,7 +534,7 @@ export function ListRow(props: ListRowProps) {
     );
   } else if (menu?.length) {
     row = (
-      <ContextMenu items={menu} title={menuTitle ?? title} surface={background} radius={position.inGroup ? radius.md : 0}>
+      <ContextMenu items={menu} title={menuTitle ?? title} surface={lift || background} radius={position.inGroup ? radius.md : 0}>
         {({ onLongPress }) => (
           <Tap
             label={a11y}
