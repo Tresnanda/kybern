@@ -1508,7 +1508,9 @@ impl Orchestrator {
                 self.inner.store.project_update(&project)?;
                 self.publish_projects();
             } else {
-                return Err(anyhow!("project is not a git repository; cannot create a worktree"));
+                return Err(anyhow!(
+                    "This project is not a git repository, so it can't use a worktree. Run git init in it, or start the chat without a worktree."
+                ));
             }
         }
         let now = Utc::now();
