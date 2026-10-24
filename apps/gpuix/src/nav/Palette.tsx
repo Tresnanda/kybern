@@ -20,6 +20,8 @@ import { Icon } from '../icons.tsx'
 import { SearchField } from '../kit/SearchField.tsx'
 import { MatrixLoader } from '../MatrixLoader.tsx'
 import { getState, useApp } from '../state.ts'
+import { renameProjectInline } from '../sidebar/renameProject.ts'
+import { PROJECT_RENAME_COPY } from '../../../../packages/kybern-client/src/projectName.ts'
 import { SPACE_COPY, inSpace } from '../../../../packages/kybern-client/src/spaces.ts'
 import { switchSpace, useCurrentSpaceId } from '../spaces/current.ts'
 import { openSpaceEditor } from '../spaces/ui.ts'
@@ -61,6 +63,11 @@ function PaletteDialog() {
   const spaces = useSpaces((s) => s.spaces)
   const spacesOn = useSpaces((s) => s.supported === true)
   const current = spaces.find((space) => space.id === spaceId) ?? null
+  // The project of the open thread, or of the draft on the home screen.
+  const renamable = useApp((s) => {
+    const id = s.selectedId ? s.threads.find((x) => x.id === s.selectedId)?.project_id : s.draft.projectId
+    return id && !isFreeChatProject(id) ? (s.projects.find((p) => p.id === id) ?? null) : null
+  })
   const selectedId = useApp((s) => s.selectedId)
   const inSplit = useSplitRoot().kind === 'split'
   const [query, setQuery] = useState('')
@@ -125,6 +132,9 @@ function PaletteDialog() {
         ? [{ id: 'go-forward', label: 'Go forward', keywords: 'forward next history navigate', group: 'Suggested' as const, icon: <Icon source={N.arrowRight} size={15} color={muted(t, 1)} />, meta: kbd(['⌘', ']']), run: () => void goForward() }]
         : []),
       ...(spacesOn ? spaceCommands() : []),
+      ...(renamable
+        ? [{ id: 'project-rename', label: PROJECT_RENAME_COPY.palette, keywords: `rename project name ${renamable.name}`, group: 'Suggested' as const, icon: <Icon source={N.pencil} size={15} color={muted(t, 1)} />, run: () => renameProjectInline(renamable.id) }]
+        : []),
       {
         id: 'settings',
         label: 'Settings',
