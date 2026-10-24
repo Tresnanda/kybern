@@ -256,9 +256,31 @@ including Reduce Motion and Android's separate dismissal behavior.
 See the [physical iPad verification](perf/ipad-attachments-2026-09-10.md) for
 the distinct causes, release-build checks, and device-test limits.
 
-Settings opens a compact overview with dedicated pages for appearance, computers,
-thread defaults, agents, usage, background/updates, and access. Computer settings
-load when their page is opened; appearance and saved connections work offline.
+Threads (phone) and the iPad sidebar share one row and one set of rules
+(`src/state/threadList.ts`, `src/features/ThreadRows.tsx`): a status glyph or the
+agent's mark with an unread dot, title, project · agent · state, time, and a
+"Needs input" / "Pending approval" badge from the shared `threadAttention` rules.
+Unread marks and dismissed attention are kept per computer in a small JSON file
+(`src/state/prefs.ts`); waiting requests come from `threads.list` activity.
+Delegated and subagent children nest under their parent while they work
+(`visibleSubagentThreads`). Swipe to pin or archive (Archive has no Undo: there
+is no unarchive method). Settings, the agent filter, archived threads and
+"Mark all as read" live in the Threads header; the iPad sidebar uses the system
+chrome material, shows the active space as its title and never wraps its filter.
+
+Spaces group projects (`src/state/spaces.ts`, shared `spaces.ts` rules). The
+active space is this phone's choice, remembered per computer, and scopes the
+Threads list, the sidebar, Projects and the project picker. Spaces can be
+created, renamed, recoloured, reordered and deleted (not the default space);
+projects move between spaces from their menu. `spaces.changed` keeps every
+client in step. Projects are listed in the reader's order (Move up / Move down,
+kept per computer); a group project offers the shared AGENTS.md / CLAUDE.md.
+
+Settings is a grouped list ("This phone", then the computer) with a page per
+category; on iPad the list is a rail beside the open page. Pages follow
+`settings.changed`, so edits made on the computer show at once. A phone paired
+with a code has the client scope only: Access shows which computer and how it is
+connected, and says to manage paired devices and Tailscale on the computer.
 
 Task activity retains parent/child relationships, separate agent transcripts,
 live process output, status and provider-supported stop/background controls.

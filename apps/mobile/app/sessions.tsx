@@ -4,23 +4,15 @@ import { useEffect, useState } from "react";
 import { View } from "react-native";
 import { Section } from "../src/features/settings/common";
 import { type ProviderKind, type SavedSession } from "../src/state/protocol";
-import { errorText, refresh, rpc, useApp } from "../src/state/runtime";
+import { homeOf, shortPath } from "../src/state/projectList";
+import { currentClient, errorText, refresh, rpc, useApp } from "../src/state/runtime";
+import { relativeTime } from "../src/state/threadList";
 import { ListRow } from "../src/ui/List";
 import { Button, Empty, ErrorBanner, Page } from "../src/ui/primitives";
 import { ProviderMark } from "../src/ui/ProviderMark";
 import { ListSearch } from "../src/ui/Search";
 import { space, useTheme } from "../src/ui/theme";
 import { Working } from "../src/ui/Working";
-
-const homeless = (path: string) => path.replace(/^\/(Users|home)\/[^/]+/, "~");
-function ago(at: string) {
-  const minutes = Math.max(0, (Date.now() - Date.parse(at)) / 60000);
-  if (!Number.isFinite(minutes)) return undefined;
-  if (minutes < 1) return "Now";
-  if (minutes < 60) return `${Math.floor(minutes)}m`;
-  if (minutes < 1440) return `${Math.floor(minutes / 60)}h`;
-  return `${Math.floor(minutes / 1440)}d`;
-}
 
 export default function Sessions() {
   const app = useApp();
@@ -122,9 +114,9 @@ export default function Sessions() {
             <ListRow
               key={s.id}
               title={s.title || "Untitled session"}
-              subtitle={homeless(s.cwd)}
+              subtitle={shortPath(s.cwd, homeOf(currentClient()?.info?.data_dir))}
               subtitleLines={1}
-              meta={ago(s.updated_at)}
+              meta={Number.isFinite(Date.parse(s.updated_at)) ? relativeTime(s.updated_at) : undefined}
               disabled={busy}
               onPress={() => void resume(s)}
             />
