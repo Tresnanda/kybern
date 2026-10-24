@@ -1,5 +1,8 @@
 import { useState, type ReactNode } from "react";
-import { Keyboard, View } from "react-native";
+import { Keyboard, Pressable, View } from "react-native";
+import Animated, { useReducedMotion } from "react-native-reanimated";
+import { CSS_EASE_OUT, DURATION } from "../components/liquid/motion";
+import type { IconName } from "../ui/icons";
 import Svg, { Circle } from "react-native-svg";
 import { router } from "expo-router";
 import { setDraft, useDraft } from "../state/draft";
@@ -26,7 +29,7 @@ import {
 } from "../ui/primitives";
 import { ProviderMark } from "../ui/ProviderMark";
 import { useLayout } from "../state/layout";
-import { useTheme } from "../ui/theme";
+import { radius, space, useTheme } from "../ui/theme";
 import type { ThreadState } from "../state/transcript";
 import { backendLabel, catalogBackends, findModel, modelChoices } from "../../../../packages/kybern-client/src/models";
 const selectUsage = (state: ThreadState) => state.providerUsage;
@@ -115,42 +118,33 @@ export function ComposerControls({
           color={mode === "full-access" ? colors.warning : colors.secondary}
         />
       </Tap>
-      <View style={{ width: 8 }} />
-      {thread && (
+      {/* Context only when it matters (≥ 50 %), with its number: a bare ring at low
+          usage read as an activity spinner (ux-thread H10). */}
+      {thread && fraction >= 0.5 && (
         <Tap
-          label={
-            context
-              ? `Context usage: ${Math.round(fraction * 100)} percent`
-              : "Context usage unavailable"
-          }
+          label={`Context ${Math.round(fraction * 100)} percent used. Open usage`}
           disabled={disabled}
           onPress={() => openOptions("usage")}
-          style={{ width: 44, alignItems: "center" }}
+          style={{ flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.xs }}
         >
-          <Svg width={20} height={20} viewBox="0 0 20 20">
+          <Svg width={18} height={18} viewBox="0 0 20 20">
+            <Circle cx={10} cy={10} r={7.5} stroke={colors.line} strokeWidth={2.5} fill="none" />
             <Circle
               cx={10}
               cy={10}
               r={7.5}
-              stroke={colors.line}
+              stroke={fraction >= 0.85 ? colors.warning : colors.secondary}
               strokeWidth={2.5}
               fill="none"
+              strokeLinecap="round"
+              strokeDasharray={`${fraction * 47.124} 47.124`}
+              rotation={-90}
+              origin="10, 10"
             />
-            {fraction > 0 && (
-              <Circle
-                cx={10}
-                cy={10}
-                r={7.5}
-                stroke={fraction >= 0.85 ? colors.warning : colors.ink}
-                strokeWidth={2.5}
-                fill="none"
-                strokeLinecap="round"
-                strokeDasharray={`${fraction * 47.124} 47.124`}
-                rotation={-90}
-                origin="10, 10"
-              />
-            )}
           </Svg>
+          <T variant="caption" tone={fraction >= 0.85 ? "warning" : "secondary"} style={{ fontVariant: ["tabular-nums"] }}>
+            {Math.round(fraction * 100)}%
+          </T>
         </Tap>
       )}
       {/* On tablet the model chip sits at the trailing edge next to Send; on the
@@ -596,5 +590,62 @@ export function ComposerOptions({
         </>
       )}
     </Page>
+  );
+}
+
+/**
+ * The composer's send control (ux-thread M4). Empty: a quiet `raised` disc with a
+ * muted arrow (it is not a dimmed primary). Ready: `ink` with an `inverse` arrow.
+ * Running with nothing typed: Stop. The fill cross-fades in 120 ms.
+ */
+export function SendButton({
+  state,
+  icon,
+  label,
+  onPress,
+  disabled,
+}: {
+  state: "empty" | "ready" | "stop";
+  icon: IconName;
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+}) {
+  const { colors } = useTheme();
+  const reduced = useReducedMotion();
+  const on = state !== "empty";
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}
+    >
+      {({ pressed }) => (
+        <Animated.View
+          style={{
+            width: 34,
+            height: 34,
+            borderRadius: radius.full,
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: on ? colors.ink : colors.raised,
+            opacity: disabled && on ? 0.6 : 1,
+            transform: [{ scale: pressed && !reduced ? 0.94 : 1 }],
+            transitionProperty: ["backgroundColor", "transform", "opacity"],
+            transitionDuration: DURATION.press,
+            transitionTimingFunction: CSS_EASE_OUT,
+          }}
+        >
+          <Icon
+            name={state === "stop" ? "stop.fill" : icon}
+            size={state === "stop" ? 14 : 18}
+            color={on ? colors.inverse : colors.muted}
+          />
+        </Animated.View>
+      )}
+    </Pressable>
   );
 }
