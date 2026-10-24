@@ -24,6 +24,8 @@ import { chunkRuns, isAgentLaunchBlock, isDelegationLaunchBlock, isOrchestration
 import { buildWorkHierarchy, shouldRevealLiveText, type Block, type TurnGroup } from '../../../../packages/kybern-client/src/transcript.ts'
 import type { ContentPart, Diff, RuntimeTask, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { removePending, usePendingSend } from '../composer/pending.ts'
+import { useNewChat } from '../composer/newChats.ts'
+import { PREPARING_WORKTREE } from '../../../../packages/kybern-client/src/newChat.ts'
 import { restoreToComposer, retryPending } from '../composer/store.ts'
 import { useApp } from '../state.ts'
 import { TranscriptTail } from './Window.tsx'
@@ -105,6 +107,9 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
   // An optimistic send the daemon rejected (`composer/pending.ts`): its bubble stays, with Retry and Edit, and no turn runs.
   const send = usePendingSend(threadId, group.user?.id)
   const failed = send?.state === 'failed'
+  // A new chat in worktree mode: its first turn starts once the daemon has made the worktree (`composer/newChats.ts`).
+  const chat = useNewChat(threadId)
+  const preparing = !!chat && chat.worktree && chat.state === 'creating' && chat.messageId === group.user?.id
   // A long live turn can start before the loaded page, so its user message (and
   // with it `running`) is missing; the thread's status still says it is live.
   const running = !failed && (group.running || (threadRunning && isLast && !group.end))
@@ -169,7 +174,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
       {subagentThread && group.user?.id === firstUserId && <SubagentDivider thread={subagentThread} />}
       {group.user && (
         <div ref={userRef} testId={`turn-user:${group.user.id}`} style={{ paddingBottom: running ? 20 : 16 }}>
-          <UserBubble parts={group.user.message.parts} at={group.user.at} clampLines={subagent ? 6 : undefined} />
+          <UserBubble parts={group.user.message.parts} at={group.user.at} id={group.user.id} clampLines={subagent ? 6 : undefined} />
           {failed && <SendFailed threadId={threadId} id={send.id} error={send.error} parts={group.user.message.parts} />}
         </div>
       )}
@@ -186,7 +191,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
           {/* `thinkingRow`: `t-row-enter` each time it mounts. */}
           {!hasLiveWork && !endsInRun && (
             <Rise kind="row" style={{ marginTop: 6 }}>
-              <Shimmer text="Thinking" color={muted(t)} lineHeight={TEXT.lineHeight} />
+              <Shimmer text={preparing ? PREPARING_WORKTREE : 'Thinking'} color={muted(t)} lineHeight={TEXT.lineHeight} />
             </Rise>
           )}
         </div>

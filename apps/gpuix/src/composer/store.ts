@@ -2,6 +2,8 @@ import {readAccounts} from '../requests/accounts.ts'
 import { onEnvironmentChange, onEnvironmentLeaving } from '../shell/environment.ts'
 import { load, save } from '../shell/persist.ts'
 import { addPending, pendingFor, updatePending, type PendingSend } from './pending.ts'
+import { newChats } from './newChats.ts'
+import type { NewChatCreate } from '../../../../packages/kybern-client/src/newChat.ts'
 // Composer data and actions: the agent catalog, settings and accounts, the open
 // thread's next-message target, queued follow-ups, and the home screen's draft
 // choices. Every RPC here is the one the desktop uses (`state/rpc.ts`,
@@ -26,6 +28,7 @@ import type {
   ProviderStatus,
   QueuedMessage,
   Settings,
+  Thread,
   ThreadId,
   ThreadTargetState,
   UserMessage,
@@ -218,6 +221,8 @@ function writeProviderCache(url: string, providers: ProviderStatus[]) {
 
 const targetSeq = new Map<string, number>()
 export async function loadTarget(threadId: ThreadId) {
+  // A new chat the daemon has not made yet has no target; its composer loads it once the thread exists.
+  if (newChats.uncreated(threadId)) return
   const client = rpc()
   const seq = (targetSeq.get(threadId) ?? 0) + 1
   targetSeq.set(threadId, seq)
@@ -328,7 +333,13 @@ function track(threadId: ThreadId, done: Promise<void>) {
 
 async function deliverPending(send: PendingSend) {
   try {
-    if (send.delivery === 'send') await rpc().call('threads.send', { thread_id: send.threadId, message: send.message, message_id: send.id })
+    if (send.delivery === 'send' && newChats.uncreated(send.threadId)) {
+      // The daemon has no row for this new chat yet: its create runs again with the same thread id (a Retry, or an
+      // edited first message with its own id). The daemon answers a repeat from the first call.
+      const chat = newChats.get(send.threadId)!
+      const done = await newChats.retry(send.threadId, chat.messageId === send.id ? undefined : { message: send.message, messageId: send.id })
+      if (done?.state === 'failed') throw new Error(done.error)
+    } else if (send.delivery === 'send') await rpc().call('threads.send', { thread_id: send.threadId, message: send.message, message_id: send.id })
     else await rpc().call('threads.steer', { thread_id: send.threadId, id: send.id, message: send.message })
     updatePending(send.threadId, send.id, { state: 'accepted' })
   } catch (e) {
@@ -422,40 +433,31 @@ export async function interruptThread(threadId: ThreadId) {
   await rpc().call('threads.interrupt', { thread_id: threadId })
 }
 
-/** `createThread` from the home screen, then open it. */
-export async function createThread(opts: {
+/** A new chat from the home screen, optimistic (`composer/newChats.ts`): the thread gets its id here, its row and page show
+ *  on this frame with the prompt as a pending bubble, and `create` makes it on the daemon behind them. A failure stays on the
+ *  thread page as the bubble's "Not sent" with Retry and Edit; both reuse the thread id. Returns the thread id. */
+export function launchNewChat(opts: {
   paneId?: string
-  projectId: ProjectId | null
-  provider: ProviderInstance
-  pinAccount: boolean
-  permissionMode: PermissionMode
-  model?: string
-  effort?: string
-  useWorktree: boolean
-  baseBranch?: string
+  threadId: ThreadId
+  thread: Thread
   message: UserMessage
-  /** The daemon answered with the thread, before the lists refresh and the pane switches to it. */
-  onCreated?: (id: string) => void
-}) {
-  const client = rpc()
+  worktree: boolean
+  /** Makes the thread with `thread_id` = `threadId` and delivers `message` with `message_id` = `messageId`. */
+  create: NewChatCreate
+}): ThreadId {
   const paneId = opts.paneId ?? getFocusedPaneId()
-  const generation = getPane(paneId)?.generation
-  const t = await client.call('threads.create', {
-    ...(opts.projectId ? { project_id: opts.projectId } : {}),
-    provider: opts.provider,
-    pin_account: opts.pinAccount,
-    permission_mode: opts.permissionMode,
-    model: opts.model,
-    effort: opts.effort,
-    use_worktree: opts.useWorktree,
-    base_branch: opts.baseBranch,
-    message: opts.message,
-  })
-  if (getClient() !== client) return t.id
-  opts.onCreated?.(t.id)
-  await refreshLists()
-  if (getClient() === client && getPane(paneId)?.generation === generation) void selectPaneThread(paneId, t.id)
-  return t.id
+  const client = rpc()
+  const send: PendingSend = { id: crypto.randomUUID(), threadId: opts.threadId, message: opts.message, at: new Date().toISOString(), delivery: 'send', state: 'sending' }
+  addPending(send)
+  const started = newChats.start({ threadId: opts.threadId, messageId: send.id, message: opts.message, worktree: opts.worktree, thread: opts.thread }, opts.create)
+  track(opts.threadId, started.then((chat) => {
+    if (chat.state === 'failed') updatePending(opts.threadId, send.id, { state: 'failed', error: chat.error })
+    else if (chat.messageId === send.id) updatePending(opts.threadId, send.id, { state: 'accepted' })
+    // The list catches up behind the page; nothing waits for it.
+    if (getClient() === client) void refreshLists()
+  }))
+  void selectPaneThread(paneId, opts.threadId)
+  return opts.threadId
 }
 
 export async function loadBranches(projectId: ProjectId) {

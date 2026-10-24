@@ -83,7 +83,7 @@ export function messageText(parts: ContentPart[]): string {
 /** The footer's height: `pt-1` over a 24px action. */
 const FOOTER_HEIGHT = 28
 
-export const UserBubble = memo(function UserBubble({ parts, at, pending = false, clampLines }: { parts: ContentPart[]; at: string; pending?: boolean; clampLines?: number }) {
+export const UserBubble = memo(function UserBubble({ parts, at, id, pending = false, clampLines }: { parts: ContentPart[]; at: string; /** The message id: an optimistic bubble keeps it when the daemon's copy replaces it. */ id?: string; pending?: boolean; clampLines?: number }) {
   const t = useTheme()
   const g = useGlass()
   const [hover, setHover] = useState(false)
@@ -95,20 +95,23 @@ export const UserBubble = memo(function UserBubble({ parts, at, pending = false,
   const fresh = useFresh(at)
   // The new chat's first message: a stand-in flies here from the composer (`draft/Morph.tsx`). This row mounts invisible at its
   // final place, reports where its text box and images are, and shows itself in the frame the stand-in lands.
-  const [flight] = useState(() => fresh && !pending && claimFlight(at))
-  const flightHidden = useFlightHidden(at, flight)
+  // Keyed by the message id when there is one: the new chat's bubble starts as a pending send and becomes the daemon's
+  // block (a later `at`) mid-flight, under the same row.
+  const flightKey = id ?? at
+  const [flight] = useState(() => fresh && !pending && claimFlight(flightKey))
+  const flightHidden = useFlightHidden(flightKey, flight)
   const fillNode = useRef<PublicInstance | null>(null)
   const fileNodes = useRef<(PublicInstance | null)[]>([])
   useEffect(() => {
     if (!flight) return
     const rects: { text: LayoutRect | null; images: (LayoutRect | null)[] } = { text: null, images: [] }
-    const report = () => reportFlightTarget(at, { text: rects.text, images: rects.images.filter((r): r is LayoutRect => !!r) })
+    const report = () => reportFlightTarget(flightKey, { text: rects.text, images: rects.images.filter((r): r is LayoutRect => !!r) })
     const stops = [
       ...(fillNode.current ? [observeElementBounds(renderer, { id: fillNode.current.id }, (e) => { rects.text = e.rect; report() })] : []),
       ...fileNodes.current.flatMap((node, i) => node ? [observeElementBounds(renderer, { id: node.id }, (e) => { rects.images[i] = e.rect; report() })] : []),
     ]
     return () => stops.forEach((stop) => stop())
-  }, [flight, at, renderer])
+  }, [flight, flightKey, renderer])
   const text = useMemo(() => messageText(parts), [parts])
   // Short one-line messages with `code` spans get chips like desktop's inline code.
   const chips = useMemo(() => {

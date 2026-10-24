@@ -6,7 +6,10 @@ import type { TokenReference } from './composer/token-text.ts'
 import { type InputSelection } from './native/api.ts'
 export { useComposerOverlayHeight, useMeasureComposerOverlay } from './composer/height.ts'
 import { useMeasureComposerOverlay } from './composer/height.ts'
-import { createCoordinatorStarter } from '../../../packages/kybern-client/src/coordinator.ts'
+import { coordinatorOpenParams, openingMessageText } from '../../../packages/kybern-client/src/coordinator.ts'
+import { optimisticThread, uuidv7, type NewChatCreate } from '../../../packages/kybern-client/src/newChat.ts'
+import { newChats } from './composer/newChats.ts'
+import { removePending } from './composer/pending.ts'
 import { goPage, openThread } from './nav/history.ts'
 import { setNav } from './nav/store.ts'
 import { N } from './nav/glyphs.ts'
@@ -29,6 +32,7 @@ import { createComposerMentionReference, nextAttachmentLabel, type AttachmentRef
 import { findModel, modelQualifier, selectedVariant, selectorEffort, triggerTraits, variantSelector } from '../../../packages/kybern-client/src/models.ts'
 import { promptText } from '../../../packages/kybern-client/src/prompts.ts'
 import {
+  FREE_CHAT_PROJECT_ID,
   isFreeChatProject,
   type ContentPart,
   type PermissionMode,
@@ -44,7 +48,7 @@ import { Icon } from './icons.tsx'
 import { MatrixLoader } from './MatrixLoader.tsx'
 import { Spinner } from './kit/Spinner.tsx'
 import { upsert as upsertTask } from './tasks/store.ts'
-import { getClient, refreshLists, setThreadOpen, usePaneCompact, focusPane, getFocusedPaneId, usePaneAccess, getPane, selectPaneThread, setPane, set, useApp } from './state.ts'
+import { getClient, getState, refreshLists, setThreadOpen, usePaneCompact, focusPane, getFocusedPaneId, usePaneAccess, getPane, selectPaneThread, setPane, set, useApp } from './state.ts'
 import { useCurrentSpaceId } from './spaces/current.ts'
 import { FONT_UI } from './theme.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from './ui.tsx'
@@ -56,6 +60,7 @@ import { isUserInput, connectorApproval } from '../../../packages/kybern-client/
 import { ANSWER_COPY } from '../../../packages/kybern-client/src/visualAnswer.ts'
 import { isVisualAnswerCard, pendingVisualAnswer, replyToVisual } from './requests/VisualAnswer.tsx'
 import { setThreadComposerFocus } from './composer/focus.ts'
+import { markLaunchEnter } from './draft/store.ts'
 import { handleCardKey, isRowCard } from './requests/actions.ts'
 import { cardKeyHandler, focusCard, setComposerEmpty } from './requests/ui.ts'
 import { noteKeystroke, openHeldCard } from './requests/typingGuard.ts'
@@ -89,7 +94,7 @@ import type { PaintTransformProps } from '@gpuix/native/host'
 
 import { hoverPressTransform } from './motion/press.ts'
 import {
-  createThread,
+  launchNewChat,
   ensureLoaded,
   errorText,
   onComposerRestore,
@@ -296,7 +301,6 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
   const accounts = useComposer((d) => d.accounts)
   const { projectId, provider, pinAccount, mode, useWorktree, choice, draft } = useDraftTarget()
   const coordinator = useApp(s => s.draft.purpose === 'coordinator')
-  const starter = useRef<{ client: ReturnType<typeof getClient>; controller: ReturnType<typeof createCoordinatorStarter> } | null>(null)
 
   return (
     <ComposerView
@@ -335,62 +339,95 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
       sendDisabledReason={!provider ? 'Choose an available agent before sending.' : coordinator && !projectId ? 'Choose a project for the Coordinator.' : undefined}
       onSend={async (message, _delivery, snapshot) => {
         if (!provider) return
-        const launched = (threadId: string) => {
+        const client = getClient()
+        if (!client) throw new Error('Reconnect and try again.')
+        // Enter starts the chat on this frame (`composer/newChats.ts`): the thread id is ours, the page switches and the
+        // prompt flies into its bubble while the daemon makes the thread behind it.
+        const threadId = uuidv7()
+        const owner = activeEnvironment()
+        const live = () => getClient() === client && owner === activeEnvironment()
+        const launch = (thread: Thread, worktree: boolean, create: NewChatCreate, sent: UserMessage = message) => {
           // The prompt now belongs to the thread: drop the saved draft before the page switches, so no composer reloads it.
           drafts.drop(`${pane.id}:${coordinator ? 'coordinator' : 'project'}:${projectId ?? 'free'}`)
           extras.onLaunch?.(threadId, snapshot)
+          launchNewChat({ paneId: pane.id, threadId, thread, message: sent, worktree, create })
         }
+        const account = pinAccount ? provider : { ...provider, instance: 'default' }
+        const base = { id: threadId, provider: account, model: choice?.model, effort: choice?.effort, permissionMode: mode, message }
         const task = extras.task
         if (task && !coordinator) {
           // `RunComposer`'s single-task send: the thread is recorded as the task's next run and the task becomes running.
-          const client = getClient(), owner = activeEnvironment(), generation = getPane(pane.id)?.generation
-          if (!client) throw new Error('Reconnect and try again.')
+          if (!projectId) throw new Error('Choose a project to run this task in.')
+          // The task leads the message as its chip, as the daemon would add it, so the first bubble shows it at once.
           const pending = task.pending_followup?.trim()
-          const result = await client.call('tasks.items.send', {
-            id: task.id,
-            provider: pinAccount ? provider : { ...provider, instance: 'default' },
-            model: choice?.model,
-            effort: choice?.effort,
-            permission_mode: mode,
-            use_worktree: useWorktree,
-            base_branch: useWorktree ? draft.baseBranch ?? null : null,
-            project_id: projectId,
-            message: pending ? { ...message, parts: [{ type: 'text', text: pending }, ...message.parts] } : message,
-            note_ids: [...new Set([...task.note_ids, ...(task.source_note_id ? [task.source_note_id] : [])])],
-          })
-          upsertTask(result.task)
-          extras.onTaskSent?.()
-          if (owner !== activeEnvironment() || getPane(pane.id)?.generation !== generation) return
-          launched(result.thread_id)
-          await refreshLists()
-          if (getPane(pane.id)?.generation === generation) void selectPaneThread(pane.id, result.thread_id)
+          const chip = { type: 'mention' as const, name: task.key, path: `kybern://task/${task.id}`, display_name: `${task.key} ${task.title}` }
+          const sent = { ...message, parts: [chip, ...(pending ? [{ type: 'text' as const, text: pending }] : []), ...message.parts] }
+          launch(optimisticThread({ ...base, projectId, title: task.title }), useWorktree, async (first, messageId) => {
+            const result = await client.call('tasks.items.send', {
+              id: task.id,
+              provider: account,
+              model: choice?.model,
+              effort: choice?.effort,
+              permission_mode: mode,
+              use_worktree: useWorktree,
+              base_branch: useWorktree ? draft.baseBranch ?? null : null,
+              project_id: projectId,
+              message: first,
+              note_ids: [...new Set([...task.note_ids, ...(task.source_note_id ? [task.source_note_id] : [])])],
+              thread_id: threadId,
+              message_id: messageId,
+            })
+            if (!live()) return
+            upsertTask(result.task)
+            extras.onTaskSent?.()
+          }, sent)
           return
         }
         if (coordinator) {
-          const client = getClient()!, owner = activeEnvironment(), generation = getPane(pane.id)?.generation
           const available = providers.find(p => p.kind === provider.kind && p.available)
           if (!projectId || !available) throw new Error('Choose a project and an available harness.')
-          if (starter.current?.client !== client) starter.current = { client, controller: createCoordinatorStarter((method, params) => client.call(method, params), () => crypto.randomUUID()) }
           // A Coordinator plans the attached task rather than running it: the task goes in as a mention, which the daemon
           // expands for the provider.
           const lead = task ? [{ type: 'mention' as const, name: task.key, path: `kybern://task/${task.id}`, display_name: `${task.key} ${task.title}` }] : []
-          const result = await starter.current.controller.send({ projectId, provider: available, instance: provider.instance, model: choice?.model, effort: choice?.effort, permissionMode: mode }, lead.length ? { ...message, parts: [...lead, ...message.parts] } : message)
-          if (task) extras.onTaskSent?.()
-          if (owner === activeEnvironment() && getPane(pane.id)?.generation === generation) { launched(result.thread.id); const state = pane.get(); set({ threads: [...state.threads.filter(t => t.id !== result.thread.id), result.thread] }); void selectPaneThread(pane.id, result.thread.id) }
+          const sent = lead.length ? { ...message, parts: [...lead, ...message.parts] } : message
+          // The project has its Coordinator already: the message is an ordinary send to it.
+          const existing = getState().threads.find(t => t.coordinator_project_id === projectId)
+          if (existing) {
+            drafts.drop(`${pane.id}:coordinator:${projectId}`)
+            void selectPaneThread(pane.id, existing.id)
+            await sendToThread(existing.id, sent, 'send')
+            if (task) extras.onTaskSent?.()
+            return
+          }
+          const params = coordinatorOpenParams({ projectId, provider: available, instance: provider.instance, model: choice?.model, effort: choice?.effort, permissionMode: mode, openingMessage: openingMessageText(sent) })
+          const projectName = getState().projects.find(p => p.id === projectId)?.name ?? 'Project'
+          launch(optimisticThread({ ...base, provider: params.provider, projectId, message: sent, title: `${projectName} coordinator`, coordinatorProjectId: projectId }), false, async (first, messageId) => {
+            const result = await client.call('coordinator.open', { ...params, opening_message: openingMessageText(first), thread_id: threadId, message_id: messageId })
+            if (result.thread.id === threadId) { if (task && live()) extras.onTaskSent?.(); return }
+            // Another client opened this project's Coordinator first: the message goes to that one, and the page follows it.
+            await client.call('threads.send', { thread_id: result.thread.id, message: first, message_id: messageId })
+            newChats.forget(threadId)
+            removePending(threadId, messageId)
+            if (task && live()) extras.onTaskSent?.()
+            if (live() && getPane(pane.id)?.selectedId === threadId) void selectPaneThread(pane.id, result.thread.id)
+          }, sent)
           return
         }
-        await createThread({
-          paneId: pane.id,
-          projectId,
-          provider: pinAccount ? provider : { ...provider, instance: 'default' },
-          pinAccount,
-          permissionMode: mode,
-          model: choice?.model,
-          effort: choice?.effort,
-          useWorktree,
-          baseBranch: draft.baseBranch ?? undefined,
-          message,
-          onCreated: launched,
+        const freeChat = !projectId
+        launch(optimisticThread({ ...base, projectId: projectId ?? FREE_CHAT_PROJECT_ID }), useWorktree && !freeChat, async (first, messageId) => {
+          await client.call('threads.create', {
+            ...(projectId ? { project_id: projectId } : {}),
+            provider: account,
+            pin_account: pinAccount,
+            permission_mode: mode,
+            model: choice?.model,
+            effort: choice?.effort,
+            use_worktree: useWorktree,
+            base_branch: draft.baseBranch ?? undefined,
+            message: first,
+            thread_id: threadId,
+            message_id: messageId,
+          })
         })
       }}
     />
@@ -703,6 +740,7 @@ export function ComposerView(input: ComposerViewProps) {
     rememberSentDraft(parts, { text, attachments, references: completion.snapshot() })
     // The new chat keeps the prompt where it is until the thread exists; the thread page then carries it off.
     const hold = !!props.launch
+    if (hold) markLaunchEnter()
     const snapshot = hold ? snapshotNow() : undefined
     setSending(true)
     setError(null)

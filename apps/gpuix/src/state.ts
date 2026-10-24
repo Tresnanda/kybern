@@ -20,6 +20,8 @@ import {
 } from '../../../packages/kybern-client/src/transcript.ts'
 import { isChildThread } from '../../../packages/kybern-client/src/subagents.ts'
 import type { Project, Thread, ThreadActivitySummary, ThreadEvent, ThreadId } from '../../../packages/kybern-client/src/types.ts'
+import { mergeOptimisticThreads } from '../../../packages/kybern-client/src/newChat.ts'
+import { newChats } from './composer/newChats.ts'
 
 export interface AppState {
   status: ConnectionStatus
@@ -309,6 +311,26 @@ export function refreshLists(): Promise<void> {
   return refreshing
 }
 
+/** The daemon's last thread list; new chats it does not list yet are shown with it (`composer/newChats.ts`). */
+let listedThreads: Thread[] = []
+function withNewChats(base = state.listsLoaded ? listedThreads : state.threads.filter(t => !newChats.get(t.id))): Thread[] {
+  const { threads, listed } = mergeOptimisticThreads(base, newChats.unlisted())
+  if (listed.length) queueMicrotask(() => newChats.listed(listed))
+  return threads
+}
+// A new chat appears in the list (and its page) on the frame it starts, follows its create's state while the daemon has no
+// row for it, and loads its transcript once the daemon made it. The server copy keeps the id, so no row remounts.
+newChats.subscribe(() => {
+  set({ threads: withNewChats() })
+  for (const [paneId, pane] of panes) {
+    const id = pane.selectedId
+    const chat = newChats.get(id)
+    if (!id || !chat || sessions.has(id)) continue
+    if (chat.state === 'created') void selectPaneThread(paneId, id, true).catch(error => console.error('[pane] Unable to load thread:', error))
+    else if (pane.open.thread?.status !== chat.thread.status) setPane(paneId, { open: { ...pane.open, thread: chat.thread } })
+  }
+})
+
 async function loadLists() {
   if (!client) return
   const owner = client
@@ -326,10 +348,10 @@ async function loadLists() {
   ])
   if (owner !== client) return
   startupMark('lists-ready', { projects: p.projects.length, threads: t.threads.length })
-  const threads = t.threads
+  listedThreads = t.threads
     .filter((th) => !isChildThread(th) && th.status !== 'archived')
     .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updated_at.localeCompare(a.updated_at))
-  set({ projects: p.projects, threads, listsLoaded: true })
+  set({ projects: p.projects, threads: withNewChats(listedThreads), listsLoaded: true })
   if (initial) {
     // Preserve the usual Git self-heal without putting one subprocess per
     // project on the first sidebar paint's critical path. Notifications may
@@ -346,7 +368,7 @@ async function loadLists() {
   for (const [paneId, pane] of panes) if (pane.selectedId && !pane.open.loaded && !sessions.has(pane.selectedId)) void selectPaneThread(paneId, pane.selectedId).catch(error => console.error('[pane] Unable to load thread:', error))
   const want = process.env.KYBERN_GPUIX_THREAD
   if (want && !state.selectedId) {
-    const match = threads.find((th) => th.id === want || th.title.toLowerCase().includes(want.toLowerCase()))
+    const match = listedThreads.find((th) => th.id === want || th.title.toLowerCase().includes(want.toLowerCase()))
     if (match) void selectThread(match.id)
   }
 }
@@ -368,6 +390,14 @@ export async function selectPaneThread(paneId: string, id: ThreadId | null, keep
     sessions.get(id)?.stop?.(); sessions.delete(id)
   }
   const existing = id ? sessions.get(id) : undefined
+  // A new chat the daemon has not made yet opens on its own record: its first message shows as a pending bubble, and the
+  // transcript loads when the create answers (`newChats.subscribe` above).
+  const uncreated = id && !existing && newChats.uncreated(id) ? newChats.get(id)!.thread : null
+  if (uncreated) {
+    setPane(paneId, { selectedId: id, open: { ...emptyThreadState(), thread: uncreated, loaded: true }, generation })
+    releaseUnused()
+    return
+  }
   setPane(paneId, { selectedId: id, open: existing?.open ?? (keepOpen ? pane.open : emptyThreadState()), generation })
   releaseUnused()
   if (!id || !client) return
