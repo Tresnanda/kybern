@@ -443,6 +443,10 @@ export interface CoordinatorOpenParams {
   opening_message?: string | null;
   /** Older clients' name for `opening_message`, treated the same way. */
   initial_brief?: string | null;
+  /** The id the Coordinator gets if this call creates it; ignored when the project has one. A repeat reports `created: true` again. */
+  thread_id?: ThreadId;
+  /** The client's id for the opening message. */
+  message_id?: MessageId;
 }
 
 /** "Redo setup": start the Coordinator's setup interview again. Refused while it runs a turn. */
@@ -1379,6 +1383,10 @@ export interface ThreadsCreateParams {
   base_branch?: string;
   title?: string;
   message?: UserMessage;
+  /** Client-chosen id (UUID v7) for the new thread. A repeat with the same id returns that thread, never a second one, and sends `message` only if it was not delivered. */
+  thread_id?: ThreadId;
+  /** The client's id for `message` (as `threads.send` `message_id`); a repeat is answered from the first delivery. */
+  message_id?: MessageId;
 }
 
 export interface ThreadsGetParams {
@@ -1655,6 +1663,10 @@ export interface TaskItemsSendParams {
   message?: UserMessage;
   /** Notes attached as `kybern://note/<id>` mentions; the daemon expands them in the provider's copy only. Only the notes listed here are sent. A saved `pending_followup` is cleared by the send (the prompt is expected to include it). */
   note_ids?: NoteId[];
+  /** Client-chosen id for the run's thread (see `ThreadsCreateParams.thread_id`). A repeat returns the run it started; after a failed first message the thread is kept for a retry with this id. */
+  thread_id?: ThreadId;
+  /** The client's id for the first message. */
+  message_id?: MessageId;
 }
 
 /** One run per task (`separate`, started in parallel), or one thread that every task records a run for (`combined`). */

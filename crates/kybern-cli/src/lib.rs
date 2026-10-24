@@ -1472,6 +1472,8 @@ pub async fn run() -> Result<()> {
                     base_branch: branch,
                     title: None,
                     message: Some(UserMessage::text(prompt)),
+                    thread_id: None,
+                    message_id: None,
                 })
                 .await?;
             eprintln!("thread {}", thread.id);
@@ -2537,6 +2539,8 @@ async fn task_command(client: &Client, cmd: TaskCmd, json: bool) -> Result<()> {
                     prompt: Some(prompt),
                     message: None,
                     note_ids: Some(task.note_ids.clone()),
+                    thread_id: None,
+                    message_id: None,
                 })
                 .await?;
             if json {

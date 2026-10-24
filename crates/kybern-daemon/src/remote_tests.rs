@@ -154,6 +154,8 @@ async fn ordinary_worktree_cleanup_rpc_retains_thread_and_source_association() {
             base_branch: None,
             title: Some("Cleanup fixture".into()),
             message: None,
+            thread_id: None,
+            message_id: None,
         })
         .await
         .unwrap();
@@ -895,6 +897,8 @@ async fn tasks_round_trip_over_rpc_with_notifications_and_error_codes() {
         prompt: Some(" ".into()),
         message: None,
         note_ids: None,
+        thread_id: None,
+        message_id: None,
     };
     let rejected = phone.call_raw(TaskItemsSend::NAME, serde_json::to_value(empty_prompt).unwrap()).await.unwrap_err().to_string();
     assert!(rejected.contains(&format!("code {}", codes::INVALID_PARAMS)), "{rejected}");
@@ -2115,6 +2119,8 @@ async fn the_coordinator_and_project_brief_work_over_rpc() {
         permission_mode: None,
         opening_message: None,
         initial_brief: brief.map(str::to_owned),
+        thread_id: None,
+        message_id: None,
     };
     // The user's brief exists before the Coordinator does, so no setup interview starts a real agent.
     client

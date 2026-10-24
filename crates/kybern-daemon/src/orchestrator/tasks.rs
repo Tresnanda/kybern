@@ -173,6 +173,15 @@ impl Orchestrator {
     /// Start an agent on the task: create the thread, record the run, mark the task
     /// running and deliver the prompt with the attached notes.
     pub async fn task_item_send(&self, params: TaskItemsSendParams) -> Result<TaskItemsSendResult> {
+        match params.thread_id {
+            Some(id) => self.with_client_thread_id(id, self.task_item_send_inner(params)).await,
+            None => self.task_item_send_inner(params).await,
+        }
+    }
+
+    async fn task_item_send_inner(&self, params: TaskItemsSendParams) -> Result<TaskItemsSendResult> {
+        let client_thread = params.thread_id;
+        let message_id = params.message_id;
         let prompt = params.prompt.as_deref().map(str::trim).unwrap_or_default().to_owned();
         let composed = match (params.message, prompt.is_empty()) {
             (Some(_), false) => return invalid("Send either a prompt or a message, not both."),
@@ -184,6 +193,13 @@ impl Orchestrator {
             let _tasks = self.task_lock()?;
             let store = &self.inner.store;
             let task = store.task_item_get(params.id)?.ok_or(TaskError::NotFound("Task not found. It may have been deleted."))?;
+            // A repeat of the send that started a run gets that run back. Runs whose first
+            // message never went out are removed, so a run here means it was delivered.
+            if let Some(id) = client_thread
+                && task.runs.iter().any(|run| run.thread_id == id)
+            {
+                return Ok(TaskItemsSendResult { thread_id: id, task });
+            }
             if task.runs.last().is_some_and(|run| run.state.is_live()) {
                 return invalid("This task already has a run in progress. Open it or send a follow-up instead.");
             }
@@ -244,24 +260,35 @@ impl Orchestrator {
             (task, project_id, UserMessage { parts }, run_notes)
         };
 
+        // A retry after a failed first message runs in the thread the first attempt kept.
+        let existing = match client_thread {
+            Some(id) => self.client_thread(id, project_id)?,
+            None => None,
+        };
         // The title is the task's, so the thread keeps it: AI titling is skipped for task runs.
-        let thread = self
-            .create_thread_with_id(
-                methods::ThreadsCreateParams {
-                    pin_account: false,
-                    project_id: Some(project_id),
-                    provider: params.provider,
-                    model: params.model,
-                    effort: params.effort,
-                    permission_mode: params.permission_mode,
-                    use_worktree: params.use_worktree,
-                    base_branch: params.base_branch,
-                    title: Some(task.title.clone()),
-                    message: None,
-                },
-                Uuid::now_v7(),
-            )
-            .await?;
+        let thread = match existing {
+            Some(thread) => thread,
+            None => {
+                self.create_thread_with_id(
+                    methods::ThreadsCreateParams {
+                        pin_account: false,
+                        project_id: Some(project_id),
+                        provider: params.provider,
+                        model: params.model,
+                        effort: params.effort,
+                        permission_mode: params.permission_mode,
+                        use_worktree: params.use_worktree,
+                        base_branch: params.base_branch,
+                        title: Some(task.title.clone()),
+                        message: None,
+                        thread_id: None,
+                        message_id: None,
+                    },
+                    client_thread.unwrap_or_else(Uuid::now_v7),
+                )
+                .await?
+            }
+        };
 
         // Record the run before the first turn starts so no event of it is missed.
         let previous_status = task.status;
@@ -285,17 +312,24 @@ impl Orchestrator {
             self.publish_task(started.clone());
             Ok(started)
         })();
+        // A thread the client named stays after a failure: it shows the failed message, and a
+        // retry with the same id starts the run there. Without one, nothing would reach it again.
         let started = match started {
             Ok(started) => started,
             Err(error) => {
-                let _ = self.archive_thread(thread.id).await;
+                if client_thread.is_none() {
+                    let _ = self.archive_thread(thread.id).await;
+                }
                 return Err(error);
             }
         };
 
-        if let Err(error) = self.send(thread.id, message).await {
+        let retryable = message_id.is_some();
+        if let Err(error) = self.send_with_id(thread.id, message_id.unwrap_or_else(Uuid::now_v7), message, false, retryable).await {
             self.rollback_task_run(&started, thread.id, previous_status);
-            let _ = self.archive_thread(thread.id).await;
+            if client_thread.is_none() {
+                let _ = self.archive_thread(thread.id).await;
+            }
             return Err(error);
         }
         let task = self.inner.store.task_item_get(task.id)?.unwrap_or(started);
@@ -378,6 +412,8 @@ impl Orchestrator {
                     prompt: None,
                     message: Some(message.clone()),
                     note_ids: params.note_ids.clone(),
+                    thread_id: None,
+                    message_id: None,
                 };
                 async move { (index, task.id, this.task_item_send(send).await) }
             })
@@ -506,6 +542,8 @@ impl Orchestrator {
                     base_branch: params.base_branch.clone(),
                     title: Some(title),
                     message: None,
+                    thread_id: None,
+                    message_id: None,
                 },
                 Uuid::now_v7(),
             )
@@ -1315,6 +1353,8 @@ mod tests {
                 prompt: Some(format!("{}\n\nDo it.", task.title)),
                 message: None,
                 note_ids: Some(note_ids),
+                thread_id: None,
+                message_id: None,
             }
         }
 
@@ -1458,6 +1498,38 @@ mod tests {
         assert_eq!(settled.runs[0].state, TaskRunState::Failed);
         assert!(settled.runs[0].ended_at.is_some() && settled.runs[0].activity.is_none());
         assert!(fixture.store.thread_get(thread.id).unwrap().unwrap().title == "Fix login", "the title survives the turn");
+    }
+
+    #[tokio::test]
+    async fn send_with_a_client_thread_id_is_idempotent_and_keeps_a_failed_thread_for_retry() {
+        let fixture = Fixture::new();
+        let task = fixture.task("Fix login");
+        let thread_id = Uuid::now_v7();
+        let params =
+            TaskItemsSendParams { thread_id: Some(thread_id), message_id: Some(Uuid::now_v7()), ..fixture.send_params(&task, vec![]) };
+
+        // The first message cannot go out (the harness is updating): the run is undone, but the
+        // thread the client named stays for the retry.
+        let gate = fixture.orchestrator.inner.harness_gates[&ProviderKind::ClaudeCode].clone().write_owned().await;
+        assert!(fixture.orchestrator.task_item_send(params.clone()).await.is_err());
+        drop(gate);
+        assert!(fixture.store.thread_get(thread_id).unwrap().is_some_and(|thread| thread.status == ThreadStatus::Idle));
+        assert!(fixture.current(&task).runs.is_empty());
+
+        let sent = fixture.orchestrator.task_item_send(params.clone()).await.unwrap();
+        assert_eq!(sent.thread_id, thread_id, "the retry runs in the kept thread");
+        let repeat = fixture.orchestrator.task_item_send(params).await.unwrap();
+        assert_eq!(repeat.thread_id, thread_id);
+        assert_eq!(fixture.current(&task).runs.len(), 1, "a repeat records no second run");
+        assert_eq!(fixture.store.threads_list(None, true).unwrap().len(), 1);
+        let turns = fixture
+            .store
+            .events_for_thread(thread_id)
+            .unwrap()
+            .iter()
+            .filter(|event| matches!(event.payload, EventPayload::TurnStarted { .. }))
+            .count();
+        assert_eq!(turns, 1);
     }
 
     #[tokio::test]

@@ -653,6 +653,15 @@ pub struct ThreadsCreateParams {
     /// Optionally send a first message in the same call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<UserMessage>,
+    /// A client-chosen id for the new thread (UUID v7), so a client can show the thread before the
+    /// daemon answers. A repeat with the same id returns the thread the first call made, never a
+    /// second one, and sends `message` only if that call did not already deliver it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<ThreadId>,
+    /// The client's id for `message`, as `threads.send` takes it: a repeat with the same id is
+    /// answered from the first delivery instead of starting another turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<MessageId>,
 }
 method!(ThreadsCreate, "threads.create", Some(Scope::OrchestrationOperate), ThreadsCreateParams, Thread);
 
@@ -926,6 +935,13 @@ pub struct CoordinatorOpenParams {
     /// Older clients' name for [`Self::opening_message`], treated the same way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_brief: Option<String>,
+    /// The id the Coordinator gets when this call creates it (see `threads.create`). Ignored
+    /// when the project already has one: the result carries that thread instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<ThreadId>,
+    /// The client's id for the opening message, so its optimistic bubble meets the real one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<MessageId>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CoordinatorOpenResult {
@@ -3011,6 +3027,14 @@ pub struct TaskItemsSendParams {
     /// Notes attached as `kybern://note/<id>` mentions; the daemon expands them in the provider's copy only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note_ids: Option<Vec<NoteId>>,
+    /// A client-chosen id for the run's thread (see `threads.create`). A repeat with the same id
+    /// returns the run it started; after a failed first message the thread is kept, not archived,
+    /// and a retry with this id starts the run in it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<ThreadId>,
+    /// The client's id for the first message (see `threads.send`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<MessageId>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TaskItemsSendResult {

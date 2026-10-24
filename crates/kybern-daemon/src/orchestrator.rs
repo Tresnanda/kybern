@@ -459,6 +459,8 @@ struct Inner {
     workspace_ops: Mutex<()>,
     question_answers: Mutex<()>,
     lead_commands: Mutex<()>,
+    /// Creates that carry a client-chosen thread id, one at a time per id (`with_client_thread_id`).
+    client_thread_ids: std::sync::Mutex<HashMap<ThreadId, Arc<Mutex<()>>>>,
     thread_updates: std::sync::Mutex<()>,
     store: Store,
     drivers: DriverRegistry,
@@ -798,6 +800,7 @@ impl Orchestrator {
                 workspace_ops: Mutex::new(()),
                 question_answers: Mutex::new(()),
                 lead_commands: Mutex::new(()),
+                client_thread_ids: std::sync::Mutex::new(HashMap::new()),
                 thread_updates: std::sync::Mutex::new(()),
                 store,
                 drivers,
@@ -1412,7 +1415,73 @@ impl Orchestrator {
     }
 
     pub async fn create_thread(&self, params: methods::ThreadsCreateParams) -> Result<Thread> {
-        self.create_thread_with_id(params, Uuid::now_v7()).await
+        let Some(id) = params.thread_id else { return self.create_thread_with_id(params, Uuid::now_v7()).await };
+        self.with_client_thread_id(id, async {
+            match self.client_thread(id, params.project_id.unwrap_or(FREE_CHAT_PROJECT_ID))? {
+                Some(existing) => self.finish_client_create(existing, params.message, params.message_id).await,
+                None => self.create_thread_with_id(params, id).await,
+            }
+        })
+        .await
+    }
+
+    /// Run `work` for a client-chosen thread id with other calls for that id held back, so a
+    /// repeat that arrives while the first is still creating the thread waits and then finds it.
+    async fn with_client_thread_id<T>(&self, id: ThreadId, work: impl Future<Output = Result<T>>) -> Result<T> {
+        if id.is_nil() {
+            return Err(anyhow!("thread_id must be a UUID other than the nil UUID"));
+        }
+        let lock = self.inner.client_thread_ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).entry(id).or_default().clone();
+        let guard = lock.clone().lock_owned().await;
+        let result = work.await;
+        drop(guard);
+        drop(lock);
+        let mut locks = self.inner.client_thread_ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if locks.get(&id).is_some_and(|lock| Arc::strong_count(lock) == 1) {
+            locks.remove(&id);
+        }
+        result
+    }
+
+    /// The thread an earlier create with this client id made, if any. An id that belongs to
+    /// another kind of thread, or to one in another project, is refused rather than reused.
+    pub(crate) fn client_thread(&self, id: ThreadId, project_id: ProjectId) -> Result<Option<Thread>> {
+        let Some(existing) = self.inner.store.thread_get(id)? else { return Ok(None) };
+        if existing.project_id != project_id
+            || existing.subagent.is_some()
+            || existing.delegation.is_some()
+            || existing.parent_thread_id.is_some()
+        {
+            return Err(anyhow!("thread_id already belongs to a different thread. Start the chat with a new id."));
+        }
+        if existing.status == ThreadStatus::Archived {
+            return Err(anyhow!("This chat was archived. Start a new chat instead."));
+        }
+        Ok(Some(existing))
+    }
+
+    /// A repeated create: the thread exists, so only the first message may still be missing. With
+    /// its client id the send is answered from the first delivery when there was one; without it,
+    /// the message goes only to a thread that has never started a turn.
+    async fn finish_client_create(&self, thread: Thread, message: Option<UserMessage>, message_id: Option<MessageId>) -> Result<Thread> {
+        let Some(message) = message else { return Ok(thread) };
+        match message_id {
+            Some(message_id) => {
+                self.send_with_id(thread.id, message_id, message, false, true).await?;
+            }
+            None => {
+                let started = self
+                    .inner
+                    .store
+                    .events_for_thread(thread.id)?
+                    .iter()
+                    .any(|event| matches!(event.payload, EventPayload::TurnStarted { .. }));
+                if !started {
+                    self.send(thread.id, message).await?;
+                }
+            }
+        }
+        Ok(self.inner.store.thread_get(thread.id)?.unwrap_or(thread))
     }
 
     async fn create_thread_with_id(&self, params: methods::ThreadsCreateParams, id: ThreadId) -> Result<Thread> {
@@ -1490,7 +1559,8 @@ impl Orchestrator {
         let mut thread = Thread { last_seq: ev.seq, ..thread };
         self.inner.store.thread_upsert(&thread)?;
         if let Some(message) = params.message {
-            self.send(thread.id, message).await?;
+            let retryable = params.message_id.is_some();
+            self.send_with_id(thread.id, params.message_id.unwrap_or_else(Uuid::now_v7), message, false, retryable).await?;
             thread = self.inner.store.thread_get(thread.id)?.unwrap_or(thread);
         }
         Ok(thread)
@@ -4696,6 +4766,8 @@ mod tests {
                 base_branch: None,
                 title: Some("Free chat".into()),
                 message: None,
+                thread_id: None,
+                message_id: None,
             })
             .await
             .unwrap();
@@ -4719,11 +4791,76 @@ mod tests {
                 base_branch: None,
                 title: None,
                 message: None,
+                thread_id: None,
+                message_id: None,
             })
             .await;
         assert!(rejected.is_err());
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn turns_started(store: &Store, thread_id: ThreadId) -> usize {
+        store.events_for_thread(thread_id).unwrap().iter().filter(|event| matches!(event.payload, EventPayload::TurnStarted { .. })).count()
+    }
+
+    fn client_create(fixture: &Fixture, thread_id: ThreadId, message_id: Option<MessageId>, text: &str) -> methods::ThreadsCreateParams {
+        methods::ThreadsCreateParams {
+            pin_account: false,
+            project_id: Some(fixture.project.id),
+            provider: ProviderInstance::default_for(ProviderKind::Codex),
+            model: None,
+            effort: None,
+            permission_mode: None,
+            use_worktree: Some(false),
+            base_branch: None,
+            title: None,
+            message: Some(UserMessage::text(text)),
+            thread_id: Some(thread_id),
+            message_id,
+        }
+    }
+
+    #[tokio::test]
+    async fn create_with_a_client_thread_id_is_idempotent() {
+        let fixture = Fixture::new();
+        let (thread_id, message_id) = (Uuid::now_v7(), Uuid::now_v7());
+        let first = fixture.orchestrator.create_thread(client_create(&fixture, thread_id, Some(message_id), "hello")).await.unwrap();
+        assert_eq!(first.id, thread_id, "the daemon uses the client's id");
+        let repeat = fixture.orchestrator.create_thread(client_create(&fixture, thread_id, Some(message_id), "hello")).await.unwrap();
+        assert_eq!(repeat.id, thread_id);
+        assert_eq!(fixture.store.threads_list(None, true).unwrap().len(), 1, "never a second row");
+        assert_eq!(turns_started(&fixture.store, thread_id), 1, "the accepted message is not sent again");
+
+        // Without a message id, a repeat sends only to a thread that never started a turn.
+        fixture.orchestrator.create_thread(client_create(&fixture, thread_id, None, "hello")).await.unwrap();
+        assert_eq!(turns_started(&fixture.store, thread_id), 1);
+
+        let other_message = fixture.orchestrator.create_thread(client_create(&fixture, thread_id, Some(message_id), "changed")).await;
+        assert!(other_message.unwrap_err().to_string().contains("already belongs"));
+        let mut elsewhere = client_create(&fixture, thread_id, Some(Uuid::now_v7()), "hello");
+        elsewhere.project_id = None;
+        assert!(fixture.orchestrator.create_thread(elsewhere).await.unwrap_err().to_string().contains("different thread"));
+        let nil = fixture.orchestrator.create_thread(client_create(&fixture, Uuid::nil(), None, "hello")).await;
+        assert!(nil.is_err());
+    }
+
+    #[tokio::test]
+    async fn retrying_a_create_whose_message_failed_reuses_the_thread() {
+        let fixture = Fixture::new();
+        let (thread_id, message_id) = (Uuid::now_v7(), Uuid::now_v7());
+        // The thread is created, then its first message is refused (the harness is updating).
+        let gate = fixture.orchestrator.inner.harness_gates[&ProviderKind::Codex].clone().write_owned().await;
+        let failed = fixture.orchestrator.create_thread(client_create(&fixture, thread_id, Some(message_id), "hello")).await;
+        assert!(failed.unwrap_err().to_string().contains("updating"));
+        drop(gate);
+        assert!(fixture.store.thread_get(thread_id).unwrap().is_some());
+        assert_eq!(turns_started(&fixture.store, thread_id), 0);
+
+        let retried = fixture.orchestrator.create_thread(client_create(&fixture, thread_id, Some(message_id), "hello")).await.unwrap();
+        assert_eq!(retried.id, thread_id);
+        assert_eq!(fixture.store.threads_list(None, true).unwrap().len(), 1, "the retry fills the same row");
+        assert_eq!(turns_started(&fixture.store, thread_id), 1);
     }
 
     #[test]

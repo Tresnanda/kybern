@@ -147,12 +147,37 @@ impl Orchestrator {
     /// interview: the user's opening words, when there are any, become their first
     /// answer. They are never saved as the brief.
     pub async fn coordinator_open(&self, params: methods::CoordinatorOpenParams) -> Result<methods::CoordinatorOpenResult> {
+        match params.thread_id {
+            Some(id) => self.with_client_thread_id(id, self.coordinator_open_inner(params)).await,
+            None => self.coordinator_open_inner(params).await,
+        }
+    }
+
+    async fn coordinator_open_inner(&self, params: methods::CoordinatorOpenParams) -> Result<methods::CoordinatorOpenResult> {
         let _lead = self.inner.lead_commands.lock().await;
         ensure!(!is_free_chat_project(params.project_id), "Chats without a project have no Coordinator. Choose a project.");
         let project =
             self.inner.store.project_get(params.project_id)?.ok_or_else(|| anyhow!("Project not found. Choose another project."))?;
+        let opening = params.opening_message.as_deref().or(params.initial_brief.as_deref()).map(str::trim).filter(|text| !text.is_empty());
         if let Some(thread) = self.coordinator_get(project.id)? {
-            return Ok(methods::CoordinatorOpenResult { thread, created: false });
+            if params.thread_id != Some(thread.id) {
+                return Ok(methods::CoordinatorOpenResult { thread, created: false });
+            }
+            // A repeat of the call that created it reports the creation again, and delivers the
+            // opening message if the first call could not.
+            if let Some(message_id) = params.message_id
+                && self.inner.store.turn_started_receipt(message_id)?.is_none()
+                && let Some(message) = self.lead_opening(project.id, opening)?
+            {
+                self.send_with_id(thread.id, message_id, message, false, true).await?;
+            }
+            let thread = self.inner.store.thread_get(thread.id)?.unwrap_or(thread);
+            return Ok(methods::CoordinatorOpenResult { thread, created: true });
+        }
+        if let Some(id) = params.thread_id
+            && self.inner.store.thread_get(id)?.is_some()
+        {
+            return Err(anyhow!("thread_id already belongs to a different thread. Start the Coordinator with a new id."));
         }
         let created = self
             .create_thread_with_id(
@@ -167,17 +192,17 @@ impl Orchestrator {
                     base_branch: None,
                     title: Some(format!("{} coordinator", project.name)),
                     message: None,
+                    thread_id: None,
+                    message_id: None,
                 },
-                Uuid::now_v7(),
+                params.thread_id.unwrap_or_else(Uuid::now_v7),
             )
             .await?;
         // The marker is set right away and published as an update, so clients see
         // the Coordinator before anyone can send it a message.
         let mut thread = self.set_thread_relationships(created.id, None, Some(project.id))?;
-        let opening = params.opening_message.as_deref().or(params.initial_brief.as_deref()).map(str::trim).filter(|text| !text.is_empty());
-        let message = if self.project_has_brief(project.id)? { opening.map(UserMessage::text) } else { Some(setup_message(opening)) };
-        if let Some(message) = message {
-            self.send_lead_message(thread.id, message).await;
+        if let Some(message) = self.lead_opening(project.id, opening)? {
+            self.send_lead_message(thread.id, params.message_id.unwrap_or_else(Uuid::now_v7), message).await;
             thread = self.inner.store.thread_get(thread.id)?.unwrap_or(thread);
         }
         Ok(methods::CoordinatorOpenResult { thread, created: true })
@@ -203,10 +228,16 @@ impl Orchestrator {
     /// Send the Coordinator a message of Kybern's own (a kickoff, or the user's
     /// opening words). A failure is logged: the thread exists either way, and
     /// "Redo setup" starts the interview again.
-    async fn send_lead_message(&self, thread_id: ThreadId, message: UserMessage) {
-        if let Err(error) = self.send_with_id(thread_id, Uuid::now_v7(), message, false, false).await {
+    async fn send_lead_message(&self, thread_id: ThreadId, message_id: MessageId, message: UserMessage) {
+        if let Err(error) = self.send_with_id(thread_id, message_id, message, false, false).await {
             tracing::warn!(%thread_id, %error, "could not start the Coordinator's first turn");
         }
+    }
+
+    /// The Coordinator's first message: the setup interview when the project has no brief,
+    /// else the user's opening words as they are.
+    fn lead_opening(&self, project_id: ProjectId, opening: Option<&str>) -> Result<Option<UserMessage>> {
+        Ok(if self.project_has_brief(project_id)? { opening.map(UserMessage::text) } else { Some(setup_message(opening)) })
     }
 
     /// Whether the project has a brief with something in it.
