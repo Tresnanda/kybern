@@ -26,7 +26,6 @@ import { agentsCapsuleLabel } from "../../src/state/agents";
 import { HeldBubbles, useHeldMessages, useSenderName } from "../../src/features/HeldMessages";
 import { ChildThreadBar } from "../../src/features/ChildThreadBar";
 import { QueuedCapsule } from "../../src/features/QueuedPrompts";
-import { StatusStrip } from "../../src/features/ThreadStatus";
 import { useLayout } from "../../src/state/layout";
 import {
   errorText,
@@ -60,6 +59,7 @@ import {
   Tap,
 } from "../../src/ui/primitives";
 import { CONTENT_MAX_WIDTH, gutter, radius, space, useTheme } from "../../src/ui/theme";
+import { PREPARING_WORKTREE } from "../../../../packages/kybern-client/src/newChat";
 import { Working } from "../../src/ui/Working";
 import { useSendTransition } from "../../src/components/liquid/SendTransition";
 import { createOutgoingProjection } from "../../src/state/sendTransition";
@@ -587,6 +587,22 @@ function ThreadScreenBody() {
                   <AsyncQuestions key={q.id} request={q} threadId={id} />
                 ))}
                 <HeldBubbles held={held} senderName={senderName} onResolved={heldResolved} />
+                {running && !subagent && (
+                  <View style={{ paddingVertical: 15 }}>
+                    <Working
+                      label={
+                        chat?.worktree && chat.state === "creating"
+                          ? PREPARING_WORKTREE
+                          : snapshot.pendingApprovals.length || thread?.status === "awaiting-approval"
+                            ? "Waiting for your approval"
+                            : snapshot.pendingQuestions?.length
+                              ? "Waiting for your answer"
+                              : "Working on it"
+                      }
+                      active={focused}
+                    />
+                  </View>
+                )}
               </View>
             }
           />
@@ -618,22 +634,6 @@ function ThreadScreenBody() {
           >
             <View style={{ paddingHorizontal: side, gap: space.sm }}>
               <ChildThreadBar thread={thread} />
-              {running && !subagent && (
-                <StatusStrip
-                  threadId={id}
-                  status={
-                    chat?.worktree && chat.state === "creating"
-                      ? "preparing"
-                      : snapshot.pendingApprovals.length || thread?.status === "awaiting-approval"
-                        ? "approval"
-                        : snapshot.pendingQuestions?.length
-                          ? "question"
-                          : "working"
-                  }
-                  blocks={snapshot.blocks}
-                  active={focused}
-                />
-              )}
               {(capsule || queued.length > 0) && (
                 <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
                   {capsule && (
