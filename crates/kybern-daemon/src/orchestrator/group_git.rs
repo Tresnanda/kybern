@@ -330,11 +330,12 @@ impl Orchestrator {
         } else {
             let Ok(Some(mut c)) = self.inner.store.checkpoint_get(turn_id) else { return };
             // A failed "after" only costs the diff its end point; rewinding needs "before".
+            let primary = c.repos.first().map(|r| r.repo.clone());
             for (repo, after) in done {
+                if primary.as_deref() == Some(repo.as_str()) {
+                    c.after = Some(after.clone());
+                }
                 if let Some(entry) = c.repos.iter_mut().find(|r| r.repo == repo) {
-                    if entry.before == c.before {
-                        c.after = Some(after.clone());
-                    }
                     entry.after = Some(after);
                 }
             }

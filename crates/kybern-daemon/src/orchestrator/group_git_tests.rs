@@ -175,6 +175,7 @@ async fn group_checkpoints_diff_by_member_and_rewind_every_member() {
     assert_eq!(checkpoint.repos.iter().map(|r| r.repo.as_str()).collect::<Vec<_>>(), ["api", "infra", "web"]);
     assert!(checkpoint.repos.iter().all(|r| r.after.is_some()) && !checkpoint.incomplete);
     assert_eq!(checkpoint.before, checkpoint.repos[0].before, "the top-level commits are the primary's");
+    assert_eq!(checkpoint.after, checkpoint.repos[0].after);
     let pinned = group_git(&cwd.join("web"), &["rev-parse", &format!("refs/kybern/{}/{turn}/before", thread.id)]);
     assert_eq!(pinned, checkpoint.repos[2].before, "each member pins its own snapshot");
 
