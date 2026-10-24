@@ -12,11 +12,14 @@ import {
   Empty,
   ErrorBanner,
   Group,
+  Icon,
   Page,
   Row,
   T,
 } from "../src/ui/primitives";
 import { useTheme } from "../src/ui/theme";
+import { GroupRepositories, RepoBadge } from "../src/features/GroupRepositories";
+import { groupRowLabel, isGroupProject } from "../../../packages/kybern-client/src/groups";
 
 export default function Projects() {
   const app = useApp();
@@ -241,6 +244,7 @@ export default function Projects() {
               }
             />
           </Group>
+          {isGroupProject(selected) && <GroupRepositories project={selected} onChanged={setSelected} />}
           <Group title="Open pull requests">
             {!prsLoaded ? (
               <Button
@@ -270,15 +274,27 @@ export default function Projects() {
           <T tone="secondary" style={{ marginBottom: 24 }}>
             Projects on your connected computer.
           </T>
-          {app.projects.map((p) => (
-            <Row
-              key={p.id}
-              title={p.name}
-              detail={p.path}
-              icon="folder"
-              onPress={() => void choose(p)}
-            />
-          ))}
+          {app.projects.map((p) => {
+            const group = isGroupProject(p);
+            return (
+              <Row
+                key={p.id}
+                title={p.name}
+                label={group ? groupRowLabel(p.name, p.members?.length ?? 0) : undefined}
+                detail={p.path}
+                icon={group ? "square.stack.3d.up" : "folder"}
+                onPress={() => void choose(p)}
+                trailing={
+                  group ? (
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                      <RepoBadge count={p.members?.length ?? 0} />
+                      <Icon name="chevron.right" size={13} color={colors.muted} />
+                    </View>
+                  ) : undefined
+                }
+              />
+            );
+          })}
           {!app.projects.length && (
             <Empty
               icon="folder"
