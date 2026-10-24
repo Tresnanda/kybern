@@ -1401,6 +1401,13 @@ impl Orchestrator {
             ));
         }
         let project = self.add_project(session.cwd.clone(), None, None)?;
+        // A session in a group folder joins the group like a local chat: every member. Its cwd stays the
+        // session's own spelling, which the harness resumes by.
+        let members = if project.kind == ProjectKind::Group {
+            self.group_local_members(&project, &std::collections::BTreeMap::new()).await?
+        } else {
+            Vec::new()
+        };
         let now = Utc::now();
         let thread = Thread {
             id: Uuid::now_v7(),
@@ -1426,7 +1433,7 @@ impl Orchestrator {
             coordinator_project_id: None,
             subagent: None,
             delegation: None,
-            members: Vec::new(),
+            members,
         };
         let store = self.inner.store.clone();
         let (mut thread, events) = tokio::task::spawn_blocking(move || store.thread_import(thread, history.events)).await??;
