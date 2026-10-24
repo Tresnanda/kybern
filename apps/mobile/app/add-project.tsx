@@ -1,6 +1,6 @@
 import { Stack, router, useLocalSearchParams } from "expo-router";
 import { useEffect, useRef, useState } from "react";
-import { Platform, TextInput, View } from "react-native";
+import { Platform, StyleSheet, TextInput, View } from "react-native";
 import Animated, { FadeIn, ReduceMotion } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
@@ -13,11 +13,13 @@ import {
 import { setDraft } from "../src/state/draft";
 import { candidateDetail, toggleCandidate } from "../src/state/groups";
 import type { ProjectsBrowseResult, ProjectsScanReposResult } from "../src/state/protocol";
-import { errorText, refresh, rpc, supportsGroupProjects, useApp } from "../src/state/runtime";
+import { currentClient, errorText, refresh, rpc, supportsGroupProjects, useApp } from "../src/state/runtime";
 import { CheckRow } from "../src/ui/CheckRow";
-import { Button, ErrorBanner, Field, Icon, Page, Row, T, Tap, styles } from "../src/ui/primitives";
+import { homeOf, shortPath } from "../src/state/projectList";
+import { InsetGroup, ListRow, SectionFooter, SectionHeader } from "../src/ui/List";
+import { Button, Empty, ErrorBanner, Field, Icon, Page, T, Tap, styles } from "../src/ui/primitives";
 import { Segmented } from "../src/ui/Segmented";
-import { MONO, useTheme } from "../src/ui/theme";
+import { MONO, radius, space, type as typography, useTheme } from "../src/ui/theme";
 
 type Kind = "single" | "group";
 
@@ -66,26 +68,19 @@ function FolderList({
   choose?: { title: string; disabled?: boolean; onPress: () => void };
 }) {
   const atRoot = !!root && browse.path === root;
+  const home = homeOf(currentClient()?.info?.data_dir);
   return (
-    <View style={{ marginTop: 8 }}>
-      <T variant="footnote" tone="secondary" selectable>
-        Folders in {browse.path}
-      </T>
-      {choose && !choose.disabled && <Row title={choose.title} icon="checkmark" onPress={choose.onPress} />}
-      {browse.parent && !atRoot && <Row title="Parent folder" icon="arrow.up" onPress={() => onOpen(browse.parent!)} />}
-      {browse.directories.map((d) => (
-        <Row key={d.path} title={d.name} icon="folder" onPress={() => onOpen(d.path)} />
-      ))}
-      {!browse.directories.length && (
-        <T tone="secondary" style={{ marginTop: 12 }}>
-          No subfolders here.
-        </T>
-      )}
-      {browse.has_more && (
-        <T variant="footnote" tone="secondary">
-          Enter a folder path above to find more folders.
-        </T>
-      )}
+    <View style={{ marginTop: space.sm }}>
+      <SectionHeader title={`Folders in ${shortPath(browse.path, home)}`} inset first />
+      <InsetGroup>
+        {choose && !choose.disabled ? <ListRow title={choose.title} leading="checkmark" onPress={choose.onPress} /> : null}
+        {browse.parent && !atRoot ? <ListRow title="Parent folder" leading="arrow.up" onPress={() => onOpen(browse.parent!)} /> : null}
+        {browse.directories.map((d) => (
+          <ListRow key={d.path} title={d.name} leading="folder" chevron onPress={() => onOpen(d.path)} />
+        ))}
+        {!browse.directories.length ? <Empty variant="inline" title="No subfolders here." /> : null}
+      </InsetGroup>
+      {browse.has_more ? <SectionFooter inset>{"Enter a folder path above to find more folders."}</SectionFooter> : null}
     </View>
   );
 }
@@ -158,7 +153,7 @@ function SingleForm({ header }: { header: React.ReactNode }) {
       {header}
       <Animated.View entering={header ? swap : undefined}>
         <T tone="secondary" style={{ marginTop: header ? 14 : 0, marginBottom: 24 }}>
-          Choose an existing folder on your computer. It will also appear in the desktop app.
+          Choose a folder on your computer. It shows up in Kybern on your computer too.
         </T>
         <View style={{ gap: 16 }}>
           <Field
@@ -169,13 +164,13 @@ function SingleForm({ header }: { header: React.ReactNode }) {
             autoCapitalize="none"
             placeholder="/Users/you/projects/my-app"
           />
-          <Button busy={busy || folders.busy} onPress={() => void directories(path)}>
-            Browse folder
+          <Button size="medium" icon="folder" busy={folders.busy} onPress={() => void directories(path)}>
+            Browse this folder
           </Button>
           <Field label="Project name (optional)" value={name} onChangeText={setName} placeholder="Use folder name" />
           <ErrorBanner error={error || folders.error} />
           <Button role="prominent" busy={busy} disabled={!path.trim()} onPress={() => void add()}>
-            Add this folder
+            Add project
           </Button>
         </View>
         {folders.browse && (
@@ -296,9 +291,9 @@ function GroupForm({ header, existing }: { header?: React.ReactNode; existing?: 
                 style={[
                   styles.line,
                   {
-                    minHeight: 52,
-                    borderRadius: 16,
-                    borderWidth: 1,
+                    minHeight: 48,
+                    borderRadius: radius.md,
+                    borderWidth: StyleSheet.hairlineWidth,
                     borderColor: colors.line,
                     backgroundColor: colors.surface,
                     paddingStart: 15,
@@ -324,8 +319,8 @@ function GroupForm({ header, existing }: { header?: React.ReactNode; existing?: 
                     flex: 1,
                     alignSelf: "stretch",
                     color: colors.ink,
+                    fontSize: typography.subhead.fontSize,
                     fontFamily: MONO,
-                    fontSize: 15,
                     letterSpacing: 0,
                   }}
                 />

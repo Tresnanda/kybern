@@ -1,25 +1,23 @@
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
-import { View } from "react-native";
+import { Platform, ScrollView, useWindowDimensions, View } from "react-native";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { parsePairingInvitation } from "../src/state/protocol";
-import {
-  addEnvironment,
-  errorText,
-  pairEnvironment,
-} from "../src/state/runtime";
+import { addEnvironment, errorText, pairEnvironment } from "../src/state/runtime";
+import { HeaderActions } from "../src/ui/ActionMenu";
 import { Brand } from "../src/ui/Brand";
-import {
-  Button,
-  ErrorBanner,
-  Field,
-  IconButton,
-  Page,
-  T,
-  Tap,
-} from "../src/ui/primitives";
+import { SectionFooter, SectionHeader } from "../src/ui/List";
+import { Button, ErrorBanner, Field, T } from "../src/ui/primitives";
+import { CONTENT_MAX_WIDTH, gutter, space, useTheme } from "../src/ui/theme";
 
+// Pair this phone with Kybern on a computer: scan the invitation's QR code, or
+// type its address and six-digit code. An access token is the fallback.
 export default function Connect() {
   const { invitation } = useLocalSearchParams<{ invitation?: string }>();
+  const { colors } = useTheme();
+  const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const [address, setAddress] = useState("");
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
@@ -29,18 +27,17 @@ export default function Connect() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   useEffect(() => {
-    if (invitation) {
-      const parsed = parsePairingInvitation(invitation);
-      if (parsed) {
-        setAddress(parsed.url);
-        setCode(parsed.code);
-        setExpected(parsed.environmentId);
-      } else
-        setError(
-          "This invitation is incomplete. Create a new one in Kybern on your computer.",
-        );
-    }
+    if (!invitation) return;
+    const parsed = parsePairingInvitation(invitation);
+    if (parsed) {
+      setAddress(parsed.url);
+      setCode(parsed.code);
+      setExpected(parsed.environmentId);
+      setAdvanced(false);
+    } else setError("This invitation is incomplete. Create a new one in Kybern on your computer.");
   }, [invitation]);
+
+  const ready = !!address.trim() && (advanced ? !!token.trim() : /^\d{6}$/.test(code.trim()));
   async function submit() {
     if (!address.trim()) {
       setError("Enter the address shown on your computer.");
@@ -53,8 +50,7 @@ export default function Connect() {
     setError("");
     setBusy(true);
     try {
-      if (advanced)
-        await addEnvironment({ url: address, token: token.trim() }, name);
+      if (advanced) await addEnvironment({ url: address, token: token.trim() }, name);
       else await pairEnvironment(address, code, name, expected);
       router.dismissTo("/");
     } catch (e) {
@@ -63,93 +59,99 @@ export default function Connect() {
       setBusy(false);
     }
   }
+
   return (
-    <Page>
-      <Stack.Screen
-        options={{
-          headerRight: () => (
-            <IconButton
-              name="xmark"
-              label="Close connection setup"
-              onPress={() => router.back()}
-            />
-          ),
+    <KeyboardAvoidingView behavior="padding" style={{ flex: 1, backgroundColor: colors.grouped }}>
+      <Stack.Screen options={{ headerStyle: { backgroundColor: colors.grouped } }} />
+      {Platform.OS === "ios" && (
+        <>
+          <Stack.Toolbar placement="left">
+            <Stack.Toolbar.Button onPress={() => router.back()}>Cancel</Stack.Toolbar.Button>
+          </Stack.Toolbar>
+          <HeaderActions buttons={[{ title: "Connect", prominent: true, disabled: !ready || busy, onPress: () => void submit() }]} />
+        </>
+      )}
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+        contentInsetAdjustmentBehavior="automatic"
+        contentContainerStyle={{
+          paddingHorizontal: gutter(width),
+          paddingTop: space.lg,
+          paddingBottom: insets.bottom + space["2xl"],
+          maxWidth: CONTENT_MAX_WIDTH,
+          width: "100%",
+          alignSelf: "center",
         }}
-      />
-      <View style={{ paddingTop: 22, gap: 16, paddingBottom: 32 }}>
-        <Brand size={45} />
-        <T variant="title">Connect your computer.</T>
-        <T tone="secondary">
-          Open Kybern on your computer, choose its environment menu, then create
-          a pairing invitation.
-        </T>
-      </View>
-      <View style={{ gap: 22 }}>
-        <Button
-          icon="qrcode.viewfinder"
-          onPress={() => router.push("/scan-pairing")}
-        >
+      >
+        <View style={{ alignItems: "center", gap: space.md, paddingBottom: space.xl }}>
+          <Brand size={44} />
+          <T tone="secondary" style={{ textAlign: "center", maxWidth: 340 }}>
+            Open Kybern on your computer, choose its environment menu, then create a pairing invitation.
+          </T>
+        </View>
+        <Button icon="qrcode.viewfinder" onPress={() => router.push("/scan-pairing")}>
           Scan QR code
         </Button>
-        <Field
-          label="Computer address"
-          placeholder="100.64.0.2:4173"
-          value={address}
-          onChangeText={setAddress}
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="url"
-        />
-        {advanced ? (
+
+        <SectionHeader title={advanced ? "Or enter an access token" : "Or enter the code"} />
+        <View style={{ gap: space.lg }}>
           <Field
-            label="Access token"
-            value={token}
-            onChangeText={setToken}
-            secureTextEntry
+            label="Computer address"
+            placeholder="100.64.0.2:4173"
+            value={address}
+            onChangeText={setAddress}
             autoCapitalize="none"
             autoCorrect={false}
-            placeholder="Paste your access token"
+            keyboardType="url"
+            textContentType="URL"
           />
-        ) : (
-          <Field
-            label="Pairing code"
-            variant="code"
-            placeholder="000000"
-            value={code}
-            onChangeText={setCode}
-            maxLength={6}
-          />
-        )}
-        <Field
-          label="Computer name (optional)"
-          placeholder="MacBook Pro"
-          value={name}
-          onChangeText={setName}
-        />
+          {advanced ? (
+            <Field
+              label="Access token"
+              value={token}
+              onChangeText={setToken}
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder="Paste your access token"
+            />
+          ) : (
+            <Field
+              label="Pairing code"
+              variant="code"
+              placeholder="000000"
+              value={code}
+              onChangeText={(text) => setCode(text.replace(/\D/g, ""))}
+              maxLength={6}
+            />
+          )}
+          <Field label="Computer name (optional)" placeholder="MacBook Pro" value={name} onChangeText={setName} />
+        </View>
+        <SectionFooter>
+          {"Use the address from your pairing invitation. Away from home, keep both devices on the same Tailscale network."}
+        </SectionFooter>
         <ErrorBanner error={error} />
-        <Button role="prominent"
-          onPress={() => void submit()}
-          busy={busy}
-          disabled={advanced && !token.trim()}
-        >
-          Connect computer
-        </Button>
-        <T variant="footnote" tone="secondary">
-          Use the address from your pairing invitation. For connections away
-          from home, keep both devices on the same Tailscale network.
-        </T>
-        <Tap
-          label={advanced ? "Use a pairing code" : "Use an access token"}
-          onPress={() => {
-            setAdvanced(!advanced);
-            setError("");
-          }}
-        >
-          <T variant="footnote" tone="secondary">
-            {advanced ? "Use a pairing code" : "Use an access token instead"}
-          </T>
-        </Tap>
-      </View>
-    </Page>
+        {Platform.OS !== "ios" && (
+          <View style={{ paddingTop: space.lg }}>
+            <Button role="prominent" busy={busy} disabled={!ready} onPress={() => void submit()}>
+              Connect
+            </Button>
+          </View>
+        )}
+        <View style={{ alignItems: "center", paddingTop: space.lg }}>
+          <Button
+            role="plain"
+            size="medium"
+            onPress={() => {
+              setAdvanced(!advanced);
+              setError("");
+            }}
+          >
+            {advanced ? "Use a pairing code instead" : "Use an access token instead"}
+          </Button>
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
