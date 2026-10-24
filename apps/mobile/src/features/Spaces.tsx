@@ -2,6 +2,7 @@
 // menu items that switch, create and manage spaces. Switching changes what the
 // lists show and nothing animates.
 import { router } from "expo-router";
+import type { ReactNode } from "react";
 import { View } from "react-native";
 import { count } from "../state/format";
 import {
@@ -45,35 +46,58 @@ export function useSpaceMenuItems(): MenuItem[] {
 }
 
 /**
- * The active space as a chip that opens the switcher. Shown only with two or more
- * spaces: with one, there is nothing to switch to.
+ * A value that opens a menu, as a capsule: optional mark, the value, ⌄. The
+ * space chip and the Notes/Tasks project filter share it.
  */
-export function SpaceSwitcher({ compact = false }: { compact?: boolean }) {
+export function ValueCapsule({
+  leading,
+  label,
+  compact = false,
+}: {
+  leading?: ReactNode;
+  label: string;
+  compact?: boolean;
+}) {
   const { colors } = useTheme();
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: space.sm,
+        minHeight: compact ? 32 : 36,
+        paddingStart: leading ? space.xs + 2 : space.md,
+        paddingEnd: space.md,
+        borderRadius: radius.full,
+        backgroundColor: colors.raised,
+      }}
+    >
+      {leading}
+      <T variant="subhead" numberOfLines={1} style={{ fontWeight: "600", flexShrink: 1 }}>
+        {label}
+      </T>
+      <Icon name="chevron.up.chevron.down" size={12} color={colors.muted} />
+    </View>
+  );
+}
+
+/**
+ * The active space as a chip that opens the switcher. Shown only with two or more
+ * spaces (with one, there is nothing to switch to) unless `always`, which keeps
+ * New space and Manage spaces reachable on screens without another way there.
+ */
+export function SpaceSwitcher({ compact = false, always = false }: { compact?: boolean; always?: boolean }) {
   const s = useSpaces();
   const items = useSpaceMenuItems();
   const active = s.spaces.find((space) => space.id === currentSpaceId(s));
-  if (!active || s.spaces.length < 2) return null;
+  if (!active || (s.spaces.length < 2 && !always)) return null;
   return (
     <MenuButton items={items} title="Space" label={`Space: ${active.name}. Switch space`} radius={radius.full}>
-      <View
-        style={{
-          flexDirection: "row",
-          alignItems: "center",
-          gap: space.sm,
-          minHeight: compact ? 32 : 36,
-          paddingStart: space.xs + 2,
-          paddingEnd: space.md,
-          borderRadius: radius.full,
-          backgroundColor: colors.raised,
-        }}
-      >
-        <SpaceTile space={active} size={compact ? 20 : 22} />
-        <T variant="subhead" numberOfLines={1} style={{ fontWeight: "600", flexShrink: 1 }}>
-          {active.name}
-        </T>
-        <Icon name="chevron.up.chevron.down" size={12} color={colors.muted} />
-      </View>
+      <ValueCapsule
+        compact={compact}
+        label={active.name}
+        leading={<SpaceTile space={active} size={compact ? 20 : 22} />}
+      />
     </MenuButton>
   );
 }

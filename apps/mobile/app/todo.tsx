@@ -4,7 +4,6 @@ import {
   Platform,
   RefreshControl,
   ScrollView,
-  StyleSheet,
   TextInput,
   View,
   useWindowDimensions,
@@ -14,6 +13,7 @@ import Animated, {
   useSharedValue,
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { ScopeBar } from "../src/features/ScopeBar";
 import { TaskRow, useMinuteClock } from "../src/features/TaskRow";
 import { TaskToast } from "../src/features/TaskToast";
 import { count } from "../src/state/format";
@@ -26,6 +26,7 @@ import {
   scopeTasks,
   startsCollapsed,
 } from "../src/state/tasksModel";
+import { useProjectScope } from "../src/state/projectScope";
 import { errorText, useApp } from "../src/state/runtime";
 import { useInSpace, useSpaceProjects } from "../src/state/spaces";
 import { HeaderActions, MenuButton, type MenuItem } from "../src/ui/ActionMenu";
@@ -39,7 +40,6 @@ import {
   Icon,
   IconButton,
   T,
-  Tap,
 } from "../src/ui/primitives";
 import { PullRefresh } from "../src/ui/PullRefresh";
 import { ProjectDot, StatusGlyph } from "../src/ui/TaskGlyphs";
@@ -56,48 +56,7 @@ type Row =
   | { key: string; kind: "header"; status: TaskStatus; count: number; collapsible: boolean; open: boolean; first: boolean }
   | { key: string; kind: "task"; task: TaskItem; separator: boolean };
 
-/** All tasks, Global, or one project. */
-type Scope = "all" | "global" | string;
 type Layout = "list" | "board";
-
-/** A scope chip: quiet text, the chosen one on a raised fill with a hairline. No haptic: it is a filter. */
-function ScopeChip({
-  label,
-  projectId,
-  selected,
-  onPress,
-}: {
-  label: string;
-  projectId?: string | null;
-  selected: boolean;
-  onPress: () => void;
-}) {
-  const { colors } = useTheme();
-  return (
-    <Tap
-      label={label}
-      selected={selected}
-      feedback="highlight"
-      onPress={onPress}
-      style={{
-        flexDirection: "row",
-        alignItems: "center",
-        gap: space.sm,
-        minHeight: 36,
-        paddingHorizontal: space.md,
-        borderRadius: radius.full,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: selected ? colors.line : "transparent",
-        backgroundColor: selected ? colors.raised : undefined,
-      }}
-    >
-      {projectId !== undefined && <ProjectDot projectId={projectId} />}
-      <T variant="label" tone={selected ? "ink" : "secondary"}>
-        {label}
-      </T>
-    </Tap>
-  );
-}
 
 /**
  * One line to capture a task. Return adds it to Inbox and keeps the keyboard up
@@ -281,14 +240,13 @@ export default function Tasks() {
   const connected = app.status === "open";
   const [refreshing, setRefreshing] = useState(false);
   const [open, setOpen] = useState<Partial<Record<TaskStatus, boolean>>>({});
-  const [chosen, setChosen] = useState<Scope>("all");
   const [view, setView] = useState<Layout>("list");
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   // Where quick add puts a task while every scope is listed (null: Global).
-  const [destination, setDestination] = useState<string | null>(null);
-  const scope: Scope = projectId || chosen;
-  const scoped = projectId ? app.projects.find((p) => p.id === projectId) : undefined;
+  const [chosenDestination, setDestination] = useState<string | null>(null);
+  // A link from a project page opens on that project; the filter can widen it.
+  const [scope, setScope] = useProjectScope("tasks", projectId);
   const projectName = useCallback(
     (id?: string | null) => (id ? app.projects.find((p) => p.id === id)?.name : undefined),
     [app.projects],
@@ -296,10 +254,7 @@ export default function Tasks() {
   // Global tasks show in every space; project tasks in their project's space.
   const inSpace = useInSpace();
   const spaceProjects = useSpaceProjects();
-  const tasks = useMemo(
-    () => (projectId ? allTasks : allTasks.filter((t) => inSpace(t.project_id))),
-    [allTasks, projectId, inSpace],
-  );
+  const tasks = useMemo(() => allTasks.filter((t) => inSpace(t.project_id)), [allTasks, inSpace]);
   const offset = useSharedValue(0);
   const onScroll = useAnimatedScrollHandler({
     onScroll: (event) => {
@@ -307,25 +262,9 @@ export default function Tasks() {
     },
   });
 
-  // Only scopes that hold tasks are worth a chip; the chosen one stays while it empties.
-  const scopes = useMemo(() => {
-    if (projectId) return [];
-    const ids = new Set<string>();
-    let global = false;
-    for (const task of tasks)
-      if (task.scope === "global" || !task.project_id) global = true;
-      else ids.add(task.project_id);
-    const list: { id: Scope; label: string }[] = [{ id: "all", label: "All" }];
-    if (global || chosen === "global") list.push({ id: "global", label: "Global" });
-    for (const project of spaceProjects)
-      if (ids.has(project.id) || chosen === project.id)
-        list.push({ id: project.id, label: project.name });
-    return list.length > 2 ? list : [];
-  }, [tasks, spaceProjects, projectId, chosen]);
-
   const visible = useMemo(
-    () => (scope === "all" ? tasks : scopeTasks(tasks, scope)),
-    [tasks, scope],
+    () => (scope === "all" ? tasks : scopeTasks(allTasks, scope)),
+    [tasks, allTasks, scope],
   );
   const rows = useMemo<Row[]>(() => {
     const out: Row[] = [];
@@ -355,6 +294,8 @@ export default function Tasks() {
     setRefreshing(false);
   }, []);
 
+  // A destination from another space falls back to Global.
+  const destination = spaceProjects.some((p) => p.id === chosenDestination) ? chosenDestination : null;
   const targetProject =
     scope === "all" ? destination : scope === "global" ? null : scope;
   const where = targetProject ? (projectName(targetProject) ?? "this project") : "Global";
@@ -382,7 +323,7 @@ export default function Tasks() {
           ],
         }
       : undefined;
-  const showProject = !projectId && scope === "all";
+  const showProject = scope === "all";
   const nothing = loaded && !unsupported && !visible.length;
 
   const toggleSelect = useCallback((id: string) => {
@@ -400,30 +341,13 @@ export default function Tasks() {
   };
   // Tasks a run can start from: anything open that no run is working on.
   const sendable = [...selected].filter((id) => {
-    const task = tasks.find((t) => t.id === id);
+    const task = allTasks.find((t) => t.id === id);
     return task && isOpenStatus(task.status) && task.status !== "running";
   });
 
   const header = (
     <View>
-      {scopes.length > 0 && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={{ marginTop: space.xs }}
-          contentContainerStyle={{ paddingHorizontal: space.md, gap: space.xs }}
-        >
-          {scopes.map((item) => (
-            <ScopeChip
-              key={item.id}
-              label={item.label}
-              projectId={item.id === "all" ? undefined : item.id === "global" ? null : item.id}
-              selected={item.id === scope}
-              onPress={() => setChosen(item.id)}
-            />
-          ))}
-        </ScrollView>
-      )}
+      {loaded && !unsupported && <ScopeBar scope={scope} onChange={setScope} />}
       {(loaded || connected) && !unsupported && !selecting && (
         <QuickAdd where={where} destinations={destinations} disabled={!connected} onAdd={add} />
       )}
@@ -466,11 +390,9 @@ export default function Tasks() {
             ? selected.size
               ? `${selected.size} selected`
               : "Select tasks"
-            : scoped
-              ? `${scoped.name} tasks`
-              : "Tasks",
+            : "Tasks",
           // The board pages sideways under a plain bar; the list keeps the large title.
-          headerLargeTitleEnabled: !scoped && !selecting && view === "list",
+          headerLargeTitleEnabled: !selecting && view === "list",
           headerStyle: { backgroundColor: view === "board" ? colors.grouped : colors.background },
         }}
       />

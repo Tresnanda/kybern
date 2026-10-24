@@ -199,6 +199,8 @@ the iOS 26 bottom search bar is present so it sits above them.
 `headline`, one `subhead` line, at most one tinted button, placed at 38 % of the
 free height. `variant="inline"` is one `footnote muted` line for an empty group.
 Filtered empty: “No notes match “quarterly”.” + a plain “Clear search”.
+An inline `Empty` with an `action` puts one plain button at the row's end
+(“No notes in kybern yet.” + New note).
 
 ### ChromeBar (`ChromeBar.tsx`)
 
@@ -253,6 +255,18 @@ three-quarter pie, done check, failed “!”, stopped cross.
 `<Segmented compact options value onChange label />` for list scopes (All /
 Working / Pinned / Archived): a capsule track with a raised thumb that slides.
 Non-compact for short settings choices. Never a black pill or loose text tabs.
+
+### Scope bar (`src/features/ScopeBar.tsx`)
+
+Notes and Tasks open with one compact row under the search: the space chip
+(`SpaceSwitcher always`, so Manage spaces stays reachable with one space) and a
+project filter capsule (“All projects ⌄”, “Global ⌄”, “kybern ⌄” with the
+project's dot) opening a menu of All projects, then Global and the space's
+projects. Both are `ValueCapsule`s (32 pt, `raised`, full radius), the same
+control as Home's space chip. `useProjectScope(screen, linkedProjectId)`
+remembers the filter per screen per computer in SecureStore; a `projectId` link
+preselects without overwriting it; switching to a space without the chosen
+project resets it to All projects. Switching filters swaps the list, no motion.
 
 ### Copy helpers
 

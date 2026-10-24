@@ -543,7 +543,23 @@ export function Empty({
 }) {
   const { colors } = useTheme();
   if (variant === "inline")
-    return (
+    return action ? (
+      // A filtered group with nothing in it: the line, then one plain action at the end.
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          gap: space.md,
+          minHeight: 44,
+          paddingHorizontal: space.lg,
+        }}
+      >
+        <T variant="footnote" tone="muted" style={{ flex: 1 }}>
+          {title}
+        </T>
+        {action}
+      </View>
+    ) : (
       <View style={{ paddingVertical: space.sm, paddingHorizontal: space.lg }}>
         <T variant="footnote" tone="muted">
           {title}

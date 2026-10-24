@@ -330,3 +330,18 @@ test("the notes list loads, follows notifications, offers undo, and ignores old 
   assert.equal(store.getNotes().unsupported, true);
   store.resetNotes();
 });
+
+test("the project filter keeps Global notes, or every note of one project", () => {
+  const notes = [
+    summary("g"),
+    summary("pn", { scope: "project", project_id: "p1" }),
+    summary("tn", { scope: "thread", project_id: "p1", thread_id: "t", pinned: true }),
+    summary("other", { scope: "project", project_id: "p2" }),
+    summary("gone", { scope: "project", project_id: "p1", deleted_at: "2026-10-04T00:00:00Z" }),
+  ];
+  const inSpace = (id) => !id || id === "p1";
+  assert.deepEqual(model.scopeNotes(notes, "all", inSpace).map((n) => n.id), ["g", "pn", "tn", "gone"]);
+  assert.deepEqual(model.scopeNotes(notes, "global", inSpace).map((n) => n.id), ["g"]);
+  assert.deepEqual(model.scopeNotes(notes, "p1", inSpace).map((n) => n.id), ["pn", "tn", "gone"]);
+  assert.deepEqual(model.scopeNotes(notes, "p2", inSpace).map((n) => n.id), ["other"]);
+});

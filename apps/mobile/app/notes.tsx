@@ -8,6 +8,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { attempt, noteMenuItems } from "../src/features/noteActions";
+import { ScopeBar } from "../src/features/ScopeBar";
 import { confirm } from "../src/ui/Alert";
 import { HeaderActions } from "../src/ui/ActionMenu";
 import {
@@ -28,8 +29,11 @@ import {
   filterNotes,
   groupNotes,
   noteTitle,
+  scopeNotes,
   type SearchHit,
 } from "../src/state/notesModel";
+import { useProjectScope } from "../src/state/projectScope";
+import { scopeLabel } from "../src/state/scopeModel";
 import { count } from "../src/state/format";
 import { isFreeChatProject, type NoteSummary } from "../src/state/protocol";
 import { activeEnvironment, useApp } from "../src/state/runtime";
@@ -72,6 +76,7 @@ type Row =
     }
   | { key: string; kind: "disclosure"; title: string; count: number; open: boolean; onToggle: () => void }
   | { key: string; kind: "empty"; ids: string[] }
+  | { key: string; kind: "scopeEmpty"; text: string; project?: string }
   | { key: string; kind: "footnote"; text: string };
 
 /** Swipes: Pin on the leading edge, Delete (full swipe) on the trailing one; Restore and Delete forever once deleted. */
@@ -216,9 +221,11 @@ export default function Notes() {
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const computer = activeEnvironment()?.name ?? "your computer";
   const searching = query.trim().length > 0;
-  const scoped = projectId ? app.projects.find((p) => p.id === projectId) : undefined;
   // Global notes show in every space; project notes in their project's space.
   const inSpace = useInSpace();
+  // A link from a project page opens on that project; the filter can widen it.
+  const [scope, setScope] = useProjectScope("notes", projectId);
+  const scopeProject = scope === "all" || scope === "global" ? undefined : scope;
   const offset = useSharedValue(0);
   const onScroll = useAnimatedScrollHandler({
     onScroll: (event) => {
@@ -260,11 +267,12 @@ export default function Notes() {
     [],
   );
 
+  const hasNotes =
+    notes.some((n) => inSpace(n.project_id)) ||
+    (!!scopeProject && notes.some((n) => n.project_id === scopeProject));
   const rows = useMemo<Row[]>(() => {
-    const scopedNotes = projectId
-      ? notes.filter((n) => n.project_id === projectId)
-      : notes.filter((n) => inSpace(n.project_id));
-    if (!scopedNotes.length) return [];
+    if (!hasNotes) return [];
+    const scopedNotes = scopeNotes(notes, scope, inSpace);
     const { notes: visible, snippets } = filterNotes(scopedNotes, query, hits);
     const groups = groupNotes(visible, app.projects, isFreeChatProject);
     const out: Row[] = [];
@@ -297,10 +305,10 @@ export default function Notes() {
         : undefined;
     if (groups.pinned.length) {
       header({ key: "h:pinned", title: "Pinned", count: groups.pinned.length });
-      list("pin", groups.pinned, { context: projectId ? undefined : placeOf });
+      list("pin", groups.pinned, { context: scope === "all" ? placeOf : undefined });
     }
-    // Always offer Global (and the scoped project) so there is somewhere obvious to add a note.
-    if (!projectId && (groups.global.length || !searching)) {
+    // Always offer Global so there is somewhere obvious to add a note.
+    if (!scopeProject && (groups.global.length || !searching)) {
       header({
         key: "h:global",
         title: "Global",
@@ -332,6 +340,14 @@ export default function Notes() {
         if (expanded) list(`t:${group.projectId}`, group.threadNotes, { nested: true });
       }
     }
+    // A project with nothing filed under it yet still offers a way to start.
+    if (scopeProject && !searching && !visible.some((n) => !n.deleted_at))
+      out.push({
+        key: "e:scope",
+        kind: "scopeEmpty",
+        text: `No notes in ${scopeLabel(scope, app.projects)} yet.`,
+        project: scopeProject,
+      });
     if (groups.empty.length && !searching)
       out.push({ key: "empty", kind: "empty", ids: groups.empty.map((n) => n.id) });
     if (groups.chats.length) {
@@ -364,11 +380,8 @@ export default function Notes() {
       }
     }
     return out;
-  }, [notes, hits, query, open, app.projects, projectId, connected, searching, newNote, inSpace]);
+  }, [notes, hits, query, open, app.projects, scope, scopeProject, hasNotes, connected, searching, newNote, inSpace]);
 
-  const hasNotes = projectId
-    ? notes.some((n) => n.project_id === projectId)
-    : notes.some((n) => inSpace(n.project_id));
   const nothing = loaded && !unsupported && !hasNotes;
   const noMatch = searching && !rows.some((r) => r.kind === "note");
   // Android draws edge to edge: keep the last row clear of the gesture bar and fade what scrolls under it.
@@ -376,12 +389,14 @@ export default function Notes() {
   // iOS 26 puts the header search bar at the bottom: the toast sits above it.
   const toastLift = Platform.OS === "ios" ? 56 : 0;
 
+  const scopeBar = loaded && !unsupported ? <ScopeBar scope={scope} onChange={setScope} /> : null;
+
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       <Stack.Screen
         options={{
-          title: scoped ? `${scoped.name} notes` : "Notes",
-          headerLargeTitleEnabled: !scoped,
+          title: "Notes",
+          headerLargeTitleEnabled: true,
         }}
       />
       <HeaderActions
@@ -390,17 +405,22 @@ export default function Notes() {
             icon: "square.and.pencil",
             label: "New note",
             disabled: !connected || unsupported,
-            onPress: () => newNote(projectId),
+            onPress: () => newNote(scopeProject),
           },
         ]}
       />
       {Platform.OS === "ios" ? (
         <ListSearch value={query} onChangeText={setQuery} placeholder="Search notes" />
-      ) : hasNotes ? (
-        <View style={{ paddingHorizontal: space.lg, paddingTop: space.sm, paddingBottom: space.xs }}>
-          <ListSearch value={query} onChangeText={setQuery} placeholder="Search notes" />
+      ) : (
+        <View>
+          {hasNotes && (
+            <View style={{ paddingHorizontal: space.lg, paddingTop: space.sm, paddingBottom: space.xs }}>
+              <ListSearch value={query} onChangeText={setQuery} placeholder="Search notes" />
+            </View>
+          )}
+          {scopeBar}
         </View>
-      ) : null}
+      )}
       <PullRefresh offset={offset} refreshing={refreshing} onRefresh={reload} label="Refreshing notes">
         <Animated.FlatList
           data={rows}
@@ -421,6 +441,8 @@ export default function Notes() {
               <RefreshControl refreshing={refreshing} onRefresh={() => void reload()} />
             ) : undefined
           }
+          // iOS keeps search in the navigation bar, so the bar leads the list.
+          ListHeaderComponent={Platform.OS === "ios" ? scopeBar : null}
           renderItem={({ item }) => {
             switch (item.kind) {
               case "header":
@@ -458,6 +480,20 @@ export default function Notes() {
                 return <EmptyNotes ids={item.ids} />;
               case "footnote":
                 return <Empty variant="inline" title={item.text} />;
+              case "scopeEmpty":
+                return (
+                  <Empty
+                    variant="inline"
+                    title={item.text}
+                    action={
+                      connected ? (
+                        <Button role="plain" size="medium" onPress={() => newNote(item.project)}>
+                          New note
+                        </Button>
+                      ) : undefined
+                    }
+                  />
+                );
             }
           }}
           ListEmptyComponent={
@@ -495,7 +531,7 @@ export default function Notes() {
                   title="Your notes, across every project"
                   detail="Jot down ideas, checklists and reminders. Start a line with - [ ] to make a checklist."
                   action={
-                    <Button icon="plus" onPress={() => newNote(projectId)}>
+                    <Button icon="plus" onPress={() => newNote(scopeProject)}>
                       New note
                     </Button>
                   }

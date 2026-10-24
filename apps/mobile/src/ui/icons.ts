@@ -86,6 +86,7 @@ export const androidIcons = {
   square: "check_box_outline_blank",
   "square.and.arrow.up": "ios_share",
   "square.and.pencil": "edit_square",
+  "square.grid.2x2": "grid_view",
   "square.stack.3d.up": "stacks",
   stop: "stop",
   "stop.fill": "stop",

@@ -90,6 +90,20 @@ export function filterNotes(
   return { notes: matched, snippets };
 }
 
+/**
+ * The notes a project filter keeps: Global notes, or every note of one project
+ * (its own, its threads', pinned or deleted). `inSpace` decides "all".
+ */
+export function scopeNotes(
+  notes: NoteSummary[],
+  scope: string,
+  inSpace: (projectId: string | null | undefined) => boolean,
+) {
+  if (scope === "all") return notes.filter((n) => inSpace(n.project_id));
+  if (scope === "global") return notes.filter((n) => n.scope === "global");
+  return notes.filter((n) => n.scope !== "global" && n.project_id === scope);
+}
+
 export interface ProjectNotes {
   projectId: string;
   name: string;
