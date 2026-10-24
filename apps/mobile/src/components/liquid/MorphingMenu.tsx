@@ -56,8 +56,13 @@ const MENU_GAP = 6;
 /** How far a covering menu reaches past its button's edge. */
 const COVER_INSET = 4;
 /** A closing menu is the same liquid at 1.25× the tempo: exits are shorter than entrances. */
+// It also lands instead of settling: an exit that rings around its trigger keeps
+// the modal (and a copy of the trigger) on screen for half a second after the
+// eye has seen it arrive.
 function quicker<T extends { stiffness: number; damping: number }>(spring: T, open: boolean): T {
-  return open ? spring : { ...spring, stiffness: spring.stiffness * 1.5625, damping: spring.damping * 1.25 };
+  return open
+    ? spring
+    : { ...spring, stiffness: spring.stiffness * 1.5625, damping: spring.damping * 1.25, overshootClamping: true };
 }
 /** liquid-gooey's cornerEase: the droplet resolves into the target corners. */
 const cornerEase = Easing.bezierFn(0.3, 1.05, 0.4, 1);
@@ -379,6 +384,8 @@ export function MorphingMenu({
   // modal is torn down. Menus that redraw their source icon keep an opaque
   // material; the attachment return fades at its source before its picker.
   const dissolve = !hasSource;
+  /** A custom trigger is redrawn at the origin (worklets can't capture the element itself). */
+  const redrawn = !sourceIcon && source != null;
   const materialStyle = useAnimatedStyle(() => ({
     opacity: reduced
       ? fade.get()
@@ -386,9 +393,18 @@ export function MorphingMenu({
         ? opening.get()
           ? interpolate(size.get(), [0.05, 0.35], [0, 1], "clamp")
           : interpolate(size.get(), [0.15, 0.5], [0, 1], "clamp")
-        : open || !attachmentExit
-          ? 1
-          : interpolate(size.get(), [0, 0.12], [0, 1], "clamp"),
+        : redrawn
+          ? // A redrawn custom trigger carries its own background: the surface
+            // must be gone before the body reaches the trigger's (larger) box.
+            interpolate(size.get(), [0.04, 0.22], [0, 1], "clamp")
+          : open || !attachmentExit
+            ? 1
+            : interpolate(size.get(), [0, 0.12], [0, 1], "clamp"),
+  }));
+  // The menu's shadow and hairline belong to the open surface; at the trigger's
+  // size they would ring the redrawn trigger as a second outline.
+  const outlineStyle = useAnimatedStyle(() => ({
+    opacity: reduced ? 1 : interpolate(size.get(), [0.05, 0.35], [0, 1], "clamp"),
   }));
   const scrimStyle = useAnimatedStyle(() => ({ opacity: dim.get() }));
   const dotStyle = useAnimatedStyle(() => ({
@@ -532,7 +548,7 @@ export function MorphingMenu({
         >
           <Animated.View
             pointerEvents="none"
-            style={[StyleSheet.absoluteFill, materialStyle]}
+            style={[StyleSheet.absoluteFill, materialStyle, outlineStyle]}
           >
             <Animated.View
               style={[
