@@ -16,14 +16,16 @@ import { runtimeTaskStatusWord } from "../../../../packages/kybern-client/src/st
 import { launchCounts, launchGroupTitle, launchState, type ChildPhase } from "../../../../packages/kybern-client/src/delegations";
 import { delegateTitle, orchestrationTool, parseDelegateResult, parseSendInput, parseSendResult, sendStateWord } from "../../../../packages/kybern-client/src/orchestrationTools";
 import { findSubagentFor, subagentGroupTitle } from "../../../../packages/kybern-client/src/subagents";
+import { purposeLabel } from "../../../../packages/kybern-client/src/delegations";
 import { sendFollowUp } from "../state/followUp";
 import { count } from "../state/format";
-import type { JsonValue, RuntimeTask } from "../state/protocol";
+import type { JsonValue, RuntimeTask, Thread } from "../state/protocol";
 import { errorText, getState, rpc, useApp } from "../state/runtime";
 import { runtimeStatus } from "../state/status";
 import type { Block } from "../state/transcript";
 import { Code } from "../ui/Markdown";
 import { Button, Icon, T, Tap } from "../ui/primitives";
+import { ProviderMark } from "../ui/ProviderMark";
 import { StatusGlyph } from "../ui/TaskGlyphs";
 import { showToast } from "../ui/Toast";
 import { space, useTheme } from "../ui/theme";
@@ -313,24 +315,57 @@ export const DelegationRow = memo(function DelegationRow({ block }: { block: Too
   );
 });
 
-/** "Sent to Reviewer · Answered": a message to another thread and what became of it. */
+/** Title and harness of a thread outside the loaded list (another space, a
+ * subagent, an archived thread), fetched once per id and kept for the session. */
+type ThreadLabel = { title: string; provider: Thread["provider"]["kind"] };
+const threadLabels = new Map<string, ThreadLabel | null>();
+function useThreadLabel(id: string | undefined): ThreadLabel | undefined {
+  const app = useApp();
+  const known = id ? app.threads.find((thread) => thread.id === id) : undefined;
+  const [fetched, setFetched] = useState(() => (id ? threadLabels.get(id) ?? undefined : undefined));
+  useEffect(() => {
+    if (!id || known || threadLabels.has(id)) return;
+    threadLabels.set(id, null);
+    let live = true;
+    rpc("threads.get", { thread_id: id, transcript_limit: 1, defer_tool_stream: true })
+      .then(({ thread }) => {
+        const label = { title: thread.title, provider: thread.provider.kind };
+        threadLabels.set(id, label);
+        if (live) setFetched(label);
+      })
+      .catch(() => threadLabels.delete(id));
+    return () => {
+      live = false;
+    };
+  }, [id, known]);
+  return known ? { title: known.title, provider: known.provider.kind } : fetched;
+}
+
+/** "Sent to ✳ Reviewer · Question · Answered": a message to another thread, the
+ * recipient's harness mark and what became of it. */
 export const SendRow = memo(function SendRow({ block }: { block: ToolBlock }) {
   const { colors } = useTheme();
-  const app = useApp();
   const input = parseSendInput(block.call.input);
-  const target = app.threads.find((thread) => thread.id === input.threadId);
+  const target = useThreadLabel(input.threadId);
   const word = sendStateWord(parseSendResult(block.output), block.complete, block.isError);
   const title = target?.title || "another thread";
+  const verb = block.complete ? "Sent to" : "Sending to";
   return (
     <WorkLine
-      glyph={<Icon name="paperplane" size={13} color={block.isError ? colors.negative : colors.muted} />}
-      verb="Sent to"
-      target={title}
+      glyph={
+        target && !block.isError ? (
+          <ProviderMark kind={target.provider} size={14} />
+        ) : (
+          <Icon name="paperplane" size={13} color={block.isError ? colors.negative : colors.muted} />
+        )
+      }
+      verb={verb}
+      target={`${title} · ${purposeLabel(input.purpose)}`}
       mono={false}
       meta={word}
       metaTone={block.isError ? "negative" : "muted"}
       chevron={input.threadId ? "right" : undefined}
-      label={`Sent to ${title}, ${word}${input.threadId ? ". Open that thread" : ""}`}
+      label={`${verb} ${title}, ${purposeLabel(input.purpose)}, ${word}${input.threadId ? ". Open that thread" : ""}`}
       onPress={() => input.threadId && router.push({ pathname: "/thread/[id]", params: { id: input.threadId } })}
     />
   );
