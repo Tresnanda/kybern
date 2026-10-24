@@ -1871,7 +1871,7 @@ impl Orchestrator {
             return Err(ThreadBusy.into());
         }
         if thread.status == ThreadStatus::Archived {
-            return Err(anyhow!("thread is archived"));
+            return Err(anyhow!("This chat is archived. Start a new chat to keep working."));
         }
         if thread.delegation.as_ref().is_some_and(|info| info.worktree_state == Some(WorktreeState::Removed)) {
             return Err(delegation::worktree_removed_error());
@@ -1948,7 +1948,7 @@ impl Orchestrator {
             return Err(anyhow!(subagents::READ_ONLY_ERROR));
         }
         if thread.status == ThreadStatus::Archived {
-            return Err(anyhow!("thread is archived"));
+            return Err(anyhow!("This chat is archived. Start a new chat to keep working."));
         }
         if let Some(receipt) = self.inner.store.queue_receipt(message.id)? {
             if serde_json::to_value(receipt)? != serde_json::to_value(&message)? {
