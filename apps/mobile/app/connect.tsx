@@ -86,7 +86,6 @@ export default function Connect() {
       </View>
       <View style={{ gap: 22 }}>
         <Button
-          secondary
           icon="qrcode.viewfinder"
           onPress={() => router.push("/scan-pairing")}
         >
@@ -129,14 +128,14 @@ export default function Connect() {
           onChangeText={setName}
         />
         <ErrorBanner error={error} />
-        <Button
+        <Button role="prominent"
           onPress={() => void submit()}
           busy={busy}
           disabled={advanced && !token.trim()}
         >
           Connect computer
         </Button>
-        <T variant="caption" tone="secondary">
+        <T variant="footnote" tone="secondary">
           Use the address from your pairing invitation. For connections away
           from home, keep both devices on the same Tailscale network.
         </T>
@@ -147,7 +146,7 @@ export default function Connect() {
             setError("");
           }}
         >
-          <T variant="caption" tone="secondary">
+          <T variant="footnote" tone="secondary">
             {advanced ? "Use a pairing code" : "Use an access token instead"}
           </T>
         </Tap>

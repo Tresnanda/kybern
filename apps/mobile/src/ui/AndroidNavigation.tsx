@@ -97,7 +97,7 @@ export function AndroidHeader({
           {typeof options.headerTitle === "function" ? (
             options.headerTitle({ children: title, tintColor: colors.ink })
           ) : (
-            <T variant="heading" accessibilityRole="header">
+            <T variant="title" accessibilityRole="header" numberOfLines={1}>
               {title}
             </T>
           )}

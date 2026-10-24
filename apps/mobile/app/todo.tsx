@@ -55,7 +55,7 @@ function GroupHeader({
       <T variant="label" accessibilityRole="header">
         {STATUS_LABEL[row.status]}
       </T>
-      <T variant="caption" tone="muted" style={{ fontVariant: ["tabular-nums"], marginStart: -4 }}>
+      <T variant="footnote" tone="muted" style={{ fontVariant: ["tabular-nums"], marginStart: -4 }}>
         {row.count}
       </T>
       {row.collapsible && !row.open && (
@@ -137,7 +137,7 @@ function QuickAdd({
           <IconButton name="arrow.up" label="Add task" onPress={submit} disabled={busy} />
         ) : null}
       </View>
-      <T variant="caption" tone="muted" style={{ paddingStart: 4 }}>
+      <T variant="footnote" tone="muted" style={{ paddingStart: 4 }}>
         Adds to Inbox in {where}
       </T>
     </View>
@@ -345,7 +345,7 @@ export default function Tasks() {
               detail="This computer’s Kybern is too old for tasks. Update it, then open Tasks again."
             />
           ) : !loaded ? (
-            <T variant="caption" tone="secondary" style={{ paddingVertical: 24 }}>
+            <T variant="footnote" tone="secondary" style={{ paddingVertical: 24 }}>
               Loading tasks…
             </T>
           ) : nothing ? (
@@ -358,7 +358,7 @@ export default function Tasks() {
         }
         ListFooterComponent={
           error ? (
-            <T variant="caption" tone="negative" style={{ paddingVertical: 12 }}>
+            <T variant="footnote" tone="negative" style={{ paddingVertical: 12 }}>
               {error}
             </T>
           ) : null

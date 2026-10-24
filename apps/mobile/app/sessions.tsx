@@ -97,7 +97,7 @@ export default function Sessions() {
               color={provider === p.kind ? colors.inverse : colors.ink}
             />
             <T
-              variant="caption"
+              variant="footnote"
               tone={provider === p.kind ? "inverse" : "secondary"}
             >
               {p.display_name}
@@ -135,7 +135,6 @@ export default function Sessions() {
       )}
       {cursor && (
         <Button
-          secondary
           busy={busy}
           onPress={() => {
             setBusy(true);

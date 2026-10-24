@@ -88,23 +88,23 @@ export function ProjectCoordinatorSection({ projectId }: { projectId: string }) 
   return (
     <View style={{ marginTop: 12 }}>
       <View style={[styles.spread, { minHeight: 44, paddingTop: 12 }]}>
-        <T variant="caption" tone="secondary" accessibilityRole="header">{COORDINATOR_SETTINGS_COPY.section}</T>
+        <T variant="footnote" tone="secondary" accessibilityRole="header">{COORDINATOR_SETTINGS_COPY.section}</T>
         <Pill label={COORDINATOR_SETTINGS_COPY.redo} onPress={redo} />
       </View>
       <View style={{ gap: 18, padding: 14, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface }}>
         <View style={{ gap: 8 }}>
-          <T variant="caption" tone="secondary">{COORDINATOR_SETTINGS_COPY.autonomy}</T>
+          <T variant="footnote" tone="secondary">{COORDINATOR_SETTINGS_COPY.autonomy}</T>
           <Segmented label={COORDINATOR_SETTINGS_COPY.autonomy} options={AUTONOMY_OPTIONS} value={effective.lead_autonomy} disabled={!!pending} onChange={(value) => setField("lead_autonomy", value)} />
-          <T variant="caption" tone="muted">{autonomyHint(effective.lead_autonomy)}</T>
+          <T variant="footnote" tone="muted">{autonomyHint(effective.lead_autonomy)}</T>
         </View>
         <View style={{ gap: 8 }}>
-          <T variant="caption" tone="secondary">{COORDINATOR_SETTINGS_COPY.workspace}</T>
+          <T variant="footnote" tone="secondary">{COORDINATOR_SETTINGS_COPY.workspace}</T>
           <Segmented label={COORDINATOR_SETTINGS_COPY.workspace} options={WORKSPACE_OPTIONS} value={effective.lead_workspace} disabled={!!pending} onChange={(value) => setField("lead_workspace", value)} />
         </View>
         <View style={[styles.line, { gap: 12 }]}>
           <View style={{ flex: 1, gap: 2 }}>
             <T variant="label">{COORDINATOR_SETTINGS_COPY.push}</T>
-            <T variant="caption" tone="secondary">{COORDINATOR_SETTINGS_COPY.pushDetail}</T>
+            <T variant="footnote" tone="secondary">{COORDINATOR_SETTINGS_COPY.pushDetail}</T>
           </View>
           <Toggle
             value={effective.lead_push_without_asking}
@@ -114,7 +114,7 @@ export function ProjectCoordinatorSection({ projectId }: { projectId: string }) 
           />
         </View>
         <View style={{ gap: 4 }}>
-          <T variant="caption" tone="secondary">{COORDINATOR_SETTINGS_COPY.models}</T>
+          <T variant="footnote" tone="secondary">{COORDINATOR_SETTINGS_COPY.models}</T>
           <View>
             {COORDINATOR_ROLES.map(({ role, label }, index) => {
               const chip = roleChip(role, global, overrides, app.providers, "project");
@@ -129,7 +129,7 @@ export function ProjectCoordinatorSection({ projectId }: { projectId: string }) 
                 >
                   <T style={{ flex: 1 }}>{label}</T>
                   {chip.kind !== "coordinator" && chip.provider && <ProviderMark kind={chip.provider.kind} size={14} />}
-                  <T variant="caption" tone={chip.kind === "set" ? "ink" : "muted"} numberOfLines={1} style={{ flexShrink: 1, maxWidth: "60%" }}>
+                  <T variant="footnote" tone={chip.kind === "set" ? "ink" : "muted"} numberOfLines={1} style={{ flexShrink: 1, maxWidth: "60%" }}>
                     {chip.label}
                   </T>
                   <Icon name="chevron.right" size={12} color={colors.muted} />
@@ -139,7 +139,7 @@ export function ProjectCoordinatorSection({ projectId }: { projectId: string }) 
           </View>
         </View>
         <View style={[styles.spread, { gap: 8 }]}>
-          <T variant="caption" tone="muted" style={{ flex: 1 }}>{COORDINATOR_SETTINGS_COPY.defaultsFrom}</T>
+          <T variant="footnote" tone="muted" style={{ flex: 1 }}>{COORDINATOR_SETTINGS_COPY.defaultsFrom}</T>
           <Tap label={COORDINATOR_SETTINGS_COPY.reset} disabled={!overrides || !!pending} onPress={reset} style={{ paddingHorizontal: 6, alignItems: "center" }}>
             <T variant="label" tone="accent">{COORDINATOR_SETTINGS_COPY.reset}</T>
           </Tap>

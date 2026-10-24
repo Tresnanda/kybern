@@ -102,13 +102,13 @@ export function CheckRow({
           <T variant="label" numberOfLines={1}>
             {title}
             {titleDetail ? (
-              <T variant="caption" tone="muted">
+              <T variant="footnote" tone="muted">
                 {` · ${titleDetail}`}
               </T>
             ) : null}
           </T>
           {!!detail && (
-            <T variant="caption" tone={detailTone}>
+            <T variant="footnote" tone={detailTone}>
               {detail}
             </T>
           )}

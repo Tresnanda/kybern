@@ -45,7 +45,7 @@ export default function NoteScreen() {
   }
   const meta = (
     <View style={{ gap: 4, marginBottom: 12 }}>
-      <T variant="caption" tone="muted">
+      <T variant="footnote" tone="muted">
         {where}
       </T>
       {thread && note?.thread_id && (

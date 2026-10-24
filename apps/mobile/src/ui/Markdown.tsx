@@ -6,7 +6,7 @@ import { ChatFileContext } from "../state/chatFileContext";
 import { Alert } from "./Alert";
 import { Image, Linking, ScrollView, Text, View } from "react-native";
 import { Icon, IconButton, T, styles } from "./primitives";
-import { useTheme } from "./theme";
+import { MONO, useTheme } from "./theme";
 import { taskLinkId } from "../state/tasksModel";
 import { TaskRef } from "./TaskRef";
 import { NoteRef } from "./NoteRef";
@@ -73,7 +73,7 @@ function Inline({ text, checklist }: { text: string; checklist?: boolean }) {
               <Text
                 key={i}
                 style={{
-                  fontFamily: "Menlo",
+                  fontFamily: MONO,
                   fontSize: 14,
                   backgroundColor: colors.raised,
                 }}
@@ -146,7 +146,7 @@ export const Code = memo(function Code({
       }}
     >
       <View style={[styles.spread, { paddingStart: 15, paddingEnd: 4 }]}>
-        <T variant="caption" tone="secondary">
+        <T variant="footnote" tone="secondary">
           {language || (diff ? "Changes" : "Code")}
         </T>
         <IconButton
@@ -162,7 +162,7 @@ export const Code = memo(function Code({
         <Text
           selectable
           style={{
-            fontFamily: "Menlo",
+            fontFamily: MONO,
             fontSize: 13,
             lineHeight: 21,
             color: colors.ink,
@@ -254,7 +254,7 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
           resizeMode="contain"
         />
         {!!picture[1] && (
-          <T variant="caption" tone="secondary">
+          <T variant="footnote" tone="secondary">
             {picture[1]}
           </T>
         )}
@@ -295,7 +295,7 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
             >
               {row.map((cell, c) => (
                 <View key={c} style={{ width: 180, padding: 12 }}>
-                  <T selectable variant={r === 0 ? "label" : "caption"}>
+                  <T selectable variant={r === 0 ? "label" : "footnote"}>
                     <Inline text={cell} />
                   </T>
                 </View>
@@ -309,7 +309,7 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
   if (/^#{1,6}\s/.test(para))
     return (
       <T
-        variant={para.startsWith("# ") ? "title" : "heading"}
+        variant={para.startsWith("# ") ? "title" : "headline"}
         style={{ marginTop: 12 }}
       >
         <Inline text={para.replace(/^#{1,6}\s/, "")} />
@@ -334,7 +334,7 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
           paddingStart: 16,
         }}
       >
-        <T tone="secondary" selectable>
+        <T variant="prose" tone="secondary" selectable>
           <Inline text={para.replace(/^> ?/gm, "")} />
         </T>
       </View>
@@ -371,12 +371,13 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
                 </View>
               ) : (
                 match && (
-                  <T tone="secondary" style={{ minWidth: 15 }}>
+                  <T variant="prose" tone="secondary" style={{ minWidth: 15 }}>
                     {/\d/.test(match[2]!) ? match[2] : "•"}
                   </T>
                 )
               )}
               <T
+                variant="prose"
                 selectable
                 tone={checked ? "secondary" : "ink"}
                 style={{
@@ -392,7 +393,7 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
       </View>
     );
   return (
-    <T selectable>
+    <T variant="prose" selectable>
       <Inline text={para} />
     </T>
   );

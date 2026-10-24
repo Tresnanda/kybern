@@ -205,7 +205,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
           onClosed={closed}
         >
           <View style={[styles.spread, { paddingStart: 12 }]}>
-            <T variant="caption" tone="secondary">
+            <T variant="footnote" tone="secondary">
               Environment
             </T>
             <IconButton
@@ -246,7 +246,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
                 "shippingbox",
                 () => void Clipboard.setStringAsync(repo.branch ?? ""),
                 !repo.branch,
-                <T variant="caption" tone="secondary">
+                <T variant="footnote" tone="secondary">
                   {repo.ahead ? `↑${repo.ahead}` : ""}
                   {repo.behind ? ` ↓${repo.behind}` : ""}
                 </T>,
@@ -258,7 +258,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
               "arrow.triangle.branch",
               () => void Clipboard.setStringAsync(git.branch!),
               false,
-              <T variant="caption" tone="secondary">
+              <T variant="footnote" tone="secondary">
                 {git.ahead ? `↑${git.ahead}` : ""}
                 {git.behind ? ` ↓${git.behind}` : ""}
               </T>,
@@ -273,7 +273,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
           {group && (
             <>
               <T
-                variant="caption"
+                variant="footnote"
                 tone="secondary"
                 style={{
                   paddingHorizontal: 10,
@@ -295,7 +295,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
                   createGroupPrs(plan.create.length),
                 )}
               {!pulls.length && !plan.create.length && (
-                <T variant="caption" tone="secondary" style={{ paddingHorizontal: 10, paddingBottom: 4 }}>
+                <T variant="footnote" tone="secondary" style={{ paddingHorizontal: 10, paddingBottom: 4 }}>
                   {changed.size ? "No changed repository has a GitHub remote." : "No changes to open a pull request for."}
                 </T>
               )}
@@ -304,7 +304,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
           {!group && !!remote && (
             <>
               <T
-                variant="caption"
+                variant="footnote"
                 tone="secondary"
                 style={{
                   paddingHorizontal: 10,
@@ -324,7 +324,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
           {!group && git?.is_git && (
             <>
               <T
-                variant="caption"
+                variant="footnote"
                 tone="secondary"
                 style={{
                   paddingHorizontal: 10,
@@ -349,7 +349,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
             </>
           )}
           <T
-            variant="caption"
+            variant="footnote"
             tone="secondary"
             style={{ paddingHorizontal: 10, paddingTop: 10, paddingBottom: 4 }}
           >
@@ -371,7 +371,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
           {row("Connectors and plugins", "puzzlepiece.extension", () => { afterClose.current = () => router.push({ pathname: "/integrations", params: { threadId } }); close(); })}
           {row("Notes", "square.and.pencil", () => navigate("Notes"))}
           {busy && (
-            <T variant="caption" tone="secondary" style={{ padding: 12 }}>
+            <T variant="footnote" tone="secondary" style={{ padding: 12 }}>
               Updating workspace…
             </T>
           )}
@@ -443,7 +443,7 @@ export function WorkspacePill({
           >
             <Icon name="person.2" size={16} />
             {activeTasks > 0 && (
-              <T variant="caption" tone="accent">
+              <T variant="footnote" tone="accent">
                 {activeTasks}
               </T>
             )}
@@ -458,7 +458,7 @@ export function WorkspacePill({
           style={[styles.line, pill]}
         >
           <Icon name="arrow.down" size={14} />
-          <T variant="caption" numberOfLines={1}>
+          <T variant="footnote" numberOfLines={1}>
             Latest
           </T>
         </Tap>

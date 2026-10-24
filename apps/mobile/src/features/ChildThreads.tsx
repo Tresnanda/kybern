@@ -64,11 +64,11 @@ export function ChildThreads({ thread, active = true }: { thread?: Thread | null
         style={[styles.line, { minHeight: 48, gap: 8 }]}
       >
         <Icon name="person.2" size={18} />
-        <T variant="caption" style={{ flex: 1 }}>
+        <T variant="footnote" style={{ flex: 1 }}>
           {children.length} {children.length === 1 ? "agent" : "agents"}
         </T>
         {running > 0 && (
-          <T variant="caption" tone="secondary">
+          <T variant="footnote" tone="secondary">
             {running} running
           </T>
         )}
@@ -100,14 +100,14 @@ export function ChildThreads({ thread, active = true }: { thread?: Thread | null
             >
               <ProviderMark kind={child.provider.kind} size={15} />
               <View style={{ flex: 1, gap: 3 }}>
-                <T variant="caption" numberOfLines={2}>
+                <T variant="footnote" numberOfLines={2}>
                   {child.title || "Agent"}
                 </T>
-                <T variant="caption" tone="secondary" numberOfLines={1}>
+                <T variant="footnote" tone="secondary" numberOfLines={1}>
                   {childStatusWord(child)}
                 </T>
                 {child.delegation?.default_override && (
-                  <T variant="caption" tone="muted" numberOfLines={2}>
+                  <T variant="footnote" tone="muted" numberOfLines={2}>
                     {defaultOverrideText(child.delegation.default_override, app.providers)}
                   </T>
                 )}

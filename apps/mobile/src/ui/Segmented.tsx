@@ -51,7 +51,7 @@ export function Segmented<V extends string>({
               ...(selected && Platform.OS === "android" ? { elevation: dark ? 0 : 1 } : {}),
             }}
           >
-            <T variant="caption" tone={selected ? "ink" : "secondary"} numberOfLines={1} style={selected ? { fontWeight: "600" } : undefined}>
+            <T variant="footnote" tone={selected ? "ink" : "secondary"} numberOfLines={1} style={selected ? { fontWeight: "600" } : undefined}>
               {option.label}
             </T>
           </Tap>

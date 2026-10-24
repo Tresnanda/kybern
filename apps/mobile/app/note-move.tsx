@@ -38,10 +38,10 @@ export default function MoveNote() {
   const check = <Icon name="checkmark" size={18} />;
   return (
     <Page>
-      <T variant="heading" style={{ marginBottom: 4 }}>
+      <T variant="headline" style={{ marginBottom: 4 }}>
         Move “{noteTitle(note)}”
       </T>
-      <T variant="caption" tone="secondary" style={{ marginBottom: 12 }}>
+      <T variant="footnote" tone="secondary" style={{ marginBottom: 12 }}>
         Choose where this note lives.
       </T>
       <Row

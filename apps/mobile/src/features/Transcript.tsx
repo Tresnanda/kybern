@@ -39,11 +39,11 @@ function OutsideChangeRow({ block, threadId }: { block: Extract<Block, { kind: "
   return (
     <View style={[styles.line, { gap: 8, marginVertical: 8 }]} accessibilityRole="alert">
       <Icon name="exclamationmark.triangle" size={14} color={colors.warning} />
-      <T variant="caption" tone="secondary" style={{ flex: 1 }}>
+      <T variant="footnote" tone="secondary" style={{ flex: 1 }}>
         {text}
       </T>
       <Tap label={`${GROUP_COPY.outsideChangeOpen} ${block.repos.map((repo) => repo.name).join(", ")}`} onPress={open}>
-        <T variant="caption" tone="accent" style={{ fontWeight: "500" }}>
+        <T variant="footnote" tone="accent" style={{ fontWeight: "500" }}>
           {GROUP_COPY.outsideChangeOpen}
         </T>
       </Tap>
@@ -127,7 +127,7 @@ export const TranscriptBlock = memo(function TranscriptBlock({
                 style={[styles.line, { gap: 7 }]}
               >
                 <Icon name="sparkle" size={14} color={colors.muted} />
-                <T variant="caption" tone="secondary">
+                <T variant="footnote" tone="secondary">
                   {thinking ? "Thinking" : "Thought process"}
                 </T>
                 <Icon
@@ -146,7 +146,7 @@ export const TranscriptBlock = memo(function TranscriptBlock({
                     borderColor: colors.line,
                   }}
                 >
-                  <T variant="caption" tone="secondary" selectable>
+                  <T variant="footnote" tone="secondary" selectable>
                     {block.thinking}
                   </T>
                 </Animated.View>
@@ -200,7 +200,7 @@ export const TranscriptBlock = memo(function TranscriptBlock({
               color={block.isError ? colors.negative : colors.muted}
             />
             <T
-              variant="caption"
+              variant="footnote"
               tone="secondary"
               style={{ flex: 1 }}
               numberOfLines={1}
@@ -249,7 +249,7 @@ export const TranscriptBlock = memo(function TranscriptBlock({
             size={14}
             color={colors.secondary}
           />
-          <T variant="caption" tone="secondary">
+          <T variant="footnote" tone="secondary">
             {block.decision.decision === "deny"
               ? "Request declined"
               : "Request approved"}
@@ -264,7 +264,7 @@ export const TranscriptBlock = memo(function TranscriptBlock({
     case "notice":
       return (
         <T
-          variant="caption"
+          variant="footnote"
           tone={block.level === "error" ? "negative" : "secondary"}
           style={{ paddingVertical: 12 }}
         >
@@ -278,7 +278,7 @@ export const TranscriptBlock = memo(function TranscriptBlock({
         <View style={{ marginTop: 8, marginBottom: 26, gap: 6 }}>
           {block.error && <T tone="negative">{block.error}</T>}
           <View style={styles.spread}>
-            <T variant="caption" tone="muted">
+            <T variant="footnote" tone="muted">
               {grouped && block.stopReason === "completed"
                 ? new Date(block.at).toLocaleTimeString([], {
                     hour: "numeric",
@@ -334,7 +334,7 @@ export const TranscriptBlock = memo(function TranscriptBlock({
       return <OutsideChangeRow block={block} threadId={threadId} />;
     case "reverted":
       return (
-        <T variant="caption" tone="secondary">
+        <T variant="footnote" tone="secondary">
           Restored checkpoint {block.commit.slice(0, 7)}
         </T>
       );

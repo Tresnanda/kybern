@@ -26,7 +26,7 @@ export function QuestionChoices({
     <View style={{ gap: 8 }}>
       <T variant="label">{title}</T>
       {multiple && (
-        <T variant="caption" tone="secondary">
+        <T variant="footnote" tone="secondary">
           Select all that apply.
         </T>
       )}
@@ -80,7 +80,7 @@ export function QuestionChoices({
           <View style={{ flex: 1, gap: 4 }}>
             <T variant="label">{option.label}</T>
             {option.description && (
-              <T variant="caption" tone="secondary">
+              <T variant="footnote" tone="secondary">
                 {option.description}
               </T>
             )}
@@ -125,7 +125,7 @@ export function ApprovalCard({
   return (
     <View style={{ gap: 16 }}>
       <View style={styles.spread}>
-        <T variant="caption" tone="secondary">
+        <T variant="footnote" tone="secondary">
           {question
             ? `Question ${current + 1} of ${questions.length}`
             : "Review your answers"}
@@ -193,7 +193,7 @@ export function ApprovalCard({
               style={{ paddingVertical: 8, gap: 5 }}
             >
               <T variant="label">{q.title}</T>
-              <T variant="caption" tone="secondary">
+              <T variant="footnote" tone="secondary">
                 {q.secret
                   ? "Answer hidden"
                   : [
@@ -203,7 +203,7 @@ export function ApprovalCard({
                       .filter(Boolean)
                       .join(", ")}
               </T>
-              <T variant="caption" tone="accent">
+              <T variant="footnote" tone="accent">
                 Edit answer
               </T>
             </Tap>
@@ -213,7 +213,6 @@ export function ApprovalCard({
       <View style={[styles.line, { gap: 12 }]}>
         {current > 0 && (
           <Button
-            secondary
             disabled={busy}
             onPress={() => setStep(current - 1)}
           >
@@ -221,7 +220,7 @@ export function ApprovalCard({
           </Button>
         )}
         <View style={{ flex: 1 }}>
-          <Button
+          <Button role="prominent"
             busy={busy}
             disabled={
               question ? !complete(question) : !questions.every(complete)

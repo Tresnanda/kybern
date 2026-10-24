@@ -51,7 +51,7 @@ export default function AppUpdatesScreen() {
         <Row
           title="Version"
           trailing={
-            <T variant="caption">
+            <T variant="footnote">
               {Constants.expoConfig?.version ?? Constants.nativeAppVersion}
             </T>
           }
@@ -67,7 +67,7 @@ export default function AppUpdatesScreen() {
         ) : isUpdatePending ? (
           <>
             <T>Update ready. Restart Kybern to use it.</T>
-            <Button icon="arrow.clockwise" onPress={restart}>
+            <Button role="prominent" icon="arrow.clockwise" onPress={restart}>
               Restart to update
             </Button>
           </>

@@ -31,7 +31,7 @@ export function ThreadMessageCard({ part }: { part: ThreadMessagePart }) {
     >
       <View style={[styles.line, { gap: 8 }]}>
         <Icon name="text.bubble" size={14} color={colors.secondary} />
-        <T variant="caption" tone="secondary" numberOfLines={1} style={{ flex: 1 }}>
+        <T variant="footnote" tone="secondary" numberOfLines={1} style={{ flex: 1 }}>
           {threadMessageHeading(part)}
         </T>
       </View>
@@ -44,7 +44,7 @@ export function ThreadMessageCard({ part }: { part: ThreadMessagePart }) {
           onPress={() => setExpanded((value) => !value)}
           style={{ minHeight: 44, justifyContent: "center" }}
         >
-          <T variant="caption" tone="secondary">
+          <T variant="footnote" tone="secondary">
             {expanded ? "Show less" : "Show more"}
           </T>
         </Tap>
@@ -70,11 +70,11 @@ function ResultRow({ item }: { item: AgentResultItem }) {
         <T variant="label" numberOfLines={1}>
           {item.title}
         </T>
-        <T variant="caption" tone="secondary" numberOfLines={2}>
+        <T variant="footnote" tone="secondary" numberOfLines={2}>
           {status} · {resultSummary(item)}
         </T>
         {!!location && (
-          <T variant="caption" tone="muted" numberOfLines={1}>
+          <T variant="footnote" tone="muted" numberOfLines={1}>
             {location}
           </T>
         )}
@@ -98,7 +98,7 @@ export function AgentResultsList({ items }: { items: AgentResultItem[] }) {
     >
       <View style={[styles.line, { gap: 8, paddingTop: 6 }]}>
         <Icon name="person.2" size={14} color={colors.secondary} />
-        <T variant="caption" tone="secondary">
+        <T variant="footnote" tone="secondary">
           {items.length === 1 ? "Agent result" : `${items.length} agent results`}
         </T>
       </View>

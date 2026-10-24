@@ -171,10 +171,10 @@ export function ComposerControls({
         ]}
       >
         <ProviderMark kind={kind} size={16} />
-        <T variant="caption" numberOfLines={1} style={{ flexShrink: 1 }}>
+        <T variant="footnote" numberOfLines={1} style={{ flexShrink: 1 }}>
           {compactModel}
           {effortLabel ? (
-            <T variant="caption" tone="secondary">
+            <T variant="footnote" tone="secondary">
               {" "}
               {effortLabel}
             </T>
@@ -322,7 +322,7 @@ export function ComposerOptions({
             >
               <View style={{ flex: 1, gap: 5 }}>
                 <T variant="label">{m.label}</T>
-                <T variant="caption" tone="secondary">
+                <T variant="footnote" tone="secondary">
                   {m.detail}
                 </T>
               </View>
@@ -368,11 +368,11 @@ export function ComposerOptions({
               }
               style={[styles.spread, { minHeight: 50 }]}
             >
-              <T variant="caption" tone="secondary">
+              <T variant="footnote" tone="secondary">
                 Reasoning effort
               </T>
               <View style={styles.line}>
-                <T variant="caption" style={{ textTransform: "capitalize" }}>
+                <T variant="footnote" style={{ textTransform: "capitalize" }}>
                   {effort || "Default"}
                 </T>
                 <Icon name="chevron.down" size={12} />
@@ -401,7 +401,7 @@ export function ComposerOptions({
                       <ProviderMark kind={p.kind} size={22} />
                       <View style={{ flex: 1, paddingVertical: 10 }}>
                         <T>{p.display_name}</T>
-                        {coordinator && <T variant="caption" tone="secondary">
+                        {coordinator && <T variant="footnote" tone="secondary">
                           {coordinatorEditsEnforced(p.kind) ? "Can't edit files; delegates edits" : `Edits not blocked on ${p.display_name}`}
                         </T>}
                       </View>
@@ -411,7 +411,7 @@ export function ComposerOptions({
               </View>
             </Group>
           )}
-          {coordinator && <T variant="caption" tone="secondary" style={{ marginVertical: 12 }}>
+          {coordinator && <T variant="footnote" tone="secondary" style={{ marginVertical: 12 }}>
             {canSwitchHarness ? "Changing harnesses keeps this conversation and its agents." : "Finish or stop the current turn before changing the Coordinator’s harness."}
           </T>}
           {choosing === "effort" && (
@@ -466,7 +466,7 @@ export function ComposerOptions({
                 />
                 {!visibleModels.length && !customId && (
                   <T
-                    variant="caption"
+                    variant="footnote"
                     tone="secondary"
                     style={{ paddingVertical: 12 }}
                   >
@@ -509,12 +509,12 @@ export function ComposerOptions({
                       <View style={{ flex: 1, gap: 2 }}>
                         <T variant="label">{m.display_name}</T>
                         {multiBackend && !!m.provider && (
-                          <T variant="caption" tone="secondary">
+                          <T variant="footnote" tone="secondary">
                             {backendLabel(m.provider)}
                           </T>
                         )}
                         {!!m.description && (
-                          <T variant="caption" tone="secondary" numberOfLines={2}>
+                          <T variant="footnote" tone="secondary" numberOfLines={2}>
                             {m.description}
                           </T>
                         )}
@@ -540,7 +540,7 @@ export function ComposerOptions({
                     >
                       <View style={{ flex: 1, gap: 3 }}>
                         <T variant="label">Use “{customId}”</T>
-                        <T variant="caption" tone="secondary">
+                        <T variant="footnote" tone="secondary">
                           Custom model ID
                         </T>
                       </View>
@@ -555,7 +555,7 @@ export function ComposerOptions({
       )}
       {open === "usage" && (
         <>
-          <T variant="caption" selectable>
+          <T variant="footnote" selectable>
             {context
               ? `${context.used_tokens.toLocaleString()} / ${context.window_tokens.toLocaleString()} tokens · ${Math.round(fraction * 100)}% used`
               : "The agent has not reported its context window yet."}
@@ -566,7 +566,7 @@ export function ComposerOptions({
                 {l.name} · {Math.round(l.used_percent)}% used
               </T>
               {l.resets_at && (
-                <T variant="caption" tone="secondary">
+                <T variant="footnote" tone="secondary">
                   Resets {new Date(l.resets_at * 1000).toLocaleString()}
                 </T>
               )}

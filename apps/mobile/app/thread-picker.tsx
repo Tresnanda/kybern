@@ -149,7 +149,7 @@ export default function ThreadPicker() {
           autoCorrect={false}
         />
         <View style={[styles.line, { gap: 8, flexWrap: "wrap" }]}>
-          <T variant="caption" tone="secondary">
+          <T variant="footnote" tone="secondary">
             Search in
           </T>
           <Tap
@@ -169,7 +169,7 @@ export default function ThreadPicker() {
             ]}
           >
             <Icon name={scopeProjectId ? "folder" : "person.2"} size={15} />
-            <T variant="caption">{scopeName}</T>
+            <T variant="footnote">{scopeName}</T>
             <Icon
               name="arrow.triangle.swap"
               size={12}
@@ -177,7 +177,7 @@ export default function ThreadPicker() {
             />
           </Tap>
         </View>
-        <T variant="caption" tone="secondary">
+        <T variant="footnote" tone="secondary">
           The reference adds the conversation’s stable ID to your message. It
           does not start or wake that conversation.
         </T>

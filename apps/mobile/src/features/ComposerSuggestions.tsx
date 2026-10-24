@@ -162,7 +162,7 @@ export function ComposerSuggestions({
       }}
     >
       <View style={[styles.spread, { paddingStart: 10 }]}>
-        <T variant="caption" tone="secondary">
+        <T variant="footnote" tone="secondary">
           {trigger.marker === "@"
             ? "Files & plugins"
             : trigger.marker === "/"
@@ -200,14 +200,14 @@ export function ComposerSuggestions({
               <T variant="label" numberOfLines={2}>
                 {row.title}
               </T>
-              <T variant="caption" tone="secondary" numberOfLines={2}>
+              <T variant="footnote" tone="secondary" numberOfLines={2}>
                 {row.detail}
               </T>
             </View>
           </Tap>
         ))}
         {!rows.length && (
-          <T variant="caption" tone="secondary" style={{ padding: 12 }}>
+          <T variant="footnote" tone="secondary" style={{ padding: 12 }}>
             {error ||
               (loading || skillsLoading
                 ? "Loading suggestions…"

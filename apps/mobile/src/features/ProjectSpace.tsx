@@ -29,7 +29,7 @@ const MEMORY_LIMIT = 50;
 function SectionLabel({ title, trailing }: { title: string; trailing?: React.ReactNode }) {
   return (
     <View style={[styles.spread, { minHeight: 44, paddingTop: 12 }]}>
-      <T variant="caption" tone="secondary" accessibilityRole="header">
+      <T variant="footnote" tone="secondary" accessibilityRole="header">
         {title}
       </T>
       {trailing}
@@ -55,7 +55,7 @@ export function ProjectSpace({ projectId }: { projectId: string }) {
       {setup ? (
         <NoteRow note={setup} threads={threads} />
       ) : (
-        <T variant="caption" tone="muted">{PROJECT_SPACE_COPY.setupEmpty}</T>
+        <T variant="footnote" tone="muted">{PROJECT_SPACE_COPY.setupEmpty}</T>
       )}
       <SectionLabel title={memory.length ? `Memory · ${memory.length}` : "Memory"} />
       {memory.length ? (
@@ -67,7 +67,7 @@ export function ProjectSpace({ projectId }: { projectId: string }) {
           ))}
         </View>
       ) : (
-        <T variant="caption" tone="muted">{PROJECT_SPACE_COPY.memoryEmpty}</T>
+        <T variant="footnote" tone="muted">{PROJECT_SPACE_COPY.memoryEmpty}</T>
       )}
       <ProjectCoordinatorSection projectId={projectId} />
       <BriefSwitch projectId={projectId} />
@@ -119,7 +119,7 @@ function BriefSection({ projectId, briefId }: { projectId: string; briefId: stri
           />
         )}
       </View>
-      <T variant="caption" tone="muted" style={{ marginTop: 8 }}>{PROJECT_SPACE_COPY.briefOwner}</T>
+      <T variant="footnote" tone="muted" style={{ marginTop: 8 }}>{PROJECT_SPACE_COPY.briefOwner}</T>
     </View>
   );
 }
@@ -138,9 +138,9 @@ const NoteRow = memo(function NoteRow({ note, threads }: { note: NoteSummary; th
     <Tap label={`${title}, ${author(note, threads)}`} onPress={() => router.push({ pathname: "/note", params: { id: note.id } })} static style={{ paddingVertical: 10, gap: 2 }}>
       <View style={[styles.spread, { gap: 8 }]}>
         <T variant="label" numberOfLines={1} style={{ flex: 1 }}>{title}</T>
-        <T variant="caption" tone="muted" style={{ fontVariant: ["tabular-nums"] }}>{relativeTime(note.updated_at)}</T>
+        <T variant="footnote" tone="muted" style={{ fontVariant: ["tabular-nums"] }}>{relativeTime(note.updated_at)}</T>
       </View>
-      <T variant="caption" tone="secondary" numberOfLines={1}>
+      <T variant="footnote" tone="secondary" numberOfLines={1}>
         {author(note, threads)}
         {preview ? ` · ${preview}` : ""}
       </T>
@@ -169,7 +169,7 @@ function BriefSwitch({ projectId }: { projectId: string }) {
       <View style={[styles.line, { gap: 12, padding: 14, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface }]}>
         <View style={{ flex: 1, gap: 2 }}>
           <T variant="label">{PROJECT_SPACE_COPY.switchTitle}</T>
-          <T variant="caption" tone="secondary">{PROJECT_SPACE_COPY.switchDetail}</T>
+          <T variant="footnote" tone="secondary">{PROJECT_SPACE_COPY.switchDetail}</T>
         </View>
         <Toggle value={value} onValueChange={change} disabled={pending !== null} accessibilityLabel={PROJECT_SPACE_COPY.switchTitle} />
       </View>
@@ -200,7 +200,7 @@ function SpaceRow({ projectId }: { projectId: string }) {
       <View style={[styles.line, { gap: 12, padding: 14, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface }]}>
         <View style={{ flex: 1, gap: 2 }}>
           <T variant="label">{space.name}</T>
-          <T variant="caption" tone="secondary">{space.is_default ? SPACE_COPY.defaultBadge : "Space"}</T>
+          <T variant="footnote" tone="secondary">{space.is_default ? SPACE_COPY.defaultBadge : "Space"}</T>
         </View>
       </View>
     </View>

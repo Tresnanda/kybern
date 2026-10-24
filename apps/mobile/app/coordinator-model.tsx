@@ -67,7 +67,7 @@ export default function CoordinatorModelScreen() {
             >
               <View style={{ flex: 1, gap: 3 }}>
                 <T variant="label">{COORDINATOR_SETTINGS_COPY.useDefault}</T>
-                <T variant="caption" tone="secondary">Follow the computer's Coordinator defaults for this kind of work.</T>
+                <T variant="footnote" tone="secondary">Follow the computer's Coordinator defaults for this kind of work.</T>
               </View>
               {!current && <Icon name="checkmark" size={14} />}
             </Tap>
@@ -106,7 +106,7 @@ export default function CoordinatorModelScreen() {
                         onPress={() => void save({ ...current, effort: effort || null }, false)}
                         style={{ paddingHorizontal: 14, borderRadius: 22, alignItems: "center", backgroundColor: on ? colors.ink : colors.raised }}
                       >
-                        <T variant="caption" tone={on ? "inverse" : "ink"} style={{ textTransform: "capitalize" }}>{effort || "Default"}</T>
+                        <T variant="footnote" tone={on ? "inverse" : "ink"} style={{ textTransform: "capitalize" }}>{effort || "Default"}</T>
                       </Tap>
                     );
                   })}
@@ -138,7 +138,7 @@ export default function CoordinatorModelScreen() {
                     >
                       <View style={{ flex: 1, gap: 2 }}>
                         <T variant="label">{model.display_name}</T>
-                        {!!model.description && <T variant="caption" tone="secondary" numberOfLines={2}>{model.description}</T>}
+                        {!!model.description && <T variant="footnote" tone="secondary" numberOfLines={2}>{model.description}</T>}
                       </View>
                       {selected === model.id && <Icon name="checkmark" size={12} />}
                     </Tap>
@@ -152,7 +152,7 @@ export default function CoordinatorModelScreen() {
                   >
                     <View style={{ flex: 1, gap: 3 }}>
                       <T variant="label">Use “{customId}”</T>
-                      <T variant="caption" tone="secondary">Custom model ID</T>
+                      <T variant="footnote" tone="secondary">Custom model ID</T>
                     </View>
                     <Icon name="plus" size={16} />
                   </Tap>

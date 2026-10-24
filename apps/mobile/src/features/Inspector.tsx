@@ -126,7 +126,7 @@ function Inspector({ threadId }: { threadId: string }) {
                     size={15}
                     color={active ? colors.ink : colors.secondary}
                   />
-                  <T variant="caption" tone={active ? "ink" : "secondary"}>
+                  <T variant="footnote" tone={active ? "ink" : "secondary"}>
                     {tab.label}
                   </T>
                 </Tap>

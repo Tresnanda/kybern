@@ -68,14 +68,14 @@ function ThreadRow({
         ) : running ? (
           <Icon name="circle.dotted" size={12} color={colors.accent} />
         ) : (
-          <T variant="caption" tone="muted">
+          <T variant="footnote" tone="muted">
             {relativeTime(thread.updated_at)}
           </T>
         )}
       </View>
       <View style={[styles.line, { gap: 7 }]}>
         <ProviderMark kind={thread.provider.kind} size={12} />
-        <T variant="caption" tone="secondary" numberOfLines={1} style={{ flex: 1 }}>
+        <T variant="footnote" tone="secondary" numberOfLines={1} style={{ flex: 1 }}>
           {PROVIDER_DISPLAY_NAME[thread.provider.kind]}
         </T>
       </View>
@@ -129,7 +129,7 @@ function ProjectGroup({
           size={14}
           color={colors.secondary}
         />
-        <T variant="caption" tone="secondary" numberOfLines={1} style={{ flex: 1 }}>
+        <T variant="footnote" tone="secondary" numberOfLines={1} style={{ flex: 1 }}>
           {name}
         </T>
         <Icon
@@ -148,7 +148,7 @@ function ProjectGroup({
                 onPress={() => setExpandedThreads(value => ({ ...value, [t.id]: !childrenOpen }))}
                 style={[styles.line, { minHeight: 48, paddingStart: 12, gap: 8 }]}>
                 <Icon name={childrenOpen ? "chevron.down" : "chevron.right"} size={12} />
-                <T variant="caption" tone="secondary">{childCount} helpers</T>
+                <T variant="footnote" tone="secondary">{childCount} helpers</T>
               </Tap>}
             </View>
           ))}
@@ -158,7 +158,7 @@ function ProjectGroup({
               onPress={() => setShowAll(true)}
               style={{ paddingStart: 12, paddingVertical: 7 }}
             >
-              <T variant="caption" tone="accent">
+              <T variant="footnote" tone="accent">
                 Show {hidden} more
               </T>
             </Tap>
@@ -259,7 +259,7 @@ export function Sidebar() {
       >
         <View style={[styles.line, { gap: 9 }]}>
           <Brand size={20} />
-          <T variant="heading" style={{ fontSize: 18 }}>
+          <T variant="headline">
             kybern
           </T>
         </View>
@@ -326,7 +326,7 @@ export function Sidebar() {
                 borderRadius: 20,
               }}
             >
-              <T variant="caption" tone={filter === f ? "inverse" : "secondary"}>
+              <T variant="footnote" tone={filter === f ? "inverse" : "secondary"}>
                 {f}
               </T>
             </Tap>

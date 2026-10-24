@@ -67,7 +67,7 @@ export function MessagePart({
         style={[styles.line, { paddingHorizontal: 2 }]}
       >
         <Icon name="text.bubble" size={15} />
-        <T variant="caption" numberOfLines={1} style={{ flexShrink: 1 }}>
+        <T variant="footnote" numberOfLines={1} style={{ flexShrink: 1 }}>
           {threadReferenceLabel(part)}
         </T>
         <Icon name="chevron.right" size={10} />
@@ -85,7 +85,7 @@ export function MessagePart({
         }
         size={15}
       />
-      <T variant="caption">
+      <T variant="footnote">
         {part.type === "attachment" || part.type === "skill"
           ? part.name
           : part.type === "file_mention"

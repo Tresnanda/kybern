@@ -190,10 +190,10 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
     <View style={{ flex: 1, gap: 4 }}>
       <ErrorBanner error={error} />
       {connectorLogin && selected === initialTerminalId && <View style={{ paddingHorizontal: 16, gap: 8 }}>
-        {loginUrl && <Button secondary onPress={() => void Linking.openURL(loginUrl).catch(e => setError(errorText(e)))}>Sign in on {new URL(loginUrl).hostname}</Button>}
-        <T variant="caption" tone="secondary">After signing in, paste the full redirect URL when Claude asks for it.</T>
+        {loginUrl && <Button onPress={() => void Linking.openURL(loginUrl).catch(e => setError(errorText(e)))}>Sign in on {new URL(loginUrl).hostname}</Button>}
+        <T variant="footnote" tone="secondary">After signing in, paste the full redirect URL when Claude asks for it.</T>
         <Field label="Sign-in redirect URL" hideLabel secureTextEntry autoCapitalize="none" autoCorrect={false} value={redirect} onChangeText={setRedirect} placeholder="Paste the redirect URL" />
-        <Button secondary busy={busy} disabled={!ready || !redirect.trim() || app.status !== "open"} onPress={() => void completeLogin()}>Complete sign-in</Button>
+        <Button busy={busy} disabled={!ready || !redirect.trim() || app.status !== "open"} onPress={() => void completeLogin()}>Complete sign-in</Button>
       </View>}
       {terminals.length > 0 && (
         <View style={[styles.spread, { paddingHorizontal: 16 }]}>
@@ -217,7 +217,7 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
                 }}
               >
                 <T
-                  variant="caption"
+                  variant="footnote"
                   tone={selected === t.id ? "ink" : "secondary"}
                 >
                   {t.title || "Shell"}
@@ -351,7 +351,7 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
                   onPress={() => void send("\x1b")}
                   style={{ width: 44, alignItems: "center" }}
                 >
-                  <T variant="caption">esc</T>
+                  <T variant="footnote">esc</T>
                 </Tap>
                 <Tap
                   label="Control modifier"
@@ -364,7 +364,7 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
                     backgroundColor: control ? colors.accentSoft : undefined,
                   }}
                 >
-                  <T variant="caption" tone={control ? "accent" : "ink"}>
+                  <T variant="footnote" tone={control ? "accent" : "ink"}>
                     ctrl
                   </T>
                 </Tap>
@@ -373,7 +373,7 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
                   onPress={() => void send("\t")}
                   style={{ width: 44, alignItems: "center" }}
                 >
-                  <T variant="caption">tab</T>
+                  <T variant="footnote">tab</T>
                 </Tap>
               </View>
               <View

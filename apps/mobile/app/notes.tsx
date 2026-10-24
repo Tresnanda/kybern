@@ -102,7 +102,7 @@ function NoteRow({
               }}
             >
               <Icon name="checkmark.square.fill" size={11} color={colors.secondary} />
-              <T variant="caption" tone="secondary" style={{ fontVariant: ["tabular-nums"] }}>
+              <T variant="footnote" tone="secondary" style={{ fontVariant: ["tabular-nums"] }}>
                 {badge}
               </T>
             </View>
@@ -110,22 +110,22 @@ function NoteRow({
           {note.pinned && !deleted ? (
             <Icon name="pin.fill" size={12} color={colors.secondary} />
           ) : null}
-          <T variant="caption" tone="muted" style={{ fontVariant: ["tabular-nums"] }}>
+          <T variant="footnote" tone="muted" style={{ fontVariant: ["tabular-nums"] }}>
             {when}
           </T>
         </View>
       </View>
       {preview ? (
-        <T variant="caption" tone="secondary" numberOfLines={1}>
+        <T variant="footnote" tone="secondary" numberOfLines={1}>
           {preview}
         </T>
       ) : (
-        <T variant="caption" tone="muted" numberOfLines={1}>
+        <T variant="footnote" tone="muted" numberOfLines={1}>
           No text yet
         </T>
       )}
       {detail ? (
-        <T variant="caption" tone="muted" numberOfLines={1}>
+        <T variant="footnote" tone="muted" numberOfLines={1}>
           {detail}
         </T>
       ) : null}
@@ -142,7 +142,7 @@ function Header({ row }: { row: Extract<Row, { kind: "header" }> }) {
           {row.title}
         </T>
         {row.count ? (
-          <T variant="caption" tone="muted" style={{ fontVariant: ["tabular-nums"] }}>
+          <T variant="footnote" tone="muted" style={{ fontVariant: ["tabular-nums"] }}>
             {row.count}
           </T>
         ) : null}
@@ -155,7 +155,7 @@ function Header({ row }: { row: Extract<Row, { kind: "header" }> }) {
         ) : null}
       </View>
       {row.subtitle ? (
-        <T variant="caption" tone="muted" numberOfLines={1}>
+        <T variant="footnote" tone="muted" numberOfLines={1}>
           {row.subtitle}
         </T>
       ) : null}
@@ -484,14 +484,14 @@ export default function Notes() {
                     size={11}
                     color={colors.muted}
                   />
-                  <T variant="caption" tone="secondary">
+                  <T variant="footnote" tone="secondary">
                     {item.label}
                   </T>
                 </Tap>
               );
             case "footnote":
               return (
-                <T variant="caption" tone="muted" style={{ paddingVertical: 10 }}>
+                <T variant="footnote" tone="muted" style={{ paddingVertical: 10 }}>
                   {item.text}
                 </T>
               );
@@ -516,7 +516,7 @@ export default function Notes() {
               detail="This computer’s Kybern is too old to keep notes. Update it, then open Notes again."
             />
           ) : !loaded ? (
-            <T variant="caption" tone="secondary" style={{ paddingVertical: 24 }}>
+            <T variant="footnote" tone="secondary" style={{ paddingVertical: 24 }}>
               Loading notes…
             </T>
           ) : null
@@ -524,7 +524,7 @@ export default function Notes() {
         ListFooterComponent={
           <View>
             {error ? (
-              <T variant="caption" tone="negative" style={{ paddingVertical: 12 }}>
+              <T variant="footnote" tone="negative" style={{ paddingVertical: 12 }}>
                 {error}
               </T>
             ) : null}

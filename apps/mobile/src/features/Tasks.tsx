@@ -43,7 +43,7 @@ export function TaskRow({ task }: { task: RuntimeTask }) {
       />
       <View style={{ flex: 1 }}>
         <T variant="label">{task.title}</T>
-        <T variant="caption" tone="secondary">
+        <T variant="footnote" tone="secondary">
           {task.status}
           {task.backgrounded ? " · Background" : ""}
           {task.model ? ` · ${task.model}` : ""}
@@ -79,7 +79,6 @@ export function TaskControls({ task }: { task: RuntimeTask }) {
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
           {task.capabilities.background && !task.backgrounded && (
             <Button
-              secondary
               busy={busy}
               disabled={app.status !== "open"}
               onPress={() => void control("tasks.background")}
@@ -89,7 +88,6 @@ export function TaskControls({ task }: { task: RuntimeTask }) {
           )}
           {task.capabilities.stop && (
             <Button
-              secondary
               busy={busy}
               disabled={app.status !== "open"}
               onPress={() => void control("tasks.stop")}

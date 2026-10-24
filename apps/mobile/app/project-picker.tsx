@@ -22,7 +22,6 @@ export default function ProjectPicker() {
       />
       <View style={{ marginVertical: 16 }}>
         <Button
-          secondary
           icon="plus"
           onPress={() => router.push("/add-project")}
         >

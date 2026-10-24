@@ -90,7 +90,7 @@ export default function ComposerOptionsScreen() {
               backgroundColor: section === tab ? colors.raised : "transparent",
             }}
           >
-            <T variant="caption" tone={section === tab ? "ink" : "secondary"}>
+            <T variant="footnote" tone={section === tab ? "ink" : "secondary"}>
               {tab === "model"
                 ? "Model"
                 : tab === "permissions"

@@ -20,14 +20,14 @@ import { errorText, refresh, rpc } from "../state/runtime";
 import { Alert } from "../ui/Alert";
 import { CheckRow } from "../ui/CheckRow";
 import { ErrorBanner, Group, Icon, Row, T, Tap, styles } from "../ui/primitives";
-import { useTheme } from "../ui/theme";
+import { radius, useTheme } from "../ui/theme";
 
 /** "3 repos" next to a group project's name in lists. */
 export function RepoBadge({ count }: { count: number }) {
   const { colors } = useTheme();
   return (
-    <View style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8, backgroundColor: colors.raised }}>
-      <T variant="caption" tone="secondary" style={{ fontSize: 12, lineHeight: 17, fontWeight: "500", fontVariant: ["tabular-nums"] }}>
+    <View style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: radius.full, backgroundColor: colors.raised }}>
+      <T variant="caption" tone="secondary" style={{ fontWeight: "500", fontVariant: ["tabular-nums"] }}>
         {repoBadge(count)}
       </T>
     </View>
@@ -137,13 +137,13 @@ export function GroupRepositories({ project, onChanged }: { project: Project; on
               <View style={{ flex: 1, gap: 3 }}>
                 <T variant="label">{member.name}</T>
                 {detail && (
-                  <T variant="caption" tone={status === "ok" ? "secondary" : "warning"}>
+                  <T variant="footnote" tone={status === "ok" ? "secondary" : "warning"}>
                     {detail}
                   </T>
                 )}
               </View>
               {index === 0 && (
-                <T variant="caption" tone="muted">
+                <T variant="footnote" tone="muted">
                   {GROUP_COPY.primary}
                 </T>
               )}
@@ -153,7 +153,7 @@ export function GroupRepositories({ project, onChanged }: { project: Project; on
       })}
       {removed && (
         <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(120)} style={[styles.spread, { paddingVertical: 4 }]} accessibilityLiveRegion="polite">
-          <T variant="caption" tone="secondary" style={{ flex: 1 }}>
+          <T variant="footnote" tone="secondary" style={{ flex: 1 }}>
             {GROUP_COPY.removed(removed.name)}
           </T>
           <Tap
@@ -185,16 +185,16 @@ export function GroupRepositories({ project, onChanged }: { project: Project; on
       />
       {copyOpen && (
         <Animated.View entering={FadeIn.duration(160)} style={{ paddingStart: 35 }}>
-          <T variant="caption" tone="secondary" style={{ marginBottom: 4 }}>
+          <T variant="footnote" tone="secondary" style={{ marginBottom: 4 }}>
             {GROUP_COPY.alsoCopyDetail(project.name)}
           </T>
           {!state && (
-            <T variant="caption" tone="secondary">
+            <T variant="footnote" tone="secondary">
               Loading {project.name}…
             </T>
           )}
           {state && !candidates.length && !absent.length && (
-            <T variant="caption" tone="secondary">
+            <T variant="footnote" tone="secondary">
               Nothing else in {project.name} can be copied.
             </T>
           )}

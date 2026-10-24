@@ -114,7 +114,7 @@ export function FileTreeRow({
         size={19}
         color={folder ? colors.secondary : colors.muted}
       />
-      <T variant="caption" numberOfLines={1} style={{ flex: 1 }}>
+      <T variant="footnote" numberOfLines={1} style={{ flex: 1 }}>
         {row.item.name}
       </T>
       {loading && <Busy size="small" color={colors.secondary} />}

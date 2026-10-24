@@ -85,7 +85,7 @@ function Section({
           {title}
         </T>
         {aside ? (
-          <T variant="caption" tone="muted" style={{ fontVariant: ["tabular-nums"] }}>
+          <T variant="footnote" tone="muted" style={{ fontVariant: ["tabular-nums"] }}>
             {aside}
           </T>
         ) : null}
@@ -119,7 +119,7 @@ function Property({
   const { colors } = useTheme();
   const line = (
     <>
-      <T variant="caption" tone="secondary" style={{ width: 84 }}>
+      <T variant="footnote" tone="secondary" style={{ width: 84 }}>
         {label}
       </T>
       <View style={[styles.line, { gap: 9, flex: 1 }]}>
@@ -228,11 +228,11 @@ function RunRow({ run, now }: { run: TaskRun; now: number }) {
               {` · ${agent}${run.model ? ` ${run.model.replace(/^Claude\s+/i, "")}` : ""}`}
             </T>
           </T>
-          <T variant="caption" tone="secondary" style={{ fontVariant: ["tabular-nums"] }}>
+          <T variant="footnote" tone="secondary" style={{ fontVariant: ["tabular-nums"] }}>
             {outcome}
           </T>
         </View>
-        <T variant="caption" tone="muted" style={{ paddingTop: 2, fontVariant: ["tabular-nums"] }}>
+        <T variant="footnote" tone="muted" style={{ paddingTop: 2, fontVariant: ["tabular-nums"] }}>
           {ageLabel(run.started_at, now)}
         </T>
       </Tap>
@@ -254,7 +254,7 @@ function RunRow({ run, now }: { run: TaskRun; now: number }) {
           ]}
         >
           <StatusGlyph status="running" size={14} animated />
-          <T variant="caption" tone="secondary" numberOfLines={2} style={{ flex: 1 }}>
+          <T variant="footnote" tone="secondary" numberOfLines={2} style={{ flex: 1 }}>
             {run.state === "waiting" ? "Waiting for your answer" : (run.activity ?? "Working")}
           </T>
           <T variant="label" style={{ paddingHorizontal: 8 }}>
@@ -306,7 +306,7 @@ function Followup({ task }: { task: TaskItem }) {
       {task.pending_followup?.trim() ? (
         <View style={{ gap: 4 }}>
           <View style={styles.spread}>
-            <T variant="caption" tone="secondary">
+            <T variant="footnote" tone="secondary">
               For the next run
             </T>
             <Tap
@@ -314,7 +314,7 @@ function Followup({ task }: { task: TaskItem }) {
               onPress={() => attempt(() => clearPendingFollowup(task.id))}
               style={{ paddingHorizontal: 4 }}
             >
-              <T variant="caption" tone="accent">
+              <T variant="footnote" tone="accent">
                 Clear
               </T>
             </Tap>
@@ -433,7 +433,7 @@ export default function TaskScreen() {
             action={<Button onPress={() => router.back()}>Go back</Button>}
           />
         ) : (
-          <T variant="caption" tone="secondary" style={{ paddingVertical: 24 }}>
+          <T variant="footnote" tone="secondary" style={{ paddingVertical: 24 }}>
             {connected ? "Loading task…" : "Connect your computer to open this task."}
           </T>
         )}
@@ -571,13 +571,13 @@ export default function TaskScreen() {
               scrollEnabled={false}
               style={[type.body, { color: colors.ink, padding: 0, minHeight: 240 }]}
             />
-            <T variant="caption" tone="muted">
+            <T variant="footnote" tone="muted">
               Checklist lines (- [ ]) become the acceptance criteria.
             </T>
           </View>
         ) : (
           <>
-            <T variant="title" selectable style={{ letterSpacing: -0.6 }}>
+            <T variant="title" selectable>
               {taskTitle(task)}
             </T>
             <View style={{ marginTop: 16 }}>
@@ -602,7 +602,7 @@ export default function TaskScreen() {
                   />
                 ))}
                 {!isUserStatus(task.status) && (
-                  <T variant="caption" tone="muted" style={{ paddingHorizontal: 14, paddingVertical: 8 }}>
+                  <T variant="footnote" tone="muted" style={{ paddingHorizontal: 14, paddingVertical: 8 }}>
                     {STATUS_LABEL[task.status]} follows the latest run.
                   </T>
                 )}
@@ -650,7 +650,7 @@ export default function TaskScreen() {
               {!live && (
                 <Button
                   icon="paperplane"
-                  secondary={task.status === "needs_review"}
+                  role={task.status === "needs_review" ? "tinted" : "prominent"}
                   disabled={!connected}
                   onPress={() => openSend(task.id)}
                 >
@@ -696,8 +696,9 @@ export default function TaskScreen() {
                       />
                     </View>
                     <T
+                      variant="callout"
                       tone={criterion.checked ? "secondary" : "ink"}
-                      style={{ flex: 1, fontSize: 16, lineHeight: 23 }}
+                      style={{ flex: 1 }}
                     >
                       {plainInline(criterion.text)}
                     </T>
@@ -721,7 +722,7 @@ export default function TaskScreen() {
                       {note ? noteTitle(note) : "Note unavailable"}
                     </T>
                     {note && checklistBadge(note) ? (
-                      <T variant="caption" tone="muted" style={{ fontVariant: ["tabular-nums"] }}>
+                      <T variant="footnote" tone="muted" style={{ fontVariant: ["tabular-nums"] }}>
                         {checklistBadge(note)}
                       </T>
                     ) : null}
@@ -737,7 +738,7 @@ export default function TaskScreen() {
               </Section>
             )}
             {connected && <Followup task={task} />}
-            <T variant="caption" tone="muted" style={{ marginTop: 24, fontVariant: ["tabular-nums"] }}>
+            <T variant="footnote" tone="muted" style={{ marginTop: 24, fontVariant: ["tabular-nums"] }}>
               {`Created ${ageLabel(task.created_at, now)} ago`.replace("now ago", "just now")}
             </T>
           </>

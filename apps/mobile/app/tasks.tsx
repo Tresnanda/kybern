@@ -32,8 +32,8 @@ export default function Tasks() {
       />
       {task ? (
         <View style={{ gap: 16 }}>
-          <T variant="heading">{task.title}</T>
-          <T variant="caption" tone="secondary">
+          <T variant="headline">{task.title}</T>
+          <T variant="footnote" tone="secondary">
             {task.status}
             {task.backgrounded ? " · Background" : ""}
             {task.model ? ` · ${task.model}` : ""}
@@ -60,7 +60,7 @@ export default function Tasks() {
             task.stats.tool_uses != null ||
             task.stats.duration_ms != null) && (
             <T
-              variant="caption"
+              variant="footnote"
               tone="secondary"
               style={{ fontVariant: ["tabular-nums"] }}
             >
@@ -90,7 +90,7 @@ export default function Tasks() {
             />
           ))}
           {!activity.length && (
-            <T variant="caption" tone="secondary">
+            <T variant="footnote" tone="secondary">
               {taskActive(task)
                 ? "Activity will appear here as the harness reports it."
                 : "This harness did not report a separate transcript for this task."}

@@ -209,7 +209,7 @@ export default function Library() {
                     }}
                   >
                     <T
-                      variant="caption"
+                      variant="footnote"
                       tone={filter === f ? "inverse" : "secondary"}
                     >
                       {f}
@@ -252,19 +252,19 @@ export default function Library() {
                   {item.pinned ? (
                     <Icon name="pin.fill" size={12} color={colors.secondary} />
                   ) : (
-                    <T variant="caption" tone="muted">
+                    <T variant="footnote" tone="muted">
                       {relativeTime(item.updated_at)}
                     </T>
                   )}
                 </View>
                 <View style={styles.spread}>
                   <ProviderMark kind={item.provider.kind} size={16} />
-                  <T variant="caption" tone="secondary" style={{ flex: 1 }}>
+                  <T variant="footnote" tone="secondary" style={{ flex: 1 }}>
                     {project?.name ?? "Project"} ·{" "}
                     {PROVIDER_DISPLAY_NAME[item.provider.kind]}
                   </T>
                   <T
-                    variant="caption"
+                    variant="footnote"
                     tone={
                       running
                         ? "accent"
@@ -286,7 +286,7 @@ export default function Library() {
                 onPress={() => setExpandedThreads(value => ({ ...value, [item.id]: !open }))}
                 style={[styles.line, { minHeight: 48, paddingBottom: 8, gap: 8 }]}>
                 <Icon name={open ? "chevron.down" : "chevron.right"} size={12} />
-                <T variant="caption" tone="secondary">{childCount} helpers</T>
+                <T variant="footnote" tone="secondary">{childCount} helpers</T>
               </Tap>}
               </View>
             );

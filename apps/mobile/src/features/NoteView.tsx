@@ -95,7 +95,7 @@ function Banner({
         <T variant="label" tone="warning">
           {title}
         </T>
-        <T variant="caption" tone="warning">
+        <T variant="footnote" tone="warning">
           {detail}
         </T>
       </View>
@@ -232,7 +232,7 @@ export function NoteView({
             ]}
           />
           <T
-            variant="caption"
+            variant="footnote"
             tone={s.status === "saved" ? "positive" : "muted"}
             accessibilityLiveRegion="polite"
             style={{ minHeight: 19 }}
@@ -248,7 +248,7 @@ export function NoteView({
             </T>
           )}
           {!s.loaded && !s.loadError ? (
-            <T variant="caption" tone="secondary">
+            <T variant="footnote" tone="secondary">
               Loading note…
             </T>
           ) : s.body.trim() ? (
@@ -259,7 +259,7 @@ export function NoteView({
             </T>
           )}
           {s.note && (
-            <T variant="caption" tone="muted">
+            <T variant="footnote" tone="muted">
               {editedLabel(s.note.updated_at)}
             </T>
           )}

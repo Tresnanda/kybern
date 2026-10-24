@@ -55,7 +55,7 @@ function Choice({
           {label}
         </T>
         {detail ? (
-          <T variant="caption" tone="secondary" numberOfLines={1}>
+          <T variant="footnote" tone="secondary" numberOfLines={1}>
             {detail}
           </T>
         ) : null}
@@ -248,7 +248,7 @@ export default function SendTask() {
         {global && (
           <>
             <Heading>Project</Heading>
-            <T variant="caption" tone="secondary" style={{ marginBottom: 6 }}>
+            <T variant="footnote" tone="secondary" style={{ marginBottom: 6 }}>
               This is a Global task. Choose where the agent works.
             </T>
             <View style={{ borderRadius: 15, backgroundColor: colors.raised, paddingVertical: 4 }}>
@@ -304,7 +304,7 @@ export default function SendTask() {
               />
             ))}
             {!providers.length && (
-              <T variant="caption" tone="secondary">
+              <T variant="footnote" tone="secondary">
                 Set up an agent on your computer to send tasks.
               </T>
             )}
@@ -354,7 +354,7 @@ export default function SendTask() {
             <Heading
               aside={
                 total > 0 ? (
-                  <T variant="caption" tone="muted" style={{ fontVariant: ["tabular-nums"] }}>
+                  <T variant="footnote" tone="muted" style={{ fontVariant: ["tabular-nums"] }}>
                     About {formatTokens(total)} tokens
                   </T>
                 ) : undefined
@@ -392,7 +392,7 @@ export default function SendTask() {
                     {name}
                   </T>
                   {sizes[noteId] ? (
-                    <T variant="caption" tone="muted" style={{ fontVariant: ["tabular-nums"] }}>
+                    <T variant="footnote" tone="muted" style={{ fontVariant: ["tabular-nums"] }}>
                       {formatTokens(sizes[noteId]!)}
                     </T>
                   ) : null}
@@ -406,7 +406,7 @@ export default function SendTask() {
           aside={
             prompt !== initialPrompt ? (
               <Tap label="Reset prompt" onPress={() => setPrompt(initialPrompt)} style={{ minHeight: 32 }}>
-                <T variant="caption" tone="accent">
+                <T variant="footnote" tone="accent">
                   Reset
                 </T>
               </Tap>
@@ -439,18 +439,17 @@ export default function SendTask() {
         />
 
         <View style={{ marginTop: 24, gap: 10 }}>
-          <Button busy={busy === "start"} disabled={!ready || !!busy} onPress={() => void start(false)}>
+          <Button role="prominent" busy={busy === "start"} disabled={!ready || !!busy} onPress={() => void start(false)}>
             Start
           </Button>
           <Button
-            secondary
             busy={busy === "open"}
             disabled={!ready || !!busy}
             onPress={() => void start(true)}
           >
             Start and open
           </Button>
-          <T variant="caption" tone="muted" style={{ textAlign: "center", marginTop: 2 }}>
+          <T variant="footnote" tone="muted" style={{ textAlign: "center", marginTop: 2 }}>
             {!projectId
               ? "Choose a project to start."
               : "Runs in the background on your computer."}

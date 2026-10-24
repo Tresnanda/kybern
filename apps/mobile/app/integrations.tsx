@@ -160,7 +160,7 @@ export default function Integrations() {
       >
         <View style={{ flex: 1, gap: 4 }}>
           <T variant="title">Connect your tools</T>
-          <T variant="caption" tone="secondary">
+          <T variant="footnote" tone="secondary">
             {app.projects.find((p) => p.id === projectId)?.name ??
               "Choose a project in your conversation"}
           </T>
@@ -279,7 +279,7 @@ export default function Integrations() {
       </View>
       <ErrorBanner error={error} />
       {!!notice && (
-        <T variant="caption" tone="secondary" style={{ marginBottom: 16 }}>
+        <T variant="footnote" tone="secondary" style={{ marginBottom: 16 }}>
           {notice}
         </T>
       )}
@@ -300,7 +300,7 @@ export default function Integrations() {
       )}
       {loading || !items.length ? (
         <View style={{ paddingVertical: 32, gap: 8 }}>
-          <T variant="heading">
+          <T variant="headline">
             {loading
               ? "Loading integrations…"
               : query
@@ -374,14 +374,14 @@ export default function Integrations() {
                   <T variant="label">{displayName}</T>
                   {!!item.description && (
                     <T
-                      variant="caption"
+                      variant="footnote"
                       tone="secondary"
                       numberOfLines={isExpanded ? undefined : 2}
                     >
                       {item.description}
                     </T>
                   )}
-                  <T variant="caption" tone="secondary">
+                  <T variant="footnote" tone="secondary">
                     {item.status}
                     {item.scope ? ` · ${item.scope}` : ""}
                   </T>
@@ -397,7 +397,7 @@ export default function Integrations() {
                   style={{ paddingHorizontal: 16, paddingBottom: 16, gap: 12 }}
                 >
                   {item.name.includes("@") && (
-                    <T variant="caption" tone="secondary">
+                    <T variant="footnote" tone="secondary">
                       {item.name.split("@").slice(1).join("@")}
                     </T>
                   )}
@@ -463,7 +463,7 @@ export default function Integrations() {
                     (!thread ||
                       thread.provider.kind !== provider ||
                       thread.project_id !== projectId) && (
-                      <T variant="caption" tone="secondary">
+                      <T variant="footnote" tone="secondary">
                         Open a Claude conversation in this project to sign in.
                       </T>
                     )}
@@ -474,11 +474,11 @@ export default function Integrations() {
         })
       )}
       {items.length > count && (
-        <Button secondary onPress={() => setCount((n) => n + 40)}>
+        <Button onPress={() => setCount((n) => n + 40)}>
           Show more
         </Button>
       )}
-      <T variant="caption" tone="secondary" style={{ marginTop: 24 }}>
+      <T variant="footnote" tone="secondary" style={{ marginTop: 24 }}>
         {provider === "codex"
           ? "Use @ in a conversation to choose a plugin or connected app."
           : "Use / in a conversation to choose a plugin skill."}
@@ -496,7 +496,7 @@ export default function Integrations() {
               size={16}
               color={colors.secondary}
             />
-            <T variant="caption" tone="secondary">
+            <T variant="footnote" tone="secondary">
               {catalog.warnings.length} catalog{" "}
               {catalog.warnings.length === 1 ? "notice" : "notices"}
             </T>
@@ -509,7 +509,7 @@ export default function Integrations() {
             catalog.warnings.map((w) => (
               <T
                 key={w}
-                variant="caption"
+                variant="footnote"
                 tone="secondary"
                 style={{ marginBottom: 8 }}
               >

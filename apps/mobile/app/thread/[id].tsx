@@ -100,7 +100,7 @@ const TranscriptRow = memo(function TranscriptRow({
           style={[styles.line, { gap: 8, paddingVertical: 8 }]}
         >
           <Icon name="hammer" size={14} color={colors.secondary} />
-          <T variant="caption" tone="secondary" style={{ flex: 1 }}>
+          <T variant="footnote" tone="secondary" style={{ flex: 1 }}>
             {row.label ?? `Worked for ${workDuration(row.durationMs)}`}
           </T>
           <Icon
@@ -441,7 +441,7 @@ export default function ThreadScreen() {
                 snapshot.nextBeforeSeq !== null ? (
                   <View style={{ paddingVertical: 12, minHeight: 44 }}>
                     {historyError ? <ErrorBanner error={historyError} onRetry={earlier} /> :
-                      <T variant="caption" tone="secondary" accessibilityLiveRegion="polite">
+                      <T variant="footnote" tone="secondary" accessibilityLiveRegion="polite">
                         {snapshot.loadingEarlier ? "Loading earlier messages…" : "Scroll up for earlier messages"}
                       </T>}
                   </View>
@@ -563,7 +563,7 @@ export default function ThreadScreen() {
               <T variant="label" numberOfLines={1}>
                 {thread?.title || "New thread"}
               </T>
-              <T variant="caption" tone="secondary" numberOfLines={1}>
+              <T variant="footnote" tone="secondary" numberOfLines={1}>
                 {project?.name ?? "Workspace"}
                 {thread?.worktree ? ` · ${thread.worktree.branch}` : ""}
               </T>
@@ -588,7 +588,7 @@ export default function ThreadScreen() {
                     backgroundColor: colors.raised,
                   }}
                 >
-                  <T variant="caption" style={{ fontWeight: "500" }}>
+                  <T variant="footnote" style={{ fontWeight: "500" }}>
                     Project
                   </T>
                 </View>

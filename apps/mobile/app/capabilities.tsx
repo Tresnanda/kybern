@@ -101,14 +101,14 @@ export default function Capabilities() {
               backgroundColor: tab === name ? colors.ink : colors.raised,
             }}
           >
-            <T variant="caption" tone={tab === name ? "inverse" : "ink"}>
+            <T variant="footnote" tone={tab === name ? "inverse" : "ink"}>
               {name}
             </T>
           </Tap>
         ))}
       </View>
       <ErrorBanner error={error} />
-      <T variant="caption" tone="secondary" style={{ marginBottom: 12 }}>
+      <T variant="footnote" tone="secondary" style={{ marginBottom: 12 }}>
         {tab === "Commands"
           ? "Choose a command to add it to your message before sending."
           : "Choose an installed capability to include with your next message."}

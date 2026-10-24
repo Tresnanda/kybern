@@ -962,7 +962,7 @@ export const Composer = memo(function Composer({
                               size={14}
                             />
                             <T
-                              variant="caption"
+                              variant="footnote"
                               numberOfLines={1}
                               style={{ flexShrink: 1 }}
                             >
@@ -1166,7 +1166,7 @@ export const Composer = memo(function Composer({
         />
       </Animated.View>
       {(uploading || (busy && running)) && (
-        <T variant="caption" tone="secondary">
+        <T variant="footnote" tone="secondary">
           {uploading
             ? "Attaching files…"
             : steering

@@ -17,7 +17,7 @@ import { errorText, refresh, rpc, supportsGroupProjects, useApp } from "../src/s
 import { CheckRow } from "../src/ui/CheckRow";
 import { Button, ErrorBanner, Field, Icon, Page, Row, T, Tap, styles } from "../src/ui/primitives";
 import { Segmented } from "../src/ui/Segmented";
-import { useTheme } from "../src/ui/theme";
+import { MONO, useTheme } from "../src/ui/theme";
 
 type Kind = "single" | "group";
 
@@ -68,7 +68,7 @@ function FolderList({
   const atRoot = !!root && browse.path === root;
   return (
     <View style={{ marginTop: 8 }}>
-      <T variant="caption" tone="secondary" selectable>
+      <T variant="footnote" tone="secondary" selectable>
         Folders in {browse.path}
       </T>
       {choose && !choose.disabled && <Row title={choose.title} icon="checkmark" onPress={choose.onPress} />}
@@ -82,7 +82,7 @@ function FolderList({
         </T>
       )}
       {browse.has_more && (
-        <T variant="caption" tone="secondary">
+        <T variant="footnote" tone="secondary">
           Enter a folder path above to find more folders.
         </T>
       )}
@@ -169,12 +169,12 @@ function SingleForm({ header }: { header: React.ReactNode }) {
             autoCapitalize="none"
             placeholder="/Users/you/projects/my-app"
           />
-          <Button secondary busy={busy || folders.busy} onPress={() => void directories(path)}>
+          <Button busy={busy || folders.busy} onPress={() => void directories(path)}>
             Browse folder
           </Button>
           <Field label="Project name (optional)" value={name} onChangeText={setName} placeholder="Use folder name" />
           <ErrorBanner error={error || folders.error} />
-          <Button busy={busy} disabled={!path.trim()} onPress={() => void add()}>
+          <Button role="prominent" busy={busy} disabled={!path.trim()} onPress={() => void add()}>
             Add this folder
           </Button>
         </View>
@@ -284,7 +284,7 @@ function GroupForm({ header, existing }: { header?: React.ReactNode; existing?: 
       <Page>
         {header}
         <Animated.View entering={header ? swap : undefined}>
-          <T variant="caption" tone="secondary" style={{ marginTop: header ? 14 : 0 }}>
+          <T variant="footnote" tone="secondary" style={{ marginTop: header ? 14 : 0 }}>
             {existing ? GROUP_COPY.addRepositoriesBody(existing.path) : GROUP_COPY.newGroupSubtitleMobile}
           </T>
           {!existing && (
@@ -324,7 +324,7 @@ function GroupForm({ header, existing }: { header?: React.ReactNode; existing?: 
                     flex: 1,
                     alignSelf: "stretch",
                     color: colors.ink,
-                    fontFamily: Platform.select({ ios: "Menlo", default: "monospace" }),
+                    fontFamily: MONO,
                     fontSize: 15,
                     letterSpacing: 0,
                   }}
@@ -376,18 +376,18 @@ function GroupForm({ header, existing }: { header?: React.ReactNode; existing?: 
             </View>
           )}
           {scanning && !scan && (
-            <T variant="caption" tone="secondary" style={{ marginTop: 20 }}>
+            <T variant="footnote" tone="secondary" style={{ marginTop: 20 }}>
               {GROUP_COPY.scanning(folder.split("/").filter(Boolean).pop() ?? folder)}
             </T>
           )}
           {scan && (
             <View style={{ marginTop: 20 }}>
               <View style={[styles.spread, { marginBottom: 4 }]}>
-                <T variant="caption" tone="secondary">
+                <T variant="footnote" tone="secondary">
                   {scanning ? GROUP_COPY.scanning(scan.name) : `Repositories in ${scan.name}`}
                 </T>
                 {!!selectable.length && (
-                  <T variant="caption" tone="secondary" style={{ fontVariant: ["tabular-nums"] }}>
+                  <T variant="footnote" tone="secondary" style={{ fontVariant: ["tabular-nums"] }}>
                     {selectedCountLabel(selected.length, selectable.length)}
                   </T>
                 )}
@@ -397,7 +397,7 @@ function GroupForm({ header, existing }: { header?: React.ReactNode; existing?: 
                   <T variant="label">
                     {existing ? `Every repository in ${scan.name} is already in the group` : GROUP_COPY.nothingFoundTitle(scan.name)}
                   </T>
-                  <T variant="caption" tone="secondary">
+                  <T variant="footnote" tone="secondary">
                     {GROUP_COPY.nothingFoundBody}
                   </T>
                 </View>
@@ -413,12 +413,12 @@ function GroupForm({ header, existing }: { header?: React.ReactNode; existing?: 
                 />
               ))}
               {scan.rejected?.map((item) => (
-                <T key={item.path} variant="caption" tone="warning" style={{ marginTop: 6 }}>
+                <T key={item.path} variant="footnote" tone="warning" style={{ marginTop: 6 }}>
                   {item.reason}
                 </T>
               ))}
               {scan.truncated && (
-                <T variant="caption" tone="secondary" style={{ marginTop: 6 }}>
+                <T variant="footnote" tone="secondary" style={{ marginTop: 6 }}>
                   Kybern stopped looking after 200 repositories. Use {GROUP_COPY.addFolder} for one it didn’t reach.
                 </T>
               )}
@@ -460,11 +460,11 @@ function GroupForm({ header, existing }: { header?: React.ReactNode; existing?: 
       </Page>
       {scan && (
         <View style={{ paddingHorizontal: 24, paddingTop: 10, paddingBottom: insets.bottom + 12, backgroundColor: colors.background, gap: 10 }}>
-          <T variant="caption" tone={blocked && selected.length ? "warning" : "secondary"} style={{ textAlign: "center" }} accessibilityLiveRegion="polite">
+          <T variant="footnote" tone={blocked && selected.length ? "warning" : "secondary"} style={{ textAlign: "center" }} accessibilityLiveRegion="polite">
             {helper}
           </T>
           <View style={{ width: "100%", maxWidth: 712, alignSelf: "center" }}>
-            <Button busy={adding} disabled={!!blocked || !!duplicate || scanning} onPress={() => void submit()}>
+            <Button role="prominent" busy={adding} disabled={!!blocked || !!duplicate || scanning} onPress={() => void submit()}>
               {existing ? (selected.length ? GROUP_COPY.addRepositoriesButton(selected.length) : "Add repositories") : GROUP_COPY.addGroup}
             </Button>
           </View>

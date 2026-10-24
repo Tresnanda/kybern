@@ -224,7 +224,6 @@ function Navigation() {
               : undefined,
           headerStyle: { backgroundColor: colors.background },
           headerTintColor: colors.ink,
-          headerTitleStyle: { fontSize: 17, fontWeight: "500" },
           contentStyle: { backgroundColor: colors.background },
           headerBackButtonDisplayMode: "minimal",
           animation: reduced ? "fade" : "default",

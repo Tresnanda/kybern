@@ -92,14 +92,13 @@ export default function ScanPairing() {
       <ErrorBanner error={error} />
       <View style={{ gap: 12, marginTop: 24 }}>
         <Button
-          secondary
           icon="photo"
           busy={busy}
           onPress={() => void scanImage()}
         >
           Choose QR image
         </Button>
-        <Button secondary onPress={() => router.back()}>
+        <Button onPress={() => router.back()}>
           Enter code manually
         </Button>
       </View>

@@ -88,8 +88,8 @@ export const TaskRow = memo(function TaskRow({
       </View>
       <View style={{ flex: 1, gap: 3 }}>
         <T
+          variant="callout"
           numberOfLines={2}
-          style={{ fontSize: 16, lineHeight: 22 }}
           tone={task.status === "canceled" ? "secondary" : "ink"}
         >
           {taskTitle(task)}
@@ -98,7 +98,7 @@ export const TaskRow = memo(function TaskRow({
           {task.priority > 0 && (
             <PriorityGlyph priority={task.priority} size={12} color={colors.secondary} />
           )}
-          <T variant="caption" tone="muted" style={{ fontVariant: ["tabular-nums"] }}>
+          <T variant="footnote" tone="muted" style={{ fontVariant: ["tabular-nums"] }}>
             {task.key}
           </T>
           {detail ? (
@@ -109,7 +109,7 @@ export const TaskRow = memo(function TaskRow({
                 </View>
               )}
               <T
-                variant="caption"
+                variant="footnote"
                 tone="secondary"
                 numberOfLines={1}
                 style={{ flexShrink: 1, fontVariant: ["tabular-nums"] }}
@@ -122,7 +122,7 @@ export const TaskRow = memo(function TaskRow({
               <View style={{ marginStart: 4 }}>
                 <ProjectDot projectId={task.project_id} />
               </View>
-              <T variant="caption" tone="muted" numberOfLines={1} style={{ flexShrink: 1 }}>
+              <T variant="footnote" tone="muted" numberOfLines={1} style={{ flexShrink: 1 }}>
                 {where}
               </T>
             </>
@@ -130,7 +130,7 @@ export const TaskRow = memo(function TaskRow({
         </View>
       </View>
       <T
-        variant="caption"
+        variant="footnote"
         tone="muted"
         style={{ paddingTop: 2, fontVariant: ["tabular-nums"] }}
       >

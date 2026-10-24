@@ -4,7 +4,7 @@
 // and Kybern (not the agent) writes it to the file.
 import * as Haptics from "expo-haptics";
 import { useRef, useState } from "react";
-import { Platform, Text, TextInput, View } from "react-native";
+import { Text, TextInput, View } from "react-native";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import {
   SECRET_REQUEST_COPY,
@@ -17,18 +17,16 @@ import {
 import type { ApprovalDecision, ApprovalRequest, SecretRequestInput } from "../state/protocol";
 import { errorText, loadThread, refresh, rpc } from "../state/runtime";
 import { Button, ErrorBanner, Icon, T, Tap, styles } from "../ui/primitives";
-import { type as typography, useTheme } from "../ui/theme";
-
-const MONO = Platform.select({ ios: "Menlo", default: "monospace" });
+import { MONO, radius, type as typography, useTheme } from "../ui/theme";
 
 /** Text with the file and key set as code. */
 function SecretText({ parts, tone = "secondary" }: { parts: readonly SecretTextPart[]; tone?: "secondary" | "ink" }) {
   const { colors } = useTheme();
   return (
-    <T variant="caption" tone={tone}>
+    <T variant="footnote" tone={tone}>
       {parts.map((part, index) =>
         part.code ? (
-          <Text key={index} style={{ fontFamily: MONO, fontSize: 12, color: colors.ink, backgroundColor: colors.raised }}>
+          <Text key={index} style={{ fontFamily: MONO, color: colors.ink, backgroundColor: colors.raised }}>
             {` ${part.text} `}
           </Text>
         ) : (
@@ -84,7 +82,7 @@ export function SecretRequestCard({ approval, input }: { approval: ApprovalReque
         </View>
         <View style={{ flex: 1, gap: 4 }}>
           <T variant="label" style={{ fontWeight: "600" }}>{input.label}</T>
-          {!!input.reason && <T variant="caption" tone="secondary">{input.reason}</T>}
+          {!!input.reason && <T variant="footnote" tone="secondary">{input.reason}</T>}
           <SecretText parts={secretDestination(input)} />
         </View>
       </View>
@@ -109,28 +107,28 @@ export function SecretRequestCard({ approval, input }: { approval: ApprovalReque
           placeholder={input.placeholder ?? undefined}
           placeholderTextColor={colors.muted}
           selectionColor={colors.accent}
-          style={[typography.body, { flex: 1, color: colors.ink, paddingVertical: 10, fontFamily: shown ? MONO : undefined, fontSize: 16 }]}
+          style={[typography.callout, { flex: 1, color: colors.ink, paddingVertical: 10, fontFamily: shown ? MONO : undefined, letterSpacing: 0 }]}
         />
         <Tap label={shown ? "Hide the value" : "Show the value"} selected={shown} onPress={() => setShown(!shown)} style={{ paddingHorizontal: 14, alignItems: "center" }}>
-          <T variant="caption" tone="secondary">{shown ? "Hide" : "Show"}</T>
+          <T variant="footnote" tone="secondary">{shown ? "Hide" : "Show"}</T>
         </Tap>
       </View>
       <ErrorBanner error={error} />
       <View style={{ flexDirection: "row", gap: 10 }}>
         <View style={{ flex: 1 }}>
-          <Button secondary disabled={busy} onPress={() => void respond({ decision: "deny" })}>
+          <Button disabled={busy} onPress={() => void respond({ decision: "deny" })}>
             {SECRET_REQUEST_COPY.decline}
           </Button>
         </View>
         <View style={{ flex: 1 }}>
-          <Button busy={busy} disabled={!value} onPress={save}>
+          <Button role="prominent" busy={busy} disabled={!value} onPress={save}>
             {SECRET_REQUEST_COPY.save}
           </Button>
         </View>
       </View>
       <View style={[styles.line, { gap: 6, justifyContent: "center" }]}>
         <Icon name="lock" size={12} color={colors.muted} />
-        <T variant="caption" tone="muted" style={{ flexShrink: 1 }}>{SECRET_REQUEST_COPY.footnote}</T>
+        <T variant="footnote" tone="muted" style={{ flexShrink: 1 }}>{SECRET_REQUEST_COPY.footnote}</T>
       </View>
     </Animated.View>
   );

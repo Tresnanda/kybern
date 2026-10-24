@@ -179,7 +179,7 @@ export default function Home() {
           </View>
           <View style={[styles.line, { gap: 9 }]}>
             <Brand size={21} />
-            <T variant="heading" style={{ fontSize: 19 }}>
+            <T variant="headline">
               kybern
             </T>
           </View>
@@ -228,7 +228,7 @@ export default function Home() {
             <View style={{ marginBottom: 24 }}>
               <Brand size={52} />
             </View>
-            <T variant="display">What are we{`\n`}building?</T>
+            <T variant="largeTitle">What are we{`\n`}building?</T>
             <T tone="secondary" style={{ marginTop: 18, maxWidth: 300 }}>
               {connected
                 ? "Choose a project and start a conversation."
@@ -290,14 +290,14 @@ export default function Home() {
         {!outgoing && connected && recent.length > 0 && (
           <View style={{ paddingTop: 8, gap: 4 }}>
             <View style={styles.spread}>
-              <T variant="caption" tone="muted">
+              <T variant="footnote" tone="muted">
                 Pick up a thread
               </T>
               <Tap
                 label="View all threads"
                 onPress={() => router.push("/library")}
               >
-                <T variant="caption" tone="secondary">
+                <T variant="footnote" tone="secondary">
                   View all
                 </T>
               </Tap>
@@ -349,7 +349,7 @@ export default function Home() {
             style={[styles.line, { gap: 7, flexShrink: 1 }]}
           >
             <Icon name="folder" size={15} color={colors.secondary} />
-            <T variant="caption" tone="secondary" numberOfLines={1}>
+            <T variant="footnote" tone="secondary" numberOfLines={1}>
               {project?.name ??
                 (connected ? "Choose a project" : "No computer connected")}
             </T>
@@ -368,7 +368,7 @@ export default function Home() {
                 size={15}
                 color={colors.secondary}
               />
-              <T variant="caption" tone="secondary" numberOfLines={1}>
+              <T variant="footnote" tone="secondary" numberOfLines={1}>
                 {workspaceLabel}
               </T>
               <Icon name="chevron.down" size={9} color={colors.muted} />
@@ -380,7 +380,7 @@ export default function Home() {
             label="View agent activity"
             onPress={() => router.push("/activity")}
           >
-            <T variant="caption" tone="accent">
+            <T variant="footnote" tone="accent">
               {app.approvals.length
                 ? `${app.approvals.length} needs you`
                 : `${active} working`}

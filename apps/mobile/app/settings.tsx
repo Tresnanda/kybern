@@ -38,7 +38,7 @@ function SettingsRail({
   const { colors } = useTheme();
   return (
     <View style={{ marginBottom: 18 }}>
-      <T variant="caption" tone="secondary" style={{ marginBottom: 4, paddingHorizontal: 12 }}>
+      <T variant="footnote" tone="secondary" style={{ marginBottom: 4, paddingHorizontal: 12 }}>
         {label}
       </T>
       {items.map((item) => {
@@ -211,7 +211,7 @@ export default function SettingsScreen() {
             {SETTINGS_TITLES[selected] ?? "Settings"}
           </T>
           <SettingsBody category={selected} />
-          <T variant="caption" tone="muted" style={{ marginTop: 24 }}>
+          <T variant="footnote" tone="muted" style={{ marginTop: 24 }}>
             {version}
           </T>
         </ScrollView>
@@ -254,7 +254,7 @@ export default function SettingsScreen() {
       <Group title={environment ? `On ${environment.name}` : "On your computer"}>
         <View style={card}>{computer.map(row)}</View>
       </Group>
-      <T variant="caption" tone="muted">
+      <T variant="footnote" tone="muted">
         {version}
       </T>
     </Page>

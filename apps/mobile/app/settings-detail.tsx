@@ -186,7 +186,7 @@ export function SettingsBody({ category }: { category: string }) {
               </View>
             ))}
           </View>
-          <T variant="caption" tone="secondary" style={{ marginTop: 12 }}>
+          <T variant="footnote" tone="secondary" style={{ marginTop: 12 }}>
             Ink · Clean whites and neutral charcoal.
           </T>
         </Group>
@@ -239,7 +239,7 @@ export function SettingsBody({ category }: { category: string }) {
                   )
                 }
               >
-                <T variant="caption" tone="secondary">
+                <T variant="footnote" tone="secondary">
                   Forget connection
                 </T>
               </Tap>
@@ -340,7 +340,7 @@ export function SettingsBody({ category }: { category: string }) {
                   detail={`${usage?.total.turns ?? 0} turns`}
                   trailing={
                     <T
-                      variant="heading"
+                      variant="headline"
                       style={{ fontVariant: ["tabular-nums"] }}
                     >
                       ${(usage?.total.cost_usd ?? 0).toFixed(2)}
@@ -360,7 +360,7 @@ export function SettingsBody({ category }: { category: string }) {
                           usageGroup === g ? colors.raised : undefined,
                       }}
                     >
-                      <T variant="caption" tone="secondary">
+                      <T variant="footnote" tone="secondary">
                         {g.charAt(0).toUpperCase() + g.slice(1)}
                       </T>
                     </Tap>
@@ -373,7 +373,7 @@ export function SettingsBody({ category }: { category: string }) {
                     detail={`${row.turns} turns · ${(row.usage.input_tokens + row.usage.output_tokens).toLocaleString()} tokens`}
                     trailing={
                       <T
-                        variant="caption"
+                        variant="footnote"
                         style={{ fontVariant: ["tabular-nums"] }}
                       >
                         ${row.cost_usd.toFixed(2)}
@@ -423,7 +423,7 @@ export function SettingsBody({ category }: { category: string }) {
             {category === "system" && (
               <Group title="Computer resources">
                 {activity && (
-                  <T variant="caption" tone="secondary">
+                  <T variant="footnote" tone="secondary">
                     {activity.live_sessions} agent sessions ·{" "}
                     {activity.terminals} terminals · {activity.running_threads}{" "}
                     running threads
@@ -489,11 +489,10 @@ export function SettingsBody({ category }: { category: string }) {
                       title="Kybern daemon"
                       detail={daemonUpdate?.message}
                       trailing={
-                        <T variant="caption">{daemonUpdate?.current_version}</T>
+                        <T variant="footnote">{daemonUpdate?.current_version}</T>
                       }
                     />
                     <Button
-                      secondary
                       onPress={() => {
                         void rpc("daemon_update.check", {})
                           .then(setDaemonUpdate)
@@ -659,12 +658,11 @@ function BackgroundLimits({
           }}
         />
       ))}
-      <T variant="caption" tone="secondary">
+      <T variant="footnote" tone="secondary">
         Use 0 to turn a limit off.
       </T>
       <ErrorBanner error={error} />
       <Button
-        secondary
         busy={busy}
         onPress={() => {
           if (
@@ -729,7 +727,6 @@ function ProviderConfiguration({
       />
       <ErrorBanner error={error} />
       <Button
-        secondary
         busy={busy}
         onPress={() => {
           try {

@@ -189,7 +189,7 @@ export function Changes({ threadId }: { threadId: string }) {
             diff
           />
           {truncated && (
-            <T variant="caption" tone="secondary">
+            <T variant="footnote" tone="secondary">
               This patch is truncated. Review the complete diff on your
               computer.
             </T>
@@ -224,14 +224,14 @@ export function Changes({ threadId }: { threadId: string }) {
           {diff?.files.length ? (
             <>
               <View style={styles.line}>
-                <T variant="caption" tone="secondary">
+                <T variant="footnote" tone="secondary">
                   {diff.files.length} changed{" "}
                   {diff.files.length === 1 ? "file" : "files"}
                 </T>
-                <T variant="caption" tone="positive">
+                <T variant="footnote" tone="positive">
                   +{diff.files.reduce((n, f) => n + f.additions, 0)}
                 </T>
-                <T variant="caption" tone="negative">
+                <T variant="footnote" tone="negative">
                   −{diff.files.reduce((n, f) => n + f.deletions, 0)}
                 </T>
               </View>
@@ -244,10 +244,10 @@ export function Changes({ threadId }: { threadId: string }) {
                   onPress={() => void file(f.path)}
                   trailing={
                     <View style={{ flexDirection: "row", gap: 5 }}>
-                      <T variant="caption" tone="positive">
+                      <T variant="footnote" tone="positive">
                         +{f.additions}
                       </T>
-                      <T variant="caption" tone="negative">
+                      <T variant="footnote" tone="negative">
                         −{f.deletions}
                       </T>
                     </View>
@@ -333,7 +333,7 @@ export function Changes({ threadId }: { threadId: string }) {
                 placeholder="What changed and how you tested it"
                 multiline
               />
-              <T variant="caption" tone="secondary">
+              <T variant="footnote" tone="secondary">
                 Commit your changes first. Creating a pull request pushes this
                 branch to GitHub.
               </T>
@@ -365,12 +365,12 @@ function Counts({ additions, deletions }: { additions: number; deletions: number
   return (
     <View style={{ flexDirection: "row", gap: 5 }}>
       {additions > 0 && (
-        <T variant="caption" tone="positive" style={{ fontVariant: ["tabular-nums"] }}>
+        <T variant="footnote" tone="positive" style={{ fontVariant: ["tabular-nums"] }}>
           +{additions}
         </T>
       )}
       {deletions > 0 && (
-        <T variant="caption" tone="negative" style={{ fontVariant: ["tabular-nums"] }}>
+        <T variant="footnote" tone="negative" style={{ fontVariant: ["tabular-nums"] }}>
           −{deletions}
         </T>
       )}
@@ -403,7 +403,7 @@ function GroupedChanges({
   return (
     <>
       <View style={[styles.line, { gap: 6, marginTop: -6 }]}>
-        <T variant="caption" tone="secondary">
+        <T variant="footnote" tone="secondary">
           {files} changed {files === 1 ? "file" : "files"} · {changedReposLabel(changed.filter((group) => group.repo.path !== "").length, repos.length)}
         </T>
         <Counts additions={groups.reduce((n, g) => n + g.additions, 0)} deletions={groups.reduce((n, g) => n + g.deletions, 0)} />
@@ -412,13 +412,13 @@ function GroupedChanges({
         <View key={group.repo.path || "other"}>
           <View style={[styles.line, { gap: 6, marginTop: 6, marginBottom: group.files.length ? 2 : 10 }]}>
             <Icon name="shippingbox" size={14} color={group.files.length ? colors.ink : colors.secondary} />
-            <T variant="caption" tone={group.files.length ? "ink" : "secondary"} style={{ flex: 1, fontWeight: group.files.length ? "600" : "400" }}>
+            <T variant="footnote" tone={group.files.length ? "ink" : "secondary"} style={{ flex: 1, fontWeight: group.files.length ? "600" : "400" }}>
               {group.repo.name}
             </T>
             {group.files.length ? (
               <Counts additions={group.additions} deletions={group.deletions} />
             ) : (
-              <T variant="caption" tone="secondary">
+              <T variant="footnote" tone="secondary">
                 {busy ? "" : "No changes"}
               </T>
             )}

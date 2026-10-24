@@ -112,7 +112,7 @@ export default function Workspace() {
           gap: 14,
         }}
       >
-        <T variant="caption" tone="secondary">
+        <T variant="footnote" tone="secondary">
           {project?.name ?? "Workspace"}
           {thread?.worktree ? ` / ${thread.worktree.branch}` : ""}
         </T>
@@ -139,7 +139,6 @@ export default function Workspace() {
                 />
                 <View style={{ marginTop: 12 }}>
                   <Button
-                    secondary
                     busy={busy}
                     disabled={!title.trim() || title === thread.title}
                     onPress={() =>
@@ -233,7 +232,7 @@ export default function Workspace() {
                 {tasks.length ? (
                   tasks.map((task) => <TaskRow key={task.id} task={task} />)
                 ) : (
-                  <T variant="caption" tone="secondary">
+                  <T variant="footnote" tone="secondary">
                     No background agents or processes.
                   </T>
                 )}
@@ -255,7 +254,7 @@ export default function Workspace() {
                         : undefined
                     }
                     trailing={
-                      <T variant="caption">
+                      <T variant="footnote">
                         {Math.round(limit.used_percent)}% used
                       </T>
                     }
@@ -263,7 +262,7 @@ export default function Workspace() {
                 ))}
                 {!snapshot.providerUsage?.context &&
                   !snapshot.providerUsage?.limits?.length && (
-                    <T variant="caption" tone="secondary">
+                    <T variant="footnote" tone="secondary">
                       This agent has not reported its limits.
                     </T>
                   )}
@@ -308,7 +307,7 @@ export default function Workspace() {
                   />
                 ))}
                 {!checkpoints.length && (
-                  <T variant="caption" tone="secondary">
+                  <T variant="footnote" tone="secondary">
                     Checkpoints appear after completed turns.
                   </T>
                 )}

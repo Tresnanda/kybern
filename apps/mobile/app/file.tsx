@@ -70,7 +70,7 @@ export default function FileScreen() {
         }}
       />
       <View style={{ paddingHorizontal: 20, paddingVertical: 10, gap: 12 }}>
-        <T variant="caption" tone="secondary" selectable>
+        <T variant="footnote" tone="secondary" selectable>
           {path}{line ? ` · Line ${line}` : ""}
         </T>
         {markdown && (
@@ -93,7 +93,7 @@ export default function FileScreen() {
                   backgroundColor: raw === source ? colors.surface : undefined,
                 }}
               >
-                <T variant="caption">{source ? "Raw" : "Preview"}</T>
+                <T variant="footnote">{source ? "Raw" : "Preview"}</T>
               </Tap>
             ))}
           </View>
@@ -126,7 +126,7 @@ export default function FileScreen() {
           )
         ) : null}
         {file?.truncated && (
-          <T variant="caption" tone="secondary" style={{ padding: 20 }}>
+          <T variant="footnote" tone="secondary" style={{ padding: 20 }}>
             Showing the first 128 KB.
           </T>
         )}
@@ -135,7 +135,6 @@ export default function FileScreen() {
         style={{ paddingHorizontal: 20, paddingTop: 10, paddingBottom: 30 }}
       >
         <Button
-          secondary
           onPress={() => {
             addContext(threadId ?? "new", { type: "file_mention", path });
             if (threadId)

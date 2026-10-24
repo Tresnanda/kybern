@@ -58,7 +58,7 @@ export function Working({
           />
         ))}
       </View>
-      <T variant="caption" tone="accent">
+      <T variant="footnote" tone="accent">
         {label}
       </T>
     </View>

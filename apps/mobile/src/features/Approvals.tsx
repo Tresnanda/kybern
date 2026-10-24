@@ -74,7 +74,7 @@ export function AsyncQuestions({
         gap: 20,
       }}
     >
-      <T variant="heading">A quick question</T>
+      <T variant="headline">A quick question</T>
       <ApprovalCard
         busy={busy}
         questions={request.questions.map((q, i) => ({
@@ -216,7 +216,7 @@ function DecisionPanel({ approval }: { approval: ApprovalRequest }) {
           size={19}
           color={colors.accent}
         />
-        <T variant="heading">
+        <T variant="headline">
           {userInput ? "Question from agent" : "Approval needed"}
         </T>
       </View>
@@ -228,7 +228,7 @@ function DecisionPanel({ approval }: { approval: ApprovalRequest }) {
         </T>
       )}
       {connector?.subtitle && (
-        <T variant="caption" tone="secondary">
+        <T variant="footnote" tone="secondary">
           {connector.subtitle}
         </T>
       )}
@@ -317,7 +317,6 @@ function DecisionPanel({ approval }: { approval: ApprovalRequest }) {
             })}
           {isUrl && (
             <Button
-              secondary
               onPress={() => {
                 const url = string(input.url);
                 if (/^https?:\/\//i.test(url))
@@ -336,7 +335,7 @@ function DecisionPanel({ approval }: { approval: ApprovalRequest }) {
             label={details ? "Hide request details" : "View request details"}
             onPress={() => setDetails(!details)}
           >
-            <T variant="caption" tone="secondary">
+            <T variant="footnote" tone="secondary">
               {details ? "Hide details" : "View request details"}
             </T>
           </Tap>
@@ -352,7 +351,7 @@ function DecisionPanel({ approval }: { approval: ApprovalRequest }) {
       {userInput ? (
         <>
           {!questions.length && (
-            <Button
+            <Button role="prominent"
               busy={busy}
               disabled={isUrl && !urlOpened}
               onPress={() =>
@@ -368,7 +367,6 @@ function DecisionPanel({ approval }: { approval: ApprovalRequest }) {
             </Button>
           )}
           <Button
-            secondary
             disabled={busy}
             onPress={() => void respond({ decision: "deny" })}
           >
@@ -380,7 +378,6 @@ function DecisionPanel({ approval }: { approval: ApprovalRequest }) {
           <View style={{ flexDirection: "row", gap: 10 }}>
             <View style={{ flex: 1 }}>
               <Button
-                secondary
                 disabled={busy}
                 onPress={() => void respond({ decision: "deny" })}
               >
@@ -388,7 +385,7 @@ function DecisionPanel({ approval }: { approval: ApprovalRequest }) {
               </Button>
             </View>
             <View style={{ flex: 1 }}>
-              <Button
+              <Button role="prominent"
                 busy={busy}
                 onPress={() =>
                   void respond(
@@ -425,7 +422,7 @@ function DecisionPanel({ approval }: { approval: ApprovalRequest }) {
               }
             >
               <T
-                variant="caption"
+                variant="footnote"
                 tone="secondary"
                 style={{ textAlign: "center" }}
               >

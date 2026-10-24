@@ -114,8 +114,8 @@ export function Artifacts({ thread }: { thread: Thread }) {
     <View style={{ gap: 20 }}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
         <View style={{ flex: 1, gap: 4 }}>
-          <T variant="heading">Artifacts</T>
-          <T variant="caption" tone="secondary">
+          <T variant="headline">Artifacts</T>
+          <T variant="footnote" tone="secondary">
             Pages and tools from this conversation
           </T>
         </View>
@@ -128,7 +128,7 @@ export function Artifacts({ thread }: { thread: Thread }) {
       </View>
       <ErrorBanner error={error} />
       {!!notice && (
-        <T variant="caption" tone="secondary">
+        <T variant="footnote" tone="secondary">
           {notice}
         </T>
       )}
@@ -151,7 +151,7 @@ export function Artifacts({ thread }: { thread: Thread }) {
             <Icon name="doc.badge.plus" size={22} />
             <View style={{ flex: 1, gap: 3 }}>
               <T variant="label">Open a generated file</T>
-              <T variant="caption" tone="secondary">
+              <T variant="footnote" tone="secondary">
                 Preview HTML or Markdown
               </T>
             </View>
@@ -204,12 +204,12 @@ export function Artifacts({ thread }: { thread: Thread }) {
       {!items.length && (
         <View style={{ paddingVertical: 32, gap: 12, alignItems: "center" }}>
           <Icon name="doc.text" size={32} color={colors.muted} />
-          <T variant="heading">
+          <T variant="headline">
             {busy ? "Loading artifacts…" : "Your work will appear here"}
           </T>
           {!busy && (
             <T
-              variant="caption"
+              variant="footnote"
               tone="secondary"
               style={{ textAlign: "center", maxWidth: 280 }}
             >
@@ -252,7 +252,7 @@ export function Artifacts({ thread }: { thread: Thread }) {
               <View style={{ flex: 1, gap: 4 }}>
                 <T variant="label">{item.title}</T>
                 <T
-                  variant="caption"
+                  variant="footnote"
                   tone={item.status === "failed" ? "negative" : "secondary"}
                 >
                   {item.status === "published"
@@ -271,7 +271,7 @@ export function Artifacts({ thread }: { thread: Thread }) {
               />
             </View>
             {!!item.path && (
-              <T variant="caption" tone="secondary" numberOfLines={2}>
+              <T variant="footnote" tone="secondary" numberOfLines={2}>
                 {item.path}
               </T>
             )}
@@ -338,7 +338,7 @@ export function Artifacts({ thread }: { thread: Thread }) {
         );
       })}
       {before !== null && (
-        <Button secondary disabled={busy} onPress={() => void older()}>
+        <Button disabled={busy} onPress={() => void older()}>
           Load earlier artifacts
         </Button>
       )}

@@ -135,7 +135,7 @@ export default function Projects() {
           />
           <T variant="title">{selected.name}</T>
           <T
-            variant="caption"
+            variant="footnote"
             tone="secondary"
             selectable
             style={{ marginVertical: 10 }}
@@ -254,7 +254,6 @@ export default function Projects() {
           <Group title="Open pull requests">
             {!prsLoaded ? (
               <Button
-                secondary
                 busy={loadingPrs}
                 onPress={() => void loadPullRequests()}
               >
@@ -310,7 +309,6 @@ export default function Projects() {
           )}
           <View style={{ marginTop: 24 }}>
             <Button
-              secondary
               icon="plus"
               disabled={app.status !== "open"}
               onPress={() => router.push("/add-project")}

@@ -33,7 +33,7 @@ export function BackToMain({ thread }: { thread?: Thread | null }) {
         style={[styles.line, { minHeight: 48, gap: 8 }]}
       >
         <Icon name="arrow.turn.up.left" size={15} />
-        <T variant="caption" numberOfLines={1} style={{ flex: 1 }}>
+        <T variant="footnote" numberOfLines={1} style={{ flex: 1 }}>
           Back to main conversation
         </T>
       </Tap>

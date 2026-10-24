@@ -213,7 +213,7 @@ export function UserMessageBubble({
         )}
         {pending && !pending.receipt && !matching && (
           <T
-            variant="caption"
+            variant="footnote"
             tone="muted"
             accessibilityLiveRegion="polite"
             style={{ position: "absolute", right: 0, bottom: -23 }}

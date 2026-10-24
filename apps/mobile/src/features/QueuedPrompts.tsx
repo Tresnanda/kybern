@@ -9,7 +9,7 @@ import { ErrorBanner, Field, Icon, IconButton, styles, T, Tap } from "../ui/prim
 export function QueuedPrompts({ items }: { items: QueuedMessage[] }) {
   return <View style={{ width: "100%", maxWidth: 760, alignSelf: "center", paddingHorizontal: 20 }}>
     <ScrollView style={{ maxHeight: 200 }} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 8 }}>
-      <T variant="caption" tone="secondary">Queued · {items.length}</T>
+      <T variant="footnote" tone="secondary">Queued · {items.length}</T>
       {items.map(item => <QueuedPrompt key={item.id} item={item} />)}
     </ScrollView>
   </View>;
@@ -39,12 +39,12 @@ function QueuedPrompt({ item }: { item: QueuedMessage }) {
     <View style={styles.spread}>
       {edit === null ? <>
         <Tap static label="Show queued prompt" expanded={showBody} onPress={() => setShowBody(value => !value)} style={{ flex: 1, minHeight: 48, justifyContent: "center" }}>
-          <View style={[styles.line, { gap: 8 }]}><T variant="caption" numberOfLines={showBody ? undefined : 2} style={{ flex: 1 }}>{promptText(item.message) || relayed || "Attached context"}</T><Icon name={showBody ? "chevron.up" : "chevron.down"} size={12} /></View>
+          <View style={[styles.line, { gap: 8 }]}><T variant="footnote" numberOfLines={showBody ? undefined : 2} style={{ flex: 1 }}>{promptText(item.message) || relayed || "Attached context"}</T><Icon name={showBody ? "chevron.up" : "chevron.down"} size={12} /></View>
         </Tap>
         {!relayed && <IconButton name="pencil" label="Edit queued prompt" disabled={!connected || busy} onPress={() => setEdit(promptText(item.message))} />}
       </> : <View style={styles.line}>
-        <Tap label="Save queued prompt" disabled={!connected || busy || (!edit.trim() && !contextCount)} onPress={() => void run(true)} style={{ minHeight: 44, padding: 12 }}><T variant="caption">Save</T></Tap>
-        <Tap label="Cancel edit" disabled={busy} onPress={() => setEdit(null)} style={{ minHeight: 44, padding: 12 }}><T variant="caption">Cancel</T></Tap>
+        <Tap label="Save queued prompt" disabled={!connected || busy || (!edit.trim() && !contextCount)} onPress={() => void run(true)} style={{ minHeight: 44, padding: 12 }}><T variant="footnote">Save</T></Tap>
+        <Tap label="Cancel edit" disabled={busy} onPress={() => setEdit(null)} style={{ minHeight: 44, padding: 12 }}><T variant="footnote">Cancel</T></Tap>
       </View>}
       <IconButton name="xmark" label="Remove queued message" disabled={!connected || busy} onPress={() => void run(false)} />
     </View>
