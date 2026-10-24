@@ -20,7 +20,7 @@ import {
 } from '../../../packages/kybern-client/src/transcript.ts'
 import { isChildThread } from '../../../packages/kybern-client/src/subagents.ts'
 import type { Project, Thread, ThreadActivitySummary, ThreadEvent, ThreadId } from '../../../packages/kybern-client/src/types.ts'
-import { mergeOptimisticThreads } from '../../../packages/kybern-client/src/newChat.ts'
+import { mergeIntoCurrent } from '../../../packages/kybern-client/src/newChat.ts'
 import { newChats } from './composer/newChats.ts'
 
 export interface AppState {
@@ -317,10 +317,8 @@ let listedThreads: Thread[] = []
 const optimisticThreads = new WeakSet<Thread>()
 /** The list with the new chats merged in. Without `base` it is the current list (live events and local changes included),
  *  never the last `loadLists()` snapshot, which would bring back archived threads and old statuses and titles. */
-function withNewChats(base = state.threads.filter(t => !optimisticThreads.has(t))): Thread[] {
-  const local = newChats.unlisted()
-  for (const thread of local) optimisticThreads.add(thread)
-  const { threads, listed } = mergeOptimisticThreads(base, local)
+function withNewChats(base: readonly Thread[] = state.threads): Thread[] {
+  const { threads, listed } = mergeIntoCurrent(base, newChats.unlisted(), optimisticThreads)
   if (listed.length) queueMicrotask(() => newChats.listed(listed))
   return threads
 }

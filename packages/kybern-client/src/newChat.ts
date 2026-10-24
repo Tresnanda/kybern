@@ -115,6 +115,16 @@ export function mergeOptimisticThreads(server: readonly Thread[], local: Iterabl
   return { threads: [...pinned, ...extra.sort((a, b) => b.created_at.localeCompare(a.created_at)), ...rest], listed };
 }
 
+/**
+ * `mergeOptimisticThreads` over the client's current list rather than its last full load: live
+ * updates (an archive, a rename, a status) stay, and optimistic objects merged earlier (`seen`) are
+ * taken out first so a stale copy never outlives its record or shadows the daemon's.
+ */
+export function mergeIntoCurrent(current: readonly Thread[], local: readonly Thread[], seen: WeakSet<Thread>): { threads: Thread[]; listed: ThreadId[] } {
+  for (const thread of local) seen.add(thread);
+  return mergeOptimisticThreads(current.filter((thread) => !seen.has(thread)), local);
+}
+
 /** Where a new chat's create stands: in flight, done (the daemon has the thread), or failed. */
 export type NewChatState = "creating" | "created" | "failed";
 

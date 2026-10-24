@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { clientThreadIds, createNewChats, mergeOptimisticThreads, optimisticThread, titleFromMessage, uuidv7, versionAtLeast } from "../src/newChat.ts";
+import { clientThreadIds, createNewChats, mergeIntoCurrent, mergeOptimisticThreads, optimisticThread, titleFromMessage, uuidv7, versionAtLeast } from "../src/newChat.ts";
 
 const text = (value) => ({ parts: [{ type: "text", text: value }] });
 const thread = (id, extra = {}) => optimisticThread({
@@ -107,4 +107,20 @@ test("a create that failed here but reached the daemon is dropped once the daemo
   assert.equal(chats.get("t1").state, "failed");
   chats.listed(["t1"]);
   assert.equal(chats.get("t1"), undefined, "the daemon's thread loads like any other");
+});
+
+test("merging into the current list keeps live changes and the daemon's copy of a new thread", () => {
+  const seen = new WeakSet();
+  const loaded = [{ ...thread("a"), status: "running" }, { ...thread("b"), status: "idle" }];
+  const fresh = thread("new");
+  let current = mergeIntoCurrent(loaded, [fresh], seen).threads;
+  // Live events since the last full load: a finished, b archived (dropped from the list).
+  current = current.filter((t) => t.id !== "b").map((t) => (t.id === "a" ? { ...t, status: "idle" } : t));
+  const failed = { ...fresh, status: "failed" };
+  const next = mergeIntoCurrent(current, [failed], seen).threads;
+  assert.deepEqual(next.map((t) => [t.id, t.status]), [["new", "failed"], ["a", "idle"]], "no archived row comes back, no status reverts, no stale copy");
+  const server = { ...fresh, cwd: "/repo", status: "idle" };
+  const settled = mergeIntoCurrent([server, ...next.filter((t) => t.id !== "new")], [failed], seen);
+  assert.equal(settled.threads.find((t) => t.id === "new"), server, "the daemon's copy wins");
+  assert.deepEqual(settled.listed, ["new"]);
 });
