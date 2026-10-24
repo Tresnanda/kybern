@@ -1,61 +1,68 @@
-import { router } from "expo-router";
+// Resume a session another coding agent saved on the computer.
+import { router, Stack } from "expo-router";
 import { useEffect, useState } from "react";
 import { View } from "react-native";
+import { Section } from "../src/features/settings/common";
 import { type ProviderKind, type SavedSession } from "../src/state/protocol";
 import { errorText, refresh, rpc, useApp } from "../src/state/runtime";
-import {
-  Button,
-  Empty,
-  ErrorBanner,
-  Field,
-  Page,
-  Row,
-  T,
-  Tap,
-} from "../src/ui/primitives";
+import { ListRow } from "../src/ui/List";
+import { Button, Empty, ErrorBanner, Page } from "../src/ui/primitives";
 import { ProviderMark } from "../src/ui/ProviderMark";
-import { useTheme } from "../src/ui/theme";
+import { ListSearch } from "../src/ui/Search";
+import { space, useTheme } from "../src/ui/theme";
 import { Working } from "../src/ui/Working";
+
+const homeless = (path: string) => path.replace(/^\/(Users|home)\/[^/]+/, "~");
+function ago(at: string) {
+  const minutes = Math.max(0, (Date.now() - Date.parse(at)) / 60000);
+  if (!Number.isFinite(minutes)) return undefined;
+  if (minutes < 1) return "Now";
+  if (minutes < 60) return `${Math.floor(minutes)}m`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)}h`;
+  return `${Math.floor(minutes / 1440)}d`;
+}
+
 export default function Sessions() {
   const app = useApp();
   const { colors } = useTheme();
-  const [provider, setProvider] = useState<ProviderKind>("claude-code");
+  const [provider, setProvider] = useState<ProviderKind>(
+    () => app.providers.find((p) => p.available)?.kind ?? "claude-code",
+  );
   const [query, setQuery] = useState("");
   const [sessions, setSessions] = useState<SavedSession[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const agent = app.providers.find((p) => p.kind === provider);
+  const unavailable = agent && !agent.available;
   useEffect(() => {
+    if (unavailable) {
+      setSessions([]);
+      setCursor(null);
+      return;
+    }
     let alive = true;
     setBusy(true);
     const timer = setTimeout(() => {
-      void rpc("sessions.list", { provider, query: query || undefined })
+      rpc("sessions.list", { provider, query: query || undefined })
         .then((r) => {
-          if (alive) {
-            setSessions(r.sessions);
-            setCursor(r.next_cursor);
-            setError("");
-          }
+          if (!alive) return;
+          setSessions(r.sessions);
+          setCursor(r.next_cursor);
+          setError("");
         })
-        .catch((e) => {
-          if (alive) setError(errorText(e));
-        })
-        .finally(() => {
-          if (alive) setBusy(false);
-        });
+        .catch((e) => alive && setError(errorText(e)))
+        .finally(() => alive && setBusy(false));
     }, 200);
     return () => {
       alive = false;
       clearTimeout(timer);
     };
-  }, [provider, query]);
+  }, [provider, query, unavailable]);
   async function resume(session: SavedSession) {
     setBusy(true);
     try {
-      const t = await rpc("sessions.resume", {
-        provider: session.provider,
-        session_id: session.id,
-      });
+      const t = await rpc("sessions.resume", { provider: session.provider, session_id: session.id });
       await refresh();
       router.replace({ pathname: "/thread/[id]", params: { id: t.id } });
     } catch (e) {
@@ -64,96 +71,73 @@ export default function Sessions() {
       setBusy(false);
     }
   }
+  const more = () => {
+    if (!cursor) return;
+    setBusy(true);
+    rpc("sessions.list", { provider, query: query || undefined, cursor })
+      .then((r) => {
+        setSessions((s) => [...s, ...r.sessions]);
+        setCursor(r.next_cursor);
+      })
+      .catch((e) => setError(errorText(e)))
+      .finally(() => setBusy(false));
+  };
   return (
-    <Page>
-      <T tone="secondary" style={{ marginBottom: 24 }}>
-        Continue work you started in another coding agent.
-      </T>
-      <View
-        style={{
-          flexDirection: "row",
-          flexWrap: "wrap",
-          gap: 8,
-          marginBottom: 20,
-        }}
-      >
-        {app.providers.map((p) => (
-          <Tap
-            key={p.kind}
-            label={p.display_name}
-            onPress={() => setProvider(p.kind)}
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              gap: 8,
-              paddingHorizontal: 14,
-              borderRadius: 22,
-              backgroundColor: provider === p.kind ? colors.ink : colors.raised,
-            }}
-          >
-            <ProviderMark
-              kind={p.kind}
-              size={17}
-              color={provider === p.kind ? colors.inverse : colors.ink}
-            />
-            <T
-              variant="footnote"
-              tone={provider === p.kind ? "inverse" : "secondary"}
-            >
-              {p.display_name}
-            </T>
-          </Tap>
-        ))}
-      </View>
-      <Field
-        label="Find a session"
-        value={query}
-        onChangeText={setQuery}
-        placeholder="Search title or project"
-      />
+    <Page grouped>
+      <Stack.Screen options={{ headerStyle: { backgroundColor: colors.grouped } }} />
+      <ListSearch value={query} onChangeText={setQuery} placeholder="Search title or project" />
+      <Section first footer="Continue work you started in another coding agent.">
+        <ListRow
+          title="Agent"
+          leading={<ProviderMark kind={provider} size={20} />}
+          value={agent?.display_name ?? provider}
+          valueMenu={app.providers.map((p) => ({
+            title: p.display_name,
+            subtitle: p.available ? undefined : (p.unavailable_reason ?? "Not set up on your computer"),
+            checked: p.kind === provider,
+            onPress: () => setProvider(p.kind),
+          }))}
+        />
+      </Section>
       <ErrorBanner error={error} />
-      {busy && (
-        <View style={{ marginVertical: 20 }}>
+      {unavailable ? (
+        <Empty
+          icon="exclamationmark.circle"
+          title={`${agent.display_name} isn't set up`}
+          detail={agent.unavailable_reason ?? `Install ${agent.display_name} on your computer to resume its sessions.`}
+        />
+      ) : busy && !sessions.length ? (
+        <View style={{ marginVertical: space.xl }}>
           <Working label="Loading sessions" />
         </View>
-      )}
-      {sessions.map((s) => (
-        <Row
-          key={s.id}
-          title={s.title || "Untitled session"}
-          detail={s.cwd}
-          icon="clock.arrow.circlepath"
-          onPress={() => void resume(s)}
-        />
-      ))}
-      {!busy && !sessions.length && (
+      ) : !sessions.length ? (
         <Empty
           icon="clock"
-          title="No sessions here yet."
-          detail="Sessions saved by this agent on your computer will appear here."
+          title={query ? `No sessions match “${query}”` : "No sessions yet"}
+          detail={query ? "Try another title or project." : `Sessions ${agent?.display_name ?? "this agent"} saves on your computer show up here.`}
         />
+      ) : (
+        <Section title="Sessions">
+          {sessions.map((s) => (
+            <ListRow
+              key={s.id}
+              title={s.title || "Untitled session"}
+              subtitle={homeless(s.cwd)}
+              subtitleLines={1}
+              meta={ago(s.updated_at)}
+              disabled={busy}
+              onPress={() => void resume(s)}
+            />
+          ))}
+        </Section>
       )}
-      {cursor && (
-        <Button
-          busy={busy}
-          onPress={() => {
-            setBusy(true);
-            void rpc("sessions.list", {
-              provider,
-              query: query || undefined,
-              cursor,
-            })
-              .then((r) => {
-                setSessions((s) => [...s, ...r.sessions]);
-                setCursor(r.next_cursor);
-              })
-              .catch((e) => setError(errorText(e)))
-              .finally(() => setBusy(false));
-          }}
-        >
-          Load more sessions
-        </Button>
-      )}
+      {cursor && !unavailable ? (
+        <View style={{ marginTop: space.md }}>
+          <Button role="plain" busy={busy} onPress={more}>
+            Show more sessions
+          </Button>
+        </View>
+      ) : null}
     </Page>
   );
 }
