@@ -2,7 +2,7 @@
 // Native large title and search; a state filter; one section per project.
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
-import { FlatList, Platform, RefreshControl, View } from "react-native";
+import { FlatList, RefreshControl, View } from "react-native";
 import { classifyPrError } from "../../../packages/kybern-client/src/prReview";
 import {
   PR_FILTERS,
@@ -17,7 +17,7 @@ import { errorText, rpc, useApp } from "../src/state/runtime";
 import { HeaderActions } from "../src/ui/ActionMenu";
 import { SectionHeader } from "../src/ui/List";
 import { Button, Empty, ErrorBanner } from "../src/ui/primitives";
-import { ListSearch } from "../src/ui/Search";
+import { SearchField } from "../src/ui/Search";
 import { Segmented } from "../src/ui/Segmented";
 import { space, useTheme } from "../src/ui/theme";
 import { Working } from "../src/ui/Working";
@@ -98,7 +98,7 @@ export default function PullRequestsScreen() {
 
   const header = (
     <View style={{ gap: space.md, paddingHorizontal: space.lg, paddingTop: space.sm, paddingBottom: space.sm }}>
-      {Platform.OS !== "ios" && <ListSearch value={query} onChangeText={setQuery} placeholder="Title, branch or number" />}
+      <SearchField value={query} onChangeText={setQuery} placeholder="Title, branch or number" />
       <Segmented compact label="Show pull requests" options={PR_FILTERS} value={filter} onChange={setFilter} />
       {otherErrors.length > 0 && (
         <ErrorBanner error={otherErrors.join("\n")} onRetry={() => setRevision((n) => n + 1)} />
@@ -106,9 +106,8 @@ export default function PullRequestsScreen() {
     </View>
   );
   return (
-    <>
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
       <Stack.Screen options={{ title: project?.name ?? "Pull requests", headerLargeTitleEnabled: true }} />
-      {Platform.OS === "ios" && <ListSearch value={query} onChangeText={setQuery} placeholder="Title, branch or number" />}
       {githubProjects.length > 1 && (
         <HeaderActions
           menu={{
@@ -198,6 +197,6 @@ export default function PullRequestsScreen() {
           )
         }
       />
-    </>
+    </View>
   );
 }

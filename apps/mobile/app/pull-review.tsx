@@ -13,16 +13,17 @@ import type { PrActionKind } from "../src/state/protocol";
 import { usePullRequest } from "../src/state/pulls";
 import { errorText } from "../src/state/runtime";
 import { Button, ErrorBanner, Field, T } from "../src/ui/primitives";
-import { Segmented } from "../src/ui/Segmented";
+import { InsetGroup, ListRow } from "../src/ui/List";
+import type { IconName } from "../src/ui/icons";
 import { showToast } from "../src/ui/Toast";
 import { space, useTheme } from "../src/ui/theme";
 import { haptics } from "../src/ui/haptics";
 
 type Kind = Extract<PrActionKind, "comment" | "approve" | "request_changes">;
-const KINDS: readonly { value: Kind; label: string }[] = [
-  { value: "comment", label: "Comment" },
-  { value: "approve", label: "Approve" },
-  { value: "request_changes", label: "Request changes" },
+const KINDS: readonly { value: Kind; label: string; detail: string; icon: IconName }[] = [
+  { value: "comment", label: "Comment", detail: "Feedback without a verdict", icon: "text.bubble" },
+  { value: "approve", label: "Approve", detail: "Ready to merge", icon: "checkmark.circle" },
+  { value: "request_changes", label: "Request changes", detail: "Must be addressed before merging", icon: "exclamationmark.circle" },
 ];
 const VERB: Record<Kind, string> = { comment: "Post comment", approve: "Approve", request_changes: "Request changes" };
 const DONE: Record<Kind, string> = { comment: "Comment posted", approve: "Pull request approved", request_changes: "Changes requested" };
@@ -63,7 +64,21 @@ export default function PullReviewSheet() {
             {pr.detail.pull_request.title}
           </T>
         )}
-        <Segmented label="Review type" options={KINDS} value={kind} onChange={setKind} />
+        <InsetGroup>
+          {KINDS.map((option) => (
+            <ListRow
+              key={option.value}
+              title={option.label}
+              subtitle={option.detail}
+              leading={option.icon}
+              checked={kind === option.value}
+              onPress={() => {
+                haptics.select();
+                setKind(option.value);
+              }}
+            />
+          ))}
+        </InsetGroup>
         <Field
           label={kind === "approve" ? "Comment (optional)" : kind === "comment" ? "Comment" : "What needs to change"}
           value={body}

@@ -17,7 +17,7 @@ import { ThreadCache } from "./threadCache";
 import { attachNotes, loadNotes, resetNotes } from "./notes";
 import { attachTasks, loadTasks, resetTasks } from "./tasks";
 import { attachRequestProgress } from "./requestProgress";
-import { attachPreviews } from "./previews";
+import { attachPreviews } from "./previewRequests";
 import {
   KybernClient,
   PROJECTS_CHANGED_NOTIFICATION,

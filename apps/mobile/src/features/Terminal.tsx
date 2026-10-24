@@ -90,6 +90,7 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
   selectedRef.current = selected;
   const reload = useCallback(async () => {
     const r = await rpc("terminals.list", { thread_id: threadId });
+    setError("");
     setTerminals(r.terminals);
     setSelected((s) =>
       r.terminals.some((t) => t.id === s) ? s : (r.terminals[0]?.id ?? ""),
@@ -227,7 +228,11 @@ export function Terminal({ threadId, initialTerminalId, connectorLogin = false, 
   }
   return (
     <View style={{ flex: 1, gap: 4 }}>
-      <ErrorBanner error={error} />
+      {!!error && (
+        <View style={{ paddingHorizontal: space.lg }}>
+          <ErrorBanner error={error} onRetry={() => void reload().catch((e) => setError(errorText(e)))} />
+        </View>
+      )}
       {connectorLogin && selected === initialTerminalId && <View style={{ paddingHorizontal: 16, gap: 8 }}>
         {loginUrl && <Button onPress={() => void Linking.openURL(loginUrl).catch(e => setError(errorText(e)))}>Sign in on {new URL(loginUrl).hostname}</Button>}
         <T variant="footnote" tone="secondary">After signing in, paste the full redirect URL when Claude asks for it.</T>

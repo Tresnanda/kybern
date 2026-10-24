@@ -163,7 +163,11 @@ export function Changes({ threadId }: { threadId: string }) {
     setBusy(true);
     try {
       const [d, s] = await Promise.all([
-        rpc("threads.diff", { thread_id: threadId, include_patch: false }),
+        // A thread with no finished turn has no checkpoint to diff against yet: nothing changed.
+        rpc("threads.diff", { thread_id: threadId, include_patch: false }).catch((e) => {
+          if (/no checkpoints/i.test(errorText(e))) return { from: "", to: "", files: [], patch: "" } as Diff;
+          throw e;
+        }),
         rpc("git.status", { thread_id: threadId }),
       ]);
       setDiff(d);

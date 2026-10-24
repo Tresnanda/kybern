@@ -1,16 +1,10 @@
 // Dev-server preview on the phone (parity P2-1). The computer serves a page through a
 // short-lived ticket: `/preview-proxy/{ticket}/` for a server on its loopback, or
 // `/preview-files/{ticket}/…` for an HTML file. The WebView only ever receives that ticket URL,
-// never the daemon's credentials. Agents can open a page (`previews.open_requested`); the
-// request is kept per thread so the preview screen or inspector can show it.
-import { useSyncExternalStore } from "react";
+// never the daemon's credentials. Agent requests (`previews.open_requested`) live in
+// `previewRequests.ts`, which the runtime attaches without importing this module.
 import { httpBase } from "../../../../packages/kybern-client/src/address";
 import { classifyPreviewInput, PREVIEW_REJECTED_MESSAGE } from "../../../../packages/kybern-client/src/previewTarget";
-import {
-  PREVIEW_OPEN_REQUESTED_NOTIFICATION,
-  type KybernClient,
-  type PreviewOpenRequestedNotification,
-} from "./protocol";
 import { activeEnvironment, errorText, rpc } from "./runtime";
 
 export type PreviewPage = {
@@ -73,43 +67,4 @@ export async function openPreview(threadId: string, input: string, allowFolder =
 export function closePreview(page: PreviewPage | null) {
   const ticket = page?.scope.match(/\/preview-(?:proxy|files)\/([^/]+)\//)?.[1];
   if (ticket) void rpc("previews.close", { ticket }).catch(() => {});
-}
-
-// ---- agent requests ----
-
-type Request = PreviewOpenRequestedNotification & { at: number };
-let requests = new Map<string, Request>();
-const listeners = new Set<() => void>();
-const requestListeners = new Set<(request: Request) => void>();
-const emit = () => listeners.forEach((fn) => fn());
-
-/** Called once per connection from `runtime.connect`. */
-export function attachPreviews(client: KybernClient, current: () => boolean) {
-  requests = new Map();
-  emit();
-  client.onNotification(PREVIEW_OPEN_REQUESTED_NOTIFICATION, (raw) => {
-    const request = raw as PreviewOpenRequestedNotification;
-    if (!current() || !request?.thread_id || typeof request.target !== "string") return;
-    const entry = { ...request, at: Date.now() };
-    requests = new Map(requests).set(request.thread_id, entry);
-    emit();
-    requestListeners.forEach((fn) => fn(entry));
-  });
-}
-
-/** The latest page an agent asked to show in this thread. */
-export function usePreviewRequest(threadId: string | undefined) {
-  return useSyncExternalStore(
-    (fn) => {
-      listeners.add(fn);
-      return () => void listeners.delete(fn);
-    },
-    () => (threadId ? requests.get(threadId) : undefined),
-  );
-}
-
-/** Hear every agent request as it arrives (the app shows a toast or reveals the inspector). */
-export function onPreviewRequested(fn: (request: Request) => void) {
-  requestListeners.add(fn);
-  return () => void requestListeners.delete(fn);
 }

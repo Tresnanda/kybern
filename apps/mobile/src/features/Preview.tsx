@@ -13,7 +13,8 @@ import {
   viewportPreset,
 } from "../../../../packages/kybern-client/src/previewViewport";
 import type { PreviewServer } from "../state/protocol";
-import { closePreview, onPreviewRequested, openPreview, usePreviewRequest, type PreviewPage } from "../state/previews";
+import { closePreview, openPreview, type PreviewPage } from "../state/previews";
+import { onPreviewRequested, usePreviewRequest } from "../state/previewRequests";
 import { errorText, getState, rpc, useApp } from "../state/runtime";
 import { useLayout } from "../state/layout";
 import { showToast } from "../ui/Toast";
@@ -69,7 +70,7 @@ export function PreviewPane({ threadId, initialTarget }: { threadId: string; ini
       if (result.kind === "page") {
         closePreview(pageRef.current);
         setTitle("");
-        setAddress(result.page.address);
+        setAddress(result.page.address.replace(/^https?:\/\//, "").replace(/\/$/, ""));
         setPage(result.page);
       } else if (result.kind === "browser") void Linking.openURL(result.url);
       else if (result.kind === "permission") {
