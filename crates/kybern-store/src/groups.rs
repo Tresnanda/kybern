@@ -88,11 +88,7 @@ pub(crate) fn attach_members(c: &Connection, projects: &mut [Project]) -> Result
         let rows = by_project.remove(&project.id.to_string()).unwrap_or_default();
         let paths: Vec<&str> = rows.iter().map(|(path, _)| path.as_str()).collect();
         let names = member_display_names(&project.path, &paths);
-        project.members = rows
-            .into_iter()
-            .zip(names)
-            .map(|((path, status), name)| ProjectMember { path, name, status })
-            .collect();
+        project.members = rows.into_iter().zip(names).map(|((path, status), name)| ProjectMember { path, name, status }).collect();
     }
     Ok(())
 }
@@ -128,10 +124,7 @@ pub fn member_display_names(folder: &str, paths: &[&str]) -> Vec<String> {
 
 /// The last component of an absolute folder path, on any platform.
 pub fn folder_name(folder: &str) -> String {
-    std::path::Path::new(folder)
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| folder.to_string())
+    std::path::Path::new(folder).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| folder.to_string())
 }
 
 pub(crate) fn status_str(status: MemberStatus) -> &'static str {
@@ -244,10 +237,10 @@ mod tests {
         assert!(!store.project_set_member_status(project.id, "web", MemberStatus::Missing).unwrap(), "unchanged probes stay quiet");
         store.project_set_members(project.id, &["infra".into(), "web".into()]).unwrap();
         let members = store.project_members(project.id).unwrap();
-        assert_eq!(members.iter().map(|m| (m.path.as_str(), m.status)).collect::<Vec<_>>(), [
-            ("infra", MemberStatus::Ok),
-            ("web", MemberStatus::Missing)
-        ]);
+        assert_eq!(
+            members.iter().map(|m| (m.path.as_str(), m.status)).collect::<Vec<_>>(),
+            [("infra", MemberStatus::Ok), ("web", MemberStatus::Missing)]
+        );
         store.project_delete(project.id).unwrap();
         let left: i64 = store.with(|c| Ok(c.query_row("SELECT COUNT(*) FROM project_members", [], |r| r.get(0))?)).unwrap();
         assert_eq!(left, 0);

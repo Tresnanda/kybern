@@ -13,11 +13,11 @@ mod tasks;
 mod thread_history;
 mod transcript_page;
 mod visuals;
+pub use groups::{GROUP_FOLDER_MEMBER, folder_name, member_display_names};
 pub use notes::{
     NOTE_BODY_MAX_BYTES, NOTE_RETENTION_DAYS, NOTE_TITLE_MAX_CHARS, NoteError, NoteTarget, checklist as note_checklist,
     preview as note_preview,
 };
-pub use groups::{GROUP_FOLDER_MEMBER, folder_name, member_display_names};
 pub use spaces::SpaceError;
 pub use tasks::{
     GLOBAL_TASK_PREFIX, NewTask, TASK_BODY_MAX_BYTES, TASK_RETENTION_DAYS, TASK_TITLE_MAX_CHARS, TaskError, TaskPatch, TaskRunPatch,
