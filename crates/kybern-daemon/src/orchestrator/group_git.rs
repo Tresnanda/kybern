@@ -513,26 +513,17 @@ impl Orchestrator {
     }
 
     /// Worktree mode: a container `<worktrees>/<project>/<thread-id>` with one
-    /// worktree per included member on `kybern/<thread-id>`, at the member's
-    /// path. `include` omitted means every member; `starts` gives a member's
+    /// worktree per included member of `members` on `kybern/<thread-id>`, at the
+    /// member's path, added from its `source_path`. `starts` gives a member's
     /// fork point (a branch or commit; its HEAD otherwise). On any failure
     /// everything created so far is removed.
     pub(super) async fn create_group_workspace(
         &self,
         project: &Project,
         thread_id: ThreadId,
-        include: Option<&[String]>,
+        mut members: Vec<ThreadMember>,
         starts: &BTreeMap<String, String>,
     ) -> Result<(WorktreeInfo, Vec<ThreadMember>)> {
-        let mut members = snapshot_members(project);
-        if let Some(include) = include {
-            for path in include {
-                ensure!(members.iter().any(|m| &m.path == path), "{path} isn't a repository of {}.", project.name);
-            }
-            for member in &mut members {
-                member.included &= include.contains(&member.path);
-            }
-        }
         ensure!(members.iter().any(|m| m.included), "Choose at least one available repository for this chat.");
         let id = thread_id.to_string();
         let branch = format!("kybern/{id}");
@@ -604,6 +595,38 @@ impl Orchestrator {
         }
         Ok((WorktreeInfo { path: container.to_string_lossy().into_owned(), branch }, members))
     }
+}
+
+/// The project's members for a new worktree chat: `include` (paths) or all.
+pub(crate) fn select_members(project: &Project, include: Option<&[String]>) -> Result<Vec<ThreadMember>> {
+    let mut members = snapshot_members(project);
+    if let Some(include) = include {
+        for path in include {
+            ensure!(members.iter().any(|m| &m.path == path), "{path} isn't a repository of {}.", project.name);
+        }
+        for member in &mut members {
+            member.included &= include.contains(&member.path);
+        }
+    }
+    Ok(members)
+}
+
+/// A group parent's members as its worktree child starts them: the parent's
+/// included members, without the parent's worktrees.
+pub(crate) fn child_members(parent: &Thread) -> Vec<ThreadMember> {
+    parent
+        .members
+        .iter()
+        .cloned()
+        .map(|mut m| {
+            m.included &= !m.missing && Path::new(&m.source_path).join(".git").exists();
+            m.worktree = None;
+            m.worktree_state = None;
+            m.base_branch = None;
+            m.base_commit = None;
+            m
+        })
+        .collect()
 }
 
 /// The project's members as a new thread records them: every available member

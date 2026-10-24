@@ -1564,7 +1564,8 @@ impl Orchestrator {
                 bases.entry(primary.path.clone()).or_insert(branch);
             }
             if use_worktree {
-                let (worktree, snapshot) = self.create_group_workspace(&project, id, params.members.as_deref(), &bases).await?;
+                let selected = group_git::select_members(&project, params.members.as_deref())?;
+                let (worktree, snapshot) = self.create_group_workspace(&project, id, selected, &bases).await?;
                 members = snapshot;
                 Some(worktree)
             } else {

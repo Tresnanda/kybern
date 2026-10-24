@@ -685,7 +685,10 @@ impl Orchestrator {
         let workspace = match (args.workspace, &lead) {
             (Some(workspace), _) => workspace,
             // The default worktree only applies where there is a repository to branch from.
-            (None, Some(lead)) if lead.lead_workspace == DelegationWorkspace::Worktree && Repo::is_repo(Path::new(&parent.cwd)).await => {
+            (None, Some(lead))
+                if lead.lead_workspace == DelegationWorkspace::Worktree
+                    && (super::group_git::is_group(parent) || Repo::is_repo(Path::new(&parent.cwd)).await) =>
+            {
                 DelegationWorkspace::Worktree
             }
             (None, _) => DelegationWorkspace::Shared,
@@ -806,8 +809,30 @@ impl Orchestrator {
         // Workspace.
         let child_id = Uuid::now_v7();
         let task_id = Uuid::now_v7();
-        let (cwd, worktree, base_commit, branch) = match workspace {
-            DelegationWorkspace::Shared => (parent.cwd.clone(), parent.worktree.clone(), None, None),
+        let (cwd, worktree, base_commit, branch, members) = match workspace {
+            // A shared child works in the parent's folder, with the parent's repositories.
+            DelegationWorkspace::Shared => (parent.cwd.clone(), parent.worktree.clone(), None, None, parent.members.clone()),
+            DelegationWorkspace::Worktree if super::group_git::is_group(parent) => {
+                let template = super::group_git::child_members(parent);
+                // Per member, as for one repository: a clean checkout branches from HEAD,
+                // a dirty one from a snapshot of the parent's current changes.
+                let mut starts = std::collections::BTreeMap::new();
+                for target in super::group_git::targets(parent) {
+                    if !template.iter().any(|m| m.included && m.path == target.repo_path()) {
+                        continue;
+                    }
+                    let repo = target.git();
+                    let clean = repo.status_porcelain(&target.exclude).await.is_ok_and(|lines| lines.is_empty());
+                    let base = match repo.head().await {
+                        Some(head) if clean => head,
+                        _ => repo.snapshot_excluding("kybern delegation base", &target.exclude).await?,
+                    };
+                    starts.insert(target.repo_path().to_string(), base);
+                }
+                let (worktree, members) = self.create_group_workspace(&project, child_id, template, &starts).await?;
+                let base = members.iter().filter(|m| m.included).find_map(|m| m.base_commit.clone());
+                (worktree.path.clone(), Some(worktree.clone()), base, Some(worktree.branch), members)
+            }
             DelegationWorkspace::Worktree => {
                 ensure!(
                     Repo::is_repo(Path::new(&parent.cwd)).await,
@@ -832,7 +857,7 @@ impl Orchestrator {
                 }
                 repo.worktree_add(&dir, &branch, Some(&base)).await?;
                 let path = dir.to_string_lossy().into_owned();
-                (path.clone(), Some(WorktreeInfo { path, branch: branch.clone() }), Some(base), Some(branch))
+                (path.clone(), Some(WorktreeInfo { path, branch: branch.clone() }), Some(base), Some(branch), Vec::new())
             }
         };
 
@@ -880,8 +905,7 @@ impl Orchestrator {
             coordinator_project_id: None,
             subagent: None,
             delegation: Some(info),
-            // A child in its parent's workspace works on the same repositories.
-            members: if workspace == DelegationWorkspace::Shared { parent.members.clone() } else { Vec::new() },
+            members,
         };
         let created = {
             let guard = live.turn.lock().await;
@@ -1280,7 +1304,16 @@ impl Orchestrator {
         };
         let mut result = self.last_assistant_text(child.id, Some(turn_id), terminal);
         let (head_commit, diffstat) = self.worktree_outcome(child, &info).await;
-        if head_commit.is_some() && !Repo::new(&child.cwd).is_clean().await.unwrap_or(true) {
+        let dirty = if super::group_git::is_group(child) {
+            let mut dirty = false;
+            for target in super::group_git::targets(child) {
+                dirty |= !target.git().status_porcelain(&target.exclude).await.map(|lines| lines.is_empty()).unwrap_or(true);
+            }
+            dirty
+        } else {
+            !Repo::new(&child.cwd).is_clean().await.unwrap_or(true)
+        };
+        if head_commit.is_some() && dirty {
             // The branch and diffstat only describe commits; say so when edits were left uncommitted.
             let note = "[Kybern: this worktree still has uncommitted changes that are not on the branch. Ask the agent to commit them, or inspect the worktree before merging.]";
             result = Some(match result {
@@ -1312,6 +1345,22 @@ impl Orchestrator {
     async fn worktree_outcome(&self, child: &Thread, info: &DelegationInfo) -> (Option<String>, Option<DiffStat>) {
         if info.workspace != DelegationWorkspace::Worktree || info.worktree_state == Some(WorktreeState::Removed) {
             return (None, None);
+        }
+        if super::group_git::is_group(child) {
+            let mut total = DiffStat::default();
+            let mut primary = None;
+            for member in child.members.iter().filter(|m| m.included) {
+                let (Some(tree), Some(base)) = (member.worktree.as_ref(), member.base_commit.as_deref()) else { continue };
+                let repo = Repo::new(&tree.path);
+                let Some(head) = repo.head().await else { continue };
+                if let Ok(stat) = repo.diffstat(base, &head).await {
+                    total.files += stat.files;
+                    total.additions += stat.additions;
+                    total.deletions += stat.deletions;
+                }
+                primary.get_or_insert(head);
+            }
+            return (primary, Some(total));
         }
         let repo = Repo::new(&child.cwd);
         let Some(head) = repo.head().await else { return (None, None) };
@@ -1599,6 +1648,9 @@ impl Orchestrator {
     /// it an ancestor of the parent's HEAD, does it hold commits beyond
     /// `base_commit`), never assumed empty.
     async fn worktree_disposition(&self, child: &Thread, info: &DelegationInfo) -> Result<WorktreeDisposition> {
+        if super::group_git::is_group(child) {
+            return self.group_worktree_disposition(child, info).await;
+        }
         let dir = child.worktree.as_ref().map(|worktree| worktree.path.clone()).unwrap_or_else(|| child.cwd.clone());
         let branch = info.branch.clone().ok_or_else(|| anyhow!("delegation has no branch"))?;
         let source = self.worktree_source_repo(child, info);
@@ -1626,6 +1678,57 @@ impl Orchestrator {
         Ok(WorktreeDisposition { dir, clean, merged, no_work, missing, branch_exists })
     }
 
+    /// A group child's member worktrees, each with the parent checkout of that
+    /// member (the parent's folder joined with its path, else the original).
+    fn group_child_members(&self, child: &Thread, info: &DelegationInfo) -> Vec<(ThreadMember, Repo)> {
+        let parent = self.inner.store.thread_get(info.parent_thread_id).ok().flatten();
+        child
+            .members
+            .iter()
+            .filter(|m| m.included && m.worktree.is_some())
+            .map(|m| {
+                let dir = match &parent {
+                    Some(parent) if super::group_git::is_group(parent) => super::group_git::member_dir(Path::new(&parent.cwd), &m.path),
+                    _ => std::path::PathBuf::from(&m.source_path),
+                };
+                (m.clone(), Repo::new(dir))
+            })
+            .collect()
+    }
+
+    /// `worktree_disposition` over every member: clean, merged and empty only when each member is.
+    async fn group_worktree_disposition(&self, child: &Thread, info: &DelegationInfo) -> Result<WorktreeDisposition> {
+        let branch = info.branch.clone().ok_or_else(|| anyhow!("delegation has no branch"))?;
+        let dir = child.cwd.clone();
+        let missing = !Path::new(&dir).exists();
+        let (mut clean, mut merged, mut no_work, mut branch_exists) = (true, true, true, false);
+        for (member, source) in self.group_child_members(child, info) {
+            let tree = &member.worktree.as_ref().unwrap().path;
+            if Path::new(tree).exists() {
+                let exclude = if member.path == "." {
+                    child.members.iter().filter(|m| m.path != ".").map(|m| m.path.clone()).collect()
+                } else {
+                    Vec::new()
+                };
+                clean &= Repo::new(tree).status_porcelain(&exclude).await?.is_empty();
+            } else if let Err(error) = source.worktree_prune().await {
+                tracing::debug!(%error, "git worktree prune failed");
+            }
+            if source.rev_parse(&format!("refs/heads/{branch}")).await.is_ok() {
+                branch_exists = true;
+                merged &= source.is_ancestor(&branch, "HEAD").await.unwrap_or(false);
+                no_work &= match member.base_commit.as_deref() {
+                    Some(base) => source.is_ancestor(&branch, base).await.unwrap_or(false),
+                    None => false,
+                };
+            }
+        }
+        if !branch_exists {
+            merged = false;
+        }
+        Ok(WorktreeDisposition { dir, clean, merged, no_work, missing, branch_exists })
+    }
+
     /// The parent's checkout, whose HEAD decides whether a child branch is merged.
     fn worktree_source_repo(&self, child: &Thread, info: &DelegationInfo) -> Repo {
         let cwd = self
@@ -1650,6 +1753,28 @@ impl Orchestrator {
     ) -> Result<()> {
         // The child's last "after" snapshot may still be reading the worktree.
         let _checkpoint = self.checkpoint_lock(child.id).lock_owned().await;
+        if super::group_git::is_group(child) {
+            // Nested member worktrees go before the group folder's own.
+            for (member, source) in self.group_child_members(child, info).into_iter().rev() {
+                let tree = &member.worktree.as_ref().unwrap().path;
+                if Path::new(tree).exists() {
+                    source.worktree_remove(Path::new(tree), force).await?;
+                } else if let Err(error) = source.worktree_prune().await {
+                    tracing::debug!(%error, "git worktree prune failed");
+                }
+                if let Some(branch) = info.branch.as_deref().filter(|_| state.merged || state.no_work) {
+                    let _ = source.delete_branch(branch, !state.merged).await;
+                }
+            }
+            if Path::new(&state.dir).exists() {
+                std::fs::remove_dir_all(&state.dir)?;
+            }
+            self.delegation_update(child.id, |info| {
+                info.worktree_state = Some(WorktreeState::Removed);
+                true
+            })?;
+            return Ok(());
+        }
         let source = self.worktree_source_repo(child, info);
         if !state.missing {
             source.worktree_remove(Path::new(&state.dir), force).await?;
