@@ -5,16 +5,7 @@ import { confirm } from "../../ui/Alert";
 import { ListRow } from "../../ui/List";
 import { ErrorBanner } from "../../ui/primitives";
 import { Section } from "./common";
-import { connectionRoute, shortAddress } from "./labels";
-
-const STATUS: Record<string, string> = {
-  open: "Connected",
-  connecting: "Connecting…",
-  reconnecting: "Reconnecting…",
-  failed: "Can't connect",
-  closed: "Disconnected",
-  idle: "Disconnected",
-};
+import { connectionLabel, connectionRoute, shortAddress } from "./labels";
 
 export function ComputersSettings() {
   const app = useApp();
@@ -45,7 +36,7 @@ export function ComputersSettings() {
               title={env.name}
               subtitle={
                 active
-                  ? `${STATUS[app.status] ?? "Disconnected"} · ${connectionRoute(env.url)}`
+                  ? `${connectionLabel(app.status)} · ${connectionRoute(env.url)}`
                   : `${shortAddress(env.url)} · ${connectionRoute(env.url)}`
               }
               leading="laptopcomputer"

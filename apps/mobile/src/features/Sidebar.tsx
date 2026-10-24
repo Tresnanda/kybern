@@ -32,6 +32,7 @@ import { SearchField } from "../ui/Search";
 import { Segmented } from "../ui/Segmented";
 import { SpaceTile } from "../ui/SpaceTile";
 import { radius, space, useTheme } from "../ui/theme";
+import { useComputerMenuItems } from "./ComputerSwitcher";
 import { useSpaceMenuItems } from "./Spaces";
 import { ThreadListRow, type ThreadRowContext } from "./ThreadRows";
 
@@ -48,11 +49,16 @@ function SidebarMaterial() {
   return <View style={[StyleSheet.absoluteFill, { backgroundColor: dark ? colors.surface : colors.grouped }]} />;
 }
 
-/** The sidebar's title: the active space (a switcher) when there are two or more, else the wordmark. */
+/**
+ * The sidebar's title: the active space when there are two or more, else the wordmark.
+ * Its menu switches computers and spaces, like Home's title and space chip.
+ */
 function SidebarTitle() {
   const { colors } = useTheme();
   const s = useSpaces();
-  const items = useSpaceMenuItems();
+  const computers = useComputerMenuItems();
+  const spaces = useSpaceMenuItems();
+  const items = [...computers, ...spaces];
   const active = s.spaces.find((x) => x.id === currentSpaceId(s));
   const content = (
     <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 44, paddingHorizontal: space.sm }}>
@@ -65,7 +71,12 @@ function SidebarTitle() {
   );
   if (!items.length) return content;
   return (
-    <MenuButton items={items} title="Space" label={active ? `Space: ${active.name}. Switch space` : "Spaces"} radius={radius.md} style={{ flexShrink: 1 }}>
+    <MenuButton
+      items={items}
+      label={active ? `Space: ${active.name}. Switch computer or space` : "Switch computer or space"}
+      radius={radius.md}
+      style={{ flexShrink: 1 }}
+    >
       <View style={{ borderRadius: radius.md }}>{content}</View>
     </MenuButton>
   );

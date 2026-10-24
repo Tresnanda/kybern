@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   canManageAccess,
+  connectionLabel,
   connectionRoute,
   limitLabel,
   limitTone,
@@ -49,4 +50,12 @@ test("reset and stale copy", () => {
   assert.equal(resetsLabel(null, now), null);
   assert.equal(staleLabel(undefined), null);
   assert.ok(staleLabel("login_refresh")?.includes("Sign in"));
+});
+
+test("the computer switcher and Settings name a connection the same way", () => {
+  assert.equal(connectionLabel("open"), "Connected");
+  assert.equal(connectionLabel("reconnecting"), "Reconnecting…");
+  assert.equal(connectionLabel("failed"), "Can't connect");
+  assert.equal(connectionLabel("idle"), "Disconnected");
+  assert.equal(connectionLabel("something-new"), "Disconnected");
 });

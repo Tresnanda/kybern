@@ -207,8 +207,11 @@ For custom floating chrome (the thread screen). Wrap the screen in
 insets. The bar pads the safe area, measures itself and publishes its height.
 iOS: system chrome blur + `chrome` tint (opaque with Reduce Transparency); the
 top material fades in over the first 8 pt of scroll. Android: opaque
-`background`, 12 pt scroll-edge gradient and a hairline once content is under
-it. Interactive chrome always sits on the bar; when a bar grows, shift the list
+`background`. On both, the material runs `EDGE_FADE` (20 pt) past the bar's
+inner edge and dissolves into the content (a masked progressive edge on iOS, a
+gradient on Android): no hairline, no hard-edged slab. Anything stacked on a bar
+(status strip, held messages, capsules) sits on that material without a box of
+its own. Interactive chrome always sits on the bar; when a bar grows, shift the list
 by the delta in one frame instead of animating it. `useWindowControlsInset()`
 keeps custom headers clear of the iPadOS window controls (78 pt when windowed);
 ChromeBar top bars apply it automatically. Native stack headers handle it

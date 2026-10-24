@@ -6,6 +6,8 @@ import { KeyboardStickyView } from "react-native-keyboard-controller";
 import Animated, { FadeIn, ReduceMotion } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Composer } from "../src/features/Composer";
+import { ComputerSwitcher } from "../src/features/ComputerSwitcher";
+import { SpaceSwitcher } from "../src/features/Spaces";
 import { setDraft, useDraft } from "../src/state/draft";
 import { plural } from "../src/state/format";
 import { isFreeChatProject, type TaskItem, type Thread, type UserMessage } from "../src/state/protocol";
@@ -20,7 +22,6 @@ import { isGroupProject } from "../../../packages/kybern-client/src/groups";
 import { optimisticThread } from "../../../packages/kybern-client/src/newChat";
 import { isSubagentThread } from "../../../packages/kybern-client/src/subagents";
 import { useLayout } from "../src/state/layout";
-import { Brand } from "../src/ui/Brand";
 import { ChromeBar, ChromeProvider, useChromeInsets } from "../src/ui/ChromeBar";
 import { ListRow, SectionHeader } from "../src/ui/List";
 import { Button, Icon, IconButton, T, Tap, type IconName } from "../src/ui/primitives";
@@ -29,6 +30,9 @@ import { CONTENT_MAX_WIDTH, gutter, radius, space, useTheme } from "../src/ui/th
 import { useSendTransition } from "../src/components/liquid/SendTransition";
 import { DRAFT_SEND_THREAD, outgoingBlock } from "../src/state/sendTransition";
 import { UserMessageBubble } from "../src/features/UserMessageBubble";
+
+/** Each header side fits two 44 pt buttons, so the title stays centred. */
+const HEADER_SIDE = 96;
 
 /** Rows per pick-up group: Continue and Up next. */
 const PICKUP_ROWS = 3;
@@ -348,8 +352,9 @@ function HomeScreen() {
           )}
         </View>
       ) : (
-        // 44 pt targets on an 8 pt grid: Threads leads, the wordmark centres,
-        // Tasks and Notes trail. Settings lives on the Threads screen.
+        // 44 pt targets on an 8 pt grid: Threads leads, the computer (a switcher)
+        // centres, Tasks and Notes trail. Equal side columns keep the title centred.
+        // Settings lives on the Threads screen.
         <View
           style={{
             paddingTop: insets.top + space.xs,
@@ -358,18 +363,17 @@ function HomeScreen() {
             alignItems: "center",
           }}
         >
-          <View style={{ flex: 1, alignItems: "flex-start" }}>
+          <View style={{ flex: 1, minWidth: HEADER_SIDE, alignItems: "flex-start" }}>
             <IconButton
               name="list.bullet"
               label="Threads"
               onPress={() => router.push("/library")}
             />
           </View>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-            <Brand size={20} />
-            <T variant="headline">kybern</T>
+          <View style={{ flexShrink: 1, alignItems: "center" }}>
+            <ComputerSwitcher />
           </View>
-          <View style={{ flex: 1, flexDirection: "row", justifyContent: "flex-end", gap: space.sm }}>
+          <View style={{ flex: 1, minWidth: HEADER_SIDE, flexDirection: "row", justifyContent: "flex-end", gap: space.sm }}>
             <IconButton
               name="checklist"
               label="Tasks"
@@ -407,6 +411,12 @@ function HomeScreen() {
             entering={FadeIn.duration(280).reduceMotion(ReduceMotion.System)}
             style={{ flexGrow: 1, justifyContent: "center", paddingHorizontal: gutter(width), paddingBottom: space.xl }}
           >
+            {/* The space Home works in; switching refills Continue, Up next and the project chip. */}
+            {connected && (
+              <View style={{ alignSelf: "flex-start", marginBottom: space.md }}>
+                <SpaceSwitcher compact />
+              </View>
+            )}
             <T variant="largeTitle" accessibilityRole="header">What are we building?</T>
             <T variant="subhead" tone="secondary" style={{ marginTop: space.sm, maxWidth: 320 }}>
               {!connected

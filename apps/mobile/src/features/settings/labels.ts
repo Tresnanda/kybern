@@ -86,6 +86,17 @@ export function connectionRoute(url: string): Route {
 }
 
 /** "192.168.1.4:4199" from "ws://192.168.1.4:4199/ws". */
+const CONNECTION_LABELS: Record<string, string> = {
+  open: "Connected",
+  connecting: "Connecting…",
+  reconnecting: "Reconnecting…",
+  failed: "Can't connect",
+  closed: "Disconnected",
+  idle: "Disconnected",
+};
+/** The active computer's connection, in words ("Connected", "Reconnecting…"). */
+export const connectionLabel = (status: string) => CONNECTION_LABELS[status] ?? "Disconnected";
+
 export const shortAddress = (url: string) =>
   url.replace(/^(wss?|https?):\/\//, "").replace(/\/ws$/, "").replace(/\/$/, "");
 

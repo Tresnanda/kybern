@@ -27,6 +27,7 @@ import { httpBase, type ApprovalDecision, type ApprovalRequest } from "../state/
 import { activeEnvironment, errorText, getState } from "../state/runtime";
 import { type Block } from "../state/transcript";
 import type { TurnRow } from "../state/turnRows";
+import { turnFooterText } from "../state/format";
 import { workDuration } from "../state/turnRows";
 import { ContextMenu, type MenuItem } from "../ui/ActionMenu";
 import { Markdown } from "../ui/Markdown";
@@ -163,20 +164,10 @@ export const TranscriptRow = memo(function TranscriptRow({
   );
 });
 
-/** "12:51 · 3m 43s · $3.52"; a turn that did not complete says how it ended first. */
+/** "12:51 · 3m 43s · $3.52" in the phone's own clock convention; see `turnFooterText`. */
+const clockTime = (date: Date) => date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 function turnFooter(block: Extract<Block, { kind: "turn_end" }>) {
-  const time = new Date(block.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  const ending =
-    block.stopReason === "completed"
-      ? null
-      : block.stopReason === "interrupted"
-        ? "Stopped"
-        : block.stopReason === "error"
-          ? "Failed"
-          : "Turn limit reached";
-  return [ending, time, workDuration(block.durationMs), block.costUsd != null ? `$${block.costUsd.toFixed(2)}` : null]
-    .filter(Boolean)
-    .join(" · ");
+  return turnFooterText(block, clockTime, workDuration);
 }
 
 /** What a settled approval leaves in the transcript: the shared record when there is one, else one plain line. */

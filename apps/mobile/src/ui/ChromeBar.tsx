@@ -5,10 +5,14 @@
 // interactive chrome always sits on it.
 //
 //   iOS      system chrome blur + `chrome` tint (100 % `background` with Reduce
-//            Transparency). The top bar's material fades in over the first 8 pt
-//            of scroll, driven on the UI thread.
-//   Android  opaque `background`, a 12 pt scroll-edge gradient on the content
-//            side, and a hairline once content is underneath.
+//            Transparency). The material runs EDGE_FADE past the bar's inner
+//            edge and dissolves into the content there (a masked progressive
+//            edge), so nothing on the bar sits in a hard-edged slab. The top
+//            bar's material fades in over the first 8 pt of scroll, driven on
+//            the UI thread.
+//   Android  opaque `background` that dissolves through an EDGE_FADE gradient
+//            on the content side once content is underneath.
+import MaskedView from "@react-native-masked-view/masked-view";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import {
@@ -37,6 +41,9 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "./theme";
+
+/** How far a bar's material reaches past its inner edge while it dissolves into the content. */
+export const EDGE_FADE = 20;
 
 /** iOS "Reduce Transparency": draw bars opaque. */
 export function useReduceTransparency() {
@@ -119,7 +126,7 @@ export function ChromeBar({
     return { opacity: interpolate(scrollY.get(), [0, 8], [0, 1], "clamp") };
   });
   const ios = Platform.OS === "ios";
-  const material = ios ? (
+  const fill = ios ? (
     reduceTransparency ? (
       <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.background }]} />
     ) : (
@@ -132,8 +139,33 @@ export function ChromeBar({
         <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.chrome }]} />
       </>
     )
-  ) : (
+  ) : null;
+  // The mask is solid over the bar and ramps to clear over EDGE_FADE past its
+  // inner edge: the blur and tint thin out together, so the bar has no edge.
+  const ramp = (
+    <LinearGradient
+      colors={["#000000", "#00000000"]}
+      start={{ x: 0, y: top ? 0 : 1 }}
+      end={{ x: 0, y: top ? 1 : 0 }}
+      style={{ height: EDGE_FADE }}
+    />
+  );
+  const material = !fill ? (
     <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.background }]} />
+  ) : (
+    <MaskedView
+      pointerEvents="none"
+      style={{ position: "absolute", start: 0, end: 0, top: top ? 0 : -EDGE_FADE, bottom: top ? -EDGE_FADE : 0 }}
+      maskElement={
+        <View style={{ flex: 1 }}>
+          {!top && ramp}
+          <View style={{ flex: 1, backgroundColor: "#000000" }} />
+          {top && ramp}
+        </View>
+      }
+    >
+      {fill}
+    </MaskedView>
   );
   return (
     <View
@@ -168,7 +200,7 @@ export function ChromeBar({
               position: "absolute",
               start: 0,
               end: 0,
-              height: 12,
+              height: EDGE_FADE,
               ...(top ? { top: "100%" } : { bottom: "100%" }),
             },
             top ? reveal : { opacity: contentUnder ? 1 : 0 },
@@ -179,16 +211,6 @@ export function ChromeBar({
             start={{ x: 0, y: top ? 0 : 1 }}
             end={{ x: 0, y: top ? 1 : 0 }}
             style={StyleSheet.absoluteFill}
-          />
-          <View
-            style={{
-              position: "absolute",
-              start: 0,
-              end: 0,
-              [top ? "top" : "bottom"]: 0,
-              height: StyleSheet.hairlineWidth,
-              backgroundColor: colors.line,
-            }}
           />
         </Animated.View>
       )}

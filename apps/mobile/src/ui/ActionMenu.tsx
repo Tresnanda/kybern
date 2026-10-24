@@ -208,9 +208,10 @@ export function MenuPanel({
               }}
             />
           ) : null}
-          {section.map((item) => (
+          {section.map((item, row) => (
             <MenuRow
-              key={item.title}
+              // Titles can repeat (two computers with one name); the position keeps rows apart.
+              key={`${row}:${item.title}`}
               item={item}
               leading={leading}
               onSelect={(picked) => {
