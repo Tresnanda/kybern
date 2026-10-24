@@ -676,6 +676,228 @@ fn copy_tree(source: &Path, target: &Path, meta: &std::fs::Metadata, budget: &mu
     std::fs::copy(source, target).map(|_| ())
 }
 
+/// A group container's cleanup state, aggregated over its member worktrees.
+pub(super) struct ContainerState {
+    pub clean: bool,
+    pub merged: bool,
+    pub ignored_files: u32,
+    pub blockers: Vec<String>,
+}
+
+/// One member worktree's recovery refs, written before it is removed.
+pub(super) struct SavedMember {
+    source: PathBuf,
+    tree: PathBuf,
+    folder: bool,
+    commit: String,
+}
+
+/// Members with a worktree in the container, in project order (the group folder's first).
+fn container_members(thread: &Thread) -> Vec<&ThreadMember> {
+    thread.members.iter().filter(|m| m.included && m.worktree.is_some()).collect()
+}
+
+/// What Kybern itself put in the container besides worktrees.
+fn copied_entries(project: &Project) -> Vec<String> {
+    SHARED_FILES.iter().map(|e| e.to_string()).chain(project.worktree_copy.iter().filter(|e| is_copy_entry(e)).cloned()).collect()
+}
+
+/// Porcelain lines of a member worktree, without the nested members of the
+/// group folder's worktree and without the untracked copies Kybern made there.
+async fn member_status(member: &ThreadMember, thread: &Thread, copied: &[String]) -> Result<Vec<String>> {
+    let tree = Repo::new(&member.worktree.as_ref().unwrap().path);
+    if member.path != "." {
+        return tree.status_porcelain(&[]).await;
+    }
+    let lines = tree.status_porcelain(&other_member_paths(&thread.members, ".")).await?;
+    Ok(lines
+        .into_iter()
+        .filter(|line| !line.strip_prefix("?? ").is_some_and(|path| copied.iter().any(|c| path.trim_end_matches('/') == c)))
+        .collect())
+}
+
+impl Orchestrator {
+    /// Inspect a group container: every member worktree must be clean, on its
+    /// branch and merged for automatic cleanup. Blockers name the member.
+    pub(super) async fn inspect_container(&self, thread: &Thread, project: &Project) -> Result<ContainerState> {
+        let copied = copied_entries(project);
+        let container = PathBuf::from(&thread.cwd);
+        let mut state = ContainerState { clean: true, merged: true, ignored_files: 0, blockers: Vec::new() };
+        for member in container_members(thread) {
+            let wt = member.worktree.as_ref().unwrap();
+            let source = Repo::new(&member.source_path);
+            if !source.is_ancestor(&wt.branch, "HEAD").await.unwrap_or(false) {
+                state.merged = false;
+            }
+            let tree_dir = Path::new(&wt.path);
+            if !tree_dir.exists() {
+                continue;
+            }
+            let common = ["rev-parse", "--path-format=absolute", "--git-common-dir"];
+            let source_common = crate::github::run(Path::new(&member.source_path), "git", &common).await?;
+            let tree_common = crate::github::run(tree_dir, "git", &common).await?;
+            ensure!(
+                std::fs::canonicalize(source_common)? == std::fs::canonicalize(tree_common)?,
+                "{} in this worktree belongs to another repository. Inspect it with Git before cleanup.",
+                member.name
+            );
+            let tree = Repo::new(tree_dir);
+            if tree.current_branch().await.as_deref() != Some(wt.branch.as_str()) {
+                state.blockers.push(format!(
+                    "{}: the checked-out branch changed outside Kybern. Restore the conversation’s branch before cleanup.",
+                    member.name
+                ));
+            }
+            let dirty = member_status(member, thread, &copied).await?.len();
+            if dirty > 0 {
+                state.clean = false;
+            }
+            let mut args = vec!["ls-files".to_string(), "--others".into(), "--ignored".into(), "--exclude-standard".into(), "-z".into()];
+            if member.path == "." {
+                args.extend(["--".into(), ".".into()]);
+                args.extend(kybern_git::exclude_pathspecs(&other_member_paths(&thread.members, ".")));
+            }
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            let ignored = crate::github::run(tree_dir, "git", &args).await?;
+            let count = ignored.bytes().filter(|b| *b == 0).count() as u32;
+            if count > 0 {
+                state
+                    .blockers
+                    .push(format!("{}: move or delete ignored files (including build output) before removing this worktree.", member.name));
+            }
+            state.ignored_files += count;
+        }
+        // Without the group folder's own worktree the container is a plain folder:
+        // anything there besides member worktrees and Kybern's copies would be lost.
+        if !thread.members.iter().any(|m| m.path == "." && m.included) && container.is_dir() {
+            let tops: HashSet<String> =
+                thread.members.iter().filter(|m| m.included).filter_map(|m| m.path.split('/').next().map(str::to_string)).collect();
+            let mut stray: Vec<String> = std::fs::read_dir(&container)?
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|name| !tops.contains(name) && !copied.contains(name))
+                .collect();
+            stray.sort();
+            if !stray.is_empty() {
+                state.clean = false;
+                state.blockers.push(format!(
+                    "Move or delete {} from this chat’s folder first: they are outside every repository, so Kybern can’t keep them.",
+                    join_names(&stray)
+                ));
+            }
+        }
+        Ok(state)
+    }
+
+    /// Write each member's recovery refs (`refs/kybern/worktree-recovery/<id>/{head,source}`
+    /// in that member's repository) before its worktree is removed.
+    pub(super) async fn save_container_recovery(&self, thread: &Thread, project: &Project) -> Result<Vec<SavedMember>> {
+        let copied = copied_entries(project);
+        let mut saved = Vec::new();
+        for member in container_members(thread) {
+            let tree_dir = PathBuf::from(&member.worktree.as_ref().unwrap().path);
+            if !tree_dir.exists() {
+                continue;
+            }
+            let tree = Repo::new(&tree_dir);
+            let head = tree.rev_parse("HEAD").await?;
+            let clean = member_status(member, thread, &copied).await?.is_empty();
+            let exclude = if member.path == "." { other_member_paths(&thread.members, ".") } else { Vec::new() };
+            let commit = if clean { head.clone() } else { tree.snapshot_excluding("Kybern worktree cleanup recovery", &exclude).await? };
+            let source = Repo::new(&member.source_path);
+            source.update_ref(&format!("{}/head", super::worktrees::recovery_ref(thread.id)), &head).await?;
+            source.update_ref(&format!("{}/source", super::worktrees::recovery_ref(thread.id)), &commit).await?;
+            saved.push(SavedMember { source: PathBuf::from(&member.source_path), tree: tree_dir, folder: member.path == ".", commit });
+        }
+        Ok(saved)
+    }
+
+    /// Remove member worktrees (nested ones before the group folder's), then
+    /// the container. Returns the primary member's recovery commit.
+    pub(super) async fn remove_container(
+        &self,
+        thread: &mut Thread,
+        project: &Project,
+        saved: &[SavedMember],
+        force: bool,
+    ) -> Result<String> {
+        let container = PathBuf::from(&thread.cwd);
+        let copied = copied_entries(project);
+        for member in saved.iter().rev() {
+            let source = Repo::new(&member.source);
+            if member.folder {
+                // Kybern's untracked copies would make git refuse to remove the folder's worktree.
+                let tree = Repo::new(&member.tree);
+                for entry in &copied {
+                    if member.tree.join(entry).exists() && !tree.is_tracked(entry).await.unwrap_or(true) {
+                        let path = member.tree.join(entry);
+                        let _ = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+                    }
+                }
+            }
+            source.worktree_remove(&member.tree, force).await.map_err(|e| {
+                let name = thread
+                    .members
+                    .iter()
+                    .find(|m| m.source_path == member.source.to_string_lossy())
+                    .map_or("a repository", |m| m.name.as_str());
+                anyhow!("Couldn't remove the worktree of {name}: {e}")
+            })?;
+        }
+        if container.exists() {
+            std::fs::remove_dir_all(&container)?;
+        }
+        for member in thread.members.iter_mut().filter(|m| m.included && m.worktree.is_some()) {
+            member.worktree_state = Some(WorktreeState::Removed);
+        }
+        Ok(saved.first().map(|s| s.commit.clone()).unwrap_or_default())
+    }
+
+    /// Recreate a cleaned group container from each member's recovery refs.
+    pub(super) async fn restore_container(&self, thread: &mut Thread, project: &Project, receipt: &str) -> Result<()> {
+        let container = PathBuf::from(&thread.cwd);
+        let branch = thread.worktree.as_ref().map(|w| w.branch.clone()).unwrap_or_default();
+        let has_folder = thread.members.iter().any(|m| m.path == "." && m.included && m.worktree.is_some());
+        let members: Vec<ThreadMember> = container_members(thread).into_iter().cloned().collect();
+        let mut primary = None;
+        for member in &members {
+            let source = Repo::new(&member.source_path);
+            let commit = source.rev_parse(&format!("{}/source", super::worktrees::recovery_ref(thread.id))).await?;
+            let head = source.rev_parse(&format!("{}/head", super::worktrees::recovery_ref(thread.id))).await?;
+            primary.get_or_insert(commit.clone());
+            source.worktree_prune().await?;
+            let tree = PathBuf::from(&member.worktree.as_ref().unwrap().path);
+            if member.path != "." {
+                if !has_folder && !container.exists() {
+                    std::fs::create_dir_all(&container)?;
+                    copy_entries(Path::new(&project.path), &container, &SHARED_FILES, SHARED_FILES_CAP);
+                }
+                if let Some(parent) = tree.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+            }
+            let exclude = if member.path == "." { other_member_paths(&thread.members, ".") } else { Vec::new() };
+            let start = if source.rev_parse(&branch).await.is_ok() {
+                source.worktree_add_existing(&tree, &branch).await?;
+                source.rev_parse(&branch).await?
+            } else {
+                source.worktree_add(&tree, &branch, Some(&head)).await?;
+                head
+            };
+            if start != commit {
+                Repo::new(&tree).restore_excluding(&commit, &exclude).await?;
+            }
+        }
+        ensure!(primary.as_deref() == Some(receipt), "The worktree recovery ref changed. Inspect it before continuing.");
+        let copy: Vec<&str> = project.worktree_copy.iter().map(String::as_str).filter(|e| is_copy_entry(e)).collect();
+        copy_entries(Path::new(&project.path), &container, &copy, COPY_CAP);
+        for member in thread.members.iter_mut().filter(|m| m.included && m.worktree.is_some()) {
+            member.worktree_state = None;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

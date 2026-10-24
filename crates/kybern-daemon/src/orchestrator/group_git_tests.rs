@@ -338,3 +338,43 @@ async fn local_branch_switches_are_all_or_nothing() {
     assert_eq!(bases, [Some("feature"), Some("main"), Some("feature")]);
     let _ = std::fs::remove_dir_all(&group.fixture.root);
 }
+
+#[tokio::test]
+async fn group_worktree_cleanup_saves_each_member_and_restores_the_container() {
+    let group = Group::new(false);
+    let thread = group.create(true, Some(&["api", "web"])).await;
+    let container = std::path::PathBuf::from(&thread.cwd);
+    let state = group.fixture.orchestrator.worktree_inspect(thread.id).await.unwrap();
+    assert!(state.clean && state.merged && state.eligible, "{:?}", state.blockers);
+
+    std::fs::write(container.join("notes.md"), "mine\n").unwrap();
+    let state = group.fixture.orchestrator.worktree_inspect(thread.id).await.unwrap();
+    assert!(!state.eligible);
+    assert!(state.blockers.iter().any(|b| b.starts_with("Move or delete notes.md from this chat’s folder first")), "{:?}", state.blockers);
+    std::fs::remove_file(container.join("notes.md")).unwrap();
+
+    std::fs::write(container.join("web/app.ts"), "edited\n").unwrap();
+    let state = group.fixture.orchestrator.worktree_inspect(thread.id).await.unwrap();
+    assert!(!state.clean && state.blockers.is_empty(), "{:?}", state.blockers);
+    let removed = group
+        .fixture
+        .orchestrator
+        .worktree_remove(methods::WorktreeRemoveParams { thread_id: thread.id, force: true, delete_branch: false })
+        .await
+        .unwrap();
+    assert!(!removed.exists);
+    assert!(!container.exists(), "the container and its copies are gone");
+    let web = group.folder.join("web");
+    let saved = group_git(&web, &["rev-parse", &format!("refs/kybern/worktree-recovery/{}/source", thread.id)]);
+    assert_eq!(group_git(&web, &["show", &format!("{saved}:app.ts")]), "edited");
+    let stored = group.fixture.store.thread_get(thread.id).unwrap().unwrap();
+    assert!(stored.members.iter().filter(|m| m.included).all(|m| m.worktree_state == Some(WorktreeState::Removed)));
+
+    group.fixture.orchestrator.restore_worktree_if_cleaned(&stored).await.unwrap();
+    assert_eq!(std::fs::read_to_string(container.join("web/app.ts")).unwrap(), "edited\n");
+    assert_eq!(group_git(&container.join("api"), &["branch", "--show-current"]), format!("kybern/{}", thread.id));
+    assert!(container.join("AGENTS.md").exists() && container.join("Makefile").exists());
+    let events = group.fixture.store.events_for_thread(thread.id).unwrap();
+    assert!(events.iter().any(|e| matches!(e.payload, EventPayload::WorktreeRestored { .. })));
+    let _ = std::fs::remove_dir_all(&group.fixture.root);
+}
