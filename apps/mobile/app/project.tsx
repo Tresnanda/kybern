@@ -201,6 +201,7 @@ export default function ProjectPage() {
         />
         <ListRow title="Tasks" leading="checklist" chevron onPress={() => router.push({ pathname: "/todo", params: { projectId: project.id } })} />
         <ListRow title="Notes" leading="doc.text" chevron onPress={() => router.push({ pathname: "/notes", params: { projectId: project.id } })} />
+        <ListRow title="Pull requests" leading="arrow.triangle.pull" chevron onPress={() => router.push({ pathname: "/pulls", params: { projectId: project.id } })} />
         <ListRow
           title="Browse files"
           leading="folder"

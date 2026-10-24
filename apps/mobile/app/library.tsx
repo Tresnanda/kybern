@@ -140,6 +140,7 @@ export default function Library() {
       inline: true,
       children: [
         { title: "Projects", icon: "folder", onPress: () => router.push("/projects") },
+        { title: "Pull requests", icon: "arrow.triangle.pull", onPress: () => router.push("/pulls") },
         {
           title: "Activity",
           icon: "waveform.path",
