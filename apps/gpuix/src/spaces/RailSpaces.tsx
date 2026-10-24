@@ -3,12 +3,12 @@
 // the leading edge. Switching never animates.
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { SPACE_COPY, SPACE_LIMIT } from '../../../../packages/kybern-client/src/spaces.ts'
+import { SPACE_COPY, SPACE_LIMIT, canDeleteSpace } from '../../../../packages/kybern-client/src/spaces.ts'
 import type { Project, Space, Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { attentionKind, type AttentionKind } from '../sidebar/model.ts'
 import { N } from '../nav/glyphs.ts'
-import { ContextMenu, MenuItem, MenuSeparator, Tip } from '../nav/overlay.tsx'
+import { ContextMenu, MenuItem, MenuLabel, MenuSeparator, Tip } from '../nav/overlay.tsx'
 import { useNav, type NavState } from '../nav/store.ts'
 import { observeElementBounds } from '../native/layout.ts'
 import { pressTransform } from '../motion/press.ts'
@@ -117,7 +117,7 @@ export function RailSpaces() {
             rowRef={space.id === current ? activeRef : undefined}
           />
         ))}
-        <NewSpaceTile full={spaces.length >= SPACE_LIMIT} />
+        <NewSpaceTile full={spaces.length >= SPACE_LIMIT} only={list ? undefined : spaces[0]} />
       </div>
       <div style={{ width: 20, height: 1, flexShrink: 0, backgroundColor: edges.bottom ? ink(t, 0.07) : 'transparent' }} />
       <SpaceMenu spaces={spaces} />
@@ -183,11 +183,13 @@ const SpaceRow = memo(function SpaceRow({ space, index, count, active, dot, rowR
   )
 })
 
-function NewSpaceTile({ full }: { full: boolean }) {
+/** `only`: the sole space, whose tile is hidden. Its editor opens here (from the palette), beside the "+" tile. */
+function NewSpaceTile({ full, only }: { full: boolean; only?: Space }) {
   const t = useTheme()
   const [hover, setHover] = useState(false)
   const open = useSpaceUi((s) => s.editor?.mode === 'create' && s.editor.anchor === 'plus')
   const still = useSpaceUi((s) => !!s.editor?.still)
+  const editingOnly = useSpaceUi((s) => !!only && s.editor?.mode === 'edit' && s.editor.anchor === only.id)
   return (
     <div style={{ position: 'relative', width: RAIL, height: ROW, flexShrink: 0 }}>
     <Tip label={full ? SPACE_COPY.limitTooltip : SPACE_COPY.newSpaceTooltip} side="right" sideOffset={6} size={ROW}>
@@ -210,6 +212,7 @@ function NewSpaceTile({ full }: { full: boolean }) {
       </div>
     </Tip>
     {open && <SpaceEditor mode="create" still={still} />}
+    {editingOnly && only && <SpaceEditor mode="edit" space={only} still={still} />}
     </div>
   )
 }
@@ -228,7 +231,8 @@ function SpaceMenu({ spaces }: { spaces: Space[] }) {
       <MenuItem id="up" testId="space-menu-up" icon={N.arrowUp} label={SPACE_COPY.menuMoveUp} disabled={index === 0} onSelect={() => void moveSpace(space.id, -1).catch(() => {})} />
       <MenuItem id="down" testId="space-menu-down" icon={N.arrowDown} label={SPACE_COPY.menuMoveDown} disabled={index === spaces.length - 1} onSelect={() => void moveSpace(space.id, 1).catch(() => {})} />
       <MenuSeparator />
-      <MenuItem id="delete" testId="space-menu-delete" icon={N.trash} label={SPACE_COPY.menuDelete} destructive onSelect={() => askDeleteSpace(space.id)} />
+      <MenuItem id="delete" testId="space-menu-delete" icon={N.trash} label={SPACE_COPY.menuDelete} destructive disabled={!canDeleteSpace(space)} onSelect={() => askDeleteSpace(space.id)} />
+      {!canDeleteSpace(space) && <MenuLabel>{SPACE_COPY.defaultCantDelete}</MenuLabel>}
     </ContextMenu>
   )
 }

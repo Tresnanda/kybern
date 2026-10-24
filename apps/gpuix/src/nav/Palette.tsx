@@ -60,6 +60,7 @@ function PaletteDialog() {
   const spaceId = useCurrentSpaceId()
   const spaces = useSpaces((s) => s.spaces)
   const spacesOn = useSpaces((s) => s.supported === true)
+  const current = spaces.find((space) => space.id === spaceId) ?? null
   const selectedId = useApp((s) => s.selectedId)
   const inSplit = useSplitRoot().kind === 'split'
   const [query, setQuery] = useState('')
@@ -81,6 +82,7 @@ function PaletteDialog() {
         meta: spaces.length >= 2 && (index < 8 || (index === spaces.length - 1 && spaces.length > 8)) ? kbd(['⌃', index === spaces.length - 1 && spaces.length > 8 ? '9' : String(index + 1)]) : undefined,
         run: () => { switchSpace(space.id, 'pointer') },
       }]),
+      ...(current ? [{ id: 'space-rename', label: SPACE_COPY.paletteRename, keywords: 'rename edit space name color icon', group: 'Suggested' as const, icon: <Icon source={N.pencil} size={15} color={muted(t, 1)} />, run: () => openSpaceEditor({ anchor: current.id, mode: 'edit', still: true }) }] : []),
       { id: 'space-new', label: SPACE_COPY.paletteNew, keywords: 'new space create group projects', group: 'Suggested', icon: <Icon source={N.plus} size={15} color={muted(t, 1)} />, run: () => openSpaceEditor({ anchor: 'plus', mode: 'create', still: true }) },
     ]
     const actions: Item[] = [

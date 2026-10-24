@@ -1,6 +1,6 @@
 // The confirm dialog for deleting a space (`docs/specs/spaces.md` §7.8).
 import { useState } from 'react'
-import { SPACE_COPY, deleteTarget } from '../../../../packages/kybern-client/src/spaces.ts'
+import { SPACE_COPY, canDeleteSpace, deleteTarget } from '../../../../packages/kybern-client/src/spaces.ts'
 import { AlertDialog, AlertDialogClose, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../kit/AlertDialog.tsx'
 import { getNav, setNav } from '../nav/store.ts'
 import { toast } from '../shell/toasts.tsx'
@@ -18,6 +18,8 @@ export function DeleteSpace() {
   if (id && id !== shown) setShown(id)
   const space = spaces.find((candidate) => candidate.id === (id ?? shown))
   if (!space) return null
+  // The menu disables Delete for the default space; this keeps a stale request from asking.
+  if (!canDeleteSpace(space)) return null
   const target = deleteTarget(spaces, space.id)
   const inside = projects.filter((project) => project.space_id === space.id)
   const description =
