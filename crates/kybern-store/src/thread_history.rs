@@ -129,7 +129,7 @@ impl Store {
             })?;
             let mut found = Vec::with_capacity(limit as usize + 1);
             while let Some(row) = rows.next()? {
-                found.push(SearchRow { thread: row_to_thread(row)?, rank: row.get(21)?, created_second: row.get(22)? });
+                found.push(SearchRow { thread: row_to_thread(row)?, rank: row.get(22)?, created_second: row.get(23)? });
             }
             let has_more = found.len() > limit as usize;
             found.truncate(limit as usize);
@@ -249,7 +249,7 @@ fn search_sql() -> String {
          )
          SELECT id,project_id,title,provider_kind,provider_instance,model,effort,permission_mode,status,
                 worktree_path,worktree_branch,cwd,provider_session_id,pinned,created_at,updated_at,last_seq,
-                parent_thread_id,coordinator_project_id,subagent,delegation,preference_rank,created_second
+                parent_thread_id,coordinator_project_id,subagent,delegation,members,preference_rank,created_second
          FROM candidates
          WHERE (created_second<:snapshot_second OR (created_second=:snapshot_second AND id<=:snapshot_id))
            AND (:cursor_rank IS NULL OR preference_rank>:cursor_rank

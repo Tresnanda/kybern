@@ -549,6 +549,32 @@ const MIGRATIONS: &[&str] = &[
     CREATE UNIQUE INDEX spaces_one_default ON spaces(is_default) WHERE is_default = 1;
     COMMIT;
     ",
+    // v30: group projects. A project of kind 'group' is a parent folder whose members
+    // are git repositories inside it, stored as '/'-separated paths relative to
+    // projects.path ('.' is the folder itself). Position 0 is the primary member.
+    "
+    BEGIN;
+    ALTER TABLE projects ADD COLUMN kind TEXT NOT NULL DEFAULT 'single';
+    ALTER TABLE projects ADD COLUMN instructions_offer_dismissed INTEGER NOT NULL DEFAULT 0;
+    -- JSON array of top-level entry names copied into new worktree containers.
+    ALTER TABLE projects ADD COLUMN worktree_copy TEXT;
+    CREATE TABLE project_members (
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        path TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        -- `MemberStatus` from the last probe, cached like projects.is_git.
+        status TEXT NOT NULL DEFAULT 'ok',
+        added_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, path)
+    );
+    CREATE INDEX project_members_order ON project_members(project_id, position);
+    -- JSON of Vec<ThreadMember>; NULL for single-repo threads.
+    ALTER TABLE threads ADD COLUMN members TEXT;
+    -- JSON of Vec<RepoCheckpoint>; NULL for single-repo threads.
+    ALTER TABLE checkpoints ADD COLUMN repos TEXT;
+    ALTER TABLE checkpoints ADD COLUMN incomplete INTEGER NOT NULL DEFAULT 0;
+    COMMIT;
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {
