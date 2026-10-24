@@ -151,9 +151,10 @@ export function Changes({ threadId }: { threadId: string }) {
       )}
       {status && (
         <View style={styles.spread}>
-          <View style={styles.line}>
+          <View style={[styles.line, { flexShrink: 1 }]}>
             <Icon name="arrow.triangle.branch" size={17} />
-            <T variant="label" numberOfLines={1} style={{ flexShrink: 1 }}>
+            {/* Middle truncation keeps the branch's start and "in N repositories" readable. */}
+            <T variant="label" numberOfLines={1} ellipsizeMode="middle" style={{ flexShrink: 1 }}>
               {status.branch || (grouped ? "No branch" : "No Git repository")}
               {grouped && (
                 <T variant="label" tone="secondary" style={{ fontWeight: "400" }}>
