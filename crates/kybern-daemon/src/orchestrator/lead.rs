@@ -363,8 +363,11 @@ impl Orchestrator {
         }
         let lead = thread.coordinator_project_id.is_some();
         let project = self.inner.store.project_get(thread.project_id)?.ok_or_else(|| anyhow!("Project not found"))?;
+        // Group threads always learn about their repositories, with or without the
+        // brief, and even when the Kybern guide is off: it describes the workspace.
+        let note = self.repository_note(thread)?;
         if !(lead || project.brief_in_all_threads || self.rooted_at_lead(thread)?) {
-            return Ok(None);
+            return Ok(note.map(|text| SessionInstructions { text, brief_revision: 0, lead_settings: None }));
         }
         let notes = self.inner.store.project_notes(project.id)?;
         let brief = notes.iter().find(|note| note.summary.project_role == Some(ProjectNoteRole::Brief));
@@ -379,6 +382,10 @@ impl Orchestrator {
             lead_settings = Some(effective);
         }
         text.push_str(&project_context(brief, &notes, lead));
+        if let Some(note) = note {
+            text.push_str("\n\n");
+            text.push_str(&note);
+        }
         Ok(Some(SessionInstructions { text, brief_revision: brief.map_or(0, |note| note.summary.revision), lead_settings }))
     }
 

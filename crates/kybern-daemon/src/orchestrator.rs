@@ -27,6 +27,7 @@ mod agent_items;
 mod askpass;
 mod child_questions;
 mod delegation;
+mod groups;
 mod lead;
 mod lead_git;
 mod lead_proposals;
@@ -1227,6 +1228,12 @@ impl Orchestrator {
     /// project checkout itself: a thread can be running in a separate worktree.
     pub async fn refresh_project_git(&self, project_id: ProjectId) -> Result<()> {
         if let Some(project) = self.inner.store.project_get(project_id)? {
+            if project.kind == ProjectKind::Group {
+                if self.refresh_group_members(&project)? {
+                    self.publish_projects();
+                }
+                return Ok(());
+            }
             let is_git = Repo::is_repo(std::path::Path::new(&project.path)).await;
             if self.inner.store.project_set_git_status(project.id, is_git)? {
                 self.publish_projects();
@@ -1243,6 +1250,11 @@ impl Orchestrator {
         // A list read must not wait for one git subprocess per project in
         // sequence. Bound process concurrency, and keep store writes/publishing
         // on this task after every batch completes.
+        // Group folders are not repositories themselves; their members are probed instead.
+        let (groups, projects): (Vec<_>, Vec<_>) = projects.into_iter().partition(|project| project.kind == ProjectKind::Group);
+        for project in &groups {
+            changed |= self.refresh_group_members(project)?;
+        }
         for batch in projects.chunks(8) {
             let probes = batch.iter().map(|project| async { (project.id, Repo::is_repo(std::path::Path::new(&project.path)).await) });
             for (id, is_git) in futures::future::join_all(probes).await {
@@ -1271,6 +1283,9 @@ impl Orchestrator {
             // Self-heal a stale cached flag: the folder may have gained (or lost) a
             // repo since it was first registered. Re-probe and persist any change so
             // edit/integration spawns are not permanently blocked after a `git init`.
+            if existing.kind == ProjectKind::Group {
+                return Ok(existing);
+            }
             let live = project_path_is_git(&existing.path);
             if live != existing.is_git {
                 existing.is_git = live;
@@ -8085,4 +8100,5 @@ for line in sys.stdin:
     include!("orchestrator/worktree_tests.rs");
     include!("orchestrator/subagent_messaging_tests.rs");
     include!("orchestrator/full_access_tests.rs");
+    include!("orchestrator/groups_tests.rs");
 }

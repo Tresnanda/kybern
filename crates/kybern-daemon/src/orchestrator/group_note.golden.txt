@@ -1,0 +1,51 @@
+=== local (431 bytes)
+## Repositories in this working folder
+This folder holds 3 separate git repositories. Each has its own branches, commits and pull requests:
+- api/ (primary): read api/AGENTS.md before you edit files there.
+- web/: read web/CLAUDE.md before you edit files there.
+- infra/: no instructions file.
+Run git commands inside a repository; the working folder itself is not a repository. A change across repositories needs a commit in each.
+
+=== worktree, two deselected, one missing (667 bytes)
+## Repositories in this working folder
+This folder holds 2 separate git repositories. Each has its own branches, commits and pull requests:
+- api/ (primary): read api/AGENTS.md before you edit files there.
+- web/: read web/CLAUDE.md before you edit files there.
+Run git commands inside a repository; the working folder itself is not a repository. A change across repositories needs a commit in each.
+Each repository is a worktree on branch kybern/0199aa00-0000-7000-8000-000000000001.
+Not in this worktree; read only, do not edit: infra at /Users/me/work/acme/infra, docs at /Users/me/work/acme/docs.
+legacy was missing when this chat started, so it is not available.
+
+=== the folder is a member (452 bytes)
+## Repositories in this working folder
+This folder holds 2 separate git repositories. Each has its own branches, commits and pull requests:
+- ./ (acme, primary): read AGENTS.md before you edit files there.
+- api/: no instructions file.
+Run git commands inside a repository. The working folder is itself the repository acme; the others are separate repositories nested in it, not part of its history. A change across repositories needs a commit in each.
+
+=== one repository in this chat (446 bytes)
+## Repositories in this working folder
+This folder holds 1 git repository for this chat. It has its own branches, commits and pull requests:
+- api/ (primary): no instructions file.
+Run git commands inside a repository; the working folder itself is not a repository. A change across repositories needs a commit in each.
+Each repository is a worktree on branch kybern/x.
+Not in this worktree; read only, do not edit: web at /Users/me/work/acme/web.
+
+=== 17 members (1062 bytes)
+## Repositories in this working folder
+This folder holds 17 separate git repositories. Each has its own branches, commits and pull requests:
+- svc01/ (primary): read svc01/AGENTS.md before you edit files there.
+- svc02/: read svc02/AGENTS.md before you edit files there.
+- svc03/: read svc03/AGENTS.md before you edit files there.
+- svc04/: read svc04/AGENTS.md before you edit files there.
+- svc05/: read svc05/AGENTS.md before you edit files there.
+- svc06/: read svc06/AGENTS.md before you edit files there.
+- svc07/: read svc07/AGENTS.md before you edit files there.
+- svc08/: read svc08/AGENTS.md before you edit files there.
+- svc09/: read svc09/AGENTS.md before you edit files there.
+- svc10/: read svc10/AGENTS.md before you edit files there.
+- svc11/: read svc11/AGENTS.md before you edit files there.
+- svc12/: read svc12/AGENTS.md before you edit files there.
+- and 5 more: svc13/, svc14/, svc15/, svc16/, svc17/.
+Run git commands inside a repository; the working folder itself is not a repository. A change across repositories needs a commit in each.
+

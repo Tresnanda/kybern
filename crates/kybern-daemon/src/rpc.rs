@@ -195,7 +195,30 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         }
         ProjectsAdd::NAME => {
             let p: ProjectsAddParams = parse(params)?;
-            ok(state.orchestrator.add_project(p.path, p.name, p.space_id).map_err(bad)?)
+            match p.kind.unwrap_or_default() {
+                ProjectKind::Group => {
+                    let members = p.members.ok_or_else(|| RpcError::new(codes::INVALID_PARAMS, "Select at least 2 repositories."))?;
+                    ok(state.orchestrator.add_group_project(p.path, p.name, p.space_id, members)?)
+                }
+                ProjectKind::Single => {
+                    if p.members.is_some() {
+                        return Err(RpcError::new(codes::INVALID_PARAMS, "Only group projects have repositories."));
+                    }
+                    ok(state.orchestrator.add_project(p.path, p.name, p.space_id).map_err(bad)?)
+                }
+            }
+        }
+        ProjectsScanRepos::NAME => {
+            let p: ProjectsScanReposParams = parse(params)?;
+            ok(state.orchestrator.scan_repos(p).await?)
+        }
+        ProjectsMembersStatus::NAME => {
+            let p: ProjectsMembersStatusParams = parse(params)?;
+            ok(state.orchestrator.members_status(p.project_id).await?)
+        }
+        ProjectsInstructionsCreate::NAME => {
+            let p: ProjectsInstructionsCreateParams = parse(params)?;
+            ok(state.orchestrator.create_group_instructions(p.project_id)?)
         }
         ProjectsUpdate::NAME => {
             let p: ProjectsUpdateParams = parse(params)?;
@@ -223,12 +246,18 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 }
                 project.coordinator = coordinator.filter(|overrides| !overrides.is_empty());
             }
+            // Validated before anything is saved, so a rejected member list leaves the other edits unsaved too.
+            let members =
+                state.orchestrator.apply_group_update(&mut project, p.members, p.worktree_copy, p.instructions_offer_dismissed)?;
             project.updated_at = chrono::Utc::now();
             if let Some(prefix) = &p.task_prefix {
                 // Validated first, so a bad prefix leaves the other edits unsaved too.
                 state.store.project_set_task_prefix(p.project_id, prefix).map_err(task_err)?;
             }
             state.store.project_update(&project).map_err(internal)?;
+            if let Some(members) = members {
+                state.store.project_set_members(p.project_id, &members).map_err(internal)?;
+            }
             state.orchestrator.publish_projects();
             ok(state.store.project_get(p.project_id).map_err(internal)?.unwrap_or(project))
         }

@@ -880,7 +880,8 @@ impl Orchestrator {
             coordinator_project_id: None,
             subagent: None,
             delegation: Some(info),
-            members: Vec::new(),
+            // A child in its parent's workspace works on the same repositories.
+            members: if workspace == DelegationWorkspace::Shared { parent.members.clone() } else { Vec::new() },
         };
         let created = {
             let guard = live.turn.lock().await;
