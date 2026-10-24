@@ -457,6 +457,7 @@ export function MenuItem({
   icon,
   iconNode,
   label,
+  description,
   shortcut,
   detail,
   checked,
@@ -470,6 +471,8 @@ export function MenuItem({
   icon?: string
   iconNode?: ReactNode
   label: string
+  /** A second, muted line that says what the item does (the Projects "+" menu); the icon then sits on the first line. */
+  description?: string
   shortcut?: string
   detail?: string
   /** A radio item: shows the 12px check when true. */
@@ -504,22 +507,29 @@ export function MenuItem({
       onClick={() => menu.pick(id)}
       style={{
         display: 'flex',
-        alignItems: 'center',
+        alignItems: description ? 'flex-start' : 'center',
         gap: 8,
         minHeight: 26,
         paddingLeft: 8,
         paddingRight: 8,
-        paddingTop: 1,
-        paddingBottom: 1,
+        paddingTop: description ? 5 : 1,
+        paddingBottom: description ? 6 : 1,
         borderRadius: 8,
         opacity: disabled ? 0.64 : 1,
         ...(active ? { backgroundColor: t.buttonSecondaryHover } : {}),
       }}
     >
-      {iconNode ?? (icon && <Icon source={icon} size={16} color={destructive ? t.red : ink(t, t.variant === 'dark' ? 0.8 : 0.8)} />)}
-      <Label color={color} truncate style={{ flexGrow: 1 }}>
-        {label}
-      </Label>
+      {iconNode ?? (icon && <Icon source={icon} size={16} color={destructive ? t.red : ink(t, t.variant === 'dark' ? 0.8 : 0.8)} style={description ? { marginTop: 2 } : undefined} />)}
+      {description ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 1, flexGrow: 1, minWidth: 0 }}>
+          <Label color={color} lineHeight={20} truncate>{label}</Label>
+          <Label color={muted(t, 0.72)} size={12} lineHeight={16}>{description}</Label>
+        </div>
+      ) : (
+        <Label color={color} truncate style={{ flexGrow: 1 }}>
+          {label}
+        </Label>
+      )}
       {detail && (
         <Label color={muted(t, 0.72)} size={12} weight={500}>
           {detail}

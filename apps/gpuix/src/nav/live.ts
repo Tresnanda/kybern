@@ -30,6 +30,7 @@ import {
 import { getClient, getState, onThreadActivity, set, subscribe } from '../state.ts'
 import { DEFAULT_FILTER, getNav, setNav, subscribeNav, type NavState } from './store.ts'
 import { followSpaces, loadSpaces } from '../spaces/store.ts'
+import { followWorkspaceProgress } from '../groups/store.ts'
 
 const LIMITS_POLL_MS = 60_000
 const ACTIVITY_DEBOUNCE_MS = 600
@@ -309,6 +310,7 @@ export function startLive() {
   const events = client.subscribeEvents({ include_tool_output: false }, (event) => { if (getClient() === client) onEvent(event) })
   stops.push(() => events.unsubscribe())
   stops.push(followSpaces())
+  stops.push(followWorkspaceProgress())
   stops.push(client.onNotification(USAGE_LIMITS_CHANGED_NOTIFICATION, (params) => applyLimits(params as UsageLimitsResult)))
   stops.push(onThreadActivity(activity => { if (getClient() === client) applyActivity(activity) }))
   const onOpen = () => {
