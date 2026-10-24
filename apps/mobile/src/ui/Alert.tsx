@@ -17,7 +17,33 @@ import {
   type DialogButton,
   type DialogRequest,
 } from "./dialogQueue";
-import { Button, Field, T } from "./primitives";
+import { Field, T, Tap } from "./primitives";
+import { radius, space, useTheme } from "./theme";
+
+/**
+ * Ask before an irreversible action, and only then. The title names the object
+ * ("Delete “Project brief” forever?"); the button repeats the verb. iOS: a native
+ * two-button alert. Android: the themed dialog with text buttons in a row.
+ * Prefer Undo (a toast) for anything that can be restored.
+ */
+export function confirm({
+  title,
+  message,
+  confirm: verb,
+  destructive = true,
+  onConfirm,
+}: {
+  title: string;
+  message?: string;
+  confirm: string;
+  destructive?: boolean;
+  onConfirm: () => void;
+}) {
+  Alert.alert(title, message, [
+    { text: "Cancel", style: "cancel" },
+    { text: verb, style: destructive ? "destructive" : "default", onPress: onConfirm },
+  ]);
+}
 
 export const Alert = {
   alert(
@@ -141,13 +167,13 @@ function Dialog({ request }: { request: DialogRequest & { id: number } }) {
             >
               <ScrollView
                 keyboardShouldPersistTaps="handled"
-                contentContainerStyle={{ padding: 24, gap: 16 }}
+                contentContainerStyle={{ padding: space.xl, gap: space.md }}
               >
-                <T variant="heading" accessibilityRole="header">
+                <T variant="title" accessibilityRole="header">
                   {request.title}
                 </T>
                 {request.message ? (
-                  <T tone="secondary">{request.message}</T>
+                  <T variant="subhead" tone="secondary">{request.message}</T>
                 ) : null}
                 {request.prompt && (
                   <Field
@@ -159,19 +185,11 @@ function Dialog({ request }: { request: DialogRequest & { id: number } }) {
                     autoCorrect={false}
                   />
                 )}
-                <View style={{ gap: 8, marginTop: 8 }}>
-                  {request.buttons.map((button, index) => (
-                    <Button
-                      key={index}
-                      secondary={button.style === "cancel"}
-                      danger={button.style === "destructive"}
-                      disabled={!open}
-                      onPress={() => select(index)}
-                    >
-                      {button.text ?? "OK"}
-                    </Button>
-                  ))}
-                </View>
+                <DialogButtons
+                  buttons={request.buttons}
+                  disabled={!open}
+                  onSelect={select}
+                />
               </ScrollView>
             </MorphingSurface>
           </View>
@@ -180,6 +198,72 @@ function Dialog({ request }: { request: DialogRequest & { id: number } }) {
     </Modal>
   );
 }
+/**
+ * Material-style text buttons, end-aligned in one row: Cancel in `secondary`,
+ * the action in `accent`, a destructive one in `negative`. More than two, or
+ * labels too long to share a row, stack end-aligned.
+ */
+function DialogButtons({
+  buttons,
+  disabled,
+  onSelect,
+}: {
+  buttons: DialogButton[];
+  disabled: boolean;
+  onSelect: (index: number) => void;
+}) {
+  const { colors } = useTheme();
+  const stacked =
+    buttons.length > 2 ||
+    buttons.reduce((sum, b) => sum + (b.text ?? "OK").length, 0) > 28;
+  return (
+    <View
+      style={{
+        flexDirection: stacked ? "column" : "row",
+        justifyContent: "flex-end",
+        alignItems: stacked ? "flex-end" : "center",
+        gap: stacked ? 0 : space.sm,
+        marginTop: space.sm,
+        marginEnd: -space.md,
+      }}
+    >
+      {buttons.map((button, index) => {
+        const color =
+          button.style === "cancel"
+            ? colors.secondary
+            : button.style === "destructive"
+              ? colors.negative
+              : colors.accent;
+        return (
+          <Tap
+            key={index}
+            label={button.text ?? "OK"}
+            disabled={disabled}
+            feedback="highlight"
+            onPress={() => onSelect(index)}
+            style={{
+              minHeight: 44,
+              paddingHorizontal: space.md,
+              borderRadius: radius.full,
+              alignItems: "center",
+            }}
+          >
+            <T
+              variant="label"
+              style={{
+                color,
+                fontWeight: button.style === "cancel" ? "500" : "600",
+              }}
+            >
+              {button.text ?? "OK"}
+            </T>
+          </Tap>
+        );
+      })}
+    </View>
+  );
+}
+
 export function DialogHost() {
   const request = useSyncExternalStore(
     dialogQueue.subscribe,

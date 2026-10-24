@@ -39,7 +39,9 @@ export type MenuOrigin = {
   width: number;
   height: number;
 };
-import { MASS, SIZE } from "./motion";
+import { DURATION, MASS, SIZE } from "./motion";
+/** Final corner radius of a menu surface (`radius.lg`). Rows inside use `radius.md`. */
+const MENU_RADIUS = 20;
 const SPEED = 2;
 const ATTACHMENT_EXIT = {
   duration: 220,
@@ -59,6 +61,9 @@ export function MorphingMenu({
   dismissLabel = "Dismiss thread menu",
   preferredWidth = 272,
   closingMotion = "spring",
+  point,
+  originRadius,
+  scrim = false,
 }: {
   origin: MenuOrigin;
   anchorRef?: AnimatedRef<View>;
@@ -66,8 +71,21 @@ export function MorphingMenu({
   onClose: () => void;
   onClosed: () => void;
   children: ReactNode;
-  placement?: "above" | "below";
-  sourceIcon?: IconName;
+  /**
+   * `below`/`above`: the thread and composer menus' fixed placements. `auto`:
+   * below the trigger when it fits, else above; a row origin (wider than the
+   * menu) opens next to the row at the touch point, a button origin grows out of
+   * the button, aligned to the side of the screen it sits on.
+   */
+  placement?: "above" | "below" | "auto";
+  /** Drawn at the origin while the surface leaves it; null for row origins. */
+  sourceIcon?: IconName | null;
+  /** Where a long press landed, in window coordinates. */
+  point?: { x: number; y: number };
+  /** The trigger's own corner radius; defaults to a capsule. */
+  originRadius?: number;
+  /** Dim the screen behind the menu (20 %). */
+  scrim?: boolean;
   dismissLabel?: string;
   preferredWidth?: number;
   closingMotion?: "spring" | "attachment";
@@ -92,22 +110,56 @@ export function MorphingMenu({
     else finishDismissal();
   }, [finishDismissal]);
   const menuWidth = Math.min(width - 32, preferredWidth);
+  const clampX = (x: number) => Math.max(16, Math.min(x, width - 16 - menuWidth));
+  // A row is wider than the menu: open beside it. A button: grow out of it.
+  const fromRow = origin.width > menuWidth;
+  const autoTop = fromRow ? origin.y + origin.height + 6 : origin.y;
+  const autoBottom = fromRow ? origin.y - 6 : origin.y + origin.height;
+  const roomBelow = height - insets.bottom - 16 - autoTop;
+  const roomAbove = autoBottom - insets.top - 16;
+  const resolved =
+    placement !== "auto"
+      ? placement
+      : roomBelow >= contentHeight || roomBelow >= roomAbove
+        ? "below"
+        : "above";
+  const anchorX = point?.x ?? origin.x + origin.width / 2;
   const menuX =
-    placement === "above"
-      ? Math.max(16, Math.min(origin.x, width - 16 - menuWidth))
-      : width - 16 - menuWidth;
-  const belowY = Math.max(insets.top + 4, origin.y - 8);
+    placement === "auto"
+      ? fromRow
+        ? clampX(anchorX - 24)
+        : anchorX > width / 2
+          ? clampX(origin.x + origin.width - menuWidth)
+          : clampX(origin.x)
+      : placement === "above"
+        ? clampX(origin.x)
+        : width - 16 - menuWidth;
+  const belowY =
+    placement === "auto"
+      ? Math.max(insets.top + 4, autoTop)
+      : Math.max(insets.top + 4, origin.y - 8);
   const maxHeight = Math.max(
     44,
-    placement === "above"
-      ? origin.y - insets.top - 16
-      : height - belowY - insets.bottom - 16,
+    placement === "auto"
+      ? resolved === "below"
+        ? roomBelow
+        : roomAbove
+      : resolved === "above"
+        ? origin.y - insets.top - 16
+        : height - belowY - insets.bottom - 16,
   );
   const menuHeight = Math.min(contentHeight, maxHeight);
   const menuY =
-    placement === "above"
-      ? Math.max(insets.top + 4, origin.y - menuHeight - 8)
-      : belowY;
+    resolved === "below"
+      ? belowY
+      : placement === "auto"
+        ? Math.max(insets.top + 4, autoBottom - menuHeight)
+        : Math.max(insets.top + 4, origin.y - menuHeight - 8);
+  const startRadius = Math.min(
+    originRadius ?? origin.width / 2,
+    origin.width / 2,
+    origin.height / 2,
+  );
   // A native modal can dismiss the keyboard underneath it. Follow the actual
   // trigger rather than keeping the screen coordinates captured before opening.
   const anchorOffset = useSharedValue({ x: 0, y: 0 });
@@ -156,6 +208,7 @@ export function MorphingMenu({
   const size = useSharedValue(0);
   const corners = useSharedValue(0);
   const fade = useSharedValue(0);
+  const dim = useSharedValue(0);
   const ready = shown && contentHeight > 0;
   const attachmentExit = closingMotion === "attachment";
   useEffect(() => {
@@ -186,6 +239,12 @@ export function MorphingMenu({
             if (finished && !open && !reduced) scheduleOnRN(finishAnimation);
           }),
     );
+    dim.set(
+      withTiming(open ? 1 : 0, {
+        duration: DURATION.scrim,
+        reduceMotion: ReduceMotion.Never,
+      }),
+    );
     fade.set(
       withTiming(
         open ? 1 : 0,
@@ -208,6 +267,7 @@ export function MorphingMenu({
     size,
     corners,
     fade,
+    dim,
     finishAnimation,
   ]);
   const geometry = useDerivedValue(() => {
@@ -230,8 +290,8 @@ export function MorphingMenu({
     const r = Math.min(
       w / 2,
       h / 2,
-      origin.width / 2 +
-        (28 - origin.width / 2) * corners.get() +
+      startRadius +
+        (MENU_RADIUS - startRadius) * corners.get() +
         round * Math.min(w, h) * 0.22,
     );
     return { width: w, height: h, radius: r, x: x - w / 2, y: y - h / 2 };
@@ -268,6 +328,7 @@ export function MorphingMenu({
         ? 1
         : interpolate(size.get(), [0, 0.12], [0, 1], "clamp"),
   }));
+  const scrimStyle = useAnimatedStyle(() => ({ opacity: dim.get() }));
   const dotStyle = useAnimatedStyle(() => ({
     opacity: reduced
       ? 0
@@ -308,7 +369,7 @@ export function MorphingMenu({
           ]}
         />
       </Animated.View>
-      <Animated.View
+      {sourceIcon && <Animated.View
         pointerEvents="none"
         style={[
           {
@@ -324,7 +385,7 @@ export function MorphingMenu({
         ]}
       >
         <Icon name={sourceIcon} />
-      </Animated.View>
+      </Animated.View>}
       <Animated.View
         pointerEvents={open ? "auto" : "none"}
         accessibilityElementsHidden={!open}
@@ -373,7 +434,18 @@ export function MorphingMenu({
           accessibilityLabel={dismissLabel}
           onPress={onClose}
           style={StyleSheet.absoluteFill}
-        />
+        >
+          {scrim && (
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                StyleSheet.absoluteFill,
+                { backgroundColor: colors.scrimLight },
+                scrimStyle,
+              ]}
+            />
+          )}
+        </Pressable>
         <Animated.View
           pointerEvents="box-none"
           style={[StyleSheet.absoluteFill, anchorStyle]}

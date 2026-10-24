@@ -113,6 +113,7 @@ export function Tap({
   selected,
   expanded,
   feedback,
+  hitSlop,
   static: isStatic = false,
 }: PropsWithChildren<{
   onPress?: () => void;
@@ -124,6 +125,8 @@ export function Tap({
   selected?: boolean;
   expanded?: boolean;
   feedback?: "scale" | "highlight" | "none";
+  /** Grow the target past a small visual (keep the visual small, the target 44). */
+  hitSlop?: number | { top?: number; bottom?: number; left?: number; right?: number };
   /** @deprecated Use `feedback="highlight"`. */
   static?: boolean;
 }>) {
@@ -150,7 +153,7 @@ export function Tap({
       // Trackpad/pointer feedback on iPad; touch devices never fire these.
       onHoverIn={() => setHovered(true)}
       onHoverOut={() => setHovered(false)}
-      hitSlop={Platform.OS === "android" ? 2 : undefined}
+      hitSlop={hitSlop ?? (Platform.OS === "android" ? 2 : undefined)}
       pressRetentionOffset={16}
     >
       <Animated.View

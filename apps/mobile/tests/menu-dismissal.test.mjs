@@ -76,7 +76,7 @@ function mountMenu(platform, reduced, closingMotion) {
     "expo-blur": { BlurView: "BlurView" },
     "../../ui/primitives": { Icon: "Icon" },
     "../../ui/theme": { useTheme: () => ({ colors: {}, dark: true }) },
-    "./motion": { MASS: {}, SIZE: {} },
+    "./motion": { MASS: {}, SIZE: {}, DURATION: { scrim: 140 } },
   };
   const exports = {};
   runInNewContext(compiled, { exports, require: (id) => {
