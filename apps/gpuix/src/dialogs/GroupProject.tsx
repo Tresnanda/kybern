@@ -2,7 +2,7 @@
 // deep, nothing ticked. "Add folder…" adds a deeper repository (it must be inside the group folder). The helper line above
 // the buttons says what is missing or what the group will be; the primary stays disabled until the selection is valid.
 // ⌘↵ submits, Esc cancels. Busy: "Adding…", the button keeps its width and the sheet stays until the project exists.
-import { useGpuix } from '@gpuix/react'
+import { useGpuix, useWindowSize } from '@gpuix/react'
 import { homedir } from 'node:os'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { GROUP_COPY, memberSelectionError, memberSelectionHelper, orderMemberPaths } from '../../../../packages/kybern-client/src/groups.ts'
@@ -40,6 +40,7 @@ export function GroupProject({ path, close, seed }: { path: string; close: () =>
 function GroupSheet({ path, close, seed }: { path: string; close: () => void; seed?: GroupSheetSeed }) {
   const t = useTheme()
   const { renderer } = useGpuix()
+  const window = useWindowSize({ intervalMs: 250 })
   const exit = useDialogClose()
   const local = activeEnvironment().local
   const [client] = useState(() => getClient())
@@ -152,6 +153,7 @@ function GroupSheet({ path, close, seed }: { path: string; close: () => void; se
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <ChecklistHeader selected={selected.length} total={loading ? null : candidates.length} />
         <Checklist
+          maxHeight={Math.max(128, Math.min(420, window.height - 440))}
           candidates={candidates}
           selected={selected}
           loading={loading}

@@ -3,7 +3,7 @@
 // once and offers Undo (8 s, or until the dialog closes) instead of a confirmation. The primary is the group folder when
 // it is a member, else the first by path: it is shown, never chosen (no "Make primary"). "Also copy into worktrees" lists
 // the top-level entries of the group folder the user picked for new worktree containers; nothing is pre-picked.
-import { useGpuix } from '@gpuix/react'
+import { useGpuix, useWindowSize } from '@gpuix/react'
 import { spawn } from 'node:child_process'
 import { homedir } from 'node:os'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
@@ -273,6 +273,7 @@ function MemberRow({ member, state, primary, first, folder, local, atMinimum, on
 /** "Add repositories to <project>" (sheet 3F): the group folder's repositories that aren't members, nothing ticked. */
 function AddRepositories({ project, onDone }: { project: Project; onDone: () => void }) {
   const t = useTheme()
+  const window = useWindowSize({ intervalMs: 250 })
   const { renderer } = useGpuix()
   const local = activeEnvironment().local
   const [client] = useState(() => getClient())
@@ -333,7 +334,7 @@ function AddRepositories({ project, onDone }: { project: Project; onDone: () => 
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <ChecklistHeader selected={selected.length} total={loading ? null : candidates.length} />
-        <Checklist testId="repositories-checklist" candidates={candidates} selected={selected} loading={loading} onToggle={(p) => setSelected(toggled(selected, p))} empty={{ title: GROUP_COPY.nothingFoundTitle(group), body: GROUP_COPY.nothingFoundBody }} />
+        <Checklist testId="repositories-checklist" maxHeight={Math.max(128, Math.min(420, window.height - 400))} candidates={candidates} selected={selected} loading={loading} onToggle={(p) => setSelected(toggled(selected, p))} empty={{ title: GROUP_COPY.nothingFoundTitle(group), body: GROUP_COPY.nothingFoundBody }} />
         {local && <div style={{ display: 'flex' }}><Button testId="repositories-add-folder" variant="ghost" size="sm" icon={N.plus} onClick={() => void addFolder()}>{GROUP_COPY.addFolder}</Button></div>}
         {error && <Label color={t.red} size={12} lineHeight={17}>{error}</Label>}
       </div>
