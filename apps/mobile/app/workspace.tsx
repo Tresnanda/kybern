@@ -99,7 +99,7 @@ export default function Workspace() {
       <Stack.Screen
         options={{
           title: tab === "More" ? "Thread details" : tab,
-          headerStyle: { backgroundColor: tab === "Changes" ? colors.grouped : colors.background },
+          headerStyle: { backgroundColor: tab === "Changes" || tab === "Artifacts" ? colors.grouped : colors.background },
         }}
       />
       {tab === "Changes" && threadId ? (
@@ -118,7 +118,7 @@ export default function Workspace() {
       ) : tab === "Files" && project ? (
         <Files key={project.id} project={project} threadId={threadId} reveal={reveal} />
       ) : (
-        <Page>
+        <Page grouped={tab === "Artifacts"}>
           <ErrorBanner error={error} />
           {tab === "Artifacts" && thread && <Artifacts key={`${app.activeId}:${threadId}`} thread={thread} />}
           {tab === "Notes" && threadId && <ThreadNotes key={`${app.activeId}:${threadId}`} threadId={threadId} />}
