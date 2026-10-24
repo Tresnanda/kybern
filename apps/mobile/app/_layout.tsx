@@ -296,6 +296,10 @@ function Navigation() {
         />
         <Stack.Screen name="settings-detail" options={{ title: "Settings" }} />
         <Stack.Screen name="settings" options={{ title: "Settings" }} />
+        <Stack.Screen name="settings-agent" options={{ title: "Agent" }} />
+        <Stack.Screen name="settings-role" options={{ title: "Model", ...sheet }} />
+        <Stack.Screen name="computer-note" options={{ title: "App note" }} />
+        <Stack.Screen name="computer-live" options={{ title: "Live view" }} />
         <Stack.Screen name="app-updates" options={{ title: "App updates" }} />
         <Stack.Screen name="projects" options={{ title: "Projects" }} />
         <Stack.Screen
