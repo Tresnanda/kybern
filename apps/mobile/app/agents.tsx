@@ -1,5 +1,5 @@
 // The Agents sheet (ux-thread H2/H9): opened from the thread's bottom-bar capsule or a
-// transcript's "N processes running" row. `/tasks` shows the same list full screen.
+// transcript's "N processes running" row. Held messages wait at the top of Agents. `/tasks` shows the same list full screen.
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import { ScrollView } from "react-native";
@@ -34,6 +34,7 @@ export default function AgentsSheet() {
           model={model}
           segment={segment}
           onSegment={setSegment}
+          beforeOpen={() => router.back()}
           onOpen={(row) => {
             // Close the sheet first so the destination is pushed on the stack, not under it.
             router.back();

@@ -48,6 +48,7 @@ export type Tone = Extract<
   | "inverse"
   | "warning"
   | "onProminent"
+  | "onAccent"
 >;
 
 /** Text in one of the type roles. Scales with Dynamic Type up to the role's ceiling. */
@@ -251,7 +252,8 @@ export function IconButton({
  * - `tinted` (default): secondary commits; accent text on `accentSoft`.
  * - `plain`: text only, for header actions and inline "New" / "See all".
  * - `destructive`: red text, no fill. A red fill exists only in confirmations.
- * `size` "large" is 48 pt (forms, sheets, bottom bars), "medium" 36 pt.
+ * `size` "large" is 48 pt (forms, sheets, bottom bars), "medium" 36 pt, "small"
+ * 32 pt (inline actions under a message; its target grows to 44 pt).
  */
 export type ButtonRole = "prominent" | "tinted" | "plain" | "destructive";
 export function Button({
@@ -268,7 +270,7 @@ export function Button({
   busy?: boolean;
   disabled?: boolean;
   role?: ButtonRole;
-  size?: "large" | "medium";
+  size?: "large" | "medium" | "small";
   icon?: IconName;
   /** Accessible name when the visible text alone says too little. */
   label?: string;
@@ -299,11 +301,12 @@ export function Button({
       label={label ?? (typeof children === "string" ? children : "Continue")}
       onPress={onPress}
       disabled={disabled || busy}
+      hitSlop={size === "small" ? { top: 6, bottom: 6 } : undefined}
       style={{
-        minHeight: large ? 48 : 36,
+        minHeight: large ? 48 : size === "small" ? 32 : 36,
         // 48 pt full-width buttons nest in `lg` cards at 6 pt; smaller ones are capsules.
         borderRadius: large ? radius.md : radius.full,
-        paddingHorizontal: filled ? (large ? 20 : 14) : 0,
+        paddingHorizontal: filled ? (large ? 20 : size === "small" ? 12 : 14) : 0,
         backgroundColor: fill,
         flexDirection: "row",
         alignItems: "center",

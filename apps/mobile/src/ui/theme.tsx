@@ -31,6 +31,8 @@ const light = {
   /** The one commit button per screen. Never pure white in dark mode. */
   prominent: "#1A1C1F",
   onProminent: "#FFFFFF",
+  /** Text on an `accent` fill (count badges). */
+  onAccent: "#FFFFFF",
   positive: "#008A38",
   negative: "#BA2623",
   negativeSoft: "#FCEBEA",
@@ -59,6 +61,7 @@ const dark: typeof light = {
   accentSoft: "#203247",
   prominent: "#E9E9EB",
   onProminent: "#141414",
+  onAccent: "#FFFFFF",
   positive: "#40C977",
   negative: "#FA423E",
   negativeSoft: "#3A2222",

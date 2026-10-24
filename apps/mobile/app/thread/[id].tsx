@@ -23,7 +23,7 @@ import { onEditPending, sendWithPending, settlePending, usePendingSends, withPen
 import { WorkspaceMenu } from "../../src/features/WorkspaceMenu";
 import { AgentsCapsule, openAgents, useAgents } from "../../src/features/AgentsSheet";
 import { agentsCapsuleLabel } from "../../src/state/agents";
-import { HeldMessages } from "../../src/features/HeldMessages";
+import { HeldBubbles, useHeldMessages, useSenderName } from "../../src/features/HeldMessages";
 import { ChildThreadBar } from "../../src/features/ChildThreadBar";
 import { QueuedCapsule } from "../../src/features/QueuedPrompts";
 import { StatusStrip } from "../../src/features/ThreadStatus";
@@ -297,7 +297,11 @@ function ThreadScreenBody() {
   const fileContext = useMemo(() => ({ threadId: id, projectId: thread?.project_id }), [id, thread?.project_id]);
   const queued = app.queue.filter((q) => q.thread_id === id);
   const agents = useAgents(thread, snapshot.tasks, { active: focused });
-  const capsule = agentsCapsuleLabel(agents);
+  // Held messages read as incoming bubbles at the transcript's end; the Agents capsule
+  // badges the count (and reads "Waiting" when it has nothing else to say).
+  const { held, resolved: heldResolved } = useHeldMessages(thread?.id, thread?.last_seq ?? 0);
+  const senderName = useSenderName(agents.children);
+  const capsule = agentsCapsuleLabel(agents) ?? (held.length ? "Waiting" : null);
   const subagent = isSubagentThread(thread);
   const subagentWorking = !!thread && subagent && subagentThreadPhase(thread) === "working";
   useFocusEffect(
@@ -350,7 +354,11 @@ function ThreadScreenBody() {
   useEffect(() => {
     if (lastRow && following && !wasRunning.current) jump();
   }, [lastRow]);
-  // The bottom bar grew or shrank (a status strip, a held message): a following
+  // A held message arrived (or left) at the end: a following reader keeps seeing the end.
+  useEffect(() => {
+    if (following) requestAnimationFrame(() => list.current?.scrollToEnd({ animated: true }));
+  }, [held.length]);
+  // The bottom bar grew or shrank (a status strip, the capsule row): a following
   // reader stays on the last line instead of having it slide under the bar.
   useEffect(() => {
     if (following) requestAnimationFrame(() => list.current?.scrollToEnd({ animated: false }));
@@ -578,6 +586,7 @@ function ThreadScreenBody() {
                 {snapshot.pendingQuestions?.map((q) => (
                   <AsyncQuestions key={q.id} request={q} threadId={id} />
                 ))}
+                <HeldBubbles held={held} senderName={senderName} onResolved={heldResolved} />
               </View>
             }
           />
@@ -608,7 +617,6 @@ function ThreadScreenBody() {
             }}
           >
             <View style={{ paddingHorizontal: side, gap: space.sm }}>
-              <HeldMessages thread={thread} senders={agents.children} />
               <ChildThreadBar thread={thread} />
               {running && !subagent && (
                 <StatusStrip
@@ -632,7 +640,8 @@ function ThreadScreenBody() {
                     <AgentsCapsule
                       label={capsule}
                       running={agents.runningAgents + agents.runningProcesses > 0}
-                      onPress={() => (regular ? openInspector("tasks") : openAgents(id))}
+                      waiting={held.length}
+                      onPress={() => (regular ? openInspector("tasks") : openAgents(id, held.length ? "agents" : undefined))}
                     />
                   )}
                   <View style={{ flex: 1 }} />

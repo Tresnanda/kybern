@@ -3,7 +3,8 @@
 //   AgentsList          Agents | Processes, running first, status glyph + shared words,
 //                       cleaned mono commands. Rendered by the `/agents` sheet, the
 //                       full-screen `/tasks` route and the iPad inspector.
-//   AgentsCapsule       the bottom-bar entry point ("15 agents · 2 running").
+//   AgentsCapsule       the bottom-bar entry point ("15 agents · 2 running"), with a
+//                       count badge for held messages ("Waiting" when nothing else).
 //   RunningProcessesRow a compact transcript row ("3 processes running ›") that opens
 //                       the sheet on Processes, so a running thread never lists every
 //                       process at once. The transcript lane places it.
@@ -15,6 +16,7 @@ import { agentsModel, type AgentRow, type AgentsModel } from "../state/agents";
 import type { RuntimeTask, Thread } from "../state/protocol";
 import { count } from "../state/format";
 import { useChildThreads } from "./ChildThreads";
+import { HeldSection, WaitingBadge, useThreadHeld } from "./HeldMessages";
 import { InsetGroup, ListRow, SectionHeader } from "../ui/List";
 import { Empty, Icon, T, Tap } from "../ui/primitives";
 import { ProviderMark } from "../ui/ProviderMark";
@@ -90,12 +92,15 @@ export function AgentsList({
   segment,
   onSegment,
   onOpen,
+  beforeOpen,
 }: {
   threadId: string;
-  model: AgentsModel;
+  model: AgentsModel & { children?: readonly Thread[] };
   segment: AgentsSegment;
   onSegment: (segment: AgentsSegment) => void;
   onOpen?: (row: AgentRow) => void;
+  /** Runs before a held message's sender is opened (the sheet closes itself). */
+  beforeOpen?: () => void;
 }) {
   const open =
     onOpen ??
@@ -103,6 +108,7 @@ export function AgentsList({
       if ("thread" in row.target) router.push({ pathname: "/thread/[id]", params: { id: row.target.thread } });
       else router.push({ pathname: "/tasks", params: { threadId, taskId: row.target.task } });
     });
+  const waiting = useThreadHeld(threadId);
   const rows = segment === "agents" ? model.agents : model.processes;
   const running = rows.filter((row) => row.active);
   const finished = rows.filter((row) => !row.active);
@@ -121,7 +127,9 @@ export function AgentsList({
           { value: "processes", label: `Processes · ${model.processes.length}` },
         ]}
       />
-      {groups.map((group, index) => (
+      {/* Held messages wait at the top of Agents: the capsule's badge opens the sheet here. */}
+      {segment === "agents" && <HeldSection {...waiting} senders={model.children} beforeOpen={beforeOpen} />}
+      {groups.map((group) => (
         <Fragment key={group.title}>
           <SectionHeader title={group.title} count={group.rows.length} inset />
           <InsetGroup>
@@ -131,7 +139,7 @@ export function AgentsList({
           </InsetGroup>
         </Fragment>
       ))}
-      {!rows.length && (
+      {!rows.length && !(segment === "agents" && waiting.held.length) && (
         <Empty
           icon={segment === "agents" ? "person.2" : "terminal"}
           title={segment === "agents" ? "No agents yet" : "No processes yet"}
@@ -146,12 +154,23 @@ export function AgentsList({
   );
 }
 
-/** The bottom-bar entry point. 36 pt, sits on the bar's material. */
-export function AgentsCapsule({ label, running, onPress }: { label: string; running: boolean; onPress: () => void }) {
+/** The bottom-bar entry point. 36 pt, sits on the bar's material; `waiting` badges it. */
+export function AgentsCapsule({
+  label,
+  running,
+  waiting = 0,
+  onPress,
+}: {
+  label: string;
+  running: boolean;
+  waiting?: number;
+  onPress: () => void;
+}) {
   const { colors } = useTheme();
+  const held = waiting > 0 ? `. ${waiting === 1 ? "1 message waits" : `${waiting} messages wait`} for you` : "";
   return (
     <Tap
-      label={`${label}. Open agents and processes`}
+      label={`${label}${held}. Open agents and processes`}
       onPress={onPress}
       hitSlop={{ top: 4, bottom: 4 }}
       style={{
@@ -173,6 +192,7 @@ export function AgentsCapsule({ label, running, onPress }: { label: string; runn
       <T variant="label" numberOfLines={1} style={{ fontVariant: ["tabular-nums"] }}>
         {label}
       </T>
+      <WaitingBadge count={waiting} />
     </Tap>
   );
 }

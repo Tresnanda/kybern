@@ -91,7 +91,8 @@ Status hues for glyphs come from `taskColors()` in `TaskGlyphs.tsx`.
 `role`: `prominent` (one per screen, the commit: Connect, Start, Save),
 `tinted` (default; secondary commits), `plain` (header actions, inline “New”,
 “See all”; flush, no fill), `destructive` (red text, no fill). `size`: `large`
-48 pt (forms, sheets, bottom bars) or `medium` 36 pt. Never a white or red slab;
+48 pt (forms, sheets, bottom bars), `medium` 36 pt, or `small` 32 pt (inline
+actions under a message; the target grows to 44 pt). Never a white or red slab;
 a red fill exists only inside a confirmation. Full-width buttons only in forms,
 sheets and bottom bars, never mid-reading or in menus.
 
@@ -210,12 +211,33 @@ top material fades in over the first 8 pt of scroll. Android: opaque
 `background`. On both, the material runs `EDGE_FADE` (20 pt) past the bar's
 inner edge and dissolves into the content (a masked progressive edge on iOS, a
 gradient on Android): no hairline, no hard-edged slab. Anything stacked on a bar
-(status strip, held messages, capsules) sits on that material without a box of
+(status strip, capsules) sits on that material without a box of
 its own. Interactive chrome always sits on the bar; when a bar grows, shift the list
 by the delta in one frame instead of animating it. `useWindowControlsInset()`
 keeps custom headers clear of the iPadOS window controls (78 pt when windowed);
 ChromeBar top bars apply it automatically. Native stack headers handle it
 themselves.
+
+### Held messages (`src/features/HeldMessages.tsx`)
+
+A message another thread wants to deliver here waits for the user. One reads as
+an incoming bubble at the transcript's end (`HeldBubbles`, list footer): a meta
+line “● Sender · Question · waiting for you” (accent dot, the sender opens its
+thread), a `card` bubble at radius `lg` with an `xs` tail corner on the leading
+bottom, clamped to 6 lines with “Show more”, then Deliver (`tinted`, `small`)
+and Dismiss (`plain`, `small`). Several stack like a notification group: a
+header “2 messages waiting · Show all · …” (Deliver all, Dismiss all with a
+confirmation), the newest bubble in front (4 lines; its actions apply to it)
+and one or two card edges behind it, each 6 pt lower and 4 % narrower. Show all
+fans them out oldest first (staggered, `SIZE` spring); Show less folds them.
+Delivering lifts a bubble away on `MASS`; dismissing sinks and fades while the
+rest close the gap. Reduce Motion: fades.
+
+The Agents capsule carries the only count (`WaitingBadge`: accent fill,
+`onAccent` tabular number, 19 pt with a background ring, top-trailing); its label
+never repeats it (“24 agents”, or “Waiting” when it has nothing else to say).
+The Agents list opens with a “Waiting for you” group of the same messages
+(`HeldSection`).
 
 ### Status (`src/state/status.ts`, `StatusGlyph`)
 
