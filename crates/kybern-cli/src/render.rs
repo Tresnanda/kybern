@@ -53,7 +53,72 @@ pub fn projects(list: &[Project], spaces: &[Space]) {
             .and_then(|id| spaces.iter().find(|space| space.id == id))
             .map(|space| format!("  {}", space.name))
             .unwrap_or_default();
-        println!("{}  {:<20} {}{}{}{}", p.id, p.name, p.path, if p.is_git { "" } else { "  (not git)" }, prefix, space);
+        let git = if p.kind == ProjectKind::Group || p.is_git { "" } else { "  (not git)" };
+        println!("{}  {:<20} {}{}{}{}{}", p.id, p.name, p.path, repo_count(p), git, prefix, space);
+    }
+}
+
+/// "  3 repos" for a group project, nothing for a single one.
+pub fn repo_count(p: &Project) -> String {
+    match (p.kind, p.members.len()) {
+        (ProjectKind::Single, _) => String::new(),
+        (_, 1) => "  1 repo".into(),
+        (_, n) => format!("  {n} repos"),
+    }
+}
+
+pub fn scan(r: &ProjectsScanReposResult) {
+    println!("{}{}", r.path, if r.is_git { "  (a repository itself: \".\")" } else { "" });
+    if let Some(id) = r.existing_project_id {
+        println!("  already project {id}");
+    }
+    for c in &r.candidates {
+        let branch = match (&c.branch, c.detached) {
+            (Some(b), true) => format!("detached at {b}"),
+            (Some(b), false) => b.clone(),
+            (None, _) => "-".into(),
+        };
+        let mut notes = Vec::new();
+        if let Some(parent) = &c.submodule_of {
+            notes.push(format!("submodule of {parent}, not selectable"));
+        }
+        if let Some(id) = c.project_id {
+            notes.push(format!("also project {id}"));
+        }
+        if c.added {
+            notes.push("added".into());
+        }
+        let notes = if notes.is_empty() { String::new() } else { format!("  ({})", notes.join("; ")) };
+        println!("  {:<24} {:<20} {}{notes}", c.path, c.name, branch);
+    }
+    for rejected in &r.rejected {
+        println!("  ! {}: {}", rejected.path, rejected.reason);
+    }
+    if r.truncated {
+        println!("  (stopped early: too many folders)");
+    }
+}
+
+pub fn members(r: &ProjectsMembersStatusResult, project: Option<&Project>) {
+    for m in &r.members {
+        let state = match m.status {
+            MemberStatus::Ok => match (&m.branch, m.detached) {
+                (Some(b), true) => format!("detached at {b}"),
+                (Some(b), false) => b.clone(),
+                (None, _) => "-".into(),
+            },
+            MemberStatus::Missing => "missing".into(),
+            MemberStatus::NotGit => "not a repository".into(),
+        };
+        let dirty = if m.dirty_files > 0 { format!("  {} uncommitted", m.dirty_files) } else { String::new() };
+        let instructions = m.instructions.as_deref().map(|f| format!("  {f}")).unwrap_or_default();
+        println!("  {:<24} {:<20} {state}{dirty}{instructions}", m.path, m.name);
+    }
+    let shared: Vec<&str> =
+        [("AGENTS.md", r.agents_md), ("CLAUDE.md", r.claude_md)].into_iter().filter(|(_, on)| *on).map(|(f, _)| f).collect();
+    println!("shared instructions: {}", if shared.is_empty() { "none".to_string() } else { shared.join(", ") });
+    if let Some(project) = project.filter(|p| !p.worktree_copy.is_empty()) {
+        println!("copied into worktrees: {}", project.worktree_copy.join(", "));
     }
 }
 
