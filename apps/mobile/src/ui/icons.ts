@@ -29,6 +29,7 @@ export const androidIcons = {
   "chevron.left": "chevron_left",
   "chevron.right": "chevron_right",
   "chevron.up": "expand_less",
+  "chevron.up.chevron.down": "unfold_more",
   circle: "circle",
   "circle.dotted": "pending",
   "circle.lefthalf.filled": "contrast",
