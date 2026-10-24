@@ -231,7 +231,7 @@ function SpaceMenu({ spaces }: { spaces: Space[] }) {
       <MenuItem id="up" testId="space-menu-up" icon={N.arrowUp} label={SPACE_COPY.menuMoveUp} disabled={index === 0} onSelect={() => void moveSpace(space.id, -1).catch(() => {})} />
       <MenuItem id="down" testId="space-menu-down" icon={N.arrowDown} label={SPACE_COPY.menuMoveDown} disabled={index === spaces.length - 1} onSelect={() => void moveSpace(space.id, 1).catch(() => {})} />
       <MenuSeparator />
-      <MenuItem id="delete" testId="space-menu-delete" icon={N.trash} label={SPACE_COPY.menuDelete} destructive disabled={!canDeleteSpace(space)} onSelect={() => askDeleteSpace(space.id)} />
+      <MenuItem id="delete" testId="space-menu-delete" icon={N.trash} label={SPACE_COPY.menuDelete} destructive={canDeleteSpace(space)} disabled={!canDeleteSpace(space)} onSelect={() => askDeleteSpace(space.id)} />
       {!canDeleteSpace(space) && <MenuLabel>{SPACE_COPY.defaultCantDelete}</MenuLabel>}
     </ContextMenu>
   )
