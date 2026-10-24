@@ -1,5 +1,6 @@
 import { useWorkspaceProgress } from '../groups/store.ts'
-import { workspaceProgressLabel } from '../../../../packages/kybern-client/src/groups.ts'
+import { editedFilesTitle, groupFilesByRepo, includedMembers, stripRepoPrefix, workspaceProgressLabel } from '../../../../packages/kybern-client/src/groups.ts'
+import { OutsideChange } from './OutsideChange.tsx'
 import { openTab } from '../tabs/open.ts'
 import { expiredQuestion } from '../../../../packages/kybern-client/src/requestCards.ts'
 import type { PublicInstance } from '@gpuix/react'
@@ -17,7 +18,8 @@ import { AgentItemCard } from '../coordinator/AgentItem.tsx'
 // folded under "Worked for"), then the answer with its error/stopped lines,
 // the "Edited N files" card and the footer.
 import { SubagentDivider } from '../subagents/Page.tsx'
-import { memo, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { N } from '../nav/glyphs.ts'
 import { calendarDateKey, calendarDateLabel, elapsedSince, plural } from '../../../desktop/src/lib/format.ts'
 import { clockTime } from './clock.ts'
 import { isImageGenerationTool } from '../../../desktop/src/lib/toolActivity.ts'
@@ -276,6 +278,7 @@ export const TurnFooter = memo(function TurnFooter({ group, threadId, isLast }: 
           )}
           {group.end?.stopReason === 'interrupted' && <Para color={muted(t)}>Stopped.</Para>}
           {diff && diff.files.length > 0 && <EditedFilesCard diff={diff} threadId={threadId} turnId={group.turnId} canUndo={isLast} />}
+          {group.outside?.map((block) => <OutsideChange key={block.id} repos={block.repos} />)}
           {group.reverted && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8 }}>
               <Icon source={T.undo} size={12} color={muted(t)} />
@@ -319,8 +322,24 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
   const [reverting, setReverting] = useState(false)
   const adds = diff.files.reduce((n, f) => n + f.additions, 0)
   const dels = diff.files.reduce((n, f) => n + f.deletions, 0)
-  const head = diff.files.slice(0, MAX_VISIBLE_CHANGED_FILES)
-  const rest = diff.files.slice(MAX_VISIBLE_CHANGED_FILES)
+  // A group thread lists the files under their repository (paths stay relative to the group folder, so links resolve).
+  const members = useApp((s) => (s.open.thread?.id === threadId ? s.open.thread.members : undefined))
+  const groups = members?.length ? groupFilesByRepo(diff, includedMembers(members)).filter((g) => g.files.length > 0) : null
+  const files = groups ? groups.flatMap((g) => g.files) : diff.files
+  const head = files.slice(0, MAX_VISIBLE_CHANGED_FILES)
+  const rest = files.slice(MAX_VISIBLE_CHANGED_FILES)
+  const repoOf = (file: Diff['files'][number]) => groups?.find((g) => g.files.includes(file))
+  // The repository's caption goes before its first file, in the part of the list that shows that file.
+  const rowsFor = (part: Diff['files'], offset: number) => part.map((f, i) => {
+    const repo = repoOf(f)
+    const first = repo && repo.files[0] === f
+    return (
+      <Fragment key={f.path}>
+        {first && <RepoCaption name={repo.repo.name} border={offset + i > 0 ? border : undefined} />}
+        <EditedFileRow file={f} threadId={threadId} turnId={turnId} first={offset + i === 0 || !!first} border={border} repo={repo?.repo.path} />
+      </Fragment>
+    )
+  })
   const border = t.variant === 'dark' ? alpha(t.borderLight, 0.55) : t.borderLight
   const radius = 10.4
   const undo = async () => {
@@ -358,7 +377,7 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
           <Icon source={T.changes} size={14} color={muted(t, 0.7)} />
           <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
             <Label color={fg(t, 0.92)} lineHeight={TEXT.lineHeight} truncate>
-              {`Edited ${plural(diff.files.length, 'file')}`}
+              {groups ? editedFilesTitle(files.length, groups.map((g) => g.repo.name)) : `Edited ${plural(diff.files.length, 'file')}`}
             </Label>
             {(adds > 0 || dels > 0) && <DiffStat additions={adds} deletions={dels} />}
           </div>
@@ -375,12 +394,10 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
       </div>
       {/* `DisclosureRegion`s: the file list, and the files past the first five inside it. */}
       <Collapse open={expanded} testId="edited-files-panel">
-          {head.map((f, i) => (
-            <EditedFileRow key={f.path} file={f} threadId={threadId} turnId={turnId} first={i === 0} border={border} />
-          ))}
+          {rowsFor(head, 0)}
           {rest.length > 0 && (
             <Collapse open={showAll}>
-              {rest.map((f) => <EditedFileRow key={f.path} file={f} threadId={threadId} turnId={turnId} border={border} />)}
+              {rowsFor(rest, head.length)}
             </Collapse>
           )}
           {rest.length > 0 && (
@@ -397,7 +414,18 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
   )
 }
 
-function EditedFileRow({ file, threadId, turnId, first, border }: { file: Diff['files'][number]; threadId: ThreadId; turnId: string; first?: boolean; border: string }) {
+/** A repository's caption over its files in a group thread's card: the glyph and name, quiet. */
+function RepoCaption({ name, border }: { name: string; border?: string }) {
+  const t = useTheme()
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 2, ...(border ? { borderTopWidth: 1, borderColor: border } : {}) }}>
+      <Icon source={N.repo} size={12} color={muted(t, 0.55)} />
+      <Label color={muted(t, 0.7)} size={12} lineHeight={16}>{name}</Label>
+    </div>
+  )
+}
+
+function EditedFileRow({ file, threadId, turnId, first, border, repo }: { file: Diff['files'][number]; threadId: ThreadId; turnId: string; first?: boolean; border: string; /** The member it belongs to: its path prefix is drawn muted. */ repo?: string }) {
   const t = useTheme()
   const g = useGlass()
   const [open, setOpen] = useRowState(`file:${turnId}:${file.path}`, false)
@@ -437,9 +465,16 @@ function EditedFileRow({ file, threadId, turnId, first, border }: { file: Diff['
         <div testId={`edited-file-${file.path}`} onClick={toggle} style={{ display: 'flex', alignItems: 'center', gap: 8, flexGrow: 1, minWidth: 0 }}>
         <Chevron open={open} color={muted(t, 0.6)} />
         <Icon source={diffFileIcons[getFileIconName(file.path)] ?? T.file} size={16} color={t.text} style={{ opacity: t.variant === 'dark' ? 0.8 : 0.7 }} />
-        <Label color={t.text} lineHeight={TEXT.lineHeight} truncate style={{ flexShrink: 1, hover: { textDecoration: 'underline' } }}>
-          {file.path}
-        </Label>
+        {repo && repo !== '.' && file.path.startsWith(`${repo}/`) ? (
+          <div style={{ display: 'flex', minWidth: 0, flexShrink: 1 }}>
+            <Label color={muted(t, 0.6)} lineHeight={TEXT.lineHeight} style={{ flexShrink: 0 }}>{`${repo}/`}</Label>
+            <Label color={t.text} lineHeight={TEXT.lineHeight} truncate style={{ flexShrink: 1, hover: { textDecoration: 'underline' } }}>{stripRepoPrefix(file.path, repo)}</Label>
+          </div>
+        ) : (
+          <Label color={t.text} lineHeight={TEXT.lineHeight} truncate style={{ flexShrink: 1, hover: { textDecoration: 'underline' } }}>
+            {file.path}
+          </Label>
+        )}
         <div style={{ flexGrow: 1 }} />
         <DiffStat additions={file.additions} deletions={file.deletions} />
         </div>
