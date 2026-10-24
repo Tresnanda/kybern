@@ -17,6 +17,7 @@ import { ThreadCache } from "./threadCache";
 import { attachNotes, loadNotes, resetNotes } from "./notes";
 import { attachTasks, loadTasks, resetTasks } from "./tasks";
 import { attachRequestProgress } from "./requestProgress";
+import { attachPreviews } from "./previews";
 import {
   KybernClient,
   PROJECTS_CHANGED_NOTIFICATION,
@@ -483,6 +484,7 @@ export function connect(id: string | null) {
   attachTasks(next, () => generation === thisGeneration);
   attachRequestProgress(next, () => generation === thisGeneration);
   attachHooks.forEach((attach) => attach(next, () => generation === thisGeneration && client === next));
+  attachPreviews(next, () => generation === thisGeneration);
   // Projects added or removed elsewhere (desktop, CLI) arrive as the whole list.
   next.onNotification(PROJECTS_CHANGED_NOTIFICATION, (params) => {
     if (generation !== thisGeneration || client !== next) return;

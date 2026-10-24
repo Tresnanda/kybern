@@ -37,6 +37,7 @@ import { SendTransitionProvider } from "../src/components/liquid/SendTransition"
 import { DialogHost } from "../src/ui/Alert";
 import { sheetOptions } from "../src/ui/Sheet";
 import { ToastHost } from "../src/ui/Toast";
+import { PreviewRequests } from "../src/features/Preview";
 
 // A sheet opened from a deep link still needs a destination to dismiss to.
 export const unstable_settings = { anchor: "index" };
@@ -271,6 +272,7 @@ function Navigation() {
         <Stack.Screen name="pull" options={{ title: "" }} />
         <Stack.Screen name="pull-review" options={{ title: "Review", ...sheet }} />
         <Stack.Screen name="pull-send" options={{ title: "Send to agent", ...sheet }} />
+        <Stack.Screen name="preview" options={{ title: "Preview" }} />
         <Stack.Screen
           name="integrations"
           options={{ title: "Connectors and plugins" }}
@@ -354,6 +356,7 @@ function Navigation() {
         <Stack.Screen name="dev-sheet" options={{ title: "Sheet", ...sheet }} />
       </Stack>
       </Shell>
+      <PreviewRequests />
       <ToastHost />
       <DialogHost />
     </View>

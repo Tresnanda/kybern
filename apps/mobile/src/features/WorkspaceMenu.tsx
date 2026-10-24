@@ -24,6 +24,8 @@ const INSPECTOR_TAB: Record<string, InspectorTab> = {
   Changes: "changes",
   Files: "files",
   Terminal: "terminal",
+  Preview: "preview",
+  Notes: "notes",
 };
 
 const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
@@ -69,6 +71,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
   function navigate(tab: string) {
     const inspectorTab = INSPECTOR_TAB[tab];
     if (regular && inspectorTab) openInspector(inspectorTab);
+    else if (tab === "Preview") router.push({ pathname: "/preview", params: { threadId } });
     else router.push({ pathname: "/workspace", params: { threadId, tab } });
   }
   async function run(action: () => Promise<unknown>, done: string) {
@@ -229,6 +232,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
             ),
         },
         { title: "Details", icon: "slider.horizontal.3", onPress: () => navigate("More") },
+        { title: "Preview", subtitle: "Dev servers and pages", icon: "globe", onPress: () => navigate("Preview") },
         { title: "Artifacts", icon: "doc", onPress: () => navigate("Artifacts") },
         { title: "Notes", icon: "square.and.pencil", onPress: () => navigate("Notes") },
         {
