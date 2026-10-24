@@ -17,7 +17,7 @@ import { errorText, refresh, rpc, supportsGroupProjects, useApp } from "../src/s
 import { CheckRow } from "../src/ui/CheckRow";
 import { Button, ErrorBanner, Field, Icon, Page, Row, T, Tap, styles } from "../src/ui/primitives";
 import { Segmented } from "../src/ui/Segmented";
-import { type as typography, useTheme } from "../src/ui/theme";
+import { useTheme } from "../src/ui/theme";
 
 type Kind = "single" | "group";
 
@@ -316,13 +316,18 @@ function GroupForm({ header, existing }: { header?: React.ReactNode; existing?: 
                   autoCorrect={false}
                   autoCapitalize="none"
                   spellCheck={false}
-                  placeholder="/Users/you/work/acme"
+                  placeholder="~/work/acme"
                   placeholderTextColor={colors.muted}
                   selectionColor={colors.accent}
-                  style={[
-                    typography.body,
-                    { flex: 1, color: colors.ink, fontFamily: Platform.select({ ios: "Menlo", default: "monospace" }), fontSize: 16 },
-                  ]}
+                  // No body line height: iOS drops a single-line input's baseline under it and clips descenders.
+                  style={{
+                    flex: 1,
+                    alignSelf: "stretch",
+                    color: colors.ink,
+                    fontFamily: Platform.select({ ios: "Menlo", default: "monospace" }),
+                    fontSize: 15,
+                    letterSpacing: 0,
+                  }}
                 />
                 <Tap
                   label="Browse folders"
@@ -428,7 +433,7 @@ function GroupForm({ header, existing }: { header?: React.ReactNode; existing?: 
                   setBrowsing("add");
                   void folders.open(scan.path);
                 }}
-                style={[styles.line, { gap: 14, minHeight: 52 }]}
+                style={[styles.line, { gap: 14, minHeight: 52, justifyContent: "flex-start" }]}
               >
                 <View style={{ width: 24, alignItems: "center" }}>
                   <Icon name="folder.badge.plus" size={20} color={colors.accent} />
