@@ -356,3 +356,43 @@ async fn renaming_the_project_keeps_its_worktrees_removable_and_restorable() {
     assert_eq!(dir.parent().and_then(std::path::Path::parent), Some(fixture.orchestrator.inner.paths.worktrees.as_path()));
     assert!(fixture.orchestrator.is_managed_worktree(&dir, "abc"));
 }
+
+#[test]
+fn worktree_labels_are_valid_folder_names_on_every_platform() {
+    use super::worktree_label as label;
+    assert_eq!(label("API v2?"), "API v2-");
+    assert_eq!(label("\"web\""), "-web-");
+    assert_eq!(label("a|b<c>*d"), "a-b-c--d");
+    assert_eq!(label("acme. "), "acme");
+    assert_eq!(label("CON"), "_CON");
+    assert_eq!(label("nul.txt"), "_nul.txt");
+    assert_eq!(label("com1"), "_com1");
+    assert_eq!(label("Console"), "Console");
+    assert_eq!(label(".."), "project");
+    assert_eq!(label("  "), "project");
+    assert_eq!(label(&"x".repeat(80)).len(), 64);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_worktree_that_fails_half_way_can_be_created_again_with_the_same_id() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut fixture = Fixture::new();
+    init_project_repo(&fixture.root);
+    fixture.project.is_git = true;
+    fixture.store.project_update(&fixture.project).unwrap();
+    // A failing post-checkout hook: git has made the branch and the folder when it reports the error.
+    let hooks = fixture.root.join("hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    std::fs::write(hooks.join("post-checkout"), "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(hooks.join("post-checkout"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    run_git(&fixture.root, &["config", "core.hooksPath", &hooks.to_string_lossy()]);
+    let thread = fixture.thread(ThreadStatus::Idle);
+    assert!(fixture.orchestrator.create_worktree(&fixture.project, thread.id, None).await.is_err());
+    let repo = Repo::new(&fixture.project.path);
+    assert!(repo.rev_parse(&format!("refs/heads/kybern/{}", thread.id)).await.is_err(), "the half-made branch is gone");
+
+    run_git(&fixture.root, &["config", "--unset", "core.hooksPath"]);
+    let wt = fixture.orchestrator.create_worktree(&fixture.project, thread.id, None).await.unwrap();
+    assert_eq!(Repo::new(&wt.path).current_branch().await, Some(format!("kybern/{}", thread.id)));
+}

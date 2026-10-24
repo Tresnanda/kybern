@@ -1664,11 +1664,7 @@ impl Orchestrator {
     /// folder: it is one sanitized path component, and ownership checks go through
     /// `is_managed_worktree`, so renaming a project never orphans its worktrees.
     pub(crate) fn worktree_dir(&self, project: &Project, id: &str) -> PathBuf {
-        let label: String =
-            project.name.chars().map(|c| if matches!(c, '/' | '\\' | ':') || c.is_control() { '-' } else { c }).take(64).collect();
-        let label = label.trim();
-        let label = if label.is_empty() || label.chars().all(|c| c == '.') { "project" } else { label };
-        self.inner.paths.worktrees.join(label).join(id)
+        self.inner.paths.worktrees.join(worktree_label(&project.name)).join(id)
     }
 
     /// True for a folder `worktree_dir` could have made for `id`, under any project label.
@@ -1683,9 +1679,23 @@ impl Orchestrator {
         let dir = self.worktree_dir(project, &unique);
         std::fs::create_dir_all(dir.parent().unwrap())?;
         self.send_workspace_progress(thread_id, 0, 1, None);
-        let added = Repo::new(&project.path).worktree_add(&dir, &branch, base).await;
+        let repo = Repo::new(&project.path);
+        let (had_branch, had_dir) = (repo.rev_parse(&format!("refs/heads/{branch}")).await.is_ok(), dir.exists());
+        let added = repo.worktree_add(&dir, &branch, base).await;
         self.send_workspace_progress(thread_id, u32::from(added.is_ok()), 1, None);
-        added?;
+        if let Err(error) = added {
+            // `git worktree add` can fail after making the branch and folder (a checkout hook, LFS, a full
+            // disk). Undo what this call made, so Retry with the same thread id can start again.
+            if !had_dir && dir.exists() {
+                let _ = repo.worktree_remove(&dir, true).await;
+                let _ = std::fs::remove_dir_all(&dir);
+                let _ = repo.worktree_prune().await;
+            }
+            if !had_branch {
+                let _ = repo.delete_branch(&branch, true).await;
+            }
+            return Err(error);
+        }
         Ok(WorktreeInfo { path: dir.to_string_lossy().to_string(), branch })
     }
 
@@ -4620,6 +4630,25 @@ pub fn title_from_message(message: &UserMessage) -> String {
 
 fn is_compact_message(message: &UserMessage) -> bool {
     matches!(message.parts.as_slice(), [kybern_protocol::ContentPart::Text { text }] if text.trim() == "/compact")
+}
+
+/// One portable path component for a project's worktree folder: characters Windows forbids or
+/// treats specially (`<>:"/\\|?*`, control characters) become '-', trailing dots and spaces go,
+/// reserved device names (`CON`, `NUL`, `COM1`…) get a prefix, at most 64 characters.
+pub(crate) fn worktree_label(name: &str) -> String {
+    let label: String = name
+        .chars()
+        .map(|c| if matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || c.is_control() { '-' } else { c })
+        .take(64)
+        .collect();
+    let label = label.trim().trim_end_matches(['.', ' ']);
+    if label.is_empty() {
+        return "project".into();
+    }
+    let stem = label.split('.').next().unwrap_or(label).trim_end().to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.as_bytes()[3].is_ascii_digit());
+    if reserved { format!("_{label}") } else { label.to_string() }
 }
 
 #[cfg(test)]
