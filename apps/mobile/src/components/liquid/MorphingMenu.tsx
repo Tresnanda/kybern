@@ -82,6 +82,7 @@ export function MorphingMenu({
   point: touch,
   originRadius,
   scrim = false,
+  source,
 }: {
   origin: MenuOrigin;
   anchorRef?: AnimatedRef<View>;
@@ -98,6 +99,8 @@ export function MorphingMenu({
   placement?: "above" | "below" | "auto";
   /** Drawn at the origin while the surface leaves it; null for row origins. */
   sourceIcon?: IconName | null;
+  /** A custom trigger's content (a chip, a value), redrawn at the origin like `sourceIcon`. */
+  source?: ReactNode;
   /** Where a long press landed, in window coordinates. */
   point?: { x: number; y: number };
   /** The trigger's own corner radius; defaults to a capsule. */
@@ -139,11 +142,13 @@ export function MorphingMenu({
   // A row is wider than the menu: open at the finger (or under the row when
   // opened by a tap). A button: drop from it, aligned to the edge on its side.
   const fromRow = origin.width > menuWidth;
-  // An icon button becomes the menu: the surface grows out of the button and
-  // covers it, its corner on the button's corner (liquid-gooey's plus menu, iOS
-  // pull-down menus). A chip, a value or a row stays visible: the menu drops
-  // next to it and the droplet travels there from it.
-  const cover = !fromRow && !!sourceIcon && placement !== "above";
+  // A trigger becomes the menu: the surface grows out of the button, chip or
+  // value and covers it, its corner on the trigger's corner (liquid-gooey's plus
+  // menu, iOS pull-down menus), while the trigger's glyph or content is redrawn
+  // in place and dissolves into the liquid. A long-pressed row stays visible:
+  // the menu grows from under the finger.
+  const hasSource = !!sourceIcon || source != null;
+  const cover = !fromRow && hasSource && placement !== "above";
   const target =
     fromRow && point ? { y: point.y - 22, height: 44 } : { y: origin.y, height: origin.height };
   const autoTop = cover ? origin.y - COVER_INSET : target.y + target.height + MENU_GAP;
@@ -373,7 +378,7 @@ export function MorphingMenu({
   // thins back into it on close, so no blank pill covers the trigger while the
   // modal is torn down. Menus that redraw their source icon keep an opaque
   // material; the attachment return fades at its source before its picker.
-  const dissolve = !sourceIcon;
+  const dissolve = !hasSource;
   const materialStyle = useAnimatedStyle(() => ({
     opacity: reduced
       ? fade.get()
@@ -443,6 +448,24 @@ export function MorphingMenu({
       >
         <Icon name={sourceIcon} />
       </Animated.View>}
+      {!sourceIcon && source != null && (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            {
+              position: "absolute",
+              left: origin.x,
+              top: origin.y,
+              width: origin.width,
+              height: origin.height,
+              justifyContent: "center",
+            },
+            dotStyle,
+          ]}
+        >
+          {source}
+        </Animated.View>
+      )}
       <Animated.View
         pointerEvents={open ? "auto" : "none"}
         accessibilityElementsHidden={!open}

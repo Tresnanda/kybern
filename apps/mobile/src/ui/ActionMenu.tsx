@@ -241,6 +241,8 @@ type SurfaceRequest = {
   origin: MenuOrigin;
   point?: { x: number; y: number };
   sourceIcon?: IconName | null;
+  /** A custom trigger's content, redrawn at the origin while the menu grows out of it. */
+  source?: ReactNode;
   originRadius?: number;
 };
 
@@ -270,6 +272,7 @@ export function useMenuSurface() {
       point={request.point}
       placement="auto"
       sourceIcon={request.sourceIcon ?? null}
+      source={request.source}
       originRadius={request.originRadius}
       dismissLabel="Close menu"
       scrim
@@ -393,9 +396,8 @@ export function MenuButton({
 }) {
   const anchor = useRef<View>(null);
   const menu = useMenuSurface();
-  // An icon button grows into the menu and back. Custom content (a value, a
-  // chip) stays put: the menu condenses out of it below (or above) and
-  // dissolves back into it on close.
+  // The trigger grows into the menu and back, whether it is an icon button or
+  // custom content (a value, a chip).
   const open = () =>
     measureTrigger(anchor.current, (origin) =>
       menu.show({
@@ -403,8 +405,11 @@ export function MenuButton({
         title,
         origin,
         originRadius: children ? triggerRadius : undefined,
-        // An icon button turns into the menu; custom content stays and the menu drops beside it.
+        // The trigger turns into the menu: an icon button's glyph, or a custom
+        // trigger's own content, is redrawn where it sits while the surface grows
+        // out of it and back.
         sourceIcon: children ? null : icon,
+        source: children,
       }),
     );
   return (

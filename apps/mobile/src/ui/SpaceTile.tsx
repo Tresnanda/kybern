@@ -1,11 +1,48 @@
-// A space's tile: its colour with its initials (or a star when the name has
-// none), the same swatches as the desktop rail. Image logos fall back to the
-// tile: the phone doesn't fetch them for a 20 pt mark.
+// A space's tile, as the desktop rail draws it: the logo the user chose (an
+// uploaded image, a curated glyph) on the space's colour, else its initials
+// (or a sparkle when the name has none). An image shows the swatch while it loads.
 import { spaceInitials } from "../../../../packages/kybern-client/src/spaces";
 import type { Space, SpaceColor } from "../state/protocol";
-import { View } from "react-native";
+import { Image, StyleSheet, View } from "react-native";
+import { activeEnvironment, assetUrl } from "../state/runtime";
+import type { IconName } from "./icons";
 import { Icon, T } from "./primitives";
-import { radius } from "./theme";
+import { radius, useTheme } from "./theme";
+
+/** The desktop's curated logo slugs (`SPACE_ICONS`) as app icons; unknown slugs draw initials. */
+const SPACE_GLYPHS: Record<string, IconName> = {
+  briefcase: "briefcase",
+  building: "building.2",
+  team: "person.3",
+  user: "person",
+  rocket: "paperplane",
+  target: "target",
+  idea: "lightbulb",
+  code: "chevron.left.forwardslash.chevron.right",
+  terminal: "terminal",
+  cpu: "cpu",
+  server: "server.rack",
+  database: "cylinder.split.1x2",
+  robot: "cpu",
+  atom: "atom",
+  lab: "flask",
+  book: "book",
+  pen: "pencil",
+  paint: "paintbrush",
+  camera: "camera",
+  music: "music.note",
+  game: "gamecontroller",
+  puzzle: "puzzlepiece.extension",
+  package: "shippingbox",
+  globe: "globe",
+  leaf: "leaf",
+  coffee: "cup.and.saucer",
+  heart: "heart",
+  star: "star",
+  flash: "bolt",
+  shield: "shield",
+  wallet: "creditcard",
+};
 
 /** One fill per swatch in both themes; white initials except on amber. */
 export const SPACE_SWATCHES: Record<SpaceColor, { fill: string; fg: string }> = {
@@ -19,22 +56,49 @@ export const SPACE_SWATCHES: Record<SpaceColor, { fill: string; fg: string }> = 
   graphite: { fill: "#5B6270", fg: "#FFFFFF" },
 };
 
-export function SpaceTile({ space, size = 20 }: { space: Pick<Space, "name" | "color">; size?: number }) {
+export function SpaceTile({
+  space,
+  size = 20,
+}: {
+  space: Pick<Space, "name" | "color"> & { logo?: Space["logo"] };
+  size?: number;
+}) {
+  const { colors } = useTheme();
   const swatch = SPACE_SWATCHES[space.color] ?? SPACE_SWATCHES.graphite;
   const initials = spaceInitials(space.name).slice(0, size < 24 ? 1 : 2);
+  const logo = space.logo;
+  const glyph = logo?.kind === "icon" ? SPACE_GLYPHS[logo.icon] : undefined;
+  const env = logo?.kind === "image" ? activeEnvironment() : undefined;
+  const image =
+    logo?.kind === "image" && env
+      ? { uri: assetUrl(logo.asset_id), headers: { authorization: `Bearer ${env.token}` } }
+      : undefined;
+  const corner = size >= 28 ? radius.sm - 2 : radius.xs;
   return (
     <View
       accessible={false}
       style={{
         width: size,
         height: size,
-        borderRadius: size >= 28 ? radius.sm - 2 : radius.xs,
+        borderRadius: corner,
         backgroundColor: swatch.fill,
         alignItems: "center",
         justifyContent: "center",
+        overflow: "hidden",
       }}
     >
-      {initials ? (
+      {image ? (
+        <>
+          <Image source={image} resizeMode="cover" style={{ width: size, height: size }} />
+          {/* A hairline keeps a light image from melting into a light surface. */}
+          <View
+            pointerEvents="none"
+            style={[StyleSheet.absoluteFill, { borderRadius: corner, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line }]}
+          />
+        </>
+      ) : glyph ? (
+        <Icon name={glyph} size={size * 0.6} color={swatch.fg} />
+      ) : initials ? (
         <T
           variant="caption"
           maxFontSizeMultiplier={1}
