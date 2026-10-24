@@ -270,6 +270,12 @@ export default function ThreadScreen() {
     if (wasRunning.current && !running && following) jump();
     wasRunning.current = running;
   }, [thread?.status, following, jump]);
+  // Rows can still arrive after that (the outside-change warning follows the turn's
+  // end); keep a following reader on them instead of leaving them under the pills.
+  const lastRow = rows.length ? rowKey(rows[rows.length - 1]!) : "";
+  useEffect(() => {
+    if (lastRow && following && !wasRunning.current) jump();
+  }, [lastRow]);
   const steeringAttempt = useRef<{ signature: string; id: string } | null>(
     null,
   );
