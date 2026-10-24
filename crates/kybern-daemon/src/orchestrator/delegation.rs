@@ -826,7 +826,7 @@ impl Orchestrator {
                     None => repo.snapshot("kybern delegation base").await?,
                 };
                 let branch = format!("kybern/{child_id}");
-                let dir = self.inner.paths.worktrees.join(&project.name).join(child_id.to_string());
+                let dir = self.worktree_dir(&project, &child_id.to_string());
                 if let Some(parent_dir) = dir.parent() {
                     std::fs::create_dir_all(parent_dir)?;
                 }

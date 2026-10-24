@@ -340,3 +340,19 @@ async fn worktree_removal_waits_for_a_running_after_snapshot() {
     let removed = tokio::time::timeout(Duration::from_secs(10), removing).await.unwrap().unwrap().unwrap();
     assert!(!removed.exists && !path.exists());
 }
+
+#[tokio::test]
+async fn renaming_the_project_keeps_its_worktrees_removable_and_restorable() {
+    let (mut fixture, thread) = ordinary_worktree_fixture().await;
+    fixture.project.name = "Renamed / ../project".into();
+    fixture.store.project_update(&fixture.project).unwrap();
+    assert!(fixture.orchestrator.worktree_inspect(thread.id).await.unwrap().eligible);
+    let params = methods::WorktreeRemoveParams { thread_id: thread.id, force: true, delete_branch: false };
+    fixture.orchestrator.worktree_remove(params).await.unwrap();
+    fixture.orchestrator.restore_worktree_if_cleaned(&thread).await.unwrap();
+    assert!(PathBuf::from(&thread.cwd).exists());
+    // New worktrees stay one folder under the managed root whatever the name holds.
+    let dir = fixture.orchestrator.worktree_dir(&fixture.project, "abc");
+    assert_eq!(dir.parent().and_then(std::path::Path::parent), Some(fixture.orchestrator.inner.paths.worktrees.as_path()));
+    assert!(fixture.orchestrator.is_managed_worktree(&dir, "abc"));
+}

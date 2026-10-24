@@ -14,9 +14,8 @@ impl Orchestrator {
         ensure!(thread.delegation.is_none() && thread.subagent.is_none(), "Use this agent’s worktree controls instead.");
         let wt = thread.worktree.as_ref().ok_or_else(|| anyhow!("This thread uses the shared checkout. It has no worktree to remove."))?;
         let project = self.inner.store.project_get(thread.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
-        let expected = self.inner.paths.worktrees.join(&project.name).join(thread.id.to_string());
         ensure!(
-            Path::new(&wt.path) == expected && thread.cwd == wt.path,
+            self.is_managed_worktree(Path::new(&wt.path), &thread.id.to_string()) && thread.cwd == wt.path,
             "This folder is not a Kybern-managed worktree. Remove it with Git after checking its owners."
         );
         let exists = Path::new(&wt.path).exists();
@@ -183,11 +182,11 @@ impl Orchestrator {
             })
             .ok_or_else(|| anyhow!("This worktree folder is missing. Restore it with Git before continuing this conversation."))?;
         let project = self.inner.store.project_get(thread.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
-        let expected = self.inner.paths.worktrees.join(&project.name).join(thread.id.to_string());
         ensure!(
-            Path::new(&wt.path) == expected && thread.cwd == wt.path,
+            self.is_managed_worktree(Path::new(&wt.path), &thread.id.to_string()) && thread.cwd == wt.path,
             "The saved worktree location changed. Restore its original folder before continuing."
         );
+        let expected = Path::new(&wt.path).to_path_buf();
         let source = Repo::new(&project.path);
         // The ref prevents Git GC from discarding recovered uncommitted source.
         let commit = source.rev_parse(&format!("{}/source", recovery_ref(thread.id))).await?;

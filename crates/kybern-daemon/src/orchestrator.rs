@@ -2,7 +2,7 @@
 //! broadcast thread log.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
@@ -1525,10 +1525,27 @@ impl Orchestrator {
         }
     }
 
+    /// `<worktrees>/<project label>/<id>`. The label is only for people browsing the
+    /// folder: it is one sanitized path component, and ownership checks go through
+    /// `is_managed_worktree`, so renaming a project never orphans its worktrees.
+    pub(crate) fn worktree_dir(&self, project: &Project, id: &str) -> PathBuf {
+        let label: String =
+            project.name.chars().map(|c| if matches!(c, '/' | '\\' | ':') || c.is_control() { '-' } else { c }).take(64).collect();
+        let label = label.trim();
+        let label = if label.is_empty() || label.chars().all(|c| c == '.') { "project" } else { label };
+        self.inner.paths.worktrees.join(label).join(id)
+    }
+
+    /// True for a folder `worktree_dir` could have made for `id`, under any project label.
+    pub(crate) fn is_managed_worktree(&self, path: &Path, id: &str) -> bool {
+        path.file_name().is_some_and(|name| name == id)
+            && path.parent().and_then(Path::parent) == Some(self.inner.paths.worktrees.as_path())
+    }
+
     async fn create_worktree(&self, project: &Project, thread_id: ThreadId, base: Option<&str>) -> Result<WorktreeInfo> {
         let unique = thread_id.to_string();
         let branch = format!("kybern/{unique}");
-        let dir = self.inner.paths.worktrees.join(&project.name).join(&unique);
+        let dir = self.worktree_dir(project, &unique);
         std::fs::create_dir_all(dir.parent().unwrap())?;
         Repo::new(&project.path).worktree_add(&dir, &branch, base).await?;
         Ok(WorktreeInfo { path: dir.to_string_lossy().to_string(), branch })

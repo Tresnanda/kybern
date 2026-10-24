@@ -205,7 +205,11 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             }
             let mut project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
             if let Some(n) = p.name {
-                project.name = n;
+                let n = n.trim();
+                if n.is_empty() || n.chars().count() > 100 {
+                    return Err(RpcError::new(codes::INVALID_PARAMS, "Use a project name of 1 to 100 characters."));
+                }
+                project.name = n.to_string();
             }
             if let Some(w) = p.worktrees_default {
                 project.worktrees_default = w;
