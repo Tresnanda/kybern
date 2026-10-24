@@ -97,11 +97,11 @@ test("queued relays get a one-line label", () => {
 });
 
 test("child rows use the delegation, subagent or thread status word", () => {
-  assert.equal(childStatusWord({ ...thread, delegation: delegation("completed") }), "Completed");
+  assert.equal(childStatusWord({ ...thread, delegation: delegation("completed") }), "Done");
   assert.equal(childIsRunning({ ...thread, delegation: delegation("running") }), true);
   assert.equal(childIsRunning({ ...thread, delegation: delegation("failed"), status: "running" }), false);
   const subagent = { task_id: "x", root_thread_id: "parent", parent_turn_id: "t", status: "waiting" };
-  assert.equal(childStatusWord({ ...thread, subagent }), "Waiting");
+  assert.equal(childStatusWord({ ...thread, subagent }), "Working");
   assert.equal(childIsRunning({ ...thread, subagent }), true);
   assert.equal(childStatusWord({ ...thread, status: "awaiting-approval" }), "Needs approval");
   const later = { ...thread, id: "b", created_at: "2026-10-06T01:00:00Z" };

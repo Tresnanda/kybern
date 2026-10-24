@@ -32,9 +32,11 @@ import { ContextMenu, MenuButton } from "./ActionMenu";
 import { haptics } from "./haptics";
 import type { MenuItem } from "./menuModel";
 import { Icon, T, Tap, type IconName } from "./primitives";
-import { radius, space, useTheme } from "./theme";
+import { MONO, radius, space, useTheme } from "./theme";
 
 const LEAD = 28;
+/** A command as a row title: body size in MONO, a step smaller so it lines up optically. */
+const MONO_TITLE = { fontFamily: MONO, fontSize: 15, letterSpacing: 0 } as const;
 /** A disclosure chevron: 0° closed, 90° open, turning in 180 ms. */
 const chevronTurn = (open?: boolean) => ({
   transform: [{ rotate: open ? "90deg" : "0deg" }],
@@ -366,6 +368,8 @@ export type ListRowProps = {
   subtitle?: string;
   subtitleLines?: number;
   titleLines?: number;
+  /** Machine text (a command, a path): the title in MONO. */
+  mono?: boolean;
   /** An icon (20 pt, `secondary`) or any 28 pt node: a status glyph, provider mark, project dot. */
   leading?: IconName | ReactNode;
   /** Trailing time or count, `muted`, tabular. */
@@ -401,6 +405,7 @@ export function ListRow(props: ListRowProps) {
     subtitle,
     subtitleLines = 2,
     titleLines = 1,
+    mono,
     leading,
     meta,
     value,
@@ -475,7 +480,7 @@ export function ListRow(props: ListRowProps) {
             variant="body"
             tone={destructive ? "negative" : selected ? "accent" : "ink"}
             numberOfLines={titleLines}
-            style={[{ flex: 1 }, selected ? { fontWeight: "600" } : null]}
+            style={[{ flex: 1 }, selected ? { fontWeight: "600" } : null, mono ? MONO_TITLE : null]}
           >
             {title}
           </T>

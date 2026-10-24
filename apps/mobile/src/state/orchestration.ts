@@ -7,7 +7,7 @@ import type {
   ThreadMessagePurpose,
   UserMessage,
 } from "./protocol";
-import { childStatus } from "./status.ts";
+import { childState, isChildWorking } from "../../../../packages/kybern-client/src/delegations.ts";
 
 const PURPOSES: Record<ThreadMessagePurpose, string> = {
   task: "Task",
@@ -68,15 +68,14 @@ export function resultLocation(item: AgentResultItem) {
   return files > 0 ? `${files} ${files === 1 ? "file" : "files"} touched` : "";
 }
 
-/** Status word of a child row: delegation outcome, subagent task state, or the thread's own status. */
+/** Status word of a child row, from the shared vocabulary (`childState`). */
 export function childStatusWord(thread: Thread) {
-  return childStatus(thread).word;
+  return childState(thread).word;
 }
 
+/** Still working or waiting on the reader. */
 export function childIsRunning(thread: Thread) {
-  if (thread.delegation) return thread.delegation.status === "running";
-  if (thread.subagent) return ["pending", "running", "waiting", "stopping"].includes(thread.subagent.status);
-  return thread.status === "running" || thread.status === "awaiting-approval";
+  return isChildWorking(thread);
 }
 
 /** Oldest first, so the list reads in the order the agents were started. */
