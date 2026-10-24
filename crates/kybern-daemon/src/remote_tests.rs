@@ -53,6 +53,7 @@ impl Host {
             coordinator_project_id: None,
             subagent: None,
             delegation: None,
+            members: Vec::new(),
         };
         self.state.store.thread_upsert(&thread).unwrap();
         thread
@@ -154,6 +155,10 @@ async fn ordinary_worktree_cleanup_rpc_retains_thread_and_source_association() {
             base_branch: None,
             title: Some("Cleanup fixture".into()),
             message: None,
+            thread_id: None,
+            message_id: None,
+            members: None,
+            base_branches: None,
         })
         .await
         .unwrap();
@@ -770,14 +775,26 @@ async fn project_changes_reach_every_client() {
     std::fs::create_dir_all(&folder).unwrap();
 
     let added = desktop
-        .call::<ProjectsAdd>(ProjectsAddParams { path: folder.to_string_lossy().into_owned(), name: Some("Shop".into()), space_id: None })
+        .call::<ProjectsAdd>(ProjectsAddParams {
+            path: folder.to_string_lossy().into_owned(),
+            name: Some("Shop".into()),
+            space_id: None,
+            kind: None,
+            members: None,
+        })
         .await
         .unwrap();
     let announced = next_projects_changed(&phone).await;
     assert!(announced.projects.iter().any(|project| project.id == added.id && project.name == "Shop"), "the new project is announced");
     // Adding the same folder again changes nothing, so nothing is announced for it.
     desktop
-        .call::<ProjectsAdd>(ProjectsAddParams { path: folder.to_string_lossy().into_owned(), name: None, space_id: None })
+        .call::<ProjectsAdd>(ProjectsAddParams {
+            path: folder.to_string_lossy().into_owned(),
+            name: None,
+            space_id: None,
+            kind: None,
+            members: None,
+        })
         .await
         .unwrap();
 
@@ -790,6 +807,9 @@ async fn project_changes_reach_every_client() {
             brief_in_all_threads: None,
             coordinator: None,
             space_id: None,
+            members: None,
+            worktree_copy: None,
+            instructions_offer_dismissed: None,
         })
         .await
         .unwrap();
@@ -895,6 +915,8 @@ async fn tasks_round_trip_over_rpc_with_notifications_and_error_codes() {
         prompt: Some(" ".into()),
         message: None,
         note_ids: None,
+        thread_id: None,
+        message_id: None,
     };
     let rejected = phone.call_raw(TaskItemsSend::NAME, serde_json::to_value(empty_prompt).unwrap()).await.unwrap_err().to_string();
     assert!(rejected.contains(&format!("code {}", codes::INVALID_PARAMS)), "{rejected}");
@@ -983,6 +1005,8 @@ async fn project_task_prefixes_are_assigned_edited_and_validated_over_rpc() {
             path: one.to_string_lossy().into_owned(),
             name: Some("kybern-mobile".into()),
             space_id: None,
+            kind: None,
+            members: None,
         })
         .await
         .unwrap();
@@ -991,6 +1015,8 @@ async fn project_task_prefixes_are_assigned_edited_and_validated_over_rpc() {
             path: two.to_string_lossy().into_owned(),
             name: Some("kybern-mobile".into()),
             space_id: None,
+            kind: None,
+            members: None,
         })
         .await
         .unwrap();
@@ -1004,6 +1030,9 @@ async fn project_task_prefixes_are_assigned_edited_and_validated_over_rpc() {
         brief_in_all_threads: None,
         coordinator: None,
         space_id: None,
+        members: None,
+        worktree_copy: None,
+        instructions_offer_dismissed: None,
     };
     let renamed = client.call::<ProjectsUpdate>(update(a.id, "mob")).await.unwrap();
     assert_eq!(renamed.task_prefix.as_deref(), Some("MOB"));
@@ -1024,6 +1053,9 @@ async fn project_task_prefixes_are_assigned_edited_and_validated_over_rpc() {
             brief_in_all_threads: None,
             coordinator: None,
             space_id: None,
+            members: None,
+            worktree_copy: None,
+            instructions_offer_dismissed: None,
         })
         .await
         .unwrap();
@@ -2115,6 +2147,8 @@ async fn the_coordinator_and_project_brief_work_over_rpc() {
         permission_mode: None,
         opening_message: None,
         initial_brief: brief.map(str::to_owned),
+        thread_id: None,
+        message_id: None,
     };
     // The user's brief exists before the Coordinator does, so no setup interview starts a real agent.
     client
@@ -2172,6 +2206,9 @@ async fn the_coordinator_and_project_brief_work_over_rpc() {
         brief_in_all_threads: on,
         coordinator: None,
         space_id: None,
+        members: None,
+        worktree_copy: None,
+        instructions_offer_dismissed: None,
     };
     assert!(!client.call::<ProjectsUpdate>(update(None)).await.unwrap().brief_in_all_threads);
     assert!(client.call::<ProjectsUpdate>(update(Some(true))).await.unwrap().brief_in_all_threads);
@@ -2320,7 +2357,7 @@ async fn next_spaces_changed(client: &Client) -> SpacesChangedNotification {
 }
 
 fn add_params(path: &std::path::Path, space_id: Option<SpaceId>) -> ProjectsAddParams {
-    ProjectsAddParams { path: path.to_string_lossy().into_owned(), name: None, space_id }
+    ProjectsAddParams { path: path.to_string_lossy().into_owned(), name: None, space_id, kind: None, members: None }
 }
 
 fn space_create(name: &str) -> SpacesCreateParams {
@@ -2441,6 +2478,9 @@ async fn projects_are_added_to_and_moved_between_spaces() {
             brief_in_all_threads: None,
             coordinator: None,
             space_id: Some(work.id),
+            members: None,
+            worktree_copy: None,
+            instructions_offer_dismissed: None,
         })
         .await
         .unwrap();
@@ -2460,6 +2500,9 @@ async fn projects_are_added_to_and_moved_between_spaces() {
             brief_in_all_threads: None,
             coordinator: None,
             space_id: Some(work.id),
+            members: None,
+            worktree_copy: None,
+            instructions_offer_dismissed: None,
         },
     )
     .await;
@@ -2497,6 +2540,24 @@ async fn deleting_a_space_moves_its_projects_and_announces_both_lists() {
     assert_eq!(spaces.unwrap().spaces[0].id, personal);
     let last = rpc_error::<SpacesDelete>(&client, SpacesDeleteParams { space_id: personal }).await;
     assert!(last.contains("You can't delete your only space."), "{last}");
+}
+
+#[tokio::test]
+async fn the_default_space_cannot_be_deleted_but_can_be_renamed() {
+    let host = Host::start().await;
+    let client = host.client().await;
+    let personal = client.call::<SpacesList>(Empty {}).await.unwrap().spaces[0].clone();
+    assert!(personal.is_default);
+    let work = client.call::<SpacesCreate>(space_create("Work")).await.unwrap();
+    assert!(!work.is_default);
+
+    let refused = rpc_error::<SpacesDelete>(&client, SpacesDeleteParams { space_id: personal.id }).await;
+    assert!(refused.contains("Your default space can't be deleted."), "{refused}");
+    assert_eq!(client.call::<SpacesList>(Empty {}).await.unwrap().spaces.len(), 2);
+
+    let renamed = client.call::<SpacesUpdate>(SpacesUpdateParams { name: Some("Me".into()), ..space_update(personal.id) }).await.unwrap();
+    assert!((renamed.name.as_str(), renamed.is_default) == ("Me", true));
+    client.call::<SpacesDelete>(SpacesDeleteParams { space_id: work.id }).await.unwrap();
 }
 
 #[tokio::test]

@@ -25,6 +25,7 @@ import { Button, Icon, styles, T, Tap } from "../src/ui/primitives";
 import { ProjectDot } from "../src/ui/TaskGlyphs";
 import { type, useTheme } from "../src/ui/theme";
 import { findModel } from "../../../packages/kybern-client/src/models";
+import { supportsWorktree } from "../src/state/groups";
 
 function Choice({
   label,
@@ -88,7 +89,8 @@ export default function SendTask() {
   );
   const projectId = task?.project_id ?? chosenProject;
   const project = app.projects.find((p) => p.id === projectId);
-  const isGit = !!project?.is_git;
+  // Group projects run in their member repositories even when the group folder is not one.
+  const isGit = supportsWorktree(project);
 
   const defaults = useMemo<SendDefaults>(() => {
     const draft = getDraft();

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.15.0
+
+<!-- kybern-release-title: Work across several repositories in one chat, in Kybern GPUIX and on mobile -->
+<!-- kybern-release-summary: Group repositories into one project so an agent can change them together, start new chats the moment you press Enter, and keep your default space safe from deletion. -->
+
+- Work across several repositories in one chat: add a **Group of repositories** from the Projects **+** menu, pick the parent folder and tick the repositories it holds (nothing is ticked for you). Agents work in the group folder, are told which repositories they're in and where each one's instructions live, and commit in each repository separately.
+- See every repository a group chat touched: Changes and the edited-files card list files under one header per repository, the branch chip shows `main +2` with each repository's branch in its menu, and **Create N pull requests** opens one pull request in every changed GitHub repository, each linking to the others.
+- Run group chats in worktrees: each repository gets its own worktree on the chat's branch, and a chip picks which repositories the chat may change. Kybern copies the group's AGENTS.md, CLAUDE.md, `.claude` and anything you choose under **Also copy into worktrees**, and warns you when a repository left out of the chat changes anyway. Rewind restores every repository together or none of them.
+- Share instructions across a group: Kybern offers to create an AGENTS.md and a CLAUDE.md that imports it in the group folder, and **Repositories…** on the project adds or removes repositories later.
+- Create and use groups on mobile too: add a group, edit its repositories, pick base branches and repositories for a chat, and review changes and pull requests grouped by repository.
+- Start a new chat the moment you press Enter: the thread opens and your message rises into it at once, even while a worktree is still being prepared. If the chat can't start, the message stays with the reason, **Retry** and **Edit**, and retrying never makes a second thread. Same on mobile.
+- Rename a project from its right-click menu or the palette (**Rename project…**). Existing worktrees keep working after a rename.
+- Keep your default space: it can't be deleted any more (it can still be renamed and recoloured), so deleting your only other space no longer makes every space seem to disappear. **Rename space…** in the palette works even when you have one space.
+- Say what to do when a worktree chat starts in a folder without git, and when a message goes to an archived chat.
+
 ## 0.14.0
 
 <!-- kybern-release-title: Agents ask for what they need, right in the chat, in Kybern GPUIX -->

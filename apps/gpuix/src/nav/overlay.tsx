@@ -263,6 +263,7 @@ export function Menu({
   rootStyle,
   fit,
   panel,
+  priority,
 }: {
   trigger: (open: boolean) => ReactNode
   children: ReactNode
@@ -279,6 +280,8 @@ export function Menu({
   fit?: 'snap' | 'switch'
   /** Overrides on the menu panel, for a popover opened from a trigger (its radius and padding). */
   panel?: StyleDesc
+  /** Layer order: a menu inside a dialog passes 7, like the kit `Select`, to sit above the dialog's card. */
+  priority?: number
 }) {
   const t = useTheme()
   const { renderer } = useGpuix()
@@ -366,6 +369,7 @@ export function Menu({
           align={align}
           sideOffset={sideOffset}
           fit={fit}
+          {...(priority !== undefined ? { priority } : {})}
           tabIndex={0}
           autoFocus
           leaving={leaving}
@@ -457,6 +461,7 @@ export function MenuItem({
   icon,
   iconNode,
   label,
+  description,
   shortcut,
   detail,
   checked,
@@ -470,6 +475,8 @@ export function MenuItem({
   icon?: string
   iconNode?: ReactNode
   label: string
+  /** A second, muted line that says what the item does (the Projects "+" menu); the icon then sits on the first line. */
+  description?: string
   shortcut?: string
   detail?: string
   /** A radio item: shows the 12px check when true. */
@@ -504,22 +511,29 @@ export function MenuItem({
       onClick={() => menu.pick(id)}
       style={{
         display: 'flex',
-        alignItems: 'center',
+        alignItems: description ? 'flex-start' : 'center',
         gap: 8,
         minHeight: 26,
         paddingLeft: 8,
         paddingRight: 8,
-        paddingTop: 1,
-        paddingBottom: 1,
+        paddingTop: description ? 5 : 1,
+        paddingBottom: description ? 6 : 1,
         borderRadius: 8,
         opacity: disabled ? 0.64 : 1,
         ...(active ? { backgroundColor: t.buttonSecondaryHover } : {}),
       }}
     >
-      {iconNode ?? (icon && <Icon source={icon} size={16} color={destructive ? t.red : ink(t, t.variant === 'dark' ? 0.8 : 0.8)} />)}
-      <Label color={color} truncate style={{ flexGrow: 1 }}>
-        {label}
-      </Label>
+      {iconNode ?? (icon && <Icon source={icon} size={16} color={destructive ? t.red : ink(t, t.variant === 'dark' ? 0.8 : 0.8)} style={description ? { marginTop: 2 } : undefined} />)}
+      {description ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 1, flexGrow: 1, minWidth: 0 }}>
+          <Label color={color} lineHeight={20} truncate>{label}</Label>
+          <Label color={muted(t, 0.72)} size={12} lineHeight={16}>{description}</Label>
+        </div>
+      ) : (
+        <Label color={color} truncate style={{ flexGrow: 1 }}>
+          {label}
+        </Label>
+      )}
       {detail && (
         <Label color={muted(t, 0.72)} size={12} weight={500}>
           {detail}
@@ -549,6 +563,8 @@ export function MenuSub({
   id,
   label,
   icon,
+  hint,
+  trailing,
   children,
   width = 192,
   testId,
@@ -558,6 +574,10 @@ export function MenuSub({
   id: string
   label: string
   icon?: string
+  /** Muted text right after the label ("primary"). */
+  hint?: string
+  /** Before the chevron (a repository's branch in the composer's branch menu). */
+  trailing?: ReactNode
   children: ReactNode
   width?: number
   testId?: string
@@ -664,9 +684,15 @@ export function MenuSub({
         }}
       >
         {icon && <Icon source={icon} size={16} color={ink(t, 0.8)} />}
-        <Label color={t.text} truncate style={{ flexGrow: 1, pointerEvents: 'none' }}>
+        <Label color={t.text} truncate style={{ flexGrow: hint ? 0 : 1, flexShrink: 1, pointerEvents: 'none' }}>
           {label}
         </Label>
+        {hint && (
+          <Label color={muted(t, 0.6)} size={12} style={{ flexGrow: 1, flexShrink: 0, pointerEvents: 'none' }}>
+            {hint}
+          </Label>
+        )}
+        {trailing && <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 1, minWidth: 0, pointerEvents: 'none' }}>{trailing}</div>}
         <Icon source={N.chevronRight} size={16} color={t.text} style={{ marginRight: -2, pointerEvents: 'none' }} />
       </div>
       {open && (

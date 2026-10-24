@@ -82,7 +82,7 @@ impl Orchestrator {
             None => SpaceLogo::Initials,
         };
         let now = Utc::now();
-        let space = Space { id: Uuid::now_v7(), name, color, logo, position: 0, created_at: now, updated_at: now };
+        let space = Space { id: Uuid::now_v7(), name, color, logo, position: 0, is_default: false, created_at: now, updated_at: now };
         let _guard = self.inner.space_writes.lock().unwrap_or_else(|e| e.into_inner());
         // Re-check under the lock so two clients cannot both take the same name, or both take the 50th place.
         self.checked_name(&space.name, None)?;

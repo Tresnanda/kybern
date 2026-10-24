@@ -454,6 +454,10 @@ mod tests {
             space_id: None,
             created_at: now,
             updated_at: now,
+            kind: Default::default(),
+            members: Vec::new(),
+            worktree_copy: Vec::new(),
+            instructions_offer_dismissed: false,
         };
         store.project_insert(&project).unwrap();
         let thread: Thread = serde_json::from_value(serde_json::json!({
@@ -511,6 +515,10 @@ mod tests {
             space_id: None,
             created_at: now,
             updated_at: now,
+            kind: Default::default(),
+            members: Vec::new(),
+            worktree_copy: Vec::new(),
+            instructions_offer_dismissed: false,
         };
         store.project_insert(&project).unwrap();
         let thread: Thread = serde_json::from_value(serde_json::json!({

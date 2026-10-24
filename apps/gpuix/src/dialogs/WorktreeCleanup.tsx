@@ -32,7 +32,10 @@ export function WorktreeCleanup({ threadId, close }: { threadId: string; close: 
   }
   const unsafe = inspection && (!inspection.clean || !inspection.merged)
   const dismiss = () => { if (!busy) close() }
-  return <Dialog onClose={dismiss} width={512} testId="worktree-cleanup"><DialogHeader title={inspection?.exists === false ? 'Worktree removed' : 'Remove this worktree?'} description={`${thread?.title ?? 'This thread'}. Keep this conversation and saved source. Continuing recreates its worktree.`} onClose={dismiss} />
+  // A title that already ends a sentence ("…ok.", a truncated "…") takes no second full stop.
+  const title = thread?.title ?? 'This thread'
+  const lead = /[.!?…]$/.test(title) ? title : `${title}.`
+  return <Dialog onClose={dismiss} width={512} testId="worktree-cleanup"><DialogHeader title={inspection?.exists === false ? 'Worktree removed' : 'Remove this worktree?'} description={`${lead} Keep this conversation and saved source. Continuing recreates its worktree.`} onClose={dismiss} />
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingLeft:16, paddingRight:16, paddingTop:12, paddingBottom:12 }}>
       {error && <Label color={t.red} size={14}>{`${error} Refresh after resolving this issue.`}</Label>}
       {!inspection && !error && <Label color={t.textSecondary} size={14}>Checking worktree owners and source…</Label>}

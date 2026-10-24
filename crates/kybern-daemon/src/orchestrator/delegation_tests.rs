@@ -1270,3 +1270,126 @@ async fn cancelling_drops_queues_only_for_descendants_that_were_running() {
     assert!(t.fixture.store.queue_list(Some(running.id)).unwrap().is_empty(), "a cancelled agent's queue is dropped");
     assert_eq!(t.fixture.store.queue_list(Some(finished.id)).unwrap().len(), 1, "a finished agent keeps its queue");
 }
+
+#[tokio::test]
+async fn a_group_parent_delegates_into_its_own_container_of_member_worktrees() {
+    let mut t = Delegating::new().await;
+    let folder = t.fixture.root.join("acme");
+    for member in ["api", "web"] {
+        let dir = folder.join(member);
+        std::fs::create_dir_all(&dir).unwrap();
+        run_git(&dir, &["init", "-q"]);
+        run_git(&dir, &["config", "user.name", "Group"]);
+        run_git(&dir, &["config", "user.email", "group@example.com"]);
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        run_git(&dir, &["add", "."]);
+        run_git(&dir, &["commit", "-q", "-m", "init"]);
+    }
+    // Upserts never move a thread between projects, so the parent keeps the
+    // fixture's project; the members snapshot is what makes it a group thread.
+    let mut project = t.fixture.project.clone();
+    project.id = Uuid::now_v7();
+    project.name = "acme".into();
+    project.path = folder.to_string_lossy().into_owned();
+    project.kind = ProjectKind::Group;
+    project.members = ["api", "web"].iter().map(|p| ProjectMember { path: (*p).into(), name: (*p).into(), status: MemberStatus::Ok }).collect();
+    t.fixture.store.project_insert(&project).unwrap();
+    let project = t.fixture.store.project_get(project.id).unwrap().unwrap();
+    t.parent.project_id = project.id;
+    t.parent.cwd = project.path.clone();
+    t.parent.members = super::group_git::snapshot_members(&project);
+    t.fixture.store.thread_upsert(&t.parent).unwrap();
+    // The parent has uncommitted work in api only.
+    std::fs::write(folder.join("api/a.txt"), "one\nparent\n").unwrap();
+
+    let result = t.delegate(json!({"task": "Change both", "workspace": "worktree"})).await;
+    let child = t.delegation(&result["task_id"]);
+    let container = std::path::PathBuf::from(&child.cwd);
+    let branch = format!("kybern/{}", child.id);
+    assert_eq!(child.worktree.as_ref().map(|w| w.branch.as_str()), Some(branch.as_str()));
+    assert_eq!(child.members.iter().map(|m| (m.path.as_str(), m.included, m.worktree.is_some())).collect::<Vec<_>>(), [
+        ("api", true, true),
+        ("web", true, true)
+    ]);
+    assert_eq!(std::fs::read_to_string(container.join("api/a.txt")).unwrap(), "one\nparent\n", "a dirty member is seeded from a snapshot");
+    assert_eq!(run_git(&container.join("web"), &["rev-parse", "HEAD"]), run_git(&folder.join("web"), &["rev-parse", "HEAD"]));
+
+    let agent = t.agent("Change both").await;
+    assert_eq!(agent.cwd, container);
+    std::fs::write(container.join("web/b.txt"), "b\n").unwrap();
+    run_git(&container.join("web"), &["add", "."]);
+    run_git(&container.join("web"), &["commit", "-q", "-m", "web change"]);
+    agent.finish("Done.").await;
+    let done = eventually(|| async {
+        let thread = t.delegation(&result["task_id"]);
+        (thread.delegation.as_ref().unwrap().status != DelegationStatus::Running).then_some(thread)
+    })
+    .await;
+    let info = done.delegation.clone().unwrap();
+    assert_eq!(info.diffstat, Some(DiffStat { files: 1, additions: 1, deletions: 0 }));
+    assert_eq!(info.result.as_deref(), Some("Done."));
+    let removed = t.fixture.orchestrator.delegation_worktree_remove(done.id, true).await.unwrap();
+    assert_eq!(removed.delegation.unwrap().worktree_state, Some(WorktreeState::Removed));
+    assert!(!container.exists());
+    assert_eq!(run_git(&folder.join("api"), &["worktree", "list", "--porcelain"]).matches("worktree ").count(), 1);
+}
+
+#[tokio::test]
+async fn a_group_child_s_files_outside_its_repositories_block_cleanup_and_survive_removal() {
+    let mut t = Delegating::new().await;
+    let folder = t.fixture.root.join("acme");
+    for member in ["api", "web"] {
+        let dir = folder.join(member);
+        std::fs::create_dir_all(&dir).unwrap();
+        run_git(&dir, &["init", "-q"]);
+        run_git(&dir, &["config", "user.name", "Group"]);
+        run_git(&dir, &["config", "user.email", "group@example.com"]);
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        run_git(&dir, &["add", "."]);
+        run_git(&dir, &["commit", "-q", "-m", "init"]);
+    }
+    // The stored parent keeps the fixture's project, so Kybern copies from its folder.
+    std::fs::write(std::path::Path::new(&t.fixture.project.path).join("AGENTS.md"), "# acme\n").unwrap();
+    let mut project = t.fixture.project.clone();
+    project.id = Uuid::now_v7();
+    project.path = folder.to_string_lossy().into_owned();
+    project.kind = ProjectKind::Group;
+    project.members = ["api", "web"].iter().map(|p| ProjectMember { path: (*p).into(), name: (*p).into(), status: MemberStatus::Ok }).collect();
+    t.fixture.store.project_insert(&project).unwrap();
+    let project = t.fixture.store.project_get(project.id).unwrap().unwrap();
+    t.parent.project_id = project.id;
+    t.parent.cwd = project.path.clone();
+    t.parent.members = super::group_git::snapshot_members(&project);
+    t.fixture.store.thread_upsert(&t.parent).unwrap();
+
+    let result = t.delegate(json!({"task": "Plan it", "workspace": "worktree"})).await;
+    let child = t.delegation(&result["task_id"]);
+    let container = std::path::PathBuf::from(&child.cwd);
+    assert_eq!(std::fs::read_to_string(container.join("AGENTS.md")).unwrap(), "# acme\n");
+    let agent = t.agent("Plan it").await;
+    // The agent commits nothing, but writes at its cwd: the container root.
+    std::fs::write(container.join("PLAN.md"), "the plan\n").unwrap();
+    std::fs::write(container.join("AGENTS.md"), "# acme\nlearned\n").unwrap();
+    agent.finish("Done.").await;
+    let done = eventually(|| async {
+        let thread = t.delegation(&result["task_id"]);
+        (thread.delegation.as_ref().unwrap().status != DelegationStatus::Running).then_some(thread)
+    })
+    .await;
+
+    t.fixture.orchestrator.delegation_cleanup_on_archive(done.id).await;
+    let kept = t.delegation(&result["task_id"]);
+    assert_eq!(kept.delegation.unwrap().worktree_state, Some(WorktreeState::Kept));
+    assert!(container.join("PLAN.md").exists(), "automatic cleanup keeps files outside the repositories");
+    let error = t.fixture.orchestrator.delegation_worktree_remove(done.id, false).await.unwrap_err();
+    assert!(error.to_string().contains("remove it anyway"), "{error}");
+
+    let removed = t.fixture.orchestrator.delegation_worktree_remove(done.id, true).await.unwrap();
+    assert_eq!(removed.delegation.unwrap().worktree_state, Some(WorktreeState::Removed));
+    assert!(!container.exists());
+    let recovery = t.fixture.root.join("worktree-recovery").join(done.id.to_string());
+    let saved = std::fs::read_dir(&recovery).unwrap().next().unwrap().unwrap().path();
+    assert_eq!(std::fs::read_to_string(saved.join("PLAN.md")).unwrap(), "the plan\n");
+    assert_eq!(std::fs::read_to_string(saved.join("AGENTS.md")).unwrap(), "# acme\nlearned\n");
+    assert!(!saved.join("api").exists(), "member worktrees stay with git");
+}

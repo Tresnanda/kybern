@@ -93,27 +93,59 @@ impl FileIndexCache {
 }
 
 async fn list_uncached(root: &Path) -> Result<Vec<String>> {
-    let git = tokio::process::Command::new("git")
-        .args(["-C"])
-        .arg(root)
-        .args(["ls-files", "--cached", "--others", "--exclude-standard", "-z"])
-        .output()
-        .await;
-    if let Ok(out) = git
-        && out.status.success()
-    {
-        let mut files: Vec<String> =
-            out.stdout.split(|b| *b == 0).filter(|s| !s.is_empty()).map(|s| String::from_utf8_lossy(s).to_string()).collect();
+    if let Some(mut files) = git_files(root).await {
+        // A repository folder that holds other repositories (a group folder that
+        // is itself a member) lists each nested one as `name/`: list its files too.
+        let nested: Vec<String> =
+            files.iter().filter(|f| f.ends_with('/') && root.join(f.trim_end_matches('/')).join(".git").exists()).cloned().collect();
+        files.retain(|f| !f.ends_with('/'));
+        for repo in nested {
+            add_nested(&mut files, root, repo.trim_end_matches('/')).await;
+        }
         files.truncate(MAX_FILES);
         return Ok(files);
     }
-    let root = root.to_path_buf();
-    let files = tokio::task::spawn_blocking(move || walk(&root)).await?;
+    let walk_root = root.to_path_buf();
+    let (mut files, repos) = tokio::task::spawn_blocking(move || walk(&walk_root)).await?;
+    // A folder of repositories (a group project): each one's own ignores apply.
+    for repo in repos {
+        if files.len() >= MAX_FILES {
+            break;
+        }
+        add_nested(&mut files, root, &repo).await;
+    }
+    files.sort();
+    files.truncate(MAX_FILES);
     Ok(files)
 }
 
-fn walk(root: &Path) -> Vec<String> {
+/// `git ls-files` of a repository, or `None` when `dir` is not one.
+async fn git_files(dir: &Path) -> Option<Vec<String>> {
+    let out = tokio::process::Command::new("git")
+        .args(["-C"])
+        .arg(dir)
+        .args(["ls-files", "--cached", "--others", "--exclude-standard", "-z"])
+        .output()
+        .await
+        .ok()?;
+    out.status
+        .success()
+        .then(|| out.stdout.split(|b| *b == 0).filter(|s| !s.is_empty()).map(|s| String::from_utf8_lossy(s).to_string()).collect())
+}
+
+/// Add the files of the repository at `rel` (a '/'-separated path under `root`), prefixed.
+async fn add_nested(files: &mut Vec<String>, root: &Path, rel: &str) {
+    let dir = rel.split('/').fold(root.to_path_buf(), |dir, part| dir.join(part));
+    let Some(nested) = git_files(&dir).await else { return };
+    let room = MAX_FILES.saturating_sub(files.len());
+    files.extend(nested.into_iter().filter(|f| !f.ends_with('/')).take(room).map(|f| format!("{rel}/{f}")));
+}
+
+/// Files under a folder that is not a repository, and the repositories inside
+/// it ('/'-separated, relative), which are listed with git instead of walked.
+fn walk(root: &Path) -> (Vec<String>, Vec<String>) {
     let mut out = Vec::new();
+    let mut repos = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else { continue };
@@ -121,19 +153,27 @@ fn walk(root: &Path) -> Vec<String> {
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
             if path.is_dir() {
-                if !SKIP_DIRS.contains(&name.as_str()) && !name.starts_with('.') {
+                if SKIP_DIRS.contains(&name.as_str()) || name.starts_with('.') {
+                    continue;
+                }
+                if path.join(".git").exists()
+                    && let Ok(rel) = path.strip_prefix(root)
+                {
+                    repos.push(rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/"));
+                } else {
                     stack.push(path);
                 }
             } else if let Ok(rel) = path.strip_prefix(root) {
                 out.push(rel.to_string_lossy().to_string());
                 if out.len() >= MAX_FILES {
-                    return out;
+                    return (out, repos);
                 }
             }
         }
     }
     out.sort();
-    out
+    repos.sort();
+    (out, repos)
 }
 
 /// Score paths against a query: file-name prefix, then file-name contains,
@@ -861,5 +901,31 @@ mod tests {
         *slot.lock().await = Some(CachedIndex { loaded_at: newer_at, files: Arc::new(vec!["new/file.txt".into()]) });
         FileIndexCache::expire(&slot, first_at).await;
         assert_eq!(slot.lock().await.as_ref().unwrap().files[0], "new/file.txt");
+    }
+
+    #[tokio::test]
+    async fn a_folder_of_repositories_is_indexed_with_each_repository_s_ignores() {
+        let root = std::env::temp_dir().join(format!("kybern-files-group-{}", uuid::Uuid::now_v7()));
+        let git = |dir: &std::path::Path, args: &[&str]| {
+            assert!(std::process::Command::new("git").arg("-C").arg(dir).args(args).status().unwrap().success());
+        };
+        for member in ["api", "services/web"] {
+            let dir = root.join(member);
+            std::fs::create_dir_all(dir.join("target")).unwrap();
+            git(&dir, &["init", "-q"]);
+            std::fs::write(dir.join(".gitignore"), "target/\n").unwrap();
+            std::fs::write(dir.join("main.rs"), "").unwrap();
+            std::fs::write(dir.join("target/big.o"), "").unwrap();
+        }
+        std::fs::write(root.join("AGENTS.md"), "").unwrap();
+        let files = super::list_uncached(&root).await.unwrap();
+        assert_eq!(files, ["AGENTS.md", "api/.gitignore", "api/main.rs", "services/web/.gitignore", "services/web/main.rs"]);
+
+        // The group folder itself a repository: nested repositories are listed, not skipped.
+        git(&root, &["init", "-q"]);
+        let mut files = super::list_uncached(&root).await.unwrap().to_vec();
+        files.sort();
+        assert_eq!(files, ["AGENTS.md", "api/.gitignore", "api/main.rs", "services/web/.gitignore", "services/web/main.rs"]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

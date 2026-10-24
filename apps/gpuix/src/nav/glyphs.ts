@@ -23,6 +23,12 @@ import {
   Edit03Icon,
   FilterIcon,
   Folder01Icon,
+  FoldersIcon,
+  RepositoryIcon,
+  Alert02Icon,
+  File02Icon,
+  ViewIcon,
+  LinkSquare02Icon,
   FolderOpenIcon,
   GitBranchIcon,
   GitForkIcon,
@@ -74,6 +80,18 @@ export const N = {
   clock: glyph(Clock01Icon),
   folder: glyph(Folder01Icon, 2),
   folderOpen: glyph(FolderOpenIcon, 2),
+  /** Group projects (several repositories under one folder): stacked folders. */
+  folders: glyph(FoldersIcon, 2),
+  /** One git repository of a group. */
+  repo: glyph(RepositoryIcon),
+  /** A missing member, an outside change. */
+  alert: glyph(Alert02Icon),
+  /** An instructions file (AGENTS.md, CLAUDE.md). */
+  file: glyph(File02Icon),
+  /** Preview. */
+  eye: glyph(ViewIcon),
+  /** Opens elsewhere (GitHub, Finder). */
+  external: glyph(LinkSquare02Icon),
   chevronRight: glyph(ChevronRightIcon),
   chevronDown: glyph(ChevronDownIcon),
   arrowLeft: glyph(ArrowLeft01Icon),

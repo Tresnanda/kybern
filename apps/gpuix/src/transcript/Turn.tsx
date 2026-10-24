@@ -1,3 +1,6 @@
+import { useWorkspaceProgress } from '../groups/store.ts'
+import { editedFilesTitle, groupFilesByRepo, includedMembers, stripRepoPrefix, workspaceProgressLabel } from '../../../../packages/kybern-client/src/groups.ts'
+import { OutsideChange } from './OutsideChange.tsx'
 import { openTab } from '../tabs/open.ts'
 import { expiredQuestion } from '../../../../packages/kybern-client/src/requestCards.ts'
 import type { PublicInstance } from '@gpuix/react'
@@ -15,7 +18,8 @@ import { AgentItemCard } from '../coordinator/AgentItem.tsx'
 // folded under "Worked for"), then the answer with its error/stopped lines,
 // the "Edited N files" card and the footer.
 import { SubagentDivider } from '../subagents/Page.tsx'
-import { memo, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { N } from '../nav/glyphs.ts'
 import { calendarDateKey, calendarDateLabel, elapsedSince, plural } from '../../../desktop/src/lib/format.ts'
 import { clockTime } from './clock.ts'
 import { isImageGenerationTool } from '../../../desktop/src/lib/toolActivity.ts'
@@ -24,6 +28,8 @@ import { chunkRuns, isAgentLaunchBlock, isDelegationLaunchBlock, isOrchestration
 import { buildWorkHierarchy, shouldRevealLiveText, type Block, type TurnGroup } from '../../../../packages/kybern-client/src/transcript.ts'
 import type { ContentPart, Diff, RuntimeTask, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { removePending, usePendingSend } from '../composer/pending.ts'
+import { useNewChat } from '../composer/newChats.ts'
+import { PREPARING_WORKTREE } from '../../../../packages/kybern-client/src/newChat.ts'
 import { restoreToComposer, retryPending } from '../composer/store.ts'
 import { useApp } from '../state.ts'
 import { TranscriptTail } from './Window.tsx'
@@ -105,6 +111,11 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
   // An optimistic send the daemon rejected (`composer/pending.ts`): its bubble stays, with Retry and Edit, and no turn runs.
   const send = usePendingSend(threadId, group.user?.id)
   const failed = send?.state === 'failed'
+  // A new chat in worktree mode: its first turn starts once the daemon has made the worktree (`composer/newChats.ts`).
+  const chat = useNewChat(threadId)
+  const preparing = !!chat && chat.worktree && chat.state === 'creating' && chat.messageId === group.user?.id
+  // A group's worktrees are made one repository at a time: "Preparing worktrees… 2 of 3" (`threads.workspace_progress`).
+  const progress = useWorkspaceProgress(preparing ? threadId : null)
   // A long live turn can start before the loaded page, so its user message (and
   // with it `running`) is missing; the thread's status still says it is live.
   const running = !failed && (group.running || (threadRunning && isLast && !group.end))
@@ -169,7 +180,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
       {subagentThread && group.user?.id === firstUserId && <SubagentDivider thread={subagentThread} />}
       {group.user && (
         <div ref={userRef} testId={`turn-user:${group.user.id}`} style={{ paddingBottom: running ? 20 : 16 }}>
-          <UserBubble parts={group.user.message.parts} at={group.user.at} clampLines={subagent ? 6 : undefined} />
+          <UserBubble parts={group.user.message.parts} at={group.user.at} id={group.user.id} clampLines={subagent ? 6 : undefined} />
           {failed && <SendFailed threadId={threadId} id={send.id} error={send.error} parts={group.user.message.parts} />}
         </div>
       )}
@@ -186,7 +197,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
           {/* `thinkingRow`: `t-row-enter` each time it mounts. */}
           {!hasLiveWork && !endsInRun && (
             <Rise kind="row" style={{ marginTop: 6 }}>
-              <Shimmer text="Thinking" color={muted(t)} lineHeight={TEXT.lineHeight} />
+              <Shimmer text={preparing ? (progress ? workspaceProgressLabel(progress) : PREPARING_WORKTREE) : 'Thinking'} color={muted(t)} lineHeight={TEXT.lineHeight} />
             </Rise>
           )}
         </div>
@@ -267,6 +278,7 @@ export const TurnFooter = memo(function TurnFooter({ group, threadId, isLast }: 
           )}
           {group.end?.stopReason === 'interrupted' && <Para color={muted(t)}>Stopped.</Para>}
           {diff && diff.files.length > 0 && <EditedFilesCard diff={diff} threadId={threadId} turnId={group.turnId} canUndo={isLast} />}
+          {group.outside?.map((block) => <OutsideChange key={block.id} repos={block.repos} />)}
           {group.reverted && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8 }}>
               <Icon source={T.undo} size={12} color={muted(t)} />
@@ -310,8 +322,24 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
   const [reverting, setReverting] = useState(false)
   const adds = diff.files.reduce((n, f) => n + f.additions, 0)
   const dels = diff.files.reduce((n, f) => n + f.deletions, 0)
-  const head = diff.files.slice(0, MAX_VISIBLE_CHANGED_FILES)
-  const rest = diff.files.slice(MAX_VISIBLE_CHANGED_FILES)
+  // A group thread lists the files under their repository (paths stay relative to the group folder, so links resolve).
+  const members = useApp((s) => (s.open.thread?.id === threadId ? s.open.thread.members : undefined))
+  const groups = members?.length ? groupFilesByRepo(diff, includedMembers(members)).filter((g) => g.files.length > 0) : null
+  const files = groups ? groups.flatMap((g) => g.files) : diff.files
+  const head = files.slice(0, MAX_VISIBLE_CHANGED_FILES)
+  const rest = files.slice(MAX_VISIBLE_CHANGED_FILES)
+  const repoOf = (file: Diff['files'][number]) => groups?.find((g) => g.files.includes(file))
+  // The repository's caption goes before its first file, in the part of the list that shows that file.
+  const rowsFor = (part: Diff['files'], offset: number) => part.map((f, i) => {
+    const repo = repoOf(f)
+    const first = repo && repo.files[0] === f
+    return (
+      <Fragment key={f.path}>
+        {first && <RepoCaption name={repo.repo.name} border={offset + i > 0 ? border : undefined} />}
+        <EditedFileRow file={f} threadId={threadId} turnId={turnId} first={offset + i === 0 || !!first} border={border} repo={repo?.repo.path} />
+      </Fragment>
+    )
+  })
   const border = t.variant === 'dark' ? alpha(t.borderLight, 0.55) : t.borderLight
   const radius = 10.4
   const undo = async () => {
@@ -349,7 +377,7 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
           <Icon source={T.changes} size={14} color={muted(t, 0.7)} />
           <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
             <Label color={fg(t, 0.92)} lineHeight={TEXT.lineHeight} truncate>
-              {`Edited ${plural(diff.files.length, 'file')}`}
+              {groups ? editedFilesTitle(files.length, groups.map((g) => g.repo.name)) : `Edited ${plural(diff.files.length, 'file')}`}
             </Label>
             {(adds > 0 || dels > 0) && <DiffStat additions={adds} deletions={dels} />}
           </div>
@@ -366,12 +394,10 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
       </div>
       {/* `DisclosureRegion`s: the file list, and the files past the first five inside it. */}
       <Collapse open={expanded} testId="edited-files-panel">
-          {head.map((f, i) => (
-            <EditedFileRow key={f.path} file={f} threadId={threadId} turnId={turnId} first={i === 0} border={border} />
-          ))}
+          {rowsFor(head, 0)}
           {rest.length > 0 && (
             <Collapse open={showAll}>
-              {rest.map((f) => <EditedFileRow key={f.path} file={f} threadId={threadId} turnId={turnId} border={border} />)}
+              {rowsFor(rest, head.length)}
             </Collapse>
           )}
           {rest.length > 0 && (
@@ -388,7 +414,18 @@ function EditedFilesCard({ diff, threadId, turnId, canUndo }: { diff: Diff; thre
   )
 }
 
-function EditedFileRow({ file, threadId, turnId, first, border }: { file: Diff['files'][number]; threadId: ThreadId; turnId: string; first?: boolean; border: string }) {
+/** A repository's caption over its files in a group thread's card: the glyph and name, quiet. */
+function RepoCaption({ name, border }: { name: string; border?: string }) {
+  const t = useTheme()
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 2, ...(border ? { borderTopWidth: 1, borderColor: border } : {}) }}>
+      <Icon source={N.repo} size={12} color={muted(t, 0.55)} />
+      <Label color={muted(t, 0.7)} size={12} lineHeight={16}>{name}</Label>
+    </div>
+  )
+}
+
+function EditedFileRow({ file, threadId, turnId, first, border, repo }: { file: Diff['files'][number]; threadId: ThreadId; turnId: string; first?: boolean; border: string; /** The member it belongs to: its path prefix is drawn muted. */ repo?: string }) {
   const t = useTheme()
   const g = useGlass()
   const [open, setOpen] = useRowState(`file:${turnId}:${file.path}`, false)
@@ -428,9 +465,16 @@ function EditedFileRow({ file, threadId, turnId, first, border }: { file: Diff['
         <div testId={`edited-file-${file.path}`} onClick={toggle} style={{ display: 'flex', alignItems: 'center', gap: 8, flexGrow: 1, minWidth: 0 }}>
         <Chevron open={open} color={muted(t, 0.6)} />
         <Icon source={diffFileIcons[getFileIconName(file.path)] ?? T.file} size={16} color={t.text} style={{ opacity: t.variant === 'dark' ? 0.8 : 0.7 }} />
-        <Label color={t.text} lineHeight={TEXT.lineHeight} truncate style={{ flexShrink: 1, hover: { textDecoration: 'underline' } }}>
-          {file.path}
-        </Label>
+        {repo && repo !== '.' && file.path.startsWith(`${repo}/`) ? (
+          <div style={{ display: 'flex', minWidth: 0, flexShrink: 1 }}>
+            <Label color={muted(t, 0.6)} lineHeight={TEXT.lineHeight} style={{ flexShrink: 0 }}>{`${repo}/`}</Label>
+            <Label color={t.text} lineHeight={TEXT.lineHeight} truncate style={{ flexShrink: 1, hover: { textDecoration: 'underline' } }}>{stripRepoPrefix(file.path, repo)}</Label>
+          </div>
+        ) : (
+          <Label color={t.text} lineHeight={TEXT.lineHeight} truncate style={{ flexShrink: 1, hover: { textDecoration: 'underline' } }}>
+            {file.path}
+          </Label>
+        )}
         <div style={{ flexGrow: 1 }} />
         <DiffStat additions={file.additions} deletions={file.deletions} />
         </div>
@@ -471,14 +515,18 @@ function SendFailed({ threadId, id, error, parts }: { threadId: ThreadId; id: st
   return (
     <Rise kind="row" style={{ alignItems: 'flex-end', width: '100%' }}>
       {/* Below the bubble's hover footer (Copy, Save to note), which reaches 28 px under it. */}
-      <div testId="send-failed" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, paddingTop: 30, maxWidth: '80%' }}>
-        <Label color={t.v('--destructive')} size={META.size} lineHeight={META.lineHeight} truncate style={{ flexShrink: 1 }}>
-          {`Not sent. ${error ?? 'The daemon did not answer.'}`}
+      {/* The reason wraps instead of truncating: its last clause is usually what to do next. */}
+      <div testId="send-failed" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, paddingTop: 30, maxWidth: '80%' }}>
+        <Label color={t.v('--destructive')} size={META.size} lineHeight={META.lineHeight} style={{ textAlign: 'right' }}>
+          {/* Daemon errors may start lowercase ("thread is no longer idle"); the reason reads as its own sentence. */}
+          {`Not sent. ${error ? error.charAt(0).toUpperCase() + error.slice(1) : 'The daemon did not answer.'}`}
         </Label>
-        <Button size="sm" testId="send-retry" onClick={() => retryPending(threadId, id)}>Retry</Button>
-        <Button variant="ghost" size="sm" testId="send-edit" onClick={() => {
-          if (restoreToComposer(`thread:${threadId}`, parts, messageText(parts))) removePending(threadId, id)
-        }}>Edit</Button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Button size="sm" testId="send-retry" onClick={() => retryPending(threadId, id)}>Retry</Button>
+          <Button variant="ghost" size="sm" testId="send-edit" onClick={() => {
+            if (restoreToComposer(`thread:${threadId}`, parts, messageText(parts))) removePending(threadId, id)
+          }}>Edit</Button>
+        </div>
       </div>
     </Rise>
   )

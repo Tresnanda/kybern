@@ -538,6 +538,43 @@ const MIGRATIONS: &[&str] = &[
     ",
     // A thread note follows its thread's title until someone renames the note itself.
     "ALTER TABLE notes ADD COLUMN title_edited INTEGER NOT NULL DEFAULT 0;",
+    // The default space cannot be deleted. v27 seeded "Personal" first, so the
+    // oldest space is the seeded one while it exists (even renamed) and the
+    // oldest survivor once it is gone. The partial index keeps it to one.
+    "
+    BEGIN;
+    ALTER TABLE spaces ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0;
+    UPDATE spaces SET is_default = 1
+      WHERE id = (SELECT id FROM spaces ORDER BY created_at, position, id LIMIT 1);
+    CREATE UNIQUE INDEX spaces_one_default ON spaces(is_default) WHERE is_default = 1;
+    COMMIT;
+    ",
+    // v30: group projects. A project of kind 'group' is a parent folder whose members
+    // are git repositories inside it, stored as '/'-separated paths relative to
+    // projects.path ('.' is the folder itself). Position 0 is the primary member.
+    "
+    BEGIN;
+    ALTER TABLE projects ADD COLUMN kind TEXT NOT NULL DEFAULT 'single';
+    ALTER TABLE projects ADD COLUMN instructions_offer_dismissed INTEGER NOT NULL DEFAULT 0;
+    -- JSON array of top-level entry names copied into new worktree containers.
+    ALTER TABLE projects ADD COLUMN worktree_copy TEXT;
+    CREATE TABLE project_members (
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        path TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        -- `MemberStatus` from the last probe, cached like projects.is_git.
+        status TEXT NOT NULL DEFAULT 'ok',
+        added_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, path)
+    );
+    CREATE INDEX project_members_order ON project_members(project_id, position);
+    -- JSON of Vec<ThreadMember>; NULL for single-repo threads.
+    ALTER TABLE threads ADD COLUMN members TEXT;
+    -- JSON of Vec<RepoCheckpoint>; NULL for single-repo threads.
+    ALTER TABLE checkpoints ADD COLUMN repos TEXT;
+    ALTER TABLE checkpoints ADD COLUMN incomplete INTEGER NOT NULL DEFAULT 0;
+    COMMIT;
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

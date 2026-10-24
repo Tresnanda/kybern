@@ -1,4 +1,5 @@
 import type {
+  CoordinatorOpenParams,
   CoordinatorOpenResult,
   Methods,
   PermissionMode,
@@ -67,6 +68,37 @@ export function openingMessageText(message: UserMessage): string {
     .trim();
 }
 
+/**
+ * `coordinator.open`'s parameters for this input, after the checks the daemon would otherwise
+ * refuse: an available harness, an effort the model offers, a supported permission mode.
+ */
+export function coordinatorOpenParams(input: StartProjectCoordinatorInput): CoordinatorOpenParams {
+  const model = input.model?.trim() || undefined;
+  const effort = input.effort?.trim() || undefined;
+  const instance = input.instance?.trim() || (input.provider.instances.includes("default") ? "default" : input.provider.instances[0] || "default");
+  const openingMessage = input.openingMessage?.trim() || undefined;
+  if (!supportsProjectCoordinator(input.provider)) {
+    throw new Error("Choose an available harness for the Coordinator.");
+  }
+  const modelInfo = input.provider.models?.find((item) => item.id === model);
+  if (effort && modelInfo?.efforts?.length && !modelInfo.efforts.includes(effort)) {
+    throw new Error("Choose an available effort for the Coordinator.");
+  }
+  const modes = input.provider.supported_permission_modes;
+  const permission = input.permissionMode ?? (modes.includes("supervised") ? "supervised" : modes[0]);
+  if (!permission || !modes.includes(permission)) {
+    throw new Error("Choose a permission mode supported by this provider.");
+  }
+  return {
+    project_id: input.projectId,
+    provider: { kind: input.provider.kind, instance },
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
+    permission_mode: permission,
+    ...(openingMessage ? { opening_message: openingMessage } : {}),
+  };
+}
+
 /** Use one controller for a mounted project entry. `coordinator.open` is idempotent on the
  * daemon, so a lost acknowledgement just retries; a first message for an existing
  * Coordinator keeps one client id. */
@@ -89,27 +121,9 @@ export function createCoordinatorStarter(call: CoordinatorRpc, newId: () => stri
       const execute = async (): Promise<CoordinatorOpenResult> => {
         const existing = await call("coordinator.get", { project_id: input.projectId });
         if (existing) return { thread: existing, created: false };
-        if (!supportsProjectCoordinator(input.provider)) {
-          throw new Error("Choose an available harness for the Coordinator.");
-        }
-        const modelInfo = input.provider.models?.find((item) => item.id === model);
-        if (effort && modelInfo?.efforts?.length && !modelInfo.efforts.includes(effort)) {
-          throw new Error("Choose an available effort for the Coordinator.");
-        }
-        const modes = input.provider.supported_permission_modes;
-        const permission = input.permissionMode ?? (modes.includes("supervised") ? "supervised" : modes[0]);
-        if (!permission || !modes.includes(permission)) {
-          throw new Error("Choose a permission mode supported by this provider.");
-        }
+        const params = coordinatorOpenParams(input);
         onOpenSent?.();
-        return call("coordinator.open", {
-          project_id: input.projectId,
-          provider: { kind: input.provider.kind, instance },
-          ...(model ? { model } : {}),
-          ...(effort ? { effort } : {}),
-          permission_mode: permission,
-          ...(openingMessage ? { opening_message: openingMessage } : {}),
-        });
+        return call("coordinator.open", params);
       };
       const promise = execute();
       inFlight = { fingerprint, promise };

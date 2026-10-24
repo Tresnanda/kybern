@@ -3,16 +3,17 @@
 // gives every new thread in the project the brief, then the project's Coordinator settings.
 // Shown in the Project sheet.
 import { router } from "expo-router";
-import { memo, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { View } from "react-native";
 import {
   PROJECT_SPACE_COPY,
   notePreviewLine,
   projectSpaceNotes,
 } from "../../../../packages/kybern-client/src/projectSpace";
+import { SPACE_COPY } from "../../../../packages/kybern-client/src/spaces";
 import { useNotes } from "../state/notes";
 import { noteTitle } from "../state/notesModel";
-import type { NoteSummary, Thread } from "../state/protocol";
+import type { NoteSummary, Space, Thread } from "../state/protocol";
 import { errorText, rpc, useApp } from "../state/runtime";
 import { relativeTime } from "../state/threadList";
 import { useNoteSession } from "../state/useNoteSession";
@@ -70,6 +71,7 @@ export function ProjectSpace({ projectId }: { projectId: string }) {
       )}
       <ProjectCoordinatorSection projectId={projectId} />
       <BriefSwitch projectId={projectId} />
+      <SpaceRow projectId={projectId} />
       <Tap
         label="Show all in Notes"
         onPress={() => router.push({ pathname: "/notes", params: { projectId } })}
@@ -172,6 +174,35 @@ function BriefSwitch({ projectId }: { projectId: string }) {
         <Toggle value={value} onValueChange={change} disabled={pending !== null} accessibilityLabel={PROJECT_SPACE_COPY.switchTitle} />
       </View>
       <ErrorBanner error={error} />
+    </View>
+  );
+}
+
+/** Which space the project is in, and whether it is the default one. Read-only: spaces are managed on the computer. */
+function SpaceRow({ projectId }: { projectId: string }) {
+  const { colors } = useTheme();
+  const app = useApp();
+  const spaceId = app.projects.find((project) => project.id === projectId)?.space_id;
+  const [space, setSpace] = useState<Space | null>(null);
+  useEffect(() => {
+    let live = true;
+    // A computer without spaces answers with an error: the row stays hidden.
+    rpc("spaces.list", {})
+      .then((result) => live && setSpace(result.spaces.find((item) => item.id === spaceId) ?? null))
+      .catch(() => live && setSpace(null));
+    return () => {
+      live = false;
+    };
+  }, [spaceId]);
+  if (!space) return null;
+  return (
+    <View style={{ marginTop: 24 }}>
+      <View style={[styles.line, { gap: 12, padding: 14, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface }]}>
+        <View style={{ flex: 1, gap: 2 }}>
+          <T variant="label">{space.name}</T>
+          <T variant="caption" tone="secondary">{space.is_default ? SPACE_COPY.defaultBadge : "Space"}</T>
+        </View>
+      </View>
     </View>
   );
 }

@@ -1,0 +1,657 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(ThreadsCreateParams)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ThreadsCreateParams",
+  "type": "object",
+  "properties": {
+    "pin_account": {
+      "description": "Pin the explicitly selected account, including the regular CLI account.",
+      "type": "boolean",
+      "default": false
+    },
+    "project_id": {
+      "description": "Omit to create a free chat in the daemon-owned neutral workspace.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "provider": {
+      "$ref": "#/$defs/ProviderInstance"
+    },
+    "model": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "effort": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "permission_mode": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "use_worktree": {
+      "description": "Create a git worktree for this thread. Defaults to the project override, then global off.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "base_branch": {
+      "description": "Branch to start from. A worktree forks its branch from it; a local thread\nswitches the project checkout to it first.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "title": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "message": {
+      "description": "Optionally send a first message in the same call.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/UserMessage"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "thread_id": {
+      "description": "A client-chosen id for the new thread (UUID v7), so a client can show the thread before the\ndaemon answers. A repeat with the same id returns the thread the first call made, never a\nsecond one, and sends `message` only if that call did not already deliver it.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "message_id": {
+      "description": "The client's id for `message`, as `threads.send` takes it: a repeat with the same id is\nanswered from the first delivery instead of starting another turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "members": {
+      "description": "Group projects, worktree mode: member paths to include. Omit for all.\nIgnored in local mode (the agent works in the group folder with every member).",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "base_branches": {
+      "description": "Group projects: base branch per member path. Worktree: each member's fork\npoint. Local: the branch to switch that member's checkout to first.\n`base_branch` still applies to the primary when this map does not name it.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "provider"
+  ],
+  "$defs": {
+    "ProviderInstance": {
+      "description": "A configured account/instance of a provider. `default` is created implicitly.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        "instance": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "instance"
+      ]
+    },
+    "ProviderKind": {
+      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "opencode",
+        "pi",
+        "omp",
+        "cursor"
+      ]
+    },
+    "PermissionMode": {
+      "description": "The four permission modes.",
+      "oneOf": [
+        {
+          "description": "Every tool call that mutates or executes asks for approval.",
+          "type": "string",
+          "const": "supervised"
+        },
+        {
+          "description": "File edits proceed; shell and network still ask.",
+          "type": "string",
+          "const": "accept-edits"
+        },
+        {
+          "description": "The provider decides with its own safety heuristics; asks only when unsure.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Nothing asks. Sandboxing is the provider's problem.",
+          "type": "string",
+          "const": "full-access"
+        }
+      ]
+    },
+    "UserMessage": {
+      "type": "object",
+      "properties": {
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContentPart"
+          }
+        }
+      },
+      "required": [
+        "parts"
+      ]
+    },
+    "ContentPart": {
+      "description": "One piece of a user message.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "Inline image. `data` is base64 of the raw bytes.",
+          "type": "object",
+          "properties": {
+            "media_type": {
+              "type": "string"
+            },
+            "data": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "required": [
+            "type",
+            "media_type",
+            "data"
+          ]
+        },
+        {
+          "description": "Uploaded attachment served by the daemon's HTTP asset route.",
+          "type": "object",
+          "properties": {
+            "asset_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "name": {
+              "type": "string"
+            },
+            "media_type": {
+              "type": "string"
+            },
+            "size": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "attachment"
+            }
+          },
+          "required": [
+            "type",
+            "asset_id",
+            "name",
+            "media_type",
+            "size"
+          ]
+        },
+        {
+          "description": "`@path` mention resolved relative to the thread cwd.",
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "file_mention"
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ]
+        },
+        {
+          "description": "Inert reference to an existing Kybern thread. Selecting or rendering it\nnever reads, wakes, or sends to the referenced thread.",
+          "type": "object",
+          "properties": {
+            "thread_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "title": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            "type": {
+              "type": "string",
+              "const": "thread_reference"
+            }
+          },
+          "required": [
+            "type",
+            "thread_id",
+            "title"
+          ]
+        },
+        {
+          "description": "A user-selected agent skill. Drivers translate this into the provider's\nnative invocation syntax instead of treating a lookalike `$NAME` as a\nskill accidentally.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "path": {
+              "description": "Canonical `SKILL.md` path returned by the provider catalog. Codex\nrequires it for its structured `skill` turn input; other drivers\nmay use only the name.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "skill"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "path"
+          ]
+        },
+        {
+          "description": "A provider plugin or app the user pulled in with `@name`, such as\nCodex's Computer Use. `path` is the provider's own id for it\n(`plugin://name@marketplace` or `app://connector-id`); drivers without\na structured form send the mention as text.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "display_name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "mention"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "path"
+          ]
+        },
+        {
+          "description": "A message from another thread (or from Kybern itself when\n`from_thread_id` is `None`). Providers receive it as flattened text; see\n[`thread_message_text`].",
+          "type": "object",
+          "properties": {
+            "message_id": {
+              "description": "The `thread_messages` row id; also the queued or steered message id.",
+              "type": "string",
+              "format": "uuid"
+            },
+            "from_thread_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            "from_title": {
+              "type": "string"
+            },
+            "purpose": {
+              "$ref": "#/$defs/ThreadMessagePurpose"
+            },
+            "reply_to": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            "body": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "thread_message"
+            }
+          },
+          "required": [
+            "type",
+            "message_id",
+            "from_title",
+            "purpose",
+            "body"
+          ]
+        },
+        {
+          "description": "A batch of delegated-agent outcomes delivered to the delegating thread.\nProviders receive it as flattened text; see [`agent_results_text`].",
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AgentResultItem"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "agent_results"
+            }
+          },
+          "required": [
+            "type",
+            "items"
+          ]
+        },
+        {
+          "description": "A row Kybern itself adds to a conversation, such as \"Setup started\".\nClients draw it as a small system row, never a user bubble; it may sit in\nfront of the user's own parts. Providers never receive it as written:\nthe daemon swaps in its own instructions for the provider's copy, and a\ndriver that meets one flattens `text`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/SystemRowKind"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "system_row"
+            }
+          },
+          "required": [
+            "type",
+            "kind",
+            "text"
+          ]
+        }
+      ]
+    },
+    "ThreadMessagePurpose": {
+      "description": "Why a message exists. `Task` is a delegation brief; `Warning` comes from\nKybern itself (for example a file ownership clash).",
+      "type": "string",
+      "enum": [
+        "task",
+        "message",
+        "question",
+        "reply",
+        "warning"
+      ]
+    },
+    "AgentResultItem": {
+      "description": "One delegated agent's outcome inside an [`ContentPart::AgentResults`] batch.",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "thread_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "title": {
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "$ref": "#/$defs/DelegationRole",
+          "default": "general"
+        },
+        "status": {
+          "$ref": "#/$defs/DelegationStatus"
+        },
+        "result": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace": {
+          "$ref": "#/$defs/DelegationWorkspace",
+          "default": "shared"
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "head_commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "base_commit": {
+          "description": "Worktree: the commit the worktree was seeded from.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "diffstat": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DiffStat"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "files_touched": {
+          "description": "At most 50.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DelegationConflict"
+          }
+        }
+      },
+      "required": [
+        "task_id",
+        "thread_id",
+        "title",
+        "provider",
+        "status"
+      ]
+    },
+    "DelegationRole": {
+      "description": "What the delegating agent asked this child to be.",
+      "type": "string",
+      "enum": [
+        "implementation",
+        "research",
+        "review",
+        "design",
+        "test",
+        "general"
+      ]
+    },
+    "DelegationStatus": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "running",
+            "completed",
+            "failed",
+            "cancelled"
+          ]
+        },
+        {
+          "description": "Cut off by a daemon restart.",
+          "type": "string",
+          "const": "interrupted"
+        }
+      ]
+    },
+    "DelegationWorkspace": {
+      "description": "Where a delegated child works.",
+      "oneOf": [
+        {
+          "description": "The parent's checkout and branch.",
+          "type": "string",
+          "const": "shared"
+        },
+        {
+          "description": "Its own git worktree on `kybern/<child-id>`, seeded from the parent's\ncurrent uncommitted state.",
+          "type": "string",
+          "const": "worktree"
+        }
+      ]
+    },
+    "DiffStat": {
+      "description": "Files and lines changed between two commits.",
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "additions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "deletions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "files",
+        "additions",
+        "deletions"
+      ]
+    },
+    "DelegationConflict": {
+      "description": "A shared-checkout edit that landed on a path a sibling delegation owns.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Repo-relative path that was edited.",
+          "type": "string"
+        },
+        "owner_thread_id": {
+          "description": "The sibling thread whose `owns` globs cover `path`.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "path",
+        "owner_thread_id",
+        "at"
+      ]
+    },
+    "SystemRowKind": {
+      "description": "What a [`ContentPart::SystemRow`] announces.",
+      "oneOf": [
+        {
+          "description": "The Coordinator's setup interview began (a new Coordinator without a\nbrief, or \"Redo setup\").",
+          "type": "string",
+          "const": "coordinator_setup"
+        }
+      ]
+    }
+  }
+}

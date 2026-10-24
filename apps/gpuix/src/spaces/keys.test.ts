@@ -9,7 +9,7 @@ import { startSpaces } from './current.ts'
 import { setSpacesState } from './store.ts'
 
 const space = (id: string, position: number): Space => ({
-  id, name: id, color: 'blue', logo: { kind: 'initials' }, position, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
+  id, name: id, color: 'blue', logo: { kind: 'initials' }, position, is_default: position === 0, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
 })
 const project = (id: string, space_id: string): Project => ({ id, name: id, path: `/${id}`, is_git: false, brief_in_all_threads: false, space_id }) as unknown as Project
 const press = (key: string, modifiers: Partial<NonNullable<EventPayload['modifiers']>> = { ctrl: true }) => ({ key, modifiers } as unknown as EventPayload)

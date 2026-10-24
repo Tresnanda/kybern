@@ -257,3 +257,18 @@ test("only the tail segment of a running turn is still thinking", () => {
   assert.equal(thinking(project([user, thought], new Set())).thought, true);
   assert.equal(thinking(project([user, { ...thought, text: "Opening Notes." }], new Set())).thought, false);
 });
+
+test("an outside-change warning stays visible after a collapsed group worktree turn", () => {
+  const outside = {
+    ...base,
+    kind: "outside_repo_changed",
+    id: "outside:6",
+    seq: 6,
+    repos: [{ repo: "infra", name: "infra", source_path: "/work/acme/infra", dirty_files: 2 }],
+  };
+  const rendered = content(createTurnRows()([...blocks, outside], new Set()));
+  assert.deepEqual(
+    rendered.map((block) => block.kind),
+    ["user", "assistant", "turn_end", "outside_repo_changed"],
+  );
+});

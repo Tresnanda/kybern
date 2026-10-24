@@ -22,6 +22,7 @@ import { openThread } from './nav/history.ts'
 import { observeElementBounds, type LayoutRect } from './native/layout.ts'
 import { useTasks } from './tasks/store.ts'
 import { Headline } from './draft/Headline.tsx'
+import { InstructionsOffer } from './draft/InstructionsOffer.tsx'
 import { attachedForProject, continueThreads, MORPH_MAX_IMAGES, MORPH_MAX_LINES, pickupRowsFor, upNextTasks } from './draft/model.ts'
 import { PickUp, type PickUpHandle } from './draft/PickUp.tsx'
 import { clearAttachedTask, setLaunch, toggleAttachedTask, useAttachedTaskId, type ExitPaint } from './draft/store.ts'
@@ -158,7 +159,8 @@ export function Draft() {
       gutter={compact ? 20 : GUTTER}
       enter={enter}
       headline={headline(false)}
-      middle={
+      middle={<>
+        {!coordinator && <InstructionsOffer project={project} />}
         <DraftComposer
           tray={trayShown ? tray(false) : undefined}
           extras={{
@@ -170,7 +172,7 @@ export function Draft() {
             onTaskSent: () => clearAttachedTask(pane.id),
           }}
         />
-      }
+      </>}
       pickup={pickupView(false)}
     />
   )

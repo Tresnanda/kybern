@@ -20,6 +20,12 @@ import { Icon } from '../icons.tsx'
 import { SearchField } from '../kit/SearchField.tsx'
 import { MatrixLoader } from '../MatrixLoader.tsx'
 import { getState, useApp } from '../state.ts'
+import { renameProjectInline } from '../sidebar/renameProject.ts'
+import { GROUP_COPY, isGroupProject } from '../../../../packages/kybern-client/src/groups.ts'
+import { addGroup, addRepository } from '../groups/add.ts'
+import { useGroupsSupported } from '../groups/store.ts'
+import { showDialog } from '../dialogs/store.ts'
+import { PROJECT_RENAME_COPY } from '../../../../packages/kybern-client/src/projectName.ts'
 import { SPACE_COPY, inSpace } from '../../../../packages/kybern-client/src/spaces.ts'
 import { switchSpace, useCurrentSpaceId } from '../spaces/current.ts'
 import { openSpaceEditor } from '../spaces/ui.ts'
@@ -60,8 +66,15 @@ function PaletteDialog() {
   const spaceId = useCurrentSpaceId()
   const spaces = useSpaces((s) => s.spaces)
   const spacesOn = useSpaces((s) => s.supported === true)
+  const current = spaces.find((space) => space.id === spaceId) ?? null
+  // The project of the open thread, or of the draft on the home screen.
+  const renamable = useApp((s) => {
+    const id = s.selectedId ? s.threads.find((x) => x.id === s.selectedId)?.project_id : s.draft.projectId
+    return id && !isFreeChatProject(id) ? (s.projects.find((p) => p.id === id) ?? null) : null
+  })
   const selectedId = useApp((s) => s.selectedId)
   const inSplit = useSplitRoot().kind === 'split'
+  const groupsOn = useGroupsSupported()
   const [query, setQuery] = useState('')
   const [highlight, setHighlight] = useState(0)
   const rowRefs = useRef(new Map<number, PublicInstance>())
@@ -81,6 +94,7 @@ function PaletteDialog() {
         meta: spaces.length >= 2 && (index < 8 || (index === spaces.length - 1 && spaces.length > 8)) ? kbd(['⌃', index === spaces.length - 1 && spaces.length > 8 ? '9' : String(index + 1)]) : undefined,
         run: () => { switchSpace(space.id, 'pointer') },
       }]),
+      ...(current ? [{ id: 'space-rename', label: SPACE_COPY.paletteRename, keywords: 'rename edit space name color icon', group: 'Suggested' as const, icon: <Icon source={N.pencil} size={15} color={muted(t, 1)} />, run: () => openSpaceEditor({ anchor: current.id, mode: 'edit', still: true }) }] : []),
       { id: 'space-new', label: SPACE_COPY.paletteNew, keywords: 'new space create group projects', group: 'Suggested', icon: <Icon source={N.plus} size={15} color={muted(t, 1)} />, run: () => openSpaceEditor({ anchor: 'plus', mode: 'create', still: true }) },
     ]
     const actions: Item[] = [
@@ -123,6 +137,17 @@ function PaletteDialog() {
         ? [{ id: 'go-forward', label: 'Go forward', keywords: 'forward next history navigate', group: 'Suggested' as const, icon: <Icon source={N.arrowRight} size={15} color={muted(t, 1)} />, meta: kbd(['⌘', ']']), run: () => void goForward() }]
         : []),
       ...(spacesOn ? spaceCommands() : []),
+      ...(renamable
+        ? [{ id: 'project-rename', label: PROJECT_RENAME_COPY.palette, keywords: `rename project name ${renamable.name}`, group: 'Suggested' as const, icon: <Icon source={N.pencil} size={15} color={muted(t, 1)} />, run: () => renameProjectInline(renamable.id) }]
+        : []),
+      // Sheet 1: the keyboard path to both kinds of project is one step.
+      { id: 'project-add', label: GROUP_COPY.paletteAddProject, keywords: 'add project folder repository open', group: 'Suggested', icon: <Icon source={N.folder} size={15} color={muted(t, 1)} />, run: () => void addRepository(renderer) },
+      ...(groupsOn
+        ? [{ id: 'project-add-group', label: GROUP_COPY.paletteAddGroup, keywords: 'add group repositories multi repo monorepo folder', group: 'Suggested' as const, icon: <Icon source={N.folders} size={15} color={muted(t, 1)} />, run: () => void addGroup(renderer) }]
+        : []),
+      ...(renamable && isGroupProject(renamable)
+        ? [{ id: 'project-repositories', label: GROUP_COPY.paletteEditRepositories, keywords: `repositories members group ${renamable.name}`, group: 'Suggested' as const, icon: <Icon source={N.repo} size={15} color={muted(t, 1)} />, run: () => showDialog({ kind: 'repositories', projectId: renamable.id }) }]
+        : []),
       {
         id: 'settings',
         label: 'Settings',
@@ -215,7 +240,7 @@ function PaletteDialog() {
     const matched = q ? all.filter((item) => `${item.label} ${item.keywords}`.toLowerCase().includes(q)) : all
     const order: Item['group'][] = ['Suggested', 'Threads', 'Notes', 'Tasks', 'Projects', 'Themes']
     return order.map((group) => ({ group, items: matched.filter((item) => item.group === group) })).filter((g) => g.items.length > 0)
-  }, [notes, threads, projects, taskMap, spaceId, spaces, spacesOn, selectedId, inSplit, history, settingsOpen, page, query, t])
+  }, [notes, threads, projects, taskMap, spaceId, spaces, spacesOn, selectedId, inSplit, history, settingsOpen, page, query, t, renamable, groupsOn, renderer])
 
   const flat = groups.flatMap((g) => g.items)
   const active = Math.min(highlight, Math.max(0, flat.length - 1))

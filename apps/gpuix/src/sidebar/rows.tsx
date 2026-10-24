@@ -1,4 +1,8 @@
 import { useSidebarRowLease } from './Window.tsx'
+import { startProjectRename, stopProjectRename, useRenamingProject } from './renameProject.ts'
+import { PROJECT_RENAME_COPY, renamedProject } from '../../../../packages/kybern-client/src/projectName.ts'
+import { RpcCallError } from '../../../../packages/kybern-client/src/client.ts'
+import { toast } from '../shell/toasts.tsx'
 import { Button } from '../kit/Button.tsx'
 import { CONTROL } from '../kit/controls.ts'
 import { IconButton, type IconButtonProps } from '../kit/IconButton.tsx'
@@ -8,7 +12,10 @@ import { SPACE_COPY } from '../../../../packages/kybern-client/src/spaces.ts'
 import { canOpenInSplit, collectThreadPanes, openThreadInSplit, useFocusedPane, useSplitRoot } from '../split/store.ts'
 import { beginThreadDrag, trackThreadDrag, consumeThreadDrag, finishSplitDrag } from '../split/Workspace.tsx'
 import { showDialog } from '../dialogs/store.ts'
-import { activeEnvironment } from '../shell/environment.ts'
+import { addGroup, addRepository } from '../groups/add.ts'
+import { useGroupsSupported } from '../groups/store.ts'
+import { GROUP_COPY, groupRowLabel, isGroupProject } from '../../../../packages/kybern-client/src/groups.ts'
+import { RepoBadge } from '../groups/RepoBadge.tsx'
 // Thread panel rows (`views/Sidebar.tsx`, `views/subagents/SubagentSidebarRow.tsx`,
 // `lib/kit/sidebarRowStyles.ts`). Rows are 28px with an 8px radius, 14px text,
 // `--sidebar-accent` on hover and `--sidebar-accent-active` when selected.
@@ -24,7 +31,7 @@ import { SUBAGENT_SIDEBAR_HOLD_MS, subagentThreadPhase, type SubagentPhase } fro
 import { FREE_CHAT_PROJECT_ID, type Project, type Thread, type ThreadActivityState } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { MatrixLoader } from '../MatrixLoader.tsx'
-import { addProject, archiveThread, errorText, removeProject, updateThread } from '../nav/actions.ts'
+import { archiveThread, errorText, removeProject, renameProject, updateThread } from '../nav/actions.ts'
 import { N } from '../nav/glyphs.ts'
 import { newThread, openThread } from '../nav/history.ts'
 import { ContextMenu, Menu, MenuItem, MenuLabel, MenuSeparator, muted, Tip } from '../nav/overlay.tsx'
@@ -213,12 +220,32 @@ function ChildToggle({ depth, open, onToggle, label, testId }: { depth: number; 
 /** Add project: pick a folder with the system panel, then open its draft (`onAddProject`). */
 export function useAddProject() {
   const { renderer } = useGpuix()
-  return async () => {
-    if (getState().status !== 'open') return
-    if (!activeEnvironment().local) return showDialog({ kind: 'project' })
-    const paths = await renderer?.promptForPaths?.({ directories: true, files: false, prompt: 'Add project' })
-    if (paths?.[0]) await addProject(paths[0]).catch((e) => console.error('[sidebar] Unable to add project:', errorText(e)))
-  }
+  return () => addRepository(renderer)
+}
+
+/**
+ * The Projects "+" (L3 sheet 1): with group projects available it opens a two-row menu, Repository… (today's flow) and
+ * Group of repositories…; on an older daemon it adds a repository directly, as before.
+ */
+function AddProjectButton() {
+  const { renderer } = useGpuix()
+  const groups = useGroupsSupported()
+  const [open, setOpen] = useState(false)
+  useSidebarRowLease(open)
+  if (!groups) return <SidebarIconButton icon={N.plus} size="sm" glyph={15} label="Add project" tooltip="Add project" onClick={() => void addRepository(renderer)} testId="add-project" />
+  return (
+    <Menu
+      open={open}
+      onOpenChange={setOpen}
+      align="start"
+      width={288}
+      testId="add-project"
+      trigger={() => <SidebarIconButton icon={N.plus} size="sm" glyph={15} label="Add project" tooltip={open ? undefined : 'Add project'} active={open} />}
+    >
+      <MenuItem id="repository" testId="add-project-repository" icon={N.folder} label={GROUP_COPY.addMenuRepository} description={GROUP_COPY.addMenuRepositoryDetail} onSelect={() => void addRepository(renderer)} />
+      <MenuItem id="group" testId="add-project-group" icon={N.folders} label={GROUP_COPY.addMenuGroup} description={GROUP_COPY.addMenuGroupDetail} onSelect={() => void addGroup(renderer)} />
+    </Menu>
+  )
 }
 
 // ---- section label ("Projects", with filter and add) ----
@@ -229,7 +256,6 @@ export const SectionLabel = memo(function SectionLabel({ text = 'Projects' }: { 
   const threads = useNav(() => getState().threads)
   const [menuOpen, setMenuOpen] = useState(false)
   useSidebarRowLease(menuOpen)
-  const onAddProject = useAddProject()
   const filtering = isFiltering(filter)
   const summaryPop = usePopOnChange(filtering)
   const agents = threadAgents(threads, filter)
@@ -283,7 +309,7 @@ export const SectionLabel = memo(function SectionLabel({ text = 'Projects' }: { 
                 </>
               )}
             </Menu>
-            <SidebarIconButton icon={N.plus} size="sm" glyph={15} label="Add project" tooltip="Add project" onClick={() => void onAddProject()} testId="add-project" />
+            <AddProjectButton />
             </div>
         </div>
       </div>
@@ -334,6 +360,23 @@ export const ProjectHeader = memo(function ProjectHeader({
   const { renderer } = useGpuix()
   const headerRef = useRef<PublicInstance | null>(null)
   const wasHovered = useWasRevealed(hover)
+  const g = useGlass()
+  const renaming = useRenamingProject(project.id)
+  useSidebarRowLease(renaming)
+  const group = isGroupProject(project)
+  const [name, setName] = useState(project.name)
+  // Esc (and Enter) end the edit before the blur they cause: only the first one counts.
+  const finished = useRef(false)
+  useEffect(() => { if (renaming) { finished.current = false; setName(project.name) } }, [renaming])
+  const finishRename = (save: boolean) => {
+    if (finished.current) return
+    finished.current = true
+    stopProjectRename(project.id)
+    const next = save ? renamedProject(name, project.name) : null
+    if (next) {
+      renameProject(project.id, next).catch((e) => toast.error(e instanceof RpcCallError ? e.message : PROJECT_RENAME_COPY.failure))
+    }
+  }
   const move = (offset: -1 | 1) => {
     const visible = getState()
       .projects.filter((p) => inCurrentSpace(p.id))
@@ -352,14 +395,15 @@ export const ProjectHeader = memo(function ProjectHeader({
       <div {...bind} style={{ position: 'relative' }}>
         <div
           testId={`project-${project.id}`}
+          aria-label={group ? groupRowLabel(project.name, project.members?.length ?? 0) : project.name}
           ref={headerRef}
-          onMouseDown={(e) => beginProjectDrag(project.id, e, renderer, (headerRef.current && renderer?.getElementBounds?.(headerRef.current.id)) || null)}
+          onMouseDown={(e) => { if (!renaming) beginProjectDrag(project.id, e, renderer, (headerRef.current && renderer?.getElementBounds?.(headerRef.current.id)) || null) }}
           onMouseMove={trackProjectDrag}
           onMouseUp={endProjectPending}
           onMouseLeave={(e) => { if (!leftSource(e, renderer)) return; trackProjectDrag(e, true); endProjectPending() }}
           onAuxClick={menu.onAuxClick}
           onClick={() => {
-            if (consumeProjectDrag(project.id)) return
+            if (renaming || consumeProjectDrag(project.id)) return
             if (active) toggleProject(project.id)
             else newThread(project.id)
           }}
@@ -380,15 +424,30 @@ export const ProjectHeader = memo(function ProjectHeader({
             {/* The folder fades back in as the disclosure control leaves. */}
             {!hover && (
               <FadeBack play={wasHovered}>
-                <Icon source={open ? N.folderOpen : N.folder} size={16} color={resting(t)} />
+                <Icon source={group ? N.folders : open ? N.folderOpen : N.folder} size={16} color={resting(t)} />
               </FadeBack>
             )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexGrow: 1, minWidth: 0 }}>
-            <Label color={active ? t.text : resting(t)} truncate>
-              {project.name}
-            </Label>
-            {hasDraft && <DraftMarker />}
+            {renaming ? (
+              <input
+                autoFocus
+                value={name}
+                aria-label={PROJECT_RENAME_COPY.field}
+                onChange={(e) => setName(e.value ?? '')}
+                onSubmit={() => finishRename(true)}
+                onBlur={() => finishRename(true)}
+                onKeyDown={(e) => { if (e.key === 'escape') finishRename(false) }}
+                testId={`rename-project-${project.id}`}
+                style={{ flexGrow: 1, minWidth: 0, height: 20, paddingLeft: 4, paddingRight: 4, borderRadius: 4, borderWidth: 1, borderColor: t.v('--ring'), backgroundColor: raisedFill(g, t.surface), color: t.text, fontSize: 14 }}
+              />
+            ) : (
+              <Label color={active ? t.text : resting(t)} truncate>
+                {project.name}
+              </Label>
+            )}
+            {group && !renaming && <RepoBadge project={project} emphasized={active || hover} />}
+            {hasDraft && !renaming && <DraftMarker />}
             {/* Room for the always-visible New thread button. */}
             <PadTween width={PROJECT_PAD} cancelGap={8} />
           </div>
@@ -419,6 +478,8 @@ export const ProjectHeader = memo(function ProjectHeader({
         <ContextMenu at={menu.at} onClose={menu.close} testId="project-menu">
           <MenuItem id="new" icon={N.newThread} label="New thread" onSelect={() => newThread(project.id)} />
           <MenuItem id="resume" icon={N.clock} label="Resume session" onSelect={() => setNav({ sessions: { projectId: project.id } })} />
+          <MenuItem id="rename" testId="project-menu-rename" icon={N.pencil} label={PROJECT_RENAME_COPY.menu} onSelect={() => startProjectRename(project.id)} />
+          {group && <MenuItem id="repositories" testId="project-menu-repositories" icon={N.folders} label={GROUP_COPY.repositoriesMenuItem} onSelect={() => showDialog({ kind: 'repositories', projectId: project.id })} />}
           {(canMoveUp || canMoveDown) && (
             <>
               <MenuSeparator />

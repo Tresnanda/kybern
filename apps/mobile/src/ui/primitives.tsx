@@ -260,6 +260,7 @@ export function Field({
 }
 export function Row({
   title,
+  label,
   detail,
   detailLines,
   icon,
@@ -268,6 +269,8 @@ export function Row({
   danger,
 }: {
   title: string;
+  /** Accessible name when the title alone says too little. */
+  label?: string;
   detail?: string;
   detailLines?: number;
   icon?: IconName;
@@ -305,7 +308,7 @@ export function Row({
     </View>
   );
   return onPress ? (
-    <Tap onPress={onPress} label={title}>
+    <Tap onPress={onPress} label={label ?? title}>
       {inner}
     </Tap>
   ) : (

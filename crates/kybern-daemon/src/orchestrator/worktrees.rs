@@ -4,7 +4,7 @@ use anyhow::ensure;
 use kybern_protocol::methods::*;
 use std::path::Path;
 
-fn recovery_ref(id: ThreadId) -> String {
+pub(super) fn recovery_ref(id: ThreadId) -> String {
     format!("refs/kybern/worktree-recovery/{id}")
 }
 
@@ -14,9 +14,8 @@ impl Orchestrator {
         ensure!(thread.delegation.is_none() && thread.subagent.is_none(), "Use this agent’s worktree controls instead.");
         let wt = thread.worktree.as_ref().ok_or_else(|| anyhow!("This thread uses the shared checkout. It has no worktree to remove."))?;
         let project = self.inner.store.project_get(thread.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
-        let expected = self.inner.paths.worktrees.join(&project.name).join(thread.id.to_string());
         ensure!(
-            Path::new(&wt.path) == expected && thread.cwd == wt.path,
+            self.is_managed_worktree(Path::new(&wt.path), &thread.id.to_string()) && thread.cwd == wt.path,
             "This folder is not a Kybern-managed worktree. Remove it with Git after checking its owners."
         );
         let exists = Path::new(&wt.path).exists();
@@ -27,14 +26,18 @@ impl Orchestrator {
                 actual.starts_with(managed) && !std::fs::symlink_metadata(&wt.path)?.file_type().is_symlink(),
                 "This worktree points outside the managed folders. Inspect it with Git before cleanup."
             );
-            let source_common =
-                crate::github::run(Path::new(&project.path), "git", &["rev-parse", "--path-format=absolute", "--git-common-dir"]).await?;
-            let tree_common =
-                crate::github::run(Path::new(&wt.path), "git", &["rev-parse", "--path-format=absolute", "--git-common-dir"]).await?;
-            ensure!(
-                std::fs::canonicalize(source_common)? == std::fs::canonicalize(tree_common)?,
-                "This folder belongs to another repository. Inspect it with Git before cleanup."
-            );
+            // A group container is checked member by member in `inspect_container`.
+            if !group_git::is_group(&thread) {
+                let source_common =
+                    crate::github::run(Path::new(&project.path), "git", &["rev-parse", "--path-format=absolute", "--git-common-dir"])
+                        .await?;
+                let tree_common =
+                    crate::github::run(Path::new(&wt.path), "git", &["rev-parse", "--path-format=absolute", "--git-common-dir"]).await?;
+                ensure!(
+                    std::fs::canonicalize(source_common)? == std::fs::canonicalize(tree_common)?,
+                    "This folder belongs to another repository. Inspect it with Git before cleanup."
+                );
+            }
         }
         let mut blockers = Vec::new();
         if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
@@ -78,7 +81,14 @@ impl Orchestrator {
         if self.inner.app_tools.terminals().iter().any(|t| t.alive && Path::new(&t.cwd).starts_with(&wt.path)) {
             blockers.push("Close terminals using this worktree first.".into());
         }
-        let (clean, ignored_files) = if exists {
+        let group = if group_git::is_group(&thread) { Some(self.inspect_container(&thread, &project).await?) } else { None };
+        let (clean, ignored_files) = if let Some(group) = group.as_ref() {
+            blockers.extend(group.blockers.iter().cloned());
+            if exists && processes_use_path(Path::new(&wt.path)).await? && !idle_native_session {
+                blockers.push("A process is using this worktree. Stop it or change its working directory first.".into());
+            }
+            (group.clean, group.ignored_files)
+        } else if exists {
             if Repo::new(&wt.path).current_branch().await.as_deref() != Some(wt.branch.as_str()) {
                 blockers.push("The checked-out branch changed outside Kybern. Restore the conversation’s branch before cleanup.".into());
             }
@@ -100,8 +110,10 @@ impl Orchestrator {
         } else {
             (true, 0)
         };
-        let source = Repo::new(&project.path);
-        let merged = source.is_ancestor(&wt.branch, "HEAD").await.unwrap_or(false);
+        let merged = match group.as_ref() {
+            Some(group) => group.merged,
+            None => Repo::new(&project.path).is_ancestor(&wt.branch, "HEAD").await.unwrap_or(false),
+        };
         let eligible = exists && clean && merged && ignored_files == 0 && blockers.is_empty();
         Ok(WorktreeInspectResult {
             path: wt.path.clone(),
@@ -143,6 +155,21 @@ impl Orchestrator {
             self.revoke_native_session(&live);
             live.session.close().await?;
         }
+        if group_git::is_group(&thread) {
+            let mut thread = thread;
+            let saved = self.save_container_recovery(&thread, &project).await?;
+            let current = self.worktree_inspect(thread.id).await?;
+            ensure!(current.blockers.is_empty(), "{}", current.blockers.join(" "));
+            let commit = self.remove_container(&mut thread, &project, &saved, p.force).await?;
+            self.update_thread(thread.clone())?;
+            self.emit(thread.id, None, EventPayload::WorktreeCleaned { branch: state.branch.clone(), recovery_commit: commit })?;
+            if p.delete_branch {
+                for member in thread.members.iter().filter(|m| m.included && m.worktree.is_some()) {
+                    Repo::new(&member.source_path).delete_branch(&state.branch, false).await?;
+                }
+            }
+            return Ok(WorktreeInspectResult { exists: false, eligible: false, ..state });
+        }
         let repo = Repo::new(&state.path);
         let head = repo.rev_parse("HEAD").await?;
         let commit = if state.clean { head.clone() } else { repo.snapshot("Kybern worktree cleanup recovery").await? };
@@ -183,11 +210,19 @@ impl Orchestrator {
             })
             .ok_or_else(|| anyhow!("This worktree folder is missing. Restore it with Git before continuing this conversation."))?;
         let project = self.inner.store.project_get(thread.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
-        let expected = self.inner.paths.worktrees.join(&project.name).join(thread.id.to_string());
         ensure!(
-            Path::new(&wt.path) == expected && thread.cwd == wt.path,
+            self.is_managed_worktree(Path::new(&wt.path), &thread.id.to_string()) && thread.cwd == wt.path,
             "The saved worktree location changed. Restore its original folder before continuing."
         );
+        if group_git::is_group(thread) {
+            let mut thread = thread.clone();
+            self.restore_container(&mut thread, &project, &receipt).await?;
+            let branch = wt.branch.clone();
+            self.update_thread(thread.clone())?;
+            self.emit(thread.id, None, EventPayload::WorktreeRestored { branch })?;
+            return Ok(());
+        }
+        let expected = Path::new(&wt.path).to_path_buf();
         let source = Repo::new(&project.path);
         // The ref prevents Git GC from discarding recovered uncommitted source.
         let commit = source.rev_parse(&format!("{}/source", recovery_ref(thread.id))).await?;
@@ -292,6 +327,10 @@ impl Orchestrator {
         ensure!(
             thread.project_id == p.project_id && thread.status != ThreadStatus::Archived,
             "Choose an open conversation in this project."
+        );
+        ensure!(
+            !group_git::is_group(&thread),
+            "This chat spans several repositories, so a pull request can't be checked out into it. Use a chat in that repository's own project."
         );
         let project = self.inner.store.project_get(p.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
         // Check the remote identity before even recreating a cleaned directory.

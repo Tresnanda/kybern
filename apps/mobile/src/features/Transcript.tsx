@@ -7,6 +7,7 @@ import { httpBase } from "../state/protocol";
 import {
   activeEnvironment,
   errorText,
+  getState,
   loadThread,
   rpc,
 } from "../state/runtime";
@@ -24,6 +25,31 @@ import { coordinatorCardLine } from "../../../../packages/kybern-client/src/coor
 import { CoordinatorCardLine, SystemRowLine } from "./CoordinatorCards";
 import { MessagePart } from "./MessagePart";
 import { hasOrchestrationParts } from "../state/orchestration";
+import { router } from "expo-router";
+import { GROUP_COPY, outsideChangeText } from "../../../../packages/kybern-client/src/groups";
+
+/** Quiet warning after a group worktree turn: a left-out repository's own checkout changed. Never reverted. */
+function OutsideChangeRow({ block, threadId }: { block: Extract<Block, { kind: "outside_repo_changed" }>; threadId: string }) {
+  const { colors } = useTheme();
+  const text = outsideChangeText(block.repos.map((repo) => repo.name));
+  const open = () => {
+    const projectId = getState().threads.find((thread) => thread.id === threadId)?.project_id;
+    if (projectId) router.push({ pathname: "/workspace", params: { projectId, tab: "Files", reveal: block.repos[0]?.repo } });
+  };
+  return (
+    <View style={[styles.line, { gap: 8, marginVertical: 8 }]} accessibilityRole="alert">
+      <Icon name="exclamationmark.triangle" size={14} color={colors.warning} />
+      <T variant="caption" tone="secondary" style={{ flex: 1 }}>
+        {text}
+      </T>
+      <Tap label={`${GROUP_COPY.outsideChangeOpen} ${block.repos.map((repo) => repo.name).join(", ")}`} onPress={open}>
+        <T variant="caption" tone="accent" style={{ fontWeight: "500" }}>
+          {GROUP_COPY.outsideChangeOpen}
+        </T>
+      </Tap>
+    </View>
+  );
+}
 
 /** Kybern's own row ("Setup started") above the user's words, which keep their bubble. */
 function SystemRowMessage({ block, threadId }: { block: Extract<Block, { kind: "user" }>; threadId: string }) {
@@ -304,6 +330,8 @@ export const TranscriptBlock = memo(function TranscriptBlock({
           </View>
         </View>
       );
+    case "outside_repo_changed":
+      return <OutsideChangeRow block={block} threadId={threadId} />;
     case "reverted":
       return (
         <T variant="caption" tone="secondary">

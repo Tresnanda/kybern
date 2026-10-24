@@ -256,6 +256,11 @@ pub enum EventPayload {
         to_turn_id: TurnId,
         commit: String,
     },
+    /// After a turn of a group worktree thread: these deselected members' original
+    /// checkouts changed (uncommitted files or HEAD) while the turn ran. Never reverted.
+    OutsideRepoChanged {
+        repos: Vec<OutsideRepoChange>,
+    },
 }
 
 impl EventPayload {
@@ -310,6 +315,7 @@ impl EventPayload {
             Self::ProviderNotice { .. } => "provider_notice",
             Self::CheckpointUpdated { .. } => "checkpoint_updated",
             Self::WorkspaceReverted { .. } => "workspace_reverted",
+            Self::OutsideRepoChanged { .. } => "outside_repo_changed",
         }
     }
 }
@@ -381,6 +387,15 @@ mod kind_tests {
             EventPayload::ProviderUsageUpdated { usage: Default::default() },
             EventPayload::ProviderCommandsUpdated { commands: Vec::new() },
             EventPayload::WorkspaceReverted { to_turn_id: TurnId::nil(), commit: "abc".into() },
+            EventPayload::OutsideRepoChanged {
+                repos: vec![OutsideRepoChange {
+                    repo: "infra".into(),
+                    name: "infra".into(),
+                    source_path: "/work/acme/infra".into(),
+                    dirty_files: 2,
+                    head_moved: false,
+                }],
+            },
             EventPayload::ThreadMessageResolved { message_id: MessageId::nil(), resolution: HeldResolution::Dismissed },
             EventPayload::ThreadMessageHeld {
                 message: ThreadMessageRecord {

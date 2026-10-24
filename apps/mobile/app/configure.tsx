@@ -8,14 +8,22 @@ import {
   type BranchInfo,
   type PermissionMode,
   type ProviderKind,
+  type UserMessage,
 } from "../src/state/protocol";
 import {
   errorText,
   loadThread,
   refresh,
   rpc,
+  startNewChat,
+  supportsOptimisticCreate,
   useApp,
 } from "../src/state/runtime";
+import { optimisticThread } from "../../../packages/kybern-client/src/newChat";
+import { newThreadId } from "../src/state/ids";
+import { emptyGroupDraft } from "../src/state/groups";
+import { isGroupProject } from "../../../packages/kybern-client/src/groups";
+import { GroupWorkspace } from "../src/features/GroupWorkspace";
 import {
   Button,
   ErrorBanner,
@@ -74,6 +82,7 @@ export default function Configure() {
           permission: thread.permission_mode,
           worktree: !!thread.worktree,
           baseBranch: "",
+          ...emptyGroupDraft,
         }
       : getDraft(),
   );
@@ -94,7 +103,7 @@ export default function Configure() {
   };
   useEffect(() => {
     let alive = true;
-    if (options.projectId && !threadId)
+    if (options.projectId && !threadId && !isGroupProject(project))
       void rpc("git.branches", { project_id: options.projectId })
         .then((r) => {
           if (alive) setBranches(r.branches);
@@ -138,24 +147,54 @@ export default function Configure() {
                 : [],
           )
           .join("\n\n");
-        const created = await rpc("threads.create", {
+        const message: UserMessage = {
+          parts: [
+            {
+              type: "text",
+              text: `Continue this coding session from the conversation below. Read the project before acting and preserve completed work.\n\n${transcript}`,
+            },
+          ],
+        };
+        const provider = { kind: options.provider, instance: options.instance };
+        const params = {
           project_id: options.projectId,
-          provider: { kind: options.provider, instance: options.instance },
+          provider,
           permission_mode: options.permission,
           model: options.model || undefined,
           effort: options.effort || undefined,
-          message: {
-            parts: [
-              {
-                type: "text",
-                text: `Continue this coding session from the conversation below. Read the project before acting and preserve completed work.\n\n${transcript}`,
-              },
-            ],
+        };
+        if (!supportsOptimisticCreate()) {
+          // An older daemon names the thread itself: wait for it, then open that thread.
+          const created = await rpc("threads.create", { ...params, message });
+          void refresh();
+          router.dismiss();
+          router.push({ pathname: "/thread/[id]", params: { id: created.id } });
+          return;
+        }
+        // Optimistic, as from Home: the new thread opens now and the daemon makes it behind it.
+        const createdId = newThreadId();
+        startNewChat(
+          {
+            threadId: createdId,
+            messageId: newThreadId(),
+            message,
+            worktree: false,
+            thread: optimisticThread({
+              id: createdId,
+              projectId: options.projectId,
+              provider,
+              model: options.model || null,
+              effort: options.effort || null,
+              permissionMode: options.permission,
+              message,
+              title: thread ? `${thread.title} (handoff)` : undefined,
+            }),
           },
-        });
-        await refresh();
+          (first, messageId) => rpc("threads.create", { ...params, message: first, thread_id: createdId, message_id: messageId }),
+          { seed: true },
+        );
         router.dismiss();
-        router.push({ pathname: "/thread/[id]", params: { id: created.id } });
+        router.push({ pathname: "/thread/[id]", params: { id: createdId } });
       } else if (threadId) {
         await rpc("threads.update", {
           thread_id: threadId,
@@ -367,7 +406,10 @@ export default function Configure() {
             ),
           )}
       </Group>
-      {!threadId && project?.is_git && (
+      {!threadId && project && isGroupProject(project) && (
+        <GroupWorkspace project={project} options={options} patch={patch} />
+      )}
+      {!threadId && project?.is_git && !isGroupProject(project) && (
         <Group title="Workspace">
           <Row
             title="Use a worktree"

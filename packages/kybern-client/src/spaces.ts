@@ -69,6 +69,11 @@ export function deleteTarget(spaces: readonly Space[], id: SpaceId): Space | nul
   return index === 0 ? spaces[1]! : spaces[index - 1]!;
 }
 
+/** The default space stays; every other space can be deleted (the daemon still refuses the last one). */
+export function canDeleteSpace(space: Pick<Space, "is_default">): boolean {
+  return !space.is_default;
+}
+
 /** The first swatch no space uses, else the next in rotation. */
 export function nextSpaceColor(spaces: readonly Space[]): SpaceColor {
   const used = new Set(spaces.map((space) => space.color));
@@ -97,6 +102,9 @@ export const SPACE_COPY = {
   menuMoveUp: "Move up",
   menuMoveDown: "Move down",
   menuDelete: "Delete space…",
+  defaultCantDelete: "Your default space can't be deleted.",
+  defaultBadge: "Default space",
+  paletteRename: "Rename space…",
   deleteTitle: (name: string) => `Delete “${name}”?`,
   deleteNone: "This space has no projects.",
   deleteOne: (project: string, target: string) => `${project} moves to ${target}, with its threads, notes and tasks.`,

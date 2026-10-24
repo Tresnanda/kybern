@@ -24,6 +24,8 @@ import { PickerChip } from '../kit/PickerChip.tsx'
 import { G } from './glyphs.ts'
 import { CheckMark, muted, PickerItem, PickerLabel, PickerMenu, PickerSeparator } from './Menu.tsx'
 import { loadBranches, patchDraft, useComposer } from './store.ts'
+import { GroupBranchChip, ReposChip } from './GroupTray.tsx'
+import { isGroupProject } from '../../../../packages/kybern-client/src/groups.ts'
 
 export const COMPOSER_RADIUS = 19.2
 
@@ -48,10 +50,13 @@ export function LandingTray({ projectId, useWorktree, task, onRemoveTask, still 
   const t = useTheme()
   const everyProject = useApp((s) => s.projects)
   const project = projectId ? everyProject.find((p) => p.id === projectId) : undefined
+  // A group's folder is often not a repository itself, but every member is: worktree mode works, and the branch chip
+  // speaks for the members (`GroupTray.tsx`).
+  const group = isGroupProject(project)
   const isGit = project?.is_git ?? false
   useEffect(() => {
-    if (!still && projectId && isGit) void loadBranches(projectId)
-  }, [projectId, isGit, still])
+    if (!still && projectId && isGit && !group) void loadBranches(projectId)
+  }, [projectId, isGit, group, still])
   // The chip stays through its 120 ms fade after ×; it is not animated away by a send (the tray leaves as a whole).
   const [shownTask, setShownTask] = useState(task ?? null)
   if (task && task !== shownTask) setShownTask(task)
@@ -64,8 +69,10 @@ export function LandingTray({ projectId, useWorktree, task, onRemoveTask, still 
           {project && <div style={{ width: 1, height: 16, flexShrink: 0, backgroundColor: ink(t, 0.06) }} />}
         </Presence>
       )}
-      {project && <WorkspaceChip useWorktree={useWorktree} isGit={isGit} checkoutHint={parentPath(project.path)} />}
-      {project && isGit && <BranchChip projectId={project.id} useWorktree={useWorktree} />}
+      {project && <WorkspaceChip useWorktree={useWorktree} isGit={isGit || group} checkoutHint={parentPath(project.path)} />}
+      {project && group && <GroupBranchChip project={project} useWorktree={useWorktree} still={still} />}
+      {project && group && useWorktree && <ReposChip project={project} still={still} />}
+      {project && isGit && !group && <BranchChip projectId={project.id} useWorktree={useWorktree} />}
     </TrayFrame>
   )
 }

@@ -114,6 +114,8 @@ export function createTurnRows() {
         add(group.end);
       }
       if (group.reverted) add(group.reverted);
+      // Group worktree threads: repositories changed outside the worktree, after the turn's answer.
+      group.outside?.forEach((block) => add(block));
       next.set(group.turnId, { group, expanded, rows });
       result.push(...rows);
     }

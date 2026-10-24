@@ -26,6 +26,26 @@ pub(crate) async fn run(cwd: &Path, program: &str, args: &[&str]) -> Result<Stri
     Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
 }
 
+/// `run`, with `input` written to the program's standard input.
+pub(crate) async fn run_stdin(cwd: &Path, program: &str, args: &[&str], input: &str) -> Result<String> {
+    let mut child = Command::new(program)
+        .current_dir(cwd)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .with_context(|| format!("run {program}"))?;
+    let mut stdin = child.stdin.take().context("program stdin")?;
+    tokio::io::AsyncWriteExt::write_all(&mut stdin, input.as_bytes()).await.with_context(|| format!("write to {program}"))?;
+    drop(stdin);
+    let out = child.wait_with_output().await.with_context(|| format!("run {program}"))?;
+    if !out.status.success() {
+        return Err(anyhow!("{program} {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+}
+
 /// Local branches of a project checkout, most recently committed first.
 pub async fn branches(cwd: &Path) -> Result<GitBranchesResult> {
     if !Repo::is_repo(cwd).await {
@@ -62,6 +82,7 @@ pub async fn status(cwd: &Path) -> Result<GitStatus> {
             upstream: None,
             remote_url: None,
             pull_request: None,
+            repos: Vec::new(),
         });
     }
     let repo = Repo::new(cwd);
@@ -91,7 +112,7 @@ pub async fn status(cwd: &Path) -> Result<GitStatus> {
         }
         _ => None,
     };
-    Ok(GitStatus { is_git: true, branch, dirty_files, ahead, behind, upstream, remote_url, pull_request })
+    Ok(GitStatus { is_git: true, branch, dirty_files, ahead, behind, upstream, remote_url, pull_request, repos: Vec::new() })
 }
 
 pub(crate) fn parse_pr(v: &Value) -> Option<PullRequest> {
@@ -212,6 +233,36 @@ pub async fn has_changes(cwd: &Path) -> bool {
     run(cwd, "git", &["status", "--porcelain"]).await.map(|s| !s.trim().is_empty()).unwrap_or(false)
 }
 
+/// `has_changes`, leaving out `exclude` (the nested members of a group folder).
+pub async fn has_changes_excluding(cwd: &Path, exclude: &[String]) -> bool {
+    Repo::new(cwd).status_porcelain(exclude).await.is_ok_and(|lines| !lines.is_empty())
+}
+
+/// `commit_all`, never adding `exclude` (the nested members of a group folder).
+pub async fn commit_all_excluding(cwd: &Path, message: &str, exclude: &[String]) -> Result<String> {
+    let excludes = kybern_git::exclude_pathspecs(exclude);
+    let mut add = vec!["add", "-A", "--", "."];
+    add.extend(excludes.iter().map(String::as_str));
+    run(cwd, "git", &add).await?;
+    run(cwd, "git", &["commit", "-q", "-m", message]).await?;
+    run(cwd, "git", &["rev-parse", "HEAD"]).await
+}
+
+/// Whether `origin` points at GitHub.
+pub async fn has_github_remote(cwd: &Path) -> bool {
+    run(cwd, "git", &["remote", "get-url", "origin"]).await.is_ok_and(|url| url.contains("github.com"))
+}
+
+/// Commits of HEAD that `origin/<base>` (else the local `base`) does not have.
+pub async fn commits_ahead_of(cwd: &Path, base: &str) -> u32 {
+    for range in [format!("origin/{base}..HEAD"), format!("{base}..HEAD")] {
+        if let Ok(count) = run(cwd, "git", &["rev-list", "--count", &range]).await {
+            return count.trim().parse().unwrap_or(0);
+        }
+    }
+    0
+}
+
 /// Diff of what would go into a PR: committed changes vs the base branch plus the working tree.
 pub async fn diff_against_base(cwd: &Path, base: &str) -> Result<String> {
     let merge_base =
@@ -220,7 +271,11 @@ pub async fn diff_against_base(cwd: &Path, base: &str) -> Result<String> {
 }
 
 pub async fn default_base(cwd: &Path) -> String {
-    if let Ok(s) = run(cwd, "gh", &["repo", "view", "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"]).await
+    default_base_with("gh", cwd).await
+}
+
+pub async fn default_base_with(gh: &str, cwd: &Path) -> String {
+    if let Ok(s) = run(cwd, gh, &["repo", "view", "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"]).await
         && !s.is_empty()
     {
         return s;
@@ -239,13 +294,39 @@ pub async fn push_current(cwd: &Path) -> Result<()> {
 }
 
 pub async fn pr_create(cwd: &Path, title: &str, body: &str, base: &str, draft: bool) -> Result<PullRequest> {
+    pr_create_with("gh", cwd, title, body, base, draft).await
+}
+
+pub async fn pr_create_with(gh: &str, cwd: &Path, title: &str, body: &str, base: &str, draft: bool) -> Result<PullRequest> {
     let mut args = vec!["pr", "create", "--title", title, "--body", body, "--base", base];
     if draft {
         args.push("--draft");
     }
-    run(cwd, "gh", &args).await?;
-    let json = run(cwd, "gh", &["pr", "view", "--json", "number,title,url,state,headRefName,baseRefName,isDraft,author,updatedAt"]).await?;
+    run(cwd, gh, &args).await?;
+    let json = run(cwd, gh, &["pr", "view", "--json", "number,title,url,state,headRefName,baseRefName,isDraft,author,updatedAt"]).await?;
     parse_pr(&serde_json::from_str::<Value>(&json)?).ok_or_else(|| anyhow!("could not read the created pull request"))
+}
+
+/// Replace a pull request's description (`gh pr edit <n> --body-file -`).
+pub async fn pr_edit_body(gh: &str, cwd: &Path, number: u64, body: &str) -> Result<()> {
+    run_stdin(cwd, gh, &["pr", "edit", &number.to_string(), "--body-file", "-"], body).await.map(|_| ())
+}
+
+/// `owner/repo#128` from `https://github.com/owner/repo/pull/128`.
+pub fn pr_reference(url: &str) -> Option<String> {
+    let rest = url.split_once("github.com/")?.1;
+    let mut parts = rest.trim_end_matches('/').split('/');
+    let (owner, repo, kind, number) = (parts.next()?, parts.next()?, parts.next()?, parts.next()?);
+    (kind == "pull" && !owner.is_empty() && !repo.is_empty() && number.parse::<u64>().is_ok()).then(|| format!("{owner}/{repo}#{number}"))
+}
+
+/// The block appended to each pull request of a change across repositories.
+pub fn cross_link_block(chat_title: &str, references: &[String]) -> String {
+    let mut block = format!("---\nPart of a change across {} repositories (Kybern chat “{chat_title}”):\n", references.len());
+    for reference in references {
+        block.push_str(&format!("- {reference}\n"));
+    }
+    block
 }
 
 pub async fn pr_list(cwd: &Path, state: &str, limit: u32) -> Result<Vec<PullRequest>> {
@@ -326,5 +407,20 @@ mod tests {
         assert!(avatar_url("https://github.com/o/r/pull/1", "dependabot", true).is_none());
         assert!(avatar_url("https://github.com/o/r/pull/1", "app/renovate", false).is_none());
         assert!(avatar_url("https://github.com/o/r/pull/1", "", false).is_none());
+    }
+}
+
+#[cfg(test)]
+mod group_link_tests {
+    use super::*;
+
+    #[test]
+    fn cross_link_block_names_every_pull_request() {
+        assert_eq!(pr_reference("https://github.com/acme/api/pull/128").as_deref(), Some("acme/api#128"));
+        assert_eq!(pr_reference("https://github.com/acme/api/issues/3"), None);
+        assert_eq!(
+            cross_link_block("Add SSO to the admin console", &["acme/api#128".into(), "acme/web#77".into()]),
+            "---\nPart of a change across 2 repositories (Kybern chat “Add SSO to the admin console”):\n- acme/api#128\n- acme/web#77\n"
+        );
     }
 }

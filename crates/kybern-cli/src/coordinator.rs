@@ -134,6 +134,8 @@ pub async fn coordinator(client: &Client, cmd: CoordinatorCmd) -> Result<()> {
                     permission_mode: mode,
                     opening_message,
                     initial_brief: None,
+                    thread_id: None,
+                    message_id: None,
                 })
                 .await?;
             serde_json::to_value(opened)?

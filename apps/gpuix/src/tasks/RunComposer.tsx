@@ -19,6 +19,9 @@ import { removeFromRun } from './batch.ts'
 import { BatchModeChip, TasksChip } from './BatchChips.tsx'
 import { ContextChip, runState, TrayButton, TrayHide } from './DockParts.tsx'
 import { DURATION, EASE } from '../motion/tokens.ts'
+import { optimisticCreates } from '../composer/newChats.ts'
+import { getNav } from '../nav/store.ts'
+import { uuidv7 } from '../../../../packages/kybern-client/src/newChat.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { setTasks, taskState, upsert, useTasks, updateTask } from './store.ts'
 
@@ -97,6 +100,8 @@ export function RunComposer({ ids, onEmptyChange }: { ids: string[]; onEmptyChan
       current = false
     }
   }, [projectId, project?.is_git])
+  // One run's client ids, kept until the daemon answers: pressing Send again after a lost reply repeats the same run.
+  const attempt = useRef<{ key: string; threadId: string; messageId: string } | null>(null)
   const send = async (message: UserMessage) => {
     const client = getClient()
     if (!client) throw new Error('Reconnect and try again.')
@@ -127,7 +132,11 @@ export function RunComposer({ ids, onEmptyChange }: { ids: string[]; onEmptyChan
       note_ids: notes,
     }
     if (single) {
-      const result = await client.call('tasks.items.send', { id: single.id, ...common })
+      const key = JSON.stringify([single.id, common])
+      if (attempt.current?.key !== key) attempt.current = { key, threadId: uuidv7(), messageId: crypto.randomUUID() }
+      const ids = optimisticCreates(getNav().version) ? { thread_id: attempt.current.threadId, message_id: attempt.current.messageId } : {}
+      const result = await client.call('tasks.items.send', { id: single.id, ...common, ...ids })
+      attempt.current = null
       upsert(result.task)
       toast(`${single.key} started`, { action: { label: 'Open', onClick: () => openThread(result.thread_id) } })
     } else {

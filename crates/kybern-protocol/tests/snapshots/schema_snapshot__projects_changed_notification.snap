@@ -75,6 +75,28 @@ expression: schema_for!(ProjectsChangedNotification)
           ],
           "format": "uuid"
         },
+        "kind": {
+          "description": "`group` for a parent folder of several git repositories. Absent means single.",
+          "$ref": "#/$defs/ProjectKind"
+        },
+        "members": {
+          "description": "Group members in order; the first is the primary (the group folder itself\nwhen it is a member, else the first member by path). Empty for single projects.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProjectMember"
+          }
+        },
+        "worktree_copy": {
+          "description": "Top-level entries of the group folder (files or folders, never a member or\n`.git`) the user chose to copy into each new worktree container, after\n`AGENTS.md`, `CLAUDE.md` and `.claude/`. Entries missing at copy time are skipped.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "instructions_offer_dismissed": {
+          "description": "The user hid the \"Add shared instructions\" offer for this group.",
+          "type": "boolean"
+        },
         "created_at": {
           "type": "string",
           "format": "date-time"
@@ -246,6 +268,63 @@ expression: schema_for!(ProjectsChangedNotification)
           "description": "Its own git worktree on `kybern/<child-id>`, seeded from the parent's\ncurrent uncommitted state.",
           "type": "string",
           "const": "worktree"
+        }
+      ]
+    },
+    "ProjectKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "single"
+          ]
+        },
+        {
+          "description": "A parent folder whose members are git repositories inside it.",
+          "type": "string",
+          "const": "group"
+        }
+      ]
+    },
+    "ProjectMember": {
+      "description": "One git repository of a group project.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "'/'-separated, relative to `Project.path`; \".\" is the group folder itself.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Display name: the last path component, or the group folder's name for \".\".\nTwo members with the same last component get their parent segment too (\"a/api\").",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/MemberStatus"
+        }
+      },
+      "required": [
+        "path",
+        "name",
+        "status"
+      ]
+    },
+    "MemberStatus": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "ok"
+          ]
+        },
+        {
+          "description": "The folder is gone (deleted or renamed).",
+          "type": "string",
+          "const": "missing"
+        },
+        {
+          "description": "The folder exists but is no longer a git repository.",
+          "type": "string",
+          "const": "not_git"
         }
       ]
     }

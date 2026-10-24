@@ -110,6 +110,24 @@ export async function addProject(folder: string) {
   await addProjectToCurrentSpace(folder)
 }
 
+/**
+ * Change a project's display name (never its folder). The sidebar shows the new name at once; a refusal puts the old
+ * one back and rejects with the daemon's message.
+ */
+export async function renameProject(projectId: string, name: string) {
+  const before = getState().projects.find((p) => p.id === projectId)
+  if (!before) return
+  const patch = (value: string) => set({ projects: getState().projects.map((p) => (p.id === projectId ? { ...p, name: value } : p)) })
+  patch(name)
+  try {
+    const project = await rpc().call('projects.update', { project_id: projectId, name })
+    set({ projects: getState().projects.map((p) => (p.id === projectId ? project : p)) })
+  } catch (error) {
+    patch(before.name)
+    throw error
+  }
+}
+
 export async function removeProject(projectId: string) {
   await rpc().call('projects.remove', { project_id: projectId })
   await refreshLists()

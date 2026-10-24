@@ -17,7 +17,7 @@ import { FONT_UI } from '../theme.ts'
 import { TEXT } from '../transcript/kit.tsx'
 import { COLUMN, GUTTER } from '../Transcript.tsx'
 import { REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { clearFlight, endFlight, startFlight, takeLaunch, useFlightTarget, type Launch } from './store.ts'
+import { clearFlight, endFlight, logLaunchOpened, startFlight, takeLaunch, useFlightTarget, type Launch } from './store.ts'
 
 type Shift = { translateX: number; translateY: number }
 /**
@@ -57,6 +57,7 @@ export interface LaunchMotion {
 export function useLaunch(paneId: string, threadId: string | null): Launch | null {
   const [launch] = useState(() => {
     const found = PATCHED_NATIVE ? takeLaunch(paneId, threadId) : null
+    if (found) logLaunchOpened()
     if (found && (found.text || found.imagesFly) && !REDUCED_MOTION) startFlight(found.threadId)
     // The bubble shows the composer's own copy of each image at once, so a flight lands on the picture, not a loading label.
     if (found) for (const image of found.images) primeAttachmentImage(image.id, image.src)

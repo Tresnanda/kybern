@@ -195,7 +195,30 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         }
         ProjectsAdd::NAME => {
             let p: ProjectsAddParams = parse(params)?;
-            ok(state.orchestrator.add_project(p.path, p.name, p.space_id).map_err(bad)?)
+            match p.kind.unwrap_or_default() {
+                ProjectKind::Group => {
+                    let members = p.members.ok_or_else(|| RpcError::new(codes::INVALID_PARAMS, "Select at least 2 repositories."))?;
+                    ok(state.orchestrator.add_group_project(p.path, p.name, p.space_id, members)?)
+                }
+                ProjectKind::Single => {
+                    if p.members.is_some() {
+                        return Err(RpcError::new(codes::INVALID_PARAMS, "Only group projects have repositories."));
+                    }
+                    ok(state.orchestrator.add_project(p.path, p.name, p.space_id).map_err(bad)?)
+                }
+            }
+        }
+        ProjectsScanRepos::NAME => {
+            let p: ProjectsScanReposParams = parse(params)?;
+            ok(state.orchestrator.scan_repos(p).await?)
+        }
+        ProjectsMembersStatus::NAME => {
+            let p: ProjectsMembersStatusParams = parse(params)?;
+            ok(state.orchestrator.members_status(p.project_id).await?)
+        }
+        ProjectsInstructionsCreate::NAME => {
+            let p: ProjectsInstructionsCreateParams = parse(params)?;
+            ok(state.orchestrator.create_group_instructions(p.project_id)?)
         }
         ProjectsUpdate::NAME => {
             let p: ProjectsUpdateParams = parse(params)?;
@@ -205,7 +228,11 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             }
             let mut project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
             if let Some(n) = p.name {
-                project.name = n;
+                let n = n.trim();
+                if n.is_empty() || n.chars().count() > 100 {
+                    return Err(RpcError::new(codes::INVALID_PARAMS, "Use a project name of 1 to 100 characters."));
+                }
+                project.name = n.to_string();
             }
             if let Some(w) = p.worktrees_default {
                 project.worktrees_default = w;
@@ -219,12 +246,18 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 }
                 project.coordinator = coordinator.filter(|overrides| !overrides.is_empty());
             }
+            // Validated before anything is saved, so a rejected member list leaves the other edits unsaved too.
+            let members =
+                state.orchestrator.apply_group_update(&mut project, p.members, p.worktree_copy, p.instructions_offer_dismissed)?;
             project.updated_at = chrono::Utc::now();
             if let Some(prefix) = &p.task_prefix {
                 // Validated first, so a bad prefix leaves the other edits unsaved too.
                 state.store.project_set_task_prefix(p.project_id, prefix).map_err(task_err)?;
             }
             state.store.project_update(&project).map_err(internal)?;
+            if let Some(members) = members {
+                state.store.project_set_members(p.project_id, &members).map_err(internal)?;
+            }
             state.orchestrator.publish_projects();
             ok(state.store.project_get(p.project_id).map_err(internal)?.unwrap_or(project))
         }
@@ -934,17 +967,29 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: GitStatusParams = parse(params)?;
             let t = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
             state.orchestrator.refresh_project_git(t.project_id).await.map_err(internal)?;
+            if !t.members.is_empty() {
+                return ok(state.orchestrator.group_git_status(&t).await.map_err(internal)?);
+            }
             ok(crate::github::status(std::path::Path::new(&t.cwd)).await.map_err(internal)?)
         }
         GitBranches::NAME => {
             let p: GitBranchesParams = parse(params)?;
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
             state.orchestrator.refresh_project_git(project.id).await.map_err(internal)?;
+            if project.kind == ProjectKind::Group {
+                return ok(state.orchestrator.group_branches(&project, p.repo.as_deref()).await.map_err(RpcError::invalid_params)?);
+            }
             ok(crate::github::branches(std::path::Path::new(&project.path)).await.map_err(internal)?)
         }
         GitCommit::NAME => {
             let p: GitCommitParams = parse(params)?;
             let t = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            if !t.members.is_empty() {
+                if !state.orchestrator.group_has_changes(&t).await {
+                    return Err(RpcError::invalid_params("nothing to commit"));
+                }
+                return ok(state.orchestrator.group_commit(&t, p.message).await.map_err(provider_err)?);
+            }
             let cwd = std::path::PathBuf::from(&t.cwd);
             if !crate::github::has_changes(&cwd).await {
                 return Err(RpcError::invalid_params("nothing to commit"));
@@ -954,11 +999,16 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 None => state.orchestrator.generate_commit_message(&t).await.map_err(provider_err)?,
             };
             let commit = crate::github::commit_all(&cwd, &message).await.map_err(bad)?;
-            ok(GitCommitResult { commit, message })
+            ok(GitCommitResult { commit, message, commits: Vec::new() })
         }
         PrCreate::NAME => {
             let p: PrCreateParams = parse(params)?;
             let t = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            if !t.members.is_empty() {
+                return Err(RpcError::invalid_params(
+                    "This chat spans several repositories. Use Create pull requests (github.pr.create_group).",
+                ));
+            }
             let cwd = std::path::PathBuf::from(&t.cwd);
             if !crate::github::gh_available().await {
                 return Err(RpcError::new(codes::PROVIDER_UNAVAILABLE, "GitHub CLI (gh) is not installed or not logged in"));
@@ -980,6 +1030,13 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 }
             };
             ok(crate::github::pr_create(&cwd, &title, &body, &base, p.draft).await.map_err(bad)?)
+        }
+        PrCreateGroup::NAME => {
+            let p: PrCreateGroupParams = parse(params)?;
+            if !crate::github::gh_available().await {
+                return Err(RpcError::new(codes::PROVIDER_UNAVAILABLE, "GitHub CLI (gh) is not installed or not logged in"));
+            }
+            ok(state.orchestrator.pr_create_group(p, "gh").await.map_err(bad)?)
         }
         PrList::NAME => {
             let p: PrListParams = parse(params)?;

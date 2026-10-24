@@ -66,9 +66,17 @@ export interface Launch {
 }
 
 let launch: Launch | null = null
+/** `KYBERN_LAUNCH_LOG=1`: when Enter sent the new chat, so the thread page logs how long it took to open. */
+let enterAt = 0
+export function markLaunchEnter() { enterAt = performance.now() }
+export function logLaunchOpened() {
+  if (process.env.KYBERN_LAUNCH_LOG === '1' && enterAt) console.error(`[launch] enter→page ${(performance.now() - enterAt).toFixed(1)} ms`)
+  enterAt = 0
+}
 /** Recorded when the send has a thread id, before the thread page mounts. */
 export function setLaunch(next: Launch) { launch = next }
-/** The thread page claims its launch once, on mount; a stale one (over 3 s, another pane or thread) is dropped. */
+/** The thread page claims its launch once, on mount. The page opens on Enter (the thread id is the client's), so this runs in
+ *  the same moment; the 3 s limit only drops a launch whose page never came (another pane or thread took over). */
 export function takeLaunch(paneId: string, threadId: string | null): Launch | null {
   const found = launch
   if (!found || !threadId) return null
@@ -101,21 +109,22 @@ export function clearFlight(threadId: string) {
   flight = null
   emitFlight()
 }
-/** The first fresh user bubble that asks claims the flight (`at` is its timestamp); later bubbles render normally. */
-export function claimFlight(at: string): boolean {
+/** The first fresh user bubble that asks claims the flight (`key` is its message id, or its timestamp); later bubbles render
+ *  normally. The pending bubble claims it, and the daemon's copy of that message keeps the claim (same id, same row). */
+export function claimFlight(key: string): boolean {
   if (!flight || flight.landed) return false
-  if (flight.claimed && flight.claimed !== at) return false
-  if (!flight.claimed) flight = { ...flight, claimed: at }
+  if (flight.claimed && flight.claimed !== key) return false
+  if (!flight.claimed) flight = { ...flight, claimed: key }
   return true
 }
-export function reportFlightTarget(at: string, target: MorphTarget) {
-  if (!flight || flight.claimed !== at) return
+export function reportFlightTarget(key: string, target: MorphTarget) {
+  if (!flight || flight.claimed !== key) return
   flight = { ...flight, target }
   emitFlight()
 }
 /** For the bubble: hidden while its flight is in the air. */
-export function useFlightHidden(at: string, claimed: boolean): boolean {
-  return useSyncExternalStore(subscribeFlight, () => claimed && !!flight && flight.claimed === at && !flight.landed)
+export function useFlightHidden(key: string, claimed: boolean): boolean {
+  return useSyncExternalStore(subscribeFlight, () => claimed && !!flight && flight.claimed === key && !flight.landed)
 }
 /** For the morph layer: where the bubble reported it is. */
 export function useFlightTarget(threadId: string): MorphTarget | null {

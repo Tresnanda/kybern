@@ -28,18 +28,24 @@ import {
   loadThread,
   ensureThread,
   loadEarlier,
+  newChats,
   refresh,
   rpc,
   useApp,
+  useNewChat,
   useThread,
   taskActive,
 } from "../../src/state/runtime";
+import { NEW_CHAT_FAILED, PREPARING_WORKTREE, type NewChat } from "../../../../packages/kybern-client/src/newChat";
+import { partToken } from "../../../../packages/kybern-client/src/composerTokens";
+import { newThreadId } from "../../src/state/ids";
 import {
   createTurnRows,
   workDuration,
   type TurnRow,
 } from "../../src/state/turnRows";
-import type { UserMessage } from "../../src/state/protocol";
+import type { ContentPart, UserMessage } from "../../src/state/protocol";
+import { isInlinePart } from "../../src/state/inlineMessage";
 import {
   Empty,
   ErrorBanner,
@@ -131,6 +137,26 @@ const TranscriptRow = memo(function TranscriptRow({
   );
 });
 
+const messageText = (message: UserMessage) =>
+  message.parts.filter((part) => part.type === "text" || isInlinePart(part)).map((part) => (part.type === "text" ? part.text : partToken(part) ?? "")).join("");
+/** A message's images and files, which go back to the composer's tray rather than its text. */
+const messageAttachments = (message: UserMessage) => message.parts.filter((part) => part.type !== "text" && !isInlinePart(part));
+
+/** A new chat whose create failed: the message stays above, with Try again (same thread id) and Edit. */
+function NewChatFailed({ chat, onEdit }: { chat: NewChat; onEdit: () => void }) {
+  return (
+    <View>
+      <ErrorBanner
+        error={`Not sent. ${chat.error || NEW_CHAT_FAILED}`}
+        onRetry={() => void newChats.retry(chat.threadId)}
+      />
+      <Tap label="Edit message" onPress={onEdit} style={{ alignSelf: "flex-start", paddingVertical: 8, paddingHorizontal: 16 }}>
+        <T variant="label" tone="secondary">Edit message</T>
+      </Tap>
+    </View>
+  );
+}
+
 export default function ThreadScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const app = useApp();
@@ -198,6 +224,13 @@ export default function ThreadScreen() {
     });
   }, []);
   const thread = app.threads.find((t) => t.id === id) ?? snapshot.thread;
+  const chat = useNewChat(id);
+  const [editPrompt, setEditPrompt] = useState("");
+  const [editAttachments, setEditAttachments] = useState<ContentPart[] | undefined>(undefined);
+  // The daemon made this chat under its own id (an older daemon ignores ours): follow it.
+  useEffect(() => {
+    if (chat?.adoptedId) router.replace({ pathname: "/thread/[id]", params: { id: chat.adoptedId } });
+  }, [chat?.adoptedId]);
   const fileContext = useMemo(() => ({ threadId: id, projectId: thread?.project_id }), [id, thread?.project_id]);
   const project = app.projects.find((p) => p.id === thread?.project_id);
   const queued = app.queue.filter((q) => q.thread_id === id);
@@ -245,6 +278,12 @@ export default function ThreadScreen() {
     if (wasRunning.current && !running && following) jump();
     wasRunning.current = running;
   }, [thread?.status, following, jump]);
+  // Rows can still arrive after that (the outside-change warning follows the turn's
+  // end); keep a following reader on them instead of leaving them under the pills.
+  const lastRow = rows.length ? rowKey(rows[rows.length - 1]!) : "";
+  useEffect(() => {
+    if (lastRow && following && !wasRunning.current) jump();
+  }, [lastRow]);
   const steeringAttempt = useRef<{ signature: string; id: string } | null>(
     null,
   );
@@ -266,6 +305,18 @@ export default function ThreadScreen() {
   );
   const send = useCallback(
     async (message: UserMessage) => {
+      // A new chat the daemon has not made yet: an edited first message goes through its create
+      // again (same thread id), and a follow-up waits for the create to finish first.
+      if (newChats.uncreated(id)) {
+        if (newChats.get(id)!.state === "failed") {
+          const messageId = newThreadId();
+          const done = await newChats.retry(id, { message, messageId });
+          if (done?.state === "failed") throw new Error(done.error);
+          return { threadId: id, messageId };
+        }
+        const done = await newChats.retry(id);
+        if (done?.state === "failed") throw new Error(done.error);
+      }
       if (
         thread?.status === "running" ||
         thread?.status === "awaiting-approval"
@@ -403,6 +454,9 @@ export default function ThreadScreen() {
               }
               ListFooterComponent={
                 <View style={{ gap: 16 }}>
+                  {chat?.state === "failed" && (
+                    <NewChatFailed chat={chat} onEdit={() => { setEditPrompt(messageText(chat.message)); setEditAttachments(messageAttachments(chat.message)); }} />
+                  )}
                   <ErrorBanner
                     error={error}
                     onRetry={() => {
@@ -429,9 +483,11 @@ export default function ThreadScreen() {
                     <View style={{ paddingVertical: 15 }}>
                       <Working
                         label={
-                          snapshot.pendingApprovals.length
-                            ? "Waiting for your approval"
-                            : "Working on it"
+                          chat?.worktree && chat.state === "creating"
+                            ? PREPARING_WORKTREE
+                            : snapshot.pendingApprovals.length
+                              ? "Waiting for your approval"
+                              : "Working on it"
                         }
                         active={focused}
                       />
@@ -586,6 +642,9 @@ export default function ThreadScreen() {
               }
               onStop={stop}
               onSend={send}
+              prompt={editPrompt}
+              promptAttachments={editAttachments}
+              onPromptConsumed={() => { setEditPrompt(""); setEditAttachments(undefined); }}
             />
           </View>
           <View style={{ height: Math.max(12, insets.bottom) }} />

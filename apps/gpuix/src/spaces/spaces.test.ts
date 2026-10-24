@@ -3,6 +3,7 @@ import type { Project, Space } from '../../../../packages/kybern-client/src/type
 import { FREE_CHAT_PROJECT_ID } from '../../../../packages/kybern-client/src/types.ts'
 import {
   SPACE_ICONS,
+  canDeleteSpace,
   deleteTarget,
   inSpace,
   nextSpaceColor,
@@ -15,6 +16,7 @@ const space = (id: string, color: Space['color'] = 'blue'): Space => ({
   name: id,
   color,
   logo: { kind: 'initials' },
+  is_default: false,
   position: 0,
   created_at: '2026-10-01T00:00:00Z',
   updated_at: '2026-10-01T00:00:00Z',
@@ -87,4 +89,9 @@ test('the icon set has 31 unique slugs', () => {
   expect(SPACE_ICONS.length).toBe(31)
   expect(new Set(SPACE_ICONS).size).toBe(31)
   for (const slug of SPACE_ICONS) expect(slug).toMatch(/^[a-z0-9][a-z0-9-]{0,31}$/)
+})
+
+test('only the default space is protected from deletion', () => {
+  expect(canDeleteSpace({ ...space('a'), is_default: true })).toBe(false)
+  expect(canDeleteSpace(space('b'))).toBe(true)
 })

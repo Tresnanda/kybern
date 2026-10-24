@@ -2,7 +2,7 @@
 //! broadcast thread log.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
@@ -27,6 +27,9 @@ mod agent_items;
 mod askpass;
 mod child_questions;
 mod delegation;
+pub(crate) mod group_git;
+mod group_pr;
+mod groups;
 mod lead;
 mod lead_git;
 mod lead_proposals;
@@ -459,6 +462,8 @@ struct Inner {
     workspace_ops: Mutex<()>,
     question_answers: Mutex<()>,
     lead_commands: Mutex<()>,
+    /// Creates that carry a client-chosen thread id, one at a time per id (`with_client_thread_id`).
+    client_thread_ids: std::sync::Mutex<HashMap<ThreadId, Arc<Mutex<()>>>>,
     thread_updates: std::sync::Mutex<()>,
     store: Store,
     drivers: DriverRegistry,
@@ -485,6 +490,11 @@ struct Inner {
     /// The project list after each change, forwarded as `projects.changed`.
     projects_changed: tokio::sync::broadcast::Sender<methods::ProjectsChangedNotification>,
     spaces_changed: tokio::sync::broadcast::Sender<methods::SpacesChangedNotification>,
+    /// Worktree preparation during `threads.create`, forwarded as `threads.workspace_progress`.
+    workspace_progress: tokio::sync::broadcast::Sender<methods::ThreadsWorkspaceProgress>,
+    /// Group worktree threads: each deselected member's state when a turn started,
+    /// compared when it ends (`group_git::OutsideBaseline`).
+    outside_baselines: std::sync::Mutex<HashMap<TurnId, Vec<group_git::OutsideBaseline>>>,
     /// Serialises space writes so name checks and inserts cannot interleave.
     space_writes: std::sync::Mutex<()>,
     /// Agent requests to show a page, forwarded as `previews.open_requested`.
@@ -798,6 +808,7 @@ impl Orchestrator {
                 workspace_ops: Mutex::new(()),
                 question_answers: Mutex::new(()),
                 lead_commands: Mutex::new(()),
+                client_thread_ids: std::sync::Mutex::new(HashMap::new()),
                 thread_updates: std::sync::Mutex::new(()),
                 store,
                 drivers,
@@ -818,6 +829,8 @@ impl Orchestrator {
                 tasks_changed: tokio::sync::broadcast::channel(1024).0,
                 projects_changed: tokio::sync::broadcast::channel(64).0,
                 spaces_changed: tokio::sync::broadcast::channel(64).0,
+                workspace_progress: tokio::sync::broadcast::channel(256).0,
+                outside_baselines: std::sync::Mutex::new(HashMap::new()),
                 space_writes: std::sync::Mutex::new(()),
                 preview_requests: tokio::sync::broadcast::channel(64).0,
                 requests: Default::default(),
@@ -1224,6 +1237,12 @@ impl Orchestrator {
     /// project checkout itself: a thread can be running in a separate worktree.
     pub async fn refresh_project_git(&self, project_id: ProjectId) -> Result<()> {
         if let Some(project) = self.inner.store.project_get(project_id)? {
+            if project.kind == ProjectKind::Group {
+                if self.refresh_group_members(&project)? {
+                    self.publish_projects();
+                }
+                return Ok(());
+            }
             let is_git = Repo::is_repo(std::path::Path::new(&project.path)).await;
             if self.inner.store.project_set_git_status(project.id, is_git)? {
                 self.publish_projects();
@@ -1240,6 +1259,11 @@ impl Orchestrator {
         // A list read must not wait for one git subprocess per project in
         // sequence. Bound process concurrency, and keep store writes/publishing
         // on this task after every batch completes.
+        // Group folders are not repositories themselves; their members are probed instead.
+        let (groups, projects): (Vec<_>, Vec<_>) = projects.into_iter().partition(|project| project.kind == ProjectKind::Group);
+        for project in &groups {
+            changed |= self.refresh_group_members(project)?;
+        }
         for batch in projects.chunks(8) {
             let probes = batch.iter().map(|project| async { (project.id, Repo::is_repo(std::path::Path::new(&project.path)).await) });
             for (id, is_git) in futures::future::join_all(probes).await {
@@ -1268,6 +1292,9 @@ impl Orchestrator {
             // Self-heal a stale cached flag: the folder may have gained (or lost) a
             // repo since it was first registered. Re-probe and persist any change so
             // edit/integration spawns are not permanently blocked after a `git init`.
+            if existing.kind == ProjectKind::Group {
+                return Ok(existing);
+            }
             let live = project_path_is_git(&existing.path);
             if live != existing.is_git {
                 existing.is_git = live;
@@ -1290,6 +1317,10 @@ impl Orchestrator {
             space_id,
             created_at: now,
             updated_at: now,
+            kind: Default::default(),
+            members: Vec::new(),
+            worktree_copy: Vec::new(),
+            instructions_offer_dismissed: false,
         };
         if let Err(error) = self.inner.store.project_insert(&project) {
             // Concurrent imports may discover the same folder before either
@@ -1302,6 +1333,11 @@ impl Orchestrator {
         self.publish_projects();
         // The store assigns the task prefix on insert; return the project as stored.
         Ok(self.inner.store.project_get(project.id)?.unwrap_or(project))
+    }
+
+    /// Worktree preparation progress of thread creates, for forwarding to connected clients.
+    pub fn subscribe_workspace_progress(&self) -> tokio::sync::broadcast::Receiver<methods::ThreadsWorkspaceProgress> {
+        self.inner.workspace_progress.subscribe()
     }
 
     /// Changes to the project list, for forwarding to connected clients.
@@ -1365,6 +1401,13 @@ impl Orchestrator {
             ));
         }
         let project = self.add_project(session.cwd.clone(), None, None)?;
+        // A session in a group folder joins the group like a local chat: every member. Its cwd stays the
+        // session's own spelling, which the harness resumes by.
+        let members = if project.kind == ProjectKind::Group {
+            self.group_local_members(&project, &std::collections::BTreeMap::new()).await?
+        } else {
+            Vec::new()
+        };
         let now = Utc::now();
         let thread = Thread {
             id: Uuid::now_v7(),
@@ -1390,6 +1433,7 @@ impl Orchestrator {
             coordinator_project_id: None,
             subagent: None,
             delegation: None,
+            members,
         };
         let store = self.inner.store.clone();
         let (mut thread, events) = tokio::task::spawn_blocking(move || store.thread_import(thread, history.events)).await??;
@@ -1412,7 +1456,73 @@ impl Orchestrator {
     }
 
     pub async fn create_thread(&self, params: methods::ThreadsCreateParams) -> Result<Thread> {
-        self.create_thread_with_id(params, Uuid::now_v7()).await
+        let Some(id) = params.thread_id else { return self.create_thread_with_id(params, Uuid::now_v7()).await };
+        self.with_client_thread_id(id, async {
+            match self.client_thread(id, params.project_id.unwrap_or(FREE_CHAT_PROJECT_ID))? {
+                Some(existing) => self.finish_client_create(existing, params.message, params.message_id).await,
+                None => self.create_thread_with_id(params, id).await,
+            }
+        })
+        .await
+    }
+
+    /// Run `work` for a client-chosen thread id with other calls for that id held back, so a
+    /// repeat that arrives while the first is still creating the thread waits and then finds it.
+    async fn with_client_thread_id<T>(&self, id: ThreadId, work: impl Future<Output = Result<T>>) -> Result<T> {
+        if id.is_nil() {
+            return Err(anyhow!("thread_id must be a UUID other than the nil UUID"));
+        }
+        let lock = self.inner.client_thread_ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).entry(id).or_default().clone();
+        let guard = lock.clone().lock_owned().await;
+        let result = work.await;
+        drop(guard);
+        drop(lock);
+        let mut locks = self.inner.client_thread_ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if locks.get(&id).is_some_and(|lock| Arc::strong_count(lock) == 1) {
+            locks.remove(&id);
+        }
+        result
+    }
+
+    /// The thread an earlier create with this client id made, if any. An id that belongs to
+    /// another kind of thread, or to one in another project, is refused rather than reused.
+    pub(crate) fn client_thread(&self, id: ThreadId, project_id: ProjectId) -> Result<Option<Thread>> {
+        let Some(existing) = self.inner.store.thread_get(id)? else { return Ok(None) };
+        if existing.project_id != project_id
+            || existing.subagent.is_some()
+            || existing.delegation.is_some()
+            || existing.parent_thread_id.is_some()
+        {
+            return Err(anyhow!("thread_id already belongs to a different thread. Start the chat with a new id."));
+        }
+        if existing.status == ThreadStatus::Archived {
+            return Err(anyhow!("This chat was archived. Start a new chat instead."));
+        }
+        Ok(Some(existing))
+    }
+
+    /// A repeated create: the thread exists, so only the first message may still be missing. With
+    /// its client id the send is answered from the first delivery when there was one; without it,
+    /// the message goes only to a thread that has never started a turn.
+    async fn finish_client_create(&self, thread: Thread, message: Option<UserMessage>, message_id: Option<MessageId>) -> Result<Thread> {
+        let Some(message) = message else { return Ok(thread) };
+        match message_id {
+            Some(message_id) => {
+                self.send_with_id(thread.id, message_id, message, false, true).await?;
+            }
+            None => {
+                let started = self
+                    .inner
+                    .store
+                    .events_for_thread(thread.id)?
+                    .iter()
+                    .any(|event| matches!(event.payload, EventPayload::TurnStarted { .. }));
+                if !started {
+                    self.send(thread.id, message).await?;
+                }
+            }
+        }
+        Ok(self.inner.store.thread_get(thread.id)?.unwrap_or(thread))
     }
 
     async fn create_thread_with_id(&self, params: methods::ThreadsCreateParams, id: ThreadId) -> Result<Thread> {
@@ -1430,7 +1540,8 @@ impl Orchestrator {
         }
         let use_worktree =
             if free_chat { false } else { params.use_worktree.or(project.worktrees_default).unwrap_or(settings.worktrees_default) };
-        if use_worktree && !project.is_git {
+        let group = project.kind == ProjectKind::Group;
+        if use_worktree && !project.is_git && !group {
             // Re-probe a stale cached flag before refusing (see `project_path_is_git`);
             // a folder `git init`-ed after registration must still support worktrees.
             if project_path_is_git(&project.path) {
@@ -1439,12 +1550,37 @@ impl Orchestrator {
                 self.inner.store.project_update(&project)?;
                 self.publish_projects();
             } else {
-                return Err(anyhow!("project is not a git repository; cannot create a worktree"));
+                return Err(anyhow!(
+                    "This project is not a git repository, so it can't use a worktree. Run git init in it, or start the chat without a worktree."
+                ));
             }
         }
         let now = Utc::now();
         let base_branch = params.base_branch.clone().map(|b| b.trim().to_string()).filter(|b| !b.is_empty());
-        let worktree = if use_worktree {
+        let mut members = Vec::new();
+        let worktree = if group {
+            // `base_branch` is the primary's when the map does not name it.
+            let mut bases: std::collections::BTreeMap<String, String> = params
+                .base_branches
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(path, branch)| (path, branch.trim().to_string()))
+                .filter(|(_, branch)| !branch.is_empty())
+                .collect();
+            if let (Some(branch), Some(primary)) = (base_branch.clone(), project.members.first()) {
+                bases.entry(primary.path.clone()).or_insert(branch);
+            }
+            if use_worktree {
+                let selected = group_git::select_members(&project, params.members.as_deref())?;
+                let (worktree, snapshot) = self.create_group_workspace(&project, id, selected, &bases).await?;
+                members = snapshot;
+                Some(worktree)
+            } else {
+                members = self.group_local_members(&project, &bases).await?;
+                None
+            }
+        } else if use_worktree {
             Some(self.create_worktree(&project, id, base_branch.as_deref()).await?)
         } else {
             if let Some(branch) = base_branch.as_deref() {
@@ -1480,6 +1616,7 @@ impl Orchestrator {
             coordinator_project_id: None,
             subagent: None,
             delegation: None,
+            members,
         };
         self.inner.store.thread_upsert(&thread)?;
         if params.pin_account || thread.provider.instance != "default" {
@@ -1490,7 +1627,8 @@ impl Orchestrator {
         let mut thread = Thread { last_seq: ev.seq, ..thread };
         self.inner.store.thread_upsert(&thread)?;
         if let Some(message) = params.message {
-            self.send(thread.id, message).await?;
+            let retryable = params.message_id.is_some();
+            self.send_with_id(thread.id, params.message_id.unwrap_or_else(Uuid::now_v7), message, false, retryable).await?;
             thread = self.inner.store.thread_get(thread.id)?.unwrap_or(thread);
         }
         Ok(thread)
@@ -1515,6 +1653,10 @@ impl Orchestrator {
             space_id: None,
             created_at: now,
             updated_at: now,
+            kind: Default::default(),
+            members: Vec::new(),
+            worktree_copy: Vec::new(),
+            instructions_offer_dismissed: false,
         };
         match self.inner.store.project_insert(&project) {
             Ok(()) => {
@@ -1525,12 +1667,42 @@ impl Orchestrator {
         }
     }
 
+    /// `<worktrees>/<project label>/<id>`. The label is only for people browsing the
+    /// folder: it is one sanitized path component, and ownership checks go through
+    /// `is_managed_worktree`, so renaming a project never orphans its worktrees.
+    pub(crate) fn worktree_dir(&self, project: &Project, id: &str) -> PathBuf {
+        self.inner.paths.worktrees.join(worktree_label(&project.name)).join(id)
+    }
+
+    /// True for a folder `worktree_dir` could have made for `id`, under any project label.
+    pub(crate) fn is_managed_worktree(&self, path: &Path, id: &str) -> bool {
+        path.file_name().is_some_and(|name| name == id)
+            && path.parent().and_then(Path::parent) == Some(self.inner.paths.worktrees.as_path())
+    }
+
     async fn create_worktree(&self, project: &Project, thread_id: ThreadId, base: Option<&str>) -> Result<WorktreeInfo> {
         let unique = thread_id.to_string();
         let branch = format!("kybern/{unique}");
-        let dir = self.inner.paths.worktrees.join(&project.name).join(&unique);
+        let dir = self.worktree_dir(project, &unique);
         std::fs::create_dir_all(dir.parent().unwrap())?;
-        Repo::new(&project.path).worktree_add(&dir, &branch, base).await?;
+        self.send_workspace_progress(thread_id, 0, 1, None);
+        let repo = Repo::new(&project.path);
+        let (had_branch, had_dir) = (repo.rev_parse(&format!("refs/heads/{branch}")).await.is_ok(), dir.exists());
+        let added = repo.worktree_add(&dir, &branch, base).await;
+        self.send_workspace_progress(thread_id, u32::from(added.is_ok()), 1, None);
+        if let Err(error) = added {
+            // `git worktree add` can fail after making the branch and folder (a checkout hook, LFS, a full
+            // disk). Undo what this call made, so Retry with the same thread id can start again.
+            if !had_dir && dir.exists() {
+                let _ = repo.worktree_remove(&dir, true).await;
+                let _ = std::fs::remove_dir_all(&dir);
+                let _ = repo.worktree_prune().await;
+            }
+            if !had_branch {
+                let _ = repo.delete_branch(&branch, true).await;
+            }
+            return Err(error);
+        }
         Ok(WorktreeInfo { path: dir.to_string_lossy().to_string(), branch })
     }
 
@@ -1716,7 +1888,7 @@ impl Orchestrator {
             return Err(ThreadBusy.into());
         }
         if thread.status == ThreadStatus::Archived {
-            return Err(anyhow!("thread is archived"));
+            return Err(anyhow!("This chat is archived. Start a new chat to keep working."));
         }
         if thread.delegation.as_ref().is_some_and(|info| info.worktree_state == Some(WorktreeState::Removed)) {
             return Err(delegation::worktree_removed_error());
@@ -1793,7 +1965,7 @@ impl Orchestrator {
             return Err(anyhow!(subagents::READ_ONLY_ERROR));
         }
         if thread.status == ThreadStatus::Archived {
-            return Err(anyhow!("thread is archived"));
+            return Err(anyhow!("This chat is archived. Start a new chat to keep working."));
         }
         if let Some(receipt) = self.inner.store.queue_receipt(message.id)? {
             if serde_json::to_value(receipt)? != serde_json::to_value(&message)? {
@@ -2711,6 +2883,9 @@ impl Orchestrator {
     }
 
     async fn checkpoint_locked(&self, thread: &Thread, turn_id: TurnId, which: &str) {
+        if group_git::is_group(thread) {
+            return self.group_checkpoint_locked(thread, turn_id, which).await;
+        }
         let repo = Repo::new(&thread.cwd);
         if !Repo::is_repo(std::path::Path::new(&thread.cwd)).await {
             return;
@@ -2732,6 +2907,8 @@ impl Orchestrator {
                 provider_turn_id: None,
                 provider_turn_end: None,
                 created_at: Utc::now(),
+                repos: Vec::new(),
+                incomplete: false,
             },
             _ => match self.inner.store.checkpoint_get(turn_id) {
                 Ok(Some(mut c)) => {
@@ -2888,6 +3065,10 @@ impl Orchestrator {
 
     pub async fn diff(&self, thread_id: ThreadId, turn_id: Option<TurnId>, include_patch: bool, path: Option<&str>) -> Result<Diff> {
         let thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
+        if group_git::is_group(&thread) {
+            return group_git::group_diff(&self.inner.store, &thread, turn_id, include_patch, path, group_git::DiffCaps::UNLIMITED_FILES)
+                .await;
+        }
         let repo = Repo::new(&thread.cwd);
         if !Repo::is_repo(std::path::Path::new(&thread.cwd)).await {
             return Err(anyhow!("project is not a git repository"));
@@ -2922,6 +3103,9 @@ impl Orchestrator {
         // A finished turn's "after" snapshot may still be running, for minutes on a large tree. Wait for it without the
         // admission gate, so sends are not held back meanwhile; whatever started in that time is caught below.
         drop(self.checkpoint_lock(thread_id).lock_owned().await);
+        // A group rewind rewrites several repositories: once, under the daemon-wide workspace lock.
+        let group = self.inner.store.thread_get(thread_id)?.is_some_and(|t| group_git::is_group(&t));
+        let _workspace = if group { Some(self.inner.workspace_ops.lock().await) } else { None };
         let admission = self.session_admission(thread_id).await;
         let _admission = admission.lock().await;
         let checkpoint = self.checkpoint_lock(thread_id).lock_owned().await;
@@ -2932,8 +3116,11 @@ impl Orchestrator {
         let all = self.inner.store.checkpoints_for_thread(thread_id)?;
         let idx = all.iter().position(|c| c.turn_id == turn_id).ok_or_else(|| anyhow!("no checkpoint for that turn"))?;
         let c = all[idx].clone();
-        let repo = Repo::new(&thread.cwd);
-        repo.restore(&c.before).await?;
+        if group_git::is_group(&thread) {
+            self.group_restore(&thread, &c).await?;
+        } else {
+            Repo::new(&thread.cwd).restore(&c.before).await?;
+        }
         drop(checkpoint);
         self.emit(thread_id, Some(turn_id), EventPayload::WorkspaceReverted { to_turn_id: turn_id, commit: c.before.clone() })?;
 
@@ -4452,6 +4639,25 @@ fn is_compact_message(message: &UserMessage) -> bool {
     matches!(message.parts.as_slice(), [kybern_protocol::ContentPart::Text { text }] if text.trim() == "/compact")
 }
 
+/// One portable path component for a project's worktree folder: characters Windows forbids or
+/// treats specially (`<>:"/\\|?*`, control characters) become '-', trailing dots and spaces go,
+/// reserved device names (`CON`, `NUL`, `COM1`…) get a prefix, at most 64 characters.
+pub(crate) fn worktree_label(name: &str) -> String {
+    let label: String = name
+        .chars()
+        .map(|c| if matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || c.is_control() { '-' } else { c })
+        .take(64)
+        .collect();
+    let label = label.trim().trim_end_matches(['.', ' ']);
+    if label.is_empty() {
+        return "project".into();
+    }
+    let stem = label.split('.').next().unwrap_or(label).trim_end().to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.as_bytes()[3].is_ascii_digit());
+    if reserved { format!("_{label}") } else { label.to_string() }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
@@ -4679,6 +4885,10 @@ mod tests {
                 base_branch: None,
                 title: Some("Free chat".into()),
                 message: None,
+                thread_id: None,
+                message_id: None,
+                members: None,
+                base_branches: None,
             })
             .await
             .unwrap();
@@ -4702,11 +4912,80 @@ mod tests {
                 base_branch: None,
                 title: None,
                 message: None,
+                thread_id: None,
+                message_id: None,
+                members: None,
+                base_branches: None,
             })
             .await;
         assert!(rejected.is_err());
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn turns_started(store: &Store, thread_id: ThreadId) -> usize {
+        store.events_for_thread(thread_id).unwrap().iter().filter(|event| matches!(event.payload, EventPayload::TurnStarted { .. })).count()
+    }
+
+    fn client_create(fixture: &Fixture, thread_id: ThreadId, message_id: Option<MessageId>, text: &str) -> methods::ThreadsCreateParams {
+        methods::ThreadsCreateParams {
+            pin_account: false,
+            project_id: Some(fixture.project.id),
+            provider: ProviderInstance::default_for(ProviderKind::Codex),
+            model: None,
+            effort: None,
+            permission_mode: None,
+            use_worktree: Some(false),
+            base_branch: None,
+            title: None,
+            message: Some(UserMessage::text(text)),
+            thread_id: Some(thread_id),
+            message_id,
+            members: None,
+            base_branches: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn create_with_a_client_thread_id_is_idempotent() {
+        let fixture = Fixture::new();
+        let (thread_id, message_id) = (Uuid::now_v7(), Uuid::now_v7());
+        let first = fixture.orchestrator.create_thread(client_create(&fixture, thread_id, Some(message_id), "hello")).await.unwrap();
+        assert_eq!(first.id, thread_id, "the daemon uses the client's id");
+        let repeat = fixture.orchestrator.create_thread(client_create(&fixture, thread_id, Some(message_id), "hello")).await.unwrap();
+        assert_eq!(repeat.id, thread_id);
+        assert_eq!(fixture.store.threads_list(None, true).unwrap().len(), 1, "never a second row");
+        assert_eq!(turns_started(&fixture.store, thread_id), 1, "the accepted message is not sent again");
+
+        // Without a message id, a repeat sends only to a thread that never started a turn.
+        fixture.orchestrator.create_thread(client_create(&fixture, thread_id, None, "hello")).await.unwrap();
+        assert_eq!(turns_started(&fixture.store, thread_id), 1);
+
+        let other_message = fixture.orchestrator.create_thread(client_create(&fixture, thread_id, Some(message_id), "changed")).await;
+        assert!(other_message.unwrap_err().to_string().contains("already belongs"));
+        let mut elsewhere = client_create(&fixture, thread_id, Some(Uuid::now_v7()), "hello");
+        elsewhere.project_id = None;
+        assert!(fixture.orchestrator.create_thread(elsewhere).await.unwrap_err().to_string().contains("different thread"));
+        let nil = fixture.orchestrator.create_thread(client_create(&fixture, Uuid::nil(), None, "hello")).await;
+        assert!(nil.is_err());
+    }
+
+    #[tokio::test]
+    async fn retrying_a_create_whose_message_failed_reuses_the_thread() {
+        let fixture = Fixture::new();
+        let (thread_id, message_id) = (Uuid::now_v7(), Uuid::now_v7());
+        // The thread is created, then its first message is refused (the harness is updating).
+        let gate = fixture.orchestrator.inner.harness_gates[&ProviderKind::Codex].clone().write_owned().await;
+        let failed = fixture.orchestrator.create_thread(client_create(&fixture, thread_id, Some(message_id), "hello")).await;
+        assert!(failed.unwrap_err().to_string().contains("updating"));
+        drop(gate);
+        assert!(fixture.store.thread_get(thread_id).unwrap().is_some());
+        assert_eq!(turns_started(&fixture.store, thread_id), 0);
+
+        let retried = fixture.orchestrator.create_thread(client_create(&fixture, thread_id, Some(message_id), "hello")).await.unwrap();
+        assert_eq!(retried.id, thread_id);
+        assert_eq!(fixture.store.threads_list(None, true).unwrap().len(), 1, "the retry fills the same row");
+        assert_eq!(turns_started(&fixture.store, thread_id), 1);
     }
 
     #[test]
@@ -4773,6 +5052,10 @@ mod tests {
             space_id: None,
             created_at: now,
             updated_at: now,
+            kind: Default::default(),
+            members: Vec::new(),
+            worktree_copy: Vec::new(),
+            instructions_offer_dismissed: false,
         };
         store.project_insert(&project).unwrap();
         let thread = Thread {
@@ -4795,6 +5078,7 @@ mod tests {
             coordinator_project_id: None,
             subagent: None,
             delegation: None,
+            members: Vec::new(),
         };
         store.thread_upsert(&thread).unwrap();
         let (events_tx, _) = crate::bounded_broadcast::channel(32, 8 * 1024 * 1024);
@@ -5149,6 +5433,10 @@ mod tests {
                 space_id: None,
                 created_at: now,
                 updated_at: now,
+                kind: Default::default(),
+                members: Vec::new(),
+                worktree_copy: Vec::new(),
+                instructions_offer_dismissed: false,
             };
             store.project_insert(&project).unwrap();
             let (events_tx, _) = crate::bounded_broadcast::channel(64, 8 * 1024 * 1024);
@@ -5185,6 +5473,7 @@ mod tests {
                 coordinator_project_id: None,
                 subagent: None,
                 delegation: None,
+                members: Vec::new(),
             };
             self.store.thread_upsert(&thread).unwrap();
             thread
@@ -7893,6 +8182,8 @@ for line in sys.stdin:
     include!("orchestrator/secret_tests.rs");
     include!("orchestrator/request_tests.rs");
     include!("orchestrator/lead_git_tests.rs");
+    include!("orchestrator/group_git_tests.rs");
+    include!("orchestrator/group_pr_tests.rs");
     include!("orchestrator/capabilities_tests.rs");
     include!("orchestrator/lead_tests.rs");
     include!("orchestrator/lead_setup_tests.rs");
@@ -7901,4 +8192,5 @@ for line in sys.stdin:
     include!("orchestrator/worktree_tests.rs");
     include!("orchestrator/subagent_messaging_tests.rs");
     include!("orchestrator/full_access_tests.rs");
+    include!("orchestrator/groups_tests.rs");
 }

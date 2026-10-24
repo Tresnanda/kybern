@@ -244,3 +244,63 @@ fn space_schema_is_stable() {
 fn spaces_changed_notification_is_stable() {
     insta::assert_json_snapshot!("spaces_changed_notification", schema_for!(SpacesChangedNotification));
 }
+
+#[test]
+fn group_project_wire_shape_is_stable() {
+    insta::assert_json_snapshot!("projects_scan_repos_result", schema_for!(ProjectsScanReposResult));
+    insta::assert_json_snapshot!("projects_members_status_result", schema_for!(ProjectsMembersStatusResult));
+    insta::assert_json_snapshot!("threads_create_params", schema_for!(ThreadsCreateParams));
+    insta::assert_json_snapshot!("git_status", schema_for!(GitStatus));
+    insta::assert_json_snapshot!("pr_create_group_result", schema_for!(PrCreateGroupResult));
+    insta::assert_json_snapshot!("threads_workspace_progress", schema_for!(ThreadsWorkspaceProgress));
+    assert_eq!(THREADS_WORKSPACE_PROGRESS_NOTIFICATION, "threads.workspace_progress");
+
+    // A single project from an older daemon has none of the group fields, and
+    // a single project still serializes without them.
+    let at = "2026-10-24T00:00:00Z";
+    let single: Project = serde_json::from_value(serde_json::json!({
+        "id": uuid::Uuid::nil(), "name": "kybern", "path": "/work/kybern", "is_git": true,
+        "brief_in_all_threads": false, "created_at": at, "updated_at": at,
+    }))
+    .unwrap();
+    assert_eq!(single.kind, ProjectKind::Single);
+    let wire = serde_json::to_value(&single).unwrap();
+    for key in ["kind", "members", "worktree_copy", "instructions_offer_dismissed"] {
+        assert!(wire.get(key).is_none(), "{key} leaked into a single project");
+    }
+
+    let group: Project = serde_json::from_value(serde_json::json!({
+        "id": uuid::Uuid::nil(), "name": "acme", "path": "/work/acme", "is_git": false,
+        "brief_in_all_threads": false, "created_at": at, "updated_at": at,
+        "kind": "group",
+        "members": [
+            { "path": "api", "name": "api", "status": "ok" },
+            { "path": "web", "name": "web", "status": "not_git" },
+        ],
+        "worktree_copy": [".env", "docker-compose.yml"],
+    }))
+    .unwrap();
+    assert_eq!(group.kind, ProjectKind::Group);
+    assert_eq!(group.members[1].status, MemberStatus::NotGit);
+    assert_eq!(serde_json::to_value(&group).unwrap()["kind"], "group");
+
+    let event = EventPayload::OutsideRepoChanged {
+        repos: vec![OutsideRepoChange {
+            repo: "infra".into(),
+            name: "infra".into(),
+            source_path: "/work/acme/infra".into(),
+            dirty_files: 2,
+            head_moved: false,
+        }],
+    };
+    let wire = serde_json::to_value(&event).unwrap();
+    assert_eq!(wire["kind"], "outside_repo_changed");
+    assert!(wire["repos"][0].get("head_moved").is_none());
+
+    let progress: ThreadsWorkspaceProgress =
+        serde_json::from_value(serde_json::json!({ "thread_id": uuid::Uuid::nil(), "done": 1, "total": 3, "current": "web" })).unwrap();
+    assert_eq!(progress.current.as_deref(), Some("web"));
+    let pr: PrCreateGroupParams = serde_json::from_value(serde_json::json!({ "thread_id": uuid::Uuid::nil() })).unwrap();
+    assert!(pr.commit_first && !pr.draft && pr.repos.is_none());
+    assert_eq!(PrCreateGroup::NAME, "github.pr.create_group");
+}

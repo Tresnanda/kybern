@@ -747,6 +747,11 @@ fn apply_transcript_event(
                 let Some(turn_id) = turn_id else { continue };
                 out.push(TranscriptEntry::Reverted { turn_id, seq: ev.seq, commit: commit.clone(), at: ev.at });
             }
+            EventPayload::OutsideRepoChanged { repos } => {
+                // Recorded after the turn ends; show it under that turn.
+                let Some(turn_id) = turn_id.or(last_turn_id_value) else { continue };
+                out.push(TranscriptEntry::OutsideRepoChanged { turn_id, seq: ev.seq, repos: repos.clone(), at: ev.at });
+            }
             EventPayload::ProviderSessionReleased { reason } => {
                 // Releases happen between turns; show them under the last one.
                 let (Some(turn_id), Some(text)) = (turn_id.or(last_turn_id_value), reason.notice_text()) else { continue };
@@ -1166,6 +1171,33 @@ mod tests {
         assert!(!project(vec![thinking("Plan.")]));
         assert!(project(vec![thinking("Plan."), closed.clone()]));
         assert!(!project(vec![thinking("Plan."), closed, thinking(" More.")]));
+    }
+
+    #[test]
+    fn outside_repo_change_after_a_turn_shows_under_that_turn() {
+        let thread_id = Uuid::new_v4();
+        let turn_id = Uuid::new_v4();
+        let change = OutsideRepoChange {
+            repo: "infra".into(),
+            name: "infra".into(),
+            source_path: "/work/acme/infra".into(),
+            dirty_files: 1,
+            head_moved: true,
+        };
+        let message = UserMessage::text("Add SSO");
+        let events = [
+            (Some(turn_id), EventPayload::TurnStarted { message_id: Uuid::new_v4(), message }),
+            (None, EventPayload::OutsideRepoChanged { repos: vec![change.clone()] }),
+        ];
+        let events: Vec<_> = events
+            .into_iter()
+            .enumerate()
+            .map(|(seq, (turn, payload))| ThreadEvent { seq: seq as EventSeq + 1, thread_id, turn_id: turn, at: Utc::now(), payload })
+            .collect();
+        let rows = project_transcript(&events);
+        let Some(TranscriptEntry::OutsideRepoChanged { turn_id: row_turn, seq: 2, repos, .. }) = rows.last() else { panic!("{rows:?}") };
+        assert_eq!(*row_turn, turn_id);
+        assert_eq!(repos, &vec![change]);
     }
 
     #[test]

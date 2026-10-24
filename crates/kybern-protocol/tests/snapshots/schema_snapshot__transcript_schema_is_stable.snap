@@ -449,6 +449,41 @@ expression: schema_for!(TranscriptEntry)
         "commit",
         "at"
       ]
+    },
+    {
+      "description": "Deselected repositories of a group worktree thread changed outside its\nworktree during this turn. Kybern never reverts them; clients show a quiet warning.",
+      "type": "object",
+      "properties": {
+        "turn_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
+        "repos": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OutsideRepoChange"
+          }
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "role": {
+          "type": "string",
+          "const": "outside_repo_changed"
+        }
+      },
+      "required": [
+        "role",
+        "turn_id",
+        "repos",
+        "at"
+      ]
     }
   ],
   "$defs": {
@@ -1622,6 +1657,39 @@ expression: schema_for!(TranscriptEntry)
         "info",
         "warning",
         "error"
+      ]
+    },
+    "OutsideRepoChange": {
+      "description": "A deselected member whose original checkout changed during a turn of a\ngroup worktree thread (see `EventPayload::OutsideRepoChanged`).",
+      "type": "object",
+      "properties": {
+        "repo": {
+          "description": "Member path, relative to the project folder.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "source_path": {
+          "description": "Absolute path of the original checkout that changed.",
+          "type": "string"
+        },
+        "dirty_files": {
+          "description": "Files `git status --porcelain` reported changed at the end of the turn.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 0
+        },
+        "head_moved": {
+          "description": "HEAD moved during the turn (a commit, checkout or reset).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "repo",
+        "name",
+        "source_path"
       ]
     }
   }

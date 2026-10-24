@@ -1,7 +1,10 @@
+import type { GroupChoice } from '../groups/tray.ts'
 import {readAccounts} from '../requests/accounts.ts'
 import { onEnvironmentChange, onEnvironmentLeaving } from '../shell/environment.ts'
 import { load, save } from '../shell/persist.ts'
-import { addPending, pendingFor, updatePending, type PendingSend } from './pending.ts'
+import { addPending, pendingFor, removePending, updatePending, type PendingSend } from './pending.ts'
+import { newChats } from './newChats.ts'
+import type { NewChatCreate } from '../../../../packages/kybern-client/src/newChat.ts'
 // Composer data and actions: the agent catalog, settings and accounts, the open
 // thread's next-message target, queued follow-ups, and the home screen's draft
 // choices. Every RPC here is the one the desktop uses (`state/rpc.ts`,
@@ -26,6 +29,7 @@ import type {
   ProviderStatus,
   QueuedMessage,
   Settings,
+  Thread,
   ThreadId,
   ThreadTargetState,
   UserMessage,
@@ -43,6 +47,8 @@ export interface DraftChoices {
   projectId: ProjectId | null | undefined
   worktree: boolean | null
   baseBranch: string | null
+  /** Group projects: the members and per-member branches of the new chat (`groups/tray.ts`), for one project. */
+  group?: GroupChoice | null
 }
 
 export interface ComposerData {
@@ -71,7 +77,7 @@ const initialData: ComposerData = {
   catalogLoading: null,
   queued: {},
   branches: null,
-  draft: { mode: null, provider: null, models: {}, projectId: undefined, worktree: null, baseBranch: null },
+  draft: { mode: null, provider: null, models: {}, projectId: undefined, worktree: null, baseBranch: null, group: null },
   favorites: [],
   recents: {},
 }
@@ -93,9 +99,12 @@ export function patch(next: Partial<ComposerData> | ((d: ComposerData) => Partia
   const previous = data
   data = { ...data, ...(typeof next === 'function' ? next(data) : next) }
   if (data.target) { targets.set(data.target.threadId, data.target); if (targets.size > 100) targets.delete(targets.keys().next().value!) }
-  if (data.draft !== previous.draft || data.favorites !== previous.favorites || data.recents !== previous.recents) save('kybern.composer.choices', { draft: data.draft, favorites: data.favorites, recents: data.recents })
+  if (data.draft !== previous.draft || data.favorites !== previous.favorites || data.recents !== previous.recents) save('kybern.composer.choices', { draft: savedDraft(data.draft), favorites: data.favorites, recents: data.recents })
   for (const l of listeners) l()
 }
+
+/** What survives a restart: a group chat's repositories and branches are picked for one chat, never remembered for the next. */
+const savedDraft = ({ group: _group, ...draft }: DraftChoices): DraftChoices => draft
 
 export function patchDraft(next: Partial<DraftChoices>, paneId = getFocusedPaneId()) {
   const draft = { ...(paneDrafts.get(paneId) ?? data.draft), ...next }
@@ -218,6 +227,8 @@ function writeProviderCache(url: string, providers: ProviderStatus[]) {
 
 const targetSeq = new Map<string, number>()
 export async function loadTarget(threadId: ThreadId) {
+  // A new chat the daemon has not made yet has no target; its composer loads it once the thread exists.
+  if (newChats.uncreated(threadId)) return
   const client = rpc()
   const seq = (targetSeq.get(threadId) ?? 0) + 1
   targetSeq.set(threadId, seq)
@@ -328,7 +339,14 @@ function track(threadId: ThreadId, done: Promise<void>) {
 
 async function deliverPending(send: PendingSend) {
   try {
-    if (send.delivery === 'send') await rpc().call('threads.send', { thread_id: send.threadId, message: send.message, message_id: send.id })
+    if (send.delivery === 'send' && newChats.uncreated(send.threadId)) {
+      // The daemon has no row for this new chat yet: its create runs again with the same thread id (a Retry, or an
+      // edited first message with its own id). The daemon answers a repeat from the first call.
+      const chat = newChats.get(send.threadId)!
+      const done = await newChats.retry(send.threadId, chat.messageId === send.id ? undefined : { message: send.message, messageId: send.id })
+      if (done?.state === 'failed') throw new Error(done.error)
+      if (done?.adoptedId) return adoptNewChat(getFocusedPaneId(), send.threadId, done.adoptedId, send.id)
+    } else if (send.delivery === 'send') await rpc().call('threads.send', { thread_id: send.threadId, message: send.message, message_id: send.id })
     else await rpc().call('threads.steer', { thread_id: send.threadId, id: send.id, message: send.message })
     updatePending(send.threadId, send.id, { state: 'accepted' })
   } catch (e) {
@@ -422,40 +440,43 @@ export async function interruptThread(threadId: ThreadId) {
   await rpc().call('threads.interrupt', { thread_id: threadId })
 }
 
-/** `createThread` from the home screen, then open it. */
-export async function createThread(opts: {
+/** A new chat from the home screen, optimistic (`composer/newChats.ts`): the thread gets its id here, its row and page show
+ *  on this frame with the prompt as a pending bubble, and `create` makes it on the daemon behind them. A failure stays on the
+ *  thread page as the bubble's "Not sent" with Retry and Edit; both reuse the thread id. Returns the thread id. */
+export function launchNewChat(opts: {
   paneId?: string
-  projectId: ProjectId | null
-  provider: ProviderInstance
-  pinAccount: boolean
-  permissionMode: PermissionMode
-  model?: string
-  effort?: string
-  useWorktree: boolean
-  baseBranch?: string
+  threadId: ThreadId
+  thread: Thread
   message: UserMessage
-  /** The daemon answered with the thread, before the lists refresh and the pane switches to it. */
-  onCreated?: (id: string) => void
-}) {
-  const client = rpc()
+  worktree: boolean
+  /** Makes the thread with `thread_id` = `threadId` and delivers `message` with `message_id` = `messageId`. */
+  create: NewChatCreate
+}): ThreadId {
   const paneId = opts.paneId ?? getFocusedPaneId()
-  const generation = getPane(paneId)?.generation
-  const t = await client.call('threads.create', {
-    ...(opts.projectId ? { project_id: opts.projectId } : {}),
-    provider: opts.provider,
-    pin_account: opts.pinAccount,
-    permission_mode: opts.permissionMode,
-    model: opts.model,
-    effort: opts.effort,
-    use_worktree: opts.useWorktree,
-    base_branch: opts.baseBranch,
-    message: opts.message,
+  const client = rpc()
+  const send: PendingSend = { id: crypto.randomUUID(), threadId: opts.threadId, message: opts.message, at: new Date().toISOString(), delivery: 'send', state: 'sending' }
+  addPending(send)
+  const started = newChats.start({ threadId: opts.threadId, messageId: send.id, message: opts.message, worktree: opts.worktree, thread: opts.thread }, opts.create)
+  track(opts.threadId, started.then((chat) => {
+    if (chat.adoptedId) return adoptNewChat(paneId, opts.threadId, chat.adoptedId, send.id)
+    if (chat.state === 'failed') updatePending(opts.threadId, send.id, { state: 'failed', error: chat.error })
+    else if (chat.messageId === send.id) updatePending(opts.threadId, send.id, { state: 'accepted' })
+    // The list catches up behind the page; nothing waits for it.
+    if (getClient() === client) void refreshLists()
+  }))
+  void selectPaneThread(paneId, opts.threadId)
+  return opts.threadId
+}
+
+/** The daemon made the thread under its own id (one that ignores ours): its copy replaces the optimistic one, and a page
+ *  still showing ours follows it. */
+function adoptNewChat(paneId: string, from: ThreadId, to: ThreadId, sendId: string) {
+  const client = getClient()
+  removePending(from, sendId)
+  newChats.forget(from)
+  void refreshLists().then(() => {
+    if (getClient() === client && getPane(paneId)?.selectedId === from) void selectPaneThread(paneId, to)
   })
-  if (getClient() !== client) return t.id
-  opts.onCreated?.(t.id)
-  await refreshLists()
-  if (getClient() === client && getPane(paneId)?.generation === generation) void selectPaneThread(paneId, t.id)
-  return t.id
 }
 
 export async function loadBranches(projectId: ProjectId) {
@@ -511,5 +532,5 @@ export async function uploadBytes(name: string, mediaType: string, bytes: ArrayB
   return (await response.json()) as UploadedAsset
 }
 
-onEnvironmentLeaving(() => save('kybern.composer.choices', { draft: data.draft, favorites: data.favorites, recents: data.recents }))
+onEnvironmentLeaving(() => save('kybern.composer.choices', { draft: savedDraft(data.draft), favorites: data.favorites, recents: data.recents }))
 onEnvironmentChange(() => { loadedFor = null; providerLoad = null; targetSeq.clear(); catalogSeq.clear(); targets.clear(); catalogs.clear(); catalogLoads.clear(); paneDrafts.clear(); patch({ ...initialData, ...load<Partial<Pick<ComposerData, 'draft' | 'favorites' | 'recents'>>>('kybern.composer.choices', {}) }) })

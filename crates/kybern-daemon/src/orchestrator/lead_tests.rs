@@ -12,6 +12,8 @@ fn open_params(project: &Project, kind: ProviderKind, brief: Option<&str>) -> Co
         permission_mode: None,
         opening_message: None,
         initial_brief: brief.map(str::to_owned),
+        thread_id: None,
+        message_id: None,
     }
 }
 
@@ -221,6 +223,9 @@ async fn children_of_the_lead_and_every_thread_with_the_switch_on_get_the_projec
         brief_in_all_threads: Some(on),
         coordinator: None,
         space_id: None,
+        members: None,
+        worktree_copy: None,
+        instructions_offer_dismissed: None,
     };
     let mut project = fixture.store.project_get(fixture.project.id).unwrap().unwrap();
     project.brief_in_all_threads = rpc(true).brief_in_all_threads.unwrap();
@@ -448,4 +453,37 @@ async fn the_coordinator_has_its_own_child_limit_and_other_threads_keep_theirs()
     t.delegate(json!({"task": "two"})).await;
     let error = t.tool("kybern_agent_delegate", json!({"task": "three"})).await.unwrap_err().to_string();
     assert!(error.contains("(max 2)"), "{error}");
+}
+
+#[tokio::test]
+async fn opening_the_coordinator_with_a_client_id_uses_it_and_a_repeat_reports_the_creation() {
+    let fixture = Fixture::new();
+    std::fs::create_dir_all(&fixture.root).unwrap();
+    let (thread_id, message_id) = (Uuid::now_v7(), Uuid::now_v7());
+    let params = CoordinatorOpenParams {
+        opening_message: Some("Ship the importer.".into()),
+        thread_id: Some(thread_id),
+        message_id: Some(message_id),
+        ..open_params(&fixture.project, ProviderKind::Codex, None)
+    };
+    let first = fixture.orchestrator.coordinator_open(params.clone()).await.unwrap();
+    assert!(first.created);
+    assert_eq!(first.thread.id, thread_id);
+    let turn_started = |id| {
+        fixture.store.events_for_thread(id).unwrap().iter().filter(|event| matches!(&event.payload, EventPayload::TurnStarted { message_id: sent, .. } if *sent == message_id)).count()
+    };
+    assert_eq!(turn_started(thread_id), 1, "the opening message carries the client's id");
+
+    // A repeat gets the same thread, reported as created so its opening message is not sent again.
+    let repeat = fixture.orchestrator.coordinator_open(params).await.unwrap();
+    assert!(repeat.created && repeat.thread.id == thread_id);
+    assert_eq!(turn_started(thread_id), 1);
+
+    // Another client with its own id gets the existing Coordinator, not a second one.
+    let other = fixture
+        .orchestrator
+        .coordinator_open(CoordinatorOpenParams { thread_id: Some(Uuid::now_v7()), ..open_params(&fixture.project, ProviderKind::Codex, None) })
+        .await
+        .unwrap();
+    assert!(!other.created && other.thread.id == thread_id);
 }

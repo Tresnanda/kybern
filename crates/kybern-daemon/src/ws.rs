@@ -410,6 +410,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let mut settings = ctx.principal.has(Scope::OrchestrationRead).then(|| state.settings.subscribe());
     let mut account_logins = ctx.principal.has(Scope::OrchestrationRead).then(|| state.account_logins.subscribe());
     let mut projects = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_projects());
+    let mut workspace_progress = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_workspace_progress());
     let mut spaces = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_spaces());
     let mut preview_requests = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_preview_requests());
     let mut request_progress = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.requests().subscribe());
@@ -499,6 +500,19 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                     // Each notification carries the whole list; the next one catches up.
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(_) => projects = None,
+                }
+            }
+            progress = async {
+                match workspace_progress.as_mut() {
+                    Some(progress) => progress.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match progress {
+                    Ok(progress) => { let _ = ctx.out.notify(kybern_protocol::methods::THREADS_WORKSPACE_PROGRESS_NOTIFICATION, progress).await; }
+                    // Progress is transient; the create's result settles it.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => workspace_progress = None,
                 }
             }
             changed = async {

@@ -5,3 +5,4 @@ import "../../../packages/kybern-client/tests/chat-references.test.mjs";
 import "../../../packages/kybern-client/tests/subagents.test.mjs";
 import "../../../packages/kybern-client/tests/project-space.test.mjs";
 import "../../../packages/kybern-client/tests/coordinator-settings.test.mjs";
+import "../../../packages/kybern-client/tests/new-chat.test.mjs";

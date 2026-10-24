@@ -3,6 +3,7 @@
 //! The store is synchronous; the daemon wraps calls in `spawn_blocking` when
 //! they may take more than a few milliseconds (replays, projections).
 
+mod groups;
 mod notes;
 mod projection;
 mod schema;
@@ -12,6 +13,7 @@ mod tasks;
 mod thread_history;
 mod transcript_page;
 mod visuals;
+pub use groups::{GROUP_FOLDER_MEMBER, folder_name, member_display_names};
 pub use notes::{
     NOTE_BODY_MAX_BYTES, NOTE_RETENTION_DAYS, NOTE_TITLE_MAX_CHARS, NoteError, NoteTarget, checklist as note_checklist,
     preview as note_preview,
@@ -428,10 +430,12 @@ impl Store {
         self.with(|c| {
             let tx = c.unchecked_transaction()?;
             tx.execute(
-                "INSERT INTO projects(id, name, path, is_git, worktrees_default, created_at, updated_at, brief_in_all_threads, coordinator, space_id)
+                "INSERT INTO projects(id, name, path, is_git, worktrees_default, created_at, updated_at, brief_in_all_threads, coordinator, space_id,
+                    kind, instructions_offer_dismissed, worktree_copy)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
                          CASE WHEN ?1 = ?11 THEN NULL
-                              ELSE COALESCE(?10, (SELECT id FROM spaces ORDER BY position, created_at LIMIT 1)) END)",
+                              ELSE COALESCE(?10, (SELECT id FROM spaces ORDER BY position, created_at LIMIT 1)) END,
+                         ?12, ?13, ?14)",
                 params![
                     p.id.to_string(),
                     p.name,
@@ -443,9 +447,16 @@ impl Store {
                     p.brief_in_all_threads,
                     coordinator_json(p)?,
                     p.space_id.map(|id| id.to_string()),
-                    FREE_CHAT_PROJECT_ID.to_string()
+                    FREE_CHAT_PROJECT_ID.to_string(),
+                    p.kind.as_str(),
+                    p.instructions_offer_dismissed,
+                    worktree_copy_json(p)?
                 ],
             )?;
+            if p.kind == ProjectKind::Group {
+                let paths: Vec<String> = p.members.iter().map(|m| m.path.clone()).collect();
+                groups::write_members(&tx, p.id, &paths)?;
+            }
             // Every project gets a task prefix; an explicit one is kept when it is valid and free.
             tasks::assign_project_prefix(&tx, p.id, &p.name, p.task_prefix.as_deref())?;
             tx.commit()?;
@@ -457,7 +468,7 @@ impl Store {
         self.with(|c| {
             c.execute(
                 "UPDATE projects SET name = ?2, path = ?3, is_git = ?4, worktrees_default = ?5, updated_at = ?6, brief_in_all_threads = ?7,
-                 coordinator = ?8
+                 coordinator = ?8, instructions_offer_dismissed = ?9, worktree_copy = ?10
                  WHERE id = ?1",
                 params![
                     p.id.to_string(),
@@ -467,7 +478,9 @@ impl Store {
                     p.worktrees_default,
                     p.updated_at.to_rfc3339(),
                     p.brief_in_all_threads,
-                    coordinator_json(p)?
+                    coordinator_json(p)?,
+                    p.instructions_offer_dismissed,
+                    worktree_copy_json(p)?
                 ],
             )?;
             Ok(())
@@ -497,34 +510,25 @@ impl Store {
 
     pub fn project_get(&self, id: ProjectId) -> Result<Option<Project>> {
         self.with(|c| {
-            Ok(c.query_row(
-                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads, coordinator, space_id FROM projects WHERE id = ?1",
-                [id.to_string()],
-                row_to_project,
-            )
-            .optional()?)
+            let project = c.query_row(&format!("{PROJECT_SELECT} WHERE id = ?1"), [id.to_string()], row_to_project).optional()?;
+            with_members(c, project)
         })
     }
 
     pub fn project_by_path(&self, path: &str) -> Result<Option<Project>> {
         self.with(|c| {
-            Ok(c.query_row(
-                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads, coordinator, space_id FROM projects WHERE path = ?1",
-                [path],
-                row_to_project,
-            )
-            .optional()?)
+            let project = c.query_row(&format!("{PROJECT_SELECT} WHERE path = ?1"), [path], row_to_project).optional()?;
+            with_members(c, project)
         })
     }
 
     pub fn projects_list(&self) -> Result<Vec<Project>> {
         self.with(|c| {
-            let mut st = c.prepare(
-                "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads, coordinator, space_id
-                 FROM projects WHERE id != ?1 ORDER BY name",
-            )?;
+            let mut st = c.prepare(&format!("{PROJECT_SELECT} WHERE id != ?1 ORDER BY name"))?;
             let rows = st.query_map([FREE_CHAT_PROJECT_ID.to_string()], row_to_project)?;
-            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            let mut projects = rows.collect::<Result<Vec<_>, _>>()?;
+            groups::attach_members(c, &mut projects)?;
+            Ok(projects)
         })
     }
 
@@ -1608,12 +1612,33 @@ impl Store {
 
     pub fn checkpoint_upsert(&self, c: &Checkpoint) -> Result<()> {
         self.with(|conn| {
-            conn.execute(
-                "INSERT INTO checkpoints(turn_id, thread_id, before_commit, after_commit, created_at, provider_turn_id, provider_turn_end)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            let tx = conn.unchecked_transaction()?;
+            // Group checkpoints: a later write (the turn's end) fills `after` per member
+            // and keeps the `before` each member was snapshotted with.
+            let repos = if c.repos.is_empty() {
+                None
+            } else {
+                let existing: Option<String> = tx
+                    .query_row("SELECT repos FROM checkpoints WHERE turn_id = ?1", [c.turn_id.to_string()], |r| r.get(0))
+                    .optional()?
+                    .flatten();
+                let mut merged: Vec<RepoCheckpoint> = existing.map(|json| serde_json::from_str(&json)).transpose()?.unwrap_or_default();
+                for repo in &c.repos {
+                    match merged.iter_mut().find(|known| known.repo == repo.repo) {
+                        Some(known) => known.after = repo.after.clone().or(known.after.take()),
+                        None => merged.push(repo.clone()),
+                    }
+                }
+                Some(serde_json::to_string(&merged)?)
+            };
+            tx.execute(
+                "INSERT INTO checkpoints(turn_id, thread_id, before_commit, after_commit, created_at, provider_turn_id, provider_turn_end, repos, incomplete)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                  ON CONFLICT(turn_id) DO UPDATE SET after_commit = excluded.after_commit,
                     provider_turn_id = COALESCE(excluded.provider_turn_id, checkpoints.provider_turn_id),
-                    provider_turn_end = COALESCE(excluded.provider_turn_end, checkpoints.provider_turn_end)",
+                    provider_turn_end = COALESCE(excluded.provider_turn_end, checkpoints.provider_turn_end),
+                    repos = COALESCE(excluded.repos, checkpoints.repos),
+                    incomplete = MAX(excluded.incomplete, checkpoints.incomplete)",
                 params![
                     c.turn_id.to_string(),
                     c.thread_id.to_string(),
@@ -1621,9 +1646,12 @@ impl Store {
                     c.after,
                     c.created_at.to_rfc3339(),
                     c.provider_turn_id,
-                    c.provider_turn_end
+                    c.provider_turn_end,
+                    repos,
+                    c.incomplete
                 ],
             )?;
+            tx.commit()?;
             Ok(())
         })
     }
@@ -1632,7 +1660,7 @@ impl Store {
         self.with(|conn| {
             Ok(conn
                 .query_row(
-                    "SELECT turn_id, thread_id, before_commit, after_commit, created_at, provider_turn_id, provider_turn_end FROM checkpoints WHERE turn_id = ?1",
+                    "SELECT turn_id, thread_id, before_commit, after_commit, created_at, provider_turn_id, provider_turn_end, repos, incomplete FROM checkpoints WHERE turn_id = ?1",
                     [turn_id.to_string()],
                     row_to_checkpoint,
                 )
@@ -1643,7 +1671,7 @@ impl Store {
     pub fn checkpoints_for_thread(&self, thread_id: ThreadId) -> Result<Vec<Checkpoint>> {
         self.with(|conn| {
             let mut st = conn.prepare(
-                "SELECT turn_id, thread_id, before_commit, after_commit, created_at, provider_turn_id, provider_turn_end FROM checkpoints WHERE thread_id = ?1 ORDER BY created_at",
+                "SELECT turn_id, thread_id, before_commit, after_commit, created_at, provider_turn_id, provider_turn_end, repos, incomplete FROM checkpoints WHERE thread_id = ?1 ORDER BY created_at",
             )?;
             Ok(st.query_map([thread_id.to_string()], row_to_checkpoint)?.collect::<Result<Vec<_>, _>>()?)
         })
@@ -1796,7 +1824,7 @@ fn stamp_runtime_task_sequence(payload: &mut EventPayload, seq: EventSeq) -> boo
 
 const THREAD_SELECT: &str = "SELECT id, project_id, title, provider_kind, provider_instance, model, effort, permission_mode, status,
     worktree_path, worktree_branch, cwd, provider_session_id, pinned, created_at, updated_at, last_seq,
-    parent_thread_id, coordinator_project_id, subagent, delegation FROM threads";
+    parent_thread_id, coordinator_project_id, subagent, delegation, members FROM threads";
 
 const THREAD_MESSAGE_SELECT: &str = "SELECT id, operation_id, from_thread_id, to_thread_id, purpose, reply_to, body, delivery, state,
     held_reason, created_at, updated_at FROM thread_messages";
@@ -1850,7 +1878,34 @@ fn row_to_project(r: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
         space_id: r.get::<_, Option<String>>(10)?.map(parse_uuid).transpose()?,
         created_at: parse_time(r.get::<_, String>(5)?)?,
         updated_at: parse_time(r.get::<_, String>(6)?)?,
+        kind: groups::parse_kind(&r.get::<_, String>(11)?),
+        members: Vec::new(),
+        instructions_offer_dismissed: r.get(12)?,
+        worktree_copy: r
+            .get::<_, Option<String>>(13)?
+            .map(|json| serde_json::from_str(&json))
+            .transpose()
+            .map_err(|error| rusqlite::Error::FromSqlConversionFailure(13, rusqlite::types::Type::Text, Box::new(error)))?
+            .unwrap_or_default(),
     })
+}
+
+const PROJECT_SELECT: &str = "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads,
+    coordinator, space_id, kind, instructions_offer_dismissed, worktree_copy FROM projects";
+
+fn with_members(c: &Connection, project: Option<Project>) -> Result<Option<Project>> {
+    let Some(project) = project else { return Ok(None) };
+    let mut one = [project];
+    groups::attach_members(c, &mut one)?;
+    let [project] = one;
+    Ok(Some(project))
+}
+
+fn worktree_copy_json(project: &Project) -> rusqlite::Result<Option<String>> {
+    if project.worktree_copy.is_empty() {
+        return Ok(None);
+    }
+    serde_json::to_string(&project.worktree_copy).map(Some).map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
 }
 
 fn row_to_thread(r: &rusqlite::Row<'_>) -> rusqlite::Result<Thread> {
@@ -1882,6 +1937,7 @@ fn row_to_thread(r: &rusqlite::Row<'_>) -> rusqlite::Result<Thread> {
         coordinator_project_id: r.get::<_, Option<String>>(18)?.map(parse_uuid).transpose()?,
         subagent: r.get::<_, Option<String>>(19)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
         delegation: r.get::<_, Option<String>>(20)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
+        members: r.get::<_, Option<String>>(21)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?.unwrap_or_default(),
     })
 }
 
@@ -1894,6 +1950,8 @@ fn row_to_checkpoint(r: &rusqlite::Row<'_>) -> rusqlite::Result<Checkpoint> {
         created_at: parse_time(r.get::<_, String>(4)?)?,
         provider_turn_id: r.get(5)?,
         provider_turn_end: r.get(6)?,
+        repos: r.get::<_, Option<String>>(7)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?.unwrap_or_default(),
+        incomplete: r.get(8)?,
     })
 }
 
@@ -2076,8 +2134,8 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
     c.execute(
         "INSERT INTO threads(id, project_id, title, provider_kind, provider_instance, model, effort, permission_mode,
                     status, worktree_path, worktree_branch, cwd, provider_session_id, pinned, created_at, updated_at, last_seq,
-                    parent_thread_id, coordinator_project_id, subagent, delegation)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+                    parent_thread_id, coordinator_project_id, subagent, delegation, members)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
                  ON CONFLICT(id) DO UPDATE SET
                     provider_kind = excluded.provider_kind, provider_instance = excluded.provider_instance,
                     title = excluded.title, model = excluded.model, effort = excluded.effort, permission_mode = excluded.permission_mode,
@@ -2087,7 +2145,8 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
                     parent_thread_id = COALESCE(threads.parent_thread_id, excluded.parent_thread_id),
                     coordinator_project_id = excluded.coordinator_project_id,
                     subagent = COALESCE(excluded.subagent, threads.subagent),
-                    delegation = COALESCE(excluded.delegation, threads.delegation)",
+                    delegation = COALESCE(excluded.delegation, threads.delegation),
+                    members = COALESCE(excluded.members, threads.members)",
         params![
             t.id.to_string(),
             t.project_id.to_string(),
@@ -2110,6 +2169,7 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
             t.coordinator_project_id.map(|id| id.to_string()),
             t.subagent.as_ref().map(serde_json::to_string).transpose()?,
             t.delegation.as_ref().map(serde_json::to_string).transpose()?,
+            (!t.members.is_empty()).then(|| serde_json::to_string(&t.members)).transpose()?,
         ],
     )?;
     Ok(())
@@ -2225,6 +2285,10 @@ mod tests {
             space_id: None,
             created_at: now,
             updated_at: now,
+            kind: Default::default(),
+            members: Vec::new(),
+            worktree_copy: Vec::new(),
+            instructions_offer_dismissed: false,
         };
         store.project_insert(&project).unwrap();
         let thread = Thread {
@@ -2247,6 +2311,7 @@ mod tests {
             coordinator_project_id: None,
             subagent: None,
             delegation: None,
+            members: Vec::new(),
         };
         store.thread_upsert(&thread).unwrap();
         (store, thread)
@@ -2284,6 +2349,10 @@ mod tests {
             space_id: None,
             created_at: now,
             updated_at: now,
+            kind: Default::default(),
+            members: Vec::new(),
+            worktree_copy: Vec::new(),
+            instructions_offer_dismissed: false,
         };
         store.project_insert(&project).unwrap();
         let thread = Thread {
@@ -2306,6 +2375,7 @@ mod tests {
             coordinator_project_id: None,
             subagent: None,
             delegation: None,
+            members: Vec::new(),
         };
         let history = vec![ThreadEvent {
             seq: 999,
@@ -2357,6 +2427,10 @@ mod tests {
             space_id: None,
             created_at: now,
             updated_at: now,
+            kind: Default::default(),
+            members: Vec::new(),
+            worktree_copy: Vec::new(),
+            instructions_offer_dismissed: false,
         };
         store.project_insert(&project).unwrap();
         let mut edited = store.project_get(project.id).unwrap().unwrap();
@@ -2394,6 +2468,10 @@ mod tests {
             space_id: None,
             created_at: now,
             updated_at: now,
+            kind: Default::default(),
+            members: Vec::new(),
+            worktree_copy: Vec::new(),
+            instructions_offer_dismissed: false,
         };
         s.project_insert(&p).unwrap();
         let t = Thread {
@@ -2416,6 +2494,7 @@ mod tests {
             coordinator_project_id: None,
             subagent: None,
             delegation: None,
+            members: Vec::new(),
         };
         s.thread_upsert(&t).unwrap();
         let e = s.event_append(t.id, None, EventPayload::ThreadCreated { thread: t.clone() }).unwrap();
@@ -2490,6 +2569,10 @@ mod tests {
             space_id: None,
             created_at: now,
             updated_at: now,
+            kind: Default::default(),
+            members: Vec::new(),
+            worktree_copy: Vec::new(),
+            instructions_offer_dismissed: false,
         };
         store.project_insert(&project).unwrap();
         let thread = Thread {
@@ -2512,6 +2595,7 @@ mod tests {
             coordinator_project_id: None,
             subagent: None,
             delegation: None,
+            members: Vec::new(),
         };
         store.thread_upsert(&thread).unwrap();
         let turn = Uuid::now_v7();
@@ -3225,6 +3309,10 @@ mod orchestration_tests {
             space_id: None,
             created_at: now,
             updated_at: now,
+            kind: Default::default(),
+            members: Vec::new(),
+            worktree_copy: Vec::new(),
+            instructions_offer_dismissed: false,
         };
         store.project_insert(&project).unwrap();
         project
@@ -3252,6 +3340,7 @@ mod orchestration_tests {
             coordinator_project_id: None,
             subagent: None,
             delegation,
+            members: Vec::new(),
         }
     }
 
@@ -3702,6 +3791,10 @@ mod coordinator_upgrade_tests {
             space_id: None,
             created_at: now,
             updated_at: now,
+            kind: Default::default(),
+            members: Vec::new(),
+            worktree_copy: Vec::new(),
+            instructions_offer_dismissed: false,
         };
         store.project_insert(&project).unwrap();
         let thread = Thread {
@@ -3724,6 +3817,7 @@ mod coordinator_upgrade_tests {
             coordinator_project_id: Some(project.id),
             subagent: None,
             delegation: None,
+            members: Vec::new(),
         };
         store.thread_upsert(&thread).unwrap();
         (store, thread)

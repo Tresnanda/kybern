@@ -832,6 +832,41 @@ enum ProjectsCmd {
         /// The space for the new project (an id or name). Defaults to the first space.
         #[arg(long)]
         space: Option<String>,
+        /// Add a group of repositories: PATH is the parent folder, each --member a repository inside it.
+        #[arg(long)]
+        group: bool,
+        /// A member repository of the group, relative to PATH ("." for the folder itself). Repeat for each.
+        #[arg(long = "member", requires = "group")]
+        members: Vec<String>,
+    },
+    /// List the git repositories inside a folder, as candidates for a group.
+    Scan {
+        path: PathBuf,
+        /// Also check these folders (relative to PATH or absolute), like "Add folder…".
+        #[arg(long)]
+        include: Vec<String>,
+        /// Folder levels to search (default 2, at most 4).
+        #[arg(long)]
+        depth: Option<u8>,
+    },
+    /// Show a group's repositories, or replace them.
+    Members {
+        /// A project id, name or path.
+        project: String,
+        /// Replace the members with this comma-separated list of paths.
+        #[arg(long, value_delimiter = ',')]
+        set: Option<Vec<String>>,
+        /// Replace the top-level entries copied into new worktrees (comma-separated; "" clears).
+        #[arg(long, value_delimiter = ',')]
+        copy: Option<Vec<String>>,
+    },
+    /// Create the group folder's missing shared AGENTS.md and CLAUDE.md.
+    Instructions {
+        /// A project id, name or path.
+        project: String,
+        /// Hide the offer in the apps instead of creating the files.
+        #[arg(long)]
+        dismiss: bool,
     },
     /// Move a project to another space.
     Move {
@@ -1406,15 +1441,91 @@ pub async fn run() -> Result<()> {
                 let result = client.call::<ProjectsBrowse>(ProjectsBrowseParams { path }).await?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }
-            ProjectsCmd::Add { path, name, space } => {
+            ProjectsCmd::Add { path, name, space, group, members } => {
                 let space_id = match space {
                     Some(key) => Some(spaces::resolve_space(&spaces::list(&client).await?, &key)?),
                     None => None,
                 };
                 let p = client
-                    .call::<ProjectsAdd>(ProjectsAddParams { path: host_path(&client, &path.to_string_lossy()).await?, name, space_id })
+                    .call::<ProjectsAdd>(ProjectsAddParams {
+                        path: host_path(&client, &path.to_string_lossy()).await?,
+                        name,
+                        space_id,
+                        kind: group.then_some(ProjectKind::Group),
+                        members: group.then_some(members),
+                    })
                     .await?;
-                if json { println!("{}", serde_json::to_string_pretty(&p)?) } else { println!("{}  {}  {}", p.id, p.name, p.path) }
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&p)?)
+                } else {
+                    println!("{}  {}  {}{}", p.id, p.name, p.path, render::repo_count(&p))
+                }
+            }
+            ProjectsCmd::Scan { path, include, depth } => {
+                let result = client
+                    .call::<ProjectsScanRepos>(ProjectsScanReposParams {
+                        path: host_path(&client, &path.to_string_lossy()).await?,
+                        include,
+                        depth,
+                    })
+                    .await?;
+                if json { println!("{}", serde_json::to_string_pretty(&result)?) } else { render::scan(&result) }
+            }
+            ProjectsCmd::Members { project, set, copy } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                if set.is_some() || copy.is_some() {
+                    client
+                        .call::<ProjectsUpdate>(ProjectsUpdateParams {
+                            project_id,
+                            name: None,
+                            worktrees_default: None,
+                            task_prefix: None,
+                            brief_in_all_threads: None,
+                            coordinator: None,
+                            space_id: None,
+                            members: set.map(|paths| paths.into_iter().map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect()),
+                            worktree_copy: copy
+                                .map(|names| names.into_iter().map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).collect()),
+                            instructions_offer_dismissed: None,
+                        })
+                        .await?;
+                }
+                let status = client.call::<ProjectsMembersStatus>(ProjectsMembersStatusParams { project_id }).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&status)?)
+                } else {
+                    let project = client.call::<ProjectsList>(ProjectsListParams { refresh_git: Some(false) }).await?.projects;
+                    render::members(&status, project.iter().find(|p| p.id == project_id))
+                }
+            }
+            ProjectsCmd::Instructions { project, dismiss } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                if dismiss {
+                    client
+                        .call::<ProjectsUpdate>(ProjectsUpdateParams {
+                            project_id,
+                            name: None,
+                            worktrees_default: None,
+                            task_prefix: None,
+                            brief_in_all_threads: None,
+                            coordinator: None,
+                            space_id: None,
+                            members: None,
+                            worktree_copy: None,
+                            instructions_offer_dismissed: Some(true),
+                        })
+                        .await?;
+                    println!("offer hidden");
+                } else {
+                    let r = client.call::<ProjectsInstructionsCreate>(ProjectsInstructionsCreateParams { project_id }).await?;
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&r)?)
+                    } else if r.created.is_empty() {
+                        println!("AGENTS.md and CLAUDE.md already exist")
+                    } else {
+                        println!("created {}", r.created.join(", "))
+                    }
+                }
             }
             ProjectsCmd::Move { project, space } => {
                 let project_id = resolve_project(&client, &project, false).await?;
@@ -1430,6 +1541,9 @@ pub async fn run() -> Result<()> {
                         brief_in_all_threads: None,
                         coordinator: None,
                         space_id: Some(space_id),
+                        members: None,
+                        worktree_copy: None,
+                        instructions_offer_dismissed: None,
                     })
                     .await?;
                 if json { println!("{}", serde_json::to_string_pretty(&p)?) } else { println!("{}  moved to {space_name}", p.name) }
@@ -1472,6 +1586,10 @@ pub async fn run() -> Result<()> {
                     base_branch: branch,
                     title: None,
                     message: Some(UserMessage::text(prompt)),
+                    thread_id: None,
+                    message_id: None,
+                    members: None,
+                    base_branches: None,
                 })
                 .await?;
             eprintln!("thread {}", thread.id);
@@ -2147,7 +2265,7 @@ pub async fn run() -> Result<()> {
         }
         Cmd::Branches { project } => {
             let project_id = resolve_project(&client, &project, false).await?;
-            let r = client.call::<GitBranches>(GitBranchesParams { project_id }).await?;
+            let r = client.call::<GitBranches>(GitBranchesParams { project_id, repo: None }).await?;
             for b in r.branches {
                 let upstream = b.upstream.map(|u| format!("  -> {u}")).unwrap_or_default();
                 println!("{} {}{upstream}", if b.is_current { "*" } else { " " }, b.name);
@@ -2537,6 +2655,8 @@ async fn task_command(client: &Client, cmd: TaskCmd, json: bool) -> Result<()> {
                     prompt: Some(prompt),
                     message: None,
                     note_ids: Some(task.note_ids.clone()),
+                    thread_id: None,
+                    message_id: None,
                 })
                 .await?;
             if json {
@@ -2606,7 +2726,7 @@ async fn resolve_project(client: &Client, key: &str, add_if_missing: bool) -> Re
         return Ok(project.id);
     }
     if add_if_missing {
-        let p = client.call::<ProjectsAdd>(ProjectsAddParams { path, name: None, space_id: None }).await?;
+        let p = client.call::<ProjectsAdd>(ProjectsAddParams { path, name: None, space_id: None, kind: None, members: None }).await?;
         eprintln!("added project {} ({})", p.name, p.id);
         return Ok(p.id);
     }

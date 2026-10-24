@@ -1,0 +1,125 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(ProjectsMembersStatusResult)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProjectsMembersStatusResult",
+  "type": "object",
+  "properties": {
+    "members": {
+      "description": "In project order (primary first).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/MemberState"
+      }
+    },
+    "agents_md": {
+      "description": "Which shared instruction files exist in the group folder.",
+      "type": "boolean"
+    },
+    "claude_md": {
+      "type": "boolean"
+    },
+    "copy_candidates": {
+      "description": "Entries the \"Also copy into worktrees\" picker offers, sorted by name.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CopyCandidate"
+      }
+    }
+  },
+  "required": [
+    "members",
+    "agents_md",
+    "claude_md"
+  ],
+  "$defs": {
+    "MemberState": {
+      "description": "Live state of one member, for the Repositories dialog, badge tooltip and mobile.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/MemberStatus"
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detached": {
+          "type": "boolean"
+        },
+        "dirty_files": {
+          "description": "Uncommitted files (`git status --porcelain` lines).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 0
+        },
+        "remote_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "instructions": {
+          "description": "The member's own instruction file relative to the group folder\n(`api/AGENTS.md`, else `api/CLAUDE.md`), when it has one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "name",
+        "status"
+      ]
+    },
+    "MemberStatus": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "ok"
+          ]
+        },
+        {
+          "description": "The folder is gone (deleted or renamed).",
+          "type": "string",
+          "const": "missing"
+        },
+        {
+          "description": "The folder exists but is no longer a git repository.",
+          "type": "string",
+          "const": "not_git"
+        }
+      ]
+    },
+    "CopyCandidate": {
+      "description": "A top-level entry of the group folder that may go in `Project.worktree_copy`.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Entry name (top level only, never a member or `.git`).",
+          "type": "string"
+        },
+        "is_dir": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "is_dir"
+      ]
+    }
+  }
+}

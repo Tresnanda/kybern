@@ -8,7 +8,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Composer } from "../src/features/Composer";
 import { setDraft, useDraft } from "../src/state/draft";
 import { type UserMessage } from "../src/state/protocol";
-import { ensureThread, refresh, rpc, useApp } from "../src/state/runtime";
+import { ensureThread, refresh, rpc, startNewChat, supportsOptimisticCreate, useApp } from "../src/state/runtime";
+import { newThreadId } from "../src/state/ids";
+import { groupCreateFields, supportsWorktree } from "../src/state/groups";
+import { isGroupProject } from "../../../packages/kybern-client/src/groups";
+import { optimisticThread } from "../../../packages/kybern-client/src/newChat";
 import { useLayout } from "../src/state/layout";
 import { Brand } from "../src/ui/Brand";
 import { Button, Icon, IconButton, T, Tap, styles } from "../src/ui/primitives";
@@ -54,6 +58,7 @@ export default function Home() {
   const connected = app.status === "open";
   const project =
     app.projects.find((p) => p.id === draft.projectId) ?? app.projects[0];
+  const workspaceLabel = draft.worktree ? "Worktree" : "This checkout";
   const recent = app.threads
     .filter((t) => t.status !== "archived")
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
@@ -86,21 +91,49 @@ export default function Home() {
   }, [project?.id, app.providers, draft.projectId, draft.provider, draft.permission]);
   async function send(message: UserMessage) {
     if (!project) throw new Error("Add a project before starting a thread.");
-    const thread = await rpc("threads.create", {
+    const provider = { kind: draft.provider, instance: draft.instance };
+    const worktree = draft.worktree && supportsWorktree(project);
+    const params = {
       project_id: project.id,
-      provider: { kind: draft.provider, instance: draft.instance },
+      provider,
       permission_mode: draft.permission,
-      use_worktree: draft.worktree && project.is_git,
+      use_worktree: worktree,
       ...(draft.model ? { model: draft.model } : {}),
       ...(draft.effort ? { effort: draft.effort } : {}),
-      ...(draft.baseBranch ? { base_branch: draft.baseBranch } : {}),
-      message,
-    });
-    void refresh();
-    // Keep the local message visible while the new conversation hydrates.
-    // A hydration failure must not turn an accepted send into a retry.
-    await ensureThread(thread.id).catch(() => {});
-    return { threadId: thread.id };
+      // A group names a base branch per repository instead.
+      ...(draft.baseBranch && !isGroupProject(project) ? { base_branch: draft.baseBranch } : {}),
+      ...groupCreateFields(project, draft, worktree),
+    };
+    if (!supportsOptimisticCreate()) {
+      // An older daemon names the thread itself: wait for it, then open that thread.
+      const thread = await rpc("threads.create", { ...params, message });
+      void refresh();
+      await ensureThread(thread.id).catch(() => {});
+      return { threadId: thread.id };
+    }
+    // Optimistic: the thread id is ours, so the receipt is immediate and the thread opens with the
+    // message in flight while the daemon makes it. A failure shows on the thread with Retry.
+    const threadId = newThreadId();
+    const messageId = newThreadId();
+    startNewChat(
+      {
+        threadId,
+        messageId,
+        message,
+        worktree,
+        thread: optimisticThread({
+          id: threadId,
+          projectId: project.id,
+          provider,
+          model: draft.model || null,
+          effort: draft.effort || null,
+          permissionMode: draft.permission,
+          message,
+        }),
+      },
+      (first, id) => rpc("threads.create", { ...params, message: first, thread_id: threadId, message_id: id }),
+    );
+    return { threadId, messageId };
   }
   return (
     <KeyboardAvoidingView
@@ -307,22 +340,41 @@ export default function Home() {
           ...styles.spread,
         }}
       >
-        <Tap
-          label={project ? `Change project, ${project.name}` : "Add a project"}
-          onPress={() =>
-            router.push(connected ? "/project-picker" : "/connect")
-          }
-          style={[styles.line, { gap: 7 }]}
-        >
-          <Icon name="folder" size={15} color={colors.secondary} />
-          <T variant="caption" tone="secondary">
-            {project?.name ??
-              (connected ? "Choose a project" : "No computer connected")}
-          </T>
-          {project && (
-            <Icon name="chevron.down" size={9} color={colors.muted} />
+        <View style={[styles.line, { gap: 16, flexShrink: 1 }]}>
+          <Tap
+            label={project ? `Change project, ${project.name}` : "Add a project"}
+            onPress={() =>
+              router.push(connected ? "/project-picker" : "/connect")
+            }
+            style={[styles.line, { gap: 7, flexShrink: 1 }]}
+          >
+            <Icon name="folder" size={15} color={colors.secondary} />
+            <T variant="caption" tone="secondary" numberOfLines={1}>
+              {project?.name ??
+                (connected ? "Choose a project" : "No computer connected")}
+            </T>
+            {project && (
+              <Icon name="chevron.down" size={9} color={colors.muted} />
+            )}
+          </Tap>
+          {connected && supportsWorktree(project) && (
+            <Tap
+              label={`Thread setup, ${workspaceLabel}`}
+              onPress={() => router.push("/configure")}
+              style={[styles.line, { gap: 7 }]}
+            >
+              <Icon
+                name="arrow.triangle.branch"
+                size={15}
+                color={colors.secondary}
+              />
+              <T variant="caption" tone="secondary" numberOfLines={1}>
+                {workspaceLabel}
+              </T>
+              <Icon name="chevron.down" size={9} color={colors.muted} />
+            </Tap>
           )}
-        </Tap>
+        </View>
         {(active > 0 || app.approvals.length > 0) && (
           <Tap
             label="View agent activity"

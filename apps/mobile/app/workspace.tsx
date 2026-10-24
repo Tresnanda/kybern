@@ -36,12 +36,15 @@ export default function Workspace() {
     terminalId,
     login,
     tab: initialTab,
+    reveal,
   } = useLocalSearchParams<{
     threadId?: string;
     projectId?: string;
     terminalId?: string;
     login?: string;
     tab?: string;
+    /** A folder Files opens expanded (the outside-change row's repository). */
+    reveal?: string;
   }>();
   const app = useApp();
   const snapshot = useThread(threadId ?? "");
@@ -119,7 +122,7 @@ export default function Workspace() {
           <Terminal key={`${app.activeId}:${threadId}:${terminalId ?? ""}`} threadId={threadId} initialTerminalId={terminalId} connectorLogin={login === "1"} />
         </View>
       ) : tab === "Files" && project ? (
-        <Files key={project.id} project={project} threadId={threadId} />
+        <Files key={project.id} project={project} threadId={threadId} reveal={reveal} />
       ) : (
         <Page>
           <ErrorBanner error={error} />

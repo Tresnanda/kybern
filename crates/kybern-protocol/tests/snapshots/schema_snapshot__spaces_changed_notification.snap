@@ -45,6 +45,11 @@ expression: schema_for!(SpacesChangedNotification)
           "format": "uint32",
           "minimum": 0
         },
+        "is_default": {
+          "description": "Exactly one space is the default. It can be renamed and restyled but not deleted.",
+          "type": "boolean",
+          "default": false
+        },
         "created_at": {
           "type": "string",
           "format": "date-time"

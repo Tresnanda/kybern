@@ -204,6 +204,19 @@ impl AppTools {
     async fn workspace_diff(&self, thread_id: ThreadId, args: WorkspaceDiffArgs) -> Result<Value> {
         let thread = self.thread(thread_id)?;
         ensure_relative_path(args.path.as_deref())?;
+        if crate::orchestrator::group_git::is_group(&thread) {
+            let caps = crate::orchestrator::group_git::DiffCaps { files: MAX_FILE_ENTRIES, patch_bytes: MAX_DIFF_PATCH_BYTES };
+            let diff = crate::orchestrator::group_git::group_diff(
+                &self.store,
+                &thread,
+                args.turn_id,
+                args.include_patch,
+                args.path.as_deref(),
+                caps,
+            )
+            .await?;
+            return serde_json::to_value(diff).map_err(Into::into);
+        }
         let repo = Repo::new(&thread.cwd);
         let checkpoint = match args.turn_id {
             Some(turn_id) => {
@@ -667,6 +680,10 @@ mod tests {
                 space_id: None,
                 created_at: now,
                 updated_at: now,
+                kind: Default::default(),
+                members: Vec::new(),
+                worktree_copy: Vec::new(),
+                instructions_offer_dismissed: false,
             };
             store.project_insert(&project).unwrap();
             let make_thread = |id| Thread {
@@ -689,6 +706,7 @@ mod tests {
                 coordinator_project_id: None,
                 subagent: None,
                 delegation: None,
+                members: Vec::new(),
             };
             let thread = make_thread(Uuid::now_v7());
             let other_thread = make_thread(Uuid::now_v7());
@@ -765,6 +783,8 @@ mod tests {
                 provider_turn_id: None,
                 provider_turn_end: None,
                 created_at: Utc::now(),
+                repos: Vec::new(),
+                incomplete: false,
             })
             .unwrap();
         let error = fixture.tools.execute(fixture.thread.id, "kybern_workspace_diff", json!({ "turn_id": turn_id })).await.unwrap_err();
