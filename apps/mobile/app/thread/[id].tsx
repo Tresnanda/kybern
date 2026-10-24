@@ -6,18 +6,20 @@ import { ChatFileContext } from "../../src/state/chatFileContext";
 import { randomUUID } from "expo-crypto";
 import {
   LegendList,
-  useViewability,
   type LegendListRef,
 } from "@legendapp/list/react-native";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, View, useWindowDimensions } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import Animated, { FadeIn, FadeOut, useSharedValue } from "react-native-reanimated";
 import { ApprovalPanel, AsyncQuestions } from "../../src/features/Approvals";
 import { Composer } from "../../src/features/Composer";
 import { InspectorColumn } from "../../src/features/Inspector";
-import { TranscriptBlock } from "../../src/features/Transcript";
+import { TranscriptRow } from "../../src/features/Transcript";
+import { ThreadPanels } from "../../src/features/ThreadPanels";
+import { SubagentDivider, SubagentEndRow } from "../../src/features/SubagentDividers";
+import { onEditPending, sendWithPending, settlePending, usePendingSends, withPending } from "../../src/state/pendingSends";
 import { WorkspaceMenu } from "../../src/features/WorkspaceMenu";
 import { AgentsCapsule, openAgents, useAgents } from "../../src/features/AgentsSheet";
 import { agentsCapsuleLabel } from "../../src/state/agents";
@@ -43,7 +45,6 @@ import { partToken } from "../../../../packages/kybern-client/src/composerTokens
 import { newThreadId } from "../../src/state/ids";
 import {
   createTurnRows,
-  workDuration,
   type TurnRow,
 } from "../../src/state/turnRows";
 import type { ContentPart, Thread, UserMessage } from "../../src/state/protocol";
@@ -57,7 +58,6 @@ import {
   IconButton,
   T,
   Tap,
-  styles,
 } from "../../src/ui/primitives";
 import { CONTENT_MAX_WIDTH, gutter, radius, space, useTheme } from "../../src/ui/theme";
 import { Working } from "../../src/ui/Working";
@@ -69,78 +69,7 @@ const anchorOptions = { data: true, size: true };
 const viewabilityConfig = { id: "transcript", itemVisiblePercentThreshold: 1 };
 const rowKey = (row: TurnRow) => row.key;
 const rowType = (row: TurnRow) =>
-  row.kind === "block" ? row.block.kind : "work";
-const TranscriptRow = memo(function TranscriptRow({
-  row,
-  threadId,
-  focused,
-  expansions,
-  onToggleWork,
-}: {
-  row: TurnRow;
-  threadId: string;
-  focused: boolean;
-  expansions: Map<string, boolean>;
-  onToggleWork: (turnId: string) => void;
-}) {
-  const { colors } = useTheme();
-  const [visible, setVisible] = useState(false);
-  useViewability(
-    useCallback((token) => setVisible(token.isViewable), []),
-    "transcript",
-  );
-  if (row.kind === "work") {
-    return (
-      <View
-        style={{
-          marginBottom: 12,
-        }}
-      >
-        <Tap
-          label={`${row.expanded ? "Hide" : "Show"} work. ${row.label ?? `Worked for ${workDuration(row.durationMs)}`}`}
-          expanded={row.expanded}
-          onPress={() => onToggleWork(row.turnId)}
-          style={[styles.line, { gap: 8, paddingVertical: 8 }]}
-        >
-          <Icon name="hammer" size={14} color={colors.secondary} />
-          <T variant="footnote" tone="secondary" style={{ flex: 1 }}>
-            {row.label ?? `Worked for ${workDuration(row.durationMs)}`}
-          </T>
-          <Icon
-            name={row.expanded ? "chevron.up" : "chevron.down"}
-            size={11}
-            color={colors.muted}
-          />
-        </Tap>
-      </View>
-    );
-  }
-  return (
-    <View
-      style={
-        row.nested
-          ? {
-              marginStart: 7,
-              paddingStart: 14,
-              borderStartWidth: 1,
-              borderColor: colors.line,
-              paddingBottom: 8,
-            }
-          : undefined
-      }
-    >
-      <TranscriptBlock
-        block={row.block}
-        threadId={threadId}
-        active={focused && visible}
-        expansions={expansions}
-        grouped
-        thinking={row.thinking}
-      />
-    </View>
-  );
-});
-
+  row.kind === "block" ? row.block.kind : row.kind;
 const messageText = (message: UserMessage) =>
   message.parts.filter((part) => part.type === "text" || isInlinePart(part)).map((part) => (part.type === "text" ? part.text : partToken(part) ?? "")).join("");
 /** A message's images and files, which go back to the composer's tray rather than its text. */
@@ -317,10 +246,14 @@ function ThreadScreenBody() {
   const [expandedTurns, setExpandedTurns] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
-  const projectRows = useMemo(() => createTurnRows(), [id]);
+  const projectRows = useMemo(() => createTurnRows(id), [id]);
+  // Failed follow-ups stay as bubbles with Retry and Edit until the real message arrives.
+  const pendingSent = usePendingSends(id);
+  const transcriptBlocks = useMemo(() => withPending(snapshot.blocks, pendingSent), [snapshot.blocks, pendingSent]);
+  useEffect(() => settlePending(id, snapshot.blocks), [id, snapshot.blocks]);
   const baseRows = useMemo(
-    () => projectRows(snapshot.blocks, expandedTurns),
-    [projectRows, snapshot.blocks, expandedTurns],
+    () => projectRows(transcriptBlocks, expandedTurns),
+    [projectRows, transcriptBlocks, expandedTurns],
   );
   const projectOutgoing = useMemo(() => createOutgoingProjection(), [id]);
   const outgoingRows = useMemo(
@@ -474,12 +407,21 @@ function ThreadScreenBody() {
         await rpc("queue.add", { thread_id: id, id: randomUUID(), message });
         await refresh();
       } else {
-        const receipt = await rpc("threads.send", { thread_id: id, message });
-        return { threadId: id, messageId: receipt.message_id };
+        // A failed send stays in the transcript as a bubble with Retry and Edit.
+        const receipt = await sendWithPending(id, message);
+        return receipt ? { threadId: id, messageId: receipt.message_id } : undefined;
       }
       jump();
     },
     [id, thread?.status, jump, subagent],
+  );
+  useEffect(
+    () =>
+      onEditPending(id, (message) => {
+        setEditPrompt(messageText(message));
+        setEditAttachments(messageAttachments(message));
+      }),
+    [id],
   );
   const earlier = () => {
     setFollowing(false);
@@ -598,6 +540,8 @@ function ThreadScreenBody() {
                       </T>
                     ) : null}
                 </View>
+              ) : subagent && thread ? (
+                <SubagentDivider thread={thread} />
               ) : null
             }
             ListEmptyComponent={
@@ -608,6 +552,7 @@ function ThreadScreenBody() {
             }
             ListFooterComponent={
               <View style={{ gap: 16 }}>
+                {subagent && thread && <SubagentEndRow thread={thread} />}
                 {chat?.state === "failed" && (
                   <NewChatFailed chat={chat} onEdit={() => { setEditPrompt(messageText(chat.message)); setEditAttachments(messageAttachments(chat.message)); }} />
                 )}
@@ -629,6 +574,7 @@ function ThreadScreenBody() {
                   .map((a) => (
                     <ApprovalPanel key={a.id} approval={a} />
                   ))}
+                <ThreadPanels thread={thread} />
                 {snapshot.pendingQuestions?.map((q) => (
                   <AsyncQuestions key={q.id} request={q} threadId={id} />
                 ))}

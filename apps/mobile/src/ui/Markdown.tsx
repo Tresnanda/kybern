@@ -6,7 +6,8 @@ import { ChatFileContext } from "../state/chatFileContext";
 import { Alert } from "./Alert";
 import { Image, Linking, ScrollView, Text, View } from "react-native";
 import { Icon, IconButton, T, styles } from "./primitives";
-import { MONO, useTheme } from "./theme";
+import { MONO, radius, useTheme } from "./theme";
+import { MermaidBlock } from "./Mermaid";
 import { taskLinkId } from "../state/tasksModel";
 import { TaskRef } from "./TaskRef";
 import { NoteRef } from "./NoteRef";
@@ -74,11 +75,13 @@ function Inline({ text, checklist }: { text: string; checklist?: boolean }) {
                 key={i}
                 style={{
                   fontFamily: MONO,
-                  fontSize: 14,
-                  backgroundColor: colors.raised,
+                  // 0.88 em of the 17 pt reading text, on the code fill; nested text cannot pad, so thin spaces do.
+                  fontSize: 15,
+                  backgroundColor: colors.code,
+                  color: colors.ink,
                 }}
               >
-                {part.slice(1, -1)}
+                {`\u2009${part.slice(1, -1)}\u2009`}
               </Text>
             );
           const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(part);
@@ -140,9 +143,9 @@ export const Code = memo(function Code({
     <View
       style={{
         backgroundColor: colors.code,
-        borderRadius: 16,
+        borderRadius: radius.md,
+        borderCurve: "continuous",
         overflow: "hidden",
-        marginVertical: 8,
       }}
     >
       <View style={[styles.spread, { paddingStart: 15, paddingEnd: 4 }]}>
@@ -207,10 +210,16 @@ export const Markdown = memo(function Markdown({
         {sections.filter(Boolean).map((section, s) => {
           if (section.startsWith("```")) {
             const first = section.indexOf("\n");
+            const language = section.slice(3, first < 0 ? undefined : first).trim();
+            // A finished mermaid fence is drawn; one still streaming stays code.
+            if (language === "mermaid" && first >= 0 && section.trimEnd().endsWith("```")) {
+              const source = section.slice(first + 1).replace(/```\s*$/, "").trim();
+              return <MermaidBlock key={`mermaid:${s}`} source={source} code={<Code text={source} language="mermaid" />} />;
+            }
             return (
               <Code
                 key={`code:${s}`}
-                language={section.slice(3, first < 0 ? undefined : first).trim()}
+                language={language}
                 text={
                   first < 0
                     ? ""

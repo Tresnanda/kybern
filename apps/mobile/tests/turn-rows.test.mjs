@@ -73,7 +73,7 @@ test("a completed turn shows its final formatted answer and discloses preceding 
   );
   assert.equal(rendered[1].text, answer.text);
   assert.equal(rendered[1].thinking, "");
-  assert.equal(rows.find((row) => row.kind === "work").durationMs, 83000);
+  assert.equal(rows.find((row) => row.kind === "work").label, "1 step · 1m 23s");
   const expanded = project(blocks, new Set(["turn-1"]));
   assert(content(expanded).some((block) => block === narration));
   assert(content(expanded).some((block) => block === tool));
@@ -130,14 +130,17 @@ test("approvals, errors and continuing background work remain reachable when col
     level: "error",
     text: "Connection lost",
   };
-  const rendered = content(
-    createTurnRows()(
-      [user, pending, activeTool, task, error, answer, end],
-      new Set(),
-    ),
+  const rows = createTurnRows("thread")(
+    [user, pending, activeTool, task, error, answer, end],
+    new Set(),
   );
-  for (const block of [pending, activeTool, task, error])
+  const rendered = content(rows);
+  for (const block of [pending, activeTool, error])
     assert(rendered.includes(block));
+  // A process still running after its turn ended is reachable from the one processes row.
+  const processes = rows.find((row) => row.kind === "processes");
+  assert.deepEqual(processes.tasks, [task.task]);
+  assert.equal(processes.threadId, "thread");
 });
 
 test("finished background processes fold with work while delegated agents stay visible", () => {
@@ -207,6 +210,7 @@ test("large expanded work stays as individual virtual rows and folding omits its
   assert.equal(new Set(expanded.map((row) => row.key)).size, expanded.length);
   assert.equal(workDuration(83000), "1m 23s");
   assert.equal(workDuration(0), "1s");
+  assert.equal(workDuration(3_723_000), "1h 2m");
 });
 
 
@@ -218,7 +222,7 @@ test("live completed steps fold between narration without hiding failures or app
   const history = [user, narration, ...tools, failed, active];
   const rows = project(history, new Set());
   const disclosure = rows.find((row) => row.kind === "work");
-  assert.equal(disclosure.label, "1000 completed steps");
+  assert.equal(disclosure.label, "Read 1000 files");
   assert.deepEqual(content(rows), [user, narration, failed, active]);
   const opened = project(history, new Set([disclosure.turnId]));
   assert.equal(content(opened).length, history.length);
@@ -233,7 +237,8 @@ test("live agent launches and task-linked tools stay outside automatic groups", 
   const task = { ...base, kind: "runtime_task", id: "task", seq: 5,
     task: { id: "task", kind: "agent", status: "running", tool_call_id: "linked" } };
   const history = [user, tool, launch, linked, task];
-  assert.deepEqual(content(createTurnRows()(history, new Set())), history);
+  // The agent task stands for the call that launched it.
+  assert.deepEqual(content(createTurnRows()(history, new Set())), [user, tool, launch, task]);
 });
 
 test("only the tail segment of a running turn is still thinking", () => {
@@ -271,4 +276,74 @@ test("an outside-change warning stays visible after a collapsed group worktree t
     rendered.map((block) => block.kind),
     ["user", "assistant", "turn_end", "outside_repo_changed"],
   );
+});
+
+
+test("a running turn folds finished processes into its steps and collapses running ones into one row", () => {
+  const command = (id, seq, status, kind = "process") => ({
+    ...base, kind: "runtime_task", id, seq,
+    task: { id, kind, status, title: `npm run ${id}`, thread_id: "thread" },
+  });
+  const finished = [command("a", 3, "completed"), command("b", 4, "failed"), command("c", 5, "completed")];
+  const running = [command("d", 6, "running"), command("e", 7, "running"), command("f", 8, "waiting", "monitor")];
+  const agent = command("g", 9, "running", "agent");
+  const history = [user, narration, ...finished, ...running, agent];
+  const rows = createTurnRows("thread")(history, new Set());
+  // One step group for the finished ones, the agent on its own, and a single row for everything still running.
+  assert.deepEqual(rows.map((row) => row.kind), ["block", "block", "work", "block", "processes"]);
+  assert.deepEqual(content(rows), [user, narration, agent]);
+  assert.deepEqual(rows.at(-1).tasks.map((task) => task.id), ["d", "e", "f"]);
+  const group = rows.find((row) => row.kind === "work");
+  const opened = createTurnRows("thread")(history, new Set([group.turnId]));
+  for (const block of finished) assert(content(opened).includes(block));
+  assert(content(opened).filter((block) => finished.includes(block)).every((block) =>
+    opened.find((row) => row.kind === "block" && row.block === block).nested));
+});
+
+test("a finished turn that edited files gets the edited-files row; read-only turns do not", () => {
+  const edit = { ...tool, id: "edit", call: { id: "edit", name: "Edit", input: { file_path: "src/a.ts", old_string: "a", new_string: "b" } } };
+  const rows = createTurnRows("thread")([user, edit, answer, end], new Set());
+  const files = rows.find((row) => row.kind === "files");
+  assert.equal(files.turnId, "turn-1");
+  assert.equal(rows.indexOf(files), rows.length - 2);
+  assert(!createTurnRows("thread")(blocks, new Set()).some((row) => row.kind === "files"));
+});
+
+test("a signed-out command gets its sign-in chip on the row", () => {
+  const gh = { ...tool, id: "gh", call: { id: "gh", name: "Bash", input: { command: "gh pr list" } }, output: "To get started with GitHub CLI, please run:  gh auth login" };
+  const rows = createTurnRows("thread")([user, narration, gh], new Set());
+  const row = rows.find((item) => item.kind === "block" && item.block === gh);
+  assert.equal(row.signIn.service, "GitHub");
+});
+
+
+test("two or more launched agents fold into one group row where the first started", () => {
+  const agent = (id, seq, status) => ({ ...base, kind: "runtime_task", id, seq, task: { id, kind: "agent", status, title: id, thread_id: "thread" } });
+  const delegate = { ...tool, id: "d", seq: 6, call: { id: "d", name: "mcp__kybern__kybern_agent_delegate", input: { task: "Fix it", title: "Fixer" } } };
+  const send = { ...tool, id: "s", seq: 7, call: { id: "s", name: "kybern_thread_send", input: { thread_id: "t2", body: "Hi" } } };
+  const launches = [agent("a", 3, "running"), agent("b", 4, "completed"), delegate];
+  const history = [user, narration, ...launches, send];
+  const rows = createTurnRows("thread")(history, new Set());
+  const group = rows.find((row) => row.kind === "agents");
+  assert.deepEqual(group.launches, launches);
+  assert.equal(rows.filter((row) => row.kind === "agents").length, 1);
+  // "Sent to" rows stay visible; launches only appear inside the open group.
+  assert.deepEqual(content(rows), [user, narration, send]);
+  const opened = createTurnRows("thread")(history, new Set([group.turnId]));
+  assert.deepEqual(content(opened).filter((block) => launches.includes(block)), launches);
+  const settled = createTurnRows("thread")([...history, answer, end], new Set());
+  assert.equal(settled.filter((row) => row.kind === "agents").length, 1);
+  assert(content(settled).includes(send));
+});
+
+
+test("settled reasoning joins the run and empty segments never become rows", () => {
+  const thought = { ...narration, id: "thought", messageId: "t1", text: "", thinking: "Check the file.", complete: true };
+  const blank = { ...narration, id: "blank", messageId: "t2", text: "", thinking: "", complete: true };
+  const second = { ...tool, id: "tool-2", seq: 6, call: { ...tool.call, id: "tool-2" } };
+  const rows = createTurnRows("thread")([user, narration, tool, thought, blank, second], new Set());
+  assert.deepEqual(rows.map((row) => row.kind), ["block", "block", "work"]);
+  const opened = createTurnRows("thread")([user, narration, tool, thought, blank, second], new Set([rows[2].turnId]));
+  assert(!content(opened).includes(blank));
+  assert(content(opened).includes(thought));
 });

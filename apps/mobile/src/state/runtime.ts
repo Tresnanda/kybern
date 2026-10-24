@@ -16,6 +16,7 @@ import { applyIndexEvent } from "./indexProjection";
 import { ThreadCache } from "./threadCache";
 import { attachNotes, loadNotes, resetNotes } from "./notes";
 import { attachTasks, loadTasks, resetTasks } from "./tasks";
+import { attachRequestProgress } from "./requestProgress";
 import {
   KybernClient,
   PROJECTS_CHANGED_NOTIFICATION,
@@ -480,6 +481,7 @@ export function connect(id: string | null) {
   client = next;
   attachNotes(next, () => generation === thisGeneration);
   attachTasks(next, () => generation === thisGeneration);
+  attachRequestProgress(next, () => generation === thisGeneration);
   attachHooks.forEach((attach) => attach(next, () => generation === thisGeneration && client === next));
   // Projects added or removed elsewhere (desktop, CLI) arrive as the whole list.
   next.onNotification(PROJECTS_CHANGED_NOTIFICATION, (params) => {
@@ -670,6 +672,8 @@ export async function loadThread(id: string) {
   const requested = Math.max(RECENT_ENTRIES, previous?.blocks.length ?? 0);
   const request = rpc("threads.get", {
     thread_id: id,
+    // Settled tool output streams load when a step is opened (`threads.tool_output`).
+    defer_tool_stream: true,
     ...(requested <= 500 ? { transcript_limit: requested } : {}),
   })
     .then((result) => {
@@ -722,6 +726,7 @@ export async function loadEarlier(id: string) {
   publishThread(id, { ...base, loadingEarlier: true });
   record.promise = rpc("threads.get", {
     thread_id: id,
+    defer_tool_stream: true,
     transcript_limit: EARLIER_HISTORY_ENTRIES,
     before_seq: base.nextBeforeSeq,
     through_seq: base.lastSeq,

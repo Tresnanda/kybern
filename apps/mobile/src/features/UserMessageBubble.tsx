@@ -1,7 +1,8 @@
+import * as Clipboard from "expo-clipboard";
+import { router } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Image,
-  Modal,
   ScrollView,
   Text,
   View,
@@ -19,10 +20,39 @@ import {
 } from "../state/sendTransition";
 import type { Block } from "../state/transcript";
 import { useTheme } from "../ui/theme";
-import { T, Tap, IconButton } from "../ui/primitives";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Button, T, Tap } from "../ui/primitives";
+import { ContextMenu, type MenuItem } from "../ui/ActionMenu";
+import { showToast } from "../ui/Toast";
+import { radius, space } from "../ui/theme";
 import { groupInlineParts, inlineTextRuns } from "../state/inlineMessage";
+import { createNote } from "../state/notes";
+import { errorText, getState } from "../state/runtime";
+import { Lightbox } from "./Lightbox";
+import { LongPressArea } from "./LongPressArea";
+import { editPending, retryPending, usePendingSend } from "../state/pendingSends";
 import { MessagePart, imageSource } from "./MessagePart";
+
+/** The message as text: its words and mentions, in order. */
+const messageText = (parts: Extract<Block, { kind: "user" }>["message"]["parts"]) =>
+  inlineTextRuns(parts.filter((part) => part.type !== "image" && part.type !== "attachment")).map((run) => run.text).join("");
+
+/** Long-press on your own message: Copy and Save to note. */
+function bubbleMenu(text: string, threadId: string): MenuItem[] {
+  if (!text.trim()) return [];
+  return [
+    { title: "Copy", icon: "doc.on.doc", onPress: () => void Clipboard.setStringAsync(text).then(() => showToast("Copied")) },
+    {
+      title: "Save to note",
+      icon: "doc.badge.plus",
+      onPress: () => {
+        const projectId = getState().threads.find((thread) => thread.id === threadId)?.project_id ?? null;
+        void createNote({ projectId, body: text })
+          .then((note) => showToast("Saved to a new note", { title: "Open", onPress: () => router.push({ pathname: "/note", params: { id: note.id } }) }))
+          .catch((e) => showToast(errorText(e) || "Unable to save the note. Try again."));
+      },
+    },
+  ];
+}
 
 export function UserMessageBubble({
   block,
@@ -33,10 +63,10 @@ export function UserMessageBubble({
 }) {
   const { colors } = useTheme();
   const { height, width, fontScale } = useWindowDimensions();
-  const insets = useSafeAreaInsets();
   const [viewing, setViewing] = useState<number | null>(null);
   const textSurface = useRef<View>(null);
   const { flight, outgoing, land } = useSendTransition();
+  const failed = usePendingSend(threadId, block.id);
   const pending =
     outgoing?.key === block.id && outgoing.threadId === threadId
       ? outgoing
@@ -109,9 +139,7 @@ export function UserMessageBubble({
           alignSelf: "flex-end",
           maxWidth: "94%",
           width: images.length > 1 ? "100%" : undefined,
-          marginTop: 22,
-          marginBottom: 24,
-          gap: 8,
+          gap: space.sm,
           opacity: matching ? 0 : 1,
         }}
       >
@@ -141,7 +169,7 @@ export function UserMessageBubble({
                   style={{
                     width: tileSize,
                     height: tileSize,
-                    borderRadius: 24,
+                    borderRadius: radius.lg,
                     borderCurve: "continuous",
                     overflow: "hidden",
                     backgroundColor: colors.raised,
@@ -159,16 +187,20 @@ export function UserMessageBubble({
           </ScrollView>
         )}
         {body.length > 0 && (
+          <ContextMenu items={bubbleMenu(messageText(block.message.parts), threadId)} title="Your message" surface="transparent" radius={radius.lg} style={{ alignSelf: "flex-end", maxWidth: "100%" }}>
+            {({ onLongPress }) => (
+          <LongPressArea onLongPress={onLongPress} hint="Long-press for Copy and Save to note">
           <View
             ref={textSurface}
             collapsable={false}
             style={{
               alignSelf: "flex-end",
               maxWidth: "100%",
-              borderRadius: 22,
-              borderBottomEndRadius: 7,
-              paddingHorizontal: 18,
-              paddingVertical: 12,
+              borderRadius: radius.lg,
+              borderBottomEndRadius: radius.xs,
+              borderCurve: "continuous",
+              paddingHorizontal: 14,
+              paddingVertical: 10,
               backgroundColor: colors.raised,
               gap: 8,
             }}
@@ -210,50 +242,47 @@ export function UserMessageBubble({
               </View>
             ))}
           </View>
+          </LongPressArea>
+            )}
+          </ContextMenu>
+        )}
+        {failed?.state === "failed" && (
+          <View style={{ alignItems: "flex-end", gap: space.xs }} accessibilityLiveRegion="polite">
+            <T variant="footnote" tone="negative" style={{ textAlign: "right" }}>
+              {`Not sent. ${failed.error ?? "Check the connection and try again."}`}
+            </T>
+            <View style={{ flexDirection: "row", gap: space.sm }}>
+              <Button size="medium" role="plain" onPress={() => editPending(failed)}>
+                Edit
+              </Button>
+              <Button size="medium" onPress={() => void retryPending(failed)}>
+                Try again
+              </Button>
+            </View>
+          </View>
+        )}
+        {failed?.state === "sending" && (
+          <T variant="caption" tone="muted" accessibilityLiveRegion="polite" style={{ alignSelf: "flex-end", marginTop: -space.xs }}>
+            Sending…
+          </T>
         )}
         {pending && !pending.receipt && !matching && (
           <T
-            variant="footnote"
+            variant="caption"
             tone="muted"
             accessibilityLiveRegion="polite"
-            style={{ position: "absolute", right: 0, bottom: -23 }}
+            style={{ alignSelf: "flex-end", marginTop: -space.xs }}
           >
             Sending…
           </T>
         )}
       </Animated.View>
       {viewing !== null && (
-        <Modal
-          visible
-          transparent={false}
-          animationType="fade"
-          onRequestClose={() => setViewing(null)}
-        >
-          <View
-            style={{ flex: 1, backgroundColor: colors.background }}
-            accessibilityViewIsModal
-          >
-            <Image
-              source={imageSource(
-                block.message.parts[viewing]!,
-                localUris.current.get(viewing),
-              )}
-              accessibilityLabel="Full attached image"
-              resizeMode="contain"
-              fadeDuration={0}
-              style={{ flex: 1, width: "100%" }}
-            />
-            <View
-              style={{ position: "absolute", top: insets.top + 8, right: 16 }}
-            >
-              <IconButton
-                name="xmark"
-                label="Close image"
-                onPress={() => setViewing(null)}
-              />
-            </View>
-          </View>
-        </Modal>
+        <Lightbox
+          source={imageSource(block.message.parts[viewing]!, localUris.current.get(viewing))}
+          label="Attached image"
+          onClose={() => setViewing(null)}
+        />
       )}
     </>
   );

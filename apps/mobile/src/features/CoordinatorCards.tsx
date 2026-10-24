@@ -5,7 +5,7 @@
 // `packages/kybern-client/src/coordinatorCards.ts`, shared with desktop.
 import * as Haptics from "expo-haptics";
 import { useState } from "react";
-import { Text, TextInput, View } from "react-native";
+import { StyleSheet, Text, TextInput, View } from "react-native";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import {
   COORDINATOR_CARD_COPY,
@@ -20,7 +20,7 @@ import { settingValueLabel } from "../../../../packages/kybern-client/src/coordi
 import type { ApprovalDecision, ApprovalRequest, BriefProposalInput, LeadGitCardInput, SettingsProposalInput } from "../state/protocol";
 import { errorText, loadThread, refresh, rpc, useApp } from "../state/runtime";
 import { Button, ErrorBanner, Icon, T, Tap, styles, type IconName } from "../ui/primitives";
-import { MONO, radius, type as typography, useTheme } from "../ui/theme";
+import { MONO, radius, space, type as typography, useTheme } from "../ui/theme";
 
 /** Text with branch names set as code. */
 function CardText({ parts, tone = "secondary", variant = "footnote" }: { parts: readonly CardTextPart[]; tone?: "secondary" | "ink"; variant?: "footnote" | "label" }) {
@@ -29,7 +29,7 @@ function CardText({ parts, tone = "secondary", variant = "footnote" }: { parts: 
     <T variant={variant} tone={tone}>
       {parts.map((part, index) =>
         part.code ? (
-          <Text key={index} style={{ fontFamily: MONO, color: colors.ink, backgroundColor: colors.raised }}>
+          <Text key={index} style={{ fontFamily: MONO, color: colors.ink, backgroundColor: colors.code }}>
             {` ${part.text} `}
           </Text>
         ) : (
@@ -66,10 +66,10 @@ function CardShell({ icon, title, detail, children }: { icon: IconName; title: R
     <Animated.View
       entering={FadeIn.duration(180)}
       exiting={FadeOut.duration(140)}
-      style={{ padding: 16, borderRadius: 22, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, gap: 12 }}
+      style={{ padding: space.lg, borderRadius: radius.lg, borderCurve: "continuous", backgroundColor: colors.card, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, gap: space.md }}
     >
       <View style={[styles.line, { alignItems: "flex-start", gap: 12 }]}>
-        <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: colors.raised, alignItems: "center", justifyContent: "center" }}>
+        <View style={{ width: 32, height: 32, borderRadius: radius.sm, backgroundColor: colors.raised, alignItems: "center", justifyContent: "center" }}>
           <Icon name={icon} size={17} color={colors.secondary} />
         </View>
         <View style={{ flex: 1, gap: 4 }}>
@@ -147,7 +147,7 @@ export function SettingsProposalCard({ approval, input }: { approval: ApprovalRe
         </>
       }
     >
-      <View style={{ borderRadius: 14, borderWidth: 1, borderColor: colors.line, overflow: "hidden" }}>
+      <View style={{ borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, overflow: "hidden" }}>
         {input.changes.map((change, index) => {
           const on = accepted.has(change.path);
           const oldText = settingValueLabel(change.path, change.old, app.providers);
@@ -207,7 +207,7 @@ export function GitApprovalCard({ approval, input }: { approval: ApprovalRequest
       detail={copy.detail.length ? <CardText parts={copy.detail} /> : undefined}
     >
       {input.op === "open_pr" && (!!input.title || !!input.body) && (
-        <View style={{ padding: 12, borderRadius: 14, backgroundColor: colors.raised, gap: 3 }}>
+        <View style={{ padding: space.md, borderRadius: radius.md, backgroundColor: colors.raised, gap: 3 }}>
           {!!input.title && <T variant="label">{input.title}</T>}
           {!!input.body && <T variant="footnote" tone="secondary" numberOfLines={3}>{input.body}</T>}
         </View>

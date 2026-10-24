@@ -5,7 +5,7 @@ import { Pressable, View } from "react-native";
 import Animated, { useReducedMotion } from "react-native-reanimated";
 import type { FileEntry } from "../../state/protocol";
 import { Icon, T } from "../../ui/primitives";
-import { useTheme } from "../../ui/theme";
+import { radius, useTheme } from "../../ui/theme";
 export type FlatFileTreeItem = {
   item: FileEntry;
   depth: number;
@@ -76,7 +76,7 @@ export function FileTreeRow({
         flexDirection: "row",
         alignItems: "center",
         gap: 10,
-        borderRadius: 12,
+        borderRadius: radius.md,
         backgroundColor: selected
           ? colors.accentSoft
           : pressed
@@ -105,7 +105,7 @@ export function FileTreeRow({
               transitionDuration: reduced ? 0 : 180,
             }}
           >
-            <Icon name="chevron.right" size={11} color={colors.secondary} />
+            <Icon name="chevron.right" size={12} color={colors.secondary} />
           </Animated.View>
         )}
       </View>

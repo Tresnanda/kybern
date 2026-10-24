@@ -3,6 +3,7 @@ import { router } from "expo-router";
 import { httpBase, type ContentPart } from "../state/protocol";
 import { activeEnvironment } from "../state/runtime";
 import { Icon, T, Tap, styles } from "../ui/primitives";
+import { radius } from "../ui/theme";
 import { AgentResultsList, ThreadMessageCard } from "./OrchestrationParts";
 import { SystemRowLine } from "./CoordinatorCards";
 import { threadReferenceLabel } from "../../../../packages/kybern-client/src/threadReferences";
@@ -44,7 +45,7 @@ export function MessagePart({
           width: fillImage ? "100%" : 220,
           maxWidth: "100%",
           height: fillImage ? "100%" : 170,
-          borderRadius: 12,
+          borderRadius: radius.md,
         }}
         resizeMode="contain"
       />
@@ -70,7 +71,7 @@ export function MessagePart({
         <T variant="footnote" numberOfLines={1} style={{ flexShrink: 1 }}>
           {threadReferenceLabel(part)}
         </T>
-        <Icon name="chevron.right" size={10} />
+        <Icon name="chevron.right" size={12} />
       </Tap>
     );
   return (

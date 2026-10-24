@@ -4,7 +4,7 @@
 // and Kybern (not the agent) writes it to the file.
 import * as Haptics from "expo-haptics";
 import { useRef, useState } from "react";
-import { Text, TextInput, View } from "react-native";
+import { StyleSheet, Text, TextInput, View } from "react-native";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import {
   SECRET_REQUEST_COPY,
@@ -17,7 +17,7 @@ import {
 import type { ApprovalDecision, ApprovalRequest, SecretRequestInput } from "../state/protocol";
 import { errorText, loadThread, refresh, rpc } from "../state/runtime";
 import { Button, ErrorBanner, Icon, T, Tap, styles } from "../ui/primitives";
-import { MONO, radius, type as typography, useTheme } from "../ui/theme";
+import { MONO, radius, space, type as typography, useTheme } from "../ui/theme";
 
 /** Text with the file and key set as code. */
 function SecretText({ parts, tone = "secondary" }: { parts: readonly SecretTextPart[]; tone?: "secondary" | "ink" }) {
@@ -26,7 +26,7 @@ function SecretText({ parts, tone = "secondary" }: { parts: readonly SecretTextP
     <T variant="footnote" tone={tone}>
       {parts.map((part, index) =>
         part.code ? (
-          <Text key={index} style={{ fontFamily: MONO, color: colors.ink, backgroundColor: colors.raised }}>
+          <Text key={index} style={{ fontFamily: MONO, color: colors.ink, backgroundColor: colors.code }}>
             {` ${part.text} `}
           </Text>
         ) : (
@@ -74,10 +74,10 @@ export function SecretRequestCard({ approval, input }: { approval: ApprovalReque
       entering={FadeIn.duration(180)}
       exiting={FadeOut.duration(140)}
       accessibilityLabel={`${input.label}. ${secretPartsText(secretDestination(input))}`}
-      style={{ padding: 16, borderRadius: 22, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, gap: 12 }}
+      style={{ padding: space.lg, borderRadius: radius.lg, borderCurve: "continuous", backgroundColor: colors.card, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, gap: space.md }}
     >
       <View style={[styles.line, { alignItems: "flex-start", gap: 12 }]}>
-        <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: colors.raised, alignItems: "center", justifyContent: "center" }}>
+        <View style={{ width: 32, height: 32, borderRadius: radius.sm, backgroundColor: colors.raised, alignItems: "center", justifyContent: "center" }}>
           <Icon name="key" size={17} color={colors.secondary} />
         </View>
         <View style={{ flex: 1, gap: 4 }}>
@@ -86,7 +86,7 @@ export function SecretRequestCard({ approval, input }: { approval: ApprovalReque
           <SecretText parts={secretDestination(input)} />
         </View>
       </View>
-      <View style={[styles.line, { gap: 0, minHeight: 48, borderRadius: 14, backgroundColor: colors.raised, paddingStart: 14 }]}>
+      <View style={[styles.line, { gap: 0, minHeight: 48, borderRadius: radius.md, backgroundColor: colors.raised, paddingStart: 14 }]}>
         <TextInput
           ref={field}
           underlineColorAndroid="transparent"
