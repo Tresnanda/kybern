@@ -1,4 +1,10 @@
 import { EARLIER_HISTORY_ENTRIES } from "../../../../packages/kybern-client/src/historyPaging";
+import {
+  createNewChats,
+  mergeOptimisticThreads,
+  type NewChat,
+  type NewChatCreate,
+} from "../../../../packages/kybern-client/src/newChat";
 import * as SecureStore from "expo-secure-store";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { AppState, Platform } from "react-native";
@@ -94,6 +100,43 @@ const KEY = "kybern.ink.environments";
 
 export function getState() {
   return state;
+}
+
+// ---- optimistic new chats (`packages/kybern-client/src/newChat.ts`) ----
+
+/** New chats started here whose threads the daemon may not have made yet. */
+export const newChats = createNewChats({ errorText: (e) => errorText(e) });
+/** Ids the daemon's last thread list held: a new chat it does not list yet is shown from its own record. */
+let listedThreadIds = new Set<string>();
+newChats.subscribe(() => {
+  const local = newChats.unlisted().filter((thread) => !listedThreadIds.has(thread.id));
+  if (!local.length) return;
+  const ids = new Set(local.map((thread) => thread.id));
+  publish({ threads: [...local, ...state.threads.filter((thread) => !ids.has(thread.id))] });
+});
+export function useNewChat(threadId: string | undefined): NewChat | undefined {
+  return useSyncExternalStore(newChats.subscribe, () => newChats.get(threadId));
+}
+
+/**
+ * Start a new chat optimistically: its thread (with the client's id) is listed and opens at once,
+ * and `create` makes it on the daemon behind it. Navigate to the thread right after this returns.
+ * `seed` puts the first message in the transcript (callers without the send transition's bubble).
+ */
+export function startNewChat(chat: Omit<NewChat, "state" | "error">, create: NewChatCreate, options: { seed?: boolean } = {}) {
+  const at = new Date().toISOString();
+  publishThread(chat.threadId, {
+    ...emptyThreadState(),
+    thread: chat.thread,
+    loaded: true,
+    blocks: options.seed ? [{ kind: "user", id: chat.messageId, turnId: `pending:${chat.messageId}`, at, seq: 1, message: chat.message }] : [],
+  });
+  void newChats.start(chat, async (message, messageId) => {
+    await create(message, messageId);
+    // The daemon has the thread now: its own transcript and list entry take over.
+    void refresh();
+    void loadThread(chat.threadId).catch(() => {});
+  });
 }
 function publish(patch: Partial<State>) {
   state = { ...state, ...patch };
@@ -362,7 +405,10 @@ export function connect(id: string | null) {
   resetNotes();
   resetTasks();
   if (state.activeId === id) snapshots.invalidateAll();
-  else snapshots.clear();
+  else {
+    snapshots.clear();
+    newChats.clear();
+  }
   loads.clear();
   historyLoads.clear();
   hydrating.clear();
@@ -533,7 +579,7 @@ export async function refresh() {
         ...state,
         // A `projects.changed` received meanwhile is newer than this list.
         projects: projectChanges === projectsSeen ? projects.projects : state.projects,
-        threads: threads.threads,
+        threads: withNewChats(threads.threads),
         approvals: approvals.approvals,
         queue: queue.messages,
         activity: threads.activity ?? [],
@@ -549,6 +595,12 @@ export async function refresh() {
     }
   });
   return refreshPromise;
+}
+function withNewChats(listed: Thread[]): Thread[] {
+  listedThreadIds = new Set(listed.map((thread) => thread.id));
+  const merged = mergeOptimisticThreads(listed, newChats.unlisted());
+  if (merged.listed.length) queueMicrotask(() => newChats.listed(merged.listed));
+  return merged.threads;
 }
 export async function loadThread(id: string) {
   if (!id || !subscriptionReady) return;
@@ -594,6 +646,8 @@ export async function loadThread(id: string) {
   return request;
 }
 export async function ensureThread(id: string) {
+  // A new chat the daemon has not made yet: its seeded record stands until the create answers.
+  if (newChats.uncreated(id)) return;
   snapshots.touch(id);
   if (!snapshots.get(id)?.loaded || snapshots.isStale(id)) await loadThread(id);
 }

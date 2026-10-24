@@ -8,14 +8,18 @@ import {
   type BranchInfo,
   type PermissionMode,
   type ProviderKind,
+  type UserMessage,
 } from "../src/state/protocol";
 import {
   errorText,
   loadThread,
   refresh,
   rpc,
+  startNewChat,
   useApp,
 } from "../src/state/runtime";
+import { optimisticThread } from "../../../packages/kybern-client/src/newChat";
+import { newThreadId } from "../src/state/ids";
 import {
   Button,
   ErrorBanner,
@@ -138,24 +142,49 @@ export default function Configure() {
                 : [],
           )
           .join("\n\n");
-        const created = await rpc("threads.create", {
-          project_id: options.projectId,
-          provider: { kind: options.provider, instance: options.instance },
-          permission_mode: options.permission,
-          model: options.model || undefined,
-          effort: options.effort || undefined,
-          message: {
-            parts: [
-              {
-                type: "text",
-                text: `Continue this coding session from the conversation below. Read the project before acting and preserve completed work.\n\n${transcript}`,
-              },
-            ],
+        const message: UserMessage = {
+          parts: [
+            {
+              type: "text",
+              text: `Continue this coding session from the conversation below. Read the project before acting and preserve completed work.\n\n${transcript}`,
+            },
+          ],
+        };
+        // Optimistic, as from Home: the new thread opens now and the daemon makes it behind it.
+        const createdId = newThreadId();
+        const provider = { kind: options.provider, instance: options.instance };
+        startNewChat(
+          {
+            threadId: createdId,
+            messageId: newThreadId(),
+            message,
+            worktree: false,
+            thread: optimisticThread({
+              id: createdId,
+              projectId: options.projectId,
+              provider,
+              model: options.model || null,
+              effort: options.effort || null,
+              permissionMode: options.permission,
+              message,
+              title: thread ? `${thread.title} (handoff)` : undefined,
+            }),
           },
-        });
-        await refresh();
+          (first, messageId) =>
+            rpc("threads.create", {
+              project_id: options.projectId,
+              provider,
+              permission_mode: options.permission,
+              model: options.model || undefined,
+              effort: options.effort || undefined,
+              message: first,
+              thread_id: createdId,
+              message_id: messageId,
+            }),
+          { seed: true },
+        );
         router.dismiss();
-        router.push({ pathname: "/thread/[id]", params: { id: created.id } });
+        router.push({ pathname: "/thread/[id]", params: { id: createdId } });
       } else if (threadId) {
         await rpc("threads.update", {
           thread_id: threadId,

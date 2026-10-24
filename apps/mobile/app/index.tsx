@@ -8,7 +8,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Composer } from "../src/features/Composer";
 import { setDraft, useDraft } from "../src/state/draft";
 import { type UserMessage } from "../src/state/protocol";
-import { ensureThread, refresh, rpc, useApp } from "../src/state/runtime";
+import { rpc, startNewChat, useApp } from "../src/state/runtime";
+import { newThreadId } from "../src/state/ids";
+import { optimisticThread } from "../../../packages/kybern-client/src/newChat";
 import { useLayout } from "../src/state/layout";
 import { Brand } from "../src/ui/Brand";
 import { Button, Icon, IconButton, T, Tap, styles } from "../src/ui/primitives";
@@ -86,21 +88,43 @@ export default function Home() {
   }, [project?.id, app.providers, draft.projectId, draft.provider, draft.permission]);
   async function send(message: UserMessage) {
     if (!project) throw new Error("Add a project before starting a thread.");
-    const thread = await rpc("threads.create", {
-      project_id: project.id,
-      provider: { kind: draft.provider, instance: draft.instance },
-      permission_mode: draft.permission,
-      use_worktree: draft.worktree && project.is_git,
-      ...(draft.model ? { model: draft.model } : {}),
-      ...(draft.effort ? { effort: draft.effort } : {}),
-      ...(draft.baseBranch ? { base_branch: draft.baseBranch } : {}),
-      message,
-    });
-    void refresh();
-    // Keep the local message visible while the new conversation hydrates.
-    // A hydration failure must not turn an accepted send into a retry.
-    await ensureThread(thread.id).catch(() => {});
-    return { threadId: thread.id };
+    // Optimistic: the thread id is ours, so the receipt is immediate and the thread opens with the
+    // message in flight while the daemon makes it. A failure shows on the thread with Retry.
+    const threadId = newThreadId();
+    const messageId = newThreadId();
+    const provider = { kind: draft.provider, instance: draft.instance };
+    const worktree = draft.worktree && project.is_git;
+    startNewChat(
+      {
+        threadId,
+        messageId,
+        message,
+        worktree,
+        thread: optimisticThread({
+          id: threadId,
+          projectId: project.id,
+          provider,
+          model: draft.model || null,
+          effort: draft.effort || null,
+          permissionMode: draft.permission,
+          message,
+        }),
+      },
+      (first, id) =>
+        rpc("threads.create", {
+          project_id: project.id,
+          provider,
+          permission_mode: draft.permission,
+          use_worktree: worktree,
+          ...(draft.model ? { model: draft.model } : {}),
+          ...(draft.effort ? { effort: draft.effort } : {}),
+          ...(draft.baseBranch ? { base_branch: draft.baseBranch } : {}),
+          message: first,
+          thread_id: threadId,
+          message_id: id,
+        }),
+    );
+    return { threadId, messageId };
   }
   return (
     <KeyboardAvoidingView
