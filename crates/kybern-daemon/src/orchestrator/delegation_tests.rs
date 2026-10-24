@@ -659,6 +659,67 @@ async fn results_queue_for_an_idle_parent_and_late_results_merge_into_the_queued
     );
 }
 
+/// A dev server started with the harness's own background shell (Claude Code's
+/// `run_in_background` Bash, Codex's background terminal, OMP's async job).
+fn background_process(id: &str) -> DriverRuntimeTask {
+    DriverRuntimeTask {
+        id: id.into(),
+        kind: RuntimeTaskKind::Process,
+        status: RuntimeTaskStatus::Running,
+        title: "pnpm start --lan".into(),
+        detail: None,
+        provider_type: Some("local_bash".into()),
+        parent_id: None,
+        tool_call_id: None,
+        provider_thread_id: None,
+        model: None,
+        effort: None,
+        backgrounded: true,
+        last_tool_name: None,
+        usage: None,
+        stats: RuntimeTaskStats::default(),
+        capabilities: RuntimeTaskCapabilities::default(),
+    }
+}
+
+/// The task is still running, in the store and on the live session.
+async fn still_running(fixture: &Fixture, thread: &Thread, live: &LiveSession, id: &str) {
+    let stored = fixture.store.runtime_tasks_for_thread(thread.id).unwrap();
+    assert!(stored.iter().any(|task| task.id == id && task.status.is_active()), "the background task stays listed: {stored:?}");
+    assert!(live.tasks.lock().await.get(id).is_some_and(|task| task.status.is_active()), "the background task keeps running");
+}
+
+#[tokio::test]
+async fn results_start_the_next_turn_while_a_background_process_keeps_running() {
+    // ADE-75: a parent that started Metro in the background and ended its turn
+    // kept its agent results queued for as long as Metro ran.
+    let t = Delegating::new().await;
+    t.delegate(json!({"task": "build the screen"})).await;
+    t.fixture
+        .orchestrator
+        .process_driver_event(t.parent.id, &t.live, DriverEvent::RuntimeTaskStarted(background_process("metro")), false)
+        .await
+        .unwrap();
+    t.end_parent_turn().await;
+
+    t.agent("build the screen").await.finish("the screen is built").await;
+    let items = eventually(|| async { t.queued_results().into_iter().next() }).await;
+    assert_eq!(items[0].result.as_deref(), Some("the screen is built"));
+
+    assert!(!t.fixture.orchestrator.drain_queues().await.unwrap(), "nothing is left waiting");
+    assert!(t.queued_results().is_empty());
+    let events = t.fixture.store.events_for_thread(t.parent.id).unwrap();
+    assert!(events.iter().any(|event| matches!(&event.payload, EventPayload::TurnStarted { message, .. }
+        if matches!(message.parts.as_slice(), [ContentPart::AgentResults { .. }]))));
+    eventually(|| async {
+        t.parent_messages.lock().await.iter().any(|m| matches!(m.parts.as_slice(), [ContentPart::AgentResults { .. }])).then_some(())
+    })
+    .await;
+    assert_eq!(t.fixture.store.thread_get(t.parent.id).unwrap().unwrap().status, ThreadStatus::Running);
+    assert!(Arc::ptr_eq(&t.fixture.orchestrator.inner.sessions.lock().await[&t.parent.id], &t.live), "the same session runs the turn");
+    still_running(&t.fixture, &t.parent, &t.live, "metro").await;
+}
+
 #[tokio::test]
 async fn failed_children_report_their_error_to_the_parent() {
     let t = Delegating::new().await;

@@ -2128,8 +2128,13 @@ impl Orchestrator {
     /// One daemon-owned worker consumes accepted follow-ups, independently of clients.
     /// Failed turns retain their queue until the user sends a new successful turn.
     ///
-    /// Returns whether a follow-up is still waiting on a thread that is busy
-    /// or finishing background work, so the worker knows to check back soon.
+    /// Returns whether a follow-up is still waiting on a busy thread, so the
+    /// worker knows to check back soon.
+    ///
+    /// Background work never holds the queue. A dev server, monitor or native
+    /// subagent can outlive the turn that started it by hours; once that turn
+    /// has ended, a follow-up starts the next turn exactly as a direct send
+    /// would, and the tasks keep running on the same session.
     pub async fn drain_queues(&self) -> Result<bool> {
         let mut waiting = false;
         for queued in self.inner.store.queue_list(None)? {
@@ -2139,10 +2144,6 @@ impl Orchestrator {
             }
             if thread.status != ThreadStatus::Idle {
                 waiting |= matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval);
-                continue;
-            }
-            if self.inner.store.runtime_tasks_for_thread(thread.id)?.iter().any(|task| task.status.is_active()) {
-                waiting = true;
                 continue;
             }
             if let Err(error) = self.send_with_id(thread.id, queued.id, queued.message, true, false).await {

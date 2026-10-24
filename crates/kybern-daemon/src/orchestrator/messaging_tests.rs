@@ -148,6 +148,42 @@ async fn a_queued_message_waits_for_an_idle_recipient_and_is_delivered_when_its_
 }
 
 #[tokio::test]
+async fn queued_messages_start_the_next_turn_while_a_background_process_keeps_running() {
+    // ADE-75: a running dev server or monitor must not hold queued input once the turn has ended.
+    for kind in [ProviderKind::ClaudeCode, ProviderKind::Codex, ProviderKind::Omp] {
+        let chat = Chat::new();
+        let a = chat.party("Alpha", ProviderKind::ClaudeCode, PermissionMode::Supervised, true).await;
+        let b = chat.party("Beta", kind, PermissionMode::Supervised, true).await;
+        chat.fixture
+            .orchestrator
+            .process_driver_event(b.thread.id, &b.live, DriverEvent::RuntimeTaskStarted(background_process("dev-server")), false)
+            .await
+            .unwrap();
+        chat.end_turn(&b).await;
+
+        // A thread message from another agent.
+        let result = chat.send(&a, json!({"thread_id": b.thread.id, "body": "the API is ready"})).await;
+        assert_eq!(result["delivered_as"], "queued", "{kind:?}");
+        let record = chat.record(&result);
+        assert!(!chat.fixture.orchestrator.drain_queues().await.unwrap(), "{kind:?}: nothing waits on the background task");
+        eventually(|| async { (chat.state(record.id) == ThreadMessageState::Delivered).then_some(()) }).await;
+        eventually(|| async { recorded(&b, "the API is ready").await.then_some(()) }).await;
+        still_running(&chat.fixture, &b.thread, &b.live, "dev-server").await;
+
+        // A follow-up the user queued.
+        chat.end_turn(&b).await;
+        let follow_up = methods::QueuedMessage { id: Uuid::now_v7(), thread_id: b.thread.id, message: UserMessage::text("now run the tests") };
+        chat.fixture.orchestrator.enqueue(follow_up.clone()).unwrap();
+        chat.drain().await;
+        assert!(chat.queued_for(&b.thread).is_empty(), "{kind:?}");
+        assert!(chat.events(&b.thread).iter().any(|event| matches!(event, EventPayload::TurnStarted { message_id, .. } if *message_id == follow_up.id)));
+        eventually(|| async { recorded(&b, "now run the tests").await.then_some(()) }).await;
+        assert_eq!(chat.fixture.store.thread_get(b.thread.id).unwrap().unwrap().status, ThreadStatus::Running);
+        still_running(&chat.fixture, &b.thread, &b.live, "dev-server").await;
+    }
+}
+
+#[tokio::test]
 async fn steer_goes_into_a_running_turn_and_falls_back_to_the_queue_when_it_cannot() {
     let chat = Chat::new();
     let a = chat.party("Alpha", ProviderKind::ClaudeCode, PermissionMode::Supervised, true).await;
