@@ -899,6 +899,17 @@ impl Orchestrator {
     async fn run_diff_stats(&self, thread_id: ThreadId, after: &str) -> Result<Option<TaskRunDiff>> {
         let Some(thread) = self.inner.store.thread_get(thread_id)? else { return Ok(None) };
         let Some(first) = self.inner.store.checkpoints_for_thread(thread_id)?.into_iter().next() else { return Ok(None) };
+        if super::group_git::is_group(&thread) {
+            // Every member, from its own first checkpoint: `after` is the primary member's commit only.
+            let diff =
+                super::group_git::group_diff(&self.inner.store, &thread, None, false, None, super::group_git::DiffCaps::UNLIMITED_FILES)
+                    .await?;
+            return Ok(Some(TaskRunDiff {
+                added: diff.repos.iter().map(|r| r.additions).sum(),
+                removed: diff.repos.iter().map(|r| r.deletions).sum(),
+                files: diff.repos.iter().map(|r| r.files).sum(),
+            }));
+        }
         let diff = kybern_git::Repo::new(&thread.cwd).diff_with_options(&first.before, after, false, None).await?;
         Ok(Some(TaskRunDiff {
             added: diff.files.iter().map(|file| file.additions).sum(),
