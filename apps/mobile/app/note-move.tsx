@@ -1,16 +1,20 @@
-import { router, useLocalSearchParams } from "expo-router";
+import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import { attempt } from "../src/features/noteActions";
 import { moveNote, useNotes } from "../src/state/notes";
 import { noteTitle } from "../src/state/notesModel";
 import { isFreeChatProject } from "../src/state/protocol";
 import { activeEnvironment, useApp } from "../src/state/runtime";
-import { Empty, Icon, Page, Row, T } from "../src/ui/primitives";
+import { InsetGroup, ListRow } from "../src/ui/List";
+import { Empty, Page, T } from "../src/ui/primitives";
+import { ProjectDot } from "../src/ui/TaskGlyphs";
+import { space, useTheme } from "../src/ui/theme";
 
 /** Choose where a note lives: Global, or one of the computer's projects. */
 export default function MoveNote() {
   const { id } = useLocalSearchParams<{ id?: string }>();
   const app = useApp();
+  const { colors } = useTheme();
   const { notes } = useNotes();
   const note = notes.find((n) => n.id === id);
   const [busy, setBusy] = useState(false);
@@ -26,7 +30,7 @@ export default function MoveNote() {
   }
   if (!note)
     return (
-      <Page>
+      <Page grouped>
         <Empty
           icon="doc.text"
           title="Note not found"
@@ -35,31 +39,33 @@ export default function MoveNote() {
       </Page>
     );
   const current = note.scope === "project" ? note.project_id : null;
-  const check = <Icon name="checkmark" size={18} />;
+  const projects = app.projects.filter((p) => !isFreeChatProject(p.id));
   return (
-    <Page>
-      <T variant="headline" style={{ marginBottom: 4 }}>
-        Move “{noteTitle(note)}”
+    <Page grouped>
+      <Stack.Screen options={{ headerStyle: { backgroundColor: colors.grouped } }} />
+      <T variant="subhead" tone="secondary" style={{ marginBottom: space.lg }}>
+        Choose where “{noteTitle(note)}” lives.
       </T>
-      <T variant="footnote" tone="secondary" style={{ marginBottom: 12 }}>
-        Choose where this note lives.
-      </T>
-      <Row
-        title="Global"
-        detail={`On ${activeEnvironment()?.name ?? "your computer"}`}
-        icon="doc.text"
-        trailing={current === null ? check : undefined}
-        onPress={current === null ? undefined : () => choose(null)}
-      />
-      {app.projects.filter((p) => !isFreeChatProject(p.id)).map((p) => (
-        <Row
-          key={p.id}
-          title={p.name}
-          icon="folder"
-          trailing={current === p.id ? check : undefined}
-          onPress={current === p.id ? undefined : () => choose(p.id)}
+      <InsetGroup>
+        <ListRow
+          title="Global"
+          subtitle={`On ${activeEnvironment()?.name ?? "your computer"}`}
+          leading="doc.text"
+          checked={current === null}
+          disabled={busy}
+          onPress={current === null ? undefined : () => choose(null)}
         />
-      ))}
+        {projects.map((p) => (
+          <ListRow
+            key={p.id}
+            title={p.name}
+            leading={<ProjectDot projectId={p.id} size={8} />}
+            checked={current === p.id}
+            disabled={busy}
+            onPress={current === p.id ? undefined : () => choose(p.id)}
+          />
+        ))}
+      </InsetGroup>
     </Page>
   );
 }

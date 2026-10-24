@@ -1,14 +1,24 @@
+import { LinearGradient } from "expo-linear-gradient";
 import { router, Stack, useLocalSearchParams } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FlatList, Platform, RefreshControl, TextInput, View } from "react-native";
-import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Platform, RefreshControl, View } from "react-native";
+import Animated, {
+  useAnimatedScrollHandler,
+  useSharedValue,
+} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { noteMenuItems, attempt } from "../src/features/noteActions";
-import { ContextMenu } from "../src/ui/ActionMenu";
+import { attempt, noteMenuItems } from "../src/features/noteActions";
+import { confirm } from "../src/ui/Alert";
+import { HeaderActions } from "../src/ui/ActionMenu";
 import {
+  deleteNote,
+  deleteNotes,
   dismissUndo,
   loadNotes,
+  pinNote,
+  purgeNote,
   restoreNote,
+  restoreNotes,
   searchNotes,
   useNotes,
 } from "../src/state/notes";
@@ -20,184 +30,174 @@ import {
   noteTitle,
   type SearchHit,
 } from "../src/state/notesModel";
+import { count } from "../src/state/format";
 import { isFreeChatProject, type NoteSummary } from "../src/state/protocol";
 import { activeEnvironment, useApp } from "../src/state/runtime";
+import { useInSpace } from "../src/state/spaces";
 import { relativeTime } from "../src/state/threadList";
 import {
-  Button,
-  Empty,
-  Icon,
-  IconButton,
-  styles,
-  T,
-  Tap,
-} from "../src/ui/primitives";
-import { type, useTheme } from "../src/ui/theme";
+  DisclosureRow,
+  ListRow,
+  SectionFooter,
+  SectionHeader,
+  type SwipeAction,
+} from "../src/ui/List";
+import { Button, Empty, T } from "../src/ui/primitives";
+import { PullRefresh } from "../src/ui/PullRefresh";
+import { ListSearch } from "../src/ui/Search";
+import { CONTENT_MAX_WIDTH, space, useTheme } from "../src/ui/theme";
 import { Toast } from "../src/ui/Toast";
 
 type Row =
-  | { key: string; kind: "header"; title: string; subtitle?: string; count?: number; onAdd?: () => void; addLabel?: string; onToggle?: () => void; open?: boolean }
-  | { key: string; kind: "note"; note: NoteSummary; first: boolean; context?: string; snippet?: string }
-  | { key: string; kind: "disclosure"; label: string; open: boolean; onToggle: () => void }
+  | {
+      key: string;
+      kind: "header";
+      title: string;
+      count?: number;
+      first: boolean;
+      action?: { title: string; label: string; onPress: () => void };
+      open?: boolean;
+      onToggle?: () => void;
+    }
+  | {
+      key: string;
+      kind: "note";
+      note: NoteSummary;
+      /** Draw the inset hairline under it (not after a section's last row). */
+      separator: boolean;
+      context?: string;
+      snippet?: string;
+      /** A thread note inside its project's disclosure. */
+      nested?: boolean;
+    }
+  | { key: string; kind: "disclosure"; title: string; count: number; open: boolean; onToggle: () => void }
+  | { key: string; kind: "empty"; ids: string[] }
   | { key: string; kind: "footnote"; text: string };
 
-function NoteRow({
+/** Swipes: Pin on the leading edge, Delete (full swipe) on the trailing one; Restore and Delete forever once deleted. */
+function swipeFor(note: NoteSummary): { leading: SwipeAction[]; trailing: SwipeAction[] } {
+  const title = noteTitle(note);
+  if (note.deleted_at)
+    return {
+      leading: [
+        {
+          title: "Restore",
+          icon: "arrow.uturn.backward",
+          tone: "accent",
+          full: true,
+          onPress: () => attempt(() => restoreNote(note.id)),
+        },
+      ],
+      trailing: [
+        {
+          title: "Delete",
+          icon: "trash",
+          tone: "negative",
+          onPress: () =>
+            confirm({
+              title: `Delete “${title}” forever?`,
+              message: "This can’t be undone.",
+              confirm: "Delete forever",
+              destructive: true,
+              onConfirm: () => attempt(() => purgeNote(note.id)),
+            }),
+        },
+      ],
+    };
+  return {
+    leading: [
+      {
+        title: note.pinned ? "Unpin" : "Pin",
+        icon: note.pinned ? "pin.slash" : "pin",
+        tone: "accent",
+        full: true,
+        onPress: () => attempt(() => pinNote(note.id, !note.pinned)),
+      },
+    ],
+    trailing: [
+      {
+        title: "Delete",
+        icon: "trash",
+        tone: "negative",
+        full: true,
+        onPress: () => attempt(() => deleteNote(note.id)),
+      },
+    ],
+  };
+}
+
+const NoteRow = memo(function NoteRow({
   note,
-  first,
+  separator,
   context,
   snippet,
-}: {
-  note: NoteSummary;
-  first: boolean;
-  context?: string;
-  snippet?: string;
-}) {
-  const { colors } = useTheme();
+  nested,
+}: Omit<Extract<Row, { kind: "note" }>, "key" | "kind">) {
   const badge = checklistBadge(note);
   const deleted = !!note.deleted_at;
-  const preview = snippet ?? note.preview;
-  const when = deleted
-    ? `${daysLeft(note.deleted_at!)}d left`
-    : relativeTime(note.updated_at);
-  const detail = deleted ? note.origin || context : context;
+  const preview = (snippet ?? note.preview).replace(/\s+/g, " ").trim();
+  const title = noteTitle(note);
+  // An untitled note borrows its first line as the title: don't repeat it underneath.
+  const body = note.title.trim() ? preview : "";
+  const where = deleted ? note.origin || context : context;
+  const subtitle = [where, badge ? `${badge} done` : "", body].filter(Boolean).join(" · ");
   return (
-    <ContextMenu items={noteMenuItems(note)} title={noteTitle(note)}>
-    {({ onLongPress, open }) => (
-    <Tap
-      label={`${noteTitle(note)}${badge ? `, ${badge} done` : ""}${deleted ? ", deleted" : ""}`}
-      feedback="highlight"
-      onPress={(event) =>
-        deleted
-          ? open(event)
-          : router.push({ pathname: "/note", params: { id: note.id } })
-      }
-      onLongPress={onLongPress}
+    <ListRow
+      title={title}
+      subtitle={subtitle || undefined}
+      subtitleLines={1}
+      leading={nested ? "text.bubble" : undefined}
+      meta={deleted ? `${daysLeft(note.deleted_at!)}d left` : relativeTime(note.updated_at)}
+      label={[title, subtitle, deleted ? "deleted" : note.pinned ? "pinned" : ""].filter(Boolean).join(", ")}
+      onPress={() => router.push({ pathname: "/note", params: { id: note.id } })}
+      menu={noteMenuItems(note)}
+      menuTitle={title}
+      swipe={swipeFor(note)}
+      separator={separator}
+    />
+  );
+});
+
+function EmptyNotes({ ids }: { ids: string[] }) {
+  return (
+    <View
       style={{
-        paddingVertical: 14,
-        borderTopWidth: first ? 0 : 0.5,
-        borderColor: colors.line,
-        gap: 4,
-        opacity: deleted ? 0.8 : 1,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: space.md,
+        minHeight: 44,
+        paddingHorizontal: space.lg,
+        marginTop: space.lg,
       }}
     >
-      <View style={styles.spread}>
-        <T
-          variant="body"
-          numberOfLines={1}
-          tone={note.title.trim() ? "ink" : "muted"}
-          style={{ flex: 1, fontWeight: "500" }}
-        >
-          {noteTitle(note)}
-        </T>
-        <View style={[styles.line, { gap: 8 }]}>
-          {badge ? (
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                gap: 4,
-                backgroundColor: colors.raised,
-                borderRadius: 10,
-                paddingHorizontal: 8,
-                paddingVertical: 2,
-              }}
-            >
-              <Icon name="checkmark.square.fill" size={11} color={colors.secondary} />
-              <T variant="footnote" tone="secondary" style={{ fontVariant: ["tabular-nums"] }}>
-                {badge}
-              </T>
-            </View>
-          ) : null}
-          {note.pinned && !deleted ? (
-            <Icon name="pin.fill" size={12} color={colors.secondary} />
-          ) : null}
-          <T variant="footnote" tone="muted" style={{ fontVariant: ["tabular-nums"] }}>
-            {when}
-          </T>
-        </View>
-      </View>
-      {preview ? (
-        <T variant="footnote" tone="secondary" numberOfLines={1}>
-          {preview}
-        </T>
-      ) : (
-        <T variant="footnote" tone="muted" numberOfLines={1}>
-          No text yet
-        </T>
-      )}
-      {detail ? (
-        <T variant="footnote" tone="muted" numberOfLines={1}>
-          {detail}
-        </T>
-      ) : null}
-    </Tap>
-    )}
-    </ContextMenu>
-  );
-}
-
-function Header({ row }: { row: Extract<Row, { kind: "header" }> }) {
-  const { colors } = useTheme();
-  const body = (
-    <View style={{ flex: 1, gap: 2 }}>
-      <View style={[styles.line, { gap: 8 }]}>
-        <T variant="label" tone="secondary" accessibilityRole="header">
-          {row.title}
-        </T>
-        {row.count ? (
-          <T variant="footnote" tone="muted" style={{ fontVariant: ["tabular-nums"] }}>
-            {row.count}
-          </T>
-        ) : null}
-        {row.onToggle ? (
-          <Icon
-            name={row.open ? "chevron.down" : "chevron.right"}
-            size={11}
-            color={colors.muted}
-          />
-        ) : null}
-      </View>
-      {row.subtitle ? (
-        <T variant="footnote" tone="muted" numberOfLines={1}>
-          {row.subtitle}
-        </T>
-      ) : null}
-    </View>
-  );
-  return (
-    <View style={[styles.spread, { marginTop: 24, marginBottom: 4, gap: 4 }]}>
-      {row.onToggle ? (
-        <Tap
-          label={`${row.title}, ${row.open ? "expanded" : "collapsed"}`}
-          expanded={row.open}
-          static
-          onPress={row.onToggle}
-          style={{ flex: 1, justifyContent: "center" }}
-        >
-          {body}
-        </Tap>
-      ) : (
-        <View style={{ flex: 1, minHeight: 44, justifyContent: "center" }}>{body}</View>
-      )}
-      {row.onAdd ? (
-        <IconButton name="plus" label={row.addLabel ?? "New note"} onPress={row.onAdd} />
-      ) : null}
+      <T variant="subhead" tone="secondary" style={{ flex: 1 }}>
+        {count(ids.length, "empty note")}
+      </T>
+      <Button
+        role="plain"
+        size="medium"
+        label={`Delete ${count(ids.length, "empty note")}`}
+        onPress={() => attempt(() => deleteNotes(ids))}
+      >
+        Delete
+      </Button>
     </View>
   );
 }
 
-function UndoBar() {
+function UndoBar({ bottom }: { bottom: number }) {
   const { undo } = useNotes();
   if (!undo) return null;
   return (
     <Toast
-      key={undo.id}
-      text="Note deleted"
+      key={undo.ids.join(",")}
+      text={undo.ids.length > 1 ? `${count(undo.ids.length, "note")} deleted` : "Note deleted"}
+      bottom={bottom}
       onDismiss={dismissUndo}
       action={{
         title: "Undo",
         icon: "arrow.uturn.backward",
-        onPress: () => attempt(() => restoreNote(undo.id), dismissUndo),
+        onPress: () => attempt(() => restoreNotes(undo.ids)),
       }}
     />
   );
@@ -206,7 +206,7 @@ function UndoBar() {
 export default function Notes() {
   const { projectId } = useLocalSearchParams<{ projectId?: string }>();
   const app = useApp();
-  const { notes, loaded, unsupported, error } = useNotes();
+  const { notes, loaded, unsupported, error, undo } = useNotes();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const connected = app.status === "open";
@@ -217,6 +217,14 @@ export default function Notes() {
   const computer = activeEnvironment()?.name ?? "your computer";
   const searching = query.trim().length > 0;
   const scoped = projectId ? app.projects.find((p) => p.id === projectId) : undefined;
+  // Global notes show in every space; project notes in their project's space.
+  const inSpace = useInSpace();
+  const offset = useSharedValue(0);
+  const onScroll = useAnimatedScrollHandler({
+    onScroll: (event) => {
+      offset.set(event.contentOffset.y);
+    },
+  });
 
   // The daemon also searches note bodies; titles and previews match instantly.
   const lastQuery = useRef("");
@@ -253,57 +261,62 @@ export default function Notes() {
   );
 
   const rows = useMemo<Row[]>(() => {
-    const scopedNotes = projectId ? notes.filter((n) => n.project_id === projectId) : notes;
+    const scopedNotes = projectId
+      ? notes.filter((n) => n.project_id === projectId)
+      : notes.filter((n) => inSpace(n.project_id));
     if (!scopedNotes.length) return [];
     const { notes: visible, snippets } = filterNotes(scopedNotes, query, hits);
     const groups = groupNotes(visible, app.projects, isFreeChatProject);
     const out: Row[] = [];
+    const header = (row: Omit<Extract<Row, { kind: "header" }>, "kind" | "first">) =>
+      out.push({ ...row, kind: "header", first: out.length === 0 });
     const list = (
       prefix: string,
       items: NoteSummary[],
-      context?: (n: NoteSummary) => string | undefined,
+      options: { context?: (n: NoteSummary) => string | undefined; nested?: boolean } = {},
     ) =>
       items.forEach((note, i) =>
         out.push({
           key: `${prefix}:${note.id}`,
           kind: "note",
           note,
-          first: i === 0,
-          context: context?.(note),
+          separator: i < items.length - 1,
+          context: options.context?.(note),
           snippet: snippets.get(note.id),
+          nested: options.nested,
         }),
       );
     const placeOf = (n: NoteSummary) =>
       n.scope === "global"
-        ? `Global · on ${computer}`
+        ? "Global"
         : (app.projects.find((p) => p.id === n.project_id)?.name ??
-          (n.project_id && isFreeChatProject(n.project_id) ? "Chats" : "Project")) +
-          (n.scope === "thread" ? " · Thread note" : "");
+          (n.project_id && isFreeChatProject(n.project_id) ? "Chats" : "Project"));
+    const add = (title: string, project?: string) =>
+      connected
+        ? { title: "New", label: `New note in ${title}`, onPress: () => newNote(project) }
+        : undefined;
     if (groups.pinned.length) {
-      out.push({ key: "h:pinned", kind: "header", title: "Pinned", count: groups.pinned.length });
-      list("pin", groups.pinned, placeOf);
+      header({ key: "h:pinned", title: "Pinned", count: groups.pinned.length });
+      list("pin", groups.pinned, { context: projectId ? undefined : placeOf });
     }
     // Always offer Global (and the scoped project) so there is somewhere obvious to add a note.
     if (!projectId && (groups.global.length || !searching)) {
-      out.push({
+      header({
         key: "h:global",
-        kind: "header",
         title: "Global",
-        subtitle: `On ${computer}`,
-        onAdd: connected ? () => newNote() : undefined,
-        addLabel: "New global note",
+        count: groups.global.length || undefined,
+        action: add("Global"),
       });
       list("global", groups.global);
       if (!groups.global.length && !searching)
         out.push({ key: "e:global", kind: "footnote", text: "No global notes yet." });
     }
     for (const group of groups.projects) {
-      out.push({
+      header({
         key: `h:${group.projectId}`,
-        kind: "header",
         title: group.name,
-        onAdd: connected ? () => newNote(group.projectId) : undefined,
-        addLabel: `New note in ${group.name}`,
+        count: group.notes.length || undefined,
+        action: add(group.name, group.projectId),
       });
       list(`p:${group.projectId}`, group.notes);
       if (group.threadNotes.length) {
@@ -311,19 +324,20 @@ export default function Notes() {
         out.push({
           key: `d:${group.projectId}`,
           kind: "disclosure",
-          label: `Thread notes (${group.threadNotes.length})`,
+          title: "Thread notes",
+          count: group.threadNotes.length,
           open: expanded,
-          onToggle: () =>
-            setOpen((v) => ({ ...v, [`t:${group.projectId}`]: !expanded })),
+          onToggle: () => setOpen((v) => ({ ...v, [`t:${group.projectId}`]: !expanded })),
         });
-        if (expanded) list(`t:${group.projectId}`, group.threadNotes);
+        if (expanded) list(`t:${group.projectId}`, group.threadNotes, { nested: true });
       }
     }
+    if (groups.empty.length && !searching)
+      out.push({ key: "empty", kind: "empty", ids: groups.empty.map((n) => n.id) });
     if (groups.chats.length) {
       const expanded = searching || !!open.chats;
-      out.push({
+      header({
         key: "h:chats",
-        kind: "header",
         title: "Chats",
         count: groups.chats.length,
         open: expanded,
@@ -333,9 +347,8 @@ export default function Notes() {
     }
     if (groups.deleted.length) {
       const expanded = searching || !!open.deleted;
-      out.push({
+      header({
         key: "h:deleted",
-        kind: "header",
         title: "Recently deleted",
         count: groups.deleted.length,
         open: expanded,
@@ -346,16 +359,22 @@ export default function Notes() {
         out.push({
           key: "f:deleted",
           kind: "footnote",
-          text: "Deleted notes are removed for good after 30 days. Tap a note to restore it or delete it now.",
+          text: "Deleted notes are removed for good after 30 days.",
         });
       }
     }
     return out;
-  }, [notes, hits, query, open, app.projects, projectId, computer, connected, searching, newNote]);
+  }, [notes, hits, query, open, app.projects, projectId, connected, searching, newNote, inSpace]);
 
-  const hasNotes = projectId ? notes.some((n) => n.project_id === projectId) : notes.length > 0;
+  const hasNotes = projectId
+    ? notes.some((n) => n.project_id === projectId)
+    : notes.some((n) => inSpace(n.project_id));
   const nothing = loaded && !unsupported && !hasNotes;
   const noMatch = searching && !rows.some((r) => r.kind === "note");
+  // Android draws edge to edge: keep the last row clear of the gesture bar and fade what scrolls under it.
+  const edge = Platform.OS === "android" ? 24 : 0;
+  // iOS 26 puts the header search bar at the bottom: the toast sits above it.
+  const toastLift = Platform.OS === "ios" ? 56 : 0;
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
@@ -363,166 +382,145 @@ export default function Notes() {
         options={{
           title: scoped ? `${scoped.name} notes` : "Notes",
           headerLargeTitleEnabled: !scoped,
-          headerRight: () => (
-            <View style={styles.line}>
-              {Platform.OS === "android" && (
-                <IconButton
-                  name="arrow.clockwise"
-                  label="Refresh notes"
-                  disabled={refreshing || !connected}
-                  onPress={() => void reload()}
-                />
-              )}
-              <IconButton
-                name="square.and.pencil"
-                label="New note"
-                disabled={!connected || unsupported}
-                onPress={() => newNote(projectId)}
-              />
-            </View>
-          ),
         }}
       />
-      <FlatList
-        data={rows}
-        keyExtractor={(row) => row.key}
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag"
-        contentInsetAdjustmentBehavior="automatic"
-        contentContainerStyle={{
-          paddingHorizontal: 24,
-          paddingBottom: insets.bottom + 96,
-          maxWidth: 760,
-          width: "100%",
-          alignSelf: "center",
-        }}
-        refreshControl={
-          Platform.OS === "ios" ? (
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={() => void reload()}
-              tintColor={colors.ink}
-            />
-          ) : undefined
-        }
-        ListHeaderComponent={
-          <View
-            style={{
-              ...styles.line,
-              backgroundColor: colors.raised,
-              borderRadius: 15,
-              paddingHorizontal: 13,
-              marginVertical: 16,
-            }}
-          >
-            <Icon name="magnifyingglass" size={18} color={colors.secondary} />
-            <TextInput
-              underlineColorAndroid="transparent"
-              accessibilityLabel="Search notes"
-              placeholder="Search notes"
-              value={query}
-              onChangeText={setQuery}
-              placeholderTextColor={colors.muted}
-              selectionColor={colors.accent}
-              autoCorrect={false}
-              returnKeyType="search"
-              clearButtonMode="while-editing"
-              style={[type.body, { letterSpacing: 0, color: colors.ink, flex: 1, minHeight: 48 }]}
-            />
-          </View>
-        }
-        renderItem={({ item }) => {
-          switch (item.kind) {
-            case "header":
-              return <Header row={item} />;
-            case "note":
-              return (
-                <NoteRow
-                  note={item.note}
-                  first={item.first}
-                  context={item.context}
-                  snippet={item.snippet}
-                />
-              );
-            case "disclosure":
-              return (
-                <Tap
-                  label={item.label}
-                  expanded={item.open}
-                  static
-                  onPress={item.onToggle}
-                  style={[styles.line, { gap: 8, borderTopWidth: 0.5, borderColor: colors.line }]}
-                >
-                  <Icon
-                    name={item.open ? "chevron.down" : "chevron.right"}
-                    size={11}
-                    color={colors.muted}
-                  />
-                  <T variant="footnote" tone="secondary">
-                    {item.label}
-                  </T>
-                </Tap>
-              );
-            case "footnote":
-              return (
-                <T variant="footnote" tone="muted" style={{ paddingVertical: 10 }}>
-                  {item.text}
-                </T>
-              );
+      <HeaderActions
+        buttons={[
+          {
+            icon: "square.and.pencil",
+            label: "New note",
+            disabled: !connected || unsupported,
+            onPress: () => newNote(projectId),
+          },
+        ]}
+      />
+      {Platform.OS === "ios" ? (
+        <ListSearch value={query} onChangeText={setQuery} placeholder="Search notes" />
+      ) : hasNotes ? (
+        <View style={{ paddingHorizontal: space.lg, paddingTop: space.sm, paddingBottom: space.xs }}>
+          <ListSearch value={query} onChangeText={setQuery} placeholder="Search notes" />
+        </View>
+      ) : null}
+      <PullRefresh offset={offset} refreshing={refreshing} onRefresh={reload} label="Refreshing notes">
+        <Animated.FlatList
+          data={rows}
+          onScroll={onScroll}
+          scrollEventThrottle={16}
+          keyExtractor={(row) => row.key}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          contentInsetAdjustmentBehavior="automatic"
+          contentContainerStyle={{
+            paddingBottom: insets.bottom + space.xl + edge + (undo ? 72 : 0),
+            maxWidth: CONTENT_MAX_WIDTH,
+            width: "100%",
+            alignSelf: "center",
+          }}
+          refreshControl={
+            Platform.OS === "ios" ? (
+              <RefreshControl refreshing={refreshing} onRefresh={() => void reload()} />
+            ) : undefined
           }
-        }}
-        ListEmptyComponent={
-          !connected && !loaded ? (
-            <Empty
-              icon="doc.text"
-              title="Connect your computer"
-              detail="Notes live on your computer and sync with this phone."
-              action={
-                <Button onPress={() => router.push(app.activeId ? "/settings" : "/connect")}>
-                  {app.activeId ? "Open connections" : "Connect your computer"}
-                </Button>
-              }
-            />
-          ) : unsupported ? (
-            <Empty
-              icon="doc.text"
-              title="Update Kybern on your computer"
-              detail="This computer’s Kybern is too old to keep notes. Update it, then open Notes again."
-            />
-          ) : !loaded ? (
-            <T variant="footnote" tone="secondary" style={{ paddingVertical: 24 }}>
-              Loading notes…
-            </T>
-          ) : null
-        }
-        ListFooterComponent={
-          <View>
-            {error ? (
-              <T variant="footnote" tone="negative" style={{ paddingVertical: 12 }}>
-                {error}
-              </T>
-            ) : null}
-            {nothing && (
+          renderItem={({ item }) => {
+            switch (item.kind) {
+              case "header":
+                return (
+                  <SectionHeader
+                    title={item.title}
+                    count={item.count}
+                    action={item.action}
+                    open={item.open}
+                    onToggle={item.onToggle}
+                    first={item.first}
+                    inset
+                  />
+                );
+              case "note":
+                return (
+                  <NoteRow
+                    note={item.note}
+                    separator={item.separator}
+                    context={item.context}
+                    snippet={item.snippet}
+                    nested={item.nested}
+                  />
+                );
+              case "disclosure":
+                return (
+                  <DisclosureRow
+                    title={item.title}
+                    count={item.count}
+                    open={item.open}
+                    onToggle={item.onToggle}
+                  />
+                );
+              case "empty":
+                return <EmptyNotes ids={item.ids} />;
+              case "footnote":
+                return <Empty variant="inline" title={item.text} />;
+            }
+          }}
+          ListEmptyComponent={
+            !connected && !loaded ? (
               <Empty
                 icon="doc.text"
-                title="Your notes, across every project"
-                detail="Jot down ideas, checklists and reminders. Start a line with - [ ] to make a checklist."
+                title="Connect your computer"
+                detail="Notes live on your computer and sync with this phone."
                 action={
-                  <Button icon="plus" onPress={() => newNote(projectId)}>
-                    New note
+                  <Button onPress={() => router.push(app.activeId ? "/settings" : "/connect")}>
+                    {app.activeId ? "Open connections" : "Connect your computer"}
                   </Button>
                 }
               />
-            )}
-            {noMatch && !nothing && loaded && (
-              <T tone="secondary" style={{ paddingVertical: 24 }}>
-                No notes match “{query.trim()}”. Try another word.
-              </T>
-            )}
-          </View>
-        }
-      />
-      <UndoBar />
+            ) : unsupported ? (
+              <Empty
+                icon="doc.text"
+                title="Update Kybern on your computer"
+                detail="This computer’s Kybern is too old to keep notes. Update it, then open Notes again."
+              />
+            ) : !loaded ? (
+              <Empty variant="inline" title="Loading notes…" />
+            ) : null
+          }
+          ListFooterComponent={
+            <View>
+              {error ? (
+                <T variant="footnote" tone="negative" style={{ paddingVertical: space.md, paddingHorizontal: space.lg }}>
+                  {error}
+                </T>
+              ) : null}
+              {nothing && (
+                <Empty
+                  icon="doc.text"
+                  title="Your notes, across every project"
+                  detail="Jot down ideas, checklists and reminders. Start a line with - [ ] to make a checklist."
+                  action={
+                    <Button icon="plus" onPress={() => newNote(projectId)}>
+                      New note
+                    </Button>
+                  }
+                />
+              )}
+              {noMatch && !nothing && loaded && (
+                <Empty variant="inline" title={`No notes match “${query.trim()}”.`} />
+              )}
+              {hasNotes && !searching && (
+                <View style={{ marginTop: space.xl }}>
+                  <SectionFooter inset>{`Notes live on ${computer} and sync with this phone.`}</SectionFooter>
+                </View>
+              )}
+            </View>
+          }
+        />
+      </PullRefresh>
+      {edge > 0 && (
+        <LinearGradient
+          pointerEvents="none"
+          colors={[`${colors.background}00`, colors.background]}
+          style={{ position: "absolute", start: 0, end: 0, bottom: 0, height: insets.bottom + edge }}
+        />
+      )}
+      <UndoBar bottom={toastLift} />
     </View>
   );
 }

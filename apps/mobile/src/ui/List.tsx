@@ -112,6 +112,7 @@ export function ListSeparator({ leading = false }: { leading?: boolean }) {
  */
 export function SectionHeader({
   title,
+  leading,
   count,
   action,
   open,
@@ -120,6 +121,8 @@ export function SectionHeader({
   first = false,
 }: {
   title: string;
+  /** A 16 pt glyph before the label (a task status). */
+  leading?: ReactNode;
   count?: number;
   action?: { title: string; onPress: () => void; label?: string };
   open?: boolean;
@@ -132,6 +135,7 @@ export function SectionHeader({
   const { colors } = useTheme();
   const label = (
     <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6, flexShrink: 1 }}>
+      {leading ? <View style={{ alignSelf: "center", marginEnd: 2 }}>{leading}</View> : null}
       <T variant="sectionHeader" tone="secondary" accessibilityRole="header" numberOfLines={1}>
         {title}
       </T>

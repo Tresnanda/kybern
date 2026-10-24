@@ -101,6 +101,9 @@ test("runs describe themselves: latest run, outcome, activity and diff", () => {
   assert.equal(model.diffLabel({ added: 1, removed: 0, files: 1 }), "+1 −0 in 1 file");
   assert.equal(model.ageLabel("2026-10-05T07:12:30Z", now), "3h");
   assert.equal(model.ageLabel("2026-10-05T10:12:10Z", now), "now");
+  assert.equal(model.agoPhrase("Created", "2026-10-05T10:12:10Z", now), "Created just now");
+  assert.equal(model.agoPhrase("Created", "2026-10-05T09:11:00Z", now).startsWith("Created 1 hour"), true);
+  assert.equal(model.agoPhrase("Updated", "2026-09-20T00:00:00Z", now), "Updated 2 weeks ago");
 });
 
 test("the body splits into a description and acceptance criteria", () => {
@@ -304,4 +307,33 @@ test("deleting offers Undo, which restores the task", async (t) => {
   await tick();
   assert.deepEqual(store.getTasks().tasks.map((x) => x.id), ["1"]);
   store.resetTasks();
+});
+
+test("Start says why it is disabled, in the order a person can fix it", () => {
+  const ok = { connected: true, computer: "Mac", anyAgent: true, agentReady: true, agentName: "Claude Code", hasProject: true, mixedProjects: false, prompt: "Go" };
+  assert.equal(model.sendBlocker(ok), "");
+  assert.equal(model.sendBlocker({ ...ok, connected: false, prompt: "" }), "Connect to your computer to start.");
+  assert.equal(model.sendBlocker({ ...ok, agentReady: false }), "Claude Code isn't set up on Mac. Choose another agent.");
+  assert.equal(model.sendBlocker({ ...ok, anyAgent: false, agentReady: false }), "Set up an agent on Mac to send tasks.");
+  assert.equal(model.sendBlocker({ ...ok, hasProject: false, prompt: " " }), "Choose a project to start.");
+  assert.equal(model.sendBlocker({ ...ok, mixedProjects: true }), "One run needs tasks from one project. Choose separate runs.");
+  assert.equal(model.sendBlocker({ ...ok, prompt: "  " }), "Write a prompt to start.");
+  assert.notEqual(model.batchPrompt("combined"), model.batchPrompt("separate"));
+});
+
+test("Up next lists the project's open tasks, most urgent first", () => {
+  const t = (id, patch) => ({ id, scope: "project", project_id: "p1", status: "todo", priority: 0, rank: 1, updated_at: "2026-10-01T00:00:00Z", runs: [], ...patch });
+  const list = [
+    t("none"),
+    t("urgent", { priority: 1 }),
+    t("inbox-high", { priority: 2, status: "inbox" }),
+    t("todo-high", { priority: 2 }),
+    t("done", { status: "done", priority: 1 }),
+    t("other", { project_id: "p2", priority: 1 }),
+    t("global", { scope: "global", project_id: null }),
+    t("live", { priority: 1, runs: [{ number: 1, state: "running" }] }),
+  ];
+  assert.deepEqual(model.upNextTasks(list, "p1", 10).map((x) => x.id), ["urgent", "todo-high", "inbox-high", "none"]);
+  assert.equal(model.upNextTasks(list, "p1").length, 3);
+  assert.deepEqual(model.upNextTasks(list, null), []);
 });

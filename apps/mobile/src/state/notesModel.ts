@@ -8,8 +8,23 @@ export const METHOD_NOT_FOUND = -32601;
 export const AUTOSAVE_MS = 600;
 export const UNDO_MS = 6000;
 
-export const noteTitle = (note: Pick<NoteSummary, "title">) =>
-  note.title.trim() || "Untitled";
+/**
+ * What a row and a menu call a note: its title, else the first line of its
+ * text (a note is never listed as a muted "Untitled" when it has words).
+ */
+export function noteTitle(note: Pick<NoteSummary, "title"> & { preview?: string }) {
+  const title = note.title.trim();
+  if (title) return title;
+  const first = (note.preview ?? "")
+    .split("\n")
+    .map((line) => line.replace(/^\s*(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s*)?|\d+[.)]\s+|>\s*)/, "").trim())
+    .find(Boolean);
+  return first || "Untitled";
+}
+
+/** No title, no text, no checklist: an abandoned note the list folds away (ux-app H3). */
+export const isEmptyNote = (note: Pick<NoteSummary, "title" | "preview" | "checklist">) =>
+  !note.title.trim() && !note.preview.trim() && !(note.checklist?.total ?? 0);
 
 /** "3/7" for notes with checklist items, otherwise nothing. */
 export function checklistBadge(note: Pick<NoteSummary, "checklist">) {
@@ -87,12 +102,15 @@ export interface NoteGroups {
   projects: ProjectNotes[];
   chats: NoteSummary[];
   deleted: NoteSummary[];
+  /** Live notes with nothing in them, listed once as "3 empty notes". */
+  empty: NoteSummary[];
 }
 
 /**
  * Sections for the list: Pinned, Global, one per project (project notes, then
  * thread notes), Chats, then Recently deleted. A pinned note appears once, in
- * Pinned. Input order (pinned, then newest) is preserved inside each section.
+ * Pinned. Empty notes (not pinned) leave their section for `empty`. Input
+ * order (pinned, then newest) is preserved inside each section.
  */
 export function groupNotes(
   notes: NoteSummary[],
@@ -105,6 +123,7 @@ export function groupNotes(
     projects: [],
     chats: [],
     deleted: [],
+    empty: [],
   };
   const byProject = new Map<string, ProjectNotes>();
   const section = (note: NoteSummary) => {
@@ -123,6 +142,7 @@ export function groupNotes(
   };
   for (const note of notes) {
     if (note.deleted_at) groups.deleted.push(note);
+    else if (!note.pinned && isEmptyNote(note)) groups.empty.push(note);
     else if (note.pinned) groups.pinned.push(note);
     else if (note.scope === "global") groups.global.push(note);
     else if (note.scope === "project") section(note).notes.push(note);

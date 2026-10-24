@@ -315,15 +315,24 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
       </ScrollView>
     );
   }
-  if (/^#{1,6}\s/.test(para))
+  if (/^#{1,6}\s/.test(para)) {
+    // Headings step down with their level (ux-app M17): h1 22, h2 19, h3 17,
+    // h4–h6 15 in `secondary`. A screen's own title stays the only larger line.
+    const level = para.indexOf(" ");
     return (
       <T
-        variant={para.startsWith("# ") ? "title" : "headline"}
-        style={{ marginTop: 12 }}
+        variant={level === 1 ? "title" : level <= 3 ? "headline" : "label"}
+        tone={level >= 4 ? "secondary" : "ink"}
+        style={[
+          { marginTop: 12 },
+          level === 2 ? { fontSize: 19, lineHeight: 24 } : null,
+          level >= 4 ? { fontWeight: "600" } : null,
+        ]}
       >
         <Inline text={para.replace(/^#{1,6}\s/, "")} />
       </T>
     );
+  }
   if (/^[-*_]{3,}$/.test(para))
     return (
       <View

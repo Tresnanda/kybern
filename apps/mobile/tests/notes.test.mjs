@@ -57,9 +57,12 @@ test("groups follow the list sections and show a pinned note once", () => {
     summary("tn", { scope: "thread", project_id: "p1", thread_id: "t" }),
     summary("chat", { scope: "thread", project_id: "free", thread_id: "c" }),
     summary("gone", { deleted_at: "2026-10-04T00:00:00Z", origin: "kybern" }),
+    summary("blank", { title: "" }),
+    summary("blank-pinned", { title: "", pinned: true }),
   ];
   const g = model.groupNotes(notes, [{ id: "p1", name: "kybern" }], (id) => id === "free");
-  assert.deepEqual(g.pinned.map((n) => n.id), ["pinned-thread"]);
+  assert.deepEqual(g.pinned.map((n) => n.id), ["pinned-thread", "blank-pinned"]);
+  assert.deepEqual(g.empty.map((n) => n.id), ["blank"]);
   assert.deepEqual(g.global.map((n) => n.id), ["g1"]);
   assert.equal(g.projects.length, 1);
   assert.deepEqual(g.projects[0].notes.map((n) => n.id), ["pn"]);
@@ -90,6 +93,11 @@ test("badges, titles, markdown and retention read plainly", () => {
   assert.equal(model.checklistBadge({ checklist: { done: 3, total: 7 } }), "3/7");
   assert.equal(model.checklistBadge({ checklist: { done: 0, total: 0 } }), "");
   assert.equal(model.noteTitle({ title: "  " }), "Untitled");
+  assert.equal(model.noteTitle({ title: "", preview: "\n- [ ] Buy milk\nmore" }), "Buy milk");
+  assert.equal(model.noteTitle({ title: "", preview: "## Plan for Q4" }), "Plan for Q4");
+  assert.equal(model.isEmptyNote(summary("x", { title: " " })), true);
+  assert.equal(model.isEmptyNote(summary("x", { title: "", preview: "text" })), false);
+  assert.equal(model.isEmptyNote(summary("x", { title: "", checklist: { done: 0, total: 1 } })), false);
   assert.equal(model.noteMarkdown("Plan", "- [ ] one"), "# Plan\n\n- [ ] one\n");
   assert.equal(model.noteMarkdown("", "text"), "text");
   assert.equal(model.daysLeft("2026-10-01T00:00:00Z", Date.parse("2026-10-11T12:00:00Z")), 20);
@@ -306,6 +314,11 @@ test("the notes list loads, follows notifications, offers undo, and ignores old 
   assert.equal(store.getNotes().undo, null);
   await store.deleteNote("b");
   await store.restoreNote("b");
+  assert.equal(store.getNotes().undo, null);
+  assert.equal(store.getNotes().notes[0].deleted_at, undefined);
+  await store.deleteNotes(["b"]);
+  assert.deepEqual(store.getNotes().undo.ids, ["b"]);
+  await store.restoreNotes(["b"]);
   assert.equal(store.getNotes().undo, null);
   assert.equal(store.getNotes().notes[0].deleted_at, undefined);
 

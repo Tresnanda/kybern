@@ -95,6 +95,10 @@ export const androidIcons = {
   "waveform.path": "monitoring",
   xmark: "close",
   "xmark.circle": "cancel",
+  "rectangle.split.3x1": "view_column",
+  "plus.circle.fill": "add_circle",
+  "pin.slash": "keep_off",
+  "list.bullet": "format_list_bulleted",
 } as const satisfies Record<
   string,
   NonNullable<Exclude<SymbolViewProps["name"], string>["android"]>

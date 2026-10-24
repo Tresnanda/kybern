@@ -5,8 +5,8 @@ import { restoreNote } from "../state/notes";
 import { saveStatusText } from "../state/notesModel";
 import type { useNoteSession } from "../state/useNoteSession";
 import { Markdown } from "../ui/Markdown";
-import { ErrorBanner, T, Tap } from "../ui/primitives";
-import { type, useTheme } from "../ui/theme";
+import { Button, ErrorBanner, T } from "../ui/primitives";
+import { radius, space, type, useTheme } from "../ui/theme";
 import { attempt } from "./noteActions";
 
 type Session = ReturnType<typeof useNoteSession>;
@@ -17,7 +17,10 @@ export function editedLabel(updatedAt?: string) {
   return ago === "Now" ? "Edited just now" : `Edited ${ago} ago`;
 }
 
-/** A compact filled or quiet pill used for the note's inline actions. */
+/**
+ * @deprecated Use `Button` (`role="tinted"` for the primary choice, `"plain"`
+ * otherwise). Kept for pages that still import it.
+ */
 export function Pill({
   label,
   onPress,
@@ -29,28 +32,14 @@ export function Pill({
   primary?: boolean;
   disabled?: boolean;
 }) {
-  const { colors } = useTheme();
   return (
-    <Tap
-      label={label}
-      onPress={onPress}
-      disabled={disabled}
-      style={{
-        minHeight: 44,
-        paddingHorizontal: 18,
-        borderRadius: 22,
-        alignItems: "center",
-        backgroundColor: primary ? colors.ink : colors.raised,
-      }}
-    >
-      <T variant="label" tone={primary ? "inverse" : "ink"}>
-        {label}
-      </T>
-    </Tap>
+    <Button role={primary ? "tinted" : "plain"} size="medium" disabled={disabled} onPress={onPress}>
+      {label}
+    </Button>
   );
 }
 
-/** Switches between the rendered note and its Markdown text. */
+/** Switches between the rendered note and its Markdown text: a plain "Edit" / "Done". */
 export function ModeToggle({
   editing,
   onChange,
@@ -61,12 +50,9 @@ export function ModeToggle({
   disabled?: boolean;
 }) {
   return (
-    <Pill
-      label={editing ? "Done" : "Edit"}
-      primary={editing}
-      disabled={disabled}
-      onPress={() => onChange(!editing)}
-    />
+    <Button role="plain" size="medium" disabled={disabled} onPress={() => onChange(!editing)}>
+      {editing ? "Done" : "Edit"}
+    </Button>
   );
 }
 
@@ -84,22 +70,22 @@ function Banner({
     <View
       accessibilityLiveRegion="polite"
       style={{
-        padding: 16,
-        borderRadius: 16,
+        padding: space.lg,
+        borderRadius: radius.md,
         backgroundColor: colors.warningSoft,
-        gap: 12,
-        marginBottom: 16,
+        gap: space.md,
+        marginBottom: space.lg,
       }}
     >
-      <View style={{ gap: 4 }}>
-        <T variant="label" tone="warning">
+      <View style={{ gap: space.xs }}>
+        <T variant="headline" tone="warning">
           {title}
         </T>
         <T variant="footnote" tone="warning">
           {detail}
         </T>
       </View>
-      <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: space.lg, flexWrap: "wrap" }}>
         {children}
       </View>
     </View>
@@ -154,8 +140,12 @@ export function NoteView({
           title="Edited on another device"
           detail="Your changes are kept on this phone. Keep mine replaces the other version. Load theirs discards your changes."
         >
-          <Pill primary label="Keep mine" onPress={() => void s.session.keepMine()} />
-          <Pill label="Load theirs" onPress={() => void s.session.loadTheirs()} />
+          <Button size="medium" onPress={() => void s.session.keepMine()}>
+            Keep mine
+          </Button>
+          <Button role="plain" size="medium" onPress={() => void s.session.loadTheirs()}>
+            Load theirs
+          </Button>
         </Banner>
       )}
       {s.status === "error" && (
@@ -169,16 +159,18 @@ export function NoteView({
           title="In Recently deleted"
           detail="Restore this note to edit it. It is removed for good 30 days after deleting."
         >
-          <Pill
-            primary
-            label="Restore note"
+          <Button
+            size="medium"
+            icon="arrow.uturn.backward"
             onPress={() =>
               attempt(async () => {
                 await restoreNote(s.note!.id);
                 await s.session.sync();
               })
             }
-          />
+          >
+            Restore note
+          </Button>
         </Banner>
       )}
       {editing && !s.deleted ? (
@@ -241,9 +233,9 @@ export function NoteView({
           </T>
         </View>
       ) : (
-        <View style={{ gap: 12 }}>
+        <View style={{ gap: space.md }}>
           {showTitle && (
-            <T variant="title" tone={s.title.trim() ? "ink" : "muted"}>
+            <T variant="title" selectable>
               {s.title.trim() || "Untitled"}
             </T>
           )}
@@ -258,7 +250,8 @@ export function NoteView({
               {s.deleted ? "This note is empty." : emptyText ?? "Nothing here yet. Tap Edit to start writing."}
             </T>
           )}
-          {s.note && (
+          {/* A page with a title says when it was edited in its location line. */}
+          {s.note && !showTitle && (
             <T variant="footnote" tone="muted">
               {editedLabel(s.note.updated_at)}
             </T>

@@ -2,8 +2,8 @@ import { dismissToast, restoreTask, useTasks } from "../state/tasks";
 import { Toast } from "../ui/Toast";
 import { attempt, openThread } from "./taskActions";
 
-/** "ADE-14 started · Open" or "ADE-14 deleted · Undo", above the home indicator. */
-export function TaskToast() {
+/** "ADE-14 started · Open" or "ADE-14 deleted · Undo", above the home indicator (and `bottom` more, over a bottom bar). */
+export function TaskToast({ bottom = 0 }: { bottom?: number }) {
   const { toast } = useTasks();
   if (!toast) return null;
   const action = toast.action;
@@ -11,6 +11,7 @@ export function TaskToast() {
     <Toast
       key={toast.id}
       text={toast.text}
+      bottom={bottom}
       onDismiss={dismissToast}
       action={
         action?.kind === "undo"
