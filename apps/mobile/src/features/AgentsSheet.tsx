@@ -184,11 +184,27 @@ export function AgentsCapsule({
         backgroundColor: colors.raised,
       }}
     >
-      {running ? (
-        <StatusGlyph phase="working" size={15} animated />
-      ) : (
+      {/* Always the agents glyph: a half-filled pie here read as a loading
+          spinner. Something running adds a small accent dot on its corner. */}
+      <View>
         <Icon name="person.2" size={16} color={colors.secondary} />
-      )}
+        {running && (
+          <View
+            accessible={false}
+            style={{
+              position: "absolute",
+              top: -2,
+              end: -3,
+              width: 8,
+              height: 8,
+              borderRadius: 4,
+              borderWidth: 1.5,
+              borderColor: colors.raised,
+              backgroundColor: colors.accent,
+            }}
+          />
+        )}
+      </View>
       <T variant="label" numberOfLines={1} style={{ fontVariant: ["tabular-nums"] }}>
         {label}
       </T>

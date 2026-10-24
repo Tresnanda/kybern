@@ -39,7 +39,7 @@ const light = {
   warning: "#856014",
   warningSoft: "#FAF2DF",
   code: "#F5F5F5",
-  /** Dialog backdrop. Sheets use `scrim` (32 %), menus `scrimLight` (20 %). */
+  /** Dialog backdrop. Sheets use `scrim` (32 % light, 48 % dark), menus `scrimLight` (20 % / 36 %). */
   backdrop: "#00000066",
   scrim: "#00000052",
   scrimLight: "#00000033",
@@ -69,8 +69,10 @@ const dark: typeof light = {
   warningSoft: "#383024",
   code: "#222222",
   backdrop: "#00000088",
-  scrim: "#00000052",
-  scrimLight: "#00000033",
+  // Black over a near-black page needs about twice the light theme's alpha to
+  // read as dimmed at all (a 20 % menu scrim was invisible on Android dark).
+  scrim: "#0000007A",
+  scrimLight: "#0000005C",
   chrome: "#181818B8",
 };
 export type Colors = typeof light;

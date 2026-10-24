@@ -208,10 +208,10 @@ adding it also makes it available on desktop.
 
 In a conversation, the top-right environment pill opens branch, changes, commit,
 repository, pull request, and thread actions. Separate floating pills above the
-composer open Files, Terminal, and Tasks & agents. The top progressive blur ends
-near the project name; the bottom blur begins within the lower quarter of the
-composer. Both use David Mokos’s MIT progressive-blur registry component
-(`src/components/ui/progressive-blur.tsx`).
+composer open Files, Terminal, and Tasks & agents. The bars' material hugs the
+edge (`ChromeBar`): the top one covers the status bar and header and dissolves
+just below it; the bottom one starts clear at the bar's top edge and is solid
+24 pt into it, so the conversation stays sharp right up to the composer.
 
 Type `@` for project files and installed plugins, `$` for skills, or `/` for
 commands and skills. Suggestions appear at the caret inside the composer and
@@ -363,7 +363,7 @@ and sheets. Loading and pull-to-refresh visuals are custom too. Use these shared
 components for new Android UI. iOS retains its native controls and glass treatment.
 Reduce Motion removes the spatial morph and retains a short fade.
 
-The thread header uses a shorter progressive fade above the conversation. Terminal
+Terminal
 uses the app theme, an edge-to-edge xterm canvas and scrollable groups of shell
 keys above the native keyboard. Control applies to the next typed character.
 Input edits, including Unicode composition, are translated into ordered PTY writes;

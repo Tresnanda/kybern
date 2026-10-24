@@ -39,9 +39,12 @@ export type MenuOrigin = {
   width: number;
   height: number;
 };
+import { useOverlayOffset } from "../../ui/measure";
 import { DURATION, MASS, SIZE } from "./motion";
 /** Final corner radius of a menu surface (`radius.lg`). Rows inside use `radius.md`. */
 const MENU_RADIUS = 20;
+/** Space between a trigger and the menu it opens. */
+const MENU_GAP = 6;
 const SPEED = 2;
 const ATTACHMENT_EXIT = {
   duration: 220,
@@ -50,7 +53,7 @@ const ATTACHMENT_EXIT = {
 };
 
 export function MorphingMenu({
-  origin,
+  origin: anchor,
   anchorRef,
   open,
   onClose,
@@ -61,7 +64,7 @@ export function MorphingMenu({
   dismissLabel = "Dismiss thread menu",
   preferredWidth = 272,
   closingMotion = "spring",
-  point,
+  point: touch,
   originRadius,
   scrim = false,
 }: {
@@ -109,14 +112,24 @@ export function MorphingMenu({
     if (Platform.OS === "ios") setVisible(false);
     else finishDismissal();
   }, [finishDismissal]);
+  // Triggers are measured inside the app's root view; the Modal draws from the
+  // screen's top. Shift into the Modal's space (a no-op on iOS and edge to edge).
+  const rootY = useOverlayOffset();
+  const origin = { ...anchor, y: anchor.y + rootY };
+  const point = touch && { x: touch.x, y: touch.y + rootY };
+  const top = insets.top + rootY + 8;
+  const bottom = height - insets.bottom - 16;
   const menuWidth = Math.min(width - 32, preferredWidth);
   const clampX = (x: number) => Math.max(16, Math.min(x, width - 16 - menuWidth));
-  // A row is wider than the menu: open beside it. A button: grow out of it.
+  // A row is wider than the menu: open at the finger (or under the row when
+  // opened by a tap). A button: drop from it, aligned to the edge on its side.
   const fromRow = origin.width > menuWidth;
-  const autoTop = fromRow ? origin.y + origin.height + 6 : origin.y;
-  const autoBottom = fromRow ? origin.y - 6 : origin.y + origin.height;
-  const roomBelow = height - insets.bottom - 16 - autoTop;
-  const roomAbove = autoBottom - insets.top - 16;
+  const target =
+    fromRow && point ? { y: point.y - 22, height: 44 } : { y: origin.y, height: origin.height };
+  const autoTop = target.y + target.height + MENU_GAP;
+  const autoBottom = target.y - MENU_GAP;
+  const roomBelow = bottom - autoTop;
+  const roomAbove = autoBottom - top;
   const resolved =
     placement !== "auto"
       ? placement
@@ -135,9 +148,7 @@ export function MorphingMenu({
         ? clampX(origin.x)
         : width - 16 - menuWidth;
   const belowY =
-    placement === "auto"
-      ? Math.max(insets.top + 4, autoTop)
-      : Math.max(insets.top + 4, origin.y - 8);
+    placement === "auto" ? Math.max(top, autoTop) : Math.max(top, origin.y - 8);
   const maxHeight = Math.max(
     44,
     placement === "auto"
@@ -145,31 +156,42 @@ export function MorphingMenu({
         ? roomBelow
         : roomAbove
       : resolved === "above"
-        ? origin.y - insets.top - 16
-        : height - belowY - insets.bottom - 16,
+        ? origin.y - MENU_GAP - top
+        : bottom - belowY,
   );
   const menuHeight = Math.min(contentHeight, maxHeight);
   const menuY =
     resolved === "below"
       ? belowY
       : placement === "auto"
-        ? Math.max(insets.top + 4, autoBottom - menuHeight)
-        : Math.max(insets.top + 4, origin.y - menuHeight - 8);
-  const startRadius = Math.min(
-    originRadius ?? origin.width / 2,
-    origin.width / 2,
-    origin.height / 2,
-  );
+        ? Math.max(top, autoBottom - menuHeight)
+        : Math.max(top, origin.y - menuHeight - MENU_GAP);
+  // Where the silhouette starts and ends: the trigger, or for a long-pressed
+  // row a 44 pt capsule under the finger, so a menu never swells out of a
+  // whole row or message.
+  const seed =
+    fromRow && point
+      ? {
+          x: Math.max(origin.x, Math.min(point.x - 22, origin.x + origin.width - 44)),
+          y: point.y - 22,
+          width: 44,
+          height: 44,
+        }
+      : origin;
+  const startRadius =
+    seed === origin
+      ? Math.min(originRadius ?? origin.width / 2, origin.width / 2, origin.height / 2)
+      : 22;
   // A native modal can dismiss the keyboard underneath it. Follow the actual
   // trigger rather than keeping the screen coordinates captured before opening.
   const anchorOffset = useSharedValue({ x: 0, y: 0 });
   useFrameCallback(() => {
     if (!anchorRef) return;
-    const anchor = measure(anchorRef);
-    if (anchor)
+    const live = measure(anchorRef);
+    if (live)
       anchorOffset.set({
-        x: anchor.pageX - origin.x,
-        y: anchor.pageY - origin.y,
+        x: live.pageX - anchor.x,
+        y: live.pageY - anchor.y,
       });
   });
   const anchorStyle = useAnimatedStyle(() => ({
@@ -273,19 +295,19 @@ export function MorphingMenu({
   const geometry = useDerivedValue(() => {
     const p = reduced ? 1 : size.get();
     const c = reduced ? 1 : center.get();
-    const w = Math.max(1, origin.width + (menuWidth - origin.width) * p);
+    const w = Math.max(1, seed.width + (menuWidth - seed.width) * p);
     const h = Math.max(
       1,
-      origin.height + (destinationHeight.get() - origin.height) * p,
+      seed.height + (destinationHeight.get() - seed.height) * p,
     );
     const x =
-      origin.x +
-      origin.width / 2 +
-      (menuX + menuWidth / 2 - origin.x - origin.width / 2) * c;
+      seed.x +
+      seed.width / 2 +
+      (menuX + menuWidth / 2 - seed.x - seed.width / 2) * c;
     const y =
-      origin.y +
-      origin.height / 2 +
-      (menuY + destinationHeight.get() / 2 - origin.y - origin.height / 2) * c;
+      seed.y +
+      seed.height / 2 +
+      (menuY + destinationHeight.get() / 2 - seed.y - seed.height / 2) * c;
     const round = Math.sin(Math.PI * Math.max(0, Math.min(1, p)));
     const r = Math.min(
       w / 2,
@@ -319,14 +341,20 @@ export function MorphingMenu({
           interpolate(size.get(), [0.45, 0.9], [0, 1], "clamp"),
         ),
   }));
+  // A trigger that stays on screen (a chip, a value, a row) shows through the
+  // silhouette at its seed: the material condenses out of it on open and
+  // dissolves back into it on close, so no blank pill covers the trigger while
+  // the modal is torn down. Menus that redraw their source icon keep an opaque
+  // material, the attachment return fades at its source before its picker.
+  const dissolve = !sourceIcon;
   const materialStyle = useAnimatedStyle(() => ({
-    // Only the attachment return fades at its source before the bounded exit.
-    // Standard menus preserve the original material through spring completion.
     opacity: reduced
       ? fade.get()
-      : open || !attachmentExit
-        ? 1
-        : interpolate(size.get(), [0, 0.12], [0, 1], "clamp"),
+      : dissolve
+        ? interpolate(size.get(), [0, 0.2], [0, 1], "clamp")
+        : open || !attachmentExit
+          ? 1
+          : interpolate(size.get(), [0, 0.12], [0, 1], "clamp"),
   }));
   const scrimStyle = useAnimatedStyle(() => ({ opacity: dim.get() }));
   const dotStyle = useAnimatedStyle(() => ({

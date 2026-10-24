@@ -152,11 +152,30 @@ Cancel item, ever. Actions run after the menu has closed.
 | Tap a “…” or a value | `<MenuButton items label>` (children = custom trigger) | Themed menu over chrome blur (UIKit tap menus need a bar button or a native dependency) | Themed menu |
 
 Themed menu (MorphingMenu + MenuPanel): opaque `surface` on Android, 272 pt
-wide, radius 20, 6 pt padding, 20 % scrim; optional title naming the object;
-48 pt rows with 20 pt icons, `subhead` labels, accent check, chevron for
-submenus; submenus replace the list in place with a “‹ Status” back row while
-the surface morphs to the new height; hairlines between sections; destructive
-rows in red text. Imperative use: `useMenuSurface().show({ items, origin })`.
+wide, radius 20, 6 pt padding, `scrimLight` scrim (20 % light, 36 % dark);
+optional title naming the object; 48 pt rows with a 20 pt icon or `leading`
+mark (a `SpaceTile`), `subhead` labels, accent check, chevron for submenus;
+submenus replace the list in place with a “‹ Status” back row while the surface
+morphs to the new height; hairlines between sections; destructive rows in red
+text. Imperative use: `useMenuSurface().show({ items, origin })`.
+
+Anchoring and motion:
+
+- Measure triggers with `measureTrigger(view, rect => …)` (`src/ui/measure.ts`),
+  never `measureInWindow`: on Android React Native subtracts the status bar from
+  `measureInWindow` while the menu's Modal draws from the screen top, which put
+  every menu one status bar too high. MorphingMenu adds `useOverlayOffset()`
+  itself.
+- A button's menu drops 6 pt below it (above when there is less room), aligned
+  to the trigger's edge on its side of the screen, clamped inside the safe area.
+  A long-pressed row opens at the finger. The trigger stays visible.
+- The silhouette starts at the trigger (a 44 pt capsule under the finger for a
+  row): centre on `MASS`, size on `SIZE`, corners from the trigger's radius to
+  20. Its material condenses out of the trigger over the first 20 % of the size
+  spring and dissolves back into it on close, before the modal is removed. Text
+  never scales; Reduce Motion cross-fades.
+- Spaces in a menu use `leading: <SpaceTile size={20} />`. Native iOS menus
+  can't draw views: give them `nativeIcon` (the space's letter, `p.square.fill`).
 
 `HeaderActions` uses `Stack.Toolbar placement="right"`, which owns the whole
 trailing side on iOS: put every trailing control in it.
@@ -179,11 +198,13 @@ errors and acknowledgements, never for menus.
 
 Sheets are routes. Give the screen `sheetOptions({ detents })` in
 `app/_layout.tsx`. iOS: native `formSheet` with grabber and detents. Android:
-`AndroidSheet` — opaque `surface`, top radius 28, 32 % scrim, grabber, drag to
-dismiss carrying release velocity (flick down dismisses, flick up expands with
-a light haptic), liquid-gooey outline. A sheet on a grouped page should set
-`headerStyle: { backgroundColor: colors.grouped }`. Lists of more than ~6
-actions, or grouped actions, are sheets, not menus.
+`AndroidSheet` — one opaque surface in the page's colour, top radius 28, `scrim`,
+grabber, drag to dismiss carrying release velocity (flick down dismisses, flick
+up expands with a light haptic), liquid-gooey outline. The header (title and
+close on the content inset) sits on that same surface: no second colour, no
+divider. A sheet on a grouped page sets `headerStyle: { backgroundColor:
+colors.grouped }`; the Android sheet reads it as its surface colour. Lists of
+more than ~6 actions, or grouped actions, are sheets, not menus.
 
 ### Toast (`Toast.tsx`)
 
@@ -208,13 +229,21 @@ For custom floating chrome (the thread screen). Wrap the screen in
 `ChromeProvider`; render `<ChromeBar edge="top" scrollY={…}>` and
 `<ChromeBar edge="bottom">`; read `useChromeInsets()` for the list's content
 insets. The bar pads the safe area, measures itself and publishes its height.
-iOS: system chrome blur + `chrome` tint (opaque with Reduce Transparency); the
-top material fades in over the first 8 pt of scroll. Android: opaque
-`background`. On both, the material runs `EDGE_FADE` (20 pt) past the bar's
-inner edge and dissolves into the content (a masked progressive edge on iOS, a
-gradient on Android): no hairline, no hard-edged slab. Anything stacked on a bar
-(status strip, capsules) sits on that material without a box of
-its own. Interactive chrome always sits on the bar; when a bar grows, shift the list
+iOS: system chrome blur + `chrome` tint (opaque with Reduce Transparency).
+Android: `background` (or `tone="grouped"`). The top material fades in over the
+first 8 pt of scroll.
+
+**Edge rule** (iOS 26's scroll edge effect): the material hugs the screen edge
+and the bar, never a fixed or percentage height.
+
+- Bottom bars: the material is clear at the bar's top edge and solid `EDGE_FADE`
+  (24 pt) into the bar, on an eased ramp. Content stays sharp right up to the
+  bar and dissolves under its first row (chips, capsules), never above it.
+- Top bars: solid over the status bar and header, dissolving over `TOP_FADE`
+  (12 pt) just below the header.
+- No hairline, no tinted slab. Anything stacked on a bar (chips, capsules) sits
+  on that material without a box of its own. Solid footers over scrolling
+  content are ChromeBars too (the pull request “Send to agent” bar). Interactive chrome always sits on the bar; when a bar grows, shift the list
 by the delta in one frame instead of animating it. `useWindowControlsInset()`
 keeps custom headers clear of the iPadOS window controls (78 pt when windowed);
 ChromeBar top bars apply it automatically. Native stack headers handle it

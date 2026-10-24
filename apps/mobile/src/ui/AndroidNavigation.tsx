@@ -9,7 +9,7 @@ import {
   useSyncExternalStore,
   type ComponentProps,
 } from "react";
-import { View, useWindowDimensions } from "react-native";
+import { StyleSheet, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
@@ -200,6 +200,13 @@ export function AndroidSheet({ children, ...props }: ScreenLayoutProps) {
     if (allowRemove && pending.current)
       props.navigation.dispatch(pending.current);
   }, [allowRemove, props.navigation]);
+  // The sheet takes the page's colour (`headerStyle.backgroundColor`, the same
+  // option a grouped page sets for iOS) so the header is part of one surface
+  // under the sheet's rounded top, never a lighter block above the page.
+  const { colors } = useTheme();
+  const page =
+    (StyleSheet.flatten(props.options.headerStyle) as { backgroundColor?: string } | undefined)
+      ?.backgroundColor ?? colors.surface;
   const detents = props.options.sheetAllowedDetents;
   const compactHeight =
     Array.isArray(detents) && typeof detents[0] === "number" ? detents[0] : 0.9;
@@ -237,6 +244,7 @@ export function AndroidSheet({ children, ...props }: ScreenLayoutProps) {
             offset={drag}
             touchBias={touchBias}
             releaseVelocity={releaseVelocity}
+            background={typeof page === "string" ? page : colors.surface}
             style={{ flex: 1 }}
           >
             <GestureDetector gesture={gesture}>

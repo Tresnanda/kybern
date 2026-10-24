@@ -15,6 +15,7 @@ import {
   taskTitle,
 } from "../state/tasksModel";
 import { useMenuSurface } from "../ui/ActionMenu";
+import { measureTrigger } from "../ui/measure";
 import { Check } from "../ui/CheckRow";
 import { ListRow, type SwipeAction } from "../ui/List";
 import { StatusGlyph } from "../ui/TaskGlyphs";
@@ -94,8 +95,8 @@ export const TaskRow = memo(function TaskRow({
       icon: "ellipsis",
       tone: "neutral",
       onPress: () =>
-        anchor.current?.measureInWindow((x, y, width, height) =>
-          more.show({ items: taskMenuItems(task), title: menuTitle, origin: { x, y, width, height }, originRadius: 0 }),
+        measureTrigger(anchor.current, (origin) =>
+          more.show({ items: taskMenuItems(task), title: menuTitle, origin, originRadius: 0 }),
         ),
     },
     {

@@ -4,14 +4,16 @@
 // content instead of guessing. Content scrolls under the material only;
 // interactive chrome always sits on it.
 //
-//   iOS      system chrome blur + `chrome` tint (100 % `background` with Reduce
-//            Transparency). The material runs EDGE_FADE past the bar's inner
-//            edge and dissolves into the content there (a masked progressive
-//            edge), so nothing on the bar sits in a hard-edged slab. The top
-//            bar's material fades in over the first 8 pt of scroll, driven on
-//            the UI thread.
-//   Android  opaque `background` that dissolves through an EDGE_FADE gradient
-//            on the content side once content is underneath.
+// The material hugs the screen edge like iOS 26's scroll edge effect:
+//   bottom   clear at the bar's top edge, solid EDGE_FADE (24 pt) into the bar,
+//            so content stays sharp right up to the bar and dissolves under its
+//            first row (chips, capsules), never above it.
+//   top      solid over the status bar and header, dissolving over TOP_FADE
+//            (12 pt) just below the header.
+//   iOS      system chrome blur + `chrome` tint through that mask (100 %
+//            `background` with Reduce Transparency). The top bar's material
+//            fades in over the first 8 pt of scroll, on the UI thread.
+//   Android  `background` through the same ramp (no blur to sample).
 import MaskedView from "@react-native-masked-view/masked-view";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
@@ -42,8 +44,12 @@ import Animated, {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "./theme";
 
-/** How far a bar's material reaches past its inner edge while it dissolves into the content. */
-export const EDGE_FADE = 20;
+/** How far into a bottom bar its material takes to become solid. */
+export const EDGE_FADE = 24;
+/** How far below a top bar its material takes to dissolve. */
+export const TOP_FADE = 12;
+// Eased ramp: the first points stay nearly clear so text is not veiled early.
+const RAMP_STOPS = [0, 0.35, 0.7, 1] as const;
 
 /** iOS "Reduce Transparency": draw bars opaque. */
 export function useReduceTransparency() {
@@ -98,7 +104,7 @@ export function useChromeInsets() {
 export function ChromeBar({
   edge,
   scrollY,
-  contentUnder = true,
+  tone = "background",
   avoidWindowControls = true,
   safeArea = true,
   style,
@@ -107,8 +113,8 @@ export function ChromeBar({
   edge: "top" | "bottom";
   /** The list's scroll offset: the top bar reveals its material over the first 8 pt. */
   scrollY?: SharedValue<number>;
-  /** Whether content currently sits under a bottom bar (shows its edge). */
-  contentUnder?: boolean;
+  /** The page colour the material dissolves into (`grouped` on settings-style pages). */
+  tone?: "background" | "grouped";
   /** Top bars on iPad keep clear of the window controls. */
   avoidWindowControls?: boolean;
   /** Pad the screen's safe area (off for bars inside a smaller frame). */
@@ -128,7 +134,7 @@ export function ChromeBar({
   const ios = Platform.OS === "ios";
   const fill = ios ? (
     reduceTransparency ? (
-      <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.background }]} />
+      <View style={[StyleSheet.absoluteFill, { backgroundColor: colors[tone] }]} />
     ) : (
       <>
         <BlurView
@@ -140,32 +146,40 @@ export function ChromeBar({
       </>
     )
   ) : null;
-  // The mask is solid over the bar and ramps to clear over EDGE_FADE past its
-  // inner edge: the blur and tint thin out together, so the bar has no edge.
-  const ramp = (
+  // One mask for both platforms: solid over the bar, an eased ramp on its
+  // content side (inside a bottom bar, just past a top bar).
+  const fadeLength = top ? TOP_FADE : EDGE_FADE;
+  const ramp = (color: string) => (
     <LinearGradient
-      colors={["#000000", "#00000000"]}
-      start={{ x: 0, y: top ? 0 : 1 }}
-      end={{ x: 0, y: top ? 1 : 0 }}
-      style={{ height: EDGE_FADE }}
+      colors={[`${color}00`, `${color}40`, `${color}B8`, `${color}FF`]}
+      locations={RAMP_STOPS}
+      start={{ x: 0, y: top ? 1 : 0 }}
+      end={{ x: 0, y: top ? 0 : 1 }}
+      style={{ height: fadeLength }}
     />
   );
-  const material = !fill ? (
-    <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.background }]} />
-  ) : (
-    <MaskedView
-      pointerEvents="none"
-      style={{ position: "absolute", start: 0, end: 0, top: top ? 0 : -EDGE_FADE, bottom: top ? -EDGE_FADE : 0 }}
-      maskElement={
-        <View style={{ flex: 1 }}>
-          {!top && ramp}
-          <View style={{ flex: 1, backgroundColor: "#000000" }} />
-          {top && ramp}
-        </View>
-      }
-    >
+  const shape = (color: string) => (
+    <View style={{ flex: 1 }}>
+      {!top && ramp(color)}
+      <View style={{ flex: 1, backgroundColor: color }} />
+      {top && ramp(color)}
+    </View>
+  );
+  const region = {
+    position: "absolute" as const,
+    start: 0,
+    end: 0,
+    top: 0,
+    bottom: top ? -TOP_FADE : 0,
+  };
+  const material = fill ? (
+    <MaskedView pointerEvents="none" style={region} maskElement={shape("#000000")}>
       {fill}
     </MaskedView>
+  ) : (
+    <View pointerEvents="none" style={region}>
+      {shape(colors[tone].slice(0, 7))}
+    </View>
   );
   return (
     <View
@@ -184,36 +198,10 @@ export function ChromeBar({
         style,
       ]}
     >
-      {/* iOS top bars start clear and fill as content scrolls under them;
-          Android bars are always opaque, so only their edge reacts. */}
-      <Animated.View
-        pointerEvents="none"
-        style={[StyleSheet.absoluteFill, ios && top ? reveal : null]}
-      >
+      {/* Top bars start clear and fill as content scrolls under them. */}
+      <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, top ? reveal : null]}>
         {material}
       </Animated.View>
-      {!ios && (
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            {
-              position: "absolute",
-              start: 0,
-              end: 0,
-              height: EDGE_FADE,
-              ...(top ? { top: "100%" } : { bottom: "100%" }),
-            },
-            top ? reveal : { opacity: contentUnder ? 1 : 0 },
-          ]}
-        >
-          <LinearGradient
-            colors={[colors.background, `${colors.background}00`]}
-            start={{ x: 0, y: top ? 0 : 1 }}
-            end={{ x: 0, y: top ? 1 : 0 }}
-            style={StyleSheet.absoluteFill}
-          />
-        </Animated.View>
-      )}
       {children}
     </View>
   );

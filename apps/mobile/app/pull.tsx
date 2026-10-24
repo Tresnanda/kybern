@@ -26,6 +26,7 @@ import { relativeTime } from "../src/state/threadList";
 import { HeaderActions, type MenuItem } from "../src/ui/ActionMenu";
 import { confirm } from "../src/ui/Alert";
 import { Check } from "../src/ui/CheckRow";
+import { ChromeBar } from "../src/ui/ChromeBar";
 import { InsetGroup, ListRow, SectionHeader } from "../src/ui/List";
 import { Markdown } from "../src/ui/Markdown";
 import { Button, Empty, ErrorBanner, T, Tap } from "../src/ui/primitives";
@@ -260,24 +261,13 @@ export default function PullRequestScreen() {
         )}
       </ScrollView>
       {selected > 0 && open && (
-        <View
-          style={{
-            position: "absolute",
-            start: 0,
-            end: 0,
-            bottom: 0,
-            paddingHorizontal: gutter(width),
-            paddingTop: space.md,
-            paddingBottom: Math.max(insets.bottom, space.lg),
-            backgroundColor: colors.grouped,
-            borderTopWidth: 0.5,
-            borderColor: colors.line,
-          }}
-        >
-          <Button role="prominent" onPress={() => openSheet("repair")}>
-            {`Send ${count(selected, "comment")} to agent`}
-          </Button>
-        </View>
+        <ChromeBar edge="bottom" tone="grouped">
+          <View style={{ paddingHorizontal: gutter(width), paddingTop: space.md, paddingBottom: insets.bottom ? 0 : space.lg }}>
+            <Button role="prominent" onPress={() => openSheet("repair")}>
+              {`Send ${count(selected, "comment")} to agent`}
+            </Button>
+          </View>
+        </ChromeBar>
       )}
     </View>
   );

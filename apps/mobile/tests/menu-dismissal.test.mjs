@@ -75,6 +75,7 @@ function mountMenu(platform, reduced, closingMotion) {
     "@react-native-masked-view/masked-view": { default: "MaskedView" },
     "expo-blur": { BlurView: "BlurView" },
     "../../ui/primitives": { Icon: "Icon" },
+    "../../ui/measure": { useOverlayOffset: () => 0 },
     "../../ui/theme": { useTheme: () => ({ colors: {}, dark: true }) },
     "./motion": { MASS: {}, SIZE: {}, DURATION: { scrim: 140 } },
   };

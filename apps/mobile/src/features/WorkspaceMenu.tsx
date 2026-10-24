@@ -10,6 +10,7 @@ import { Linking, View } from "react-native";
 import { groupFilesByRepo, includedMembers, prButtonLabel } from "../../../../packages/kybern-client/src/groups";
 import { shortBranch } from "../../../../packages/kybern-client/src/delegations";
 import { useMenuSurface, type MenuItem } from "../ui/ActionMenu";
+import { measureTrigger } from "../ui/measure";
 import { Alert, confirm } from "../ui/Alert";
 import { showToast } from "../ui/Toast";
 import { IconButton } from "../ui/primitives";
@@ -259,16 +260,14 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
 
   return (
     <>
-      <View ref={anchor} collapsable={false} style={{ opacity: menu.element ? 0 : 1 }}>
+      <View ref={anchor} collapsable={false}>
         <IconButton
           name="ellipsis"
           label="Thread actions"
           disabled={!thread}
           onPress={() => {
             void reload().catch(() => {});
-            anchor.current?.measureInWindow((x, y, width, height) =>
-              menu.show({ items, origin: { x, y, width, height }, sourceIcon: "ellipsis" }),
-            );
+            measureTrigger(anchor.current, (origin) => menu.show({ items, origin }));
           }}
         />
       </View>

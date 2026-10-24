@@ -36,6 +36,7 @@ import Animated, { FadeIn } from "react-native-reanimated";
 import { MorphingMenu, type MenuOrigin } from "../components/liquid/MorphingMenu";
 import { DURATION } from "../components/liquid/motion";
 import { haptics } from "./haptics";
+import { measureTrigger } from "./measure";
 import { menuAt, menuSections, type MenuItem } from "./menuModel";
 import {
   Button,
@@ -59,7 +60,7 @@ function nativeActions(items: readonly MenuItem[], prefix: string): ReactNode[] 
           key={id}
           identifier={id}
           title={item.title}
-          icon={item.icon}
+          icon={item.nativeIcon ?? item.icon}
           subtitle={item.subtitle}
           destructive={item.destructive}
           disabled={item.disabled}
@@ -116,7 +117,7 @@ function MenuRow({
     >
       {leading && (
         <View style={{ width: 20, alignItems: "center" }}>
-          {item.icon && <Icon name={item.icon} size={20} color={tint} />}
+          {item.leading ?? (item.icon && <Icon name={item.icon} size={20} color={tint} />)}
         </View>
       )}
       <View style={{ flex: 1, paddingVertical: space.sm }}>
@@ -158,19 +159,27 @@ export function MenuPanel({
 }) {
   const { colors } = useTheme();
   const [path, setPath] = useState<string[]>([]);
+  // The first list arrives with the surface's own morph; only a submenu swap
+  // cross-fades (a layout animation on the first mount would also run inside
+  // Android's modal window while the silhouette is still growing).
+  const [navigated, setNavigated] = useState(false);
+  const go = (next: string[]) => {
+    setNavigated(true);
+    setPath(next);
+  };
   const level = menuAt(items, path) ?? [...items];
   const sections = menuSections(level);
   const leading = level.some(
-    (item) => item.icon || item.children?.some((child) => child.icon),
+    (item) => item.icon || item.leading || item.children?.some((child) => child.icon || child.leading),
   );
   const heading = path.length ? path[path.length - 1] : title;
   return (
-    <Animated.View key={path.join("/")} entering={FadeIn.duration(DURATION.scrim)}>
+    <Animated.View key={path.join("/")} entering={navigated ? FadeIn.duration(DURATION.scrim) : undefined}>
       {path.length ? (
         <Tap
           label={`Back to ${path.length > 1 ? path[path.length - 2] : (title ?? "menu")}`}
           feedback="highlight"
-          onPress={() => setPath((p) => p.slice(0, -1))}
+          onPress={() => go(path.slice(0, -1))}
           style={{
             flexDirection: "row",
             alignItems: "center",
@@ -215,7 +224,7 @@ export function MenuPanel({
               item={item}
               leading={leading}
               onSelect={(picked) => {
-                if (picked.children) setPath((p) => [...p, picked.title]);
+                if (picked.children) go([...path, picked.title]);
                 else onSelect(picked);
               }}
             />
@@ -316,15 +325,9 @@ export function ContextMenu({
     const point = event
       ? { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY }
       : undefined;
-    anchor.current?.measureInWindow((x, y, width, height) => {
-      menu.show({
-        items,
-        title,
-        origin: { x, y, width, height },
-        point,
-        originRadius: rowRadius,
-      });
-    });
+    measureTrigger(anchor.current, (origin) =>
+      menu.show({ items, title, origin, point, originRadius: rowRadius }),
+    );
   };
   // No `display: contents` on the native view (expo-router's own Link uses it):
   // it hides the whole row from VoiceOver.
@@ -390,27 +393,20 @@ export function MenuButton({
 }) {
   const anchor = useRef<View>(null);
   const menu = useMenuSurface();
-  const [hidden, setHidden] = useState(false);
-  const open = () => {
-    anchor.current?.measureInWindow((x, y, width, height) => {
-      setHidden(!children);
+  // The trigger stays put: the menu condenses out of it below (or above) and
+  // dissolves back into it on close.
+  const open = () =>
+    measureTrigger(anchor.current, (origin) =>
       menu.show({
         items,
         title,
-        origin: { x, y, width, height },
-        sourceIcon: children ? null : icon,
+        origin,
         originRadius: children ? triggerRadius : undefined,
-      });
-    });
-  };
+      }),
+    );
   return (
     <>
-      <View
-        ref={anchor}
-        collapsable={false}
-        // The icon morphs out of its button; hide the original while it does.
-        style={[style, { opacity: hidden && menu.element ? 0 : 1 }]}
-      >
+      <View ref={anchor} collapsable={false} style={style}>
         {children ? (
           <Tap label={label} hint="Opens a menu" onPress={open} disabled={disabled} feedback="highlight" style={{ borderRadius: triggerRadius }}>
             {children}
@@ -451,7 +447,7 @@ function toolbarItems(items: readonly MenuItem[]): ReactNode[] {
         ) : (
           <Stack.Toolbar.MenuAction
             key={item.title}
-            icon={item.icon}
+            icon={item.nativeIcon ?? item.icon}
             subtitle={item.subtitle}
             destructive={item.destructive}
             disabled={item.disabled}

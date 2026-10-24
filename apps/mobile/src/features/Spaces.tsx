@@ -3,6 +3,8 @@
 // lists show and nothing animates.
 import { router } from "expo-router";
 import type { ReactNode } from "react";
+import type { SFSymbol } from "sf-symbols-typescript";
+import { spaceInitials } from "../../../../packages/kybern-client/src/spaces";
 import { View } from "react-native";
 import { count } from "../state/format";
 import {
@@ -17,6 +19,15 @@ import type { MenuItem } from "../ui/menuModel";
 import { Icon, T } from "../ui/primitives";
 import { SpaceTile } from "../ui/SpaceTile";
 import { radius, space, useTheme } from "../ui/theme";
+
+/**
+ * A native iOS menu can't draw a SpaceTile: the letter in a filled square
+ * ("p.square.fill") is the closest system mark, monochrome like its siblings.
+ */
+function spaceSymbol(name: string): SFSymbol {
+  const letter = spaceInitials(name).charAt(0).toLowerCase();
+  return (/^[a-z]$/.test(letter) ? `${letter}.square.fill` : "square.fill") as SFSymbol;
+}
 
 /** "Personal ✓ / Work / New space… / Manage spaces…" as one inline menu section, or nothing without spaces. */
 export function useSpaceMenuItems(): MenuItem[] {
@@ -34,6 +45,8 @@ export function useSpaceMenuItems(): MenuItem[] {
           ? s.spaces.map<MenuItem>((space) => ({
               title: space.name,
               subtitle: count(projectCount(space.id), "project"),
+              leading: <SpaceTile space={space} size={20} />,
+              nativeIcon: spaceSymbol(space.name),
               checked: space.id === active,
               onPress: () => setCurrentSpace(space.id),
             }))

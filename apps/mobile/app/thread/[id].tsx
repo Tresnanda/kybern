@@ -623,7 +623,7 @@ function ThreadScreenBody() {
           )}
         </ChromeBar>
         {away && <JumpToLatest bottom={chrome.bottom} onPress={jump} />}
-        <ChromeBar edge="bottom" contentUnder={away}>
+        <ChromeBar edge="bottom">
           <View
             style={{
               width: "100%",

@@ -61,6 +61,7 @@ import {
 } from "../ui/primitives";
 import { gutter, radius, type, useTheme } from "../ui/theme";
 import { MenuPanel, type MenuItem } from "../ui/ActionMenu";
+import { measureTrigger } from "../ui/measure";
 import { PROVIDER_DISPLAY_NAME } from "../state/protocol";
 import { SendButton } from "./ComposerControls";
 import type { ThreadState } from "../state/transcript";
@@ -1070,11 +1071,9 @@ export const Composer = memo(function Composer({
                     setAdding(false);
                     return;
                   }
-                  void measureSendView(addButton.current).then((rect) => {
-                    if (rect) {
-                      setAddOrigin(rect);
-                      setAdding(true);
-                    }
+                  measureTrigger(addButton.current, (rect) => {
+                    setAddOrigin(rect);
+                    setAdding(true);
                   });
                 }}
                 disabled={disabled || uploading || busy}
@@ -1089,11 +1088,9 @@ export const Composer = memo(function Composer({
                     label={`${steering ? "Steer now" : "Queue follow-up"}. Change send mode`}
                     disabled={busy}
                     onPress={() => {
-                      void measureSendView(modeButton.current).then((rect) => {
-                        if (rect) {
-                          setModeOrigin(rect);
-                          setModeOpen(true);
-                        }
+                      measureTrigger(modeButton.current, (rect) => {
+                        setModeOrigin(rect);
+                        setModeOpen(true);
                       });
                     }}
                     style={{ width: 44, alignItems: "center" }}

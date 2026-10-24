@@ -80,7 +80,10 @@ export function MorphingSurface({
   offset: externalOffset,
   releaseVelocity,
   touchBias,
+  background,
 }: PropsWithChildren<{
+  /** The page colour inside the sheet, so its header and body are one surface. */
+  background?: string;
   open: boolean;
   onClosed: () => void;
   style?: StyleProp<ViewStyle>;
@@ -235,7 +238,7 @@ export function MorphingSurface({
                 position: "absolute",
                 left: 0,
                 top: 0,
-                backgroundColor: colors.surface,
+                backgroundColor: background ?? colors.surface,
                 borderWidth: 1,
                 borderColor: colors.line,
                 boxShadow: "0 8px 36px #00000025",
