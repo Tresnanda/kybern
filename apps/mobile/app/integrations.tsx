@@ -11,7 +11,7 @@ export default function Integrations() {
   const thread = app.threads.find((t) => t.id === params.threadId) ?? snapshot.thread ?? undefined;
   return (
     <Page grouped>
-      <Stack.Screen options={{ title: "Plugins and connectors" }} />
+      <Stack.Screen options={{ title: "Connectors and plugins" }} />
       <IntegrationsSettings
         thread={thread}
         projectId={params.projectId}

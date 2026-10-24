@@ -48,7 +48,7 @@ export const TITLES: Record<CategoryId, string> = {
   delegation: "Delegation",
   accounts: "Accounts",
   usage: "Usage",
-  integrations: "Plugins and connectors",
+  integrations: "Connectors and plugins",
   computer: "Computer use",
   system: "Background & updates",
   access: "Access",
