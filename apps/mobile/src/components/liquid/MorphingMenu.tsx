@@ -55,7 +55,7 @@ const MENU_RADIUS = 20;
 const MENU_GAP = 6;
 /** How far a covering menu reaches past its button's edge. */
 const COVER_INSET = 4;
-/** A closing menu is the same liquid at 1.25× the tempo: exits are shorter than entrances. */
+/** A closing menu is the same liquid at the same tempo as its opening. */
 // It keeps its recoil (the mass overshoots the trigger and comes back, the size
 // dips under it and swells back), but it ends when the ringing is no longer
 // visible (about 1 % of the travel) rather than Reanimated's near-zero default,
@@ -64,7 +64,7 @@ const CLOSE_SETTLED = 1e-4;
 function quicker<T extends { stiffness: number; damping: number }>(spring: T, open: boolean): T {
   return open
     ? spring
-    : { ...spring, stiffness: spring.stiffness * 1.5625, damping: spring.damping * 1.25, energyThreshold: CLOSE_SETTLED };
+    : { ...spring, energyThreshold: CLOSE_SETTLED };
 }
 /** liquid-gooey's cornerEase: the droplet resolves into the target corners. */
 const cornerEase = Easing.bezierFn(0.3, 1.05, 0.4, 1);
