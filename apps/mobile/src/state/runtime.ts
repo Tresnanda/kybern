@@ -43,6 +43,8 @@ import {
   type ThreadState,
 } from "./transcript";
 
+import { versionAtLeast } from "./groups";
+
 export type Environment = Endpoint & { id: string; name: string };
 interface State {
   ready: boolean;
@@ -221,6 +223,10 @@ export function activeEnvironment() {
 }
 export function currentClient() {
   return client;
+}
+/** True when the connected daemon understands group projects (0.15.0 and later). */
+export function supportsGroupProjects() {
+  return versionAtLeast(client?.info?.version);
 }
 export function errorText(e: unknown) {
   const message = e instanceof Error ? e.message : String(e);
