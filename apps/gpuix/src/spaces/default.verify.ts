@@ -120,7 +120,7 @@ try {
   await app.getByTestId('space-save').click()
   await until('renamed, still the default', async () => {
     const [only] = (await client.call('spaces.list', {})).spaces
-    return only?.name === 'Home base' && only.is_default
+    return only?.name === 'Home base' && only.is_default === true
   })
 
   console.log('default space verify: ok')

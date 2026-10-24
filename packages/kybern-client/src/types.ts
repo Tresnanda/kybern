@@ -273,8 +273,8 @@ export interface Space {
   logo: SpaceLogo;
   /** 0-based order in the rail. */
   position: number;
-  /** Exactly one space is the default: it can be renamed and restyled but not deleted. */
-  is_default: boolean;
+  /** Exactly one space is the default: it can be renamed and restyled but not deleted. Daemons before 0.15.0 omit it. */
+  is_default?: boolean;
   created_at: DateTime;
   updated_at: DateTime;
 }
