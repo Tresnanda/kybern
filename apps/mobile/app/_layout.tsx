@@ -301,7 +301,9 @@ function Navigation() {
         <Stack.Screen name="computer-note" options={{ title: "App note" }} />
         <Stack.Screen name="computer-live" options={{ title: "Live view" }} />
         <Stack.Screen name="app-updates" options={{ title: "App updates" }} />
-        <Stack.Screen name="projects" options={{ title: "Projects" }} />
+        <Stack.Screen name="projects" options={{ title: "Projects", headerLargeTitleEnabled: true }} />
+        <Stack.Screen name="spaces" options={{ title: "Spaces" }} />
+        <Stack.Screen name="space-edit" options={{ title: "New space", ...sheet }} />
         <Stack.Screen
           name="notes"
           options={{ title: "Notes", headerLargeTitleEnabled: true }}
