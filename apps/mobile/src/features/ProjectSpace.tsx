@@ -3,42 +3,35 @@
 // gives every new thread in the project the brief, then the project's Coordinator settings.
 // Shown in the Project sheet.
 import { router } from "expo-router";
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { View } from "react-native";
 import {
   PROJECT_SPACE_COPY,
   notePreviewLine,
   projectSpaceNotes,
 } from "../../../../packages/kybern-client/src/projectSpace";
-import { SPACE_COPY } from "../../../../packages/kybern-client/src/spaces";
 import { useNotes } from "../state/notes";
 import { noteTitle } from "../state/notesModel";
-import type { NoteSummary, Space, Thread } from "../state/protocol";
+import type { NoteSummary, Thread } from "../state/protocol";
 import { errorText, rpc, useApp } from "../state/runtime";
+import { moveProjectToSpace, SPACE_COPY, useSpaces } from "../state/spaces";
 import { relativeTime } from "../state/threadList";
 import { useNoteSession } from "../state/useNoteSession";
-import { ErrorBanner, T, Tap, styles } from "../ui/primitives";
+import { Busy } from "../ui/Busy";
+import { InsetGroup, ListRow, SectionFooter, SectionHeader } from "../ui/List";
+import type { MenuItem } from "../ui/menuModel";
+import { ErrorBanner, T, Tap } from "../ui/primitives";
+import { SpaceTile } from "../ui/SpaceTile";
 import { Toggle } from "../ui/Toggle";
-import { useTheme } from "../ui/theme";
-import { NoteView, Pill } from "./NoteView";
+import { radius, space, useTheme } from "../ui/theme";
+import { showToast } from "../ui/Toast";
+import { NoteView } from "./NoteView";
 import { ProjectCoordinatorSection } from "./ProjectCoordinator";
 
 /** Rows shown before "Show all in Notes", like the desktop dock. */
 const MEMORY_LIMIT = 50;
 
-function SectionLabel({ title, trailing }: { title: string; trailing?: React.ReactNode }) {
-  return (
-    <View style={[styles.spread, { minHeight: 44, paddingTop: 12 }]}>
-      <T variant="footnote" tone="secondary" accessibilityRole="header">
-        {title}
-      </T>
-      {trailing}
-    </View>
-  );
-}
-
 export function ProjectSpace({ projectId }: { projectId: string }) {
-  const { colors } = useTheme();
   const app = useApp();
   const { notes, loaded, unsupported, error } = useNotes();
   const { brief, setup, memory } = useMemo(() => projectSpaceNotes(notes, projectId), [notes, projectId]);
@@ -46,39 +39,37 @@ export function ProjectSpace({ projectId }: { projectId: string }) {
 
   if (unsupported)
     return <T tone="secondary">This computer needs a newer Kybern to keep project notes. Update Kybern on the computer, then try again.</T>;
-  if (!loaded) return error ? <ErrorBanner error={error} /> : <T tone="secondary">Loading project notes…</T>;
+  if (!loaded) return error ? <ErrorBanner error={error} /> : <Busy />;
   return (
     <View>
       {/* Keyed by project only: once the brief is created, the same editor keeps going. */}
       <BriefSection key={projectId} projectId={projectId} briefId={brief?.id ?? null} />
-      <SectionLabel title="Setup" />
+      <SectionHeader title="Setup" inset />
       {setup ? (
-        <NoteRow note={setup} threads={threads} />
+        <InsetGroup>
+          <NoteRow note={setup} threads={threads} />
+        </InsetGroup>
       ) : (
-        <T variant="footnote" tone="muted">{PROJECT_SPACE_COPY.setupEmpty}</T>
+        <SectionFooter inset>{PROJECT_SPACE_COPY.setupEmpty}</SectionFooter>
       )}
-      <SectionLabel title={memory.length ? `Memory · ${memory.length}` : "Memory"} />
+      <SectionHeader
+        title="Memory"
+        count={memory.length || undefined}
+        inset
+        action={{ title: "Show all", label: "Show all in Notes", onPress: () => router.push({ pathname: "/notes", params: { projectId } }) }}
+      />
       {memory.length ? (
-        <View style={{ borderRadius: 16, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 14 }}>
-          {memory.slice(0, MEMORY_LIMIT).map((note, index) => (
-            <View key={note.id} style={index ? { borderTopWidth: 1, borderColor: colors.line } : undefined}>
-              <NoteRow note={note} threads={threads} />
-            </View>
+        <InsetGroup>
+          {memory.slice(0, MEMORY_LIMIT).map((note) => (
+            <NoteRow key={note.id} note={note} threads={threads} />
           ))}
-        </View>
+        </InsetGroup>
       ) : (
-        <T variant="footnote" tone="muted">{PROJECT_SPACE_COPY.memoryEmpty}</T>
+        <SectionFooter inset>{PROJECT_SPACE_COPY.memoryEmpty}</SectionFooter>
       )}
       <ProjectCoordinatorSection projectId={projectId} />
       <BriefSwitch projectId={projectId} />
       <SpaceRow projectId={projectId} />
-      <Tap
-        label="Show all in Notes"
-        onPress={() => router.push({ pathname: "/notes", params: { projectId } })}
-        style={{ marginTop: 8, alignItems: "flex-start" }}
-      >
-        <T variant="label" tone="accent">Show all in Notes</T>
-      </Tap>
     </View>
   );
 }
@@ -95,15 +86,18 @@ function BriefSection({ projectId, briefId }: { projectId: string; briefId: stri
     if (!next) void s.session.flush();
     setEditing(next);
   };
+  const ready = s.loaded && !s.deleted;
   return (
     <View>
-      <SectionLabel
+      <SectionHeader
         title="Brief"
-        trailing={<Pill label={editing ? "Done" : empty ? "Write" : "Edit"} primary={editing} disabled={!s.loaded || s.deleted} onPress={() => setMode(!editing)} />}
+        inset
+        first
+        action={ready ? { title: editing ? "Done" : empty ? "Write" : "Edit", onPress: () => setMode(!editing) } : undefined}
       />
-      <View style={{ padding: 14, borderRadius: 16, backgroundColor: colors.raised, gap: 8 }}>
+      <View style={{ padding: space.lg, borderRadius: radius.md, backgroundColor: colors.surface, gap: space.sm }}>
         {empty && !editing ? (
-          <Tap label="Write the brief" onPress={() => setMode(true)} style={{ alignItems: "flex-start" }}>
+          <Tap label="Write the brief" feedback="none" onPress={() => setMode(true)} style={{ alignItems: "flex-start" }}>
             <T tone="secondary">{PROJECT_SPACE_COPY.briefEmpty}</T>
           </Tap>
         ) : (
@@ -119,7 +113,7 @@ function BriefSection({ projectId, briefId }: { projectId: string; briefId: stri
           />
         )}
       </View>
-      <T variant="footnote" tone="muted" style={{ marginTop: 8 }}>{PROJECT_SPACE_COPY.briefOwner}</T>
+      <SectionFooter inset>{PROJECT_SPACE_COPY.briefOwner}</SectionFooter>
     </View>
   );
 }
@@ -132,25 +126,20 @@ function author(note: NoteSummary, threads: readonly Thread[]): string {
 }
 
 const NoteRow = memo(function NoteRow({ note, threads }: { note: NoteSummary; threads: readonly Thread[] }) {
-  const title = noteTitle(note);
   const preview = notePreviewLine(note);
   return (
-    <Tap label={`${title}, ${author(note, threads)}`} onPress={() => router.push({ pathname: "/note", params: { id: note.id } })} static style={{ paddingVertical: 10, gap: 2 }}>
-      <View style={[styles.spread, { gap: 8 }]}>
-        <T variant="label" numberOfLines={1} style={{ flex: 1 }}>{title}</T>
-        <T variant="footnote" tone="muted" style={{ fontVariant: ["tabular-nums"] }}>{relativeTime(note.updated_at)}</T>
-      </View>
-      <T variant="footnote" tone="secondary" numberOfLines={1}>
-        {author(note, threads)}
-        {preview ? ` · ${preview}` : ""}
-      </T>
-    </Tap>
+    <ListRow
+      title={noteTitle(note)}
+      subtitle={`${author(note, threads)}${preview ? ` · ${preview}` : ""}`}
+      subtitleLines={1}
+      meta={relativeTime(note.updated_at)}
+      onPress={() => router.push({ pathname: "/note", params: { id: note.id } })}
+    />
   );
 });
 
 /** "Give every thread in this project the brief": `projects.update brief_in_all_threads`. */
 function BriefSwitch({ projectId }: { projectId: string }) {
-  const { colors } = useTheme();
   const app = useApp();
   const saved = app.projects.find((project) => project.id === projectId)?.brief_in_all_threads ?? false;
   // Shown at once; `projects.changed` confirms it, a failure puts it back.
@@ -165,44 +154,53 @@ function BriefSwitch({ projectId }: { projectId: string }) {
       .finally(() => setPending(null));
   };
   return (
-    <View style={{ marginTop: 24, gap: 8 }}>
-      <View style={[styles.line, { gap: 12, padding: 14, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface }]}>
-        <View style={{ flex: 1, gap: 2 }}>
-          <T variant="label">{PROJECT_SPACE_COPY.switchTitle}</T>
-          <T variant="footnote" tone="secondary">{PROJECT_SPACE_COPY.switchDetail}</T>
-        </View>
-        <Toggle value={value} onValueChange={change} disabled={pending !== null} accessibilityLabel={PROJECT_SPACE_COPY.switchTitle} />
-      </View>
+    <View>
+      <View style={{ height: space["2xl"] }} />
+      <InsetGroup>
+        <ListRow
+          title={PROJECT_SPACE_COPY.switchTitle}
+          titleLines={2}
+          subtitle={PROJECT_SPACE_COPY.switchDetail}
+          trailing={<Toggle value={value} onValueChange={change} disabled={pending !== null} accessibilityLabel={PROJECT_SPACE_COPY.switchTitle} />}
+        />
+      </InsetGroup>
       <ErrorBanner error={error} />
     </View>
   );
 }
 
-/** Which space the project is in, and whether it is the default one. Read-only: spaces are managed on the computer. */
+/** Which space the project is in; move it from the value menu. Hidden on computers without spaces. */
 function SpaceRow({ projectId }: { projectId: string }) {
-  const { colors } = useTheme();
   const app = useApp();
-  const spaceId = app.projects.find((project) => project.id === projectId)?.space_id;
-  const [space, setSpace] = useState<Space | null>(null);
-  useEffect(() => {
-    let live = true;
-    // A computer without spaces answers with an error: the row stays hidden.
-    rpc("spaces.list", {})
-      .then((result) => live && setSpace(result.spaces.find((item) => item.id === spaceId) ?? null))
-      .catch(() => live && setSpace(null));
-    return () => {
-      live = false;
-    };
-  }, [spaceId]);
-  if (!space) return null;
+  const spaces = useSpaces();
+  const project = app.projects.find((item) => item.id === projectId);
+  const current = spaces.spaces.find((item) => item.id === project?.space_id);
+  const [error, setError] = useState("");
+  if (!project || !spaces.supported || !current) return null;
+  const items: MenuItem[] = spaces.spaces.map((target) => ({
+    title: target.name,
+    checked: target.id === current.id,
+    onPress: () => {
+      if (target.id === current.id) return;
+      setError("");
+      void moveProjectToSpace(project.id, target.id)
+        .then(() => showToast(SPACE_COPY.movedToast(project.name, target.name)))
+        .catch(() => setError(SPACE_COPY.moveFailure(project.name)));
+    },
+  }));
   return (
-    <View style={{ marginTop: 24 }}>
-      <View style={[styles.line, { gap: 12, padding: 14, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface }]}>
-        <View style={{ flex: 1, gap: 2 }}>
-          <T variant="label">{space.name}</T>
-          <T variant="footnote" tone="secondary">{space.is_default ? SPACE_COPY.defaultBadge : "Space"}</T>
-        </View>
-      </View>
+    <View>
+      <SectionHeader title="Space" inset />
+      <InsetGroup>
+        <ListRow
+          title={current.name}
+          leading={<SpaceTile space={current} size={24} />}
+          meta={current.is_default ? "Default" : undefined}
+          value={spaces.spaces.length > 1 ? "Move" : undefined}
+          valueMenu={spaces.spaces.length > 1 ? items : undefined}
+        />
+      </InsetGroup>
+      <ErrorBanner error={error} />
     </View>
   );
 }

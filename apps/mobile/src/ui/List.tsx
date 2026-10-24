@@ -377,6 +377,8 @@ export type ListRowProps = {
   title: string;
   subtitle?: string;
   subtitleLines?: number;
+  /** "middle" for paths: ~/projects/…/mobile. */
+  subtitleEllipsize?: "tail" | "middle";
   titleLines?: number;
   /** Machine text (a command, a path): the title in MONO. */
   mono?: boolean;
@@ -414,6 +416,7 @@ export function ListRow(props: ListRowProps) {
     title,
     subtitle,
     subtitleLines = 2,
+    subtitleEllipsize = "tail",
     titleLines = 1,
     mono,
     leading,
@@ -502,7 +505,7 @@ export function ListRow(props: ListRowProps) {
           ) : null}
         </View>
         {subtitle ? (
-          <T variant="subhead" tone="secondary" numberOfLines={subtitleLines}>
+          <T variant="subhead" tone="secondary" numberOfLines={subtitleLines} ellipsizeMode={subtitleEllipsize}>
             {subtitle}
           </T>
         ) : null}
