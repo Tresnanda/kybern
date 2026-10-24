@@ -7,8 +7,8 @@
 // MCP text block. Nothing here touches the store: the transcript card reads
 // live state itself.
 
-import type { JsonValue, ToolCall } from "@/protocol"
-import { kybernRefKey, kybernRefsIn } from "../../../../packages/kybern-client/src/chatLinks.ts"
+import type { JsonValue, ToolCall } from "./types.ts"
+import { kybernRefKey, kybernRefsIn } from "./chatLinks.ts"
 
 export type AgentItemToolName =
   | "notes_search"

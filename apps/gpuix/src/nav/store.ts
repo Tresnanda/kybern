@@ -4,8 +4,8 @@ import { onEnvironmentChange } from '../shell/environment.ts'
 // threads and activity, and the reader's sidebar preferences. App state
 // (projects, threads, the open thread) stays in `state.ts`.
 import { useSyncExternalStore } from 'react'
+import type { ThreadPending } from '../../../../packages/kybern-client/src/threadAttention.ts'
 import type {
-  PendingRequestKind,
   ProviderKind,
   ProviderLimits,
   ProviderStatus,
@@ -84,9 +84,6 @@ export interface NavState {
   /** The last view of each space, restored when switching back. */
   spaceViews: Record<string, NavEntry>
 }
-
-/** A thread's waiting requests: its own oldest one, and the strongest of its delegated agents' (a question outranks an approval). */
-export interface ThreadPending { own?: PendingRequestKind; child?: PendingRequestKind }
 
 export const DEFAULT_FILTER: SidebarFilter = { threads: 'all', agent: null }
 

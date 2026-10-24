@@ -6,8 +6,8 @@
 // image block. Nothing here is Codex-specific in the protocol sense: another
 // harness that exposes the same shape renders the same way.
 
-import type { JsonValue, ToolCall } from "@/protocol"
-import { imageSource } from "./responseImages"
+import type { JsonValue, ToolCall } from "./types.ts"
+import { imageSource } from "./responseImages.ts"
 
 export type ToolSurfaceKind = "computer" | "browser"
 

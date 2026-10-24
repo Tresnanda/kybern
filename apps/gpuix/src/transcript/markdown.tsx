@@ -28,7 +28,7 @@ import type { NoteSummary, TaskItem } from '../../../../packages/kybern-client/s
 import type { MarkdownStream } from '../native/markdown.ts'
 import { StreamMarkdown } from './StreamMarkdown.tsx'
 import { ThreadImage, ThreadImagePreview } from './ThreadImage.tsx'
-import { localImageLink } from '../../../desktop/src/lib/responseImages.ts'
+import { localImageLink } from '../../../../packages/kybern-client/src/responseImages.ts'
 import { observeElementBounds, type ElementBoundsEvent } from '../native/layout.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 

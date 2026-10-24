@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useState } from 'react'
 import type { Note, TaskItem } from '../../../../packages/kybern-client/src/types.ts'
-import { agentItemChangeSummary, type AgentNoteResult, type AgentTaskResult } from '../../../desktop/src/lib/agentItemTools.ts'
+import { agentItemChangeSummary, type AgentNoteResult, type AgentTaskResult } from '../../../../packages/kybern-client/src/agentItemTools.ts'
 import { getClient, useApp } from '../state.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { Icon } from '../icons.tsx'

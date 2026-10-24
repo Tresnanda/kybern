@@ -1,16 +1,7 @@
 import assert from "node:assert/strict"
-import { registerHooks } from "node:module"
 import test from "node:test"
 
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (/^\.\.?\//.test(specifier) && !/\.[cm]?[jt]sx?$/.test(specifier) && context.parentURL?.includes("/src/"))
-      return nextResolve(`${specifier}.ts`, context)
-    return nextResolve(specifier, context)
-  },
-})
-
-const { appDisplayName, surfaceOutputText, toolSurface } = await import("./src/lib/toolSurface.ts")
+import { appDisplayName, surfaceOutputText, toolSurface } from "../src/toolSurface.ts"
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
 const cua = (code, title = "Step") => ({ id: "call-1", name: "mcp:cua_repl/js", input: { code, title } })

@@ -6,7 +6,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { SPACE_COPY, SPACE_LIMIT, canDeleteSpace } from '../../../../packages/kybern-client/src/spaces.ts'
 import type { Project, Space, Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
-import { attentionKind, type AttentionKind } from '../sidebar/model.ts'
+import { ATTENTION_RANK, attentionKind, type AttentionKind } from '../../../../packages/kybern-client/src/threadAttention.ts'
 import { N } from '../nav/glyphs.ts'
 import { ContextMenu, MenuItem, MenuLabel, MenuSeparator, Tip } from '../nav/overlay.tsx'
 import { useNav, type NavState } from '../nav/store.ts'
@@ -45,12 +45,11 @@ function attentionKey(...inputs: AttentionInputs): string {
   const [threads, projects, unread, attentionDismissals] = inputs
   const spaceOf = new Map(projects.map((project) => [project.id, project.space_id ?? null]))
   const out: Record<string, AttentionKind> = {}
-  const rank: Record<AttentionKind, number> = { blocked: 0, failed: 1, done: 2 }
   for (const thread of threads) {
     const space = spaceOf.get(thread.project_id)
     if (!space) continue
     const kind = attentionKind(thread, { unread, attentionDismissals })
-    if (kind && (out[space] === undefined || rank[kind] < rank[out[space]!])) out[space] = kind
+    if (kind && (out[space] === undefined || ATTENTION_RANK[kind] < ATTENTION_RANK[out[space]!])) out[space] = kind
   }
   attentionMemo = { inputs, key: Object.entries(out).map(([space, kind]) => `${space}:${kind}`).join('|') }
   return attentionMemo.key

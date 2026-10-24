@@ -1,5 +1,6 @@
 import { createHistoryPagingGate, HISTORY_PREFETCH_SCREENS } from "../../../../packages/kybern-client/src/historyPaging";
 import { isCoordinatorThread } from "../../../../packages/kybern-client/src/coordinator";
+import { canSteer } from "../../../../packages/kybern-client/src/steering";
 import { ChatFileContext } from "../../src/state/chatFileContext";
 import { QueuedPrompts } from "../../src/features/QueuedPrompts";
 import { BlurTargetView } from "expo-blur";
@@ -634,7 +635,7 @@ export default function ThreadScreen() {
           >
             <Composer
               thread={thread}
-              onSteer={thread && ["codex", "pi"].includes(thread.provider.kind) ? steer : undefined}
+              onSteer={thread && canSteer(thread.provider) ? steer : undefined}
               disabled={
                 app.status !== "open" ||
                 !snapshot.loaded ||

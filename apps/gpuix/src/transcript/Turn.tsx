@@ -11,7 +11,7 @@ import { desktopDiffTheme } from '../native/diff.ts'
 import { GlassEdge } from '../kit/GlassEdge.tsx'
 import { raisedRim, useGlass } from '../platform/glass.ts'
 import { VisualCard } from './Visual.tsx'
-import { agentItemTool, agentItemWriteResult, parseAgentItemResult, placeItemCards } from '../../../desktop/src/lib/agentItemTools.ts'
+import { agentItemTool, agentItemWriteResult, parseAgentItemResult, placeItemCards } from '../../../../packages/kybern-client/src/agentItemTools.ts'
 import { AgentItemCard } from '../coordinator/AgentItem.tsx'
 // One turn (`Turn` in `views/Transcript.tsx`): the user's bubble, live work
 // under "Working for", or the settled work (delegations visible, the rest
@@ -22,8 +22,8 @@ import { Fragment, memo, useContext, useEffect, useMemo, useRef, useState } from
 import { N } from '../nav/glyphs.ts'
 import { calendarDateKey, calendarDateLabel, elapsedSince, plural } from '../../../desktop/src/lib/format.ts'
 import { clockTime } from './clock.ts'
-import { isImageGenerationTool } from '../../../desktop/src/lib/toolActivity.ts'
-import { responseImages } from '../../../desktop/src/lib/responseImages.ts'
+import { isImageGenerationTool } from '../../../../packages/kybern-client/src/toolActivity.ts'
+import { responseImages } from '../../../../packages/kybern-client/src/responseImages.ts'
 import { chunkRuns, isAgentLaunchBlock, isDelegationLaunchBlock, isOrchestrationBlock } from '../../../desktop/src/lib/workChunks.ts'
 import { buildWorkHierarchy, shouldRevealLiveText, type Block, type TurnGroup } from '../../../../packages/kybern-client/src/transcript.ts'
 import type { ContentPart, Diff, RuntimeTask, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
@@ -51,7 +51,7 @@ import { Shimmer } from './motion.tsx'
 import { GROUP_TREE, HEADER_STEM, WorkRows, type RowContext } from './rows.tsx'
 import { markTreeOpen, TreeGroup, TreeLines } from '../tree/Tree.tsx'
 import { filePatch, hydrateToolOutput, loadFilePatch, reportError, revertTo, useChildThreads, useRowState, useTurnDiff, type ToolBlock } from './store.ts'
-import { signInRows } from './signIn.ts'
+import { signInRows } from '../../../../packages/kybern-client/src/signIn.ts'
 
 const isTaskActive = (task: RuntimeTask) => task.status === 'pending' || task.status === 'running' || task.status === 'waiting' || task.status === 'stopping'
 

@@ -10,7 +10,7 @@ import {
   parseAgentItemResult,
   placeItemCards,
   splitChecklistPreview,
-} from "./src/lib/agentItemTools.ts"
+} from "../src/agentItemTools.ts"
 
 const taskRow = { kind: "task", id: "7b0c", key: "ADE-14", title: "Fix flaky login test", status: "inbox", priority: 2, project_id: "p1", created_by_thread: "t1", agent_editable: true, criteria_done: 1, criteria_total: 3, latest_run: null, link: "kybern://task/7b0c" }
 const noteRow = { kind: "note", id: "n1", title: "Release plan", scope: "project", project_id: "p1", thread_id: null, created_by_thread: null, agent_editable: false, revision: 4, updated_at: "2026-10-05T00:00:00Z", link: "kybern://note/n1" }

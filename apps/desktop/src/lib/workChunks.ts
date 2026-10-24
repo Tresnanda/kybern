@@ -5,8 +5,8 @@
 import type { Block } from "../../../../packages/kybern-client/src/transcript.ts"
 import { isDelegateTool, orchestrationTool } from "../../../../packages/kybern-client/src/orchestrationTools.ts"
 import type { RuntimeTask } from "../../../../packages/kybern-client/src/types.ts"
-import { agentItemTool } from "./agentItemTools"
-import { isAgentLaunchTool } from "./toolActivity"
+import { agentItemTool } from "../../../../packages/kybern-client/src/agentItemTools.ts"
+import { isAgentLaunchTool } from "../../../../packages/kybern-client/src/toolActivity.ts"
 
 type ToolBlock = Extract<Block, { kind: "tool" }>
 

@@ -22,7 +22,8 @@ import { Icon } from '../icons.tsx'
 import { G } from '../composer/glyphs.ts'
 import { Dim, Leave, useLeavingList } from '../composer/motion.tsx'
 import { SECTION_LABEL, SectionLabel } from '../composer/Menu.tsx'
-import { removeQueued, STEERABLE, steerQueued } from '../composer/store.ts'
+import { canSteer } from '../../../../packages/kybern-client/src/steering.ts'
+import { removeQueued, steerQueued } from '../composer/store.ts'
 import { useApp } from '../state.ts'
 import { Chevron } from '../motion/Chevron.tsx'
 import { Collapse, Rise, SwapOnChange, revealTransform } from '../motion/kit.tsx'
@@ -405,7 +406,7 @@ const QueuedRow = memo(function QueuedRow({ item, threadId }: { item: QueuedMess
   const outline = ink(t, 0.1)
   const remove = () => void removeQueued(threadId, item.id).catch(e => reportError('Unable to remove follow-up', e))
   // A running turn of an agent that takes steering can get the follow-up now instead of after it ends.
-  const steerable = useApp((s) => { const thread = s.threads.find((x) => x.id === threadId); return !!thread && thread.status === 'running' && STEERABLE.includes(thread.provider.kind) })
+  const steerable = useApp((s) => { const thread = s.threads.find((x) => x.id === threadId); return !!thread && thread.status === 'running' && canSteer(thread.provider) })
   const steer = () => void steerQueued(threadId, item).catch(e => reportError('Couldn’t steer with this follow-up. If the turn just ended it was already sent; otherwise try again', e))
   return (
     <Row testId={`queued-${item.id}`} hoverable={false}

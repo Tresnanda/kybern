@@ -425,9 +425,6 @@ export async function removeQueued(threadId: ThreadId, id: string) {
   if (getClient() === client) await loadQueue(threadId)
 }
 
-/** Agents whose running turn accepts steering (`views/Thread.tsx:388`). */
-export const STEERABLE = ['claude-code', 'codex', 'pi', 'omp']
-
 /** A queued follow-up sent into the running turn now. It leaves the queue first, so the turn's end cannot deliver it too;
  *  if the queue no longer has it (the turn just ended and sent it), nothing more is sent. A steer whose turn has ended by
  *  then goes as a normal send (`deliverPending`). */

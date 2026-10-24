@@ -4,7 +4,7 @@ import remarkGfm from "remark-gfm"
 import remarkRehype from "remark-rehype"
 import { urlAttributes } from "html-url-attributes"
 import { defaultUrlTransform } from "react-markdown"
-import { imageSource } from "./responseImages"
+import { imageSource } from "../../../../packages/kybern-client/src/responseImages.ts"
 import { chatLink, kybernRef, splitKybernRefs, type KybernRef } from "../../../../packages/kybern-client/src/chatLinks.ts"
 
 // The same GFM, HTML-as-text and URL policy as our ReactMarkdown renderer.

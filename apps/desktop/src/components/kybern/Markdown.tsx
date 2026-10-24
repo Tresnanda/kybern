@@ -1,5 +1,5 @@
 import { ResponseImage } from "./ResponseImage"
-import { localImageLink } from "@/lib/responseImages"
+import { localImageLink } from "../../../../../packages/kybern-client/src/responseImages.ts"
 // Chat markdown, styled by the `.chat-markdown` rules (styles/kit.css).
 // Code blocks get the `.chat-markdown-codeblock` chrome: language label,
 // wrap toggle and copy action in the header, shiki-highlighted body.

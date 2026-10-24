@@ -9,12 +9,13 @@ import { useAccounts } from "@/state/accounts"
 import { offerWorktreeCleanup } from "@/state/worktreeCleanup"
 import { COORDINATOR_EDITS_NOT_BLOCKED_HINT, coordinatorEditsEnforced } from "../../../../packages/kybern-client/src/coordinator"
 import { promptText, replacePromptText } from "../../../../packages/kybern-client/src/prompts"
+import { canSteer } from "../../../../packages/kybern-client/src/steering"
 import { Textarea } from "@/components/kit/textarea"
 import { observeResizeFrame } from "@/lib/resizeObserver"
 import { AsyncQuestionPanel } from "./AsyncQuestionPanel"
 import { Markdown } from "@/components/kybern/Markdown"
 import { computerConsent, connectorApproval, connectorApprovalResponse, isUserInput, notesTasksConsent, type ConnectorApproval, type NotesTasksConsent } from "@/lib/userInput"
-import { splitChecklistPreview } from "@/lib/agentItemTools"
+import { splitChecklistPreview } from "../../../../packages/kybern-client/src/agentItemTools.ts"
 import { UserInputPanel } from "./UserInputPanel"
 import { SecretRequestPanel } from "./SecretRequestPanel"
 import { secretRequestInput } from "../../../../packages/kybern-client/src/secretRequest"
@@ -393,7 +394,7 @@ export function ThreadView({
   }
 
   const handoffSelected = !!target && (targetChanged || (target.model ?? null) !== (thread.model ?? null) || (target.effort ?? null) !== (thread.effort ?? null))
-  const onSteer = handoffSelected || ["claude-code", "codex", "pi", "omp"].includes(thread.provider.kind) ? async (message: UserMessage) => {
+  const onSteer = handoffSelected || canSteer(thread.provider) ? async (message: UserMessage) => {
     const signature = JSON.stringify([threadId, message])
     if (steeringAttempt.current?.signature !== signature) steeringAttempt.current = { signature, id: crypto.randomUUID() }
     await rpc().call("threads.steer", { thread_id: threadId, id: steeringAttempt.current.id, message })

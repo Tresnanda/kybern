@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { readFileSync } from "node:fs"
-import { imageSource, responseImages, imageSafeOutput, imageSafeValue, localImageLink, responseImageError } from "./src/lib/responseImages.ts"
+import { imageSource, responseImages, imageSafeOutput, imageSafeValue, localImageLink, responseImageError } from "../../packages/kybern-client/src/responseImages.ts"
 
 test("packaged and development CSP allow the remote image schemes accepted by the renderer", () => {
   const config = JSON.parse(readFileSync(new URL("./src-tauri/tauri.conf.json", import.meta.url), "utf8"))

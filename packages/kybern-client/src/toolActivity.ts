@@ -1,11 +1,11 @@
 // Provider-agnostic presentation of native tool calls from every Kybern driver.
 // Keeps the wire payload untouched while deriving a concise, tense-aware activity row.
 
-import type { JsonValue, ToolCall } from "@/protocol"
-import { isPreviewOpenTool, previewToolLabel } from "../../../../packages/kybern-client/src/previewTool.ts"
-import { orchestrationLabel, orchestrationTool } from "../../../../packages/kybern-client/src/orchestrationTools.ts"
-import { agentItemLabel, agentItemTool } from "./agentItemTools"
-import { toolSurface } from "./toolSurface"
+import type { JsonValue, ToolCall } from "./types.ts"
+import { isPreviewOpenTool, previewToolLabel } from "./previewTool.ts"
+import { orchestrationLabel, orchestrationTool } from "./orchestrationTools.ts"
+import { agentItemLabel, agentItemTool } from "./agentItemTools.ts"
+import { toolSurface } from "./toolSurface.ts"
 
 type JsonRecord = Record<string, unknown>
 
@@ -472,7 +472,8 @@ function executable(value: string): string {
   return value.split(/[\\/]/).at(-1)?.toLowerCase() ?? ""
 }
 
-function unwrapShellCommand(value: string): string {
+/** `zsh -lc "…"` and friends: the command the shell was asked to run. */
+export function unwrapShellCommand(value: string): string {
   let command = value.trim()
   for (let pass = 0; pass < 3; pass += 1) {
     const match =

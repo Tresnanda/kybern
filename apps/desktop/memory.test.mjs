@@ -501,7 +501,7 @@ test("terminal graphics release without disposing buffers and ignore stale addon
 
 test("collapsed output availability exactly matches readable result text", async () => {
   const { outputText, hasOutputText } = await import("./src/lib/format.ts")
-  const { surfaceOutputText, surfaceHasOutputText } = await import("./src/lib/toolSurface.ts")
+  const { surfaceOutputText, surfaceHasOutputText } = await import("../../packages/kybern-client/src/toolSurface.ts")
   const values = [null, false, 0, "", "  ", "result", [], {}, { stdout: " ", text: "unused" }, { type: "imageGeneration", result: "" }, { output: "data:image/png;base64,YQ==" }, { content: [{ type: "text", text: "first" }, { type: "text", text: "second" }] }, { error: " " }, { error: { message: "failed" } }]
   for (const output of values) for (const stream of ["", " ", "live output"]) {
     assert.equal(hasOutputText(output, stream), outputText(output, stream).trim().length > 0)

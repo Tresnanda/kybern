@@ -1,9 +1,9 @@
 // The words of a run's summary row (`WorkRunRow`): what the agent did between two pieces of narration, as one line.
 // Settled calls are counted ("Edited 2 files · ran 3 commands · read 4 files"), the call in flight is the live tail
 // ("reading Requests.tsx"), failures are counted apart. Pure, so the copy is tested without a window.
-import { joinSummaryPhrases, toolLine, toolSummaryPhrases, toolTarget } from '../../../desktop/src/lib/toolActivity.ts'
-import type { Block } from '../../../../packages/kybern-client/src/transcript.ts'
-import type { ToolCall } from '../../../../packages/kybern-client/src/types.ts'
+import { joinSummaryPhrases, toolLine, toolSummaryPhrases, toolTarget } from './toolActivity.ts'
+import type { Block } from './transcript.ts'
+import type { ToolCall } from './types.ts'
 
 export interface RunSummary {
   /** Settled work, sentence case; empty while nothing has finished yet. */

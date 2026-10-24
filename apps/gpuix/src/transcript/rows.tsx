@@ -21,11 +21,11 @@ import type { LoginRecipe } from '../../../../packages/kybern-client/src/loginRe
 // compact subagent and delegation groups. Labels and icons come from the
 // desktop's own helpers.
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { toolLine, toolVisualKind, type ToolVisualKind } from '../../../desktop/src/lib/toolActivity.ts'
-import { toolSurface, surfaceHasOutputText, surfaceOutputText, type ToolSurface } from '../../../desktop/src/lib/toolSurface.ts'
+import { toolLine, toolVisualKind, type ToolVisualKind } from '../../../../packages/kybern-client/src/toolActivity.ts'
+import { toolSurface, surfaceHasOutputText, surfaceOutputText, type ToolSurface } from '../../../../packages/kybern-client/src/toolSurface.ts'
 import { hasOutputText, outputText } from '../../../desktop/src/lib/format.ts'
-import { responseImages } from '../../../desktop/src/lib/responseImages.ts'
-import { agentItemWriteResult, agentItemLabel, agentItemResultText, agentItemTool, parseAgentItemResult } from '../../../desktop/src/lib/agentItemTools.ts'
+import { responseImages } from '../../../../packages/kybern-client/src/responseImages.ts'
+import { agentItemWriteResult, agentItemLabel, agentItemResultText, agentItemTool, parseAgentItemResult } from '../../../../packages/kybern-client/src/agentItemTools.ts'
 import { chunkKey, chunkRuns, isAgentLaunchBlock, isDelegationLaunchBlock, type WorkChunk } from '../../../desktop/src/lib/workChunks.ts'
 import { RUN_ANCHOR, RUN_TICK_END, WorkRunRow } from './WorkRun.tsx'
 import { orchestrationLabel, orchestrationTool, parseDelegateInput, parseDelegateResult, parseSendInput } from '../../../../packages/kybern-client/src/orchestrationTools.ts'

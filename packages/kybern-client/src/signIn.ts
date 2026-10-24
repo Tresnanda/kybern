@@ -1,8 +1,8 @@
 // Which tool rows of a turn get the "Sign in to …" chip (`SignInChip.tsx`): commands whose output says their CLI is signed out,
-// the latest one per CLI. Pure, so it is tested without a window.
-import { signInChips, type FinishedCommand, type LoginRecipe } from '../../../../packages/kybern-client/src/loginRecipes.ts'
-import type { Block } from '../../../../packages/kybern-client/src/transcript.ts'
-import type { JsonValue } from '../../../../packages/kybern-client/src/types.ts'
+// the latest one per CLI. Pure, so it is tested without a window (shared by every client).
+import { signInChips, type FinishedCommand, type LoginRecipe } from './loginRecipes.ts'
+import type { Block } from './transcript.ts'
+import type { JsonValue } from './types.ts'
 
 const record = (value: unknown): Record<string, unknown> | null => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null)
 

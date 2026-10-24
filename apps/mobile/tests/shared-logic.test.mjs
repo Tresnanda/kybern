@@ -1,0 +1,10 @@
+import "../../../packages/kybern-client/tests/steering.test.mjs";
+import "../../../packages/kybern-client/tests/thread-attention.test.mjs";
+import "../../../packages/kybern-client/tests/tool-activity.test.mjs";
+import "../../../packages/kybern-client/tests/tool-surface.test.mjs";
+import "../../../packages/kybern-client/tests/agent-item-tools.test.mjs";
+import "../../../packages/kybern-client/tests/work-run.test.mjs";
+import "../../../packages/kybern-client/tests/sign-in.test.mjs";
+import "../../../packages/kybern-client/tests/display-command.test.mjs";
+import "../../../packages/kybern-client/tests/pending-sends.test.mjs";
+import "../../../packages/kybern-client/tests/status-words.test.mjs";
