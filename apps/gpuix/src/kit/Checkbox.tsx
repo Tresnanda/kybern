@@ -5,7 +5,7 @@
 // worktree and close-guard boxes and the coordinator card glyphs. Keyboard focus draws the 2 px accent ring natively.
 // `tone="neutral"` is the quiet Tasks and Notes box (spec §3.3): checked fills with the ink and a page-coloured tick.
 //
-// The draw is native and paint-only (`strokeDraw`, `motion/success.ts`; `native/patches/stroke_draw.rs`): the check's sprite
+// The draw is native and paint-only (`strokeDraw`, `motion/success.ts`; `native/upstream/packages/native/src/stroke_draw.rs`): the check's sprite
 // shows the SVG rasterized at each presented frame's dash offset, with no render or layout per frame. With the stock
 // addon the check appears whole.
 // Reduce Motion: no fill transition and no draw (`motion-reduce:transition-none`, `.t-check-path { animation: none }`).

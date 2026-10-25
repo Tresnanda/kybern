@@ -26,6 +26,7 @@ import { setAppearance, useAppearance } from './appearance.ts'
 import { useResource } from './resource.ts'
 import { defaultEditor, installedEditors, setDefaultEditor } from '../dock/editors.ts'
 import { setWrapLines, useWrapLines } from '../dock/filePrefs.ts'
+import { osLabels } from '../platform/os.ts'
 
 export function General() {
   const { settings: s, saving } = useSettings()
@@ -46,7 +47,7 @@ export function General() {
       <Row title="Ask before closing while threads work" description="Agents keep going after the window closes. The prompt lists them and offers to stop them."><Switch testId="settings-close-confirmation" aria-label="Ask before closing while threads work" checked={ask} onCheckedChange={value => { save('kybern.askBeforeClose', value); setAsk(value) }} /></Row>
     </Section>
     <FilesSection />
-    <Section title="Notes"><Row title="Global notes" description="Notes that belong to no project. Shared keeps one set on this Mac for every environment window. Switching never moves or deletes a note."><Select label="Global notes" testId="settings-global-notes" value={notesHome} onChange={(value) => setGlobalNotesHome(value as 'shared' | 'separate')} options={[{ value: 'shared', label: 'Shared across environments' }, { value: 'separate', label: 'Separate per environment' }]} /></Row></Section>
+    <Section title="Notes"><Row title="Global notes" description={`Notes that belong to no project. Shared keeps one set ${osLabels().onThisComputer} for every environment window. Switching never moves or deletes a note.`}><Select label="Global notes" testId="settings-global-notes" value={notesHome} onChange={(value) => setGlobalNotesHome(value as 'shared' | 'separate')} options={[{ value: 'shared', label: 'Shared across environments' }, { value: 'separate', label: 'Separate per environment' }]} /></Row></Section>
     <PreviewFolders />
   </>
 }

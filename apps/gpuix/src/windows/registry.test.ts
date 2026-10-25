@@ -47,3 +47,21 @@ test('drops claims of windows that exited and of windows that switched away', as
   const gone = await host('env-e'); gone.child.kill(); await gone.child.exited
   expect(windowClaims().some(claim => claim.pid === gone.child.pid)).toBe(false)
 })
+test('asks other windows to quit and reports the ones that stay', async () => {
+  const { quitOtherWindows } = await import('./registry.ts')
+  const a = await host('env-q1'), b = await host('env-q2')
+  expect(await quitOtherWindows(5000)).toEqual([])
+  await a.child.exited; await b.child.exited
+  expect(windowClaims().some(claim => [a.child.pid, b.child.pid].includes(claim.pid))).toBe(false)
+  // A process that claims a window but never answers is reported, not waited for forever.
+  const { writeFileSync, mkdirSync } = await import('node:fs')
+  const stuck = Bun.spawn(['bun', '-e', 'setInterval(() => {}, 1000)'])
+  hosts.push(stuck)
+  mkdirSync(path.join(config, 'gpuix-windows'), { recursive: true })
+  writeFileSync(path.join(config, 'gpuix-windows', `${stuck.pid}.json`), JSON.stringify({ pid: stuck.pid, environment: 'env-s', socket: path.join(config, 'none.sock'), at: Date.now() }))
+  expect(await quitOtherWindows(300)).toEqual([stuck.pid])
+})
+test('Windows windows listen on a named pipe', async () => {
+  const { socketPath } = await import('./registry.ts')
+  expect(socketPath(42, 'win32')).toMatch(/^\\\\\.\\pipe\\kybern-gpuix-[0-9a-f]{12}-42$/)
+})

@@ -17,18 +17,22 @@ import { T } from './glyphs.ts'
 import { usePaneAccess } from '../state.ts'
 import { openTabFromPane } from '../tabs/open.ts'
 import { renderMermaid, type DiagramImage } from './mermaid.ts'
+import { webHost } from '../native/webview.ts'
+import { diagramLabel, diagramNote, type DiagramStatus } from './mermaidFallback.ts'
 
 /** `.chat-diagram-canvas`: padding .5rem 1rem 1rem; the image is at most 24rem tall. */
 const CANVAS = { top: 8, side: 16, bottom: 16, maxHeight: 384 }
 let lastWidth = 640
 
-export function useDiagram(code: string, dark: boolean) {
+export function useDiagram(code: string, dark: boolean, embedded: boolean = webHost.available): { status: DiagramStatus; image?: DiagramImage } {
   const [result, setResult] = useState<{ code: string; dark: boolean; image: DiagramImage | null } | null>(null)
   useEffect(() => {
+    if (!embedded) return
     const control = new AbortController()
     void renderMermaid(code, dark, control.signal).then(image => { if (!control.signal.aborted) setResult({ code, dark, image }) })
     return () => control.abort()
-  }, [code, dark])
+  }, [code, dark, embedded])
+  if (!embedded) return { status: 'unsupported' }
   const current = result?.code === code && result.dark === dark ? result : null
   return current ? (current.image ? ({ status: 'ready', image: current.image } as const) : ({ status: 'failed' } as const)) : ({ status: 'loading' } as const)
 }
@@ -60,7 +64,7 @@ export const MermaidBlock = memo(function MermaidBlock({ code, source, onSource 
   return <div ref={el => { node.current = el; setMounted(el) }} testId="mermaid-block" data-state={diagram.status} style={{ display: 'flex', flexDirection: 'column', borderRadius: CODE.radius, overflow: 'hidden', backgroundColor: t.codeSurface }}>
     <div testId="code-header" style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 40, paddingTop: 6, paddingBottom: 6, paddingLeft: 8, paddingRight: 8 }}>
       <div style={{ display: 'flex', flexGrow: 1, minWidth: 0, alignItems: 'center' }}>
-        {image ? <Segment source={source} onChange={onSource} /> : <Label color={muted(t)} style={{ paddingLeft: 4 }}>{diagram.status === 'loading' ? 'Rendering diagram…' : 'Mermaid source'}</Label>}
+        {image ? <Segment source={source} onChange={onSource} /> : <Label color={muted(t)} style={{ paddingLeft: 4 }}>{diagramLabel(diagram.status)}</Label>}
       </div>
       {image && <IconButton testId="diagram-expand" label="Open diagram in a tab" icon={T.expand} size="sm" onClick={() => openTabFromPane(pane.id, { kind: 'mermaid', code, title: 'Diagram' })} />}
       <CopyAction text={code} testId="code-copy" />
@@ -70,8 +74,8 @@ export const MermaidBlock = memo(function MermaidBlock({ code, source, onSource 
         <img testId="diagram-image" src={image!.path} alt="Mermaid diagram" objectFit="contain" style={{ width: inner, height: imageHeight, borderRadius: 6, borderWidth: 1, borderColor: outline }} />
       </div>
       : chunks.slice(0, 1).map((chunk, i) => <CodeChunk key={i} text={chunk} language="mermaid" wrap={false} />)}
-    {diagram.status === 'failed' && <div testId="diagram-note" role="status" style={{ display: 'flex', paddingLeft: 8, paddingRight: 8, paddingTop: 4, paddingBottom: 8 }}>
-      <Label color={muted(t)} lineHeight={21}>Preview unavailable. You can still copy the source.</Label>
+    {diagramNote(diagram.status) && <div testId="diagram-note" role="status" style={{ display: 'flex', paddingLeft: 8, paddingRight: 8, paddingTop: 4, paddingBottom: 8 }}>
+      <Label color={muted(t)} lineHeight={21} style={{ whiteSpace: 'normal' }}>{diagramNote(diagram.status)}</Label>
     </div>}
     {expanded && image && <ExpandedDiagram image={image} onClose={() => setExpanded(false)} />}
   </div>
@@ -108,7 +112,7 @@ export function MermaidTab({ code }: { code: string }) {
   return <div ref={setHost} testId="mermaid-tab" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
     {image ? <img testId="mermaid-tab-image" src={image.path} alt="Mermaid diagram" objectFit="contain" style={{ width: image.width * scale, height: image.height * scale }} />
       : <div style={{ display: 'flex', flexDirection: 'column', alignSelf: 'stretch', flexGrow: 1, minHeight: 0, padding: 24, gap: 8 }}>
-        <Label color={muted(t)}>{diagram.status === 'loading' ? 'Rendering diagram…' : 'Preview unavailable. You can still copy the source.'}</Label>
+        <Label color={muted(t)} style={{ whiteSpace: 'normal' }}>{diagram.status === 'loading' ? diagramLabel('loading') : diagramNote(diagram.status)}</Label>
         {lineChunks(code).slice(0, 1).map((chunk, i) => <CodeChunk key={i} text={chunk} language="mermaid" wrap={false} />)}
       </div>}
     <div style={{ position: 'absolute', top: 12, right: 12 }}><CopyAction text={code} testId="mermaid-tab-copy" /></div>

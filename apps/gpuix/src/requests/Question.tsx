@@ -248,7 +248,7 @@ function AttachMenu({ disabled, full, onAdd, onError, onTouch }: { disabled: boo
   return (
     <Menu testId="question-attach-menu" side="top" align="end" minWidth={200} fit="switch" rootStyle={{ flexGrow: 0, flexShrink: 0 }} trigger={button}>
       <MenuItem id="image" icon={G.image} label="Image…" testId="question-attach-image" onSelect={image} />
-      <MenuItem id="window" icon={ICONS.window} label="Window capture…" testId="question-attach-window" onSelect={window} />
+      {process.platform === 'darwin' && <MenuItem id="window" icon={ICONS.window} label="Window capture…" testId="question-attach-window" onSelect={window} />}
       <MenuItem id="file" icon={G.file} label="File…" testId="question-attach-file" onSelect={file} />
     </Menu>
   )

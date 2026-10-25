@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process'
 import { classifyPrError } from '@/state/prReviewModel'
 import { Skeleton } from '../kit/Skeleton.tsx'
 import { DURATION, EASE } from '../motion/tokens.ts'
@@ -6,11 +5,15 @@ import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { Button } from '../kit/Button.tsx'
 import { column, row } from '../usage/controls.tsx'
-export function openUrl(url: string) { if (/^https?:\/\//i.test(url)) { const child = spawn('open', [url], { stdio: 'ignore' }); child.on('error', () => {}); child.unref() } }
-export function copy(text: string) { const child = spawn('pbcopy', [], { stdio: ['pipe', 'ignore', 'ignore'] }); child.on('error', () => {}); child.stdin.end(text) }
-export function Problem({ error, refresh }: { error: string; refresh: () => void }) {
-  const t = useTheme(); const kind = classifyPrError(error); const missing = kind === 'gh-missing'; const auth = kind === 'gh-auth'
-  return <div role="alert" style={{ ...column, gap: 12 }}><Label color={t.text} size={16} weight={500}>{missing ? 'Install the GitHub CLI' : auth ? 'Sign in to the GitHub CLI' : 'Unable to load pull requests'}</Label><Label color={t.textSecondary} size={13} lineHeight={20}>{missing ? 'Kybern reads pull requests through gh on this Mac. Install it, sign in with gh auth login, then refresh.' : auth ? 'Run gh auth login in a terminal, then refresh.' : error}</Label><div style={{ ...row, gap: 8 }}>{(missing || auth) && <Button variant="primary" onClick={() => missing ? openUrl('https://cli.github.com') : copy('gh auth login')}>{missing ? 'Open install guide' : 'Copy command'}</Button>}<Button variant={missing || auth ? 'secondary' : 'primary'} onClick={refresh}>{missing || auth ? 'Refresh' : 'Try again'}</Button></div></div>
+import { openQuietly, osLabels, writeClipboardText } from '../platform/os.ts'
+export function openUrl(url: string) { if (/^https?:\/\//i.test(url)) openQuietly(url) }
+export function copy(text: string) { void writeClipboardText(text).catch(() => {}) }
+/** `partial`: other pull requests did load, so `error` (one line per project or repository) is shown as it is. */
+export function Problem({ error, refresh, partial = false }: { error: string; refresh: () => void; partial?: boolean }) {
+  const t = useTheme()
+  if (partial) return <div role="alert" style={{ ...column, gap: 8 }}><Label color={t.text} size={14} weight={500}>Some pull requests didn’t load</Label><Label color={t.textSecondary} size={13} lineHeight={20}>{error}</Label><div style={row}><Button size="sm" onClick={refresh}>Try again</Button></div></div>
+  const kind = classifyPrError(error); const missing = kind === 'gh-missing'; const auth = kind === 'gh-auth'
+  return <div role="alert" style={{ ...column, gap: 12 }}><Label color={t.text} size={16} weight={500}>{missing ? 'Install the GitHub CLI' : auth ? 'Sign in to the GitHub CLI' : 'Unable to load pull requests'}</Label><Label color={t.textSecondary} size={13} lineHeight={20}>{missing ? `Kybern reads pull requests through gh ${osLabels().onThisComputer}. Install it, sign in with gh auth login, then refresh.` : auth ? 'Run gh auth login in a terminal, then refresh.' : error}</Label><div style={{ ...row, gap: 8 }}>{(missing || auth) && <Button variant="primary" onClick={() => missing ? openUrl('https://cli.github.com') : copy('gh auth login')}>{missing ? 'Open install guide' : 'Copy command'}</Button>}<Button variant={missing || auth ? 'secondary' : 'primary'} onClick={refresh}>{missing || auth ? 'Refresh' : 'Try again'}</Button></div></div>
 }
 
 /**

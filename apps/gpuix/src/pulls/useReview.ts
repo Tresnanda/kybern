@@ -6,8 +6,10 @@ import { getData } from '../composer/store.ts'
 import { openThread } from '../nav/history.ts'
 import { getClient, refreshLists, useApp } from '../state.ts'
 
-export function useReview(projectId: string, number: number) {
-  const key = `pulls.draft.${projectId}.${number}`
+/** `repo`: the member repository of a group project the pull request is in. */
+export function useReview(projectId: string, number: number, repo?: string) {
+  const key = `pulls.draft.${projectId}${repo ? `.${repo}` : ''}.${number}`
+  const member = repo ? { repo } : {}
   const connection = useApp(s => s.status)
   const [detail, setDetail] = useState<PrDetailResult | null>(null)
   const [loading, setLoading] = useState(false)
@@ -31,11 +33,11 @@ export function useReview(projectId: string, number: number) {
     if (connection !== 'open') return
     let canceled = false
     setLoading(true)
-    void getClient()!.call('github.pr.detail', { project_id: projectId, number }).then(next => {
+    void getClient()!.call('github.pr.detail', { project_id: projectId, number, ...member }).then(next => {
       if (!canceled) { setDetail(next); setError(null); setLoading(false) }
     }, e => { if (!canceled) { setError(String(e)); setLoading(false) } })
     return () => { canceled = true }
-  }, [projectId, number, revision, connection])
+  }, [projectId, number, repo, revision, connection])
   const submit = async (action: PrActionKind, confirmedHead?: string, threadId?: string): Promise<boolean> => {
     if (!detail || submitting.current || !getClient()) return false
     const submitted = draftRef.current
@@ -44,7 +46,7 @@ export function useReview(projectId: string, number: number) {
       if (confirmedHead && confirmedHead !== detail.head_sha) throw new Error('The pull request changed while this confirmation was open. Cancel, review the current changes and open the action again.')
       if (review) assertReviewDraftHead(submitted, detail.head_sha)
       submitting.current = true; setBusy(true); setActionError(null)
-      await getClient()!.call('github.pr.action', { project_id: projectId, number, action, head_sha: detail.head_sha, body: submitted.body, inline_comments: review ? submitted.inline : [], ...(threadId ? { thread_id: threadId } : {}) })
+      await getClient()!.call('github.pr.action', { project_id: projectId, number, action, head_sha: detail.head_sha, body: submitted.body, inline_comments: review ? submitted.inline : [], ...(threadId ? { thread_id: threadId } : {}), ...member })
       if (review) save(afterReviewSubmission(draftRef.current, submitted))
       if (alive.current) refresh(n => n + 1)
       return true
@@ -56,6 +58,8 @@ export function useReview(projectId: string, number: number) {
     const client = getClient()
     if (!detail || !settings || !client || submitting.current) return false
     try {
+      // Refused before a thread exists, so a member pull request leaves no orphan chat.
+      if (repo) throw new Error("A pull request of a group project can't be checked out into a chat yet. Open that repository as its own project.")
       assertReviewDraftHead(draftRef.current, detail.head_sha)
       const submitted = draftRef.current
       const prompt = repairReviewPrompt(number, detail.pull_request.title, detail.pull_request.url, detail.head_sha, submitted)
@@ -72,7 +76,7 @@ export function useReview(projectId: string, number: number) {
         // Preserve the created identity before checkout: retry reuses it.
         save({ ...draftRef.current, threadId: target })
       }
-      await client.call('github.pr.action', { project_id: projectId, number, action: 'checkout', thread_id: target, head_sha: detail.head_sha, for_repair: true })
+      await client.call('github.pr.action', { project_id: projectId, number, action: 'checkout', thread_id: target, head_sha: detail.head_sha, for_repair: true, ...member })
       await client.call('threads.send', { thread_id: target, message: { parts: [{ type: 'text', text: prompt }] } })
       await refreshLists()
       openThread(target)
@@ -84,16 +88,16 @@ export function useReview(projectId: string, number: number) {
 }
 
 /** Page data is tagged by source and page so stale replies cannot replace a tab. */
-export function usePage(projectId: string, number: number, kind: PrPageKind, page: number, revision: number, head: string | undefined, enabled = true) {
+export function usePage(projectId: string, number: number, kind: PrPageKind, page: number, revision: number, head: string | undefined, enabled = true, repo?: string) {
   const [state, setState] = useState<{ key: string; data?: PrPageResult; error?: string } | null>(null)
   const connection = useApp(s => s.status)
-  const key = `${projectId}:${number}:${kind}:${page}:${revision}:${head}:${connection}`
+  const key = `${projectId}${repo ? `/${repo}` : ''}:${number}:${kind}:${page}:${revision}:${head}:${connection}`
   useEffect(() => {
     if (!enabled || !head || connection !== 'open') return
     let canceled = false
-    void getClient()!.call('github.pr.page', { project_id: projectId, number, kind, page }).then(data => { if (!canceled) setState({ key, data }) }, e => { if (!canceled) setState({ key, error: String(e) }) })
+    void getClient()!.call('github.pr.page', { project_id: projectId, number, kind, page, ...(repo ? { repo } : {}) }).then(data => { if (!canceled) setState({ key, data }) }, e => { if (!canceled) setState({ key, error: String(e) }) })
     return () => { canceled = true }
-  }, [key, projectId, number, kind, page, enabled, head, connection])
+  }, [key, projectId, number, repo, kind, page, enabled, head, connection])
   return { data: state?.key === key ? state.data : undefined, error: state?.key === key ? state.error : undefined }
 }
 export type Review = ReturnType<typeof useReview>

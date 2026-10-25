@@ -1,6 +1,6 @@
 /// <reference path="./jsx.d.ts" />
 // The one formatted editor: notes, task descriptions and the dock's Notes tab.
-// A native `<rich-editor>` (native/patches/rich_editor.rs) edits the document in
+// A native `<rich-editor>` (native/upstream/packages/native/src/rich_editor.rs) edits the document in
 // place with the reading look (desktop `NoteBody` + `.note-prose`); this component
 // feeds it Markdown, reads Markdown back, and draws the desktop's slash menu,
 // selection format bar and link bubble around it. See src/editor/README.md.

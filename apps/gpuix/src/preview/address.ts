@@ -21,3 +21,9 @@ export function reloadAddress(entry: Entry, bridgePath?: string, fresh = false, 
   if (fresh && entry.kind === 'server') result.searchParams.set('__kybern_reload', String(now))
   return result.href
 }
+
+/** The address the browser opens: a local file or the server's own address; with no embedded view, a server on another machine opens through the local relay. */
+export function browserAddress(entry: Entry, pagePath: string | undefined, local: boolean, embedded: boolean): string {
+  if (entry.kind === 'file') return `file://${currentAddress(entry, pagePath).full}`
+  return !embedded && !local && entry.frameUrl ? entry.frameUrl : entry.address
+}

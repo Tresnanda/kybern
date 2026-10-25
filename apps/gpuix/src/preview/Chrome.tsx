@@ -12,6 +12,7 @@ import { fadeTo } from '../shell/motion.ts'
 import type { ReactNode } from 'react'
 import { nativeCapabilities } from '../native/api.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
+import { webHost } from '../native/webview.ts'
 import { observeElementBounds } from '../native/layout.ts'
 import { useElementBounds } from '../native/layout-hooks.ts'
 import { getState } from '../state.ts'
@@ -63,6 +64,8 @@ export function PreviewChrome({ threadId }: { threadId: string }) {
     // Handoff is registered by Explorer without changing preview document ownership.
     showFileInExplorer(threadId, thread.project_id, explorerPath)
   }
+  // Device sizes and the mini player drive the embedded page; with no web view the page is in the browser.
+  const embedded = webHost.available
   const deviceLabel = s.device ? 'Hide device toolbar' : 'Show device toolbar', floatLabel = s.floating ? 'Return to tab' : 'Float over chat'
   return <div testId="preview-chrome" style={{ display: 'flex', alignItems: 'center', height: 36, flexShrink: 0, gap: 4, paddingLeft: 8, paddingRight: 6, position: 'relative', borderBottomWidth: 1, borderColor: t.surfaceDivider }}>
     <div role="group" aria-label="Navigation" style={{ display: 'flex', gap: 2 }}>
@@ -81,10 +84,10 @@ export function PreviewChrome({ threadId }: { threadId: string }) {
       {entry && !editing && <div paintTransform={revealTransform(hover)} style={{ ...(hover ? {} : { pointerEvents: 'none' }), ...(PATCHED_NATIVE ? {} : { opacity: hover ? 1 : 0 }) }}><div style={{ opacity: fileRemote ? 0.4 : 1 }}><IconButton testId="preview-browser" icon={externalIcon} size="sm" glyph={13} label={fileRemote ? `This file is on ${environment.name}` : 'Open in browser'} onClick={() => !fileRemote && void launchPreview(threadId)} /></div></div>}
     </div>
     {entry && <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-      {!narrow && <><IconButton testId="preview-device" icon={deviceIcon} size="md" label={deviceLabel} active={s.device} onClick={() => setPreview(threadId, { device: !s.device })} /><IconButton testId="preview-float" icon={floatIcon} size="md" label={floatLabel} active={s.floating} onClick={() => entry.kind !== 'external' && setPreview(threadId, { floating: !s.floating })} /></>}
+      {!narrow && embedded && <><IconButton testId="preview-device" icon={deviceIcon} size="md" label={deviceLabel} active={s.device} onClick={() => setPreview(threadId, { device: !s.device })} /><IconButton testId="preview-float" icon={floatIcon} size="md" label={floatLabel} active={s.floating} onClick={() => entry.kind !== 'external' && setPreview(threadId, { floating: !s.floating })} /></>}
       <Menu align="end" testId="preview-more" minWidth={224} trigger={() => <IconButton icon={N.ellipsis} label="More" size="md" />}>
-        {narrow && <><MenuItem id="device" testId="preview-device" label={deviceLabel} icon={deviceIcon} onSelect={() => setPreview(threadId, { device: !s.device })} /><MenuItem id="float" testId="preview-float" label={floatLabel} icon={floatIcon} disabled={entry.kind === 'external'} onSelect={() => setPreview(threadId, { floating: !s.floating })} /></>}
-        <MenuItem id="fresh" testId="preview-fresh" label="Reload without cache" icon={N.refresh} onSelect={() => previewCommand(threadId, 'reload', true)} />
+        {narrow && embedded && <><MenuItem id="device" testId="preview-device" label={deviceLabel} icon={deviceIcon} onSelect={() => setPreview(threadId, { device: !s.device })} /><MenuItem id="float" testId="preview-float" label={floatLabel} icon={floatIcon} disabled={entry.kind === 'external'} onSelect={() => setPreview(threadId, { floating: !s.floating })} /></>}
+        {embedded && <MenuItem id="fresh" testId="preview-fresh" label="Reload without cache" icon={N.refresh} onSelect={() => previewCommand(threadId, 'reload', true)} />}
         <MenuItem id="copy" label="Copy address" icon={ICONS.copy} onSelect={() => copyText(address?.full ?? '')} />
         <MenuItem id="browser" label="Open in browser" icon={externalIcon} disabled={fileRemote} onSelect={() => void launchPreview(threadId)} />
         {entry.target?.kind === 'file' && entry.target.in_project && <MenuItem id="explorer" testId="preview-explorer" label="Show file in Explorer" icon={N.folder} disabled={!thread?.project_id || !canShowFileInExplorer(threadId, thread.project_id, explorerPath)} onSelect={showExplorer} />}

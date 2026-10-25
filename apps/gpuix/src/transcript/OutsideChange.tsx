@@ -1,7 +1,6 @@
 // After a turn of a group worktree chat, a repository left out of the worktree changed in the user's own checkout
 // (`outside_repo_changed`, L3 §8.5). A quiet warning row under the turn names it; Open shows that checkout. Kybern never
 // reverts it: the row only says what happened.
-import { spawn } from 'node:child_process'
 import { GROUP_COPY, outsideChangeText } from '../../../../packages/kybern-client/src/groups.ts'
 import type { OutsideRepoChange } from '../../../../packages/kybern-client/src/types.ts'
 import { Button } from '../kit/Button.tsx'
@@ -9,13 +8,14 @@ import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { Label, useTheme } from '../ui.tsx'
+import { openManyQuietly } from '../platform/os.ts'
 
 export function OutsideChange({ repos }: { repos: OutsideRepoChange[] }) {
   const t = useTheme()
   const local = activeEnvironment().local
   const open = () => {
     const paths = repos.map((r) => r.source_path).filter(Boolean)
-    if (local && paths.length) spawn('open', paths, { stdio: 'ignore' }).on('error', () => {})
+    if (local && paths.length) openManyQuietly(paths)
   }
   return (
     <div testId="outside-change" role="status" style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, minHeight: 28 }}>

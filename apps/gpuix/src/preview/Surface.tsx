@@ -5,7 +5,7 @@ import { webHost } from '../native/webview.ts'
 import { viewportLayout } from '../../../../packages/kybern-client/src/previewViewport.ts'
 import { validateBridgeMessage } from '../../../../packages/kybern-client/src/previewTarget.ts'
 import { useTheme } from '../ui.tsx'
-import { openPreview, previewState, releasePreviewEntry, setPreview, usePreview, type Entry } from './store.ts'
+import { launchPreview, openPreview, previewState, releasePreviewEntry, setPreview, usePreview, type Entry } from './store.ts'
 import { recordRecent, recentsKeyForThread } from './recents.ts'
 import { currentAddress, reloadAddress } from './address.ts'
 import { DeviceRails } from './DeviceRails.tsx'
@@ -113,6 +113,8 @@ export function PreviewSurface({ threadId }: { threadId: string }) {
 export function previewCommand(threadId: string, action: 'reload' | 'back' | 'forward' | 'stop', fresh = false) {
   const s = previewState(threadId), entry = s.entries[s.index]
   if (!entry) return
+  // The page lives in the browser: Reload opens it there again; the other commands have nothing to drive.
+  if (!webHost.available) { if (action === 'reload') void launchPreview(threadId); else setPreview(threadId, { loading: false }); return }
   if (action === 'stop') { webHost.action(previewDocumentId(threadId), action); setPreview(threadId, { loading: false }); return }
   if (action === 'reload') {
     if (s.load.phase !== 'ready' || entry.released || (fresh && entry.kind === 'file')) {

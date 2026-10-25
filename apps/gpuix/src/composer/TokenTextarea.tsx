@@ -1,6 +1,5 @@
 import { useGpuixRequired, type PublicInstance, type TextareaProps } from '@gpuix/react'
 import { useImperativeHandle, useRef, useEffect, type Ref } from 'react'
-import { spawnSync } from 'node:child_process'
 import { DecoratedTextarea } from '../native/decorated-input.tsx'
 import { nativeCapabilities, type InputSelection } from '../native/api.ts'
 import { useTheme } from '../ui.tsx'
@@ -8,6 +7,7 @@ import { FONT_MONO } from '../theme.ts'
 import { alpha, tinted } from '../transcript/kit.tsx'
 import { RichHistory, textEdit } from '../notes/rich-text.ts'
 import { editTokenText, snapToChips, tokenDisplayOffset, tokenSourceOffset, tokenText, type TokenReference, type TokenText } from './token-text.ts'
+import { writeClipboardText, writeClipboardTextSync } from '../platform/os.ts'
 
 export interface TokenTextareaHandle {
   selection(): InputSelection
@@ -144,9 +144,16 @@ export function TokenTextarea({ references, editorRef, nativeRef, onEditorError,
       if (!range.composing && mod && !event.modifiers?.alt) {
         if ((event.key === 'c' || event.key === 'x') && range.start !== range.end) {
           event.preventDefault()
-          const copied = spawnSync('pbcopy', [], { input: live.current.source.slice(range.start, range.end), stdio: ['pipe', 'ignore', 'ignore'] })
-          if (copied.error || copied.status !== 0) { onEditorError?.('Unable to copy. Try the keyboard shortcut again.'); return }
-          if (event.key === 'x' && !props.readOnly) install(live.current.source.slice(0, range.start) + live.current.source.slice(range.end), range.start, true)
+          const source = live.current.source, selected = source.slice(range.start, range.end), cut = event.key === 'x' && !props.readOnly
+          const finish = () => { if (cut && live.current.source === source) install(source.slice(0, range.start) + source.slice(range.end), range.start, true) }
+          if (process.platform === 'darwin') {
+            try { writeClipboardTextSync(selected) } catch { onEditorError?.('Unable to copy. Try the keyboard shortcut again.'); return }
+            finish()
+          } else {
+            // A clipboard tool is a process spawn off macOS (up to a second): copy without blocking the UI, and cut only once the
+            // text is on the clipboard (and only if the field still holds what was copied from).
+            void writeClipboardText(selected).then(finish, () => onEditorError?.('Unable to copy. Try the keyboard shortcut again.'))
+          }
           return
         }
         if (!props.readOnly && (event.key === 'z' || (event.key === 'y' && event.modifiers?.ctrl))) {

@@ -2,10 +2,13 @@ import { dlopen, FFIType, JSCallback, ptr } from 'bun:ffi'
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import type { LayoutRect, RoundedLayoutClip } from './layout.ts'
+import { webViewSupport } from './webview-support.ts'
 
 export type WebEvent = { id: string; generation?: number; type: string; message?: string; url?: string; visible?: boolean; key?: string; modifiers?: { cmd: boolean; ctrl: boolean; alt: boolean; shift: boolean }; data?: Record<string, unknown>
   /** `outsidePress`: window points; `snapshot`: the PNG's pixel size. */
   x?: number; y?: number; width?: number; height?: number; path?: string; ok?: boolean; token?: number }
+/** Decided once: off macOS (or with `KYBERN_GPUIX_NO_WEBVIEW=1`) no library is ever loaded and every `webHost` call is a no-op. */
+const SUPPORT = webViewSupport()
 let bridge: ReturnType<typeof load> | undefined, wake: JSCallback | undefined
 let nextGeneration = 0
 let pointerCaptures = 0
@@ -24,6 +27,7 @@ let requestId = 0
 const pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>()
 /** One native request, answered by a `frameResult` or `snapshot` event with its `rid`. */
 function request(rid: string, send: () => void, timeoutMs = 8000): Promise<unknown> {
+  if (!SUPPORT.available) return Promise.reject(new Error("This page can't run here because Kybern has no embedded web view on this platform yet."))
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => { pending.delete(rid); reject(new Error('The page did not answer. Reload it and try again.')) }, timeoutMs)
     pending.set(rid, { resolve, reject, timer })
@@ -59,6 +63,7 @@ function initialize() {
   if (pointerCaptures) command({ op: 'capture', id: '', active: true })
 }
 function command(fields: Record<string, unknown>) {
+  if (!SUPPORT.available) return
   initialize()
   const bytes = Buffer.from(JSON.stringify(fields) + '\0')
   bridge!.symbols.kybern_web_command(ptr(bytes))
@@ -86,6 +91,10 @@ export function webDocument(url: string, kind: 'file' | 'server' | 'visual') {
 }
 
 export const webHost = {
+  /** False where no embedded web view exists: callers check this and draw their fallback instead of catching errors. */
+  available: SUPPORT.available,
+  /** Why it is unavailable (`platform`, or `disabled` by `KYBERN_GPUIX_NO_WEBVIEW`), else null. */
+  unavailableReason: SUPPORT.reason,
   /** A trusted, never-placed document with no child frame (the Mermaid renderer): script runs, the page is not shown. */
   createDocument(id: string, html: string) {
     const generation = ++nextGeneration
@@ -94,6 +103,7 @@ export const webHost = {
   },
   create(id: string, url: string, kind: 'file' | 'server' | 'visual') {
     const generation = ++nextGeneration
+    if (!SUPPORT.available) return generation
     command({ op: 'create', id, category: kind === 'visual' ? 'visual' : 'preview', generation, allowedOrigins: [new URL(url).origin], html: webDocument(url, kind) })
     live.add(id)
     return generation

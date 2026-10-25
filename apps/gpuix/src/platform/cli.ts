@@ -8,6 +8,13 @@
 // - never overwrites a file that is not a Kybern command or a link to one;
 // - "Remove older copy" deletes only another Kybern CLI that comes first on PATH.
 //
+// Per platform (`cliInstallKind`):
+// - macOS and a portable Linux build: the symlink above (always `~/.local/bin` on Linux, no administrator step);
+// - Linux AppImage: the bundled copy lives in a mount that changes on every run, so `~/.local/bin/kybern` links the stable copy
+//   `packaging/entry-linux.ts` stages outside it (`stageAppImageCommands`), or, when that folder was not writable, the AppImage
+//   file itself, whose AppRun runs the bundled `kybern` when it is started under that name (`$ARGV0`);
+// - Linux deb and rpm, and the Windows installer: the package owns the command on PATH, so this only reports whether it is there.
+//
 // Every input is injectable (`CliEnvironment`) so checks run against a scratch
 // home and PATH; the app uses the real ones.
 import { execFile } from 'node:child_process'
@@ -16,6 +23,7 @@ import { mkdir, open, rename, rm, symlink, unlink } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { bundledCommand } from '../shell/daemon.ts'
+import { executableName, loginShellPath, osContext, osName, type OsContext } from './os.ts'
 
 const NAME = 'kybern'
 
@@ -42,38 +50,64 @@ export interface CliEnvironment {
   searchPath: () => Promise<string[]>
   /** `/usr/local/bin`; tests replace it so nothing outside the scratch folder is touched. */
   systemBin: string
-  /** The administrator prompt (`osascript … with administrator privileges`). */
+  /** The administrator prompt (`osascript … with administrator privileges`); macOS only. */
   adminRun: (script: string, prompt: string) => Promise<void>
+  /** How the command reaches PATH. Defaults to `cliInstallKind` of this process. */
+  kind?: CliInstallKind
+  /** Defaults to this process's platform; tests pass another. */
+  platform?: NodeJS.Platform
 }
 
-let loginPath: Promise<string[]> | undefined
-function loginShellPath(): Promise<string[]> {
-  return loginPath ??= new Promise((resolve) => {
-    const fallback = () => (process.env.PATH ?? '').split(':').filter(Boolean)
-    const shell = process.env.SHELL
-    if (!shell || !existsSync(shell)) return resolve(fallback())
-    execFile(shell, ['-ilc', 'printf \'%s\' "$PATH"'], { timeout: 5000, maxBuffer: 128 * 1024 }, (error, stdout) => {
-      const text = String(stdout ?? '').trim()
-      resolve(!error && text ? text.split(':').filter(Boolean) : fallback())
-    })
-  })
+/** Who puts `kybern` on PATH. */
+export type CliInstallKind = 'link' | 'appimage' | 'package' | 'installer'
+/**
+ * `appPath` is the running program. Whether a package owns the command depends on where the app itself is, not where a
+ * `kybern` was found: a portable build on a machine with the Tauri deb has `/usr/bin/kybern` on PATH too.
+ */
+export function cliInstallKind(bundled: string | null, ctx: OsContext = osContext(), appPath: string = process.execPath): CliInstallKind {
+  switch (osName(ctx.platform)) {
+    case 'macos': return 'link'
+    case 'windows': return 'installer'
+    case 'linux':
+      if (ctx.env.APPIMAGE) return 'appimage'
+      // A deb or rpm installs the app under /usr or /opt and links /usr/bin/kybern itself. A development run (bun, node) has no
+      // install of its own, so its command's location stands in.
+      const own = /^(bun|node)$/.test(path.posix.basename(appPath)) ? bundled : appPath
+      return own && /^\/(usr|opt)\//.test(own) ? 'package' : 'link'
+  }
+}
+/** What the Settings row says when the platform's installer or package owns the command. */
+export function managedCliCopy(kind: CliInstallKind, ctx: OsContext = osContext()): string | null {
+  if (kind === 'installer') return 'The Kybern installer adds the kybern command to your PATH, and updates it with the app.'
+  if (kind === 'package') return 'Your package manager installs the kybern command with Kybern, and updates it with the app.'
+  return null
 }
 
 export function defaultCliEnvironment(): CliEnvironment {
-  // Packaged builds carry the command in Contents/MacOS (`packaging/entry.ts`).
-  const bundled = process.env.KYBERN_BUNDLED_CLI && existsSync(process.env.KYBERN_BUNDLED_CLI) ? process.env.KYBERN_BUNDLED_CLI : bundledCommand('kybern') ?? null
-  return { bundled: bundled && path.basename(bundled) === NAME ? bundled : null, home: process.env.HOME || homedir() || null, searchPath: loginShellPath, systemBin: '/usr/local/bin', adminRun }
+  const ctx = osContext()
+  // Packaged builds carry the command in Contents/MacOS (`packaging/entry.ts`), in `bin` beside the program on Windows (the installer
+  // puts only that folder on PATH), and in `bin` for a package.
+  const found = process.env.KYBERN_BUNDLED_CLI && existsSync(process.env.KYBERN_BUNDLED_CLI) ? process.env.KYBERN_BUNDLED_CLI : bundledCommand('kybern') ?? null
+  const bundledCopy = found && path.basename(found, ctx.platform === 'win32' ? '.exe' : '') === NAME ? found : null
+  const kind = cliInstallKind(bundledCopy, ctx)
+  // An AppImage's own copy sits in a per-run mount; the link must point at the staged copy outside it, or at the AppImage file.
+  const mount = ctx.env.APPDIR?.replace(/\/+$/, '')
+  const inMount = !bundledCopy || (!!mount && bundledCopy.startsWith(`${mount}/`))
+  const appImage = kind === 'appimage' && inMount && ctx.env.APPIMAGE && existsSync(ctx.env.APPIMAGE) ? ctx.env.APPIMAGE : null
+  return { bundled: appImage ?? bundledCopy, home: ctx.platform === 'win32' ? ctx.env.USERPROFILE || homedir() || null : process.env.HOME || homedir() || null, searchPath: () => loginShellPath(ctx), systemBin: '/usr/local/bin', adminRun, kind, platform: ctx.platform }
 }
 
+const platformOf = (env: CliEnvironment) => env.platform ?? process.platform
 const sameFile = (a: string, b: string) => { try { return realpathSync(a) === realpathSync(b) } catch { return false } }
-const sameDir = (a: string, b: string) => a.replace(/\/+$/, '') === b.replace(/\/+$/, '')
+const trimDir = (dir: string, platform: NodeJS.Platform) => platform === 'win32' ? dir.replace(/[\\/]+$/, '').replaceAll('/', '\\').toLowerCase() : dir.replace(/\/+$/, '')
+const sameDir = (a: string, b: string, platform: NodeJS.Platform = process.platform) => trimDir(a, platform) === trimDir(b, platform)
 const isFile = (file: string) => { try { return statSync(file).isFile() } catch { return false } }
-const resolveCommand = (dirs: string[]) => dirs.map(dir => path.join(dir, NAME)).find(isFile) ?? null
+const resolveCommand = (dirs: string[], platform: NodeJS.Platform = process.platform) => dirs.map(dir => path.join(dir, executableName(NAME, platform))).find(isFile) ?? null
 
 /** `kybern --version` prints `kybern X.Y.Z`. Anything else is not our CLI. */
 export function cliVersion(file: string): Promise<string | null> {
   return new Promise((resolve) => {
-    execFile(file, ['--version'], { timeout: 3000 }, (error, stdout) => {
+    execFile(file, ['--version'], { timeout: 3000, windowsHide: true }, (error, stdout) => {
       const text = String(stdout ?? '').trim()
       resolve(!error && text.startsWith(`${NAME} `) ? text.slice(NAME.length + 1).trim() : null)
     })
@@ -97,7 +131,7 @@ function linkTarget(env: CliEnvironment, dirs: string[], bundled: string): strin
   const candidates = [path.join(homeBin, NAME), path.join(env.systemBin, NAME)]
   const existing = candidates.find(candidate => sameFile(candidate, bundled))
   if (existing) return existing
-  return dirs.some(dir => sameDir(dir, homeBin)) || process.platform !== 'darwin' ? path.join(homeBin, NAME) : path.join(env.systemBin, NAME)
+  return dirs.some(dir => sameDir(dir, homeBin)) || platformOf(env) !== 'darwin' ? path.join(homeBin, NAME) : path.join(env.systemBin, NAME)
 }
 
 async function needsAdmin(env: CliEnvironment, target: string): Promise<boolean> {
@@ -106,10 +140,27 @@ async function needsAdmin(env: CliEnvironment, target: string): Promise<boolean>
   return !(env.home && (dir === env.home || dir.startsWith(`${env.home}/`)))
 }
 
+const kindOf = (env: CliEnvironment) => env.kind ?? cliInstallKind(env.bundled, { ...osContext(), platform: platformOf(env) })
+const managed = (kind: CliInstallKind) => kind === 'installer' || kind === 'package'
+
 export async function cliStatus(env = defaultCliEnvironment()): Promise<CliStatus> {
+  const platform = platformOf(env)
   const dirs = await env.searchPath()
-  const resolved = resolveCommand(dirs)
+  const resolved = resolveCommand(dirs, platform)
   const status: CliStatus = { method: 'unavailable', bundled: null, target: null, installed: false, needs_admin: false, target_on_path: false, resolved, resolved_version: resolved ? await cliVersion(resolved) : null, shadowed: false, problem: null, home: env.home }
+  const kind = kindOf(env)
+  if (managed(kind)) {
+    // The installer or package put the command on PATH (or did not): nothing here installs or removes it.
+    status.method = kind === 'installer' ? 'path' : 'package'
+    status.bundled = env.bundled && isFile(env.bundled) ? env.bundled : null
+    status.installed = !!status.resolved_version
+    status.target = resolved
+    status.target_on_path = status.installed
+    status.problem = status.installed ? null : kind === 'installer'
+      ? 'The kybern command isn’t on your PATH. Run the Kybern installer again, or add the folder holding kybern.exe to PATH.'
+      : 'The kybern command isn’t on your PATH. Reinstall the Kybern package, or run kybern from the folder it was installed to.'
+    return status
+  }
   if (!env.bundled || !isFile(env.bundled)) {
     status.problem = 'This build of Kybern doesn’t include the kybern command.'
     return status
@@ -121,7 +172,7 @@ export async function cliStatus(env = defaultCliEnvironment()): Promise<CliStatu
   if (!target) { status.problem = 'Kybern couldn’t find your home folder.'; return status }
   status.installed = sameFile(target, env.bundled)
   status.needs_admin = !status.installed && await needsAdmin(env, target)
-  status.target_on_path = dirs.some(dir => sameDir(dir, path.dirname(target)))
+  status.target_on_path = dirs.some(dir => sameDir(dir, path.dirname(target), platform))
   status.shadowed = status.installed && !!resolved && !sameFile(resolved, target) && !sameFile(resolved, env.bundled)
   status.target = target
   return status
@@ -149,8 +200,9 @@ async function link(bundled: string, target: string) {
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
 
-/** Run a shell command as an administrator through the standard macOS password prompt. */
+/** Run a shell command as an administrator through the standard macOS password prompt. Only macOS asks: elsewhere the link is per user. */
 function adminRun(script: string, prompt: string): Promise<void> {
+  if (process.platform !== 'darwin') return Promise.reject(Error('Kybern installs the command for your user only, so it needs no administrator. Make ~/.local/bin writable, then try again.'))
   const quote = (text: string) => `"${text.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
   return new Promise((resolve, reject) => {
     execFile('/usr/bin/osascript', ['-e', `do shell script ${quote(script)} with prompt ${quote(prompt)} with administrator privileges`], (error, _stdout, stderr) => {
@@ -161,7 +213,9 @@ function adminRun(script: string, prompt: string): Promise<void> {
   })
 }
 
+const managedError = (kind: CliInstallKind) => Error(managedCliCopy(kind) ?? 'Kybern doesn’t manage the command here.')
 export async function installCli(env = defaultCliEnvironment()): Promise<CliStatus> {
+  if (managed(kindOf(env))) throw managedError(kindOf(env))
   const bundled = env.bundled
   if (!bundled || !isFile(bundled)) throw Error('This build of Kybern doesn’t include the kybern command.')
   const problem = unstableLocation(bundled)
@@ -179,6 +233,7 @@ export async function installCli(env = defaultCliEnvironment()): Promise<CliStat
 }
 
 export async function uninstallCli(env = defaultCliEnvironment()): Promise<CliStatus> {
+  if (managed(kindOf(env))) throw managedError(kindOf(env))
   const bundled = env.bundled
   if (!bundled || !isFile(bundled)) throw Error('This build of Kybern doesn’t include the kybern command.')
   const target = linkTarget(env, await env.searchPath(), bundled)

@@ -36,7 +36,7 @@ export async function connectEnvironment(id: string) {
     profile.url = `ws://127.0.0.1:${port}/ws`
     profile.ssh.local_port = port
   }
-  const endpoint = profile.id === 'local' && !process.env.KYBERN_URL ? null : profileEndpoint(profile)
+  const endpoint = profile.id === 'local' && !process.env.KYBERN_URL ? null : await profileEndpoint(profile)
   const registry = readRegistry()
   writeRegistry({ ...registry, selected_id: id, environments: registry.environments.map(saved => saved.id === profile.id ? profile : saved) })
   stopSshTunnels(id)
@@ -67,23 +67,23 @@ export async function saveEnvironment(input: { id?: string; name: string; addres
     if (expected && expected !== result.environment_id) throw Error('This invitation belongs to a different environment. Add it separately.')
     token = result.token; expected = result.environment_id; paired = true
   }
-  if (!token && existing) token = readCredential(existing.id)
+  if (!token && existing) token = await readCredential(existing.id)
   if (!token) throw Error('Enter a pairing code from the other machine')
   if (expected && registry.environments.some((p) => p.id !== id && p.environment_id === expected)) throw Error('This environment is already saved. Select it from the environment menu.')
   const profile: EnvironmentProfile = { id, name, url, environment_id: expected, local: false, ssh: input.ssh ?? existing?.ssh }
-  const persist = (next: EnvironmentProfile) => {
+  const persist = async (next: EnvironmentProfile) => {
     const latest = readRegistry()
-    writeCredential(id, token)
+    await writeCredential(id, token)
     writeRegistry({ ...latest, environments: [...latest.environments.filter((p) => p.id !== id), next] })
   }
   // The pairing code is single use. Keep its credential before opening a socket
   // so a network failure still leaves a recoverable saved connection.
-  if (paired) persist(profile)
+  if (paired) await persist(profile)
   try {
     const info = await verifyEndpoint({ url, token, environmentId: expected })
     if (registry.environments.some((p) => p.id !== id && p.environment_id === info.environment_id)) throw Error('This environment is already saved. Select it from the environment menu.')
     profile.environment_id = info.environment_id; profile.hostname = info.hostname
-    persist(profile)
+    await persist(profile)
   } catch (e) {
     if (paired) throw Error(`Paired and saved. Reconnect from the environment menu when the machine is reachable. ${e instanceof Error ? e.message : String(e)}`)
     throw e
@@ -91,14 +91,14 @@ export async function saveEnvironment(input: { id?: string; name: string; addres
   return profile
 }
 
-export function forgetEnvironment(id: string) {
+export async function forgetEnvironment(id: string) {
   if (id === 'local') throw Error('The local environment cannot be removed')
   const registry = readRegistry()
-  const previous = (() => { try { return readCredential(id) } catch { return null } })()
+  const previous = await readCredential(id).catch(() => null)
   stopSshTunnel(id)
-  removeCredential(id)
+  await removeCredential(id)
   try { writeRegistry({ selected_id: registry.selected_id === id ? 'local' : registry.selected_id, environments: registry.environments.filter((p) => p.id !== id) }) }
-  catch (e) { if (previous) writeCredential(id, previous); throw e }
+  catch (e) { if (previous) await writeCredential(id, previous); throw e }
   // The desktop drops the environment's stored workspace with it (`forgetEnvironmentStore`).
   if (activeEnvironment().id !== id) for (const file of [savedEnvironmentStateFile(localDataDir, id), prefsFileFor(id)]) rmSync(file, { force: true })
   if (activeEnvironment().id === id) { const files = [savedEnvironmentStateFile(localDataDir, id), prefsFileFor(id)]; connectEnvironment('local'); for (const file of files) rmSync(file, { force: true }) }

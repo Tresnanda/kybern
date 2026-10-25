@@ -14,6 +14,7 @@ import { toast } from '../shell/toasts.tsx'
 import { connectEnvironment, openEnvironmentWindow } from '../environments/actions.ts'
 import { showEnvironmentDialog } from '../environments/Dialogs.tsx'
 import { localProfile, readRegistry, type EnvironmentProfile } from '../environments/registry.ts'
+import { osLabels } from '../platform/os.ts'
 
 let menuOpen = false
 const menuListeners = new Set<() => void>()
@@ -90,7 +91,7 @@ function EnvironmentChoice({ profile, last, current, status, statusLabel, onChoo
   useLayoutEffect(() => menu.register({ key: profile.id, disabled: false, keepOpen: false, onSelect: () => choose.current() }), [menu.register, profile.id])
   useLayoutEffect(() => menu.register({ key: windowKey, disabled: false, keepOpen: false, onSelect: () => openWindow.current() }), [menu.register, windowKey])
   const choiceActive = menu.active === profile.id, windowActive = menu.active === windowKey
-  const detail = current ? statusLabel : profile.local ? 'On this Mac' : profile.ssh ? 'SSH connection' : 'Remote environment'
+  const detail = current ? statusLabel : profile.local ? `On ${osLabels().thisComputerInline}` : profile.ssh ? 'SSH connection' : 'Remote environment'
   const dot = current && status === 'open' ? '#00bc7d' : current && status === 'failed' ? t.red : muted(t, 0.4)
   return <div style={{ paddingBottom: last ? 0 : 2 }}><div style={{ display: 'flex', alignItems: 'center', gap: 4, height: 45, paddingRight: 4, borderRadius: 10, backgroundColor: choiceActive || windowActive ? t.buttonSecondaryHover : current ? t.buttonSecondary : 'transparent' }}>
     <div testId={`environment-choice-${profile.id}`} role="menuitem" aria-checked={current} aria-label={profile.name} onMouseMove={() => { if (menu.active !== profile.id) menu.setActive(profile.id) }} onMouseLeave={() => { if (menu.active === profile.id) menu.setActive(null) }} onMouseDown={() => {}} onClick={() => menu.pick(profile.id)} style={{ display: 'flex', alignItems: 'center', gap: 12, flexGrow: 1, minWidth: 0, height: 45, paddingLeft: 8, paddingRight: 8 }}>

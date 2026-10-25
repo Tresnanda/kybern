@@ -1,14 +1,14 @@
 // Attention pop (`.t-pop`, `styles/motion.css`): one small bump for a badge or count that just changed or appeared: scale
 // 0.85 -> 1 and opacity 0.4 -> 1 over `--duration-fast` (250 ms) with `--ease-bounce` (cubic-bezier(0.34, 1.36, 0.64, 1)).
 //
-// Patched native build (`native/patches/pop_gpui.py`): `paintAnimation: { kind: 'pop', cycleMs }` on a passive text or SVG leaf.
+// Patched native build (`the fork commit from pop_gpui.py`): `paintAnimation: { kind: 'pop', cycleMs }` on a passive text or SVG leaf.
 // The renderer re-scales and re-fades the leaf's glyph sprites about the leaf's centre at every presented frame without element
 // render, layout or prepaint, and stops asking for frames once the curve has ended, so a pop costs a scene replay per frame for
 // 250 ms and nothing afterwards. Paint-only, like a CSS transform: layout and hit testing do not move. It plays when the element
 // mounts, so (as with the desktop's `key={count}`) a new `key` plays it again.
 //
 // A box with a background or border (a chip, an attachment tile) pops as a whole with `popTransform()`: the paint-only
-// subtree transform (`native/patches/subtree_transform.rs`) scales and fades everything the box paints about its centre,
+// subtree transform (`native/upstream/packages/native/src/subtree_transform.rs`) scales and fades everything the box paints about its centre,
 // again with no render or layout per frame. With the stock addon (`KYBERN_GPUIX_NATIVE=npm`) and under Reduce Motion
 // (`.t-pop { animation: none }`) the element simply appears.
 import type { PaintTransformProps } from '@gpuix/native/host'

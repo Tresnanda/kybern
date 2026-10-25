@@ -7,7 +7,7 @@ import type { ApprovalRequest, PermissionRequestInput, ThreadId } from '../../..
 import { permissionGrantedTitle, permissionPane, permissionStillOffMeta, permissionStillOffTitle, permissionTitle, permissionWaitingLine } from '../../../../packages/kybern-client/src/requestCards.ts'
 import { Icon, ICONS } from '../icons.tsx'
 import { Button } from '../kit/Button.tsx'
-import { openSystemSettings, revealInFinder } from '../settings/external.ts'
+import { openSystemSettings, revealInFinder, systemSettingsFailure } from '../settings/external.ts'
 import { FONT_MONO } from '../theme.ts'
 import { Label } from '../ui.tsx'
 import { cancelTurn } from './actions.ts'
@@ -58,7 +58,7 @@ export function PermissionRequestPanel({ approval, input, count, threadId }: { a
 
   const act = async (action: string) => { setActError(''); await actOnRequest(approval.id, action) }
   const open = async () => {
-    await openSystemSettings(progress?.url || input.url).catch(() => { throw new Error(`Unable to open System Settings. Open ${input.pane_label} yourself, then choose Check again.`) })
+    await openSystemSettings(progress?.url || input.url).catch(() => { throw new Error(systemSettingsFailure(input.pane_label, ', then choose Check again')) })
     if (input.needs_app_added && input.app_path) await revealInFinder(input.app_path).catch(() => {})
     await act('open')
   }
@@ -105,7 +105,7 @@ export function PermissionRequestPanel({ approval, input, count, threadId }: { a
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
                 <Button variant="ghost" size="sm" testId="permission-stop" onKeyboard={keyboardAnswer} onClick={() => void stop(false)}>Stop waiting</Button>
                 {input.detects
-                  ? <Button size="sm" testId="permission-reopen" onClick={() => void openSystemSettings(progress?.url || input.url).catch(() => setActError(`Unable to open System Settings. Open ${input.pane_label} yourself.`))}>Open System Settings</Button>
+                  ? <Button size="sm" testId="permission-reopen" onClick={() => void openSystemSettings(progress?.url || input.url).catch(() => setActError(systemSettingsFailure(input.pane_label, '')))}>Open System Settings</Button>
                   : <Button size="sm" testId="permission-granted" onClick={() => void act('granted').catch((e) => setActError(actionFailed(e)))}>I’ve granted it</Button>}
               </div>
             }

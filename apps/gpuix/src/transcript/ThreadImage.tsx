@@ -4,7 +4,6 @@
 // threads included), hidden folders allowed, or an exact outside path the conversation names. It works the same for
 // remote environments. A source that cannot load shows a card with the caption, the reason and what to do, never a bare
 // link; one written moments before the reply finished is retried once. Fresh images resolve from a blur (`ResponseImage`).
-import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { useEffect, useState } from 'react'
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
@@ -21,6 +20,7 @@ import { ImageLightbox, ResponseImage } from './images.tsx'
 import { ImageViewer } from '../motion/ImageMorph.tsx'
 import { openTab } from '../tabs/open.ts'
 import { storeImageBytes } from './imageFiles.ts'
+import { openQuietly, osLabels, revealQuietly } from '../platform/os.ts'
 
 /** Retried once after this, for an image the agent wrote moments before its reply arrived. */
 const RETRY_MS = 1500
@@ -113,7 +113,7 @@ function LocalThreadImage({ threadId, source, label, at }: { threadId: string | 
   // Retry helps only when the file may still appear or the connection failed.
   const retryable = image.failure.status === 404 || image.failure.status === 0 || image.failure.status >= 500
   return <ImageCard label={label} reason={image.failure.reason} onRetry={retryable ? image.retry : undefined}
-    onReveal={file ? () => { spawn('open', image.failure!.status === 404 ? [path.dirname(file)] : ['-R', file]).on('error', () => {}) } : undefined} />
+    onReveal={file ? () => { if (image.failure!.status === 404) openQuietly(path.dirname(file)); else revealQuietly(file) } : undefined} />
 }
 
 /** The image's slot while it loads, or why it cannot show: a quiet card with its caption (`ResponseImage`'s width). */
@@ -128,7 +128,7 @@ function ImageCard({ label, reason, loading = false, onRetry, onReveal }: { labe
       <Label color={muted(t)} size={12} lineHeight={16}>{loading ? 'Loading image…' : reason ?? ''}</Label>
       {(onRetry || onReveal) && <div style={{ display: 'flex', gap: 8 }}>
         {onRetry && <Button size="sm" testId="thread-image-retry" onClick={onRetry}>Retry</Button>}
-        {onReveal && <Button variant="ghost" size="sm" testId="thread-image-reveal" onClick={onReveal}>Show in Finder</Button>}
+        {onReveal && <Button variant="ghost" size="sm" testId="thread-image-reveal" onClick={onReveal}>{osLabels().reveal.replace('Reveal', 'Show')}</Button>}
       </div>}
     </div>
   </Rise>

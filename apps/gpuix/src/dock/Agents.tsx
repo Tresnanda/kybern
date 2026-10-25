@@ -28,6 +28,7 @@ import { DockEmpty, ErrorLine, Section } from './parts.tsx'
 import { Button } from '../kit/Button.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
 import { flatTree, TICK_GAP, TreeLines, type TreeShape } from '../tree/Tree.tsx'
+import { osLabels } from '../platform/os.ts'
 
 const choices = new Map<string, { tree: Record<string, boolean>; detail: Record<string, boolean> }>()
 function initialChoices(id: string) {
@@ -127,7 +128,7 @@ export function Agents({ thread }: { thread: Thread }) {
       </div>
     </>}
     {removing && <Dialog onClose={() => { if (!busy) setRemoving(null) }} width={420} testId="dock-remove-worktree">
-      <DialogHeader title="Remove this worktree?" description={`${removing?.title || 'This agent'} left its worktree on disk because it has unmerged changes. Removing it deletes those files from this Mac. The branch is deleted only if already merged.`} onClose={() => { if (!busy) setRemoving(null) }} />
+      <DialogHeader title="Remove this worktree?" description={`${removing?.title || 'This agent'} left its worktree on disk because it has unmerged changes. Removing it deletes those files from ${osLabels().thisComputerInline}. The branch is deleted only if already merged.`} onClose={() => { if (!busy) setRemoving(null) }} />
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: 12 }}>
         <Button size="lg" disabled={busy} onClick={() => setRemoving(null)}>Cancel</Button>
         <Button size="lg" variant="destructive" busy={busy} onClick={() => void run(async () => { if (removing) await getClient()!.call('delegations.worktree_remove', { thread_id: removing.id, force: true }); setRemoving(null) })}>{busy ? 'Removing…' : 'Remove worktree'}</Button>

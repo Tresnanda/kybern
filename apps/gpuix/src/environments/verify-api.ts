@@ -24,15 +24,15 @@ try {
     if (profile.environment_id !== client.info!.environment_id) throw Error('Identity not retained')
     const edited = await saveEnvironment({ id: profile.id, name: 'Edited pair test', address: profile.url! })
     if (edited.name !== 'Edited pair test') throw Error('Edit not retained')
-    await verifyEndpoint(profileEndpoint(edited))
+    await verifyEndpoint(await profileEndpoint(edited))
     const after = await client.call('access.tokens.list', {})
     const created = after.tokens.find((t) => !tokens.tokens.some((old) => old.id === t.id))
     if (!created) throw Error('Device not listed')
     await client.call('access.tokens.revoke', { token_id: created.id })
     let rejected = false
-    try { await verifyEndpoint(profileEndpoint(edited)) } catch { rejected = true }
+    try { await verifyEndpoint(await profileEndpoint(edited)) } catch { rejected = true }
     if (!rejected) throw Error('Revoked credential connected')
-    forgetEnvironment(profile.id)
+    await forgetEnvironment(profile.id)
     if (readRegistry().environments.some((p) => p.id === profile.id)) throw Error('Forget did not remove profile')
     console.log('Pairing redemption, identity verification, profile edit, device revoke and forget passed')
   } finally { writeRegistry(before) }

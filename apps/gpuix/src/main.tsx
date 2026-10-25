@@ -3,7 +3,8 @@
 // Must stay the first import: it picks the native module before @gpuix loads.
 import './native/local-build.ts'
 import { startupMark } from './perf/startup.ts'
-import { fstatSync, readFileSync } from 'node:fs'
+import { fstatSync, readFileSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { render, useGpuixRequired } from '@gpuix/react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { onWindowKeyDown } from './nav/keys.ts'
@@ -23,6 +24,7 @@ import { hasSavedFrame, installWindowFrame, startWindowShell } from './shell/win
 import { startEnvironmentWindow } from './windows/window.ts'
 import { installRuntimeSafetyNet } from './shell/errors.ts'
 import { startMemoryLog } from './perf/memoryLog.ts'
+import { setOsHost } from './platform/os.ts'
 
 // The terminal draws xterm's weights (300 text, 500 bold); italics are their own family until GPUIX styles take `fontStyle`.
 const FONTS = ['CalSans-Regular.ttf', 'JetBrainsMono-Regular.ttf', 'JetBrainsMono-Light.ttf', 'JetBrainsMono-Medium.ttf', 'JetBrainsMono-LightItalic.ttf', 'JetBrainsMono-MediumItalic.ttf']
@@ -32,6 +34,8 @@ function Fonts({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false)
   useEffect(() => {
     startupMark('fonts-start')
+    // Windows and Linux use the addon's clipboard, open and picker bindings when it has them (`platform/os.ts`).
+    setOsHost(renderer)
     installFrameSource(renderer)
     // Focus that GPUIX moves takes the keyboard back from a clicked web document (`native/focusHandback.ts`).
     installFocusHandback(renderer)
@@ -60,6 +64,24 @@ function Fonts({ children }: { children: ReactNode }) {
 }
 
 startupMark('modules-ready')
+// KYBERN_GPUIX_SMOKE=1 (the installer check, `packaging/windows/verify-install.ps1`): prove that a packaged build
+// loads its native addon with every DLL it needs and imports its whole module graph and resources, then exit before
+// a window, daemon or network connection exists. A failure is written to KYBERN_GPUIX_SMOKE_OUT (a GUI build has no console).
+if (process.env.KYBERN_GPUIX_SMOKE === '1') {
+  const out = process.env.KYBERN_GPUIX_SMOKE_OUT
+  try {
+    const addon = process.env.NAPI_RS_NATIVE_LIBRARY_PATH
+    if (!addon) throw Error('No patched native addon is set (NAPI_RS_NATIVE_LIBRARY_PATH)')
+    createRequire(import.meta.url)(addon)
+    await import('./App.tsx')
+    readFileSync(new URL(`./assets/fonts/${FONTS[0]}`, import.meta.url))
+    if (out) writeFileSync(out, 'ok')
+  } catch (error) {
+    if (out) writeFileSync(out, error instanceof Error ? error.stack ?? error.message : String(error))
+    process.exit(1)
+  }
+  process.exit(0)
+}
 // Restore selection before the socket opens, so its content can hydrate while
 // the workspace modules and native window initialize.
 startSplitView()

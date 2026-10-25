@@ -6,6 +6,8 @@ import { spawnSync } from 'node:child_process'
 
 function startup(): boolean {
   if (process.env.KYBERN_REDUCED_MOTION) return process.env.KYBERN_REDUCED_MOTION === '1'
+  // Windows and Linux have their own switches (SystemParametersInfo, the freedesktop portal): not read yet, so motion stays on.
+  if (process.platform !== 'darwin') return false
   const r = spawnSync('defaults', ['read', 'com.apple.universalaccess', 'reduceMotion'], { encoding: 'utf8' })
   return r.stdout?.trim() === '1'
 }

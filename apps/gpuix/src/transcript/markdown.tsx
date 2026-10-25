@@ -5,7 +5,6 @@ import { useTranscriptRowLease } from './Window.tsx'
 // nodes. Code expansion contributes rows to the OUTER transcript virtual list.
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useGpuix, type PublicInstance } from '@gpuix/react'
-import { spawn } from 'node:child_process'
 import { chatLink } from '../../../../packages/kybern-client/src/chatLinks.ts'
 import { fileRefCandidates, linkifyFileRefs } from '../../../../packages/kybern-client/src/fileRefs.ts'
 import { TOOL_RESULT_CHAR_LIMIT, TOOL_RESULT_LINE_LIMIT } from '../../../desktop/src/lib/toolResultText.ts'
@@ -31,6 +30,7 @@ import { ThreadImage, ThreadImagePreview } from './ThreadImage.tsx'
 import { localImageLink } from '../../../../packages/kybern-client/src/responseImages.ts'
 import { observeElementBounds, type ElementBoundsEvent } from '../native/layout.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
+import { openTarget } from '../platform/os.ts'
 
 /** `image`: a Markdown image on a line of its own (`text` is its source as written, `alt` its caption). */
 export type MarkdownPart = { kind: 'prose' | 'code' | 'image'; text: string; language?: string; alt?: string; key: string }
@@ -279,7 +279,7 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
           const repo = git?.remote_url && /[:/]([^/:]+\/[^/]+?)(?:\.git)?$/.exec(git.remote_url)?.[1]
           if (repo && repo.toLowerCase() === pr[1]!.toLowerCase() && openTabFromPane(pane.id, { kind: 'pr', projectId: thread.project_id, number: Number(pr[2]) })) return
         }
-        spawn('open', [link.url]).on('error', e => reportError('Unable to open link', e)); return
+        openTarget(link.url).catch(e => reportError('Unable to open link', e)); return
       }
       // From inside a thread, files, notes and tasks open as permanent tabs beside the chat (ADE-54); the page is a click away.
       if (link.kind === 'file') {

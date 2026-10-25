@@ -2,7 +2,6 @@ import { toast } from '../shell/toasts.tsx'
 import { createTask, openTask } from '../tasks/store.ts'
 import { checklistLine } from '@/state/noteLines'
 import { goPage } from '../nav/history.ts'
-import { spawn } from 'node:child_process'
 import { motion, useGpuix, useWindowSize, type PublicInstance } from '@gpuix/react'
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { editedAgo } from '@/state/notesModel'
@@ -32,6 +31,7 @@ import type { NoteCategory } from '../../../../packages/kybern-client/src/types.
 import { Menu, MenuItem } from '../nav/overlay.tsx'
 import { FONT_MONO } from '../theme.ts'
 import { supersededBlocks, type SupersededBlock } from './superseded.ts'
+import { openQuietly } from '../platform/os.ts'
 
 /** The text a reader counts: no link targets, list numbers, fences or heading marks. */
 function plainText(body: string): string {
@@ -42,7 +42,7 @@ export function openLink(href: string, _noteId?: string) {
   if (task) { openTask(task[1]!); goPage('tasks'); return }
   const thread = /^kybern:\/\/thread\/([a-f\d-]{36})\/?$/i.exec(href)
   if (thread) { openThread(thread[1]!); return }
-  if (/^(https?:|mailto:|tel:)/i.test(href)) { const child = spawn('open', [href], { stdio: 'ignore' }); child.on('error', () => {}) }
+  if (/^(https?:|mailto:|tel:)/i.test(href)) openQuietly(href)
 }
 /** Where a note's images are kept: the daemon that keeps the note. */
 export function noteImageHome(id: string): ImageHome {

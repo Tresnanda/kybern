@@ -1,5 +1,4 @@
 import { noteSession } from './session.ts'
-import { spawn } from 'node:child_process'
 import { saveTextFile } from '../platform/files.ts'
 import { useGpuix } from '@gpuix/react'
 import { useState } from 'react'
@@ -12,9 +11,10 @@ import { toast } from '../shell/toasts.tsx'
 import { Label, useTheme } from '../ui.tsx'
 import { markNoteLeaving } from './motion.ts'
 import { deleteNote, gallery, recordNote, refreshNotes, restoreNote, rpc, moveNote } from './store.ts'
+import { writeClipboardText } from '../platform/os.ts'
 
 export async function copyMarkdown(title: string, body: string) {
-  await new Promise<void>((resolve, reject) => { const child = spawn('pbcopy'); child.once('error', reject); child.once('close', (code) => code === 0 ? resolve() : reject(new Error('Clipboard unavailable'))); child.stdin.end(noteMarkdown(title, body)) })
+  await writeClipboardText(noteMarkdown(title, body)).catch((error) => { throw new Error(error instanceof Error && error.name === 'MissingToolError' ? error.message : 'Clipboard unavailable') })
 }
 export function NoteMenu({ note, readText, part, trigger }: { note: NoteSummary; readText?: () => { title: string; body: string }; part?: 'share' | 'more'; trigger?: () => React.ReactNode }) {
   const t = useTheme()

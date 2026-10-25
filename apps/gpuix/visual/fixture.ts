@@ -7,6 +7,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { deflateSync } from 'node:zlib'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
@@ -17,7 +18,9 @@ import { KybernClient } from '../../../packages/kybern-client/src/client.ts'
  * never share a daemon, data dir or Vite server; `GPUIX_VISUAL_SLOT` overrides the hash.
  */
 const SLOT = process.env.GPUIX_VISUAL_SLOT ?? createHash('sha1').update(path.resolve(import.meta.dir, '../../..')).digest('hex').slice(0, 8)
-export const SCRATCH = process.env.VISUAL_SCRATCH ?? `/Users/mymac/projects/ade-gpuix-scratch/visual-pair-${SLOT}`
+// The checkout's own scratch tree on the author's Mac; elsewhere (CI runners, other machines) under the temp folder. The
+// path must contain `gpuix-scratch`, which the guards below and the app fixtures look for.
+export const SCRATCH = process.env.VISUAL_SCRATCH ?? (process.platform === 'darwin' ? `/Users/mymac/projects/ade-gpuix-scratch/visual-pair-${SLOT}` : path.join(tmpdir(), 'gpuix-scratch', `visual-pair-${SLOT}`))
 export const DATA_DIR = process.env.VISUAL_DATA_DIR ?? path.join(SCRATCH, 'data')
 /** GPUIX appearance prefs and credentials live here, never in ~/Library (a guard refuses anything outside the scratch dir). */
 export const CLIENT_DIR = path.join(SCRATCH, 'client')

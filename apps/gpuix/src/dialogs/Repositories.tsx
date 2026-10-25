@@ -4,7 +4,6 @@
 // it is a member, else the first by path: it is shown, never chosen (no "Make primary"). "Also copy into worktrees" lists
 // the top-level entries of the group folder the user picked for new worktree containers; nothing is pre-picked.
 import { useGpuix, useWindowSize } from '@gpuix/react'
-import { spawn } from 'node:child_process'
 import { homedir } from 'node:os'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
@@ -38,6 +37,7 @@ import { addProjectToCurrentSpace } from '../spaces/add.ts'
 import { getClient, useApp } from '../state.ts'
 import { FONT_MONO } from '../theme.ts'
 import { Label, useTheme } from '../ui.tsx'
+import { openQuietly, osLabels, revealQuietly } from '../platform/os.ts'
 
 const UNDO_MS = 8000
 
@@ -118,8 +118,8 @@ function MemberList({ project, close, onAdd }: { project: Project; close: () => 
       void loadMemberStatus(project.id, true)
     } catch (e) { setError(errorText(e)) } finally { setCreating(false) }
   }
-  const reveal = (path: string) => { if (local) spawn('open', ['-R', path], { stdio: 'ignore' }).on('error', () => {}) }
-  const openFile = (path: string) => { if (local) spawn('open', [path], { stdio: 'ignore' }).on('error', () => {}) }
+  const reveal = (path: string) => { if (local) revealQuietly(path) }
+  const openFile = (path: string) => { if (local) openQuietly(path) }
   const absolute = (member: string) => (member === '.' ? project.path : `${project.path}/${member}`)
 
   const shared = status ? [status.agents_md && 'AGENTS.md', status.claude_md && 'CLAUDE.md'].filter((f): f is string => !!f) : []
@@ -260,7 +260,7 @@ function MemberRow({ member, state, primary, first, folder, local, atMinimum, on
       ) : null}
       <div style={{ display: 'flex', opacity: hover || menuOpen ? 1 : 0 }}>
         <Menu open={menuOpen} onOpenChange={setMenuOpen} priority={7} align="end" width={224} testId={`repositories-menu-${member.path}`} trigger={() => <IconButton tabIndex={-1} size="sm" icon={N.ellipsis} label={`Actions for ${member.name}`} active={menuOpen} />}>
-          {local && <MenuItem id="reveal" icon={N.folder} label={GROUP_COPY.revealInFinder} disabled={missing} onSelect={onReveal} />}
+          {local && <MenuItem id="reveal" icon={N.folder} label={osLabels().reveal} disabled={missing} onSelect={onReveal} />}
           <MenuItem id="own" icon={N.plus} label={GROUP_COPY.addAsOwnProject} disabled={missing} onSelect={onOwnProject} />
           <MenuSeparator />
           <MenuItem id="remove" testId={`repositories-remove-${member.path}`} icon={N.x} label={GROUP_COPY.removeFromGroup} destructive={!atMinimum} disabled={atMinimum} description={atMinimum ? GROUP_COPY.minimumReason : undefined} onSelect={onRemove} />

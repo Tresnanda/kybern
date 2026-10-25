@@ -33,7 +33,7 @@ export function explain(target: string, code: number | null, stderr: string) {
 export function runSsh(plan: CommandPlan, signal?: AbortSignal): Promise<string> {
   const target = plan.args.at(-2) ?? 'the machine'
   return new Promise((resolve, reject) => {
-    const child = spawn(process.env.KYBERN_SSH ?? plan.command, plan.args, { stdio: ['pipe', 'pipe', 'pipe'] })
+    const child = spawn(process.env.KYBERN_SSH ?? plan.command, plan.args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
     let output = '', detail = '', overflow = false, settled = false
     const finish = (error: Error | null) => { if (settled) return; settled = true; signal?.removeEventListener('abort', abort); clearTimeout(timer); if (error) reject(error); else resolve(output) }
     const abort = () => { child.kill('SIGTERM'); finish(Error('SSH setup was canceled.')) }
@@ -81,7 +81,7 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) process.once(signal, () => 
 async function spawnTunnel(tunnel: Tunnel): Promise<ChildProcess> {
   const { config, port } = tunnel
   const plan = tunnelPlan({ ...toConfig(config), localPort: port })
-  const child = spawn(process.env.KYBERN_SSH ?? plan.command, plan.args, { stdio: ['ignore', 'ignore', 'pipe'] })
+  const child = spawn(process.env.KYBERN_SSH ?? plan.command, plan.args, { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true })
   tunnel.child = child
   let detail = '', exit: { code: number | null } | null = null
   child.stderr?.on('data', chunk => { detail = (detail + String(chunk)).slice(-8192) })

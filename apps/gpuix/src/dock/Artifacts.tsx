@@ -18,6 +18,7 @@ import { TaskWindow, type TaskWindowEntry } from '../tasks/TaskWindow.tsx'
 import { Label, useTheme } from '../ui.tsx'
 import { ErrorLine, Section } from './parts.tsx'
 import { Button } from '../kit/Button.tsx'
+import { artifactBrowserCopy, type ArtifactBrowserPhase } from './artifactFallback.ts'
 import { TextField } from '../kit/Field.tsx'
 import { openTab } from '../tabs/open.ts'
 
@@ -89,11 +90,37 @@ function useArtifactFile(threadId: string, path: string) {
       if (result.binary || result.truncated) throw new Error('This file is binary or larger than 1 MB. Open the hosted artifact instead.')
       if (!alive) return
       setFile(result)
-      if (!markdown) { const preview = await client.call('threads.artifacts.preview', { thread_id: threadId, path: path }); if (alive) setUrl(`${httpBase(client.endpoint.url)}/artifact-preview/${encodeURIComponent(preview.ticket)}`) }
+      // Without a web view no frame will show the page: the ticket is minted when the reader opens it in the browser.
+      if (!markdown && webHost.available) { const preview = await client.call('threads.artifacts.preview', { thread_id: threadId, path: path }); if (alive) setUrl(`${httpBase(client.endpoint.url)}/artifact-preview/${encodeURIComponent(preview.ticket)}`) }
     }).catch(e => { if (alive) setError(String(e).replace(/^Error: /, '')) })
     return () => { alive = false }
   }, [threadId, path])
   return { file, error, setError, url, markdown }
+}
+
+/** Open the artifact's page in the default browser with a fresh preview ticket (single use, 60 s: "open again" asks for another). */
+async function openArtifactInBrowser(threadId: string, path: string) {
+  const client = getClient()
+  if (!client) throw Error('Kybern is not connected. Reconnect, then open the artifact again.')
+  const preview = await client.call('threads.artifacts.preview', { thread_id: threadId, path })
+  await launchBrowser(`${httpBase(client.endpoint.url)}/artifact-preview/${encodeURIComponent(preview.ticket)}`)
+}
+
+/** Where the artifact's frame would be: the page lives in the browser (`artifactFallback.ts`). */
+function ArtifactInBrowser({ threadId, path, title, hidden }: { threadId: string; path: string; title: string; hidden: boolean }) {
+  const t = useTheme(), [phase, setPhase] = useState<ArtifactBrowserPhase>('idle')
+  const open = () => {
+    if (phase === 'opening') return
+    setPhase('opening')
+    openArtifactInBrowser(threadId, path).then(() => setPhase('opened'), () => setPhase('failed'))
+  }
+  if (hidden) return null
+  const copy = artifactBrowserCopy(phase, title)
+  return <div testId="artifact-browser" data-phase={phase} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, paddingTop: 32, paddingBottom: 32, paddingLeft: 24, paddingRight: 24, borderRadius: 8, backgroundColor: t.buttonSecondary }}>
+    <Label color={t.text} size={13} lineHeight={18} weight={500} style={{ textAlign: 'center' }}>{copy.title}</Label>
+    <Label color={t.textSecondary} size={12} lineHeight={18} style={{ textAlign: 'center', whiteSpace: 'normal', maxWidth: 360 }}>{copy.body}</Label>
+    <div style={{ display: 'flex', marginTop: 8 }}><Button size="sm" variant="primary" testId="artifact-open-browser" busy={phase === 'opening'} onClick={open}>{copy.action}</Button></div>
+  </div>
 }
 
 /** An artifact opened as a tab (ADE-54): Source and Preview over the whole tab, the page in its own sandboxed document. */
@@ -116,6 +143,7 @@ export function ArtifactTab({ threadId, path, url: hosted }: { threadId: string;
         : <>
           {source && <div testId="artifact-source-text" style={{ height, overflow: 'scroll' }}><Label color={t.text} size={12} lineHeight={16} font={FONT_CODE} style={{ whiteSpace: 'normal', width: '100%' }}>{file.content}</Label></div>}
           {markdown ? !source && <div style={{ height, overflow: 'scroll' }}><markdown style={{ userSelect: 'text' }} source={file.content} theme={cachedMarkdownTheme(t)} /></div>
+            : !webHost.available ? <ArtifactInBrowser threadId={threadId} path={path} title={path.split('/').pop() || 'This artifact'} hidden={source} />
             : url ? <ArtifactFrame id={`artifact-tab:${threadId}:${path}`} url={url} height={height} hidden={source} onFailed={setError} /> : !source && <Label color={t.textSecondary} size={14}>Loading preview…</Label>}
         </>}
     </div>
@@ -171,6 +199,7 @@ function ArtifactPreview({ thread, artifact, close }: { thread: Thread; artifact
           {/* Desktop `<pre className="text-xs whitespace-pre-wrap">`: the raw file in the mono family, wrapped. */}
           {source && <div testId="artifact-source-text" style={{ height, overflow: 'scroll' }}><Label color={t.text} size={12} lineHeight={16} font={FONT_CODE} style={{ whiteSpace: 'normal', width: '100%' }}>{file.content}</Label></div>}
           {markdown ? !source && <div style={{ height, overflow: 'scroll' }}><markdown style={{ userSelect: 'text' }} source={file.content} theme={cachedMarkdownTheme(t)} /></div>
+            : !webHost.available ? <ArtifactInBrowser threadId={thread.id} path={artifact.path!} title={artifact.title} hidden={source} />
             : url ? <ArtifactFrame id={`artifact:${thread.id}:${artifact.path}`} url={url} height={height} hidden={source} onFailed={setError} /> : !source && <Label color={t.textSecondary} size={14}>Loading preview…</Label>}
         </>}
     </div>

@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { readClipboardText } from '../platform/os.ts'
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useGpuix, type PublicInstance, type EventPayload } from '@gpuix/react'
 import type { TerminalInfo, TerminalOutputNotification, TerminalExitedNotification, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
@@ -310,11 +310,13 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
   const indexedSelection = selectionByIndex(lines, selection)
   useEffect(() => { if (follow.current && list.current) { setRange({ start: Math.max(0, lines.length - model.rows - 8), end: lines.length }); renderer?.scrollToItem?.(list.current.id, Math.max(0, lines.length - model.rows)) } }, [version])
   const start = Math.min(range.start, Math.max(0, lines.length - 1)), end = Math.min(lines.length, Math.max(start + 1, range.end))
-  const paste = () => execFile('pbpaste', (error, stdout) => {
-    if (error) setError(String(error))
-    // xterm.js turns pasted newlines into carriage returns.
-    else { follow.current = true; send(terminalPaste(stdout.replace(/\r?\n/g, '\r'), model.bracketedPaste)) }
-  })
+  const paste = () => void readClipboardText().then(
+    (stdout) => {
+      // xterm.js turns pasted newlines into carriage returns.
+      follow.current = true; send(terminalPaste(stdout.replace(/\r?\n/g, '\r'), model.bracketedPaste))
+    },
+    (error) => setError(String(error instanceof Error ? error.message : error)),
+  )
   const copy = () => { const text = selectedText(model.lines(), selection, model.cols); if (text) copyText(text) }
   const cursorLine = (model.alternate || model.mouseTracking ? 0 : model.history.length) + model.y
   const reportMouse = (line: Line, column: number, event: EventPayload, kind: TerminalMouseEvent['kind']) => {

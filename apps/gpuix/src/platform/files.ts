@@ -1,15 +1,14 @@
 // Native save panel and image copy, the desktop's `save_text_file`,
 // `save_html_file`, `save_image_file` and `write_image_clipboard`
 // (src-tauri/src/text_export.rs, lib.rs). The destination is chosen in the
-// native save panel (`promptForNewPath`, native/patches/window_platform.rs);
+// native save panel (`promptForNewPath`, native/upstream/packages/native/src/window_platform.rs);
 // callers never pass a path. Each resolves to false when the panel is dismissed.
 import { writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import path from 'node:path'
+import { downloadsDir, savePanelDialog } from './os.ts'
 import { readPref, writePref } from './prefs.ts'
 
 interface FileHost {
-  promptForNewPath?: (directory: string, suggestedName?: string | null) => Promise<string[] | null>
   writeClipboardImage?: (data: Buffer, mediaType: string) => void
 }
 const LAST_DIR = 'kybern.save.directory'
@@ -34,10 +33,9 @@ export function imageFileName(requested: string | undefined): string {
 
 /** Ask where to save, starting in the last folder used (Downloads at first). Null when dismissed. */
 async function choose(host: object | null | undefined, suggested: string, extensions: string[]): Promise<string | null> {
-  const prompt = (host as FileHost | null | undefined)?.promptForNewPath
-  if (!prompt) throw Error('The save panel needs the patched native module. Rebuild it with native/update.sh.')
-  const directory = readPref<string | null>(LAST_DIR, null) ?? path.join(homedir(), 'Downloads')
-  const chosen = (await prompt.call(host, directory, suggested))?.[0]
+  // The patched addon's panel on every platform; without it Windows and Linux fall back to a PowerShell or zenity/kdialog panel.
+  const directory = readPref<string | null>(LAST_DIR, null) ?? downloadsDir()
+  const chosen = await savePanelDialog(host, directory, suggested)
   if (!chosen) return null
   if (!path.basename(chosen)) throw Error('Choose a file name first.')
   writePref(LAST_DIR, path.dirname(chosen))

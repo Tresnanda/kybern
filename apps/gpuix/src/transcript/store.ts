@@ -8,7 +8,6 @@ import { pendingFor, removePending, settledPending, subscribePending, withPendin
 // for the parts the transcript owns: approvals, saved tool output, turn diffs,
 // earlier history pages, and per-row disclosure state that must survive a row
 // being unmounted by the virtual list.
-import { spawn, spawnSync } from 'node:child_process'
 import { useContext, useMemo, useEffect, useState, useSyncExternalStore } from 'react'
 import { TranscriptRowStateScope } from './rowStateScope.ts'
 import { prependThreadHistory, type Block } from '../../../../packages/kybern-client/src/transcript.ts'
@@ -16,6 +15,7 @@ import { EARLIER_HISTORY_PAGE, historyPageShowedNothing, historyTop } from '../.
 import type { ApprovalDecision, Diff, Thread, ThreadEvent, ThreadId, TurnId } from '../../../../packages/kybern-client/src/types.ts'
 import { useNav } from '../nav/store.ts'
 import { getClient, getThreadSession, primeThreadHistory, takeThreadHistory, reloadPaneThread, getThreadOpen, setThreadOpen, getFocusedPaneId, getPane, getPaneState, onThreadEvent, subscribe, useApp, usePaneAccess, usePaneId } from '../state.ts'
+import { readClipboardText as readSystemClipboardText, writeClipboardText } from '../platform/os.ts'
 
 export type ToolBlock = Extract<Block, { kind: 'tool' }>
 
@@ -87,14 +87,12 @@ function createCell<T>(initial: T) {
 // ---- clipboard ----
 
 export function copyText(text: string) {
-  const p = spawn('pbcopy')
-  p.on('error', () => {})
-  p.stdin.end(text)
+  void writeClipboardText(text).catch(() => {})
 }
 
-/** The clipboard's text (a pasted sign-in code). Empty when it holds none. */
-export function readClipboardText(): string {
-  try { return spawnSync('pbpaste', { encoding: 'utf8', timeout: 1000 }).stdout ?? '' } catch { return '' }
+/** The clipboard's text (a pasted sign-in code). Empty when it holds none or cannot be read. */
+export function readClipboardText(): Promise<string> {
+  return readSystemClipboardText().catch(() => '')
 }
 
 // ---- approvals and questions ----

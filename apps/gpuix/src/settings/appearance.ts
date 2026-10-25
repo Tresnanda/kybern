@@ -1,17 +1,17 @@
 import { environmentKey, onEnvironmentChange } from '../shell/environment.ts'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { useSyncExternalStore } from 'react'
 import { getSystemVariant } from '../shell/appearance.ts'
 import { snapshotBeforeThemeChange } from '../motion/themeFade.tsx'
 import { BLUR_MAX, BLUR_MIN, OPACITY_MIN, isSidebarOnly, migrateWindow, normalizeVariantMaterial, type ThemeVariant, type VariantMaterial } from '../platform/translucency.ts'
+import { gpuixConfigDir } from '../platform/os.ts'
 
 export type Appearance = 'light' | 'dark' | 'system'
 export interface AppearancePrefs { theme: Appearance; window: Record<ThemeVariant, VariantMaterial> }
 
-const file = () => path.join(process.env.KYBERN_CLIENT_CONFIG_DIR ?? path.join(homedir(), 'Library/Application Support/kybern-gpuix'), `appearance-${createHash('sha1').update(environmentKey()).digest('hex').slice(0, 12)}.json`)
+const file = () => path.join(gpuixConfigDir(), `appearance-${createHash('sha1').update(environmentKey()).digest('hex').slice(0, 12)}.json`)
 
 /**
  * The saved file in memory (§ "Migration"): `{ version: 3, theme, window: { dark, light } }`. Version 2 had one `opacity` and

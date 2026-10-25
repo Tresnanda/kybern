@@ -1,4 +1,4 @@
-// `<rich-editor>`: the native formatted editor (native/patches/rich_editor.rs).
+// `<rich-editor>`: the native formatted editor (native/upstream/packages/native/src/rich_editor.rs).
 import type { Props } from '@gpuix/react'
 
 interface RichEditorHostProps extends Props {

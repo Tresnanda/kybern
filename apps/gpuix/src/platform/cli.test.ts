@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { cliStatus, installCli, removeOtherCli, uninstallCli, type CliEnvironment } from './cli.ts'
+import { cliInstallKind, cliStatus, installCli, managedCliCopy, removeOtherCli, uninstallCli, type CliEnvironment } from './cli.ts'
 
 let root = ''
 let admin: string[] = []
@@ -77,4 +77,47 @@ test('a missing bundled command is a problem, not an install', async () => {
   const e = { ...env([]), bundled: null }
   expect((await cliStatus(e)).problem).toBe('This build of Kybern doesn’t include the kybern command.')
   await expect(installCli(e)).rejects.toThrow('doesn’t include the kybern command')
+})
+
+const ctx = (platform: NodeJS.Platform, env: Record<string, string> = {}) => ({ platform, env, home: '/home/ada' })
+test('who owns the command per platform', () => {
+  expect(cliInstallKind('/Applications/Kybern GPUIX.app/Contents/MacOS/kybern', ctx('darwin'))).toBe('link')
+  expect(cliInstallKind('C:\\Users\\ada\\AppData\\Local\\Programs\\Kybern GPUIX\\kybern.exe', ctx('win32'))).toBe('installer')
+  expect(cliInstallKind('/tmp/.mount_kybernX/usr/bin/kybern', ctx('linux', { APPIMAGE: '/home/ada/Kybern.AppImage' }))).toBe('appimage')
+  expect(cliInstallKind('/usr/lib/kybern-gpuix/kybern', ctx('linux'), '/usr/lib/kybern-gpuix/Kybern GPUIX')).toBe('package')
+  expect(cliInstallKind('/opt/kybern/kybern', ctx('linux'), '/opt/kybern/Kybern GPUIX')).toBe('package')
+  expect(cliInstallKind('/home/ada/kybern-portable/kybern', ctx('linux'), '/home/ada/kybern-portable/Kybern GPUIX')).toBe('link')
+  // A portable build on a machine that has the Tauri deb: its PATH holds /usr/bin/kybern, which is not this app's command.
+  expect(cliInstallKind('/usr/bin/kybern', ctx('linux'), '/home/ada/kybern-portable/Kybern GPUIX')).toBe('link')
+  // A development run is bun: the command's own location decides.
+  expect(cliInstallKind('/home/ada/ade/target/debug/kybern', ctx('linux'), '/usr/local/bin/bun')).toBe('link')
+  expect(managedCliCopy('installer')).toContain('installer')
+  expect(managedCliCopy('package')).toContain('package manager')
+  expect(managedCliCopy('link')).toBeNull()
+})
+test('a package or installer owns the command: reported, never installed or removed', async () => {
+  const packaged: CliEnvironment = { ...env([path.join(root, 'usr-bin')]), kind: 'package', platform: 'linux' }
+  command(path.join(root, 'usr-bin/kybern'), 'kybern 0.9.1')
+  expect(await cliStatus(packaged)).toMatchObject({ method: 'package', installed: true, needs_admin: false, problem: null, target: path.join(root, 'usr-bin/kybern') })
+  await expect(installCli(packaged)).rejects.toThrow('package manager')
+  await expect(uninstallCli(packaged)).rejects.toThrow('package manager')
+  const missing = await cliStatus({ ...env([path.join(root, 'nowhere')]), kind: 'installer', platform: 'win32' })
+  expect(missing).toMatchObject({ method: 'path', installed: false })
+  expect(missing.problem).toContain('PATH')
+})
+test('an AppImage links ~/.local/bin/kybern to the AppImage file, with no administrator step', async () => {
+  const appImage = path.join(root, 'Kybern.AppImage')
+  command(appImage, 'kybern 0.9.1')
+  const homeBin = path.join(root, 'home/.local/bin')
+  const e: CliEnvironment = { ...env([homeBin]), bundled: appImage, kind: 'appimage', platform: 'linux' }
+  expect(await cliStatus(e)).toMatchObject({ method: 'link', installed: false, needs_admin: false, target: path.join(homeBin, 'kybern') })
+  const after = await installCli(e)
+  expect(after.installed).toBe(true)
+  expect(readlinkSync(path.join(homeBin, 'kybern'))).toBe(appImage)
+  expect(admin).toEqual([])
+  expect((await uninstallCli(e)).installed).toBe(false)
+})
+test('off macOS the link target is the home bin even when it is not on PATH yet', async () => {
+  const status = await cliStatus({ ...env(['/usr/bin']), kind: 'link', platform: 'linux' })
+  expect(status).toMatchObject({ target: path.join(root, 'home/.local/bin/kybern'), needs_admin: false, target_on_path: false })
 })

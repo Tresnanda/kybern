@@ -3,7 +3,7 @@
 import { existsSync, closeSync, openSync, readFileSync, statSync } from 'node:fs'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
-import { homedir } from 'node:os'
+import { executableName, pathPlan, withPath } from '../platform/os.ts'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Endpoint } from '../../../../packages/kybern-client/src/client.ts'
@@ -20,10 +20,13 @@ export function desktopVersion() {
 
 export function bundledCommand(name: 'kybern' | 'kybernd') {
   const explicit = process.env[name === 'kybern' ? 'KYBERN_BUNDLED_CLI' : 'KYBERND']
-  const candidates = [explicit, path.join(path.dirname(process.execPath), name),
+  const file = executableName(name, process.platform)
+  const candidates = [explicit, path.join(path.dirname(process.execPath), file),
+    // The Windows installer keeps the command-line tools in `bin`, the only folder it adds to PATH.
+    path.join(path.dirname(process.execPath), 'bin', file),
     // Development builds use this checkout's artifacts only.
-    fileURLToPath(new URL(`../../../../target/debug/${name}`, import.meta.url)),
-    ...(process.env.PATH ?? '').split(path.delimiter).filter(Boolean).map(dir => path.join(dir, name))]
+    fileURLToPath(new URL(`../../../../target/debug/${file}`, import.meta.url)),
+    ...(process.env.PATH ?? '').split(path.delimiter).filter(Boolean).map(dir => path.join(dir, file))]
   return candidates.find((candidate): candidate is string => !!candidate && existsSync(candidate) && statSync(candidate).isFile())
 }
 
@@ -33,12 +36,18 @@ export function bundledCommand(name: 'kybern' | 'kybernd') {
  * bundled kybernd. A development run (bun, a checkout's target/debug/kybernd,
  * a KYBERND override) never stops a daemon it did not start: a fresh checkout
  * build is newer than any running daemon, so the policy would replace the
- * user's own daemon. KYBERN_ALLOW_DAEMON_RESTART=1 opts in.
+ * user's own daemon. KYBERN_ALLOW_DAEMON_RESTART=1 opts in. A Linux AppImage
+ * runs its daemon from a copy outside the image (`packaging/entry-linux.ts`),
+ * which it names in KYBERN_GPUIX_PACKAGED_DAEMON.
  */
-export function mayRestartDaemon(binary: string, env: NodeJS.ProcessEnv = process.env, execPath = process.execPath) {
+export function mayRestartDaemon(binary: string, env: NodeJS.ProcessEnv = process.env, execPath = process.execPath, platform: NodeJS.Platform = process.platform) {
   if (env.KYBERN_ALLOW_DAEMON_RESTART === '1') return true
-  const name = path.basename(execPath)
-  return name !== 'bun' && name !== 'node' && path.resolve(binary) === path.resolve(path.dirname(execPath), 'kybernd')
+  // Windows paths ignore case and executables end in `.exe` (`bun.exe`, `kybernd.exe`).
+  const windows = platform === 'win32', p = windows ? path.win32 : path.posix
+  const fold = (value: string) => windows ? value.toLowerCase() : value
+  const runtime = p.basename(fold(execPath), windows ? '.exe' : '')
+  const packaged = env.KYBERN_GPUIX_PACKAGED_DAEMON || p.join(p.dirname(execPath), windows ? 'kybernd.exe' : 'kybernd')
+  return runtime !== 'bun' && runtime !== 'node' && fold(p.resolve(binary)) === fold(p.resolve(packaged))
 }
 
 export function daemonNeedsRestart(info: Pick<DaemonInfo, 'protocol_version' | 'version' | 'started_at'>, version: string, modifiedMs?: number) {
@@ -95,11 +104,13 @@ export interface DaemonDependencies {
   now: () => number
 }
 let loginPath: Promise<string> | undefined
+/** The PATH the daemon (and the agents it starts) sees: the login shell's on macOS and Linux, the inherited one on Windows (`pathPlan`). */
 function daemonPath() {
   return loginPath ??= new Promise<string>(resolve => {
-    const fallback = [path.join(homedir(), '.local/bin'), path.join(homedir(), '.cargo/bin'), path.join(homedir(), '.bun/bin'), '/opt/homebrew/bin', '/usr/local/bin', process.env.PATH ?? ''].join(path.delimiter)
-    if (!process.env.SHELL) return resolve(fallback)
-    execFile(process.env.SHELL, ['-ilc', 'printf \'%s\' "$PATH"'], { timeout: 5000, maxBuffer: 128 * 1024 }, (error, output) => resolve(!error && output.trim() ? `${output.trim()}${path.delimiter}${fallback}` : fallback))
+    const plan = pathPlan()
+    const fallback = plan.fallback.join(path.delimiter)
+    if (!plan.shell) return resolve(fallback)
+    execFile(plan.shell.command, plan.shell.args, { timeout: 5000, maxBuffer: 128 * 1024, windowsHide: true }, (error, output) => resolve(!error && output.trim() ? `${output.trim()}${path.delimiter}${fallback}` : fallback))
   })
 }
 const defaults: DaemonDependencies = {
@@ -107,9 +118,9 @@ const defaults: DaemonDependencies = {
   launch: async (binary, args, root) => {
     const log = openSync(path.join(root, 'daemon.log'), 'a', 0o600)
     try {
-      const env: NodeJS.ProcessEnv = { ...process.env, PATH: await daemonPath() }
+      const env: NodeJS.ProcessEnv = withPath(process.env, await daemonPath())
       delete env.CARGO_TARGET_DIR
-      const child = spawn(binary, args, { detached: true, stdio: ['ignore', log, log], env })
+      const child = spawn(binary, args, { detached: true, stdio: ['ignore', log, log], env, windowsHide: true })
       // Handle asynchronous spawn failure; never leave an unhandled error event.
       await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
       child.unref()

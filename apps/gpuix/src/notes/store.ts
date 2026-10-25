@@ -10,6 +10,7 @@ import { load, save } from '../shell/persist.ts'
 import { toast } from '../shell/toasts.tsx'
 import { isFreeChatProject } from '../../../../packages/kybern-client/src/types.ts'
 import { resolveNewNoteHome } from '@/state/notesModel'
+import { osLabels } from '../platform/os.ts'
 
 export interface Capture { text: string; threadTitle: string; threadId: string }
 interface Display { layout: 'gallery' | 'list'; group: NotesGroupBy; sort: NotesSortBy; hints: boolean; outline: boolean }
@@ -53,7 +54,7 @@ export function refreshNotes(): Promise<void> {
         if (owner !== activeEnvironment()) return
         if (sharesHome()) {
           const home = await homeClient(() => void refreshNotes()).call('notes.list', {}).catch((error) => {
-            if (owner === activeEnvironment()) setNotes({ notes: [...result.notes.filter((note) => note.scope !== 'global'), ...state.notes.filter((note) => homeIds.has(note.id))], loaded: true, error: `Global notes on this Mac are unavailable. Reconnect and try again. ${String(error)}` })
+            if (owner === activeEnvironment()) setNotes({ notes: [...result.notes.filter((note) => note.scope !== 'global'), ...state.notes.filter((note) => homeIds.has(note.id))], loaded: true, error: `Global notes ${osLabels().onThisComputer} are unavailable. Reconnect and try again. ${String(error)}` })
             return null
           })
           if (!home) return

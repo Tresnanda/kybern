@@ -160,7 +160,7 @@ function Manage({ close }: { close: () => void }) {
   const profiles = useMemo(() => { try { return [localProfile, ...readRegistry().environments] } catch { return [localProfile] } }, [revision])
   const forget = async (profile: EnvironmentProfile) => {
     setBusy(profile.id); setError('')
-    try { forgetEnvironment(profile.id); setRevision(n => n + 1) } catch (e) { setError(errorText(e)) } finally { setBusy(null) }
+    try { await forgetEnvironment(profile.id); setRevision(n => n + 1) } catch (e) { setError(errorText(e)) } finally { setBusy(null) }
   }
   return <>
     <DialogHeader title="Manage environments" description="Edit a connection or remove it from this device. Work on that machine keeps running." onClose={close} />

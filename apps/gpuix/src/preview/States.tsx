@@ -1,6 +1,8 @@
 // Copy and state order mirror desktop PreviewStates.tsx.
 import { useEffect, useState, type ReactNode } from 'react'
-import { usePreview, retryPreview, setPreviewProxy, launchPreview, openPreview, setPreview } from './store.ts'
+import { usePreview, retryPreview, setPreviewProxy, launchPreview, openPreview, previewLink, setPreview } from './store.ts'
+import { webHost } from '../native/webview.ts'
+import { browserOnlyCopy } from './browserOnly.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
 import { copyText } from '../transcript/store.ts'
@@ -30,7 +32,17 @@ export function PreviewStateView({ threadId }: { threadId: string }) {
   if (entry.kind === 'external') return <State title={entry.query ? `Searching for “${entry.query}” opens in your browser` : `${host} opens in your browser`} body="Kybern previews local files and dev servers. Other websites open in your default browser."><Button variant="primary" size="sm" testId="preview-open-browser" onClick={() => void launchPreview(threadId)}>{entry.query ? 'Search in browser' : 'Open in browser'}</Button></State>
   if (load.phase === 'not-found') return <State icon={N.folder} title={`${load.name} isn't there anymore`} body="It may have been moved or deleted."><Button variant="primary" size="sm" onClick={() => { chooseTab(threadId, 'explorer'); setDock(threadId, { open: true }) }}>Show folder in Explorer</Button></State>
   if (load.phase === 'relay-failed') return <State title={`Open this page on ${activeEnvironment().name}`} body="Kybern can't forward this server through the current connection."><Button size="sm" onClick={() => copyText(entry.address)}>Copy address</Button><Button variant="primary" size="sm" onClick={() => void launchPreview(threadId)}>Open in browser</Button><Button size="sm" onClick={() => void retryPreview(threadId)}>Try again</Button></State>
+  if (load.phase === 'ready' && !webHost.available) return <BrowserOnly threadId={threadId} />
   return null
+}
+function BrowserOnly({ threadId }: { threadId: string }) {
+  const s = usePreview(threadId), entry = s.entries[s.index]!
+  const host = entry.kind === 'file' ? entry.title : new URL(entry.address).host
+  const copy = browserOnlyCopy(!!s.opened, s.error, host)
+  return <State title={copy.title} body={copy.body}>
+    <Button variant="primary" size="sm" testId="preview-open-again" onClick={() => void launchPreview(threadId)}>{s.opened ? 'Open again' : 'Open in browser'}</Button>
+    <Button size="sm" testId="preview-copy-link" onClick={() => { const link = previewLink(threadId); if (link) copyText(link) }}>Copy link</Button>
+  </State>
 }
 export function State({ title, body, children, icon = N.globe }: { title: string; body: string; children?: ReactNode; icon?: string }) {
   const t = useTheme()

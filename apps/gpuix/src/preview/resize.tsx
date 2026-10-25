@@ -13,8 +13,12 @@ function end() { stopRelease?.(); stopRelease = undefined; releaseInput?.(); rel
 export function beginPreviewResize(event: EventPayload, move: (event: EventPayload) => void, cursor: NonNullable<typeof drag>['cursor']) {
   if (event.button !== 0 || event.x === undefined || event.y === undefined) return
   end(); drag = { move, cursor }; releaseInput = webHost.capturePointer()
-  const o = getObjc(), app = nsApp()
-  stopRelease = watchPointerRelease(() => ({ pressed: (Number(o.msgU64(cls(o, 'NSEvent'), sel(o, 'pressedMouseButtons'))) & 1) !== 0, active: !!app && !!o.msgU64(app, sel(o, 'isActive')) }), end)
+  // AppKit's pressed-button state is the macOS backstop for a release that never reaches the capture layer. Elsewhere the layer
+  // itself ends the drag: it covers the window, so a mouse-up lands on it, and any move reporting no pressed button cancels.
+  if (process.platform === 'darwin') {
+    const o = getObjc(), app = nsApp()
+    stopRelease = watchPointerRelease(() => ({ pressed: (Number(o.msgU64(cls(o, 'NSEvent'), sel(o, 'pressedMouseButtons'))) & 1) !== 0, active: !!app && !!o.msgU64(app, sel(o, 'isActive')) }), end)
+  }
   for (const listener of listeners) listener()
 }
 /** Mounted beside the dock, covering the whole workspace only during a resize.

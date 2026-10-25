@@ -95,6 +95,29 @@ test('only the packaged app replacing its bundled kybernd, or an explicit opt-in
   expect(mayRestartDaemon('/Users/me/.bun/bin/kybernd', {}, '/Users/me/.bun/bin/bun')).toBe(false)
   expect(mayRestartDaemon('/repo/target/debug/kybernd', { KYBERN_ALLOW_DAEMON_RESTART: '1' }, '/Users/me/.bun/bin/bun')).toBe(true)
   expect(mayRestartDaemon('/repo/target/debug/kybernd', { KYBERN_ALLOW_DAEMON_RESTART: 'true' }, '/Users/me/.bun/bin/bun')).toBe(false)
+  // A Linux AppImage runs the copy it staged outside its mount, never another binary.
+  const image = '/tmp/.mount_KybernX/usr/lib/kybern-gpuix/kybern-gpuix'
+  const copy = { KYBERN_GPUIX_PACKAGED_DAEMON: '/home/me/.local/share/kybern-gpuix/bin/kybernd' }
+  expect(mayRestartDaemon('/home/me/.local/share/kybern-gpuix/bin/kybernd', copy, image, 'linux')).toBe(true)
+  expect(mayRestartDaemon('/tmp/.mount_KybernX/usr/lib/kybern-gpuix/kybernd', copy, image, 'linux')).toBe(false)
+  expect(mayRestartDaemon('/home/me/.local/share/kybern-gpuix/bin/kybernd', copy, '/Users/me/.bun/bin/bun', 'linux')).toBe(false)
+})
+test('on Windows the packaged app may restart its kybernd.exe, and a development run may not', () => {
+  const dir = 'C:\\Users\\me\\AppData\\Local\\Programs\\Kybern GPUIX', app = `${dir}\\Kybern GPUIX.exe`
+  expect(mayRestartDaemon(`${dir}\\kybernd.exe`, {}, app, 'win32')).toBe(true)
+  // Paths ignore case and forward slashes name the same file.
+  expect(mayRestartDaemon('c:/users/ME/appdata/local/programs/kybern gpuix/KYBERND.EXE', {}, app, 'win32')).toBe(true)
+  // The extensionless name is not what the installer ships, and another folder's daemon is not ours.
+  expect(mayRestartDaemon(`${dir}\\kybernd`, {}, app, 'win32')).toBe(false)
+  expect(mayRestartDaemon('C:\\old\\kybernd.exe', {}, app, 'win32')).toBe(false)
+  for (const runtime of ['bun.exe', 'BUN.EXE', 'node.exe', 'bun']) {
+    expect(mayRestartDaemon('C:\\repo\\target\\debug\\kybernd.exe', {}, `C:\\tools\\${runtime}`, 'win32')).toBe(false)
+    expect(mayRestartDaemon('C:\\tools\\kybernd.exe', {}, `C:\\tools\\${runtime}`, 'win32')).toBe(false)
+  }
+  expect(mayRestartDaemon('C:\\repo\\kybernd.exe', { KYBERN_ALLOW_DAEMON_RESTART: '1' }, 'C:\\tools\\bun.exe', 'win32')).toBe(true)
+  // macOS and Linux stay exact: case matters and `.exe` means nothing.
+  expect(mayRestartDaemon('/opt/app/KYBERND', {}, '/opt/app/Kybern GPUIX', 'darwin')).toBe(false)
+  expect(mayRestartDaemon('/opt/app/kybernd', {}, '/opt/app/bun.exe', 'linux')).toBe(true)
 })
 test('early daemon exit fails instead of reusing a dead startup endpoint', () => fixture(async (root, binary) => {
   const resolver = createLocalDaemonResolver({ root, binary, version: '0.9.1' }, {

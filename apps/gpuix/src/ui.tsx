@@ -21,6 +21,8 @@ import { EASE } from './motion/tokens.ts'
 function systemVariant(): 'dark' | 'light' {
   const forced = process.env.KYBERN_APPEARANCE
   if (forced === 'dark' || forced === 'light') return forced
+  // Windows and Linux appearance (GPUI `window_appearance`) is read through the addon later; light until then.
+  if (process.platform !== 'darwin') return 'light'
   const r = spawnSync('defaults', ['read', '-g', 'AppleInterfaceStyle'], { encoding: 'utf8' })
   return r.stdout?.trim() === 'Dark' ? 'dark' : 'light'
 }

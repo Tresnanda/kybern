@@ -16,7 +16,6 @@ import {
   isGroupProject,
 } from '../../../../packages/kybern-client/src/groups.ts'
 import type { Project } from '../../../../packages/kybern-client/src/types.ts'
-import { spawn } from 'node:child_process'
 import { Button } from '../kit/Button.tsx'
 import { RADIUS, useControls } from '../kit/controls.ts'
 import { IconButton } from '../kit/IconButton.tsx'
@@ -31,6 +30,7 @@ import { activeEnvironment } from '../shell/environment.ts'
 import { getClient } from '../state.ts'
 import { FONT_MONO } from '../theme.ts'
 import { Label, useTheme } from '../ui.tsx'
+import { openQuietly } from '../platform/os.ts'
 
 const AUTO_DISMISS_MS = 6000
 
@@ -111,7 +111,7 @@ function OfferCard({ project, missing, done, onCreated, onHide }: {
       void loadMemberStatus(project.id, true)
     } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
   }
-  const openAgents = () => { if (local) spawn('open', [`${project.path}/AGENTS.md`], { stdio: 'ignore' }).on('error', () => {}) }
+  const openAgents = () => { if (local) openQuietly(`${project.path}/AGENTS.md`) }
 
   const files = instructionsPreview(project.name, (project.members ?? []).map((m) => ({ path: m.path, instructions: status?.members.find((s) => s.path === m.path)?.instructions })), project.is_git)
   const card = { width: '100%', borderRadius: RADIUS.xl, borderWidth: 1, borderColor: t.borderLight, backgroundColor: t.v('--background') } as const
