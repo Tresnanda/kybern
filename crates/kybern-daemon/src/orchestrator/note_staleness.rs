@@ -118,9 +118,12 @@ fn cited_changed<'a>(cited: &'a str, repo: &RepoRef, changed: &HashSet<String>) 
 
 /// Check the claims against the repositories at `heads`. `None` when no cited path changed or
 /// nothing could be checked.
+/// Changed paths per (repository, commit): the resolved commit and the paths changed since it.
+type ChangedSince = HashMap<(PathBuf, String), Option<(String, HashSet<String>)>>;
+
 fn check_claims(claims: &[Claim], heads: &[(RepoRef, String)]) -> Option<StaleInfo> {
-    // Changed paths per (repository, commit): one diff however many claims cite the commit.
-    let mut changed: HashMap<(PathBuf, String), Option<(String, HashSet<String>)>> = HashMap::new();
+    // One diff per (repository, commit), however many claims cite the commit.
+    let mut changed: ChangedSince = HashMap::new();
     for claim in claims {
         for (repo, head) in heads {
             let entry = changed.entry((repo.path.clone(), claim.sha.clone())).or_insert_with(|| {

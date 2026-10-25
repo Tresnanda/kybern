@@ -42,6 +42,7 @@ mod note_tidy;
 mod notes;
 mod omp_recovery;
 mod pick_request;
+mod project_map;
 mod request_tools;
 mod secret_request;
 mod spaces;
@@ -325,6 +326,9 @@ impl Orchestrator {
             }
             if lead_proposals::is_tool(name) {
                 return self.execute_lead_tool(&thread, turn_id, &live, name, arguments).await;
+            }
+            if crate::project_map::is_tool(name) {
+                return self.execute_project_map(&thread, arguments).await;
             }
             if agent_items::is_tool(name) {
                 return self.execute_notes_tasks_tool(&thread, turn_id, &live, name, arguments).await;
@@ -3297,6 +3301,9 @@ impl Orchestrator {
         }
         let session_instance_id = Uuid::now_v7();
         let restrictions = self.native_tool_restrictions(thread)?;
+        if thread.coordinator_project_id.is_some() {
+            self.refresh_project_map(thread.project_id).await;
+        }
         let instructions = self.session_instructions(thread)?;
         let brief_revision = instructions.as_ref().map(|instructions| instructions.brief_revision);
         let lead_settings = instructions.as_ref().and_then(|instructions| instructions.lead_settings.clone());
@@ -8239,4 +8246,5 @@ for line in sys.stdin:
     include!("orchestrator/subagent_messaging_tests.rs");
     include!("orchestrator/full_access_tests.rs");
     include!("orchestrator/groups_tests.rs");
+    include!("orchestrator/project_map_tests.rs");
 }

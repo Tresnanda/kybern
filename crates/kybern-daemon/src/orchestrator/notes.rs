@@ -61,7 +61,7 @@ impl Orchestrator {
                 .store
                 .note_get(id)?
                 .map(Some)
-                .ok_or_else(|| NoteError::NotFound("Note not found. It may have been deleted permanently."))?,
+                .ok_or(NoteError::NotFound("Note not found. It may have been deleted permanently."))?,
             (None, Some(thread_id)) => self.inner.store.note_for_thread(thread_id)?,
             _ => return invalid("Pass either id or thread_id."),
         };

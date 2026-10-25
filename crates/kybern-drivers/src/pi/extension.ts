@@ -33,6 +33,7 @@ const APP_TOOL_NAMES = new Set([
   "kybern_read_file",
   "kybern_list_files",
   "kybern_runtime_tasks",
+  "kybern_project_map",
   "kybern_list_terminals",
   "kybern_read_terminal",
   "kybern_html_preview",

@@ -613,6 +613,105 @@ method!(
     ProjectsMembersStatusResult
 );
 
+/// The project map: a daemon-built description of the project's repositories,
+/// stamped with each repository's HEAD. Built from git and manifests only, with no
+/// model involved, and rebuilt when a request sees a different HEAD.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectsMapParams {
+    pub project_id: ProjectId,
+}
+/// One repository of the project as the map saw it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectMapRepo {
+    /// Member path relative to the project folder; "." for a single project or the group folder itself.
+    pub path: String,
+    pub name: String,
+    /// The branch work lands on: the remote's default, else `main` or `master`, else the current branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_branch: Option<String>,
+    /// The branch checked out when the map was built; absent when HEAD is detached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Full HEAD commit id the map describes.
+    pub head: String,
+    /// Tracked files counted, at most 20 000.
+    pub files: u32,
+    /// More files are tracked than were counted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
+}
+/// A directory (top two levels) with its tracked-file count.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectMapArea {
+    /// The repository's member path (see [`ProjectMapRepo::path`]).
+    pub repo: String,
+    /// Directory relative to the repository, '/'-separated; "." is the repository root.
+    pub path: String,
+    pub files: u32,
+    /// Name from the manifest in this directory (Cargo package, npm package, Go module, Python project).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// `cargo`, `npm`, `go` or `python`, when a manifest is here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<String>,
+}
+/// A command the project itself documents.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectMapCommand {
+    pub repo: String,
+    /// The file it comes from, relative to the repository (`apps/desktop/package.json`, `Makefile`, `AGENTS.md`).
+    pub source: String,
+    /// Script, alias or target name; for a fenced block, the heading text copied verbatim.
+    pub name: String,
+    /// The script body, alias expansion, `make`/`just` invocation or fenced block text.
+    pub run: String,
+}
+/// Commits per directory (two levels deep) over the last 30 days.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectMapBusy {
+    pub repo: String,
+    pub path: String,
+    pub commits: u32,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectMapChangeKind {
+    Deleted,
+    Renamed,
+}
+/// A file deleted or renamed in the last 14 days.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectMapChange {
+    pub repo: String,
+    pub kind: ProjectMapChangeKind,
+    /// The path that is gone (deleted), or the new path (renamed).
+    pub path: String,
+    /// Renamed only: the old path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    pub commit: String,
+    /// Commit date, strict ISO 8601.
+    pub date: String,
+    pub subject: String,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectMap {
+    pub built_at: chrono::DateTime<chrono::Utc>,
+    pub repos: Vec<ProjectMapRepo>,
+    pub layout: Vec<ProjectMapArea>,
+    pub commands: Vec<ProjectMapCommand>,
+    pub busy: Vec<ProjectMapBusy>,
+    pub removed: Vec<ProjectMapChange>,
+    /// The part sessions receive: at most 6 KiB, starting `Map as of {repo}@{sha}`.
+    pub header: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectsMapResult {
+    pub project_id: ProjectId,
+    pub map: ProjectMap,
+}
+method!(ProjectsMap, "projects.map", Some(Scope::OrchestrationRead), ProjectsMapParams, ProjectsMapResult);
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProjectsInstructionsCreateParams {
     pub project_id: ProjectId,
@@ -3555,6 +3654,7 @@ registry!(
     ProjectsRemove,
     ProjectsScanRepos,
     ProjectsMembersStatus,
+    ProjectsMap,
     ProjectsInstructionsCreate,
     SpacesList,
     SpacesCreate,

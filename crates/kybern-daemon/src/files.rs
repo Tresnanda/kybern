@@ -8,10 +8,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-const MAX_FILES: usize = 20_000;
+pub(crate) const MAX_FILES: usize = 20_000;
 const MAX_INDEX_SLOTS: usize = 8;
 const INDEX_CACHE_TTL: Duration = Duration::from_secs(3);
-const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", ".next", "dist", "build", ".venv", "venv", "__pycache__", ".cache"];
+pub(crate) const SKIP_DIRS: &[&str] =
+    &[".git", "node_modules", "target", ".next", "dist", "build", ".venv", "venv", "__pycache__", ".cache"];
 
 struct CachedIndex {
     loaded_at: Instant,

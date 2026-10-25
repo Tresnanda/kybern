@@ -122,6 +122,36 @@ pub fn members(r: &ProjectsMembersStatusResult, project: Option<&Project>) {
     }
 }
 
+pub fn project_map(map: &methods::ProjectMap) {
+    println!("{}", map.header);
+    println!("\nbuilt {}", map.built_at.format("%Y-%m-%d %H:%M:%SZ"));
+    println!("\nlayout");
+    for a in &map.layout {
+        let name = match (&a.name, &a.manifest) {
+            (Some(name), Some(kind)) => format!("  {name} ({kind})"),
+            (Some(name), None) => format!("  {name}"),
+            _ => String::new(),
+        };
+        println!("  {:<12} {:<40} {:>6}{name}", a.repo, a.path, a.files);
+    }
+    println!("\ncommands");
+    for c in &map.commands {
+        println!("  {:<12} {:<28} {:<24} {}", c.repo, c.source, c.name, c.run.replace('\n', " ; "));
+    }
+    println!("\nbusy areas");
+    for b in &map.busy {
+        println!("  {:<12} {:<40} {:>4}", b.repo, b.path, b.commits);
+    }
+    println!("\nremoved and renamed");
+    for c in &map.removed {
+        let what = match &c.from {
+            Some(from) => format!("{from} -> {}", c.path),
+            None => format!("deleted {}", c.path),
+        };
+        println!("  {:<12} {what}  {} {} {}", c.repo, c.commit, c.date.get(..10).unwrap_or(&c.date), c.subject);
+    }
+}
+
 pub fn threads(list: &[Thread]) {
     for t in list {
         let status = serde_json::to_value(t.status).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();

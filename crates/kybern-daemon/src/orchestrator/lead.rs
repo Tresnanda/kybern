@@ -77,6 +77,7 @@ const LEAD_TOOLS: &[&str] = &[
     "kybern_read_terminal",
     "kybern_workspace_diff",
     "kybern_runtime_tasks",
+    "kybern_project_map",
     // Notes and tasks.
     "kybern_notes_search",
     "kybern_note_read",
@@ -393,6 +394,11 @@ impl Orchestrator {
         if let Some(note) = note {
             text.push_str("\n\n");
             text.push_str(&note);
+        }
+        // Only at spawn (refreshed by `spawn_session`), so the prefix holds for the whole session.
+        if lead && let Some(header) = self.map_header(project.id) {
+            text.push_str("\n\n");
+            text.push_str(&header);
         }
         Ok(Some(SessionInstructions { text, brief_revision: brief.map_or(0, |note| note.summary.revision), lead_settings }))
     }

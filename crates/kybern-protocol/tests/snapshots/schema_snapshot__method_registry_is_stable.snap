@@ -39,6 +39,7 @@ expression: names
 - projects.remove
 - projects.scan_repos
 - projects.members.status
+- projects.map
 - projects.instructions.create
 - spaces.list
 - spaces.create

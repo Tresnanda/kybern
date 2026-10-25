@@ -106,6 +106,7 @@ fn main() {
     method::<ProjectsRemove>(&mut methods);
     method::<ProjectsScanRepos>(&mut methods);
     method::<ProjectsMembersStatus>(&mut methods);
+    method::<ProjectsMap>(&mut methods);
     method::<ProjectsInstructionsCreate>(&mut methods);
     method::<SpacesList>(&mut methods);
     method::<SpacesCreate>(&mut methods);

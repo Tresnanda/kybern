@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 
 /// Bumped with every wording change so a changed guide is a deliberate act.
-pub(crate) const GUIDE_VERSION: u32 = 17;
+pub(crate) const GUIDE_VERSION: u32 = 18;
 
 /// Hard ceiling for the rendered guide (about 1.5k tokens at 4 bytes a token).
 #[cfg(test)]
@@ -113,7 +113,7 @@ pub(crate) fn render(tools: &GuideTools) -> String {
     }
     let threads = tools.present(&THREAD_TOOLS);
     let inspect = tools.present(&INSPECT_TOOLS);
-    if !threads.is_empty() || !inspect.is_empty() {
+    if !threads.is_empty() || !inspect.is_empty() || tools.has("kybern_project_map") {
         out.push_str("\n## Threads and the workspace\n");
         if !threads.is_empty() {
             out.push_str(&format!(
@@ -128,6 +128,9 @@ pub(crate) fn render(tools: &GuideTools) -> String {
         }
         if !inspect.is_empty() {
             out.push_str(&format!("Inspect this thread with {}.\n", describe(&inspect)));
+        }
+        if tools.has("kybern_project_map") {
+            out.push_str("`kybern_project_map` shows the project's layout, commands and recent changes, stamped with a commit.\n");
         }
     }
     out.push_str("\n## Native subagents\nUsers can message an active Claude native subagent in its own thread. These messages arrive at that child's next tool call as additional context; they never enter the parent's input. Pending means not yet delivered. Attachments arrive as file references, not images. If the child finishes first, the message stays undelivered and only the user's explicit Send to parent action queues it for the parent. Other harnesses' native child threads remain read-only.\n");
@@ -209,7 +212,7 @@ mod tests {
             include_str!("agent_guide_full.golden.txt"),
             "guide wording changed: bump GUIDE_VERSION and update the golden file (KYBERN_UPDATE_GOLDEN=1)"
         );
-        assert_eq!(GUIDE_VERSION, 17);
+        assert_eq!(GUIDE_VERSION, 18);
     }
 
     #[test]

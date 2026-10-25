@@ -216,6 +216,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: ProjectsMembersStatusParams = parse(params)?;
             ok(state.orchestrator.members_status(p.project_id).await?)
         }
+        ProjectsMap::NAME => ok(state.orchestrator.projects_map(parse(params)?).await.map_err(bad)?),
         ProjectsInstructionsCreate::NAME => {
             let p: ProjectsInstructionsCreateParams = parse(params)?;
             ok(state.orchestrator.create_group_instructions(p.project_id)?)

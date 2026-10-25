@@ -128,7 +128,7 @@ impl Store {
     /// When categories were introduced (the migration time). Uncategorized project
     /// notes created before it are undated.
     pub fn notes_history_since(&self) -> Result<Option<DateTime<Utc>>> {
-        self.with(|c| history_since(c))
+        self.with(history_since)
     }
 
     /// The live project-scope notes of a project (the brief and setup note included),

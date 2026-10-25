@@ -229,6 +229,7 @@ enum Cmd {
         run: bool,
     },
     /// Manage projects.
+    #[command(alias = "project")]
     Projects {
         #[command(subcommand)]
         cmd: ProjectsCmd,
@@ -877,6 +878,11 @@ enum ProjectsCmd {
         #[arg(long, value_delimiter = ',')]
         copy: Option<Vec<String>>,
     },
+    /// Show the project map: repositories, layout, commands, busy areas and recent removals, stamped with HEAD.
+    Map {
+        /// A project id, name or path.
+        project: String,
+    },
     /// Create the group folder's missing shared AGENTS.md and CLAUDE.md.
     Instructions {
         /// A project id, name or path.
@@ -1514,6 +1520,11 @@ pub async fn run() -> Result<()> {
                     let project = client.call::<ProjectsList>(ProjectsListParams { refresh_git: Some(false) }).await?.projects;
                     render::members(&status, project.iter().find(|p| p.id == project_id))
                 }
+            }
+            ProjectsCmd::Map { project } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                let result = client.call::<ProjectsMap>(ProjectsMapParams { project_id }).await?;
+                if json { println!("{}", serde_json::to_string_pretty(&result)?) } else { render::project_map(&result.map) }
             }
             ProjectsCmd::Instructions { project, dismiss } => {
                 let project_id = resolve_project(&client, &project, false).await?;

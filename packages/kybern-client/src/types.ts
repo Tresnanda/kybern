@@ -1465,6 +1465,85 @@ export interface ProjectsMembersStatusResult {
   copy_candidates?: CopyCandidate[];
 }
 
+/** One repository of the project as the map saw it. */
+export interface ProjectMapRepo {
+  /** Member path relative to the project folder; "." for a single project or the group folder itself. */
+  path: string;
+  name: string;
+  /** The branch work lands on: the remote's default, else `main` or `master`, else the current branch. */
+  default_branch?: string;
+  /** The branch checked out when the map was built; absent when HEAD is detached. */
+  branch?: string;
+  /** Full HEAD commit id the map describes. */
+  head: string;
+  /** Tracked files counted, at most 20 000. */
+  files: number;
+  /** More files are tracked than were counted. */
+  truncated?: boolean;
+}
+
+/** A directory (top two levels) with its tracked-file count. */
+export interface ProjectMapArea {
+  repo: string;
+  /** Relative to the repository, '/'-separated; "." is the repository root. */
+  path: string;
+  files: number;
+  /** Name from the manifest in this directory. */
+  name?: string;
+  /** `cargo`, `npm`, `go` or `python`, when a manifest is here. */
+  manifest?: string;
+}
+
+/** A command the project itself documents. */
+export interface ProjectMapCommand {
+  repo: string;
+  /** The file it comes from, relative to the repository. */
+  source: string;
+  /** Script, alias or target name; for a fenced block, the heading text copied verbatim. */
+  name: string;
+  run: string;
+}
+
+/** Commits per directory (two levels deep) over the last 30 days. */
+export interface ProjectMapBusy {
+  repo: string;
+  path: string;
+  commits: number;
+}
+
+export type ProjectMapChangeKind = "deleted" | "renamed";
+
+/** A file deleted or renamed in the last 14 days. */
+export interface ProjectMapChange {
+  repo: string;
+  kind: ProjectMapChangeKind;
+  /** The path that is gone (deleted), or the new path (renamed). */
+  path: string;
+  /** Renamed only: the old path. */
+  from?: string;
+  commit: string;
+  /** Commit date, strict ISO 8601. */
+  date: string;
+  subject: string;
+}
+
+/** A daemon-built, commit-stamped description of a project. Built from git and manifests only. */
+export interface ProjectMap {
+  built_at: string;
+  repos: ProjectMapRepo[];
+  layout: ProjectMapArea[];
+  commands: ProjectMapCommand[];
+  busy: ProjectMapBusy[];
+  removed: ProjectMapChange[];
+  /** What sessions receive: at most 6 KiB, starting `Map as of {repo}@{sha}`. */
+  header: string;
+}
+
+export interface ProjectsMapResult {
+  project_id: ProjectId;
+  map: ProjectMap;
+}
+
 export interface ProjectsInstructionsCreateResult {
   /** Files written in the group folder, e.g. ["AGENTS.md", "CLAUDE.md"]. Never overwrites. */
   created: string[];
@@ -2965,6 +3044,7 @@ export interface Methods {
   "projects.remove": [ProjectsRemoveParams, Empty];
   "projects.scan_repos": [ProjectsScanReposParams, ProjectsScanReposResult];
   "projects.members.status": [{ project_id: ProjectId }, ProjectsMembersStatusResult];
+  "projects.map": [{ project_id: ProjectId }, ProjectsMapResult];
   "projects.instructions.create": [{ project_id: ProjectId }, ProjectsInstructionsCreateResult];
   "spaces.list": [Empty, SpacesListResult];
   "spaces.create": [SpacesCreateParams, Space];

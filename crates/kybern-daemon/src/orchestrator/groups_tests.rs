@@ -334,7 +334,10 @@ async fn group_threads_their_shared_children_and_the_coordinator_get_the_reposit
     let bridge = spawn_bridge(&fixture, &bridges, &lead).await;
     let text = bridge.coordinator_instructions.clone().unwrap();
     assert!(text.starts_with(LEAD_ROLE_FOR_TESTS) && text.contains("Project brief (the user's"), "{text}");
-    assert!(text.ends_with(&note), "the note follows the brief: {text}");
+    let (before, after) = text.split_once(&note).unwrap_or_else(|| panic!("the note follows the brief: {text}"));
+    assert!(before.contains("Project brief (the user's"), "{text}");
+    // The project map header, when the repositories have commits, closes the instructions.
+    assert!(after.is_empty() || after.starts_with("\n\nMap as of "), "{after}");
 
     // A single project's thread gets nothing new.
     let single = fixture.thread(ThreadStatus::Idle);

@@ -76,6 +76,8 @@ expression: scopes
   - "orchestration:read"
 - - projects.members.status
   - "orchestration:read"
+- - projects.map
+  - "orchestration:read"
 - - projects.instructions.create
   - "orchestration:operate"
 - - spaces.list

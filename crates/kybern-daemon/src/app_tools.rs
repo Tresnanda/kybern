@@ -363,6 +363,7 @@ pub(crate) fn native_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinit
     definitions.extend(agent_tool_definitions());
     definitions.extend(crate::orchestrator::child_question_tool_definitions());
     definitions.extend(notes_tasks_tool_definitions());
+    definitions.push(crate::project_map::tool_definition());
     definitions.push(crate::secrets::tool_definition());
     definitions.push(crate::pick::tool_definition());
     definitions.extend(crate::orchestrator::request_tool_definitions());

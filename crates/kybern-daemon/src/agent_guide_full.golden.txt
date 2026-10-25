@@ -27,6 +27,7 @@ Notes are memory. File a claim as `- 2026-10-25 · As of `abc1234`: what is true
 Work with the user's other Kybern threads using `kybern_threads_search` (find threads), `kybern_thread_read` (read a thread), and `kybern_thread_send` (message a thread). A `@thread[<id>] Title` in the user's message refers to one.
 A message to another thread is queued by default, so the recipient reads it when idle; `delivery: "steer"` puts it into a running turn when its harness allows. A `question` gets a reply: end your turn and the reply wakes you, or set `wait_for_reply` to wait up to a minute. A message the recipient's permissions do not allow is held until the user approves it in that thread; do not resend it.
 Inspect this thread with `kybern_list_terminals` (terminals the user opened), `kybern_read_terminal` (a terminal's output), `kybern_workspace_diff` (worktree changes), and `kybern_runtime_tasks` (background tasks).
+`kybern_project_map` shows the project's layout, commands and recent changes, stamped with a commit.
 
 ## Native subagents
 Users can message an active Claude native subagent in its own thread. These messages arrive at that child's next tool call as additional context; they never enter the parent's input. Pending means not yet delivered. Attachments arrive as file references, not images. If the child finishes first, the message stays undelivered and only the user's explicit Send to parent action queues it for the parent. Other harnesses' native child threads remain read-only.
