@@ -1576,7 +1576,7 @@ const WorkRow = memo(function WorkRow({
 function RotationNoticeRow({ block }: { block: Extract<Block, { kind: "rotation" }> }) {
   return (
     <p className="chat-paint-host mt-2 leading-6 text-muted-foreground" style={CHAT_FONT} data-timeline-row-kind="rotation">
-      {rotationLabel(block, (date) => date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }))}
+      {rotationLabel(block, new Date(block.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }))}
     </p>
   )
 }

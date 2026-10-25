@@ -17,7 +17,10 @@ import {
   mergeMethodLabel,
   type CardTextPart,
 } from "../../../../packages/kybern-client/src/coordinatorCards";
-import { rotationLabel, type RotationBlock } from "../../../../packages/kybern-client/src/rotation";
+import { rotationLabel } from "../../../../packages/kybern-client/src/rotation";
+import type { Block } from "../../../../packages/kybern-client/src/transcript";
+
+type RotationBlock = Extract<Block, { kind: "rotation" }>;
 import { settingValueLabel } from "../../../../packages/kybern-client/src/coordinatorSettings";
 import type { ApprovalDecision, ApprovalRequest, BriefProposalInput, LeadGitCardInput, SettingsProposalInput } from "../state/protocol";
 import { errorText, loadThread, refresh, rpc, useApp } from "../state/runtime";
@@ -279,11 +282,14 @@ export function SystemRowLine({ text, onPress, hint, busy }: { text: string; onP
   );
 }
 
-const rotationClock = (date: Date) => date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+const rotationTime = (at: string) => {
+  const date = new Date(at);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+};
 
 /** A Coordinator's context refresh: "Context refreshed · 2:02 PM", opening the handoff once it has settled. */
 export function RotationRow({ block, threadId }: { block: RotationBlock; threadId: string }) {
-  const text = rotationLabel(block, rotationClock);
+  const text = rotationLabel(block, rotationTime(block.at));
   return (
     <SystemRowLine
       text={text}

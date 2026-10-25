@@ -6,6 +6,7 @@ import { globalNotesHome, setGlobalNotesHome, watchGlobalNotesHome } from '../no
 import { PERMISSION_HINT, PERMISSION_LABEL } from '../../../desktop/src/lib/format.ts'
 import { AUTONOMY_OPTIONS, WORKSPACE_OPTIONS, COORDINATOR_ROLES, COORDINATOR_SETTINGS_COPY as COPY, autonomyHint, effectiveCoordinatorSettings, withGlobalRoleDefault } from '../../../../packages/kybern-client/src/coordinatorSettings.ts'
 import type { PermissionMode, ProviderKind, OrchestrationSettings, RoleDefault } from '../../../../packages/kybern-client/src/types.ts'
+import { ROTATION_COPY, rotationBudgetChoices } from '../../../../packages/kybern-client/src/rotation.ts'
 import { ASK_DEADLINE_DEFAULTS, askDeadlineOptions } from '../../../../packages/kybern-client/src/requestCards.ts'
 import { getClient, useApp } from '../state.ts'
 import { useNav } from '../nav/store.ts'
@@ -102,6 +103,7 @@ export function Agents() {
     <Section title="Delegation">
       <Row title="Active agents per thread" description="How many delegated agents one thread can have working at once. At the limit, the thread waits for one to finish before delegating again."><NumberField label="Active agents per thread" testId="settings-max-agents" unit="agents" min={1} max={16} value={current.max_active_children} disabled={saving} onCommit={(max_active_children) => change({ max_active_children })} /></Row>
       <Row title="Active agents per Coordinator" description="The same limit for a project's Coordinator, which usually runs more agents at once than an ordinary thread."><NumberField label="Active agents per Coordinator" unit="agents" min={1} max={16} value={current.lead_max_children} disabled={saving} onCommit={(lead_max_children) => change({ lead_max_children })} /></Row>
+      <Row title={ROTATION_COPY.settingTitle} description={ROTATION_COPY.settingDetail}><Select label={ROTATION_COPY.settingTitle} testId="settings-rotation-budget" compact value={String(effective.rotation_budget_tokens)} options={rotationBudgetChoices(effective.rotation_budget_tokens)} disabled={saving} onChange={(v) => change({ rotation_budget_tokens: Number(v) })} /></Row>
       <Row title="Delegation depth" description="1 lets only top-level threads delegate. 2 also lets their agents delegate again."><NumberField label="Delegation depth" unit="levels" min={1} max={4} value={current.max_depth} disabled={saving} onCommit={(max_depth) => change({ max_depth })} /></Row>
     </Section>
     <AskDeadlineSection />

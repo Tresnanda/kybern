@@ -8,6 +8,8 @@ import { NotesHeaderActions, NotesHeaderTitle } from '../notes/Header.tsx'
 import { useNotes } from '../notes/store.ts'
 import { showDialog } from '../dialogs/store.ts'
 import { ThreadContextChips } from '../coordinator/Header.tsx'
+import { latestRotation, refreshContext } from '../coordinator/rotation.ts'
+import { formatTokens, ROTATION_COPY } from '../../../../packages/kybern-client/src/rotation.ts'
 // The window title bar (`views/chrome.tsx` + the thread `Header` in
 // `views/Thread.tsx`): the sidebar toggle and back/forward (or New thread while
 // the panel is closed) after the traffic lights, then the route header over the
@@ -241,6 +243,13 @@ function ancestorsOf(thread: Thread): Thread[] {
   return chain
 }
 
+/** "Refresh context" for a project Coordinator, with the tokens in use on the right. Off while a turn or a refresh runs. No motion (menu item). */
+function RefreshContextItem({ thread }: { thread: Thread }) {
+  const used = useApp((s) => (s.open.thread?.id === thread.id ? s.open.providerUsage?.context?.used_tokens : undefined))
+  const rotating = useApp((s) => s.open.thread?.id === thread.id && (latestRotation(s.open.blocks, 64)?.pending ?? false))
+  return <MenuItem id="refresh-context" testId="header-refresh-context" icon={N.refresh} label={ROTATION_COPY.refreshMenu} detail={used ? formatTokens(used) : undefined} disabled={thread.status === 'running' || rotating} onSelect={() => void refreshContext(thread.id)} />
+}
+
 /** The width under which "Hand off" shows its glyph only (spec §6). */
 const HANDOFF_COMPACT = 720
 
@@ -384,6 +393,7 @@ export const ThreadHeader = memo(function ThreadHeader({ leafId: given, size = '
             </>
           )}
           {thread.worktree && !thread.subagent && <MenuItem id="cleanup" testId="header-worktree-cleanup" icon={N.worktree} label="Remove worktree…" onSelect={() => showDialog({ kind: 'worktree', threadId: thread.id })} />}
+          {thread.coordinator_project_id && !thread.subagent && <><MenuSeparator /><RefreshContextItem thread={thread} /></>}
           {/* A subagent thread is read-only: it cannot be renamed, pinned or archived. */}
           {!thread.subagent && (
             <>

@@ -3,7 +3,7 @@ import { Stack, useLocalSearchParams } from "expo-router";
 import { ScrollView, View } from "react-native";
 import {
   ROTATION_COPY,
-  handoffSections,
+  parseHandoff,
   missingHandoffText,
   rotationMeta,
 } from "../../../packages/kybern-client/src/rotation";
@@ -19,7 +19,7 @@ export default function HandoffSheet() {
   const block = blocks.find((candidate) => candidate.kind === "rotation" && candidate.rotationId === rotationId);
   const rotation = block?.kind === "rotation" ? block : null;
   const missing = rotation?.handoffStatus?.status === "missing";
-  const sections = rotation && !missing ? handoffSections(rotation.handoff) : [];
+  const sections = rotation && !missing ? parseHandoff(rotation.handoff) : [];
   return (
     <>
       <Stack.Screen options={{ headerStyle: { backgroundColor: colors.grouped } }} />
@@ -44,17 +44,17 @@ export default function HandoffSheet() {
             </View>
             {missing ? (
               <T variant="subhead" tone="secondary" selectable>
-                {missingHandoffText(rotation)}
+                {missingHandoffText(rotation.handoffStatus)}
               </T>
             ) : (
               sections.map((section, index) => (
                 <View key={`${index}:${section.heading}`} style={{ gap: space.xs }}>
-                  {!!section.heading && (
+                  {!!section.label && (
                     <T variant="footnote" tone="secondary" style={{ fontWeight: "500" }}>
-                      {section.heading}
+                      {section.label}
                     </T>
                   )}
-                  <Markdown text={section.body} />
+                  <Markdown text={section.none ? "None" : section.body} />
                 </View>
               ))
             )}

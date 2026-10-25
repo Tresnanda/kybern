@@ -11,6 +11,8 @@ export const EASE = {
   smoothOut: [0.22, 1, 0.36, 1],
   out: [0.23, 1, 0.32, 1],
   inOut: [0.77, 0, 0.175, 1],
+  /** A status label changing in place ("Refreshing…" → "Refreshed"): quick start, a long settle. */
+  swap: [0.2, 0, 0, 1],
   /** The iOS zoom / drawer curve: fast out of the gate, a long settle. The image morph's curve (`ZOOM`). */
   drawer: [0.32, 0.72, 0, 1],
   bounce: [0.34, 1.36, 0.64, 1],
