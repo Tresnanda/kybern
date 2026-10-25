@@ -12,8 +12,8 @@ running the patched addon on Linux and Windows.
 | --- | --- | --- |
 | macOS Apple Silicon | `.dmg`, `.app.tar.gz` | `kybern-gpuix_<v>_aarch64.app.tar.gz` |
 | macOS Intel | `.dmg`, `.app.tar.gz` | `kybern-gpuix_<v>_x86_64.app.tar.gz` |
-| Windows x64 | NSIS `-setup.exe` (unsigned) | addon builds and draws in CI (ADE-52); no package |
-| Linux x64 | `.AppImage`, `.deb` | addon builds and draws in CI (ADE-52); no package |
+| Windows x64 | NSIS `-setup.exe` (unsigned) | `kybern-gpuix_<v>_x64-setup.exe` (beta, unsigned per-user NSIS; ADE-78, [packaging](packaging/README.md#windows-x64-beta)) |
+| Linux x64 | `.AppImage`, `.deb` | beta (ADE-78): `kybern-gpuix_<v>_x86_64.AppImage` (self-updating), `.deb`, `.rpm`, with the fallbacks below |
 
 ## ADE-52 spike: the patched addon on Linux and Windows (2026-10-22)
 
@@ -39,6 +39,11 @@ rectangular look the app had before this port). Neither runner has a GPU:
   (Microsoft Basic Render Driver). Captured with the addon's
   `captureScreenshot` (GPUI renders the window's scene to an image through the
   same renderer).
+
+Since WP7 the same workflow runs the whole check harness (`scripts/run-platform-checks.ts`, see
+`native/README.md`, "Running the checks on Linux and Windows") on `ubuntu-22.04` and `windows-2022`, builds the addon through
+`.github/actions/gpuix-addon`, and captures through the addon's screenshot, falling back to the X window on Linux when the
+addon's screenshot is unavailable there (the smoke's `import -window root` above is that fallback, now window-sized).
 
 `workflow_dispatch` only runs a workflow that exists on `main`. Until this
 branch merges, the spike ran it from throwaway `spike/ade-52-platforms*`
@@ -74,9 +79,12 @@ Screenshots are workflow artifacts (`gpuix-<os>-screens`) and copies under
 | `update.sh` Mach-O only (1.5 d) | Per-target library name and output (`linux-x64-gnu`, `linux-arm64-gnu`, `win32-x64-msvc`), realign/codesign/Cocoa companion only on macOS, `.exe` test binaries, `PYTHON`/`PYTHONUTF8` for Git Bash; 0.5 d |
 | (not in the inventory) | Compositor loops defaulted on everywhere: GPUI core lifted loop leaves out of the scene for Core Animation layers that only Metal creates, so spinners and shimmers would vanish off macOS. Now macOS-only (scene loops elsewhere). Upstream `getPaintedText` / `getPaintedHighlights` read the JS thread's empty thread-locals off macOS; they ask the UI thread now. `ElementBounds` lost `Copy` in a Kybern patch, which broke upstream's Linux-only `elements_at` |
 
-All of it lives in two new drivers, `patches/platforms_gpui.py` (GPUI side,
+All of it lived in two new drivers, `patches/platforms_gpui.py` (GPUI side,
 run last by `backdrop_gpui.py`) and `patches/platforms_hooks.py` (native crate,
-run last by `apply_hooks.py`). They only edit Linux/Windows sources or add
+run last by `apply_hooks.py`). Since the fork move (WP0) they are the commits
+"Linux (wgpu) and Windows (Direct3D 11) build and draw (ADE-52)" on
+`Tresnanda/zed` `kybern` and "Linux and Windows: UI-thread bridge (ADE-52)" on
+`Tresnanda/gpuix` `kybern`. They only edit Linux/Windows sources or add
 `cfg`-gated code, so the macOS addon is unchanged apart from the gate removal
 on the 12 shared methods; `KYBERN_NATIVE_CHECKS=0 ./update.sh`, the app's
 typecheck and 442 unit tests, `clip-check` and `rounded-check` pass on macOS.
@@ -113,6 +121,15 @@ Evidence:
    That is cheap for per-gesture calls, but hooks called many times per frame
    should not wait: make the fire-and-forget ones (`()` results) send without
    waiting (WP1 below), and measure calls per frame in the bench.
+   **WP1 did both:** `()` hooks queue without waiting (`update_window_detached`;
+   the per-frame one is the animation-frame acknowledge), and `getBridgeStats()`
+   counts sends, waited calls and wait time against GPUI's served frames;
+   `perf/bench` records it per window (`evidence.bridge`) and
+   `scripts/frame-wake-check.tsx` asserts fewer than 0.5 waited calls per
+   animated frame. The same work found that off macOS every mutation batch
+   invalidated with `window.refresh()`, which turns every cached island off; it
+   now takes the macOS island path (`KYBERN_FULL_INVALIDATE=1` restores the
+   refresh for A/B runs).
 4. **Option 2 has real costs that option 1 does not.** Main-thread pumping
    needs an embedded mode in `gpui_linux` (X11 and Wayland calloop dispatch
    from a Bun-polled fd) and `gpui_windows` (a `PeekMessage` pump, with
@@ -146,28 +163,31 @@ nothing but `platforms_hooks.py`.
 | Idle GPU release, window-state observer, autorelease tick pool | `idle_memory*` | fallback | fallback | No idle release; JS keeps its polling path |
 | Large-allocation mapper, small-allocation heap | `large_alloc.rs`, `code_small*`, `code_alloc.rs` | fallback | fallback | System allocator; their stats read 0 |
 | Shimmer band / hue, pop, rotate, stroke draw, hover/stream fades, subtree transforms | `shimmer_band_gpui.py`, `pop_gpui.py`, `rotate_gpui.py`, `stroke_draw*`, `hover_fade*`, `stream_fade*`, `subtree_*` | works | works | Evaluated in GPUI core's scene, not in Metal; compiled and running, not individually checked on screen |
-| Frame wake | upstream `set_frame_wake_hook` (0.11) | fallback | fallback | No display-link wake; JS frame loop on its timer (`frameMs`) |
+| Frame wake | upstream `set_frame_wake_hook` (0.11); WP1 zed commit "Frame wake hook off macOS" | works (WP1, not yet run) | works (WP1, not yet run) | JS wakes after each GPUI frame that drew or ran next-frame callbacks, paced by Wayland frame callbacks, the X11 RandR refresh loop or the DWM vsync thread, and once when the UI thread exits. The 8 ms JS poll (125 wakes/s) is gone; the runtime's 100 ms fallback stays. `scripts/frame-wake-check.tsx` checks it in CI |
+| Mutation invalidation (cached islands) | `request_invalidate` | works (WP1, not yet run) | works (WP1, not yet run) | Was `window.refresh()` on every batch (no cached views); now the macOS island path. `KYBERN_FULL_INVALIDATE=1` restores the refresh |
+| Wayland without `wl_seat`, stale `WAYLAND_DISPLAY` | WP1 zed commit "Wayland: run without a seat, fall back to X11" | works (WP1, not yet run) | — | Headless Weston (no seat) no longer panics; a seat that appears later gets its devices. An unreachable `WAYLAND_DISPLAY` with `DISPLAY` set uses X11 |
+| Per-monitor DPI | `enable_per_monitor_dpi` (0.11), `getPlatformInfo` (WP1) | — | works? | Bun's manifest declares no DPI awareness, so the UI thread's `SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)` succeeds; GPUI handles `WM_DPICHANGED`. WP1 reports the mode and the window's `GetDpiForWindow`. 125/150/175 % and monitor moves need hardware |
 | Variable `wght` axis | `font_weight*` (CoreText) | fallback | fallback | Nearest installed weight; WP4 |
 | Per-run text scale (`kszl`) | `text_scale_gpui.py` (CoreText) | fallback | fallback | `font_scale()` default 1: rich-editor inline code at full size; WP4 |
 | Fonts | `theme.ts` `.SystemUIFont`, Menlo | fallback | fallback | GPUI maps `.SystemUIFont` per platform; Menlo falls back (DejaVu in CI). Bundled Cal Sans / JetBrains Mono load (wordmark visible) |
 | Key interception, close guard, input selection/transactions, text selection, rich-editor commands and images, window background | `apply_hooks.py`, `editor9_hooks.py`, `image_memory_hooks.py`, `window_platform_hooks.py` | works (UI-thread bridge) | works (UI-thread bridge) | Were "macOS-only" stubs; the close guard is used at startup |
 | Rich-editor key interceptor | `rich_editor.rs:677` | fallback | fallback | Gated `macos`; editor shortcuts that rely on it do not fire. WP3 |
 | Title-bar double-click action | `window_platform_hooks.py` | blocked | blocked | Reads the macOS "double-click to zoom" default; JS should zoom/maximize itself. WP3 |
-| Save panel | `apply_hooks.py` `prompt_for_new_path` | works (UI thread) | works (UI thread) | Not opened in CI |
+| Save panel | `apply_hooks.py` `prompt_for_new_path` | works (UI thread) | works (UI thread) | Not opened in CI. `platform/files.ts` goes through `os.savePanelDialog`: the hook, else a PowerShell / zenity / kdialog panel (WP2) |
 | Clipboard image | `clipboard_hooks.py` | works (bridge) | works (bridge) | Not exercised |
 | Window drag regions | `window_drag.rs` | works? | works? | `WindowControlArea::Drag` is cross-platform; unverified (no pointer in CI) |
 | Traffic lights / window controls | `TitleBar.tsx`, `window_platform*` | blocked | blocked | With a transparent title bar Linux X11 shows no close/min/max at all (see screenshot). WP3 |
 | Window material (NSVisualEffectView) | `native/material.ts` | fallback | fallback | Opaque window |
 | Secure input (Carbon) | `secure_input.rs` | fallback | fallback | No-op |
-| Automation test display | `automation_display.rs` | fallback | fallback | Centered on the primary display |
-| Scroll phase injection | `scroll_hooks.py` | blocked | blocked | Test-only; one line to unify like the others |
-| Web view (previews, Visual, Artifacts, Mermaid) | `webview.m`, `src/native/webview.ts` | blocked | blocked | `dlopen` of the `.dylib` throws on use. Fallback to wire: previews in the browser, Mermaid as static text. WP5 |
+| Automation test display | `automation_display.rs` | fallback | fallback | Centered on the primary display. Not needed by the WP7 harness: captures are the addon's screenshot (or the X window, Linux) and input is synthesized in-process, so the window's position never matters |
+| Scroll phase injection | `scroll_hooks.py` | works (WP1) | works (WP1) | `simulateScrollPhase` on every desktop platform and in `TestGpuixRenderer`; compile-checked, on screen in `frame-wake-check`. The WP7 checks still mark every wheel step `GAPS.wheel` until a CI run passes: a pass is reported as a closed gap, then the marker goes |
+| Web view (previews, Visual, Artifacts, Mermaid) | `webview.m`, `src/native/webview.ts` | blocked | blocked | `dlopen` of the `.dylib` throws on use. No library is loaded off macOS (`webHost.available` is false; `KYBERN_GPUIX_NO_WEBVIEW=1` forces it anywhere). Fallbacks shipped in WP4: see *Without a web view*. WP5 |
 | Notifications | `packaging/notifications.m` | fallback | fallback | Already skipped outside a macOS `.app` |
 | objc FFI shell (frame restore, appearance, visibility, locale) | `shell/*.ts`, `native/*.ts` | fallback | fallback | Guarded: no restore, no system theme |
-| `pbcopy`, `open`, `osascript`, `~/Library`, Keychain | `src/**` | blocked | blocked | WP2 |
+| `pbcopy`, `open`, `osascript`, `~/Library`, Keychain | `src/**` via `src/platform/os.ts` | fallback | fallback | WP2 done: commands per OS, unit-tested; not run on a real Windows/Linux desktop. [Details](#f-js-platform-services-src) |
 | ⌘ shortcuts | 26 files | blocked | blocked | `cmd` maps to Super/Windows off macOS. WP3 |
-| Pointer-release watch | `preview/resize.tsx:16` | blocked | blocked | Unguarded objc call throws on use. WP2 |
-| Copy "This Mac" | environment chip | blocked | blocked | Says "This Mac" on Linux (screenshot). WP2 |
+| Pointer-release watch | `preview/resize.tsx` | works | works | Guarded; the window-sized capture layer ends the drag on mouse-up or a move with no button (WP2) |
+| Copy "This Mac" | environment chip, sidebar, settings | works | works | "This computer" off macOS (`osLabels()`); Finder copy becomes Explorer / Files (WP2) |
 
 ## Intel Mac (shipped in v0.10.3)
 
@@ -279,7 +299,7 @@ parity (WP9); their fallbacks are what the spike runs today.
 | Compositor loops (breathe/shimmer/rotate handed to Core Animation) | `compositor_loops_*` | DirectComposition animations later | none | `KYBERN_COMPOSITOR_LOOPS=0` scene path, already checked by `perf/motion-fps/lab-check.ts` | 0 (fallback), 4 for DComp |
 | Partial-region presentation | `paint_region_*`, `paint_region.metal` | `Present1` dirty rects | wgpu has no partial present | Full-frame present (higher idle-animation cost; measure) | 0 / 3 |
 | GPU clip simplification, drawable timing, telemetry, idle GPU release, image eviction | `gpu_clip*`, `frame_drawable_gpui.py`, `gpu_telemetry_gpui.py`, `memory_counters_gpui.py`, `image_memory_gpui.py`, `idle_memory_gpui.py` | Atlas counters from the DX atlas | wgpu atlas | Counters report 0; release on idle skipped | 2 |
-| Frame waker + presentation timestamps (CVDisplayLink) | `frame_gpui.py`, `frame_clock.rs` | DXGI frame statistics / `DwmFlush` | Wayland frame callback / X11 Present | Timer-based waker at display rate | 1.5 |
+| Frame waker + presentation timestamps (CVDisplayLink) | `frame_gpui.py`, `frame_clock.rs` | Waker done in WP1 (GPUI's DWM vsync thread); presentation timestamps (DXGI frame statistics) not done | Waker done in WP1 (Wayland frame callbacks, X11 refresh loop); X11 Present timestamps not done | Presentation timestamps report nothing | 1 (timestamps) |
 
 ### C. Text
 
@@ -337,6 +357,27 @@ Ports:
 - **Both platforms, interim:** the helper-process approach also gives Windows
   Mermaid before the composition host is done.
 
+**Without a web view (WP4, shipped).** `webHost.available` (from `src/native/webview-support.ts`) gates every
+surface; `webHost` calls are no-ops and `frame`/`snapshotRect` reject. Each surface checks the flag, never catches.
+- **Previews** (dock tab, `previews.open`): the page opens in the default browser when ready (`store.ts`; a server on
+  another machine opens through the local relay URL) and the tab says "Opened in your browser" with Open again and
+  Copy link. The entry keeps its ticket and relay until it is replaced, closed or the environment resets. No mini player,
+  device toolbar or native documents.
+- **Visuals:** the daemon picture stays. A click does not go live; the caption has Open in browser (a fresh
+  `threads.visuals.frame` ticket, served once, 60 s). Full screen and visual tabs show the picture at size
+  (`VisualStill.tsx`). No Open in a tab.
+- **Questions (`await_answer`):** the browser cannot answer. The ticket page is a top-level document, and
+  `visuals/bootstrap.js` posts `kybern.answer.*` only when `window.parent !== window`; its CSP (`sandbox allow-scripts`,
+  `connect-src https:`) also keeps it from the daemon. So the bar offers Reply in your own words (focuses the composer;
+  the existing `replied` path) and Skip. A page-side answer needs the WP10 web view, or a daemon endpoint that
+  accepts an answer for a frame ticket.
+- **Artifacts:** the frame becomes a state with Open in browser (`threads.artifacts.preview` ticket, single use);
+  Source still works.
+- **Mermaid:** the fence keeps its source under a "Mermaid diagram" label with a note. The daemon's headless renderer
+  (`threads.visuals.preview`) cannot take the 5 MB Mermaid bundle (512 KB page cap), so no picture yet. A WebKitGTK
+  helper (phase 1 above) or WP10 draws it.
+- Check: `bun scripts/nowebview-app-check.ts` (see its header; pass `macos` to prove the embedded path is unchanged).
+
 **Notifications** (`packaging/notifications.m`;
 `src/native/notifications.ts`: `status` / `requestPermission` / `post` /
 `onClick`). Replace the `.m` with addon napi methods over GPUI's
@@ -348,31 +389,107 @@ Ports:
 
 ### F. JS platform services (`src/`)
 
-Gather these behind one `src/platform/os.ts` (desktop-style), mostly backed by
-GPUI APIs. Effort: 6–9 days total.
+Done in WP2: every call site goes through `src/platform/os.ts` (Windows and Linux are unit-tested with simulated
+platforms only; nothing here has run on a real desktop yet). macOS runs the same commands as before. Off macOS the
+addon's binding is used when `setOsHost(renderer)` finds it, otherwise the command in the table. Status: **fallback** =
+command-based, works once the tool is present, with a sentence naming the tool when it is not.
 
-| Today | Files | Windows | Linux |
+| Service | Files | Windows | Linux |
 | --- | --- | --- | --- |
-| `pbcopy` / `pbpaste` | `transcript/store.ts:89`, `notes/NoteMenu.tsx:17`, `composer/TokenTextarea.tsx:145`, `terminal/Terminal.tsx:326` | GPUI clipboard (addon) | same |
-| `open`, `open -R` (Reveal in Finder) | `transcript/markdown.tsx`, `ThreadImage.tsx`, `dock/Diff.tsx`, `dock/Explorer.tsx`, `notes/NoteEditor.tsx`, `pulls/PrStates.tsx`, `preview/browser.ts`, `settings/external.ts` | GPUI `open_url` / `reveal_path` ("Show in Explorer") | `xdg-open` / D-Bus FileManager1 ("Show in Files") |
-| `osascript` folder picker, admin prompt | `settings/external.ts:23`, `platform/cli.ts:156` | GPUI `prompt_for_paths`; no admin needed (per-user PATH) | same |
-| `~/Library/Application Support`, `~/Library/Caches` | `settings/appearance.ts`, `platform/prefs.ts`, `environments/registry.ts`, `nav/live.ts`, `composer/store.ts` | `%APPDATA%`, `%LOCALAPPDATA%` | `$XDG_CONFIG_HOME`, `$XDG_CACHE_HOME` |
-| Keychain (throws off macOS) | `environments/credentials.ts:35` | GPUI credentials → Credential Manager | Secret Service; file store (`KYBERN_GPUIX_CREDENTIALS_DIR`) when no keyring is running |
-| Login-shell PATH, `/opt/homebrew/bin` | `shell/daemon.ts:100-102`, `platform/cli.ts:53` | Inherit the environment; `;` separator; `.exe` | `$SHELL -ilc` works |
-| CLI install symlink | `platform/cli.ts` | Installer adds `bin` to the user PATH | `~/.local/bin` symlink |
-| Save panel, clipboard image | `platform/files.ts` → `promptForNewPath` (macOS-gated hook) | GPUI `prompt_for_new_path` | same |
-| `screencapture -l` | `transcript/live.ts:43` + verify scripts | Addon window capture | same |
+| Clipboard text (`pbcopy` / `pbpaste`) | `transcript/store.ts`, `notes/NoteMenu.tsx`, `composer/TokenTextarea.tsx`, `terminal/Terminal.tsx`, `pulls/PrStates.tsx` | fallback: PowerShell `Set-Clipboard` / `Get-Clipboard` (UTF-8 on stdin) | fallback: `wl-copy`/`wl-paste` on Wayland, `xclip` then `xsel` on X11 (and the other family as a last try); "needs wl-clipboard / xclip or xsel" when none |
+| Clipboard image | `platform/files.ts`, `composer/clipboard.ts` | works: addon `writeClipboardImage`, `readClipboardImage`, `readClipboardPaths` | same |
+| Open URL or file (`open`) | `settings/external.ts`, `preview/browser.ts`, `transcript/markdown.tsx`, `dock/Diff.tsx`, `notes/NoteEditor.tsx`, `pulls/PrStates.tsx`, `dialogs/Repositories.tsx`, `draft/InstructionsOffer.tsx`, `transcript/OutsideChange.tsx`, `environment/Panel.tsx` | fallback: `rundll32 url.dll,FileProtocolHandler` (never cmd.exe, so `&` is safe) | fallback: `xdg-open`, then `gio open` |
+| Reveal (`open -R`): "Reveal in Finder" / "Show in Explorer" / "Show in Files" | `dock/Explorer.tsx`, `dialogs/Repositories.tsx`, `environment/Panel.tsx`, `transcript/ThreadImage.tsx`, `settings/external.ts` | fallback: `explorer.exe /select,<path>` | fallback: D-Bus `org.freedesktop.FileManager1.ShowItems` (`dbus-send`), then `xdg-open` / `gio open` of the parent folder |
+| Folder picker (`osascript`) | `settings/external.ts` `pickFolder` | works if the addon exposes `promptForPaths` (GPUIX ships it); else PowerShell `FolderBrowserDialog` | same; else `zenity`, then `kdialog` |
+| Admin prompt (`osascript … with administrator privileges`) | `platform/cli.ts` | none: per-user install | none: `~/.local/bin` only; a read-only folder says how to fix it |
+| Save panel | `platform/files.ts` | works: addon `promptForNewPath`; else PowerShell `SaveFileDialog` | works: addon; else `zenity --save` / `kdialog` |
+| Config and cache folders | `settings/appearance.ts`, `platform/prefs.ts`, `environments/registry.ts` (shared with Tauri: `dev.kybern.desktop`), `nav/live.ts`, `composer/store.ts`, `transcript/imageFiles.ts`, `perf/memoryLog.ts` | `%APPDATA%\kybern-gpuix`, `%LOCALAPPDATA%\kybern-gpuix` | `$XDG_CONFIG_HOME` (`~/.config`), `$XDG_CACHE_HOME` (`~/.cache`) |
+| Credentials | `environments/credentials.ts` | The bundled `kybern credentials get\|set\|delete` command (`crates/kybern-cli/src/credentials.rs`): the same `keyring` crate and entries as the Tauri client, secret on stdin/stdout, async, cached per id. Exit 3 missing, 4 locked or dismissed (an error: "Unlock your keyring"), 5 no store. Fallback 0600 file in `%LOCALAPPDATA%\kybern-gpuix\credentials` only for exit 5 | The same command over the Secret Service (libdbus compiled in for the static musl build); with no session bus or Secret Service (exit 5) the 0600 file store in `~/.config/kybern-gpuix/credentials` (warned once, no secret logged); a locked keyring never falls back to the file |
+| Login-shell PATH, Homebrew | `shell/daemon.ts`, `platform/cli.ts` (`pathPlan`) | inherited PATH, `;`, `.exe` names (`bundledCommand`, `resolveCommand`) | `$SHELL -ilc`; `/home/linuxbrew/.linuxbrew/bin` instead of `/opt/homebrew/bin` |
+| CLI install | `platform/cli.ts`, `settings/About.tsx` | the installer owns PATH: the row reports whether `kybern` is there, no Install button | AppImage: `~/.local/bin/kybern` symlink to the AppImage file (needs AppRun to run the bundled `kybern` when `$ARGV0` is `kybern`; WP6 lane); deb/rpm: the package owns `/usr/bin/kybern`, reported only; portable build: `~/.local/bin` symlink |
+| `screencapture -l` | `transcript/live.ts` via `os.captureWindowImage` | test-only: the automation client's `screenshot`; scripts say so and stop | same |
+| Window capture attach, `sips` downscale, reduced motion and appearance (`defaults`), screen-recording check | `requests/attach.ts`, `transcript/imageFiles.ts`, `platform/reducedMotion.ts`, `ui.tsx`, `pick/screenRecording.ts` | the attach item is hidden; images show at full size; motion on, light theme (WP3 reads the real settings); no screen-recording card | same |
+| Editors ("Open in…") | `dock/editors.ts` | "Default app" (the system's choice) | `code`, `cursor`, `windsurf`, `zed`, `subl`, `idea`, `webstorm` on PATH, plus "Default app" |
+
+#### Native bindings wanted (not added: `native/` is frozen for the fork move)
+
+`os.ts` takes these from the renderer when present (off macOS only, so macOS keeps its commands). Each is a napi method
+over a GPUI `App` call, run on the UI thread through `run_on_ui_thread`:
+
+| napi method | Signature | GPUI API | Replaces |
+| --- | --- | --- | --- |
+| `writeClipboardText` | `(text: string) => void` | `cx.write_to_clipboard(ClipboardItem::new_string)` | `pbcopy`, PowerShell, `wl-copy`/`xclip` |
+| `readClipboardText` | `() => string \| null` | `cx.read_from_clipboard()` → text entry | `pbpaste`, PowerShell, `wl-paste`/`xclip` |
+| `openUrl` | `(url: string) => void` | `cx.open_url` | `rundll32`, `xdg-open` |
+| `openPath` | `(path: string) => void` | `cx.open_with_system` | same, for files and folders |
+| `revealPath` | `(path: string) => void` | `cx.reveal_path` | `explorer.exe /select,`, FileManager1 |
+| `readCredential` / `writeCredential` / `deleteCredential` | `(service: string, account: string[, secret: string]) => string \| null` | `cx.read_credentials` / `write_credentials` / `delete_credentials` (Credential Manager, Secret Service) | PowerShell P/Invoke, `secret-tool`; wire them into `credentials.ts` as a store between the platform store and the file |
+| `captureWindowImage` (optional) | `(path: string) => void` | already `captureScreenshot` | nothing new |
+
+`promptForPaths`, `promptForNewPath`, the clipboard-image methods and `captureScreenshot` already exist.
+
+Left on macOS only, deliberately: `requests/Permission.tsx` and `Pick.tsx` System Settings flows (the daemon only sends them
+on macOS), `platform/update.ts` (`/bin/mkdir`, `/usr/bin/tar`: WP6), the remote SSH install scripts (they run on the remote),
+`locale.ts`, `shell/window.ts` and the other objc FFI shell (WP3), and every `screencapture`, `pbcopy`, `security`, `ps` or
+`pgrep` call in the `*.verify.ts`, `verify-*.ts`, `*-check.ts`, `perf/**` and `scripts/**` test scripts, which also use Swift
+helpers and NSEvent synthesis (WP7).
 
 ### G. Packaging, updates, CI
+
+**Linux status (ADE-78, WP0 + WP6(L)):** the Linux column is built.
+`.github/actions/gpuix-addon` takes `x86_64-unknown-linux-gnu` (the cache key
+hashes rustc, cc, ld, glibc and the OS release instead of Xcode), and
+`gpuix-addon.yml` warms that cache on `ubuntu-22.04`. The `gpuix-linux` job of
+`desktop.yml` (its own job on `ubuntu-22.04`, so that like `gpuix-windows` a
+failure leaves only its manifest entry out) packages dist's static musl
+`kybernd`/`kybern` with `scripts/bundle-gpuix-linux.sh` →
+`scripts/package-linux.ts`: an AppImage (appimagetool 1.9.1 and type2-runtime
+pinned by checksum), a `.deb` and an `.rpm`, the AppImage signed as
+`linux-x86_64-gpuix`. The updater replaces a running AppImage in place; deb and
+rpm installs announce the release with the package link and install command;
+`scripts/install-linux-gpuix.sh` installs the distribution's package or the
+AppImage. Layout, dependencies and the side-by-side rule with the Tauri package
+are in `packaging/README.md`. Not proven until CI and real machines run it: the
+lane itself, the release AppImage's self-update and relaunch, and every item
+under [What needs real hardware or CI](#what-needs-real-hardware-or-ci).
 
 | Item | Windows | Linux | Effort |
 | --- | --- | --- | --- |
 | App | `bun build --compile --target=bun-windows-x64`; `Kybern GPUIX.exe` + `gpuix-native.win32-x64-msvc.node` + `kybernd.exe` + `kybern.exe` + `kybern-webview.dll` | `bun-linux-x64` (glibc; baseline build if old CPUs matter); `.node` + daemon + CLI | 2 + 2 |
-| Installer | NSIS per-user into `%LOCALAPPDATA%\Programs\Kybern GPUIX`, Start-menu shortcut carrying the AUMID, WebView2 bootstrapper. Unsigned like Tauri today (SmartScreen warning) until a certificate exists | AppImage (appimagetool, built on ubuntu-22.04 for the same glibc floor as Tauri) + `.deb` with a `.desktop` file and icon | 3 + 3 |
+| Installer | NSIS per-user into `%LOCALAPPDATA%\Programs\Kybern GPUIX`, Start-menu shortcut carrying the AUMID (**done**, ADE-78; WebView2 bootstrapper only when WP10 needs it). Unsigned like Tauri today (SmartScreen warning) until a certificate exists | AppImage (appimagetool, built on ubuntu-22.04 for the same glibc floor as Tauri) + `.deb` with a `.desktop` file and icon | 3 + 3 |
 | Updater (`src/platform/update.ts`) | Keys `windows-x86_64-gpuix`; download the signed installer, run it silently `/S`, relaunch | `linux-x86_64-gpuix`; replace the AppImage in place (`$APPIMAGE`) and relaunch; `.deb` installs only announce | 2 + 2 |
 | `updater-manifest.mjs`, `bundle-gpuix.*` | New asset names and keys | same | 1 |
 | CI | `windows-2022` lane: build the addon from source (no display checks), package, sign the archive with the updater key | `ubuntu-22.04` lane: same, plus `libxkbcommon`/`wayland`/`vulkan` dev packages | 2 + 2 |
-| Parity checks | The check harness relies on `screencapture`, Swift helpers and NSEvent synthesis. Move captures and input to the addon's automation API (already cross-platform) and run under a virtual display | Xvfb / headless Weston | 5–8 |
+| Parity checks | **First set done (WP7):** `native/check-harness.ts` + `scripts/run-platform-checks.ts` run `clip`, `rounded`, `markdown-document`, `focus`, the platform smoke and the WP4 no-web-view check through the addon's automation API on macOS, Xvfb + lavapipe and WARP (`gpuix-platforms.yml`). The rest of the `*-check.ts` / `perf/**` scripts still use `screencapture`, Swift and NSEvent | Xvfb done; headless Weston runs `frame-wake` and the smoke without captures (WP1's `wl_seat` fix; on by default, the `wayland` input turns it off) | 5–8 |
+
+### Status: Windows packaging and CI (ADE-78, WP0(W) + WP6(W))
+
+Landed in code, **not yet exercised on a real release or real hardware**:
+
+- `.github/actions/gpuix-addon` takes `x86_64-pc-windows-msvc` (library path and tool hash per
+  target; macOS unchanged).
+- `scripts/package-windows.ts` (dispatched from `package-app.ts`) compiles the app with
+  `bun-windows-x64` and builds `packaging/windows/installer.nsi`: per-user install in
+  `%LOCALAPPDATA%\Programs\Kybern GPUIX`, Start-menu shortcut with the AppUserModelID
+  `dev.kybern.gpuix`, Add/Remove Programs, silent `/S` and `/UPDATE`, the kybern command on the
+  user Path (only `bin`, appended, so the Tauri app's wins), app-local C++ runtime. No WebView2:
+  nothing here needs it until WP10. Uninstall stops the daemon running from the folder first.
+- `desktop.yml` `gpuix-windows` job (its own job while it is a beta, so a failure cannot skip the
+  manifest): packages, signs with the updater key, then installs, smoke-runs, updates (over a
+  running daemon) and uninstalls the result on the runner (`verify-install.ps1`, blocking) before
+  uploading `kybern-gpuix_<v>_x64-setup.exe` + `.sig`; `updater-manifest.mjs` publishes them as
+  `windows-x86_64-gpuix` when they exist.
+- `src/platform/update.ts`: Windows downloads and verifies the installer (its signature must name
+  this release's file, and the version must be newer), asks the other window processes to quit,
+  runs the installer silently with `/D=` the running copy's folder, then quits; the installer
+  relaunches. Child processes of the Rust daemon and drivers start without console windows
+  (`kybern_protocol::process::NoWindow`, `CREATE_NO_WINDOW`; the terminal PTY is left alone) and
+  the TypeScript spawns of console programs pass `windowsHide`.
+
+Still open for Windows: the WP1 CI run and a DPI pass on real hardware (the code is in, see
+[WP1 status](#wp1-native-platform-core-status)), the Windows half of WP3 (caption buttons, key helper), WP2
+(credentials, CLI install in Settings, shell-outs), WP4 (previews in the browser), WP5 (toasts use
+the AppUserModelID registered here), Authenticode signing, and the real-hardware list below.
 
 ## Work packages
 
@@ -388,43 +505,139 @@ agents (one OS-specific lane can split W/L).
 
 | WP | Scope | Owns | Depends on | Days | Lane |
 | --- | --- | --- | --- | --- | --- |
-| WP0 | Forks + CI. Move to `Tresnanda/gpuix` and `Tresnanda/zed` with the patch queue as commits (planned separately). Then: `desktop.yml` lanes that build and cache the Linux/Windows addons (generalize `.github/actions/gpuix-addon` by target), run the app's unit tests there, and keep `gpuix-platforms.yml` as the on-screen check | `native/update.sh`, `.github/actions/gpuix-addon`, `.github/workflows/*gpuix*` | — | 2–3 (+ fork move) | A |
-| WP1 | Native platform core: confirm Windows on screen at DPI 100/150 %; Wayland (a real GNOME/KDE session: headless Weston has no `wl_seat` and upstream `gpui_linux` unwraps it, `wayland/client.rs:832`); bridge cost: `()`-returning hooks send without waiting, count bridged calls per frame in `perf/bench`; unify scroll-phase injection; a frame-wake hook on Linux/Windows instead of the timer (Wayland frame callback / DXGI `WaitForVBlank`) | `native/patches/platforms_*`, `perf/bench` | WP0 | 3–5 | A |
-| WP2 | JS platform services (section F): `src/platform/os.ts` over GPUI clipboard, `open_url`/`reveal_path`, path prompts, credentials (Credential Manager / Secret Service, file store fallback), config/cache dirs, PATH and `.exe`, CLI install, "This computer" copy, the `preview/resize.tsx` guard | `src/platform/**`, `src/environments/credentials.ts`, shell-out call sites | — (JS only; mock the addon) | 5–7 | B |
-| WP3 | Window and input (section D): caption buttons and drag/snap on Windows (`WindowControlArea`), CSD buttons on Linux, title-bar double-click in JS, one `isPrimary(mods)` key helper with a conflict review (terminal Ctrl+C, editors), the rich-editor key interceptor off macOS, close guard and DPI checks | `src/nav/TitleBar.tsx`, key helper + call sites, `native/patches/{window_*,rich_editor}*` | WP1 | 6–8 | C |
+| WP0 | Forks + CI. ~~Move to `Tresnanda/gpuix` and `Tresnanda/zed` with the patch queue as commits~~ (done 2026-10-25, see [Where the forks help](#where-the-forks-help)). Then: `desktop.yml` lanes that build and cache the Linux/Windows addons (generalize `.github/actions/gpuix-addon` by target), run the app's unit tests there, and keep `gpuix-platforms.yml` as the on-screen check. **Linux and Windows addon lanes and caches done (ADE-78)** | `native/update.sh`, `.github/actions/gpuix-addon`, `.github/workflows/*gpuix*` | — | 2–3 (+ fork move) | A |
+| WP1 (code done, CI run pending) | Native platform core: confirm Windows on screen at DPI 100/150 %; Wayland (a real GNOME/KDE session: headless Weston has no `wl_seat` and upstream `gpui_linux` unwraps it, `wayland/client.rs:832`); bridge cost: `()`-returning hooks send without waiting, count bridged calls per frame in `perf/bench`; unify scroll-phase injection; a frame-wake hook on Linux/Windows instead of the timer (Wayland frame callback / DXGI `WaitForVBlank`). [Status](#wp1-native-platform-core-status) | fork commits "… (WP1)" on both `wp1` branches, `perf/bench`, `scripts/frame-wake-check.tsx` | WP0 | 3–5 | A |
+| WP2 (done) | JS platform services (section F): `src/platform/os.ts` over GPUI clipboard, `open_url`/`reveal_path`, path prompts, credentials (Credential Manager / Secret Service, file store fallback), config/cache dirs, PATH and `.exe`, CLI install, "This computer" copy, the `preview/resize.tsx` guard | `src/platform/**`, `src/environments/credentials.ts`, shell-out call sites | — (JS only; mock the addon) | 5–7 | B |
+| WP3 | Window and input (section D): caption buttons and drag/snap on Windows (`WindowControlArea`), CSD buttons on Linux, title-bar double-click in JS, one `isPrimary(mods)` key helper with a conflict review (terminal Ctrl+C, editors), the rich-editor key interceptor off macOS, close guard and DPI checks | `src/nav/TitleBar.tsx`, key helper + call sites, fork: `packages/native/src/{window_*,rich_editor}.rs` | WP1 | 6–8 | C |
 | WP4 | Previews and Mermaid without the embedded web view: open previews in the default browser through the existing relay, Mermaid as static text (or SVG from a headless helper on Linux later) | `src/native/webview.ts` loader, `src/preview/browser.ts`, `src/transcript/mermaid.ts` | WP2 | 2–3 | B |
-| WP5 | Notifications over GPUI (`show_system_notification`); Windows needs the AUMID from WP7's installer | `native/patches/notifications*`, `src/native/notifications.ts` | WP1 | 2–3 | C |
-| WP6 (L/W) | Packaging and updater (section G): `bun build --compile` per target, AppImage + `.deb` (L), NSIS per-user installer with the AUMID shortcut (W), updater keys and in-place update, manifest entries | `scripts/package-app.ts`, `scripts/bundle-gpuix*`, `scripts/updater-manifest.mjs`, `src/platform/update.ts` | WP0 | L 5–6, W 6–8 | D |
-| WP7 | Cross-platform check harness: run a first set of the native checks (`clip-check`, `rounded-check`, `markdown-document-check`, `focus-check`) through automation captures under Xvfb/lavapipe and WARP; `platform-smoke.ts` is the seed | `native/*-check.ts` capture helpers, `scripts/platform-smoke.ts` | WP1 | 4–6 | A |
+| WP5 | Notifications over GPUI (`show_system_notification`); Windows needs the AUMID from WP7's installer | new fork commits (native crate), `src/native/notifications.ts` | WP1 | 2–3 | C |
+| WP6 (L/W) | Packaging and updater (section G): `bun build --compile` per target, AppImage + `.deb` (L), NSIS per-user installer with the AUMID shortcut (W), updater keys and in-place update, manifest entries. **L and W in (ADE-78): AppImage, `.deb` and `.rpm`; NSIS installer; not yet released** | `scripts/package-app.ts`, `scripts/bundle-gpuix*`, `scripts/updater-manifest.mjs`, `src/platform/update.ts` | WP0 | L 5–6, W 6–8 | D |
+| WP7 (first set done, CI-unverified) | Cross-platform check harness: `native/check-harness.ts` (capture per OS, tolerance, known-gap steps), `scripts/run-platform-checks.ts` (runner, summary, artifacts), ported `clip-check`, `rounded-check`, `markdown-document-check`, `focus-check`, `platform-smoke.ts` (now asserting sidebar, Markdown/code transcript, composer) and `nowebview-app-check.ts`; `gpuix-platforms.yml` runs them on `ubuntu-22.04` (Xvfb + lavapipe), `windows-2022` (WARP) and headless Weston (`frame-wake` + smoke, no captures). WP1's `scripts/frame-wake-check.tsx` is the `frame-wake` check id. Passing on macOS; the Linux/Windows runs have not happened yet. Left: port the other checks, flip `--strict` once WP1/WP3 close the gaps | `native/check-harness.ts`, `native/*-check.ts`, `scripts/{run-platform-checks,platform-smoke,nowebview-app-check}.ts`, `.github/workflows/gpuix-platforms.yml` | WP1 | 4–6 | A |
 | — | **Linux beta** = WP0–WP5 + WP6(L) + WP7 | | | ≈ 30–41 | 3–4 lanes: ≈ 2.5–3 calendar weeks |
 | — | **Windows beta** adds WP6(W) and Windows-only fixes from WP1/WP3 | | | ≈ +6–10 | ≈ +1–1.5 weeks |
-| WP8 | Text parity (section C): variable `wght` and `kszl` on DirectWrite and cosmic-text, system font choice | `native/patches/{font_weight,text_scale}*`, `src/theme.ts` | WP0 | 4–6 | after beta |
-| WP9 | GPU parity: backdrop blur in WGSL and HLSL (scratch copy + two-pass blur), Mica on Windows 11 | `native/patches/platforms_gpui.py` (or fork commits) | WP0 | 6–8 | after beta |
+| WP8 | Text parity (section C): variable `wght` and `kszl` on DirectWrite and cosmic-text, system font choice | zed fork: `gpui_macos/src/font_weight.rs`, the "Per-run text size scale (kszl)" commit, `src/theme.ts` | WP0 | 4–6 | after beta |
+| WP9 | GPU parity: backdrop blur in WGSL and HLSL (scratch copy + two-pass blur), Mica on Windows 11 | zed fork commits on `kybern` (`gpui_wgpu`, `gpui_windows` shaders) | WP0 | 6–8 | after beta |
 | WP10 | Embedded web view: WebView2 composition host (W, 8–12); WebKitGTK/WPE (L, phase 2, 10–15, risky) | `native/webview-*/**` | WP3, WP4 | 18–27 | after beta |
 
 Totals: about 36–51 agent-days to both betas, 28–41 more for full parity
 (text, blur, embedded web view). With three or four lanes the Linux beta is
 about 2.5–3 calendar weeks out and Windows 1–1.5 weeks after it.
 
-Where the forks help (WP0 onwards):
+### WP1 native platform core: status
 
-- `platforms_gpui.py` edits shaders with anchored replacements and a regex that
-  wraps every fragment `return`; as commits on `Tresnanda/zed` they become
-  plain diffs to `shaders.wgsl`/`shaders.hlsl`, reviewable and rebased by git.
+Fork branches `wp1` (on top of `kybern`; `native/FORK` pins them until they are
+merged into `kybern`):
+
+| Fork | Commit | What |
+| --- | --- | --- |
+| `Tresnanda/zed` | "Frame wake hook off macOS (WP1)" | `gpui::set_frame_wake_hook` and `served_frame_count`, called from GPUI's frame-request closure when a frame drew or ran next-frame callbacks (not on macOS) |
+| `Tresnanda/zed` | "Wayland: run without a seat, fall back to X11 (WP1)" | Optional `wl_seat` end to end; `WaylandClient::new` returns an error and `current_platform` falls back to X11 when `DISPLAY` is set |
+| `Tresnanda/gpuix` | "Windows and Linux: native frame wake, bridge cost, scroll phases, DPI info (WP1)" | `setFrameWakeCallback` returns true off macOS; detached `()` hooks; island invalidation; `getBridgeStats()`, `getPlatformInfo()`; `simulateScrollPhase` everywhere |
+| `Tresnanda/gpuix` | "Use the zed wp1 branch (WP1)" | The gitlink |
+
+Decided against in WP1: parking GPUI's X11 refresh loop and the Windows vsync
+thread while idle. Both still wake the UI thread every vsync for a no-op frame
+request (Wayland parks). That is upstream GPUI's idle cost, not the JS loop's;
+the X11 loop also drains X events, and the Windows thread re-invalidates
+deferred draws and checks for device loss, so it needs a Linux and Windows run
+to change safely. `frame-wake-check` reports process CPU while idle so the cost
+is visible.
+
+What proves what:
+
+- **macOS unchanged.** Every Linux/Windows change is `cfg`-gated; on macOS the
+  gpui commits compile to nothing, `update_window_detached` calls
+  `update_window`, and the display-link hook only gained a wake counter. The
+  addon built from the pin passes `update.sh`'s unit tests, realign, signing,
+  load check and arena tests; its napi surface differs from the `kybern` pin's
+  by exactly `getBridgeStats`, `getPlatformInfo` and
+  `TestGpuixRenderer.simulateScrollPhase`; the app's typecheck and 952 unit
+  tests pass; both addons launch the app against a scratch daemon and show the
+  seeded transcript (`platform-smoke.ts --capture none`); the idle JS loop is
+  the same (10 ticks/s, the fallback timer). The on-screen native checks were
+  not run: the Mac's screen was locked.
+- **Linux and Windows compile.** `cargo check` of the native crate for
+  `x86_64-unknown-linux-gnu` and `x86_64-pc-windows-msvc` passes from macOS with
+  stub C tools (`cargo check` never links the C dependencies, so a stub
+  compiler satisfies aws-lc-sys, ring and the resource compiler). Nothing ran on
+  Linux or Windows: OrbStack's Docker did not respond.
+- **On screen: needs the CI run below.**
+
+The CI run that validates WP1 (`.github/workflows/gpuix-platforms.yml`, manual;
+`workflow_dispatch` needs the workflow on `main`, so before the merge use a
+throwaway `spike/*` branch with a push trigger as the ADE-52 spike did), inputs
+`lto: false` (enough for a behaviour check) and the default `checks: all`, `wayland: true`. Everything below lands in the
+`gpuix-<job>-checks` artifacts:
+
+| Step | Proves |
+| --- | --- |
+| Build the patched GPUIX addon (all three jobs) | The `wp1` pin builds and links for real (the local check never linked) |
+| Smoke check on screen, `smoke-clip-1/*-app.png`, `smoke-clip-0/*` | The app still draws with island invalidation; compare with the ADE-52 captures (`.kybern-artifacts/ade-grill/`) for stale or missing content |
+| `frame-wake` check (Linux X11 job), `frame-wake/frame-wake-x11.json` | Idle: ≤ 15 JS ticks/s and ≤ 5 frame wakes/s; animating: ≥ 10 wakes/s and < 0.5 waited bridge calls per frame; `simulateScrollPhase` moves a scroller; `platform` is `X11` |
+| `linux-wayland` job (headless Weston, no seat): `frame-wake/frame-wake-wayland.json`, `smoke-clip-1` with `--capture none` | GPUI connects to a compositor with no `wl_seat` without panicking, `platform` is `Wayland`, the same frame-wake and scroll checks, and the whole app comes up there with the seeded message (no PNG: no grabber) |
+| `frame-wake` check (Windows job), `frame-wake/frame-wake-windows.json` | The same on Direct3D 11/WARP, plus `info.windows.dpiMode` (`process-per-monitor-v2` expected) and `windowDpi` agreeing with `scaleFactor × 96` (96 on the runner) |
+
+Repeat a Linux run with `KYBERN_FULL_INVALIDATE=1` if a capture differs, to
+tell the invalidation change apart from the rest. CI cannot change the display
+scale, so 125/150/175 % and moving between monitors stay on the real-hardware
+list.
+
+### Where the forks help
+
+**Status (2026-10-25): done.** The patch queue (`native/patches/*.rs`,
+`apply_hooks.py`, `backdrop_gpui.py` and the 89 hook scripts they ran) is now
+two commit series, one commit per former script, and was deleted from this
+repository:
+
+| Fork | Branch | Base | Commits |
+| --- | --- | --- | --- |
+| [`Tresnanda/gpuix`](https://github.com/Tresnanda/gpuix/tree/kybern) | `kybern` | tag `@gpuix/native@0.11.0` (`2e31b47`) | 58: the native crate (57) and the zed submodule pointer |
+| [`Tresnanda/zed`](https://github.com/Tresnanda/zed/tree/kybern) | `kybern` | remorses/zed `gpuix` `f77e5cf` (what 0.11.0 pins) | 49: GPUI, Metal, WGSL and HLSL |
+
+`native/FORK` pins the gpuix commit and the zed commit it records;
+`native/update.sh` builds exactly that, and the CI addon cache is keyed on
+`FORK`. A fresh clone of the pinned commit is identical to what the old queue
+produced except `.gitmodules` (the fork URL) and `Cargo.lock` (the mimalloc
+entries cargo used to write on the first build), and the macOS addon built from
+it was byte-identical to the old one. Each commit body names the script it came
+from: `git log --grep 'From rotate_gpui.py'` on the zed fork finds that patch.
+
+Making a native change now (`native/README.md`, "Changing the native module"):
+commit on `Tresnanda/zed` `kybern` (GPUI) and/or `Tresnanda/gpuix` `kybern`
+(native crate; bump its `zed` gitlink when zed moved), push, set `commit` and
+`zed` in `native/FORK`, run `native/update.sh`. Try unpushed commits with
+`KYBERN_GPUIX_SOURCE=<gpuix checkout> ./update.sh`.
+
+What that buys for the remaining work packages:
+
+- Shader edits (`platforms_gpui.py` used anchored replacements and a regex that
+  wrapped every fragment `return`) are now plain diffs to
+  `shaders.wgsl`/`shaders.hlsl`, reviewable and rebased by git.
 - The UI-thread bridge and the off-macOS fixes to upstream code
   (`elements_at`, painted-text readers) are upstreamable to GPUIX as commits.
-- CI can key the addon cache on the fork SHAs instead of hashing the patch
-  queue, and each platform lane can build from the same commit.
+- Each platform lane builds from the same pinned commit, and the cache key is
+  the pin.
 - Shader changes for Metal, WGSL and HLSL land in one commit, so a missing
   backend shows in review instead of as a blank Linux window.
+- The weekly canary (`gpuix-canary.yml`) rebases both series onto a new
+  upstream release and lists the commits that conflict.
 
 ## What needs real hardware or CI
 
 - **Windows:**
   - D3D11 on Intel iGPU, NVIDIA and AMD
-  - per-monitor DPI at 125/150/175 %, mixed-DPI monitor moves
+  - per-monitor DPI at 125/150/175 %, mixed-DPI monitor moves (`getPlatformInfo()`
+    reports `scaleFactor`, `dpiMode` and `windowDpi` after each move; text and
+    hit targets should stay sharp and in place)
   - Windows 10 (no Mica; WebView2 runtime may be missing) and Windows 11
   - SmartScreen and Defender behaviour for the unsigned installer
+  - the installer on a clean Windows 10 (the app-local C++ runtime, `kybern` on Path, Add/Remove
+    Programs; the runner image already has the C++ runtime in System32, so CI cannot show a missing
+    DLL), and no console windows flashing when the daemon spawns `git`, `gh`, shells and agent CLIs
+    (the Windows `cargo check` of `kybern-daemon` and `kybern-drivers` is blocked by aws-lc-sys
+    off Windows, so the `CREATE_NO_WINDOW` code is exercised only by the Windows CI build)
+  - that `tauri signer sign` writes `file:<installer name>` as the trusted comment (the updater
+    refuses a signature that names another file; `verify-archive.ts` checks it before the upload)
   - toasts after install (AUMID)
   - the silent-update relaunch
 - **Linux:**
@@ -446,10 +659,15 @@ energy: the spike's screenshots say nothing about real GPUs.
 1. **Intel Mac**: shipped in v0.10.3.
 2. **ADE-52 spike** (done): the patched addon builds for Linux and Windows and
    draws in CI (`gpuix-platforms.yml`); rounded clipping on both backends.
-3. **WP0**: forks, cached addon lanes in `desktop.yml`; internal artifacts only.
+3. **WP0**: forks (done), cached addon lanes in `desktop.yml` (Linux and Windows in, ADE-78);
+   internal artifacts only.
 4. **Linux x64 beta**: WP1–WP5, WP6(L), WP7. AppImage is simple and previews
    degrade to the browser. Offered next to Tauri, which stays the default.
-5. **Windows x64 beta**: WP6(W) and the Windows halves of WP1/WP3.
+   WP6(L) is in (ADE-78): the next release publishes the AppImage, `.deb` and
+   `.rpm` as a beta with today's fallbacks (table above); WP1–WP5 and WP7 remain.
+5. **Windows x64 beta**: WP6(W) and the Windows halves of WP1/WP3. WP6(W) packaging and the
+   updater are in (ADE-78, see above); the beta stays unannounced until WP1–WP4 and a run on real
+   Windows hardware pass.
 6. **Parity**: WP8 text, WP9 backdrop blur and Mica, WP10 embedded web view;
    visual pairs and perf through WP7's harness.
 7. **Tauri deprecation release** (below), once 4 and 5 have each had a release

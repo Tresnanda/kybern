@@ -1,0 +1,120 @@
+// WP10 spike (Linux): render a page with WPE WebKit into CPU pixels, with no window, no GTK and no compositor, on a
+// transparent background, and drive it with a synthesized click. This is the path GPUI would composite as a
+// `PaintSurface` texture (`gpui_wgpu` `draw_surfaces`). See apps/gpuix/WEBVIEW-PLATFORMS.md "Linux".
+//
+// Checks, printed as `CHECK <name> ok|FAIL <detail>`:
+//   frame        a buffer arrives through WPEView::buffer-rendered and imports to pixels
+//   transparent  a pixel outside the page's box has alpha 0 (webkit_web_view_set_background_color with alpha 0)
+//   translucent  a pixel inside the 50% box has alpha ≈ 128 (premultiplied)
+//   input        a pointer press/release injected with wpe_view_event changes the page (title "clicked")
+//   timing       ms from load to first frame and per-frame import cost
+// Writes frame.pam (RGBA, viewable with ImageMagick) next to the binary.
+#include <wpe/webkit.h>
+#include <wpe/wpe-platform.h>
+#include <wpe/headless/wpe-headless.h>
+#include <stdio.h>
+#include <string.h>
+
+static const char *PAGE =
+    "<!doctype html><style>html,body{margin:0;background:transparent}"
+    "#box{position:absolute;left:40px;top:40px;width:200px;height:120px;border-radius:24px;background:rgba(255,0,0,.5)}</style>"
+    "<div id=box></div><script>addEventListener('click',()=>{document.title='clicked';box.style.background='rgba(0,0,255,.5)'})</script>";
+
+static GMainLoop *loop;
+static WPEView *wpe_view;
+static WebKitWebView *web;
+static gint64 loaded_at, first_frame_at;
+static int frames, clicked;
+static double import_ms;
+
+static void check(const char *name, gboolean ok, const char *detail) { printf("CHECK %s %s %s\n", name, ok ? "ok" : "FAIL", detail ? detail : ""); }
+
+static void write_pam(const guint8 *px, int w, int h, int stride) {
+  FILE *f = fopen("frame.pam", "wb");
+  if (!f) return;
+  fprintf(f, "P7\nWIDTH %d\nHEIGHT %d\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n", w, h);
+  for (int y = 0; y < h; y++)
+    for (int x = 0; x < w; x++) {
+      const guint8 *p = px + y * stride + x * 4; // ARGB8888 little endian = B,G,R,A in memory
+      guint8 rgba[4] = {p[2], p[1], p[0], p[3]};
+      fwrite(rgba, 1, 4, f);
+    }
+  fclose(f);
+}
+
+static void inject_click(void) {
+  // Pointer coordinates are logical (view) pixels, inside #box.
+  WPEEvent *down = wpe_event_pointer_button_new(WPE_EVENT_POINTER_DOWN, wpe_view, WPE_INPUT_SOURCE_MOUSE, 0, 0, 1, 1, 100, 100, 1);
+  WPEEvent *up = wpe_event_pointer_button_new(WPE_EVENT_POINTER_UP, wpe_view, WPE_INPUT_SOURCE_MOUSE, 0, 0, 1, 0, 100, 100, 0);
+  wpe_view_event(wpe_view, down);
+  wpe_view_event(wpe_view, up);
+  wpe_event_unref(down);
+  wpe_event_unref(up);
+}
+
+static void on_buffer(WPEView *view, WPEBuffer *buffer, gpointer data) {
+  (void)view; (void)data;
+  gint64 start = g_get_monotonic_time();
+  GError *error = NULL;
+  GBytes *bytes = wpe_buffer_import_to_pixels(buffer, &error);
+  import_ms += (g_get_monotonic_time() - start) / 1000.0;
+  if (!bytes) { check("frame", FALSE, error ? error->message : "import_to_pixels returned NULL"); g_main_loop_quit(loop); return; }
+  int w = wpe_buffer_get_width(buffer), h = wpe_buffer_get_height(buffer);
+  gsize size = 0;
+  const guint8 *px = g_bytes_get_data(bytes, &size);
+  int stride = h ? (int)(size / h) : 0;
+  if (++frames == 1) {
+    first_frame_at = g_get_monotonic_time();
+    char detail[128];
+    snprintf(detail, sizeof detail, "%dx%d stride %d bytes %zu", w, h, stride, size);
+    check("frame", w > 0 && h > 0 && size >= (gsize)(w * h * 4), detail);
+  }
+  // Settle a few frames (the box paints after layout), then judge the latest one.
+  if (frames == 4 && !clicked) {
+    const guint8 *outside = px + 10 * stride + 10 * 4, *inside = px + 100 * stride + 100 * 4;
+    char detail[128];
+    snprintf(detail, sizeof detail, "alpha %u at (10,10)", outside[3]);
+    check("transparent", outside[3] == 0, detail);
+    snprintf(detail, sizeof detail, "BGRA %u,%u,%u,%u at (100,100)", inside[0], inside[1], inside[2], inside[3]);
+    check("translucent", inside[3] > 100 && inside[3] < 160, detail);
+    write_pam(px, w, h, stride);
+    clicked = 1;
+    inject_click();
+    g_timeout_add(3000, (GSourceFunc)g_main_loop_quit, loop);
+  }
+}
+
+static void on_title(WebKitWebView *view, GParamSpec *spec, gpointer data) {
+  (void)spec; (void)data;
+  const char *title = webkit_web_view_get_title(view);
+  if (title && !strcmp(title, "clicked")) {
+    check("input", TRUE, "title changed after injected click");
+    char detail[160];
+    snprintf(detail, sizeof detail, "first frame %.1f ms after load; %d frames; import %.2f ms/frame",
+             (first_frame_at - loaded_at) / 1000.0, frames, frames ? import_ms / frames : 0);
+    check("timing", TRUE, detail);
+    g_main_loop_quit(loop);
+  }
+}
+
+int main(void) {
+  loop = g_main_loop_new(NULL, FALSE);
+  WPEDisplay *display = wpe_display_headless_new();
+  GError *error = NULL;
+  if (!wpe_display_connect(display, &error)) { check("frame", FALSE, error ? error->message : "display connect failed"); return 1; }
+  web = WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "display", display, NULL));
+  WebKitColor clear = {0, 0, 0, 0};
+  webkit_web_view_set_background_color(web, &clear);
+  wpe_view = webkit_web_view_get_wpe_view(web);
+  g_signal_connect(wpe_view, "buffer-rendered", G_CALLBACK(on_buffer), NULL);
+  g_signal_connect(web, "notify::title", G_CALLBACK(on_title), NULL);
+  wpe_view_resized(wpe_view, 320, 200);
+  wpe_view_focus_in(wpe_view);
+  loaded_at = g_get_monotonic_time();
+  webkit_web_view_load_html(web, PAGE, "about:blank");
+  g_timeout_add(15000, (GSourceFunc)g_main_loop_quit, loop);
+  g_main_loop_run(loop);
+  if (!clicked) check("input", FALSE, frames ? "never clicked" : "no frames");
+  else if (strcmp(webkit_web_view_get_title(web) ?: "", "clicked")) check("input", FALSE, "title unchanged");
+  return 0;
+}

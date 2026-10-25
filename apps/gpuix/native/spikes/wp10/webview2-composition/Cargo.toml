@@ -1,0 +1,47 @@
+# WP10 spike: WebView2 visual hosting under a Windows.UI.Composition target on
+# GPUI's HWND. Compile-checked only: `cargo check --target x86_64-pc-windows-msvc`.
+# Not part of the app: its own workspace, never referenced by apps/gpuix.
+[package]
+name = "wp10-webview2-composition"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[lib]
+path = "src/lib.rs"
+
+# Exact pins. `windows` 0.61 is the version the zed fork's workspace uses
+# (Cargo.toml `[workspace.dependencies.windows] version = "0.61"`), so the host
+# can share COM pointers with gpui_windows without crossing crate versions.
+# webview2-com 0.38.2 (WebView2 SDK 1.0.3650.58) is the last line on windows 0.61.
+[target.'cfg(windows)'.dependencies]
+webview2-com = "=0.38.2"
+windows-core = "=0.61.2"
+# gpui_windows uses windows-numerics "0.2" next to windows 0.61.
+windows-numerics = "=0.2.0"
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "=0.61.3"
+features = [
+    "Foundation",
+    "Foundation_Numerics",
+    "Graphics",
+    "System",
+    "UI",
+    "UI_Composition",
+    "UI_Composition_Desktop",
+    "Win32_Foundation",
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Composition",
+    "Win32_System_WinRT_Graphics_Direct2D",
+    "Win32_UI_Controls",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+]
