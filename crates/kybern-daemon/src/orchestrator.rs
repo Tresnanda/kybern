@@ -36,6 +36,9 @@ mod lead_git;
 mod lead_proposals;
 mod login_request;
 mod messaging;
+mod note_claims;
+mod note_staleness;
+mod note_tidy;
 mod notes;
 mod omp_recovery;
 mod pick_request;
@@ -5706,6 +5709,7 @@ mod tests {
                 title: Some("Plan".into()),
                 body: Some("Ship it".into()),
                 project_role: None,
+                category: None,
             })
             .unwrap();
         let error = fixture
@@ -7066,6 +7070,7 @@ mod tests {
                 title: Some("Plan".into()),
                 body: Some("- [ ] ship".into()),
                 project_role: None,
+                category: None,
             })
             .unwrap();
         assert_eq!(changes.try_recv().unwrap().note.unwrap().id, note.summary.id);
@@ -7076,6 +7081,7 @@ mod tests {
             expected_revision,
             title: None,
             body: Some(body.into()),
+            category: None,
         };
         fixture.orchestrator.note_update(update("- [ ] ship", 1)).unwrap();
         assert!(changes.try_recv().is_err(), "nothing changed, nothing published");
@@ -7104,6 +7110,7 @@ mod tests {
                 title: Some("Plan".into()),
                 body: None,
                 project_role: None,
+                category: None,
             })
             .unwrap();
         fixture

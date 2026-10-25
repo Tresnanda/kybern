@@ -1000,6 +1000,9 @@ pub enum SystemRowKind {
     /// The Coordinator's setup interview began (a new Coordinator without a
     /// brief, or "Redo setup").
     CoordinatorSetup,
+    /// The user chose "Tidy notes": the Coordinator was asked to check outdated
+    /// memory notes. The provider's copy carries the instructions.
+    CoordinatorTidyNotes,
 }
 
 impl ContentPart {
@@ -1791,6 +1794,17 @@ pub const COORDINATOR_BRIEF_TOOL: &str = "kybern_coordinator_brief";
 /// `ApprovalDecision::Submit { response: {"accepted": ["<change path>", ...]} }`
 /// (at least one path from `input.changes`) or `Deny`.
 pub const COORDINATOR_SETTINGS_TOOL: &str = "kybern_coordinator_settings";
+/// `tool_name` of the daemon-raised approval behind
+/// `kybern_coordinator_propose_note_changes`: the card "Apply N note changes?"
+/// lists each proposed append, with the line it retires when it supersedes one, and
+/// the user can untick rows.
+///
+/// `input` is a [`NoteChangesProposalInput`]. The answer is
+/// `ApprovalDecision::Submit { response: {"accepted": ["<change path>", ...]} }`
+/// (at least one path from `input.changes`) or `Deny`.
+pub const COORDINATOR_NOTES_TOOL: &str = "kybern_coordinator_notes";
+/// Most changes one note-changes proposal may hold.
+pub const MAX_NOTE_CHANGES: usize = 30;
 /// Longest project brief, in bytes.
 pub const MAX_BRIEF_BYTES: usize = 16 * 1024;
 
@@ -1827,6 +1841,44 @@ pub struct SettingsProposalInput {
     pub changes: Vec<SettingChange>,
 }
 
+/// What one row of a [`NoteChangesProposalInput`] does to its note.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NoteChangeOp {
+    /// Add `text` as a new dated claim.
+    Append,
+    /// Add `text` and retire the line that holds `supersedes`: it is struck through
+    /// and marked superseded.
+    Supersede,
+}
+
+/// One proposed change in a [`NoteChangesProposalInput`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NoteChange {
+    /// Stable id of the row, and the value `accepted` lists. The daemon numbers rows from 1.
+    pub path: String,
+    pub note_id: crate::methods::NoteId,
+    /// The note's title, for the row.
+    pub note_title: String,
+    pub op: NoteChangeOp,
+    /// The markdown added to the note, a dated claim.
+    pub text: String,
+    /// For `Supersede`: the exact line (or the part of it) that is retired.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supersedes: Option<String>,
+    /// Sets the note's category when it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<crate::methods::NoteCategory>,
+}
+
+/// The `input` of a [`COORDINATOR_NOTES_TOOL`] approval.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NoteChangesProposalInput {
+    /// Why the Coordinator proposes these, in its words.
+    pub reason: String,
+    pub changes: Vec<NoteChange>,
+}
+
 /// Whether an approval with this `tool_name` asks the user a question or for
 /// input, rather than for permission to run a tool.
 pub fn is_user_input_tool(tool_name: &str) -> bool {
@@ -1841,6 +1893,7 @@ pub fn is_user_input_tool(tool_name: &str) -> bool {
             | PERMISSION_REQUEST_TOOL
             | COORDINATOR_BRIEF_TOOL
             | COORDINATOR_SETTINGS_TOOL
+            | COORDINATOR_NOTES_TOOL
             | "request_user_input"
             | "opencode_question"
             | crate::CURSOR_QUESTION_TOOL
@@ -1995,6 +2048,23 @@ impl ApprovalRequest {
                 let text = response.get("text").and_then(Value::as_str).map(str::trim);
                 if !text.is_some_and(|text| !text.is_empty() && text.len() <= MAX_BRIEF_BYTES) {
                     return Err(format!("Write a brief of up to {} KiB, or decline.", MAX_BRIEF_BYTES / 1024));
+                }
+            }
+            COORDINATOR_NOTES_TOOL => {
+                let known: Vec<&str> = self
+                    .input
+                    .get("changes")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|change| change.get("path").and_then(Value::as_str))
+                    .collect();
+                let accepted = response.get("accepted").and_then(Value::as_array);
+                let valid = accepted.is_some_and(|accepted| {
+                    !accepted.is_empty() && accepted.iter().all(|path| path.as_str().is_some_and(|path| known.contains(&path)))
+                });
+                if !valid {
+                    return Err("Keep at least one change ticked, or decline.".into());
                 }
             }
             COORDINATOR_SETTINGS_TOOL => {

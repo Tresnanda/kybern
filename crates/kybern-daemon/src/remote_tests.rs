@@ -562,6 +562,7 @@ async fn notes_round_trip_over_rpc_and_conflicts_use_the_conflict_code() {
             title: Some("Release plan".into()),
             body: Some("# Plan\n- [x] tag\n- [ ] ship".into()),
             project_role: None,
+            category: None,
         })
         .await
         .unwrap();
@@ -581,6 +582,7 @@ async fn notes_round_trip_over_rpc_and_conflicts_use_the_conflict_code() {
         expected_revision,
         title: None,
         body: Some(body.into()),
+        category: None,
     };
     let edited = desktop.call::<NotesUpdate>(update("desktop edit", 1)).await.unwrap();
     assert_eq!(edited.summary.revision, 2);
@@ -629,6 +631,7 @@ async fn notes_round_trip_over_rpc_and_conflicts_use_the_conflict_code() {
             expected_revision: 0,
             title: None,
             body: Some("on the thread".into()),
+            category: None,
         })
         .await
         .unwrap();
@@ -666,6 +669,7 @@ async fn removing_a_project_over_rpc_keeps_its_notes_in_recently_deleted() {
             title: Some("Plan".into()),
             body: None,
             project_role: None,
+            category: None,
         })
         .await
         .unwrap();
@@ -677,6 +681,7 @@ async fn removing_a_project_over_rpc_keeps_its_notes_in_recently_deleted() {
             expected_revision: 0,
             title: None,
             body: Some("remember".into()),
+            category: None,
         })
         .await
         .unwrap();
@@ -717,6 +722,7 @@ async fn note_notifications_reach_only_clients_that_can_read_orchestration() {
             title: Some("Hello".into()),
             body: None,
             project_role: None,
+            category: None,
         })
         .await
         .unwrap();
@@ -734,7 +740,8 @@ async fn note_notifications_reach_only_clients_that_can_read_orchestration() {
                 project_id: None,
                 title: None,
                 body: None,
-                project_role: None
+                project_role: None,
+                category: None,
             })
             .await
             .unwrap_err()
@@ -2158,6 +2165,7 @@ async fn the_coordinator_and_project_brief_work_over_rpc() {
             title: None,
             body: Some("Ship it carefully.".into()),
             project_role: Some(ProjectNoteRole::Brief),
+            category: None,
         })
         .await
         .unwrap();
@@ -2178,6 +2186,7 @@ async fn the_coordinator_and_project_brief_work_over_rpc() {
             title: None,
             body: Some("Another".into()),
             project_role: Some(ProjectNoteRole::Brief),
+            category: None,
         })
         .await
         .unwrap_err()
@@ -2190,6 +2199,7 @@ async fn the_coordinator_and_project_brief_work_over_rpc() {
             expected_revision: brief.revision,
             title: None,
             body: Some("Ship it carefully, and propose first.".into()),
+            category: None,
         })
         .await
         .unwrap();

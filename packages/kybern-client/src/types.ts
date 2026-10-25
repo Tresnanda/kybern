@@ -558,7 +558,7 @@ export type ContentPart =
   | SystemRowPart;
 
 /** What a `system_row` part announces. */
-export type SystemRowKind = "coordinator_setup";
+export type SystemRowKind = "coordinator_setup" | "coordinator_tidy_notes";
 
 /**
  * A row Kybern itself adds to a conversation, such as "Setup started". Clients draw it as
@@ -885,6 +885,12 @@ export const COORDINATOR_BRIEF_TOOL = "kybern_coordinator_brief";
  * (at least one path from `input.changes`) or a deny.
  */
 export const COORDINATOR_SETTINGS_TOOL = "kybern_coordinator_settings";
+/**
+ * `tool_name` of the Coordinator's "Apply N note changes?" card. `input` is a
+ * `NoteChangesProposalInput`; the answer is `{ decision: "submit", response: { accepted: [path, ...] } }`
+ * (at least one path from `input.changes`) or a deny.
+ */
+export const COORDINATOR_NOTES_TOOL = "kybern_coordinator_notes";
 /** `tool_name` of the Coordinator's git approvals (push, open a pull request, merge one). Answered allow once or deny. */
 export const LEAD_GIT_TOOL = "kybern_git";
 /** Longest project brief, in bytes. */
@@ -915,6 +921,31 @@ export interface SettingsProposalInput {
   /** Why the Coordinator proposes these, in its words. */
   reason: string;
   changes: SettingChange[];
+}
+
+/** What one row of a `NoteChangesProposalInput` does: add a dated claim, or add one and retire the line it replaces. */
+export type NoteChangeOp = "append" | "supersede";
+
+/** One proposed change in a `NoteChangesProposalInput`. */
+export interface NoteChange {
+  /** The row's id, numbered from 1; also the value `accepted` lists. */
+  path: string;
+  note_id: NoteId;
+  note_title: string;
+  op: NoteChangeOp;
+  /** The markdown added to the note, a dated claim. */
+  text: string;
+  /** For `supersede`: the exact line, or part of it, that is retired (struck through). */
+  supersedes?: string | null;
+  /** Sets the note's category when it has none. */
+  category?: NoteCategory | null;
+}
+
+/** The `input` of a `COORDINATOR_NOTES_TOOL` approval. */
+export interface NoteChangesProposalInput {
+  /** Why the Coordinator proposes these, in its words. */
+  reason: string;
+  changes: NoteChange[];
 }
 
 /** The `input` of a `LEAD_GIT_TOOL` approval. */
@@ -1697,6 +1728,15 @@ export type NoteId = Uuid;
 export type NoteScope = "global" | "project" | "thread";
 /** What a project note is for: the user's brief, or the setup note the Coordinator keeps. Ordinary notes (memory) have no role. */
 export type ProjectNoteRole = "brief" | "setup";
+/** What kind of memory a project note holds. Decision and gotcha notes are history: agents add dated claims instead of rewriting them. */
+export type NoteCategory = "preference" | "decision" | "convention" | "gotcha";
+/** Why a note may be outdated: a claim cites a file that changed since the commit it names. */
+export interface StaleInfo {
+  /** The cited path that changed, as the note writes it. */
+  path: string;
+  /** Short id of the latest commit that changed it. */
+  commit: string;
+}
 
 /** A note without its body, as listed. */
 export interface NoteSummary {
@@ -1723,6 +1763,12 @@ export interface NoteSummary {
   created_by_thread?: ThreadId | null;
   /** Set on a project's brief and setup notes (one of each per project). Only the user edits the brief; only the project's Coordinator writes the setup note. */
   project_role?: ProjectNoteRole | null;
+  /** The kind of memory this note holds. Absent for ordinary notes. */
+  category?: NoteCategory | null;
+  /** Set when a claim cites a file that changed after its commit; computed by the daemon from git. Show "May be outdated · {path} changed". */
+  stale?: StaleInfo | null;
+  /** A project note without a category written before categories existed (see `NotesListResult.history_since`). Show "Undated, before {date}". */
+  undated?: boolean;
 }
 
 export interface Note extends NoteSummary {
@@ -1738,6 +1784,7 @@ export interface NotesCreateParams {
   body?: string;
   /** Creates the project's pinned brief or setup note (scope "project" with a `project_id`). Absent for an ordinary note. */
   project_role?: ProjectNoteRole | null;
+  category?: NoteCategory | null;
 }
 
 export interface NotesUpdateParams {
@@ -1749,6 +1796,30 @@ export interface NotesUpdateParams {
   /** Ignored for thread notes. */
   title?: string | null;
   body?: string | null;
+  /** Sets the note's category. Absent leaves it as it is. */
+  category?: NoteCategory | null;
+}
+
+/** Result of `notes.list`. */
+export interface NotesListResult {
+  notes: NoteSummary[];
+  /** When categories were introduced. Uncategorized project notes created before it are `undated`. */
+  history_since?: string | null;
+}
+
+/** Stale notes a project needs before the Coordinator offers to tidy them. */
+export const NOTES_TIDY_THRESHOLD = 5;
+/** Days the "Tidy notes" offer stays quiet after "Not now". */
+export const NOTES_TIDY_SNOOZE_DAYS = 7;
+
+/** The state of a project's "Tidy notes" card ("N notes may be outdated"). */
+export interface TidyOffer {
+  /** Live project notes whose claims cite files that changed since. */
+  stale: NoteId[];
+  /** Show the card: at least `NOTES_TIDY_THRESHOLD` stale notes and not snoozed. */
+  offer: boolean;
+  /** While set and in the future, the offer is snoozed. */
+  snoozed_until?: string | null;
 }
 
 // ---- user tasks ("tasks.items.*"; `tasks.list` is runtime agent work) ----
@@ -2803,7 +2874,7 @@ export interface Methods {
   "threads.steer": [QueuedMessage, ThreadsSendResult];
   "threads.notes.get": [{ thread_id: ThreadId }, ThreadNotes];
   "threads.notes.set": [{ thread_id: ThreadId; text: string; expected_revision: number }, ThreadNotes];
-  "notes.list": [Empty, { notes: NoteSummary[] }];
+  "notes.list": [Empty, NotesListResult];
   "notes.get": [{ id?: NoteId | null; thread_id?: ThreadId | null }, { note?: Note | null }];
   "notes.create": [NotesCreateParams, Note];
   "notes.update": [NotesUpdateParams, Note];
@@ -2813,6 +2884,9 @@ export interface Methods {
   "notes.restore": [{ id: NoteId }, NoteSummary];
   "notes.purge": [{ id: NoteId }, Empty];
   "notes.search": [{ query: string; limit?: number | null }, { results: { id: NoteId; snippet: string }[] }];
+  "notes.tidy_offer": [{ project_id: ProjectId }, TidyOffer];
+  "notes.tidy_snooze": [{ project_id: ProjectId }, TidyOffer];
+  "notes.tidy_start": [{ project_id: ProjectId }, { thread_id: ThreadId; notes: number }];
   "tasks.items.list": [Empty, { tasks: TaskItem[] }];
   "tasks.items.get": [{ id?: TaskItemId | null; key?: string | null }, { task?: TaskItem | null }];
   "tasks.items.create": [TaskItemsCreateParams, TaskItem];

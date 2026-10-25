@@ -562,6 +562,9 @@ enum NoteCmd {
         /// Read the markdown body from this file (`-` reads stdin).
         #[arg(long)]
         file: Option<String>,
+        /// What kind of memory this is: preference, decision, convention or gotcha.
+        #[arg(long, value_parser = parse_note_category)]
+        category: Option<NoteCategory>,
     },
     /// Replace a note's body from a file (`-` reads stdin), and optionally its title.
     Edit {
@@ -571,6 +574,20 @@ enum NoteCmd {
         file: Option<String>,
         #[arg(long)]
         title: Option<String>,
+        /// Set the note's category: preference, decision, convention or gotcha.
+        #[arg(long, value_parser = parse_note_category)]
+        category: Option<NoteCategory>,
+    },
+    /// Show the project's "Tidy notes" offer (notes whose cited files changed), snooze it, or send it to the Coordinator.
+    Tidy {
+        /// Project name, path or id.
+        project: String,
+        /// "Not now": hide the offer for 7 days.
+        #[arg(long, conflicts_with = "start")]
+        not_now: bool,
+        /// Ask the project's Coordinator to check the flagged notes and propose changes.
+        #[arg(long)]
+        start: bool,
     },
     /// Move a note to Recently deleted.
     Delete { id: String },
@@ -2398,6 +2415,35 @@ async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
                 render::notes(&result.notes);
             }
         }
+        NoteCmd::Tidy { project, not_now, start } => {
+            let project_id = resolve_project(client, &project, false).await?;
+            let params = NotesTidyParams { project_id };
+            if start {
+                let started = client.call::<NotesTidyStart>(params).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&started)?);
+                } else {
+                    println!("Asked the Coordinator ({}) to check {} notes.", started.thread_id, started.notes);
+                }
+                return Ok(());
+            }
+            let offer = if not_now { client.call::<NotesTidySnooze>(params).await? } else { client.call::<NotesTidyOffer>(params).await? };
+            if json {
+                println!("{}", serde_json::to_string_pretty(&offer)?);
+            } else if offer.stale.is_empty() {
+                println!("No notes look outdated.");
+            } else {
+                let state = match (offer.offer, offer.snoozed_until) {
+                    (true, _) => "offered".to_owned(),
+                    (false, Some(until)) => format!("snoozed until {}", until.format("%Y-%m-%d")),
+                    (false, None) => format!("below the {NOTES_TIDY_THRESHOLD}-note threshold"),
+                };
+                println!("{} notes may be outdated ({state}).", offer.stale.len());
+                for id in &offer.stale {
+                    println!("{id}");
+                }
+            }
+        }
         NoteCmd::Show { id } => {
             let note = client.call::<NotesGet>(NotesGetParams { id: Some(resolve_note(client, &id).await?), thread_id: None }).await?.note;
             let note = note.ok_or_else(|| anyhow!("note {id} not found; run `kybern note list` for ids"))?;
@@ -2410,7 +2456,7 @@ async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
                 println!("{}", note.body);
             }
         }
-        NoteCmd::New { project, title, file } => {
+        NoteCmd::New { project, title, file, category } => {
             let project_id = match &project {
                 Some(project) => Some(resolve_project(client, project, false).await?),
                 None => None,
@@ -2422,6 +2468,7 @@ async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
                     title,
                     body: file.as_deref().map(read_input).transpose()?,
                     project_role: None,
+                    category,
                 })
                 .await?;
             if json {
@@ -2430,9 +2477,9 @@ async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
                 println!("{}", note.summary.id);
             }
         }
-        NoteCmd::Edit { id, file, title } => {
-            if file.is_none() && title.is_none() {
-                return Err(anyhow!("nothing to change; pass --file <path|-> for the body or --title for the title"));
+        NoteCmd::Edit { id, file, title, category } => {
+            if file.is_none() && title.is_none() && category.is_none() {
+                return Err(anyhow!("nothing to change; pass --file <path|-> for the body, --title for the title or --category"));
             }
             let id = resolve_note(client, &id).await?;
             let current = client
@@ -2447,6 +2494,7 @@ async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
                     expected_revision: current.summary.revision,
                     title,
                     body: file.as_deref().map(read_input).transpose()?,
+                    category,
                 })
                 .await?;
             if json {
@@ -2488,6 +2536,11 @@ async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn parse_note_category(value: &str) -> Result<NoteCategory, String> {
+    NoteCategory::parse(&value.to_ascii_lowercase())
+        .ok_or_else(|| format!("unknown category {value}; use preference, decision, convention or gotcha"))
 }
 
 fn parse_task_status(value: &str) -> Result<TaskStatus, String> {

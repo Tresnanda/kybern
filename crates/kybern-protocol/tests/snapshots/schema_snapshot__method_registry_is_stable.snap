@@ -71,6 +71,9 @@ expression: names
 - notes.restore
 - notes.purge
 - notes.search
+- notes.tidy_offer
+- notes.tidy_snooze
+- notes.tidy_start
 - tasks.items.list
 - tasks.items.get
 - tasks.items.create

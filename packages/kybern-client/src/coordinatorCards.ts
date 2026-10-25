@@ -4,12 +4,15 @@
 // the one quiet line a settled card leaves in the transcript.
 import {
   COORDINATOR_BRIEF_TOOL,
+  COORDINATOR_NOTES_TOOL,
   COORDINATOR_SETTINGS_TOOL,
   LEAD_GIT_TOOL,
   type ApprovalDecision,
   type ApprovalRequest,
   type BriefProposalInput,
   type LeadGitCardInput,
+  type NoteChange,
+  type NoteChangesProposalInput,
   type PrChecksSummary,
   type SettingChange,
   type SettingsProposalInput,
@@ -35,6 +38,11 @@ export const COORDINATOR_CARD_COPY = {
   briefEmpty: "Write the brief before saving it, or decline.",
   settingsTitle: "Apply these Coordinator settings?",
   settingsDetail: "For this project. Untick anything you want to keep.",
+  notesDetail: "Each change adds a dated claim. A replaced line is struck through. Untick anything you want to keep.",
+  notesSupersedes: "Replaces",
+  tidyMeta: "Files they cite changed after they were written.",
+  tidyNotNow: "Not now",
+  tidyAction: "Tidy notes",
   decline: "Decline",
   saving: "Saving…",
   mergeWarning: "This can't be undone from Kybern.",
@@ -60,6 +68,40 @@ export function settingsProposalInput(approval: Card): SettingsProposalInput | n
     changes.push({ path, label: text(change.label) || path, old: change.old ?? null, new: change.new ?? null });
   }
   return { reason: text(input.reason), changes };
+}
+
+/** The note-changes card: each row appends a claim, optionally retiring a line. */
+export function noteChangesProposalInput(approval: Card): NoteChangesProposalInput | null {
+  if (approval.tool_name !== COORDINATOR_NOTES_TOOL) return null;
+  const input = record(approval.input);
+  if (!input) return null;
+  const changes: NoteChange[] = [];
+  for (const item of Array.isArray(input.changes) ? input.changes : []) {
+    const change = record(item);
+    const path = text(change?.path);
+    if (!change || !path) continue;
+    const supersedes = text(change.supersedes);
+    changes.push({
+      path,
+      note_id: text(change.note_id),
+      note_title: text(change.note_title),
+      op: change.op === "supersede" ? "supersede" : "append",
+      text: text(change.text),
+      supersedes: supersedes || null,
+      category: ["preference", "decision", "convention", "gotcha"].includes(text(change.category)) ? (text(change.category) as NoteChange["category"]) : null,
+    });
+  }
+  return { reason: text(input.reason), changes };
+}
+
+/** The card's title: "Apply 3 note changes?". */
+export function noteChangesTitle(count: number): string {
+  return `Apply ${count} note ${count === 1 ? "change" : "changes"}?`;
+}
+
+/** The "Tidy notes" offer's title: "5 notes may be outdated". */
+export function tidyOfferTitle(count: number): string {
+  return `${count} ${count === 1 ? "note" : "notes"} may be outdated`;
 }
 
 export function leadGitCardInput(approval: Card): LeadGitCardInput | null {
@@ -94,18 +136,24 @@ export function leadGitCardInput(approval: Card): LeadGitCardInput | null {
   }
 }
 
-export type CoordinatorCardKind = "brief" | "settings" | "push" | "open_pr" | "merge_pr";
+export type CoordinatorCardKind = "brief" | "settings" | "notes" | "push" | "open_pr" | "merge_pr";
 
 /** Which Coordinator card an approval is, for its icon; null for any other approval. */
 export function coordinatorCardKind(approval: Card): CoordinatorCardKind | null {
   if (approval.tool_name === COORDINATOR_BRIEF_TOOL) return "brief";
   if (approval.tool_name === COORDINATOR_SETTINGS_TOOL) return "settings";
+  if (approval.tool_name === COORDINATOR_NOTES_TOOL) return "notes";
   return leadGitCardInput(approval)?.op ?? null;
 }
 
 /** Any of the Coordinator's own cards. */
 export function isCoordinatorCard(approval: Card): boolean {
-  return approval.tool_name === COORDINATOR_BRIEF_TOOL || approval.tool_name === COORDINATOR_SETTINGS_TOOL || approval.tool_name === LEAD_GIT_TOOL;
+  return (
+    approval.tool_name === COORDINATOR_BRIEF_TOOL ||
+    approval.tool_name === COORDINATOR_SETTINGS_TOOL ||
+    approval.tool_name === COORDINATOR_NOTES_TOOL ||
+    approval.tool_name === LEAD_GIT_TOOL
+  );
 }
 
 const commits = (n: number) => `${n} ${n === 1 ? "commit" : "commits"}`;
@@ -188,6 +236,15 @@ export function coordinatorCardLine(approval: Card, decision: ApprovalDecision |
       return [{ text: `Applied ${n} Coordinator ${n === 1 ? "setting" : "settings"}` }];
     }
     return outcome === "declined" ? [{ text: "Declined Coordinator settings" }] : ended();
+  }
+  const notes = noteChangesProposalInput(approval);
+  if (notes) {
+    if (outcome === "pending") return [{ text: "Waiting for you to review note changes" }];
+    if (outcome === "done") {
+      const n = acceptedCount(decision, notes.changes.length);
+      return [{ text: `Applied ${n} note ${n === 1 ? "change" : "changes"}` }];
+    }
+    return outcome === "declined" ? [{ text: "Declined note changes" }] : ended();
   }
   const git = leadGitCardInput(approval);
   if (git) {

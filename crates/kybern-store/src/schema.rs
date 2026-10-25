@@ -575,6 +575,17 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE checkpoints ADD COLUMN incomplete INTEGER NOT NULL DEFAULT 0;
     COMMIT;
     ",
+    // v31: notes as history. A note may hold one kind of memory (preference, decision,
+    // convention, gotcha). Uncategorized notes written before this migration are
+    // "undated": `meta.notes_history_since` is when it ran.
+    "
+    BEGIN;
+    ALTER TABLE notes ADD COLUMN category TEXT
+      CHECK (category IS NULL OR category IN ('preference', 'decision', 'convention', 'gotcha'));
+    INSERT INTO meta(key, value) VALUES ('notes_history_since', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      ON CONFLICT(key) DO NOTHING;
+    COMMIT;
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

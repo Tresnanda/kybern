@@ -2840,6 +2840,52 @@ impl ProjectNoteRole {
     }
 }
 
+/// What kind of memory a project note holds. Agents file dated claims under one;
+/// the Coordinator's notes index groups by it. A note without a category is
+/// "Other", or "Undated" when it predates categories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NoteCategory {
+    /// What the user wants, in their words.
+    Preference,
+    Decision,
+    Convention,
+    Gotcha,
+}
+
+impl NoteCategory {
+    pub const ALL: [NoteCategory; 4] = [NoteCategory::Preference, NoteCategory::Decision, NoteCategory::Convention, NoteCategory::Gotcha];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NoteCategory::Preference => "preference",
+            NoteCategory::Decision => "decision",
+            NoteCategory::Convention => "convention",
+            NoteCategory::Gotcha => "gotcha",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|category| category.as_str() == text)
+    }
+
+    /// Decisions and gotchas are history: agents add dated claims and retire old
+    /// ones instead of rewriting the body.
+    pub fn is_history(self) -> bool {
+        matches!(self, NoteCategory::Decision | NoteCategory::Gotcha)
+    }
+}
+
+/// Why a note may be outdated: a claim in it cites a commit (`As of \`abc1234\``)
+/// and a file, and that file changed after the commit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct StaleInfo {
+    /// The cited path that changed, as the note writes it.
+    pub path: String,
+    /// Short id of the latest commit that changed it after the cited one.
+    pub commit: String,
+}
+
 /// A note without its body, as listed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct NoteSummary {
@@ -2875,6 +2921,17 @@ pub struct NoteSummary {
     /// user edits the brief; only the project's Coordinator writes the setup note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_role: Option<ProjectNoteRole>,
+    /// The kind of memory this note holds. Absent for ordinary notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<NoteCategory>,
+    /// Set when a dated claim in the note cites a file that changed since the
+    /// commit it names. Computed by the daemon from git, never stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale: Option<StaleInfo>,
+    /// A project note without a category that was written before categories existed
+    /// (see `NotesListResult::history_since`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub undated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -2888,6 +2945,10 @@ pub struct Note {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct NotesListResult {
     pub notes: Vec<NoteSummary>,
+    /// When categories were introduced. Uncategorized project notes created before
+    /// it are `undated`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_since: Option<chrono::DateTime<chrono::Utc>>,
 }
 method!(NotesList, "notes.list", Some(Scope::OrchestrationRead), Empty, NotesListResult);
 
@@ -2920,6 +2981,8 @@ pub struct NotesCreateParams {
     /// `project_id`). A project has at most one of each. Absent for an ordinary note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_role: Option<ProjectNoteRole>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<NoteCategory>,
 }
 method!(NotesCreate, "notes.create", Some(Scope::OrchestrationOperate), NotesCreateParams, Note);
 
@@ -2937,6 +3000,9 @@ pub struct NotesUpdateParams {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
+    /// Sets the note's category. Absent leaves it as it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<NoteCategory>,
 }
 method!(NotesUpdate, "notes.update", Some(Scope::OrchestrationOperate), NotesUpdateParams, Note);
 
@@ -2985,6 +3051,45 @@ pub struct NotesSearchResult {
     pub results: Vec<NoteSearchHit>,
 }
 method!(NotesSearch, "notes.search", Some(Scope::OrchestrationRead), NotesSearchParams, NotesSearchResult);
+
+/// Stale notes a project needs before the Coordinator offers to tidy them.
+pub const NOTES_TIDY_THRESHOLD: u32 = 5;
+/// Days the "Tidy notes" offer stays quiet after the user chose "Not now".
+pub const NOTES_TIDY_SNOOZE_DAYS: i64 = 7;
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NotesTidyParams {
+    pub project_id: ProjectId,
+}
+
+/// The state of a project's "Tidy notes" offer: the card "N notes may be outdated".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TidyOffer {
+    /// Live project notes whose claims cite files that changed since.
+    pub stale: Vec<NoteId>,
+    /// True when `stale` holds at least [`NOTES_TIDY_THRESHOLD`] notes and the
+    /// offer is not snoozed: clients show the card.
+    pub offer: bool,
+    /// While set and in the future, the offer is snoozed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snoozed_until: Option<chrono::DateTime<chrono::Utc>>,
+}
+method!(NotesTidyOffer, "notes.tidy_offer", Some(Scope::OrchestrationRead), NotesTidyParams, TidyOffer);
+
+// "Not now": snoozes the offer for 7 days. Returns the offer as it is now.
+method!(NotesTidySnooze, "notes.tidy_snooze", Some(Scope::OrchestrationOperate), NotesTidyParams, TidyOffer);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NotesTidyStartResult {
+    /// The Coordinator thread that received the request.
+    pub thread_id: ThreadId,
+    /// How many flagged notes the request named.
+    pub notes: u32,
+}
+// "Tidy notes": sends the project's Coordinator a request to check the flagged
+// claims against HEAD and propose changes. Fails when the project has no
+// Coordinator, or none of its notes is flagged.
+method!(NotesTidyStart, "notes.tidy_start", Some(Scope::OrchestrationOperate), NotesTidyParams, NotesTidyStartResult);
 
 /// Params of the `notes.changed` notification.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -3482,6 +3587,9 @@ registry!(
     NotesRestore,
     NotesPurge,
     NotesSearch,
+    NotesTidyOffer,
+    NotesTidySnooze,
+    NotesTidyStart,
     TaskItemsList,
     TaskItemsGet,
     TaskItemsCreate,

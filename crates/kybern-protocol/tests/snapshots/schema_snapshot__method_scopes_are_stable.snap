@@ -140,6 +140,12 @@ expression: scopes
   - "orchestration:operate"
 - - notes.search
   - "orchestration:read"
+- - notes.tidy_offer
+  - "orchestration:read"
+- - notes.tidy_snooze
+  - "orchestration:operate"
+- - notes.tidy_start
+  - "orchestration:operate"
 - - tasks.items.list
   - "orchestration:read"
 - - tasks.items.get

@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow, bail, ensure};
 use kybern_protocol::methods::{
-    Note, NoteId, NoteScope, NoteSummary, NotesUpdateParams, ProjectNoteRole, TaskItem, TaskItemId, TaskItemsUpdateParams, TaskRunState,
-    TaskScope, TaskStatus,
+    Note, NoteCategory, NoteId, NoteScope, NoteSummary, NotesUpdateParams, ProjectNoteRole, TaskItem, TaskItemId, TaskItemsUpdateParams,
+    TaskRunState, TaskScope, TaskStatus,
 };
 use kybern_protocol::*;
 use kybern_store::{NewTask, NoteError, TaskRunPatch, TaskStatusChange};
@@ -25,6 +25,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use super::note_claims::supersede;
 use super::tasks::{NOTE_MENTION_PREFIX, TASK_MENTION_PREFIX, priority_label, status_label};
 use super::{DaemonAnswer, LiveSession, Orchestrator};
 use crate::app_tools::markdown_link;
@@ -44,6 +45,14 @@ const MAX_TASK_CLAIMS_PER_CALL: usize = 10;
 const READ_BODY_MAX_BYTES: usize = 128 * 1024;
 /// How much of new text the approval card previews.
 const PREVIEW_MAX_BYTES: usize = 2 * 1024;
+
+/// Why a decision or gotcha note's body cannot be rewritten: those notes are history.
+pub(crate) const HISTORY_NOTE_REFUSAL: &str = "Add a dated claim with kybern_note_append instead; use supersedes to retire the old one.";
+
+/// Today's date, as claims and superseded lines are dated.
+pub(super) fn today() -> String {
+    chrono::Utc::now().format("%Y-%m-%d").to_string()
+}
 
 /// What a thread that tried to write the brief is told to do instead.
 fn brief_refusal(thread: &Thread) -> &'static str {
@@ -110,12 +119,36 @@ struct Write {
 }
 
 enum Action {
-    CreateNote { scope: NoteScope, project_id: Option<ProjectId>, role: Option<ProjectNoteRole>, title: String, body: String },
-    AppendNote { target: Option<NoteId>, text: String },
-    UpdateNote { id: NoteId, title: Option<String>, body: Option<String>, expected_revision: i64 },
+    CreateNote {
+        scope: NoteScope,
+        project_id: Option<ProjectId>,
+        role: Option<ProjectNoteRole>,
+        title: String,
+        body: String,
+        category: Option<NoteCategory>,
+    },
+    AppendNote {
+        target: Option<NoteId>,
+        text: String,
+        supersedes: Option<String>,
+        category: Option<NoteCategory>,
+    },
+    UpdateNote {
+        id: NoteId,
+        title: Option<String>,
+        body: Option<String>,
+        expected_revision: i64,
+    },
     CreateTask(Box<NewTask>),
-    UpdateTask { task: Box<TaskItem>, patch: Box<TaskItemsUpdateParams>, needs_review: bool, changes: Vec<String> },
-    ClaimTasks { tasks: Vec<TaskItem> },
+    UpdateTask {
+        task: Box<TaskItem>,
+        patch: Box<TaskItemsUpdateParams>,
+        needs_review: bool,
+        changes: Vec<String>,
+    },
+    ClaimTasks {
+        tasks: Vec<TaskItem>,
+    },
 }
 
 impl Orchestrator {
@@ -202,7 +235,7 @@ impl Orchestrator {
     fn agent_notes_search(&self, args: NotesSearchArgs) -> Result<Value> {
         let limit = args.limit.unwrap_or(20).clamp(1, 50) as usize;
         let summaries: HashMap<NoteId, NoteSummary> =
-            self.inner.store.notes_list()?.into_iter().filter(|note| note.deleted_at.is_none()).map(|note| (note.id, note)).collect();
+            self.notes_list()?.into_iter().filter(|note| note.deleted_at.is_none()).map(|note| (note.id, note)).collect();
         let in_scope = |note: &NoteSummary| args.project_id.is_none_or(|project_id| note.project_id == Some(project_id));
         let query = args.query.as_deref().map(str::trim).unwrap_or_default();
         let mut results = Vec::new();
@@ -229,7 +262,8 @@ impl Orchestrator {
     }
 
     fn agent_note_read(&self, args: NoteIdArgs) -> Result<Value> {
-        let note = self.live_note(args.note_id)?;
+        let mut note = self.live_note(args.note_id)?;
+        self.flag_stale(&mut note);
         let mut body = note.body.clone();
         let truncated = cut(&mut body, READ_BODY_MAX_BYTES);
         let mut value = note_row(&note.summary);
@@ -333,6 +367,7 @@ impl Orchestrator {
                 "Only the project's Coordinator saves the setup note. Ask the Coordinator, or the user, to record it."
             );
             ensure!(args.scope != Some(ItemScope::Global), "The setup note belongs to the project. Drop scope or use scope project.");
+            ensure!(args.category.is_none(), "The setup note has no category. Drop category.");
             ensure!(
                 self.inner.store.note_for_project_role(thread.project_id, role)?.is_none(),
                 "This project already has a setup note. Read it with kybern_notes_search and change it with kybern_note_update."
@@ -354,24 +389,46 @@ impl Orchestrator {
             input: json!({
                 "action": "create_note", "kind": "note", "title": title, "project": place, "preview": preview(&args.body),
             }),
-            action: Action::CreateNote { scope, project_id, role: args.project_role, title, body: args.body },
+            action: Action::CreateNote { scope, project_id, role: args.project_role, title, body: args.body, category: args.category },
         })
     }
 
     fn plan_note_append(&self, thread: &Thread, args: NoteAppendArgs) -> Result<Write> {
         ensure!(!args.text.trim().is_empty(), "Pass the text to append.");
-        let (summary, target) = match args.note_id {
+        let (summary, target, current) = match args.note_id {
             Some(id) => {
                 let note = self.live_note(id)?;
                 Self::check_role_write(thread, &note)?;
-                (format!("Append to note '{}'", display_title(&note.summary.title)), json!({ "id": id, "title": note.summary.title }))
+                (
+                    format!("Append to note '{}'", display_title(&note.summary.title)),
+                    json!({ "id": id, "title": note.summary.title }),
+                    Some(note),
+                )
             }
-            None => ("Append to this chat's note".to_owned(), Value::Null),
+            None => ("Append to this chat's note".to_owned(), Value::Null, self.inner.store.note_for_thread(thread.id)?),
         };
+        if let Some(category) = args.category
+            && let Some(existing) = current.as_ref().and_then(|note| note.summary.category)
+        {
+            ensure!(
+                existing == category,
+                "This is a {} note, so a {} claim belongs in another note. Create one with kybern_note_create and category {}, or leave category out.",
+                existing.as_str(),
+                category.as_str(),
+                category.as_str()
+            );
+        }
+        // Check the line to retire before anyone is asked, so the answer to a no-match is immediate.
+        if let Some(needle) = &args.supersedes {
+            supersede(current.as_ref().map_or("", |note| note.body.as_str()), needle, &today())?;
+        }
         Ok(Write {
             summary,
-            input: json!({ "action": "append_note", "kind": "note", "target": target, "preview": preview(&args.text) }),
-            action: Action::AppendNote { target: args.note_id, text: args.text },
+            input: json!({
+                "action": "append_note", "kind": "note", "target": target, "preview": preview(&args.text),
+                "supersedes": args.supersedes, "category": args.category,
+            }),
+            action: Action::AppendNote { target: args.note_id, text: args.text, supersedes: args.supersedes, category: args.category },
         })
     }
 
@@ -381,6 +438,9 @@ impl Orchestrator {
         // The Coordinator keeps the setup note up to date even when another thread saved it first.
         if note.summary.created_by_thread.is_none() && note.summary.project_role != Some(ProjectNoteRole::Setup) {
             bail!("The user wrote this note, so you can only append to it with kybern_note_append. Ask the user before changing it.");
+        }
+        if note.summary.category.is_some_and(NoteCategory::is_history) && args.body.is_some() {
+            bail!("{HISTORY_NOTE_REFUSAL}");
         }
         if note.summary.scope == NoteScope::Thread && args.title.is_some() {
             bail!("A thread's note is titled after its thread. Change only the body.");
@@ -720,56 +780,82 @@ impl Orchestrator {
         }
     }
 
+    /// Append `text` to a note (this thread's own note when `target` is `None`),
+    /// retiring the line that holds `supersedes` first and setting `category` on a
+    /// note that has none. A retry after a concurrent edit reads the note again.
+    pub(super) fn append_note_text(
+        &self,
+        thread_id: ThreadId,
+        target: Option<NoteId>,
+        text: &str,
+        supersedes: Option<&str>,
+        category: Option<NoteCategory>,
+    ) -> Result<NoteSummary> {
+        let text = text.trim();
+        for attempt in 0..2 {
+            let current = match target {
+                Some(id) => Some(self.live_note(id)?),
+                None => self.inner.store.note_for_thread(thread_id)?,
+            };
+            let (revision, existing) = match &current {
+                Some(note) if note.summary.deleted_at.is_some() => {
+                    bail!("This chat's note is in Recently deleted. Ask the user to restore it before appending.")
+                }
+                Some(note) => (note.summary.revision, note.body.as_str()),
+                None => (0, ""),
+            };
+            let retired;
+            let existing = match supersedes {
+                Some(needle) => {
+                    retired = supersede(existing, needle, &today())?;
+                    retired.as_str()
+                }
+                None => existing,
+            }
+            .trim_end();
+            let body = if existing.is_empty() { text.to_owned() } else { format!("{existing}\n\n{text}") };
+            let saved = self.note_update(NotesUpdateParams {
+                id: target,
+                thread_id: target.is_none().then_some(thread_id),
+                expected_revision: revision,
+                title: None,
+                body: Some(body),
+                category: category.filter(|category| current.as_ref().is_none_or(|note| note.summary.category != Some(*category))),
+            });
+            match saved {
+                Ok(note) => return Ok(note.summary),
+                Err(error) if attempt == 0 && matches!(error.downcast_ref::<NoteError>(), Some(NoteError::Conflict)) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        bail!("The note kept changing while appending. Read it again and retry.")
+    }
+
     // ---- applying writes ----
 
     fn apply_write(&self, thread: &Thread, action: Action) -> Result<Value> {
         match action {
-            Action::CreateNote { scope, project_id, role, title, body } => {
+            Action::CreateNote { scope, project_id, role, title, body, category } => {
                 let note = {
                     let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
                     let note = match (role, project_id) {
                         (Some(role), Some(project_id)) => {
                             self.inner.store.note_create_project_role(project_id, role, &title, &body, Some(thread.id))?
                         }
-                        _ => self.inner.store.note_create_by(scope, project_id, &title, &body, Some(thread.id))?,
+                        _ => self.inner.store.note_create_categorized(scope, project_id, &title, &body, Some(thread.id), category)?,
                     };
                     self.publish_note(note.summary.clone());
                     note
                 };
                 Ok(note_result("created", &note.summary))
             }
-            Action::AppendNote { target, text } => {
-                let text = text.trim().to_owned();
-                for attempt in 0..2 {
-                    let current = match target {
-                        Some(id) => Some(self.live_note(id)?),
-                        None => self.inner.store.note_for_thread(thread.id)?,
-                    };
-                    let (revision, existing) = match &current {
-                        Some(note) if note.summary.deleted_at.is_some() => {
-                            bail!("This chat's note is in Recently deleted. Ask the user to restore it before appending.")
-                        }
-                        Some(note) => (note.summary.revision, note.body.trim_end()),
-                        None => (0, ""),
-                    };
-                    let body = if existing.is_empty() { text.clone() } else { format!("{existing}\n\n{text}") };
-                    let saved = self.note_update(NotesUpdateParams {
-                        id: target,
-                        thread_id: target.is_none().then_some(thread.id),
-                        expected_revision: revision,
-                        title: None,
-                        body: Some(body),
-                    });
-                    match saved {
-                        Ok(note) => return Ok(note_result("appended", &note.summary)),
-                        Err(error) if attempt == 0 && matches!(error.downcast_ref::<NoteError>(), Some(NoteError::Conflict)) => {}
-                        Err(error) => return Err(error),
-                    }
-                }
-                bail!("The note kept changing while appending. Read it again and retry.")
+            Action::AppendNote { target, text, supersedes, category } => {
+                let note = self.append_note_text(thread.id, target, &text, supersedes.as_deref(), category)?;
+                Ok(note_result("appended", &note))
             }
             Action::UpdateNote { id, title, body, expected_revision } => {
-                let saved = self.note_update(NotesUpdateParams { id: Some(id), thread_id: None, expected_revision, title, body });
+                let saved =
+                    self.note_update(NotesUpdateParams { id: Some(id), thread_id: None, expected_revision, title, body, category: None });
                 let note = match saved {
                     Ok(note) => note,
                     Err(error) if matches!(error.downcast_ref::<NoteError>(), Some(NoteError::Conflict)) => {
@@ -892,7 +978,7 @@ impl Orchestrator {
 
     // ---- lookups ----
 
-    fn live_note(&self, id: NoteId) -> Result<Note> {
+    pub(super) fn live_note(&self, id: NoteId) -> Result<Note> {
         match self.inner.store.note_get(id)? {
             None => bail!("Note {id} not found. Search with kybern_notes_search."),
             Some(note) if note.summary.deleted_at.is_some() => bail!("Note '{}' is in Recently deleted.", note.summary.title),
@@ -957,6 +1043,8 @@ struct NoteCreateArgs {
     /// `setup` saves the project's setup note; only its Coordinator may.
     #[serde(default)]
     project_role: Option<ProjectNoteRole>,
+    #[serde(default)]
+    category: Option<NoteCategory>,
 }
 
 #[derive(Deserialize)]
@@ -965,6 +1053,11 @@ struct NoteAppendArgs {
     #[serde(default)]
     note_id: Option<NoteId>,
     text: String,
+    #[serde(default)]
+    category: Option<NoteCategory>,
+    /// An exact piece of the one line this text replaces.
+    #[serde(default)]
+    supersedes: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1081,6 +1174,9 @@ fn note_row(note: &NoteSummary) -> Value {
         "created_by_thread": note.created_by_thread,
         "agent_editable": note.created_by_thread.is_some() && note.project_role != Some(ProjectNoteRole::Brief),
         "project_role": note.project_role,
+        "category": note.category,
+        "undated": note.undated,
+        "may_be_outdated": note.stale.as_ref().map(|stale| json!({ "path": stale.path, "commit": stale.commit })),
         "revision": note.revision,
         "updated_at": note.updated_at,
         "link": format!("{NOTE_MENTION_PREFIX}{}", note.id),

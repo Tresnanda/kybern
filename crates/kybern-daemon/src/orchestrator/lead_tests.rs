@@ -26,6 +26,7 @@ fn user_note(fixture: &Fixture, title: &str, body: &str, role: Option<ProjectNot
             title: Some(title.into()),
             body: Some(body.into()),
             project_role: role,
+            category: None,
         })
         .unwrap()
 }
@@ -148,17 +149,29 @@ async fn a_coordinator_session_gets_the_lead_role_brief_notes_index_and_read_onl
 const LEAD_ROLE_FOR_TESTS: &str = super::lead::LEAD_ROLE;
 
 #[tokio::test]
-async fn the_lead_role_is_short_and_covers_the_seven_rules() {
+async fn the_lead_role_is_short_and_covers_its_rules_including_verify_memory_and_change_reports() {
     let role = super::lead::LEAD_ROLE;
-    assert!(role.len() < 1800, "the role is part of the cached prefix: {} bytes", role.len());
-    for rule in ["1. ", "2. ", "3. ", "4. ", "5. ", "6. ", "7. "] {
+    assert!(role.len() < 2800, "the role is part of the cached prefix: {} bytes", role.len());
+    for rule in ["1. ", "2. ", "3. ", "4. ", "5. ", "6. ", "7. ", "8. ", "9. ", "10. "] {
         assert!(role.contains(rule), "{rule}");
     }
     for phrase in ["kybern_agent_delegate", "kybern_thread_send", "Never edit files", "setup note", "do not mock, substitute or guess", "working policy"] {
-        // The seventh rule names the policy through the brief.
+        // The ninth rule names the policy through the brief.
         let present = role.contains(phrase) || (phrase == "working policy" && role.contains("policy written in the project brief"));
         assert!(present, "{phrase}");
     }
+    // Verify before claiming: check the code, read-only children cite path@sha, memory is not evidence.
+    for phrase in ["6. Verify before claiming", "check the current code", "read-only child", "path@sha", "Never rely only on memory notes, a handoff or earlier results"] {
+        assert!(role.contains(phrase), "{phrase}");
+    }
+    // Memory: dated claims with a category, commits for code, supersedes, nothing the code already shows.
+    for phrase in ["7. Memory", "dated claims with a category", "As of `abc1234`", "Cite commits", "supersedes", "do not record what the code or git already shows"] {
+        assert!(role.contains(phrase), "{phrase}");
+    }
+    // Change reports are acted on before answering.
+    assert!(role.contains("\"Code changed since your last turn\"") && role.contains("update your understanding before you answer"));
+    // The old advice, "consider whether a note should change", is gone.
+    assert!(!role.contains("consider whether a memory note"));
 }
 
 #[tokio::test]
@@ -264,6 +277,7 @@ async fn a_changed_brief_is_prepended_once_to_the_leads_next_message_in_the_prov
             expected_revision: brief.summary.revision,
             title: None,
             body: Some("Version two: propose before editing.".into()),
+            category: None,
         })
         .unwrap();
     fixture.orchestrator.send(lead.id, UserMessage::text("second request")).await.unwrap();

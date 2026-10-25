@@ -20,8 +20,9 @@
 //! [`SETUP_SCRIPT`]. The brief is written only through the brief proposal card.
 
 use anyhow::{Result, anyhow, ensure};
+use chrono::{DateTime, Utc};
 use kybern_drivers::NativeToolRestrictions;
-use kybern_protocol::methods::{self, Note, ProjectNoteRole};
+use kybern_protocol::methods::{self, Note, NoteCategory, ProjectNoteRole};
 use kybern_protocol::*;
 use uuid::Uuid;
 
@@ -35,9 +36,11 @@ pub(super) const LEAD_ROLE: &str = "You are this project's Coordinator. You plan
 3. If the project has no setup note, first delegate a research child to learn how to build, run and test the project, then save the result with kybern_note_create using project_role \"setup\".\n\
 4. Brief children with pointers (notes, files, commits), not pasted content.\n\
 5. Tell every child: if something is missing, say exactly what and stop; do not mock, substitute or guess.\n\
-6. After each child result, consider whether a memory note or the setup note should change so the next child starts better.\n\
-7. Follow any working policy written in the project brief and the autonomy line below.\n\
-8. The brief and your settings change only through kybern_coordinator_propose_brief and kybern_coordinator_propose_settings; the user approves each.\n\
+6. Verify before claiming. Before you state how code behaves or recommend a change to it, check the current code: a quick grep, or one file you may read yourself. Anything bigger goes to a read-only child that answers with path@sha citations. Never rely only on memory notes, a handoff or earlier results.\n\
+7. Memory. After a child result, file durable decisions, reversals, conventions, gotchas and user preferences as dated claims with a category, like `- 2026-10-25 · As of `abc1234`: what is true (`path`).` Cite commits for anything about code, retire old claims with supersedes, and do not record what the code or git already shows.\n\
+8. When a \"Code changed since your last turn\" block arrives, update your understanding before you answer.\n\
+9. Follow any working policy written in the project brief and the autonomy line below.\n\
+10. The brief and your settings change only through kybern_coordinator_propose_brief and kybern_coordinator_propose_settings; the user approves each.\n\
 If your conversation context is missing, read this thread with kybern_thread_read.";
 
 /// The one-line git rule every Coordinator session carries. `kybern_git` is the
@@ -107,6 +110,7 @@ const LEAD_TOOLS: &[&str] = &[
     // Coordinator brief and settings.
     "kybern_coordinator_propose_brief",
     "kybern_coordinator_propose_settings",
+    "kybern_coordinator_propose_note_changes",
 ];
 
 /// Whether a harness can hold the lead to its read-only tool set. Codex and
@@ -369,7 +373,11 @@ impl Orchestrator {
         if !(lead || project.brief_in_all_threads || self.rooted_at_lead(thread)?) {
             return Ok(note.map(|text| SessionInstructions { text, brief_revision: 0, lead_settings: None }));
         }
-        let notes = self.inner.store.project_notes(project.id)?;
+        let mut notes = self.inner.store.project_notes(project.id)?;
+        for note in &mut notes {
+            self.flag_stale(note);
+        }
+        let since = self.inner.store.notes_history_since()?;
         let brief = notes.iter().find(|note| note.summary.project_role == Some(ProjectNoteRole::Brief));
         let mut text = String::new();
         let mut lead_settings = None;
@@ -381,7 +389,7 @@ impl Orchestrator {
             text.push_str("\n\n");
             lead_settings = Some(effective);
         }
-        text.push_str(&project_context(brief, &notes, lead));
+        text.push_str(&project_context(brief, &notes, lead, since));
         if let Some(note) = note {
             text.push_str("\n\n");
             text.push_str(&note);
@@ -427,9 +435,15 @@ impl Orchestrator {
         *live.lead_settings.lock().await = Some(settings);
     }
 
-    /// The provider's copy of a setup kickoff, or `None` for any other message.
+    /// The provider's copy of a setup kickoff or a "Tidy notes" request, or `None` for any other message.
     pub(super) fn setup_provider_message(&self, thread: &Thread, message: &UserMessage) -> Result<Option<UserMessage>> {
-        if thread.coordinator_project_id.is_none() || !is_setup_message(message) {
+        if thread.coordinator_project_id.is_none() {
+            return Ok(None);
+        }
+        if super::note_tidy::is_tidy_message(message) {
+            return self.tidy_provider_message(thread, message);
+        }
+        if !is_setup_message(message) {
             return Ok(None);
         }
         let has_brief = self.project_has_brief(thread.project_id)?;
@@ -533,9 +547,53 @@ pub(super) fn with_brief_update(message: &UserMessage, update: &str) -> UserMess
     UserMessage { parts }
 }
 
+/// The groups of the notes index, in the order they are listed.
+const INDEX_GROUPS: [(&str, Option<NoteCategory>); 4] = [
+    ("Preferences", Some(NoteCategory::Preference)),
+    ("Decisions", Some(NoteCategory::Decision)),
+    ("Conventions", Some(NoteCategory::Convention)),
+    ("Gotchas", Some(NoteCategory::Gotcha)),
+];
+
+/// The group heading a note is listed under.
+fn index_group(note: &Note) -> &'static str {
+    match note.summary.category {
+        Some(category) => INDEX_GROUPS.iter().find(|(_, group)| *group == Some(category)).map_or("Other", |(name, _)| name),
+        None if note.summary.undated => "Undated",
+        None => "Other",
+    }
+}
+
+/// One line of the notes index.
+fn index_line(note: &Note, since: Option<DateTime<Utc>>) -> String {
+    let title = note.summary.title.trim();
+    let title = if title.is_empty() { "Untitled" } else { title };
+    let label = if note.summary.project_role == Some(ProjectNoteRole::Setup) { "Setup note: " } else { "" };
+    let first_line = first_line(&note.body);
+    let id = note.summary.id;
+    let updated = note.summary.updated_at.format("%Y-%m-%d");
+    let mut line = if first_line.is_empty() {
+        format!("- {label}{title} ({id}) · {updated}")
+    } else {
+        format!("- {label}{title}: {first_line} ({id}) · {updated}")
+    };
+    if let Some(stale) = &note.summary.stale {
+        line.push_str(&format!(" · may be outdated: {}", stale.path));
+    }
+    if note.summary.undated {
+        match since {
+            Some(since) => line.push_str(&format!(" · undated, before {}", since.format("%Y-%m-%d"))),
+            None => line.push_str(" · undated"),
+        }
+    }
+    line.push('\n');
+    line
+}
+
 /// The brief and the index of the project's notes, followed by the standing rule
-/// for anything that is missing.
-fn project_context(brief: Option<&Note>, notes: &[Note], lead: bool) -> String {
+/// for anything that is missing. The index lists the setup note first, then the
+/// notes by category, then the ones that predate categories.
+fn project_context(brief: Option<&Note>, notes: &[Note], lead: bool, since: Option<DateTime<Utc>>) -> String {
     let change = if lead { "propose the edit with kybern_coordinator_propose_brief" } else { "suggest the edit in chat" };
     let mut out = format!("Project brief (the user's; to change it, {change}):\n");
     match brief.map(|note| note.body.trim()).filter(|body| !body.is_empty()) {
@@ -549,26 +607,26 @@ fn project_context(brief: Option<&Note>, notes: &[Note], lead: bool) -> String {
     out.push_str("\n\nProject notes (read one with kybern_note_read):\n");
     let mut listed = 0;
     let mut hidden = 0;
-    // The setup note first, then the most recently edited notes.
-    let ordered = notes
-        .iter()
-        .filter(|note| note.summary.project_role == Some(ProjectNoteRole::Setup))
-        .chain(notes.iter().filter(|note| note.summary.project_role.is_none()));
-    for note in ordered {
-        if listed == INDEX_MAX_NOTES {
-            hidden += 1;
-            continue;
-        }
+    let memory = || notes.iter().filter(|note| note.summary.project_role.is_none());
+    let setup = notes.iter().filter(|note| note.summary.project_role == Some(ProjectNoteRole::Setup));
+    for note in setup {
         listed += 1;
-        let title = note.summary.title.trim();
-        let title = if title.is_empty() { "Untitled" } else { title };
-        let label = if note.summary.project_role == Some(ProjectNoteRole::Setup) { "Setup note: " } else { "" };
-        let first_line = first_line(&note.body);
-        let id = note.summary.id;
-        if first_line.is_empty() {
-            out.push_str(&format!("- {label}{title} ({id})\n"));
-        } else {
-            out.push_str(&format!("- {label}{title}: {first_line} ({id})\n"));
+        out.push_str(&index_line(note, since));
+    }
+    let headings = INDEX_GROUPS.iter().map(|(name, _)| *name).chain(["Other", "Undated"]);
+    for heading in headings {
+        let mut shown_heading = false;
+        for note in memory().filter(|note| index_group(note) == heading) {
+            if listed == INDEX_MAX_NOTES {
+                hidden += 1;
+                continue;
+            }
+            if !shown_heading {
+                out.push_str(&format!("{heading}:\n"));
+                shown_heading = true;
+            }
+            listed += 1;
+            out.push_str(&index_line(note, since));
         }
     }
     if listed == 0 {

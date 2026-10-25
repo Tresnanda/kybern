@@ -138,6 +138,9 @@ fn main() {
     method::<NotesRestore>(&mut methods);
     method::<NotesPurge>(&mut methods);
     method::<NotesSearch>(&mut methods);
+    method::<NotesTidyOffer>(&mut methods);
+    method::<NotesTidySnooze>(&mut methods);
+    method::<NotesTidyStart>(&mut methods);
     method::<TaskItemsList>(&mut methods);
     method::<TaskItemsGet>(&mut methods);
     method::<TaskItemsCreate>(&mut methods);

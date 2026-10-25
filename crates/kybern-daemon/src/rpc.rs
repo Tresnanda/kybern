@@ -495,8 +495,13 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         ThreadNotesSet::NAME => ok(state.orchestrator.set_notes(parse(params)?).map_err(note_err)?),
         NotesList::NAME => {
             let orchestrator = state.orchestrator.clone();
-            let notes = tokio::task::spawn_blocking(move || orchestrator.notes_list()).await.map_err(internal)?.map_err(note_err)?;
-            ok(NotesListResult { notes })
+            let (notes, history_since) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+                Ok((orchestrator.notes_list()?, orchestrator.notes_history_since()?))
+            })
+            .await
+            .map_err(internal)?
+            .map_err(note_err)?;
+            ok(NotesListResult { notes, history_since })
         }
         NotesGet::NAME => ok(NotesGetResult { note: state.orchestrator.note_get(parse_or_default(params)?).map_err(note_err)? }),
         NotesCreate::NAME => ok(state.orchestrator.note_create(parse(params)?).map_err(note_err)?),
@@ -598,6 +603,17 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             ok(state.orchestrator.coordinator_get(p.project_id).map_err(bad)?)
         }
         CoordinatorOpen::NAME => ok(state.orchestrator.coordinator_open(parse(params)?).await.map_err(bad)?),
+        NotesTidyOffer::NAME => {
+            let orchestrator = state.orchestrator.clone();
+            let params: NotesTidyParams = parse(params)?;
+            ok(tokio::task::spawn_blocking(move || orchestrator.notes_tidy_offer(params)).await.map_err(internal)?.map_err(bad)?)
+        }
+        NotesTidySnooze::NAME => {
+            let orchestrator = state.orchestrator.clone();
+            let params: NotesTidyParams = parse(params)?;
+            ok(tokio::task::spawn_blocking(move || orchestrator.notes_tidy_snooze(params)).await.map_err(internal)?.map_err(bad)?)
+        }
+        NotesTidyStart::NAME => ok(state.orchestrator.notes_tidy_start(parse(params)?).await.map_err(bad)?),
         CoordinatorSetup::NAME => ok(state.orchestrator.coordinator_setup(parse(params)?).await.map_err(bad)?),
         CoordinatorSwitchHarness::NAME => ok(state.orchestrator.coordinator_switch_harness(parse(params)?).await.map_err(bad)?),
         TasksList::NAME => {

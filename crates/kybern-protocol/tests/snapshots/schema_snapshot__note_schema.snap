@@ -91,6 +91,32 @@ expression: schema_for!(Note)
         }
       ]
     },
+    "category": {
+      "description": "The kind of memory this note holds. Absent for ordinary notes.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/NoteCategory"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "stale": {
+      "description": "Set when a dated claim in the note cites a file that changed since the\ncommit it names. Computed by the daemon from git, never stored.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StaleInfo"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "undated": {
+      "description": "A project note without a category that was written before categories existed\n(see `NotesListResult::history_since`).",
+      "type": "boolean"
+    },
     "body": {
       "description": "Markdown.",
       "type": "string"
@@ -150,6 +176,42 @@ expression: schema_for!(Note)
       "enum": [
         "brief",
         "setup"
+      ]
+    },
+    "NoteCategory": {
+      "description": "What kind of memory a project note holds. Agents file dated claims under one;\nthe Coordinator's notes index groups by it. A note without a category is\n\"Other\", or \"Undated\" when it predates categories.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "decision",
+            "convention",
+            "gotcha"
+          ]
+        },
+        {
+          "description": "What the user wants, in their words.",
+          "type": "string",
+          "const": "preference"
+        }
+      ]
+    },
+    "StaleInfo": {
+      "description": "Why a note may be outdated: a claim in it cites a commit (`As of \\`abc1234\\``)\nand a file, and that file changed after the commit.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "The cited path that changed, as the note writes it.",
+          "type": "string"
+        },
+        "commit": {
+          "description": "Short id of the latest commit that changed it after the cited one.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "commit"
       ]
     }
   }

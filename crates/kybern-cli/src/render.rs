@@ -187,7 +187,23 @@ pub fn notes(list: &[NoteSummary]) {
             if note.checklist.total > 0 { format!("  [{}/{}]", note.checklist.done, note.checklist.total) } else { String::new() };
         let preview =
             if note.preview.is_empty() { String::new() } else { format!("  {}", note.preview.chars().take(60).collect::<String>()) };
-        println!("{}  {:<8} {}{}{}{}", note.id, scope, title, if note.pinned { "  📌" } else { "" }, checklist, preview);
+        let category = note.category.map_or(String::new(), |category| format!("  ({})", category.as_str()));
+        let flag = match (&note.stale, note.undated) {
+            (Some(stale), _) => format!("  may be outdated: {}", stale.path),
+            (None, true) => "  undated".to_owned(),
+            (None, false) => String::new(),
+        };
+        println!(
+            "{}  {:<8} {}{}{}{}{}{}",
+            note.id,
+            scope,
+            title,
+            category,
+            if note.pinned { "  📌" } else { "" },
+            checklist,
+            flag,
+            preview
+        );
     }
 }
 

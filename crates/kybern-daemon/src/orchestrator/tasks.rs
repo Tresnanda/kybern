@@ -1351,6 +1351,7 @@ mod tests {
                     title: Some(title.into()),
                     body: Some(body.into()),
                     project_role: None,
+                    category: None,
                 })
                 .unwrap()
         }
@@ -2072,6 +2073,7 @@ mod tests {
                     expected_revision: revision,
                     title: None,
                     body: Some(text),
+                    category: None,
                 })
                 .unwrap()
         };

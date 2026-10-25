@@ -29,7 +29,11 @@ impl Orchestrator {
         self.inner.notes_changed.subscribe()
     }
 
-    pub(super) fn publish_note(&self, note: NoteSummary) {
+    pub(super) fn publish_note(&self, mut note: NoteSummary) {
+        // Only a send to a connected client needs the stale flag; read it from git for project notes.
+        if self.inner.notes_changed.receiver_count() > 0 {
+            self.flag_stale_summary(&mut note);
+        }
         // No receivers just means no client is connected.
         let _ = self.inner.notes_changed.send(NotesChangedNotification { note: Some(note), purged_id: None });
     }
@@ -39,21 +43,32 @@ impl Orchestrator {
     }
 
     pub fn notes_list(&self) -> Result<Vec<NoteSummary>> {
-        self.inner.store.notes_list()
+        let mut notes = self.inner.store.notes_list()?;
+        self.flag_stale_all(&mut notes);
+        Ok(notes)
+    }
+
+    /// When categories were introduced; see `NotesListResult::history_since`.
+    pub fn notes_history_since(&self) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+        self.inner.store.notes_history_since()
     }
 
     /// The note by `id` or by `thread_id`; a thread without a note yields `None`.
     pub fn note_get(&self, params: NotesGetParams) -> Result<Option<Note>> {
-        match (params.id, params.thread_id) {
+        let note = match (params.id, params.thread_id) {
             (Some(id), None) => self
                 .inner
                 .store
                 .note_get(id)?
                 .map(Some)
-                .ok_or_else(|| NoteError::NotFound("Note not found. It may have been deleted permanently.").into()),
-            (None, Some(thread_id)) => self.inner.store.note_for_thread(thread_id),
-            _ => invalid("Pass either id or thread_id."),
-        }
+                .ok_or_else(|| NoteError::NotFound("Note not found. It may have been deleted permanently."))?,
+            (None, Some(thread_id)) => self.inner.store.note_for_thread(thread_id)?,
+            _ => return invalid("Pass either id or thread_id."),
+        };
+        Ok(note.map(|mut note| {
+            self.flag_stale(&mut note);
+            note
+        }))
     }
 
     pub fn note_create(&self, params: NotesCreateParams) -> Result<Note> {
@@ -71,7 +86,14 @@ impl Orchestrator {
                 let title = params.title.as_deref().filter(|title| !title.trim().is_empty()).unwrap_or(default_title);
                 self.inner.store.note_create_project_role(project_id, role, title, body, None)?
             }
-            None => self.inner.store.note_create(params.scope, params.project_id, params.title.as_deref().unwrap_or_default(), body)?,
+            None => self.inner.store.note_create_categorized(
+                params.scope,
+                params.project_id,
+                params.title.as_deref().unwrap_or_default(),
+                body,
+                None,
+                params.category,
+            )?,
         };
         self.publish_note(note.summary.clone());
         Ok(note)
@@ -89,7 +111,13 @@ impl Orchestrator {
             NoteTarget::Thread(thread_id) => self.inner.store.note_for_thread(thread_id)?,
         }
         .map(|note| note.body);
-        let note = self.inner.store.note_update(target, params.expected_revision, params.title.as_deref(), params.body.as_deref())?;
+        let note = self.inner.store.note_update_with(
+            target,
+            params.expected_revision,
+            params.title.as_deref(),
+            params.body.as_deref(),
+            params.category,
+        )?;
         // An unchanged save returns the note as it is; only a real write moved the revision.
         if note.summary.revision != params.expected_revision {
             self.publish_note(note.summary.clone());
@@ -184,6 +212,7 @@ impl Orchestrator {
             expected_revision: params.expected_revision,
             title: None,
             body: Some(params.text),
+            category: None,
         })?;
         Ok(ThreadNotes { text: note.body, revision: note.summary.revision })
     }
