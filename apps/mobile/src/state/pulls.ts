@@ -22,7 +22,10 @@ const subscribe = (fn: () => void) => {
   listeners.add(fn);
   return () => void listeners.delete(fn);
 };
-const draftKey = (projectId: string, number: number) => `${activeEnvironment()?.id ?? ""}:${projectId}:${number}`;
+/** `repo`: the member repository of a group project the pull request is in (a `PullRequest.repo`). */
+const draftKey = (projectId: string, number: number, repo?: string) =>
+  `${activeEnvironment()?.id ?? ""}:${projectId}${repo ? `/${repo}` : ""}:${number}`;
+const NO_MEMBER_CHECKOUT = "A pull request of a group project can't be checked out into a conversation yet. Open that repository as its own project.";
 function saveDraft(key: string, draft: ReviewDraft) {
   drafts.set(key, draft);
   if (drafts.size > 50) drafts.delete(drafts.keys().next().value!);
@@ -30,9 +33,10 @@ function saveDraft(key: string, draft: ReviewDraft) {
 }
 const EMPTY = emptyReviewDraft();
 
-export function usePullRequest(projectId: string, number: number) {
+export function usePullRequest(projectId: string, number: number, repo?: string) {
   const app = useApp();
-  const key = draftKey(projectId, number);
+  const key = draftKey(projectId, number, repo);
+  const member = repo ? { repo } : {};
   const draft = useSyncExternalStore(subscribe, () => drafts.get(key) ?? EMPTY);
   const [detail, setDetail] = useState<PrDetailResult | null>(null);
   const [error, setError] = useState("");
@@ -50,7 +54,7 @@ export function usePullRequest(projectId: string, number: number) {
     if (app.status !== "open" || !projectId || !number) return;
     let canceled = false;
     setLoading(true);
-    void rpc("github.pr.detail", { project_id: projectId, number })
+    void rpc("github.pr.detail", { project_id: projectId, number, ...member })
       .then((next) => {
         if (canceled) return;
         setDetail(next);
@@ -65,7 +69,7 @@ export function usePullRequest(projectId: string, number: number) {
     return () => {
       canceled = true;
     };
-  }, [projectId, number, revision, app.status, app.activeId]);
+  }, [projectId, number, repo, revision, app.status, app.activeId]);
   const reload = useCallback(() => setRevision((n) => n + 1), []);
   const update = (patch: Partial<ReviewDraft>) =>
     saveDraft(key, bindReviewDraft(drafts.get(key) ?? EMPTY, patch, detail?.head_sha ?? null));
@@ -93,6 +97,7 @@ export function usePullRequest(projectId: string, number: number) {
         body: review ? submitted.body : "",
         inline_comments: [],
         ...(threadId ? { thread_id: threadId } : {}),
+        ...member,
       });
       if (review) saveDraft(key, afterReviewSubmission(drafts.get(key) ?? EMPTY, submitted));
       if (alive.current) reload();
@@ -118,6 +123,7 @@ export function usePullRequest(projectId: string, number: number) {
   /** Check the pull request out into a worktree conversation. Resolves to that conversation. */
   async function checkout(choice: string | "new") {
     if (!detail) throw new Error("Refresh this pull request, then try again.");
+    if (repo) throw new Error(NO_MEMBER_CHECKOUT);
     setBusy("checkout");
     try {
       const target = await conversation(choice);
@@ -138,6 +144,7 @@ export function usePullRequest(projectId: string, number: number) {
   /** Send the selected comments to an agent that repairs the branch. Resolves to its conversation. */
   async function repair(choice: string | "new") {
     if (!detail) throw new Error("Refresh this pull request, then try again.");
+    if (repo) throw new Error(NO_MEMBER_CHECKOUT);
     const current = drafts.get(key) ?? EMPTY;
     assertReviewDraftHead(current, detail.head_sha);
     const prompt = repairReviewPrompt(number, detail.pull_request.title, detail.pull_request.url, detail.head_sha, current);
@@ -168,14 +175,14 @@ export function usePullRequest(projectId: string, number: number) {
 }
 
 /** One page of comments, reviews or checks. Stale replies never replace a newer page. */
-export function usePrPage(projectId: string, number: number, kind: PrPageKind, revision: number, head?: string) {
+export function usePrPage(projectId: string, number: number, kind: PrPageKind, revision: number, head?: string, repo?: string) {
   const status = useApp().status;
   const [state, setState] = useState<{ key: string; data?: PrPageResult; error?: string } | null>(null);
-  const key = `${projectId}:${number}:${kind}:${revision}:${head}`;
+  const key = `${projectId}${repo ? `/${repo}` : ""}:${number}:${kind}:${revision}:${head}`;
   useEffect(() => {
     if (!head || status !== "open") return;
     let canceled = false;
-    void rpc("github.pr.page", { project_id: projectId, number, kind, page: 1 }).then(
+    void rpc("github.pr.page", { project_id: projectId, number, kind, page: 1, ...(repo ? { repo } : {}) }).then(
       (data) => !canceled && setState({ key, data }),
       (e) => !canceled && setState({ key, error: errorText(e) }),
     );
@@ -187,7 +194,7 @@ export function usePrPage(projectId: string, number: number, kind: PrPageKind, r
 }
 
 /** The draft for a pull request without loading it (the review and send sheets). */
-export function usePrDraft(projectId: string, number: number) {
-  const key = draftKey(projectId, number);
+export function usePrDraft(projectId: string, number: number, repo?: string) {
+  const key = draftKey(projectId, number, repo);
   return useSyncExternalStore(subscribe, () => drafts.get(key) ?? EMPTY);
 }

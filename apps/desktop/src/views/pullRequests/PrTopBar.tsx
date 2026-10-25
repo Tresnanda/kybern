@@ -194,14 +194,17 @@ export function PrTopBar({
           </Menu>
           {detail && (
             <>
-              <PrSendPopover
-                actions={actions}
-                stateKey={stateKey}
-                open={sendOpen}
-                onOpenChange={onSendOpen}
-                onOpenTimeline={() => onWorkspace("conversation")}
-                onOpenChanges={() => onWorkspace("changes")}
-              />
+              {/* Repair checks the pull request out into a conversation, which group members don't support yet. */}
+              {!actions.repo && (
+                <PrSendPopover
+                  actions={actions}
+                  stateKey={stateKey}
+                  open={sendOpen}
+                  onOpenChange={onSendOpen}
+                  onOpenTimeline={() => onWorkspace("conversation")}
+                  onOpenChanges={() => onWorkspace("changes")}
+                />
+              )}
               <PrReviewPopover
                 actions={actions}
                 stateKey={stateKey}

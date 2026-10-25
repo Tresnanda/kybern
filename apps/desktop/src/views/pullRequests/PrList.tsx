@@ -41,6 +41,7 @@ import { useStore } from "@/state/store"
 
 import { SurfaceHeader } from "../chrome"
 import { useDelayedFlag } from "./prAsync"
+import { prRef } from "./prIds"
 import { PrRow } from "./PrRow"
 import { GhProblem, ListSkeleton, PrErrorAlert } from "./PrStates"
 import { PR_FINE_TEXT, PR_META_TEXT, PR_QUIET_INK } from "./prText"
@@ -57,7 +58,7 @@ export const PR_ROWS_BATCH = 100
 const PR_CACHE_TTL_MS = 30_000
 const prCache = new Map<
   string,
-  { expiresAt: number; pullRequests: PullRequest[] }
+  { expiresAt: number; pullRequests: PullRequest[]; errors: LoadError[] }
 >()
 
 interface Row {
@@ -68,6 +69,11 @@ interface LoadError {
   project: string
   text: string
 }
+
+/** A group project has pull requests in its member repositories, whatever its own folder is. */
+const hasPullRequests = (p: Project) => p.is_git || p.kind === "group"
+const memberName = (project: Project, repo: string | undefined) =>
+  repo ? (project.members?.find((m) => m.path === repo)?.name ?? repo) : undefined
 
 export function PrList({
   onOpenSearchKey,
@@ -99,7 +105,7 @@ export function PrList({
   const targets = useMemo(
     () =>
       Object.values(projects).filter(
-        (p) => p.is_git && (!projectId || p.id === projectId)
+        (p) => hasPullRequests(p) && (!projectId || p.id === projectId)
       ),
     [projects, projectId]
   )
@@ -117,6 +123,7 @@ export function PrList({
             const cacheKey = `${project.id}:${filter}`
             const cached = prCache.get(cacheKey)
             if (!force && cached && cached.expiresAt > Date.now()) {
+              found.push(...cached.errors)
               return Promise.resolve(
                 cached.pullRequests.map((pr) => ({ pr, project }))
               )
@@ -128,9 +135,18 @@ export function PrList({
                 limit: 30,
               })
               .then((r) => {
+                // A group project's members that couldn't be listed don't hide the others.
+                const memberErrors: LoadError[] = (r.repos ?? []).flatMap(
+                  (m) =>
+                    m.error && !m.skipped && classifyPrError(m.error) !== "no-remote"
+                      ? [{ project: `${project.name} / ${m.name}`, text: m.error }]
+                      : []
+                )
+                found.push(...memberErrors)
                 prCache.set(cacheKey, {
                   expiresAt: Date.now() + PR_CACHE_TTL_MS,
                   pullRequests: r.pull_requests,
+                  errors: memberErrors,
                 })
                 return r.pull_requests.map((pr) => ({ pr, project }))
               })
@@ -173,6 +189,7 @@ export function PrList({
         !q ||
         r.pr.title.toLowerCase().includes(q) ||
         r.pr.head.toLowerCase().includes(q) ||
+        (memberName(r.project, r.pr.repo) ?? "").toLowerCase().includes(q) ||
         String(r.pr.number).includes(q)
     )
   }, [rows, deferredQuery])
@@ -189,10 +206,10 @@ export function PrList({
   const showGroups = groups.length > 1
 
   const selectedKey = selection
-    ? `${selection.projectId}:${selection.number}`
+    ? prRef(selection.projectId, selection.number, selection.repo)
     : null
   const keys = useMemo(
-    () => visible.map((r) => `${r.project.id}:${r.pr.number}`),
+    () => visible.map((r) => prRef(r.project.id, r.pr.number, r.pr.repo)),
     [visible]
   )
   const tabbableKey =
@@ -244,15 +261,19 @@ export function PrList({
     buttons[next]?.focus()
   }
 
-  const ghProblem = errors.length
+  // A gh problem replaces the list only when nothing listed: one member repository
+  // signed out of an organization must not hide the others' pull requests.
+  const ghProblem = errors.length && !rows?.length
     ? (["gh-missing", "gh-auth"] as const).find((kind) =>
         errors.some((e) => classifyPrError(e.text) === kind)
       )
     : undefined
-  const otherErrors = errors.filter((e) => {
-    const kind = classifyPrError(e.text)
-    return kind !== "gh-missing" && kind !== "gh-auth"
-  })
+  const otherErrors = ghProblem
+    ? errors.filter((e) => {
+        const kind = classifyPrError(e.text)
+        return kind !== "gh-missing" && kind !== "gh-auth"
+      })
+    : errors
   const stateWord = filter === "all" ? "" : `${filter} `
   const scope = projectId
     ? projects[projectId]?.name
@@ -288,7 +309,7 @@ export function PrList({
                     {!projectId && <CheckIcon className="size-3.5 shrink-0" />}
                   </MenuItem>
                   {Object.values(projects)
-                    .filter((p) => p.is_git)
+                    .filter(hasPullRequests)
                     .map((p) => (
                       <MenuItem key={p.id} onClick={() => setProjectId(p.id)}>
                         <span className="min-w-0 flex-1 truncate">{p.name}</span>
@@ -350,7 +371,7 @@ export function PrList({
               }
             }
           }}
-          placeholder="Search by title, branch or number"
+          placeholder="Search by title, branch, repository or number"
           className="w-full"
         />
       </div>
@@ -441,12 +462,13 @@ export function PrList({
                       </h2>
                     )}
                     {list.map((r) => {
-                      const key = `${pid}:${r.pr.number}`
+                      const key = prRef(pid, r.pr.number, r.pr.repo)
                       return (
                         <div key={key} role="listitem">
                           <PrRow
                             pr={r.pr}
                             projectId={pid}
+                            memberName={memberName(r.project, r.pr.repo)}
                             selected={key === selectedKey}
                             tabbable={key === tabbableKey}
                             onFocusRow={setRovingKey}

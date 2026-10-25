@@ -17,15 +17,16 @@ import { haptics } from "../src/ui/haptics";
 import { space, useTheme } from "../src/ui/theme";
 
 export default function PullSendSheet() {
-  const { projectId = "", number: raw = "0", mode = "repair" } = useLocalSearchParams<{
+  const { projectId = "", number: raw = "0", mode = "repair", repo } = useLocalSearchParams<{
     projectId: string;
     number: string;
+    repo?: string;
     mode?: "repair" | "checkout";
   }>();
   const number = Number(raw);
   const app = useApp();
   const { colors } = useTheme();
-  const pr = usePullRequest(projectId, number);
+  const pr = usePullRequest(projectId, number, repo);
   const choices = repairChoices(app.threads, projectId);
   const [choice, setChoice] = useState<string | null>(null);
   const [error, setError] = useState("");

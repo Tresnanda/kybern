@@ -241,9 +241,9 @@ export default function ProjectPage() {
         ) : prs.length ? (
           prs.map((pr) => (
             <ListRow
-              key={pr.number}
+              key={`${pr.repo ?? ""}:${pr.number}`}
               title={pr.title}
-              subtitle={`#${pr.number} · ${pr.head} → ${pr.base}${pr.is_draft ? " · Draft" : ""}`}
+              subtitle={`${pr.repo ? `${project.members?.find((m) => m.path === pr.repo)?.name ?? pr.repo} · ` : ""}#${pr.number} · ${pr.head} → ${pr.base}${pr.is_draft ? " · Draft" : ""}`}
               subtitleLines={1}
               leading="arrow.triangle.pull"
               onPress={() => void Linking.openURL(pr.url)}

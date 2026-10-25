@@ -32,7 +32,9 @@ export function usePrActions(
   key: string,
   projectId: ProjectId,
   number: number,
-  threadId?: ThreadId
+  threadId?: ThreadId,
+  /** Group projects: the member repository the pull request is in. */
+  repo?: string
 ) {
   const environmentId = useStore((s) => s.environmentId)
   const review = useReviews((s) => s.entries[key])
@@ -47,8 +49,9 @@ export function usePrActions(
   const pr = detail?.pull_request
   const draft = review?.draft ?? emptyReviewDraft()
   const staleDraft = detail ? reviewDraftIsStale(draft, detail.head_sha) : false
+  // Checking a member's pull request out into a conversation isn't supported yet.
   const linked =
-    draft.threadId === "new"
+    draft.threadId === "new" || repo
       ? undefined
       : (draft.threadId ??
         threadId ??
@@ -63,6 +66,7 @@ export function usePrActions(
   const linkedThread = linked ? threads[linked] : null
   const choices = Object.values(threads).filter(
     (t) =>
+      !repo &&
       t.project_id === projectId &&
       t.worktree &&
       t.status !== "archived" &&
@@ -79,7 +83,8 @@ export function usePrActions(
       number,
       review?.kind,
       review?.page?.page ?? 1,
-      workspace === "overview" && review?.kind !== "checks"
+      workspace === "overview" && review?.kind !== "checks",
+      repo
     )
 
   const openConfirmation = (action: PrActionKind) => {
@@ -112,6 +117,7 @@ export function usePrActions(
           body: draft.body,
           inline_comments: isReview ? draft.inline : [],
           ...(linked ? { thread_id: linked } : {}),
+          ...(repo ? { repo } : {}),
         })
       if (isReview) {
         await submitReviewDraft(
@@ -142,6 +148,8 @@ export function usePrActions(
     setBusy(true)
     setActionError(null)
     try {
+      // Refused before a thread exists, so a member pull request leaves no orphan chat.
+      if (repo) throw new Error("A pull request of a group project can't be checked out into a chat yet. Open that repository as its own project.")
       assertReviewDraftHead(draft, detail.head_sha)
       const body = repairReviewPrompt(
         number,
@@ -171,6 +179,7 @@ export function usePrActions(
         thread_id: target,
         head_sha: detail.head_sha,
         for_repair: true,
+        ...(repo ? { repo } : {}),
       })
       await runtime.sendMessage(target, {
         parts: [{ type: "text", text: body }],
@@ -219,6 +228,7 @@ export function usePrActions(
     repair,
     refresh,
     toggleFinding,
+    repo,
   }
 }
 

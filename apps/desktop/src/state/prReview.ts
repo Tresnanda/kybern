@@ -45,8 +45,12 @@ const empty = (): ReviewState => ({
 export const useReviews = create<{ entries: Record<string, ReviewState> }>(
   () => ({ entries: {} })
 )
-export function reviewKey(projectId: ProjectId, number: number) {
-  return `${useStore.getState().environmentId}:${projectId}:${number}`
+export function reviewKey(
+  projectId: ProjectId,
+  number: number,
+  repo?: string | null
+) {
+  return `${useStore.getState().environmentId}:${projectId}${repo ? `/${repo}` : ""}:${number}`
 }
 function savedDraft(key: string): ReviewDraft {
   try {
@@ -90,9 +94,11 @@ export async function loadReview(
   number: number,
   kind?: PrPageKind,
   page = 1,
-  overviewOnly = false
+  overviewOnly = false,
+  repo?: string | null
 ) {
-  const key = reviewKey(projectId, number)
+  const key = reviewKey(projectId, number, repo)
+  const member = repo ? { repo } : {}
   ensureReview(key)
   const previous = useReviews.getState().entries[key]
   const version = previous.version + 1
@@ -100,7 +106,11 @@ export async function loadReview(
   updateReview(key, { loading: true, error: null, version, kind: selectedKind })
   try {
     const [detail, result] = await Promise.all([
-      rpc().call("github.pr.detail", { project_id: projectId, number }),
+      rpc().call("github.pr.detail", {
+        project_id: projectId,
+        number,
+        ...member,
+      }),
       overviewOnly
         ? Promise.resolve(previous.page)
         : rpc().call("github.pr.page", {
@@ -108,6 +118,7 @@ export async function loadReview(
             number,
             kind: selectedKind,
             page,
+            ...member,
           }),
     ])
     if (useReviews.getState().entries[key]?.version !== version) return
@@ -141,7 +152,13 @@ export async function loadReview(
       })
   }
 }
-export function openPullRequest(projectId: ProjectId, number: number) {
+export function openPullRequest(
+  projectId: ProjectId,
+  number: number,
+  repo?: string | null
+) {
   useStore.getState().selectPulls()
-  useStore.getState().set({ prSelection: { projectId, number } })
+  useStore
+    .getState()
+    .set({ prSelection: { projectId, number, ...(repo ? { repo } : {}) } })
 }

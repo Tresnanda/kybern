@@ -107,12 +107,14 @@ export function PrChangesTab({
   stateKey,
   projectId,
   number,
+  repo,
   mode,
 }: {
   actions: PrActions
   stateKey: string
   projectId: ProjectId
   number: number
+  repo?: string
   mode: "page" | "dock"
 }) {
   const { review, detail, draft, staleDraft, setActionError } = actions
@@ -208,7 +210,7 @@ export function PrChangesTab({
   const total = detail?.changed_files ?? 0
   const first = (page - 1) * PAGE_SIZE + 1
   const go = (next: number) =>
-    void loadReview(projectId, number, "files", next)
+    void loadReview(projectId, number, "files", next, false, repo)
 
   return (
     <div className="pr-changes">

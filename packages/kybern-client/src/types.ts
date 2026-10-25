@@ -2736,6 +2736,8 @@ export interface PullRequest {
   mergeable?: string;
   labels?: PrLabel[];
   checks_summary?: PrChecksSummary;
+  /** Group projects: the member repository (path relative to the group folder). Absent for single projects. */
+  repo?: string;
 }
 export interface PrLabel { name: string; color: string }
 export interface PrChecksSummary { total: number; passed: number; failed: number; pending: number; skipped: number }
@@ -2840,10 +2842,23 @@ export interface PrListParams {
 }
 
 export interface PrListResult {
+  /** Group projects: every member's pull requests in member order, each tagged with `repo`. */
   pull_requests: PullRequest[];
+  /** Group projects only: one row per member, with why its list is missing. */
+  repos?: PrListRepo[];
+}
+export interface PrListRepo {
+  /** Member path, relative to the group folder ("." is the folder itself). */
+  repo: string;
+  name: string;
+  /** "No GitHub remote", a missing folder or the `gh` error. */
+  error?: string;
+  /** Not on GitHub (no remote `gh` knows): nothing to list, and no error to show. */
+  skipped?: boolean;
 }
 
-export interface PrDetailParams { project_id: ProjectId; number: number }
+/** `repo`: the member of a group project (a `PullRequest.repo`); a group project requires it. */
+export interface PrDetailParams { project_id: ProjectId; number: number; repo?: string }
 export interface PrCheck { name: string; status: string; conclusion: string; url: string }
 export interface PrDetailResult { pull_request: PullRequest; body: string; head_sha: string; reviewers: string[]; checks: PrCheck[]; changed_files: number
   /** CLEAN | BLOCKED | BEHIND | DIRTY | UNSTABLE | DRAFT | HAS_HOOKS | UNKNOWN */
@@ -2858,13 +2873,13 @@ export interface PrDetailResult { pull_request: PullRequest; body: string; head_
 /** APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | REQUESTED */
 export interface PrReviewer { login: string; avatar_url?: string; is_bot?: boolean; state: string }
 export type PrPageKind = "files" | "comments" | "reviews" | "review_comments" | "checks";
-export interface PrPageParams { project_id: ProjectId; number: number; kind: PrPageKind; page?: number }
+export interface PrPageParams { project_id: ProjectId; number: number; kind: PrPageKind; page?: number; repo?: string }
 export interface PrFile { path: string; old_path: string | null; status: string; additions: number; deletions: number; patch: string; patch_truncated: boolean }
 export interface PrReviewEntry { id: number; author: string; body: string; state: string; path: string | null; line: number | null; side: string | null; url: string; updated_at: string; avatar_url?: string; author_is_bot?: boolean }
 export interface PrPageResult { checks?: PrCheck[]; files: PrFile[]; entries: PrReviewEntry[]; page: number; has_more: boolean }
 export type PrActionKind = "comment" | "approve" | "request_changes" | "checkout" | "merge" | "close";
 export interface PrInlineComment { path: string; line: number; side: string; body: string }
-export interface PrActionParams { project_id: ProjectId; number: number; action: PrActionKind; body?: string; inline_comments?: PrInlineComment[]; head_sha?: string; thread_id?: ThreadId; for_repair?: boolean }
+export interface PrActionParams { project_id: ProjectId; number: number; action: PrActionKind; body?: string; inline_comments?: PrInlineComment[]; head_sha?: string; thread_id?: ThreadId; for_repair?: boolean; repo?: string }
 export interface WorktreeInspectParams { thread_id: ThreadId }
 export interface WorktreeInspectResult { path: string; branch: string; exists: boolean; clean: boolean; merged: boolean; ignored_files: number; blockers: string[]; eligible: boolean }
 export interface WorktreeRemoveParams { thread_id: ThreadId; force?: boolean; delete_branch?: boolean }
