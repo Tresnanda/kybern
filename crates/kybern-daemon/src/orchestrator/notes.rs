@@ -30,10 +30,15 @@ impl Orchestrator {
     }
 
     pub(super) fn publish_note(&self, mut note: NoteSummary) {
-        // Only a send to a connected client needs the stale flag; read it from git for project notes.
+        // Only a send to a connected client needs the stale flag. Callers hold the
+        // command lock, so git runs later, off the lock (`publish_with_stale_flag`).
         if self.inner.notes_changed.receiver_count() > 0 {
-            self.flag_stale_summary(&mut note);
+            self.publish_with_stale_flag(&mut note);
         }
+        self.send_note_changed(note);
+    }
+
+    pub(super) fn send_note_changed(&self, note: NoteSummary) {
         // No receivers just means no client is connected.
         let _ = self.inner.notes_changed.send(NotesChangedNotification { note: Some(note), purged_id: None });
     }
@@ -42,6 +47,7 @@ impl Orchestrator {
         let _ = self.inner.notes_changed.send(NotesChangedNotification { note: None, purged_id: Some(id) });
     }
 
+    /// Every note, stale flags read from git: call it from a blocking thread.
     pub fn notes_list(&self) -> Result<Vec<NoteSummary>> {
         let mut notes = self.inner.store.notes_list()?;
         self.flag_stale_all(&mut notes);
@@ -54,6 +60,7 @@ impl Orchestrator {
     }
 
     /// The note by `id` or by `thread_id`; a thread without a note yields `None`.
+    /// Its stale flag reads git: call it from a blocking thread.
     pub fn note_get(&self, params: NotesGetParams) -> Result<Option<Note>> {
         let note = match (params.id, params.thread_id) {
             (Some(id), None) => self
@@ -105,6 +112,10 @@ impl Orchestrator {
             (None, Some(thread_id)) => NoteTarget::Thread(thread_id),
             _ => return invalid("Pass either id or thread_id."),
         };
+        if params.clear_category && params.category.is_some() {
+            return invalid("Pass category or clear_category, not both.");
+        }
+        let category = if params.clear_category { Some(None) } else { params.category.map(Some) };
         let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
         let previous_body = match target {
             NoteTarget::Id(id) => self.inner.store.note_get(id)?,
@@ -116,7 +127,7 @@ impl Orchestrator {
             params.expected_revision,
             params.title.as_deref(),
             params.body.as_deref(),
-            params.category,
+            category,
         )?;
         // An unchanged save returns the note as it is; only a real write moved the revision.
         if note.summary.revision != params.expected_revision {
@@ -213,6 +224,7 @@ impl Orchestrator {
             title: None,
             body: Some(params.text),
             category: None,
+            clear_category: false,
         })?;
         Ok(ThreadNotes { text: note.body, revision: note.summary.revision })
     }

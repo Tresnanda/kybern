@@ -280,12 +280,13 @@ function Code({ children }: { children: string }) {
   return <div style={{ display: 'flex', alignItems: 'center', paddingLeft: 5, paddingRight: 5, borderRadius: 4, backgroundColor: ink(t, 0.06) }}><Label color={t.textSecondary} size={11.5} lineHeight={17} font={FONT_MONO}>{children}</Label></div>
 }
 /** The meta row's category: a small secondary control ("Decision ▾"). A deleted note shows it as plain text. */
-function CategoryPicker({ category, locked, onPick }: { category: NoteCategory | null; locked: boolean; onPick: (category: NoteCategory) => void }) {
+function CategoryPicker({ category, locked, onPick }: { category: NoteCategory | null; locked: boolean; onPick: (category: NoteCategory | null) => void }) {
   const t = useTheme()
   const label = NOTE_CATEGORIES.find((c) => c.value === category)?.label ?? NOTES_HISTORY_COPY.categoryLabel
   if (locked) return category ? <Label color={t.textSecondary} size={NOTES_META} lineHeight={19.5}>{label}</Label> : null
   return <Menu align="start" minWidth={168} testId="note-category" trigger={() => <Button size="sm" chevron label={`Category: ${label}`} testId="note-category-trigger">{label}</Button>}>
     {NOTE_CATEGORIES.map((c) => <MenuItem key={c.value} id={c.value} label={c.label} checked={c.value === category} testId={`note-category-${c.value}`} onSelect={() => { if (c.value !== category) onPick(c.value) }} />)}
+    {category && <MenuItem id="none" label={NOTES_HISTORY_COPY.noCategory} testId="note-category-none" onSelect={() => onPick(null)} />}
   </Menu>
 }
 /** A retired claim: the block dims to the muted level (a surface-coloured veil over the struck text, which the editor draws), and a

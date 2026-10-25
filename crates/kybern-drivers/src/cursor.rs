@@ -164,13 +164,14 @@ impl AgentDriver for CursorDriver {
         // The SDK has no system channel, so a new conversation carries the guide
         // on its first ordinary prompt. A project Coordinator's lead instructions
         // and a thread's project brief ride in the same block, since there is no
-        // system channel for them either. A resumed conversation already holds
-        // it in its history; sending it again on every respawn (each idle
-        // release) would pile up one more copy per resume. What changed since
-        // then reaches it as provider-only updates.
-        let guide = match config.resume_session_id {
-            None => config.native_tool_bridge.as_ref().and_then(|bridge| bridge.provider_instructions()),
-            Some(_) => None,
+        // system channel for them either. A resumed conversation that already
+        // holds it gets nothing: sending it on every respawn (each idle release)
+        // would pile up one more copy per resume, and what changed since then
+        // reaches it as provider-only updates. One that never received it (the
+        // daemon keeps track by session id) gets it once.
+        let guide = match (&config.resume_session_id, config.resume_lacks_instructions) {
+            (None, _) | (Some(_), true) => config.native_tool_bridge.as_ref().and_then(|bridge| bridge.provider_instructions()),
+            (Some(_), false) => None,
         };
         Ok(SpawnedSession { session: Box::new(Session { connection, model: Mutex::new(config.model), guide: Mutex::new(guide) }), events })
     }
@@ -295,10 +296,16 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn only_fresh_runners_send_the_guide_once_and_retry_it_after_rejection() {
+    async fn only_runners_whose_conversation_lacks_the_guide_send_it_once_and_retry_it_after_rejection() {
         use std::os::unix::fs::PermissionsExt;
 
-        for (resume, enabled) in [(None, true), (Some("cursor-sdk:restored"), true), (Some("cursor-sdk:restored"), false)] {
+        for (resume, enabled, lacks) in [
+            (None, true, false),
+            (Some("cursor-sdk:restored"), true, false),
+            (Some("cursor-sdk:restored"), false, false),
+            // Resumed, but the conversation never received the block (the guide was off then).
+            (Some("cursor-sdk:restored"), true, true),
+        ] {
             let root = tempfile::tempdir().unwrap();
             let host = root.path().join("node-fixture");
             let log = root.path().join("requests.jsonl");
@@ -336,6 +343,7 @@ for line in sys.stdin:
                     restrictions: Default::default(),
                 }),
                 resume_session_id: resume.map(str::to_owned),
+                resume_lacks_instructions: lacks,
                 fork: false,
                 rewind: None,
                 binary: None,
@@ -367,8 +375,8 @@ for line in sys.stdin:
             let sends: Vec<_> = requests.iter().filter(|request| request["type"] == "send").collect();
             assert_eq!(sends.len(), 4);
             assert_eq!(sends[0]["message"]["text"], "/compress");
-            // A resumed conversation already holds the block: it is never sent again.
-            let expected = if enabled && resume.is_none() {
+            // A resumed conversation that already holds the block never gets it again.
+            let expected = if enabled && (resume.is_none() || lacks) {
                 with_guide("CURRENT GUIDE: use kybern_html_preview when helpful\nLEAD ROLE: plan and delegate", "Explain the results")
             } else {
                 "Explain the results".into()

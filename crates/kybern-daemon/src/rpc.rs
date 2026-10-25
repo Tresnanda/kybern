@@ -504,7 +504,11 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             .map_err(note_err)?;
             ok(NotesListResult { notes, history_since })
         }
-        NotesGet::NAME => ok(NotesGetResult { note: state.orchestrator.note_get(parse_or_default(params)?).map_err(note_err)? }),
+        NotesGet::NAME => {
+            let (orchestrator, params) = (state.orchestrator.clone(), parse_or_default(params)?);
+            let note = tokio::task::spawn_blocking(move || orchestrator.note_get(params)).await.map_err(internal)?.map_err(note_err)?;
+            ok(NotesGetResult { note })
+        }
         NotesCreate::NAME => ok(state.orchestrator.note_create(parse(params)?).map_err(note_err)?),
         NotesUpdate::NAME => ok(state.orchestrator.note_update(parse(params)?).map_err(note_err)?),
         NotesPin::NAME => {
@@ -574,7 +578,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         ThreadsCompact::NAME => {
             let p: ThreadsInterruptParams = parse(params)?;
             let (turn_id, message_id) = state.orchestrator.send(p.thread_id, UserMessage::text("/compact")).await.map_err(bad)?;
-            ok(ThreadsSendResult { turn_id, message_id })
+            ok(ThreadsSendResult { turn_id, message_id, queued: false })
         }
         ThreadsInterrupt::NAME => {
             let p: ThreadsInterruptParams = parse(params)?;

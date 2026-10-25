@@ -15,15 +15,23 @@
 //! with a space cannot be a branch).
 //!
 //! A repository with no stored heads yet (the lead's first turn) is recorded
-//! without a report, and so is a branch seen for the first time. A head is
-//! marked seen only once the message that carried the report was accepted.
+//! without a report. A child's branch seen for the first time is reported from
+//! where it forked: the delegation's base commit, else its merge base with the
+//! default branch. A head is marked seen only once the message that carried
+//! the report was accepted.
+//!
+//! This runs before every lead turn, so each repository costs two git calls
+//! (`for-each-ref` for every tip, and a `status` that never takes `index.lock`)
+//! until something moved, each bounded by [`GIT_TIMEOUT`]. A repository that
+//! does not answer in time skips the report for this turn; nothing is marked
+//! seen, so the next turn reports it.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use chrono::{Duration, Utc};
-use kybern_git::{FileStatus, LogEntryWithFiles, Repo};
+use kybern_git::{FileStatus, LogEntryWithFiles, RefTips, Repo};
 use kybern_protocol::*;
 
 use super::{Orchestrator, group_git, lead_git};
@@ -40,6 +48,8 @@ const REWRITE_COMMITS: usize = 5;
 const CHILD_BRANCH_DAYS: i64 = 14;
 /// The most commits read from one branch before the rest is only counted.
 const READ_COMMITS: usize = 100;
+/// How long one git call of the report may take before the report is skipped for the turn.
+const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 /// Key of the uncommitted-state hash in a repository's `{branch: sha}` map.
 const UNCOMMITTED_KEY: &str = "uncommitted state";
 const HEADER: &str = "Code changed since your last turn:";
@@ -62,6 +72,12 @@ struct RepoRef {
     dir: PathBuf,
     /// Nested members the repository's own status must leave out.
     exclude: Vec<String>,
+}
+
+/// A branch a delegated child worked on, and the commit its worktree started from.
+struct ChildBranch {
+    name: String,
+    base: Option<String>,
 }
 
 /// What is left of each cap while a report is written.
@@ -173,14 +189,14 @@ impl Orchestrator {
     }
 
     /// Branches this lead's delegated children worked on in the last 14 days.
-    fn recent_child_branches(&self, thread: &Thread) -> Result<Vec<String>> {
+    fn recent_child_branches(&self, thread: &Thread) -> Result<Vec<ChildBranch>> {
         let cutoff = Utc::now() - Duration::days(CHILD_BRANCH_DAYS);
-        let mut branches: Vec<String> = Vec::new();
+        let mut branches: Vec<ChildBranch> = Vec::new();
         for child in self.inner.store.delegation_children(thread.id)? {
             let Some(info) = child.delegation else { continue };
             let Some(branch) = info.branch.filter(|branch| !branch.is_empty()) else { continue };
-            if info.completed_at.unwrap_or(info.started_at) >= cutoff && !branches.contains(&branch) {
-                branches.push(branch);
+            if info.completed_at.unwrap_or(info.started_at) >= cutoff && !branches.iter().any(|known| known.name == branch) {
+                branches.push(ChildBranch { name: branch, base: info.base_commit });
             }
         }
         Ok(branches)
@@ -194,16 +210,28 @@ impl Orchestrator {
         let mut seen = SeenHeads::new();
         for repo_ref in self.change_repos(thread)? {
             let repo = Repo::new(&repo_ref.dir);
-            let branches = tracked_branches(&repo, &children).await;
-            let status = repo.status_porcelain(&repo_ref.exclude).await.unwrap_or_default();
+            let (tips, status) = tokio::join!(repo.ref_tips(GIT_TIMEOUT), repo.status_porcelain_unlocked(&repo_ref.exclude, GIT_TIMEOUT));
+            // Missing a change is worse than a late report: give up on this turn, mark nothing seen.
+            let tips = tips.map_err(|error| anyhow!("{}: {error}", repo_ref.name))?;
+            let status = status.map_err(|error| anyhow!("{}: {error}", repo_ref.name))?;
+            let default = default_branch(&tips);
+            let branches = tracked_branches(&tips, default.as_deref(), &children);
             let state = uncommitted_state(&status);
             let mut heads: BTreeMap<String, String> = branches.iter().cloned().collect();
             heads.insert(UNCOMMITTED_KEY.into(), state.clone());
             if let Some(baseline) = since.get(&repo_ref.key) {
                 let mut listed = HashSet::new();
                 for (branch, sha) in &branches {
-                    if let Some(old) = baseline.get(branch).filter(|old| *old != sha) {
-                        lines.extend(branch_section(&repo, &repo_ref.name, branch, old, sha, &mut budget, &mut listed).await);
+                    let old = match baseline.get(branch) {
+                        Some(old) => Some(old.clone()),
+                        // A child's branch the lead has not seen yet: everything since it forked.
+                        None => match children.iter().find(|child| child.name == *branch) {
+                            Some(child) => fork_point(&repo, child, sha, default.as_ref().and_then(|name| tips.branches.get(name))).await,
+                            None => None,
+                        },
+                    };
+                    if let Some(old) = old.filter(|old| old != sha) {
+                        lines.extend(branch_section(&repo, &repo_ref.name, branch, &old, sha, &mut budget, &mut listed).await);
                     }
                 }
                 if !status.is_empty() && baseline.get(UNCOMMITTED_KEY) != Some(&state) {
@@ -222,19 +250,14 @@ fn seen_key(thread: &Thread, repo_key: &str) -> String {
 
 /// The default branch first, then the children's branches that still exist,
 /// each with its tip.
-async fn tracked_branches(repo: &Repo, children: &[String]) -> Vec<(String, String)> {
+fn tracked_branches(tips: &RefTips, default: Option<&str>, children: &[ChildBranch]) -> Vec<(String, String)> {
     let mut branches: Vec<(String, String)> = Vec::new();
-    if let Some(name) = default_branch(repo).await
-        && let Ok(sha) = repo.rev_parse(&name).await
-    {
-        branches.push((name, sha));
-    }
-    for name in children {
+    for name in default.into_iter().chain(children.iter().map(|child| child.name.as_str())) {
         if branches.iter().any(|(existing, _)| existing == name) {
             continue;
         }
-        if let Ok(sha) = repo.rev_parse(&format!("refs/heads/{name}")).await {
-            branches.push((name.clone(), sha));
+        if let Some(sha) = tips.branches.get(name) {
+            branches.push((name.to_owned(), sha.clone()));
         }
     }
     branches
@@ -242,15 +265,25 @@ async fn tracked_branches(repo: &Repo, children: &[String]) -> Vec<(String, Stri
 
 /// The remote's default branch if it exists locally, else `main`, `master`,
 /// else whatever is checked out.
-async fn default_branch(repo: &Repo) -> Option<String> {
-    let mut candidates: Vec<String> = repo.default_branch().await.into_iter().collect();
-    candidates.extend(["main".to_string(), "master".to_string()]);
-    for name in candidates {
-        if repo.rev_parse(&format!("refs/heads/{name}")).await.is_ok() {
-            return Some(name);
-        }
+fn default_branch(tips: &RefTips) -> Option<String> {
+    tips.origin_default
+        .iter()
+        .map(String::as_str)
+        .chain(["main", "master"])
+        .find(|name| tips.branches.contains_key(*name))
+        .map(str::to_owned)
+        .or_else(|| tips.current.clone())
+}
+
+/// Where a child's branch left the code the lead knows: the commit its worktree
+/// was seeded from, else its merge base with the default branch.
+async fn fork_point(repo: &Repo, child: &ChildBranch, tip: &str, default_tip: Option<&String>) -> Option<String> {
+    if let Some(base) = &child.base
+        && repo.is_ancestor(base, tip).await.unwrap_or(false)
+    {
+        return Some(base.clone());
     }
-    repo.current_branch().await
+    repo.merge_base(default_tip?, tip).await.ok()
 }
 
 /// A stable stand-in for the uncommitted state: "clean", or a hash of the status lines.

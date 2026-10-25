@@ -197,15 +197,16 @@ impl Store {
         self.note_update_with(target, expected_revision, title, body, None)
     }
 
-    /// [`Store::note_update`] that can also set the note's category. A new category
-    /// counts as a change: the revision moves.
+    /// [`Store::note_update`] that can also change the note's category: `None`
+    /// leaves it, `Some(None)` clears it, `Some(Some(_))` sets it. A different
+    /// category counts as a change: the revision moves.
     pub fn note_update_with(
         &self,
         target: NoteTarget,
         expected_revision: i64,
         title: Option<&str>,
         body: Option<&str>,
-        category: Option<NoteCategory>,
+        category: Option<Option<NoteCategory>>,
     ) -> Result<Note> {
         check_content(title, body)?;
         self.with(|c| {
@@ -242,7 +243,7 @@ impl Store {
                             thread_title,
                             body.unwrap_or_default(),
                             now,
-                            category.map(NoteCategory::as_str)
+                            category.flatten().map(NoteCategory::as_str)
                         ],
                     )?;
                     expect_note(&tx, id)?
@@ -253,7 +254,7 @@ impl Store {
                     }
                     // A thread note is titled after its thread until its own title is edited; from then on it keeps that title.
                     let renamed = title.is_some_and(|title| title != note.summary.title);
-                    let recategorized = category.is_some_and(|category| note.summary.category != Some(category));
+                    let recategorized = category.is_some_and(|category| note.summary.category != category);
                     if !renamed && !recategorized && body.is_none_or(|body| body == note.body) {
                         return Ok(note);
                     }
@@ -263,14 +264,15 @@ impl Store {
                     let snapshot = title.unwrap_or(&note.summary.title).to_owned();
                     tx.execute(
                         "UPDATE notes SET title = ?2, body = ?3, revision = revision + 1, updated_at = ?4,
-                            title_edited = title_edited OR ?5, category = COALESCE(?6, category) WHERE id = ?1",
+                            title_edited = title_edited OR ?5, category = CASE WHEN ?6 THEN ?7 ELSE category END WHERE id = ?1",
                         params![
                             note.summary.id.to_string(),
                             snapshot,
                             body.unwrap_or(&note.body),
                             Utc::now().to_rfc3339(),
                             renamed,
-                            category.map(NoteCategory::as_str)
+                            category.is_some(),
+                            category.flatten().map(NoteCategory::as_str)
                         ],
                     )?;
                     expect_note(&tx, note.summary.id)?
@@ -898,15 +900,20 @@ mod tests {
         let plain = store.note_create(NoteScope::Project, Some(project.id), "Plain", "b").unwrap();
         assert_eq!(plain.summary.category, None);
         assert!(!plain.summary.undated);
-        let saved = store.note_update_with(NoteTarget::Id(plain.summary.id), 1, None, None, Some(NoteCategory::Gotcha)).unwrap();
+        let saved = store.note_update_with(NoteTarget::Id(plain.summary.id), 1, None, None, Some(Some(NoteCategory::Gotcha))).unwrap();
         assert_eq!((saved.summary.category, saved.summary.revision), (Some(NoteCategory::Gotcha), 2));
         // Leaving the category out keeps it; the same category again changes nothing.
         let kept = store.note_update(NoteTarget::Id(plain.summary.id), 2, Some("Renamed"), None).unwrap();
         assert_eq!(kept.summary.category, Some(NoteCategory::Gotcha));
-        let same = store.note_update_with(NoteTarget::Id(plain.summary.id), 3, None, None, Some(NoteCategory::Gotcha)).unwrap();
+        let same = store.note_update_with(NoteTarget::Id(plain.summary.id), 3, None, None, Some(Some(NoteCategory::Gotcha))).unwrap();
         assert_eq!(same.summary.revision, 3);
         let listed = store.notes_list().unwrap();
         assert!(listed.iter().any(|n| n.id == plain.summary.id && n.category == Some(NoteCategory::Gotcha)));
+        // An explicit clear removes it.
+        let cleared = store.note_update_with(NoteTarget::Id(plain.summary.id), 3, None, None, Some(None)).unwrap();
+        assert_eq!((cleared.summary.category, cleared.summary.revision), (None, 4));
+        let again = store.note_update_with(NoteTarget::Id(plain.summary.id), 4, None, None, Some(None)).unwrap();
+        assert_eq!(again.summary.revision, 4, "clearing a note without a category changes nothing");
     }
 
     #[test]

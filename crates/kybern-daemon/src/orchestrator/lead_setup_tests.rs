@@ -913,3 +913,90 @@ async fn the_note_changes_card_applies_only_the_ticked_rows_as_appends_and_super
     assert_eq!(declined.await.unwrap().unwrap()["status"], "declined");
     assert_eq!(fixture.store.note_get(build.summary.id).unwrap().unwrap().body, "- pnpm build");
 }
+
+#[tokio::test]
+async fn a_published_note_change_carries_the_known_flag_and_is_corrected_off_the_command_lock() {
+    let fixture = Fixture::new();
+    let first = init_git_project(&fixture);
+    let mut changes = fixture.orchestrator.subscribe_notes();
+    let note = claim_note(&fixture, "Claim a", &first, "a");
+    change_files(&fixture, &["a"]);
+
+    // An autosave that leaves the claim alone. Nothing checked this note yet, so the
+    // first notification has no flag; the background check publishes it again with one.
+    let saved = fixture
+        .orchestrator
+        .note_update(methods::NotesUpdateParams {
+            id: Some(note.summary.id),
+            thread_id: None,
+            expected_revision: note.summary.revision,
+            title: None,
+            body: Some(format!("{}\nMore prose.", note.body)),
+            category: None,
+            clear_category: false,
+        })
+        .unwrap();
+    let flagged = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let change = changes.recv().await.unwrap();
+            if let Some(summary) = change.note.filter(|summary| summary.id == note.summary.id && summary.revision == saved.summary.revision)
+                && summary.stale.is_some()
+            {
+                return summary;
+            }
+        }
+    })
+    .await
+    .expect("the corrected flag is published");
+    assert_eq!(flagged.stale.unwrap().path, "src/a.ts");
+
+    // The next save of the same claims publishes the flag at once.
+    fixture.orchestrator.note_pin(note.summary.id, true).unwrap();
+    let pinned = loop {
+        let change = changes.recv().await.unwrap();
+        if let Some(summary) = change.note.filter(|summary| summary.pinned) {
+            break summary;
+        }
+    };
+    assert_eq!(pinned.stale.map(|stale| stale.path).as_deref(), Some("src/a.ts"));
+}
+
+#[tokio::test]
+async fn agent_note_search_reads_no_git_and_shows_the_flag_a_note_read_found() {
+    let fixture = Fixture::new();
+    let first = init_git_project(&fixture);
+    let (lead, live) = full_access_lead(&fixture).await;
+    let note = claim_note(&fixture, "Claim b", &first, "b");
+    change_files(&fixture, &["b"]);
+    let row = |result: &serde_json::Value| result["notes"].as_array().unwrap().iter().find(|row| row["id"] == json!(note.summary.id)).cloned().unwrap();
+
+    let search = fixture.tool(&lead, &live, "s1", "kybern_notes_search", json!({})).await.unwrap();
+    assert_eq!(row(&search)["may_be_outdated"], json!(null), "never checked, and search does not run git");
+    let read = fixture.tool(&lead, &live, "r1", "kybern_note_read", json!({"note_id": note.summary.id})).await.unwrap();
+    assert_eq!(read["may_be_outdated"]["path"], json!("src/b.ts"));
+    let search = fixture.tool(&lead, &live, "s2", "kybern_notes_search", json!({})).await.unwrap();
+    assert_eq!(row(&search)["may_be_outdated"]["path"], json!("src/b.ts"));
+}
+
+#[tokio::test]
+async fn a_notes_category_can_be_cleared_but_not_set_and_cleared_at_once() {
+    let fixture = Fixture::new();
+    let note =
+        fixture.store.note_create_categorized(NoteScope::Project, Some(fixture.project.id), "Style", "- tabs", None, Some(NoteCategory::Convention)).unwrap();
+    let update = |category, clear_category| methods::NotesUpdateParams {
+        id: Some(note.summary.id),
+        thread_id: None,
+        expected_revision: note.summary.revision,
+        title: None,
+        body: None,
+        category,
+        clear_category,
+    };
+    let error = fixture.orchestrator.note_update(update(Some(NoteCategory::Gotcha), true)).unwrap_err().to_string();
+    assert!(error.contains("not both"), "{error}");
+    let cleared = fixture.orchestrator.note_update(update(None, true)).unwrap();
+    assert_eq!(cleared.summary.category, None);
+    // Leaving both out keeps whatever is there.
+    let kept = fixture.orchestrator.note_update(methods::NotesUpdateParams { expected_revision: cleared.summary.revision, ..update(None, false) }).unwrap();
+    assert_eq!((kept.summary.category, kept.summary.revision), (None, cleared.summary.revision));
+}

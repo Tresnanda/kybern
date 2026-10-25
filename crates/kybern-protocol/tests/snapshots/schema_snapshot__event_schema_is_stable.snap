@@ -1120,6 +1120,10 @@ expression: schema_for!(ThreadEvent)
         "to": {
           "$ref": "#/$defs/HarnessRef"
         },
+        "session_kept": {
+          "description": "The refresh failed before the old session was released: that session\ncarries on, its context was not reset, and no seed waits.",
+          "type": "boolean"
+        },
         "kind": {
           "type": "string",
           "const": "context_rotated"

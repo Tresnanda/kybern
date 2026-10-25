@@ -281,6 +281,10 @@ pub enum EventPayload {
         carried: RotationCarried,
         from: HarnessRef,
         to: HarnessRef,
+        /// The refresh failed before the old session was released: that session
+        /// carries on, its context was not reset, and no seed waits.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        session_kept: bool,
     },
     /// The user corrected the latest rotation's handoff.
     HandoffEdited {
@@ -440,6 +444,7 @@ mod kind_tests {
                 carried: RotationCarried::default(),
                 from: HarnessRef { kind: ProviderKind::ClaudeCode, model: None },
                 to: HarnessRef { kind: ProviderKind::Codex, model: Some("gpt".into()) },
+                session_kept: false,
             },
             EventPayload::HandoffEdited { rotation_id: "r1".into(), text: "## Goals".into() },
             EventPayload::ThreadMessageHeld {

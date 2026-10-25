@@ -38,6 +38,18 @@ struct SkippedPath {
     bytes: u64,
 }
 
+/// Every local branch tip, the branch checked out here and the remote's
+/// default branch, read with one `for-each-ref`.
+#[derive(Debug, Clone, Default)]
+pub struct RefTips {
+    /// Branch name to its tip commit.
+    pub branches: std::collections::BTreeMap<String, String>,
+    /// The branch checked out in this working tree (`None` when detached).
+    pub current: Option<String>,
+    /// The remote's default branch as the clone recorded it (`origin/HEAD`).
+    pub origin_default: Option<String>,
+}
+
 /// One local branch from `for-each-ref`.
 #[derive(Debug, Clone)]
 pub struct BranchRef {
@@ -681,6 +693,50 @@ impl Repo {
         Ok(self.git(&["status", "--porcelain"]).await?.is_empty())
     }
 
+    /// Branch tips, the current branch and `origin/HEAD` in one git call that
+    /// gives up after `timeout`.
+    pub async fn ref_tips(&self, timeout: std::time::Duration) -> Result<RefTips> {
+        let out = self
+            .output_with(
+                &["for-each-ref", "--format=%(HEAD)%00%(refname)%00%(objectname)%00%(symref)", "refs/heads", "refs/remotes/origin/HEAD"],
+                &[],
+                Some(timeout),
+            )
+            .await?;
+        if !out.success {
+            return Err(anyhow!("git for-each-ref failed: {}", out.stderr));
+        }
+        let mut tips = RefTips::default();
+        for line in out.stdout.lines() {
+            let mut fields = line.split('\0');
+            let (Some(head), Some(name), Some(sha)) = (fields.next(), fields.next(), fields.next()) else { continue };
+            let symref = fields.next().unwrap_or_default();
+            if name == "refs/remotes/origin/HEAD" {
+                tips.origin_default = symref.strip_prefix("refs/remotes/origin/").filter(|name| !name.is_empty()).map(str::to_owned);
+            } else if let Some(branch) = name.strip_prefix("refs/heads/") {
+                if head == "*" {
+                    tips.current = Some(branch.to_owned());
+                }
+                tips.branches.insert(branch.to_owned(), sha.to_owned());
+            }
+        }
+        Ok(tips)
+    }
+
+    /// `status_porcelain` for a read that runs beside the user's own git: it
+    /// never takes `index.lock` to refresh the index (`GIT_OPTIONAL_LOCKS=0`)
+    /// and gives up after `timeout`.
+    pub async fn status_porcelain_unlocked(&self, exclude: &[String], timeout: std::time::Duration) -> Result<Vec<String>> {
+        let excludes = exclude_pathspecs(exclude);
+        let mut args = vec!["status", "--porcelain", "--", "."];
+        args.extend(excludes.iter().map(String::as_str));
+        let out = self.output_with(&args, &[("GIT_OPTIONAL_LOCKS", "0")], Some(timeout)).await?;
+        if !out.success {
+            return Err(anyhow!("git status failed: {}", out.stderr));
+        }
+        Ok(out.stdout.lines().filter(|line| !line.is_empty()).map(str::to_string).collect())
+    }
+
     /// `git status --porcelain` lines, leaving out `exclude` (paths relative to
     /// the workdir, such as the nested repositories of a group folder).
     pub async fn status_porcelain(&self, exclude: &[String]) -> Result<Vec<String>> {
@@ -728,6 +784,11 @@ impl Repo {
             Some(1) => Ok(false),
             _ => Err(anyhow!("git merge-base --is-ancestor failed: {}", String::from_utf8_lossy(&out.stderr).trim())),
         }
+    }
+
+    /// The best common ancestor of two commits (`git merge-base`).
+    pub async fn merge_base(&self, left: &str, right: &str) -> Result<String> {
+        self.git(&["merge-base", left, right]).await
     }
 
     /// Resolve a revision to a full commit id.
@@ -1170,6 +1231,40 @@ mod tests {
         repo.git(&["config", "user.email", "t@t"]).await.unwrap();
         repo.git(&["config", "user.name", "t"]).await.unwrap();
         (dir, repo)
+    }
+
+    #[tokio::test]
+    async fn ref_tips_reads_every_branch_the_current_one_and_origin_head_in_one_call() {
+        let (dir, repo) = init_repo().await;
+        repo.git(&["symbolic-ref", "HEAD", "refs/heads/trunk"]).await.unwrap();
+        std::fs::write(dir.path().join("a.txt"), "one\n").unwrap();
+        repo.git(&["add", "."]).await.unwrap();
+        repo.git(&["commit", "-q", "-m", "init"]).await.unwrap();
+        let first = repo.head().await.unwrap();
+        repo.git(&["branch", "kybern/child"]).await.unwrap();
+        std::fs::write(dir.path().join("a.txt"), "two\n").unwrap();
+        repo.git(&["commit", "-qam", "second"]).await.unwrap();
+        let second = repo.head().await.unwrap();
+        let timeout = std::time::Duration::from_secs(5);
+
+        let tips = repo.ref_tips(timeout).await.unwrap();
+        assert_eq!(tips.branches.get("trunk"), Some(&second));
+        assert_eq!(tips.branches.get("kybern/child"), Some(&first));
+        assert_eq!((tips.current.as_deref(), tips.origin_default.as_deref()), (Some("trunk"), None));
+
+        repo.git(&["update-ref", "refs/remotes/origin/trunk", &second]).await.unwrap();
+        repo.git(&["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk"]).await.unwrap();
+        repo.git(&["checkout", "-q", "--detach"]).await.unwrap();
+        let tips = repo.ref_tips(timeout).await.unwrap();
+        assert_eq!((tips.current.as_deref(), tips.origin_default.as_deref()), (None, Some("trunk")));
+        assert_eq!(tips.branches.len(), 2, "remote refs are not branches: {:?}", tips.branches);
+        assert_eq!(repo.merge_base("trunk", "kybern/child").await.unwrap(), first);
+
+        // Status that leaves the index alone still sees the change, and a hung git gives up.
+        std::fs::write(dir.path().join("a.txt"), "three\n").unwrap();
+        assert_eq!(repo.status_porcelain_unlocked(&[], timeout).await.unwrap(), [" M a.txt"]);
+        let error = repo.status_porcelain_unlocked(&[], std::time::Duration::from_nanos(1)).await.unwrap_err();
+        assert!(error.to_string().contains("timed out"), "{error}");
     }
 
     #[tokio::test]

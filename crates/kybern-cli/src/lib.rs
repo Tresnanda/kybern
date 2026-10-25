@@ -2506,6 +2506,7 @@ async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
                     title,
                     body: file.as_deref().map(read_input).transpose()?,
                     category,
+                    clear_category: false,
                 })
                 .await?;
             if json {

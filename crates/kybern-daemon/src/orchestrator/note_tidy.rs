@@ -101,7 +101,7 @@ impl Orchestrator {
         let lead = self
             .coordinator_get(params.project_id)?
             .ok_or_else(|| anyhow!("Open the project's Coordinator first; it tidies the notes."))?;
-        let flagged = self.stale_notes(params.project_id)?;
+        let flagged = self.stale_notes_off_thread(params.project_id).await?;
         ensure!(!flagged.is_empty(), "None of this project's notes looks outdated right now.");
         ensure!(matches!(lead.status, ThreadStatus::Idle | ThreadStatus::Failed), "Wait for the Coordinator to finish, then try again.");
         self.send_with_id(lead.id, Uuid::now_v7(), tidy_message(), false, false).await.map_err(|error| {

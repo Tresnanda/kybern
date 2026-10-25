@@ -1083,8 +1083,14 @@ pub struct ThreadsSendParams {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsSendResult {
+    /// The turn the message started. Nil when `queued`.
     pub turn_id: TurnId,
     pub message_id: MessageId,
+    /// The message waits in the thread's queue instead of starting a turn (a
+    /// Coordinator's context is being refreshed). It starts the next turn by
+    /// itself; a retry with the same `message_id` returns this result again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub queued: bool,
 }
 method!(ThreadsSend, "threads.send", Some(Scope::OrchestrationOperate), ThreadsSendParams, ThreadsSendResult);
 
@@ -1238,8 +1244,14 @@ pub struct CoordinatorSetupParams {
 }
 method!(CoordinatorSetup, "coordinator.setup", Some(Scope::OrchestrationOperate), CoordinatorSetupParams, Thread);
 
-/// Move the Coordinator to another harness, model or account. Its session restarts
-/// with the same lead instructions; the thread and its history stay.
+/// Move the Coordinator to another harness, model or account. This is a context
+/// refresh onto the new harness: the old session writes a handoff (unless its
+/// harness is signed out), its process closes, and the next message starts the
+/// new session with the handoff. The thread and its history stay.
+///
+/// The call returns only when the refresh is over: up to 90 s for the handoff
+/// and 90 s more for one correction, so allow about three minutes. Messages
+/// sent meanwhile queue and start on the new harness.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CoordinatorSwitchHarnessParams {
     pub project_id: ProjectId,
@@ -3131,6 +3143,9 @@ pub struct NotesUpdateParams {
     /// Sets the note's category. Absent leaves it as it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<NoteCategory>,
+    /// Removes the note's category. Not together with `category`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clear_category: bool,
 }
 method!(NotesUpdate, "notes.update", Some(Scope::OrchestrationOperate), NotesUpdateParams, Note);
 

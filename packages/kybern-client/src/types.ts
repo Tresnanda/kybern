@@ -1342,6 +1342,8 @@ export type EventPayload =
       carried: RotationCarried;
       from: HarnessRef;
       to: HarnessRef;
+      /** The refresh failed before the old session was released: it carries on with its context. */
+      session_kept?: boolean;
     }
   | { kind: "handoff_edited"; rotation_id: string; text: string };
 
@@ -1952,6 +1954,8 @@ export interface NotesUpdateParams {
   body?: string | null;
   /** Sets the note's category. Absent leaves it as it is. */
   category?: NoteCategory | null;
+  /** Removes the note's category. Not together with `category`. */
+  clear_category?: boolean;
 }
 
 /** Result of `notes.list`. */
@@ -2171,8 +2175,11 @@ export interface ThreadsSendParams {
 }
 
 export interface ThreadsSendResult {
+  /** Nil when `queued`. */
   turn_id: TurnId;
   message_id: MessageId;
+  /** The message waits in the thread's queue (a Coordinator's context is being refreshed) and starts the next turn by itself. */
+  queued?: boolean;
 }
 
 export interface ThreadsInterruptParams {

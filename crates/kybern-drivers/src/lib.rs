@@ -116,6 +116,10 @@ pub struct SessionConfig {
     pub native_tool_bridge: Option<NativeToolBridge>,
     /// Resume this provider session instead of starting fresh.
     pub resume_session_id: Option<String>,
+    /// The resumed conversation never received Kybern's instructions block (it
+    /// began with the guide off, under an older Kybern, or outside Kybern). A
+    /// harness without a system channel (Cursor) sends the block once more.
+    pub resume_lacks_instructions: bool,
     /// When resuming, fork into a new provider session (used by rewind).
     pub fork: bool,
     /// When forking, drop everything after this point in the provider conversation.
@@ -625,6 +629,7 @@ mod lifecycle_tests {
                 permission_mode: if kind == ProviderKind::Cursor { PermissionMode::Auto } else { PermissionMode::Supervised },
                 native_tool_bridge: None,
                 resume_session_id: None,
+                resume_lacks_instructions: false,
                 fork: false,
                 rewind: None,
                 binary: Some(binary.clone()),

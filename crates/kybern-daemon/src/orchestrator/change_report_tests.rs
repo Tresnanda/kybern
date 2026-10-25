@@ -144,7 +144,11 @@ async fn a_branch_a_child_worked_on_is_tracked_for_fourteen_days() {
     startup_done(&t.fixture, &t.thread).await;
     let child = t.worktree_child("b.txt", "one\n");
     let branch = child.delegation.as_ref().and_then(|d| d.branch.clone()).unwrap();
-    first_look(&t).await;
+    // The startup turn already looked, so the new branch's commit is news.
+    let first = t.fixture.orchestrator.lead_change_report(&t.thread).await.unwrap().expect("the child's commit");
+    assert!(first.text.contains("child work"), "{}", first.text);
+    t.fixture.orchestrator.lead_change_seen(&t.thread, first).await;
+    assert!(report(&t).await.is_none());
     assert!(t.fixture.orchestrator.lead_git_heads(&t.thread).await["."].contains_key(&branch));
 
     let worktree = std::path::Path::new(&child.cwd);
@@ -161,6 +165,31 @@ async fn a_branch_a_child_worked_on_is_tracked_for_fourteen_days() {
     info.completed_at = Some(chrono::Utc::now() - chrono::Duration::days(15));
     t.fixture.store.thread_upsert(&stale).unwrap();
     assert!(!t.fixture.orchestrator.lead_git_heads(&t.thread).await["."].contains_key(&branch));
+}
+
+#[tokio::test]
+async fn a_childs_branch_seen_for_the_first_time_is_reported_from_where_it_forked() {
+    let t = LeadRepo::new().await;
+    first_look(&t).await;
+
+    // The child forked and committed after the lead last looked: no baseline for its branch.
+    let child = t.worktree_child("b.txt", "one\n");
+    let branch = child.delegation.as_ref().and_then(|d| d.branch.clone()).unwrap();
+    let text = report(&t).await.expect("the child's commit is news");
+    assert!(text.contains(&format!("- fixture · {branch}: 1 commit (")) && text.contains("child work"), "{text}");
+
+    // With the delegation's base commit known, only what came after it counts.
+    let other = t.worktree_child("c.txt", "one\n");
+    let worktree = std::path::Path::new(&other.cwd);
+    let mut stored = t.fixture.store.thread_get(other.id).unwrap().unwrap();
+    stored.delegation.as_mut().unwrap().base_commit = Some(git_in(worktree, &["rev-parse", "HEAD"]));
+    t.fixture.store.thread_upsert(&stored).unwrap();
+    std::fs::write(worktree.join("d.txt"), "two\n").unwrap();
+    commit_all(worktree, "Child follow-up");
+    let other_branch = other.delegation.as_ref().and_then(|d| d.branch.clone()).unwrap();
+    let text = report(&t).await.unwrap();
+    let section: Vec<&str> = text.lines().skip_while(|line| !line.contains(&other_branch)).take(3).collect();
+    assert!(section[0].contains("1 commit (") && section[1].contains("Child follow-up"), "{text}");
 }
 
 #[tokio::test]

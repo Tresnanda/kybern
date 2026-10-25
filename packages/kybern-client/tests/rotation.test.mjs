@@ -22,8 +22,9 @@ test("a rotation shows pending, then settles in place with its handoff", () => {
   assert.equal(pending[0].pending, true)
   assert.equal(pending[0].usedTokens, 201000)
 
+  const limits = [{ name: "5h", used_percent: 10, window_minutes: 300, resets_at: null }]
   const state = fold([
-    { kind: "provider_usage_updated", usage: { context: { used_tokens: 201000, window_tokens: 1000000 } } },
+    { kind: "provider_usage_updated", usage: { context: { used_tokens: 201000, window_tokens: 1000000 }, limits } },
     { kind: "context_rotation_started", rotation_id: "r1", reason: "budget", used_tokens: 201000, window_tokens: 1000000 },
     { kind: "context_rotated", rotation_id: "r1", reason: "budget", handoff: "## Goals\nShip it.", handoff_status: { status: "written" }, carried: CARRIED, from: HARNESS, to: HARNESS },
   ])
@@ -34,7 +35,24 @@ test("a rotation shows pending, then settles in place with its handoff", () => {
   assert.equal(rows[0].usedTokens, 201000)
   assert.equal(rows[0].handoff, "## Goals\nShip it.")
   assert.deepEqual(rows[0].carried, CARRIED)
-  assert.equal(state.providerUsage, undefined, "the fresh session starts with an empty meter")
+  assert.deepEqual(state.providerUsage, { limits }, "the fresh session starts with an empty meter; plan limits stay")
+
+  const withoutLimits = fold([
+    { kind: "provider_usage_updated", usage: { context: { used_tokens: 201000, window_tokens: 1000000 } } },
+    { kind: "context_rotated", rotation_id: "r1", reason: "budget", handoff: null, handoff_status: { status: "written" }, carried: CARRIED, from: HARNESS, to: HARNESS },
+  ])
+  assert.equal(withoutLimits.providerUsage, undefined)
+})
+
+test("a refresh that failed before the release keeps the old session's meter", () => {
+  const usage = { context: { used_tokens: 201000, window_tokens: 1000000 } }
+  const state = fold([
+    { kind: "provider_usage_updated", usage },
+    { kind: "context_rotation_started", rotation_id: "r4", reason: "manual", used_tokens: 201000 },
+    { kind: "context_rotated", rotation_id: "r4", reason: "manual", handoff: null, handoff_status: { status: "missing", why: "Kybern could not refresh the context: disk full" }, carried: CARRIED, from: HARNESS, to: HARNESS, session_kept: true },
+  ])
+  assert.deepEqual(state.providerUsage.context, usage.context)
+  assert.equal(state.blocks.filter((b) => b.kind === "rotation")[0].pending, false, "the pending row still closes")
 })
 
 test("a missing handoff and a later edit", () => {

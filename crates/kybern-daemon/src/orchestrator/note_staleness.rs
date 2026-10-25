@@ -6,10 +6,14 @@
 //! clone) cannot be checked and is never flagged. A note is stale when any of its
 //! live claims is; the first one found names the path.
 //!
-//! The git calls are small, local and blocking (`std::process`): callers are the
-//! session spawn and `spawn_blocking` RPC reads. Results are cached by
-//! `(note id, revision, HEAD of every repository)`, so a note is checked again only
-//! after it or the code changed.
+//! The git calls are small, local and blocking (`std::process`), so they never run
+//! on an async runtime thread or under the daemon's command lock: RPC reads and
+//! agent reads use `spawn_blocking`, a published note change goes out with the
+//! last known flag and is corrected by a background check, and a session's notes
+//! index reads the flags warmed off-thread just before it is built. Results are
+//! cached by `(note id, its claims, HEAD of every repository)`, so an edit that
+//! leaves the claims alone (most autosaves) costs one `rev-parse` per repository,
+//! and the latest result per note is kept for readers that must not run git.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -26,11 +30,50 @@ use super::note_claims::{Claim, parse_claims};
 /// Entries kept before the cache starts over. A note costs one entry per revision and HEAD.
 const CACHE_MAX_ENTRIES: usize = 4096;
 
-type CacheKey = (NoteId, i64, String);
+/// Note id, fingerprint of its live claims, HEAD of every repository.
+type CacheKey = (NoteId, u64, String);
 
 fn cache() -> &'static Mutex<HashMap<CacheKey, Option<StaleInfo>>> {
     static CACHE: OnceLock<Mutex<HashMap<CacheKey, Option<StaleInfo>>>> = OnceLock::new();
     CACHE.get_or_init(Default::default)
+}
+
+/// The latest flag computed for a note, at whatever HEAD: its revision, claims fingerprint and result.
+type Known = HashMap<NoteId, (i64, u64, Option<StaleInfo>)>;
+
+fn known() -> &'static Mutex<Known> {
+    static KNOWN: OnceLock<Mutex<Known>> = OnceLock::new();
+    KNOWN.get_or_init(Default::default)
+}
+
+/// A stable fingerprint of a note's live claims (FNV-1a, the same in every build).
+fn claims_fingerprint(claims: &[Claim]) -> u64 {
+    claims
+        .iter()
+        .flat_map(|claim| {
+            claim.sha.bytes().chain(claim.paths.iter().flat_map(|path| b"\x1f".iter().copied().chain(path.bytes()))).chain(*b"\n")
+        })
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3))
+}
+
+fn remember(note: &Note, fingerprint: u64, result: &Option<StaleInfo>) {
+    let mut known = known().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if known.len() >= CACHE_MAX_ENTRIES && !known.contains_key(&note.summary.id) {
+        known.clear();
+    }
+    known.insert(note.summary.id, (note.summary.revision, fingerprint, result.clone()));
+}
+
+/// The last flag computed for this note, without git: for the same revision, or
+/// (when the body is at hand) the same claims. `None` when it was never checked.
+pub(super) fn known_stale(summary: &NoteSummary, body: Option<&str>) -> Option<StaleInfo> {
+    if !holds_claims(summary) {
+        return None;
+    }
+    let fingerprint = body.map(|body| claims_fingerprint(&parse_claims(body)));
+    let known = known().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (revision, claims, result) = known.get(&summary.id)?;
+    (*revision == summary.revision || fingerprint == Some(*claims)).then(|| result.clone()).flatten()
 }
 
 /// One git repository of a project.
@@ -161,8 +204,29 @@ fn holds_claims(summary: &NoteSummary) -> bool {
     summary.scope == NoteScope::Project && summary.deleted_at.is_none() && summary.project_role != Some(ProjectNoteRole::Brief)
 }
 
-/// The stale flag of `note` against `repos`, from the cache when the note and the code are unchanged.
+/// A project's repositories and their heads, read once and only when a note with claims needs them.
+pub(super) struct Heads<'a> {
+    repos: &'a [RepoRef],
+    read: Option<Vec<(RepoRef, String)>>,
+}
+
+impl<'a> Heads<'a> {
+    pub(super) fn new(repos: &'a [RepoRef]) -> Self {
+        Self { repos, read: None }
+    }
+
+    fn get(&mut self) -> &[(RepoRef, String)] {
+        self.read.get_or_insert_with(|| heads(self.repos))
+    }
+}
+
+/// The stale flag of `note` against `repos`, from the cache when its claims and the code are unchanged.
 pub(super) fn note_stale(repos: &[RepoRef], note: &Note) -> Option<StaleInfo> {
+    note_stale_at(&mut Heads::new(repos), note)
+}
+
+/// `note_stale` with the heads shared across the notes of one project.
+pub(super) fn note_stale_at(heads: &mut Heads<'_>, note: &Note) -> Option<StaleInfo> {
     if !holds_claims(&note.summary) {
         return None;
     }
@@ -170,21 +234,27 @@ pub(super) fn note_stale(repos: &[RepoRef], note: &Note) -> Option<StaleInfo> {
     if claims.is_empty() {
         return None;
     }
-    let heads = heads(repos);
+    let heads = heads.get();
     if heads.is_empty() {
         return None;
     }
+    let fingerprint = claims_fingerprint(&claims);
     let head_key = heads.iter().map(|(repo, head)| format!("{}={head}", repo.path.display())).collect::<Vec<_>>().join(";");
-    let key = (note.summary.id, note.summary.revision, head_key);
-    if let Some(hit) = cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&key) {
-        return hit.clone();
-    }
-    let result = check_claims(&claims, &heads);
-    let mut cache = cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    if cache.len() >= CACHE_MAX_ENTRIES {
-        cache.clear();
-    }
-    cache.insert(key, result.clone());
+    let key = (note.summary.id, fingerprint, head_key);
+    let hit = cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&key).cloned();
+    let result = match hit {
+        Some(hit) => hit,
+        None => {
+            let result = check_claims(&claims, heads);
+            let mut cache = cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            if cache.len() >= CACHE_MAX_ENTRIES {
+                cache.clear();
+            }
+            cache.insert(key, result.clone());
+            result
+        }
+    };
+    remember(note, fingerprint, &result);
     result
 }
 
@@ -198,6 +268,7 @@ impl Orchestrator {
     }
 
     /// Set `note.summary.stale` from git. A no-op for notes without claims.
+    /// Blocking: call it from `spawn_blocking`, never under the command lock.
     pub(super) fn flag_stale(&self, note: &mut Note) {
         if !holds_claims(&note.summary) {
             return;
@@ -209,27 +280,62 @@ impl Orchestrator {
         note.summary.stale = note_stale(&self.stale_repos(project_id), note);
     }
 
-    /// `summary` with its stale flag set; reads the body only when the note can hold claims.
-    pub(super) fn flag_stale_summary(&self, summary: &mut NoteSummary) {
-        if !holds_claims(summary) || summary.project_id.is_none() {
-            return;
-        }
-        if let Ok(Some(mut note)) = self.inner.store.note_get(summary.id) {
-            self.flag_stale(&mut note);
-            summary.stale = note.summary.stale;
-        }
-    }
-
-    /// The stale live notes of a project, each with the claim that flagged it.
+    /// The stale live notes of a project, each with the claim that flagged it. Blocking, like `flag_stale`.
     pub(super) fn stale_notes(&self, project_id: ProjectId) -> Result<Vec<(Note, StaleInfo)>> {
         let repos = self.stale_repos(project_id);
+        let mut heads = Heads::new(&repos);
         let mut out = Vec::new();
         for note in self.inner.store.project_notes(project_id)? {
-            if let Some(stale) = note_stale(&repos, &note) {
+            if let Some(stale) = note_stale_at(&mut heads, &note) {
                 out.push((note, stale));
             }
         }
         Ok(out)
+    }
+
+    /// `stale_notes` on a blocking thread.
+    pub(super) async fn stale_notes_off_thread(&self, project_id: ProjectId) -> Result<Vec<(Note, StaleInfo)>> {
+        let this = self.clone();
+        tokio::task::spawn_blocking(move || this.stale_notes(project_id)).await?
+    }
+
+    /// Bring the flags of a project's notes up to date off the runtime, so readers
+    /// that must not run git (`known_stale`) see the current ones.
+    pub(super) async fn warm_stale_flags(&self, project_id: ProjectId) {
+        if let Err(error) = self.stale_notes_off_thread(project_id).await {
+            tracing::debug!(%project_id, %error, "could not check the project's notes for stale claims");
+        }
+    }
+
+    /// A note change for clients, published while the command lock is held: it
+    /// carries the last known flag at once, and a background check that runs git
+    /// off the lock publishes the note again if the flag turns out different.
+    pub(super) fn publish_with_stale_flag(&self, summary: &mut NoteSummary) {
+        if !holds_claims(summary) || summary.project_id.is_none() {
+            return;
+        }
+        let Ok(Some(note)) = self.inner.store.note_get(summary.id) else { return };
+        summary.stale = known_stale(summary, Some(&note.body));
+        if parse_claims(&note.body).is_empty() {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else { return };
+        let (this, published) = (self.clone(), summary.clone());
+        runtime.spawn_blocking(move || {
+            let mut checked = note;
+            this.flag_stale(&mut checked);
+            if checked.summary.stale == published.stale {
+                return;
+            }
+            // Under the command lock, so no newer change of the note can be overtaken.
+            let Ok(_command) = this.inner.commands.lock() else { return };
+            let Ok(Some(current)) = this.inner.store.note_get(published.id) else { return };
+            if current.summary.revision == published.revision && current.summary.deleted_at == published.deleted_at {
+                let mut summary = current.summary;
+                summary.stale = checked.summary.stale;
+                this.send_note_changed(summary);
+            }
+        });
     }
 
     /// `notes` (from `notes.list`) with the stale flags of every project note set.
@@ -389,23 +495,37 @@ mod tests {
     }
 
     #[test]
-    fn results_are_cached_by_note_revision_and_head() {
+    fn results_are_cached_by_note_claims_and_head() {
         let (dir, repo) = repo();
         let first = run(dir.path(), &["rev-parse", "--short", "HEAD"]);
         let repos = [repo];
         let flagged = note(&claim(&first, "src/auth/session.ts"), 1);
         assert_eq!(note_stale(&repos, &flagged), None);
-        // The same note and revision at the same HEAD never reads git again: poison the repo and ask.
+        // The same claims at the same HEAD never read git again: poison the cache and ask.
         let head_key = format!("{}={}", dir.path().display(), run(dir.path(), &["rev-parse", "HEAD"]));
-        cache().lock().unwrap().insert((flagged.summary.id, 1, head_key), Some(StaleInfo { path: "cached".into(), commit: "c".into() }));
+        let fingerprint = claims_fingerprint(&parse_claims(&flagged.body));
+        cache()
+            .lock()
+            .unwrap()
+            .insert((flagged.summary.id, fingerprint, head_key), Some(StaleInfo { path: "cached".into(), commit: "c".into() }));
         assert_eq!(note_stale(&repos, &flagged).unwrap().path, "cached");
-        // A new revision, or a new HEAD, is checked again.
+        // An autosave that leaves the claims alone is still a hit; new claims, or a new HEAD, are checked again.
+        let mut autosaved = flagged.clone();
+        autosaved.summary.revision = 2;
+        autosaved.body.push_str("\nSome prose without a claim.");
+        assert_eq!(note_stale(&repos, &autosaved).unwrap().path, "cached");
         let mut revised = flagged.clone();
-        revised.summary.revision = 2;
+        revised.body = claim(&first, "src/other.ts");
         assert_eq!(note_stale(&repos, &revised), None);
         fs::write(dir.path().join("src/auth/session.ts"), "b").unwrap();
         run(dir.path(), &["commit", "-qam", "change"]);
         assert_eq!(note_stale(&repos, &flagged).unwrap().path, "src/auth/session.ts");
+        // Readers that must not run git see the latest result for that note.
+        assert_eq!(known_stale(&flagged.summary, None).unwrap().path, "src/auth/session.ts");
+        let mut later = flagged.summary.clone();
+        later.revision = 9;
+        assert_eq!(known_stale(&later, None), None, "an unchecked revision without its body is unknown");
+        assert_eq!(known_stale(&later, Some(&flagged.body)).unwrap().path, "src/auth/session.ts", "same claims");
     }
 
     #[test]

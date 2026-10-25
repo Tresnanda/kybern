@@ -585,6 +585,9 @@ struct LiveSession {
     lead_settings: Mutex<Option<EffectiveCoordinatorSettings>>,
     /// The latest context report of this process, for the rotation budget.
     context_usage: std::sync::Mutex<Option<ContextUsage>>,
+    /// A Cursor process told to send Kybern's instructions block with its first
+    /// prompt; once a turn completes, its conversation is recorded as having it.
+    instructions_unconfirmed: AtomicBool,
 }
 
 struct DaemonApproval {
@@ -722,6 +725,23 @@ impl SessionActivityTime {
     }
 }
 
+/// `meta` key recording that a provider conversation received Kybern's
+/// instructions block (for harnesses that carry it in the conversation).
+fn instructions_key(session_id: &str) -> String {
+    format!("instructions_delivered:{session_id}")
+}
+
+/// How `send_with_id` took a message.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Admission {
+    /// It started a turn.
+    Started,
+    /// A retry of a message that already started a turn.
+    Replayed,
+    /// It waits in the thread's queue (a Coordinator's context is being refreshed).
+    Queued,
+}
+
 /// Who is steering a turn. Only a person's message may restart the turn on a
 /// newly selected target; Kybern's own deliveries (agent results, thread
 /// messages) are queued for the next turn instead.
@@ -760,6 +780,9 @@ struct ActiveTurn {
     /// A Kybern-internal turn (the rotation handoff): its output is collected
     /// here and never persisted, and clients never see the turn.
     internal: Option<rotation::InternalTurn>,
+    /// The context-refresh seed this turn's message carried. It is cleared once the
+    /// turn completes, so a provider that failed before reading it gets it again.
+    rotation_seed: Option<rotation::RotationSeed>,
 }
 
 #[derive(Clone)]
@@ -947,7 +970,8 @@ impl Orchestrator {
     /// no pending approval, no provider-owned background work, and the thread
     /// is not marked busy in the store.
     async fn session_parked(&self, thread_id: ThreadId, live: &LiveSession) -> Result<bool> {
-        if live.turn.lock().await.is_some() {
+        // A context refresh owns the session between its handoff turns.
+        if live.turn.lock().await.is_some() || self.is_rotating(thread_id) {
             return Ok(false);
         }
         if live.tasks.lock().await.values().any(|task| task.status.is_active()) {
@@ -1830,17 +1854,18 @@ impl Orchestrator {
     }
 
     pub async fn send(&self, thread_id: ThreadId, message: UserMessage) -> Result<(TurnId, MessageId)> {
-        let (turn_id, message_id, _accepted) = self.send_with_id(thread_id, Uuid::now_v7(), message, false, false).await?;
+        let (turn_id, message_id, _admission) = self.send_with_id(thread_id, Uuid::now_v7(), message, false, false).await?;
         Ok((turn_id, message_id))
     }
 
     pub async fn send_client_message(&self, params: methods::ThreadsSendParams) -> Result<methods::ThreadsSendResult> {
         let retryable = params.message_id.is_some();
         let message_id = params.message_id.unwrap_or_else(Uuid::now_v7);
-        let (turn_id, message_id, _accepted) = self.send_with_id(params.thread_id, message_id, params.message, false, retryable).await?;
-        Ok(methods::ThreadsSendResult { turn_id, message_id })
+        let (turn_id, message_id, admission) = self.send_with_id(params.thread_id, message_id, params.message, false, retryable).await?;
+        Ok(methods::ThreadsSendResult { turn_id, message_id, queued: admission == Admission::Queued })
     }
 
+    /// Returns the turn the message started (nil when it was queued) and how it was taken.
     async fn send_with_id(
         &self,
         thread_id: ThreadId,
@@ -1848,7 +1873,7 @@ impl Orchestrator {
         mut message: UserMessage,
         queued: bool,
         retryable: bool,
-    ) -> Result<(TurnId, MessageId, bool)> {
+    ) -> Result<(TurnId, MessageId, Admission)> {
         // The daemon-wide workspace lock serializes worktree and checkout operations across threads. A send needs it only
         // when it may restore or work inside a managed worktree, or apply a permission change; otherwise another thread's
         // worktree removal or PR checkout would hold this message back for its whole git run. The thread's own admission
@@ -1931,17 +1956,33 @@ impl Orchestrator {
             if stored_thread_id != thread_id || stored_message != message {
                 return Err(anyhow!("message_id already belongs to a different thread or message"));
             }
-            return Ok((turn_id, message_id, false));
+            return Ok((turn_id, message_id, Admission::Replayed));
         }
         let mut thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
+        // A send queued during a context refresh and retried with its id before
+        // the queue drains is the same message: it stays queued, once.
+        if !queued && let Some(waiting) = self.inner.store.queue_receipt(message_id)? {
+            anyhow::ensure!(
+                waiting.thread_id == thread_id && serde_json::to_value(&waiting.message)? == serde_json::to_value(&message)?,
+                "message_id already belongs to a different thread or message"
+            );
+            if self.inner.store.queue_is_pending(message_id)? {
+                return Ok((Uuid::nil(), message_id, Admission::Queued));
+            }
+        }
         // While a Coordinator's context is refreshed, a message waits in its
         // queue and starts the first turn of the fresh session.
         if self.is_rotating(thread_id) {
             if queued {
                 return Err(ThreadBusy.into());
             }
+            if is_compact_message(&message) {
+                return Err(anyhow!(
+                    "Kybern is refreshing this Coordinator's context into a fresh session. Compact later if you still need to."
+                ));
+            }
             self.enqueue_admitted(methods::QueuedMessage { id: message_id, thread_id, message })?;
-            return Ok((Uuid::nil(), message_id, false));
+            return Ok((Uuid::nil(), message_id, Admission::Queued));
         }
         if queued && thread.status != ThreadStatus::Idle {
             return Err(anyhow!("thread is no longer idle"));
@@ -2010,7 +2051,7 @@ impl Orchestrator {
                 tracing::warn!(turn_id = %turn_id, error = %e, "failed to start turn");
             }
         });
-        Ok((turn_id, message_id, true))
+        Ok((turn_id, message_id, Admission::Started))
     }
 
     /// Whether a send must hold the daemon-wide workspace lock: its worktree folder is missing (restored under the lock), or
@@ -2093,7 +2134,7 @@ impl Orchestrator {
             if thread != params.thread_id || serde_json::to_value(message)? != serde_json::to_value(&params.message)? {
                 return Err(anyhow!("Message id already belongs to another request."));
             }
-            Ok(Some(methods::ThreadsSendResult { turn_id, message_id: params.id }))
+            Ok(Some(methods::ThreadsSendResult { turn_id, message_id: params.id, queued: false }))
         };
         if let Some(result) = receipt()? {
             return Ok(result);
@@ -2183,14 +2224,17 @@ impl Orchestrator {
         if let Some(result) = receipt()? {
             return Ok(result);
         }
+        // A handoff turn is Kybern's own, and a refresh that began meanwhile
+        // (checked again under the turn lock) refuses steering.
         let active = turn
             .as_ref()
-            .filter(|turn| !turn.completed)
+            .filter(|turn| !turn.completed && turn.internal.is_none())
             .ok_or_else(|| anyhow!("This turn has ended. Send your message to start the next turn."))?;
+        anyhow::ensure!(!self.is_rotating(params.thread_id), rotation::ROTATING_STEER_ERROR);
         live.touch();
         live.session.steer(&params.id.to_string(), &self.provider_message_for(&thread, &params.message, &live)).await?;
         self.emit(params.thread_id, Some(active.id), EventPayload::MessageSteered { message_id: params.id, message: params.message })?;
-        Ok(methods::ThreadsSendResult { turn_id: active.id, message_id: params.id })
+        Ok(methods::ThreadsSendResult { turn_id: active.id, message_id: params.id, queued: false })
     }
 
     /// One daemon-owned worker consumes accepted follow-ups, independently of clients.
@@ -2282,6 +2326,7 @@ impl Orchestrator {
                 completed: false,
                 pending_completion: None,
                 internal: None,
+                rotation_seed: None,
             });
         }
         live.turn_ready.notify_one();
@@ -2342,8 +2387,8 @@ impl Orchestrator {
                     let updates: Vec<&str> = [
                         brief_update.as_ref().map(|(_, text)| text.as_str()),
                         settings_update.as_ref().map(|(_, text)| text.as_str()),
-                        // The seed's git delta was marked seen at the refresh, so this report holds only
-                        // commits made since then.
+                        // The rotation marked the seed's heads seen, so this holds only
+                        // what changed after the refresh: it rides along with the seed.
                         change_report.as_ref().map(|report| report.text.as_str()),
                         handoff_correction.as_ref().map(|(_, text)| text.as_str()),
                     ]
@@ -2359,6 +2404,11 @@ impl Orchestrator {
                         Some(seed) => std::borrow::Cow::Owned(lead::with_brief_update(&provider_message, &seed.text)),
                         None => provider_message,
                     };
+                    if let Some(seed) = &seed
+                        && let Some(turn) = live.turn.lock().await.as_mut().filter(|turn| turn.id == turn_id)
+                    {
+                        turn.rotation_seed = Some(seed.clone());
+                    }
                     let sent = live.session.send_message(&message_id.to_string(), &provider_message).await;
                     if sent.is_ok() {
                         if let Some((revision, _)) = brief_update {
@@ -2369,11 +2419,6 @@ impl Orchestrator {
                         }
                         if let Some(report) = change_report {
                             self.lead_change_seen(&thread, report).await;
-                        }
-                        if let Some(seed) = &seed
-                            && let Err(error) = self.rotation_seed_sent(thread.id, seed)
-                        {
-                            tracing::warn!(thread_id = %thread.id, %error, "could not clear the context refresh seed");
                         }
                         if let Some((seq, _)) = handoff_correction
                             && let Err(error) = self.handoff_correction_seen(thread.id, seq)
@@ -2632,6 +2677,7 @@ impl Orchestrator {
         }
         let message_id = Uuid::now_v7();
         let turn_id = if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
+            anyhow::ensure!(!self.is_rotating(params.thread_id), rotation::ROTATING_STEER_ERROR);
             let live = self
                 .inner
                 .sessions
@@ -2641,19 +2687,25 @@ impl Orchestrator {
                 .cloned()
                 .ok_or_else(|| anyhow!("The agent is starting. Submit your answer again in a moment."))?;
             let turn = live.turn.lock().await;
+            // A handoff turn is Kybern's own: an answer never steers into it.
             let active = turn
                 .as_ref()
-                .filter(|turn| !turn.completed)
+                .filter(|turn| !turn.completed && turn.internal.is_none())
                 .ok_or_else(|| anyhow!("The turn just ended. Submit your answer again to continue the conversation."))?;
+            anyhow::ensure!(!self.is_rotating(params.thread_id), rotation::ROTATING_STEER_ERROR);
             live.touch();
             live.session.steer(&message_id.to_string(), &self.provider_message_for(&thread, &message, &live)).await?;
-            active.id
+            Some(active.id)
         } else {
-            self.send_with_id(params.thread_id, message_id, message.clone(), false, false).await?.0
+            // Queued during a context refresh: the answer has no turn until it starts one.
+            match self.send_with_id(params.thread_id, message_id, message.clone(), false, false).await? {
+                (_, _, Admission::Queued) => None,
+                (turn_id, ..) => Some(turn_id),
+            }
         };
         self.emit(
             params.thread_id,
-            Some(turn_id),
+            turn_id,
             EventPayload::AsyncQuestionsAnswered { request_id: params.request_id, answers: params.answers, message_id, message },
         )?;
         Ok(())
@@ -3372,6 +3424,10 @@ impl Orchestrator {
         if thread.coordinator_project_id.is_some() {
             self.refresh_project_map(thread.project_id).await;
         }
+        if !is_free_chat_project(thread.project_id) {
+            // The notes index states which notes may be outdated; check them off the runtime first.
+            self.warm_stale_flags(thread.project_id).await;
+        }
         let instructions = self.session_instructions(thread)?;
         let brief_revision = instructions.as_ref().map(|instructions| instructions.brief_revision);
         let lead_settings = instructions.as_ref().and_then(|instructions| instructions.lead_settings.clone());
@@ -3416,12 +3472,23 @@ impl Orchestrator {
         if askpass_allowed && let Some(env) = self.askpass_env(thread.id, session_instance_id) {
             provider_settings.env.extend(env);
         }
+        // Cursor has no system channel: the block rides in the conversation, once.
+        let resume_lacks_instructions = match &thread.provider_session_id {
+            Some(id) if thread.provider.kind == ProviderKind::Cursor && rewind.is_none() => {
+                self.inner.store.meta_get(&instructions_key(id))?.is_none()
+            }
+            _ => false,
+        };
+        let instructions_unconfirmed = thread.provider.kind == ProviderKind::Cursor
+            && (thread.provider_session_id.is_none() || resume_lacks_instructions)
+            && native_tool_bridge.as_ref().is_some_and(|bridge| bridge.provider_instructions().is_some());
         let config = SessionConfig {
             cwd: PathBuf::from(&thread.cwd),
             model: thread.model.clone(),
             effort: thread.effort.clone(),
             permission_mode: thread.permission_mode,
             resume_session_id: thread.provider_session_id.clone(),
+            resume_lacks_instructions,
             fork: rewind.is_some(),
             rewind,
             binary: provider_settings.binary.map(PathBuf::from),
@@ -3469,6 +3536,7 @@ impl Orchestrator {
             brief_revision: Mutex::new(None),
             lead_settings: Mutex::new(None),
             context_usage: std::sync::Mutex::new(None),
+            instructions_unconfirmed: AtomicBool::new(instructions_unconfirmed),
         });
         self.inner.store.meta_set_many(&[
             (&format!("live_fingerprint:{}", thread.id), &self.environment_fingerprint(thread)?),
@@ -4025,14 +4093,19 @@ impl Orchestrator {
         let internal = turn_guard.as_ref().is_some_and(|turn| turn.internal.is_some());
         let ev = if internal {
             match rotation::internal_turn_event(&mut turn_guard, ev) {
-                None => return Ok(()),
-                Some(DriverEvent::PermissionRequest { request_id, .. }) => {
+                rotation::InternalEvent::Consumed => return Ok(()),
+                rotation::InternalEvent::Interrupt => {
+                    // The waiting rotation interrupts the provider and goes on without a handoff.
+                    tracing::warn!(%thread_id, "the Coordinator started work while writing its handoff");
+                    return Ok(());
+                }
+                rotation::InternalEvent::Pass(DriverEvent::PermissionRequest { request_id, .. }) => {
                     drop(turn_guard);
                     let deny = ApprovalDecision::Deny { reason: Some("Kybern is collecting a handoff; tools are not available.".into()) };
                     let _ = live.session.respond_permission(&request_id, &deny).await;
                     return Ok(());
                 }
-                Some(ev) => ev,
+                rotation::InternalEvent::Pass(ev) => ev,
             }
         } else {
             ev
@@ -4435,6 +4508,12 @@ impl Orchestrator {
                 turn.completed = true;
                 let terminal_message_id = turn.terminal_message_id;
                 let turn_id = turn.id;
+                // The fresh session has read its seed: the next turn goes without it.
+                if let Some(seed) = turn.rotation_seed.take()
+                    && let Err(error) = self.rotation_seed_sent(thread_id, &seed)
+                {
+                    tracing::warn!(%thread_id, %error, "could not clear the context refresh seed");
+                }
                 turn.messages.clear();
                 turn.active_messages.clear();
                 let settled = turn_guard.take();
@@ -4470,6 +4549,11 @@ impl Orchestrator {
                 t.status = ThreadStatus::Idle;
                 let t = self.update_thread(t)?;
                 self.save_account_binding(&t)?;
+                if live.instructions_unconfirmed.swap(false, Ordering::SeqCst)
+                    && let Some(session_id) = &t.provider_session_id
+                {
+                    self.inner.store.meta_set(&instructions_key(session_id), "1")?;
+                }
                 let this = self.clone();
                 tokio::spawn(async move {
                     if let Err(error) = this.apply_pending_permission(thread_id, false).await {
@@ -5285,6 +5369,7 @@ mod tests {
                 completed: false,
                 pending_completion: None,
                 internal: None,
+                rotation_seed: None,
             })),
             continuation: Mutex::new(None),
             turn_ready: tokio::sync::Notify::new(),
@@ -5299,6 +5384,7 @@ mod tests {
             brief_revision: Mutex::new(None),
             lead_settings: Mutex::new(None),
             context_usage: std::sync::Mutex::new(None),
+            instructions_unconfirmed: AtomicBool::new(false),
         });
         orchestrator
             .handle_driver_event(
@@ -5667,6 +5753,7 @@ mod tests {
                 brief_revision: Mutex::new(None),
                 lead_settings: Mutex::new(None),
                 context_usage: std::sync::Mutex::new(None),
+                instructions_unconfirmed: AtomicBool::new(false),
             });
             self.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
             (live, closes, messages)
@@ -5702,6 +5789,7 @@ mod tests {
                 brief_revision: Mutex::new(None),
                 lead_settings: Mutex::new(None),
                 context_usage: std::sync::Mutex::new(None),
+                instructions_unconfirmed: AtomicBool::new(false),
             });
             self.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
             self.orchestrator.send(thread.id, UserMessage::text("inspect workspace")).await.unwrap();
@@ -7196,6 +7284,7 @@ mod tests {
             title: None,
             body: Some(body.into()),
             category: None,
+            clear_category: false,
         };
         fixture.orchestrator.note_update(update("- [ ] ship", 1)).unwrap();
         assert!(changes.try_recv().is_err(), "nothing changed, nothing published");
@@ -7386,6 +7475,7 @@ mod tests {
             completed: false,
             pending_completion: None,
             internal: None,
+            rotation_seed: None,
         });
         fixture
             .orchestrator
@@ -7736,6 +7826,7 @@ mod tests {
             completed: false,
             pending_completion: None,
             internal: None,
+            rotation_seed: None,
         });
 
         let with_task = fixture.thread(ThreadStatus::Idle);
@@ -8288,6 +8379,7 @@ for line in sys.stdin:
             brief_revision: Mutex::new(None),
             lead_settings: Mutex::new(None),
             context_usage: std::sync::Mutex::new(None),
+            instructions_unconfirmed: AtomicBool::new(false),
         });
         fixture.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
         fixture.orchestrator.send(thread.id, UserMessage::text("delegate")).await.unwrap();

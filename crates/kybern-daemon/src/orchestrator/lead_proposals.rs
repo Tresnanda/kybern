@@ -259,6 +259,7 @@ impl Orchestrator {
                 title: None,
                 body: Some(text.to_owned()),
                 category: None,
+                clear_category: false,
             })?,
             None => self.note_create(NotesCreateParams {
                 scope: NoteScope::Project,

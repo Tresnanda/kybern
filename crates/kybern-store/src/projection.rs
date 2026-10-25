@@ -775,7 +775,9 @@ fn apply_transcript_event(
                     at: ev.at,
                 });
             }
-            EventPayload::ContextRotated { rotation_id: id, reason: why, handoff: text, handoff_status: status, carried: facts, from: old, to: new } => {
+            EventPayload::ContextRotated {
+                rotation_id: id, reason: why, handoff: text, handoff_status: status, carried: facts, from: old, to: new, ..
+            } => {
                 // The row keeps the place and time its start gave it.
                 let row = out.iter_mut().rev().find(|entry| matches!(entry, TranscriptEntry::Rotation { rotation_id, .. } if rotation_id == id));
                 if let Some(TranscriptEntry::Rotation { reason, pending, handoff, handoff_status, carried, from, to, .. }) = row {
@@ -1016,7 +1018,8 @@ pub fn project_provider_usage(events: &[ThreadEvent]) -> ProviderUsage {
             result = ProviderUsage::default();
         }
         // A fresh session starts with an empty context; plan limits are the account's.
-        if matches!(event.payload, EventPayload::ContextRotated { .. }) {
+        // A failed refresh kept the old session, and its context.
+        if matches!(event.payload, EventPayload::ContextRotated { session_kept: false, .. }) {
             result.context = None;
         }
         if let EventPayload::ProviderUsageUpdated { usage } = &event.payload {
@@ -1858,6 +1861,7 @@ mod rotation_tests {
                 carried: RotationCarried { children: 2, ..Default::default() },
                 from: harness(ProviderKind::ClaudeCode),
                 to: harness(ProviderKind::ClaudeCode),
+                session_kept: false,
             },
         ));
         events.push(event(5, None, EventPayload::HandoffEdited { rotation_id: "r1".into(), text: "## Goals\nShip it.".into() }));
@@ -1889,25 +1893,31 @@ mod rotation_tests {
             context: Some(ContextUsage { used_tokens: used, window_tokens: 1_000 }),
             limits: Some(vec![UsageLimit { name: "5h".into(), used_percent: 10.0, window_minutes: Some(300), resets_at: None }]),
         };
-        let events = vec![
-            event(1, None, EventPayload::ProviderUsageUpdated { usage: usage(900) }),
+        let rotated = |seq, session_kept| {
             event(
-                2,
+                seq,
                 None,
                 EventPayload::ContextRotated {
-                    rotation_id: "r1".into(),
+                    rotation_id: format!("r{seq}"),
                     reason: RotationReason::Manual,
                     handoff: None,
                     handoff_status: HandoffStatus::Missing { why: "timed out".into() },
                     carried: RotationCarried::default(),
                     from: harness(ProviderKind::Codex),
                     to: harness(ProviderKind::Codex),
+                    session_kept,
                 },
-            ),
-        ];
+            )
+        };
+        let mut events = vec![event(1, None, EventPayload::ProviderUsageUpdated { usage: usage(900) }), rotated(2, false)];
         let projected = project_provider_usage(&events);
         assert!(projected.context.is_none());
         assert_eq!(projected.limits.map(|limits| limits.len()), Some(1));
+
+        // A refresh that failed before the release kept the old session and its context.
+        events.push(event(3, None, EventPayload::ProviderUsageUpdated { usage: usage(400) }));
+        events.push(rotated(4, true));
+        assert_eq!(project_provider_usage(&events).context.map(|context| context.used_tokens), Some(400));
     }
 
     /// Row signatures shared with `apps/desktop/transcript.test.mjs`: the reload projector and the

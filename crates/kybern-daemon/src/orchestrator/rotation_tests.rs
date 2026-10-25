@@ -210,7 +210,7 @@ async fn a_turn_past_the_budget_hands_off_and_the_next_message_starts_a_seeded_s
     assert!(!Arc::ptr_eq(&fresh.messages, &old.messages), "a new process");
     let sent = fresh.messages.lock().await[0].plain_text();
     assert!(sent.starts_with("[Kybern] This is a fresh session") && sent.ends_with("what next?"), "{sent}");
-    eventually(|| async { lead.seed().is_none().then_some(()) }).await;
+    assert!(lead.seed().is_some(), "the seed is kept until the fresh session's turn completes");
     let stored = lead.events().into_iter().rev().find_map(|event| match event.payload {
         EventPayload::TurnStarted { message, .. } => Some(message.plain_text()),
         _ => None,
@@ -220,6 +220,7 @@ async fn a_turn_past_the_budget_hands_off_and_the_next_message_starts_a_seeded_s
     // Only the first message of the fresh session carries it.
     fresh.finish("ok").await;
     eventually(|| async { (lead.current().status == ThreadStatus::Idle).then_some(()) }).await;
+    assert!(lead.seed().is_none());
     lead.fixture.orchestrator.send(lead.thread.id, UserMessage::text("and then?")).await.unwrap();
     lead.wait_for_prompt(&fresh, "and then?", 1).await;
     assert!(!fresh.messages.lock().await.last().unwrap().plain_text().contains("fresh session"));
@@ -313,7 +314,7 @@ async fn a_manual_refresh_needs_an_idle_lead_and_messages_sent_meanwhile_wait_fo
         })
         .await
         .unwrap();
-    assert_eq!(sent.turn_id, Uuid::nil());
+    assert_eq!((sent.turn_id, sent.queued), (Uuid::nil(), true));
     assert_eq!(lead.fixture.store.queue_list(Some(lead.thread.id)).unwrap().len(), 1);
     assert_eq!(lead.current().status, ThreadStatus::Idle);
     assert!(!lead.fixture.orchestrator.drain_queues().await.unwrap() || lead.fixture.store.queue_list(Some(lead.thread.id)).unwrap().len() == 1);
@@ -530,4 +531,293 @@ async fn a_rotation_cut_off_by_a_restart_finishes_without_a_handoff() {
     assert!(lead.seed().is_some());
     let rows = kybern_store::project_transcript(&lead.events());
     assert!(rows.iter().any(|row| matches!(row, TranscriptEntry::Rotation { pending: false, .. })));
+}
+
+/// Refresh an idle lead by hand and wait until its handoff is written and the old process closed.
+async fn refresh_with_handoff(lead: &Lead, child: &ScriptedChild, rotations: usize) {
+    lead.fixture.orchestrator.coordinator_refresh_context(methods::CoordinatorRefreshContextParams { thread_id: lead.thread.id }).await.unwrap();
+    lead.answer_handoff(child, VALID_HANDOFF).await;
+    lead.wait_rotated(rotations).await;
+}
+
+#[tokio::test]
+async fn a_commit_made_after_a_refresh_reaches_the_fresh_sessions_first_message() {
+    let lead = Lead::in_git().await;
+    let child = lead.turn("plan", 10, 1_000_000).await;
+    refresh_with_handoff(&lead, &child, 1).await;
+
+    // A child removes the fallback after the refresh, before the user's next message.
+    std::fs::remove_file(lead.fixture.root.join("src/auth/session.ts")).unwrap();
+    run_git(&lead.fixture.root, &["add", "-A"]);
+    run_git(&lead.fixture.root, &["commit", "-q", "-m", "Remove pre-launch fallback"]);
+
+    lead.fixture.orchestrator.send(lead.thread.id, UserMessage::text("what next?")).await.unwrap();
+    let fresh = lead.session_with("what next?").await;
+    let first = fresh.messages.lock().await[0].plain_text();
+    assert!(first.starts_with("[Kybern] This is a fresh session"), "{first}");
+    assert!(first.contains("Code changed since your last turn:"), "{first}");
+    assert!(first.contains("Remove pre-launch fallback") && first.contains("deleted `src/auth/session.ts`"), "{first}");
+
+    // Reported once: the next turn is quiet.
+    fresh.finish("ok").await;
+    eventually(|| async { (lead.current().status == ThreadStatus::Idle).then_some(()) }).await;
+    lead.fixture.orchestrator.send(lead.thread.id, UserMessage::text("and then?")).await.unwrap();
+    lead.wait_for_prompt(&fresh, "and then?", 1).await;
+    assert!(!fresh.messages.lock().await.last().unwrap().plain_text().contains("Code changed"));
+}
+
+#[tokio::test]
+async fn a_seed_whose_turn_failed_is_sent_again_with_the_next_message() {
+    let lead = Lead::new().await;
+    let child = lead.turn("plan", 10, 1_000_000).await;
+    refresh_with_handoff(&lead, &child, 1).await;
+
+    lead.fixture.orchestrator.send(lead.thread.id, UserMessage::text("first try")).await.unwrap();
+    let fresh = lead.session_with("first try").await;
+    fresh.tx.send(DriverEvent::TurnFailed { error: "provider crashed".into() }).await.unwrap();
+    eventually(|| async { (lead.current().status == ThreadStatus::Failed).then_some(()) }).await;
+    assert!(lead.seed().is_some(), "the provider never finished reading it");
+
+    lead.fixture.orchestrator.send(lead.thread.id, UserMessage::text("second try")).await.unwrap();
+    let again = lead.session_with("second try").await;
+    let sent = again.messages.lock().await.last().unwrap().plain_text();
+    assert!(sent.starts_with("[Kybern] This is a fresh session") && sent.ends_with("second try"), "{sent}");
+    again.finish("ok").await;
+    eventually(|| async { lead.seed().is_none().then_some(()) }).await;
+}
+
+#[tokio::test]
+async fn a_message_queued_during_a_harness_switch_starts_on_the_new_harness() {
+    let lead = Lead::new().await;
+    lead.fixture.orchestrator.send(lead.thread.id, UserMessage::text("plan")).await.unwrap();
+    let claude = lead.session_with("plan").await;
+    claude.tx.send(DriverEvent::SessionBound { session_id: "claude-1".into(), model: None }).await.unwrap();
+    claude.finish("planned").await;
+    eventually(|| async { (lead.current().status == ThreadStatus::Idle).then_some(()) }).await;
+    assert_eq!(lead.current().provider_session_id.as_deref(), Some("claude-1"));
+    let orchestrator = lead.fixture.orchestrator.clone();
+    let project_id = lead.fixture.project.id;
+    let switching = tokio::spawn(async move {
+        orchestrator
+            .coordinator_switch_harness(methods::CoordinatorSwitchHarnessParams {
+                project_id,
+                provider: ProviderInstance::default_for(ProviderKind::Codex),
+                model: Some("gpt-6".into()),
+                effort: None,
+                permission_mode: None,
+            })
+            .await
+    });
+    lead.wait_for_prompt(&claude, "Your context is about to be refreshed", 1).await;
+    let sent = lead
+        .fixture
+        .orchestrator
+        .send_client_message(methods::ThreadsSendParams {
+            thread_id: lead.thread.id,
+            message: UserMessage::text("queued during the switch"),
+            message_id: None,
+        })
+        .await
+        .unwrap();
+    assert!(sent.queued);
+    claude.finish(VALID_HANDOFF).await;
+    switching.await.unwrap().unwrap();
+    let rotated_seq = lead.events().iter().rev().find(|event| event.payload.kind() == "context_rotated").unwrap().seq;
+
+    lead.fixture.orchestrator.drain_queues().await.unwrap();
+    let codex = lead.session_with("queued during the switch").await;
+    assert!(!Arc::ptr_eq(&codex.messages, &claude.messages));
+    let first = codex.messages.lock().await[0].plain_text();
+    assert!(first.contains("the Coordinator moved to Codex (gpt-6)"), "{first}");
+    assert_eq!(lead.current().provider.kind, ProviderKind::Codex);
+    let after = kinds_after(&lead.events(), rotated_seq);
+    assert!(!after.contains(&"session_transitioned"), "the queued message moved the thread back: {after:?}");
+
+    // The replaced Claude conversation is never resumed by a switch back.
+    let mut on_claude = lead.current();
+    on_claude.provider = ProviderInstance::default_for(ProviderKind::ClaudeCode);
+    assert_eq!(lead.fixture.orchestrator.compatible_native_session(&lead.current(), &on_claude.provider).unwrap(), None);
+}
+
+#[tokio::test]
+async fn a_send_queued_during_a_refresh_is_answered_as_queued_and_never_sent_twice() {
+    let lead = Lead::new().await;
+    let child = lead.turn("plan", 10, 1_000_000).await;
+    lead.fixture.orchestrator.coordinator_refresh_context(methods::CoordinatorRefreshContextParams { thread_id: lead.thread.id }).await.unwrap();
+    let params = methods::ThreadsSendParams {
+        thread_id: lead.thread.id,
+        message: UserMessage::text("only once"),
+        message_id: Some(Uuid::now_v7()),
+    };
+    let sent = lead.fixture.orchestrator.send_client_message(params.clone()).await.unwrap();
+    assert_eq!((sent.turn_id, sent.queued), (Uuid::nil(), true));
+    let retried = lead.fixture.orchestrator.send_client_message(params.clone()).await.unwrap();
+    assert!(retried.queued);
+    assert_eq!(lead.fixture.store.queue_list(Some(lead.thread.id)).unwrap().len(), 1);
+
+    lead.answer_handoff(&child, VALID_HANDOFF).await;
+    lead.wait_rotated(1).await;
+    // The refresh is over but the queue has not drained yet: a retry still does not start a turn.
+    let retried = lead.fixture.orchestrator.send_client_message(params.clone()).await.unwrap();
+    assert!(retried.queued, "a retry before the drain must not start a second copy");
+    assert!(lead.events().iter().all(|event| event.payload.kind() != "turn_started" || event.seq < lead.events().iter().find(|e| e.payload.kind() == "context_rotated").unwrap().seq));
+
+    lead.fixture.orchestrator.drain_queues().await.unwrap();
+    let fresh = lead.session_with("only once").await;
+    fresh.finish("done").await;
+    eventually(|| async { (lead.current().status == ThreadStatus::Idle).then_some(()) }).await;
+    let replay = lead.fixture.orchestrator.send_client_message(params).await.unwrap();
+    assert!(!replay.queued && replay.turn_id != Uuid::nil(), "after it started, a retry answers with its turn");
+    let started = lead.events().into_iter().filter(|event| matches!(&event.payload, EventPayload::TurnStarted { message, .. } if message.plain_text() == "only once")).count();
+    assert_eq!(started, 1);
+}
+
+#[tokio::test]
+async fn the_idle_sweep_leaves_a_refreshing_lead_alone() {
+    let lead = Lead::new().await;
+    let child = lead.turn("plan", 10, 1_000_000).await;
+    // Claimed for a refresh, between turns: no turn runs, but the session is the refresh's.
+    let rotation = lead.fixture.orchestrator.begin_rotation(lead.thread.id, RotationReason::Manual, None).await.unwrap();
+    let later = Instant::now() + Duration::from_secs(3600);
+    let wall = SystemTime::now() + Duration::from_secs(3600);
+    let released = lead.fixture.orchestrator.release_idle_sessions_at(&policy(1, 8), false, later, wall).await.unwrap();
+    assert!(released.is_empty());
+    assert_eq!(child.closes.load(Ordering::SeqCst), 0);
+    assert!(lead.fixture.has_session(&lead.thread).await);
+
+    let orchestrator = lead.fixture.orchestrator.clone();
+    let running = tokio::spawn(async move { orchestrator.run_rotation(rotation, None).await });
+    lead.answer_handoff(&child, VALID_HANDOFF).await;
+    running.await.unwrap().unwrap();
+    assert_eq!(lead.rotated().remove(0).3, HandoffStatus::Written);
+}
+
+#[tokio::test]
+async fn a_codex_lead_that_runs_a_tool_instead_of_writing_its_handoff_is_interrupted() {
+    let lead = Lead::new().await;
+    let claude = lead.turn("plan", 10, 1_000_000).await;
+    let orchestrator = lead.fixture.orchestrator.clone();
+    let project_id = lead.fixture.project.id;
+    let switching = tokio::spawn(async move {
+        orchestrator
+            .coordinator_switch_harness(methods::CoordinatorSwitchHarnessParams {
+                project_id,
+                provider: ProviderInstance::default_for(ProviderKind::Codex),
+                model: None,
+                effort: None,
+                permission_mode: None,
+            })
+            .await
+    });
+    lead.answer_handoff(&claude, VALID_HANDOFF).await;
+    switching.await.unwrap().unwrap();
+    let codex = lead.turn("hello codex", 10, 1_000_000).await;
+
+    lead.fixture.orchestrator.coordinator_refresh_context(methods::CoordinatorRefreshContextParams { thread_id: lead.thread.id }).await.unwrap();
+    lead.wait_for_prompt(&codex, "Your context is about to be refreshed", 1).await;
+    let interrupts = codex.interrupts.load(Ordering::SeqCst);
+    codex
+        .tx
+        .send(DriverEvent::ToolStarted(ToolCall { id: "sh".into(), name: "shell".into(), input: json!({"command": "rm -rf src"}), parent_id: None }))
+        .await
+        .unwrap();
+    lead.wait_rotated(2).await;
+    let (_, _, handoff, status, ..) = lead.rotated().remove(1);
+    assert!(handoff.is_none());
+    assert!(matches!(&status, HandoffStatus::Missing { why } if why.contains("called shell")), "{status:?}");
+    assert!(codex.interrupts.load(Ordering::SeqCst) > interrupts, "the provider's turn was interrupted");
+    let after = kinds_after(&lead.events(), lead.events().iter().rev().find(|e| e.payload.kind() == "context_rotation_started").unwrap().seq);
+    assert!(!after.contains(&"tool_call_started"), "{after:?}");
+}
+
+#[tokio::test]
+async fn restart_recovery_reads_only_the_latest_rotation_event_and_skips_archived_coordinators() {
+    let lead = Lead::new().await;
+    lead.turn("plan", 10, 1_000_000).await;
+    let started =
+        EventPayload::ContextRotationStarted { rotation_id: "r1".into(), reason: RotationReason::Budget, used_tokens: 1, window_tokens: None };
+    lead.fixture.orchestrator.emit(lead.thread.id, None, started).unwrap();
+    let store = &lead.fixture.store;
+    let latest = store.latest_event_of_kinds(lead.thread.id, &["context_rotation_started", "context_rotated"]).unwrap().unwrap();
+    assert!(matches!(latest.payload, EventPayload::ContextRotationStarted { ref rotation_id, .. } if rotation_id == "r1"));
+    assert!(store.latest_event_of_kinds(lead.thread.id, &["context_rotated"]).unwrap().is_none());
+
+    let mut archived = lead.current();
+    archived.status = ThreadStatus::Archived;
+    store.thread_upsert(&archived).unwrap();
+    lead.fixture.orchestrator.inner.sessions.lock().await.clear();
+    lead.fixture.orchestrator.recover_after_restart().await.unwrap();
+    assert!(lead.rotated().is_empty(), "an archived Coordinator is left alone");
+}
+
+/// A scripted driver that also records whether each spawn was told the resumed
+/// conversation lacks Kybern's instructions block.
+type SpawnRecord = Arc<std::sync::Mutex<Vec<(Option<String>, bool)>>>;
+
+struct InstructionsRecorder {
+    inner: ScriptedDriver,
+    lacks: SpawnRecord,
+}
+
+#[async_trait::async_trait]
+impl kybern_drivers::AgentDriver for InstructionsRecorder {
+    fn kind(&self) -> ProviderKind {
+        self.inner.kind
+    }
+
+    async fn probe(&self, binary: Option<&PathBuf>) -> ProviderStatus {
+        self.inner.probe(binary).await
+    }
+
+    async fn spawn(&self, config: kybern_drivers::SessionConfig) -> kybern_drivers::Result<kybern_drivers::SpawnedSession> {
+        self.lacks.lock().unwrap().push((config.resume_session_id.clone(), config.resume_lacks_instructions));
+        self.inner.spawn(config).await
+    }
+}
+
+#[tokio::test]
+async fn a_cursor_conversation_gets_the_instructions_block_once_even_when_it_began_without_it() {
+    let spawned = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let lacks = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut drivers = DriverRegistry::default();
+    drivers.register(Arc::new(InstructionsRecorder {
+        inner: ScriptedDriver { kind: ProviderKind::Cursor, spawned: spawned.clone() },
+        lacks: lacks.clone(),
+    }));
+    let fixture = Fixture::with_drivers_and_gateway(drivers, Some(crate::native_tools_mcp::NativeToolsGateway::default()));
+    std::fs::create_dir_all(&fixture.root).unwrap();
+    // A conversation Kybern resumes but never gave the block (the guide was off, or it was bound from Cursor).
+    let mut thread = fixture.thread(ThreadStatus::Idle);
+    thread.provider = ProviderInstance::default_for(ProviderKind::Cursor);
+    thread.permission_mode = PermissionMode::FullAccess;
+    thread.provider_session_id = Some("cursor-sdk:older".into());
+    fixture.store.thread_upsert(&thread).unwrap();
+
+    let turn = |text: &'static str| {
+        let (fixture, spawned) = (&fixture, spawned.clone());
+        async move {
+            fixture.orchestrator.send(thread.id, UserMessage::text(text)).await.unwrap();
+            let child = eventually(|| async {
+                let children: Vec<ScriptedChild> = spawned.lock().unwrap().clone();
+                for child in children.into_iter().rev() {
+                    if child.messages.lock().await.last().is_some_and(|message| message.plain_text().ends_with(text)) {
+                        return Some(child);
+                    }
+                }
+                None
+            })
+            .await;
+            child.finish("ok").await;
+            eventually(|| async { (fixture.store.thread_get(thread.id).unwrap().unwrap().status == ThreadStatus::Idle).then_some(()) }).await;
+            fixture.orchestrator.inner.sessions.lock().await.remove(&thread.id);
+        }
+    };
+    turn("first").await;
+    turn("second").await;
+    let recorded = lacks.lock().unwrap().clone();
+    assert_eq!(
+        recorded,
+        vec![(Some("cursor-sdk:older".into()), true), (Some("cursor-sdk:older".into()), false)],
+        "sent once, then never again"
+    );
 }

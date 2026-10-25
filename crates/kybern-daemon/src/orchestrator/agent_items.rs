@@ -166,7 +166,7 @@ impl Orchestrator {
             object.remove("operation_id").filter(|value| !value.is_null()).map(serde_json::from_value).transpose()?;
         match name {
             "kybern_notes_search" => return self.agent_notes_search(parse(arguments)?),
-            "kybern_note_read" => return self.agent_note_read(parse(arguments)?),
+            "kybern_note_read" => return self.agent_note_read(parse(arguments)?).await,
             "kybern_tasks_list" => return self.agent_tasks_list(thread, parse(arguments)?),
             "kybern_task_read" => return self.agent_task_read(parse(arguments)?),
             _ => {}
@@ -234,8 +234,18 @@ impl Orchestrator {
 
     fn agent_notes_search(&self, args: NotesSearchArgs) -> Result<Value> {
         let limit = args.limit.unwrap_or(20).clamp(1, 50) as usize;
-        let summaries: HashMap<NoteId, NoteSummary> =
-            self.notes_list()?.into_iter().filter(|note| note.deleted_at.is_none()).map(|note| (note.id, note)).collect();
+        // No git here: rows carry the flags last computed, and kybern_note_read checks one note.
+        let summaries: HashMap<NoteId, NoteSummary> = self
+            .inner
+            .store
+            .notes_list()?
+            .into_iter()
+            .filter(|note| note.deleted_at.is_none())
+            .map(|mut note| {
+                note.stale = super::note_staleness::known_stale(&note, None);
+                (note.id, note)
+            })
+            .collect();
         let in_scope = |note: &NoteSummary| args.project_id.is_none_or(|project_id| note.project_id == Some(project_id));
         let query = args.query.as_deref().map(str::trim).unwrap_or_default();
         let mut results = Vec::new();
@@ -261,9 +271,15 @@ impl Orchestrator {
         Ok(json!({ "notes": results }))
     }
 
-    fn agent_note_read(&self, args: NoteIdArgs) -> Result<Value> {
-        let mut note = self.live_note(args.note_id)?;
-        self.flag_stale(&mut note);
+    async fn agent_note_read(&self, args: NoteIdArgs) -> Result<Value> {
+        let note = self.live_note(args.note_id)?;
+        let this = self.clone();
+        let note = tokio::task::spawn_blocking(move || {
+            let mut note = note;
+            this.flag_stale(&mut note);
+            note
+        })
+        .await?;
         let mut body = note.body.clone();
         let truncated = cut(&mut body, READ_BODY_MAX_BYTES);
         let mut value = note_row(&note.summary);
@@ -821,6 +837,7 @@ impl Orchestrator {
                 title: None,
                 body: Some(body),
                 category: category.filter(|category| current.as_ref().is_none_or(|note| note.summary.category != Some(*category))),
+                clear_category: false,
             });
             match saved {
                 Ok(note) => return Ok(note.summary),
@@ -854,8 +871,15 @@ impl Orchestrator {
                 Ok(note_result("appended", &note))
             }
             Action::UpdateNote { id, title, body, expected_revision } => {
-                let saved =
-                    self.note_update(NotesUpdateParams { id: Some(id), thread_id: None, expected_revision, title, body, category: None });
+                let saved = self.note_update(NotesUpdateParams {
+                    id: Some(id),
+                    thread_id: None,
+                    expected_revision,
+                    title,
+                    body,
+                    category: None,
+                    clear_category: false,
+                });
                 let note = match saved {
                     Ok(note) => note,
                     Err(error) if matches!(error.downcast_ref::<NoteError>(), Some(NoteError::Conflict)) => {

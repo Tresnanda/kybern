@@ -327,8 +327,9 @@ impl Orchestrator {
             return Ok(note.map(|text| SessionInstructions { text, brief_revision: 0, lead_settings: None }));
         }
         let mut notes = self.inner.store.project_notes(project.id)?;
+        // Flags from the last check (warmed off-thread before a spawn): no git here.
         for note in &mut notes {
-            self.flag_stale(note);
+            note.summary.stale = super::note_staleness::known_stale(&note.summary, Some(&note.body));
         }
         let since = self.inner.store.notes_history_since()?;
         let brief = notes.iter().find(|note| note.summary.project_role == Some(ProjectNoteRole::Brief));
@@ -348,7 +349,7 @@ impl Orchestrator {
             text.push_str(&note);
         }
         // Only at spawn (refreshed by `spawn_session`), so the prefix holds for the whole session.
-        if lead && let Some(header) = self.map_header(project.id) {
+        if lead && let Some(header) = self.fenced_map_header(project.id) {
             text.push_str("\n\n");
             text.push_str(&header);
         }

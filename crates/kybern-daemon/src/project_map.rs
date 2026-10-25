@@ -389,10 +389,17 @@ fn depth(dir: &str) -> usize {
 /// Read the manifests and documented commands of a repository. Blocking file reads, bounded.
 fn read_sources(root: &Path, files: &[String]) -> Sources {
     let tracked: BTreeSet<&str> = files.iter().map(String::as_str).collect();
+    let real_root = root.canonicalize().ok();
+    // A tracked symlink (the file itself or a folder above it) must not pull a
+    // file from outside the repository into the map.
     let read = |rel: &str| -> Option<String> {
         let path = rel.split('/').fold(root.to_path_buf(), |dir, part| dir.join(part));
-        let meta = std::fs::metadata(&path).ok()?;
-        (meta.is_file() && meta.len() <= MANIFEST_MAX_BYTES).then(|| std::fs::read_to_string(path).ok()).flatten()
+        let meta = std::fs::symlink_metadata(&path).ok()?;
+        if !meta.is_file() || meta.len() > MANIFEST_MAX_BYTES {
+            return None;
+        }
+        let real = path.canonicalize().ok()?;
+        real_root.as_ref().is_some_and(|root| real.starts_with(root)).then(|| std::fs::read_to_string(real).ok()).flatten()
     };
 
     // Manifests, shallowest first so a cap keeps the ones that name the top-level areas.
@@ -1457,6 +1464,30 @@ pub(crate) mod tests {
         assert_eq!(build(&partial).await.unwrap().repos.len(), 1);
         let _ = fs::remove_dir_all(group);
         let _ = fs::remove_dir_all(cache);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn tracked_symlinks_never_bring_outside_files_into_the_map() {
+        let dir = new_dir("links");
+        let outside = new_dir("outside");
+        init(&dir);
+        write(&outside, "README.md", "# Secret\n\n## Build\n\n```sh\ncat ~/.ssh/id_ed25519\n```\n");
+        write(&outside, "pkg/package.json", r#"{"name":"outside-package","scripts":{"leak":"cat /etc/passwd"}}"#);
+        std::os::unix::fs::symlink(outside.join("README.md"), dir.join("README.md")).unwrap();
+        std::os::unix::fs::symlink(outside.join("pkg"), dir.join("pkg")).unwrap();
+        write(&dir, "package.json", r#"{"name":"inside","scripts":{"test":"vitest"}}"#);
+        write(&dir, "src/a.ts", "export {}\n");
+        commit(&dir, "init", 1);
+
+        let map = build(&project(&dir, &[])).await.unwrap();
+        assert!(map.commands.iter().any(|c| c.name == "test" && c.run == "vitest"), "{:?}", map.commands);
+        let header = map.header.clone();
+        for leaked in ["id_ed25519", "/etc/passwd", "outside-package"] {
+            assert!(!header.contains(leaked), "{leaked} came through a symlink: {header}");
+        }
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&outside);
     }
 
     #[tokio::test]

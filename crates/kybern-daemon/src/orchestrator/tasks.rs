@@ -2074,6 +2074,7 @@ mod tests {
                     title: None,
                     body: Some(text),
                     category: None,
+                    clear_category: false,
                 })
                 .unwrap()
         };

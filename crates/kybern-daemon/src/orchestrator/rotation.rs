@@ -92,13 +92,39 @@ impl InternalTurn {
     }
 }
 
-/// Fold one driver event into the internal turn in `turn`. Returns the event when
-/// it must still be handled outside any turn (session, task, usage and process
-/// state, and permission requests to deny); `None` when it was consumed.
-pub(super) fn internal_turn_event(turn: &mut Option<ActiveTurn>, ev: DriverEvent) -> Option<DriverEvent> {
-    let internal = turn.as_mut().and_then(|turn| turn.internal.as_mut())?;
+/// What the event pump does with a driver event of an internal turn. Short-lived
+/// (matched right away), so the unboxed `DriverEvent` is fine.
+#[allow(clippy::large_enum_variant)]
+pub(super) enum InternalEvent {
+    /// The turn consumed it.
+    Consumed,
+    /// The session started work a handoff must not do (a tool on a harness that
+    /// cannot hold the lead to read-only tools, or background work): the handoff
+    /// already failed, and the waiting rotation interrupts the provider's turn.
+    Interrupt,
+    /// Handle it outside any turn (session, usage and process state, and
+    /// permission requests to deny).
+    Pass(DriverEvent),
+}
+
+/// Fold one driver event into the internal turn in `turn`.
+pub(super) fn internal_turn_event(turn: &mut Option<ActiveTurn>, ev: DriverEvent) -> InternalEvent {
+    let Some(active) = turn.as_mut() else { return InternalEvent::Pass(ev) };
+    let enforced = super::lead::lead_restrictions_enforced(active.provider);
+    let Some(internal) = active.internal.as_mut() else { return InternalEvent::Pass(ev) };
     let mut settled = false;
     let passed = match ev {
+        // Read-only built-ins are all a held lead can run, and Kybern's tools refuse
+        // internal turns. Elsewhere a tool may edit or run commands nobody would see.
+        DriverEvent::ToolStarted(call) if !enforced && call.parent_id.is_none() => {
+            internal.finish(Err(format!("The session called {} instead of writing a handoff.", call.name)));
+            return InternalEvent::Interrupt;
+        }
+        // A native subagent or background process would outlive the handoff unseen.
+        DriverEvent::RuntimeTaskStarted(task) => {
+            internal.finish(Err(format!("The session started background work ({}) instead of writing a handoff.", task.title)));
+            return InternalEvent::Interrupt;
+        }
         DriverEvent::TextDelta { origin, delta, .. } => {
             if origin.is_root() {
                 internal.partial.push_str(&delta);
@@ -128,21 +154,17 @@ pub(super) fn internal_turn_event(turn: &mut Option<ActiveTurn>, ev: DriverEvent
         ev @ (DriverEvent::PermissionRequest { .. }
         | DriverEvent::PermissionWithdrawn { .. }
         | DriverEvent::SessionBound { .. }
-        | DriverEvent::RuntimeTaskStarted(_)
-        | DriverEvent::RuntimeTaskResumed(_)
-        | DriverEvent::RuntimeTaskUpdated(_)
-        | DriverEvent::RuntimeTaskCompleted(_)
         | DriverEvent::CommandsUpdated(_)
         | DriverEvent::UsageUpdated(_)
         | DriverEvent::Notice { .. }
         | DriverEvent::Exited { .. }) => Some(ev),
-        // Reasoning, tools, images and questions belong to no transcript.
+        // Reasoning, tools, background work, images and questions belong to no transcript.
         _ => None,
     };
     if settled {
         *turn = None;
     }
-    passed
+    passed.map_or(InternalEvent::Consumed, InternalEvent::Pass)
 }
 
 /// A rotation that has started (`ContextRotationStarted` is in the log).
@@ -390,9 +412,11 @@ impl Orchestrator {
     /// Write the handoff, release the old session, store the seed and record the
     /// outcome. Always ends the rotation, and wakes the queue for what waited.
     pub(super) async fn run_rotation(&self, rotation: Rotation, switch: Option<HarnessSwitch>) -> Result<Thread> {
-        let result = self.rotate(&rotation, switch).await;
+        let mut released = false;
+        let result = self.rotate(&rotation, switch, &mut released).await;
         if let Err(error) = &result {
-            // Close the pending row; the old session may still be live.
+            // Close the pending row. Before the release the old session carries on,
+            // so the context it reported stays (`session_kept`).
             let current = self.inner.store.thread_get(rotation.thread_id).ok().flatten();
             let harness = current.map(|thread| HarnessRef { kind: thread.provider.kind, model: thread.model });
             if let Some(harness) = harness {
@@ -407,6 +431,7 @@ impl Orchestrator {
                         carried: RotationCarried::default(),
                         from: harness.clone(),
                         to: harness,
+                        session_kept: !released,
                     },
                 );
             }
@@ -416,11 +441,13 @@ impl Orchestrator {
         result
     }
 
-    async fn rotate(&self, rotation: &Rotation, switch: Option<HarnessSwitch>) -> Result<Thread> {
+    /// `released` turns true once the old session is gone.
+    async fn rotate(&self, rotation: &Rotation, switch: Option<HarnessSwitch>, released: &mut bool) -> Result<Thread> {
         let thread = self.inner.store.thread_get(rotation.thread_id)?.ok_or_else(|| anyhow!("The Coordinator thread was not found."))?;
         let from = HarnessRef { kind: thread.provider.kind, model: thread.model.clone() };
         let (handoff, handoff_status) = self.write_handoff(&thread, rotation, switch.is_some()).await;
         let thread = self.release_for_rotation(rotation.thread_id, switch).await?;
+        *released = true;
         let to = HarnessRef { kind: thread.provider.kind, model: thread.model.clone() };
         let (carried, seed) = self.build_seed(&thread, rotation, handoff.as_deref(), &handoff_status, &to).await?;
         let seed_json = serde_json::to_string(&seed)?;
@@ -442,6 +469,7 @@ impl Orchestrator {
                 carried,
                 from,
                 to,
+                session_kept: false,
             },
         )?;
         Ok(self.inner.store.thread_get(thread.id)?.unwrap_or(thread))
@@ -514,6 +542,7 @@ impl Orchestrator {
                 completed: false,
                 pending_completion: None,
                 internal: Some(InternalTurn { messages: Vec::new(), partial: String::new(), done: Some(done) }),
+                rotation_seed: None,
             });
         }
         live.touch();
@@ -526,6 +555,10 @@ impl Orchestrator {
                 Err(_) => Err(format!("The session did not write a handoff within {} seconds.", self.handoff_timeout().as_secs())),
             },
         };
+        if result.is_err() && !live.is_released() {
+            // Whatever the provider is still doing for this turn stops before the session is released.
+            let _ = live.session.interrupt().await;
+        }
         let mut turn = live.turn.lock().await;
         if turn.as_ref().is_some_and(|turn| turn.id == id) {
             *turn = None;
@@ -591,14 +624,7 @@ impl Orchestrator {
 
     /// When the latest finished rotation of this thread happened.
     fn last_rotation_at(&self, thread: &Thread) -> DateTime<Utc> {
-        self.inner
-            .store
-            .events_for_thread(thread.id)
-            .ok()
-            .and_then(|events| {
-                events.iter().rev().find(|event| matches!(event.payload, EventPayload::ContextRotated { .. })).map(|event| event.at)
-            })
-            .unwrap_or(thread.created_at)
+        self.inner.store.latest_event_of_kinds(thread.id, &["context_rotated"]).ok().flatten().map_or(thread.created_at, |event| event.at)
     }
 
     /// Close the old process (as a harness switch always did) and clear the
@@ -611,6 +637,8 @@ impl Orchestrator {
             let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
             let mut thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("The Coordinator thread was not found."))?;
             let released = sessions.remove(&thread_id);
+            let switched = switch.is_some();
+            let previous = (switched && thread.provider_session_id.is_some()).then(|| thread.clone());
             if let Some(switch) = switch {
                 thread.provider = switch.provider;
                 thread.model = switch.model;
@@ -635,6 +663,25 @@ impl Orchestrator {
                 releasing.insert(thread_id, waiting);
                 (live, done)
             });
+            if let Some(mut previous) = previous {
+                // Switching back later must not resume the replaced conversation.
+                previous.provider_session_id = None;
+                if let Err(error) = self.save_account_binding(&previous) {
+                    tracing::warn!(%thread_id, %error, "could not clear the previous harness's session binding");
+                }
+            }
+            if switched {
+                // A target chosen on the old harness would move the thread back at the next send.
+                let current =
+                    SessionTarget { provider: thread.provider.clone(), model: thread.model.clone(), effort: thread.effort.clone() };
+                if self.stored_target(&thread)?.is_some_and(|stored| stored != current) {
+                    self.inner.store.meta_set(&format!("target:{thread_id}"), &serde_json::to_string(&current)?)?;
+                }
+                // Messages queued for the old harness (sent while this refresh ran) start the fresh session on the new one.
+                if let Err(error) = self.retarget_queue(&thread) {
+                    tracing::warn!(%thread_id, %error, "could not move the queued messages to the new harness");
+                }
+            }
             (thread, released)
         };
         self.inner.pending_rewinds.lock().await.remove(&thread_id);
@@ -651,6 +698,25 @@ impl Orchestrator {
             }
         }
         Ok(thread)
+    }
+
+    /// Point every queued message of `thread` at its current harness and permission mode.
+    fn retarget_queue(&self, thread: &Thread) -> Result<()> {
+        let queued = self.inner.store.queue_list(Some(thread.id))?;
+        if queued.is_empty() {
+            return Ok(());
+        }
+        let target = self.thread_target(thread.id)?.target;
+        let mode = self.pending_permission_for(thread, &target.provider)?.unwrap_or(thread.permission_mode);
+        let (target, mode) = (serde_json::to_string(&target)?, serde_json::to_string(&mode)?);
+        let keys: Vec<(String, String)> = queued
+            .iter()
+            .flat_map(|message| {
+                [(format!("queue_target:{}", message.id), target.clone()), (format!("queue_permission:{}", message.id), mode.clone())]
+            })
+            .collect();
+        let rows: Vec<(&str, &str)> = keys.iter().map(|(key, value)| (key.as_str(), value.as_str())).collect();
+        self.inner.store.meta_set_many(&rows)
     }
 
     /// The seed and the counts of what it carries.
@@ -748,9 +814,9 @@ impl Orchestrator {
         delta
     }
 
-    /// The project map header, built (or read from cache) for the seed.
+    /// The project map header, built (or read from cache) for the seed, fenced as repository data.
     fn seed_map_header(&self, project_id: ProjectId) -> Option<String> {
-        self.map_header(project_id)
+        self.fenced_map_header(project_id)
     }
 
     fn children_facts(&self, thread: &Thread, since: DateTime<Utc>, carried: &mut RotationCarried) -> Result<String> {
@@ -869,44 +935,50 @@ impl Orchestrator {
     }
 
     /// A rotation cut off by a restart never wrote its handoff: finish it without one.
+    /// One thread that cannot be recovered does not hold up the others.
     pub(super) async fn rotation_recover_after_restart(&self) -> Result<()> {
         for thread in self.inner.store.threads_list(None, true)? {
-            if thread.coordinator_project_id.is_none() {
+            if thread.coordinator_project_id.is_none() || thread.status == ThreadStatus::Archived {
                 continue;
             }
-            let open = self.inner.store.events_for_thread(thread.id)?.iter().rev().find_map(|event| match &event.payload {
-                EventPayload::ContextRotated { .. } => Some(None),
-                EventPayload::ContextRotationStarted { rotation_id, reason, used_tokens, .. } => {
-                    Some(Some((rotation_id.clone(), *reason, *used_tokens)))
-                }
-                _ => None,
-            });
-            let Some(Some((id, reason, used_tokens))) = open else { continue };
-            let rotation = Rotation { id, reason, thread_id: thread.id, used_tokens, live: None };
-            let from = HarnessRef { kind: thread.provider.kind, model: thread.model.clone() };
-            let thread = self.release_for_rotation(thread.id, None).await?;
-            let status = HandoffStatus::Missing { why: "Kybern restarted before the handoff was written.".into() };
-            let (carried, seed) = self.build_seed(&thread, &rotation, None, &status, &from).await?;
-            self.inner.store.meta_set_many(&[
-                (&seed_key(thread.id), &serde_json::to_string(&seed)?),
-                (&edit_key(thread.id), ""),
-                (&seen_key(thread.id), ""),
-                (&format!("handoff:{}", thread.id), ""),
-            ])?;
-            self.emit(
-                thread.id,
-                None,
-                EventPayload::ContextRotated {
-                    rotation_id: rotation.id,
-                    reason,
-                    handoff: None,
-                    handoff_status: status,
-                    carried,
-                    from: from.clone(),
-                    to: from,
-                },
-            )?;
+            let thread_id = thread.id;
+            if let Err(error) = self.rotation_recover_thread(thread).await {
+                tracing::warn!(%thread_id, %error, "could not finish a context refresh cut off by the restart");
+            }
         }
+        Ok(())
+    }
+
+    async fn rotation_recover_thread(&self, thread: Thread) -> Result<()> {
+        let latest = self.inner.store.latest_event_of_kinds(thread.id, &["context_rotation_started", "context_rotated"])?;
+        let Some(EventPayload::ContextRotationStarted { rotation_id, reason, used_tokens, .. }) = latest.map(|event| event.payload) else {
+            return Ok(());
+        };
+        let rotation = Rotation { id: rotation_id, reason, thread_id: thread.id, used_tokens, live: None };
+        let from = HarnessRef { kind: thread.provider.kind, model: thread.model.clone() };
+        let thread = self.release_for_rotation(thread.id, None).await?;
+        let status = HandoffStatus::Missing { why: "Kybern restarted before the handoff was written.".into() };
+        let (carried, seed) = self.build_seed(&thread, &rotation, None, &status, &from).await?;
+        self.inner.store.meta_set_many(&[
+            (&seed_key(thread.id), &serde_json::to_string(&seed)?),
+            (&edit_key(thread.id), ""),
+            (&seen_key(thread.id), ""),
+            (&format!("handoff:{}", thread.id), ""),
+        ])?;
+        self.emit(
+            thread.id,
+            None,
+            EventPayload::ContextRotated {
+                rotation_id: rotation.id,
+                reason,
+                handoff: None,
+                handoff_status: status,
+                carried,
+                from: from.clone(),
+                to: from,
+                session_kept: false,
+            },
+        )?;
         Ok(())
     }
 }

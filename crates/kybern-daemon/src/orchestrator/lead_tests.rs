@@ -278,6 +278,7 @@ async fn a_changed_brief_is_prepended_once_to_the_leads_next_message_in_the_prov
             title: None,
             body: Some("Version two: propose before editing.".into()),
             category: None,
+            clear_category: false,
         })
         .unwrap();
     fixture.orchestrator.send(lead.id, UserMessage::text("second request")).await.unwrap();

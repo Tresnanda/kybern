@@ -26,6 +26,7 @@ export const NOTE_CATEGORIES: readonly { value: NoteCategory; label: string }[] 
 export const NOTES_HISTORY_COPY = {
   staleTitle: "May be outdated",
   categoryLabel: "Category",
+  noCategory: "No category",
   mapTab: "Map",
   mapEmptyTitle: "No map yet",
   mapEmptyBody: "The map appears once the project has a repository to read.",

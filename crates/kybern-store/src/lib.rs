@@ -1502,6 +1502,20 @@ impl Store {
         })
     }
 
+    /// The thread's latest event of one of `kinds` (`EventPayload::kind` tags), without reading the rest of its log.
+    pub fn latest_event_of_kinds(&self, thread_id: ThreadId, kinds: &[&str]) -> Result<Option<ThreadEvent>> {
+        self.with(|c| {
+            let placeholders = (0..kinds.len()).map(|index| format!("?{}", index + 2)).collect::<Vec<_>>().join(",");
+            let sql = format!(
+                "SELECT seq, thread_id, turn_id, at, payload FROM events WHERE thread_id = ?1 AND kind IN ({placeholders}) ORDER BY seq DESC LIMIT 1"
+            );
+            let thread = thread_id.to_string();
+            let mut values: Vec<&dyn rusqlite::ToSql> = vec![&thread];
+            values.extend(kinds.iter().map(|kind| kind as &dyn rusqlite::ToSql));
+            Ok(c.query_row(&sql, values.as_slice(), row_to_event).optional()?)
+        })
+    }
+
     pub fn provider_usage_through(&self, thread_id: ThreadId, through_seq: EventSeq) -> Result<ProviderUsage> {
         self.with(|c| {
             let mut st = c.prepare(

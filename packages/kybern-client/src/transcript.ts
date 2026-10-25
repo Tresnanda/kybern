@@ -575,7 +575,9 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       break
     }
     case "context_rotated": {
-      // Settles the pending row in place; the fresh session starts with an empty meter.
+      // Settles the pending row in place. The fresh session starts with an empty
+      // context meter; plan limits are the account's and stay. A failed refresh
+      // kept the old session, and its meter.
       const id = `rotation:${ev.rotation_id}`
       const settled = { pending: false, reason: ev.reason, handoff: ev.handoff ?? null, handoffStatus: ev.handoff_status, carried: ev.carried, from: ev.from, to: ev.to }
       const index = blocks.findIndex((block) => block.id === id)
@@ -585,7 +587,8 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
       } else {
         blocks = [...blocks, { kind: "rotation", id, turnId: turnId || latestConversationTurnId(blocks), at, seq: ev.seq, rotationId: ev.rotation_id, usedTokens: 0, windowTokens: null, edited: false, ...settled }]
       }
-      return { ...state, providerUsage: undefined, blocks, lastSeq: ev.seq }
+      const providerUsage = ev.session_kept ? state.providerUsage : withoutContext(state.providerUsage)
+      return { ...state, providerUsage, blocks, lastSeq: ev.seq }
     }
     case "handoff_edited": {
       const index = blocks.findIndex((block) => block.id === `rotation:${ev.rotation_id}`)
@@ -1132,4 +1135,10 @@ function mergeProviderUsage(previous: ProviderUsage | undefined, next: ProviderU
     else limits.push(merged)
   }
   return { ...previous, ...next, limits }
+}
+
+/** The usage without its context part, as `project_provider_usage` folds a context refresh. */
+function withoutContext(usage: ProviderUsage | undefined): ProviderUsage | undefined {
+  if (!usage?.limits?.length) return undefined
+  return { limits: usage.limits }
 }
