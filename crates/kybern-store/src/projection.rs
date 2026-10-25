@@ -1909,4 +1909,59 @@ mod rotation_tests {
         assert!(projected.context.is_none());
         assert_eq!(projected.limits.map(|limits| limits.len()), Some(1));
     }
+
+    /// Row signatures shared with `apps/desktop/transcript.test.mjs`: the reload projector and the
+    /// live reducer must read each captured rotation the same way.
+    #[test]
+    fn rotation_fixtures_project_to_the_shared_signatures() {
+        let expected: std::collections::BTreeMap<String, Vec<String>> =
+            serde_json::from_str(include_str!("../../../fixtures/transcript/coordinator-rotation.expected.json")).unwrap();
+        let fixtures = [
+            ("coordinator-rotation-pending", include_str!("../../../fixtures/transcript/coordinator-rotation-pending.json")),
+            ("coordinator-rotation-written", include_str!("../../../fixtures/transcript/coordinator-rotation-written.json")),
+            ("coordinator-rotation-missing", include_str!("../../../fixtures/transcript/coordinator-rotation-missing.json")),
+            ("coordinator-rotation-edited", include_str!("../../../fixtures/transcript/coordinator-rotation-edited.json")),
+            ("coordinator-rotation-harness-switch", include_str!("../../../fixtures/transcript/coordinator-rotation-harness-switch.json")),
+        ];
+        assert_eq!(fixtures.len(), expected.len());
+        for (name, source) in fixtures {
+            let events: Vec<ThreadEvent> = serde_json::from_str(source).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let signature: Vec<String> = project_transcript(&events)
+                .iter()
+                .filter(|row| {
+                    matches!(row, TranscriptEntry::User { .. } | TranscriptEntry::TurnSummary { .. } | TranscriptEntry::Rotation { .. })
+                })
+                .map(|row| match row {
+                    TranscriptEntry::User { seq, .. } => format!("user:{seq}"),
+                    TranscriptEntry::TurnSummary { seq, .. } => format!("end:{seq}"),
+                    TranscriptEntry::Rotation { turn_id, seq, reason, pending, handoff, handoff_status, edited, carried, to, .. } => {
+                        let turn = turn_id.to_string();
+                        format!(
+                            "rotation:{seq}:{}:{}:{}:{}:{}:{}:{}:turn={}",
+                            if *pending { "pending" } else { "settled" },
+                            reason.as_str(),
+                            match handoff_status {
+                                None => "-",
+                                Some(HandoffStatus::Written) => "written",
+                                Some(HandoffStatus::Missing { .. }) => "missing",
+                            },
+                            if *edited { "edited" } else { "unedited" },
+                            handoff.as_deref().map_or("-".to_string(), |text| format!(
+                                "{}/{}",
+                                text.lines().next().unwrap_or_default(),
+                                text.lines().count()
+                            )),
+                            carried
+                                .as_ref()
+                                .map_or("-".to_string(), |c| format!("{}/{}/{}/{}", c.children, c.pull_requests, c.tasks, c.commits)),
+                            to.as_ref().map_or("-", |to| to.kind.as_str()),
+                            &turn[turn.len() - 2..],
+                        )
+                    }
+                    _ => unreachable!(),
+                })
+                .collect();
+            assert_eq!(signature, expected[name], "{name}");
+        }
+    }
 }

@@ -19,3 +19,13 @@ persisted those continuation chunks without `turn_id` and assigned a different
 message id to every delta and the completion snapshot. The fixture locks down
 legacy recovery while the daemon regression test prevents new logs from taking
 that shape.
+
+`coordinator-rotation-*.json` are synthetic Coordinator context refreshes: a
+pending row that never settled, a settled one with a written handoff, a missing
+handoff, a handoff the user edited afterwards, and a harness switch. Each starts
+with one finished turn; all but the pending one end with a second turn, so the
+row's place between the two is checked as well.
+`coordinator-rotation.expected.json` holds the row signatures both consumers
+must produce: `rotation_fixtures_project_to_the_shared_signatures` in
+`crates/kybern-store/src/projection.rs` and the rotation test in
+`apps/desktop/transcript.test.mjs` (which also runs the mobile reducer).

@@ -1,0 +1,138 @@
+[
+  {
+    "seq": 1,
+    "thread_id": "00000000-0000-0000-0000-000000000021",
+    "turn_id": "00000000-0000-0000-0000-000000000022",
+    "at": "2026-10-25T14:00:00Z",
+    "kind": "turn_started",
+    "message_id": "00000000-0000-0000-0000-000000000023",
+    "message": {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Check the login fallback."
+        }
+      ]
+    }
+  },
+  {
+    "seq": 2,
+    "thread_id": "00000000-0000-0000-0000-000000000021",
+    "turn_id": "00000000-0000-0000-0000-000000000022",
+    "at": "2026-10-25T14:00:30Z",
+    "kind": "assistant_message_completed",
+    "message_id": "00000000-0000-0000-0000-000000000024",
+    "origin": {
+      "kind": "root"
+    },
+    "text": "The fallback is gone.",
+    "thinking": null
+  },
+  {
+    "seq": 3,
+    "thread_id": "00000000-0000-0000-0000-000000000021",
+    "turn_id": "00000000-0000-0000-0000-000000000022",
+    "at": "2026-10-25T14:00:30Z",
+    "kind": "turn_completed",
+    "stop_reason": "completed",
+    "usage": {
+      "input_tokens": 1,
+      "output_tokens": 1,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0
+    },
+    "cost_usd": null,
+    "duration_ms": 30000,
+    "terminal_message_id": "00000000-0000-0000-0000-000000000024"
+  },
+  {
+    "seq": 4,
+    "thread_id": "00000000-0000-0000-0000-000000000021",
+    "at": "2026-10-25T14:02:00Z",
+    "kind": "context_rotation_started",
+    "rotation_id": "r-edited",
+    "reason": "idle",
+    "used_tokens": 201000,
+    "window_tokens": 1000000
+  },
+  {
+    "seq": 5,
+    "thread_id": "00000000-0000-0000-0000-000000000021",
+    "at": "2026-10-25T14:02:20Z",
+    "kind": "context_rotated",
+    "rotation_id": "r-edited",
+    "reason": "idle",
+    "handoff": "## Goals\nShip expired-login handling before Friday.\n\n## Decisions (date, what, why, commit if any)\nNone\n\n## Reversals and removals (what was undone or deleted, by which thread or commit, and why)\nOct 25 · Removed the pre-launch fallback in `def5678`.\n\n## User preferences (quote the user's words)\nNone\n\n## Open questions\nNone\n\n## Next steps\nWait for the review agent on PR #42.",
+    "handoff_status": {
+      "status": "written"
+    },
+    "carried": {
+      "children": 3,
+      "pull_requests": 1,
+      "tasks": 0,
+      "commits": 5
+    },
+    "from": {
+      "kind": "claude-code",
+      "model": "opus"
+    },
+    "to": {
+      "kind": "claude-code",
+      "model": "opus"
+    }
+  },
+  {
+    "seq": 6,
+    "thread_id": "00000000-0000-0000-0000-000000000021",
+    "at": "2026-10-25T14:03:00Z",
+    "kind": "handoff_edited",
+    "rotation_id": "r-edited",
+    "text": "## Goals\nShip expired-login handling by Thursday."
+  },
+  {
+    "seq": 7,
+    "thread_id": "00000000-0000-0000-0000-000000000021",
+    "turn_id": "00000000-0000-0000-0000-000000000032",
+    "at": "2026-10-25T14:00:00Z",
+    "kind": "turn_started",
+    "message_id": "00000000-0000-0000-0000-000000000033",
+    "message": {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Why do expired logins reach pre-launch?"
+        }
+      ]
+    }
+  },
+  {
+    "seq": 8,
+    "thread_id": "00000000-0000-0000-0000-000000000021",
+    "turn_id": "00000000-0000-0000-0000-000000000032",
+    "at": "2026-10-25T14:05:30Z",
+    "kind": "assistant_message_completed",
+    "message_id": "00000000-0000-0000-0000-000000000034",
+    "origin": {
+      "kind": "root"
+    },
+    "text": "They shouldn't any more.",
+    "thinking": null
+  },
+  {
+    "seq": 9,
+    "thread_id": "00000000-0000-0000-0000-000000000021",
+    "turn_id": "00000000-0000-0000-0000-000000000032",
+    "at": "2026-10-25T14:05:30Z",
+    "kind": "turn_completed",
+    "stop_reason": "completed",
+    "usage": {
+      "input_tokens": 1,
+      "output_tokens": 1,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0
+    },
+    "cost_usd": null,
+    "duration_ms": 30000,
+    "terminal_message_id": "00000000-0000-0000-0000-000000000034"
+  }
+]

@@ -347,3 +347,26 @@ test("settled reasoning joins the run and empty segments never become rows", () 
   assert(!content(opened).includes(blank));
   assert(content(opened).includes(thought));
 });
+
+test("a context refresh closes its turn instead of folding into the work above the answer", () => {
+  const rotation = {
+    ...base,
+    kind: "rotation",
+    id: "rotation:r1",
+    seq: 6,
+    rotationId: "r1",
+    pending: false,
+    reason: "budget",
+  };
+  const project = createTurnRows("thread");
+  const rows = project([...blocks, rotation], new Set());
+  assert.deepEqual(
+    content(rows).map((block) => block.kind),
+    ["user", "assistant", "turn_end", "rotation"],
+  );
+  assert.equal(rows.at(-1).key, "turn-1:rotation:rotation:r1");
+  // Settling swaps the block in place: the row keeps its key, the turn's other rows keep identity.
+  const settled = project([...blocks, { ...rotation, handoff: "x" }], new Set());
+  assert.equal(settled.at(-1).key, rows.at(-1).key);
+  for (let i = 0; i < rows.length - 1; i++) assert.equal(settled[i].key, rows[i].key);
+});
