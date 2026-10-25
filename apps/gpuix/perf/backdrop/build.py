@@ -102,7 +102,7 @@ try:
         commands = [["swiftc", "perf/backdrop/window-guard.swift", "-o", env["KYBERN_WINDOW_GUARD"]], ["clang", "-dynamiclib", "-fobjc-arc", "-framework", "Cocoa", "-framework", "CoreGraphics", "perf/explorer/wheel.m", "-o", str(app/"native/build/gpu-wheel.dylib")],
                     ["nice", "-n", "15", "sh", "native/update.sh"],
                     ["pnpm", "exec", "tsc", "-p", "native/tsconfig.json"],
-                    ["rustc", "--edition=2021", "--test", "native/patches/backdrop_kernel.rs", "-o", "native/build/backdrop-kernel-tests"],
+                    ["rustc", "--edition=2021", "--test", "native/upstream/packages/native/src/backdrop_kernel.rs", "-o", "native/build/backdrop-kernel-tests"],
                     ["native/build/backdrop-kernel-tests"],
                     ["bun", "native/ui-lease.ts", "backdrop-kernel", "bun", "perf/backdrop/kernel-check.ts"],
                     ["bun", "native/ui-lease.ts", "backdrop-stream-visual", "bun", "perf/backdrop/stream-visual.ts"],

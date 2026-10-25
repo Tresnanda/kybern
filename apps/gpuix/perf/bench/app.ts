@@ -41,6 +41,11 @@ const server=Bun.serve({idleTimeout:255,port:0,hostname:'127.0.0.1',async fetch(
   while(stack.length&&visited++<200000){const node=stack.pop()!;if(node.testId===body.target){target=node;break}stack.push(...node.children??[])}
   return Response.json({id:target?.id,offset:target?(renderer.getListScrollTop(target.id)??renderer.getScrollOffset(target.id)):null})
  }
+ if(body.action==='bridge'){
+  // WP1: UI-thread bridge and frame-wake counters (`getBridgeStats`), read before and after a timed window.
+  const root=(globalThis as Record<string,unknown>).__benchFiberRoot as {containerInfo?:{nativeRenderer?:{getBridgeStats?:()=>unknown}}}|undefined
+  return Response.json({bridge:root?.containerInfo?.nativeRenderer?.getBridgeStats?.()??null})
+ }
  if(body.action==='counters'){
   const root=(globalThis as Record<string,unknown>).__benchFiberRoot as {current?:unknown;containerInfo?:{nativeRenderer?:{getMemoryStats?:()=>unknown}}}|undefined
   type Fiber={tag?:number;type?:string|{name?:string;type?:{name?:string}};memoizedProps?:{testId?:string};child?:Fiber;sibling?:Fiber}

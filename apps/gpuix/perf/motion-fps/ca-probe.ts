@@ -1,4 +1,4 @@
-/** In-process view of compositor loops (native/patches/compositor_loops_*): the Core Animation sublayers of every
+/** In-process view of compositor loops (the fork commits from compositor_loops_*): the Core Animation sublayers of every
  * window's Metal layer, their frames (points, bottom-left origin), fills, radii, the ink of masked (sprite) layers
  * rendered in place (rows top-first), and their presentation opacity, angle and colour (r+g+b) sampled every ~4 ms for `durationMs`. Reads
  * only this process's own layers, so it needs no screen-recording permission. */

@@ -182,6 +182,15 @@ Unavailable native built-child, Markdown parse/flatten, shaping, host mutation,
 image and Metal byte counters remain explicit nulls. Adding native hooks belongs
 to a later instrumentation change, not a source-only benchmark pretending to
 measure them. `profiles.ts` reports inclusive stack counts; categories overlap.
+
+Every timed window also records `evidence.bridge` (WP1): `getBridgeStats()` read
+before and after it, as `bridgeDelta` in `telemetry.ts` computes it. Off macOS
+that is the UI-thread bridge's commands sent, the ones that waited for an answer
+and their wait, each per GPUI served frame (a frame that drew or ran next-frame
+callbacks); `waitedPerFrame` rising is the regression to look for. macOS runs
+hooks on the JS thread (`bridged: false`) and reports only frame wakes. An addon
+older than WP1 gives `null`. `scripts/frame-wake-check.tsx` applies the same
+counters to an idle and an animating window on every platform.
 Profiled runs are separate from the baseline because `sample` perturbs scheduling.
 
 Comparison uses medians of successful runs. Differences below **3 CPU percentage

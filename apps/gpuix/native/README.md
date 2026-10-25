@@ -18,16 +18,33 @@ anchor. Metadata and the height summary remain proportional to loaded logical
 rows; fibers, retained hosts, bounds observers and native row construction follow
 the viewport plus selection/focus/overlay/animation owners.
 
-Patches: `sparse_list_hooks.py`, `sparse_list_gpui.py`, `sparse_list.rs`, each
-reconstructed by the existing anchored-hook drivers. `KYBERN_SPARSE_LIST=0` is
+Code: the "Sparse React windows with semantic row identity" (gpuix fork) and
+"Sparse list: SumTree scrolling, O(changed range) topology" (zed fork) commits,
+and `sparse_list.rs` (formerly `sparse_list_hooks.py`, `sparse_list_gpui.py`). `KYBERN_SPARSE_LIST=0` is
 the dense-slot comparison control. Ordinary lists do not enter this path.
 Checks and paired measurements are in `perf/scroll2/`.
 
 # Patched GPUIX native module
 
 The client runs on our own build of `@gpuix/native`: the upstream release in
-`VERSION` plus the capabilities below. The upstream checkout is disposable; all
-changes are reconstructed by the checked-in patches and anchored hooks.
+`VERSION` plus the capabilities below, built from two forks that carry them as
+commits:
+
+- [`Tresnanda/gpuix`](https://github.com/Tresnanda/gpuix/tree/kybern), branch
+  `kybern`: the release tag plus our native-crate commits
+  (`packages/native/src`), with its `zed` submodule pointing at
+- [`Tresnanda/zed`](https://github.com/Tresnanda/zed/tree/kybern), branch
+  `kybern`: the GPUI commit the release pins plus our GPUI, Metal, WGSL and
+  HLSL commits.
+
+`FORK` pins the exact commits; `update.sh` fetches them into the disposable
+`upstream/` checkout and builds. Until 2026-10-25 the same changes were a patch
+queue here (`patches/*.rs` copied into the crate, `apply_hooks.py` and
+`backdrop_gpui.py` running anchored edits). The forks hold it as one commit per
+former script, and each commit body names its script, so a `patches/<name>`
+mentioned below or in `../perf` is found with
+`git log --grep 'From <name>'` on the fork, or as
+`packages/native/src/<name>.rs` (gpuix) or `crates/*/src/<name>.rs` (zed).
 
 ## Transcript row geometry and logical anchors
 
@@ -214,58 +231,78 @@ measurements and the resolved width-measurement issue are recorded below.
 
 | Path | What |
 |---|---|
-| `VERSION` | Upstream `@gpuix/native` release the patch targets |
-| `patches/cache_island.rs` | The feature: island views, invalidation, bounds replay |
+| `VERSION` | Upstream `@gpuix/native` release the forks are based on (the npm packages) |
+| `FORK` | The pinned `Tresnanda/gpuix` commit, the zed commit it records, and its upstream tag |
+| fork `packages/native/src/cache_island.rs` | The feature: island views, invalidation, bounds replay |
 | `../scripts/island-lab.tsx`, `../scripts/island-check.ts` | The lab and the automated check (identity, hover, animation, late updates, lists) |
-| `patches/apply_hooks.py` | Atomic anchored edits; refuses and names the anchor if upstream moved |
-| `patches/patch_js.py`, `patches/patch_react.py` | Native bridge, motion identity, declarations; reproducible pnpm patches in `../patches/` |
+| `patches/patch_js.py`, `patches/patch_react.py` | Native bridge, motion identity, declarations for the npm JS packages; reproducible pnpm patches in `../patches/`. The only anchored edits left (`patches/hook_check.py` gives them `--check`) |
 | `tools/align_strtab.py` | Fixes Xcode 27 ld's misaligned LINKEDIT string pool, which dyld rejects |
-| `update.sh` | Fetch → patch → build → repair → sign → load check → capability checks |
+| `tools/gpuix_canary.py` | Rebases the fork commits onto a new upstream release and reports conflicts (weekly in CI) |
+| `update.sh` | Fetch the pinned fork → build → unit tests → repair → sign → load check → capability checks |
 | `upstream/`, `build/` | Git-ignored checkout and build output |
 
-## Staying current with GPUIX
+## Changing the native module
+
+A native change is a commit on a fork, then a new pin:
 
 ```sh
-apps/gpuix/native/update.sh 0.11.0   # new upstream release
+git clone --filter=blob:none --recurse-submodules --also-filter-submodules -b kybern \
+  https://github.com/Tresnanda/gpuix.git ~/src/gpuix
+cd ~/src/gpuix/zed && git switch kybern     # the submodule checks out detached
+# GPUI / Metal / WGSL / HLSL: commit in zed/. Native crate: commit in packages/native.
+KYBERN_GPUIX_SOURCE=~/src/gpuix apps/gpuix/native/update.sh   # build and check it unpushed
+git -C ~/src/gpuix/zed push origin kybern
+git -C ~/src/gpuix add zed && git -C ~/src/gpuix commit -m "Bump zed"   # when zed moved
+git -C ~/src/gpuix push origin kybern
 ```
 
-It moves the checkout to the tag, re-applies the patch from scratch, builds,
-bumps `@gpuix/react` + `@gpuix/native` on npm, recreates the JS patch and runs
-the checks. If upstream moved code a hook anchors on, `apply_hooks.py` names the
-anchor and writes nothing: adjust that one edit and rerun. Then run the app's
-usual checks and commit `VERSION`, `patches/` and the lockfile.
+Then set `commit` (and `zed`) in `FORK` to the new heads, run `update.sh`, and
+commit `FORK` with the app change that needs it. `update.sh` refuses a pin whose
+gpuix commit records a different zed commit than `FORK` says. Only add commits
+on top: a pinned commit has to stay fetchable. A Metal-only GPU change needs its
+WGSL/HLSL counterpart in the same commit, or Linux/Windows draw it wrong.
 
-**List every moved anchor first.** A hook driver stops at its first miss, which
-turns a port into one rerun per anchor. `--check` keeps going and prints all of
-them (a miss can cascade into later edits that anchor on text it would have
-added, so fix a file's first miss first):
+## Moving to a new GPUIX release
+
+1. Keep the current heads reachable: tag them `kybern-<old version>` in both
+   forks (`git tag kybern-0.11.0 kybern && git push origin kybern-0.11.0`).
+2. zed, when the new tag pins a different zed commit `Z'`:
+   `git rebase --onto Z' <old zed base> kybern`, resolve, `git push --force-with-lease origin kybern`.
+3. gpuix: add `remorses/gpuix` as a remote, fetch the tag, and
+   `git rebase --onto @gpuix/native@<new> @gpuix/native@<old> kybern`. The last
+   commit sets the zed submodule: resolve it to the rebased zed head. Push.
+4. Set `commit`, `zed` and `upstream` in `FORK`, then
 
 ```sh
-cd apps/gpuix/native && git -C upstream checkout -q --force @gpuix/native@0.12.0
-git -C upstream submodule update -q --init zed && cp patches/*.rs upstream/packages/native/src/
-python3 patches/apply_hooks.py upstream/packages/native/src --check   # native crate
-python3 patches/backdrop_gpui.py upstream/zed --check                 # GPUI fork
-python3 patches/patch_js.py <dir of the npm package> --check          # also patch_react.py
+apps/gpuix/native/update.sh 0.12.0   # new upstream release
 ```
 
-Each prints `MISSING <file>: expected N anchor(s), found M` with the first line
-of the anchor, and exits 1 when anything is missing (`patches/hook_check.py`).
-Run it on a disposable checkout; the drivers still write the hooks that matched.
-`update.sh` resets zed (`reset --hard`, `clean`) before moving its submodule,
-since the previous run edited it in place.
+builds the pin, bumps `@gpuix/react` + `@gpuix/native` on npm, recreates the JS
+patch and runs the checks. Run the app's usual checks and commit `VERSION`,
+`FORK`, `../patches/` and the lockfile.
+
+`tools/gpuix_canary.py --version <new> --keep <dir>` does steps 2 and 3 in a
+throwaway checkout and lists every commit that conflicts, before you start. The
+JS patches still use anchors: `python3 patches/patch_js.py <dir of the npm
+package> --check` (also `patch_react.py`) prints every `MISSING <file>: expected
+N anchor(s), found M` at once and exits 1 (`patches/hook_check.py`).
 
 **Weekly canary.** `.github/workflows/gpuix-canary.yml` runs
 `tools/gpuix_canary.py` every Monday and on demand. It skips when npm's latest is
-`VERSION`; otherwise it runs the four `--check` passes above against the new
-release on a Linux runner (a couple of minutes, no cargo), and lists the napi
-methods the release added that one of our patches also defines (a clash is a
-compile error, and one clash hides the next). When the hooks match, a macOS job
-runs `KYBERN_NATIVE_CHECKS=0 update.sh <latest>` and the app's typecheck and unit
-tests, which is what a static check cannot see. The result is one issue labelled
-`gpuix-canary`: "the patches no longer apply" with the anchors,
-"the build fails", or "ready to adopt"; it closes itself when `VERSION` catches
-up. The canary never pushes. Locally:
-`python3 -I tools/gpuix_canary.py --version 0.12.0 --report /tmp/canary.md`.
+`VERSION`; otherwise, on a Linux runner (a couple of minutes, no cargo), it
+rebases both `kybern` series onto the new release in a throwaway checkout,
+listing each commit that conflicts with its files (a conflicting commit is
+replayed with our side, so the next one reports only its own collision), runs the
+JS patches' `--check`, and lists the napi methods the release added that one of
+our commits also defines (a clash is a compile error, and one clash hides the
+next). When all of that is clean, a macOS job rebases again with `--tree`, runs
+`KYBERN_GPUIX_SOURCE=<tree> KYBERN_NATIVE_CHECKS=0 update.sh <latest>` and the
+app's typecheck and unit tests, which is what a static check cannot see. The
+result is one issue labelled `gpuix-canary`: "our commits conflict" with the
+list, "the build fails", or "ready to adopt"; it closes itself when `VERSION`
+catches up. The canary never pushes. Locally:
+`python3 -I tools/gpuix_canary.py --version 0.12.0 --report /tmp/canary.md`, or
+`--ref main` to preview upstream's next release.
 
 Prerequisites: Rust 1.97.1 (from upstream's `rust-toolchain.toml`) and Xcode's
 Metal Toolchain (`xcodebuild -downloadComponent MetalToolchain`). The first
@@ -285,23 +322,42 @@ Linux and Windows (ADE-52 spike): run `update.sh` on that OS with
 `KYBERN_NATIVE_CHECKS=0` (Git Bash on Windows, with `PYTHON=python` and
 `PYTHONUTF8=1`). It writes `build/gpuix-native.linux-x64-gnu.node` (or
 `linux-arm64-gnu`) and `build/gpuix-native.win32-x64-msvc.node`, which
-`src/native/local-build.ts` loads. Two drivers run last and only touch
-Linux/Windows code:
+`src/native/local-build.ts` loads. Two fork commits (formerly the drivers that
+ran last) only touch Linux/Windows code:
 
-- `patches/platforms_hooks.py` (native crate): off macOS, `update_window` and
+- "Linux and Windows: UI-thread bridge (ADE-52)" (gpuix, from `platforms_hooks.py`): off macOS, `update_window` and
   `update_window_without_view` box the hook's closure into `UiCommand::Run`,
   run it on the `gpuix-ui` thread and wait for its result, so a hook is
   written once and only has to be `Send + 'static`. Keep paint-time
   thread-local reads inside the closure: outside it they read the JS thread's
   empty copy.
-- `patches/platforms_gpui.py` (GPUI): backdrop batches draw nothing on wgpu and
+- "Linux (wgpu) and Windows (Direct3D 11) build and draw (ADE-52)" (zed, from
+  `platforms_gpui.py`): backdrop batches draw nothing on wgpu and
   Direct3D; `ContentMask` and the rounded clip chain walk in WGSL and HLSL
   (`KYBERN_ROUNDED_CLIP=0` squares every chain, for before/after checks);
-  compositor loops stay in the scene. A new Metal-only GPU patch needs its
-  WGSL/HLSL counterpart here, or Linux/Windows draw it wrong.
+  compositor loops stay in the scene. A new Metal-only GPU change needs its
+  WGSL/HLSL counterpart, or Linux/Windows draw it wrong.
 
-`.github/workflows/gpuix-platforms.yml` builds both and runs
-`scripts/platform-smoke.ts` on screen (Xvfb + lavapipe, D3D11 on WARP). On a
+WP1 (`wp1` branches, `../PORTING-PLATFORMS.md#wp1-native-platform-core-status`)
+added, still Linux/Windows only:
+
+- "Frame wake hook off macOS (WP1)" (zed): `gpui::set_frame_wake_hook`, called
+  after a frame request that drew or ran next-frame callbacks. The native
+  crate turns it into `setFrameWakeCallback` (true on every desktop platform),
+  so the JS frame loop runs on native frames there too.
+- "Wayland: run without a seat, fall back to X11 (WP1)" (zed).
+- "Windows and Linux: native frame wake, bridge cost, scroll phases, DPI info
+  (WP1)" (gpuix): `()` hooks that need no answer use `update_window_detached` /
+  `update_window_without_view_detached` (queued, not waited for; on macOS the
+  plain call). Use them for new hooks that return nothing and run often.
+  `UiCommand::Invalidate` takes the island path like macOS
+  (`KYBERN_FULL_INVALIDATE=1` restores `window.refresh()`). `getBridgeStats()`
+  and `getPlatformInfo()` are for checks and `perf/bench`.
+
+`.github/workflows/gpuix-platforms.yml` builds both and runs the WP7 checks on
+screen (Xvfb + lavapipe, D3D11 on WARP), including `scripts/platform-smoke.ts`
+and `scripts/frame-wake-check.tsx` (check id `frame-wake`) on X11, headless
+Weston and Windows. On a
 Mac, an arm64 Linux container gives the same check in about a minute.
 
 ## The 0.11.0 port (from 0.10.0)
@@ -627,6 +683,61 @@ The generated `native/build` (about 1.9 GiB) and `native/upstream` (186 MiB)
 are retained for the integrating agent, as requested. Free disk went from
 73 GiB before the first native build to 68 GiB at completion; other agents
 were working concurrently, so the total change is not solely this build.
+
+## Running the checks on Linux and Windows (WP7)
+
+A first set of the on-screen checks runs on all three OSes through one harness, `native/check-harness.ts`, and one
+runner, `scripts/run-platform-checks.ts`. The checks drive the app and the labs through the addon's automation client
+(`mouse.*`, `press`, `getPaintedText`, element bounds: input is synthesized inside the process, so no NSEvent, Swift or
+xdotool) and capture with `capture(fixture, file)`:
+
+| OS | Capture |
+| --- | --- |
+| macOS | the addon screenshot, as before; `{ webViews: true }` captures the real window (Swift window id + `screencapture -l`) to include an embedded web view |
+| Windows | the addon screenshot (Direct3D 11; WARP in CI) |
+| Linux | the addon screenshot if it works, else the X server (`xwininfo -root -tree` picks the window, ImageMagick `import` reads it). `KYBERN_CHECK_CAPTURE=addon\|x11` forces one; the log names the choice |
+
+| Check | Run by `--checks` | What it proves |
+| --- | --- | --- |
+| `native/focus-check.ts` | `focus` | Tab/Shift+Tab move one stop, a consumed Tab stays, the image preview traps Tab (no pixels) |
+| `native/clip-check.ts` | `clip` | rounded clip hit tests and painted corners (dark/light, motion on/off) |
+| `native/rounded-check.ts` | `rounded` | rounded input backgrounds, outset clamps, wrapped fragments, selection |
+| `native/markdown-document-check.ts` | `markdown-document` | document API; document pixels equal the original Markdown path (same renderer, exact); selection, wrap, grid. Off macOS a subset of the interior cases (`MD_INTERIOR_CASES`) |
+| `scripts/platform-smoke.ts` | `smoke` | the real app on a seeded daemon: sidebar rows, Markdown + code transcript, composer; the clip lab with rounded clip on and off (Linux/Windows) |
+| `scripts/nowebview-app-check.ts` | `nowebview` | WP4: the app with the web view off: preview in the browser, visual, question, Mermaid, artifact |
+
+Pixel assertions tolerate software rendering: `tolerance` (3 on macOS, 8 elsewhere, `KYBERN_CHECK_TOLERANCE`), regions
+that must hold painted content (`assertPainted`), structure (bounds, test ids, painted text), and exact equality only
+between two renders of the same renderer. Steps that need a capability still blocked off macOS are wrapped in
+`step(label, fn, { gap })` with a `GAPS.*` reason (wheel input: scroll phase injection, WP1; ⌘ shortcuts, WP3; Menlo
+advances, WP8). Off macOS a gap failure is recorded and listed in the summary, not failed, until `--strict` /
+`KYBERN_CHECK_STRICT=1`; a gap that passes is reported as closed so its marker can go.
+`KYBERN_OPEN_LOG=<file>` makes `os.openTarget` append instead of opening, so a check can assert what the app opened on
+any OS.
+
+Locally (Linux needs `xvfb xauth x11-utils imagemagick` and Mesa's `mesa-vulkan-drivers`):
+
+```sh
+cd apps/gpuix && pnpm install --frozen-lockfile && (cd ../desktop && pnpm install --frozen-lockfile)
+cargo build -p kybern                                    # the scratch daemon
+native/update.sh                                         # or set NAPI_RS_NATIVE_LIBRARY_PATH to a built addon
+xvfb-run -a -s '-screen 0 1440x900x24' \
+  bun scripts/run-platform-checks.ts --kybernd ../../target/debug/kybernd --out /tmp/gpuix-checks --checks clip,focus
+bun scripts/run-platform-checks.ts --list                 # the check names
+# A display nothing can grab (headless Weston): the smoke runs once without PNGs
+bun scripts/run-platform-checks.ts --kybernd ../../target/debug/kybernd --checks frame-wake,smoke --capture none
+```
+
+Windows and macOS use the desktop session (no Xvfb). Any single check also runs by hand
+(`KYBERN_VERIFY_OUTPUT=<dir> bun native/clip-check.ts`); with no `KYBERN_DATA_DIR` the harness uses a temp folder, never
+`~/.kybern`. Output per check: PNGs and `log.txt` under `<out>/<check>/`, plus `report.jsonl`, `summary.md` and
+`summary.json`.
+
+CI: `.github/workflows/gpuix-platforms.yml` (manual: Actions → "GPUIX platforms" → Run workflow). Inputs: `checks`
+(`all` or a comma list), `strict`, `wayland` (on by default: a headless-Weston job, no `wl_seat`, that runs `frame-wake` and the smoke with
+`--capture none`, since nothing can grab that screen), `lto` (off builds the addon without fat LTO: enough to check a
+patch, and cached under its own key). Jobs: `ubuntu-22.04` (Xvfb 1440x900 + lavapipe) and `windows-2022` (WARP, the desktop's
+1024x768). Artifacts `gpuix-<id>-checks` hold the screenshots and logs; the run page shows `summary.md`.
 
 ## Extension performance (2026-10-15)
 

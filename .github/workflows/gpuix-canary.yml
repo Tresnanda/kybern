@@ -1,23 +1,28 @@
 # Weekly canary for staying current with GPUIX (@gpuix/native on npm).
 #
-# Our patches (apps/gpuix/native/patches) are anchored edits of upstream source,
-# so a new release shows up as an anchor that moved or a native method that now
-# exists twice. This finds out while the release is new instead of on the day
-# someone needs it:
+# Our native changes are commit series on the forks pinned in
+# apps/gpuix/native/FORK (Tresnanda/gpuix and Tresnanda/zed, branch `kybern`),
+# so a new release shows up as a commit that no longer rebases or a native method
+# that now exists twice. This finds out while the release is new instead of on
+# the day someone needs it:
 #
 #   check    ubuntu, about two minutes, no cargo. Skips when npm's latest is
-#            native/VERSION. Otherwise `tools/gpuix_canary.py` runs the hook
-#            drivers with --check (every missing anchor at once), the JS patches,
-#            and the napi-name clash scan, and writes a markdown report.
-#   build    macOS, only when the hooks match: `KYBERN_NATIVE_CHECKS=0
-#            update.sh <latest>` (fetch, patch, cargo build, JS patch, pnpm
-#            bump) and then the app's typecheck and unit tests against the new
-#            types. This is the part a static check cannot see (type errors, a
-#            clash in a name the scan does not know).
+#            native/VERSION. Otherwise `tools/gpuix_canary.py` rebases both
+#            series onto the release in a throwaway checkout (every conflicting
+#            commit at once), checks the JS patches and scans napi names, and
+#            writes a markdown report.
+#   build    macOS, only when all of that is clean: the same rebase into a
+#            tree, `KYBERN_GPUIX_SOURCE=<tree> KYBERN_NATIVE_CHECKS=0 update.sh
+#            <latest>` (cargo build, JS patch, pnpm bump) and then the app's
+#            typecheck and unit tests against the new types. This is the part a
+#            static check cannot see (type errors, a clash in a name the scan
+#            does not know).
 #   report   one issue labelled `gpuix-canary`: opened or updated while a release
 #            waits to be adopted or fails, closed when VERSION catches up.
 #
-# It never pushes. Adopting a release is `update.sh <version>` on a branch.
+# It never pushes (the rebased commits exist only on the runner) and needs no
+# secrets: the forks are public. Adopting a release is the rebase on the forks
+# and a new FORK pin (native/README.md, "Moving to a new GPUIX release").
 name: GPUIX canary
 
 on:
@@ -30,7 +35,7 @@ on:
         required: false
         type: string
       build:
-        description: Build the addon on macOS when the hooks match (about 15 minutes)
+        description: Build the addon on macOS when the fork commits rebase cleanly (about 15 minutes)
         required: false
         type: boolean
         default: true
@@ -44,7 +49,7 @@ permissions:
 
 jobs:
   check:
-    name: check (anchors and names)
+    name: check (rebase and names)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
@@ -102,10 +107,17 @@ jobs:
       - uses: ./.github/actions/setup-pnpm-apps
         with:
           gpuix: 'true'
-      - name: Build the patched addon at the new release
+      - name: Rebase the fork commits onto the new release
+        env:
+          LATEST: ${{ needs.check.outputs.latest }}
+        run: |
+          python3 -I apps/gpuix/native/tools/gpuix_canary.py --version "$LATEST" \
+            --tree "$RUNNER_TEMP/gpuix" --keep "$RUNNER_TEMP/canary"
+      - name: Build the addon from the rebased tree
         working-directory: apps/gpuix/native
         env:
           LATEST: ${{ needs.check.outputs.latest }}
+          KYBERN_GPUIX_SOURCE: ${{ runner.temp }}/gpuix
           # No display on a runner: build, align, sign and load-check only.
           KYBERN_NATIVE_CHECKS: '0'
         run: ./update.sh "$LATEST"
@@ -144,7 +156,7 @@ jobs:
         run: |
           set -eu
           label=gpuix-canary
-          gh label create "$label" --color 5319e7 --description "GPUIX release the patches do not take yet, or one ready to adopt" 2>/dev/null || true
+          gh label create "$label" --color 5319e7 --description "GPUIX release our fork commits do not take yet, or one ready to adopt" 2>/dev/null || true
           existing=$(gh issue list --label "$label" --state open --json number --jq '.[0].number // empty')
 
           if [ "${STATUS:-}" = current ]; then
@@ -160,14 +172,14 @@ jobs:
             title="GPUIX canary: the check itself failed"
             note="The canary tool crashed before it could compare anything; the run log has the traceback."
           elif [ "$STATUS" = broken ]; then
-            title="GPUIX $LATEST: the patches no longer apply"
-            note="Port these anchors in \`apps/gpuix/native/patches\`, rerun \`tools/gpuix_canary.py\`, then \`update.sh $LATEST\`."
+            title="GPUIX $LATEST: our fork commits no longer apply"
+            note="Rebase the forks' \`kybern\` branches onto $LATEST, resolving these commits, pin them in \`apps/gpuix/native/FORK\`, then \`update.sh $LATEST\` (\`apps/gpuix/native/README.md\`, \"Moving to a new GPUIX release\")."
           elif [ "$BUILD" = failure ]; then
-            title="GPUIX $LATEST: the anchors match but the build fails"
+            title="GPUIX $LATEST: the fork commits rebase but the build fails"
             note="\`update.sh $LATEST\`, \`pnpm typecheck\` or \`bun test\` failed on the runner; the build job log names the error."
           else
             title="GPUIX $LATEST is ready to adopt"
-            note="The patches apply and, when the build ran, \`update.sh\`, typecheck and unit tests passed on the runner. Run \`apps/gpuix/native/update.sh $LATEST\` locally for the on-screen checks."
+            note="The fork commits rebase cleanly and, when the build ran, \`update.sh\`, typecheck and unit tests passed on the runner. Move the forks to $LATEST, pin them in \`apps/gpuix/native/FORK\` and run \`apps/gpuix/native/update.sh $LATEST\` locally for the on-screen checks."
           fi
           printf '\n%s\n\nWorkflow run: %s\n' "$note" "$RUN_URL" >> "$body"
 

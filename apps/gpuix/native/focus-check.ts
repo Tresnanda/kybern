@@ -1,11 +1,11 @@
 import '../src/native/local-build.ts'
-import { launchFixture } from '../src/requests/harness.ts'
+import { launch } from './check-harness.ts'
 import path from 'node:path'
 import assert from 'node:assert/strict'
 
 // GPUIX 0.11 moves focus on Tab by itself. A handler that consumes Tab must stop the default
 // (`preventDefault`), or focus moves twice (Settings and the image preview used to move it by hand).
-const f = await launchFixture(path.join(import.meta.dir, 'focus-lab.tsx'), { GPUIX_BACKGROUND: '1' }), a = f.app
+const f = await launch(path.join(import.meta.dir, 'focus-lab.tsx')), a = f.app
 const focus = async () => { await a.clock.fastForward(64); await Bun.sleep(80); return a.getByTestId('focus').textContent() }
 const press = async (keys: string) => { await a.call('keystrokes', { keys }); return focus() }
 try {
