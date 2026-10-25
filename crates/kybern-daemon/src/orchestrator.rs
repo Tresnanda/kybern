@@ -25,6 +25,7 @@ use crate::settings::SettingsStore;
 mod accounts;
 mod agent_items;
 mod askpass;
+mod change_report;
 mod child_questions;
 mod delegation;
 pub(crate) mod group_git;
@@ -592,7 +593,32 @@ enum DaemonAnswer {
     Pending,
 }
 
+/// A Coordinator's copy of `message` with each child-result batch and thread
+/// message flattened to text cut at `LEAD_COPY_BYTES`, or `None` when it holds
+/// neither. Only the provider sees it; the stored message is untouched.
+fn lead_capped_message(message: &UserMessage) -> Option<UserMessage> {
+    let capped: Vec<Option<String>> = message.parts.iter().map(ContentPart::lead_orchestration_text).collect();
+    if capped.iter().all(Option::is_none) {
+        return None;
+    }
+    let parts =
+        message.parts.iter().zip(capped).map(|(part, text)| text.map_or_else(|| part.clone(), |text| ContentPart::Text { text })).collect();
+    Some(UserMessage { parts })
+}
+
 impl Orchestrator {
+    /// `provider_message` for a thread's own session: a Coordinator's copy also
+    /// has child results and thread messages cut to `LEAD_COPY_BYTES`, with a
+    /// pointer to the rest.
+    fn provider_message_for<'a>(&self, thread: &Thread, message: &'a UserMessage, live: &LiveSession) -> std::borrow::Cow<'a, UserMessage> {
+        if thread.coordinator_project_id.is_some()
+            && let Some(capped) = lead_capped_message(message)
+        {
+            return std::borrow::Cow::Owned(self.provider_message(&capped, live).into_owned());
+        }
+        self.provider_message(message, live)
+    }
+
     /// The copy of a user message a provider receives. Kybern-only mentions become
     /// text: `@Computer` an instruction, a `kybern://note/<id>` mention the note, a
     /// `kybern://task/<id>` mention the task.
@@ -2120,7 +2146,7 @@ impl Orchestrator {
             .filter(|turn| !turn.completed)
             .ok_or_else(|| anyhow!("This turn has ended. Send your message to start the next turn."))?;
         live.touch();
-        live.session.steer(&params.id.to_string(), &self.provider_message(&params.message, &live)).await?;
+        live.session.steer(&params.id.to_string(), &self.provider_message_for(&thread, &params.message, &live)).await?;
         self.emit(params.thread_id, Some(active.id), EventPayload::MessageSteered { message_id: params.id, message: params.message })?;
         Ok(methods::ThreadsSendResult { turn_id: active.id, message_id: params.id })
     }
@@ -2244,17 +2270,25 @@ impl Orchestrator {
                         tracing::warn!(thread_id = %thread.id, %error, "could not check the Coordinator settings for changes");
                         None
                     });
+                    // Code that changed since the Coordinator last looked, also provider-only.
+                    let change_report = self.lead_change_report(&thread).await.unwrap_or_else(|error| {
+                        tracing::warn!(thread_id = %thread.id, %error, "could not check the project's git for changes");
+                        None
+                    });
                     // A setup kickoff is a row for clients; the provider gets the script.
                     let kickoff = self.setup_provider_message(&thread, &workspace_message).unwrap_or_else(|error| {
                         tracing::warn!(thread_id = %thread.id, %error, "could not prepare the setup kickoff");
                         None
                     });
-                    let provider_message = self.provider_message(kickoff.as_ref().unwrap_or(&workspace_message), &live);
-                    let updates: Vec<&str> =
-                        [brief_update.as_ref().map(|(_, text)| text.as_str()), settings_update.as_ref().map(|(_, text)| text.as_str())]
-                            .into_iter()
-                            .flatten()
-                            .collect();
+                    let provider_message = self.provider_message_for(&thread, kickoff.as_ref().unwrap_or(&workspace_message), &live);
+                    let updates: Vec<&str> = [
+                        brief_update.as_ref().map(|(_, text)| text.as_str()),
+                        settings_update.as_ref().map(|(_, text)| text.as_str()),
+                        change_report.as_ref().map(|report| report.text.as_str()),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect();
                     let provider_message = if updates.is_empty() {
                         provider_message
                     } else {
@@ -2267,6 +2301,9 @@ impl Orchestrator {
                         }
                         if let Some((settings, _)) = settings_update {
                             self.lead_settings_seen(&live, settings).await;
+                        }
+                        if let Some(report) = change_report {
+                            self.lead_change_seen(&thread, report).await;
                         }
                     }
                     sent
@@ -2534,7 +2571,7 @@ impl Orchestrator {
                 .filter(|turn| !turn.completed)
                 .ok_or_else(|| anyhow!("The turn just ended. Submit your answer again to continue the conversation."))?;
             live.touch();
-            live.session.steer(&message_id.to_string(), &self.provider_message(&message, &live)).await?;
+            live.session.steer(&message_id.to_string(), &self.provider_message_for(&thread, &message, &live)).await?;
             active.id
         } else {
             self.send_with_id(params.thread_id, message_id, message.clone(), false, false).await?.0
@@ -8187,6 +8224,7 @@ for line in sys.stdin:
     include!("orchestrator/group_pr_tests.rs");
     include!("orchestrator/capabilities_tests.rs");
     include!("orchestrator/lead_tests.rs");
+    include!("orchestrator/change_report_tests.rs");
     include!("orchestrator/lead_setup_tests.rs");
     include!("orchestrator/messaging_tests.rs");
     include!("orchestrator/account_tests.rs");

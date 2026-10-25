@@ -115,6 +115,23 @@ pub struct LogEntry {
     pub subject: String,
 }
 
+/// One path of a `--name-status -M` listing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathChange {
+    pub status: FileStatus,
+    /// The new path for a rename or copy.
+    pub path: String,
+    /// The old path of a rename or copy.
+    pub old_path: Option<String>,
+}
+
+/// A commit with the paths it changed, from `Repo::log_range`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogEntryWithFiles {
+    pub entry: LogEntry,
+    pub files: Vec<PathChange>,
+}
+
 pub use kybern_protocol::{Diff, DiffStat, FileChange, FileStatus};
 
 impl Repo {
@@ -617,23 +634,18 @@ impl Repo {
         let mut patch = if include_patch { self.git(&args("--no-color")).await? } else { String::new() };
         let patch_truncated = truncate_utf8(&mut patch, MAX_PATCH_BYTES);
 
-        let mut files: Vec<FileChange> = Vec::new();
-        for line in status.lines() {
-            let mut parts = line.split('\t');
-            let code = parts.next().unwrap_or("");
-            let a = parts.next().unwrap_or("").to_string();
-            let b = parts.next().map(str::to_string);
-            let (status, path, old_path) = match code.chars().next() {
-                Some('A') => (FileStatus::Added, a, None),
-                Some('M') => (FileStatus::Modified, a, None),
-                Some('D') => (FileStatus::Deleted, a, None),
-                Some('R') => (FileStatus::Renamed, b.clone().unwrap_or_default(), Some(a)),
-                Some('C') => (FileStatus::Copied, b.clone().unwrap_or_default(), Some(a)),
-                Some('T') => (FileStatus::TypeChanged, a, None),
-                _ => (FileStatus::Unknown, a, None),
-            };
-            files.push(FileChange { path, old_path, status, additions: 0, deletions: 0, binary: false, repo: None });
-        }
+        let mut files: Vec<FileChange> = parse_name_status(&status)
+            .into_iter()
+            .map(|change| FileChange {
+                path: change.path,
+                old_path: change.old_path,
+                status: change.status,
+                additions: 0,
+                deletions: 0,
+                binary: false,
+                repo: None,
+            })
+            .collect();
         for line in numstat.lines() {
             let mut parts = line.split('\t');
             let add = parts.next().unwrap_or("-");
@@ -809,6 +821,46 @@ impl Repo {
                 })
             })
             .collect())
+    }
+
+    /// Commits reachable from `to` but not from `from` (`from..to`; an empty
+    /// `from` means all of `to`'s history), newest first and at most `limit`, each with the paths it changed (renames
+    /// detected). Merge commits list no paths. `from` must be an ancestor of
+    /// `to` for the range to mean "what changed since"; check `is_ancestor`
+    /// first when history may have been rewritten.
+    pub async fn log_range(&self, from: &str, to: &str, limit: usize) -> Result<Vec<LogEntryWithFiles>> {
+        const START: &str = "\x1e";
+        let count = limit.max(1).to_string();
+        let range = if from.is_empty() { to.to_string() } else { format!("{from}..{to}") };
+        let out =
+            self.git(&["log", "-n", &count, "-M", "--name-status", &format!("--format={START}%H%x1f%an%x1f%aI%x1f%s"), &range]).await?;
+        let mut entries = Vec::new();
+        for block in out.split(START).filter(|block| !block.trim().is_empty()) {
+            let (header, files) = block.split_once('\n').unwrap_or((block, ""));
+            let mut fields = header.split('\x1f');
+            let (Some(hash), Some(author), Some(date)) = (fields.next(), fields.next(), fields.next()) else {
+                continue;
+            };
+            let entry = LogEntry {
+                hash: hash.to_string(),
+                author: author.to_string(),
+                date: date.to_string(),
+                subject: fields.next().unwrap_or("").to_string(),
+            };
+            entries.push(LogEntryWithFiles { entry, files: parse_name_status(files) });
+        }
+        Ok(entries)
+    }
+
+    /// How many commits `from..to` holds (`rev-list --count`).
+    pub async fn count_range(&self, from: &str, to: &str) -> Result<usize> {
+        let range = if from.is_empty() { to.to_string() } else { format!("{from}..{to}") };
+        Ok(self.git(&["rev-list", "--count", &range]).await?.trim().parse().unwrap_or(0))
+    }
+
+    /// Paths that differ between two revisions (`diff --name-status -M`).
+    pub async fn changed_paths(&self, from: &str, to: &str) -> Result<Vec<PathChange>> {
+        Ok(parse_name_status(&self.git(&["diff", "--name-status", "-M", from, to]).await?))
     }
 
     /// Uncommitted changes to tracked files (or only the staged ones) with a
@@ -1070,6 +1122,32 @@ fn truncate_utf8(value: &mut String, max_bytes: usize) -> bool {
     }
     value.truncate(end);
     true
+}
+
+/// Parse `--name-status` lines (`M\tpath`, `R100\told\tnew`). Blank lines
+/// and lines without a path are skipped.
+fn parse_name_status(text: &str) -> Vec<PathChange> {
+    let mut changes = Vec::new();
+    for line in text.lines() {
+        let mut parts = line.split('\t');
+        let code = parts.next().unwrap_or("");
+        let a = parts.next().unwrap_or("").to_string();
+        let b = parts.next().map(str::to_string);
+        if code.is_empty() || a.is_empty() {
+            continue;
+        }
+        let (status, path, old_path) = match code.chars().next() {
+            Some('A') => (FileStatus::Added, a, None),
+            Some('M') => (FileStatus::Modified, a, None),
+            Some('D') => (FileStatus::Deleted, a, None),
+            Some('R') => (FileStatus::Renamed, b.clone().unwrap_or_default(), Some(a)),
+            Some('C') => (FileStatus::Copied, b.clone().unwrap_or_default(), Some(a)),
+            Some('T') => (FileStatus::TypeChanged, a, None),
+            _ => (FileStatus::Unknown, a, None),
+        };
+        changes.push(PathChange { status, path, old_path });
+    }
+    changes
 }
 
 /// `:(exclude,literal)<path>` pathspecs for paths relative to the workdir.
@@ -1723,5 +1801,68 @@ mod group_tests {
         repo.git(&["commit", "-q", "-am", "main"]).await.unwrap();
         assert_eq!(repo.merge_tree_check("HEAD", "side").await.unwrap(), MergeCheck::Conflicts(vec!["a.txt".into()]));
         assert_eq!(std::fs::read_to_string(dir.path().join("a.txt")).unwrap(), "main\n");
+    }
+
+    #[tokio::test]
+    async fn log_range_lists_paths_with_renames_and_deletes() {
+        let (dir, repo) = init_repo().await;
+        let w = |name: &str, body: &str| std::fs::write(dir.path().join(name), body).unwrap();
+        w("keep.txt", "k\n");
+        w("gone.txt", "g\n");
+        w("old.txt", "a long enough body to be detected as a rename\nsecond line\nthird line\n");
+        repo.git(&["add", "."]).await.unwrap();
+        repo.git(&["commit", "-q", "-m", "init"]).await.unwrap();
+        let base = repo.rev_parse("HEAD").await.unwrap();
+
+        std::fs::remove_file(dir.path().join("gone.txt")).unwrap();
+        repo.git(&["add", "-A"]).await.unwrap();
+        repo.git(&["commit", "-q", "-m", "Remove gone"]).await.unwrap();
+        repo.git(&["mv", "old.txt", "new.txt"]).await.unwrap();
+        repo.git(&["commit", "-q", "-m", "Rename old"]).await.unwrap();
+        w("keep.txt", "k\nmore\n");
+        w("added.txt", "x\n");
+        repo.git(&["add", "-A"]).await.unwrap();
+        repo.git(&["commit", "-q", "-m", "Modify and add"]).await.unwrap();
+
+        let log = repo.log_range(&base, "HEAD", 10).await.unwrap();
+        let subjects: Vec<_> = log.iter().map(|c| c.entry.subject.as_str()).collect();
+        assert_eq!(subjects, ["Modify and add", "Rename old", "Remove gone"]);
+        assert_eq!(log[2].files, [PathChange { status: FileStatus::Deleted, path: "gone.txt".into(), old_path: None }]);
+        assert_eq!(log[1].files, [PathChange { status: FileStatus::Renamed, path: "new.txt".into(), old_path: Some("old.txt".into()) }]);
+        assert!(log[0].files.iter().any(|f| f.status == FileStatus::Modified && f.path == "keep.txt"));
+        assert!(log[0].files.iter().any(|f| f.status == FileStatus::Added && f.path == "added.txt"));
+        assert_eq!(log[0].entry.author, "t");
+
+        assert_eq!(repo.log_range(&base, "HEAD", 2).await.unwrap().len(), 2);
+        assert!(repo.log_range("HEAD", "HEAD", 5).await.unwrap().is_empty());
+
+        let changes = repo.changed_paths(&base, "HEAD").await.unwrap();
+        assert!(changes.iter().any(|c| c.status == FileStatus::Deleted && c.path == "gone.txt"));
+        assert!(changes.iter().any(|c| c.status == FileStatus::Renamed && c.old_path.as_deref() == Some("old.txt")));
+    }
+
+    #[tokio::test]
+    async fn log_range_after_history_rewrite_is_detectable() {
+        let (dir, repo) = init_repo().await;
+        std::fs::write(dir.path().join("a.txt"), "one\n").unwrap();
+        repo.git(&["add", "."]).await.unwrap();
+        repo.git(&["commit", "-q", "-m", "first"]).await.unwrap();
+        std::fs::write(dir.path().join("a.txt"), "two\n").unwrap();
+        repo.git(&["commit", "-q", "-am", "second"]).await.unwrap();
+        let old_head = repo.rev_parse("HEAD").await.unwrap();
+
+        // Rewrite: replace the second commit with a different one.
+        repo.git(&["reset", "-q", "--hard", "HEAD~1"]).await.unwrap();
+        std::fs::write(dir.path().join("a.txt"), "three\n").unwrap();
+        repo.git(&["commit", "-q", "-am", "second again"]).await.unwrap();
+
+        assert!(!repo.is_ancestor(&old_head, "HEAD").await.unwrap());
+        let recent = repo.log_range("HEAD~1", "HEAD", 5).await.unwrap();
+        assert_eq!(recent.len(), 1);
+        // An empty `from` lists `to`'s own history: the fallback for a rewrite.
+        let tail = repo.log_range("", "HEAD", 5).await.unwrap();
+        assert_eq!(tail.iter().map(|c| c.entry.subject.as_str()).collect::<Vec<_>>(), ["second again", "first"]);
+        assert_eq!(repo.count_range("", "HEAD").await.unwrap(), 2);
+        assert_eq!(repo.count_range("HEAD~1", "HEAD").await.unwrap(), 1);
     }
 }

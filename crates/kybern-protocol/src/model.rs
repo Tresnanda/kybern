@@ -1019,6 +1019,63 @@ impl ContentPart {
     }
 }
 
+impl ContentPart {
+    /// `orchestration_text` for a Coordinator's own copy, where a child result
+    /// or a thread message is cut to [`LEAD_COPY_BYTES`] with a pointer to the
+    /// rest. `None` for every part that is not a [`ContentPart::ThreadMessage`]
+    /// or [`ContentPart::AgentResults`]. Stored messages and clients keep the
+    /// full text; only the provider's copy is capped.
+    pub fn lead_orchestration_text(&self) -> Option<String> {
+        match self {
+            ContentPart::ThreadMessage { message_id, from_thread_id, from_title, purpose, reply_to, body } => {
+                let total = body.len();
+                let (shown, cut) = cut_on_sentence(body, LEAD_COPY_BYTES);
+                let mut text = thread_message_text(*message_id, *from_thread_id, from_title, *purpose, *reply_to, shown);
+                if cut {
+                    match from_thread_id {
+                        Some(from) => text.push_str(&format!(
+                            "\n\n[Message cut at {} of {total} bytes. Read the rest with kybern_thread_read {from}.]",
+                            shown.len()
+                        )),
+                        None => text.push_str(&format!("\n\n[Message cut at {} of {total} bytes.]", shown.len())),
+                    }
+                }
+                Some(text)
+            }
+            ContentPart::AgentResults { items } => Some(agent_results_text_with(items, Some(LEAD_COPY_BYTES))),
+            _ => None,
+        }
+    }
+}
+
+/// Bytes of a child result or thread message a Coordinator's own copy carries.
+pub const LEAD_COPY_BYTES: usize = 1500;
+
+/// `text` cut to at most `max` bytes, on a sentence boundary when the first
+/// half has one (else on a word, else on a character), and whether it was cut.
+pub fn cut_on_sentence(text: &str, max: usize) -> (&str, bool) {
+    if text.len() <= max {
+        return (text, false);
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let head = &text[..end];
+    let sentence = head
+        .char_indices()
+        .filter(|(i, c)| match c {
+            '\n' => true,
+            '.' | '!' | '?' => head[i + 1..].chars().next().is_none_or(char::is_whitespace),
+            _ => false,
+        })
+        .map(|(i, c)| i + c.len_utf8())
+        .next_back()
+        .filter(|cut| *cut >= max / 2);
+    let cut = sentence.or_else(|| head.rfind(char::is_whitespace).filter(|cut| *cut >= max / 2)).unwrap_or(end);
+    (text[..cut].trim_end(), true)
+}
+
 pub fn thread_reference_text(thread_id: ThreadId, title: &str) -> String {
     format!("@thread[{thread_id}] {title} (you can read it with kybern_thread_read and message it with kybern_thread_send)")
 }
@@ -1063,6 +1120,16 @@ pub fn thread_message_text(
 
 /// Provider-facing text for a [`ContentPart::AgentResults`] batch.
 pub fn agent_results_text(items: &[AgentResultItem]) -> String {
+    agent_results_text_with(items, None)
+}
+
+/// Files listed per item in a capped batch.
+const CAPPED_FILES_LISTED: usize = 10;
+
+/// `agent_results_text`, or with `cap` (a Coordinator's copy) each item reduced
+/// to status, branch, commit and diffstat, the start of its result cut on a
+/// sentence boundary, and where to read the rest.
+fn agent_results_text_with(items: &[AgentResultItem], cap: Option<usize>) -> String {
     let mut out = format!("Results from {} delegated agent(s):", items.len());
     for item in items {
         let model = item.model.as_deref().unwrap_or("default");
@@ -1074,6 +1141,12 @@ pub fn agent_results_text(items: &[AgentResultItem]) -> String {
             DelegationWorkspace::Shared => {
                 if item.files_touched.is_empty() {
                     out.push_str("\n  workspace: shared checkout, no files touched");
+                } else if cap.is_some() && item.files_touched.len() > CAPPED_FILES_LISTED {
+                    out.push_str(&format!(
+                        "\n  files touched: {}, +{} more",
+                        item.files_touched[..CAPPED_FILES_LISTED].join(", "),
+                        item.files_touched.len() - CAPPED_FILES_LISTED
+                    ));
                 } else {
                     out.push_str(&format!("\n  files touched: {}", item.files_touched.join(", ")));
                 }
@@ -1089,6 +1162,7 @@ pub fn agent_results_text(items: &[AgentResultItem]) -> String {
                     out.push_str(&format!(", {} files +{} −{}", stat.files, stat.additions, stat.deletions));
                 }
                 match (item.base_commit.as_deref(), item.head_commit.as_deref()) {
+                    _ if cap.is_some() => out.push_str(&format!(". Merge it with kybern_git merge_child {}.", item.thread_id)),
                     (Some(base), Some(head)) => out.push_str(&format!(
                         ". If your checkout is clean, merge the branch with git. Otherwise apply only this agent's changes with `git diff {base}..{head} | git apply --3way`; do not merge the branch, because its first commit is a snapshot of your uncommitted changes."
                     )),
@@ -1103,18 +1177,30 @@ pub fn agent_results_text(items: &[AgentResultItem]) -> String {
             && let Some(error) = &item.error
         {
             out.push_str("\n  Error: ");
-            out.push_str(error);
+            out.push_str(cap.map_or(error.as_str(), |cap| cut_on_sentence(error, cap).0));
         }
         match (&item.result, &item.error) {
             (Some(result), _) if !result.trim().is_empty() => {
                 out.push_str("\n  Result:\n");
-                out.push_str(result);
+                match cap {
+                    Some(cap) => {
+                        let (shown, cut) = cut_on_sentence(result, cap);
+                        out.push_str(shown);
+                        if cut {
+                            out.push_str(&format!("\n  […cut at {} of {} bytes]", shown.len(), result.len()));
+                        }
+                    }
+                    None => out.push_str(result),
+                }
             }
             (_, Some(error)) if item.status == DelegationStatus::Completed => {
                 out.push_str("\n  Error: ");
-                out.push_str(error);
+                out.push_str(cap.map_or(error.as_str(), |cap| cut_on_sentence(error, cap).0));
             }
             _ => {}
+        }
+        if cap.is_some() {
+            out.push_str(&format!("\n  Full result: kybern_thread_read {}", item.thread_id));
         }
     }
     out.push_str("\n\nIntegrate these results. For another round, delegate again with a full brief.");
@@ -3013,6 +3099,42 @@ mod orchestration_tests {
         let text = agent_results_text(&[interrupted]);
         assert!(text.contains("Error: interrupted by a Kybern restart"), "{text}");
         assert!(text.contains("Result:\nWaiting for sleep"), "{text}");
+    }
+
+    #[test]
+    fn cut_on_sentence_prefers_a_sentence_then_a_word_and_never_splits_a_character() {
+        assert_eq!(cut_on_sentence("short", 10), ("short", false));
+        assert_eq!(cut_on_sentence("One two. Three four five.", 16), ("One two.", true));
+        assert_eq!(cut_on_sentence("alpha beta gamma delta", 14), ("alpha beta", true));
+        assert_eq!(cut_on_sentence("ééééééé", 5), ("éé", true));
+        // A dot inside a token ("v1.2") is not a sentence end.
+        assert_eq!(cut_on_sentence("Use v1.2 now and later", 12), ("Use v1.2", true));
+    }
+
+    #[test]
+    fn the_lead_copy_caps_results_and_messages_only() {
+        assert!(ContentPart::Text { text: "x".into() }.lead_orchestration_text().is_none());
+        let body = "Sentence one. ".repeat(300);
+        let message = ContentPart::ThreadMessage {
+            message_id: Uuid::nil(),
+            from_thread_id: Some(Uuid::nil()),
+            from_title: "Child".into(),
+            purpose: ThreadMessagePurpose::Message,
+            reply_to: None,
+            body: body.clone(),
+        };
+        let full = message.orchestration_text().unwrap();
+        let capped = message.lead_orchestration_text().unwrap();
+        assert!(full.contains(&body) && capped.len() < full.len() / 2 && capped.contains("kybern_thread_read"), "{capped}");
+        let short = ContentPart::ThreadMessage {
+            message_id: Uuid::nil(),
+            from_thread_id: None,
+            from_title: String::new(),
+            purpose: ThreadMessagePurpose::Warning,
+            reply_to: None,
+            body: "tiny".into(),
+        };
+        assert_eq!(short.lead_orchestration_text(), short.orchestration_text(), "a short message is not changed");
     }
 
     #[test]

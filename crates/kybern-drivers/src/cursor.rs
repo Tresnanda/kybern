@@ -161,12 +161,17 @@ impl AgentDriver for CursorDriver {
                 description: "Compact the Cursor conversation".into(),
             }]))
             .await;
-        // The SDK has no system channel. Refresh the current guide on this
-        // runner's first ordinary prompt, including resumed conversations whose
-        // saved history may contain an older guide or none at all.
-        // A project Coordinator's lead instructions and a thread's project brief
-        // ride in the same block, since there is no system channel for them either.
-        let guide = config.native_tool_bridge.as_ref().and_then(|bridge| bridge.provider_instructions());
+        // The SDK has no system channel, so a new conversation carries the guide
+        // on its first ordinary prompt. A project Coordinator's lead instructions
+        // and a thread's project brief ride in the same block, since there is no
+        // system channel for them either. A resumed conversation already holds
+        // it in its history; sending it again on every respawn (each idle
+        // release) would pile up one more copy per resume. What changed since
+        // then reaches it as provider-only updates.
+        let guide = match config.resume_session_id {
+            None => config.native_tool_bridge.as_ref().and_then(|bridge| bridge.provider_instructions()),
+            Some(_) => None,
+        };
         Ok(SpawnedSession { session: Box::new(Session { connection, model: Mutex::new(config.model), guide: Mutex::new(guide) }), events })
     }
 }
@@ -290,7 +295,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn fresh_and_resumed_runners_send_the_current_guide_once_and_retry_it_after_rejection() {
+    async fn only_fresh_runners_send_the_guide_once_and_retry_it_after_rejection() {
         use std::os::unix::fs::PermissionsExt;
 
         for (resume, enabled) in [(None, true), (Some("cursor-sdk:restored"), true), (Some("cursor-sdk:restored"), false)] {
@@ -362,7 +367,8 @@ for line in sys.stdin:
             let sends: Vec<_> = requests.iter().filter(|request| request["type"] == "send").collect();
             assert_eq!(sends.len(), 4);
             assert_eq!(sends[0]["message"]["text"], "/compress");
-            let expected = if enabled {
+            // A resumed conversation already holds the block: it is never sent again.
+            let expected = if enabled && resume.is_none() {
                 with_guide("CURRENT GUIDE: use kybern_html_preview when helpful\nLEAD ROLE: plan and delegate", "Explain the results")
             } else {
                 "Explain the results".into()
