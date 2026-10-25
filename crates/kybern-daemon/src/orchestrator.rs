@@ -2342,8 +2342,9 @@ impl Orchestrator {
                     let updates: Vec<&str> = [
                         brief_update.as_ref().map(|(_, text)| text.as_str()),
                         settings_update.as_ref().map(|(_, text)| text.as_str()),
-                        // The seed already carries the git delta; the heads are still marked seen.
-                        change_report.as_ref().filter(|_| seed.is_none()).map(|report| report.text.as_str()),
+                        // The seed's git delta was marked seen at the refresh, so this report holds only
+                        // commits made since then.
+                        change_report.as_ref().map(|report| report.text.as_str()),
                         handoff_correction.as_ref().map(|(_, text)| text.as_str()),
                     ]
                     .into_iter()
