@@ -1,5 +1,5 @@
 /**
- * Local macOS app for this Mac's arch, or `--arch x64|arm64`; ad-hoc signing only, no installation.
+ * Local macOS app for this Mac's arch, or `--arch x64|arm64`; ad-hoc signing only, no installation. On Linux, see `package-linux.ts`.
  * `--test` gives the bundle its own name and id (`Kybern GPUIX (x86_64 test)`, `dev.kybern.gpuix.test`),
  * so LaunchServices and system notifications never attribute a test build to the installed app.
  */
@@ -7,8 +7,13 @@ import { cpSync, mkdirSync, readFileSync, existsSync, readdirSync, rmSync, write
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { COMPANION_CFLAGS } from './companion-flags.ts'
+import { resourceUrlPlugin } from './resource-urls.ts'
 const root = path.resolve(import.meta.dir, '..')
-if (process.platform !== 'darwin') throw Error('Packaging requires macOS')
+// Windows has its own pipeline (compiled app + NSIS installer); `--windows` cross-builds it from another OS.
+if (process.platform === 'win32' || process.argv.includes('--windows')) { await import('./package-windows.ts'); process.exit(0) }
+// Linux packs an AppImage, a .deb and an .rpm instead (`package-linux.ts`, same flags plus `--formats`).
+if (process.platform === 'linux') { await import('./package-linux.ts'); process.exit(0) }
+if (process.platform !== 'darwin') throw Error('Packaging requires macOS, Linux or Windows')
 // The whole bundle is one arch: Bun's runtime, the addon, kybernd and kybern. The Objective-C companions are universal.
 const archFlag = process.argv.indexOf('--arch')
 const arch = archFlag >= 0 ? process.argv[archFlag + 1] : process.arch
@@ -63,16 +68,7 @@ result = await Bun.build({
   define: { 'process.env.NODE_ENV': JSON.stringify('production') },
   compile: {target:`bun-darwin-${arch}`, outfile:path.join(macos, 'Kybern GPUIX'), autoloadDotenv:false, autoloadBunfig:false, autoloadTsconfig:false, autoloadPackageJson:false},
   external: ['@gpuix/native-*'],
-  plugins: [{name:'bundle-resource-urls', setup(build) {
-    build.onLoad({filter:/\.[cm]?[jt]sx?$/}, async args => {
-      if (!args.path.startsWith(path.join(root, 'src/'))) return
-      let contents = readFileSync(args.path, 'utf8')
-      if (args.path === path.join(root, 'src/main.tsx')) contents = contents.replace("appName: 'Kybern'", "appName: 'Kybern GPUIX'")
-      // Keep source-relative resource lookup valid outside Bun's virtual filesystem.
-      if (contents.includes('import.meta.url')) contents = contents.replaceAll('import.meta.url', `new URL(${JSON.stringify(path.relative(root,args.path))}, 'file://' + process.env.KYBERN_GPUIX_RESOURCES + '/').href`)
-      return {contents, loader:args.path.endsWith('tsx') ? 'tsx' : args.path.endsWith('ts') ? 'ts' : 'js'}
-    })
-  }}],
+  plugins: [resourceUrlPlugin(root)],
 })
 } finally {
 process.chdir(previousCwd)

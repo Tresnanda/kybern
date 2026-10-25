@@ -1,1 +1,1 @@
-{"extends":"../tsconfig.json","include":["../src","../scripts","./*.ts","../assets.d.ts"]}
+{"extends":"../tsconfig.json","include":["../src","../scripts","./*.ts","./windows/*.ts","../assets.d.ts"]}

@@ -37,7 +37,8 @@ Used in: apps/gpuix/src/platform/glass.ts, apps/gpuix/src/kit/GlassEdge.tsx,
 apps/gpuix/src/kit/Segmented.tsx, apps/gpuix/src/platform/translucency.ts (glass recipes: raised, frost and
 recess tints, rim and highlight values, the segmented thumb plate, the readability floor). Only values
 and techniques are used. Zeron's GPUI fork (ZUI, Apache-2.0/GPL) is not: the native `edgeFade` patch
-(apps/gpuix/native/patches) is written from the idea, with no ZUI code.
+(edge_fade.rs and the rounded clip chain in the Tresnanda/gpuix and Tresnanda/zed forks, pinned by
+apps/gpuix/native/FORK) is written from the idea, with no ZUI code.
 
 MIT License
 
@@ -60,3 +61,13 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Microsoft Visual C++ Redistributable (Windows installer)
+
+The Windows installer of Kybern GPUIX carries the app-local Microsoft Visual C++ runtime
+(`vcruntime140.dll`, `vcruntime140_1.dll`, `msvcp140*.dll`) next to its executables, copied from
+the Visual Studio redistributable folder (`VC\Redist\MSVC\<version>\x64\Microsoft.VC14x.CRT`)
+of the machine that builds the installer. These files are Microsoft software, redistributable
+under the terms of the Visual Studio license ("Distributable Code": the Microsoft Visual C++
+Redistributable files listed in the REDIST.TXT of the Visual Studio installation). They are not
+covered by Kybern's license.

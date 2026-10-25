@@ -1,4 +1,6 @@
-# macOS app packaging
+# App packaging (macOS, Linux)
+
+(Windows: see [Windows x64 (beta)](#windows-x64-beta) below.)
 
 Build from `apps/gpuix` with `bun scripts/package-app.ts` (or `pnpm package:app`).
 It packages for this Mac's arch; `--arch x64` builds the Intel app on Apple Silicon
@@ -19,6 +21,229 @@ Bundle ID `dev.kybern.gpuix` is distinct from `dev.kybern.desktop`.
 The icon is copied from `apps/desktop/src-tauri/icons/icon.icns` at build time.
 No entitlements are needed for this local, non-sandboxed, non-hardened ad-hoc app.
 This is a local development bundle, not notarized distribution packaging.
+
+## Windows x64 (beta)
+
+An unsigned, per-user NSIS installer, `kybern-gpuix_<version>_x64-setup.exe`, plus a
+minisign `.sig` the in-app updater verifies. Windows GPUIX is a **beta**: it draws and
+runs, but several macOS features fall back or are missing until the work packages in
+[`PORTING-PLATFORMS.md`](../PORTING-PLATFORMS.md) land (see "Known gaps" below).
+
+### Build
+
+CI builds it in the `gpuix-windows` job of `desktop.yml` on
+`windows-2022` (a job of its own, so its failure cannot skip the manifest, which publishes
+the macOS and Tauri assets with or without the Windows entry) (the addon through `.github/actions/gpuix-addon`, the binaries from
+dist's Windows zip). By hand, in Git Bash on Windows with Bun, NSIS (`makensis` on
+PATH), the patched addon and release `kybernd.exe` / `kybern.exe`:
+
+```sh
+KYBERN_BIN_DIR=/path/to/release scripts/bundle-gpuix-windows.sh   # package + sign (SKIP_SIGN=1 to skip)
+cd apps/gpuix && bun scripts/package-app.ts --windows              # package only: dist/windows/
+```
+
+`package-app.ts` hands off to `scripts/package-windows.ts` on Windows or with `--windows`.
+Options: `--out`, `--addon`, `--makensis`, `--no-installer` (stop after the app folder),
+`--no-vc-runtime`, `--nsis-ansi`. It compiles `packaging/entry-windows.ts` with
+`bun build --compile --target=bun-windows-x64` (a GUI-subsystem exe, no console window;
+the icon and file properties are set only when built on Windows, since Bun needs Windows
+APIs for them), lays out the app folder, and runs `makensis` on `windows/installer.nsi`.
+
+A Mac or Linux machine can cross-build everything except the C++ runtime copy, to prove
+the packaging compiles. Homebrew's makensis 3.13 aborts writing a Unicode installer, so
+compile the check with `--nsis-ansi`:
+
+```sh
+KYBERN_BIN_DIR=<folder with stub kybernd.exe and kybern.exe> \
+  bun scripts/package-app.ts --windows --nsis-ansi --out /tmp/win --addon <any file>
+```
+
+### What the installer does
+
+- **Where:** `%LOCALAPPDATA%\Programs\Kybern GPUIX` (no administrator prompt; a previous
+  install's folder is reused; `/D=<dir>` overrides in silent mode).
+- **Layout:** `Kybern GPUIX.exe`, `gpuix-native.win32-x64-msvc.node`, `kybernd.exe`, the
+  app-local C++ runtime (`vcruntime140.dll`, … copied from Visual Studio's redistributable
+  folder, because Rust's MSVC builds import it and a clean Windows 10 does not have it; the
+  Concurrency Runtime `concrt140.dll` is not shipped, nothing here imports it), `icon.ico`,
+  `version`, `release-background.png`, `THIRD_PARTY_NOTICES.md`, `src\assets\{fonts,providers}`,
+  `tools\{path,shortcut,stop}.ps1`, `uninstall.exe`, and `bin\kybern.exe` with its own copy of
+  the runtime DLLs (it looks beside itself first). The app finds all of it beside its own
+  executable (`packaging/entry-windows.ts`). `mermaid.min.js` and the web view companion are not
+  shipped: Windows has no embedded web view yet.
+- **Shortcuts:** a Start-menu shortcut, always, and a desktop shortcut (off by default).
+  Both carry the AppUserModelID `dev.kybern.gpuix` (set by `tools\shortcut.ps1`; NSIS cannot
+  set it, and a plain shortcut is the fallback), and the id is registered under
+  `HKCU\Software\Classes\AppUserModelId\dev.kybern.gpuix` with the app name and icon. Toasts
+  need that id; the notification work itself (WP5) is not part of this installer.
+- **Registry (all HKCU):** `Software\Kybern GPUIX` (`InstallDir`, `Version`, and the choices
+  `PathCommand` and `DesktopShortcut`, which updates keep), the Add/Remove Programs entry
+  `Software\Microsoft\Windows\CurrentVersion\Uninstall\Kybern GPUIX` (name, version, publisher,
+  icon, `UninstallString`, `QuietUninstallString`, `EstimatedSize`), and the AppUserModelId key.
+- **The `kybern` command:** an optional "Add the kybern command to PATH" component, on by
+  default, that **appends** the install folder's `bin` to the user Path (`tools\path.ps1`, which
+  edits the registry value directly so `%VAR%` entries survive, and never duplicates). Only
+  `bin` goes on Path, so `uninstall`, `kybernd` and the runtime DLLs do not become commands.
+  Appending is the side-by-side rule below. Settings → Terminal command is macOS-only until WP2.
+- **Update mode:** `/S` is silent. `/UPDATE` starts the new app when the install finishes.
+  Silent installs wait up to 30 s for `Kybern GPUIX.exe` to exit, then carry on. Only copies
+  running from the install folder count (`tools\stop.ps1` checks the image path); another
+  folder's Kybern GPUIX or the Tauri app's daemon is never waited for or touched. A locked
+  file (a daemon that outlived the app, the loaded addon, a running `kybern`) is moved aside
+  to `<name>.old` instead of killed, so running agents are not interrupted, and the next install
+  or uninstall removes it. The new app restarts the old daemon through its normal version check
+  (`daemon.shutdown`, `shell/daemon.ts`). A file that still cannot be written fails the install
+  (exit code 2, also with `/S`) rather than leaving a half-replaced folder. If an update install
+  fails, the installer starts whatever is still installed.
+- **Uninstall:** `uninstall.exe` (or Add/Remove Programs) first stops the daemon running from the
+  install folder (`kybern stop-daemon`, then ends what is left in that folder; this runs after
+  the confirm page, so cancelling it leaves the daemon alone), then removes only the files the
+  installer wrote, the shortcuts, the Path entry and the registry keys, and the folder itself.
+  Chats, settings and the daemon's data (`~/.kybern`) are never touched.
+
+### Next to the Tauri Kybern app
+
+The two apps install side by side and neither touches the other: different folders
+(`%LOCALAPPDATA%\Programs\Kybern GPUIX` against the Tauri app's own), uninstall keys,
+shortcuts and AppUserModelIDs (`dev.kybern.gpuix` against `dev.kybern.desktop`). They share
+the user's Kybern data and local daemon, as on macOS: whichever app starts with a different
+daemon version restarts it.
+
+Both ship a `kybern.exe`. The GPUIX installer only ever **appends** its `bin` folder to the user
+Path, so a `kybern` already earlier on Path (the Tauri app's, which its Settings adds the same
+way, or cargo's) keeps winning and nothing is overwritten; GPUIX's copy is then reachable by
+its full path. To prefer GPUIX's, move its entry up in Settings → Environment variables, or
+uninstall the other. Untick the component to leave Path alone.
+
+### Unsigned
+
+Like the Tauri Windows build, the installer has no Authenticode signature, so a browser
+download shows SmartScreen's "Windows protected your PC": choose **More info → Run anyway**.
+Updates installed by the app are downloaded by the app itself, carry no Mark of the Web and are
+not blocked; they are checked against the updater minisign key before they run.
+
+### Updater
+
+`src/platform/update.ts` reads the feed key `windows-x86_64-gpuix`, downloads the installer,
+verifies the signature (`minisign.ts`), and then refuses anything that is not this release's
+installer: the signature's trusted comment (`tauri signer sign` writes `file:<name>`) must name
+`kybern-gpuix_<version>_x64-setup.exe`, and the version must be newer than the running app. The
+updater key also signs Tauri's own setup and older GPUIX installers, which a swapped feed entry
+could otherwise make the app run. A PE (`MZ`) check stays as a sanity check. The installer is
+written to its own temp folder and started with `/S /UPDATE /D=<this copy's folder>` (through
+`Start-Process`, because NSIS wants `/D=` last and unquoted even with spaces) and the current
+environment, and the app quits.
+
+Each environment window is its own process and keeps the install's files open, so before
+that the updater asks every other window to quit over the window registry
+(`windows/registry.ts`, named pipe `\\.\pipe\kybern-gpuix-…`) and waits up to 10 s. A window
+that stays (stuck, or not answering) keeps running its old files; the installer moves the locked
+ones aside as `.old` and the user closes that window later, after which it is the old version.
+
+Only an installed copy updates (an `uninstall.exe` beside the exe); a loose exe or a build
+output folder does not. Old staged installers are removed at the next start.
+`KYBERN_UPDATE_NO_RELAUNCH=1` stages the installer and exits without running it, for checks
+against a local feed.
+
+### Requirements and known gaps
+
+Windows 10 1809 or later (Bun's floor), x64. **WebView2 is not required**: previews open in the
+browser and Mermaid shows as text until the embedded web view (WP10) exists; the WebView2
+bootstrapper joins the installer then. Direct3D 11 is the renderer; the CI runner proves it only
+on WARP (software). The fallbacks for everything macOS-only (no backdrop blur or Mica, fonts,
+Win-key shortcuts instead of Ctrl, title-bar controls, notifications, credentials, clipboard and
+`open` shell-outs) are the "macOS-only patches off macOS" table in
+[`PORTING-PLATFORMS.md`](../PORTING-PLATFORMS.md); WP1 to WP5 own them.
+
+### What CI and a real PC must still prove
+
+See "What needs real hardware or CI" in `PORTING-PLATFORMS.md`. For the installer: the `gpuix-windows`
+job runs `windows/verify-install.ps1` before the upload, and a failure blocks the job: install, files,
+Add/Remove Programs, AppUserModelID read back from the shortcut, only `bin` on Path, a **smoke run**
+of the installed app (`KYBERN_GPUIX_SMOKE=1`: it loads the native addon with its DLLs, imports the
+whole module graph and a bundled font, then exits 0 with no window; `src/main.tsx`), a silent
+update over a running `kybernd.exe` (it moves aside to `.old`, the daemon keeps running) and an
+uninstall with that daemon still running (it is stopped and the folder is gone). A separate
+informational step launches the installed app. It does not cover SmartScreen/Defender, a Windows 10 machine without the C++
+runtime, per-monitor DPI, the real silent-update relaunch from a running app, or toasts.
+
+## Linux packages (beta)
+
+On Linux, `bun scripts/package-app.ts` hands over to `scripts/package-linux.ts`
+(`--arch x64|arm64`, default this machine; `--formats appimage,deb,rpm`, default
+all three). Releases run `scripts/bundle-gpuix-linux.sh` in the `gpuix-linux` job of
+`desktop.yml` on `ubuntu-22.04` (a job of its own: a failure leaves only the
+`linux-x86_64-gpuix` entry out of the manifest), which
+moves the packages to the repository's `dist/` and signs the AppImage. Requires
+Bun, the patched addon (`native/build/gpuix-native.linux-x64-gnu.node`, from
+`native/update.sh` on Linux), `kybernd` and `kybern` for that arch in
+`KYBERN_BIN_DIR` (releases use dist's static musl builds), `pnpm install` in
+`apps/desktop`, `dpkg-deb` and `dpkg-shlibdeps` (dpkg-dev), `rpmbuild` (rpm),
+and for the AppImage `APPIMAGETOOL` (appimagetool 1.9.1) plus `APPIMAGE_RUNTIME`
+(the type2-runtime it embeds; `desktop.yml` pins both by checksum).
+
+The app is one folder, the same in every format:
+
+| Path | What |
+| --- | --- |
+| `kybern-gpuix` | `bun build --compile --target=bun-linux-x64` (glibc) of `packaging/entry-linux.ts` |
+| `kybernd`, `kybern` | the daemon and CLI it starts and offers to link |
+| `resources/` | the addon, fonts, provider icons, Mermaid, release artwork, notices, `version`, and `package` (`appimage`, `deb` or `rpm`: how `src/platform/linuxPackage.ts` knows which updater path applies) |
+
+| Asset | Installs | Updates |
+| --- | --- | --- |
+| `kybern-gpuix_<v>_x86_64.AppImage` | wherever the user keeps it (the install script uses `~/Applications`); the folder sits under `usr/lib/kybern-gpuix` in the image, with `AppRun`, the desktop entry and icon at its root | in place: the app downloads the release AppImage, checks its signature, that the signature's trusted comment names this release's `kybern-gpuix_<v>_x86_64.AppImage` and that the version is newer than the running app (the same check as the Windows installer; the Tauri AppImage and older GPUIX releases use the same key), renames it over `$APPIMAGE`, and relaunches it |
+| `kybern-gpuix_<v>_x86_64.deb` | `/usr/lib/kybern-gpuix/`, `/usr/bin/kybern-gpuix` (a link), `/usr/share/applications/dev.kybern.gpuix.desktop`, `hicolor` icons at 32, 128, 256 and 512 px | announced only: the app links the `.deb` beside the feed's AppImage and shows `sudo apt install ./kybern-gpuix_<v>_x86_64.deb` with a **Copy command** button (release details and Settings → About) |
+| `kybern-gpuix_<v>_x86_64.rpm` | the same files | announced only, with `sudo dnf install ./…rpm` (`sudo zypper install --allow-unsigned-rpm ./…rpm` where zypper exists) |
+
+**Beside the Tauri package.** The Tauri deb (package `kybern`) owns
+`/usr/bin/kybern`, `/usr/bin/kybernd`, `/usr/bin/kybern-desktop`,
+`kybern.desktop` and `kybern-desktop.png` icons. Kybern GPUIX (package
+`kybern-gpuix`, app id `dev.kybern.gpuix`) shares none of those paths: it keeps
+its daemon and CLI inside `/usr/lib/kybern-gpuix` and puts only `kybern-gpuix`
+on PATH, so both install side by side without conflicts, alternatives or
+`Conflicts:` fields. A terminal `kybern` comes from the Tauri package, or from
+**Settings → About → Terminal command**, which links GPUIX's copy into
+`~/.local/bin` (`platform/cli.ts`).
+
+**Dependencies.** The addon links only libc, libm, libgcc_s, libxcb and
+libxkbcommon(-x11); fonts go through cosmic-text, not fontconfig. It loads the
+Vulkan loader, the Wayland client, wayland-egl and EGL at run time, so no ELF
+tool sees those. The deb's `Depends` are `dpkg-shlibdeps` over the app
+executable and the addon on the build machine plus `libvulkan1`; on
+ubuntu-22.04: `libc6 (>= 2.35), libgcc-s1 (>= 4.2), libxcb1 (>= 1.12),
+libxkbcommon-x11-0 (>= 0.5.0), libxkbcommon0 (>= 0.5.0), libvulkan1`, with
+`Recommends: libwayland-client0, libwayland-egl1, libegl1, mesa-vulkan-drivers,
+xdg-utils`. The rpm lets `rpmbuild` generate `Requires` from the same ELF files
+in soname form (`libxkbcommon-x11.so.0()(64bit)`, `libc.so.6(GLIBC_2.35)(64bit)`
+and so on), which resolves on Fedora, RHEL and openSUSE alike although their
+package names differ, plus `Requires: libvulkan.so.1()(64bit)` and the same
+weak dependencies in soname form. On Fedora 42 that installs glibc, libgcc,
+libxcb, libxkbcommon, libxkbcommon-x11 and vulkan-loader, and as weak
+dependencies libwayland-client, libwayland-egl, libglvnd-egl,
+mesa-vulkan-drivers and xdg-utils. The list of run-time libraries is
+`RUNTIME_LIBRARIES` in `package-linux.ts`; recheck it with `strings` on the
+addon after a GPUIX update. The rpm turns off stripping and every other
+post-install step: the Bun executable carries the app after its ELF image, and
+`strip` would cut it off (the executable is byte-identical in the AppImage, deb
+and rpm).
+
+**AppImage specifics.** The image is mounted only while the app runs, but
+`kybernd` outlives the app and a linked `kybern` must survive the next launch's
+new mount path. `entry-linux.ts` therefore copies both to
+`~/.local/share/kybern-gpuix/bin` once per version (renamed into place, so a
+running daemon keeps its file) and runs those; the daemon restart policy treats
+that copy as the packaged daemon (`KYBERN_GPUIX_PACKAGED_DAEMON`). Extra
+environment windows start `$APPIMAGE` again instead of the mounted executable,
+for the same reason. The type2 runtime needs `fusermount3` (or `fusermount`) but
+no libfuse; without FUSE, `--appimage-extract-and-run` still works. An AppImage
+unpacked with `--appimage-extract` only announces updates.
+
+Check a build in a container: `dpkg-deb -I` / `-c`, `rpm -qip` / `-qlp` /
+`-qpR`, `desktop-file-validate`, then `apt install ./…deb` on Debian/Ubuntu and
+`dnf install ./…rpm` on Fedora (`which kybern-gpuix`, the desktop file and
+icons present). The GUI itself needs a display; `.github/workflows/gpuix-platforms.yml`
+is the on-screen check (Xvfb + lavapipe).
 
 ## Why compiled Bun
 
