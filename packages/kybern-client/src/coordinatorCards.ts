@@ -41,6 +41,7 @@ export const COORDINATOR_CARD_COPY = {
   notesDetail: "Each change adds a dated claim. A replaced line is struck through. Untick anything you want to keep.",
   notesSupersedes: "Replaces",
   tidyMeta: "Files they cite changed after they were written.",
+  tidyHint: "An agent checks them. You approve each change.",
   tidyNotNow: "Not now",
   tidyAction: "Tidy notes",
   decline: "Decline",

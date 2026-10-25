@@ -6,7 +6,7 @@ import { useSyncExternalStore } from 'react'
 import { getClient, getState, subscribe as subscribeApp } from '../state.ts'
 import { openTab } from '../tabs/open.ts'
 
-export type DockTab = 'agents' | 'activity' | 'changes' | 'explorer' | 'project' | 'notes' | 'tasks' | 'review' | 'artifacts' | 'terminal' | 'preview'
+export type DockTab = 'agents' | 'activity' | 'changes' | 'explorer' | 'project' | 'map' | 'notes' | 'tasks' | 'review' | 'artifacts' | 'terminal' | 'preview'
 export interface DockState {
   open: boolean
   tabs: DockTab[]
@@ -16,7 +16,7 @@ export interface DockState {
 }
 const DEFAULT: DockState = { open: false, tabs: [], tab: null, width: 538, instant: false }
 // Terminal, preview and review were viewer panels; since ADE-54 they open as tabs beside the chat, so saved choices drop them.
-const TABS: DockTab[] = ['agents', 'activity', 'changes', 'explorer', 'project', 'notes', 'tasks', 'artifacts']
+const TABS: DockTab[] = ['agents', 'activity', 'changes', 'explorer', 'project', 'map', 'notes', 'tasks', 'artifacts']
 export function restoreDockChoices(value: unknown): Map<string, DockState> {
   const restored = new Map<string, DockState>()
   if (!Array.isArray(value)) return restored
