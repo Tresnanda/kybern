@@ -349,6 +349,15 @@ pub fn transcript(r: &ThreadsGetResult) {
             TranscriptEntry::RuntimeTask { task, .. } => println!("  ↳ {}  ({:?})", task.title, task.status),
             TranscriptEntry::Notice { text, .. } => println!("  ! {text}"),
             TranscriptEntry::Reverted { commit, .. } => println!("  ↶ reverted to {commit}"),
+            TranscriptEntry::Rotation { rotation_id, pending: true, .. } => println!("  ⟳ refreshing context…  ({rotation_id})"),
+            TranscriptEntry::Rotation { rotation_id, handoff_status, edited, .. } => {
+                let how = match handoff_status {
+                    Some(HandoffStatus::Missing { why }) => format!("without a handoff: {why}"),
+                    _ if *edited => "handoff edited by you".to_owned(),
+                    _ => "with a handoff".to_owned(),
+                };
+                println!("  ⟳ context refreshed {how}  ({rotation_id})");
+            }
             TranscriptEntry::OutsideRepoChanged { repos, .. } => {
                 for repo in repos {
                     println!("  ! {} changed outside this chat's worktree", repo.name);

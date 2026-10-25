@@ -1506,7 +1506,7 @@ impl Store {
         self.with(|c| {
             let mut st = c.prepare(
                 "SELECT seq, thread_id, turn_id, at, payload FROM events
-                 WHERE thread_id = ?1 AND seq <= ?2 AND kind = 'provider_usage_updated'
+                 WHERE thread_id = ?1 AND seq <= ?2 AND kind IN ('provider_usage_updated', 'session_transitioned', 'context_rotated')
                  ORDER BY seq",
             )?;
             let events = st.query_map(params![thread_id.to_string(), through_seq], row_to_event)?.collect::<Result<Vec<_>, _>>()?;

@@ -44,6 +44,7 @@ mod omp_recovery;
 mod pick_request;
 mod project_map;
 mod request_tools;
+mod rotation;
 mod secret_request;
 mod spaces;
 mod subagent_messaging;
@@ -241,7 +242,7 @@ impl Orchestrator {
                 .lock()
                 .await
                 .as_ref()
-                .filter(|turn| !turn.completed)
+                .filter(|turn| !turn.completed && turn.internal.is_none())
                 .map(|turn| turn.id)
                 .ok_or_else(|| anyhow!("native tool request has no active owning turn"))?;
             if matches!(name, "kybern_html_preview" | "kybern_html_publish") {
@@ -532,6 +533,8 @@ struct Inner {
     messaging: messaging::MessagingState,
     /// Test hooks for the Coordinator's git tool (the `gh` program, git environment).
     lead_git: crate::lead_git::LeadGitConfig,
+    /// Coordinator context rotations in progress, and the handoff deadline.
+    rotation: rotation::RotationState,
 }
 
 struct LiveSession {
@@ -580,6 +583,8 @@ struct LiveSession {
     brief_revision: Mutex<Option<i64>>,
     /// The Coordinator settings this session was last told; only a Coordinator tracks them.
     lead_settings: Mutex<Option<EffectiveCoordinatorSettings>>,
+    /// The latest context report of this process, for the rotation budget.
+    context_usage: std::sync::Mutex<Option<ContextUsage>>,
 }
 
 struct DaemonApproval {
@@ -752,6 +757,9 @@ struct ActiveTurn {
     /// an internal task notification. Hold that provisional result so the
     /// continuation remains part of this turn and retains stable message ids.
     pending_completion: Option<PendingTurnCompletion>,
+    /// A Kybern-internal turn (the rotation handoff): its output is collected
+    /// here and never persisted, and clients never see the turn.
+    internal: Option<rotation::InternalTurn>,
 }
 
 #[derive(Clone)]
@@ -878,6 +886,7 @@ impl Orchestrator {
                 delegation: Default::default(),
                 messaging: Default::default(),
                 lead_git: Default::default(),
+                rotation: Default::default(),
             }),
         }
     }
@@ -1055,6 +1064,7 @@ impl Orchestrator {
             return Ok(Vec::new());
         }
         let mut claimed = Vec::new();
+        let mut rotations = Vec::new();
         {
             let mut sessions = self.inner.sessions.lock().await;
             for (thread_id, live, reason, last_activity) in planned {
@@ -1066,6 +1076,12 @@ impl Orchestrator {
                     // candidates. Give that newly quiet session its full grace.
                     continue;
                 }
+                // A Coordinator far into its budget writes a handoff before its
+                // process closes, so the next message starts fresh.
+                if self.idle_rotation_due(thread_id, &live) {
+                    rotations.push((thread_id, live));
+                    continue;
+                }
                 let (done, waiting) = tokio::sync::watch::channel(());
                 self.inner.releasing.lock().await.insert(thread_id, waiting);
                 sessions.remove(&thread_id);
@@ -1073,6 +1089,9 @@ impl Orchestrator {
                 self.revoke_native_session(&live);
                 claimed.push((thread_id, live, reason, done));
             }
+        }
+        for (thread_id, live) in rotations {
+            self.rotate_idle(thread_id, live);
         }
         // Once claimed, cleanup must finish even if the maintenance caller is
         // cancelled. Keep each resume barrier until its own process is closed.
@@ -1193,6 +1212,7 @@ impl Orchestrator {
         }
         self.delegation_recover_after_restart()?;
         self.messaging_recover_after_restart().await?;
+        self.rotation_recover_after_restart().await?;
         Ok(())
     }
 
@@ -1914,6 +1934,15 @@ impl Orchestrator {
             return Ok((turn_id, message_id, false));
         }
         let mut thread = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
+        // While a Coordinator's context is refreshed, a message waits in its
+        // queue and starts the first turn of the fresh session.
+        if self.is_rotating(thread_id) {
+            if queued {
+                return Err(ThreadBusy.into());
+            }
+            self.enqueue_admitted(methods::QueuedMessage { id: message_id, thread_id, message })?;
+            return Ok((Uuid::nil(), message_id, false));
+        }
         if queued && thread.status != ThreadStatus::Idle {
             return Err(anyhow!("thread is no longer idle"));
         }
@@ -1993,6 +2022,11 @@ impl Orchestrator {
 
     pub fn enqueue(&self, message: methods::QueuedMessage) -> Result<()> {
         let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
+        self.enqueue_admitted(message)
+    }
+
+    /// `enqueue` for a caller that holds the command gate.
+    fn enqueue_admitted(&self, message: methods::QueuedMessage) -> Result<()> {
         let thread = self.inner.store.thread_get(message.thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
         if thread.subagent.is_some() {
             return Err(anyhow!(subagents::READ_ONLY_ERROR));
@@ -2048,6 +2082,7 @@ impl Orchestrator {
 
     pub(super) async fn steer_from(&self, mut params: methods::QueuedMessage, source: SteerSource) -> Result<methods::ThreadsSendResult> {
         self.ensure_not_subagent(params.thread_id)?;
+        anyhow::ensure!(!self.is_rotating(params.thread_id), rotation::ROTATING_STEER_ERROR);
         self.resolve_attachments(&mut params.message);
         let receipt = || -> Result<Option<methods::ThreadsSendResult>> {
             let Some((thread, turn_id, message)) =
@@ -2175,6 +2210,10 @@ impl Orchestrator {
             if thread.status == ThreadStatus::Archived {
                 continue;
             }
+            if self.is_rotating(thread.id) {
+                waiting = true;
+                continue;
+            }
             if thread.status != ThreadStatus::Idle {
                 waiting |= matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval);
                 continue;
@@ -2242,6 +2281,7 @@ impl Orchestrator {
                 terminal_message_id: None,
                 completed: false,
                 pending_completion: None,
+                internal: None,
             });
         }
         live.turn_ready.notify_one();
@@ -2287,11 +2327,24 @@ impl Orchestrator {
                         tracing::warn!(thread_id = %thread.id, %error, "could not prepare the setup kickoff");
                         None
                     });
+                    // A handoff the user corrected after the fresh session already read it.
+                    let handoff_correction = self.handoff_correction(&thread).unwrap_or_else(|error| {
+                        tracing::warn!(thread_id = %thread.id, %error, "could not check the handoff for corrections");
+                        None
+                    });
+                    // The first message after a context refresh starts with the handoff
+                    // and the facts Kybern carried, in the provider's copy only.
+                    let seed = self.rotation_seed(thread.id).unwrap_or_else(|error| {
+                        tracing::warn!(thread_id = %thread.id, %error, "could not read the context refresh seed");
+                        None
+                    });
                     let provider_message = self.provider_message_for(&thread, kickoff.as_ref().unwrap_or(&workspace_message), &live);
                     let updates: Vec<&str> = [
                         brief_update.as_ref().map(|(_, text)| text.as_str()),
                         settings_update.as_ref().map(|(_, text)| text.as_str()),
-                        change_report.as_ref().map(|report| report.text.as_str()),
+                        // The seed already carries the git delta; the heads are still marked seen.
+                        change_report.as_ref().filter(|_| seed.is_none()).map(|report| report.text.as_str()),
+                        handoff_correction.as_ref().map(|(_, text)| text.as_str()),
                     ]
                     .into_iter()
                     .flatten()
@@ -2300,6 +2353,10 @@ impl Orchestrator {
                         provider_message
                     } else {
                         std::borrow::Cow::Owned(lead::with_brief_update(&provider_message, &updates.join("\n\n")))
+                    };
+                    let provider_message = match &seed {
+                        Some(seed) => std::borrow::Cow::Owned(lead::with_brief_update(&provider_message, &seed.text)),
+                        None => provider_message,
                     };
                     let sent = live.session.send_message(&message_id.to_string(), &provider_message).await;
                     if sent.is_ok() {
@@ -2311,6 +2368,16 @@ impl Orchestrator {
                         }
                         if let Some(report) = change_report {
                             self.lead_change_seen(&thread, report).await;
+                        }
+                        if let Some(seed) = &seed
+                            && let Err(error) = self.rotation_seed_sent(thread.id, seed)
+                        {
+                            tracing::warn!(thread_id = %thread.id, %error, "could not clear the context refresh seed");
+                        }
+                        if let Some((seq, _)) = handoff_correction
+                            && let Err(error) = self.handoff_correction_seen(thread.id, seq)
+                        {
+                            tracing::warn!(thread_id = %thread.id, %error, "could not record the handoff correction");
                         }
                     }
                     sent
@@ -3400,6 +3467,7 @@ impl Orchestrator {
             app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
             brief_revision: Mutex::new(None),
             lead_settings: Mutex::new(None),
+            context_usage: std::sync::Mutex::new(None),
         });
         self.inner.store.meta_set_many(&[
             (&format!("live_fingerprint:{}", thread.id), &self.environment_fingerprint(thread)?),
@@ -3747,24 +3815,33 @@ impl Orchestrator {
         }
         self.interrupt_runtime_tasks(thread_id, &live, "Provider exited before this work finished").await;
         let turn = live.turn.lock().await.take();
-        if let Some(turn) = turn.filter(|t| !t.completed) {
-            let _ = self.resolve_finished_requests(thread_id, turn.id, &live).await;
-            let _ =
-                self.emit(thread_id, Some(turn.id), EventPayload::TurnFailed { error: "provider exited before finishing the turn".into() });
-            if let Ok(Some(mut t)) = self.inner.store.thread_get(thread_id) {
-                t.status = ThreadStatus::Failed;
-                let _ = self.update_thread(t);
+        if let Some(mut turn) = turn.filter(|t| !t.completed) {
+            // A handoff turn is invisible: its rotation goes on without a handoff.
+            if let Some(internal) = turn.internal.as_mut() {
+                internal.finish(Err("The session exited before it wrote a handoff.".into()));
+            } else {
+                self.fail_exited_turn(thread_id, &live, turn.id).await;
             }
-            self.delegation_turn_finished(
-                thread_id,
-                turn.id,
-                delegation::TurnOutcome::Failed("provider exited before finishing the turn".into()),
-            );
         }
         if cleanup_barrier.is_some() {
             self.inner.releasing.lock().await.remove(&thread_id);
         }
         drop(cleanup_barrier);
+    }
+
+    /// The provider exited in the middle of a user's turn.
+    async fn fail_exited_turn(&self, thread_id: ThreadId, live: &Arc<LiveSession>, turn_id: TurnId) {
+        let _ = self.resolve_finished_requests(thread_id, turn_id, live).await;
+        let _ = self.emit(thread_id, Some(turn_id), EventPayload::TurnFailed { error: "provider exited before finishing the turn".into() });
+        if let Ok(Some(mut t)) = self.inner.store.thread_get(thread_id) {
+            t.status = ThreadStatus::Failed;
+            let _ = self.update_thread(t);
+        }
+        self.delegation_turn_finished(
+            thread_id,
+            turn_id,
+            delegation::TurnOutcome::Failed("provider exited before finishing the turn".into()),
+        );
     }
 
     async fn owns_app_tool_turn(&self, thread_id: ThreadId, live: &Arc<LiveSession>, expected_turn: Option<TurnId>) -> Option<TurnId> {
@@ -3776,7 +3853,10 @@ impl Orchestrator {
             return None;
         }
         let turn = live.turn.lock().await;
-        turn.as_ref().filter(|turn| !turn.completed && expected_turn.is_none_or(|expected| expected == turn.id)).map(|turn| turn.id)
+        // A handoff turn has no tools: it only writes text.
+        turn.as_ref()
+            .filter(|turn| !turn.completed && turn.internal.is_none() && expected_turn.is_none_or(|expected| expected == turn.id))
+            .map(|turn| turn.id)
     }
 
     async fn queue_app_tool_request(
@@ -3940,7 +4020,23 @@ impl Orchestrator {
             }
             break guard;
         };
-        let turn_id = turn_guard.as_ref().map(|t| t.id);
+        // A handoff turn keeps its text and drops everything a transcript would show.
+        let internal = turn_guard.as_ref().is_some_and(|turn| turn.internal.is_some());
+        let ev = if internal {
+            match rotation::internal_turn_event(&mut turn_guard, ev) {
+                None => return Ok(()),
+                Some(DriverEvent::PermissionRequest { request_id, .. }) => {
+                    drop(turn_guard);
+                    let deny = ApprovalDecision::Deny { reason: Some("Kybern is collecting a handoff; tools are not available.".into()) };
+                    let _ = live.session.respond_permission(&request_id, &deny).await;
+                    return Ok(());
+                }
+                Some(ev) => ev,
+            }
+        } else {
+            ev
+        };
+        let turn_id = if internal { None } else { turn_guard.as_ref().map(|t| t.id) };
         let response_event = matches!(
             &ev,
             DriverEvent::ImageReceived { .. }
@@ -4381,6 +4477,9 @@ impl Orchestrator {
                 });
                 self.maybe_generate_title(&t);
                 self.delegation_turn_finished(thread_id, turn_id, delegation::TurnOutcome::Completed { stop_reason, terminal_message_id });
+                if t.coordinator_project_id.is_some() {
+                    self.rotate_if_over_budget(thread_id, live.clone());
+                }
             }
             DriverEvent::TurnFailed { error } => {
                 let Some(turn) = turn_guard.as_mut() else { return Ok(()) };
@@ -4408,6 +4507,9 @@ impl Orchestrator {
                 self.emit(thread_id, turn_id, EventPayload::ProviderCommandsUpdated { commands })?;
             }
             DriverEvent::UsageUpdated(usage) => {
+                if let Some(context) = &usage.context {
+                    *live.context_usage.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(context.clone());
+                }
                 if let Some(context) = &usage.context
                     && let Some(thread) = self.inner.store.thread_get(thread_id)?
                 {
@@ -5181,6 +5283,7 @@ mod tests {
                 terminal_message_id: None,
                 completed: false,
                 pending_completion: None,
+                internal: None,
             })),
             continuation: Mutex::new(None),
             turn_ready: tokio::sync::Notify::new(),
@@ -5194,6 +5297,7 @@ mod tests {
             app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
             brief_revision: Mutex::new(None),
             lead_settings: Mutex::new(None),
+            context_usage: std::sync::Mutex::new(None),
         });
         orchestrator
             .handle_driver_event(
@@ -5561,6 +5665,7 @@ mod tests {
                 app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
                 brief_revision: Mutex::new(None),
                 lead_settings: Mutex::new(None),
+                context_usage: std::sync::Mutex::new(None),
             });
             self.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
             (live, closes, messages)
@@ -5595,6 +5700,7 @@ mod tests {
                 app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
                 brief_revision: Mutex::new(None),
                 lead_settings: Mutex::new(None),
+                context_usage: std::sync::Mutex::new(None),
             });
             self.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
             self.orchestrator.send(thread.id, UserMessage::text("inspect workspace")).await.unwrap();
@@ -7278,6 +7384,7 @@ mod tests {
             terminal_message_id: None,
             completed: false,
             pending_completion: None,
+            internal: None,
         });
         fixture
             .orchestrator
@@ -7627,6 +7734,7 @@ mod tests {
             terminal_message_id: None,
             completed: false,
             pending_completion: None,
+            internal: None,
         });
 
         let with_task = fixture.thread(ThreadStatus::Idle);
@@ -8178,6 +8286,7 @@ for line in sys.stdin:
             app_tool_permits: Arc::new(Semaphore::new(crate::app_tools::MAX_CONCURRENT_REQUESTS)),
             brief_revision: Mutex::new(None),
             lead_settings: Mutex::new(None),
+            context_usage: std::sync::Mutex::new(None),
         });
         fixture.orchestrator.inner.sessions.lock().await.insert(thread.id, live.clone());
         fixture.orchestrator.send(thread.id, UserMessage::text("delegate")).await.unwrap();
@@ -8247,4 +8356,5 @@ for line in sys.stdin:
     include!("orchestrator/full_access_tests.rs");
     include!("orchestrator/groups_tests.rs");
     include!("orchestrator/project_map_tests.rs");
+    include!("orchestrator/rotation_tests.rs");
 }

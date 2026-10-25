@@ -100,6 +100,8 @@ expression: names
 - coordinator.open
 - coordinator.setup
 - coordinator.switch_harness
+- coordinator.refresh_context
+- coordinator.edit_handoff
 - tasks.list
 - tasks.stop
 - tasks.background

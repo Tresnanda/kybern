@@ -67,6 +67,16 @@ pub enum CoordinatorCmd {
     },
     /// Redo the setup interview on the project's Coordinator. It must be idle.
     Setup { project: Uuid },
+    /// Refresh an idle Coordinator's context: it writes a handoff and a fresh session takes over.
+    RefreshContext { thread: Uuid },
+    /// Replace the handoff of the Coordinator's latest context refresh.
+    EditHandoff {
+        thread: Uuid,
+        rotation_id: String,
+        /// The new handoff (`-` reads standard input).
+        #[arg(long)]
+        file: String,
+    },
     /// Move an idle Coordinator to another harness or model; its conversation stays.
     SwitchHarness {
         project: Uuid,
@@ -108,6 +118,17 @@ fn provider(name: &str) -> Result<ProviderInstance> {
     Ok(ProviderInstance::default_for(name.parse().map_err(|error: String| anyhow!(error))?))
 }
 
+/// A file's text, or standard input for `-`.
+fn read_text(path: &str, what: &str) -> Result<String> {
+    if path == "-" {
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut text)
+            .with_context(|| format!("read {what} from standard input"))?;
+        return Ok(text);
+    }
+    std::fs::read_to_string(path).with_context(|| format!("read {path}"))
+}
+
 pub async fn coordinator(client: &Client, cmd: CoordinatorCmd) -> Result<()> {
     let result = match cmd {
         CoordinatorCmd::Get { project } => {
@@ -116,13 +137,7 @@ pub async fn coordinator(client: &Client, cmd: CoordinatorCmd) -> Result<()> {
         CoordinatorCmd::Open { project, provider: kind, model, effort, mode, message, message_file } => {
             let opening_message = match (message, message_file) {
                 (Some(text), _) => Some(text),
-                (None, Some(path)) if path == "-" => {
-                    let mut text = String::new();
-                    std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut text)
-                        .context("read the opening message from standard input")?;
-                    Some(text)
-                }
-                (None, Some(path)) => Some(std::fs::read_to_string(&path).with_context(|| format!("read {path}"))?),
+                (None, Some(path)) => Some(read_text(&path, "the opening message")?),
                 (None, None) => None,
             };
             let opened = client
@@ -142,6 +157,15 @@ pub async fn coordinator(client: &Client, cmd: CoordinatorCmd) -> Result<()> {
         }
         CoordinatorCmd::Setup { project } => {
             serde_json::to_value(client.call::<CoordinatorSetup>(CoordinatorSetupParams { project_id: project }).await?)?
+        }
+        CoordinatorCmd::RefreshContext { thread } => {
+            serde_json::to_value(client.call::<CoordinatorRefreshContext>(CoordinatorRefreshContextParams { thread_id: thread }).await?)?
+        }
+        CoordinatorCmd::EditHandoff { thread, rotation_id, file } => {
+            let text = read_text(&file, "the handoff")?;
+            serde_json::to_value(
+                client.call::<CoordinatorEditHandoff>(CoordinatorEditHandoffParams { thread_id: thread, rotation_id, text }).await?,
+            )?
         }
         CoordinatorCmd::SwitchHarness { project, provider: kind, model, effort, mode } => serde_json::to_value(
             client

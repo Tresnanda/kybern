@@ -392,6 +392,8 @@ async fn the_brief_is_the_users_the_setup_note_is_the_coordinators_and_memory_no
 #[tokio::test]
 async fn switching_the_coordinators_harness_keeps_the_thread_restarts_the_session_and_needs_an_idle_lead() {
     let (fixture, bridges) = lead_capture_fixture();
+    // These sessions never answer, so the switch goes on without a handoff.
+    fixture.orchestrator.set_handoff_timeout(Duration::from_millis(100));
     user_note(&fixture, "Project brief", "Plan first.", Some(ProjectNoteRole::Brief));
     let lead = fixture.orchestrator.coordinator_open(open_params(&fixture.project, ProviderKind::ClaudeCode, None)).await.unwrap().thread;
     let first = fixture.orchestrator.spawn_session(&lead, None).await.unwrap();
@@ -426,7 +428,7 @@ async fn switching_the_coordinators_harness_keeps_the_thread_restarts_the_sessio
     assert!(!fixture.has_session(&lead).await);
     assert!(matches!(
         fixture.store.events_for_thread(lead.id).unwrap().last().map(|event| &event.payload),
-        Some(EventPayload::ProviderSessionReleased { .. })
+        Some(EventPayload::ContextRotated { reason: RotationReason::HarnessSwitch, .. })
     ));
 
     // The new session carries the same lead instructions, unenforced on Codex.

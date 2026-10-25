@@ -2300,6 +2300,70 @@ pub struct VisualHeight {
     pub height: u32,
 }
 
+/// Why a Coordinator's provider session was replaced (`ContextRotationStarted`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RotationReason {
+    /// The session's context passed the rotation budget at the end of a turn.
+    Budget,
+    /// The session was released for idleness past half the budget.
+    Idle,
+    /// The user asked for a refresh (`coordinator.refresh_context`).
+    Manual,
+    /// The Coordinator moved to another harness, model or account.
+    HarnessSwitch,
+}
+
+impl RotationReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RotationReason::Budget => "budget",
+            RotationReason::Idle => "idle",
+            RotationReason::Manual => "manual",
+            RotationReason::HarnessSwitch => "harness_switch",
+        }
+    }
+}
+
+/// Whether the old session wrote a handoff that passed validation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum HandoffStatus {
+    Written,
+    /// No usable handoff; the fresh session gets the facts and recent messages only.
+    Missing {
+        why: String,
+    },
+}
+
+/// One repository's HEAD when a rotation happened.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RepoHead {
+    pub repo: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    pub sha: String,
+}
+
+/// Counts of what the daemon carried into a fresh Coordinator session.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RotationCarried {
+    pub children: u32,
+    pub pull_requests: u32,
+    pub tasks: u32,
+    pub commits: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub head: Vec<RepoHead>,
+}
+
+/// The harness and model on one side of a rotation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HarnessRef {
+    pub kind: ProviderKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
 /// Rendered transcript entries, projected from events by the daemon.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "role", rename_all = "snake_case")]
@@ -2435,6 +2499,34 @@ pub enum TranscriptEntry {
         repos: Vec<OutsideRepoChange>,
         at: DateTime<Utc>,
     },
+    /// A Coordinator context refresh. `pending` while the old session is still
+    /// writing its handoff; then the outcome, with the handoff the user may edit.
+    Rotation {
+        /// The turn the refresh followed (nil before the first turn).
+        turn_id: TurnId,
+        #[serde(default)]
+        seq: EventSeq,
+        rotation_id: String,
+        reason: RotationReason,
+        pending: bool,
+        used_tokens: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_tokens: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handoff: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handoff_status: Option<HandoffStatus>,
+        /// The user edited the handoff after the refresh.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        edited: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        carried: Option<RotationCarried>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<HarnessRef>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to: Option<HarnessRef>,
+        at: DateTime<Utc>,
+    },
 }
 
 /// Per-provider configuration in settings.json.
@@ -2545,6 +2637,23 @@ pub struct OrchestrationSettings {
     /// Let the Coordinator push and open pull requests without asking first.
     /// Merging a pull request always asks.
     pub lead_push_without_asking: bool,
+    /// Start a fresh Coordinator session, with a handoff, once its context passes
+    /// this many tokens (at most half the model's window). 0 turns it off;
+    /// otherwise at least 50 000. Projects can override it.
+    pub rotation_budget_tokens: u64,
+}
+
+/// The built-in Coordinator context budget.
+pub const DEFAULT_ROTATION_BUDGET_TOKENS: u64 = 200_000;
+/// The smallest budget other than 0 (off).
+pub const MIN_ROTATION_BUDGET_TOKENS: u64 = 50_000;
+
+/// Why a context budget cannot be saved, if it cannot.
+pub fn validate_rotation_budget(tokens: u64) -> Result<(), String> {
+    if tokens != 0 && tokens < MIN_ROTATION_BUDGET_TOKENS {
+        return Err("The Coordinator context budget must be 0 (off) or at least 50 000 tokens. Change the value and save again.".into());
+    }
+    Ok(())
 }
 
 impl Default for OrchestrationSettings {
@@ -2557,6 +2666,7 @@ impl Default for OrchestrationSettings {
             lead_autonomy: LeadAutonomy::default(),
             lead_workspace: DelegationWorkspace::Shared,
             lead_push_without_asking: false,
+            rotation_budget_tokens: DEFAULT_ROTATION_BUDGET_TOKENS,
         }
     }
 }
@@ -2621,6 +2731,9 @@ pub struct CoordinatorOverrides {
     /// Most delegated children the Coordinator may have running (1..=16).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lead_max_children: Option<u32>,
+    /// Context budget for this project's Coordinator (0 is off).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation_budget_tokens: Option<u64>,
 }
 
 impl CoordinatorOverrides {
@@ -2631,6 +2744,7 @@ impl CoordinatorOverrides {
             && self.lead_workspace.is_none()
             && self.lead_push_without_asking.is_none()
             && self.lead_max_children.is_none()
+            && self.rotation_budget_tokens.is_none()
     }
 
     /// Why these overrides cannot be saved, if they cannot.
@@ -2640,6 +2754,9 @@ impl CoordinatorOverrides {
         }
         if self.lead_max_children.is_some_and(|children| !(1..=16).contains(&children)) {
             return Err("Active agents per Coordinator must be between 1 and 16. Change the value and save again.".into());
+        }
+        if let Some(tokens) = self.rotation_budget_tokens {
+            validate_rotation_budget(tokens)?;
         }
         for (role, default) in &self.role_defaults {
             if default.model.as_deref().is_some_and(|model| model.trim().is_empty() || model.len() > 256)
@@ -2661,6 +2778,9 @@ pub struct EffectiveCoordinatorSettings {
     pub lead_workspace: DelegationWorkspace,
     pub lead_push_without_asking: bool,
     pub lead_max_children: u32,
+    /// 0 when context refresh is off.
+    #[serde(default)]
+    pub rotation_budget_tokens: u64,
 }
 
 impl OrchestrationSettings {
@@ -2678,11 +2798,13 @@ impl OrchestrationSettings {
             lead_workspace: project.and_then(|p| p.lead_workspace).unwrap_or(self.lead_workspace),
             lead_push_without_asking: project.and_then(|p| p.lead_push_without_asking).unwrap_or(self.lead_push_without_asking),
             lead_max_children: project.and_then(|p| p.lead_max_children).unwrap_or(self.lead_max_children),
+            rotation_budget_tokens: project.and_then(|p| p.rotation_budget_tokens).unwrap_or(self.rotation_budget_tokens),
         }
     }
 
     /// Why these settings cannot be saved, if they cannot.
     pub fn validate_coordinator(&self) -> Result<(), String> {
+        validate_rotation_budget(self.rotation_budget_tokens)?;
         CoordinatorOverrides { role_defaults: self.role_defaults.clone(), ..Default::default() }.validate()
     }
 }
@@ -3326,6 +3448,13 @@ mod orchestration_tests {
         assert!(general.validate().unwrap_err().contains("general"));
         assert!(CoordinatorOverrides { lead_max_children: Some(0), ..Default::default() }.validate().is_err());
         assert!(CoordinatorOverrides { lead_max_children: Some(17), ..Default::default() }.validate().is_err());
+        assert!(CoordinatorOverrides { rotation_budget_tokens: Some(49_999), ..Default::default() }.validate().is_err());
+        for ok in [0, 50_000, 400_000] {
+            assert!(CoordinatorOverrides { rotation_budget_tokens: Some(ok), ..Default::default() }.validate().is_ok(), "{ok}");
+        }
+        assert_eq!(OrchestrationSettings::default().effective_for(None).rotation_budget_tokens, DEFAULT_ROTATION_BUDGET_TOKENS);
+        let off = CoordinatorOverrides { rotation_budget_tokens: Some(0), ..Default::default() };
+        assert_eq!(OrchestrationSettings::default().effective_for(Some(&off)).rotation_budget_tokens, 0, "a project can turn it off");
         let blank = CoordinatorOverrides {
             role_defaults: [(DelegationRole::Test, RoleDefault { model: Some("  ".into()), ..Default::default() })].into_iter().collect(),
             ..Default::default()

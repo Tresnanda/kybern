@@ -167,6 +167,8 @@ fn main() {
     method::<CoordinatorOpen>(&mut methods);
     method::<CoordinatorSetup>(&mut methods);
     method::<CoordinatorSwitchHarness>(&mut methods);
+    method::<CoordinatorRefreshContext>(&mut methods);
+    method::<CoordinatorEditHandoff>(&mut methods);
     method::<TasksList>(&mut methods);
     method::<TaskStop>(&mut methods);
     method::<TaskBackground>(&mut methods);

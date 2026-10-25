@@ -1253,6 +1253,35 @@ pub struct CoordinatorSwitchHarnessParams {
 }
 method!(CoordinatorSwitchHarness, "coordinator.switch_harness", Some(Scope::OrchestrationOperate), CoordinatorSwitchHarnessParams, Thread);
 
+/// Refresh an idle Coordinator's context now: its session writes a handoff and is
+/// replaced by a fresh one, inside the same thread. Refused while it is busy.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CoordinatorRefreshContextParams {
+    pub thread_id: ThreadId,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CoordinatorRefreshContextResult {
+    pub rotation_id: String,
+}
+method!(
+    CoordinatorRefreshContext,
+    "coordinator.refresh_context",
+    Some(Scope::OrchestrationOperate),
+    CoordinatorRefreshContextParams,
+    CoordinatorRefreshContextResult
+);
+
+/// Replace the handoff of the Coordinator's latest context refresh. Before the
+/// fresh session's first message it replaces the handoff that message carries;
+/// after it, the correction is sent once with the next message.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CoordinatorEditHandoffParams {
+    pub thread_id: ThreadId,
+    pub rotation_id: String,
+    pub text: String,
+}
+method!(CoordinatorEditHandoff, "coordinator.edit_handoff", Some(Scope::OrchestrationOperate), CoordinatorEditHandoffParams, Empty);
+
 // ---- daemon-owned follow-ups ----
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -3715,6 +3744,8 @@ registry!(
     CoordinatorOpen,
     CoordinatorSetup,
     CoordinatorSwitchHarness,
+    CoordinatorRefreshContext,
+    CoordinatorEditHandoff,
     TasksList,
     TaskStop,
     TaskBackground,

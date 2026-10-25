@@ -102,7 +102,6 @@ impl Orchestrator {
     /// none. Repositories absent from `since` have no baseline and are left
     /// out. For a fresh session's seed: pass the heads recorded at the last
     /// rotation (`lead_git_heads`).
-    #[allow(dead_code)] // Used by the Coordinator's rotation seed.
     pub(crate) async fn git_delta_since(&self, thread: &Thread, since: &SeenHeads) -> Option<String> {
         let (lines, _) = self
             .git_delta(thread, since)
@@ -114,15 +113,18 @@ impl Orchestrator {
 
     /// The heads of every repository of the lead's project as they are now,
     /// in the shape `git_delta_since` and `lead_git_mark_seen` take.
-    #[allow(dead_code)] // Used by the Coordinator's rotation seed.
     pub(crate) async fn lead_git_heads(&self, thread: &Thread) -> SeenHeads {
         self.git_delta(thread, &SeenHeads::new()).await.map(|(_, heads)| heads).unwrap_or_default()
     }
 
     /// Record `heads` (from `lead_git_heads`) as what the Coordinator has been told.
-    #[allow(dead_code)] // Used by the Coordinator's rotation seed.
     pub(crate) fn lead_git_mark_seen(&self, thread: &Thread, heads: &SeenHeads) -> Result<()> {
         self.store_seen(thread, heads)
+    }
+
+    /// The heads the Coordinator was last told about, for the rotation seed.
+    pub(crate) async fn lead_seen_heads(&self, thread: &Thread) -> Result<SeenHeads> {
+        self.load_seen(thread).await
     }
 
     async fn load_seen(&self, thread: &Thread) -> Result<SeenHeads> {

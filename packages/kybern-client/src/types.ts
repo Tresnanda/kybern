@@ -514,6 +514,48 @@ export interface CoordinatorSwitchHarnessParams {
   permission_mode?: PermissionMode | null;
 }
 
+export interface CoordinatorRefreshContextParams {
+  thread_id: ThreadId;
+}
+
+export interface CoordinatorRefreshContextResult {
+  rotation_id: string;
+}
+
+/** Replace the handoff of the Coordinator's latest context refresh. */
+export interface CoordinatorEditHandoffParams {
+  thread_id: ThreadId;
+  rotation_id: string;
+  text: string;
+}
+
+/** Why a Coordinator's provider session was replaced. */
+export type RotationReason = "budget" | "idle" | "manual" | "harness_switch";
+
+/** Whether the old session wrote a handoff that passed validation. */
+export type HandoffStatus = { status: "written" } | { status: "missing"; why: string };
+
+export interface RepoHead {
+  repo: string;
+  branch?: string | null;
+  sha: string;
+}
+
+/** Counts of what Kybern carried into a fresh Coordinator session. */
+export interface RotationCarried {
+  children: number;
+  pull_requests: number;
+  tasks: number;
+  commits: number;
+  head?: RepoHead[];
+}
+
+/** The harness and model on one side of a rotation. */
+export interface HarnessRef {
+  kind: ProviderKind;
+  model?: string | null;
+}
+
 export interface ThreadReferencePart {
   type: "thread_reference";
   thread_id: ThreadId;
@@ -1085,6 +1127,26 @@ export type TranscriptEntry =
       seq: EventSeq;
       repos: OutsideRepoChange[];
       at: DateTime;
+    }
+  | {
+      /** A Coordinator context refresh: pending while the handoff is written, then its outcome. */
+      role: "rotation";
+      /** The turn the refresh followed (nil before the first turn). */
+      turn_id: TurnId;
+      seq: EventSeq;
+      rotation_id: string;
+      reason: RotationReason;
+      pending: boolean;
+      used_tokens: number;
+      window_tokens?: number | null;
+      handoff?: string | null;
+      handoff_status?: HandoffStatus | null;
+      /** The user edited the handoff after the refresh. */
+      edited?: boolean;
+      carried?: RotationCarried | null;
+      from?: HarnessRef | null;
+      to?: HarnessRef | null;
+      at: DateTime;
     };
 
 export interface Checkpoint {
@@ -1268,7 +1330,20 @@ export type EventPayload =
   | { kind: "checkpoint_updated"; checkpoint: Checkpoint }
   | { kind: "workspace_reverted"; to_turn_id: TurnId; commit: string }
   /** After a turn of a group worktree thread: deselected members' checkouts changed. Never reverted. */
-  | { kind: "outside_repo_changed"; repos: OutsideRepoChange[] };
+  | { kind: "outside_repo_changed"; repos: OutsideRepoChange[] }
+  /** A Coordinator context refresh began; sends queue until `context_rotated`. */
+  | { kind: "context_rotation_started"; rotation_id: string; reason: RotationReason; used_tokens: number; window_tokens?: number | null }
+  | {
+      kind: "context_rotated";
+      rotation_id: string;
+      reason: RotationReason;
+      handoff?: string | null;
+      handoff_status: HandoffStatus;
+      carried: RotationCarried;
+      from: HarnessRef;
+      to: HarnessRef;
+    }
+  | { kind: "handoff_edited"; rotation_id: string; text: string };
 
 export interface SavedSession {
   provider: ProviderKind;
@@ -2327,6 +2402,8 @@ export interface OrchestrationSettings {
   lead_workspace?: DelegationWorkspace;
   /** Push and open pull requests without asking. Merging a pull request always asks. */
   lead_push_without_asking?: boolean;
+  /** Refresh the Coordinator's context once it passes this many tokens; 0 is off. Absent from older daemons (200 000). */
+  rotation_budget_tokens?: number;
 }
 
 /** How freely a Coordinator acts before asking the user. */
@@ -2352,6 +2429,8 @@ export interface CoordinatorOverrides {
   lead_push_without_asking?: boolean | null;
   /** Most delegated children the Coordinator may have running (1-16). */
   lead_max_children?: number | null;
+  /** Context refresh budget for this project's Coordinator; 0 is off. */
+  rotation_budget_tokens?: number | null;
 }
 
 /** The Coordinator settings in force for one project. */
@@ -2361,6 +2440,8 @@ export interface EffectiveCoordinatorSettings {
   lead_workspace: DelegationWorkspace;
   lead_push_without_asking: boolean;
   lead_max_children: number;
+  /** 0 when context refresh is off. Absent from older daemons. */
+  rotation_budget_tokens?: number;
 }
 
 /** Whether an agent may ask to use the real cursor and focus. */
@@ -3073,6 +3154,8 @@ export interface Methods {
   "coordinator.open": [CoordinatorOpenParams, CoordinatorOpenResult];
   "coordinator.setup": [CoordinatorSetupParams, Thread];
   "coordinator.switch_harness": [CoordinatorSwitchHarnessParams, Thread];
+  "coordinator.refresh_context": [CoordinatorRefreshContextParams, CoordinatorRefreshContextResult];
+  "coordinator.edit_handoff": [CoordinatorEditHandoffParams, Record<string, never>];
   "tasks.list": [TasksListParams, TasksListResult];
   "tasks.stop": [TaskControlParams, RuntimeTask];
   "tasks.background": [TaskControlParams, RuntimeTask];

@@ -198,6 +198,10 @@ expression: scopes
   - "orchestration:operate"
 - - coordinator.switch_harness
   - "orchestration:operate"
+- - coordinator.refresh_context
+  - "orchestration:operate"
+- - coordinator.edit_handoff
+  - "orchestration:operate"
 - - tasks.list
   - "orchestration:read"
 - - tasks.stop

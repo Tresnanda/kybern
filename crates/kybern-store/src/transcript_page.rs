@@ -13,7 +13,8 @@ fn seq(entry: &TranscriptEntry) -> EventSeq {
         | TranscriptEntry::RuntimeTask { seq, .. }
         | TranscriptEntry::Notice { seq, .. }
         | TranscriptEntry::Reverted { seq, .. }
-        | TranscriptEntry::OutsideRepoChanged { seq, .. } => *seq,
+        | TranscriptEntry::OutsideRepoChanged { seq, .. }
+        | TranscriptEntry::Rotation { seq, .. } => *seq,
     }
 }
 
@@ -79,7 +80,8 @@ fn turn(entry: &TranscriptEntry) -> TurnId {
         | TranscriptEntry::RuntimeTask { turn_id, .. }
         | TranscriptEntry::Notice { turn_id, .. }
         | TranscriptEntry::Reverted { turn_id, .. }
-        | TranscriptEntry::OutsideRepoChanged { turn_id, .. } => *turn_id,
+        | TranscriptEntry::OutsideRepoChanged { turn_id, .. }
+        | TranscriptEntry::Rotation { turn_id, .. } => *turn_id,
     }
 }
 

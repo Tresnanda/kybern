@@ -252,15 +252,18 @@ impl Orchestrator {
         Ok(self.inner.store.note_for_project_role(project_id, ProjectNoteRole::Brief)?.is_some_and(|note| !note.body.trim().is_empty()))
     }
 
-    /// Move the Coordinator to another harness, model or account. The session
-    /// restarts with the same lead instructions; the thread and its history stay.
+    /// Move the Coordinator to another harness, model or account. This is a context
+    /// rotation onto the new harness: the old session writes a handoff (unless its
+    /// harness is signed out), its process closes, and the next message starts the
+    /// new session with the handoff and the facts Kybern carries. The thread and its
+    /// history stay.
     pub async fn coordinator_switch_harness(&self, params: methods::CoordinatorSwitchHarnessParams) -> Result<Thread> {
         let _lead = self.inner.lead_commands.lock().await;
         let current = self
             .coordinator_get(params.project_id)?
             .ok_or_else(|| anyhow!("Open the project's Coordinator before switching its harness."))?;
         let busy = || anyhow!("The Coordinator must be idle before switching its harness. Wait for its turn to end, then try again.");
-        if !matches!(current.status, ThreadStatus::Idle | ThreadStatus::Failed) {
+        if !matches!(current.status, ThreadStatus::Idle | ThreadStatus::Failed) || self.is_rotating(current.id) {
             return Err(busy());
         }
         if self.inner.store.runtime_tasks_for_thread(current.id)?.iter().any(|task| task.status.is_active()) {
@@ -279,60 +282,9 @@ impl Orchestrator {
         self.validate_provider_selection(params.project_id, &params.provider, model.as_deref(), params.effort.as_deref()).await?;
         let permission_mode =
             params.permission_mode.unwrap_or_else(|| default_provider_permission(params.provider.kind, settings.default_permission_mode));
-        let (thread, released) = {
-            // `commands` excludes a send between the final idle check, live
-            // credential revocation, and the durable provider change.
-            let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
-            let mut thread = self.inner.store.thread_get(current.id)?.ok_or_else(|| anyhow!("The Coordinator thread was not found."))?;
-            if !matches!(thread.status, ThreadStatus::Idle | ThreadStatus::Failed)
-                || thread.coordinator_project_id != Some(params.project_id)
-            {
-                return Err(busy());
-            }
-            let retry = || anyhow!("The Coordinator session is changing. Try the harness switch again in a moment.");
-            let mut sessions = self.inner.sessions.try_lock().map_err(|_| retry())?;
-            if let Some(expected) = parked_live.as_ref()
-                && !sessions.get(&thread.id).is_some_and(|live| std::sync::Arc::ptr_eq(live, expected))
-            {
-                return Err(retry());
-            }
-            let mut releasing = if parked_live.is_some() { Some(self.inner.releasing.try_lock().map_err(|_| retry())?) } else { None };
-            let released = sessions.remove(&thread.id);
-            thread.provider = params.provider.clone();
-            thread.model = model;
-            thread.effort = params.effort.clone();
-            thread.permission_mode = permission_mode;
-            thread.provider_session_id = None;
-            thread.status = ThreadStatus::Idle;
-            let thread = match self.update_thread(thread) {
-                Ok(thread) => thread,
-                Err(error) => {
-                    if let Some(live) = released {
-                        sessions.insert(current.id, live);
-                    }
-                    return Err(error);
-                }
-            };
-            if let Some(live) = released.as_deref() {
-                live.mark_released();
-                self.revoke_native_session(live);
-            }
-            let released = released.map(|live| {
-                let (done, waiting) = tokio::sync::watch::channel(());
-                releasing.as_mut().expect("a live session reserves a release barrier").insert(thread.id, waiting);
-                (live, done)
-            });
-            (thread, released)
-        };
-        self.inner.pending_rewinds.lock().await.remove(&thread.id);
-        if let Some((live, done)) = released {
-            let close = live.session.close().await;
-            self.inner.releasing.lock().await.remove(&thread.id);
-            drop(done);
-            close?;
-            self.emit(thread.id, None, EventPayload::ProviderSessionReleased { reason: SessionReleaseReason::Manual })?;
-        }
-        Ok(thread)
+        let rotation = self.begin_rotation(current.id, RotationReason::HarnessSwitch, parked_live).await.map_err(|_| busy())?;
+        let switch = super::rotation::HarnessSwitch { provider: params.provider, model, effort: params.effort, permission_mode };
+        self.run_rotation(rotation, Some(switch)).await
     }
 
     /// Bridge-tool and built-in restrictions for a session of `thread`: a
@@ -542,6 +494,12 @@ pub(super) fn settings_change_text(seen: &EffectiveCoordinatorSettings, now: &Ef
     }
     if seen.role_defaults != now.role_defaults {
         changes.push("the default models per kind of work changed (see kybern_agent_capabilities)".to_owned());
+    }
+    if seen.rotation_budget_tokens != now.rotation_budget_tokens {
+        changes.push(match now.rotation_budget_tokens {
+            0 => "Kybern no longer refreshes your context on its own".to_owned(),
+            tokens => format!("Kybern refreshes your context once it passes {}k tokens", tokens / 1000),
+        });
     }
     (!changes.is_empty()).then(|| format!("Coordinator settings changed: {}.", changes.join("; ")))
 }

@@ -261,6 +261,32 @@ pub enum EventPayload {
     OutsideRepoChanged {
         repos: Vec<OutsideRepoChange>,
     },
+    /// A Coordinator's context refresh began: the old session is writing its
+    /// handoff. Sends queue and steering is refused until `ContextRotated`.
+    ContextRotationStarted {
+        rotation_id: String,
+        reason: RotationReason,
+        used_tokens: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_tokens: Option<u64>,
+    },
+    /// The provider session was replaced by a fresh one inside the same thread.
+    /// The next message carries the handoff and the facts Kybern tracks.
+    ContextRotated {
+        rotation_id: String,
+        reason: RotationReason,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handoff: Option<String>,
+        handoff_status: HandoffStatus,
+        carried: RotationCarried,
+        from: HarnessRef,
+        to: HarnessRef,
+    },
+    /// The user corrected the latest rotation's handoff.
+    HandoffEdited {
+        rotation_id: String,
+        text: String,
+    },
 }
 
 impl EventPayload {
@@ -316,6 +342,9 @@ impl EventPayload {
             Self::CheckpointUpdated { .. } => "checkpoint_updated",
             Self::WorkspaceReverted { .. } => "workspace_reverted",
             Self::OutsideRepoChanged { .. } => "outside_repo_changed",
+            Self::ContextRotationStarted { .. } => "context_rotation_started",
+            Self::ContextRotated { .. } => "context_rotated",
+            Self::HandoffEdited { .. } => "handoff_edited",
         }
     }
 }
@@ -397,6 +426,22 @@ mod kind_tests {
                 }],
             },
             EventPayload::ThreadMessageResolved { message_id: MessageId::nil(), resolution: HeldResolution::Dismissed },
+            EventPayload::ContextRotationStarted {
+                rotation_id: "r1".into(),
+                reason: RotationReason::HarnessSwitch,
+                used_tokens: 210_000,
+                window_tokens: Some(1_000_000),
+            },
+            EventPayload::ContextRotated {
+                rotation_id: "r1".into(),
+                reason: RotationReason::Budget,
+                handoff: None,
+                handoff_status: HandoffStatus::Missing { why: "timed out".into() },
+                carried: RotationCarried::default(),
+                from: HarnessRef { kind: ProviderKind::ClaudeCode, model: None },
+                to: HarnessRef { kind: ProviderKind::Codex, model: Some("gpt".into()) },
+            },
+            EventPayload::HandoffEdited { rotation_id: "r1".into(), text: "## Goals".into() },
             EventPayload::ThreadMessageHeld {
                 message: ThreadMessageRecord {
                     id: MessageId::nil(),

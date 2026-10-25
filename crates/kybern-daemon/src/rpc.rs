@@ -617,6 +617,11 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         NotesTidyStart::NAME => ok(state.orchestrator.notes_tidy_start(parse(params)?).await.map_err(bad)?),
         CoordinatorSetup::NAME => ok(state.orchestrator.coordinator_setup(parse(params)?).await.map_err(bad)?),
         CoordinatorSwitchHarness::NAME => ok(state.orchestrator.coordinator_switch_harness(parse(params)?).await.map_err(bad)?),
+        CoordinatorRefreshContext::NAME => ok(state.orchestrator.coordinator_refresh_context(parse(params)?).await.map_err(bad)?),
+        CoordinatorEditHandoff::NAME => {
+            state.orchestrator.coordinator_edit_handoff(parse(params)?).await.map_err(bad)?;
+            ok(Empty {})
+        }
         TasksList::NAME => {
             let p: TasksListParams = parse(params)?;
             let mut tasks = state.store.runtime_tasks_for_thread(p.thread_id).map_err(internal)?;

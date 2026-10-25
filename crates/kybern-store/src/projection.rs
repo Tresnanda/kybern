@@ -757,6 +757,61 @@ fn apply_transcript_event(
                 let (Some(turn_id), Some(text)) = (turn_id.or(last_turn_id_value), reason.notice_text()) else { continue };
                 out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: NoticeLevel::Info, text: text.into(), at: ev.at });
             }
+            EventPayload::ContextRotationStarted { rotation_id, reason, used_tokens, window_tokens } => {
+                out.push(TranscriptEntry::Rotation {
+                    turn_id: last_turn_id_value.unwrap_or_default(),
+                    seq: ev.seq,
+                    rotation_id: rotation_id.clone(),
+                    reason: *reason,
+                    pending: true,
+                    used_tokens: *used_tokens,
+                    window_tokens: *window_tokens,
+                    handoff: None,
+                    handoff_status: None,
+                    edited: false,
+                    carried: None,
+                    from: None,
+                    to: None,
+                    at: ev.at,
+                });
+            }
+            EventPayload::ContextRotated { rotation_id: id, reason: why, handoff: text, handoff_status: status, carried: facts, from: old, to: new } => {
+                // The row keeps the place and time its start gave it.
+                let row = out.iter_mut().rev().find(|entry| matches!(entry, TranscriptEntry::Rotation { rotation_id, .. } if rotation_id == id));
+                if let Some(TranscriptEntry::Rotation { reason, pending, handoff, handoff_status, carried, from, to, .. }) = row {
+                    *reason = *why;
+                    *pending = false;
+                    *handoff = text.clone();
+                    *handoff_status = Some(status.clone());
+                    *carried = Some(facts.clone());
+                    *from = Some(old.clone());
+                    *to = Some(new.clone());
+                } else {
+                    out.push(TranscriptEntry::Rotation {
+                        turn_id: last_turn_id_value.unwrap_or_default(),
+                        seq: ev.seq,
+                        rotation_id: id.clone(),
+                        reason: *why,
+                        pending: false,
+                        used_tokens: 0,
+                        window_tokens: None,
+                        handoff: text.clone(),
+                        handoff_status: Some(status.clone()),
+                        edited: false,
+                        carried: Some(facts.clone()),
+                        from: Some(old.clone()),
+                        to: Some(new.clone()),
+                        at: ev.at,
+                    });
+                }
+            }
+            EventPayload::HandoffEdited { rotation_id: id, text } => {
+                let row = out.iter_mut().rev().find(|entry| matches!(entry, TranscriptEntry::Rotation { rotation_id, .. } if rotation_id == id));
+                if let Some(TranscriptEntry::Rotation { handoff, edited, .. }) = row {
+                    *handoff = Some(text.clone());
+                    *edited = true;
+                }
+            }
             EventPayload::ProviderSessionBound { session_id, .. } => {
                 roots.insert((ev.thread_id, session_id.clone()));
                 out.retain(|entry| match entry {
@@ -959,6 +1014,10 @@ pub fn project_provider_usage(events: &[ThreadEvent]) -> ProviderUsage {
     for event in events {
         if matches!(event.payload, EventPayload::SessionTransitioned { .. }) {
             result = ProviderUsage::default();
+        }
+        // A fresh session starts with an empty context; plan limits are the account's.
+        if matches!(event.payload, EventPayload::ContextRotated { .. }) {
+            result.context = None;
         }
         if let EventPayload::ProviderUsageUpdated { usage } = &event.payload {
             if usage.context.is_some() {
@@ -1737,5 +1796,117 @@ mod reconciliation_allocation_tests {
         let before = serde_json::to_value(&out).unwrap();
         reconcile_assistant_field(&mut out, &[], "replacement", AssistantField::Text);
         assert_eq!(serde_json::to_value(&out).unwrap(), before);
+    }
+}
+
+#[cfg(test)]
+mod rotation_tests {
+    use super::*;
+
+    fn event(seq: EventSeq, turn_id: Option<TurnId>, payload: EventPayload) -> ThreadEvent {
+        ThreadEvent { seq, thread_id: ThreadId::nil(), turn_id, at: chrono::Utc::now(), payload }
+    }
+
+    fn harness(kind: ProviderKind) -> HarnessRef {
+        HarnessRef { kind, model: None }
+    }
+
+    #[test]
+    fn a_rotation_is_one_row_pending_until_it_settles_and_edits_update_it_in_place() {
+        let turn = TurnId::from_u128(7);
+        let started = |seq, id: &str| {
+            event(
+                seq,
+                None,
+                EventPayload::ContextRotationStarted {
+                    rotation_id: id.into(),
+                    reason: RotationReason::Budget,
+                    used_tokens: 210_000,
+                    window_tokens: Some(1_000_000),
+                },
+            )
+        };
+        let mut events = vec![
+            event(1, Some(turn), EventPayload::TurnStarted { message_id: MessageId::from_u128(1), message: UserMessage::text("hi") }),
+            event(
+                2,
+                Some(turn),
+                EventPayload::TurnCompleted {
+                    stop_reason: StopReason::Completed,
+                    usage: Usage::default(),
+                    cost_usd: None,
+                    duration_ms: 1,
+                    terminal_message_id: None,
+                },
+            ),
+            started(3, "r1"),
+        ];
+        let rows = project_transcript(&events);
+        let Some(TranscriptEntry::Rotation { turn_id, seq, pending, used_tokens, handoff_status, .. }) = rows.last() else {
+            panic!("{rows:?}")
+        };
+        assert_eq!((*turn_id, *seq, *pending, *used_tokens, handoff_status.is_none()), (turn, 3, true, 210_000, true));
+
+        events.push(event(
+            4,
+            None,
+            EventPayload::ContextRotated {
+                rotation_id: "r1".into(),
+                reason: RotationReason::Budget,
+                handoff: Some("## Goals\nShip.".into()),
+                handoff_status: HandoffStatus::Written,
+                carried: RotationCarried { children: 2, ..Default::default() },
+                from: harness(ProviderKind::ClaudeCode),
+                to: harness(ProviderKind::ClaudeCode),
+            },
+        ));
+        events.push(event(5, None, EventPayload::HandoffEdited { rotation_id: "r1".into(), text: "## Goals\nShip it.".into() }));
+        let rows = project_transcript(&events);
+        let rotations: Vec<_> = rows.iter().filter(|row| matches!(row, TranscriptEntry::Rotation { .. })).collect();
+        assert_eq!(rotations.len(), 1, "the settled rotation replaces its pending row");
+        let TranscriptEntry::Rotation { seq, pending, handoff, handoff_status, edited, carried, to, .. } = rotations[0] else {
+            unreachable!()
+        };
+        assert_eq!((*seq, *pending, *edited), (3, false, true));
+        assert_eq!(handoff.as_deref(), Some("## Goals\nShip it."));
+        assert_eq!(handoff_status.as_ref(), Some(&HandoffStatus::Written));
+        assert_eq!(carried.as_ref().map(|carried| carried.children), Some(2));
+        assert_eq!(to.as_ref().map(|to| to.kind), Some(ProviderKind::ClaudeCode));
+
+        // A second refresh that never finished (a restart) stays pending; an
+        // edit of an unknown rotation changes nothing.
+        events.push(started(6, "r2"));
+        events.push(event(7, None, EventPayload::HandoffEdited { rotation_id: "nope".into(), text: "x".into() }));
+        let rows = project_transcript(&events);
+        let pending: Vec<bool> =
+            rows.iter().filter_map(|row| if let TranscriptEntry::Rotation { pending, .. } = row { Some(*pending) } else { None }).collect();
+        assert_eq!(pending, vec![false, true]);
+    }
+
+    #[test]
+    fn a_rotation_resets_the_context_meter_but_keeps_plan_limits() {
+        let usage = |used| ProviderUsage {
+            context: Some(ContextUsage { used_tokens: used, window_tokens: 1_000 }),
+            limits: Some(vec![UsageLimit { name: "5h".into(), used_percent: 10.0, window_minutes: Some(300), resets_at: None }]),
+        };
+        let events = vec![
+            event(1, None, EventPayload::ProviderUsageUpdated { usage: usage(900) }),
+            event(
+                2,
+                None,
+                EventPayload::ContextRotated {
+                    rotation_id: "r1".into(),
+                    reason: RotationReason::Manual,
+                    handoff: None,
+                    handoff_status: HandoffStatus::Missing { why: "timed out".into() },
+                    carried: RotationCarried::default(),
+                    from: harness(ProviderKind::Codex),
+                    to: harness(ProviderKind::Codex),
+                },
+            ),
+        ];
+        let projected = project_provider_usage(&events);
+        assert!(projected.context.is_none());
+        assert_eq!(projected.limits.map(|limits| limits.len()), Some(1));
     }
 }

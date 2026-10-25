@@ -177,6 +177,15 @@ expression: schema_for!(ProjectsChangedNotification)
           ],
           "format": "uint32",
           "minimum": 0
+        },
+        "rotation_budget_tokens": {
+          "description": "Context budget for this project's Coordinator (0 is off).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
         }
       }
     },

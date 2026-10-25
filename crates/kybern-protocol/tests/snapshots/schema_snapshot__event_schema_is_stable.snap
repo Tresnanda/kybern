@@ -1056,6 +1056,105 @@ expression: schema_for!(ThreadEvent)
         "kind",
         "repos"
       ]
+    },
+    {
+      "description": "A Coordinator's context refresh began: the old session is writing its\nhandoff. Sends queue and steering is refused until `ContextRotated`.",
+      "type": "object",
+      "properties": {
+        "rotation_id": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/RotationReason"
+        },
+        "used_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "window_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "kind": {
+          "type": "string",
+          "const": "context_rotation_started"
+        }
+      },
+      "required": [
+        "kind",
+        "rotation_id",
+        "reason",
+        "used_tokens"
+      ]
+    },
+    {
+      "description": "The provider session was replaced by a fresh one inside the same thread.\nThe next message carries the handoff and the facts Kybern tracks.",
+      "type": "object",
+      "properties": {
+        "rotation_id": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/RotationReason"
+        },
+        "handoff": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "handoff_status": {
+          "$ref": "#/$defs/HandoffStatus"
+        },
+        "carried": {
+          "$ref": "#/$defs/RotationCarried"
+        },
+        "from": {
+          "$ref": "#/$defs/HarnessRef"
+        },
+        "to": {
+          "$ref": "#/$defs/HarnessRef"
+        },
+        "kind": {
+          "type": "string",
+          "const": "context_rotated"
+        }
+      },
+      "required": [
+        "kind",
+        "rotation_id",
+        "reason",
+        "handoff_status",
+        "carried",
+        "from",
+        "to"
+      ]
+    },
+    {
+      "description": "The user corrected the latest rotation's handoff.",
+      "type": "object",
+      "properties": {
+        "rotation_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "handoff_edited"
+        }
+      },
+      "required": [
+        "kind",
+        "rotation_id",
+        "text"
+      ]
     }
   ],
   "$defs": {
@@ -3348,6 +3447,143 @@ expression: schema_for!(ThreadEvent)
         "repo",
         "name",
         "source_path"
+      ]
+    },
+    "RotationReason": {
+      "description": "Why a Coordinator's provider session was replaced (`ContextRotationStarted`).",
+      "oneOf": [
+        {
+          "description": "The session's context passed the rotation budget at the end of a turn.",
+          "type": "string",
+          "const": "budget"
+        },
+        {
+          "description": "The session was released for idleness past half the budget.",
+          "type": "string",
+          "const": "idle"
+        },
+        {
+          "description": "The user asked for a refresh (`coordinator.refresh_context`).",
+          "type": "string",
+          "const": "manual"
+        },
+        {
+          "description": "The Coordinator moved to another harness, model or account.",
+          "type": "string",
+          "const": "harness_switch"
+        }
+      ]
+    },
+    "HandoffStatus": {
+      "description": "Whether the old session wrote a handoff that passed validation.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "written"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "description": "No usable handoff; the fresh session gets the facts and recent messages only.",
+          "type": "object",
+          "properties": {
+            "why": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "const": "missing"
+            }
+          },
+          "required": [
+            "status",
+            "why"
+          ]
+        }
+      ]
+    },
+    "RotationCarried": {
+      "description": "Counts of what the daemon carried into a fresh Coordinator session.",
+      "type": "object",
+      "properties": {
+        "children": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "pull_requests": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "tasks": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "commits": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "head": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RepoHead"
+          }
+        }
+      },
+      "required": [
+        "children",
+        "pull_requests",
+        "tasks",
+        "commits"
+      ]
+    },
+    "RepoHead": {
+      "description": "One repository's HEAD when a rotation happened.",
+      "type": "object",
+      "properties": {
+        "repo": {
+          "type": "string"
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "repo",
+        "sha"
+      ]
+    },
+    "HarnessRef": {
+      "description": "The harness and model on one side of a rotation.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind"
       ]
     }
   }

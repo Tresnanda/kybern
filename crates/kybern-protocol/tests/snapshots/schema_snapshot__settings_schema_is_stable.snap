@@ -118,7 +118,8 @@ expression: schema_for!(Settings)
         "max_depth": 2,
         "lead_autonomy": "propose_large",
         "lead_workspace": "shared",
-        "lead_push_without_asking": false
+        "lead_push_without_asking": false,
+        "rotation_budget_tokens": 200000
       }
     },
     "tell_agents_about_kybern": {
@@ -425,6 +426,13 @@ expression: schema_for!(Settings)
           "description": "Let the Coordinator push and open pull requests without asking first.\nMerging a pull request always asks.",
           "type": "boolean",
           "default": false
+        },
+        "rotation_budget_tokens": {
+          "description": "Start a fresh Coordinator session, with a handoff, once its context passes\nthis many tokens (at most half the model's window). 0 turns it off;\notherwise at least 50 000. Projects can override it.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 200000
         }
       }
     },
