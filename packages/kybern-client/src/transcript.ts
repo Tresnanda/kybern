@@ -7,10 +7,14 @@ import type {
   ApprovalRequest,
   Checkpoint,
   EventOrigin,
+  HandoffStatus,
+  HarnessRef,
   JsonValue,
   NoticeLevel,
   OutsideRepoChange,
   RequestAnswerer,
+  RotationCarried,
+  RotationReason,
   RuntimeTask,
   SessionReleaseReason,
   StopReason,
@@ -78,6 +82,26 @@ export type Block =
       error: string | null
     }
   | { kind: "reverted"; id: string; turnId: TurnId; at: string; seq: number; commit: string }
+  | {
+      /** A Coordinator context refresh: `pending` while the old session writes its handoff. */
+      kind: "rotation"
+      id: string
+      turnId: TurnId
+      at: string
+      seq: number
+      rotationId: string
+      reason: RotationReason
+      pending: boolean
+      usedTokens: number
+      windowTokens: number | null
+      handoff: string | null
+      handoffStatus: HandoffStatus | null
+      /** The user edited the handoff after the refresh. */
+      edited: boolean
+      carried: RotationCarried | null
+      from: HarnessRef | null
+      to: HarnessRef | null
+    }
   /** Deselected repositories of a group worktree thread changed outside its worktree during this turn. */
   | { kind: "outside_repo_changed"; id: string; turnId: TurnId; at: string; seq: number; repos: OutsideRepoChange[] }
 
@@ -161,7 +185,7 @@ export function applyBackgroundEvent(state: ThreadState, event: ThreadEvent): Th
     case "thread_notes_updated":
     case "approval_requested": case "user_input_requested": case "approval_resolved":
     case "async_questions_requested": case "async_questions_answered":
-    case "provider_commands_updated": case "provider_usage_updated": case "session_transitioned":
+    case "provider_commands_updated": case "provider_usage_updated": case "session_transitioned": case "context_rotated":
     case "subagent_message_updated":
       return compactThreadState(applyEvent(compact, event))
     default:
@@ -206,6 +230,25 @@ function entryToBlock(e: TranscriptEntry): Block | null {
       return { kind: "notice", id: `notice:${e.seq}`, turnId: e.turn_id, at: e.at, seq: e.seq ?? 0, level: e.level, text: e.text }
     case "reverted":
       return { kind: "reverted", id: `revert:${e.seq}`, turnId: e.turn_id, at: e.at, seq: e.seq ?? 0, commit: e.commit }
+    case "rotation":
+      return {
+        kind: "rotation",
+        id: `rotation:${e.rotation_id}`,
+        turnId: e.turn_id,
+        at: e.at,
+        seq: e.seq ?? 0,
+        rotationId: e.rotation_id,
+        reason: e.reason,
+        pending: e.pending,
+        usedTokens: e.used_tokens,
+        windowTokens: e.window_tokens ?? null,
+        handoff: e.handoff ?? null,
+        handoffStatus: e.handoff_status ?? null,
+        edited: e.edited ?? false,
+        carried: e.carried ?? null,
+        from: e.from ?? null,
+        to: e.to ?? null,
+      }
     case "outside_repo_changed":
       return { kind: "outside_repo_changed", id: `outside:${e.seq}`, turnId: e.turn_id, at: e.at, seq: e.seq ?? 0, repos: e.repos }
     case "turn_summary":
@@ -521,6 +564,35 @@ export function applyEvent(state: ThreadState, ev: ThreadEvent): ThreadState {
     }
     case "provider_session_bound":
       break
+    case "context_rotation_started": {
+      const id = `rotation:${ev.rotation_id}`
+      if (!blocks.some((block) => block.id === id)) {
+        blocks = [...blocks, {
+          kind: "rotation", id, turnId: turnId || latestConversationTurnId(blocks), at, seq: ev.seq, rotationId: ev.rotation_id, reason: ev.reason,
+          pending: true, usedTokens: ev.used_tokens, windowTokens: ev.window_tokens ?? null, handoff: null, handoffStatus: null, edited: false, carried: null, from: null, to: null,
+        }]
+      }
+      break
+    }
+    case "context_rotated": {
+      // Settles the pending row in place; the fresh session starts with an empty meter.
+      const id = `rotation:${ev.rotation_id}`
+      const settled = { pending: false, reason: ev.reason, handoff: ev.handoff ?? null, handoffStatus: ev.handoff_status, carried: ev.carried, from: ev.from, to: ev.to }
+      const index = blocks.findIndex((block) => block.id === id)
+      if (index >= 0) {
+        const block = blocks[index]
+        if (block.kind === "rotation") blocks = replaceAt(blocks, index, { ...block, ...settled })
+      } else {
+        blocks = [...blocks, { kind: "rotation", id, turnId: turnId || latestConversationTurnId(blocks), at, seq: ev.seq, rotationId: ev.rotation_id, usedTokens: 0, windowTokens: null, edited: false, ...settled }]
+      }
+      return { ...state, providerUsage: undefined, blocks, lastSeq: ev.seq }
+    }
+    case "handoff_edited": {
+      const index = blocks.findIndex((block) => block.id === `rotation:${ev.rotation_id}`)
+      const block = index >= 0 ? blocks[index] : undefined
+      if (block?.kind === "rotation") blocks = replaceAt(blocks, index, { ...block, handoff: ev.text, edited: true })
+      break
+    }
     case "provider_session_released": {
       // Only the releases that can surprise: idle and update releases are the
       // expected end of a quiet thread, and would add a row every cycle.
