@@ -1,3 +1,4 @@
+use kybern_protocol::process::NoWindow;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -51,6 +52,7 @@ impl Drop for ProcessTree {
 #[cfg(unix)]
 fn signal_group(group: u32, signal: &str) -> bool {
     std::process::Command::new("/bin/kill")
+        .no_window()
         .args([signal, "--", &format!("-{group}")])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -71,6 +73,7 @@ fn alive(group: u32) -> bool {
 #[cfg(windows)]
 fn force_kill(pid: u32) {
     let _ = std::process::Command::new("taskkill")
+        .no_window()
         .args(["/PID", &pid.to_string(), "/T", "/F"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -80,6 +83,7 @@ fn force_kill(pid: u32) {
 #[cfg(windows)]
 fn alive(pid: u32) -> bool {
     std::process::Command::new("tasklist")
+        .no_window()
         .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
         .stderr(Stdio::null())
         .output()

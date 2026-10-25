@@ -1,6 +1,7 @@
 //! Native account isolation. Default never changes the regular CLI's credentials.
 use crate::state::AppState;
 use anyhow::{Result, anyhow, ensure};
+use kybern_protocol::process::NoWindow;
 use kybern_protocol::{methods::*, *};
 use std::{
     collections::BTreeMap,
@@ -331,7 +332,7 @@ async fn harness_sign_out(state: &AppState, instance: &ProviderInstance) -> Resu
         anyhow!("{} can't sign out from Kybern. Remove its credentials from the agent instead.", instance.kind.display_name())
     })?;
     let binary = kybern_drivers::binary::resolve(instance.kind, context.binary.as_ref()).map_err(|error| anyhow!(error.to_string()))?;
-    let mut command = tokio::process::Command::new(binary);
+    let mut command = tokio::process::Command::new(binary).no_window();
     command.args(args).envs(&context.env).stdin(std::process::Stdio::null()).kill_on_drop(true);
     if let Some(cwd) = &context.cwd {
         command.current_dir(cwd);

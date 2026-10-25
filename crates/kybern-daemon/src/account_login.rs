@@ -12,6 +12,7 @@
 //! `code_challenge` values travel only to clients with `access:write`, the
 //! scope that may start a login; others see progress (`for_observer`).
 
+use kybern_protocol::process::NoWindow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -834,7 +835,8 @@ fn spawn_attempt(state: &AppState, spec: &Spec, visible_terminal: bool) -> Resul
         let context = ProbeContext { binary: None, cwd: None, env: spec.env.clone() };
         kybern_drivers::cursor::login_command(&context).map_err(|error| anyhow!(kybern_drivers::cursor::reason(error)))?
     } else {
-        let mut command = tokio::process::Command::new(spec.binary.clone().ok_or_else(|| anyhow!("The harness isn't installed."))?);
+        let mut command =
+            tokio::process::Command::new(spec.binary.clone().ok_or_else(|| anyhow!("The harness isn't installed."))?).no_window();
         command.args(&spec.args).envs(&env).env_remove("NODE_OPTIONS").current_dir(&spec.cwd);
         command
     };
@@ -976,6 +978,7 @@ fn host_name() -> String {
     static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     NAME.get_or_init(|| {
         std::process::Command::new("hostname")
+            .no_window()
             .output()
             .ok()
             .and_then(|output| String::from_utf8(output.stdout).ok())
@@ -1004,7 +1007,7 @@ async fn sign_out_folder(state: &AppState, kind: ProviderKind, folder: &Path) {
     }
     let Some(args) = auth::sign_out_args(kind, None) else { return };
     let Ok(binary) = kybern_drivers::binary::resolve(kind, context.binary.as_ref()) else { return };
-    let mut command = tokio::process::Command::new(binary);
+    let mut command = tokio::process::Command::new(binary).no_window();
     command.args(args).envs(&env).stdin(std::process::Stdio::null()).kill_on_drop(true).current_dir(state.settings.dir());
     let _ = tokio::time::timeout(Duration::from_secs(10), command.output()).await;
 }

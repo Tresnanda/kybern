@@ -1,5 +1,6 @@
 //! Claude's CLI owns installation scopes, dependency checks and OAuth storage.
 use crate::{DriverError, ProbeContext, Result};
+use kybern_protocol::process::NoWindow;
 use kybern_protocol::{
     Integration, IntegrationAction as Action, IntegrationChangeResult, IntegrationKind, IntegrationsCatalog, ProviderKind,
 };
@@ -10,7 +11,7 @@ use tokio::process::Command;
 
 async fn run(context: &ProbeContext, args: &[&str]) -> Result<String> {
     let bin = crate::binary::resolve(ProviderKind::ClaudeCode, context.binary.as_ref())?;
-    let mut command = Command::new(bin);
+    let mut command = Command::new(bin).no_window();
     command.args(args).env_remove("NODE_OPTIONS").envs(&context.env);
     if let Some(cwd) = &context.cwd {
         command.current_dir(cwd);

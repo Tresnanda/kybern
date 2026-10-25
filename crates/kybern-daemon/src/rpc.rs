@@ -2,6 +2,7 @@
 //! auth (the connection layer already did), and returns a typed result.
 
 use kybern_protocol::methods::*;
+use kybern_protocol::process::NoWindow;
 use kybern_protocol::*;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -1067,27 +1068,42 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         PrList::NAME => {
             let p: PrListParams = parse(params)?;
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+            if project.kind == ProjectKind::Group {
+                return ok(state.orchestrator.group_pr_list(&project, &p.state, p.limit, "gh").await);
+            }
             ok(PrListResult {
                 pull_requests: crate::github::pr_list(std::path::Path::new(&project.path), &p.state, p.limit).await.map_err(bad)?,
+                repos: Vec::new(),
             })
         }
         PrDetail::NAME => {
             let p: PrDetailParams = parse(params)?;
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
-            ok(crate::github_review::detail(std::path::Path::new(&project.path), p.number).await.map_err(bad)?)
+            let dir = pr_dir(&project, p.repo.as_deref())?;
+            let mut detail = crate::github_review::detail(&dir, p.number).await.map_err(bad)?;
+            // Group calls always name their member (`pr_dir`); single projects stay untagged.
+            detail.pull_request.repo = p.repo;
+            ok(detail)
         }
         PrPage::NAME => {
             let p: PrPageParams = parse(params)?;
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
-            ok(crate::github_review::page(std::path::Path::new(&project.path), &p).await.map_err(bad)?)
+            let dir = pr_dir(&project, p.repo.as_deref())?;
+            ok(crate::github_review::page(&dir, &p).await.map_err(bad)?)
         }
         PrAction::NAME => {
             let p: PrActionParams = parse(params)?;
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+            let dir = pr_dir(&project, p.repo.as_deref())?;
             if matches!(p.action, PrActionKind::Checkout) {
+                if p.repo.is_some() {
+                    return Err(RpcError::invalid_params(
+                        "A pull request of a group project can't be checked out into a chat yet. Open that repository as its own project.",
+                    ));
+                }
                 state.orchestrator.pr_checkout(&p).await.map_err(bad)?;
             } else {
-                crate::github_review::action(std::path::Path::new(&project.path), &p).await.map_err(bad)?;
+                crate::github_review::action(&dir, &p).await.map_err(bad)?;
             }
             ok(Empty {})
         }
@@ -1161,6 +1177,11 @@ fn secrets_workspace(state: &AppState, workspace: &SecretsWorkspace) -> Result<S
     }
 }
 
+/// The folder a pull request call runs in: the project, or the member `repo` of a group project.
+fn pr_dir(project: &Project, repo: Option<&str>) -> Result<std::path::PathBuf, RpcError> {
+    crate::orchestrator::pr_repo_dir(project, repo).map_err(RpcError::invalid_params)
+}
+
 fn internal(e: impl std::fmt::Display) -> RpcError {
     RpcError::internal(e)
 }
@@ -1226,6 +1247,7 @@ fn provider_err(e: anyhow::Error) -> RpcError {
 
 fn hostname() -> String {
     std::process::Command::new("hostname")
+        .no_window()
         .output()
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())

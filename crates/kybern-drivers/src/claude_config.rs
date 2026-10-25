@@ -4,6 +4,7 @@
 //! layered configuration problem, so probing must follow the same inputs the
 //! spawned CLI receives instead of inventing an "auto" value.
 
+use kybern_protocol::process::NoWindow;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -184,7 +185,7 @@ fn fresher_login(file: Option<Vec<u8>>, keychain: Option<Vec<u8>>) -> Option<Vec
 async fn keychain_login(context: &ProbeContext) -> Option<Vec<u8>> {
     let custom_dir = ["CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR"].iter().any(|key| environment_value(context, key).is_some());
     let account = environment_value(context, "USER").filter(|user| !user.is_empty() && !custom_dir)?;
-    let mut command = Command::new("/usr/bin/security");
+    let mut command = Command::new("/usr/bin/security").no_window();
     command.args(["find-generic-password", "-a", &account, "-w", "-s", "Claude Code-credentials"]);
     let output = tokio::time::timeout(Duration::from_secs(2), crate::process_tree::output(&mut command)).await.ok()?.ok()?;
     output.status.success().then_some(output.stdout)
@@ -235,7 +236,7 @@ fn managed_settings_path(context: &ProbeContext) -> Option<PathBuf> {
 }
 
 async fn account_default_model(context: &ProbeContext, binary: &Path) -> Option<String> {
-    let mut command = Command::new(binary);
+    let mut command = Command::new(binary).no_window();
     command.args(["auth", "status", "--json"]).env_remove("NODE_OPTIONS");
     if let Some(cwd) = context.cwd.as_deref() {
         command.current_dir(cwd);

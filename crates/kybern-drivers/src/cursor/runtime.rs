@@ -1,3 +1,4 @@
+use kybern_protocol::process::NoWindow;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -70,7 +71,7 @@ pub fn setup_command(context: &ProbeContext, action: &str) -> Result<Command> {
 
 fn command(context: &ProbeContext, mode: &str) -> Result<Command> {
     let sdk = sdk_dir(context)?;
-    let mut cmd = Command::new(node(context)?);
+    let mut cmd = Command::new(node(context)?).no_window();
     // The SDK locates its platform helpers by walking up from argv[1], not
     // from require.resolve(). Give our embedded host its package-side origin;
     // an eval marker alone would resolve helpers from the user's workspace.
@@ -146,7 +147,7 @@ pub async fn install(context: &ProbeContext) -> Result<PathBuf> {
     let npm = npm().map_err(|_| {
         DriverError::BinaryNotFound("Cursor’s SDK installs with npm, which comes with Node.js. Install Node.js, then try again.".into())
     })?;
-    let mut cmd = Command::new(npm);
+    let mut cmd = Command::new(npm).no_window();
     cmd.args(["ci", "--ignore-scripts", "--no-audit", "--no-fund"]).current_dir(&staging).envs(&context.env);
     let output = tokio::time::timeout(Duration::from_secs(300), crate::process_tree::output(&mut cmd))
         .await
@@ -178,7 +179,7 @@ pub fn installed(context: &ProbeContext) -> bool {
 
 /// The Node.js that will run the SDK, e.g. `v24.1.0`, or why it cannot.
 pub async fn node_version(context: &ProbeContext) -> Result<String> {
-    let mut cmd = Command::new(node(context)?);
+    let mut cmd = Command::new(node(context)?).no_window();
     cmd.arg("--version").envs(&context.env);
     let output = tokio::time::timeout(Duration::from_secs(10), crate::process_tree::output(&mut cmd))
         .await

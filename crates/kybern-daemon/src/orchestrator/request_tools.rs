@@ -9,6 +9,7 @@
 //! A deadline applies to questions only: never to approvals, passwords,
 //! secrets, sign-ins or permissions.
 
+use kybern_protocol::process::NoWindow;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -240,7 +241,7 @@ async fn locate_app(name: &str) -> (Option<String>, Option<String>) {
         return (None, None);
     }
     let ask = |script: String| async move {
-        let mut command = tokio::process::Command::new("osascript");
+        let mut command = tokio::process::Command::new("osascript").no_window();
         command.args(["-e", &script]).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).kill_on_drop(true);
         let output = tokio::time::timeout(Duration::from_secs(5), command.output()).await.ok()?.ok()?;
         output.status.success().then(|| String::from_utf8_lossy(&output.stdout).trim().to_string()).filter(|text| !text.is_empty())
@@ -260,7 +261,7 @@ fn tcc_databases() -> Vec<std::path::PathBuf> {
 }
 
 async fn tcc_query(db: &std::path::Path, sql: String) -> Option<String> {
-    let mut command = tokio::process::Command::new("sqlite3");
+    let mut command = tokio::process::Command::new("sqlite3").no_window();
     command.arg("-readonly").arg(db).arg(sql).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).kill_on_drop(true);
     let output = tokio::time::timeout(Duration::from_secs(4), command.output()).await.ok()?.ok()?;
     output.status.success().then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -685,7 +686,7 @@ impl Orchestrator {
                             hub.update(card, |p| { p.phase = RequestPhase::Waiting; p.error = None; });
                             if pane.needs_app_added && let Some(path) = &app_path {
                                 // Show the app in Finder so it can be dragged into the list.
-                                let _ = tokio::process::Command::new("open").arg("-R").arg(path).status().await;
+                                let _ = tokio::process::Command::new("open").no_window().arg("-R").arg(path).status().await;
                             }
                         }
                         "check" | "granted" => {

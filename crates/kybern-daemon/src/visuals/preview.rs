@@ -1,6 +1,7 @@
 //! Kybern-owned, checksum-pinned Chrome for Testing. Never discovers user browsers.
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use futures::{SinkExt, StreamExt};
+use kybern_protocol::process::NoWindow;
 use kybern_protocol::{
     VisualHeight,
     methods::{HtmlConsoleMessage, HtmlPreviewResult},
@@ -104,9 +105,10 @@ async fn install(cache: &Path, destination: &Path, platform: &str, size: u64, ha
         tokio::fs::create_dir(&unpack).await?;
         // Only an exact hash-verified archive reaches the system extractor.
         #[cfg(not(windows))]
-        let status = Command::new("unzip").arg("-q").arg(&archive).arg("-d").arg(&unpack).status().await?;
+        let status = Command::new("unzip").no_window().arg("-q").arg(&archive).arg("-d").arg(&unpack).status().await?;
         #[cfg(windows)]
         let status = Command::new("powershell")
+            .no_window()
             .args(["-NoProfile", "-Command", "Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1]"])
             .arg(&archive)
             .arg(&unpack)
@@ -300,6 +302,7 @@ impl Session {
             }
         }));
         let mut child = Command::new(executable)
+            .no_window()
             .args([
                 "--headless=new",
                 "--remote-debugging-address=127.0.0.1",

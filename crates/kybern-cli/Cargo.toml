@@ -24,3 +24,10 @@ tokio-tungstenite.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+# The same store and version the desktop shell uses; `kybern credentials` reads and writes its entries.
+keyring = { version = "=3.6.3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+
+# The shipped Linux builds are static musl binaries: libdbus is compiled in (feature unification through keyring) instead
+# of linked from the system, so `kybern` still starts on a machine without it. Not `keyring/vendored`, which also locks OpenSSL.
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus-secret-service = { version = "4.1.0", features = ["vendored"] }

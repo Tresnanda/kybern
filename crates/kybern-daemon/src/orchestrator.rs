@@ -4840,6 +4840,7 @@ fn clean_title(text: &str) -> String {
 
 /// What `kybern askpass` gets back for a prompt.
 pub(crate) use askpass::PromptReply;
+pub(crate) use groups::pr_repo_dir;
 
 /// The wait budget of the summoned-card tools (sign-in, question, permission, terminal).
 pub(crate) fn request_call_budget(name: &str, arguments: &serde_json::Value) -> Option<Duration> {

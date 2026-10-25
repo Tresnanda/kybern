@@ -9,6 +9,7 @@
 //! of `PATH` and shown by the client, because the browser belongs to the
 //! client. Nothing here logs a URL, a code or any output.
 
+use kybern_protocol::process::NoWindow;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -45,7 +46,7 @@ async fn locate_one(name: &str) -> Option<PathBuf> {
     }
     // The user's login shell knows Homebrew and other profile additions.
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let mut command = tokio::process::Command::new(shell);
+    let mut command = tokio::process::Command::new(shell).no_window();
     command.args(["-lc", &format!("command -v {name}")]).stdin(std::process::Stdio::null()).kill_on_drop(true);
     if let Ok(Ok(output)) = tokio::time::timeout(Duration::from_secs(4), command.output()).await
         && let Some(path) = String::from_utf8_lossy(&output.stdout).lines().rev().map(str::trim).find(|line| line.starts_with('/'))
@@ -102,7 +103,7 @@ pub fn run_env(binary: &Path) -> BTreeMap<String, String> {
 
 /// Ask the CLI whether someone is signed in. `Some(account)` when signed in.
 pub async fn verify(recipe: &LoginRecipe, binary: &Path, cwd: &Path) -> Option<Option<String>> {
-    let mut command = tokio::process::Command::new(binary);
+    let mut command = tokio::process::Command::new(binary).no_window();
     command
         .args(recipe.verify_args)
         .envs(run_env(binary))
@@ -116,7 +117,7 @@ pub async fn verify(recipe: &LoginRecipe, binary: &Path, cwd: &Path) -> Option<O
 
 /// Run a command once, best effort, and say whether it succeeded.
 pub async fn run_quiet(binary: &Path, args: &[&str], cwd: &Path) -> bool {
-    let mut command = tokio::process::Command::new(binary);
+    let mut command = tokio::process::Command::new(binary).no_window();
     command
         .args(args)
         .envs(run_env(binary))

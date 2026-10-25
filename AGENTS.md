@@ -9,7 +9,7 @@ before touching UI.
 
 | Path | What |
 | --- | --- |
-| `crates/kybern-protocol` | Wire types. Every RPC method lives in `methods.rs` with its scope. `kybern-schema` bin dumps JSON Schema. |
+| `crates/kybern-protocol` | Wire types. Every RPC method lives in `methods.rs` with its scope. `kybern-schema` bin dumps JSON Schema. `process.rs` is the one `NoWindow` helper (Windows `CREATE_NO_WINDOW`) that daemon, driver and git children use; wrap background `Command::new(..)` with `.no_window()`, never the terminal PTY. |
 | `crates/kybern-store` | SQLite. Migrations are the array in `schema.rs`; append a new entry, never edit an old one. `projection.rs` folds events into transcripts. |
 | `crates/kybern-git` | Snapshots, diffs, worktrees via the `git` CLI. |
 | `crates/kybern-drivers` | One module per agent: `claude`, `codex`, `opencode`, `pi` (also omp), `cursor`. All implement `AgentDriver` + `AgentSession` from `lib.rs`. |

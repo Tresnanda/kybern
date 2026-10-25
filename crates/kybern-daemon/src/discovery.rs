@@ -1,6 +1,7 @@
 //! Host-side endpoint discovery. Never infer reachability from an outbound IP:
 //! only advertise interfaces covered by the listener or an actual Serve proxy.
 
+use kybern_protocol::process::NoWindow;
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
@@ -20,7 +21,8 @@ pub(crate) async fn output_within(program: &str, args: &[&str], timeout: Duratio
 /// Like [`output_within`] but also returns the stdout of a command that exited
 /// non-zero (`lsof` exits 1 when it finds nothing). `None` if it could not run or timed out.
 pub(crate) async fn run_within(program: &str, args: &[&str], timeout: Duration) -> Option<(bool, String)> {
-    let output = tokio::time::timeout(timeout, Command::new(program).args(args).kill_on_drop(true).output()).await.ok()?.ok()?;
+    let output =
+        tokio::time::timeout(timeout, Command::new(program).no_window().args(args).kill_on_drop(true).output()).await.ok()?.ok()?;
     Some((output.status.success(), String::from_utf8_lossy(&output.stdout).into_owned()))
 }
 

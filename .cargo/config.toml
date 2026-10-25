@@ -6,3 +6,9 @@ rustflags = ["-C", "link-arg=/STACK:8000000"]
 # https://github.com/rust-lang/rust/issues/157750
 [profile.dev.package.tauri-macros]
 strip = "none"
+
+# The Linux musl releases compile libdbus from source (keyring's Secret Service backend,
+# `dbus-secret-service/vendored`). On aarch64 the C compiler emits outline-atomics calls
+# (`__aarch64_ldadd4_sync`) that musl's toolchain doesn't provide, so the link fails.
+[env]
+CFLAGS_aarch64_unknown_linux_musl = "-mno-outline-atomics"

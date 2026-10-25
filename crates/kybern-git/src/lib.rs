@@ -9,6 +9,7 @@
 //! `SNAPSHOT_SKIP_BYTES` or more are left out (named in the commit message)
 //! and kept when a snapshot is restored.
 
+use kybern_protocol::process::NoWindow;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -162,7 +163,7 @@ impl Repo {
     }
 
     async fn git_env(&self, args: &[&str], env: &[(&str, &str)]) -> Result<String> {
-        let mut cmd = Command::new("git");
+        let mut cmd = Command::new("git").no_window();
         cmd.arg("-C").arg(&self.workdir).args(args).stdin(Stdio::null());
         cmd.envs(self.env.iter().map(|(k, v)| (k, v)));
         for (k, v) in env {
@@ -178,7 +179,7 @@ impl Repo {
     /// Run a Git command where a non-zero status is meaningful output rather
     /// than a transport failure (for example `update-index --really-refresh`).
     async fn git_env_allow_nonzero(&self, args: &[&str], env: &[(&str, &str)]) -> Result<()> {
-        let mut cmd = Command::new("git");
+        let mut cmd = Command::new("git").no_window();
         cmd.arg("-C").arg(&self.workdir).args(args).stdin(Stdio::null());
         cmd.envs(self.env.iter().map(|(k, v)| (k, v)));
         for (k, v) in env {
@@ -190,6 +191,7 @@ impl Repo {
 
     pub async fn is_repo(path: &Path) -> bool {
         Command::new("git")
+            .no_window()
             .arg("-C")
             .arg(path)
             .args(["rev-parse", "--is-inside-work-tree"])
@@ -205,6 +207,7 @@ impl Repo {
     /// not ignored: its changes would still be committed.
     pub async fn is_ignored(&self, path: &str) -> Result<bool> {
         let out = Command::new("git")
+            .no_window()
             .arg("-C")
             .arg(&self.workdir)
             .args(["check-ignore", "-q", "--"])
@@ -226,6 +229,7 @@ impl Repo {
     /// Whether git tracks `path` (in the index), so writing a secret to it would put the secret in commits.
     pub async fn is_tracked(&self, path: &str) -> Result<bool> {
         let out = Command::new("git")
+            .no_window()
             .arg("-C")
             .arg(&self.workdir)
             .args(["ls-files", "--error-unmatch", "--"])
@@ -511,7 +515,7 @@ impl Repo {
         if input.is_empty() {
             return Ok(());
         }
-        let mut cmd = Command::new("git");
+        let mut cmd = Command::new("git").no_window();
         cmd.arg("-C").arg(&self.workdir).args(["update-index", "-z", "--index-info"]);
         cmd.envs(self.env.iter().map(|(k, v)| (k, v)));
         cmd.envs(env.iter().copied());
@@ -771,6 +775,7 @@ impl Repo {
     /// --is-ancestor`). An unknown revision is an error, not `false`.
     pub async fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool> {
         let out = Command::new("git")
+            .no_window()
             .arg("-C")
             .arg(&self.workdir)
             .args(["merge-base", "--is-ancestor", ancestor, descendant])
@@ -823,7 +828,7 @@ impl Repo {
     }
 
     async fn output_with(&self, args: &[&str], env: &[(&str, &str)], timeout: Option<std::time::Duration>) -> Result<GitOutput> {
-        let mut cmd = Command::new("git");
+        let mut cmd = Command::new("git").no_window();
         cmd.arg("-C").arg(&self.workdir).args(args).stdin(Stdio::null()).kill_on_drop(true);
         cmd.envs(self.env.iter().map(|(k, v)| (k, v)));
         // Never wait for a person at a prompt or an editor.

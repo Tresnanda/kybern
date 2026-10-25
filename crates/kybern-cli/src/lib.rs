@@ -1,5 +1,6 @@
 mod accounts;
 mod coordinator;
+mod credentials;
 mod render;
 mod requests;
 mod spaces;
@@ -147,6 +148,12 @@ enum Cmd {
     Requests {
         #[command(subcommand)]
         cmd: requests::RequestsCmd,
+    },
+    /// The system credential store for Kybern's own entries (the secret goes through standard input and output).
+    #[command(hide = true)]
+    Credentials {
+        #[command(subcommand)]
+        cmd: credentials::CredentialsCmd,
     },
     /// Show daemon info.
     Info,
@@ -912,7 +919,13 @@ enum TokensCmd {
 #[derive(Subcommand)]
 enum PrCmd {
     /// Read pull request description, checks and requested reviewers.
-    View { project: String, number: u64 },
+    View {
+        project: String,
+        number: u64,
+        /// Member repository of a group project.
+        #[arg(long)]
+        repo: Option<String>,
+    },
     /// Read one bounded page of files, comments, reviews or review_comments.
     Page {
         project: String,
@@ -920,6 +933,9 @@ enum PrCmd {
         kind: String,
         #[arg(long, default_value = "1")]
         page: u32,
+        /// Member repository of a group project.
+        #[arg(long)]
+        repo: Option<String>,
     },
     /// Explicitly comment, approve, request_changes, checkout, merge or close.
     /// Read structured PrActionParams from a JSON file (or stdin with -).
@@ -1223,6 +1239,11 @@ pub async fn run() -> Result<()> {
     if let Cmd::Askpass { prompt } = &cli.cmd {
         return requests::askpass(prompt).await;
     }
+    // Local too: the GPUIX client calls this to keep device tokens in the platform store.
+    if let Cmd::Credentials { cmd } = &cli.cmd {
+        let code = credentials::run(cmd);
+        std::process::exit(code);
+    }
     let ep = Endpoint::resolve(cli.url.clone(), cli.token.clone(), cli.data_dir.clone())?;
     let client = Client::connect(&ep).await?;
     let json = cli.json;
@@ -1230,6 +1251,7 @@ pub async fn run() -> Result<()> {
     match cli.cmd {
         Cmd::Cursor { .. } => unreachable!("local Cursor setup handled before connecting"),
         Cmd::Askpass { .. } => unreachable!("askpass handled before connecting"),
+        Cmd::Credentials { .. } => unreachable!("credentials handled before connecting"),
         Cmd::Requests { cmd } => requests::requests(&client, cmd).await?,
         Cmd::Coordinator { cmd } => coordinator::coordinator(&client, cmd).await?,
         Cmd::History { cmd } => coordinator::history(&client, cmd).await?,
@@ -2304,15 +2326,15 @@ pub async fn run() -> Result<()> {
             println!("{}  {}", &r.commit[..10], r.message.lines().next().unwrap_or(""));
         }
         Cmd::Pr { cmd } => match cmd {
-            PrCmd::View { project, number } => {
+            PrCmd::View { project, number, repo } => {
                 let project_id = resolve_project(&client, &project, false).await?;
-                let result = client.call::<PrDetail>(PrDetailParams { project_id, number }).await?;
+                let result = client.call::<PrDetail>(PrDetailParams { project_id, number, repo }).await?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }
-            PrCmd::Page { project, number, kind, page } => {
+            PrCmd::Page { project, number, kind, page, repo } => {
                 let project_id = resolve_project(&client, &project, false).await?;
                 let kind = serde_json::from_value(serde_json::Value::String(kind))?;
-                let result = client.call::<PrPage>(PrPageParams { project_id, number, kind, page }).await?;
+                let result = client.call::<PrPage>(PrPageParams { project_id, number, kind, page, repo }).await?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }
             PrCmd::Action { file } => {
@@ -2336,7 +2358,11 @@ pub async fn run() -> Result<()> {
                 let project_id = resolve_project(&client, &project, false).await?;
                 let r = client.call::<PrList>(PrListParams { project_id, state, limit: 30 }).await?;
                 for pr in r.pull_requests {
-                    println!("#{:<5} {:<8} {}  {}", pr.number, pr.state.to_lowercase(), pr.title, pr.url);
+                    let repo = pr.repo.as_deref().map(|repo| format!("{repo}  ")).unwrap_or_default();
+                    println!("#{:<5} {:<8} {repo}{}  {}", pr.number, pr.state.to_lowercase(), pr.title, pr.url);
+                }
+                for repo in r.repos.iter().filter(|repo| repo.error.is_some()) {
+                    eprintln!("{}: {}", repo.name, repo.error.as_deref().unwrap_or_default());
                 }
             }
         },

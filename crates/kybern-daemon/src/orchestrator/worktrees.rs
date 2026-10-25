@@ -2,6 +2,7 @@
 use super::*;
 use anyhow::ensure;
 use kybern_protocol::methods::*;
+use kybern_protocol::process::NoWindow;
 use std::path::Path;
 
 pub(super) fn recovery_ref(id: ThreadId) -> String {
@@ -478,7 +479,7 @@ async fn processes_use_path(path: &Path) -> Result<bool> {
     let path = std::fs::canonicalize(path)?;
     #[cfg(target_os = "macos")]
     {
-        let output = tokio::process::Command::new("/usr/sbin/lsof").args(["-d", "cwd", "-Fn"]).output().await?;
+        let output = tokio::process::Command::new("/usr/sbin/lsof").no_window().args(["-d", "cwd", "-Fn"]).output().await?;
         ensure!(output.status.success(), "Unable to check processes using this worktree. Try again after closing its terminals.");
         Ok(String::from_utf8_lossy(&output.stdout)
             .lines()

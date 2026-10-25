@@ -6,6 +6,7 @@
 //! (the store redacts a `secret`, the card's in-memory copy is scrubbed once
 //! read), and a refusal or a cancel makes the asking command fail.
 
+use kybern_protocol::process::NoWindow;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -113,6 +114,7 @@ impl Orchestrator {
         };
         let parent = tokio::task::spawn_blocking(move || {
             std::process::Command::new("ps")
+                .no_window()
                 .args(["-o", "ppid=", "-p", &pid.to_string()])
                 .output()
                 .ok()

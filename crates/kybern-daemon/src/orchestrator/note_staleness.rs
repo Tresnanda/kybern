@@ -15,6 +15,7 @@
 //! leaves the claims alone (most autosaves) costs one `rev-parse` per repository,
 //! and the latest result per note is kept for readers that must not run git.
 
+use kybern_protocol::process::NoWindow;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -113,6 +114,7 @@ pub(super) fn project_repos(project: &Project) -> Vec<RepoRef> {
 
 fn git(repo: &Path, args: &[&str]) -> Option<String> {
     let out = Command::new("git")
+        .no_window()
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -126,6 +128,7 @@ fn git(repo: &Path, args: &[&str]) -> Option<String> {
 
 fn is_ancestor(repo: &Path, ancestor: &str, descendant: &str) -> bool {
     Command::new("git")
+        .no_window()
         .arg("-C")
         .arg(repo)
         .args(["merge-base", "--is-ancestor", ancestor, descendant])

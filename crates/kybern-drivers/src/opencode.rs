@@ -6,6 +6,7 @@
 //! are persisted by OpenCode on disk, so resuming is just prompting the same
 //! `ses_*` id from a fresh server.
 
+use kybern_protocol::process::NoWindow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -33,7 +34,7 @@ const MODEL_DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_s
 pub struct OpencodeDriver;
 
 async fn opencode_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<ProviderModel> {
-    let mut command = Command::new(bin);
+    let mut command = Command::new(bin).no_window();
     command.args(["models"]).stdin(Stdio::null()).kill_on_drop(true);
     if let Some(cwd) = &context.cwd {
         command.current_dir(cwd);
@@ -120,7 +121,7 @@ impl OpencodeDriver {
 /// which a filesystem walk cannot reconstruct reliably.
 pub async fn discover_skills(cwd: &Path, binary: Option<&PathBuf>, env: &BTreeMap<String, String>) -> Option<Vec<SkillInfo>> {
     let bin = resolve(ProviderKind::Opencode, binary).ok()?;
-    let mut command = Command::new(bin);
+    let mut command = Command::new(bin).no_window();
     command.current_dir(cwd).args(["debug", "skill"]).stdin(Stdio::null()).stderr(Stdio::null());
     for (key, value) in env {
         command.env(key, value);
@@ -198,7 +199,7 @@ impl AgentDriver for OpencodeDriver {
             .map(|bridge| opencode_config_content(config.env.get("OPENCODE_CONFIG_CONTENT"), bridge))
             .transpose()?;
         let bin = resolve(ProviderKind::Opencode, config.binary.as_ref())?;
-        let mut cmd = Command::new(&bin);
+        let mut cmd = Command::new(&bin).no_window();
         cmd.current_dir(&config.cwd)
             .args(["serve", "--port", "0", "--hostname", "127.0.0.1"])
             .stdin(Stdio::null())

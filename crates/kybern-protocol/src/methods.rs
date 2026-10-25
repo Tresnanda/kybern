@@ -2114,6 +2114,10 @@ pub struct PullRequest {
     pub labels: Vec<PrLabel>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checks_summary: Option<PrChecksSummary>,
+    /// Group projects: the member repository (path relative to the group folder)
+    /// this pull request belongs to. None for single-repository projects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -2199,7 +2203,28 @@ fn default_pr_limit() -> u32 {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PrListResult {
+    /// Group projects: the pull requests of every member that answered, in
+    /// member order, each tagged with `repo`.
     pub pull_requests: Vec<PullRequest>,
+    /// Group projects only: one row per member repository, in order, with the
+    /// sentence explaining why its pull requests could not be listed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repos: Vec<PrListRepo>,
+}
+/// One member repository of a group project in a `github.pr.list` answer.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrListRepo {
+    /// Member path, relative to the group folder ("." is the folder itself).
+    pub repo: String,
+    /// Display name of the member.
+    pub name: String,
+    /// Why this member has no list: "No GitHub remote", a missing folder or the `gh` error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// The member is not on GitHub (no remote, or none `gh` knows): nothing to list, and
+    /// clients show no error for it. `error` still says why.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub skipped: bool,
 }
 method!(PrList, "github.pr.list", Some(Scope::OrchestrationRead), PrListParams, PrListResult);
 
@@ -2208,6 +2233,10 @@ method!(PrList, "github.pr.list", Some(Scope::OrchestrationRead), PrListParams, 
 pub struct PrDetailParams {
     pub project_id: ProjectId,
     pub number: u64,
+    /// Group projects: the member repository (a `PullRequest.repo`) the pull
+    /// request belongs to. Required for a group project; rejected for a single project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PrCheck {
@@ -2266,6 +2295,10 @@ pub struct PrPageParams {
     pub kind: PrPageKind,
     #[serde(default = "default_pr_page")]
     pub page: u32,
+    /// Group projects: the member repository (a `PullRequest.repo`) the pull
+    /// request belongs to. Required for a group project; rejected for a single project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
 }
 fn default_pr_page() -> u32 {
     1
@@ -2342,6 +2375,10 @@ pub struct PrActionParams {
     /// Verified repair preparation may preserve local changes belonging to this PR.
     #[serde(default)]
     pub for_repair: bool,
+    /// Group projects: the member repository (a `PullRequest.repo`) the pull
+    /// request belongs to. Required for a group project; rejected for a single project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
 }
 method!(PrAction, "github.pr.action", Some(Scope::OrchestrationOperate), PrActionParams, Empty);
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

@@ -1,5 +1,6 @@
 //! Codex app-server owns its plugin catalog, installation and config policy.
 use crate::{DriverError, ProbeContext, Result, ndjson::NdjsonChild};
+use kybern_protocol::process::NoWindow;
 use kybern_protocol::{
     Integration, IntegrationAction as Action, IntegrationChangeResult, IntegrationKind, IntegrationsCatalog, ProviderKind,
 };
@@ -45,7 +46,7 @@ async fn call(child: &NdjsonChild, id: i64, method: &str, params: Value) -> Resu
 
 async fn open(context: &ProbeContext) -> Result<NdjsonChild> {
     let bin = crate::binary::resolve(ProviderKind::Codex, context.binary.as_ref())?;
-    let mut command = Command::new(bin);
+    let mut command = Command::new(bin).no_window();
     command.arg("app-server").envs(&context.env);
     if let Some(cwd) = &context.cwd {
         command.current_dir(cwd);

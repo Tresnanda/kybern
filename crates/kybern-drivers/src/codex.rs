@@ -5,6 +5,7 @@
 //! server sends requests of its own for approvals; those become permission
 //! requests and are answered by id.
 
+use kybern_protocol::process::NoWindow;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -92,7 +93,7 @@ fn ensure_requested_codex_model(requested: Option<&str>, effective: Option<&str>
 }
 
 async fn codex_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<ProviderModel> {
-    let mut cmd = Command::new(bin);
+    let mut cmd = Command::new(bin).no_window();
     cmd.arg("app-server");
     if let Some(cwd) = context.cwd.as_deref() {
         cmd.current_dir(cwd);
@@ -151,7 +152,7 @@ pub async fn read_account_limits(
     env: &std::collections::BTreeMap<String, String>,
 ) -> Option<Vec<kybern_protocol::UsageLimit>> {
     let bin = resolve(ProviderKind::Codex, binary).ok()?;
-    let mut cmd = Command::new(bin);
+    let mut cmd = Command::new(bin).no_window();
     cmd.current_dir(cwd).arg("app-server").envs(env);
     let child = NdjsonChild::spawn(cmd).ok()?;
     let initialized = catalog_call(
@@ -183,7 +184,7 @@ pub async fn discover_skills(
     env: &std::collections::BTreeMap<String, String>,
 ) -> Option<Vec<SkillInfo>> {
     let bin = resolve(ProviderKind::Codex, binary).ok()?;
-    let mut cmd = Command::new(bin);
+    let mut cmd = Command::new(bin).no_window();
     cmd.current_dir(cwd).arg("app-server").envs(env);
     let child = NdjsonChild::spawn(cmd).ok()?;
     let initialized = catalog_call(
@@ -409,6 +410,7 @@ impl AgentDriver for CodexDriver {
             std::time::Duration::from_secs(90),
             crate::process_tree::output(
                 Command::new(&bin)
+                    .no_window()
                     .current_dir(cwd)
                     .args(["exec", "-s", "read-only", "--skip-git-repo-check", "--output-last-message"])
                     .arg(&last)
@@ -445,7 +447,7 @@ impl AgentDriver for CodexDriver {
             validate_codex_bridge(bridge)?;
         }
         let bin = resolve(ProviderKind::Codex, config.binary.as_ref())?;
-        let mut cmd = Command::new(&bin);
+        let mut cmd = Command::new(&bin).no_window();
         cmd.current_dir(&config.cwd).arg("app-server");
         for (k, v) in &config.env {
             cmd.env(k, v);
