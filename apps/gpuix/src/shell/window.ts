@@ -17,7 +17,7 @@ import { readFileSync } from 'node:fs'
 import type { NativeRenderer } from '@gpuix/react'
 import { cls, cstr, each, getObjc, nsApp, sel, withPool, type Objc } from '../native/objc.ts'
 import { onWindowResize } from '../native/layout.ts'
-import { hasWindowStateEvents, installWindowState, onWindowStateChange } from '../native/windowState.ts'
+import { hasWindowStateEvents, installWindowState, onWindowStateChange, windowStateReport } from '../native/windowState.ts'
 import { readSystemVariant, setAppearanceRenderer, setSystemVariant } from './appearance.ts'
 import { setWindowWidth } from './layout.ts'
 import { load, save } from './persist.ts'
@@ -180,11 +180,12 @@ function windowsFocused(): boolean {
   return pid[0] === process.pid
 }
 
-/** Whether the app's window is the key (focused) window; true when unknown (Linux). Agent toasts post a system
- *  notification only while it is not, so `true` everywhere would mean none are ever posted. */
+/** Whether the app's window is the key (focused) window; on Linux GPUI's activation from the last window-state event,
+ *  true before one. Agent toasts post a system notification only while it is not, so `true` everywhere would mean none
+ *  are ever posted. */
 export function isWindowFocused(): boolean {
   if (process.platform === 'win32') return windowsFocused()
-  if (!mac) return true
+  if (!mac) return windowStateReport()?.focused ?? true
   try {
     const o = getObjc()
     return withPool(o, () => {

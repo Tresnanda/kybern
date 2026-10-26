@@ -993,6 +993,56 @@ with `RUST_LOG=info`, which confirmed each.
   once drew a live visual at its inline width (not reproduced; `SetBounds` failures are now logged); the update
   artwork shows moiré (a 2560 px image sampled without mipmaps); DPI other than 100 %, Windows 10, SmartScreen.
 
+### Real Windows 11 PC, second pass (2026-10-26)
+
+The same PC (satyamas), the installed per-user build of this branch on a scratch daemon, real user32 input, on the NVIDIA
+GPU and then the AMD iGPU (`Using GPU: AMD Radeon(TM) Graphics`), 100 %, German layout loaded only for the AltGr steps.
+Forks: `winhw2` (zed `9a8ab04`, gpuix `9634843`). Evidence: `.kybern-artifacts/win-hw2/` in the main checkout.
+
+| Area | Result |
+| --- | --- |
+| WP3 caption buttons | pass: hit tests answer minimize/maximize/close/caption/client; minimize, maximize and restore by the buttons; double click maximizes and restores; the close button closes the window (with a document tab open too, fixed below) |
+| Snap Layouts, Aero snap | pass: the flyout on hovering maximize; a drag to the left edge snaps to half the screen; a drag off restores |
+| Window menu on a right click | **fixed**: the caption opened no menu (DefWindowProc showed none, nor for a posted WM_CONTEXTMENU; Alt+Space did). zed `winhw2` shows `GetSystemMenu` with `TrackPopupMenu` on a right release on HTCAPTION and runs the choice; Maximize from it works and the next click (the rail) works. The menu is drawn light in the dark theme (follow-up: dark menus need the undocumented `SetPreferredAppMode`) |
+| Title-bar controls | pass: sidebar toggle and back click normally (`client` hit test) |
+| AltGr (German) | pass: terminal, composer (AltGr+Q types `@` and opens mentions, nothing is pasted) and the rich editor all read `@{}[]\|~€`; the user's layout list is unchanged afterwards |
+| Ctrl shortcuts | Ctrl+K: **fixed** (the palette opened with its field unfocused, keyboard or pointer). Ctrl+C in the terminal: **fixed** (never interrupted anything, see below). Ctrl+Shift+C/V: pass |
+| Alt+Shift+arrows | pass: the focus ring moves to the other group; the input language is unaffected (a test that sends the arrow without the extended-key flag loses Shift to the numpad emulation) |
+| Animation effects | pass: turned off and on while running, the palette's entrance follows each change |
+| Frame across monitors | pass: moved to the second (1080p) monitor, closed, relaunched there at the same frame |
+| WP8 text | pass: Segoe UI Variable; a note with an ordered list to 10, task chips and inline code with an emoji (no overlap or clipping); the VS16 row in colour; JetBrains Mono 400–700 registered; small text crisp at 1x. Italic still draws upright (known); 🇮🇩 shows as letters (Windows' emoji font has no flags) |
+| WP9 Mica by default | **fixed**: a new install got Acrylic (the shared default blur 64 is a custom radius), which also shows the windows behind; Windows now defaults to Auto, Mica (`defaultBlur`). No DWM caption glyphs at the top right |
+| WP9 top row | **fail, open**: over a magenta window, the window's top pixel row shows it (159,47,159) with Mica or Acrylic; the side edges do not. Neither a 1 px nor the full DWM frame extension changes it |
+| WP9 themes | pass: Kybern light on dark Windows and dark on light Windows; System follows a Windows switch while running, both ways |
+| Transparency effects, contrast theme | pass: turned on while running, Settings says why Kybern stays solid within seconds; settings restored |
+| Notifications | pass: posted while unfocused (`posted true`), listed under "Notifications from Kybern"; a real click on it in the notification center brought Kybern forward on the right thread. No banner appeared on this PC (its notification settings), so the banner itself was not clicked |
+| Taskbar | pass: the first window's taskbar button is `Appid: dev.kybern.gpuix` (the identity is set before the window, `setEarlyAppIdentity`) |
+
+Fixed in this pass:
+
+- **(a) Window-state events off macOS** (gpuix `winhw2`): `setWindowStateCallback` installs GPUI bounds/activation/appearance
+  observers and delivers `{ minimized, visible, focused }` (Windows: `IsIconic`, `IsWindowVisible`, `DWMWA_CLOAKED`; Linux:
+  focus only). `native/windowState.ts` keeps the report, `visibility.ts` and Linux `isWindowFocused` use it. Measured on the
+  installed app: minimize raises `[visibility] hidden` and restore `visible`; with the reconnect spinner running the process
+  used 16.3 % of a core visible, 1.9 % minimized, 11.6 % restored; idle release runs after 60 s in the background
+  (`released gpu=0`: Direct3D 11 has no idle release yet), working set 260 → 232 MB minimized on the iGPU. Covering
+  windows are not detected (Windows has no occlusion event).
+- **(b) AppUserModelID**: already set before the first window; confirmed on the taskbar (above).
+- **(c) Update artwork moiré**: off macOS the card and dialog draw copies pre-filtered near their size (420 and 768 px);
+  the 2560 px original sampled 8x smaller without mipmaps showed the moiré. GPU capture of both in the card box.
+- **(d) Hovered sidebar title**: not a bug; it is the hover marquee (`.t-marquee`): clipped at the end, panned to show the
+  tail, home again on leaving.
+- **(e) Web pages in the strip under the composer**: not reproduced (live visuals freeze before reaching the composer; the
+  strip shows transcript text, which floats under the composer by design). A live visual now also freezes before it slides
+  under the request bars and gutter of the floating stack, not only the card (`composerCardRects`).
+- **(f) Artifacts chip**: not reproduced in 18 real clicks (centre, edges, 30 ms after the dock opens).
+- **(g)** Command palette focus (gpuix: an `autoFocus` element inside an `autoFocus` parent keeps focus); terminal
+  Ctrl+C (the daemon, started detached as a new process group, ignored Ctrl+C and every shell inherited that:
+  `SetConsoleCtrlHandler(NULL, FALSE)` before the first shell); terminal working folder (`\\?\D:\…` project paths made
+  cmd.exe start in `C:\Windows`); the close button closed the active document tab instead of the window
+  (`closeRequestSource` off macOS); the window menu (above); macOS no longer compiled the native crate at `next` (two
+  functions had lost their Windows/Linux gate).
+
 ## Ship order
 
 1. **Intel Mac**: shipped in v0.10.3.

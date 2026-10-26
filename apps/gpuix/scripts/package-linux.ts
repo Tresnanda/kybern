@@ -92,6 +92,8 @@ if (webView) {
 cpSync(path.join(root, '../desktop/node_modules/mermaid/dist/mermaid.min.js'), path.join(resources, 'mermaid.min.js'))
 cpSync(path.join(root, 'src/assets/fonts'), path.join(resources, 'src/assets/fonts'), { recursive: true })
 cpSync(path.join(root, 'src/assets/providers'), path.join(resources, 'src/assets/providers'), { recursive: true })
+cpSync(path.join(root, 'src/assets/release-artwork.jpg'), path.join(resources, 'src/assets/release-artwork.jpg'))
+cpSync(path.join(root, 'src/assets/release-artwork-card.jpg'), path.join(resources, 'src/assets/release-artwork-card.jpg'))
 cpSync(path.join(root, '../desktop/public/release-background.png'), path.join(resources, 'release-background.png'))
 cpSync(path.join(root, '../../THIRD_PARTY_NOTICES.md'), path.join(resources, 'THIRD_PARTY_NOTICES.md'))
 cpSync(path.join(root, '../../LICENSE'), path.join(resources, 'LICENSE'))

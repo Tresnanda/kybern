@@ -63,6 +63,8 @@ writeFileSync(path.join(payload, 'version'), version)
 cpSync(icon, path.join(payload, 'icon.ico'))
 cpSync(path.join(root, 'src/assets/fonts'), path.join(payload, 'src/assets/fonts'), { recursive: true })
 cpSync(path.join(root, 'src/assets/providers'), path.join(payload, 'src/assets/providers'), { recursive: true })
+cpSync(path.join(root, 'src/assets/release-artwork.jpg'), path.join(payload, 'src/assets/release-artwork.jpg'))
+cpSync(path.join(root, 'src/assets/release-artwork-card.jpg'), path.join(payload, 'src/assets/release-artwork-card.jpg'))
 // The release announcement's artwork (`platform/UpdateSurface.tsx`).
 cpSync(path.join(root, '../desktop/public/release-background.png'), path.join(payload, 'release-background.png'))
 cpSync(path.join(root, '../../THIRD_PARTY_NOTICES.md'), path.join(payload, 'THIRD_PARTY_NOTICES.md'))

@@ -29,7 +29,15 @@ import { PATCHED_NATIVE } from '../native/local-build.ts'
 
 const ICON = { download: glyph(Download04Icon), arrowRight: glyph(ArrowRight01Icon), arrowUpRight: glyph(ArrowUpRight01Icon), x: glyph(Cancel01Icon) }
 
-/** `release-background.png` (AGENTS.md: the branded artwork), from the desktop's public folder or the app's Resources. */
+/**
+ * `release-background.png` (AGENTS.md: the branded artwork), from the desktop's public folder or the app's Resources.
+ * Off macOS copies pre-filtered near their drawn size (`sips -Z`): 420 px for the compact card (`release-artwork-card.jpg`),
+ * 768 px for the dialog (`release-artwork.jpg`). The art is a fine dot grid and the renderer samples images bilinearly
+ * without mipmaps, so the 2560 px original drawn into the 326 px card at 1x (8x smaller) showed heavy moire on Windows.
+ * macOS draws at 2x from the original as before.
+ */
+const OFF_MAC_ARTWORK = { card: 'release-artwork-card.jpg', dialog: 'release-artwork.jpg' } as const
+const artwork = (compact: boolean) => process.platform !== 'darwin' ? fileURLToPath(new URL(`../assets/${OFF_MAC_ARTWORK[compact ? 'card' : 'dialog']}`, import.meta.url)) : ARTWORK
 const ARTWORK = (() => {
   const packaged = process.env.KYBERN_GPUIX_RESOURCES && path.join(process.env.KYBERN_GPUIX_RESOURCES, 'release-background.png')
   return packaged && existsSync(packaged) ? packaged : fileURLToPath(new URL('../../../desktop/public/release-background.png', import.meta.url))
@@ -58,7 +66,7 @@ function ReleaseArtwork({ compact = false }: { compact?: boolean }) {
   // `h-36` compact, `h-[clamp(5rem,20vh,11rem)]` in the dialog.
   const height = compact ? 144 : Math.min(176, Math.max(80, size.height * 0.2))
   return <div style={{ display: 'flex', position: 'relative', alignItems: 'center', justifyContent: 'center', marginLeft: 12, marginRight: 12, marginTop: 12, height, flexShrink: 0, borderRadius: 16, overflow: 'hidden', pointerEvents: 'none' }}>
-    <img src={ARTWORK} objectFit="cover" style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'none' }} />
+    <img src={artwork(compact)} objectFit="cover" style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'none' }} />
     <svg source={LOGO_SVG} style={{ width: compact ? 76 : 96, height: (compact ? 76 : 96) * 315 / 504, color: '#ffffff', pointerEvents: 'none' }} />
   </div>
 }

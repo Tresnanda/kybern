@@ -12,9 +12,12 @@ const MOUSE = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 25, 26, 27])
 /**
  * `'key'`: the request comes from ⌘W. `'pointer'`: a mouse event (the close button, or Window › Close with the pointer).
  * `'none'`: no key or mouse event (a synthetic keystroke from the automation driver), treated as the keyboard by the caller.
+ * Off macOS Ctrl+W is an ordinary key event the window's shortcuts handle (`nav/keys.ts`), so a close request is always the
+ * window's own close (the caption button, Alt+F4, the window menu, the taskbar): `'pointer'`. As `'none'` it closed the
+ * active document tab instead of the window on Windows.
  */
-export function closeRequestSource(): 'key' | 'pointer' | 'none' {
-  if (process.platform !== 'darwin') return 'none'
+export function closeRequestSource(platform: NodeJS.Platform = process.platform): 'key' | 'pointer' | 'none' {
+  if (platform !== 'darwin') return 'pointer'
   try {
     const o = getObjc(), app = nsApp()
     if (!app) return 'none'

@@ -98,6 +98,7 @@ impl TerminalManager {
             return Ok(existing);
         }
         anyhow::ensure!(!self.issued_ids.lock().unwrap().contains(&id), "This terminal has closed; open a new terminal tab");
+        allow_ctrl_c();
         let pty = native_pty_system();
         let pair = pty.openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).context("openpty")?;
 
@@ -107,7 +108,7 @@ impl TerminalManager {
         };
         let mut cmd = CommandBuilder::new(&program);
         cmd.args(&args);
-        cmd.cwd(&cwd);
+        cmd.cwd(shell_cwd(&cwd));
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         cmd.env("KYBERN", "1");
@@ -323,8 +324,60 @@ fn default_shell() -> String {
     }
 }
 
+/// Windows: the desktop starts the daemon detached, as a new process group, and such a process
+/// ignores Ctrl+C, a setting every process it starts inherits. A terminal's shell, and whatever runs
+/// in it, then never stopped on Ctrl+C (the PTY delivered it; `ping -t` ran on). Turn Ctrl+C
+/// processing back on for the daemon before its first shell starts, so shells inherit it on. The
+/// daemon itself has no console, so no Ctrl+C reaches it.
+fn allow_ctrl_c() {
+    #[cfg(windows)]
+    {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            #[link(name = "kernel32")]
+            unsafe extern "system" {
+                fn SetConsoleCtrlHandler(handler: Option<unsafe extern "system" fn(u32) -> i32>, add: i32) -> i32;
+            }
+            // SAFETY: a null handler with `add` false only clears this process's ignore-Ctrl+C flag.
+            if unsafe { SetConsoleCtrlHandler(None, 0) } == 0 {
+                tracing::warn!("could not turn Ctrl+C processing on for terminal shells");
+            }
+        });
+    }
+}
+
+/// The directory a shell starts in. Windows project paths can be stored verbatim (`\\?\D:\x`, what
+/// `canonicalize` returns there), and cmd.exe cannot start in one: it says "UNC paths are not supported"
+/// and opens in `C:\Windows`. The plain form names the same directory.
+fn shell_cwd(cwd: &str) -> String {
+    if !cfg!(windows) {
+        return cwd.to_string();
+    }
+    plain_windows_path(cwd)
+}
+
+fn plain_windows_path(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    match path.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.to_string(),
+        _ => path.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn verbatim_windows_paths_become_plain_for_the_shell() {
+        use super::plain_windows_path;
+        assert_eq!(plain_windows_path(r"\\?\D:\kybern\work"), r"D:\kybern\work");
+        assert_eq!(plain_windows_path(r"\\?\UNC\server\share\dir"), r"\\server\share\dir");
+        assert_eq!(plain_windows_path(r"D:\kybern"), r"D:\kybern");
+        // A verbatim path with no plain form (a volume GUID) stays as it is.
+        assert_eq!(plain_windows_path(r"\\?\Volume{0}\x"), r"\\?\Volume{0}\x");
+    }
+
     use super::*;
 
     #[cfg(unix)]

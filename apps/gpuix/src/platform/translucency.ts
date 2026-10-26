@@ -51,8 +51,13 @@ export const VIBRANCY_EQUIVALENT_BLUR = 30
  * default to Sidebar only. The rerun kept it: whole-window glass fails streaming intervals over 33 ms and WindowServer GPU time.
  */
 export const DEFAULT_SIDEBAR_ONLY = true
+/**
+ * The new-install blur: 64 on macOS. On Windows Auto (null), which is Mica there (`shell/windowMaterial.ts`): a custom radius
+ * is Acrylic, which also shows the windows behind Kybern, and the radius itself is not applied (Windows sets the strength).
+ */
+export const defaultBlur = (platform: NodeJS.Platform = process.platform): number | null => platform === 'win32' ? null : 64
 export const DEFAULT_VARIANT_MATERIAL: VariantMaterial = {
-  material: 'translucent', sidebarOpacity: 90, contentOpacity: DEFAULT_SIDEBAR_ONLY ? 100 : 90, lastContentOpacity: 90, blur: 64, surfaceOpacity: null,
+  material: 'translucent', sidebarOpacity: 90, contentOpacity: DEFAULT_SIDEBAR_ONLY ? 100 : 90, lastContentOpacity: 90, blur: defaultBlur(), surfaceOpacity: null,
 }
 /** Sidebar only also makes the thread panel glass (the source's own `--app-sidebar-surface`); false keeps it opaque. */
 export const SIDEBAR_ONLY_PANEL_GLASS = true

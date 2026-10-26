@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { DEFAULT_THEME_STATE, buildThemeCssVariables } from '../../../desktop/src/lib/kit/theme/theme.logic.ts'
 import { THEMES, derivedThemeCount, materialFor, stack, themeFor, windowCoverage } from '../theme.ts'
 import {
-  DEFAULT_VARIANT_MATERIAL, OPACITY_MIN, OPACITY_VARS, SIDEBAR_ONLY_PANEL_GLASS, SURFACE_DEFAULT, SURFACE_MIN, advancedDefaults, coatFloor, effectiveOpacity, effectiveSurface,
+  DEFAULT_VARIANT_MATERIAL, OPACITY_MIN, defaultBlur, OPACITY_VARS, SIDEBAR_ONLY_PANEL_GLASS, SURFACE_DEFAULT, SURFACE_MIN, advancedDefaults, coatFloor, effectiveOpacity, effectiveSurface,
   frostQuietInk, glassContrast, isAdvancedDefault, isSidebarOnly, materialCoverage, materialFormulas, materialVars, migrateWindow, normalizeVariantMaterial, opacityVarsFor, resolveScope, surfaceFloor,
   windowCoats, type ThemeVariant, type VariantMaterial, type WindowScope,
 } from './translucency.ts'
@@ -379,4 +379,10 @@ describe('quiet text on a frosted panel', () => {
     expect(alpha(frostQuietInk('dark', opaque('dark'), 'rgba(0, 0, 0, 1)')!.secondary)).toBe(0.58)
     expect(frostQuietInk('dark', { '--color-background-surface': 'oklch(0.2 0 0)' }, 'rgba(46, 46, 46, 0.48)')).toBeNull()
   })
+})
+
+test('a new install starts on Mica on Windows (Auto blur) and on a 64 point blur elsewhere', () => {
+  expect(defaultBlur('win32')).toBeNull()
+  expect(defaultBlur('darwin')).toBe(64)
+  expect(defaultBlur('linux')).toBe(64)
 })
