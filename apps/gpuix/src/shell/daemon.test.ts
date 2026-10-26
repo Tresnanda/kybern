@@ -38,6 +38,16 @@ test('daemon plan: older and newer apps, same and other protocols', () => {
   // A daemon version nothing can order is replaced only when it differs.
   expect(daemonPlan({ ...info, version: 'weird' }, '0.9.1', 1)).toBe('restart')
 })
+test('a running daemon that misses the quick probe is asked again, not started twice', () => fixture(async (root, binary) => {
+  await writeFile(path.join(root, 'daemon.port'), '4321'); await writeFile(path.join(root, 'daemon.token'), 'fixture')
+  const timeouts: (number | undefined)[] = []
+  const resolver = createLocalDaemonResolver({ root, binary, version: info.version }, {
+    rpc: (async (_endpoint, _method, timeoutMs) => { timeouts.push(timeoutMs); if (timeouts.length === 1) throw Error('The daemon did not respond in time'); return info }) as typeof daemonRpc,
+    launch: async () => { throw Error('must never launch') },
+  })
+  expect((await resolver()).url).toBe('ws://127.0.0.1:4321/ws')
+  expect(timeouts).toEqual([undefined, 5000])
+}))
 test('an older app keeps a newer daemon running; a newer app replaces an older one', () => fixture(async (root, binary) => {
   await writeFile(path.join(root, 'daemon.port'), '4321'); await writeFile(path.join(root, 'daemon.token'), 'fixture')
   const old = { ...info, version: '0.10.0', started_at: '2000-01-01T00:00:00Z' }

@@ -195,7 +195,7 @@ export function createLocalDaemonResolver(options: LocalDaemonOptions, dependenc
   const deps = { ...defaults, ...dependencies }
   let resolving: Promise<Endpoint> | undefined
   let starting: { endpoint: Endpoint; at: number; child: ChildProcess } | undefined
-  const info = (endpoint: Endpoint) => deps.rpc<DaemonInfo>(endpoint, 'daemon.info').catch(() => null)
+  const info = (endpoint: Endpoint, timeoutMs?: number) => deps.rpc<DaemonInfo>(endpoint, 'daemon.info', timeoutMs).catch(() => null)
   async function resolve(): Promise<Endpoint> {
     if (starting && deps.now() - starting.at < 10000) {
       if (starting.child.exitCode !== null || starting.child.signalCode !== null) { starting = undefined; throw Error('kybernd exited during startup. Check daemon.log and reconnect.') }
@@ -220,7 +220,9 @@ export function createLocalDaemonResolver(options: LocalDaemonOptions, dependenc
       try { const port = await preferredDaemonPort(root); if (port) endpoint = { url: `ws://127.0.0.1:${port}/ws`, token: (await readFile(path.join(root, 'daemon.token'), 'utf8')).trim() } }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     }
-    const existing = endpoint && await info(endpoint)
+    // A busy local daemon or a slow first frame (software rendering) can miss the quick probe. Starting a second
+    // daemon then fails on the held port, so ask once more, patiently; nothing listening still fails at once.
+    const existing = endpoint && (await info(endpoint) ?? (configured ? null : await info(endpoint, 5000)))
     if (configured) {
       if (!existing) throw Error('The daemon configured by KYBERN_URL is not reachable or rejected the configured token')
       if (existing.protocol_version !== PROTOCOL_VERSION) throw Error('This environment uses an incompatible protocol. Update Kybern on the client and host')
