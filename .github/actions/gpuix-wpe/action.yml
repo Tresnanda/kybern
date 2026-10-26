@@ -1,0 +1,50 @@
+name: Unpack the GPUIX WPE WebKit build
+description: >-
+  Downloads the `gpuix-wpe-linux-x64` artifact that .github/workflows/gpuix-wpe.yml
+  built in this run and unpacks it to apps/gpuix/native/build/wpe, where
+  native/build-webview.ts (also run by native/update.sh, so by the gpuix-addon
+  action) links the web view companion and scripts/package-linux.ts finds it.
+  Installs the packages the companion builds against (WPE's pkg-config modules
+  name GLib, libsoup and xkbcommon), the system libraries dpkg-shlibdeps reads
+  for the .deb's Depends, and what a desktop has for the web process: bubblewrap,
+  xdg-dbus-proxy, EGL and GLES. Call it before the gpuix-addon action.
+
+inputs:
+  apparmor:
+    description: >-
+      'true' installs the .deb's AppArmor profile for the unpacked prefix's own
+      bwrap (Ubuntu 23.10+ refuses unprivileged user namespaces to /usr/bin/bwrap;
+      the companion falls back to that copy), as the .deb's postinst does.
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: gpuix-wpe-linux-x64
+        path: ${{ runner.temp }}/gpuix-wpe
+    - name: Unpack WPE WebKit and install what the companion needs
+      shell: bash
+      run: |
+        mkdir -p apps/gpuix/native/build
+        rm -rf apps/gpuix/native/build/wpe
+        tar -C apps/gpuix/native/build -xJf "$RUNNER_TEMP/gpuix-wpe/wpe.tar.xz"
+        rm -rf "$RUNNER_TEMP/gpuix-wpe"
+        test -f apps/gpuix/native/build/wpe/lib/libWPEWebKit-2.0.so.1
+        echo "WPE WebKit: $(du -sh apps/gpuix/native/build/wpe | cut -f1)"
+        # build-wpe.sh's list covers the headers and every system library WPE links; the rest is a desktop's runtime.
+        deps=$(apps/gpuix/native/wpe/build-wpe.sh deps)
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends $deps libegl1 libgles2
+    - name: AppArmor profile for Kybern's bwrap (what the .deb's postinst installs on Ubuntu 23.10+)
+      if: inputs.apparmor == 'true'
+      shell: bash
+      run: |
+        own="$PWD/apps/gpuix/native/build/wpe/lib/wpe-webkit-2.0/bwrap"
+        sed "s#@BWRAP@#$own#" apps/gpuix/packaging/linux/kybern-gpuix-bwrap.apparmor | sudo tee /etc/apparmor.d/kybern-gpuix-bwrap >/dev/null
+        sudo apparmor_parser -r -T -W /etc/apparmor.d/kybern-gpuix-bwrap
+        sysctl kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || true
+        /usr/bin/bwrap --unshare-all --ro-bind / / --dev /dev --proc /proc true && echo "system bwrap ok" || echo "system bwrap refused"
+        "$own" --unshare-all --ro-bind / / --dev /dev --proc /proc true && echo "Kybern's bwrap ok"

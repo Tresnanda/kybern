@@ -206,6 +206,9 @@ if (formats.has('deb')) {
   writeFileSync(path.join(scratch, 'debian/control'), `Source: ${PACKAGE}\n\nPackage: ${PACKAGE}\nArchitecture: any\n`)
   const lib = path.join(tree, `usr/lib/${PACKAGE}`)
   // The private WPE: its libraries resolve from resources/wpe/lib (-l), so only the system ones it links become Depends.
+  // DEBIAN/ must exist first: it marks the package root, so dpkg-shlibdeps sees resources/wpe/lib as a private
+  // directory (and resolves $ORIGIN) instead of failing on libraries no package provides.
+  mkdirSync(path.join(tree, 'DEBIAN'), { recursive: true })
   const wpeLib = path.join(lib, 'resources/wpe/lib')
   const webViewFiles = webView ? [path.join(lib, 'resources/libkybern-webview.so'), ...readdirSync(wpeLib, { recursive: true, withFileTypes: true })
     .filter(entry => entry.isFile() && /\.so(\.|$)|Process$/.test(entry.name)).map(entry => path.join(entry.parentPath, entry.name))] : []
@@ -213,7 +216,6 @@ if (formats.has('deb')) {
   const detected = /shlibs:Depends=(.*)/.exec(shlibs)?.[1]?.trim()
   if (!detected) throw Error(`dpkg-shlibdeps found no dependencies:\n${shlibs}`)
   const depends = [detected, ...RUNTIME_LIBRARIES.deb].join(', ')
-  mkdirSync(path.join(tree, 'DEBIAN'), { recursive: true })
   writeFileSync(path.join(tree, 'DEBIAN/control'), [
     `Package: ${PACKAGE}`, `Version: ${packageVersion}`, `Architecture: ${debArch}`, 'Maintainer: kybern',
     `Installed-Size: ${Math.ceil(sizeKiB(tree))}`, `Depends: ${depends}`, `Recommends: ${RUNTIME_RECOMMENDS.deb.join(', ')}`,

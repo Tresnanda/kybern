@@ -1,0 +1,97 @@
+# The private WPE WebKit that Kybern GPUIX's Linux packages carry for the
+# embedded web view (WP10, apps/gpuix/WEBVIEW-PLATFORMS.md "Linux
+# implementation"). Built on ubuntu-22.04, the glibc floor of the packages, by
+# apps/gpuix/native/wpe/build-wpe.sh, and handed to the calling jobs as the
+# `gpuix-wpe-linux-x64` artifact: wpe.tar.xz, the relocatable prefix as `wpe/`,
+# which they unpack into apps/gpuix/native/build so that build-webview.ts links
+# the companion against it and package-linux.ts copies both into resources.
+#
+# A cold build takes about 92 minutes on the 4-core runner, so the installed
+# prefix is cached, keyed on what changes the compiled WebKit (the version and
+# checksum, the patches, build-wpe.sh) and the runner image. bundle-wpe.sh is
+# not in the key: a hit re-runs it on the restored prefix, so changing what is
+# bundled never rebuilds WebKit.
+#
+# desktop.yml (release and dry runs) and gpuix-platforms.yml call this
+# workflow. A tag can restore caches saved by main but never another tag's, and
+# GitHub deletes a cache nobody has restored for seven days: the push trigger
+# saves the entry on main whenever the inputs change, and the weekly run keeps
+# it alive. A tag run that still misses builds cold within its own timeout.
+name: GPUIX WPE WebKit
+
+on:
+  workflow_call:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/gpuix/native/wpe/**'
+      - '.github/workflows/gpuix-wpe.yml'
+  schedule:
+    - cron: '29 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wpe:
+    name: WPE WebKit (ubuntu-22.04)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: key
+        name: Cache key
+        run: |
+          . /etc/os-release
+          echo "key=gpuix-wpe-$ID-$VERSION_ID-x64-${{ hashFiles('apps/gpuix/native/wpe/wpe-version.sh', 'apps/gpuix/native/wpe/build-wpe.sh', 'apps/gpuix/native/wpe/wpe-*.patch') }}" >> "$GITHUB_OUTPUT"
+      - id: cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: wpe.tar.xz
+          key: ${{ steps.key.outputs.key }}
+      # The build tree needs tens of GB; the image's preinstalled SDKs leave too little.
+      - name: Free disk space
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+      # bundle-wpe.sh copies libraries and their copyright files from these packages, so a hit needs them too.
+      - name: Install the build dependencies
+        run: |
+          deps=$(apps/gpuix/native/wpe/build-wpe.sh deps)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $deps
+      - name: Build WPE WebKit
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          WPE_JOBS: '4'
+          WPE_WORK: ${{ runner.temp }}/wpe-work
+        run: |
+          start=$(date +%s)
+          apps/gpuix/native/wpe/build-wpe.sh "$RUNNER_TEMP/wpe"
+          echo "build took $(( ($(date +%s) - start) / 60 )) min"
+          tar -C "$RUNNER_TEMP" -cf - wpe | xz -T0 -6 > wpe.tar.xz
+          ls -la wpe.tar.xz
+          df -h /
+      # A cache saved under a tag could never be restored.
+      - name: Save the build
+        if: steps.cache.outputs.cache-hit != 'true' && github.ref_type != 'tag'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: wpe.tar.xz
+          key: ${{ steps.key.outputs.key }}
+      - name: Re-bundle the cached build
+        if: steps.cache.outputs.cache-hit == 'true'
+        run: |
+          tar -C "$RUNNER_TEMP" -xJf wpe.tar.xz
+          apps/gpuix/native/wpe/bundle-wpe.sh "$RUNNER_TEMP/wpe"
+          tar -C "$RUNNER_TEMP" -cf - wpe | xz -T0 -6 > wpe.tar.xz
+          ls -la wpe.tar.xz
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gpuix-wpe-linux-x64
+          path: wpe.tar.xz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7

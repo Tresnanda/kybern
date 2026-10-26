@@ -363,15 +363,25 @@ jobs:
           path: dist/kybern-gpuix_*
           if-no-files-found: error
 
+  gpuix-wpe:
+    # The private WPE WebKit the Linux GPUIX packages carry for the embedded web
+    # view (WP10), from main's cache or built cold (about 92 minutes, alongside
+    # `binaries`); see gpuix-wpe.yml.
+    if: ${{ github.event_name != 'push' || github.ref_type == 'tag' }}
+    uses: ./.github/workflows/gpuix-wpe.yml
+
   gpuix-linux:
     # Kybern GPUIX for x86_64 Linux (beta): an AppImage (the updater artifact),
     # a .deb and an .rpm (scripts/bundle-gpuix-linux.sh). It builds on
     # ubuntu-22.04 for the same glibc floor as the Tauri AppImage and packages
-    # the static musl daemon and CLI the Tauri Linux bundle uses. Like
+    # the static musl daemon and CLI the Tauri Linux bundle uses, with the
+    # embedded web view (`gpuix-wpe` and the companion; required). Like
     # `gpuix-windows`, it is a job of its own so that its failure can never skip
     # the manifest job: the release then simply has no `linux-x86_64-gpuix`
-    # entry (scripts/updater-manifest.mjs skips a missing AppImage).
-    needs: binaries
+    # entry (scripts/updater-manifest.mjs skips a missing AppImage). It runs
+    # whatever `gpuix-wpe` did, so a failed WPE build fails this job instead
+    # of skipping it.
+    needs: [binaries, gpuix-wpe]
     if: ${{ !cancelled() && (needs.binaries.result == 'success' || needs.binaries.result == 'skipped') && (github.event_name != 'push' || github.ref_type == 'tag') }}
     name: bundle (gpuix x86_64-unknown-linux-gnu)
     runs-on: ubuntu-22.04
@@ -438,10 +448,18 @@ jobs:
       # The compiled addon inside update.sh comes from main's cache when its inputs
       # are unchanged; a dry run saves one, a tag never does. The realign,
       # re-sign and load checks run either way.
+      # Before the addon: update.sh builds the web view companion when WPE is unpacked.
+      - uses: ./.github/actions/gpuix-wpe
       - uses: ./.github/actions/gpuix-addon
         with:
           target: x86_64-unknown-linux-gnu
           save: ${{ github.event_name == 'workflow_dispatch' }}
+      # update.sh only warns when the companion does not build; here that is an error.
+      - name: Build the web view companion
+        working-directory: apps/gpuix
+        run: |
+          bun native/build-webview.ts
+          readelf -d native/build/libkybern-webview.so | grep -E 'NEEDED|RUNPATH'
       # dpkg-shlibdeps names the deb's dependencies from the libraries the
       # addon action installed. appimagetool and its runtime are pinned by
       # checksum; appimagetool would otherwise fetch the newest runtime.
@@ -462,11 +480,16 @@ jobs:
           echo "APPIMAGETOOL=$tools/appimagetool" >> "$GITHUB_ENV"
           echo "APPIMAGE_RUNTIME=$tools/runtime" >> "$GITHUB_ENV"
       - name: Package Kybern GPUIX (AppImage, deb, rpm) and sign the AppImage
+        env:
+          # Without the companion and WPE package-linux.ts would package the browser fallback.
+          KYBERN_REQUIRE_WEBVIEW: "1"
         run: scripts/bundle-gpuix-linux.sh
       # Blocking, and before the upload, like the Windows installer check:
-      # installs the deb, smoke-runs it and the AppImage (KYBERN_GPUIX_SMOKE=1:
-      # the addon loads with its libraries and every module imports), reads the
-      # rpm's header and removes the deb again.
+      # checks that every package carries the web view (companion, WPE, the
+      # deb's AppArmor profile, EGL/GLES and bubblewrap), installs the deb,
+      # smoke-runs it and the AppImage (KYBERN_GPUIX_SMOKE=1: the addon loads
+      # with its libraries and every module imports), reads the rpm's header
+      # and removes the deb again.
       - name: Check the packages (install, smoke run, remove)
         run: apps/gpuix/packaging/verify-linux.sh dist
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -99,8 +99,19 @@ const CHECKS: Record<string, Check> = {
     }],
   },
   webview: {
-    description: 'WP10 (Windows): the WebView2 web view in a GPUIX window: stacking, rounded clip, menu cut-out, dim, input, bridge, draft, present, snapshots',
-    runs: ({ out }) => platform === 'windows' ? [{ name: 'webview', args: [native('webview-win-check.ts'), '--out', path.join(out, 'webview')], minutes: 10 }] : [],
+    description: 'WP10: the embedded web view in a GPUIX window. Windows: WebView2 (stacking, rounded clip, menu cut-out, dim, input, bridge, draft, present, snapshots). Linux: WPE drawn by <websurface> (the lab: bridge, forged child post, rounded clip, transparency, popup over the page, click draft, <select>, typing, snapshot, hide; pixels only with captures; needs native/build/libkybern-webview.so and native/build/wpe)',
+    runs: ({ out, capture }) => platform === 'windows'
+      ? [{ name: 'webview', args: [native('webview-win-check.ts'), '--out', path.join(out, 'webview')], minutes: 10 }]
+      : platform === 'linux' ? [{ name: 'webview', args: [native('webview-linux-check.ts')], env: capture === 'none' ? { KYBERN_CHECK_CAPTURE: 'none' } : {} as Record<string, string>, minutes: 10 }] : [],
+  },
+  'webview-app': {
+    description: 'WP10 (Linux): the real app with the embedded web view on a seeded daemon (live visual, a draft from a click in the page, Mermaid drawn, the preview in its embedded slot, no browser opened)',
+    runs: ({ kybernd, scratch, capture }) => platform === 'linux' && capture !== 'none' ? [{
+      name: 'webview-app',
+      args: [script('nowebview-app-check.ts'), 'dark', 'embedded'],
+      env: { KYBERND: kybernd, VISUAL_SCRATCH: path.join(scratch, 'webview-app') },
+      minutes: 20,
+    }] : [],
   },
   notify: {
     description: 'WP5: system notifications through the addon. Linux: a test D-Bus notification server (Notify fields, replace per thread, ActionInvoked reaches the app once, no daemon = unsupported). Windows: the toast API with the AUMID, its registry entry, the posts and the history',

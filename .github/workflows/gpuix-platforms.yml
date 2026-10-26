@@ -24,13 +24,21 @@
 # and the app smoke (no captures: nothing can grab the screen) in headless
 # Weston, which has no wl_seat; upstream gpui_linux unwrapped it until WP1.
 # To check a patch rather than a release build, turn "lto" off.
+#
+# WP10 Linux: every Linux job unpacks the private WPE WebKit (gpuix-wpe.yml, from
+# its cache or built cold, about 92 minutes) so that update.sh builds the web
+# view companion, and runs `webview` (the lab, webview-linux-check.ts; no pixels
+# under Weston) and `webview-app` (the real app with the embedded web view). The
+# linux-noble job repeats the web view checks and `nowebview` on ubuntu-24.04:
+# jammy's lavapipe can leave X captures black, and 24.04 is where the web
+# process needs the .deb's AppArmor profile for Kybern's own bwrap.
 name: GPUIX platforms
 
 on:
   workflow_dispatch:
     inputs:
       checks:
-        description: 'Checks to run: all, or a comma list of focus, clip, rounded, backdrop, markdown-document, text, smoke, nowebview, webview (Windows), window-chrome, frame-wake, notify'
+        description: 'Checks to run: all, or a comma list of focus, clip, rounded, backdrop, markdown-document, text, smoke, nowebview, webview (Windows, Linux), webview-app (Linux), window-chrome, frame-wake, notify'
         required: false
         type: string
         default: all
@@ -70,7 +78,8 @@ jobs:
         run: |
           matrix='[
             {"id":"linux","os":"linux","runner":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","display":"xvfb","experimental":false},
-            {"id":"windows","os":"windows","runner":"windows-2022","target":"x86_64-pc-windows-msvc","display":"desktop","experimental":false}
+            {"id":"windows","os":"windows","runner":"windows-2022","target":"x86_64-pc-windows-msvc","display":"desktop","experimental":false},
+            {"id":"linux-noble","os":"linux","runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","display":"xvfb-noble","experimental":false}
           ]'
           if [ "$WAYLAND" = true ]; then
             matrix=$(echo "$matrix" | jq -c '. + [{"id":"linux-wayland","os":"linux","runner":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","display":"wayland","experimental":false}]')
@@ -79,9 +88,15 @@ jobs:
           fi
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
+  wpe:
+    name: wpe
+    uses: ./.github/workflows/gpuix-wpe.yml
+
   checks:
     name: ${{ matrix.id }}
-    needs: plan
+    needs: [plan, wpe]
+    # A failed WPE build still runs every check (the web view ones then fail).
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
@@ -138,6 +153,12 @@ jobs:
           gpuix: 'true'
       - name: Build the scratch daemon
         run: cargo build -p kybern
+      # Before the addon: update.sh builds the web view companion against it.
+      - name: Unpack the WPE WebKit build (WP10)
+        if: matrix.os == 'linux' && needs.wpe.result == 'success'
+        uses: ./.github/actions/gpuix-wpe
+        with:
+          apparmor: ${{ matrix.runner == 'ubuntu-24.04' }}
       - name: Build the patched GPUIX addon
         id: addon
         uses: ./.github/actions/gpuix-addon
@@ -209,7 +230,35 @@ jobs:
           # frame-wake asserts getPlatformInfo().seat === false: GPUI really ran without a wl_seat.
           export KYBERN_EXPECT_SEAT=false
           bun scripts/run-platform-checks.ts --kybernd "$GITHUB_WORKSPACE/target/debug/kybernd" \
-            --out gpuix-checks --checks frame-wake,smoke --capture none $STRICT
+            --out gpuix-checks --checks frame-wake,smoke,webview --capture none $STRICT
+      # Ubuntu 24.04 also refuses user namespaces to the daemon's preview browser (chrome-headless-shell, which draws the
+      # visuals' pictures), so it exits at start; let the copies it downloads into the checks' scratch data directories
+      # create them. Desktops on 24.04 need the same (or Chrome's SUID sandbox) for visual pictures.
+      - name: AppArmor profile for the daemon's preview browser (Ubuntu 24.04)
+        if: matrix.display == 'xvfb-noble'
+        run: |
+          printf '%s\n' 'abi <abi/4.0>,' 'include <tunables/global>' \
+            'profile kybern-checks-preview-browser /tmp/gpuix-scratch/**/chrome-headless-shell flags=(unconfined) {' '  userns,' '}' \
+            | sudo tee /etc/apparmor.d/kybern-checks-preview-browser >/dev/null
+          sudo apparmor_parser -r -T -W /etc/apparmor.d/kybern-checks-preview-browser
+      # Mesa 24's lavapipe presents to Xvfb (without the Composite switch the 22.04 job needs); the web process uses
+      # Kybern's bwrap under the AppArmor profile the step above installed, as the .deb does on Ubuntu 23.10+.
+      - name: Web view checks on Ubuntu 24.04 (Linux, Xvfb + lavapipe; WP10)
+        if: ${{ !cancelled() && steps.addon.outcome == 'success' && matrix.display == 'xvfb-noble' }}
+        working-directory: apps/gpuix
+        env:
+          CHECKS: ${{ inputs.checks }}
+          STRICT: ${{ inputs.strict && '--strict' || '' }}
+        run: |
+          if [ "$CHECKS" = all ]; then
+            selected=nowebview,webview,webview-app
+          else
+            selected=$(echo "$CHECKS" | tr ',' '\n' | tr -d ' ' | grep -xE 'nowebview|webview|webview-app' | paste -sd, - || true)
+          fi
+          if [ -z "$selected" ]; then echo "No web view check selected"; exit 0; fi
+          xvfb-run -a -s '-screen 0 1440x1300x24' \
+            bun scripts/run-platform-checks.ts --kybernd "$GITHUB_WORKSPACE/target/debug/kybernd" \
+            --out gpuix-checks --checks "$selected" $STRICT
       - name: Run the on-screen checks (Windows, Direct3D 11 on WARP)
         if: ${{ !cancelled() && steps.addon.outcome == 'success' && matrix.os == 'windows' }}
         working-directory: apps/gpuix
@@ -220,7 +269,7 @@ jobs:
           bun scripts/run-platform-checks.ts --kybernd "$GITHUB_WORKSPACE/target/debug/kybernd.exe" \
             --out gpuix-checks --checks "$CHECKS" $STRICT
       - name: Assert the WP1 platform reports
-        if: ${{ !cancelled() && steps.addon.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.addon.outcome == 'success' && matrix.id != 'linux-noble' }}
         working-directory: apps/gpuix
         env:
           JOB: ${{ matrix.id }}
@@ -239,7 +288,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Upload the addon
-        if: success() && matrix.display != 'wayland'
+        if: success() && matrix.display != 'wayland' && matrix.display != 'xvfb-noble'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: gpuix-native-${{ matrix.target }}
