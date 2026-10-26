@@ -10,14 +10,23 @@
 // GPUI drawing every frame; BACKDROP_LAB_SURFACES=0 leaves the card, chain and menu out (the baseline).
 // BACKDROP_LAB_STATS=<file> writes frames drawn and process CPU over BACKDROP_LAB_SECONDS (default 4) after a 1.5 s
 // warm-up, then shows testId `stats-done`.
+//
+// BACKDROP_LAB_ODD=1 is the odd-size case (WP9 review S1): a 721 x 481 window (odd in device pixels at scale 1), a flat
+// green background with stripes far from its right and bottom edges, and a half-opacity frost (blur 16, the half-resolution
+// path) over the whole window, testId `odd`. Its last column and row must stay green: a crop that leaves them uncopied
+// mixes a stale texel there.
+// BACKDROP_LAB_INFO=<file> writes what the addon reports for this window: `backdropFilterSupported()`, the result of
+// `setWindowAppearance('dark')` (Windows only) and `readOsDisplay()` (`src/platform/osDisplay.ts`), then shows `info-done`.
 import '../src/native/local-build.ts'
 import '../src/native/backdrop.ts'
 import { writeFileSync } from 'node:fs'
 import { useEffect, useState } from 'react'
 import { render, useGpuixRequired } from '@gpuix/react'
 import { BACKDROP } from '../src/native/backdrop.ts'
+import { readOsDisplay } from '../src/platform/osDisplay.ts'
 
-const LAB = { width: 720, height: 480 }
+const odd = process.env.BACKDROP_LAB_ODD === '1'
+const LAB = odd ? { width: 721, height: 481 } : { width: 720, height: 480 }
 const busy = process.env.BACKDROP_LAB_BUSY === '1'
 const surfaces = process.env.BACKDROP_LAB_SURFACES !== '0'
 const stripe = 4
@@ -46,9 +55,37 @@ function Measure({ file }: { file: string }) {
   return done ? <div testId="stats-done" style={{ position: 'absolute', left: 0, top: 0, width: 1, height: 1 }} /> : null
 }
 
-render(
+type Probe = { backdropFilterSupported?: () => boolean; setWindowAppearance?: (appearance: string | null) => boolean }
+function Info({ file }: { file: string }) {
+  const renderer = useGpuixRequired() as unknown as Probe
+  const [done, setDone] = useState(false)
+  useEffect(() => {
+    const call = <T,>(f: () => T) => { try { return { value: f() } } catch (error) { return { error: String(error) } } }
+    // The OS display reads on Linux arrive from child processes: give them a moment.
+    readOsDisplay()
+    const timer = setTimeout(() => {
+      writeFileSync(file, JSON.stringify({
+        backdropFilterSupported: renderer.backdropFilterSupported ? call(() => renderer.backdropFilterSupported!()) : null,
+        setWindowAppearance: renderer.setWindowAppearance ? call(() => renderer.setWindowAppearance!('dark')) : null,
+        osDisplay: call(() => readOsDisplay()),
+      }, null, 2))
+      setDone(true)
+    }, 500)
+    return () => clearTimeout(timer)
+  }, [])
+  return done ? <div testId="info-done" style={{ position: 'absolute', left: 0, top: 0, width: 1, height: 1 }} /> : null
+}
+
+const oddScene = <div testId="ready" style={{ width: '100%', height: '100%', position: 'relative', backgroundColor: '#00a000' }}>
+  {process.env.BACKDROP_LAB_INFO && <Info file={process.env.BACKDROP_LAB_INFO} />}
+  {Array.from({ length: 40 }, (_, i) => <div key={i} style={{ position: 'absolute', left: 40 + i * 8, top: 40, width: 4, height: 200, backgroundColor: '#ffffff' }} />)}
+  <div testId="odd" backdrop={{ ...BACKDROP.frost, radius: 0 }} style={{ position: 'absolute', left: 0, top: 0, width: LAB.width, height: LAB.height, opacity: 0.5 }} />
+</div>
+
+render(odd ? oddScene :
   <div testId="ready" style={{ width: '100%', height: '100%', position: 'relative', backgroundColor: '#000000' }}>
     {process.env.BACKDROP_LAB_STATS && <Measure file={process.env.BACKDROP_LAB_STATS} />}
+    {process.env.BACKDROP_LAB_INFO && <Info file={process.env.BACKDROP_LAB_INFO} />}
     {Array.from({ length: LAB.width / stripe }, (_, i) => {
       const left = i * stripe < LAB.width / 2
       const color = left ? (i % 2 ? '#000000' : '#ffffff') : (i % 2 ? '#0000ff' : '#ff0000')

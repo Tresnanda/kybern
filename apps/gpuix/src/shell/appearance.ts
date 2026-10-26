@@ -58,8 +58,28 @@ const subscribe = (l: () => void) => {
 /** `launch` is the variant read at startup (`VARIANT` in `ui.tsx`), used until the first poll. */
 export const useSystemVariant = (launch: Variant): Variant => useSyncExternalStore(subscribe, getSystemVariant) ?? launch
 
-/** Keep even opaque windows' native controls in the selected appearance. */
+type AppearanceRenderer = { setWindowAppearance?: (appearance: Variant | null) => boolean }
+let appearanceRenderer: AppearanceRenderer | null = null
+/** The variant the theme asked for before the renderer was registered. */
+let pendingVariant: Variant | null = null
+/** `window.ts` registers the renderer once the window is up; Windows applies the appearance through it. */
+export function setAppearanceRenderer(renderer: object) {
+  appearanceRenderer = renderer as AppearanceRenderer
+  if (pendingVariant) syncWindowAppearance(pendingVariant)
+}
+
+/**
+ * Keep even opaque windows' native controls in the selected appearance. On Windows the addon sets DWM dark mode, which
+ * also tints Mica and Acrylic, and keeps it when the system theme changes (WP9). Linux has no window appearance to set.
+ */
 export function syncWindowAppearance(variant: Variant): boolean {
+  if (process.platform === 'win32') {
+    // The window may not exist yet; an addon without the call has nothing to retry.
+    if (!appearanceRenderer) { pendingVariant = variant; return false }
+    pendingVariant = null
+    try { appearanceRenderer.setWindowAppearance?.(variant) } catch (error) { console.error('[appearance] window appearance:', error) }
+    return true
+  }
   if (process.platform !== 'darwin') return true
   try {
     const o = getObjc(), app = nsApp()

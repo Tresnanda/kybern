@@ -185,7 +185,7 @@ nothing but `platforms_hooks.py`.
 | Clipboard image | `clipboard_hooks.py` | works (bridge) | works (bridge) | Not exercised |
 | Window drag regions | `window_drag.rs` | works? | works? | `WindowControlArea::Drag` is cross-platform; unverified (no pointer in CI) |
 | Traffic lights / window controls | `TitleBar.tsx`, `window_platform*` | blocked | blocked | With a transparent title bar Linux X11 shows no close/min/max at all (see screenshot). WP3 |
-| Window material (NSVisualEffectView) | `native/material.ts`, WP9 `platform/desktopMaterial.ts` | fallback: opaque window, the glass coats over the Solid frame colour, frosted surfaces still blur | works (WP9) on Windows 11 22H2+: Auto → Mica, a custom blur → Acrylic (DWM); Windows 10 as Linux | No adjustable blur radius off macOS. Not yet seen on a real Windows desktop (CI captures cannot show DWM) |
+| Window material (NSVisualEffectView) | `native/material.ts`, WP9 `platform/desktopMaterial.ts` | fallback: opaque window, the glass coats over the Solid frame colour, frosted surfaces still blur | opt-in (WP9, `KYBERN_DESKTOP_MATERIAL=dwm`) on Windows 11 22H2+: Settings › Backdrop Mica or Acrylic (DWM), tinted in Kybern's theme; by default and on Windows 10 as Linux | No adjustable blur radius off macOS. Opt-in until seen on a real Windows desktop (CI captures cannot show DWM) |
 | Secure input (Carbon) | `secure_input.rs` | fallback | fallback | No-op |
 | Automation test display | `automation_display.rs` | fallback | fallback | Centered on the primary display. Not needed by the WP7 harness: captures are the addon's screenshot (or the X window, Linux) and input is synthesized in-process, so the window's position never matters |
 | Scroll phase injection | `scroll_hooks.py` | works (WP1) | works (WP1) | `simulateScrollPhase` on every desktop platform and in `TestGpuixRenderer`; compile-checked, on screen in `frame-wake-check`. The WP7 checks still mark every wheel step `GAPS.wheel` until a CI run passes: a pass is reported as a closed gap, then the marker goes |
@@ -363,7 +363,7 @@ face when a text font covers U+2764); Windows has no flag emoji (Segoe UI Emoji 
 | ⌘ shortcuts | 26 files test `modifiers.cmd`; gpuix maps `cmd` to `platform`, which is the Windows/Super key off macOS | One `isPrimary(mods)` helper (Ctrl off macOS), with conflict review for the terminal (Ctrl+C) and editors | same | — | 2 |
 | Window frame, appearance, visibility (objc FFI) | `shell/window.ts`, `shell/appearance.ts`, `native/visibility.ts`, `native/windowState.ts`, `locale.ts` | GPUI `window_appearance`; restore through GPUI window bounds; `Intl` locale | same | Already guarded: no system theme, no restore | 2 |
 | Pointer-release watch | `split/Workspace.tsx:45`, `tasks/drag.tsx:77` guarded; **`preview/resize.tsx:16` unguarded, throws** | GPUI mouse-up capture | same | Guard `resize.tsx` (bug) | 0.5 |
-| Reduce motion, transparency, contrast | `platform/material.ts`, `platform/reducedMotion.ts` | `SystemParametersInfo` via the addon | `org.freedesktop.appearance` portal, gsettings | Defaults | 1 each |
+| Reduce motion, transparency, contrast | `platform/material.ts`, `platform/reducedMotion.ts`; WP9 review `platform/osDisplay.ts` (transparency, contrast) | Transparency effects (`EnableTransparency`) and contrast themes (`SPI_GETHIGHCONTRAST`) through bun:ffi, done; reduced motion: WP3 | GNOME `high-contrast` (live, `gsettings monitor`) and the portal's `contrast` (launch), done; reduced motion: WP3 | Defaults | 1 each |
 
 ### E. Companion libraries
 
@@ -640,7 +640,7 @@ Fork branches `wp9` (`next` merged in; `native/FORK` pins them until they are me
 | --- | --- | --- | --- |
 | Scene backdrop filter: copy behind the filter, horizontal pass (half size above 8 px), vertical pass writing `mix(destination, blurred, coverage)` | done, `backdrop` check passes on lavapipe | done, passes on WARP | unchanged Metal path; shares `gpui::backdrop_kernel` (`halfres-check`: half vs exact Gaussian mean 0.5, max 3, as before) |
 | Window material | opaque window; the glass coats over the Solid frame colour (`desktopMaterial.ts` `none`); KDE's blur protocol not used | Windows 11 22H2+: Auto → Mica, custom blur → Acrylic (DWM system backdrop, frame extended, transparent clear); Windows 10: as Linux | vibrancy / adjustable blur, unchanged |
-| App gating | `BACKDROP_BLUR` from `kybernCapabilities().backdrop`; Reduce transparency / Increase contrast still turn scene backdrops off | same | same (`BACKDROP_BLUR` is every patched build) |
+| App gating | `BACKDROP_BLUR` from `kybernCapabilities().backdrop` and the window's `backdropFilterSupported()` (false on a surface without `COPY_SRC`); GNOME high contrast and the portal's contrast turn scene backdrops off (`platform/osDisplay.ts`) | same, plus Windows' transparency effects and contrast themes | same (`BACKDROP_BLUR` is every patched build; NSWorkspace options) |
 
 `backdrop` check (`native/backdrop-check.ts`, CI run [40265183786](https://github.com/Tresnanda/kybern/actions/runs/40265183786) at the pinned `wp9` heads, every check green on Linux X11, Wayland and Windows), the same lab on each renderer:
 
@@ -670,6 +670,26 @@ Not yet seen on real hardware: the blur on an NVIDIA/AMD GPU (Direct3D 11 and Vu
 desktop (CI captures read the scene, not DWM). Open there: whether a DirectComposition window needs the frame extension for
 the system backdrop (`KYBERN_DWM_EXTEND_FRAME=0` is the control) and whether the extension makes DWM draw its own caption
 buttons; Mica's tint follows the system theme (`DWMWA_USE_IMMERSIVE_DARK_MODE`), not Kybern's.
+
+#### WP9 review fixes (forks' `wp9fix` branches)
+
+CI run [40271249451](https://github.com/Tresnanda/kybern/actions/runs/40271249451) (spike branch, `checks: all`, lto off) at the
+`wp9fix` heads: every job green on Linux X11, Wayland and Windows. `backdrop` there: the same card, tint and menu values as
+above; the odd case at a real 721 x 481 device size keeps its last column and row (stripes under the half-opacity frost at
+deviation 35.5 on lavapipe, 35.2 on WARP, half the raw 70.3); `backdropFilterSupported()` true, and false with
+`KYBERN_BACKDROP_FILTER=0`; `setWindowAppearance` applied on Windows; `readOsDisplay()` read both options on Windows. macOS
+(M1, local): the `backdrop` check passes, and its three captures are pixel-identical before and after the saturation clamp
+(S5), the saturation-1.5 menu included.
+
+| Finding | Change |
+| --- | --- |
+| S1 odd crop at half resolution | The crop is copied exactly; the blur scratch rounds up (`div_ceil`) and both passes clamp their reads to the copied size. A full-width frost on an odd-width window used to leave the last column uncopied, so wherever coverage was below 1 the vertical pass mixed a stale texel. New zed test (odd 201 x 121 target, half coverage; fails without the fix: last column `[0, 80, 0, 127]` instead of `[0, 160, 0, 255]`) and `backdrop` check case (`BACKDROP_LAB_ODD=1`, 721 x 481) |
+| S2 Mica/Acrylic tint | gpui `set_window_appearance` now works on Windows: it sets `DWMWA_USE_IMMERSIVE_DARK_MODE` from Kybern's theme on every window (`setWindowAppearance`, called by `shell/appearance.ts`) and the `WM_SETTINGCHANGE` handler keeps it. The windows still report the system theme, for "System". Mica and Acrylic stay **opt-in** (`KYBERN_DESKTOP_MATERIAL=dwm`, `DWM_BY_DEFAULT` in `platform/desktopMaterial.ts`): CI cannot capture DWM, so the tint has not been seen on a real desktop. Flip `DWM_BY_DEFAULT` once it has (`native/window-material-lab.tsx` on the Windows PC) |
+| S3 Reduce transparency / Increase contrast off macOS | `platform/osDisplay.ts`, kept apart from WP3's theme and reduced-motion reading: Windows reads both options on the window shell's poll (bun:ffi, no process); Linux reads GNOME's `high-contrast` live and the portal's `contrast` once (KDE Plasma 6 answers the portal). Settings names the OS's own option |
+| S4 blur scratch at copy size | Copy and blur scratch pooled separately; the blur scratch is sized by the largest `scratch_size` |
+| S5 premultiplied overflow at saturation > 1 | `rgb = clamp(rgb, 0, blurred_alpha)` after the saturation mix, on Metal, WGSL and HLSL in one commit |
+| S6 `backdrop` always true | `kybernCapabilities().backdrop` is false with `KYBERN_BACKDROP_FILTER=0`; the renderer's `backdropFilterSupported()` reports the open window (`Window::backdrop_filter_supported`: wgpu needs `COPY_SRC` and no WebGL). `readWindowBackdrop` turns scene backdrops off, so frosted surfaces take dense fills |
+| Nits | Crops under 2 px use full resolution (no 0 px scratch); D3D11 releases its scratches after 30 frames without a planned filter; wgpu `prepare` reuses its buffer and params bind group, and the horizontal pass clears instead of loading; Settings shows a Mica / Acrylic choice on Windows instead of the 1–64 slider, and the Sidebar only copy says "glass" where the window stays opaque |
 
 ### WP1 native platform core: status
 

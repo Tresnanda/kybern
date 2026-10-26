@@ -17,7 +17,8 @@
 //
 // The options are read from NSWorkspace on the window shell's existing poll
 // (`shell/window.ts`), so a change in System Settings applies while the app
-// runs. `KYBERN_REDUCED_TRANSPARENCY` / `KYBERN_INCREASED_CONTRAST` /
+// runs. Off macOS `platform/osDisplay.ts` reads Windows' transparency effects and
+// contrast themes, and Linux's high contrast, on the same poll. `KYBERN_REDUCED_TRANSPARENCY` / `KYBERN_INCREASED_CONTRAST` /
 // `KYBERN_REDUCED_MOTION` pin them;
 // `KYBERN_A11Y_FILE` (JSON) lets checks change them without touching the
 // user's system settings.
@@ -26,6 +27,7 @@ import { readFileSync } from 'node:fs'
 import { useSyncExternalStore } from 'react'
 import { BACKDROP_BLUR } from '../native/local-build.ts'
 import { cls, getObjc, sel } from '../native/objc.ts'
+import { onOsDisplayChange, readOsDisplay } from './osDisplay.ts'
 import { setReducedMotion } from './reducedMotion.ts'
 import { OPAQUE_WINDOW } from './translucency.ts'
 
@@ -34,7 +36,10 @@ export interface AccessibilityDisplay { reduceTransparency: boolean; increaseCon
 const pinned = (name: string) => process.env[name] ? process.env[name] === '1' : null
 
 function readNative(): AccessibilityDisplay | null {
-  if (process.platform !== 'darwin') return null
+  if (process.platform !== 'darwin') {
+    const os = readOsDisplay()
+    return os && { ...os, reduceMotion: false }
+  }
   try {
     const o = getObjc()
     const workspace = o.msg(cls(o, 'NSWorkspace'), sel(o, 'sharedWorkspace')) as Pointer
@@ -69,11 +74,31 @@ export function refreshAccessibilityDisplay() {
   for (const l of listeners) l()
 }
 const subscribe = (l: () => void) => { listeners.add(l); return () => { listeners.delete(l) } }
+// Linux reads arrive from `gsettings`, not from the poll.
+onOsDisplayChange(refreshAccessibilityDisplay)
+
+/**
+ * Whether the open window's renderer draws scene backdrops (`backdropFilterSupported`, WP9): off macOS a wgpu surface that
+ * cannot be copied from does not, and frosted surfaces then take their dense fills. Read once the window is up
+ * (`shell/window.ts`), before the app below the font gate renders.
+ */
+let windowBackdrop = true
+export function readWindowBackdrop(renderer: object) {
+  const read = (renderer as { backdropFilterSupported?: () => boolean }).backdropFilterSupported
+  let next = true
+  try { next = read ? read.call(renderer) !== false : true } catch { next = true }
+  if (next === windowBackdrop) return
+  windowBackdrop = next
+  if (process.env.KYBERN_DEBUG_A11Y) console.log('[backdrop] window renderer draws backdrops:', next)
+  // A new snapshot, so the theme re-resolves with backdrops off.
+  display = { ...display }
+  for (const l of listeners) l()
+}
 /** Hear about changes outside React (registered first, so it runs before re-renders). */
 export const onAccessibilityDisplay = subscribe
 export const useAccessibilityDisplay = () => useSyncExternalStore(subscribe, getAccessibilityDisplay)
 
 /** Capture mode: an opaque window with no native material (`translucency.ts`). */
 export { OPAQUE_WINDOW }
-/** Scene backdrops (blurred popovers, drop labels) are allowed right now, and this OS's renderer draws them (`BACKDROP_BLUR`). */
-export const backdropAllowed = () => BACKDROP_BLUR && !OPAQUE_WINDOW && !display.reduceTransparency && !display.increaseContrast
+/** Scene backdrops (blurred popovers, drop labels) are allowed right now, and this OS's renderer and window draw them (`BACKDROP_BLUR`, `readWindowBackdrop`). */
+export const backdropAllowed = () => BACKDROP_BLUR && windowBackdrop && !OPAQUE_WINDOW && !display.reduceTransparency && !display.increaseContrast

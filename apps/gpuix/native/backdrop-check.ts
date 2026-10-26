@@ -7,6 +7,11 @@
 //   chain  a filter inside a rounded overflow parent is cut by the parent's curve (the clip chain), blurred inside
 //   menu   blur 40 at saturation 1.5 over red/blue stripes: flat, and more saturated than the plain mean
 // and on the filter-off capture the card's stripes are still there (so the check can tell the two apart).
+//   odd    (BACKDROP_LAB_ODD=1) a half-opacity frost over a whole 721 x 481 window: its last device column and row keep the
+//          flat background, which they lose when an odd crop is left partly uncopied (WP9 review S1)
+// The addon's reports for the window (BACKDROP_LAB_INFO): `backdropFilterSupported()` is true with the filter and false with
+// `KYBERN_BACKDROP_FILTER=0` off macOS, `setWindowAppearance` applies on Windows only, and `readOsDisplay()` reads this OS's
+// transparency and contrast options (Windows: it must return values).
 //
 // Perf (relative only: lavapipe and WARP render on the CPU): frames drawn per second and process CPU per frame over a busy
 // scene kept drawing by a paint animation, with no surfaces, the surfaces filtered, the surfaces at full resolution
@@ -38,18 +43,23 @@ const deviation = (values: number[]) => {
 const near = (actual: number[], expected: number[], tol = slack) => actual.every((v, i) => Math.abs(v - expected[i]!) <= tol)
 const fmt = (v: number[]) => `(${v.map(c => Math.round(c)).join(', ')})`
 
-async function shot(name: string, env: Record<string, string>) {
-  const f = await launch(lab, { KYBERN_APPEARANCE: 'dark', ...env })
+type Info = { backdropFilterSupported: { value?: boolean; error?: string } | null; setWindowAppearance: { value?: boolean; error?: string } | null; osDisplay: { value?: unknown; error?: string } }
+async function shot(name: string, env: Record<string, string>, ids = ['card', 'sharp', 'chain', 'menu']) {
+  const infoFile = path.join(out, `${name}-info.json`)
+  const f = await launch(lab, { KYBERN_APPEARANCE: 'dark', BACKDROP_LAB_INFO: infoFile, ...env })
   try {
     await f.app.getByTestId('ready').waitFor()
+    await f.app.getByTestId('info-done').waitFor()
     const bounds: Record<string, Rect> = {}
-    for (const id of ['card', 'sharp', 'chain', 'menu']) bounds[id] = await f.app.getByTestId(id).bounds()
+    for (const id of ids) bounds[id] = await f.app.getByTestId(id).bounds()
     // Two frames after the first: the filter needs the scene drawn once (no animation runs in this scene).
     await Bun.sleep(400)
     const file = path.join(out, `${name}.png`)
     await capture(f, file)
     writeFileSync(path.join(out, `${name}-bounds.json`), JSON.stringify(bounds, null, 2))
-    return { png: pngPixels(file), bounds }
+    const info = JSON.parse(readFileSync(infoFile, 'utf8')) as Info
+    console.log(`${name}: ${JSON.stringify(info)}`)
+    return { png: pngPixels(file), bounds, info }
   } catch (error) {
     console.error(f.diagnostics())
     throw error
@@ -116,8 +126,41 @@ await step('menu: blurred and saturated', () => {
   assert.ok(near(corner, [255, 0, 0], 40) || near(corner, [0, 0, 255], 40), `menu: corner ${fmt(corner)} is not a raw stripe`)
 })
 
+await step('addon reports: backdrop support, window appearance, OS display options', () => {
+  assert.equal(on.info.backdropFilterSupported?.value, true, `backdropFilterSupported() should be true with the filter on: ${JSON.stringify(on.info.backdropFilterSupported)}`)
+  assert.equal(on.info.setWindowAppearance?.value, platform === 'windows', `setWindowAppearance('dark') should apply on Windows only: ${JSON.stringify(on.info.setWindowAppearance)}`)
+  assert.ok(!on.info.osDisplay.error, `readOsDisplay() threw: ${on.info.osDisplay.error}`)
+  if (platform === 'windows') {
+    const display = on.info.osDisplay.value as { reduceTransparency?: unknown; increaseContrast?: unknown } | null
+    assert.ok(display && typeof display.reduceTransparency === 'boolean' && typeof display.increaseContrast === 'boolean', `readOsDisplay() read nothing on Windows: ${JSON.stringify(display)}`)
+  }
+})
+
+const odd = await shot(`backdrop-${platform}-odd`, { BACKDROP_LAB_ODD: '1' }, ['odd'])
+await step('odd window: the last column and row keep the background under a half-opacity frost', () => {
+  const frost = odd.bounds.odd!
+  // The device scale of the first capture: the window can come out a pixel larger than asked, never the frost.
+  const oddScale = scale
+  const right = Math.floor((frost.x + frost.width) * oddScale) - 1, bottom = Math.floor((frost.y + frost.height) * oddScale) - 1
+  console.log(`odd capture ${odd.png.width}x${odd.png.height}, frost ${frost.width}x${frost.height} (last column ${right}, last row ${bottom})`)
+  const green = [0, 160, 0]
+  // Away from the stripes (x 40…360, y 40…240) by more than the blur's 3-sigma halo.
+  for (let y = 0; y <= bottom; y += 7) assert.ok(near(odd.png.at(right, y), green, 6), `odd: last column at y=${y} is ${fmt(odd.png.at(right, y))}, not the background ${fmt(green)}`)
+  assert.ok(near(odd.png.at(right, bottom), green, 6), `odd: the last pixel is ${fmt(odd.png.at(right, bottom))}`)
+  for (let x = Math.ceil(420 * oddScale); x <= right; x += 7) assert.ok(near(odd.png.at(x, bottom), green, 6), `odd: last row at x=${x} is ${fmt(odd.png.at(x, bottom))}, not the background ${fmt(green)}`)
+  // At half coverage the white/green stripes keep half their contrast: half the raw deviation, not all of it.
+  const rawOdd = (255 - luminance(green)) / 2
+  const inside = row(odd.png, oddScale, 60, 200, 140)
+  const d = deviation(inside.map(luminance))
+  console.log(`odd: stripe deviation ${d.toFixed(1)} under the frost, raw ${rawOdd.toFixed(1)}`)
+  assert.ok(Math.abs(d - rawOdd / 2) < rawOdd * 0.15, `odd: the stripes under the half-opacity frost should keep half their contrast (deviation ${d.toFixed(1)}, raw ${rawOdd.toFixed(1)})`)
+})
+
 if (platform !== 'macos') {
   const off = await shot(`backdrop-${platform}-off`, { KYBERN_BACKDROP_FILTER: '0' })
+  await step('filter off: backdropFilterSupported() reports false, so the app falls back to dense fills', () => {
+    assert.equal(off.info.backdropFilterSupported?.value, false, `backdropFilterSupported() with KYBERN_BACKDROP_FILTER=0: ${JSON.stringify(off.info.backdropFilterSupported)}`)
+  })
   await step('filter off: the stripes show through the card (the fallback the check must tell apart)', () => {
     const inside = row(off.png, scale, card.x + 24, card.x + 110, card.y + 30)
     const d = deviation(inside.map(luminance))
@@ -152,4 +195,4 @@ await step('perf: frames and CPU per frame', async () => {
   }
   writeFileSync(path.join(out, 'perf.json'), JSON.stringify(perf, null, 2))
 })
-console.log(`ok backdrop (${platform}): blurred, tinted, clipped (own radius and the rounded chain), saturated, content sharp`)
+console.log(`ok backdrop (${platform}): blurred, tinted, clipped (own radius and the rounded chain), saturated, content sharp, odd edges kept`)

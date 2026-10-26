@@ -18,10 +18,10 @@ import type { NativeRenderer } from '@gpuix/react'
 import { cls, cstr, each, getObjc, nsApp, sel, withPool, type Objc } from '../native/objc.ts'
 import { onWindowResize } from '../native/layout.ts'
 import { hasWindowStateEvents, installWindowState, onWindowStateChange } from '../native/windowState.ts'
-import { readSystemVariant, setSystemVariant } from './appearance.ts'
+import { readSystemVariant, setAppearanceRenderer, setSystemVariant } from './appearance.ts'
 import { setWindowWidth } from './layout.ts'
 import { load, save } from './persist.ts'
-import { refreshAccessibilityDisplay } from '../platform/material.ts'
+import { readWindowBackdrop, refreshAccessibilityDisplay } from '../platform/material.ts'
 import { installIdleMemory } from '../platform/idleMemory.ts'
 
 const FRAME_KEY = 'kybern.window.frame'
@@ -187,7 +187,8 @@ export function startWindowShell(renderer: NativeRenderer) {
   started = true
   let lastFrame = ''
   const readPlatformState = () => {
-    if (!mac) return
+    // Off macOS only the accessibility display is read here (`platform/osDisplay.ts`); there is no frame or appearance to poll.
+    if (!mac) return refreshAccessibilityDisplay()
     try {
       const o = getObjc()
       withPool(o, () => {
@@ -211,6 +212,9 @@ export function startWindowShell(renderer: NativeRenderer) {
     readPlatformState()
   })
   installWindowState(renderer)
+  // Before the app below the font gate renders: frosted surfaces need to know whether this window blurs.
+  readWindowBackdrop(renderer)
+  setAppearanceRenderer(renderer)
   readPlatformState()
   if (hasWindowStateEvents()) onWindowStateChange(readPlatformState)
   else setInterval(readPlatformState, POLL_MS)

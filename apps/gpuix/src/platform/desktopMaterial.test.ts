@@ -6,11 +6,14 @@ import { materialFor } from '../theme.ts'
 test('picks the desktop material per OS, build and addon', () => {
   const all = ['mica', 'mica-alt', 'acrylic']
   expect(desktopMaterialFor('darwin', '25.0.0', [])).toBe('vibrancy')
-  expect(desktopMaterialFor('win32', '10.0.22631', all)).toBe('dwm')
-  expect(desktopMaterialFor('win32', '10.0.22621', all)).toBe('dwm')
-  expect(desktopMaterialFor('win32', '10.0.22000', all)).toBe('none') // Windows 11 21H2: no DWMWA_SYSTEMBACKDROP_TYPE
-  expect(desktopMaterialFor('win32', '10.0.19045', all)).toBe('none') // Windows 10
-  expect(desktopMaterialFor('win32', '10.0.22631', [])).toBe('none') // an addon without the materials
+  // Opt-in until seen on a real desktop (DWM_BY_DEFAULT); the pin turns it on.
+  expect(desktopMaterialFor('win32', '10.0.22631', all)).toBe('none')
+  expect(desktopMaterialFor('win32', '10.0.22631', all, 'dwm')).toBe('dwm')
+  expect(desktopMaterialFor('win32', '10.0.22631', all, undefined, true)).toBe('dwm')
+  expect(desktopMaterialFor('win32', '10.0.22621', all, undefined, true)).toBe('dwm')
+  expect(desktopMaterialFor('win32', '10.0.22000', all, undefined, true)).toBe('none') // Windows 11 21H2: no DWMWA_SYSTEMBACKDROP_TYPE
+  expect(desktopMaterialFor('win32', '10.0.19045', all, undefined, true)).toBe('none') // Windows 10
+  expect(desktopMaterialFor('win32', '10.0.22631', [], undefined, true)).toBe('none') // an addon without the materials
   expect(desktopMaterialFor('linux', '6.8.0', all)).toBe('none')
   expect(desktopMaterialFor('linux', '6.8.0', [], 'dwm')).toBe('dwm')
   expect(windowsBuild('10.0.26100')).toBe(26100)

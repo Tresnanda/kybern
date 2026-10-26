@@ -1418,26 +1418,36 @@ too; `packages/native/src/backdrop_kernel.rs` is the same file, compiled standal
 rounded clip chain with edge fades, fade-top and opacity. Per filter:
 
 1. copy the target region behind it (clip plus halo, inside the target) into a pooled scratch: a swap chain image cannot be
-   bound as a texture, so this replaces Metal's direct sample of the target, and it is cropped to the filter;
-2. horizontal pass from the copy into a second scratch (`crop / scale`);
+   bound as a texture, so this replaces Metal's direct sample of the target, and it is cropped to the filter. The crop is
+   copied exactly, odd sizes included: rounding it to the half-resolution grid either reached past the target or left the
+   last column or row uncopied, where step 3 reads the destination (a full-width frost on an odd-width window under any
+   coverage below 1: opacity, an edge fade, a rounded corner at the edge);
+2. horizontal pass from the copy into a second scratch (`ceil(crop / scale)`: an odd crop's last half block reads its one
+   copied column or row, both passes clamping their reads to the copied size). Crops under 2 px use full resolution;
 3. vertical pass into the target over the clip, writing `mix(destination, blurred, coverage)` on all four channels with the
    destination read from the copy, blending off. That is the result of Metal's programmable blending (ADE-58), so a
    translucent Windows window (Mica) gets a blurred alpha instead of text-shaped holes, without framebuffer fetch.
 
-The scratches follow N1: 64 px buckets, released after 30 frames without a filter, re-created smaller when the last 120
-frames needed under half their area. wgpu writes every filter's two parameter blocks into one uniform buffer per frame
-(dynamic offsets); Direct3D maps one constant buffer per pass. Shaders: wgpu compiles WGSL at runtime (naga-validated in
+The copy and the blur scratch are pooled separately, each following N1: 64 px buckets, released after 30 frames without a
+planned filter, re-created smaller when the last 120 frames needed under half their area. The blur scratch is sized by the
+largest `scratch_size`, so at half resolution it holds a quarter of the copy's texels. wgpu writes every filter's two
+parameter blocks into one reused buffer, uploads them into one uniform buffer per frame (dynamic offsets) and rebinds only
+when that or the clip chain buffer changed; Direct3D maps one constant buffer per pass. Shaders: wgpu compiles WGSL at runtime (naga-validated in
 `gpui_wgpu`'s tests); `gpui_windows/build.rs` compiles `backdrop.hlsl` with fxc (vs/ps 4.1) like `shaders.hlsl`.
 
 Fallbacks, each leaving the fill above the filter as before: wgpu on WebGL (no storage buffers) or a surface without
 `COPY_SRC`, and `KYBERN_BACKDROP_FILTER=0` on both backends (the A/B control the `backdrop` check uses).
-`kybernCapabilities().backdrop` tells the app the renderer blurs (`BACKDROP_BLUR` in `src/native/local-build.ts`); without it
-frosted surfaces keep their dense fills.
+`kybernCapabilities().backdrop` tells the app this build's renderer can blur (`BACKDROP_BLUR` in `src/native/local-build.ts`;
+false with `KYBERN_BACKDROP_FILTER=0`), and the renderer's `backdropFilterSupported()` whether the open window does
+(`Window::backdrop_filter_supported` in the zed fork: false for the wgpu fallbacks above). The app reads it once the window is
+up (`readWindowBackdrop` in `src/platform/material.ts`); without either, frosted surfaces keep their dense fills.
 
-Checks: `cargo test -p gpui_wgpu --lib backdrop` in the zed fork validates the WGSL and renders a striped scene through the
-filter on whatever adapter the machine has (Metal on a Mac, lavapipe in a Linux container); `native/backdrop-check.ts`
-(`run-platform-checks --checks backdrop`) asserts blur, tint, radius and chain clip, saturation, sharp later content and the
-fallback on every OS, and measures frames and CPU per frame over a busy scene (`perf.json`).
+Checks: `cargo test -p gpui_wgpu --lib backdrop` in the zed fork validates the WGSL and renders two scenes through the
+filter on whatever adapter the machine has (Metal on a Mac, lavapipe in a Linux container): stripes under a rounded filter,
+and an odd 201 x 121 target under a half-coverage filter whose last column and row must keep the background (it fails
+without the exact crop). `native/backdrop-check.ts` (`run-platform-checks --checks backdrop`) asserts blur, tint, radius and
+chain clip, saturation, sharp later content, the odd 721 x 481 window (`BACKDROP_LAB_ODD=1`), the fallback and
+`backdropFilterSupported()` on every OS, and measures frames and CPU per frame over a busy scene (`perf.json`).
 
 ### Window materials on Windows (WP9)
 
@@ -1445,8 +1455,13 @@ fallback on every OS, and measures frames and CPU per frame over a busy scene (`
 (build 22621, `DWMWA_SYSTEMBACKDROP_TYPE`) GPUI sets the DWM system backdrop and extends the frame over the client area, so
 the composition swap chain's transparent clear shows it; `blurred` is Acrylic there too, and each mode resets the other
 mechanism (DWMSBT_NONE, accent 0, zero margins). Older Windows ignores the system backdrops and keeps the accent blur for
-`blurred`. The app picks them in `src/platform/desktopMaterial.ts` / `src/shell/windowMaterial.ts`: Blur Auto is Mica, a
-custom blur is Acrylic (the system sets its strength). Linux has no compositor material standard: the window stays opaque and
+`blurred`. DWM tints both by `DWMWA_USE_IMMERSIVE_DARK_MODE`, which GPUI set from the system theme and reset on every
+`WM_SETTINGCHANGE`; the renderer's `setWindowAppearance('dark' | 'light' | null)` (gpui `set_window_appearance`, now
+implemented on Windows) sets it from Kybern's theme for every window and keeps it, while `window_appearance` still reports
+the system's for "System". `src/shell/appearance.ts` calls it with the theme variant. The app picks the materials in
+`src/platform/desktopMaterial.ts` / `src/shell/windowMaterial.ts` and Settings › Appearance (Backdrop: Mica or Acrylic; the
+system sets their strength). They are opt-in (`KYBERN_DESKTOP_MATERIAL=dwm`, `DWM_BY_DEFAULT`) until seen on a real
+Windows 11 desktop; without them Windows 11 is opaque like Windows 10. Linux has no compositor material standard: the window stays opaque and
 the theme paints the Solid frame colour under the glass coats, so frosted surfaces still blur the app's own content.
 `native/window-material-lab.tsx` (`MATERIAL_LAB_BACKGROUND=mica|acrylic|…`, `KYBERN_DWM_EXTEND_FRAME=0`) is the look on a real
 Windows desktop; CI captures read GPUI's scene and cannot show what DWM composes behind it.
