@@ -276,7 +276,9 @@ async function scrollBridge() {
     console.log(`[smoke] transcript scroll bridge: ${JSON.stringify(result)}`)
     writeFileSync(path.join(out, 'scroll.json'), JSON.stringify(result, null, 2))
     await step('scroll: the transcript moves under the wheel', () => {
-      const [start, middle] = probe.offsets.map(offset => offset?.[1] ?? offset?.[0] ?? null)
+      // A list's top is [item, offset in it, viewport height] (a plain scroller's is [x, y]): one row up can keep the
+      // offset in the row (806/3 → 805/3 when the row is three wheel steps tall), so compare the item too.
+      const [start, middle] = probe.offsets.map(offset => offset ? JSON.stringify(offset.slice(0, 2)) : null)
       assert.ok(start != null && middle != null && start !== middle, `the transcript offset did not change (${JSON.stringify(probe.offsets)})`)
     })
     if (result.bridged) await step('scroll: under 0.5 waited bridge calls per frame (wheel input excluded)', () => {

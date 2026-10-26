@@ -115,7 +115,16 @@ const clickFirst = async (testId: string) => { const b = (await app.getByTestId(
 const shot = (name: string) => capture(f, `${out}/${name}-${variant}${mac ? `-${process.argv[3]}` : ''}.png`)
 try {
   await app.getByTestId('app-ready').waitFor({ timeoutMs: 60_000 })
-  await until(async () => (await app.getByTestId('visual-picture').count()) >= 2, 'the pictures')
+  await until(async () => (await app.getByTestId('visual-picture').count()) >= 2, 'the pictures').catch(async (error) => {
+    // What was on screen instead, and what the daemon did with the snapshots, before the failure is reported.
+    const count = async (testId: string) => app.getByTestId(testId).count().catch(() => -1)
+    console.log(`[nowebview] after the timeout: ${JSON.stringify({ cards: await count('visual-card'), figures: await count('visual-figure'), pictures: await count('visual-picture'), threads: await count('thread-list') })}`)
+    const text = await app.call('getPaintedText', {}).then((r: { text: string[] }) => r.text.join(' | ')).catch((e: unknown) => `unreadable: ${e}`)
+    console.log(`[nowebview] painted: ${text.slice(0, 3000)}`)
+    try { console.log(`[nowebview] daemon log (visuals):\n${readFileSync(DAEMON_LOG(), 'utf8').split('\n').filter(line => /visual|snapshot|preview|html/i.test(line)).slice(-40).join('\n')}`) } catch { /* No log. */ }
+    await shot('pictures-timeout').catch(() => {})
+    throw error
+  })
 
 
   if (mac) {

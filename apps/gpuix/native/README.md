@@ -1011,6 +1011,9 @@ absent or ambiguous, they produce null until unique again. Numeric IDs remain ti
 to that host, returning null after unmount. Unsubscribe is safe after window close;
 queued JS callbacks check native subscription liveness before invoking app code.
 The view drops all subscriptions on close. At most 256 observers may be active.
+Off macOS `addLayoutObserver` returns its token without waiting for the UI thread
+(the add is queued in order with the other commands), so a refused target arrives
+as the callback's error instead of a throw; macOS still throws.
 
 `layout-hooks.ts` exposes `useNativeWindowSize()` and `useElementBounds(testId)`.
 The window hook performs one initial size read and then subscribes. Resize and
