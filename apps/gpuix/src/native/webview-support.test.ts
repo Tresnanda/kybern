@@ -4,7 +4,7 @@ import { expect, test } from 'bun:test'
 import { noteWebViewUnavailable, WEB_VIEW_MISSING, webViewMissingText, webViewSupport } from './webview-support.ts'
 import { fileURLToPath } from 'node:url'
 
-test('macOS always has an embedded web view, Windows when its host finds a WebView2 Runtime, Linux not yet', () => {
+test('macOS always has an embedded web view, Windows when its host finds a WebView2 Runtime', () => {
   expect(webViewSupport('darwin', {})).toEqual({ available: true, reason: null })
   expect(webViewSupport('win32', {}, () => 'ready')).toEqual({ available: true, reason: null })
   expect(webViewSupport('win32', {}, () => 'runtime')).toEqual({ available: false, reason: 'runtime' })
@@ -12,6 +12,20 @@ test('macOS always has an embedded web view, Windows when its host finds a WebVi
   expect(webViewSupport('win32', {})).toEqual({ available: false, reason: 'platform' })
   expect(webViewSupport('linux', {}, () => 'ready')).toEqual({ available: false, reason: 'platform' })
   expect(webViewSupport('win32', { KYBERN_GPUIX_NO_WEBVIEW: '1' }, () => 'ready')).toEqual({ available: false, reason: 'disabled' })
+})
+test('Linux has one when the companion exists and its pages can be sandboxed (WP10)', () => {
+  expect(webViewSupport('linux', {})).toEqual({ available: false, reason: 'platform' })
+  expect(webViewSupport('linux', {}, undefined, () => ({ loaded: false }))).toEqual({ available: false, reason: 'platform' })
+  expect(webViewSupport('linux', {}, undefined, () => ({ loaded: true, unavailable: null }))).toEqual({ available: true, reason: null })
+  const refused = 'This system does not let Kybern sandbox web pages.'
+  expect(webViewSupport('linux', {}, undefined, () => ({ loaded: true, unavailable: refused }))).toEqual({ available: false, reason: 'sandbox', message: refused })
+  let probed = false
+  expect(webViewSupport('linux', { KYBERN_GPUIX_NO_WEBVIEW: '1' }, undefined, () => { probed = true; return { loaded: true, unavailable: null } }).reason).toBe('disabled')
+  expect(probed).toBe(false)
+  expect(webViewMissingText('sandbox')).toMatch(/open in your browser/)
+  noteWebViewUnavailable('sandbox', refused)
+  expect(WEB_VIEW_MISSING).toBe(refused)
+  noteWebViewUnavailable('platform')
 })
 test('the fallback copy says what to do for each reason', () => {
   expect(webViewMissingText('runtime')).toMatch(/^Install the Microsoft Edge WebView2 Runtime .*then reopen Kybern/)

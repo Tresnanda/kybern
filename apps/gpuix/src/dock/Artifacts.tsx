@@ -4,6 +4,7 @@ import { observeElementBounds, type ElementBoundsEvent } from '../native/layout.
 import { useNativeWindowSize } from '../native/layout-hooks.ts'
 import { useWebLayer } from '../native/web-occlusion.ts'
 import { webHost } from '../native/webview.ts'
+import { WebSurface, WEB_SURFACE_HOST } from '../native/WebSurface.tsx'
 import { Dialog, DialogHeader } from '../nav/overlay.tsx'
 import { visualTheme } from '../preview/theme.ts'
 import { visualLink } from '../../../../packages/kybern-client/src/visuals.ts'
@@ -177,7 +178,7 @@ function ArtifactFrame({ id, url, height, hidden, onFailed }: { id: string; url:
   useEffect(() => { if (ready.current) webHost.theme(id, theme.current) }, [id, t])
   useEffect(() => { place.current() }, [hidden])
   // Source keeps the page loaded under it, like the desktop's `hidden` iframe.
-  return <div ref={ref} testId="artifact-frame" style={{ height: hidden ? 0 : height, width: '100%', borderRadius: 8, backgroundColor: '#ffffff', flexShrink: 0 }} />
+  return <div ref={ref} testId="artifact-frame" style={{ height: hidden ? 0 : height, width: '100%', borderRadius: 8, backgroundColor: '#ffffff', flexShrink: 0, ...WEB_SURFACE_HOST }}><WebSurface id={id} /></div>
 }
 
 /** Desktop `ArtifactPreview`: a dialog with Source and Preview, the page in a sandboxed frame, Markdown rendered natively. */

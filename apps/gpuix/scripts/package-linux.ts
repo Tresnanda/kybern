@@ -69,6 +69,25 @@ mkdirSync(resources, { recursive: true })
 for (const name of ['kybernd', 'kybern']) { cpSync(path.join(binDir, name), path.join(app, name)); chmodSync(path.join(app, name), 0o755) }
 writeFileSync(path.join(resources, 'version'), version)
 cpSync(addon, path.join(resources, path.basename(addon)))
+// WP10: the embedded web view. `libkybern-webview.so` (native/build-webview.ts, RUNPATH $ORIGIN/wpe/lib) and the
+// private WPE WebKit from native/wpe/build-wpe.sh (built on the ubuntu-22.04 floor) go into resources/wpe with its
+// licences and source offer. The web-process sandbox uses the system's bwrap and xdg-dbus-proxy (Recommends below);
+// without them, or without the files here (KYBERN_REQUIRE_WEBVIEW=1 makes that an error), pages open in the browser.
+const companion = path.join(root, 'native/build/libkybern-webview.so')
+const wpe = process.env.KYBERN_WPE_PREFIX ? path.resolve(process.env.KYBERN_WPE_PREFIX) : path.join(root, 'native/build/wpe')
+const webView = existsSync(companion) && existsSync(path.join(wpe, 'lib/libWPEWebKit-2.0.so.1'))
+if (webView) {
+  requireArch(companion)
+  requireArch(path.join(wpe, 'lib/libWPEWebKit-2.0.so.1'))
+  cpSync(companion, path.join(resources, 'libkybern-webview.so'))
+  cpSync(path.join(wpe, 'lib'), path.join(resources, 'wpe/lib'), { recursive: true, filter: source => !source.includes(`${path.sep}pkgconfig`) })
+  cpSync(path.join(wpe, 'share/licenses'), path.join(resources, 'wpe/licenses'), { recursive: true })
+  cpSync(path.join(wpe, 'SOURCES.txt'), path.join(resources, 'wpe/SOURCES.txt'))
+} else if (process.env.KYBERN_REQUIRE_WEBVIEW === '1') {
+  throw Error(`Build the web view first (native/wpe/build-wpe.sh, then bun native/build-webview.ts): ${companion}`)
+} else {
+  console.warn('Packaging without the embedded web view (no native/build/libkybern-webview.so or WPE): previews open in the browser')
+}
 // Mermaid ships for parity with macOS; off macOS it needs the web view that WP4/WP10 brings (diagrams show as text).
 cpSync(path.join(root, '../desktop/node_modules/mermaid/dist/mermaid.min.js'), path.join(resources, 'mermaid.min.js'))
 cpSync(path.join(root, 'src/assets/fonts'), path.join(resources, 'src/assets/fonts'), { recursive: true })
@@ -116,10 +135,15 @@ StartupWMClass=${APP_ID}
 // The addon dlopens these, so neither dpkg-shlibdeps nor rpmbuild sees them: wgpu's Vulkan loader (required;
 // Fedora vulkan-loader, openSUSE libvulkan1), and GPUI's Wayland client plus EGL for wgpu's GL fallback, which
 // every Wayland or GL desktop already has. Mesa's Vulkan drivers are what most machines render with.
-const RUNTIME_LIBRARIES = { deb: ['libvulkan1'], rpm: ['libvulkan.so.1()(64bit)'] }
+// The web view's WPE loads EGL and GLES through libepoxy even when it renders on the CPU; its web process aborts or
+// never draws without them (seen on a bare Ubuntu 24.04).
+const RUNTIME_LIBRARIES = {
+  deb: ['libvulkan1', ...(webView ? ['libegl1', 'libgles2'] : [])],
+  rpm: ['libvulkan.so.1()(64bit)', ...(webView ? ['libEGL.so.1()(64bit)', 'libGLESv2.so.2()(64bit)'] : [])],
+}
 const RUNTIME_RECOMMENDS = {
-  deb: ['libwayland-client0', 'libwayland-egl1', 'libegl1', 'mesa-vulkan-drivers', 'xdg-utils'],
-  rpm: ['libwayland-client.so.0()(64bit)', 'libwayland-egl.so.1()(64bit)', 'libEGL.so.1()(64bit)', 'mesa-vulkan-drivers', 'xdg-utils'],
+  deb: ['libwayland-client0', 'libwayland-egl1', 'libegl1', 'mesa-vulkan-drivers', 'xdg-utils', ...(webView ? ['bubblewrap', 'xdg-dbus-proxy'] : [])],
+  rpm: ['libwayland-client.so.0()(64bit)', 'libwayland-egl.so.1()(64bit)', 'libEGL.so.1()(64bit)', 'mesa-vulkan-drivers', 'xdg-utils', ...(webView ? ['bubblewrap', 'xdg-dbus-proxy'] : [])],
 }
 const icons = { 32: '32x32.png', 128: '128x128.png', 256: '128x128@2x.png', 512: 'icon.png' } as const
 const iconSource = (file: string) => path.join(root, '../desktop/src-tauri/icons', file)
@@ -181,7 +205,11 @@ if (formats.has('deb')) {
   mkdirSync(path.join(scratch, 'debian'), { recursive: true })
   writeFileSync(path.join(scratch, 'debian/control'), `Source: ${PACKAGE}\n\nPackage: ${PACKAGE}\nArchitecture: any\n`)
   const lib = path.join(tree, `usr/lib/${PACKAGE}`)
-  const shlibs = execFileSync('dpkg-shlibdeps', ['-O', `-e${path.join(lib, PACKAGE)}`, `-e${path.join(lib, 'resources', path.basename(addon))}`], { cwd: scratch, encoding: 'utf8' })
+  // The private WPE: its libraries resolve from resources/wpe/lib (-l), so only the system ones it links become Depends.
+  const wpeLib = path.join(lib, 'resources/wpe/lib')
+  const webViewFiles = webView ? [path.join(lib, 'resources/libkybern-webview.so'), ...readdirSync(wpeLib, { recursive: true, withFileTypes: true })
+    .filter(entry => entry.isFile() && /\.so(\.|$)|Process$/.test(entry.name)).map(entry => path.join(entry.parentPath, entry.name))] : []
+  const shlibs = execFileSync('dpkg-shlibdeps', ['-O', ...(webView ? [`-l${wpeLib}`] : []), `-e${path.join(lib, PACKAGE)}`, `-e${path.join(lib, 'resources', path.basename(addon))}`, ...webViewFiles.map(file => `-e${file}`)], { cwd: scratch, encoding: 'utf8' })
   const detected = /shlibs:Depends=(.*)/.exec(shlibs)?.[1]?.trim()
   if (!detected) throw Error(`dpkg-shlibdeps found no dependencies:\n${shlibs}`)
   const depends = [detected, ...RUNTIME_LIBRARIES.deb].join(', ')
@@ -195,6 +223,17 @@ if (formats.has('deb')) {
     ' It bundles its own kybernd and kybern under /usr/lib/kybern-gpuix and puts only',
     ' kybern-gpuix on PATH.', '',
   ].join('\n'))
+  if (webView) {
+    // Ubuntu 23.10+ refuses unprivileged user namespaces to /usr/bin/bwrap; the profile lets Kybern's own copy create
+    // the web-process sandbox there (the companion falls back to it). Written only where AppArmor 4 exists.
+    const bwrap = `/usr/lib/${PACKAGE}/resources/wpe/lib/wpe-webkit-2.0/bwrap`
+    const profile = readFileSync(path.join(root, 'packaging/linux/kybern-gpuix-bwrap.apparmor'), 'utf8').replace('@BWRAP@', bwrap)
+    const file = '/etc/apparmor.d/kybern-gpuix-bwrap'
+    writeFileSync(path.join(tree, 'DEBIAN/postinst'), `#!/bin/sh\nset -e\nif [ "$1" = configure ] && [ -e /etc/apparmor.d/abi/4.0 ] && command -v apparmor_parser >/dev/null 2>&1; then\n  cat > ${file} <<'PROFILE'\n${profile}PROFILE\n  apparmor_parser -r -T -W ${file} || true\nfi\n`)
+    writeFileSync(path.join(tree, 'DEBIAN/postrm'), `#!/bin/sh\nset -e\nif [ "$1" = remove ] || [ "$1" = purge ]; then\n  if [ -e ${file} ]; then apparmor_parser -R ${file} 2>/dev/null || true; rm -f ${file}; fi\nfi\n`)
+    chmodSync(path.join(tree, 'DEBIAN/postinst'), 0o755)
+    chmodSync(path.join(tree, 'DEBIAN/postrm'), 0o755)
+  }
   const file = output('deb')
   rmSync(file, { force: true })
   run('dpkg-deb', ['--root-owner-group', '-Zxz', '--build', tree, file])
@@ -218,8 +257,10 @@ Summary: ${SUMMARY}
 License: MIT
 URL: https://github.com/Tresnanda/kybern
 # Requires come from the ELF files (soname form, so the same rpm resolves on Fedora, RHEL and openSUSE).
-# Nothing here is a library for other packages.
+# Nothing here is a library for other packages. The web view's private WPE (resources/wpe) and the companion link
+# libraries shipped beside them, so their requirements are left out; the system ones they need are on every desktop.
 AutoProv: no
+%global __requires_exclude_from ^/usr/lib/${PACKAGE}/resources/(wpe/.*|libkybern-webview\\.so)$
 # Loaded at run time, so no ELF file names them (see RUNTIME_LIBRARIES in package-linux.ts).
 ${RUNTIME_LIBRARIES.rpm.map(name => `Requires: ${name}`).join('\n')}
 ${RUNTIME_RECOMMENDS.rpm.map(name => `Recommends: ${name}`).join('\n')}

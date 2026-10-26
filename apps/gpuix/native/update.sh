@@ -42,8 +42,10 @@
 # natively on that OS (Git Bash on Windows, PYTHON=python there) with
 # KYBERN_NATIVE_CHECKS=0. Output: build/gpuix-native.linux-x64-gnu.node or
 # build/gpuix-native.win32-x64-msvc.node, and on Windows the WebView2 companion
-# build/kybern-webview.dll (webview-win/, WP10). The Mach-O realign, codesign and
-# the Cocoa companion are macOS-only and skipped; so are the on-screen checks.
+# build/kybern-webview.dll (webview-win/, WP10); on Linux the WPE companion
+# build/libkybern-webview.so (webview-linux.c, WP10) when WPE WebKit is available.
+# The Mach-O realign, codesign and the Cocoa companion are macOS-only and skipped;
+# so are the on-screen checks.
 set -eu
 cd "$(dirname "$0")"
 here=$(pwd)
@@ -202,7 +204,10 @@ echo "native module loads"
 "$py" tools/check_arena.py
 case "$target" in
   *-apple-darwin | x86_64-pc-windows-msvc) bun build-webview.ts ;;
-  *) echo "webview companion: macOS and Windows only (previews open in the browser elsewhere)" ;;
+  # WP10: built against build/wpe (wpe/build-wpe.sh) or a system WPE WebKit 2.0; without either, previews open in
+  # the browser (webview-support.ts finds no library).
+  *-linux-gnu) bun build-webview.ts || echo "webview companion: no WPE WebKit 2.0 (run wpe/build-wpe.sh); previews open in the browser" ;;
+  *) echo "webview companion: macOS, Windows and Linux only (previews open in the browser elsewhere)" ;;
 esac
 
 if [ "$version" != "$pinned" ]; then

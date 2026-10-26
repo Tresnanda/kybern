@@ -373,6 +373,124 @@ So `webDocument` needs no change on Linux.
 - **Scale.** Device scale goes to WPE as the view/screen scale, and logical sizes stay logical. Fractional scaling
   on Wayland (`wp_fractional_scale_v1`) and X11 `Xft.dpi` follow GPUI's scale factor.
 
+## Linux implementation (WP10, 2026-10-26)
+
+What exists now, against the design above. The forks' `wp10-linux` branches carry the GPUI side; `native/FORK` pins
+them.
+
+### Pieces
+
+| Piece | Where | What it does |
+| --- | --- | --- |
+| Companion `libkybern-webview.so` | `native/webview-linux.c` (C, like `webview.m` is Objective-C), built by `native/build-webview.ts` | `webview.m`'s JSON channel (`kybern_web_init/command/next`) on WPE WebKit. One GLib thread owns WebKit and the default `GMainContext`. Kybern's own `WPEDisplay`/`WPEToplevel`/`WPEView` subclasses: no EGL display and no DRM device, so WebKit renders with Skia on the CPU into SHM buffers; `render_buffer` copies the damaged rows into the document's frame and paces WebKit at 60 Hz; `set_cursor_from_name` reports the CSS cursor. A small C API for the GPUIX element: `kybern_web_surface_lock/unlock` (the frame, its dirty rectangle, where `place` put it), `_input` (pointer, wheel, keys, focus, scale, outside press), `_listen` (frame, cursor, blur, focus, present notifications). |
+| `<websurface doc lib slot>` | gpuix fork `packages/native/src/custom_elements/websurface.rs` | A custom element that uploads the dirty rectangle into a `Bgra8Unorm` `wgpu::Texture` on GPUI's device (`Window::gpu_context`) and paints it with `Window::paint_surface`, so the page is in the element tree: popups and dialogs drawn later cover it, ancestors' rounded clips and opacity apply, hit-testing is GPUI's. It forwards input (X keysyms; Ctrl app shortcuts stay with the app), sets the cursor, takes GPUI focus on a press, gives it back when the page leaves Escape unhandled, and runs `present`'s fade and scale. One UI-thread task drains the companion's notifications and re-renders the elements showing that document. Off Linux it is an empty box. |
+| Texture surfaces | zed fork `gpui`, `gpui_wgpu` | `PaintSurface` carries the element opacity; the Linux texture is drawn like a polychrome sprite (instance record with the rounded clip chain, opacity; its texture where the atlas binds; premultiplied texels). Replaces gpui-ce's single uniform buffer, which made every surface in a frame draw with the last one's parameters. |
+| Rounded clip record | zed fork `shaders.wgsl`, `shaders_storage.wgsl`, `shaders.hlsl` | Pre-existing ADE-52 bug found here: gpui's `RoundedClip` is 40 bytes (`kind`, edge fades) but WGSL and HLSL read 36-byte nodes, so every clip chain id ≥ 1 was misread on Linux and Windows (a page in a rounded clip showed as an 80 px strip). Fixed to match `shaders.metal`, edge fades included. |
+| JS host | `src/native/webview.ts`, `webview-support.ts`, `WebSurface.tsx`, `WebPageUi.tsx` | Linux loads the companion when it exists and the sandbox probe passes; `place` also sends the slot and the page's offset in it. `WebSurface` renders `<websurface>` in the preview slots (`dock`/`mini`), visual frames and artifact frames. `WebPageUi` draws `<select>` popups and context menus as Kybern `ContextMenu`s and `alert`/`confirm`/`prompt` as an `AlertDialog`. Nothing changes on macOS. |
+| WPE build | `native/wpe/build-wpe.sh`, `bundle-wpe.sh`, `wpe-version.sh`, `wpe-relocatable.patch`, `wpe-gcc12.patch` | WPE WebKit 2.54.2 (sha256-pinned) on ubuntu-22.04 (glibc 2.35) with gcc-12; only the headless WPEPlatform; no legacy libwpe, GStreamer, WebXR, speech, ATK, docs. CI caches the prefix by the build inputs and re-runs `bundle-wpe.sh` on a hit. |
+| Packaging | `scripts/package-linux.ts`, `packaging/linux/kybern-gpuix-bwrap.apparmor` | `resources/libkybern-webview.so` (RUNPATH `$ORIGIN/wpe/lib`) and `resources/wpe/{lib,licenses,SOURCES.txt}` in the AppImage, .deb and .rpm when built (`KYBERN_REQUIRE_WEBVIEW=1` makes it mandatory). Recommends bubblewrap and xdg-dbus-proxy. The .deb's postinst installs the AppArmor profile below where AppArmor 4 exists. |
+
+### WPE build: recipe, size, relocation, licences
+
+- **Toolchain.** WebKit 2.54 needs GCC 12.2+; jammy's `gcc-12` (12.3) works with jammy's own libstdc++ 12, so the
+  binaries run on 22.04 and newer. One ANGLE line (`static_assert(kNeedsLock)` in a discarded `if constexpr` branch) is
+  rejected by GCC 12 and patched (`wpe-gcc12.patch`).
+- **Time.** 92 minutes cold on a 4-core `ubuntu-22.04` runner (8806 ninja steps); ccache (4 GB) makes a rebuild after a
+  patch change much shorter.
+- **Size.** The installed prefix is 151 MB (150 MB in `lib`: `libWPEWebKit-2.0.so.1`, the helpers, ICU 70 data
+  ~30 MB, libsoup 3, libxml2, libxslt, libwebp, libjpeg, woff2, lcms2, libepoxy, libseccomp, libpsl, nghttp2,
+  harfbuzz-icu, libunistring, libidn2) ; as an AppImage (squashfs) WPE plus a test binary is 53 MB. That is the
+  expected AppImage growth; deb/rpm (xz) are similar.
+- **Relocation.** WPE compiles `PKGLIBEXECDIR` (helper processes), `PKGLIBDIR` (injected bundle) and `LIBDIR` (bound into
+  the sandbox) in as absolute paths and honours `WEBKIT_EXEC_PATH` only in developer builds. `wpe-relocatable.patch`
+  resolves them beside the loaded `libWPEWebKit` (`dladdr`), which works from an AppImage mount and from
+  `/usr/lib/kybern-gpuix`. Bundled libraries get `RUNPATH $ORIGIN`; the helpers `$ORIGIN/..`.
+- **Licences.** WebCore and parts of JavaScriptCore are LGPL-2.1+; the rest BSD-style. The companion links
+  `libWPEWebKit-2.0.so.1` dynamically, the library is replaceable, the licence texts and every bundled library's Debian
+  copyright file ship in `resources/wpe/licenses`, and `SOURCES.txt` plus `THIRD_PARTY_NOTICES.md` give the exact
+  tarball, checksum and patches (the source offer).
+- **Security updates.** Bump `wpe-version.sh` (version + sha256), rebuild, release. Nothing else pins WebKit.
+
+### The web-process sandbox
+
+WebKit runs web processes under bubblewrap with a seccomp filter and `xdg-dbus-proxy`. Kybern never runs pages
+unsandboxed: when the sandbox cannot start, `webHost.available` is false (reason `sandbox`, the companion's sentence)
+and every surface shows WP4's browser fallback.
+
+Measured on GitHub's runners (VMs, AppArmor active) with Kybern's x86_64 WPE build and the offscreen spike
+(`native/spikes/wp10/wpe-offscreen/ci-sandbox.sh`), which checks that the web process sits in its own PID namespace:
+
+| Where | `kernel.apparmor_restrict_unprivileged_userns` | Result |
+| --- | --- | --- |
+| Ubuntu 22.04, from a folder (the .deb/.rpm layout) | 0 | Sandbox works: frames, transparency, input, web process in its own PID namespace |
+| Ubuntu 22.04, from an AppImage (FUSE mount, and `APPIMAGE_EXTRACT_AND_RUN`) | 0 | Same: works. The relocation patch binds the mount's library folder into the sandbox |
+| Ubuntu 24.04, system `/usr/bin/bwrap` | 1 | Refused: bwrap gets a user namespace but cannot configure its network namespace (`loopback: Failed RTM_NEWADDR: Operation not permitted`); WebKit would abort, so the companion and `webview.ts` report `sandbox` and pages open in the browser |
+| Ubuntu 24.04, Kybern's own bwrap with the .deb's AppArmor profile (`userns,` for that one path) | 1 | Works: frames, transparency and input with the web process in its own PID namespace (first frame about 2 s on a cold runner). The companion and `webview.ts` pick this copy when the system bwrap is refused (`KYBERN_WEBKIT_BWRAP`) |
+| Ubuntu 24.04, AppImage | 1 | No fix: an AppArmor profile cannot name a per-launch mount path, so the AppImage falls back to the browser there |
+| Docker/OrbStack container, root or default seccomp | — | No user namespace; the web view is off (tests use `KYBERN_WEBVIEW_ALLOW_UNSANDBOXED_FOR_TESTS`, never the app) |
+| Fedora, other rpm distros | — | Not run. Fedora does not restrict unprivileged user namespaces, so the folder result above should apply |
+
+WPE also loads `libEGL.so.1` through libepoxy even when it renders on the CPU, and aborts without it (seen on the 24.04
+runner, which lacks `libegl1`): the packages now depend on it when they carry the web view.
+
+### Parity per `webHost` op
+
+| Op / behaviour | Linux status | Verified by |
+| --- | --- | --- |
+| `create` (wrapper on `tauri://localhost/embedded/<id>`, ≤2 previews, ephemeral session, no inspector) | Done | companion driver, lab |
+| `createDocument` (Mermaid renderer, never placed) | Done (no frames while unmapped) | app check (`embedded`) |
+| `place` (size, layout script, visibility; slot + offset) | Done; position, clip and rounded clips come from GPUI's tree | lab: rounded clip pixels |
+| `occlusion`, `capture` | No-ops by design: popups are drawn after the page; GPUI hit-tests | lab: popup above the page |
+| `hide` / visibility | Done: unmapped, muted, `kybernVisible(false)`, focus released | lab |
+| `present` (fade, scale, cubic-bezier) | Done in the element (GPUI paint opacity and scaled bounds, app-driven frames) | lab (no pixel assertion yet) |
+| `probe` | Reports the target values (the element owns the animation) | — |
+| `post` / `send` / `theme` | Done (`evaluate_javascript`, main world) | lab: theme round trip |
+| `message` (wrapper only) | Done. WPE's script-message signal carries no frame, so the `kybern` handler lives in an isolated world reached only through a top-frame shim; the child (opaque origin) cannot dispatch on the wrapper's document | driver + lab: a forged post from the child is not delivered |
+| `frame` / `frameMessage` (isolated world in the child) | Done: the wrapper's `KybernPreview` world posts the script to the child's `KybernPreview` world, which evaluates it (capture listener registered before page scripts) and answers through `kybernFrame` | driver: `frame-isolated-world` under the visuals CSP |
+| `navigate` / `action` | Done through the same child relay | — |
+| `snapshot` | Done: the last frame as PNG at device scale (exact, no extra frame) | lab, driver |
+| `snapshotRect` | Done: crop of the last frame after probing the iframe box | driver |
+| `focus` / `releaseFocus` / Escape | Done: GPUI focus is the page's focus; unhandled Escape (bubble phase, `!defaultPrevented`) gives it back | — |
+| `outsidePress` | Done: `on_mouse_down_out` on the element | lab log |
+| Ctrl shortcuts while the page has focus | Not forwarded to the page; they reach the app as ordinary keys (no `shortcut` event needed) | — |
+| Cursor | CSS cursor names → GPUI cursor styles (`set_cursor_from_bytes`: default arrow) | — |
+| `<select>` | Kybern `ContextMenu` at the select's box; pick or dismiss | lab: pick "Blue" |
+| `alert`/`confirm`/`prompt` | Kybern `AlertDialog` (visual iframes have no `allow-modals`, so only previews get them) | driver |
+| Context menu | Previews: Kybern menu with WebKit's content actions (copy, cut, paste…; navigation, new windows, downloads and inspector removed). Visuals: none, as macOS | driver |
+| Pointer, wheel, keys | Done (X keysyms from GPUI keystrokes) | lab: click draft, typing "hi" |
+| Wayland and X11 | Same code (no window of its own); CI runs both | CI |
+
+### Verification (2026-10-26)
+
+| Where | What ran | Result |
+| --- | --- | --- |
+| arm64 container (Debian sid's WPE 2.54.2, Xvfb + lavapipe) | `webview-linux-check.ts` (lab: rounded clip, transparency, popup over the page, click draft, `<select>`, typing, snapshot, hide) | 28/28, both themes; companion driver 18/18 (bridge, forged child post refused, frames at 2×, dialogs, context menu, isolated-world `frame`, `snapshotRect`) |
+| CI `ubuntu-22.04`, headless Weston (Wayland, no captures), x86_64 WPE build, real bwrap sandbox | lab | 18/18 functional checks |
+| CI `ubuntu-22.04`, Xvfb, real bwrap sandbox | lab; the real app (`nowebview-app-check.ts dark embedded`) | Functional checks pass; the app: a visual goes live, a click in the question page drafts the answer, Mermaid is drawn, the preview opens in its embedded slot, no browser opened. Captures are black on this image: jammy's Mesa lavapipe never reaches Xvfb's framebuffer for any GPUI window (not specific to the web view); a later run timed out connecting to the cold daemon |
+| CI `ubuntu-24.04`, Xvfb, Kybern's bwrap with the .deb's AppArmor profile | lab | 28/28 including every pixel check; screenshots in the run's `wp10-gpuix-xvfb-ubuntu-24.04` artifact |
+| CI sandbox matrix | `ci-sandbox.sh` | See the sandbox table above |
+| macOS | `tsc`, `bun test` (965 on this branch; 975 on the integrated tree), `update.sh` from the pins | Unchanged and passing; the addon builds, loads and passes its unit tests (on-screen checks skipped) |
+
+Software rendering cannot show: GPU-driver behaviour (DMA-BUF, NVIDIA), real HiDPI and fractional scaling, IME,
+touchpads, a real compositor's Wayland seat, or the frame rate on actual hardware.
+
+### Gaps and next steps
+
+- **GPU rendering / DMA-BUF (L-S4).** Copying is cheap (0.08 ms per 800×500 frame, 0.5 ms at 1600×1000, 2.1 ms at
+  3200×2000, arm64), but WebKit rasterizes on the CPU because Kybern's display offers no EGL: a full-viewport
+  animation runs at 60 fps at 1600×1000 and about 12–15 fps at 3200×2000 (a 2× HiDPI preview) in the test container.
+  Static pages, visuals and ordinary scrolling of small pages are fine; large HiDPI previews with heavy animation are
+  not. Next: give the display a GBM/EGL device and import WebKit's DMA-BUFs into Vulkan through wgpu-hal (+3 days, as
+  planned); measure on real Intel/AMD/NVIDIA.
+- **Clipboard.** Copy and paste inside a page use WPE's in-process clipboard, not the system one (needs a
+  `WPEClipboard` bridged to GPUI's).
+- **IME.** Text arrives as keysyms; input-method composition is not wired (WPE `WPEInputMethodContext` ↔ GPUI input handler).
+- **`event.code`.** GPUI keystrokes carry no hardware keycode yet, so `KeyboardEvent.code` is empty; `key` is right.
+- **File chooser, tooltips, drag and drop, accessibility, media** (`<video>`/audio: GStreamer is not built): not done.
+- **Present via GPUI.** The fade runs in the element; a pixel assertion of the entrance is still to be added.
+- **Frame wakes.** Each new web frame re-renders the element's island through the retained tree; a scoped repaint
+  path for surfaces would make a 60 fps page cheaper for the rest of the window.
+
 ## Feature parity matrix
 
 **Native**: a direct platform equivalent. **Emulated**: same behaviour through a different mechanism (named).
@@ -615,23 +733,23 @@ A deliberately wrong line in `host.rs` produced E0308 under the Windows target, 
 type-checked. **What this proves:** every API the design relies on exists in the pinned bindings with the assumed
 shapes, and the Windows host is about 600 lines. **What it does not prove:** anything at runtime, especially W-S1.
 
-### Linux: `native/spikes/wp10/wpe-offscreen` (written, not run)
+### Linux: `native/spikes/wp10/wpe-offscreen` (L-S1, run 2026-10-26)
 
-`offscreen.c` creates WPE's headless display and a `WebKitWebView` on it with a transparent background. It loads a
-page with a 50 % red rounded box and receives frames through `WPEView::buffer-rendered`. It imports each frame with
-`wpe_buffer_import_to_pixels` and checks:
+`offscreen.c` creates a `WebKitWebView` on WPE's headless display with a transparent background, loads a page with a
+50 % red rounded box, receives frames through `WPEView::buffer-rendered` and imports them with
+`wpe_buffer_import_to_pixels`. `run.sh` builds it in a throwaway `debian:sid-slim` container (`wp10l-wpe-offscreen`,
+Debian's WPE 2.54.2); `ci-sandbox.sh` runs it on CI against Kybern's own WPE build. Two API fixes were needed
+(`wpe_event_pointer_button_new` has no `pressed` argument in 2.54; a static page renders once, so frames are judged on a
+timer). Results, arm64 container:
 
-- alpha 0 outside the box and about 128 inside
-- a pointer click injected with `wpe_view_event` changes the page title
-- time to first frame and per-frame import cost
-
-`run.sh` builds and runs it in a throwaway `debian:sid-slim` container (`wp10-wpe-offscreen`, WPE 2.54.2).
-
-**It was not run.** OrbStack's Docker engine stopped answering during this session: `docker ps` hung, and
-`curl --unix-socket ~/.orbstack/run/docker.sock /_ping` timed out repeatedly over about an hour. OrbStack is shared,
-and the task rules forbid restarting it. Running `./run.sh` is the next step; it is L-S1. The C was written against
-the documented API and has not been compiled. Expect small fixes, most likely the exact `wpe_event_pointer_button_new`
-argument list and the pkg-config module names, which the script discovers.
+| Check | Result |
+| --- | --- |
+| frame | `WPEBufferSHM`, 320×200, stride 1280 (no GPU: WebKit renders with Skia on the CPU) |
+| transparent | alpha 0 outside the box |
+| translucent | BGRA 0,0,128,128 inside: premultiplied |
+| input | a click injected with `wpe_view_event` changes the page |
+| timing | first frame 200–330 ms after load (cold process start dominates); import is free for SHM (`GBytes` of the buffer) |
+| sandbox | the web process runs in its own PID namespace under bwrap as an unprivileged user when user namespaces are allowed; in a default Docker container `bwrap` cannot create one |
 
 ## Open questions for the user
 

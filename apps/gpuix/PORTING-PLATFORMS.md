@@ -572,7 +572,7 @@ agents (one OS-specific lane can split W/L).
 | — | **Windows beta** adds WP6(W) and Windows-only fixes from WP1/WP3 | | | ≈ +6–10 | ≈ +1–1.5 weeks |
 | WP8 (code done, see [status](#wp8-text-status)) | Text parity (section C): variable `wght` and `kszl` on DirectWrite and cosmic-text, system font choice | zed fork: `gpui_macos/src/font_weight.rs`, the "Per-run text size scale (kszl)" commit, `src/theme.ts` | WP0 | 4–6 | after beta |
 | WP9 (code done) | GPU parity: backdrop blur in WGSL and HLSL (scratch copy + two-pass blur), Mica/Acrylic on Windows 11. [Status](#wp9-backdrop-blur-and-window-materials-status) | fork `wp9` commits (`gpui_wgpu`, `gpui_windows`, `gpui::backdrop_kernel`), `native/backdrop-check.ts`, `src/platform/desktopMaterial.ts` | WP0 | 6–8 | after beta |
-| WP10 (W done) | Embedded web view: WebView2 composition host (W, done: `native/webview-win`, fork `wp10-win` commits, CI check `webview`; see `WEBVIEW-PLATFORMS.md`); WebKitGTK/WPE (L, phase 2, 20–24, risky) | `native/webview-*/**` | WP3, WP4 | 20–24 (L) | after beta |
+| WP10 (W done, L in) | Embedded web view: WebView2 composition host (W, done: `native/webview-win`, fork `wp10-win` commits, CI check `webview`; see `WEBVIEW-PLATFORMS.md`); WPE WebKit (L, in 2026-10-26: forks' `wp10-linux`, WPE 2.54.2 built and bundled from ubuntu-22.04, drawn by GPUIX's `<websurface>` as a texture; status, sandbox findings and gaps in [WEBVIEW-PLATFORMS.md](WEBVIEW-PLATFORMS.md#linux-implementation-wp10-2026-10-26)) | `native/webview-*/**`, `native/wpe/**` | WP3, WP4 | 20–24 (L) | after beta |
 
 Totals: about 36–51 agent-days to both betas, 28–41 more for full parity
 (text, blur, embedded web view). With three or four lanes the Linux beta is

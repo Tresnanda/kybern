@@ -7,6 +7,8 @@
 // Off macOS (WP7, `scripts/run-platform-checks.ts`): the same check, with `KYBERN_OPEN_LOG` recording what Kybern asks the
 // system to open (no stub can stand in for `rundll32` or the addon's own opener), captured through `native/check-harness.ts`.
 // The parts that need the wheel or a ⌘ shortcut are known gaps there until WP1 and WP3 land (`KYBERN_CHECK_STRICT=1` enforces them).
+// `embedded` as the second argument is the Linux counterpart of `macos` (WP10: WPE drawn by `<websurface>`): the same
+// embedded assertions plus drafting an answer in the live question (the companion and WPE in native/build).
 import assert from 'node:assert/strict'
 import { Database } from 'bun:sqlite'
 import { randomUUID } from 'node:crypto'
@@ -20,8 +22,9 @@ import { BUNDLE_PAGE, LAYOUT_PAGE, LAYOUT_SCHEMA } from '../src/transcript/visua
 const PRIMARY = process.platform === 'darwin' ? 'cmd' : 'ctrl'
 
 const variant = (process.argv[2] ?? 'dark') as 'dark' | 'light'
-const mac = process.argv[3] === 'macos'
-if (mac && platform !== 'macos') throw Error('The `macos` variant needs macOS: it checks the embedded web view')
+const mac = process.argv[3] === 'macos' || process.argv[3] === 'embedded'
+if (process.argv[3] === 'macos' && platform !== 'macos') throw Error('The `macos` variant needs macOS: it checks the embedded web view')
+if (process.argv[3] === 'embedded' && platform !== 'linux') throw Error('The `embedded` variant is the Linux web view (WP10); on a Mac use `macos`')
 const out = outputDir('nowebview')
 const until = async (check: () => Promise<boolean> | boolean, label: string, ms = 20000) => { const end = Date.now() + ms; for (;;) { try { if (await check()) return } catch {} if (Date.now() > end) throw Error(`Timed out: ${label}`); await Bun.sleep(50) } }
 
@@ -105,7 +108,7 @@ const f = await launch(path.join(import.meta.dir, 'nowebview-app.fixture.ts'), {
 })
 const app = f.app
 const clickFirst = async (testId: string) => { const b = (await app.getByTestId(testId).all())[0]!.bounds!; await app.mouse.click({ x: b.x + b.width / 2, y: b.y + b.height / 2 }) }
-const shot = (name: string) => capture(f, `${out}/${name}-${variant}${mac ? '-macos' : ''}.png`)
+const shot = (name: string) => capture(f, `${out}/${name}-${variant}${mac ? `-${process.argv[3]}` : ''}.png`)
 try {
   await app.getByTestId('app-ready').waitFor({ timeoutMs: 60_000 })
   await until(async () => (await app.getByTestId('visual-picture').count()) >= 2, 'the pictures')
@@ -123,8 +126,22 @@ try {
     await app.mouse.click({ x: b.x + b.width / 2, y: b.y + 80 })
     await until(async () => (await app.getByTestId('visual-ring-live').count()) > 0, 'a click makes it live (its ring)', 20000)
     await shot('mac-live')
+    if (platform === 'linux') {
+      // The question goes live and takes a draft from a click on a tile inside the page (WP10's input path).
+      const figures = await app.getByTestId('visual-figure').all()
+      const question = figures.at(-1)!.bounds!
+      await until(async () => (await app.getByTestId('visual-ring-live').count()) > 0, 'the question is live')
+      await Bun.sleep(1500)
+      await app.mouse.click({ x: question.x + question.width * 0.5, y: question.y + 70 })
+      await until(async () => (await app.getByText('Layout B · Side panel').count()) > 0, 'the draft reaches the answer bar', 15000)
+      await shot('linux-draft')
+      console.log('PASS embedded (Linux): live visual, draft from a click in the page')
+    }
     await app.getByTestId('app-ready').press('escape'); await Bun.sleep(500)
-    await app.getByTestId('app-ready').press(`${PRIMARY}-2`); await until(async () => (await app.getByTestId('preview-slot-dock').count()) > 0, 'the embedded slot')
+    await step('the preview in its embedded slot (⌘2 / Ctrl+2)', async () => {
+      await app.getByTestId('app-ready').press(`${PRIMARY}-2`); await until(async () => (await app.getByTestId('preview-slot-dock').count()) > 0, 'the embedded slot')
+      await Bun.sleep(1500); await shot('preview-slot')
+    }, { gap: platform === 'macos' ? undefined : GAPS.shortcut })
     assert.equal(await app.getByTestId('preview-open-again').count(), 0)
     assert.equal(openedLines().length, 0)
     console.log('PASS macos unchanged: embedded preview slot, live visual, send button, drawn diagram, Open in a tab')

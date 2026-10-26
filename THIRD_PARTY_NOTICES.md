@@ -210,3 +210,21 @@ INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
 DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
+
+## WPE WebKit (Linux packages)
+
+The Linux packages of Kybern GPUIX (AppImage, .deb, .rpm) carry a private build of WPE WebKit 2.54.2 under
+`resources/wpe/` for the embedded web view (WP10). It is built from the unmodified upstream tarball
+https://wpewebkit.org/releases/wpewebkit-2.54.2.tar.xz (SHA-256
+`f3284e19e47fcb5ac8c63c2e1c113dbd65b2423eb8a545f5b345707829004f56`) plus the patches in
+`apps/gpuix/native/wpe/` of this repository, by `apps/gpuix/native/wpe/build-wpe.sh`; `resources/wpe/SOURCES.txt`
+repeats this. WebKit's WebCore and parts of JavaScriptCore are licensed under the GNU Lesser General Public License,
+version 2.1 or later; the rest is under BSD-style licenses. Kybern links `libWPEWebKit-2.0.so.1` dynamically through
+its companion `libkybern-webview.so`, so the library can be replaced. The complete licence texts are in
+`resources/wpe/licenses/wpewebkit/`. The source code of this exact build is the tarball and patches above; on request
+we provide it on a physical medium for no more than the cost of distribution, for three years after the release.
+
+The same folder holds libraries WPE WebKit needs that a distribution may lack, copied from Ubuntu 22.04 packages
+(ICU, libsoup 3, libxml2, libxslt, libwebp, libjpeg-turbo, libwoff2, Little CMS, libepoxy, libseccomp, libpsl,
+nghttp2, HarfBuzz ICU). Each one's licence is its Debian copyright file in `resources/wpe/licenses/`; their sources
+are the Ubuntu 22.04 (jammy) source packages at https://launchpad.net/ubuntu/jammy.

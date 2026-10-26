@@ -1,0 +1,11 @@
+# Kybern GPUIX (WP10): lets Kybern's own bubblewrap, the sandbox of its embedded web pages (WPE WebKit), create the
+# unprivileged user namespace Ubuntu 23.10+ refuses to unprofiled programs. Installed by the .deb's postinst where
+# AppArmor 4 is present; the binary is the one at the path below and nothing else.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile kybern-gpuix-bwrap @BWRAP@ flags=(unconfined) {
+  userns,
+
+  include if exists <local/kybern-gpuix-bwrap>
+}

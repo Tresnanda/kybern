@@ -9,7 +9,7 @@
 // Tall pages rest clamped at 480 with a fade baked into the picture's alpha (glass shows through) and "Show more". A
 // visual that asks (`await_answer`) draws the answer bar under it instead of the caption (`VisualAnswer.tsx`); the bar
 // and its receipt carry the same Show more and Full screen tools, so a tall question never has to be read in a slot.
-import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { memo, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { readFile } from 'node:fs/promises'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { ChartHistogramIcon, FullScreenIcon, RefreshIcon, SquareArrowExpand01Icon, ChevronUpIcon } from '@hugeicons/core-free-icons'
@@ -30,6 +30,7 @@ import { T } from './glyphs.ts'
 import { Dialog, Menu, MenuItem, MenuSeparator, Tip, useDialogClose } from '../nav/overlay.tsx'
 import { addWindowKeyHandler } from '../nav/keys.ts'
 import { webHost } from '../native/webview.ts'
+import { WebSurface, WEB_SURFACE_HOST } from '../native/WebSurface.tsx'
 import { observeElementBounds, type ElementBoundsEvent, type LayoutRect } from '../native/layout.ts'
 import { useNativeWindowSize } from '../native/layout-hooks.ts'
 import { useWebLayer } from '../native/web-occlusion.ts'
@@ -87,14 +88,14 @@ const placements = new Map<string, () => void>()
 /** Places the visual's document over this box while `active`. Only the slot that placed it hides it again, so the
  * inline figure and the tab can hand one document between them without either hiding the other's placement. */
 export function VisualSlot({ id, height, active, radius = 0 }: { id: string; height: number; active: boolean; radius?: number }) {
-  const renderer = useGpuixRequired(), ref = useRef<PublicInstance | null>(null), layer = useWebLayer()
+  const renderer = useGpuixRequired(), ref = useRef<PublicInstance | null>(null), layer = useWebLayer(), slot = useId()
   useEffect(() => {
     if (!ref.current || !active) return
     let latest: ElementBoundsEvent | undefined
     const place = () => {
       const rect = latest?.rect, clip = latest?.clippedRect
       if (!rect || !clip) { webHost.hide(id); return }
-      webHost.place(id, rect, clip, { width: rect.width, height: rect.height, scale: 1, left: 0, top: 0, radius, roundedClips: latest?.roundedClips }, true, layer)
+      webHost.place(id, rect, clip, { width: rect.width, height: rect.height, scale: 1, left: 0, top: 0, radius, roundedClips: latest?.roundedClips, slot }, true, layer)
     }
     placements.set(id, place)
     const stop = observeElementBounds(renderer, ref.current.id, bounds => { latest = bounds; place() })
@@ -102,8 +103,8 @@ export function VisualSlot({ id, height, active, radius = 0 }: { id: string; hei
     // host that does not exist yet is dropped): place it again when it exists, or the page stays blank and unclickable.
     const unsubscribe = webHost.subscribe(event => { if (event.id === id && (event.type === 'created' || event.type === 'loaded') && placements.get(id) === place) place() })
     return () => { stop(); unsubscribe(); if (placements.get(id) === place) { placements.delete(id); webHost.hide(id) } }
-  }, [renderer, id, layer, active, radius])
-  return <div ref={ref} testId="visual-frame" style={{ height, width: '100%', flexShrink: 0 }} />
+  }, [renderer, id, layer, active, radius, slot])
+  return <div ref={ref} testId="visual-frame" style={{ height, width: '100%', flexShrink: 0, ...WEB_SURFACE_HOST }}>{active && <WebSurface id={id} slot={slot} />}</div>
 }
 
 /** The document's owner and readiness, as one stable value per change. */

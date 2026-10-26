@@ -684,6 +684,26 @@ are retained for the integrating agent, as requested. Free disk went from
 73 GiB before the first native build to 68 GiB at completion; other agents
 were working concurrently, so the total change is not solely this build.
 
+## Embedded web view on Linux (WP10)
+
+`webview-linux.c` (`libkybern-webview.so`) is the Linux counterpart of `webview.m`: WPE WebKit renders offscreen and
+the fork's `<websurface>` element (`custom_elements/websurface.rs`) paints the page as a texture inside the element
+tree. Design, status and gaps: [`../WEBVIEW-PLATFORMS.md`](../WEBVIEW-PLATFORMS.md#linux-implementation-wp10-2026-10-26).
+
+```sh
+sudo apt-get install $(wpe/build-wpe.sh deps)    # ubuntu-22.04, the glibc floor the packages target
+wpe/build-wpe.sh build/wpe                        # ~1.5 h on 4 cores; WPE_WORK, WPE_JOBS, WPE_KEEP_WORK
+bun build-webview.ts                              # build/libkybern-webview.so (RUNPATH $ORIGIN/wpe/lib); also update.sh
+xvfb-run -a bun webview-linux-check.ts            # the lab: rounded clip, popup over the page, input, <select>, snapshot
+```
+
+On a distro that packages WPE WebKit 2.0 (Debian sid) `build-webview.ts` links the system one instead, for
+development. Pages are never run unsandboxed: without a working bubblewrap the web view is off
+(`webHost.unavailableReason === 'sandbox'`) and every surface falls back to the browser (WP4).
+`KYBERN_WEBVIEW_ALLOW_UNSANDBOXED_FOR_TESTS=1` (with WebKit's own `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1`) exists
+only for containers that cannot create user namespaces. `KYBERN_WEBVIEW_DEBUG=1` logs the companion's frame rate and
+copy cost; `KYBERN_DEBUG_WEBSURFACE=1` the element's uploads.
+
 ## Running the checks on Linux and Windows (WP7)
 
 A first set of the on-screen checks runs on all three OSes through one harness, `native/check-harness.ts`, and one
