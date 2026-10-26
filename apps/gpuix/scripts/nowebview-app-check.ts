@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
-import { DATA_DIR, SCRATCH, connect, startDaemon, stopPid } from '../visual/fixture.ts'
+import { DAEMON_LOG, DATA_DIR, SCRATCH, connect, startDaemon, stopPid } from '../visual/fixture.ts'
 import { GAPS, capture, launch, outputDir, platform, step } from '../native/check-harness.ts'
 import { BUNDLE_PAGE, LAYOUT_PAGE, LAYOUT_SCHEMA } from '../src/transcript/visual.pages.ts'
 // The shortcut key: ⌘ on macOS, Ctrl elsewhere (WP3, `src/platform/keys.ts`).
@@ -26,6 +26,7 @@ const mac = process.argv[3] === 'macos' || process.argv[3] === 'embedded'
 if (process.argv[3] === 'macos' && platform !== 'macos') throw Error('The `macos` variant needs macOS: it checks the embedded web view')
 if (process.argv[3] === 'embedded' && platform !== 'linux') throw Error('The `embedded` variant is the Linux web view (WP10); on a Mac use `macos`')
 const out = outputDir('nowebview')
+const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }
 const until = async (check: () => Promise<boolean> | boolean, label: string, ms = 20000) => { const end = Date.now() + ms; for (;;) { try { if (await check()) return } catch {} if (Date.now() > end) throw Error(`Timed out: ${label}`); await Bun.sleep(50) } }
 
 // ---- seed ----
@@ -73,10 +74,13 @@ if (!existsSync(linked)) {
       break
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      if (message !== last) console.log(`[nowebview] preview browser: ${message}`)
+      if (message !== last) console.log(`[nowebview] preview browser: ${message} (daemon ${alive(state.daemonPid) ? 'running' : 'gone'})`)
       last = message
     }
-    if (Date.now() - started > 600_000) throw Error(`Timed out: the preview browser install (${last})`)
+    if (Date.now() - started > 600_000) {
+      if (existsSync(DAEMON_LOG())) console.log(`[nowebview] daemon log tail:\n${readFileSync(DAEMON_LOG(), 'utf8').split('\n').slice(-60).join('\n')}`)
+      throw Error(`Timed out: the preview browser install (${last})`)
+    }
     await Bun.sleep(2000)
   }
   console.log(`[nowebview] preview browser ready in ${Math.round((Date.now() - started) / 1000)} s`)

@@ -6,7 +6,7 @@
  * only (plus the asset upload endpoint for the image block).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { deflateSync } from 'node:zlib'
 import path from 'node:path'
@@ -27,6 +27,8 @@ export const CLIENT_DIR = path.join(SCRATCH, 'client')
 export const CREDS_DIR = path.join(SCRATCH, 'credentials')
 export const DAEMON_BIN = process.env.KYBERND ?? '/Applications/kybern.app/Contents/MacOS/kybernd'
 const STATE = path.join(SCRATCH, 'state.json')
+/** Where `startDaemon` writes the scratch daemon's stdout and stderr. */
+export const DAEMON_LOG = () => path.join(process.env.KYBERN_VERIFY_OUTPUT ?? SCRATCH, 'daemon.log')
 
 for (const d of [DATA_DIR, CLIENT_DIR, CREDS_DIR]) if (path.resolve(d) !== path.resolve(SCRATCH) && !path.resolve(d).startsWith(path.resolve(SCRATCH) + path.sep)) throw new Error(`${d} is outside the scratch dir`)
 if (!SCRATCH.includes('gpuix-scratch')) throw new Error('VISUAL_SCRATCH must contain gpuix-scratch')
@@ -72,9 +74,20 @@ export async function startDaemon(fresh: boolean): Promise<RunState> {
   mkdirSync(DATA_DIR, { recursive: true })
   const port = process.env.VISUAL_DAEMON_PORT ? Number(process.env.VISUAL_DAEMON_PORT) : await freePort()
   if (port === 4219) throw new Error('port 4219 is reserved')
+  // The daemon's own log goes next to the check's evidence (`KYBERN_VERIFY_OUTPUT`, uploaded by CI), with how it exited.
+  const log = DAEMON_LOG()
+  mkdirSync(path.dirname(log), { recursive: true })
+  const fd = openSync(log, 'a')
   const child: ChildProcess = spawn(DAEMON_BIN, ['--data-dir', DATA_DIR, '--port', String(port)], {
-    stdio: 'ignore',
+    stdio: ['ignore', fd, fd],
     detached: true,
+    env: { ...process.env, RUST_LOG: process.env.RUST_LOG ?? 'info,kybern=debug', RUST_BACKTRACE: process.env.RUST_BACKTRACE ?? '1' },
+  })
+  child.on('exit', (code, signal) => {
+    // Windows reports a crash as an NTSTATUS exit code: 0xC00000FD is a stack overflow, 0xC0000409 an abort.
+    const status = `kybernd (pid ${child.pid}) exited: code ${code === null ? 'none' : `${code} (0x${(code >>> 0).toString(16)})`}, signal ${signal ?? 'none'}`
+    try { appendFileSync(log, `\n[fixture] ${status}\n`) } catch {}
+    console.log(`[fixture] ${status}; log: ${log}`)
   })
   child.unref()
   const tokenFile = path.join(DATA_DIR, 'daemon.token')

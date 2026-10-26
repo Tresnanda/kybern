@@ -61,13 +61,16 @@ async fn executable(root: &Path) -> Result<PathBuf> {
     installs.insert(cache.clone(), None);
     drop(installs);
     tokio::spawn(async move {
+        tracing::info!(version = VERSION, platform, "installing the preview browser");
         let result = install(&cache, &destination, platform, bytes, hash).await;
         if let Ok(mut installs) = installations().lock() {
             match result {
                 Ok(()) => {
+                    tracing::info!("the preview browser is installed");
                     installs.remove(&cache);
                 }
                 Err(error) => {
+                    tracing::warn!(error = format!("{error:#}"), "the preview browser could not install");
                     installs.insert(cache, Some(error.to_string()));
                 }
             }
@@ -101,6 +104,7 @@ async fn install(cache: &Path, destination: &Path, platform: &str, size: u64, ha
             received == size && digest.finalize().iter().map(|byte| format!("{byte:02x}")).collect::<String>() == hash,
             "The browser archive failed its SHA-256 or size check."
         );
+        tracing::debug!(bytes = received, "preview browser downloaded; extracting");
         let unpack = staging.join("unpacked");
         tokio::fs::create_dir(&unpack).await?;
         // Only an exact hash-verified archive reaches the system extractor.
@@ -121,6 +125,7 @@ async fn install(cache: &Path, destination: &Path, platform: &str, size: u64, ha
             .env("KYBERN_PREVIEW_UNPACK", &unpack)
             .status()
             .await?;
+        tracing::debug!(%status, "preview browser extractor exited");
         ensure!(status.success(), "Install an archive extractor and retry preview.");
         ensure!(
             tokio::fs::try_exists(unpack.join(format!("chrome-headless-shell-{platform}")).join(executable_name())).await?,
@@ -332,6 +337,7 @@ impl Session {
             .kill_on_drop(true)
             .spawn()
             .context("The preview browser could not start. On Linux, install Chrome's system libraries and sandbox support.")?;
+        tracing::debug!(pid = child.id(), "preview browser started");
         let port = loop {
             if let Ok(contents) = tokio::fs::read_to_string(profile.join("DevToolsActivePort")).await
                 && let Some(port) = contents.lines().next().and_then(|n| n.parse::<u16>().ok())

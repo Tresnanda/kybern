@@ -129,9 +129,23 @@ fn desktop_listen_port(requested: u16, desktop_managed: bool, root: &std::path::
     }
 }
 
+/// Stack for each runtime thread. Unoptimized builds give every arm of the
+/// `rpc::dispatch` match its own stack slots: its poll frame alone is about
+/// 1.4 MB on macOS and larger with MSVC, so a preview snapshot on top of it
+/// overflowed Tokio's 2 MiB default and aborted the daemon on Windows. This
+/// is address space; pages are committed only as they are touched.
+const RUNTIME_THREAD_STACK: usize = 8 * 1024 * 1024;
+
+fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_multi_thread().enable_all().thread_stack_size(RUNTIME_THREAD_STACK).build()
+}
+
 /// Run the daemon with the process arguments. `kybernd` is a thin wrapper around this.
-#[tokio::main]
-pub async fn run() -> Result<()> {
+pub fn run() -> Result<()> {
+    runtime()?.block_on(serve())
+}
+
+async fn serve() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,kybern=debug")))
         .with_target(true)
@@ -354,7 +368,20 @@ fn owns_endpoint_file(contents: &str, expected: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{desktop_listen_port, nvm_default_bin, owns_endpoint_file, startup_announcement_filename};
+    use super::{desktop_listen_port, nvm_default_bin, owns_endpoint_file, runtime, startup_announcement_filename};
+
+    /// A spawned task (every RPC runs in one) has room for more than Tokio's 2 MiB default.
+    #[test]
+    fn runtime_tasks_have_room_for_the_unoptimized_dispatch_frame() {
+        // 48 frames of 64 KiB: 3 MiB of stack.
+        fn deep(frames: usize) -> usize {
+            let frame = [0u8; 64 * 1024];
+            let frame = std::hint::black_box(&frame);
+            if frames == 0 { frame.len() } else { frame[0] as usize + deep(frames - 1) }
+        }
+        let used = runtime().unwrap().block_on(async { tokio::spawn(async { deep(47) }).await.unwrap() });
+        assert_eq!(used, 64 * 1024);
+    }
 
     #[test]
     fn desktop_self_restart_reuses_the_port_but_explicit_and_scratch_ports_stay_explicit() {
