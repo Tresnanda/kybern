@@ -16,7 +16,7 @@ try {
    const boxes:Record<string,unknown>={}
    for(const id of ['quad','svg','image','text','backdrop','cached','virtual','nested','code-body','native-md']) boxes[id]=await a.getByTestId(id).bounds()
    // The click's handler lands after the automation call off macOS: wait for the label it sets.
-   const hit=(expected:string)=>eventually(()=>a.getByTestId('hit').textContent(),text=>text===expected)
+   const hit=(expected:string)=>settled(()=>a.getByTestId('hit').textContent(),text=>text===expected)
    for(const kind of ['quad','svg','image','backdrop','cached','virtual','nested']) {
     console.log(`hit ${kind}`)
     const b=await a.getByTestId(kind).bounds()
