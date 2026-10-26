@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.16.0
+
+<!-- kybern-release-title: Kybern GPUIX on Windows and Linux, and a Coordinator that keeps its facts straight -->
+<!-- kybern-release-summary: Install Kybern GPUIX on Windows and Linux with the same looks and features as on the Mac, and keep long Coordinator projects accurate with context refreshes, change reports and dated notes. -->
+
+- Install Kybern GPUIX on Windows 10 and 11 (per-user installer) and on Linux (AppImage, .deb and .rpm), with the same looks and features as on the Mac. It updates itself on every platform.
+- See interactive visuals, artifacts, Mermaid diagrams and your dev server's preview inside the app on Windows (WebView2) and Linux (a bundled, sandboxed WebKit) instead of in the browser. On Linux, pages that can't be sandboxed, such as inside a Snap or a container, open in your browser.
+- Use native window controls: Windows caption buttons with Snap Layouts, Aero snap and the window menu, and Linux title-bar buttons in your desktop's order and side. Kybern reopens where you left it, on the same monitor.
+- Use Ctrl shortcuts on Windows and Linux, with "Ctrl+…" in menus and tooltips. In the terminal, Ctrl and Alt go to the shell and copy, paste and find move to Ctrl+Shift+C/V/F. AltGr types its character on European keyboard layouts.
+- Get the Mac's glass on Windows 11: Mica behind the window in Kybern's light or dark theme, and frosted panels on Windows and Linux. Kybern follows Transparency effects, contrast themes and Animation effects while it runs.
+- Read the same text everywhere: Segoe UI Variable on Windows 11 and Inter elsewhere, with every weight, JetBrains Mono for code, and colour emoji such as ❤️ and ⚠️.
+- Get notifications when an agent finishes or needs you on Windows and Linux; clicking one opens its thread.
+- Keep long Coordinator projects accurate: when the Coordinator's context fills up, it writes a checked handoff (goals, decisions, removals, your preferences) and continues in a fresh session in the same thread. Read or correct the handoff, and refresh by hand with **Refresh context**. Set the budget in Settings › Delegation or per project.
+- Tell the Coordinator what changed: each turn starts with the commits, deletions and renames since its last turn, so it stops suggesting code its own agents removed. It checks code before making claims about it.
+- Give the Coordinator a project map built by Kybern (layout, entry points, build and test commands, recent removals), shown in a Map tab next to Notes.
+- Keep project notes as dated history: notes have categories (Preference, Decision, Convention, Gotcha), claims cite commits, notes whose files changed are flagged stale, and **Tidy notes** offers a cleanup for you to approve.
+- Expand a visual that's cut off with **Show more**, or open it with **Full screen** (⇧⌘↵). A question stays answerable in the full-screen view.
+- See and open the pull requests of every repository in a group project.
+- Fix the Kybern desktop app replacing a newer running daemon with its own older one on restart.
+- Fix the daemon crashing on Windows while it installed the preview browser.
+
 ## 0.15.1
 
 <!-- kybern-release-title: A redesigned Kybern mobile, and agent results that arrive on time -->
