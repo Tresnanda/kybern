@@ -246,13 +246,22 @@ async function scrollBridge() {
     }
     await Bun.sleep(1500)
     const port = readFileSync(path.join(data, 'bridge-probe.port'), 'utf8').trim()
-    const response = await fetch(`http://127.0.0.1:${port}/`, { method: 'POST', body: JSON.stringify({ action: 'scroll', target: 'transcript', durationMs: 2000 }) })
-    const probe = await response.json() as { error?: string; seconds: number; inputCalls: number; offsets: (number[] | null)[]; calls?: Record<string, number>
+    type Probe = { error?: string; seconds: number; inputCalls: number; offsets: (number[] | null)[]; calls?: Record<string, number>
       before: { bridged: boolean; waited: number; sent: number; waitMs: number; servedFrames: number | null; drawnFrames?: number | null } | null
       after: { bridged: boolean; waited: number; sent: number; waitMs: number; servedFrames: number | null; drawnFrames?: number | null } | null }
-    if (probe.error) throw new Error(`bridge probe: ${probe.error}`)
+    const served = (p: Probe) => p.before?.servedFrames != null && p.after?.servedFrames != null ? p.after.servedFrames - p.before.servedFrames : null
+    // Software rendering can draw the full transcript only a couple of times a second (lavapipe with rounded clips on
+    // drew 4 frames in 2 s): scroll longer before judging the per-frame cost on too few frames.
+    let probe!: Probe
+    for (const durationMs of [2000, 6000]) {
+      const response = await fetch(`http://127.0.0.1:${port}/`, { method: 'POST', body: JSON.stringify({ action: 'scroll', target: 'transcript', durationMs }) })
+      probe = await response.json() as Probe
+      if (probe.error) throw new Error(`bridge probe: ${probe.error}`)
+      if ((served(probe) ?? 0) >= 5) break
+      console.log(`[smoke] ${served(probe)} frames in a ${durationMs} ms scroll; scrolling longer`)
+    }
     const { before, after } = probe
-    const frames = before?.servedFrames != null && after?.servedFrames != null ? after.servedFrames - before.servedFrames : null
+    const frames = served(probe)
     const drawn = before?.drawnFrames != null && after?.drawnFrames != null ? after.drawnFrames - before.drawnFrames : null
     const waited = before && after ? after.waited - before.waited : null
     const appWaited = waited == null ? null : Math.max(0, waited - probe.inputCalls)
