@@ -45,7 +45,10 @@ SetCompressor /SOLID lzma
 !define REG_APP "Software\Kybern GPUIX"
 !define REG_UNINSTALL "Software\Microsoft\Windows\CurrentVersion\Uninstall\Kybern GPUIX"
 !define REG_AUMID "Software\Classes\AppUserModelId\${AUMID}"
-!define POWERSHELL "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+; The 64-bit PowerShell (FindPowerShell): this installer is a 32-bit program, and the 32-bit PowerShell
+; that $SYSDIR names cannot read a 64-bit process's image path, so tools\stop.ps1 would see no kybernd.exe
+; or app running from the install folder, stop nothing, and leave the folder locked.
+!define POWERSHELL "$PowerShell"
 ; The Microsoft Edge WebView2 Runtime's EdgeUpdate client key (Microsoft's documented install check).
 !define WEBVIEW2_CLIENT "Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 
@@ -78,6 +81,7 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "Kybern"
 !insertmacro MUI_LANGUAGE "English"
 
 Var UpdateMode
+Var PowerShell
 
 ; Replace a file even while it is in use. Windows lets a running exe or loaded
 ; DLL be renamed but not deleted, so a locked file moves aside to `.old` (the
@@ -126,6 +130,18 @@ Var UpdateMode
 ; after starting this installer), interactively until the user closes it. Only
 ; copies running from the install folder count (tools\stop.ps1 exits 1 while one
 ; runs); any other result, a blocked PowerShell included, lets the install go on.
+!macro DefineFindPowerShell PREFIX
+Function ${PREFIX}FindPowerShell
+  ; Sysnative reaches the real System32 from a 32-bit process on 64-bit Windows.
+  StrCpy $PowerShell "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+  ${IfNot} ${FileExists} $PowerShell
+    StrCpy $PowerShell "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+  ${EndIf}
+FunctionEnd
+!macroend
+!insertmacro DefineFindPowerShell ""
+!insertmacro DefineFindPowerShell "un."
+
 !macro DefineCheckAppClosed PREFIX SCRIPT
 Function ${PREFIX}CheckAppClosed
   loop:
@@ -310,6 +326,7 @@ FunctionEnd
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Function .onInit
+  Call FindPowerShell
   InitPluginsDir
   File "/oname=$PLUGINSDIR\stop.ps1" "${PAYLOAD_DIR}\tools\stop.ps1"
 
@@ -350,6 +367,7 @@ Function .onInstFailed
 FunctionEnd
 
 Function un.onInit
+  Call un.FindPowerShell
   Call un.CheckAppClosed
 FunctionEnd
 
