@@ -409,6 +409,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let mut usage = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.usage().subscribe());
     let mut settings = ctx.principal.has(Scope::OrchestrationRead).then(|| state.settings.subscribe());
     let mut account_logins = ctx.principal.has(Scope::OrchestrationRead).then(|| state.account_logins.subscribe());
+    let mut session_imports = ctx.principal.has(Scope::OrchestrationRead).then(|| state.session_imports.subscribe());
     let mut projects = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_projects());
     let mut workspace_progress = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_workspace_progress());
     let mut spaces = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_spaces());
@@ -584,6 +585,23 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                     // Clients also poll `providers.accounts.login.get`, so a missed phase is recovered.
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(_) => account_logins = None,
+                }
+            }
+            update = async {
+                match session_imports.as_mut() {
+                    Some(updates) => updates.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                use crate::session_import::SessionsEvent;
+                use kybern_protocol::methods::*;
+                match update {
+                    Ok(SessionsEvent::Scan(scan)) => { let _ = ctx.out.notify(SESSIONS_SCAN_CHANGED_NOTIFICATION, scan).await; }
+                    Ok(SessionsEvent::Progress(progress)) => { let _ = ctx.out.notify(SESSIONS_IMPORT_PROGRESS_NOTIFICATION, progress).await; }
+                    Ok(SessionsEvent::Finished(finished)) => { let _ = ctx.out.notify(SESSIONS_IMPORT_FINISHED_NOTIFICATION, finished).await; }
+                    // Clients also read `sessions.scan_get` / `sessions.import_get`, so a missed step is recovered.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => session_imports = None,
                 }
             }
             limits = async {

@@ -249,6 +249,22 @@ fn spaces_changed_notification_is_stable() {
 }
 
 #[test]
+fn sessions_scan_and_import_schemas_are_stable() {
+    insta::assert_json_snapshot!("sessions_scan_changed_notification", schema_for!(SessionsScanChanged));
+    insta::assert_json_snapshot!("sessions_import_progress_notification", schema_for!(SessionsImportProgress));
+    insta::assert_json_snapshot!("sessions_import_finished_notification", schema_for!(SessionsImportFinished));
+    insta::assert_json_snapshot!("sessions_import_all_params", schema_for!(SessionsImportAllParams));
+}
+
+#[test]
+fn an_import_root_omitting_the_limit_means_fifty_and_null_means_all() {
+    let omitted: SessionsImportRoot = serde_json::from_str(r#"{"root":"/r"}"#).unwrap();
+    assert_eq!(omitted.limit, Some(50));
+    let all: SessionsImportRoot = serde_json::from_str(r#"{"root":"/r","limit":null}"#).unwrap();
+    assert_eq!(all.limit, None);
+}
+
+#[test]
 fn group_project_wire_shape_is_stable() {
     insta::assert_json_snapshot!("projects_scan_repos_result", schema_for!(ProjectsScanReposResult));
     insta::assert_json_snapshot!("projects_members_status_result", schema_for!(ProjectsMembersStatusResult));

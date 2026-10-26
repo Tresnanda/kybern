@@ -123,6 +123,10 @@ impl AgentDriver for ClaudeDriver {
         crate::sessions::read(self.kind(), context, id).await
     }
 
+    async fn open_session_reader(&self, context: &ProbeContext) -> Result<Box<dyn crate::sessions::SessionReader>> {
+        crate::sessions::reader(self.kind(), context).await
+    }
+
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession> {
         let bin = resolve(ProviderKind::ClaudeCode, config.binary.as_ref())?;
         let native_mcp_config = config.native_tool_bridge.as_ref().map(write_claude_mcp_config).transpose()?;

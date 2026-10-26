@@ -1,6 +1,6 @@
 use super::*;
 
-fn root(kind: ProviderKind, context: &ProbeContext) -> Result<PathBuf> {
+pub(super) fn root(kind: ProviderKind, context: &ProbeContext) -> Result<PathBuf> {
     let user_home = home(context)?;
     if kind == ProviderKind::Pi {
         return Ok(env(context, "PI_CODING_AGENT_DIR").map(PathBuf::from).unwrap_or(user_home.join(".pi/agent")).join("sessions"));
@@ -26,7 +26,7 @@ fn root(kind: ProviderKind, context: &ProbeContext) -> Result<PathBuf> {
     Ok(agent.join("sessions"))
 }
 
-fn summary(kind: ProviderKind, path: &Path, records: &[Value]) -> Option<SavedSession> {
+pub(super) fn summary(kind: ProviderKind, path: &Path, records: &[Value]) -> Option<SavedSession> {
     let header = records.iter().find(|v| v["type"] == "session")?;
     let name = records
         .iter()
@@ -70,22 +70,7 @@ pub(super) async fn list(kind: ProviderKind, context: &ProbeContext, cursor: Opt
     let query = query.to_string();
     tokio::task::spawn_blocking(move || {
         let files = jsonl_files(&root)?;
-        let mut sessions = Vec::new();
-        let mut next_cursor = None;
-        for (index, path) in files.iter().enumerate().skip(start) {
-            if let Ok(records) = metadata_lines(path)
-                && let Some(session) = summary(kind, path, &records)
-                && matches_cwd(&session, &context)
-                && matches_query(&session, &query)
-            {
-                sessions.push(session);
-            }
-            if sessions.len() == PAGE_SIZE {
-                next_cursor = (index + 1 < files.len()).then(|| (index + 1).to_string());
-                break;
-            }
-        }
-        Ok(SessionsListResult { sessions, next_cursor })
+        Ok(file_page(&files, start, &context, &query, |path, records| summary(kind, path, records)).0)
     })
     .await
     .map_err(|e| DriverError::Other(e.into()))?
@@ -98,14 +83,23 @@ pub(super) async fn read(kind: ProviderKind, context: &ProbeContext, id: &str) -
         // Resolve by exact native id, never accept an arbitrary client file path.
         for path in jsonl_files(&root)? {
             let Ok(metadata) = metadata_lines(&path) else { continue };
-            let Some(session) = summary(kind, &path, &metadata).filter(|s| s.id == id) else { continue };
-            let records = read_lines(&path)?;
-            return Ok(parse(session, records));
+            if summary(kind, &path, &metadata).is_some_and(|s| s.id == id) {
+                return read_path(kind, &path, &id);
+            }
         }
         Err(DriverError::Protocol("Session was not found. Check the harness profile and refresh the session list.".into()))
     })
     .await
     .map_err(|e| DriverError::Other(e.into()))?
+}
+
+/// Read the file a listing found for `id`.
+pub(super) fn read_path(kind: ProviderKind, path: &Path, id: &str) -> Result<SessionHistory> {
+    let metadata = metadata_lines(path)?;
+    let session = summary(kind, path, &metadata)
+        .filter(|s| s.id == id)
+        .ok_or_else(|| DriverError::Protocol("Session was not found. Check the harness profile and refresh the session list.".into()))?;
+    Ok(parse(session, read_lines(path)?))
 }
 
 pub(super) fn parse(session: SavedSession, records: Vec<Value>) -> SessionHistory {

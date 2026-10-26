@@ -230,3 +230,51 @@ fn claude_compaction_retains_earlier_history_without_a_synthetic_user() {
     assert_eq!(users(&history), ["Original question"]);
     assert_eq!(answers(&history), ["Original answer", "Continued answer"]);
 }
+
+#[tokio::test]
+async fn a_file_reader_pages_all_folders_and_reads_by_the_path_it_listed() {
+    let temp = tempfile::tempdir().unwrap();
+    let claude_dir = temp.path().join("claude");
+    let projects = claude_dir.join("projects/p");
+    std::fs::create_dir_all(&projects).unwrap();
+    for index in 0..(PAGE_SIZE + 5) {
+        let id = format!("s{index}");
+        let cwd = format!("/work/repo{}", index % 3);
+        let lines = [
+            json!({"type":"user","uuid":"u","parentUuid":null,"cwd":cwd,"sessionId":id,"message":{"content":format!("Task {index}")}}),
+            json!({"type":"assistant","uuid":"a","parentUuid":"u","cwd":cwd,"sessionId":id,"message":{"content":[{"type":"text","text":"Done"}]}}),
+        ];
+        std::fs::write(projects.join(format!("{id}.jsonl")), lines.iter().map(|l| l.to_string() + "\n").collect::<String>()).unwrap();
+    }
+    let context = ProbeContext {
+        binary: None,
+        cwd: None,
+        env: [("HOME".to_string(), temp.path().display().to_string()), ("CLAUDE_CONFIG_DIR".to_string(), claude_dir.display().to_string())]
+            .into_iter()
+            .collect(),
+    };
+    let mut reader = reader(ProviderKind::ClaudeCode, &context).await.unwrap();
+    let first = reader.list_page(None).await.unwrap();
+    assert_eq!(first.sessions.len(), PAGE_SIZE);
+    let second = reader.list_page(first.next_cursor.as_deref()).await.unwrap();
+    assert_eq!(second.sessions.len(), 5);
+    assert!(second.next_cursor.is_none());
+    let ids: HashSet<_> = first.sessions.iter().chain(&second.sessions).map(|s| s.id.clone()).collect();
+    assert_eq!(ids.len(), PAGE_SIZE + 5, "no folder filter: every session of every folder");
+    let history = reader.read("s7").await.unwrap();
+    assert_eq!(users(&history), ["Task 7"]);
+    assert!(reader.read("missing").await.is_err());
+    reader.close().await;
+}
+
+#[test]
+fn read_failures_are_told_apart_by_cause() {
+    use super::{ReadFailure, classify_read_error};
+    let temp = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(temp.path(), "{\"type\":\"session\"}\n{\"unfinished\"").unwrap();
+    assert_eq!(classify_read_error(&read_lines(temp.path()).unwrap_err()), ReadFailure::InUse);
+    std::fs::write(temp.path(), "{}\n").unwrap();
+    temp.as_file().set_len(MAX_HISTORY_BYTES + 1).unwrap();
+    assert_eq!(classify_read_error(&read_lines(temp.path()).unwrap_err()), ReadFailure::TooLarge);
+    assert_eq!(classify_read_error(&DriverError::Protocol("Choose a valid OpenCode session.".into())), ReadFailure::Other);
+}

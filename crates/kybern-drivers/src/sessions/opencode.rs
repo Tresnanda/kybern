@@ -2,7 +2,7 @@ use super::*;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader as AsyncBufReader};
 
-struct Server {
+pub(super) struct Server {
     _child: tokio::process::Child,
     _tree: crate::process_tree::ProcessTree,
     _stdout: tokio::io::Lines<AsyncBufReader<tokio::process::ChildStdout>>,
@@ -12,7 +12,7 @@ struct Server {
 }
 
 impl Server {
-    async fn start(context: &ProbeContext) -> Result<Self> {
+    pub(super) async fn start(context: &ProbeContext) -> Result<Self> {
         let mut cmd = command(ProviderKind::Opencode, context)?;
         let password = Uuid::new_v4().to_string();
         cmd.args(["serve", "--port", "0", "--hostname", "127.0.0.1"])
@@ -96,6 +96,10 @@ fn summary(value: &Value) -> Option<SavedSession> {
 
 pub(super) async fn list(context: &ProbeContext, cursor: Option<&str>, search: &str) -> Result<SessionsListResult> {
     let server = Server::start(context).await?;
+    list_with(&server, context, cursor, search).await
+}
+
+async fn list_with(server: &Server, context: &ProbeContext, cursor: Option<&str>, search: &str) -> Result<SessionsListResult> {
     let mut cursor = cursor.map(str::to_string);
     let mut sessions = Vec::new();
     let mut seen = HashSet::new();
@@ -121,15 +125,42 @@ pub(super) async fn list(context: &ProbeContext, cursor: Option<&str>, search: &
 }
 
 pub(super) async fn read(context: &ProbeContext, id: &str) -> Result<SessionHistory> {
+    check_id(id)?;
+    let server = Server::start(context).await?;
+    read_with(&server, id).await
+}
+
+fn check_id(id: &str) -> Result<()> {
     if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
         return Err(DriverError::Protocol("Choose a valid OpenCode session.".into()));
     }
-    let server = Server::start(context).await?;
+    Ok(())
+}
+
+async fn read_with(server: &Server, id: &str) -> Result<SessionHistory> {
+    check_id(id)?;
     let info = server.get(&format!("/session/{id}"), &[]).await?;
     let session =
         summary(&info).ok_or_else(|| DriverError::Protocol("Choose a top-level OpenCode session with a working folder.".into()))?;
     let messages = server.get(&format!("/session/{id}/message"), &[("directory", session.cwd.clone())]).await?;
     Ok(parse(session, messages))
+}
+
+/// One `opencode serve` for a whole scan or import.
+pub(super) struct Reader {
+    pub(super) server: Server,
+    pub(super) context: ProbeContext,
+}
+
+#[async_trait::async_trait]
+impl SessionReader for Reader {
+    async fn list_page(&mut self, cursor: Option<&str>) -> Result<SessionsListResult> {
+        list_with(&self.server, &self.context, cursor, "").await
+    }
+    async fn read(&mut self, id: &str) -> Result<SessionHistory> {
+        read_with(&self.server, id).await
+    }
+    async fn close(self: Box<Self>) {}
 }
 
 pub(super) fn parse(mut session: SavedSession, messages: Value) -> SessionHistory {

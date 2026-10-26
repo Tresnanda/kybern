@@ -1,0 +1,174 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(SessionsImportProgress)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SessionsImportProgress",
+  "description": "Params of the `sessions.import.progress` notification: counts so far for one\nproject plus what is new since the previous notification of that project.",
+  "type": "object",
+  "properties": {
+    "job_id": {
+      "type": "string"
+    },
+    "root": {
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/ImportProjectState"
+    },
+    "project_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "total": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "done": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "imported": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "already_imported": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "skipped_count": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "new_thread_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      }
+    },
+    "new_skipped": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SessionSkip"
+      }
+    },
+    "error": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "job_id",
+    "root",
+    "state",
+    "total",
+    "done",
+    "imported",
+    "already_imported",
+    "skipped_count",
+    "new_thread_ids",
+    "new_skipped"
+  ],
+  "$defs": {
+    "ImportProjectState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "queued",
+            "running",
+            "done"
+          ]
+        },
+        {
+          "description": "The project could not be created or found; no session of it was imported.",
+          "type": "string",
+          "const": "failed"
+        }
+      ]
+    },
+    "SessionSkip": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        "session_id": {
+          "description": "Native harness session id.",
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/SessionSkipReason"
+        },
+        "detail": {
+          "description": "One sentence saying what happened and what to do.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "session_id",
+        "title",
+        "reason",
+        "detail"
+      ]
+    },
+    "ProviderKind": {
+      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "opencode",
+        "pi",
+        "omp",
+        "cursor"
+      ]
+    },
+    "SessionSkipReason": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "read_failed"
+          ]
+        },
+        {
+          "description": "Still being written by its harness.",
+          "type": "string",
+          "const": "in_use"
+        },
+        {
+          "description": "Over the 64 MB history limit.",
+          "type": "string",
+          "const": "too_large"
+        },
+        {
+          "description": "The session's folder no longer exists.",
+          "type": "string",
+          "const": "folder_missing"
+        },
+        {
+          "description": "The harness could not be started to read the session.",
+          "type": "string",
+          "const": "harness_unavailable"
+        }
+      ]
+    }
+  }
+}

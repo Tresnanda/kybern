@@ -41,6 +41,8 @@ pub struct Inner {
     pub cursor_setup: crate::cursor_setup::CursorSetup,
     pub account_identities: crate::account_identity::AccountIdentities,
     pub account_logins: crate::account_login::AccountLogins,
+    /// First-run scan and bulk import of saved harness sessions.
+    pub session_imports: crate::session_import::SessionImports,
     /// Preview file and proxy tickets (ADE-34).
     pub previews: Arc<crate::previews::tickets::PreviewTickets>,
     /// Started by the desktop app, whose bundle owns this binary.
@@ -127,6 +129,7 @@ impl AppState {
                 cursor_setup: Default::default(),
                 account_identities: Default::default(),
                 account_logins: Default::default(),
+                session_imports: Default::default(),
                 previews,
                 desktop_managed: std::sync::atomic::AtomicBool::new(false),
                 restart_pending: std::sync::atomic::AtomicBool::new(false),

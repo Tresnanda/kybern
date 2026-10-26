@@ -245,6 +245,10 @@ impl AgentDriver for CursorAcpDriver {
         crate::sessions::read(self.kind(), context, id).await
     }
 
+    async fn open_session_reader(&self, context: &ProbeContext) -> Result<Box<dyn crate::sessions::SessionReader>> {
+        crate::sessions::reader(self.kind(), context).await
+    }
+
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession> {
         if let Some(bridge) = config.native_tool_bridge.as_ref() {
             cursor_mcp_servers(Some(bridge))?;
