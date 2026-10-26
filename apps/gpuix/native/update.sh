@@ -1,31 +1,37 @@
 #!/bin/sh
-# Build the Kybern-patched GPUIX native module, optionally moving to a new
-# upstream release. The patch is small and reapplied from scratch every time,
-# so staying current with GPUIX is: run this with the new version, fix any hook
-# it reports, check, commit.
+# Build Kybern's GPUIX native module from the fork pinned in FORK: Tresnanda/gpuix
+# at `commit` (the upstream release plus our commits), with its zed submodule on
+# Tresnanda/zed. Nothing is patched here; a native change is a commit on the
+# forks' `kybern` branches and a new pin (README.md, "Changing the native module").
 #
-#   ./update.sh            rebuild the pinned version (VERSION)
-#   ./update.sh 0.11.0     move to @gpuix/native@0.11.0 (also bumps the npm
-#                          packages and recreates the JS patch)
+#   ./update.sh            rebuild the pinned fork commit for VERSION
+#   ./update.sh 0.12.0     after the fork moved to @gpuix/native@0.12.0 (FORK's
+#                          `upstream`): build it, bump the npm packages and
+#                          recreate the JS patch
+#   KYBERN_GPUIX_SOURCE=~/src/gpuix ./update.sh
+#                          build a local gpuix checkout (zed submodule included)
+#                          as it is, skipping the fetch: for trying fork commits
+#                          before pushing them, and for the canary's rebased tree
 #   KYBERN_NATIVE_CHECKS=0 ./update.sh
 #                          build, align, sign and load-check the addon, but skip
 #                          the typecheck and on-screen native checks (CI
 #                          runners have no usable display)
 #
-# Steps: fetch upstream at the tag → reset packages/native/src → copy
-# patches/*.rs → apply patches/apply_hooks.py (fails loudly, writing
-# nothing, if an anchor moved) → cargo build → realign + re-sign → dlopen check
-# → capability checks. Output: build/gpuix-native.darwin-arm64.node, which
+# Steps: fetch the fork at the pinned commit with its zed submodule → cargo
+# build → the fork's standalone unit tests → realign + re-sign → dlopen check →
+# capability checks. Output: build/gpuix-native.darwin-arm64.node, which
 # src/native/local-build.ts loads.
 #
 #   KYBERN_GPUIX_PREBUILT=1 ./update.sh
-#                          skip the fetch, patch and cargo build when
+#                          skip the zed submodule and the cargo build when
 #                          build/target/.../libgpuix_native.dylib and
 #                          upstream/zed/crates/gpui/src/arena.rs already exist
-#                          (CI restores them from a cache keyed on every input
-#                          of those steps); every later step still runs except
-#                          markdown-document-test.py, which needs the dependency
-#                          rlibs and already passed when the cache was built.
+#                          (CI restores them from a cache keyed on FORK and this
+#                          script); the gpuix checkout the unit tests compile
+#                          from is still fetched, and every later step runs
+#                          except markdown-document-test.py, which needs the
+#                          dependency rlibs and already passed when the cache
+#                          was built.
 #
 #   KYBERN_GPUIX_TARGET=x86_64-apple-darwin ./update.sh
 #                          cross-build the Intel addon, build/gpuix-native.darwin-x64.node.
@@ -35,8 +41,11 @@
 # Linux and Windows (ADE-52 spike, `.github/workflows/gpuix-platforms.yml`): run
 # natively on that OS (Git Bash on Windows, PYTHON=python there) with
 # KYBERN_NATIVE_CHECKS=0. Output: build/gpuix-native.linux-x64-gnu.node or
-# build/gpuix-native.win32-x64-msvc.node. The Mach-O realign, codesign and the
-# Cocoa webview companion are macOS-only and skipped; so are the on-screen checks.
+# build/gpuix-native.win32-x64-msvc.node, and on Windows the WebView2 companion
+# build/kybern-webview.dll (webview-win/, WP10); on Linux the WPE companion
+# build/libkybern-webview.so (webview-linux.c, WP10) when WPE WebKit is available.
+# The Mach-O realign, codesign and the Cocoa companion are macOS-only and skipped;
+# so are the on-screen checks.
 set -eu
 cd "$(dirname "$0")"
 here=$(pwd)
@@ -44,6 +53,8 @@ app=$(cd .. && pwd)
 pinned=$(cat VERSION)
 version=${1:-$pinned}
 tag="@gpuix/native@$version"
+pin() { sed -n "s/^$1=//p" FORK | tr -d '\r'; }
+fork_repo=$(pin repo) fork_commit=$(pin commit) fork_zed=$(pin zed) fork_upstream=$(pin upstream)
 host=$(rustc +1.97.1 -vV | sed -n 's/^host: //p')
 target=${KYBERN_GPUIX_TARGET:-$host}
 py=${PYTHON:-python3}
@@ -65,65 +76,107 @@ if [ "$target" != "$host" ]; then
 fi
 
 echo "== GPUIX $version (pinned $pinned) for $target"
-if [ "${KYBERN_GPUIX_PREBUILT:-0}" = 1 ] && [ -f "$release/$lib" ] && [ -f upstream/zed/crates/gpui/src/arena.rs ]; then
-  # CI restored the cargo output (and the one upstream file check_arena.py reads)
-  # for exactly these inputs: the same VERSION, patches, this script, toolchain
-  # and target. Below, the patch unit tests, the realign + re-sign, the load
-  # check, the arena tests and the webview companion still run; only the
-  # Markdown parser parity test (it needs the dependency rlibs) is skipped.
-  echo "== reusing the prebuilt $release/$lib"
-  prebuilt=1
+# $src is the tree cargo builds, relative to this directory; $app_src is the same
+# tree relative to the app (the unit tests compile from there).
+if [ -n "${KYBERN_GPUIX_SOURCE:-}" ]; then
+  src=$(cd "$KYBERN_GPUIX_SOURCE" && pwd)
+  app_src=$src
+  # The tools that read the source tree (check_arena.py, the Markdown parity
+  # test) default to upstream/.
+  export KYBERN_GPUIX_TREE="$src"
+  echo "== building the local checkout $src ($(git -C "$src" rev-parse --short HEAD 2>/dev/null || echo 'not a git checkout'))"
 else
-  prebuilt=0
-  if [ ! -d upstream/.git ]; then
-    git clone --filter=blob:none --no-checkout https://github.com/remorses/gpuix.git upstream
+  src=upstream
+  app_src=native/upstream
+  if [ "$fork_upstream" != "$tag" ]; then
+    echo "FORK is based on $fork_upstream, not $tag: move the fork's kybern branch to $tag and pin it first (README.md, \"Moving to a new GPUIX release\")" >&2
+    exit 1
   fi
-  git -C upstream fetch -q --filter=blob:none --tags origin
-  # The previous run's GPUI hooks edit zed in place; reset it so the submodule
-  # can move to the new tag's commit.
+fi
+# Check out the pinned fork commit into upstream/. A checkout made by the old
+# patch queue (origin remorses/gpuix, zed edited in place) is reused and moved over.
+fetch_fork() {
+  if [ ! -d upstream/.git ]; then
+    # A CI cache hit has already restored upstream/zed/...; clone beside it.
+    rm -rf upstream.clone
+    git clone -q --filter=blob:none --no-checkout "$fork_repo" upstream.clone
+    mkdir -p upstream
+    mv upstream.clone/.git upstream/.git
+    rm -rf upstream.clone
+  fi
+  git -C upstream remote set-url origin "$fork_repo"
+  if ! git -C upstream cat-file -e "$fork_commit^{commit}" 2>/dev/null; then
+    git -C upstream fetch -q --filter=blob:none origin "$fork_commit"
+  fi
   if [ -e upstream/zed/.git ]; then
     git -C upstream/zed reset -q --hard
     git -C upstream/zed clean -fdq
   fi
-  git -C upstream checkout -q --force "$tag"
-  git -C upstream clean -fdq packages/native/src
-  git -C upstream submodule update -q --init --filter=blob:none zed
+  git -C upstream checkout -q --force --detach "$fork_commit"
+}
 
-  echo "== patch"
-  cp patches/*.rs upstream/packages/native/src/
-  "$py" patches/apply_hooks.py upstream/packages/native/src
-  "$py" patches/backdrop_gpui.py upstream/zed
+if [ "${KYBERN_GPUIX_PREBUILT:-0}" = 1 ] && [ -f "$release/$lib" ] && [ -f "$src/zed/crates/gpui/src/arena.rs" ]; then
+  # CI restored the cargo output (and the one zed file check_arena.py reads)
+  # for exactly these inputs: the same FORK, this script, toolchain and target.
+  # The unit tests, the realign + re-sign, the load check, the arena tests and
+  # the webview companion still run; only the Markdown parser parity test (it
+  # needs the dependency rlibs) is skipped.
+  echo "== reusing the prebuilt $release/$lib"
+  prebuilt=1
+  [ -n "${KYBERN_GPUIX_SOURCE:-}" ] || fetch_fork
+else
+  prebuilt=0
+  if [ -z "${KYBERN_GPUIX_SOURCE:-}" ]; then
+    fetch_fork
+    git -C upstream clean -fdq
+    # Older checkouts still name remorses/zed in .git/config; take the URL from .gitmodules.
+    git -C upstream submodule sync -q zed
+    git -C upstream submodule update -q --init --filter=blob:none zed
+    actual=$(git -C upstream/zed rev-parse HEAD)
+    if [ "$actual" != "$fork_zed" ]; then
+      echo "the fork commit $fork_commit records zed $actual, FORK says $fork_zed: fix the pin" >&2
+      exit 1
+    fi
+  fi
 
   echo "== build (several minutes after a version change)"
   # kache (the global rustc wrapper here) is bypassed: the release link must be
-  # exactly what rustc produced.
+  # exactly what rustc produced. --locked: the fork commits Cargo.lock.
   (
-    cd upstream/packages/native
+    cd "$src/packages/native"
     case "$target" in
       *-apple-darwin)
         RUSTC_WRAPPER= HOST_CC=cc HOST_CXX=c++ CC=cc CXX=c++ \
-          CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$here/build/target" cargo +1.97.1 build --release --lib $cross ;;
+          CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$here/build/target" cargo +1.97.1 build --release --lib --locked $cross ;;
       *)
-        RUSTC_WRAPPER= CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$here/build/target" cargo +1.97.1 build --release --lib $cross ;;
+        RUSTC_WRAPPER= CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$here/build/target" cargo +1.97.1 build --release --lib --locked $cross ;;
     esac
   )
 fi
 
 (
+  # Standalone unit tests of Kybern modules in the fork's native crate.
   cd "$app"
-  rustc --test native/patches/spring.rs -o native/build/spring-tests$exe
+  mkdir -p native/build
+  native_src=$app_src/packages/native/src
+  rustc --test "$native_src/spring.rs" -o native/build/spring-tests$exe
   native/build/spring-tests$exe
-  rustc --test native/patches/physical_spring.rs -o native/build/physical-spring-tests$exe
+  rustc --test "$native_src/physical_spring.rs" -o native/build/physical-spring-tests$exe
   native/build/physical-spring-tests$exe
-  rustc --test native/patches/rich_doc.rs -o native/build/rich-doc-tests$exe
+  rustc --test "$native_src/rich_doc.rs" -o native/build/rich-doc-tests$exe
   native/build/rich-doc-tests$exe
-  rustc --edition 2021 --test native/patches/backdrop_kernel.rs -o native/build/backdrop-kernel-tests$exe
+  rustc --edition 2021 --test "$native_src/backdrop_kernel.rs" -o native/build/backdrop-kernel-tests$exe
   native/build/backdrop-kernel-tests$exe
+  # The renderers build zed's copy; the test above compiles the native crate's, which must be the same file.
+  zed_kernel=$app_src/zed/crates/gpui/src/backdrop_kernel.rs
+  if [ -f "$zed_kernel" ] && ! cmp -s "$zed_kernel" "$native_src/backdrop_kernel.rs"; then
+    echo "$native_src/backdrop_kernel.rs differs from $zed_kernel: they must be the same file" >&2
+    exit 1
+  fi
   if [ "$prebuilt" = 1 ]; then
     # It compiles against the cargo dependency rlibs, which a cache hit does not
-    # restore; its inputs (VERSION, patches and the test itself) are in the
-    # cache key, so the build that saved the cache already ran it on exactly
-    # these sources.
+    # restore; its inputs (FORK and the test itself) are in the cache key, so
+    # the build that saved the cache already ran it on exactly these sources.
     echo "markdown-document-test.py: ran when the cached build was made"
   else
     "$py" native/markdown-document-test.py
@@ -150,8 +203,11 @@ fi
 echo "native module loads"
 "$py" tools/check_arena.py
 case "$target" in
-  *-apple-darwin) bun build-webview.ts ;;
-  *) echo "webview companion: macOS only (previews open in the browser elsewhere)" ;;
+  *-apple-darwin | x86_64-pc-windows-msvc) bun build-webview.ts ;;
+  # WP10: built against build/wpe (wpe/build-wpe.sh) or a system WPE WebKit 2.0; without either, previews open in
+  # the browser (webview-support.ts finds no library).
+  *-linux-gnu) bun build-webview.ts || echo "webview companion: no WPE WebKit 2.0 (run wpe/build-wpe.sh); previews open in the browser" ;;
+  *) echo "webview companion: macOS, Windows and Linux only (previews open in the browser elsewhere)" ;;
 esac
 
 if [ "$version" != "$pinned" ]; then
@@ -176,7 +232,7 @@ if [ "$version" != "$pinned" ]; then
 fi
 
 if [ "${KYBERN_NATIVE_CHECKS:-1}" = "0" ]; then
-  echo "done: GPUIX $version with Kybern patches (on-screen checks skipped)"
+  echo "done: GPUIX $version from the Kybern fork (on-screen checks skipped)"
   exit 0
 fi
 
@@ -196,4 +252,4 @@ echo "== checks"
     bun native/ui-lease.ts "update-$batch-$(basename "$(cd "$app/../.." && pwd)")" sh native/check-update.sh "$batch"
   done
 )
-echo "done: GPUIX $version with Kybern patches"
+echo "done: GPUIX $version from the Kybern fork"

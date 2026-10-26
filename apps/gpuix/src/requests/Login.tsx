@@ -22,6 +22,7 @@ import { keyboardAnswer } from './Panel.tsx'
 import { actOnRequest, refreshProgress, useRequestProgress } from './progress.ts'
 import { CodeText, PhaseIn, TimeLeft } from './summoned.tsx'
 import { someoneIsTyping } from './ui.ts'
+import { isPrimaryNotAltGr } from '../platform/keys.ts'
 
 /** Which body the card shows for the daemon's phase. */
 export function loginView(phase: string | undefined): 'ask' | 'wait' | 'paste' | 'done' {
@@ -143,7 +144,7 @@ function LoginWaiting({ approvalId, threadId, input, badge, error, act }: { appr
   return (
     <CardShell testId="login-panel" cmdKeys={['c']} onKey={(e) => {
       if (e.key === 'escape') { void cancel(true); return true }
-      if (e.key === 'c' && e.modifiers?.cmd && progress?.user_code) { copyText(progress.user_code); return true }
+      if (e.key === 'c' && isPrimaryNotAltGr(e.modifiers) && progress?.user_code) { copyText(progress.user_code); return true }
       return false
     }}>
       <RequestHeader glyph={T.terminal} tileMark={<WaitingMark cli={input.cli} />} title={loginTitle(input)} chip={{ label: input.cli, mono: true }} badge={badge} error={failure || error || undefined} />
@@ -189,7 +190,7 @@ function LoginPasteForm({ approval, input, badge, error, act }: { approval: Appr
           label="Verification code" testId="login-code-input" size="lg" mono value={value} disabled={!!busy} autoFocus={autoFocus} placeholder="Paste the code"
           {...{ spellcheck: false, autocomplete: 'off' }} style={{ fontSize: 13 }} shell={{ marginTop: 12, paddingRight: 4 }}
           onChange={(next) => { setValue(next); setFailure('') }} onSubmit={() => void run('paste')}
-          trailing={<Button variant="ghost" size="sm" testId="login-paste-clipboard" label="Paste the code" onClick={() => { const text = readClipboardText().trim(); if (text) setValue(text) }}>Paste</Button>}
+          trailing={<Button variant="ghost" size="sm" testId="login-paste-clipboard" label="Paste the code" onClick={() => { void readClipboardText().then((clip) => { const text = clip.trim(); if (text) setValue(text) }) }}>Paste</Button>}
         />
         <Hints
           left={<CodeText text={`The code goes to the \`${input.cli}\` CLI only.`} color={k.t.textTertiary} />}

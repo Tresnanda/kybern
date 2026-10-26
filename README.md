@@ -56,6 +56,7 @@ inside the app, so every app update also updates it:
 | --- | --- |
 | macOS | Links `kybern` into `~/.local/bin` when that is on your PATH, otherwise into `/usr/local/bin` after an administrator prompt. |
 | Linux `.deb` | Nothing to do: the package installs `/usr/bin/kybern`. |
+| Kybern GPUIX on Linux | Links its own `kybern` into `~/.local/bin`: `/usr/lib/kybern-gpuix/kybern` from the deb or rpm, or the copy the AppImage keeps in `~/.local/share/kybern-gpuix/bin` and refreshes on each update. The packages put only `kybern-gpuix` on PATH, so they install beside the Tauri package, which owns `/usr/bin/kybern` and `/usr/bin/kybernd`. |
 | Linux AppImage | Copies `kybern` into `~/.local/bin` and refreshes the copy when the app updates. |
 | Windows | Adds Kybern’s install folder to your user Path. Open a new terminal afterwards. |
 
@@ -75,6 +76,39 @@ client, as a separate app next to the Tauri one (it updates itself from the same
 ```sh
 curl -fsSL https://github.com/Tresnanda/kybern/releases/latest/download/kybern-gpuix-mac-install.sh | sh
 ```
+
+Windows x64 can install **Kybern GPUIX (beta)** the same way, next to or instead of the
+Tauri app: download `kybern-gpuix_<version>_x64-setup.exe` from the
+[release page](https://github.com/Tresnanda/kybern/releases/latest). It installs for your
+user only (no administrator prompt) into `%LOCALAPPDATA%\Programs\Kybern GPUIX`, adds a Start-menu
+entry, optionally a desktop shortcut, and adds its `bin` folder (just `kybern`) to the end of your user Path (so the
+Tauri app's `kybern`, if any, keeps winning). It is unsigned, so SmartScreen warns once: choose
+**More info → Run anyway**. The beta falls back where macOS features are missing (previews open in
+your browser, no backdrop blur, no notifications yet); see
+[`apps/gpuix/PORTING-PLATFORMS.md`](apps/gpuix/PORTING-PLATFORMS.md) and
+[`apps/gpuix/packaging/README.md`](apps/gpuix/packaging/README.md#windows-x64-beta). Updates install
+from the app (silently, then it restarts).
+
+**Kybern GPUIX on Linux** (x86_64, beta) installs the same way, next to the
+Tauri app:
+
+```sh
+curl -fsSL https://github.com/Tresnanda/kybern/releases/latest/download/kybern-gpuix-linux-install.sh | sh
+```
+
+It installs the `.deb` with apt or the `.rpm` with dnf or zypper (asking for
+your password through sudo), and the AppImage on other distributions or with
+`sh -s -- --appimage`. The AppImage updates itself (when its folder is one you
+can write); deb and rpm installs show new releases with the download link and the
+`sudo apt install` / `sudo dnf install` command to run. `sh -s -- --uninstall`
+removes it again and leaves `~/.kybern` alone. It needs **glibc 2.35 or newer**
+(Ubuntu 22.04+, Debian 12+, Fedora 36+, openSUSE Leap 16 or Tumbleweed); RHEL, Rocky and
+Alma 9, Debian 11, Ubuntu 20.04 and openSUSE Leap 15 are not supported yet, and the installer says
+so before it changes anything. The Linux beta still lacks some macOS
+features: no backdrop blur or window material, no embedded previews (they open
+in the browser) or Mermaid rendering, no window buttons in the title bar yet,
+and shortcuts still use the Super key. The full list is in
+[`apps/gpuix/PORTING-PLATFORMS.md`](apps/gpuix/PORTING-PLATFORMS.md).
 
 Or download the DMG from the
 [release page](https://github.com/Tresnanda/kybern/releases/latest) and drag
@@ -105,7 +139,9 @@ this check.
 | macOS, Apple silicon | `kybern-<version>-aarch64-apple-darwin.dmg` |
 | macOS, Intel | `kybern-<version>-x86_64-apple-darwin.dmg` |
 | Linux x86_64 | `kybern-<version>-x86_64-unknown-linux-gnu.AppImage` or `.deb` |
+| Linux x86_64, Kybern GPUIX (beta) | `kybern-gpuix_<version>_x86_64.AppImage`, `.deb` or `.rpm` (glibc 2.35 or newer) |
 | Windows x86_64 | `kybern-<version>-x86_64-pc-windows-msvc-setup.exe` |
+| Windows x86_64, Kybern GPUIX (beta) | `kybern-gpuix_<version>_x64-setup.exe` |
 
 The app checks the release feed after launch and every few hours; **Settings →
 About** has a manual check. When a newer version is available, a release card
@@ -360,7 +396,7 @@ cache that release builds restore. Publishing is a separate action.
 
 | Release unit | Version and delivery |
 | --- | --- |
-| Daemon, CLI, and desktop | Share the Rust workspace/Tauri version. `scripts/release.sh X.Y.Z` updates these versions and pushes `vX.Y.Z`. The release workflow builds `kybernd` and `kybern` once per target; the desktop bundles, which include the daemon and CLI, reuse those binaries, and the whole GitHub Release is published at once. The `gpuix` job of `desktop.yml` also builds Kybern GPUIX (`apps/gpuix`) for Apple Silicon and Intel Macs from the same dist binaries and attaches `kybern-gpuix_<version>_<aarch64|x86_64>.app.tar.gz` plus their signatures; `latest.json` carries them as `darwin-aarch64-gpuix` and `darwin-x86_64-gpuix`. |
+| Daemon, CLI, and desktop | Share the Rust workspace/Tauri version. `scripts/release.sh X.Y.Z` updates these versions and pushes `vX.Y.Z`. The release workflow builds `kybernd` and `kybern` once per target; the desktop bundles, which include the daemon and CLI, reuse those binaries, and the whole GitHub Release is published at once. The `gpuix` job of `desktop.yml` also builds Kybern GPUIX (`apps/gpuix`) for Apple Silicon and Intel Macs from the same dist binaries and attaches `kybern-gpuix_<version>_<aarch64|x86_64>.app.tar.gz` plus their signatures; `latest.json` carries them as `darwin-aarch64-gpuix` and `darwin-x86_64-gpuix`. The separate `gpuix-windows` job (beta) builds the Windows x64 installer `kybern-gpuix_<version>_x64-setup.exe` (`scripts/bundle-gpuix-windows.sh`) and its signature, published as `windows-x86_64-gpuix`; the manifest job runs whether that job succeeds or fails, so a Windows failure only leaves that entry out. The separate `gpuix-linux` job (beta) builds the Linux x86_64 packages on `ubuntu-22.04` from dist's static musl binaries: `kybern-gpuix_<version>_x86_64.AppImage` (signed; `latest.json` key `linux-x86_64-gpuix`), `.deb` and `.rpm`; like Windows, a Linux failure only leaves that entry out. |
 | Android and iOS mobile app | Use `expo.version` in `apps/mobile/app.json`, independent of the desktop release number. EAS builds use the selected commit and profile. Android `versionCode` and iOS `buildNumber` identify individual binaries; EAS manages these remotely. Preview and production builds increment them automatically. |
 | Wire protocol | `PROTOCOL_VERSION` is a compatibility contract, not an app release number. Bump it for breaking wire changes and update both clients and the daemon together. Additive features may still require a newer daemon even when the protocol number is unchanged. |
 

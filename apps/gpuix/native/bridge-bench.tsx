@@ -1,5 +1,5 @@
 // ADE-52: cost of one synchronous window update from JS (macOS: same thread;
-// Linux/Windows: the UI-thread bridge in patches/platforms_hooks.py).
+// Linux/Windows: the UI-thread bridge in the fork commit from platforms_hooks.py).
 //   bun native/bridge-bench.tsx
 import '../src/native/local-build.ts'
 import { render, useGpuixRequired } from '@gpuix/react'

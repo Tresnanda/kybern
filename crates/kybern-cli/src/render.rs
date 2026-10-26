@@ -122,6 +122,36 @@ pub fn members(r: &ProjectsMembersStatusResult, project: Option<&Project>) {
     }
 }
 
+pub fn project_map(map: &methods::ProjectMap) {
+    println!("{}", map.header);
+    println!("\nbuilt {}", map.built_at.format("%Y-%m-%d %H:%M:%SZ"));
+    println!("\nlayout");
+    for a in &map.layout {
+        let name = match (&a.name, &a.manifest) {
+            (Some(name), Some(kind)) => format!("  {name} ({kind})"),
+            (Some(name), None) => format!("  {name}"),
+            _ => String::new(),
+        };
+        println!("  {:<12} {:<40} {:>6}{name}", a.repo, a.path, a.files);
+    }
+    println!("\ncommands");
+    for c in &map.commands {
+        println!("  {:<12} {:<28} {:<24} {}", c.repo, c.source, c.name, c.run.replace('\n', " ; "));
+    }
+    println!("\nbusy areas");
+    for b in &map.busy {
+        println!("  {:<12} {:<40} {:>4}", b.repo, b.path, b.commits);
+    }
+    println!("\nremoved and renamed");
+    for c in &map.removed {
+        let what = match &c.from {
+            Some(from) => format!("{from} -> {}", c.path),
+            None => format!("deleted {}", c.path),
+        };
+        println!("  {:<12} {what}  {} {} {}", c.repo, c.commit, c.date.get(..10).unwrap_or(&c.date), c.subject);
+    }
+}
+
 pub fn threads(list: &[Thread]) {
     for t in list {
         let status = serde_json::to_value(t.status).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
@@ -187,7 +217,23 @@ pub fn notes(list: &[NoteSummary]) {
             if note.checklist.total > 0 { format!("  [{}/{}]", note.checklist.done, note.checklist.total) } else { String::new() };
         let preview =
             if note.preview.is_empty() { String::new() } else { format!("  {}", note.preview.chars().take(60).collect::<String>()) };
-        println!("{}  {:<8} {}{}{}{}", note.id, scope, title, if note.pinned { "  📌" } else { "" }, checklist, preview);
+        let category = note.category.map_or(String::new(), |category| format!("  ({})", category.as_str()));
+        let flag = match (&note.stale, note.undated) {
+            (Some(stale), _) => format!("  may be outdated: {}", stale.path),
+            (None, true) => "  undated".to_owned(),
+            (None, false) => String::new(),
+        };
+        println!(
+            "{}  {:<8} {}{}{}{}{}{}",
+            note.id,
+            scope,
+            title,
+            category,
+            if note.pinned { "  📌" } else { "" },
+            checklist,
+            flag,
+            preview
+        );
     }
 }
 
@@ -303,6 +349,15 @@ pub fn transcript(r: &ThreadsGetResult) {
             TranscriptEntry::RuntimeTask { task, .. } => println!("  ↳ {}  ({:?})", task.title, task.status),
             TranscriptEntry::Notice { text, .. } => println!("  ! {text}"),
             TranscriptEntry::Reverted { commit, .. } => println!("  ↶ reverted to {commit}"),
+            TranscriptEntry::Rotation { rotation_id, pending: true, .. } => println!("  ⟳ refreshing context…  ({rotation_id})"),
+            TranscriptEntry::Rotation { rotation_id, handoff_status, edited, .. } => {
+                let how = match handoff_status {
+                    Some(HandoffStatus::Missing { why }) => format!("without a handoff: {why}"),
+                    _ if *edited => "handoff edited by you".to_owned(),
+                    _ => "with a handoff".to_owned(),
+                };
+                println!("  ⟳ context refreshed {how}  ({rotation_id})");
+            }
             TranscriptEntry::OutsideRepoChanged { repos, .. } => {
                 for repo in repos {
                     println!("  ! {} changed outside this chat's worktree", repo.name);

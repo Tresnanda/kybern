@@ -1,12 +1,17 @@
-import { beforeEach, describe, expect, test } from 'bun:test'
+import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import type { EventPayload } from '@gpuix/react'
 import type { Project, Space } from '../../../../packages/kybern-client/src/types.ts'
 import { getNav, setNav } from '../nav/store.ts'
 import { set } from '../state.ts'
 import { noteTerminalFocus } from '../terminal/focus.ts'
+import { setKeyPlatform } from '../platform/keys.ts'
 import { spaceForDigit, spaceKey } from './keys.ts'
 import { startSpaces } from './current.ts'
 import { setSpacesState } from './store.ts'
+
+// Written for macOS shortcuts (⌘, ⌃); the off-macOS cases set their platform themselves. CI runs these on Linux.
+const restoreKeys = setKeyPlatform('darwin')
+afterAll(() => restoreKeys())
 
 const space = (id: string, position: number): Space => ({
   id, name: id, color: 'blue', logo: { kind: 'initials' }, position, is_default: position === 0, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
@@ -65,5 +70,22 @@ describe('spaceKey', () => {
     expect(spaceKey(press('1'))).toBe(false)
     setSpacesState({ supported: false, spaces: [] })
     expect(spaceKey(press('2'))).toBe(false)
+  })
+})
+
+describe('spaceKey off macOS', () => {
+  // Ctrl+1–9 pick tabs there, so spaces take Alt+1–9.
+  test('Alt+2 picks the second space; Ctrl+2 is left to the tabs', () => {
+    const restore = setKeyPlatform('win32')
+    try {
+      expect(spaceKey(press('2', { ctrl: true }))).toBe(false)
+      expect(spaceKey(press('2', { alt: true }))).toBe(true)
+      expect(getNav().spaceId).toBe('s2')
+      // AltGr arrives as Ctrl+Alt.
+      expect(spaceKey(press('3', { ctrl: true, alt: true }))).toBe(false)
+      noteTerminalFocus(true)
+      expect(spaceKey(press('3', { alt: true }))).toBe(false)
+      noteTerminalFocus(false)
+    } finally { restore() }
   })
 })

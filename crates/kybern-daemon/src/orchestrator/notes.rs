@@ -29,7 +29,16 @@ impl Orchestrator {
         self.inner.notes_changed.subscribe()
     }
 
-    pub(super) fn publish_note(&self, note: NoteSummary) {
+    pub(super) fn publish_note(&self, mut note: NoteSummary) {
+        // Only a send to a connected client needs the stale flag. Callers hold the
+        // command lock, so git runs later, off the lock (`publish_with_stale_flag`).
+        if self.inner.notes_changed.receiver_count() > 0 {
+            self.publish_with_stale_flag(&mut note);
+        }
+        self.send_note_changed(note);
+    }
+
+    pub(super) fn send_note_changed(&self, note: NoteSummary) {
         // No receivers just means no client is connected.
         let _ = self.inner.notes_changed.send(NotesChangedNotification { note: Some(note), purged_id: None });
     }
@@ -38,22 +47,35 @@ impl Orchestrator {
         let _ = self.inner.notes_changed.send(NotesChangedNotification { note: None, purged_id: Some(id) });
     }
 
+    /// Every note, stale flags read from git: call it from a blocking thread.
     pub fn notes_list(&self) -> Result<Vec<NoteSummary>> {
-        self.inner.store.notes_list()
+        let mut notes = self.inner.store.notes_list()?;
+        self.flag_stale_all(&mut notes);
+        Ok(notes)
+    }
+
+    /// When categories were introduced; see `NotesListResult::history_since`.
+    pub fn notes_history_since(&self) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+        self.inner.store.notes_history_since()
     }
 
     /// The note by `id` or by `thread_id`; a thread without a note yields `None`.
+    /// Its stale flag reads git: call it from a blocking thread.
     pub fn note_get(&self, params: NotesGetParams) -> Result<Option<Note>> {
-        match (params.id, params.thread_id) {
+        let note = match (params.id, params.thread_id) {
             (Some(id), None) => self
                 .inner
                 .store
                 .note_get(id)?
                 .map(Some)
-                .ok_or_else(|| NoteError::NotFound("Note not found. It may have been deleted permanently.").into()),
-            (None, Some(thread_id)) => self.inner.store.note_for_thread(thread_id),
-            _ => invalid("Pass either id or thread_id."),
-        }
+                .ok_or(NoteError::NotFound("Note not found. It may have been deleted permanently."))?,
+            (None, Some(thread_id)) => self.inner.store.note_for_thread(thread_id)?,
+            _ => return invalid("Pass either id or thread_id."),
+        };
+        Ok(note.map(|mut note| {
+            self.flag_stale(&mut note);
+            note
+        }))
     }
 
     pub fn note_create(&self, params: NotesCreateParams) -> Result<Note> {
@@ -71,7 +93,14 @@ impl Orchestrator {
                 let title = params.title.as_deref().filter(|title| !title.trim().is_empty()).unwrap_or(default_title);
                 self.inner.store.note_create_project_role(project_id, role, title, body, None)?
             }
-            None => self.inner.store.note_create(params.scope, params.project_id, params.title.as_deref().unwrap_or_default(), body)?,
+            None => self.inner.store.note_create_categorized(
+                params.scope,
+                params.project_id,
+                params.title.as_deref().unwrap_or_default(),
+                body,
+                None,
+                params.category,
+            )?,
         };
         self.publish_note(note.summary.clone());
         Ok(note)
@@ -83,13 +112,23 @@ impl Orchestrator {
             (None, Some(thread_id)) => NoteTarget::Thread(thread_id),
             _ => return invalid("Pass either id or thread_id."),
         };
+        if params.clear_category && params.category.is_some() {
+            return invalid("Pass category or clear_category, not both.");
+        }
+        let category = if params.clear_category { Some(None) } else { params.category.map(Some) };
         let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
         let previous_body = match target {
             NoteTarget::Id(id) => self.inner.store.note_get(id)?,
             NoteTarget::Thread(thread_id) => self.inner.store.note_for_thread(thread_id)?,
         }
         .map(|note| note.body);
-        let note = self.inner.store.note_update(target, params.expected_revision, params.title.as_deref(), params.body.as_deref())?;
+        let note = self.inner.store.note_update_with(
+            target,
+            params.expected_revision,
+            params.title.as_deref(),
+            params.body.as_deref(),
+            category,
+        )?;
         // An unchanged save returns the note as it is; only a real write moved the revision.
         if note.summary.revision != params.expected_revision {
             self.publish_note(note.summary.clone());
@@ -184,6 +223,8 @@ impl Orchestrator {
             expected_revision: params.expected_revision,
             title: None,
             body: Some(params.text),
+            category: None,
+            clear_category: false,
         })?;
         Ok(ThreadNotes { text: note.body, revision: note.summary.revision })
     }

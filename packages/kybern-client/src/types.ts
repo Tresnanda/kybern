@@ -514,6 +514,48 @@ export interface CoordinatorSwitchHarnessParams {
   permission_mode?: PermissionMode | null;
 }
 
+export interface CoordinatorRefreshContextParams {
+  thread_id: ThreadId;
+}
+
+export interface CoordinatorRefreshContextResult {
+  rotation_id: string;
+}
+
+/** Replace the handoff of the Coordinator's latest context refresh. */
+export interface CoordinatorEditHandoffParams {
+  thread_id: ThreadId;
+  rotation_id: string;
+  text: string;
+}
+
+/** Why a Coordinator's provider session was replaced. */
+export type RotationReason = "budget" | "idle" | "manual" | "harness_switch";
+
+/** Whether the old session wrote a handoff that passed validation. */
+export type HandoffStatus = { status: "written" } | { status: "missing"; why: string };
+
+export interface RepoHead {
+  repo: string;
+  branch?: string | null;
+  sha: string;
+}
+
+/** Counts of what Kybern carried into a fresh Coordinator session. */
+export interface RotationCarried {
+  children: number;
+  pull_requests: number;
+  tasks: number;
+  commits: number;
+  head?: RepoHead[];
+}
+
+/** The harness and model on one side of a rotation. */
+export interface HarnessRef {
+  kind: ProviderKind;
+  model?: string | null;
+}
+
 export interface ThreadReferencePart {
   type: "thread_reference";
   thread_id: ThreadId;
@@ -558,7 +600,7 @@ export type ContentPart =
   | SystemRowPart;
 
 /** What a `system_row` part announces. */
-export type SystemRowKind = "coordinator_setup";
+export type SystemRowKind = "coordinator_setup" | "coordinator_tidy_notes";
 
 /**
  * A row Kybern itself adds to a conversation, such as "Setup started". Clients draw it as
@@ -885,6 +927,12 @@ export const COORDINATOR_BRIEF_TOOL = "kybern_coordinator_brief";
  * (at least one path from `input.changes`) or a deny.
  */
 export const COORDINATOR_SETTINGS_TOOL = "kybern_coordinator_settings";
+/**
+ * `tool_name` of the Coordinator's "Apply N note changes?" card. `input` is a
+ * `NoteChangesProposalInput`; the answer is `{ decision: "submit", response: { accepted: [path, ...] } }`
+ * (at least one path from `input.changes`) or a deny.
+ */
+export const COORDINATOR_NOTES_TOOL = "kybern_coordinator_notes";
 /** `tool_name` of the Coordinator's git approvals (push, open a pull request, merge one). Answered allow once or deny. */
 export const LEAD_GIT_TOOL = "kybern_git";
 /** Longest project brief, in bytes. */
@@ -915,6 +963,31 @@ export interface SettingsProposalInput {
   /** Why the Coordinator proposes these, in its words. */
   reason: string;
   changes: SettingChange[];
+}
+
+/** What one row of a `NoteChangesProposalInput` does: add a dated claim, or add one and retire the line it replaces. */
+export type NoteChangeOp = "append" | "supersede";
+
+/** One proposed change in a `NoteChangesProposalInput`. */
+export interface NoteChange {
+  /** The row's id, numbered from 1; also the value `accepted` lists. */
+  path: string;
+  note_id: NoteId;
+  note_title: string;
+  op: NoteChangeOp;
+  /** The markdown added to the note, a dated claim. */
+  text: string;
+  /** For `supersede`: the exact line, or part of it, that is retired (struck through). */
+  supersedes?: string | null;
+  /** Sets the note's category when it has none. */
+  category?: NoteCategory | null;
+}
+
+/** The `input` of a `COORDINATOR_NOTES_TOOL` approval. */
+export interface NoteChangesProposalInput {
+  /** Why the Coordinator proposes these, in its words. */
+  reason: string;
+  changes: NoteChange[];
 }
 
 /** The `input` of a `LEAD_GIT_TOOL` approval. */
@@ -1053,6 +1126,26 @@ export type TranscriptEntry =
       turn_id: TurnId;
       seq: EventSeq;
       repos: OutsideRepoChange[];
+      at: DateTime;
+    }
+  | {
+      /** A Coordinator context refresh: pending while the handoff is written, then its outcome. */
+      role: "rotation";
+      /** The turn the refresh followed (nil before the first turn). */
+      turn_id: TurnId;
+      seq: EventSeq;
+      rotation_id: string;
+      reason: RotationReason;
+      pending: boolean;
+      used_tokens: number;
+      window_tokens?: number | null;
+      handoff?: string | null;
+      handoff_status?: HandoffStatus | null;
+      /** The user edited the handoff after the refresh. */
+      edited?: boolean;
+      carried?: RotationCarried | null;
+      from?: HarnessRef | null;
+      to?: HarnessRef | null;
       at: DateTime;
     };
 
@@ -1237,7 +1330,22 @@ export type EventPayload =
   | { kind: "checkpoint_updated"; checkpoint: Checkpoint }
   | { kind: "workspace_reverted"; to_turn_id: TurnId; commit: string }
   /** After a turn of a group worktree thread: deselected members' checkouts changed. Never reverted. */
-  | { kind: "outside_repo_changed"; repos: OutsideRepoChange[] };
+  | { kind: "outside_repo_changed"; repos: OutsideRepoChange[] }
+  /** A Coordinator context refresh began; sends queue until `context_rotated`. */
+  | { kind: "context_rotation_started"; rotation_id: string; reason: RotationReason; used_tokens: number; window_tokens?: number | null }
+  | {
+      kind: "context_rotated";
+      rotation_id: string;
+      reason: RotationReason;
+      handoff?: string | null;
+      handoff_status: HandoffStatus;
+      carried: RotationCarried;
+      from: HarnessRef;
+      to: HarnessRef;
+      /** The refresh failed before the old session was released: it carries on with its context. */
+      session_kept?: boolean;
+    }
+  | { kind: "handoff_edited"; rotation_id: string; text: string };
 
 export interface SavedSession {
   provider: ProviderKind;
@@ -1432,6 +1540,85 @@ export interface ProjectsMembersStatusResult {
   claude_md: boolean;
   /** Entries for "Also copy into worktrees", sorted by name. */
   copy_candidates?: CopyCandidate[];
+}
+
+/** One repository of the project as the map saw it. */
+export interface ProjectMapRepo {
+  /** Member path relative to the project folder; "." for a single project or the group folder itself. */
+  path: string;
+  name: string;
+  /** The branch work lands on: the remote's default, else `main` or `master`, else the current branch. */
+  default_branch?: string;
+  /** The branch checked out when the map was built; absent when HEAD is detached. */
+  branch?: string;
+  /** Full HEAD commit id the map describes. */
+  head: string;
+  /** Tracked files counted, at most 20 000. */
+  files: number;
+  /** More files are tracked than were counted. */
+  truncated?: boolean;
+}
+
+/** A directory (top two levels) with its tracked-file count. */
+export interface ProjectMapArea {
+  repo: string;
+  /** Relative to the repository, '/'-separated; "." is the repository root. */
+  path: string;
+  files: number;
+  /** Name from the manifest in this directory. */
+  name?: string;
+  /** `cargo`, `npm`, `go` or `python`, when a manifest is here. */
+  manifest?: string;
+}
+
+/** A command the project itself documents. */
+export interface ProjectMapCommand {
+  repo: string;
+  /** The file it comes from, relative to the repository. */
+  source: string;
+  /** Script, alias or target name; for a fenced block, the heading text copied verbatim. */
+  name: string;
+  run: string;
+}
+
+/** Commits per directory (two levels deep) over the last 30 days. */
+export interface ProjectMapBusy {
+  repo: string;
+  path: string;
+  commits: number;
+}
+
+export type ProjectMapChangeKind = "deleted" | "renamed";
+
+/** A file deleted or renamed in the last 14 days. */
+export interface ProjectMapChange {
+  repo: string;
+  kind: ProjectMapChangeKind;
+  /** The path that is gone (deleted), or the new path (renamed). */
+  path: string;
+  /** Renamed only: the old path. */
+  from?: string;
+  commit: string;
+  /** Commit date, strict ISO 8601. */
+  date: string;
+  subject: string;
+}
+
+/** A daemon-built, commit-stamped description of a project. Built from git and manifests only. */
+export interface ProjectMap {
+  built_at: string;
+  repos: ProjectMapRepo[];
+  layout: ProjectMapArea[];
+  commands: ProjectMapCommand[];
+  busy: ProjectMapBusy[];
+  removed: ProjectMapChange[];
+  /** What sessions receive: at most 6 KiB, starting `Map as of {repo}@{sha}`. */
+  header: string;
+}
+
+export interface ProjectsMapResult {
+  project_id: ProjectId;
+  map: ProjectMap;
 }
 
 export interface ProjectsInstructionsCreateResult {
@@ -1697,6 +1884,15 @@ export type NoteId = Uuid;
 export type NoteScope = "global" | "project" | "thread";
 /** What a project note is for: the user's brief, or the setup note the Coordinator keeps. Ordinary notes (memory) have no role. */
 export type ProjectNoteRole = "brief" | "setup";
+/** What kind of memory a project note holds. Decision and gotcha notes are history: agents add dated claims instead of rewriting them. */
+export type NoteCategory = "preference" | "decision" | "convention" | "gotcha";
+/** Why a note may be outdated: a claim cites a file that changed since the commit it names. */
+export interface StaleInfo {
+  /** The cited path that changed, as the note writes it. */
+  path: string;
+  /** Short id of the latest commit that changed it. */
+  commit: string;
+}
 
 /** A note without its body, as listed. */
 export interface NoteSummary {
@@ -1723,6 +1919,12 @@ export interface NoteSummary {
   created_by_thread?: ThreadId | null;
   /** Set on a project's brief and setup notes (one of each per project). Only the user edits the brief; only the project's Coordinator writes the setup note. */
   project_role?: ProjectNoteRole | null;
+  /** The kind of memory this note holds. Absent for ordinary notes. */
+  category?: NoteCategory | null;
+  /** Set when a claim cites a file that changed after its commit; computed by the daemon from git. Show "May be outdated · {path} changed". */
+  stale?: StaleInfo | null;
+  /** A project note without a category written before categories existed (see `NotesListResult.history_since`). Show "Undated, before {date}". */
+  undated?: boolean;
 }
 
 export interface Note extends NoteSummary {
@@ -1738,6 +1940,7 @@ export interface NotesCreateParams {
   body?: string;
   /** Creates the project's pinned brief or setup note (scope "project" with a `project_id`). Absent for an ordinary note. */
   project_role?: ProjectNoteRole | null;
+  category?: NoteCategory | null;
 }
 
 export interface NotesUpdateParams {
@@ -1749,6 +1952,32 @@ export interface NotesUpdateParams {
   /** Ignored for thread notes. */
   title?: string | null;
   body?: string | null;
+  /** Sets the note's category. Absent leaves it as it is. */
+  category?: NoteCategory | null;
+  /** Removes the note's category. Not together with `category`. */
+  clear_category?: boolean;
+}
+
+/** Result of `notes.list`. */
+export interface NotesListResult {
+  notes: NoteSummary[];
+  /** When categories were introduced. Uncategorized project notes created before it are `undated`. */
+  history_since?: string | null;
+}
+
+/** Stale notes a project needs before the Coordinator offers to tidy them. */
+export const NOTES_TIDY_THRESHOLD = 5;
+/** Days the "Tidy notes" offer stays quiet after "Not now". */
+export const NOTES_TIDY_SNOOZE_DAYS = 7;
+
+/** The state of a project's "Tidy notes" card ("N notes may be outdated"). */
+export interface TidyOffer {
+  /** Live project notes whose claims cite files that changed since. */
+  stale: NoteId[];
+  /** Show the card: at least `NOTES_TIDY_THRESHOLD` stale notes and not snoozed. */
+  offer: boolean;
+  /** While set and in the future, the offer is snoozed. */
+  snoozed_until?: string | null;
 }
 
 // ---- user tasks ("tasks.items.*"; `tasks.list` is runtime agent work) ----
@@ -1946,8 +2175,11 @@ export interface ThreadsSendParams {
 }
 
 export interface ThreadsSendResult {
+  /** Nil when `queued`. */
   turn_id: TurnId;
   message_id: MessageId;
+  /** The message waits in the thread's queue (a Coordinator's context is being refreshed) and starts the next turn by itself. */
+  queued?: boolean;
 }
 
 export interface ThreadsInterruptParams {
@@ -2177,6 +2409,8 @@ export interface OrchestrationSettings {
   lead_workspace?: DelegationWorkspace;
   /** Push and open pull requests without asking. Merging a pull request always asks. */
   lead_push_without_asking?: boolean;
+  /** Refresh the Coordinator's context once it passes this many tokens; 0 is off. Absent from older daemons (200 000). */
+  rotation_budget_tokens?: number;
 }
 
 /** How freely a Coordinator acts before asking the user. */
@@ -2202,6 +2436,8 @@ export interface CoordinatorOverrides {
   lead_push_without_asking?: boolean | null;
   /** Most delegated children the Coordinator may have running (1-16). */
   lead_max_children?: number | null;
+  /** Context refresh budget for this project's Coordinator; 0 is off. */
+  rotation_budget_tokens?: number | null;
 }
 
 /** The Coordinator settings in force for one project. */
@@ -2211,6 +2447,8 @@ export interface EffectiveCoordinatorSettings {
   lead_workspace: DelegationWorkspace;
   lead_push_without_asking: boolean;
   lead_max_children: number;
+  /** 0 when context refresh is off. Absent from older daemons. */
+  rotation_budget_tokens?: number;
 }
 
 /** Whether an agent may ask to use the real cursor and focus. */
@@ -2498,6 +2736,8 @@ export interface PullRequest {
   mergeable?: string;
   labels?: PrLabel[];
   checks_summary?: PrChecksSummary;
+  /** Group projects: the member repository (path relative to the group folder). Absent for single projects. */
+  repo?: string;
 }
 export interface PrLabel { name: string; color: string }
 export interface PrChecksSummary { total: number; passed: number; failed: number; pending: number; skipped: number }
@@ -2602,10 +2842,23 @@ export interface PrListParams {
 }
 
 export interface PrListResult {
+  /** Group projects: every member's pull requests in member order, each tagged with `repo`. */
   pull_requests: PullRequest[];
+  /** Group projects only: one row per member, with why its list is missing. */
+  repos?: PrListRepo[];
+}
+export interface PrListRepo {
+  /** Member path, relative to the group folder ("." is the folder itself). */
+  repo: string;
+  name: string;
+  /** "No GitHub remote", a missing folder or the `gh` error. */
+  error?: string;
+  /** Not on GitHub (no remote `gh` knows): nothing to list, and no error to show. */
+  skipped?: boolean;
 }
 
-export interface PrDetailParams { project_id: ProjectId; number: number }
+/** `repo`: the member of a group project (a `PullRequest.repo`); a group project requires it. */
+export interface PrDetailParams { project_id: ProjectId; number: number; repo?: string }
 export interface PrCheck { name: string; status: string; conclusion: string; url: string }
 export interface PrDetailResult { pull_request: PullRequest; body: string; head_sha: string; reviewers: string[]; checks: PrCheck[]; changed_files: number
   /** CLEAN | BLOCKED | BEHIND | DIRTY | UNSTABLE | DRAFT | HAS_HOOKS | UNKNOWN */
@@ -2620,13 +2873,13 @@ export interface PrDetailResult { pull_request: PullRequest; body: string; head_
 /** APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | REQUESTED */
 export interface PrReviewer { login: string; avatar_url?: string; is_bot?: boolean; state: string }
 export type PrPageKind = "files" | "comments" | "reviews" | "review_comments" | "checks";
-export interface PrPageParams { project_id: ProjectId; number: number; kind: PrPageKind; page?: number }
+export interface PrPageParams { project_id: ProjectId; number: number; kind: PrPageKind; page?: number; repo?: string }
 export interface PrFile { path: string; old_path: string | null; status: string; additions: number; deletions: number; patch: string; patch_truncated: boolean }
 export interface PrReviewEntry { id: number; author: string; body: string; state: string; path: string | null; line: number | null; side: string | null; url: string; updated_at: string; avatar_url?: string; author_is_bot?: boolean }
 export interface PrPageResult { checks?: PrCheck[]; files: PrFile[]; entries: PrReviewEntry[]; page: number; has_more: boolean }
 export type PrActionKind = "comment" | "approve" | "request_changes" | "checkout" | "merge" | "close";
 export interface PrInlineComment { path: string; line: number; side: string; body: string }
-export interface PrActionParams { project_id: ProjectId; number: number; action: PrActionKind; body?: string; inline_comments?: PrInlineComment[]; head_sha?: string; thread_id?: ThreadId; for_repair?: boolean }
+export interface PrActionParams { project_id: ProjectId; number: number; action: PrActionKind; body?: string; inline_comments?: PrInlineComment[]; head_sha?: string; thread_id?: ThreadId; for_repair?: boolean; repo?: string }
 export interface WorktreeInspectParams { thread_id: ThreadId }
 export interface WorktreeInspectResult { path: string; branch: string; exists: boolean; clean: boolean; merged: boolean; ignored_files: number; blockers: string[]; eligible: boolean }
 export interface WorktreeRemoveParams { thread_id: ThreadId; force?: boolean; delete_branch?: boolean }
@@ -2803,7 +3056,7 @@ export interface Methods {
   "threads.steer": [QueuedMessage, ThreadsSendResult];
   "threads.notes.get": [{ thread_id: ThreadId }, ThreadNotes];
   "threads.notes.set": [{ thread_id: ThreadId; text: string; expected_revision: number }, ThreadNotes];
-  "notes.list": [Empty, { notes: NoteSummary[] }];
+  "notes.list": [Empty, NotesListResult];
   "notes.get": [{ id?: NoteId | null; thread_id?: ThreadId | null }, { note?: Note | null }];
   "notes.create": [NotesCreateParams, Note];
   "notes.update": [NotesUpdateParams, Note];
@@ -2813,6 +3066,9 @@ export interface Methods {
   "notes.restore": [{ id: NoteId }, NoteSummary];
   "notes.purge": [{ id: NoteId }, Empty];
   "notes.search": [{ query: string; limit?: number | null }, { results: { id: NoteId; snippet: string }[] }];
+  "notes.tidy_offer": [{ project_id: ProjectId }, TidyOffer];
+  "notes.tidy_snooze": [{ project_id: ProjectId }, TidyOffer];
+  "notes.tidy_start": [{ project_id: ProjectId }, { thread_id: ThreadId; notes: number }];
   "tasks.items.list": [Empty, { tasks: TaskItem[] }];
   "tasks.items.get": [{ id?: TaskItemId | null; key?: string | null }, { task?: TaskItem | null }];
   "tasks.items.create": [TaskItemsCreateParams, TaskItem];
@@ -2891,6 +3147,7 @@ export interface Methods {
   "projects.remove": [ProjectsRemoveParams, Empty];
   "projects.scan_repos": [ProjectsScanReposParams, ProjectsScanReposResult];
   "projects.members.status": [{ project_id: ProjectId }, ProjectsMembersStatusResult];
+  "projects.map": [{ project_id: ProjectId }, ProjectsMapResult];
   "projects.instructions.create": [{ project_id: ProjectId }, ProjectsInstructionsCreateResult];
   "spaces.list": [Empty, SpacesListResult];
   "spaces.create": [SpacesCreateParams, Space];
@@ -2919,6 +3176,8 @@ export interface Methods {
   "coordinator.open": [CoordinatorOpenParams, CoordinatorOpenResult];
   "coordinator.setup": [CoordinatorSetupParams, Thread];
   "coordinator.switch_harness": [CoordinatorSwitchHarnessParams, Thread];
+  "coordinator.refresh_context": [CoordinatorRefreshContextParams, CoordinatorRefreshContextResult];
+  "coordinator.edit_handoff": [CoordinatorEditHandoffParams, Record<string, never>];
   "tasks.list": [TasksListParams, TasksListResult];
   "tasks.stop": [TaskControlParams, RuntimeTask];
   "tasks.background": [TaskControlParams, RuntimeTask];

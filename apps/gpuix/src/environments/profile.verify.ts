@@ -30,7 +30,7 @@ try {
   assert(!readFileSync(path.join(root,'client/environments.json'),'utf8').includes('fixture-device-token'),'Credential leaked into profile metadata')
   const edited = await saveEnvironment({id:profile.id,name:'Renamed fixture',address})
   assert(edited.ssh?.port === 2222,'Editing an environment lost SSH metadata')
-  forgetEnvironment(profile.id)
+  await forgetEnvironment(profile.id)
   assert(!readRegistry().environments.length && !existsSync(path.join(root,'credentials/fixture-A.token')),'Forget did not remove isolated profile and credential')
   identity = 'fixture-B'; reportedIdentity = 'wrong-fixture'
   let failed = false

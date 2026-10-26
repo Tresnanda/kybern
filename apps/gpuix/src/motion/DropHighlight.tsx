@@ -1,7 +1,7 @@
 // A Finder drag over a drop target: the desktop sets the card's border to `--color-border-focus` on `dragover` and
 // back on `dragleave`/`drop`, eased by the card's `transition-colors duration-200` (Tailwind's default curve,
 // cubic-bezier(0.4, 0, 0.2, 1); not a movement, so Reduce Motion keeps it). GPUIX lays a focus-coloured ring over the
-// card's own border and cross-fades it with the paint-only subtree opacity (`native/patches/subtree_transform.rs`):
+// card's own border and cross-fades it with the paint-only subtree opacity (`native/upstream/packages/native/src/subtree_transform.rs`):
 // no render or layout per frame. Drive `over` from the native `onFileDragChange` event.
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 

@@ -12,6 +12,7 @@ import { ContextMenu, MenuItem, MenuLabel, MenuSeparator, Tip } from '../nav/ove
 import { useNav, type NavState } from '../nav/store.ts'
 import { observeElementBounds } from '../native/layout.ts'
 import { pressTransform } from '../motion/press.ts'
+import { SHORTCUT } from '../platform/keys.ts'
 import { DURATION, EASE } from '../motion/kit.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { useApp } from '../state.ts'
@@ -125,10 +126,10 @@ export function RailSpaces() {
   )
 }
 
-/** Tooltip shortcut: ⌃1–⌃8 for the first eight and ⌃9 for the last. */
+/** Tooltip shortcut: ⌃1–⌃8 for the first eight and ⌃9 for the last (Alt+1–9 off macOS, `spaces/keys.ts`). */
 function shortcutFor(index: number, count: number): string[] | undefined {
-  if (index === count - 1 && count > 8) return ['⌃', '9']
-  return index < 8 ? ['⌃', String(index + 1)] : undefined
+  if (index === count - 1 && count > 8) return [SHORTCUT.space, '9']
+  return index < 8 ? [SHORTCUT.space, String(index + 1)] : undefined
 }
 
 const SpaceRow = memo(function SpaceRow({ space, index, count, active, dot, rowRef }: {

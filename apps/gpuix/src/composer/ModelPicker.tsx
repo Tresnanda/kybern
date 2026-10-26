@@ -54,6 +54,7 @@ import { DURATION, EASE, SPRING } from '../motion/kit.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { Dim, SwapOnChange } from './motion.tsx'
 import { patch, useComposer } from './store.ts'
+import { isPrimary } from '../platform/keys.ts'
 
 const SEARCH_RESULT_LIMIT = 150
 const SECTION_STEP = 100
@@ -416,7 +417,7 @@ function ModelPickerPanel({
                 setQuery(value)
                 setActiveKey(null)
               }}
-              onKeyDown={(e) => onKeyDown(e.key ?? '', !!e.modifiers?.cmd)}
+              onKeyDown={(e) => onKeyDown(e.key ?? '', isPrimary(e.modifiers))}
               // The input consumes Enter as its own submit action; it never reaches onKeyDown.
               onSubmit={() => onKeyDown('enter', false)}
             />

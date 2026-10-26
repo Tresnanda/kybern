@@ -1,6 +1,6 @@
 // A spinning glyph (`animate-spin`: 1 s linear infinite).
 //
-// Patched native build (`native/patches/rotate_gpui.py`): `paintAnimation: { kind: 'rotate', cycleMs }` on a passive
+// Patched native build (`the fork commit from rotate_gpui.py`): `paintAnimation: { kind: 'rotate', cycleMs }` on a passive
 // fixed-size SVG. The renderer re-rotates the glyph's sprite at every presented frame without element render,
 // layout or prepaint, so a spinner costs a scene replay per frame, not a window rebuild (measured on the PR page:
 // ~41% CPU as a native motion tween, ~12% as a scoped paint animation). There is no JS clock and no React work.

@@ -1,5 +1,6 @@
 //! Locate provider executables. Never installs anything.
 
+use kybern_protocol::process::NoWindow;
 use std::path::{Path, PathBuf};
 
 use kybern_protocol::ProviderKind;
@@ -18,11 +19,13 @@ pub fn resolve(kind: ProviderKind, override_path: Option<&PathBuf>) -> Result<Pa
 
 /// Run `<bin> --version` and return the first line, trimmed.
 pub async fn version_of(bin: &Path, args: &[&str]) -> Option<String> {
-    let out =
-        tokio::time::timeout(std::time::Duration::from_secs(10), crate::process_tree::output(tokio::process::Command::new(bin).args(args)))
-            .await
-            .ok()?
-            .ok()?;
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        crate::process_tree::output(tokio::process::Command::new(bin).no_window().args(args)),
+    )
+    .await
+    .ok()?
+    .ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
     let line = text.lines().next()?.trim();
     if line.is_empty() { None } else { Some(line.to_string()) }

@@ -1,4 +1,5 @@
 //! Bounded, native GitHub review reads and explicit human actions.
+use kybern_protocol::process::NoWindow;
 use std::path::Path;
 
 use anyhow::{Result, anyhow, ensure};
@@ -248,6 +249,7 @@ fn parse_checks(checks: &Value, statuses: &Value, page: u32) -> Result<PrPageRes
 
 async fn write_api(cwd: &Path, endpoint: &str, method: &str, value: Value) -> Result<()> {
     let mut child = Command::new("gh")
+        .no_window()
         .current_dir(cwd)
         .args(["api", endpoint, "--method", method, "--input", "-"])
         .stdin(std::process::Stdio::piped())

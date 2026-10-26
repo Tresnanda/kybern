@@ -40,19 +40,19 @@ const CHECKS_SHOWN = 5;
 const BUCKET_WORD = { passed: "Passed", failed: "Failing", pending: "Running", skipped: "Skipped" } as const;
 
 export default function PullRequestScreen() {
-  const { projectId = "", number: raw = "0" } = useLocalSearchParams<{ projectId: string; number: string }>();
+  const { projectId = "", number: raw = "0", repo } = useLocalSearchParams<{ projectId: string; number: string; repo?: string }>();
   const number = Number(raw);
   const app = useApp();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const project = app.projects.find((p) => p.id === projectId);
-  const pr = usePullRequest(projectId, number);
+  const pr = usePullRequest(projectId, number, repo);
   const detail = pr.detail;
   const head = detail?.head_sha;
-  const comments = usePrPage(projectId, number, "comments", pr.revision, head);
-  const reviews = usePrPage(projectId, number, "reviews", pr.revision, head);
-  const inline = usePrPage(projectId, number, "review_comments", pr.revision, head);
+  const comments = usePrPage(projectId, number, "comments", pr.revision, head, repo);
+  const reviews = usePrPage(projectId, number, "reviews", pr.revision, head, repo);
+  const inline = usePrPage(projectId, number, "review_comments", pr.revision, head, repo);
   const [allChecks, setAllChecks] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -94,11 +94,11 @@ export default function PullRequestScreen() {
   const openSheet = (mode: "review" | "checkout" | "repair") =>
     router.push({
       pathname: mode === "review" ? "/pull-review" : "/pull-send",
-      params: { projectId, number: String(number), ...(mode === "review" ? {} : { mode }) },
+      params: { projectId, number: String(number), ...(repo ? { repo } : {}), ...(mode === "review" ? {} : { mode }) },
     });
   const menu: MenuItem[] = [
-    { title: "Send to agent…", icon: "paperplane", disabled: !open, onPress: () => openSheet("repair") },
-    { title: "Check out…", icon: "arrow.triangle.branch", disabled: !open, onPress: () => openSheet("checkout") },
+    { title: "Send to agent…", icon: "paperplane", disabled: !open || !!repo, onPress: () => openSheet("repair") },
+    { title: "Check out…", icon: "arrow.triangle.branch", disabled: !open || !!repo, onPress: () => openSheet("checkout") },
     { title: "Open on GitHub", icon: "arrow.up.right", disabled: !p, onPress: () => p && void Linking.openURL(p.url) },
     { title: "Copy link", icon: "link", disabled: !p, onPress: copyLink },
     ...(open ? [{ title: "Close pull request…", icon: "xmark.circle" as const, destructive: true, onPress: close }] : []),
@@ -238,7 +238,7 @@ export default function PullRequestScreen() {
                     key={id}
                     entry={entry}
                     selected={pr.draft.selected.includes(id)}
-                    selectable={open}
+                    selectable={open && !repo}
                     onToggle={() => {
                       try {
                         pr.toggleFinding(id, entry);
@@ -248,7 +248,7 @@ export default function PullRequestScreen() {
                     }}
                   />
                 ))}
-                {open && (
+                {open && !repo && (
                   <T variant="footnote" tone="muted" style={{ paddingHorizontal: space.lg }}>
                     Select comments to send them to an agent that repairs this branch.
                   </T>

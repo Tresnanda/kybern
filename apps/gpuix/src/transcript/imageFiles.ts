@@ -10,10 +10,10 @@
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync, utimesSync } from 'node:fs'
 import { rename, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import path from 'node:path'
 import { useEffect, useMemo, useState } from 'react'
 import { imageSource } from '../../../../packages/kybern-client/src/responseImages.ts'
+import { gpuixCacheDir } from '../platform/os.ts'
 
 const CACHE_BYTES = 256 * 1024 * 1024
 const MEMORY_ENTRIES = 512
@@ -25,7 +25,7 @@ const EXTENSIONS: Record<string, string> = { 'image/png': 'png', 'image/jpeg': '
 let folder: string | null = null
 function cacheFolder() {
   if (folder) return folder
-  folder = process.env.KYBERN_CLIENT_CONFIG_DIR ? path.join(process.env.KYBERN_CLIENT_CONFIG_DIR, 'image-cache') : path.join(homedir(), 'Library/Caches/kybern-gpuix/images')
+  folder = gpuixCacheDir('image-cache', 'images')
   mkdirSync(folder, { recursive: true })
   prune(folder)
   return folder
@@ -66,6 +66,8 @@ export async function storeImageBytes(bytes: Uint8Array, media: string): Promise
 let running = 0
 const waiting: (() => void)[] = []
 async function convert(input: string, output: string, width: number, jpeg: boolean) {
+  // `sips` is macOS's: elsewhere the original file is the inline image too (callers fall back to it on `false`).
+  if (process.platform !== 'darwin') return false
   if (running >= CONVERSIONS) await new Promise<void>(resolve => waiting.push(resolve))
   running++
   try {

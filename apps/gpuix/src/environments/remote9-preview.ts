@@ -49,7 +49,7 @@ const thread = (JSON.parse(cli(DATA_B, 'call', 'threads.create', JSON.stringify(
   const { httpBase } = await import('../../../../packages/kybern-client/src/address.ts')
   const { openRelay } = await import('../preview/relay.ts')
   const port = await ensureSshTunnel(env.id, env.ssh!)
-  const client = new KybernClient({ url: `ws://127.0.0.1:${port}/ws`, token: readCredential(env.id) }, { createSocket: (url, token) => new WebSocket(url, { headers: { origin: 'tauri://localhost', Authorization: `Bearer ${token}` } } as never) })
+  const client = new KybernClient({ url: `ws://127.0.0.1:${port}/ws`, token: await readCredential(env.id) }, { createSocket: (url, token) => new WebSocket(url, { headers: { origin: 'tauri://localhost', Authorization: `Bearer ${token}` } } as never) })
   client.connect(); await until('client over the tunnel', () => client.status === 'open')
   const opened = await client.call('previews.open', { thread_id: thread, target: `http://127.0.0.1:${SITE_PORT}/`, proxy: true }) as { ticket?: string; path?: string }
   const relay = await openRelay(`${httpBase(client.endpoint.url)}${opened.path}`, httpBase(client.endpoint.url))

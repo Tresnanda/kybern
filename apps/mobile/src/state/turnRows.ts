@@ -143,14 +143,17 @@ export function createTurnRows(threadId: string) {
       { group: TurnGroup; expanded: ReadonlySet<string>; rows: TurnRow[] }
     >();
     const result: TurnRow[] = [];
-    for (const group of groupTurns(blocks)) {
-      const expanded = turnKeys(group.turnId, expandedTurns);
-      const previous = cache.get(group.turnId);
-      if (group.end && previous?.group === group && sameKeys(previous.expanded, expanded)) {
-        next.set(group.turnId, previous);
+    for (const grouped of groupTurns(blocks)) {
+      const expanded = turnKeys(grouped.turnId, expandedTurns);
+      const previous = cache.get(grouped.turnId);
+      if (grouped.end && previous?.group === grouped && sameKeys(previous.expanded, expanded)) {
+        next.set(grouped.turnId, previous);
         result.push(...previous.rows);
         continue;
       }
+      // A context refresh follows its turn, so it closes the turn's rows instead of folding into its work.
+      const rotations = grouped.work.filter((block) => block.kind === "rotation");
+      const group = rotations.length ? { ...grouped, work: grouped.work.filter((block) => block.kind !== "rotation") } : grouped;
       const rows: TurnRow[] = [];
       const chips = signInRows(group.work);
       // A visual that asks is answered under the visual itself, not by a separate card.
@@ -260,7 +263,8 @@ export function createTurnRows(threadId: string) {
       if (group.reverted) add(group.reverted);
       // Group worktree threads: repositories changed outside the worktree, after the turn's answer.
       group.outside?.forEach((block) => add(block));
-      next.set(group.turnId, { group, expanded, rows });
+      rotations.forEach((block) => add(block));
+      next.set(group.turnId, { group: grouped, expanded, rows });
       result.push(...rows);
     }
     cache = next;

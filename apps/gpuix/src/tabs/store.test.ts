@@ -1,6 +1,11 @@
-import { expect, test } from 'bun:test'
+import { afterAll, expect, test } from 'bun:test'
+import { setKeyPlatform } from '../platform/keys.ts'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+
+// Written for macOS shortcuts (⌘, ⌃); the off-macOS cases set their platform themselves. CI runs these on Linux.
+const restoreKeys = setKeyPlatform('darwin')
+afterAll(() => restoreKeys())
 
 test('tab groups: migration, openers, split and move, close and reopen, retarget, persistence, close pane keys', async () => {
   const scratch = mkdtempSync(tmpdir() + '/gpuix-scratch-tabs-')

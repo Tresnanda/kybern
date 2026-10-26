@@ -1502,11 +1502,25 @@ impl Store {
         })
     }
 
+    /// The thread's latest event of one of `kinds` (`EventPayload::kind` tags), without reading the rest of its log.
+    pub fn latest_event_of_kinds(&self, thread_id: ThreadId, kinds: &[&str]) -> Result<Option<ThreadEvent>> {
+        self.with(|c| {
+            let placeholders = (0..kinds.len()).map(|index| format!("?{}", index + 2)).collect::<Vec<_>>().join(",");
+            let sql = format!(
+                "SELECT seq, thread_id, turn_id, at, payload FROM events WHERE thread_id = ?1 AND kind IN ({placeholders}) ORDER BY seq DESC LIMIT 1"
+            );
+            let thread = thread_id.to_string();
+            let mut values: Vec<&dyn rusqlite::ToSql> = vec![&thread];
+            values.extend(kinds.iter().map(|kind| kind as &dyn rusqlite::ToSql));
+            Ok(c.query_row(&sql, values.as_slice(), row_to_event).optional()?)
+        })
+    }
+
     pub fn provider_usage_through(&self, thread_id: ThreadId, through_seq: EventSeq) -> Result<ProviderUsage> {
         self.with(|c| {
             let mut st = c.prepare(
                 "SELECT seq, thread_id, turn_id, at, payload FROM events
-                 WHERE thread_id = ?1 AND seq <= ?2 AND kind = 'provider_usage_updated'
+                 WHERE thread_id = ?1 AND seq <= ?2 AND kind IN ('provider_usage_updated', 'session_transitioned', 'context_rotated')
                  ORDER BY seq",
             )?;
             let events = st.query_map(params![thread_id.to_string(), through_seq], row_to_event)?.collect::<Result<Vec<_>, _>>()?;
@@ -3386,6 +3400,23 @@ mod orchestration_tests {
             created_at: now,
             updated_at: now,
         }
+    }
+
+    #[test]
+    fn a_store_migrated_by_a_newer_build_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.sqlite");
+        drop(Store::open(&path).unwrap());
+        let newer = schema::migration_count() as i64 + 1;
+        Connection::open(&path).unwrap().pragma_update(None, "user_version", newer).unwrap();
+        let error = Store::open(&path).err().expect("a newer schema must not open").to_string();
+        assert!(error.contains("newer Kybern") && error.contains("Update Kybern"), "{error}");
+        // Refusing leaves the data as the newer build wrote it.
+        assert_eq!(Connection::open(&path).unwrap().query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), newer);
+        // The current schema, and an older one that migrates forward, still open.
+        let conn = Connection::open_in_memory().unwrap();
+        schema::migrate(&conn).unwrap();
+        schema::migrate(&conn).unwrap();
     }
 
     #[test]

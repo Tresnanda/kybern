@@ -119,6 +119,9 @@ fn notes_wire_shape_is_stable() {
             origin: None,
             created_by_thread: None,
             project_role: None,
+            category: None,
+            stale: None,
+            undated: false,
         },
         body: "- [x] Ship it".into(),
     };

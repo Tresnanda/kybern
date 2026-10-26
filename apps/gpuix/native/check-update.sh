@@ -11,7 +11,7 @@ geometry)
   bun native/capability-check.ts
   bun native/decoration-check.ts
   bun native/rounded-check.ts
-  # Edge fades (patches/edge_fade.rs, N3): alpha ramps, nesting, insets, scroll and retained translation.
+  # Edge fades (native/upstream/packages/native/src/edge_fade.rs, N3): alpha ramps, nesting, insets, scroll and retained translation.
   bun native/edge-fade-check.ts
   # Half-resolution wide backdrops (N2) against an exact Gaussian.
   bun perf/backdrop/halfres-check.ts
@@ -21,11 +21,11 @@ geometry)
   KYBERN_REGION_PAINT=1 bun native/subtree-transform-check.ts
   bun native/font-weight-check.ts
   bun native/stroke-draw-check.ts
-  # Paint-only hover colour fades (patches/hover_fade_*): dark, light, Reduce Motion, KYBERN_HOVER_FADE=0.
+  # Paint-only hover colour fades (the fork commits from hover_fade_*): dark, light, Reduce Motion, KYBERN_HOVER_FADE=0.
   bun native/hover-fade-check.ts
   # Rings that ease between values (stroke_draw from/to/retarget, N2).
   bun native/ring-check.ts
-  # Compositor loops (patches/compositor_loops_*): CA layers, curves, hand-back; and the scene path control.
+  # Compositor loops (the fork commits from compositor_loops_*): CA layers, curves, hand-back; and the scene path control.
   bun perf/motion-fps/lab-check.ts
   bun perf/motion-fps/lab-check.ts --light
   bun perf/motion-fps/lab-check.ts --reduced

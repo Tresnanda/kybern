@@ -21,6 +21,9 @@ import { useComposer } from './store.ts'
 import { popoverStyle, PopupLayer } from './Menu.tsx'
 import type { Theme } from '../theme.ts'
 import { ringValue } from '../motion/success.ts'
+import { refreshContext, useRefreshPoint, useRotationPending } from '../coordinator/rotation.ts'
+import { formatTokens, ROTATION_COPY } from '../../../../packages/kybern-client/src/rotation.ts'
+import { Button } from '../kit/Button.tsx'
 
 type Limits = NonNullable<ProviderUsage['limits']>
 
@@ -88,6 +91,11 @@ export function StatusGlyph({ provider, running }: { provider: ProviderInstance;
   }, [remaining > 0, running, activity, pane.frozen])
   const cache: CacheState | null = activity && window ? cacheState(!!running, remaining) : null
   const context = contextUsage(usage?.context)
+  // A project Coordinator refreshes its context at a budget: a tick on the ring and a row in the popover (spec §10.1).
+  const thread = useApp(s => s.open.thread)
+  const refreshAt = useRefreshPoint(thread, context?.window)
+  const rotating = useRotationPending(!!thread?.coordinator_project_id)
+  const tick = context && refreshAt && refreshAt < context.window ? refreshAt / context.window : null
   const binding = limits ? bindingLimit(limits, now) : null
   const leftPercent = binding ? 100 - binding.used : null
   const tone = glyphTone(context?.percent ?? null, leftPercent)
@@ -102,7 +110,9 @@ export function StatusGlyph({ provider, running }: { provider: ProviderInstance;
   const base = hovered || open ? t.text : ink(t, t.variant === 'dark' ? 0.58 : 0.598)
   const arc = tone === 'critical' ? t.v('--destructive') : tone === 'warning' ? t.warning : base
   const head = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">'
-  const backdrop = `${head}<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" opacity=".2"/>${cache && cache.state !== 'cold' ? `<circle cx="12" cy="12" r="2.5" fill="currentColor" opacity="${cacheDotOpacity(cache)}"/>` : ''}</svg>`
+  // The budget tick: a short radial stroke across the ring at the share of the window where the refresh happens.
+  const budgetTick = tick ? `<path d="M12 .8v3.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" transform="rotate(${Math.round(tick * 3600) / 10} 12 12)"/>` : ''
+  const backdrop = `${head}<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" opacity=".2"/>${cache && cache.state !== 'cold' ? `<circle cx="12" cy="12" r="2.5" fill="currentColor" opacity="${cacheDotOpacity(cache)}"/>` : ''}${budgetTick}</svg>`
   // Context used: eases from the old share to the new one after each turn (native ring, N2); it mounts at its value.
   const ring = context ? ringValue({ size: 24, radius: 9, strokeWidth: 2.5, fraction: context.percent / 100 }) : null
   const trigger = (
@@ -142,7 +152,7 @@ export function StatusGlyph({ provider, running }: { provider: ProviderInstance;
           style={{ ...popoverStyle(t), borderRadius: RADIUS, boxShadow: shadowXl(t), width: WIDTH, maxWidth: Math.max(WIDTH / 2, windowWidth - 32), padding: PAD, display: 'flex', flexDirection: 'column' }}
         >
           <HoverScopeProvider ctl={ctl as never}>
-            <UsagePopover usage={usage} kind={kind} promptProvider={window?.providerLabel ?? null} ttl={window?.ttlMinutes ?? 0} cache={cache} remaining={remaining} limits={limits} accountName={multi ? accountName : null} accountColor={account?.color ?? null} />
+            <UsagePopover usage={usage} kind={kind} promptProvider={window?.providerLabel ?? null} ttl={window?.ttlMinutes ?? 0} cache={cache} remaining={remaining} limits={limits} accountName={multi ? accountName : null} accountColor={account?.color ?? null} refresh={thread && refreshAt !== null ? { point: refreshAt, tick, disabled: !!running || rotating, onRefresh: () => void refreshContext(thread.id) } : undefined} />
           </HoverScopeProvider>
         </PopupLayer>
       )}
@@ -175,6 +185,7 @@ function UsagePopover({
   limits,
   accountName,
   accountColor,
+  refresh,
 }: {
   usage?: ProviderUsage
   kind: ProviderInstance['kind']
@@ -185,6 +196,8 @@ function UsagePopover({
   limits?: Limits
   accountName: string | null
   accountColor: string | null
+  /** A project Coordinator: where it refreshes (0 is off), as a share of the window, and the manual refresh. */
+  refresh?: { point: number; tick: number | null; disabled: boolean; onRefresh: () => void }
 }) {
   const t = useTheme()
   const now = useOpenClock()
@@ -215,12 +228,23 @@ function UsagePopover({
         </Heading>
         {/* The heading's `mb-3` and the caption's `mt-2` are adjacent block margins on the desktop: they collapse to 12px, not 20. */}
         {context ? <>
-          <UsageMeter percent={context.percent} tone={ctxTone} label="Context used" />
+          <UsageMeter percent={context.percent} tone={ctxTone} label="Context used" tick={refresh?.tick ?? undefined} />
           <div style={{ display: 'flex', flexWrap: 'wrap', marginTop: 8 }}>
             <Label color={t.text} size={SM} lineHeight={SM * 1.5}>{context.used.toLocaleString()}</Label>
             <Label color={muted} size={SM} lineHeight={SM * 1.5}>{` of ${context.window.toLocaleString()} tokens`}</Label>
           </div>
         </> : <Caption color={muted}>Context usage hasn’t been reported yet.</Caption>}
+        {refresh && (
+          <div testId="composer-status-refresh" style={{ display: 'flex', flexDirection: 'column', marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderColor: ink(t, 0.06) }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flexGrow: 1 }}>
+                <Label color={t.text} size={SM} lineHeight={SM * 1.5}>{refresh.point > 0 ? `${ROTATION_COPY.refreshAt} ${formatTokens(refresh.point)}` : ROTATION_COPY.refreshOff}</Label>
+                <Caption color={muted} style={{ fontSize: 12, lineHeight: 16 }}>{ROTATION_COPY.refreshMeta}</Caption>
+              </div>
+              <Button variant="ghost" size="sm" testId="composer-status-refresh-now" disabled={refresh.disabled} onClick={refresh.onRefresh}>{ROTATION_COPY.refreshNow}</Button>
+            </div>
+          </div>
+        )}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', marginTop: 24 }}>
         <div testId="composer-status-limits-label" style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10, minWidth: 0 }}>
@@ -293,12 +317,22 @@ function Caption({ children, color, style }: { children: string; color: string; 
 }
 
 /** `provider-usage-meter`: a 4px pill, ink 10% track, ink 65% fill (warning or destructive near the limit). */
-function UsageMeter({ percent, tone, label }: { percent: number; tone: 'normal' | 'warning' | 'critical'; label: string }) {
+function UsageMeter({ percent, tone, label, tick }: { percent: number; tone: 'normal' | 'warning' | 'critical'; label: string; /** Where a Coordinator refreshes, as a share of the window (0-1): a 2 × 12 px mark across the track. */ tick?: number }) {
   const t = useTheme()
   const fill = tone === 'critical' ? t.v('--destructive') : tone === 'warning' ? t.warning : ink(t, 0.65)
-  return (
+  const meter = (
     <div role="meter" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)} style={{ display: 'flex', height: 4, borderRadius: 2, overflow: 'hidden', backgroundColor: ink(t, 0.1) }}>
       <div style={{ width: `${Math.max(0, Math.min(100, percent))}%`, height: 4, borderRadius: 2, backgroundColor: fill }} />
+    </div>
+  )
+  if (tick === undefined) return meter
+  return (
+    <div style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}>
+      {meter}
+      <div style={{ position: 'absolute', top: -4, left: 0, right: 0, display: 'flex', pointerEvents: 'none' }}>
+        <div style={{ width: `${Math.max(0, Math.min(100, tick * 100))}%`, flexShrink: 0 }} />
+        <div testId="composer-status-tick" style={{ marginLeft: -1, width: 2, height: 12, borderRadius: 1, backgroundColor: t.text, flexShrink: 0 }} />
+      </div>
     </div>
   )
 }

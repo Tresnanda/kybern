@@ -30,12 +30,13 @@ pub const APP_TOOL_TITLE_PREFIX: &str = "kybern_app_tool_request:";
 pub const ALLOW_ONCE: &str = "Allow once";
 pub const ALLOW_ALWAYS: &str = "Always allow this exact call";
 pub const DENY: &str = "Deny";
-pub const APP_TOOL_NAMES: [&str; 44] = [
+pub const APP_TOOL_NAMES: [&str; 45] = [
     "kybern_thread_context",
     "kybern_workspace_diff",
     "kybern_read_file",
     "kybern_list_files",
     "kybern_runtime_tasks",
+    "kybern_project_map",
     "kybern_list_terminals",
     "kybern_read_terminal",
     "kybern_html_preview",

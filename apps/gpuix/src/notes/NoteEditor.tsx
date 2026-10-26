@@ -2,7 +2,6 @@ import { toast } from '../shell/toasts.tsx'
 import { createTask, openTask } from '../tasks/store.ts'
 import { checklistLine } from '@/state/noteLines'
 import { goPage } from '../nav/history.ts'
-import { spawn } from 'node:child_process'
 import { motion, useGpuix, useWindowSize, type PublicInstance } from '@gpuix/react'
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { editedAgo } from '@/state/notesModel'
@@ -18,15 +17,22 @@ import { Button } from '../kit/Button.tsx'
 import { observeElementBounds } from '../native/layout.ts'
 import { onWindowVisibility } from '../native/visibility.ts'
 import { useApp } from '../state.ts'
-import { EASE_OUT, REDUCED_MOTION, Label, useTheme } from '../ui.tsx'
+import { EASE_OUT, REDUCED_MOTION, Label, ink, useTheme } from '../ui.tsx'
 import { display, gallery, getNotes, restoreNote, rpc, useNotes } from './store.ts'
 import { noteSession } from './session.ts'
 import { Toolbar } from './Toolbar.tsx'
 import { noteBannerIn, noteDocIn } from './motion.ts'
 import { SwapOnChange } from '../motion/kit.tsx'
-import { RichEditor, type EditorState, type MakeTaskLine, type RichEditorHandle } from '../editor/RichEditor.tsx'
+import { RichEditor, withAlpha, type EditorState, type MakeTaskLine, type RichEditorHandle } from '../editor/RichEditor.tsx'
 import type { ImageHome } from '../editor/images.ts'
 import { plainText as docText, type DocBlock } from '../editor/markdown.ts'
+import { NOTES_HISTORY_COPY, NOTE_CATEGORIES, supersededLabel, supersededLines } from '../../../../packages/kybern-client/src/notesHistory.ts'
+import type { NoteCategory } from '../../../../packages/kybern-client/src/types.ts'
+import { Menu, MenuItem } from '../nav/overlay.tsx'
+import { FONT_MONO } from '../theme.ts'
+import { supersededBlocks, type SupersededBlock } from './superseded.ts'
+import { openQuietly } from '../platform/os.ts'
+import { isPrimaryNotAltGr } from '../platform/keys.ts'
 
 /** The text a reader counts: no link targets, list numbers, fences or heading marks. */
 function plainText(body: string): string {
@@ -37,7 +43,7 @@ export function openLink(href: string, _noteId?: string) {
   if (task) { openTask(task[1]!); goPage('tasks'); return }
   const thread = /^kybern:\/\/thread\/([a-f\d-]{36})\/?$/i.exec(href)
   if (thread) { openThread(thread[1]!); return }
-  if (/^(https?:|mailto:|tel:)/i.test(href)) { const child = spawn('open', [href], { stdio: 'ignore' }); child.on('error', () => {}) }
+  if (/^(https?:|mailto:|tel:)/i.test(href)) openQuietly(href)
 }
 /** Where a note's images are kept: the daemon that keeps the note. */
 export function noteImageHome(id: string): ImageHome {
@@ -80,7 +86,7 @@ export function NoteEditor({ id, compact = false, width, onClose }: { id: string
   const editing = !!state?.focused
   useEffect(() => addWindowKeyHandler((e) => {
     if (getNav().paletteOpen || getNav().settingsOpen || getNotes().quick || getNotes().capture) return
-    if (e.modifiers?.cmd && e.key === 's') { void session.flush(); return true }
+    if (isPrimaryNotAltGr(e.modifiers) && e.key === 's') { void session.flush(); return true }
     if (!compact && width === undefined && e.key === 'escape' && !editing) { gallery(); return true }
   }), [session, editing, compact, width])
   const finish = () => { renderer?.blur?.(); void session.flush() }
@@ -122,6 +128,19 @@ export function NoteEditor({ id, compact = false, width, onClose }: { id: string
     }, 300)
     return () => clearTimeout(timer)
   }, [snap.body, snap.epoch, state?.canUndo, state?.height])
+  // Retired claims (`~~line~~ (superseded date)`) are struck through by the editor; they are also dimmed and, where the page has a
+  // right margin, labelled "Superseded Oct 25". Their places are read once after typing pauses, and only when the note has any.
+  const [superseded, setSuperseded] = useState<SupersededBlock[]>([])
+  useEffect(() => {
+    if (compact || !supersededLines(snap.body).length) { setSuperseded((old) => old.length ? [] : old); return }
+    const timer = setTimeout(() => {
+      const doc = editor.current?.command({ cmd: 'getDoc' }) as { blocks: DocBlock[] } | null
+      const layout = editor.current?.command({ cmd: 'layout' }) as { blocks: { top: number; height: number; ty: number; lineHeight: number | null }[] } | null
+      const next = doc && layout ? supersededBlocks(doc.blocks, layout.blocks) : []
+      setSuperseded((old) => old.length === next.length && old.every((b, i) => b.top === next[i]!.top && b.height === next[i]!.height && b.date === next[i]!.date) ? old : next)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [snap.body, snap.epoch, state?.height, docWidth, compact])
   const headings = (state?.headings ?? []).slice(0, 80)
   // Desktop `hasOutline`: two headings and room in the margin.
   const hasOutline = !compact && headings.length >= 2 && (width ?? size.width) >= 1050
@@ -201,12 +220,14 @@ export function NoteEditor({ id, compact = false, width, onClose }: { id: string
       : <Banner opened={openedAt} title="This note no longer exists" detail="Return to Notes to open another document."><Button onClick={gallery}>Open Notes</Button></Banner>)}
     {snap.conflict && <Banner opened={openedAt} title="This note changed on another device" detail="Keep your version to replace theirs, or use theirs and discard your changes."><Button testId="note-use-theirs" danger onClick={() => session.useTheirs()}>Use theirs</Button><Button testId="note-keep-mine" variant="primary" onClick={() => session.keepMine()}>Keep mine</Button></Banner>}
     {deleted && <Banner opened={openedAt} title="This note is in Recently deleted" detail="Restore it to edit it again."><Button testId="note-restore" variant="primary" onClick={() => void restoreNote(id)}>Restore</Button></Banner>}
+    {snap.phase === 'ready' && note?.stale && !deleted && <Banner opened={openedAt} tone="warning" testId="note-stale-banner" title={NOTES_HISTORY_COPY.staleTitle} detail={<><Code>{note.stale.path}</Code><Label color={t.textSecondary} size={12}>changed in</Label><Code>{note.stale.commit}</Code></>} />}
     {snap.phase === 'ready' && <>
       <div ref={viewport} testId="note-viewport" style={{ display: 'flex', flexGrow: 1, minHeight: 0, position: 'relative' }}>
         <div ref={scroller} testId="note-body-list" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexGrow: 1, minHeight: 0, overflow: 'scroll' }}>
           <div paintTransform={docIn} style={{ display: 'flex', flexDirection: 'column', width: docWidth, paddingTop: 84, flexShrink: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, minHeight: 19.5, marginBottom: 20 }}>
               <ProjectDot projectId={note?.scope === 'global' ? null : note?.project_id ?? null} /><Label color={k.fg2} size={NOTES_META} lineHeight={19.5}>{note?.scope === 'global' ? 'Global' : projects.find((p) => p.id === note?.project_id)?.name ?? 'Chats'}</Label>
+              {note?.scope === 'project' && <CategoryPicker category={note.category ?? null} locked={deleted} onPick={(category) => void session.setCategory(category).catch((error) => toast.error('Unable to set the category', { description: String(error) }))} />}
               <Label color={k.fg4} size={NOTES_META} lineHeight={19.5}>·</Label>
               <div testId="note-save-status" onClick={() => { if (snap.status === 'error') void session.flush() }}><SwapOnChange active={`save:${saveEra}`} style={{ justifyContent: 'flex-start' }}><Label color={snap.status === 'error' ? t.red : k.fg3} size={NOTES_META} lineHeight={19.5}>{status}</Label></SwapOnChange></div>
             </div>
@@ -215,7 +236,10 @@ export function NoteEditor({ id, compact = false, width, onClose }: { id: string
               onSubmit={() => editor.current?.focus('start')}
               onKeyDown={(e) => { if (e.key === 'down' && !e.modifiers?.shift) { e.preventDefault(); editor.current?.focus('start') } }}
               theme={{ text: k.fg, caret: k.fg }} style={{ width: '100%', height: 37, marginBottom: 24, fontSize: 30.15, lineHeight: 36.6, fontWeight: 650, color: k.fg }} />
-            {body('page')}
+            <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', width: '100%' }}>
+              {body('page')}
+              {superseded.map((block) => <SupersededMark key={block.index} block={block} gutter={(room - docWidth) / 2 - 12} docWidth={docWidth} />)}
+            </div>
             {/* The blank space under the text is part of the page: click it to keep writing. */}
             {!deleted && <div testId="note-add-block" style={{ width: '100%', minHeight: 96, paddingBottom: 48, cursor: 'text' }} onClick={() => editor.current?.focus('end')} />}
           </div>
@@ -243,4 +267,36 @@ export function NoteEditor({ id, compact = false, width, onClose }: { id: string
     </>}
   </div>
 }
-function Banner({ title, detail, children, opened }: { title: string; detail: string; children: React.ReactNode; opened: number }) { const t = useTheme(); const [enter] = useState(() => (Date.now() - opened > 400 ? noteBannerIn() : undefined)); return <div testId="note-banner" paintTransform={enter} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 14, backgroundColor: t.buttonSecondary }}><div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexGrow: 1 }}><Label color={t.text} size={13} weight={500}>{title}</Label><Label color={t.textSecondary} size={12}>{detail}</Label></div>{children}</div> }
+function Banner({ title, detail, children, opened, tone, testId = 'note-banner' }: { title: string; detail: React.ReactNode; children?: React.ReactNode; opened: number; /** `warning` leads with a warning dot (a stale note). */ tone?: 'warning'; testId?: string }) {
+  const t = useTheme()
+  const [enter] = useState(() => (Date.now() - opened > 400 ? noteBannerIn() : undefined))
+  return <div testId={testId} paintTransform={enter} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 14, backgroundColor: t.buttonSecondary }}>
+    {tone === 'warning' && <div style={{ width: 8, height: 8, borderRadius: 4, flexShrink: 0, backgroundColor: t.warning }} />}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexGrow: 1, minWidth: 0 }}><Label color={t.text} size={13} weight={500}>{title}</Label>{typeof detail === 'string' ? <Label color={t.textSecondary} size={12}>{detail}</Label> : <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4 }}>{detail}</div>}</div>{children}
+  </div>
+}
+/** A path or commit inside a sentence: mono on the secondary fill, as inline code in a note. */
+function Code({ children }: { children: string }) {
+  const t = useTheme()
+  return <div style={{ display: 'flex', alignItems: 'center', paddingLeft: 5, paddingRight: 5, borderRadius: 4, backgroundColor: ink(t, 0.06) }}><Label color={t.textSecondary} size={11.5} lineHeight={17} font={FONT_MONO}>{children}</Label></div>
+}
+/** The meta row's category: a small secondary control ("Decision ▾"). A deleted note shows it as plain text. */
+function CategoryPicker({ category, locked, onPick }: { category: NoteCategory | null; locked: boolean; onPick: (category: NoteCategory | null) => void }) {
+  const t = useTheme()
+  const label = NOTE_CATEGORIES.find((c) => c.value === category)?.label ?? NOTES_HISTORY_COPY.categoryLabel
+  if (locked) return category ? <Label color={t.textSecondary} size={NOTES_META} lineHeight={19.5}>{label}</Label> : null
+  return <Menu align="start" minWidth={168} testId="note-category" trigger={() => <Button size="sm" chevron label={`Category: ${label}`} testId="note-category-trigger">{label}</Button>}>
+    {NOTE_CATEGORIES.map((c) => <MenuItem key={c.value} id={c.value} label={c.label} checked={c.value === category} testId={`note-category-${c.value}`} onSelect={() => { if (c.value !== category) onPick(c.value) }} />)}
+    {category && <MenuItem id="none" label={NOTES_HISTORY_COPY.noCategory} testId="note-category-none" onSelect={() => onPick(null)} />}
+  </Menu>
+}
+/** A retired claim: the block dims to the muted level (a surface-coloured veil over the struck text, which the editor draws), and a
+ *  tertiary "Superseded Oct 25" sits in the page's right margin when the window leaves room for it. */
+function SupersededMark({ block, gutter, docWidth }: { block: SupersededBlock; gutter: number; docWidth: number }) {
+  const t = useTheme()
+  const k = useNotesTokens()
+  return <>
+    <div testId="note-superseded-veil" style={{ position: 'absolute', left: -2, top: block.top, width: docWidth + 4, height: block.height, backgroundColor: withAlpha(t.surface, 0.45), pointerEvents: 'none' }} />
+    {gutter >= 112 && <div testId="note-superseded-label" style={{ position: 'absolute', left: docWidth + 12, top: block.textTop + Math.max(0, (block.lineHeight - 16) / 2), width: gutter, pointerEvents: 'none' }}><Label color={k.fg3} size={NOTES_META - 1} lineHeight={16} truncate>{supersededLabel(block.date)}</Label></div>}
+  </>
+}

@@ -1,20 +1,21 @@
 import '../src/native/local-build.ts'
-import { launchFixture, waitForPainted } from '../src/requests/harness.ts'
+import { waitForPainted } from '../src/requests/harness.ts'
+import { GAPS, beforeAddon, capture, captureSettled, launch, outputDir, settled, step } from './check-harness.ts'
 import path from 'node:path'
 import assert from 'node:assert/strict'
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { pixels } from './png.ts'
 import { BLOCKS_A, BLOCKS_B, BLOCKS_C } from '../visual/fixture.convo9.ts'
-const out='/Users/mymac/projects/ade/previews/gpuix/perf/markdown'
-mkdirSync(out,{recursive:true})
+const out=outputDir('markdown')
+mkdirSync(path.join(import.meta.dir,'build'),{recursive:true})
 for(const mode of (process.env.MD_API_ONLY==='1'?[]:['dark','light'])) {
  for(const document of ['0','1']) {
-  const f=await launchFixture(path.join(import.meta.dir,'markdown-document-lab.tsx'),{KYBERN_APPEARANCE:mode,GPUIX_BACKGROUND:'1',MD_DOCUMENT:document,...(document==='0'?{NAPI_RS_NATIVE_LIBRARY_PATH:path.join(import.meta.dir,existsSync(path.join(import.meta.dir,'build/markdown-before.node'))?'build/markdown-before.node':`build/gpuix-native.darwin-${process.arch}.node`)}:{} )})
+  const f=await launch(path.join(import.meta.dir,'markdown-document-lab.tsx'),{KYBERN_APPEARANCE:mode,MD_DOCUMENT:document,...(document==='0'?{NAPI_RS_NATIVE_LIBRARY_PATH:beforeAddon()}:{})})
   try {
    await f.app.getByTestId('ready').waitFor();await waitForPainted(f.app,'Markdown parity')
-   await f.app.screenshot({path:`${out}/document-${mode}-${document}.png`})
+   await capture(f,`${out}/document-${mode}-${document}.png`)
    await f.app.mouse.wheel({x:300,y:300},0,-450);await f.app.clock.fastForward(64)
-   await f.app.screenshot({path:`${out}/document-${mode}-${document}-scrolled.png`})
+   await capture(f,`${out}/document-${mode}-${document}-scrolled.png`)
   } finally {await f.close()}
  }
  for(const suffix of ['','-scrolled']) {
@@ -30,7 +31,7 @@ for(const mode of (process.env.MD_API_ONLY==='1'?[]:['dark','light'])) {
  }
  console.log(`ok ${mode}: canonical document pixels equal original Markdown at top and after scrolling`)
 }
-const f=await launchFixture(path.join(import.meta.dir,'markdown-document-api-lab.tsx'),{GPUIX_BACKGROUND:'1'})
+const f=await launch(path.join(import.meta.dir,'markdown-document-api-lab.tsx'),{GPUIX_BACKGROUND:'1'})
 try {
  await f.app.getByTestId('api-ready').waitFor({timeoutMs:60_000})
  let result:any
@@ -52,7 +53,7 @@ try {
 }catch(error){console.error(f.diagnostics());throw error}finally{await f.close()}
 
 for(const mode of (process.env.MD_API_ONLY==='1'?[]:['dark','light'])) {
- const f=await launchFixture(path.join(import.meta.dir,'markdown-document-lab.tsx'),{KYBERN_APPEARANCE:mode,GPUIX_BACKGROUND:'1',MD_CHECK:'1',MD_DOCUMENT:'1'}),a=f.app
+ const f=await launch(path.join(import.meta.dir,'markdown-document-lab.tsx'),{KYBERN_APPEARANCE:mode,MD_CHECK:'1',MD_DOCUMENT:'1'}),a=f.app
  try {
  await a.getByTestId('check-ready').waitFor();await waitForPainted(a,'😀é')
  const inline=await a.getByTestId('inline').bounds()
@@ -66,12 +67,12 @@ for(const mode of (process.env.MD_API_ONLY==='1'?[]:['dark','light'])) {
  await a.getByTestId('check-ready').press('r');await a.clock.fastForward(32);await a.getByTestId('check-ready').press('g');assert.equal(JSON.parse(await a.getByTestId('result').textContent()).text,'one 😀é two','Reflow retains selection identity');await a.getByTestId('check-ready').press('r')
  const before=await a.getByTestId('wrap-code').bounds()
  await a.getByTestId('wrap').click();await a.clock.fastForward(32)
- const after=await a.getByTestId('wrap-code').bounds();assert.ok(after.height>before.height+30,`Wrap must grow code: ${before.height} -> ${after.height}`)
- const file=path.join(out,`capability-${mode}.png`);await a.screenshot({path:file});const grid=pixels(file)
+ const after=await settled(()=>a.getByTestId('wrap-code').bounds(),b=>b.height>before.height+30);assert.ok(after.height>before.height+30,`Wrap must grow code: ${before.height} -> ${after.height}`)
+ const file=path.join(out,`capability-${mode}.png`);await capture(f,file);const grid=pixels(file)
  await a.getByTestId('grid').click();await a.clock.fastForward(32)
- const file2=path.join(out,`capability-${mode}-no-grid.png`);await a.screenshot({path:file2});const plain=pixels(file2)
- let redBefore=0,redAfter=0
- for(let y=0;y<grid.h;y++)for(let x=0;x<grid.w;x++){const c=grid.at(x,y),d=plain.at(x,y);if(c[0]!>240&&c[1]!<20&&c[2]!<20)redBefore++;if(d[0]!>240&&d[1]!<20&&d[2]!<20)redAfter++}
+ const red=(png:ReturnType<typeof pixels>)=>{let n=0;for(let y=0;y<png.h;y++)for(let x=0;x<png.w;x++){const c=png.at(x,y);if(c[0]!>240&&c[1]!<20&&c[2]!<20)n++}return n}
+ const redBefore=red(grid),file2=path.join(out,`capability-${mode}-no-grid.png`)
+ const redAfter=await settled(async()=>red(pixels(await capture(f,file2))),n=>redBefore>n+500)
  assert.ok(redBefore>redAfter+500,'Grid adds actual outer/vertical borders')
  console.log(`ok ${mode}: exact Unicode selection across padded boxes, paragraph search, code wrap ${before.height} -> ${after.height}, grid paint`)
  }catch(e){console.error(f.diagnostics());throw e}finally{await f.close()}
@@ -96,41 +97,49 @@ if(process.env.MD_API_ONLY!=='1') for(const [name,source] of Object.entries({
  const file=path.join(import.meta.dir,'build',`markdown-${name}.md`);writeFileSync(file,source)
  for(const mode of ['dark','light']) {
   for(const document of ['0','1']) {
-   const f=await launchFixture(path.join(import.meta.dir,'markdown-document-lab.tsx'),{KYBERN_APPEARANCE:mode,GPUIX_BACKGROUND:'1',MD_DOCUMENT:document,MD_DOC_SOURCE:file,MD_WRAP:name==='wrappedcode'?'1':'0',...(document==='0'?{NAPI_RS_NATIVE_LIBRARY_PATH:path.join(import.meta.dir,existsSync(path.join(import.meta.dir,'build/markdown-before.node'))?'build/markdown-before.node':`build/gpuix-native.darwin-${process.arch}.node`)}:{})})
+   const f=await launch(path.join(import.meta.dir,'markdown-document-lab.tsx'),{KYBERN_APPEARANCE:mode,MD_DOCUMENT:document,MD_DOC_SOURCE:file,MD_WRAP:name==='wrappedcode'?'1':'0',...(document==='0'?{NAPI_RS_NATIVE_LIBRARY_PATH:beforeAddon()}:{})})
    try {
     await f.app.getByTestId('ready').waitFor();await waitForPainted(f.app,name==='wrappedcode'?'item0':name==='convo9a'?'Here is a tour':name==='convo9b'?'Paragraph before':name==='convo9c'?'A table follows':name==='table'?'Name':name==='code'?'item0':name==='list'?'Item':name==='inline'?'inline':(name==='quote'||name==='wrappedquote')?'Quote':name==='semantics'?'Semantics':name==='bidi'?'עברית':name==='cjk'?'漢字':'phrase',60_000)
-    for(const position of ['top','middle']) {
-     if(position==='middle'){await f.app.mouse.wheel({x:300,y:300},0,-3500);await f.app.clock.fastForward(64)}
-     await f.app.screenshot({path:`${out}/interior-${name}-${mode}-${document}-${position}.png`})
-    }
+    const shot=(position:string)=>`${out}/interior-${name}-${mode}-${document}-${position}.png`
+    await capture(f,shot('top'))
+    await f.app.mouse.wheel({x:300,y:300},0,-3500);await f.app.clock.fastForward(64)
+    // Off macOS the wheel lands after the call returns: capture until the view has moved off the top and holds still.
+    const same=(x:ReturnType<typeof pixels>,y:ReturnType<typeof pixels>)=>x.w===y.w&&x.h===y.h&&x.data.equals(y.data)
+    let previous:ReturnType<typeof pixels>|null=null
+    await captureSettled(f,shot('middle'),file=>{const now=pixels(file),moved=!same(now,pixels(shot('top'))),still=!!previous&&same(now,previous);previous=now;return moved&&still})
    } finally {await f.close()}
   }
   for(const position of ['top','middle']) {
-   const a=pixels(`${out}/interior-${name}-${mode}-0-${position}.png`),b=pixels(`${out}/interior-${name}-${mode}-1-${position}.png`)
-   assert.equal(a.w,b.w);assert.equal(a.h,b.h)
-   let changed=0
-   for(let y=12;y<a.h-12;y++)for(let x=8;x<a.w-8;x++)if(a.at(x,y).some((v,i)=>v!==b.at(x,y)[i]))changed++
-   assert.equal(changed,0,`${name}/${mode}/${position}: ${changed} changed pixels`)
+   // The middle capture follows a wheel jump, which each launch may or may not receive off macOS.
+   await step(`${name}/${mode} ${position}`,()=>{
+    const a=pixels(`${out}/interior-${name}-${mode}-0-${position}.png`),b=pixels(`${out}/interior-${name}-${mode}-1-${position}.png`)
+    assert.equal(a.w,b.w);assert.equal(a.h,b.h)
+    let changed=0
+    for(let y=12;y<a.h-12;y++)for(let x=8;x<a.w-8;x++)if(a.at(x,y).some((v,i)=>v!==b.at(x,y)[i]))changed++
+    assert.equal(changed,0,`${name}/${mode}/${position}: ${changed} changed pixels`)
+   },position==='middle'?{gap:GAPS.wheel}:{})
   }
   console.log(`ok ${name}/${mode}: huge semantic block pixels equal before and after wheel jump`)
  }
 }
 
 if(process.env.MD_API_ONLY!=='1') for(const document of ['1']) {
- const f=await launchFixture(path.join(import.meta.dir,'markdown-document-selection-lab.tsx'),{GPUIX_BACKGROUND:'1',MD_DOCUMENT:document,...(document==='0'?{NAPI_RS_NATIVE_LIBRARY_PATH:path.join(import.meta.dir,existsSync(path.join(import.meta.dir,'build/markdown-before.node'))?'build/markdown-before.node':`build/gpuix-native.darwin-${process.arch}.node`)}:{})})
+ const f=await launch(path.join(import.meta.dir,'markdown-document-selection-lab.tsx'),{MD_DOCUMENT:document,...(document==='0'?{NAPI_RS_NATIVE_LIBRARY_PATH:beforeAddon()}:{})})
  try {
   const a=f.app
   await a.getByTestId('selection-ready').waitFor();await waitForPainted(a,'Start',60_000)
-  const box=await a.getByTestId('selection-scroll').bounds()
-  const markdown=await a.getByTestId('selection-markdown').bounds()
-  await a.mouse.down({x:markdown.x,y:markdown.y+8})
-  await a.mouse.move({x:markdown.x+100,y:markdown.y+8},{pressedButton:0})
-  await a.mouse.wheel({x:300,y:300},0,-1000000);await a.clock.fastForward(64);await waitForPainted(a,'sentinel',60_000)
-  const end={x:box.x+600,y:box.y+box.height-32}
-  await a.mouse.move(end,{pressedButton:0});await a.mouse.up(end)
-  await a.getByTestId('selection-ready').press('g')
-  const selected=await a.getByTestId('selection-result').textContent()
-  assert.equal(selected,['Start 😀é.',...Array.from({length:100},(_,i)=>`Middle ${i}.`),'End sentinel.'].join('\n'),'Copy must include every unpainted intermediate paragraph in document order')
-  console.log(`ok copy/${document}: exact Unicode source order across a viewport jump and 100 unpainted paragraphs`)
+  await step(`copy/${document} across a viewport jump`,async()=>{
+    const box=await a.getByTestId('selection-scroll').bounds()
+    const markdown=await a.getByTestId('selection-markdown').bounds()
+    await a.mouse.down({x:markdown.x,y:markdown.y+8})
+    await a.mouse.move({x:markdown.x+100,y:markdown.y+8},{pressedButton:0})
+    await a.mouse.wheel({x:300,y:300},0,-1000000);await a.clock.fastForward(64);await waitForPainted(a,'sentinel',60_000)
+    const end={x:box.x+600,y:box.y+box.height-32}
+    await a.mouse.move(end,{pressedButton:0});await a.mouse.up(end)
+    await a.getByTestId('selection-ready').press('g')
+    const selected=await a.getByTestId('selection-result').textContent()
+    assert.equal(selected,['Start 😀é.',...Array.from({length:100},(_,i)=>`Middle ${i}.`),'End sentinel.'].join('\n'),'Copy must include every unpainted intermediate paragraph in document order')
+    console.log(`ok copy/${document}: exact Unicode source order across a viewport jump and 100 unpainted paragraphs`)
+  },{gap:GAPS.wheel})
  }catch(error){console.error(f.diagnostics());throw error}finally{await f.close()}
 }

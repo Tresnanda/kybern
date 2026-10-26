@@ -1,5 +1,4 @@
 import { DOCK_ICONS } from './icons.ts'
-import { spawn } from 'node:child_process'
 import { memo, useCallback, useEffect, useState, type ReactNode } from 'react'
 import type { Diff as ThreadDiff, FileChange, GitStatus, Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
@@ -19,10 +18,11 @@ import { LoadingLines } from './loading.tsx'
 import { Spinner } from '../kit/Spinner.tsx'
 import { changedReposLabel, commitDetail, includedMembers, isGroupThread, repoBadge } from '../../../../packages/kybern-client/src/groups.ts'
 import { fileParts, groupDiffRows, GroupEnvironmentRows, groupDirty, RepoHeader, repoBranch, useCollapsedRepos } from './GroupDiff.tsx'
+import { openQuietly } from '../platform/os.ts'
 
 export function openWeb(url: string) {
-  // Only web links from daemon records; never hand arbitrary schemes to macOS.
-  if (/^https?:\/\//i.test(url)) spawn('open', [url], { stdio: 'ignore' }).on('error', () => {})
+  // Only web links from daemon records; never hand arbitrary schemes to the system.
+  if (/^https?:\/\//i.test(url)) openQuietly(url)
 }
 
 /**

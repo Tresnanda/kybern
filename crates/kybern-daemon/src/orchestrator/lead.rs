@@ -20,8 +20,9 @@
 //! [`SETUP_SCRIPT`]. The brief is written only through the brief proposal card.
 
 use anyhow::{Result, anyhow, ensure};
+use chrono::{DateTime, Utc};
 use kybern_drivers::NativeToolRestrictions;
-use kybern_protocol::methods::{self, Note, ProjectNoteRole};
+use kybern_protocol::methods::{self, Note, NoteCategory, ProjectNoteRole};
 use kybern_protocol::*;
 use uuid::Uuid;
 
@@ -35,9 +36,11 @@ pub(super) const LEAD_ROLE: &str = "You are this project's Coordinator. You plan
 3. If the project has no setup note, first delegate a research child to learn how to build, run and test the project, then save the result with kybern_note_create using project_role \"setup\".\n\
 4. Brief children with pointers (notes, files, commits), not pasted content.\n\
 5. Tell every child: if something is missing, say exactly what and stop; do not mock, substitute or guess.\n\
-6. After each child result, consider whether a memory note or the setup note should change so the next child starts better.\n\
-7. Follow any working policy written in the project brief and the autonomy line below.\n\
-8. The brief and your settings change only through kybern_coordinator_propose_brief and kybern_coordinator_propose_settings; the user approves each.\n\
+6. Verify before claiming. Before you state how code behaves or recommend a change to it, check the current code: a quick grep, or one file you may read yourself. Anything bigger goes to a read-only child that answers with path@sha citations. Never rely only on memory notes, a handoff or earlier results.\n\
+7. Memory. After a child result, file durable decisions, reversals, conventions, gotchas and user preferences as dated claims with a category, like `- 2026-10-25 · As of `abc1234`: what is true (`path`).` Cite commits for anything about code, retire old claims with supersedes, and do not record what the code or git already shows.\n\
+8. When a \"Code changed since your last turn\" block arrives, update your understanding before you answer.\n\
+9. Follow any working policy written in the project brief and the autonomy line below.\n\
+10. The brief and your settings change only through kybern_coordinator_propose_brief and kybern_coordinator_propose_settings; the user approves each.\n\
 If your conversation context is missing, read this thread with kybern_thread_read.";
 
 /// The one-line git rule every Coordinator session carries. `kybern_git` is the
@@ -74,6 +77,7 @@ const LEAD_TOOLS: &[&str] = &[
     "kybern_read_terminal",
     "kybern_workspace_diff",
     "kybern_runtime_tasks",
+    "kybern_project_map",
     // Notes and tasks.
     "kybern_notes_search",
     "kybern_note_read",
@@ -107,6 +111,7 @@ const LEAD_TOOLS: &[&str] = &[
     // Coordinator brief and settings.
     "kybern_coordinator_propose_brief",
     "kybern_coordinator_propose_settings",
+    "kybern_coordinator_propose_note_changes",
 ];
 
 /// Whether a harness can hold the lead to its read-only tool set. Codex and
@@ -247,15 +252,18 @@ impl Orchestrator {
         Ok(self.inner.store.note_for_project_role(project_id, ProjectNoteRole::Brief)?.is_some_and(|note| !note.body.trim().is_empty()))
     }
 
-    /// Move the Coordinator to another harness, model or account. The session
-    /// restarts with the same lead instructions; the thread and its history stay.
+    /// Move the Coordinator to another harness, model or account. This is a context
+    /// rotation onto the new harness: the old session writes a handoff (unless its
+    /// harness is signed out), its process closes, and the next message starts the
+    /// new session with the handoff and the facts Kybern carries. The thread and its
+    /// history stay.
     pub async fn coordinator_switch_harness(&self, params: methods::CoordinatorSwitchHarnessParams) -> Result<Thread> {
         let _lead = self.inner.lead_commands.lock().await;
         let current = self
             .coordinator_get(params.project_id)?
             .ok_or_else(|| anyhow!("Open the project's Coordinator before switching its harness."))?;
         let busy = || anyhow!("The Coordinator must be idle before switching its harness. Wait for its turn to end, then try again.");
-        if !matches!(current.status, ThreadStatus::Idle | ThreadStatus::Failed) {
+        if !matches!(current.status, ThreadStatus::Idle | ThreadStatus::Failed) || self.is_rotating(current.id) {
             return Err(busy());
         }
         if self.inner.store.runtime_tasks_for_thread(current.id)?.iter().any(|task| task.status.is_active()) {
@@ -274,60 +282,9 @@ impl Orchestrator {
         self.validate_provider_selection(params.project_id, &params.provider, model.as_deref(), params.effort.as_deref()).await?;
         let permission_mode =
             params.permission_mode.unwrap_or_else(|| default_provider_permission(params.provider.kind, settings.default_permission_mode));
-        let (thread, released) = {
-            // `commands` excludes a send between the final idle check, live
-            // credential revocation, and the durable provider change.
-            let _command = self.inner.commands.lock().map_err(|_| anyhow!("command lock poisoned"))?;
-            let mut thread = self.inner.store.thread_get(current.id)?.ok_or_else(|| anyhow!("The Coordinator thread was not found."))?;
-            if !matches!(thread.status, ThreadStatus::Idle | ThreadStatus::Failed)
-                || thread.coordinator_project_id != Some(params.project_id)
-            {
-                return Err(busy());
-            }
-            let retry = || anyhow!("The Coordinator session is changing. Try the harness switch again in a moment.");
-            let mut sessions = self.inner.sessions.try_lock().map_err(|_| retry())?;
-            if let Some(expected) = parked_live.as_ref()
-                && !sessions.get(&thread.id).is_some_and(|live| std::sync::Arc::ptr_eq(live, expected))
-            {
-                return Err(retry());
-            }
-            let mut releasing = if parked_live.is_some() { Some(self.inner.releasing.try_lock().map_err(|_| retry())?) } else { None };
-            let released = sessions.remove(&thread.id);
-            thread.provider = params.provider.clone();
-            thread.model = model;
-            thread.effort = params.effort.clone();
-            thread.permission_mode = permission_mode;
-            thread.provider_session_id = None;
-            thread.status = ThreadStatus::Idle;
-            let thread = match self.update_thread(thread) {
-                Ok(thread) => thread,
-                Err(error) => {
-                    if let Some(live) = released {
-                        sessions.insert(current.id, live);
-                    }
-                    return Err(error);
-                }
-            };
-            if let Some(live) = released.as_deref() {
-                live.mark_released();
-                self.revoke_native_session(live);
-            }
-            let released = released.map(|live| {
-                let (done, waiting) = tokio::sync::watch::channel(());
-                releasing.as_mut().expect("a live session reserves a release barrier").insert(thread.id, waiting);
-                (live, done)
-            });
-            (thread, released)
-        };
-        self.inner.pending_rewinds.lock().await.remove(&thread.id);
-        if let Some((live, done)) = released {
-            let close = live.session.close().await;
-            self.inner.releasing.lock().await.remove(&thread.id);
-            drop(done);
-            close?;
-            self.emit(thread.id, None, EventPayload::ProviderSessionReleased { reason: SessionReleaseReason::Manual })?;
-        }
-        Ok(thread)
+        let rotation = self.begin_rotation(current.id, RotationReason::HarnessSwitch, parked_live).await.map_err(|_| busy())?;
+        let switch = super::rotation::HarnessSwitch { provider: params.provider, model, effort: params.effort, permission_mode };
+        self.run_rotation(rotation, Some(switch)).await
     }
 
     /// Bridge-tool and built-in restrictions for a session of `thread`: a
@@ -369,7 +326,12 @@ impl Orchestrator {
         if !(lead || project.brief_in_all_threads || self.rooted_at_lead(thread)?) {
             return Ok(note.map(|text| SessionInstructions { text, brief_revision: 0, lead_settings: None }));
         }
-        let notes = self.inner.store.project_notes(project.id)?;
+        let mut notes = self.inner.store.project_notes(project.id)?;
+        // Flags from the last check (warmed off-thread before a spawn): no git here.
+        for note in &mut notes {
+            note.summary.stale = super::note_staleness::known_stale(&note.summary, Some(&note.body));
+        }
+        let since = self.inner.store.notes_history_since()?;
         let brief = notes.iter().find(|note| note.summary.project_role == Some(ProjectNoteRole::Brief));
         let mut text = String::new();
         let mut lead_settings = None;
@@ -381,10 +343,15 @@ impl Orchestrator {
             text.push_str("\n\n");
             lead_settings = Some(effective);
         }
-        text.push_str(&project_context(brief, &notes, lead));
+        text.push_str(&project_context(brief, &notes, lead, since));
         if let Some(note) = note {
             text.push_str("\n\n");
             text.push_str(&note);
+        }
+        // Only at spawn (refreshed by `spawn_session`), so the prefix holds for the whole session.
+        if lead && let Some(header) = self.fenced_map_header(project.id) {
+            text.push_str("\n\n");
+            text.push_str(&header);
         }
         Ok(Some(SessionInstructions { text, brief_revision: brief.map_or(0, |note| note.summary.revision), lead_settings }))
     }
@@ -427,9 +394,15 @@ impl Orchestrator {
         *live.lead_settings.lock().await = Some(settings);
     }
 
-    /// The provider's copy of a setup kickoff, or `None` for any other message.
+    /// The provider's copy of a setup kickoff or a "Tidy notes" request, or `None` for any other message.
     pub(super) fn setup_provider_message(&self, thread: &Thread, message: &UserMessage) -> Result<Option<UserMessage>> {
-        if thread.coordinator_project_id.is_none() || !is_setup_message(message) {
+        if thread.coordinator_project_id.is_none() {
+            return Ok(None);
+        }
+        if super::note_tidy::is_tidy_message(message) {
+            return self.tidy_provider_message(thread, message);
+        }
+        if !is_setup_message(message) {
             return Ok(None);
         }
         let has_brief = self.project_has_brief(thread.project_id)?;
@@ -523,6 +496,12 @@ pub(super) fn settings_change_text(seen: &EffectiveCoordinatorSettings, now: &Ef
     if seen.role_defaults != now.role_defaults {
         changes.push("the default models per kind of work changed (see kybern_agent_capabilities)".to_owned());
     }
+    if seen.rotation_budget_tokens != now.rotation_budget_tokens {
+        changes.push(match now.rotation_budget_tokens {
+            0 => "Kybern no longer refreshes your context on its own".to_owned(),
+            tokens => format!("Kybern refreshes your context once it passes {}k tokens", tokens / 1000),
+        });
+    }
     (!changes.is_empty()).then(|| format!("Coordinator settings changed: {}.", changes.join("; ")))
 }
 
@@ -533,9 +512,53 @@ pub(super) fn with_brief_update(message: &UserMessage, update: &str) -> UserMess
     UserMessage { parts }
 }
 
+/// The groups of the notes index, in the order they are listed.
+const INDEX_GROUPS: [(&str, Option<NoteCategory>); 4] = [
+    ("Preferences", Some(NoteCategory::Preference)),
+    ("Decisions", Some(NoteCategory::Decision)),
+    ("Conventions", Some(NoteCategory::Convention)),
+    ("Gotchas", Some(NoteCategory::Gotcha)),
+];
+
+/// The group heading a note is listed under.
+fn index_group(note: &Note) -> &'static str {
+    match note.summary.category {
+        Some(category) => INDEX_GROUPS.iter().find(|(_, group)| *group == Some(category)).map_or("Other", |(name, _)| name),
+        None if note.summary.undated => "Undated",
+        None => "Other",
+    }
+}
+
+/// One line of the notes index.
+fn index_line(note: &Note, since: Option<DateTime<Utc>>) -> String {
+    let title = note.summary.title.trim();
+    let title = if title.is_empty() { "Untitled" } else { title };
+    let label = if note.summary.project_role == Some(ProjectNoteRole::Setup) { "Setup note: " } else { "" };
+    let first_line = first_line(&note.body);
+    let id = note.summary.id;
+    let updated = note.summary.updated_at.format("%Y-%m-%d");
+    let mut line = if first_line.is_empty() {
+        format!("- {label}{title} ({id}) · {updated}")
+    } else {
+        format!("- {label}{title}: {first_line} ({id}) · {updated}")
+    };
+    if let Some(stale) = &note.summary.stale {
+        line.push_str(&format!(" · may be outdated: {}", stale.path));
+    }
+    if note.summary.undated {
+        match since {
+            Some(since) => line.push_str(&format!(" · undated, before {}", since.format("%Y-%m-%d"))),
+            None => line.push_str(" · undated"),
+        }
+    }
+    line.push('\n');
+    line
+}
+
 /// The brief and the index of the project's notes, followed by the standing rule
-/// for anything that is missing.
-fn project_context(brief: Option<&Note>, notes: &[Note], lead: bool) -> String {
+/// for anything that is missing. The index lists the setup note first, then the
+/// notes by category, then the ones that predate categories.
+fn project_context(brief: Option<&Note>, notes: &[Note], lead: bool, since: Option<DateTime<Utc>>) -> String {
     let change = if lead { "propose the edit with kybern_coordinator_propose_brief" } else { "suggest the edit in chat" };
     let mut out = format!("Project brief (the user's; to change it, {change}):\n");
     match brief.map(|note| note.body.trim()).filter(|body| !body.is_empty()) {
@@ -549,26 +572,26 @@ fn project_context(brief: Option<&Note>, notes: &[Note], lead: bool) -> String {
     out.push_str("\n\nProject notes (read one with kybern_note_read):\n");
     let mut listed = 0;
     let mut hidden = 0;
-    // The setup note first, then the most recently edited notes.
-    let ordered = notes
-        .iter()
-        .filter(|note| note.summary.project_role == Some(ProjectNoteRole::Setup))
-        .chain(notes.iter().filter(|note| note.summary.project_role.is_none()));
-    for note in ordered {
-        if listed == INDEX_MAX_NOTES {
-            hidden += 1;
-            continue;
-        }
+    let memory = || notes.iter().filter(|note| note.summary.project_role.is_none());
+    let setup = notes.iter().filter(|note| note.summary.project_role == Some(ProjectNoteRole::Setup));
+    for note in setup {
         listed += 1;
-        let title = note.summary.title.trim();
-        let title = if title.is_empty() { "Untitled" } else { title };
-        let label = if note.summary.project_role == Some(ProjectNoteRole::Setup) { "Setup note: " } else { "" };
-        let first_line = first_line(&note.body);
-        let id = note.summary.id;
-        if first_line.is_empty() {
-            out.push_str(&format!("- {label}{title} ({id})\n"));
-        } else {
-            out.push_str(&format!("- {label}{title}: {first_line} ({id})\n"));
+        out.push_str(&index_line(note, since));
+    }
+    let headings = INDEX_GROUPS.iter().map(|(name, _)| *name).chain(["Other", "Undated"]);
+    for heading in headings {
+        let mut shown_heading = false;
+        for note in memory().filter(|note| index_group(note) == heading) {
+            if listed == INDEX_MAX_NOTES {
+                hidden += 1;
+                continue;
+            }
+            if !shown_heading {
+                out.push_str(&format!("{heading}:\n"));
+                shown_heading = true;
+            }
+            listed += 1;
+            out.push_str(&index_line(note, since));
         }
     }
     if listed == 0 {

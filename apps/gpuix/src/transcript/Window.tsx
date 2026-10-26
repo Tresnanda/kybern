@@ -4,6 +4,9 @@ import { observeElementBounds } from '../native/layout.ts'
 import { SparseRetention } from '../kit/sparseList.tsx'
 import { transcriptWindowRange, transcriptWindowRangeBy } from './windowRange.ts'
 
+/** Off macOS, take the list anchor from the observation (WP1: no UI-thread round trip per scrolled frame). */
+const OBSERVED_ANCHOR = process.platform !== 'darwin'
+
 /** Whether the reader is at the tail, as a ref the transcript keeps current (reading it never re-renders a row). */
 export const TranscriptTail = createContext<{ current: boolean }>({ current: false })
 const FirstBodyMount = createContext(true)
@@ -44,18 +47,22 @@ export function useTranscriptWindow(keys: readonly string[], list: React.RefObje
   const live = useRef({ keys, viewport, identity, estimates, onReadPosition })
   live.current = { keys, viewport, identity, estimates, onReadPosition }
   const previousIdentity = useRef(identity)
+  const observedAnchor = useRef<readonly number[] | null>(null)
   if (previousIdentity.current !== identity) {
     previousIdentity.current = identity
+    observedAnchor.current = null
     heights.current.clear()
     selected.current.clear()
   }
   const lastFrame = useRef(-1)
   const [rangeHint, setRangeHint] = useState<{start:number;end:number} | null>(null)
   const rangeRef = useRef({start:0,end:0})
-  const sync = useCallback((frame?: number) => {
+  const sync = useCallback((frame?: number, observed?: readonly number[] | null) => {
     if (!list.current || (frame !== undefined && lastFrame.current === frame)) return
     if (frame !== undefined) lastFrame.current = frame
-    const scroll = renderer.getListScrollTop?.(list.current.id)
+    // Off macOS getListScrollTop waits on GPUI's UI thread. The list's observations carry the anchor they painted;
+    // row observations and range changes reuse the latest one (at most a frame old: the list re-syncs below).
+    const scroll = (OBSERVED_ANCHOR && (observed ?? observedAnchor.current)) || renderer.getListScrollTop?.(list.current.id)
     if (!scroll) return
     const index = Math.max(0, (scroll[0] ?? 0) - 1), key = live.current.keys[index] ?? '', offset = scroll[1] ?? 0
     // The native range callback may stay unchanged across programmatic jumps
@@ -98,7 +105,15 @@ export function useTranscriptWindow(keys: readonly string[], list: React.RefObje
   // previous rich bodies are all offscreen. Native emits only changed anchors.
   useEffect(() => {
     if (!list.current) return
-    return observeElementBounds(renderer, list.current.id, ({frame}) => sync(frame))
+    return observeElementBounds(renderer, list.current.id, ({frame, scrollTop}) => {
+      if (OBSERVED_ANCHOR && scrollTop) {
+        const changed = observedAnchor.current?.[0] !== scrollTop[0] || observedAnchor.current?.[1] !== scrollTop[1]
+        observedAnchor.current = scrollTop
+        // A row observation of this frame already synced with the previous anchor.
+        if (changed && lastFrame.current === frame) { sync(undefined, scrollTop); return }
+      }
+      sync(frame, scrollTop)
+    })
   }, [renderer, list, sync, identity, keys.length])
   const measure = useCallback((key: string, height: number) => {
     if (height < 0 || !Number.isFinite(height) || Math.abs((heights.current.get(key) ?? -1) - height) < 0.5) return

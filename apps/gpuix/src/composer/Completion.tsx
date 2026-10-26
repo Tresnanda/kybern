@@ -30,6 +30,7 @@ import { noteScopeLabel, noteTitle } from '@/state/notesModel'
 import { keyMatchesQuery, PRIORITY_LABEL, STATUS_LABEL } from '@/state/tasksModel'
 import { COMPUTER_MENTION_PATH, noteMentionPart, taskMentionPart } from '../../../../packages/kybern-client/src/userInput.ts'
 import { sharesHome } from '../notes/home.ts'
+import { isMacKeys } from '../platform/keys.ts'
 import { MentionChips } from './MentionChips.tsx'
 import { tokenIcon } from './token-icons.ts'
 import type { TokenReference } from './token-text.ts'
@@ -445,8 +446,9 @@ export function useCompletion({
       selectFilter(chips[(at + (raw === 'right' ? 1 : -1) + chips.length) % chips.length]!)
       return true
     }
-    // ⌃N/⌃P are additional shortcuts for moving the list.
-    const key = ctrl && raw === 'n' ? 'down' : ctrl && raw === 'p' ? 'up' : raw
+    // ⌃N/⌃P are additional shortcuts for moving the list (macOS only: elsewhere Ctrl+N is a new thread).
+    const emacs = ctrl && isMacKeys()
+    const key = emacs && raw === 'n' ? 'down' : emacs && raw === 'p' ? 'up' : raw
     if (key === 'escape') {
       setDismissed(menuKey)
       return true

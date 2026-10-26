@@ -1,5 +1,5 @@
-// Memory log: one JSON line a minute in the client config folder
-// (`memory.jsonl`, under 4 MiB with one rotated copy), so a footprint spike in
+// Memory log: one JSON line a minute in the client's local data folder
+// (`memory.jsonl`, under 4 MiB with one rotated copy; `%LOCALAPPDATA%` on Windows), so a footprint spike in
 // a real session can be traced to what was open when it happened. Each line has
 // the physical footprint (Activity Monitor's number), JSC's heap and allocator
 // counters, every pane's thread and transcript size, and the steps since the
@@ -9,11 +9,11 @@
 // CENSUS_JUMP_MB, at most once every CENSUS_GAP_MS. `KYBERN_MEMORY_LOG=0` turns
 // it off; `KYBERN_MEMORY_LOG_MS` changes the interval.
 import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
 import path from 'node:path'
 import { dlopen, FFIType, ptr } from 'bun:ffi'
 import { heapStats, memoryUsage } from 'bun:jsc'
 import { desktopVersion } from '../shell/daemon.ts'
+import { gpuixLocalDir } from '../platform/os.ts'
 
 const MB = 1024 * 1024
 const MAX_FILE = 4 * MB
@@ -99,7 +99,7 @@ export function sampleMemory(reason = 'tick') {
 export function startMemoryLog() {
   if (started || process.env.KYBERN_MEMORY_LOG === '0') return
   started = true
-  const dir = process.env.KYBERN_CLIENT_CONFIG_DIR ?? path.join(homedir(), 'Library/Application Support/kybern-gpuix')
+  const dir = gpuixLocalDir()
   try { mkdirSync(dir, { recursive: true }) } catch { /* `write` reports nothing either. */ }
   file = path.join(dir, 'memory.jsonl')
   write({ at: new Date().toISOString(), reason: 'launch', pid: process.pid, version: version() })

@@ -586,3 +586,417 @@ fn settings_notices_name_only_what_changed() {
         "Coordinator settings changed: children now get their own worktree by default; you may run 3 agents at once; the default models per kind of work changed (see kybern_agent_capabilities)."
     );
 }
+
+// ---- notes as history: categories, supersedes, stale flags, the index, tidy ----
+
+use methods::{NoteCategory, NotesTidyParams};
+
+fn git_run(dir: &std::path::Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+/// Make the fixture's project a git repository with six source files; returns the first commit.
+fn init_git_project(fixture: &Fixture) -> String {
+    std::fs::create_dir_all(fixture.root.join("src")).unwrap();
+    for file in ["a", "b", "c", "d", "e", "f"] {
+        std::fs::write(fixture.root.join(format!("src/{file}.ts")), "1").unwrap();
+    }
+    git_run(&fixture.root, &["init", "-q", "-b", "main"]);
+    git_run(&fixture.root, &["add", "src"]);
+    git_run(&fixture.root, &["commit", "-q", "-m", "first"]);
+    let mut project = fixture.project.clone();
+    project.is_git = true;
+    fixture.store.project_update(&project).unwrap();
+    git_run(&fixture.root, &["rev-parse", "--short", "HEAD"])
+}
+
+/// Change the given source files in a new commit.
+fn change_files(fixture: &Fixture, files: &[&str]) {
+    for file in files {
+        std::fs::write(fixture.root.join(format!("src/{file}.ts")), "2").unwrap();
+    }
+    git_run(&fixture.root, &["commit", "-qam", "change"]);
+}
+
+/// A Coordinator thread whose writes need no approval card.
+async fn full_access_lead(fixture: &Fixture) -> (Thread, Arc<LiveSession>) {
+    let thread = fixture.thread(ThreadStatus::Idle);
+    fixture.store.thread_set_relationships(thread.id, None, Some(fixture.project.id)).unwrap();
+    let mut thread = fixture.store.thread_get(thread.id).unwrap().unwrap();
+    thread.permission_mode = PermissionMode::FullAccess;
+    fixture.store.thread_upsert(&thread).unwrap();
+    let (live, _) = fixture.active_app_tool_session(&thread).await;
+    (thread, live)
+}
+
+fn claim_note(fixture: &Fixture, title: &str, sha: &str, file: &str) -> methods::Note {
+    user_note(fixture, title, &format!("- 2026-10-25 · As of `{sha}`: it works (`src/{file}.ts`)."), None)
+}
+
+#[tokio::test]
+async fn agents_file_categorized_claims_retire_lines_with_supersedes_and_cannot_rewrite_history_notes() {
+    let fixture = Fixture::new();
+    std::fs::create_dir_all(&fixture.root).unwrap();
+    let (lead, live) = full_access_lead(&fixture).await;
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
+    let created = fixture
+        .tool(&lead, &live, "c1", "kybern_note_create", json!({"title": "Auth decisions", "body": "- first claim\n- second claim", "category": "decision"}))
+        .await
+        .unwrap();
+    assert_eq!(created["category"], "decision");
+    let id: methods::NoteId = serde_json::from_value(created["id"].clone()).unwrap();
+    assert_eq!(fixture.store.note_get(id).unwrap().unwrap().summary.category, Some(NoteCategory::Decision));
+
+    // Supersede: one match retires that line with today's date and appends the new claim.
+    fixture
+        .tool(&lead, &live, "a1", "kybern_note_append", json!({"note_id": id, "text": "- third claim", "supersedes": "first claim"}))
+        .await
+        .unwrap();
+    let body = fixture.store.note_get(id).unwrap().unwrap().body;
+    assert_eq!(body, format!("- ~~first claim~~ (superseded {today})\n- second claim\n\n- third claim"));
+
+    // No match, several matches, a line already retired: nothing changes and the error says what to do.
+    let none = fixture.tool(&lead, &live, "a2", "kybern_note_append", json!({"note_id": id, "text": "x", "supersedes": "missing"})).await.unwrap_err();
+    assert!(none.to_string().contains("No line of the note contains that text") && none.to_string().contains("kybern_note_read"), "{none}");
+    let many = fixture.tool(&lead, &live, "a3", "kybern_note_append", json!({"note_id": id, "text": "x", "supersedes": "claim"})).await.unwrap_err();
+    assert!(many.to_string().contains("2 lines of the note contain that text"), "{many}");
+    let again = fixture.tool(&lead, &live, "a4", "kybern_note_append", json!({"note_id": id, "text": "x", "supersedes": "first claim"})).await.unwrap_err();
+    assert!(again.to_string().contains("already superseded"), "{again}");
+    assert_eq!(fixture.store.note_get(id).unwrap().unwrap().body, body, "a refused supersede changes nothing");
+
+    // Decision and gotcha notes are history: no body rewrite, even by their author; titles stay editable.
+    let revision = fixture.store.note_get(id).unwrap().unwrap().summary.revision;
+    let refused = fixture.tool(&lead, &live, "u1", "kybern_note_update", json!({"note_id": id, "body": "rewritten", "expected_revision": revision})).await.unwrap_err();
+    assert_eq!(refused.to_string(), "Add a dated claim with kybern_note_append instead; use supersedes to retire the old one.");
+    fixture.tool(&lead, &live, "u2", "kybern_note_update", json!({"note_id": id, "title": "Auth log", "expected_revision": revision})).await.unwrap();
+    let gotcha = fixture.tool(&lead, &live, "c2", "kybern_note_create", json!({"title": "Traps", "body": "a", "category": "gotcha"})).await.unwrap();
+    let gotcha_id: methods::NoteId = serde_json::from_value(gotcha["id"].clone()).unwrap();
+    assert!(fixture.tool(&lead, &live, "u3", "kybern_note_update", json!({"note_id": gotcha_id, "body": "b", "expected_revision": 1})).await.is_err());
+    // A convention note keeps the old rule: its author may rewrite it.
+    let convention = fixture.tool(&lead, &live, "c3", "kybern_note_create", json!({"title": "Style", "body": "a", "category": "convention"})).await.unwrap();
+    let convention_id: methods::NoteId = serde_json::from_value(convention["id"].clone()).unwrap();
+    fixture.tool(&lead, &live, "u4", "kybern_note_update", json!({"note_id": convention_id, "body": "b", "expected_revision": 1})).await.unwrap();
+
+    // Appending sets a missing category, and refuses a different one.
+    let plain = fixture.tool(&lead, &live, "c4", "kybern_note_create", json!({"title": "Plain", "body": "a"})).await.unwrap();
+    let plain_id: methods::NoteId = serde_json::from_value(plain["id"].clone()).unwrap();
+    let set = fixture.tool(&lead, &live, "a5", "kybern_note_append", json!({"note_id": plain_id, "text": "b", "category": "preference"})).await.unwrap();
+    assert_eq!(set["category"], "preference");
+    let clash = fixture.tool(&lead, &live, "a6", "kybern_note_append", json!({"note_id": plain_id, "text": "c", "category": "gotcha"})).await.unwrap_err();
+    assert!(clash.to_string().contains("preference note") && clash.to_string().contains("kybern_note_create"), "{clash}");
+    assert!(fixture.tool(&lead, &live, "c5", "kybern_note_create", json!({"title": "S", "body": "x", "project_role": "setup", "category": "gotcha"})).await.is_err());
+
+    // The user's own note stays append-only for agents, categories included.
+    let theirs = user_note(&fixture, "User memo", "- keep this", None);
+    assert!(fixture.tool(&lead, &live, "m1", "kybern_note_update", json!({"note_id": theirs.summary.id, "body": "x", "expected_revision": 1})).await.is_err());
+    fixture
+        .tool(&lead, &live, "m2", "kybern_note_append", json!({"note_id": theirs.summary.id, "text": "- new line", "supersedes": "keep this", "category": "preference"}))
+        .await
+        .unwrap();
+    let theirs = fixture.store.note_get(theirs.summary.id).unwrap().unwrap();
+    assert_eq!(theirs.summary.category, Some(NoteCategory::Preference));
+    assert!(theirs.body.starts_with("- ~~keep this~~ (superseded "), "{}", theirs.body);
+}
+
+#[tokio::test]
+async fn the_index_groups_notes_by_category_and_labels_outdated_and_undated_ones() {
+    let (fixture, bridges) = lead_capture_fixture();
+    let first = init_git_project(&fixture);
+    let create = |title: &str, body: &str, category| {
+        fixture.store.note_create_categorized(NoteScope::Project, Some(fixture.project.id), title, body, None, category).unwrap()
+    };
+    create("Likes", "- user wants small PRs", Some(NoteCategory::Preference));
+    create("Reversals", &format!("- 2026-10-25 · As of `{first}`: guard removed (`src/a.ts`)."), Some(NoteCategory::Decision));
+    create("Style", "- tabs", Some(NoteCategory::Convention));
+    create("Traps", "- flaky test", Some(NoteCategory::Gotcha));
+    // Written before categories existed: undated. Written after: Other.
+    create("Old memo", "- from before", None);
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    fixture.store.meta_set("notes_history_since", &chrono::Utc::now().to_rfc3339()).unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    create("Fresh memo", "- from after", None);
+    change_files(&fixture, &["a"]);
+
+    let lead = fixture.orchestrator.coordinator_open(open_params(&fixture.project, ProviderKind::ClaudeCode, Some("Plan first."))).await.unwrap().thread;
+    let bridge = spawn_bridge(&fixture, &bridges, &lead).await;
+    let text = bridge.coordinator_instructions.clone().unwrap();
+    let at = |needle: &str| text.find(needle).unwrap_or_else(|| panic!("{needle:?} missing from {text}"));
+    let order = ["\nPreferences:\n", "\nDecisions:\n", "\nConventions:\n", "\nGotchas:\n", "\nOther:\n", "\nUndated:\n"].map(at);
+    assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "groups in order: {text}");
+
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let line = |title: &str| text.lines().find(|line| line.starts_with(&format!("- {title}: "))).unwrap_or_else(|| panic!("{title}: {text}")).to_owned();
+    let likes = line("Likes");
+    assert!(likes.starts_with("- Likes: user wants small PRs (") && likes.ends_with(&format!(") · {today}")), "{likes}");
+    assert!(line("Reversals").ends_with(" · may be outdated: src/a.ts"), "{}", line("Reversals"));
+    assert!(line("Old memo").ends_with(&format!(" · undated, before {today}")), "{}", line("Old memo"));
+    assert!(!line("Fresh memo").contains("undated") && !line("Style").contains("outdated"));
+    assert!(text.find("- Fresh memo").unwrap() < text.find("\nUndated:\n").unwrap(), "after-categories notes are Other");
+}
+
+#[tokio::test]
+async fn the_index_keeps_its_forty_note_cap_and_the_hundred_character_first_line() {
+    let (fixture, bridges) = lead_capture_fixture();
+    for index in 0..42 {
+        fixture.store.note_create(NoteScope::Project, Some(fixture.project.id), &format!("Note {index:02}"), &"x".repeat(150)).unwrap();
+    }
+    let lead = fixture.orchestrator.coordinator_open(open_params(&fixture.project, ProviderKind::ClaudeCode, Some("Plan."))).await.unwrap().thread;
+    let text = spawn_bridge(&fixture, &bridges, &lead).await.coordinator_instructions.clone().unwrap();
+    assert_eq!(text.lines().filter(|line| line.starts_with("- Note ")).count(), 40, "{text}");
+    assert!(text.contains("(2 more; find them with kybern_notes_search.)"));
+    let line = text.lines().find(|line| line.starts_with("- Note ")).unwrap();
+    assert!(line.contains(&format!(": {}… (", "x".repeat(100))), "{line}");
+}
+
+#[tokio::test]
+async fn stale_flags_reach_summaries_and_five_stale_notes_raise_a_tidy_offer_that_snoozes_for_a_week() {
+    let fixture = Fixture::new();
+    let first = init_git_project(&fixture);
+    let project = NotesTidyParams { project_id: fixture.project.id };
+    let flagged: Vec<_> = ["a", "b", "c", "d", "e"].iter().map(|file| claim_note(&fixture, &format!("Claim {file}"), &first, file)).collect();
+    let fresh = claim_note(&fixture, "Claim f", &first, "f");
+
+    // Nothing changed yet: no flags, no offer.
+    assert!(fixture.orchestrator.notes_list().unwrap().iter().all(|note| note.stale.is_none()));
+    assert!(!fixture.orchestrator.notes_tidy_offer(project.clone()).unwrap().offer);
+
+    // Four stale notes are below the threshold.
+    change_files(&fixture, &["a", "b", "c", "d"]);
+    let offer = fixture.orchestrator.notes_tidy_offer(project.clone()).unwrap();
+    assert_eq!((offer.stale.len(), offer.offer), (4, false));
+
+    // The fifth raises the card. The summaries name the changed file and its commit.
+    change_files(&fixture, &["e"]);
+    let offer = fixture.orchestrator.notes_tidy_offer(project.clone()).unwrap();
+    assert_eq!((offer.stale.len(), offer.offer, offer.snoozed_until), (5, true, None));
+    assert!(!offer.stale.contains(&fresh.summary.id));
+    let head = git_run(&fixture.root, &["rev-parse", "--short", "HEAD"]);
+    let listed = fixture.orchestrator.notes_list().unwrap();
+    let stale = listed.iter().find(|note| note.id == flagged[4].summary.id).unwrap().stale.clone().expect("flagged");
+    assert_eq!((stale.path.as_str(), stale.commit.as_str()), ("src/e.ts", head.as_str()));
+    assert!(listed.iter().find(|note| note.id == fresh.summary.id).unwrap().stale.is_none());
+    let got = fixture.orchestrator.note_get(methods::NotesGetParams { id: Some(flagged[0].summary.id), thread_id: None }).unwrap().unwrap();
+    assert_eq!(got.summary.stale.map(|stale| stale.path), Some("src/a.ts".into()));
+
+    // "Not now": quiet for seven days, then back.
+    let snoozed = fixture.orchestrator.notes_tidy_snooze(project.clone()).unwrap();
+    assert!(!snoozed.offer && snoozed.stale.len() == 5);
+    let until = snoozed.snoozed_until.expect("snoozed");
+    let days = (until - chrono::Utc::now()).num_hours();
+    assert!((166..=168).contains(&days), "about seven days: {days} h");
+    fixture.store.meta_set(&format!("notes_tidy_snooze:{}", fixture.project.id), &(chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339()).unwrap();
+    let back = fixture.orchestrator.notes_tidy_offer(project).unwrap();
+    assert!(back.offer && back.snoozed_until.is_none());
+}
+
+#[tokio::test]
+async fn tidy_notes_sends_the_lead_a_row_for_clients_and_the_instructions_for_the_provider_only() {
+    let (fixture, spawned) = scripted_lead_fixture();
+    let first = init_git_project(&fixture);
+    user_note(&fixture, "Project brief", "Ship it.", Some(ProjectNoteRole::Brief));
+    let params = NotesTidyParams { project_id: fixture.project.id };
+
+    // Without a Coordinator, or without flagged notes, there is nothing to ask.
+    let error = fixture.orchestrator.notes_tidy_start(params.clone()).await.unwrap_err().to_string();
+    assert!(error.contains("Coordinator"), "{error}");
+    let lead = fixture.orchestrator.coordinator_open(open_params(&fixture.project, ProviderKind::ClaudeCode, None)).await.unwrap().thread;
+    let error = fixture.orchestrator.notes_tidy_start(params.clone()).await.unwrap_err().to_string();
+    assert!(error.contains("None of this project's notes looks outdated"), "{error}");
+
+    for file in ["a", "b", "c"] {
+        claim_note(&fixture, &format!("Claim {file}"), &first, file);
+    }
+    change_files(&fixture, &["a", "b"]);
+    let started = fixture.orchestrator.notes_tidy_start(params.clone()).await.unwrap();
+    assert_eq!((started.thread_id, started.notes), (lead.id, 2));
+
+    let stored = started_messages(&fixture, lead.id);
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].parts, vec![ContentPart::SystemRow { kind: SystemRowKind::CoordinatorTidyNotes, text: "Tidy notes".into() }]);
+    let agent = eventually(|| async { spawned.lock().unwrap().first().cloned() }).await;
+    let text = sent_to(&agent, 1).await[0].plain_text();
+    for needed in ["2 notes cite files that changed", "Claim a", "`src/a.ts` changed in", "Claim b", "read-only child", "kybern_coordinator_propose_note_changes", "supersedes"] {
+        assert!(text.contains(needed), "{needed}: {text}");
+    }
+    assert!(!text.contains("Claim c"), "only flagged notes are listed: {text}");
+    let events = serde_json::to_string(&fixture.store.events_for_thread(lead.id).unwrap()).unwrap();
+    assert!(!events.contains("read-only child"), "the instructions are the provider's copy only");
+    // A card that did its job stays away for the week.
+    assert!(fixture.orchestrator.notes_tidy_offer(params).unwrap().snoozed_until.is_some());
+}
+
+#[tokio::test]
+async fn the_note_changes_card_applies_only_the_ticked_rows_as_appends_and_supersedes() {
+    let fixture = Fixture::new();
+    std::fs::create_dir_all(&fixture.root).unwrap();
+    let (lead, live) = lead_tool_thread(&fixture).await;
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let auth = user_note(&fixture, "Auth", "- 2026-10-01 · As of `abc1234`: guard exists (`src/auth.ts`).\n- keep me", None);
+    let build = user_note(&fixture, "Build", "- pnpm build", None);
+    let brief = user_note(&fixture, "Project brief", "Be careful.", Some(ProjectNoteRole::Brief));
+
+    // Bad proposals fail before any card.
+    let tool = |changes: serde_json::Value| fixture.tool(&lead, &live, "bad", "kybern_coordinator_propose_note_changes", json!({"changes": changes, "reason": "r"}));
+    let error = tool(json!([{"note_id": brief.summary.id, "text": "x"}])).await.unwrap_err().to_string();
+    assert!(error.contains("Change 1") && error.contains("kybern_coordinator_propose_brief"), "{error}");
+    let error = tool(json!([{"note_id": auth.summary.id, "text": "x", "supersedes": "no such line"}])).await.unwrap_err().to_string();
+    assert!(error.contains("Change 1") && error.contains("No line of the note contains that text"), "{error}");
+    assert!(tool(json!([])).await.is_err());
+    assert!(tool(json!([{"note_id": uuid::Uuid::now_v7(), "text": "x"}])).await.is_err());
+
+    let call = start_tool_call(
+        &fixture,
+        &lead,
+        &live,
+        "n1",
+        "kybern_coordinator_propose_note_changes",
+        json!({
+            "reason": "The guard was removed.",
+            "changes": [
+                {"note_id": auth.summary.id, "text": "- 2026-10-25 · As of `def5678`: guard removed (`src/auth.ts`).", "supersedes": "guard exists", "category": "decision"},
+                {"note_id": build.summary.id, "text": "- 2026-10-25 · yarn is not used."},
+            ]
+        }),
+    );
+    let card = secret_card(&live).await;
+    let (request, _) = fixture.store.approval_get(card).unwrap().unwrap();
+    assert_eq!(request.tool_name, COORDINATOR_NOTES_TOOL);
+    assert!(request.is_user_input());
+    assert_eq!(request.summary, "Apply 2 note changes?");
+    let input: NoteChangesProposalInput = serde_json::from_value(request.input.clone()).unwrap();
+    assert_eq!(input.reason, "The guard was removed.");
+    assert_eq!(
+        input.changes.iter().map(|change| (change.path.as_str(), change.note_title.as_str(), change.op)).collect::<Vec<_>>(),
+        vec![("1", "Auth", NoteChangeOp::Supersede), ("2", "Build", NoteChangeOp::Append)]
+    );
+    assert_eq!(input.changes[0].supersedes.as_deref(), Some("guard exists"));
+    assert_eq!(input.changes[0].category, Some(NoteCategory::Decision));
+
+    // Only paths on the card are an answer, and at least one.
+    for bad in [json!({}), json!({"accepted": []}), json!({"accepted": ["9"]})] {
+        assert!(fixture.orchestrator.respond_approval(card, ApprovalDecision::Submit { response: bad }).await.is_err());
+    }
+    assert!(!call.is_finished());
+    assert_eq!(fixture.store.note_get(auth.summary.id).unwrap().unwrap().body, auth.body, "nothing changes before the answer");
+
+    fixture.orchestrator.respond_approval(card, ApprovalDecision::Submit { response: json!({"accepted": ["1"]}) }).await.unwrap();
+    let result = call.await.unwrap().unwrap();
+    assert_eq!((result["status"].clone(), result["applied"].clone(), result["skipped"].clone()), (json!("applied"), json!(["1"]), json!(["2"])));
+    let auth_after = fixture.store.note_get(auth.summary.id).unwrap().unwrap();
+    assert_eq!(
+        auth_after.body,
+        format!("- ~~2026-10-01 · As of `abc1234`: guard exists (`src/auth.ts`).~~ (superseded {today})\n- keep me\n\n- 2026-10-25 · As of `def5678`: guard removed (`src/auth.ts`).")
+    );
+    assert_eq!(auth_after.summary.category, Some(NoteCategory::Decision));
+    assert_eq!(fixture.store.note_get(build.summary.id).unwrap().unwrap().body, "- pnpm build", "the unticked row was skipped");
+
+    // A decline changes nothing.
+    let declined = start_tool_call(
+        &fixture,
+        &lead,
+        &live,
+        "n2",
+        "kybern_coordinator_propose_note_changes",
+        json!({"reason": "r", "changes": [{"note_id": build.summary.id, "text": "- more"}]}),
+    );
+    let card = secret_card(&live).await;
+    fixture.orchestrator.respond_approval(card, ApprovalDecision::Deny { reason: None }).await.unwrap();
+    assert_eq!(declined.await.unwrap().unwrap()["status"], "declined");
+    assert_eq!(fixture.store.note_get(build.summary.id).unwrap().unwrap().body, "- pnpm build");
+}
+
+#[tokio::test]
+async fn a_published_note_change_carries_the_known_flag_and_is_corrected_off_the_command_lock() {
+    let fixture = Fixture::new();
+    let first = init_git_project(&fixture);
+    let mut changes = fixture.orchestrator.subscribe_notes();
+    let note = claim_note(&fixture, "Claim a", &first, "a");
+    change_files(&fixture, &["a"]);
+
+    // An autosave that leaves the claim alone. Nothing checked this note yet, so the
+    // first notification has no flag; the background check publishes it again with one.
+    let saved = fixture
+        .orchestrator
+        .note_update(methods::NotesUpdateParams {
+            id: Some(note.summary.id),
+            thread_id: None,
+            expected_revision: note.summary.revision,
+            title: None,
+            body: Some(format!("{}\nMore prose.", note.body)),
+            category: None,
+            clear_category: false,
+        })
+        .unwrap();
+    let flagged = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let change = changes.recv().await.unwrap();
+            if let Some(summary) = change.note.filter(|summary| summary.id == note.summary.id && summary.revision == saved.summary.revision)
+                && summary.stale.is_some()
+            {
+                return summary;
+            }
+        }
+    })
+    .await
+    .expect("the corrected flag is published");
+    assert_eq!(flagged.stale.unwrap().path, "src/a.ts");
+
+    // The next save of the same claims publishes the flag at once.
+    fixture.orchestrator.note_pin(note.summary.id, true).unwrap();
+    let pinned = loop {
+        let change = changes.recv().await.unwrap();
+        if let Some(summary) = change.note.filter(|summary| summary.pinned) {
+            break summary;
+        }
+    };
+    assert_eq!(pinned.stale.map(|stale| stale.path).as_deref(), Some("src/a.ts"));
+}
+
+#[tokio::test]
+async fn agent_note_search_reads_no_git_and_shows_the_flag_a_note_read_found() {
+    let fixture = Fixture::new();
+    let first = init_git_project(&fixture);
+    let (lead, live) = full_access_lead(&fixture).await;
+    let note = claim_note(&fixture, "Claim b", &first, "b");
+    change_files(&fixture, &["b"]);
+    let row = |result: &serde_json::Value| result["notes"].as_array().unwrap().iter().find(|row| row["id"] == json!(note.summary.id)).cloned().unwrap();
+
+    let search = fixture.tool(&lead, &live, "s1", "kybern_notes_search", json!({})).await.unwrap();
+    assert_eq!(row(&search)["may_be_outdated"], json!(null), "never checked, and search does not run git");
+    let read = fixture.tool(&lead, &live, "r1", "kybern_note_read", json!({"note_id": note.summary.id})).await.unwrap();
+    assert_eq!(read["may_be_outdated"]["path"], json!("src/b.ts"));
+    let search = fixture.tool(&lead, &live, "s2", "kybern_notes_search", json!({})).await.unwrap();
+    assert_eq!(row(&search)["may_be_outdated"]["path"], json!("src/b.ts"));
+}
+
+#[tokio::test]
+async fn a_notes_category_can_be_cleared_but_not_set_and_cleared_at_once() {
+    let fixture = Fixture::new();
+    let note =
+        fixture.store.note_create_categorized(NoteScope::Project, Some(fixture.project.id), "Style", "- tabs", None, Some(NoteCategory::Convention)).unwrap();
+    let update = |category, clear_category| methods::NotesUpdateParams {
+        id: Some(note.summary.id),
+        thread_id: None,
+        expected_revision: note.summary.revision,
+        title: None,
+        body: None,
+        category,
+        clear_category,
+    };
+    let error = fixture.orchestrator.note_update(update(Some(NoteCategory::Gotcha), true)).unwrap_err().to_string();
+    assert!(error.contains("not both"), "{error}");
+    let cleared = fixture.orchestrator.note_update(update(None, true)).unwrap();
+    assert_eq!(cleared.summary.category, None);
+    // Leaving both out keeps whatever is there.
+    let kept = fixture.orchestrator.note_update(methods::NotesUpdateParams { expected_revision: cleared.summary.revision, ..update(None, false) }).unwrap();
+    assert_eq!((kept.summary.category, kept.summary.revision), (None, cleared.summary.revision));
+}

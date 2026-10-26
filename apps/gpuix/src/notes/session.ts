@@ -1,6 +1,6 @@
 // Native counterpart of desktop noteSession: 500 ms debounce, serialized saves,
 // persistent drafts, conservative line merge and explicit conflict resolution.
-import type { Note } from '../../../../packages/kybern-client/src/types.ts'
+import type { Note, NoteCategory } from '../../../../packages/kybern-client/src/types.ts'
 import { mergeNoteBodies } from '@/state/noteLines'
 import { activeEnvironment, onEnvironmentLeaving } from '../shell/environment.ts'
 import { load, save } from '../shell/persist.ts'
@@ -125,6 +125,17 @@ export class NoteSession {
     if (!this.live) return
     if (this.snap.status === 'dirty') { if (this.mounted) this.schedule(); else await this.flush() }
     if (this.mounted) void this.remote()
+  }
+  /** Save the text first, then set (or, with `null`, clear) the category: it changes no content, so the draft is untouched. */
+  async setCategory(category: NoteCategory | null) {
+    await this.flush()
+    const base = this.snap.note
+    if (!this.live || !base || base.deleted_at || this.snap.conflict || this.snap.status !== 'saved' || (base.category ?? null) === category) return
+    const change = category ? { category } : { clear_category: true }
+    const note = await this.client.call('notes.update', { id: this.id, expected_revision: base.revision, ...change })
+    if (!this.live) return
+    this.set({ note: { ...base, ...note }, error: null })
+    recordNote(note)
   }
   useTheirs() { if (this.snap.conflict) this.adopt(this.snap.conflict) }
   keepMine() { if (!this.snap.conflict) return; this.set({ note: this.snap.conflict, conflict: null, status: 'dirty' }); this.persist(); void this.flush() }

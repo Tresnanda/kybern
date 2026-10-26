@@ -27,7 +27,11 @@ type ListRowItem =
   | { kind: "header"; key: string; title: string; count: number; first: boolean }
   | { kind: "pr"; key: string; item: Item; last: boolean };
 
-const cache = new Map<string, { until: number; rows: PullRequest[] }>();
+const cache = new Map<string, { until: number; rows: PullRequest[]; errors: string[] }>();
+/** A group project has pull requests in its member repositories, whatever its own folder is. */
+const hasPullRequests = (p: Project) => p.is_git || p.kind === "group";
+const memberName = (project: Project, repo?: string) =>
+  repo ? (project.members?.find((m) => m.path === repo)?.name ?? repo) : undefined;
 
 export default function PullRequestsScreen() {
   const { projectId: initialProject } = useLocalSearchParams<{ projectId?: string }>();
@@ -39,7 +43,7 @@ export default function PullRequestsScreen() {
   const [revision, setRevision] = useState(0);
   const [loaded, setLoaded] = useState<{ scope: string; items: Item[]; errors: string[] } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const githubProjects = useMemo(() => app.projects.filter((p) => p.is_git), [app.projects]);
+  const githubProjects = useMemo(() => app.projects.filter(hasPullRequests), [app.projects]);
   const targets = useMemo(
     () => githubProjects.filter((p) => !projectId || p.id === projectId),
     [githubProjects, projectId],
@@ -53,21 +57,29 @@ export default function PullRequestsScreen() {
         const key = `${app.activeId}:${project.id}:${filter}`;
         const hit = cache.get(key);
         try {
-          const rows =
-            !refreshing && hit && hit.until > Date.now()
-              ? hit.rows
-              : (await rpc("github.pr.list", { project_id: project.id, state: filter, limit: 30 })).pull_requests;
-          cache.set(key, { until: Date.now() + 30_000, rows });
-          return { items: rows.map((pr) => ({ project, pr })), error: "" };
+          let loaded: { rows: PullRequest[]; errors: string[] };
+          if (!refreshing && hit && hit.until > Date.now()) loaded = hit;
+          else {
+            const result = await rpc("github.pr.list", { project_id: project.id, state: filter, limit: 30 });
+            // A group project's members that couldn't be listed don't hide the others.
+            const errors = (result.repos ?? []).flatMap((m) =>
+              m.error && !m.skipped && classifyPrError(m.error) !== "no-remote"
+                ? [`${project.name} / ${m.name}: ${m.error}`]
+                : [],
+            );
+            loaded = { rows: result.pull_requests, errors };
+          }
+          cache.set(key, { until: Date.now() + 30_000, ...loaded });
+          return { items: loaded.rows.map((pr) => ({ project, pr })), errors: loaded.errors };
         } catch (e) {
           const text = errorText(e);
           // A project without a GitHub remote simply has no pull requests.
-          return { items: [] as Item[], error: classifyPrError(text) === "no-remote" ? "" : `${project.name}: ${text}` };
+          return { items: [] as Item[], errors: classifyPrError(text) === "no-remote" ? [] : [`${project.name}: ${text}`] };
         }
       }),
     ).then((results) => {
       if (canceled) return;
-      setLoaded({ scope, items: byUpdated(results.flatMap((r) => r.items)), errors: results.map((r) => r.error).filter(Boolean) });
+      setLoaded({ scope, items: byUpdated(results.flatMap((r) => r.items)), errors: results.flatMap((r) => r.errors) });
       setRefreshing(false);
     });
     return () => {
@@ -87,7 +99,7 @@ export default function PullRequestsScreen() {
         first = false;
       }
       items.forEach((item, i) =>
-        out.push({ kind: "pr", key: `${id}:${item.pr.number}`, item, last: i === items.length - 1 }),
+        out.push({ kind: "pr", key: `${id}${item.pr.repo ? `/${item.pr.repo}` : ""}:${item.pr.number}`, item, last: i === items.length - 1 }),
       );
     }
     return out;
@@ -186,11 +198,16 @@ export default function PullRequestsScreen() {
           ) : (
             <PrRow
               pr={row.item.pr}
+              repoName={memberName(row.item.project, row.item.pr.repo)}
               separator={!row.last}
               onPress={() =>
                 router.push({
                   pathname: "/pull",
-                  params: { projectId: row.item.project.id, number: String(row.item.pr.number) },
+                  params: {
+                    projectId: row.item.project.id,
+                    number: String(row.item.pr.number),
+                    ...(row.item.pr.repo ? { repo: row.item.pr.repo } : {}),
+                  },
                 })
               }
             />

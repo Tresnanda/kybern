@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync, watch } from 'node:fs'
 import path from 'node:path'
 import { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
-import { configDir, localProfile, profileEndpoint } from '../environments/registry.ts'
+import { configDir, localEndpoint } from '../environments/registry.ts'
 import { activeEnvironment, onEnvironmentChange } from '../shell/environment.ts'
 
 const file = () => path.join(configDir(), 'notes-preferences.json')
@@ -27,7 +27,7 @@ onEnvironmentChange(closeHome)
 /** Only Global notes use this connection. Never silently redirect an unavailable home to the remote daemon. */
 export function homeClient(changed: () => void) {
   if (!client) {
-    client = new KybernClient(profileEndpoint(localProfile))
+    client = new KybernClient(localEndpoint())
     client.onNotification('notes.changed', changed)
     client.onStatus((status) => { if (status === 'open') changed() })
     client.connect()

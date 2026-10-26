@@ -1,0 +1,35 @@
+{
+  "coordinator-rotation-pending": [
+    "user:1",
+    "end:3",
+    "rotation:5:pending:budget:-:unedited:-:-:-:turn=22"
+  ],
+  "coordinator-rotation-written": [
+    "user:1",
+    "end:3",
+    "rotation:5:settled:budget:written:unedited:## Goals/17:3/1/0/5:claude-code:turn=22",
+    "user:7",
+    "end:9"
+  ],
+  "coordinator-rotation-missing": [
+    "user:1",
+    "end:3",
+    "rotation:4:settled:manual:missing:unedited:-:3/1/0/5:claude-code:turn=22",
+    "user:6",
+    "end:8"
+  ],
+  "coordinator-rotation-edited": [
+    "user:1",
+    "end:3",
+    "rotation:4:settled:idle:written:edited:## Goals/2:3/1/0/5:claude-code:turn=22",
+    "user:7",
+    "end:9"
+  ],
+  "coordinator-rotation-harness-switch": [
+    "user:1",
+    "end:3",
+    "rotation:4:settled:harness_switch:written:unedited:## Goals/17:3/1/0/5:codex:turn=22",
+    "user:6",
+    "end:8"
+  ]
+}

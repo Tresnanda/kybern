@@ -8,14 +8,19 @@
 //!   Coordinator settings?" listing each field old to new. The accepted rows are
 //!   written to the project's override; the rest are left alone.
 //!
-//! Both wait for the user like other consent cards: a wait that runs out leaves
+//! - `kybern_coordinator_propose_note_changes { changes, reason }`: "Apply N note
+//!   changes?" listing each dated claim to append, and the line it retires. The
+//!   accepted rows are appended to the notes; this is how the Coordinator tidies
+//!   notes the user asked it to check.
+//!
+//! All wait for the user like other consent cards: a wait that runs out leaves
 //! the card open, and the agent calls again with the same arguments.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow, bail, ensure};
-use kybern_protocol::methods::{NoteScope, NotesCreateParams, NotesUpdateParams, ProjectNoteRole};
+use kybern_protocol::methods::{NoteCategory, NoteId, NoteScope, NotesCreateParams, NotesUpdateParams, ProjectNoteRole};
 use kybern_protocol::*;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -26,9 +31,10 @@ use super::{DaemonAnswer, LiveSession, Orchestrator};
 
 pub(super) const BRIEF_TOOL: &str = "kybern_coordinator_propose_brief";
 pub(super) const SETTINGS_TOOL: &str = "kybern_coordinator_propose_settings";
+pub(super) const NOTE_CHANGES_TOOL: &str = "kybern_coordinator_propose_note_changes";
 
 pub(crate) fn is_tool(name: &str) -> bool {
-    name == BRIEF_TOOL || name == SETTINGS_TOOL
+    name == BRIEF_TOOL || name == SETTINGS_TOOL || name == NOTE_CHANGES_TOOL
 }
 
 /// The proposal tools, offered to a project's Coordinator only.
@@ -100,6 +106,38 @@ pub(crate) fn tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
                 "required": ["changes", "reason"]
             }),
         },
+        NativeToolDefinition {
+            name: NOTE_CHANGES_TOOL.into(),
+            description: concat!(
+                "Propose changes to the project's memory notes, usually after a read-only child checked flagged claims against the code. ",
+                "Each change appends one dated claim to a note (note_id, text). To retire an old claim, set supersedes to an exact piece of the one line it replaces: ",
+                "that line is struck through and marked superseded. Write text as `- YYYY-MM-DD · As of `abc1234`: what is true (`path`).` with the current HEAD. ",
+                "category sets the note's category when it has none. The user sees every change in a card and can untick rows; the brief cannot be changed this way. ",
+                "At most 30 changes. The call waits for the user. Result: {status, applied, failed, skipped}: \"applied\" lists the accepted changes by number, \"declined\" means none. ",
+                "If the call returns an error saying it is still waiting, call again with the same arguments."
+            )
+            .into(),
+            input_schema: json!({
+                "type": "object", "additionalProperties": false,
+                "properties": {
+                    "changes": {
+                        "type": "array", "minItems": 1, "maxItems": MAX_NOTE_CHANGES,
+                        "items": {
+                            "type": "object", "additionalProperties": false,
+                            "properties": {
+                                "note_id": {"type": "string", "format": "uuid"},
+                                "text": {"type": "string", "minLength": 1, "description": "Markdown appended to the note."},
+                                "supersedes": {"type": ["string", "null"], "description": "Exact piece of the one line this replaces."},
+                                "category": {"enum": ["preference", "decision", "convention", "gotcha", null]}
+                            },
+                            "required": ["note_id", "text"]
+                        }
+                    },
+                    "reason": {"type": "string", "minLength": 1, "maxLength": 500}
+                },
+                "required": ["changes", "reason"]
+            }),
+        },
     ]
 }
 
@@ -114,6 +152,24 @@ struct BriefArgs {
 struct SettingsArgs {
     changes: ChangesArgs,
     reason: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoteChangesArgs {
+    changes: Vec<NoteChangeArgs>,
+    reason: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoteChangeArgs {
+    note_id: NoteId,
+    text: String,
+    #[serde(default)]
+    supersedes: Option<String>,
+    #[serde(default)]
+    category: Option<NoteCategory>,
 }
 
 #[derive(Deserialize, Default)]
@@ -156,6 +212,7 @@ impl Orchestrator {
         match name {
             BRIEF_TOOL => self.propose_brief(thread, turn_id, live, crate::app_tools::parse(arguments)?).await,
             SETTINGS_TOOL => self.propose_settings(thread, turn_id, live, crate::app_tools::parse(arguments)?).await,
+            NOTE_CHANGES_TOOL => self.propose_note_changes(thread, turn_id, live, crate::app_tools::parse(arguments)?).await,
             _ => bail!("unknown Coordinator tool: {name}"),
         }
     }
@@ -201,6 +258,8 @@ impl Orchestrator {
                 expected_revision: existing.summary.revision,
                 title: None,
                 body: Some(text.to_owned()),
+                category: None,
+                clear_category: false,
             })?,
             None => self.note_create(NotesCreateParams {
                 scope: NoteScope::Project,
@@ -208,6 +267,7 @@ impl Orchestrator {
                 title: Some("Project brief".into()),
                 body: Some(text.to_owned()),
                 project_role: Some(ProjectNoteRole::Brief),
+                category: None,
             })?,
         };
         Ok(note.summary.revision)
@@ -352,6 +412,99 @@ impl Orchestrator {
         }
         self.publish_projects();
         Ok(())
+    }
+
+    // ---- kybern_coordinator_propose_note_changes ----
+
+    async fn propose_note_changes(
+        &self,
+        thread: &Thread,
+        turn_id: TurnId,
+        live: &Arc<LiveSession>,
+        args: NoteChangesArgs,
+    ) -> Result<Value> {
+        let reason = args.reason.trim().to_owned();
+        ensure!(!reason.is_empty() && reason.chars().count() <= 500, "Say why in a sentence of up to 500 characters, then call again.");
+        ensure!(!args.changes.is_empty(), "Pass at least one change, or do not call this tool.");
+        ensure!(
+            args.changes.len() <= MAX_NOTE_CHANGES,
+            "Propose at most {MAX_NOTE_CHANGES} changes at a time; send the rest in another call."
+        );
+        let date = super::agent_items::today();
+        let mut changes = Vec::new();
+        for (index, change) in args.changes.into_iter().enumerate() {
+            let number = index + 1;
+            let note = self.live_note(change.note_id).map_err(|error| anyhow!("Change {number}: {error:#}"))?;
+            ensure!(
+                note.summary.project_id == Some(thread.project_id) && note.summary.scope == NoteScope::Project,
+                "Change {number}: '{}' is not one of this project's notes.",
+                note.summary.title
+            );
+            ensure!(
+                note.summary.project_role != Some(ProjectNoteRole::Brief),
+                "Change {number}: the project brief is the user's. Use kybern_coordinator_propose_brief."
+            );
+            let text = change.text.trim().to_owned();
+            ensure!(!text.is_empty(), "Change {number}: text is empty.");
+            if let Some(category) = change.category
+                && let Some(existing) = note.summary.category
+            {
+                ensure!(
+                    existing == category,
+                    "Change {number}: '{}' is a {} note. Leave category out, or propose a new note for the {} claim.",
+                    note.summary.title,
+                    existing.as_str(),
+                    category.as_str()
+                );
+            }
+            let supersedes = change.supersedes.map(|text| text.trim().to_owned()).filter(|text| !text.is_empty());
+            if let Some(needle) = &supersedes {
+                super::note_claims::supersede(&note.body, needle, &date).map_err(|error| anyhow!("Change {number}: {error:#}"))?;
+            }
+            changes.push(NoteChange {
+                path: number.to_string(),
+                note_id: note.summary.id,
+                note_title: note.summary.title.clone(),
+                op: if supersedes.is_some() { NoteChangeOp::Supersede } else { NoteChangeOp::Append },
+                text,
+                supersedes,
+                category: change.category,
+            });
+        }
+        let paths: Vec<String> = changes.iter().map(|change| change.path.clone()).collect();
+        let key = format!("lead_notes:{}", digest(&json!([&changes, &reason])));
+        let input = serde_json::to_value(NoteChangesProposalInput { reason, changes: changes.clone() })?;
+        let summary = format!("Apply {} note {}?", changes.len(), if changes.len() == 1 { "change" } else { "changes" });
+        let answer = self.ask_proposal(thread, turn_id, live, key, COORDINATOR_NOTES_TOOL, input, &summary).await?;
+        let Proposal::Submitted(response) = answer else {
+            return Ok(json!({
+                "status": "declined", "applied": [], "failed": [], "skipped": paths,
+                "note": "The user declined these note changes. Do not propose them again unless they ask."
+            }));
+        };
+        let accepted: HashSet<String> = response
+            .get("accepted")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|path| path.as_str().map(str::to_owned))
+            .collect();
+        let chosen: Vec<&NoteChange> = changes.iter().filter(|change| accepted.contains(&change.path)).collect();
+        ensure!(!chosen.is_empty(), "The answer accepted no change. Nothing was applied.");
+        let mut applied = Vec::new();
+        let mut failed = Vec::new();
+        for change in chosen {
+            match self.append_note_text(thread.id, Some(change.note_id), &change.text, change.supersedes.as_deref(), change.category) {
+                Ok(_) => applied.push(change.path.clone()),
+                Err(error) => failed.push(json!({ "path": change.path, "note": change.note_title, "error": format!("{error:#}") })),
+            }
+        }
+        let skipped: Vec<&str> = paths
+            .iter()
+            .map(String::as_str)
+            .filter(|path| !applied.iter().any(|done| done == path) && !failed.iter().any(|f| f["path"] == *path))
+            .collect();
+        Ok(json!({ "status": "applied", "applied": applied, "failed": failed, "skipped": skipped }))
     }
 
     // ---- the card ----

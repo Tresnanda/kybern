@@ -52,14 +52,15 @@ export function prMeta(pr: PullRequest) {
   return [`#${pr.number}`, pr.author, relativeTime(pr.updated_at)].filter(Boolean).join(" · ");
 }
 
-export function PrRow({ pr, onPress, separator }: { pr: PullRequest; onPress: () => void; separator?: boolean }) {
+/** `repoName`: the member repository's display name, for a pull request in a group project. */
+export function PrRow({ pr, repoName, onPress, separator }: { pr: PullRequest; repoName?: string; onPress: () => void; separator?: boolean }) {
   const kind = resolvePrStateKind(pr);
   const outcome = checksOutcome(pr.checks_summary);
   return (
     <ListRow
       title={pr.title}
       titleLines={2}
-      subtitle={prMeta(pr)}
+      subtitle={repoName ? `${repoName} · ${prMeta(pr)}` : prMeta(pr)}
       subtitleLines={1}
       leading={
         <View>
@@ -74,6 +75,7 @@ export function PrRow({ pr, onPress, separator }: { pr: PullRequest; onPress: ()
       meta={signedDiff(pr)}
       label={[
         pr.title,
+        repoName ?? "",
         PR_STATE_WORDS[kind],
         prMeta(pr),
         pr.checks_summary?.total ? checksDotLabel(pr.checks_summary) : "",

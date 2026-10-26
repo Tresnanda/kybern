@@ -77,7 +77,7 @@ index 37cc70406f67838394b07664259720cf9dd9f748..09a5c21aacf092351270d6322bee5e84
          }),
          result: okSchema,
 diff --git a/dist/host.d.ts b/dist/host.d.ts
-index 74dea743a2c536658dc833f884ef317970c8d5d3..0e3b91d02142569526e5a131b15b59cdfb39ae44 100644
+index 74dea743a2c536658dc833f884ef317970c8d5d3..9c2ba92a8dfe1cdfeeff0fe8ec0fcafa344086ad 100644
 --- a/dist/host.d.ts
 +++ b/dist/host.d.ts
 @@ -5,6 +5,10 @@ export * from "./mutations.js";
@@ -107,7 +107,7 @@ index 74dea743a2c536658dc833f884ef317970c8d5d3..0e3b91d02142569526e5a131b15b59cd
      /** Duration in seconds. */
      duration?: number;
      /** Delay in seconds. */
-@@ -300,7 +313,62 @@ export interface HighlightSpec {
+@@ -300,7 +313,64 @@ export interface HighlightSpec {
      /** Corner radius of the wash. Defaults to 2. */
      radius?: number;
  }
@@ -167,10 +167,12 @@ index 74dea743a2c536658dc833f884ef317970c8d5d3..0e3b91d02142569526e5a131b15b59cd
 +    cache?: boolean | "fill";
 +    /** Empty titlebar region; do not place on interactive controls. */
 +    windowDrag?: boolean;
++    /** Windows: this element is that caption button (the native hit test acts on it). No-op elsewhere. */
++    windowControl?: "minimize" | "maximize" | "close";
      style?: StyleDesc;
      /** Primary button only, like the DOM. Use `onAuxClick` for the others. */
      onClick?: (event: EventPayload) => void;
-@@ -384,6 +452,10 @@ export interface HostProps {
+@@ -384,6 +454,10 @@ export interface HostProps {
      motion?: MotionProps;
  }
  export interface InputProps extends HostProps {
@@ -181,7 +183,7 @@ index 74dea743a2c536658dc833f884ef317970c8d5d3..0e3b91d02142569526e5a131b15b59cd
      /** External editor value. Native edits apply immediately and report through onChange. */
      value?: string;
      placeholder?: string;
-@@ -453,6 +525,8 @@ export interface SvgProps extends HostProps {
+@@ -453,6 +527,8 @@ export interface SvgProps extends HostProps {
   * scroller, so `whiteSpace` and `overflowX` do nothing.
   */
  export interface CodeProps extends HostProps {
@@ -190,7 +192,7 @@ index 74dea743a2c536658dc833f884ef317970c8d5d3..0e3b91d02142569526e5a131b15b59cd
      /** The source to display. Rendered one div per line at an exact line height. */
      code?: string;
      /** Language alias such as "ts", "rust", "bash". Beats `path` for detection. */
-@@ -519,7 +593,7 @@ export type WindowSizeHost = Pick<GpuixRenderer, "getWindowSize">;
+@@ -519,7 +595,7 @@ export type WindowSizeHost = Pick<GpuixRenderer, "getWindowSize">;
  export type WindowInsetsHost = Pick<GpuixRenderer, "getWindowInsets">;
  export type SelectionHost = Pick<GpuixRenderer, "getSelectedText">;
  /** `applyBatch` plus the live renderer methods a host may also expose. */
@@ -213,7 +215,7 @@ index f095555e429a7cc49a887556d32b2d0ce4de7ee3..cf47e28cf9d82c70480ef1103714e9da
  /**
   * Event type for a handler prop. Adapters walk an element's own props and look
 diff --git a/dist/mutations.js b/dist/mutations.js
-index f517f20be37230511112c0b1702def9db4c10bfa..b448ed3ae16d8b85adf214346745a7590b9701f3 100644
+index f517f20be37230511112c0b1702def9db4c10bfa..335c1b8511f04db25b75252a01b0e93be738437e 100644
 --- a/dist/mutations.js
 +++ b/dist/mutations.js
 @@ -9,6 +9,7 @@ export function appliedBatchCount() {
@@ -263,7 +265,7 @@ index f517f20be37230511112c0b1702def9db4c10bfa..b448ed3ae16d8b85adf214346745a759
  ];
  export const EVENT_PROP_NAMES = new Set(EVENT_PROPS.map(([name]) => name));
  /**
-@@ -115,6 +127,17 @@ export const UNIVERSAL_PROPS = new Set([
+@@ -115,6 +127,18 @@ export const UNIVERSAL_PROPS = new Set([
      "autoFocus",
      "tabIndex",
      "motion",
@@ -275,6 +277,7 @@ index f517f20be37230511112c0b1702def9db4c10bfa..b448ed3ae16d8b85adf214346745a759
 +    "hoverTransition",
 +    "cache",
 +    "windowDrag",
++    "windowControl",
 +    "interceptKeys",
 +    "secure",
 +    "softWrap",
@@ -357,7 +360,7 @@ index 9af08d9c4b6a83a1c8f1a35c14bad16cadd4c9db..f9b5716cd3928d832cd6e4c174ffd83c
      }
      /** Dispatch a wheel without the surrounding flushes, for perf sampling.
 diff --git a/index.d.ts b/index.d.ts
-index 4eded3a21879e8df7ee34145a1bce4f805b8be27..536f037d363419892ff31ec9c491cc5c48b36bcf 100644
+index 4eded3a21879e8df7ee34145a1bce4f805b8be27..3d4ee21e1977816820fa2a14c913c8091e231efb 100644
 --- a/index.d.ts
 +++ b/index.d.ts
 @@ -34,6 +34,13 @@ export declare class AvailableUpdate {
@@ -374,3 +377,17 @@ index 4eded3a21879e8df7ee34145a1bce4f805b8be27..536f037d363419892ff31ec9c491cc5c
    constructor(eventCallback?: (((err: Error | null, arg: EventPayload) => any)) | undefined | null)
    /** Initialize GPUI using the native event-loop architecture for this OS. */
    init(options?: WindowOptions | undefined | null): void
+@@ -768,6 +775,13 @@ export interface WindowOptions {
+   windowBackground?: string
+   trafficLightX?: number
+   trafficLightY?: number
++  /** Linux: `"client"` asks for client-side decorations. */
++  windowDecorations?: string
++  /** Windows and Linux: a saved frame to open at (`getWindowBounds`). */
++  x?: number
++  y?: number
++  maximized?: boolean
++  display?: string
+   /**
+    * Give the window key focus when it opens. `false` opens it behind the
+    * active app, like `open -g`. Ignored on Linux.

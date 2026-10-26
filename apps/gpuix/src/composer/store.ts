@@ -13,7 +13,6 @@ import type { NewChatCreate } from '../../../../packages/kybern-client/src/newCh
 // The desktop keeps draft choices, favorites and recents in localStorage; here
 // they live for the session only.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import path from 'node:path'
 import { useRef, useSyncExternalStore } from 'react'
 import { getClient, getState, refreshLists, selectPaneThread, getFocusedPaneId, getPane, getPaneState, setPane, usePaneAccess, useApp } from '../state.ts'
@@ -37,6 +36,7 @@ import type {
 } from '../../../../packages/kybern-client/src/types.ts'
 import type { DraftReferences } from './Completion.tsx'
 import type { FavoriteModel } from '../../../../packages/kybern-client/src/models.ts'
+import { gpuixCacheDir } from '../platform/os.ts'
 
 export interface DraftChoices {
   /** `null` follows `settings.default_permission_mode`. */
@@ -203,7 +203,7 @@ export function loadProviders(force: boolean, projectId?: ProjectId): Promise<Pr
   return request
 }
 
-const CACHE_DIR = process.env.KYBERN_CLIENT_CONFIG_DIR ? path.join(process.env.KYBERN_CLIENT_CONFIG_DIR, 'cache') : path.join(homedir(), 'Library', 'Caches', 'kybern-gpuix')
+const CACHE_DIR = gpuixCacheDir('cache')
 const cacheFile = (url: string) => path.join(CACHE_DIR, `providers-${url.replace(/[^a-z0-9]+/gi, '_')}.json`)
 
 function readProviderCache(url: string): ProviderStatus[] | null {

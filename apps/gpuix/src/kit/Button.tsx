@@ -15,6 +15,7 @@ import { Icon, ICONS, type IconName } from '../icons.tsx'
 import { SCALE, SwapOnChange } from '../motion/kit.tsx'
 import { pressTransform } from '../motion/press.ts'
 import { N } from '../nav/glyphs.ts'
+import { shortcutLabel } from '../platform/keys.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { CONTROL, useControls, type ControlSize } from './controls.ts'
 import { Spinner } from './Spinner.tsx'
@@ -36,7 +37,7 @@ export interface ButtonProps {
   iconAfter?: string
   /** A menu trigger: a trailing 12 px chevron (`open` turns it, as `PickerChip` does not need to). */
   chevron?: boolean
-  /** A shortcut hint after the label, in the label's colour at 55% (`⌘↵`). The primary owns ⌘↵. */
+  /** A shortcut hint after the label, in the label's colour at 55% (`⌘↵`; `Ctrl+Enter` off macOS). The primary owns ⌘↵. */
   kbd?: string
   busy?: boolean
   disabled?: boolean
@@ -107,7 +108,7 @@ export function Button({ children, variant = 'secondary', danger = false, size =
     >
       {busy ? <Spinner size={12} color={fg} /> : icon ? <Icon source={glyphSource(icon)} size={g.glyph} color={fg} style={{ pointerEvents: 'none' }} /> : null}
       {labelNode}
-      {kbd && <Label color={fg} size={g.font - 1} lineHeight={g.line} weight={500} style={{ opacity: 0.55, marginLeft: 2, pointerEvents: 'none' }}>{kbd}</Label>}
+      {kbd && <Label color={fg} size={g.font - 1} lineHeight={g.line} weight={500} style={{ opacity: 0.55, marginLeft: 2, pointerEvents: 'none' }}>{shortcutLabel(kbd)}</Label>}
       {trailing}
       {iconAfter && <Icon source={glyphSource(iconAfter)} size={13} color={fg} style={{ opacity: 0.7, pointerEvents: 'none' }} />}
       {chevron && <Icon source={N.chevronDown} size={12} color={fg} style={{ opacity: 0.7, pointerEvents: 'none' }} />}

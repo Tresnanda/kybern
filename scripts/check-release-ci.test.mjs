@@ -77,10 +77,61 @@ test('every required job is a job of ci.yml, and main runs all of them', async (
 test('GPUIX bundles both macOS targets from dist binaries without compiling the daemon', async () => {
   const { readFileSync } = await import('node:fs')
   const workflow = readFileSync(new URL('../.github/workflows/desktop.yml', import.meta.url), 'utf8')
-  const gpuix = workflow.split('\n  gpuix:\n')[1].split('\n  manifest:')[0]
-  assert.match(gpuix, /target: \[aarch64-apple-darwin, x86_64-apple-darwin\]/)
+  const gpuix = workflow.split('\n  gpuix:\n')[1].split('\n  gpuix-linux:')[0]
+  assert.match(gpuix, /- target: aarch64-apple-darwin\n\s+os: macos-15/)
+  assert.match(gpuix, /- target: x86_64-apple-darwin\n\s+os: macos-15/)
+  // Linux and Windows are jobs of their own; nothing about them lives in the macOS matrix.
+  assert.doesNotMatch(gpuix, /windows-2022|msvc|ubuntu|unknown-linux|bundle-gpuix-linux|continue-on-error|matrix\.beta/)
   assert.match(gpuix, /dist-binaries\.mjs --target "\$KYBERN_GPUIX_TARGET"/)
   assert.match(gpuix, /--pattern "kybern-\$KYBERN_GPUIX_TARGET\.\*"/)
   assert.doesNotMatch(gpuix, /cargo build/)
   assert.match(gpuix, /name: desktop-gpuix-\$\{\{ matrix\.target \}\}/)
+})
+
+test('the Linux GPUIX beta is its own job: dist\'s musl binaries on the ubuntu-22.04 glibc floor, and its failure cannot skip the manifest', async () => {
+  const { readFileSync } = await import('node:fs')
+  const workflow = readFileSync(new URL('../.github/workflows/desktop.yml', import.meta.url), 'utf8')
+  const linux = workflow.split('\n  gpuix-linux:\n')[1].split('\n  gpuix-windows:')[0]
+  assert.match(linux, /runs-on: ubuntu-22\.04/)
+  assert.doesNotMatch(linux, /matrix\./)
+  assert.match(linux, /KYBERN_DIST_TARGET: x86_64-unknown-linux-musl/)
+  assert.match(linux, /dist-binaries\.mjs --target "\$KYBERN_DIST_TARGET"/)
+  assert.match(linux, /--pattern "kybern-\$KYBERN_DIST_TARGET\.\*"/)
+  assert.match(linux, /scripts\/bundle-gpuix-linux\.sh/)
+  assert.doesNotMatch(linux, /cargo build|continue-on-error/)
+  assert.match(linux, /name: desktop-gpuix-x86_64-unknown-linux-gnu/)
+  const manifest = workflow.split('\n  manifest:\n')[1]
+  assert.match(manifest, /\(needs\.gpuix-linux\.result == 'success' \|\| needs\.gpuix-linux\.result == 'failure'\)/)
+})
+
+test('the Windows GPUIX beta is its own job: its failure cannot skip the manifest, and its installer is checked before upload', async () => {
+  const { readFileSync } = await import('node:fs')
+  const workflow = readFileSync(new URL('../.github/workflows/desktop.yml', import.meta.url), 'utf8')
+  const windows = workflow.split('\n  gpuix-windows:\n')[1].split('\n  manifest:')[0]
+  assert.match(windows, /runs-on: windows-2022/)
+  assert.doesNotMatch(windows, /matrix\./)
+  assert.match(windows, /scripts\/bundle-gpuix-windows\.sh/)
+  assert.match(windows, /dist-binaries\.mjs --target "\$KYBERN_GPUIX_TARGET"/)
+  assert.doesNotMatch(windows, /cargo build/)
+  assert.match(windows, /name: desktop-gpuix-x86_64-pc-windows-msvc/)
+  // The blocking installer check (smoke run included) precedes the upload; only the real-launch step is informational.
+  const check = windows.indexOf('verify-install.ps1 \\\n'), upload = windows.indexOf('actions/upload-artifact')
+  assert.ok(check > 0 && check < upload, 'verify-install.ps1 must run before the upload')
+  const checkStep = windows.slice(windows.lastIndexOf('      - name:', check), upload)
+  assert.doesNotMatch(checkStep, /continue-on-error/)
+  assert.match(windows.slice(upload), /name: Launch the installed app\n\s+continue-on-error: true/)
+  assert.doesNotMatch(windows.slice(0, upload), /continue-on-error/)
+  // The manifest needs the macOS job to succeed and takes the Linux and Windows jobs either way.
+  const manifest = workflow.split('\n  manifest:\n')[1]
+  assert.match(manifest, /needs: \[bundle, gpuix, gpuix-linux, gpuix-windows\]/)
+  assert.match(manifest, /needs\.gpuix\.result == 'success'/)
+  assert.match(manifest, /\(needs\.gpuix-windows\.result == 'success' \|\| needs\.gpuix-windows\.result == 'failure'\)/)
+})
+
+test('actions in the GPUIX workflows are pinned to a commit, setup-python included', async () => {
+  const { readFileSync } = await import('node:fs')
+  for (const file of ['desktop.yml', 'gpuix-addon.yml', 'gpuix-platforms.yml']) {
+    const workflow = readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), 'utf8')
+    for (const [, action] of workflow.matchAll(/uses: (actions\/setup-python@\S+)/g)) assert.match(action, /@[0-9a-f]{40}$/, `${file}: ${action}`)
+  }
 })

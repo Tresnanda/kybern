@@ -650,6 +650,11 @@ expression: schema_for!(ThreadsCreateParams)
           "description": "The Coordinator's setup interview began (a new Coordinator without a\nbrief, or \"Redo setup\").",
           "type": "string",
           "const": "coordinator_setup"
+        },
+        {
+          "description": "The user chose \"Tidy notes\": the Coordinator was asked to check outdated\nmemory notes. The provider's copy carries the instructions.",
+          "type": "string",
+          "const": "coordinator_tidy_notes"
         }
       ]
     }

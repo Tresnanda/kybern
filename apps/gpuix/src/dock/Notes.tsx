@@ -22,6 +22,7 @@ import { Button } from '../kit/Button.tsx'
 import { TaskWindow, type TaskWindowEntry } from '../tasks/TaskWindow.tsx'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { ErrorLine, Section } from './parts.tsx'
+import { groupNotes, noteSnippet } from '../../../../packages/kybern-client/src/notesHistory.ts'
 
 export function ScopeHeader({ thread, action }: { thread: Thread; action: React.ReactNode }) {
   const name = useApp(s => s.projects.find(p => p.id === thread.project_id)?.name)
@@ -31,6 +32,7 @@ export function ScopeHeader({ thread, action }: { thread: Thread; action: React.
 export function NotesPane({ thread }: { thread: Thread }) {
   const notes = useNotes(s => s.notes)
   const loaded = useNotes(s => s.loaded)
+  const historySince = useNotes(s => s.historySince)
   const error = useNotes(s => s.error)
   const project = isFreeChatProject(thread.project_id) ? null : thread.project_id
   const projectName = useApp(s => s.projects.find(p => p.id === thread.project_id)?.name)
@@ -41,9 +43,11 @@ export function NotesPane({ thread }: { thread: Thread }) {
   const pinned = live.filter(n => n.pinned && (scope(n) || n.scope === 'global')).sort(recent).slice(0, 8)
   const other = live.filter(n => !n.pinned && scope(n)).sort(recent).slice(0, 50 - pinned.length)
   const entries: TaskWindowEntry[] = []
-  for (const [label, items] of [['Pinned', pinned], ['Recent', other]] as const) {
-    if (items.length) entries.push({ key: label, height: label === 'Recent' && pinned.length ? 36 : 28, render: () => <div style={{ paddingTop: label === 'Recent' && pinned.length ? 8 : 0 }}><DockSection label={label} /></div> })
-    for (const note of items) entries.push({ key: note.id, height: 55, render: () => <NoteRow note={note} /> })
+  // Notes the Coordinator keeps as history sit under their category; a project with none keeps the single "Recent" run.
+  const sections = [{ key: 'Pinned', label: 'Pinned', notes: pinned }, ...groupNotes(other).map((group) => group.key === 'other' && group.notes.length === other.length ? { ...group, key: 'Recent', label: 'Recent' } : group)]
+  for (const { key, label, notes: items } of sections) {
+    if (items.length) { const lead = entries.length === 0; entries.push({ key: `section:${key}`, height: lead ? 28 : 36, render: () => <div style={{ paddingTop: lead ? 0 : 8 }}><DockSection label={label} /></div> }) }
+    for (const note of items) entries.push({ key: note.id, height: 55, render: () => <NoteRow note={note} historySince={historySince} /> })
   }
   const all = () => { setNotes({ selected: null, filter: project ? { kind: 'project', projectId: project } : { kind: 'global' } }); goPage('notes') }
   const quick = () => {
@@ -60,13 +64,17 @@ export function NotesPane({ thread }: { thread: Thread }) {
     {!loaded ? <Section label="Loading notes…" /> : entries.length ? <TaskWindow entries={entries} testId="dock-notes-list" /> : <Section label={`Other notes for ${project ? projectName ?? 'this project' : 'Global'} appear here.`} />}
   </div>
 }
-const NoteRow = memo(function NoteRow({ note }: { note: NoteSummary }) {
+const NoteRow = memo(function NoteRow({ note, historySince }: { note: NoteSummary; historySince: string | null }) {
   const t = useTheme()
   // A note opens as a tab beside the chat (ADE-54); "Show all in Notes" still leaves for the Notes page.
   const open = () => { if (!openTabFromPane(getFocusedPaneId(), { kind: 'note', id: note.id, title: noteTitle(note) })) openNote(note.id) }
+  const snippet = noteSnippet(note, historySince)
   return <div testId={`dock-note-${note.id}`} role="button" tabIndex={0} onClick={open} onKeyDown={e => { if (e.key === 'enter') open() }} style={{ display: 'flex', flexDirection: 'column', gap: 2, height: 54, paddingTop: 6, paddingBottom: 6, paddingLeft: 8, paddingRight: 8, marginLeft: 6, marginRight: 6, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.hover } }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, pointerEvents: 'none' }}><Label color={t.text} size={14} lineHeight={21} truncate style={{ flexGrow: 1 }}>{noteTitle(note)}</Label>{note.checklist.total > 0 && <Ring done={note.checklist.done} total={note.checklist.total} color={muted(t, 0.55)} />}<Label color={muted(t, 0.55)} size={13}>{relativeTime(note.updated_at, Date.now())}</Label></div>
-    <Label color={muted(t, 0.6)} size={13} lineHeight={19.5} truncate style={{ pointerEvents: 'none' }}>{note.preview.replace(/\s+/g, ' ').trim()}</Label>
+    {/* A stale note says why in a warning dot and one line; the preview comes back once its claims are checked. */}
+    {snippet.kind === 'stale'
+      ? <div testId={`dock-note-stale-${note.id}`} style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, pointerEvents: 'none' }}><div style={{ width: 6, height: 6, borderRadius: 3, flexShrink: 0, backgroundColor: t.warning }} /><Label color={muted(t, 0.6)} size={13} lineHeight={19.5} truncate style={{ flexGrow: 1, flexShrink: 1 }}>{snippet.text}</Label></div>
+      : <Label color={muted(t, snippet.kind === 'undated' ? 0.5 : 0.6)} size={13} lineHeight={19.5} truncate style={{ pointerEvents: 'none' }}>{snippet.text}</Label>}
   </div>
 })
 function ThreadNote({ threadId, noteId }: { threadId: string; noteId?: string }) {

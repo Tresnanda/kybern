@@ -3,6 +3,7 @@
 import path from 'node:path'
 import { mkdirSync, rmSync } from 'node:fs'
 import { launchFixture } from '../requests/harness.ts'
+import { captureWindowImage } from '../platform/os.ts'
 import { CLIENT_DIR, CREDS_DIR, DATA_DIR, SCRATCH, connect, readState } from '../../visual/fixture.ts'
 
 export const ROOT = path.resolve(import.meta.dir, '../..')
@@ -38,8 +39,9 @@ export function percentile(values: number[], p: number) {
 
 /** Window-only capture (the GPUI screenshot API omits embedded web views). */
 export function captureWindow(pid: number, file: string) {
+  // The window id comes from a Swift helper and the image from `screencapture -l`; off macOS use the automation client's `screenshot` instead.
+  if (process.platform !== 'darwin') throw Error('captureWindow(pid) needs macOS. On Windows and Linux capture with the automation client (app.screenshot) and skip the embedded web view checks.')
   const id = Bun.spawnSync(['swift', path.join(ROOT, 'visual/window-id.swift'), String(pid)]).stdout.toString().trim()
   if (!id) throw Error('No window for pid ' + pid)
-  const result = Bun.spawnSync(['screencapture', '-l', id, '-x', '-o', file])
-  if (result.exitCode !== 0) throw Error('screencapture failed: ' + result.stderr.toString())
+  captureWindowImage(id, file)
 }

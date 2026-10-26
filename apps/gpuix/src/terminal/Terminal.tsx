@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { readClipboardText } from '../platform/os.ts'
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useGpuix, type PublicInstance, type EventPayload } from '@gpuix/react'
 import type { TerminalInfo, TerminalOutputNotification, TerminalExitedNotification, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
@@ -23,7 +23,8 @@ import { VT, cellWidth, type Line, type Pen } from './vt.ts'
 import { glyphRects, isCustomGlyph } from './glyphs.ts'
 import { allRange, lineRange, selectedText, selectionByIndex, selectionColumns, wordRange, type TerminalSelection } from './selection.ts'
 import { observeElementBounds } from '../native/layout.ts'
-import { terminalKey, terminalPaste, terminalMouse, terminalViewportKey, type TerminalMouseEvent } from './keys.ts'
+import { terminalCommand, terminalKey, terminalPaste, terminalMouse, terminalViewportKey, type TerminalMouseEvent } from './keys.ts'
+import { SHORTCUT } from '../platform/keys.ts'
 import { Utf8ToUtf32 } from './utf8.ts'
 import { fitTerminal, PANE_BOTTOM, PANE_X, XTERM_X, XTERM_Y } from './fit.ts'
 import { blend, indexedColor, parseCss, terminalColors, terminalPalette, type TerminalPalette } from './palette.ts'
@@ -310,11 +311,13 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
   const indexedSelection = selectionByIndex(lines, selection)
   useEffect(() => { if (follow.current && list.current) { setRange({ start: Math.max(0, lines.length - model.rows - 8), end: lines.length }); renderer?.scrollToItem?.(list.current.id, Math.max(0, lines.length - model.rows)) } }, [version])
   const start = Math.min(range.start, Math.max(0, lines.length - 1)), end = Math.min(lines.length, Math.max(start + 1, range.end))
-  const paste = () => execFile('pbpaste', (error, stdout) => {
-    if (error) setError(String(error))
-    // xterm.js turns pasted newlines into carriage returns.
-    else { follow.current = true; send(terminalPaste(stdout.replace(/\r?\n/g, '\r'), model.bracketedPaste)) }
-  })
+  const paste = () => void readClipboardText().then(
+    (stdout) => {
+      // xterm.js turns pasted newlines into carriage returns.
+      follow.current = true; send(terminalPaste(stdout.replace(/\r?\n/g, '\r'), model.bracketedPaste))
+    },
+    (error) => setError(String(error instanceof Error ? error.message : error)),
+  )
   const copy = () => { const text = selectedText(model.lines(), selection, model.cols); if (text) copyText(text) }
   const cursorLine = (model.alternate || model.mouseTracking ? 0 : model.history.length) + model.y
   const reportMouse = (line: Line, column: number, event: EventPayload, kind: TerminalMouseEvent['kind']) => {
@@ -365,7 +368,10 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
         const action = terminalViewportKey(e)
         if (action === 'selectall') { setSelection(allRange(model.lines(), model.cols)); return }
         if (action === 'pageup' || action === 'pagedown') { follow.current = false; const at = Math.max(0, Math.min(lines.length - 1, (range.start + (action === 'pageup' ? -model.rows : model.rows)))); if (list.current) renderer?.scrollToItem?.(list.current.id, at); return }
-        if (e.modifiers?.cmd) { if (e.key === 'c') copy(); else if (e.key === 'v') paste(); else if (e.key === 'f') setSearch(''); else if (e.key === 'end') { follow.current = true; update(v => v + 1) }; return }
+        const command = terminalCommand(e)
+        if (command === 'copy') copy(); else if (command === 'paste') paste(); else if (command === 'find') setSearch(''); else if (command === 'latest') { follow.current = true; update(v => v + 1) }
+        // ⌘ never reaches the shell (off macOS that is the Windows / Super key).
+        if (command || e.modifiers?.cmd) return
         const text = terminalKey(e, model.applicationCursor)
         if (text !== null) { e.preventDefault() /* Tab belongs to the shell, not window focus navigation */; follow.current = true; setSelection(null); setRestart(n => n + 1); send(text) }
       }}
@@ -375,10 +381,10 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
       </virtual-list>}
     </div>
     {menuAt && <ContextMenu at={menuAt} onClose={() => setMenuAt(null)} testId="terminal-menu">
-      <MenuItem id="find" testId="terminal-find" label="Find" shortcut="⌘F" onSelect={() => setSearch('')} />
-      <MenuItem id="copy" testId="terminal-copy" label="Copy" shortcut="⌘C" onSelect={copy} />
-      <MenuItem id="paste" label="Paste" shortcut="⌘V" disabled={exit !== null} onSelect={paste} />
-      <MenuItem id="latest" testId="terminal-bottom" label="Scroll to latest" shortcut="⌘End" onSelect={() => { follow.current = true; update(v => v + 1) }} />
+      <MenuItem id="find" testId="terminal-find" label="Find" shortcut={SHORTCUT.terminalFind} onSelect={() => setSearch('')} />
+      <MenuItem id="copy" testId="terminal-copy" label="Copy" shortcut={SHORTCUT.terminalCopy} onSelect={copy} />
+      <MenuItem id="paste" label="Paste" shortcut={SHORTCUT.terminalPaste} disabled={exit !== null} onSelect={paste} />
+      <MenuItem id="latest" testId="terminal-bottom" label="Scroll to latest" shortcut={SHORTCUT.terminalLatest} onSelect={() => { follow.current = true; update(v => v + 1) }} />
     </ContextMenu>}
   </>
 }

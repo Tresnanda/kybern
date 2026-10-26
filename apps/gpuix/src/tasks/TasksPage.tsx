@@ -11,6 +11,7 @@ import {
   type TaskOrdering,
 } from '@/state/tasksModel'
 import { addWindowKeyHandler } from '../nav/keys.ts'
+import { isMacKeys } from '../platform/keys.ts'
 import { getNav, setNav } from '../nav/store.ts'
 import { Menu, MenuItem, MenuSeparator } from '../nav/overlay.tsx'
 import { useCurrentSpaceId, useSpaceProjects } from '../spaces/current.ts'
@@ -106,7 +107,8 @@ export function TasksPage() {
         if (getNav().settingsOpen || getNav().paletteOpen || getNav().page !== 'tasks') return
         const s = taskState(),
           key = event.key,
-          cmd = event.modifiers?.cmd || event.modifiers?.ctrl
+          // Off macOS not with Alt: Windows sends AltGr as Ctrl+Alt (Polish AltGr+N is `ń`).
+          cmd = (event.modifiers?.cmd || event.modifiers?.ctrl) && (isMacKeys() || !event.modifiers?.alt)
         if (draggingTask()) {
           if (key === 'escape') escapeTaskDrag()
           return true

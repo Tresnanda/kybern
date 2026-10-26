@@ -49,7 +49,7 @@ import { copyText } from '../transcript/store.ts'
 import { Screen as TerminalScreen } from '../terminal/Terminal.tsx'
 import { getClient } from '../state.ts'
 import { ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { FONT_UI } from '../theme.ts'
+import { FONT_MONO, FONT_UI } from '../theme.ts'
 import { AccountAvatar, accountColor } from '../usage/AccountMark.tsx'
 import { flashAccount, refreshAccounts, useAccounts, useAccountsFeed, useAccountsLegacy } from '../usage/accounts.ts'
 import { useSettings } from '../settings/store.ts'
@@ -228,7 +228,7 @@ export function Account({ close, provider, instance }: { close: () => void; prov
       <Title pe>Enter this code in your browser</Title>
       {remote && <RemoteNote host={host} transport={transport} />}
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, paddingLeft: 16, paddingRight: 16, paddingTop: 20, paddingBottom: 20, borderWidth: 1, borderColor: t.border, borderRadius: 12 }}>
-        {login.user_code ? <Label color={t.text} size={30} lineHeight={30} weight={500} font="Menlo">{login.user_code}</Label> : <div style={{ width: 192, height: 32, borderRadius: 6, backgroundColor: t.buttonSecondary }} />}
+        {login.user_code ? <Label color={t.text} size={30} lineHeight={30} weight={500} font={FONT_MONO}>{login.user_code}</Label> : <div style={{ width: 192, height: 32, borderRadius: 6, backgroundColor: t.buttonSecondary }} />}
         <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 8 }}>
           {login.user_code && <CopyButton text={login.user_code} label="Copy code" />}
           {login.url && <Button testId="account-open-page" icon={S.externalLink} onClick={() => void openExternal(login.url!)}>{`Open ${url ?? 'sign-in page'}`}</Button>}

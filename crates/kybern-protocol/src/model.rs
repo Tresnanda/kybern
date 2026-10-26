@@ -1000,6 +1000,9 @@ pub enum SystemRowKind {
     /// The Coordinator's setup interview began (a new Coordinator without a
     /// brief, or "Redo setup").
     CoordinatorSetup,
+    /// The user chose "Tidy notes": the Coordinator was asked to check outdated
+    /// memory notes. The provider's copy carries the instructions.
+    CoordinatorTidyNotes,
 }
 
 impl ContentPart {
@@ -1017,6 +1020,63 @@ impl ContentPart {
             _ => None,
         }
     }
+}
+
+impl ContentPart {
+    /// `orchestration_text` for a Coordinator's own copy, where a child result
+    /// or a thread message is cut to [`LEAD_COPY_BYTES`] with a pointer to the
+    /// rest. `None` for every part that is not a [`ContentPart::ThreadMessage`]
+    /// or [`ContentPart::AgentResults`]. Stored messages and clients keep the
+    /// full text; only the provider's copy is capped.
+    pub fn lead_orchestration_text(&self) -> Option<String> {
+        match self {
+            ContentPart::ThreadMessage { message_id, from_thread_id, from_title, purpose, reply_to, body } => {
+                let total = body.len();
+                let (shown, cut) = cut_on_sentence(body, LEAD_COPY_BYTES);
+                let mut text = thread_message_text(*message_id, *from_thread_id, from_title, *purpose, *reply_to, shown);
+                if cut {
+                    match from_thread_id {
+                        Some(from) => text.push_str(&format!(
+                            "\n\n[Message cut at {} of {total} bytes. Read the rest with kybern_thread_read {from}.]",
+                            shown.len()
+                        )),
+                        None => text.push_str(&format!("\n\n[Message cut at {} of {total} bytes.]", shown.len())),
+                    }
+                }
+                Some(text)
+            }
+            ContentPart::AgentResults { items } => Some(agent_results_text_with(items, Some(LEAD_COPY_BYTES))),
+            _ => None,
+        }
+    }
+}
+
+/// Bytes of a child result or thread message a Coordinator's own copy carries.
+pub const LEAD_COPY_BYTES: usize = 1500;
+
+/// `text` cut to at most `max` bytes, on a sentence boundary when the first
+/// half has one (else on a word, else on a character), and whether it was cut.
+pub fn cut_on_sentence(text: &str, max: usize) -> (&str, bool) {
+    if text.len() <= max {
+        return (text, false);
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let head = &text[..end];
+    let sentence = head
+        .char_indices()
+        .filter(|(i, c)| match c {
+            '\n' => true,
+            '.' | '!' | '?' => head[i + 1..].chars().next().is_none_or(char::is_whitespace),
+            _ => false,
+        })
+        .map(|(i, c)| i + c.len_utf8())
+        .next_back()
+        .filter(|cut| *cut >= max / 2);
+    let cut = sentence.or_else(|| head.rfind(char::is_whitespace).filter(|cut| *cut >= max / 2)).unwrap_or(end);
+    (text[..cut].trim_end(), true)
 }
 
 pub fn thread_reference_text(thread_id: ThreadId, title: &str) -> String {
@@ -1063,6 +1123,16 @@ pub fn thread_message_text(
 
 /// Provider-facing text for a [`ContentPart::AgentResults`] batch.
 pub fn agent_results_text(items: &[AgentResultItem]) -> String {
+    agent_results_text_with(items, None)
+}
+
+/// Files listed per item in a capped batch.
+const CAPPED_FILES_LISTED: usize = 10;
+
+/// `agent_results_text`, or with `cap` (a Coordinator's copy) each item reduced
+/// to status, branch, commit and diffstat, the start of its result cut on a
+/// sentence boundary, and where to read the rest.
+fn agent_results_text_with(items: &[AgentResultItem], cap: Option<usize>) -> String {
     let mut out = format!("Results from {} delegated agent(s):", items.len());
     for item in items {
         let model = item.model.as_deref().unwrap_or("default");
@@ -1074,6 +1144,12 @@ pub fn agent_results_text(items: &[AgentResultItem]) -> String {
             DelegationWorkspace::Shared => {
                 if item.files_touched.is_empty() {
                     out.push_str("\n  workspace: shared checkout, no files touched");
+                } else if cap.is_some() && item.files_touched.len() > CAPPED_FILES_LISTED {
+                    out.push_str(&format!(
+                        "\n  files touched: {}, +{} more",
+                        item.files_touched[..CAPPED_FILES_LISTED].join(", "),
+                        item.files_touched.len() - CAPPED_FILES_LISTED
+                    ));
                 } else {
                     out.push_str(&format!("\n  files touched: {}", item.files_touched.join(", ")));
                 }
@@ -1089,6 +1165,7 @@ pub fn agent_results_text(items: &[AgentResultItem]) -> String {
                     out.push_str(&format!(", {} files +{} −{}", stat.files, stat.additions, stat.deletions));
                 }
                 match (item.base_commit.as_deref(), item.head_commit.as_deref()) {
+                    _ if cap.is_some() => out.push_str(&format!(". Merge it with kybern_git merge_child {}.", item.thread_id)),
                     (Some(base), Some(head)) => out.push_str(&format!(
                         ". If your checkout is clean, merge the branch with git. Otherwise apply only this agent's changes with `git diff {base}..{head} | git apply --3way`; do not merge the branch, because its first commit is a snapshot of your uncommitted changes."
                     )),
@@ -1103,18 +1180,30 @@ pub fn agent_results_text(items: &[AgentResultItem]) -> String {
             && let Some(error) = &item.error
         {
             out.push_str("\n  Error: ");
-            out.push_str(error);
+            out.push_str(cap.map_or(error.as_str(), |cap| cut_on_sentence(error, cap).0));
         }
         match (&item.result, &item.error) {
             (Some(result), _) if !result.trim().is_empty() => {
                 out.push_str("\n  Result:\n");
-                out.push_str(result);
+                match cap {
+                    Some(cap) => {
+                        let (shown, cut) = cut_on_sentence(result, cap);
+                        out.push_str(shown);
+                        if cut {
+                            out.push_str(&format!("\n  […cut at {} of {} bytes]", shown.len(), result.len()));
+                        }
+                    }
+                    None => out.push_str(result),
+                }
             }
             (_, Some(error)) if item.status == DelegationStatus::Completed => {
                 out.push_str("\n  Error: ");
-                out.push_str(error);
+                out.push_str(cap.map_or(error.as_str(), |cap| cut_on_sentence(error, cap).0));
             }
             _ => {}
+        }
+        if cap.is_some() {
+            out.push_str(&format!("\n  Full result: kybern_thread_read {}", item.thread_id));
         }
     }
     out.push_str("\n\nIntegrate these results. For another round, delegate again with a full brief.");
@@ -1705,6 +1794,17 @@ pub const COORDINATOR_BRIEF_TOOL: &str = "kybern_coordinator_brief";
 /// `ApprovalDecision::Submit { response: {"accepted": ["<change path>", ...]} }`
 /// (at least one path from `input.changes`) or `Deny`.
 pub const COORDINATOR_SETTINGS_TOOL: &str = "kybern_coordinator_settings";
+/// `tool_name` of the daemon-raised approval behind
+/// `kybern_coordinator_propose_note_changes`: the card "Apply N note changes?"
+/// lists each proposed append, with the line it retires when it supersedes one, and
+/// the user can untick rows.
+///
+/// `input` is a [`NoteChangesProposalInput`]. The answer is
+/// `ApprovalDecision::Submit { response: {"accepted": ["<change path>", ...]} }`
+/// (at least one path from `input.changes`) or `Deny`.
+pub const COORDINATOR_NOTES_TOOL: &str = "kybern_coordinator_notes";
+/// Most changes one note-changes proposal may hold.
+pub const MAX_NOTE_CHANGES: usize = 30;
 /// Longest project brief, in bytes.
 pub const MAX_BRIEF_BYTES: usize = 16 * 1024;
 
@@ -1741,6 +1841,44 @@ pub struct SettingsProposalInput {
     pub changes: Vec<SettingChange>,
 }
 
+/// What one row of a [`NoteChangesProposalInput`] does to its note.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NoteChangeOp {
+    /// Add `text` as a new dated claim.
+    Append,
+    /// Add `text` and retire the line that holds `supersedes`: it is struck through
+    /// and marked superseded.
+    Supersede,
+}
+
+/// One proposed change in a [`NoteChangesProposalInput`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NoteChange {
+    /// Stable id of the row, and the value `accepted` lists. The daemon numbers rows from 1.
+    pub path: String,
+    pub note_id: crate::methods::NoteId,
+    /// The note's title, for the row.
+    pub note_title: String,
+    pub op: NoteChangeOp,
+    /// The markdown added to the note, a dated claim.
+    pub text: String,
+    /// For `Supersede`: the exact line (or the part of it) that is retired.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supersedes: Option<String>,
+    /// Sets the note's category when it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<crate::methods::NoteCategory>,
+}
+
+/// The `input` of a [`COORDINATOR_NOTES_TOOL`] approval.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NoteChangesProposalInput {
+    /// Why the Coordinator proposes these, in its words.
+    pub reason: String,
+    pub changes: Vec<NoteChange>,
+}
+
 /// Whether an approval with this `tool_name` asks the user a question or for
 /// input, rather than for permission to run a tool.
 pub fn is_user_input_tool(tool_name: &str) -> bool {
@@ -1755,6 +1893,7 @@ pub fn is_user_input_tool(tool_name: &str) -> bool {
             | PERMISSION_REQUEST_TOOL
             | COORDINATOR_BRIEF_TOOL
             | COORDINATOR_SETTINGS_TOOL
+            | COORDINATOR_NOTES_TOOL
             | "request_user_input"
             | "opencode_question"
             | crate::CURSOR_QUESTION_TOOL
@@ -1909,6 +2048,23 @@ impl ApprovalRequest {
                 let text = response.get("text").and_then(Value::as_str).map(str::trim);
                 if !text.is_some_and(|text| !text.is_empty() && text.len() <= MAX_BRIEF_BYTES) {
                     return Err(format!("Write a brief of up to {} KiB, or decline.", MAX_BRIEF_BYTES / 1024));
+                }
+            }
+            COORDINATOR_NOTES_TOOL => {
+                let known: Vec<&str> = self
+                    .input
+                    .get("changes")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|change| change.get("path").and_then(Value::as_str))
+                    .collect();
+                let accepted = response.get("accepted").and_then(Value::as_array);
+                let valid = accepted.is_some_and(|accepted| {
+                    !accepted.is_empty() && accepted.iter().all(|path| path.as_str().is_some_and(|path| known.contains(&path)))
+                });
+                if !valid {
+                    return Err("Keep at least one change ticked, or decline.".into());
                 }
             }
             COORDINATOR_SETTINGS_TOOL => {
@@ -2144,6 +2300,70 @@ pub struct VisualHeight {
     pub height: u32,
 }
 
+/// Why a Coordinator's provider session was replaced (`ContextRotationStarted`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RotationReason {
+    /// The session's context passed the rotation budget at the end of a turn.
+    Budget,
+    /// The session was released for idleness past half the budget.
+    Idle,
+    /// The user asked for a refresh (`coordinator.refresh_context`).
+    Manual,
+    /// The Coordinator moved to another harness, model or account.
+    HarnessSwitch,
+}
+
+impl RotationReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RotationReason::Budget => "budget",
+            RotationReason::Idle => "idle",
+            RotationReason::Manual => "manual",
+            RotationReason::HarnessSwitch => "harness_switch",
+        }
+    }
+}
+
+/// Whether the old session wrote a handoff that passed validation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum HandoffStatus {
+    Written,
+    /// No usable handoff; the fresh session gets the facts and recent messages only.
+    Missing {
+        why: String,
+    },
+}
+
+/// One repository's HEAD when a rotation happened.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RepoHead {
+    pub repo: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    pub sha: String,
+}
+
+/// Counts of what the daemon carried into a fresh Coordinator session.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RotationCarried {
+    pub children: u32,
+    pub pull_requests: u32,
+    pub tasks: u32,
+    pub commits: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub head: Vec<RepoHead>,
+}
+
+/// The harness and model on one side of a rotation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HarnessRef {
+    pub kind: ProviderKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
 /// Rendered transcript entries, projected from events by the daemon.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "role", rename_all = "snake_case")]
@@ -2279,6 +2499,34 @@ pub enum TranscriptEntry {
         repos: Vec<OutsideRepoChange>,
         at: DateTime<Utc>,
     },
+    /// A Coordinator context refresh. `pending` while the old session is still
+    /// writing its handoff; then the outcome, with the handoff the user may edit.
+    Rotation {
+        /// The turn the refresh followed (nil before the first turn).
+        turn_id: TurnId,
+        #[serde(default)]
+        seq: EventSeq,
+        rotation_id: String,
+        reason: RotationReason,
+        pending: bool,
+        used_tokens: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_tokens: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handoff: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handoff_status: Option<HandoffStatus>,
+        /// The user edited the handoff after the refresh.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        edited: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        carried: Option<RotationCarried>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<HarnessRef>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to: Option<HarnessRef>,
+        at: DateTime<Utc>,
+    },
 }
 
 /// Per-provider configuration in settings.json.
@@ -2389,6 +2637,23 @@ pub struct OrchestrationSettings {
     /// Let the Coordinator push and open pull requests without asking first.
     /// Merging a pull request always asks.
     pub lead_push_without_asking: bool,
+    /// Start a fresh Coordinator session, with a handoff, once its context passes
+    /// this many tokens (at most half the model's window). 0 turns it off;
+    /// otherwise at least 50 000. Projects can override it.
+    pub rotation_budget_tokens: u64,
+}
+
+/// The built-in Coordinator context budget.
+pub const DEFAULT_ROTATION_BUDGET_TOKENS: u64 = 200_000;
+/// The smallest budget other than 0 (off).
+pub const MIN_ROTATION_BUDGET_TOKENS: u64 = 50_000;
+
+/// Why a context budget cannot be saved, if it cannot.
+pub fn validate_rotation_budget(tokens: u64) -> Result<(), String> {
+    if tokens != 0 && tokens < MIN_ROTATION_BUDGET_TOKENS {
+        return Err("The Coordinator context budget must be 0 (off) or at least 50 000 tokens. Change the value and save again.".into());
+    }
+    Ok(())
 }
 
 impl Default for OrchestrationSettings {
@@ -2401,6 +2666,7 @@ impl Default for OrchestrationSettings {
             lead_autonomy: LeadAutonomy::default(),
             lead_workspace: DelegationWorkspace::Shared,
             lead_push_without_asking: false,
+            rotation_budget_tokens: DEFAULT_ROTATION_BUDGET_TOKENS,
         }
     }
 }
@@ -2465,6 +2731,9 @@ pub struct CoordinatorOverrides {
     /// Most delegated children the Coordinator may have running (1..=16).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lead_max_children: Option<u32>,
+    /// Context budget for this project's Coordinator (0 is off).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation_budget_tokens: Option<u64>,
 }
 
 impl CoordinatorOverrides {
@@ -2475,6 +2744,7 @@ impl CoordinatorOverrides {
             && self.lead_workspace.is_none()
             && self.lead_push_without_asking.is_none()
             && self.lead_max_children.is_none()
+            && self.rotation_budget_tokens.is_none()
     }
 
     /// Why these overrides cannot be saved, if they cannot.
@@ -2484,6 +2754,9 @@ impl CoordinatorOverrides {
         }
         if self.lead_max_children.is_some_and(|children| !(1..=16).contains(&children)) {
             return Err("Active agents per Coordinator must be between 1 and 16. Change the value and save again.".into());
+        }
+        if let Some(tokens) = self.rotation_budget_tokens {
+            validate_rotation_budget(tokens)?;
         }
         for (role, default) in &self.role_defaults {
             if default.model.as_deref().is_some_and(|model| model.trim().is_empty() || model.len() > 256)
@@ -2505,6 +2778,9 @@ pub struct EffectiveCoordinatorSettings {
     pub lead_workspace: DelegationWorkspace,
     pub lead_push_without_asking: bool,
     pub lead_max_children: u32,
+    /// 0 when context refresh is off.
+    #[serde(default)]
+    pub rotation_budget_tokens: u64,
 }
 
 impl OrchestrationSettings {
@@ -2522,11 +2798,13 @@ impl OrchestrationSettings {
             lead_workspace: project.and_then(|p| p.lead_workspace).unwrap_or(self.lead_workspace),
             lead_push_without_asking: project.and_then(|p| p.lead_push_without_asking).unwrap_or(self.lead_push_without_asking),
             lead_max_children: project.and_then(|p| p.lead_max_children).unwrap_or(self.lead_max_children),
+            rotation_budget_tokens: project.and_then(|p| p.rotation_budget_tokens).unwrap_or(self.rotation_budget_tokens),
         }
     }
 
     /// Why these settings cannot be saved, if they cannot.
     pub fn validate_coordinator(&self) -> Result<(), String> {
+        validate_rotation_budget(self.rotation_budget_tokens)?;
         CoordinatorOverrides { role_defaults: self.role_defaults.clone(), ..Default::default() }.validate()
     }
 }
@@ -3016,6 +3294,42 @@ mod orchestration_tests {
     }
 
     #[test]
+    fn cut_on_sentence_prefers_a_sentence_then_a_word_and_never_splits_a_character() {
+        assert_eq!(cut_on_sentence("short", 10), ("short", false));
+        assert_eq!(cut_on_sentence("One two. Three four five.", 16), ("One two.", true));
+        assert_eq!(cut_on_sentence("alpha beta gamma delta", 14), ("alpha beta", true));
+        assert_eq!(cut_on_sentence("ééééééé", 5), ("éé", true));
+        // A dot inside a token ("v1.2") is not a sentence end.
+        assert_eq!(cut_on_sentence("Use v1.2 now and later", 12), ("Use v1.2", true));
+    }
+
+    #[test]
+    fn the_lead_copy_caps_results_and_messages_only() {
+        assert!(ContentPart::Text { text: "x".into() }.lead_orchestration_text().is_none());
+        let body = "Sentence one. ".repeat(300);
+        let message = ContentPart::ThreadMessage {
+            message_id: Uuid::nil(),
+            from_thread_id: Some(Uuid::nil()),
+            from_title: "Child".into(),
+            purpose: ThreadMessagePurpose::Message,
+            reply_to: None,
+            body: body.clone(),
+        };
+        let full = message.orchestration_text().unwrap();
+        let capped = message.lead_orchestration_text().unwrap();
+        assert!(full.contains(&body) && capped.len() < full.len() / 2 && capped.contains("kybern_thread_read"), "{capped}");
+        let short = ContentPart::ThreadMessage {
+            message_id: Uuid::nil(),
+            from_thread_id: None,
+            from_title: String::new(),
+            purpose: ThreadMessagePurpose::Warning,
+            reply_to: None,
+            body: "tiny".into(),
+        };
+        assert_eq!(short.lead_orchestration_text(), short.orchestration_text(), "a short message is not changed");
+    }
+
+    #[test]
     fn orchestration_text_is_only_for_the_new_parts() {
         assert!(ContentPart::Text { text: "x".into() }.orchestration_text().is_none());
         assert!(ContentPart::AgentResults { items: Vec::new() }.orchestration_text().unwrap().starts_with("Results from 0"));
@@ -3134,6 +3448,13 @@ mod orchestration_tests {
         assert!(general.validate().unwrap_err().contains("general"));
         assert!(CoordinatorOverrides { lead_max_children: Some(0), ..Default::default() }.validate().is_err());
         assert!(CoordinatorOverrides { lead_max_children: Some(17), ..Default::default() }.validate().is_err());
+        assert!(CoordinatorOverrides { rotation_budget_tokens: Some(49_999), ..Default::default() }.validate().is_err());
+        for ok in [0, 50_000, 400_000] {
+            assert!(CoordinatorOverrides { rotation_budget_tokens: Some(ok), ..Default::default() }.validate().is_ok(), "{ok}");
+        }
+        assert_eq!(OrchestrationSettings::default().effective_for(None).rotation_budget_tokens, DEFAULT_ROTATION_BUDGET_TOKENS);
+        let off = CoordinatorOverrides { rotation_budget_tokens: Some(0), ..Default::default() };
+        assert_eq!(OrchestrationSettings::default().effective_for(Some(&off)).rotation_budget_tokens, 0, "a project can turn it off");
         let blank = CoordinatorOverrides {
             role_defaults: [(DelegationRole::Test, RoleDefault { model: Some("  ".into()), ..Default::default() })].into_iter().collect(),
             ..Default::default()

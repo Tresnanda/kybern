@@ -6,6 +6,7 @@
 //! so rewinds are workspace-only. Sessions persist under ~/.cursor and reload
 //! with `session/load`, which replays history as notifications we ignore.
 
+use kybern_protocol::process::NoWindow;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -63,7 +64,7 @@ fn parse_cursor_models(output: &[u8]) -> Vec<ProviderModel> {
 }
 
 async fn cursor_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<ProviderModel> {
-    let mut command = Command::new(bin);
+    let mut command = Command::new(bin).no_window();
     command.args(["models"]).stdin(Stdio::null()).kill_on_drop(true).env("NO_COLOR", "1");
     if let Some(cwd) = &context.cwd {
         command.current_dir(cwd);
@@ -338,7 +339,7 @@ async fn run_connection(
     bound: oneshot::Sender<Result<String>>,
 ) -> Result<()> {
     // Spawn ourselves so the process cwd is the project (Cursor reads .cursor/mcp.json from it).
-    let mut cmd = Command::new(&bin);
+    let mut cmd = Command::new(&bin).no_window();
     cmd.arg("acp")
         .current_dir(&config.cwd)
         .stdin(std::process::Stdio::piped())

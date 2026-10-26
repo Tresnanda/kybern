@@ -86,7 +86,7 @@ target, so a shared card with several triggers (the rail usage rings) survives G
 ## Spin (`Spin.tsx`)
 
 `<SpinIcon source size color spinning periodMs testId />`: a glyph turning once per `periodMs` (1000) on the native
-`rotate` paint animation (`native/patches/rotate_gpui.py`); still when hidden, minimized or under Reduce Motion.
+`rotate` paint animation (`the fork commit from rotate_gpui.py`); still when hidden, minimized or under Reduce Motion.
 
 ## Menus (`nav/overlay.tsx`)
 
@@ -165,7 +165,7 @@ measured width to 0 (120 ms); Reduce Motion: opacity, 90 ms. Switching is instan
 ## Attention pop (`Pop.tsx`)
 
 `<Label paintAnimation={popAnimation()}>`: the desktop's `.t-pop` (scale 0.85 → 1, opacity 0.4 → 1, 250 ms `--ease-bounce`) on a
-text or icon leaf, as a native paint animation (`native/patches/pop_gpui.py`, the same per-frame path as the spinner: no React or
+text or icon leaf, as a native paint animation (`the fork commit from pop_gpui.py`, the same per-frame path as the spinner: no React or
 layout per frame, frames stop when the curve ends). It plays when the leaf mounts; give it a new `key` to play again.
 `usePopOnChange(active)` is true once `active` turned on after first render (virtual rows do not re-pop on scroll-in).
 Leaves only: a box with a background does not scale (no subtree scale in the renderer yet).

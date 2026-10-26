@@ -2,6 +2,7 @@
 //! No installers, package migrations, or user-provided command strings.
 use anyhow::{Result, bail};
 use kybern_protocol::ProviderKind;
+use kybern_protocol::process::NoWindow;
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -59,7 +60,7 @@ pub async fn plan(kind: ProviderKind, binary: &Path, env: &BTreeMap<String, Stri
         args.push(package);
         return Ok(UpdateCommand { program, args });
     }
-    let mut help = Command::new(binary);
+    let mut help = Command::new(binary).no_window();
     help.arg("--help").envs(env).current_dir(cwd).stdin(Stdio::null()).kill_on_drop(true);
     let output = tokio::time::timeout(Duration::from_secs(10), crate::process_tree::output(&mut help)).await??;
     // Some CLIs (including OpenCode) write successful help to stderr.
@@ -108,7 +109,7 @@ pub async fn run(plan: &UpdateCommand, env: &BTreeMap<String, String>, cwd: &Pat
 }
 
 async fn run_with_timeout(plan: &UpdateCommand, env: &BTreeMap<String, String>, cwd: &Path, timeout: Duration) -> Result<()> {
-    let mut command = Command::new(&plan.program);
+    let mut command = Command::new(&plan.program).no_window();
     command
         .args(&plan.args)
         .envs(env)

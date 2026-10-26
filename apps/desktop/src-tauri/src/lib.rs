@@ -144,12 +144,17 @@ async fn daemon_info(endpoint: &Endpoint) -> Option<DaemonInfo> {
 }
 
 fn ensure_compatible(info: &DaemonInfo) -> Result<()> {
+    if info.protocol_version > PROTOCOL_VERSION {
+        return Err(anyhow!(NEWER_KYBERN_RUNNING));
+    }
     ensure_protocol_compatible(info.protocol_version)?;
     if info.version != env!("CARGO_PKG_VERSION") {
         log::warn!("using compatible kybernd {} with desktop {}", info.version, env!("CARGO_PKG_VERSION"));
     }
     Ok(())
 }
+
+const NEWER_KYBERN_RUNNING: &str = "A newer Kybern is running. Update this copy of Kybern, or quit the newer one and reopen this app.";
 
 fn ensure_protocol_compatible(protocol_version: u32) -> Result<()> {
     if protocol_version != PROTOCOL_VERSION {
@@ -174,16 +179,49 @@ fn endpoint_from_announcement(announcement: DaemonStartupAnnouncement, token: St
     Ok(EndpointInfo { http_base: http_base(&url), url, token, spawned: true })
 }
 
-fn daemon_needs_restart(info: &DaemonInfo, binary_modified: Option<SystemTime>) -> bool {
-    if info.protocol_version != PROTOCOL_VERSION || info.version != env!("CARGO_PKG_VERSION") {
-        return true;
+/// What to do with a daemon that is already running in the shared data folder.
+#[derive(Debug, PartialEq, Eq)]
+enum DaemonPlan {
+    /// Use it as is.
+    Keep,
+    /// Stop it and start the bundled one.
+    Restart,
+    /// It speaks a newer protocol than this app: never replace it with older code.
+    NewerProtocol,
+    /// Same protocol but a newer release than this app's: keep it and say to update.
+    NewerDaemon,
+}
+
+fn version_parts(version: &str) -> Option<[u64; 3]> {
+    let core = version.trim().trim_start_matches('v').split(['-', '+']).next()?;
+    let mut parts = core.split('.');
+    let parsed = [parts.next()?.parse().ok()?, parts.next()?.parse().ok()?, parts.next()?.parse().ok()?];
+    parts.next().is_none().then_some(parsed)
+}
+
+/// Only an older protocol, an older release or a rebuilt binary of the same release replaces a running daemon.
+/// A second Kybern (an old install or AppImage next to a newer one) shares `~/.kybern`; restarting the newer
+/// daemon with older code would kill its agents and run an old binary against a newer store.
+fn daemon_plan(info: &DaemonInfo, bundled_version: &str, binary_modified: Option<SystemTime>) -> DaemonPlan {
+    if info.protocol_version > PROTOCOL_VERSION {
+        return DaemonPlan::NewerProtocol;
+    }
+    if info.protocol_version < PROTOCOL_VERSION {
+        return DaemonPlan::Restart;
+    }
+    match (version_parts(bundled_version), version_parts(&info.version)) {
+        (Some(bundled), Some(running)) if bundled > running => return DaemonPlan::Restart,
+        (Some(bundled), Some(running)) if bundled < running => return DaemonPlan::NewerDaemon,
+        (Some(_), Some(_)) => {}
+        _ if bundled_version != info.version => return DaemonPlan::Restart,
+        _ => {}
     }
     let Some(modified_ms) =
         binary_modified.and_then(|time| time.duration_since(UNIX_EPOCH).ok()).and_then(|duration| i64::try_from(duration.as_millis()).ok())
     else {
-        return false;
+        return DaemonPlan::Keep;
     };
-    modified_ms > info.started_at.timestamp_millis()
+    if modified_ms > info.started_at.timestamp_millis() { DaemonPlan::Restart } else { DaemonPlan::Keep }
 }
 
 async fn stop_daemon(endpoint: &Endpoint, root: &Path) -> Result<()> {
@@ -379,7 +417,12 @@ async fn endpoint() -> Result<EndpointInfo, String> {
                 let externally_managed = std::env::var_os("KYBERN_URL").is_some();
                 let binary = (!externally_managed).then(daemon_binary).transpose()?;
                 let binary_modified = binary.as_ref().and_then(|path| std::fs::metadata(path).ok()?.modified().ok());
-                if !externally_managed && daemon_needs_restart(&info, binary_modified) {
+                let plan =
+                    if externally_managed { DaemonPlan::Keep } else { daemon_plan(&info, env!("CARGO_PKG_VERSION"), binary_modified) };
+                if plan == DaemonPlan::NewerProtocol {
+                    return Err(anyhow!(NEWER_KYBERN_RUNNING));
+                }
+                if plan == DaemonPlan::Restart {
                     log::info!(
                         "restarting stale kybernd {} (started {}) from {}",
                         info.version,
@@ -601,7 +644,7 @@ fn pairing_qr(invitation: String) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DaemonStartupAnnouncement, EndpointInfo, STARTUP_ANNOUNCEMENT_TIMEOUT, StartingEndpoint, daemon_needs_restart,
+        DaemonPlan, DaemonStartupAnnouncement, EndpointInfo, STARTUP_ANNOUNCEMENT_TIMEOUT, StartingEndpoint, daemon_plan,
         endpoint_from_announcement, fresh_starting_endpoint, persist_image_file, preferred_daemon_port, remember_daemon_port,
     };
     use kybern_protocol::PROTOCOL_VERSION;
@@ -661,21 +704,55 @@ mod tests {
         }
     }
 
+    const THIS: &str = env!("CARGO_PKG_VERSION");
+
     #[test]
     fn restarts_when_the_local_daemon_binary_was_rebuilt() {
         let rebuilt = UNIX_EPOCH + Duration::from_secs(1_788_480_001);
-        assert!(daemon_needs_restart(&daemon(env!("CARGO_PKG_VERSION")), Some(rebuilt)));
+        assert_eq!(daemon_plan(&daemon(THIS), THIS, Some(rebuilt)), DaemonPlan::Restart);
     }
 
     #[test]
     fn keeps_the_daemon_started_after_the_local_binary() {
         let older_binary = UNIX_EPOCH + Duration::from_secs(1_788_479_999);
-        assert!(!daemon_needs_restart(&daemon(env!("CARGO_PKG_VERSION")), Some(older_binary)));
+        assert_eq!(daemon_plan(&daemon(THIS), THIS, Some(older_binary)), DaemonPlan::Keep);
+        assert_eq!(daemon_plan(&daemon(THIS), THIS, None), DaemonPlan::Keep);
     }
 
     #[test]
-    fn restarts_a_different_daemon_version_even_without_metadata() {
-        assert!(daemon_needs_restart(&daemon("0.0.0-stale"), None));
+    fn restarts_an_older_daemon_even_without_metadata() {
+        assert_eq!(daemon_plan(&daemon("0.0.1"), "0.10.1", None), DaemonPlan::Restart);
+        assert_eq!(daemon_plan(&daemon("0.9.9"), "0.10.0", None), DaemonPlan::Restart);
+        assert_eq!(daemon_plan(&daemon("0.10.0-beta.1"), "0.10.0", None), DaemonPlan::Keep);
+        assert_eq!(daemon_plan(&daemon("garbage"), "0.10.1", None), DaemonPlan::Restart);
+    }
+
+    #[test]
+    fn keeps_a_newer_daemon_whatever_the_binary_mtime() {
+        // A freshly copied older binary has a new mtime; it must not replace a newer daemon.
+        let fresh = UNIX_EPOCH + Duration::from_secs(1_900_000_000);
+        assert_eq!(daemon_plan(&daemon("0.11.0"), "0.10.9", Some(fresh)), DaemonPlan::NewerDaemon);
+        assert_eq!(daemon_plan(&daemon("1.0.0"), "0.99.99", None), DaemonPlan::NewerDaemon);
+    }
+
+    #[test]
+    fn protocol_decides_before_versions() {
+        let mut newer = daemon("0.0.1");
+        newer.protocol_version = PROTOCOL_VERSION + 1;
+        assert_eq!(daemon_plan(&newer, "9.9.9", None), DaemonPlan::NewerProtocol);
+        let mut older = daemon("99.0.0");
+        older.protocol_version = PROTOCOL_VERSION.saturating_sub(1);
+        if PROTOCOL_VERSION > 0 {
+            assert_eq!(daemon_plan(&older, "0.0.1", None), DaemonPlan::Restart);
+        }
+    }
+
+    #[test]
+    fn a_newer_running_protocol_says_to_update() {
+        let mut newer = daemon("99.0.0");
+        newer.protocol_version = PROTOCOL_VERSION + 1;
+        let error = super::ensure_compatible(&newer).unwrap_err().to_string();
+        assert!(error.contains("A newer Kybern is running") && error.contains("Update this copy of Kybern"), "{error}");
     }
 
     #[test]

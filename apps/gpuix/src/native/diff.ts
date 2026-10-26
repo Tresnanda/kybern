@@ -1,5 +1,5 @@
 import type { GpuixTheme } from '@gpuix/react'
-import { over, type Theme, FONT_UI, FONT_MONO } from '../theme.ts'
+import { over, type Theme, FONT_UI, FONT_MONO, MONO_ADVANCE } from '../theme.ts'
 import { alpha } from '../transcript/kit.tsx'
 export interface DiffStyle {
   fileHeaders?: boolean
@@ -37,7 +37,7 @@ export function desktopDiffTheme(t: Theme, fileHeaders = true, size = 13, option
     diffAdd:t.green,diffDel:t.red,diffHunkBg:mix(t.text,0.05),
     metrics:{diffTextSize:size,diffLineHeight:size*1.65,diffFileHeaderHeight:30,
       diffHunkHeaderHeight:size*1.65+4,diffBodyBottomPad:0,diffGutterWidth:29,
-      diffMarkerWidth:size*0.602*1.5,diffAccentBarWidth:0,diffRowPaddingX:12},
+      diffMarkerWidth:size*MONO_ADVANCE*1.5,diffAccentBarWidth:0,diffRowPaddingX:12},
     diff:{fileHeaders,notices:false,syntaxHighlight:false,horizontalScroll:true,tableLayout:true,showMoreBatch:600,scrollbarHeight:10,scrollbarColor:t.variant==='dark'?'rgba(255,255,255,0.07)':'rgba(0,0,0,0.1)',
       addBackground:mix(t.green,0.08),deleteBackground:mix(t.red,0.08),
       addGutterBackground:mix(t.green,0.12),deleteGutterBackground:mix(t.red,0.12),

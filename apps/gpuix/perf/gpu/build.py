@@ -78,7 +78,7 @@ try:
         commands = [["clang", "-dynamiclib", "-fobjc-arc", "-framework", "Cocoa", "-framework", "CoreGraphics", "perf/explorer/wheel.m", "-o", str(app/"native/build/gpu-wheel.dylib")],
                     ["nice", "-n", "15", "sh", "native/update.sh"],
                     ["pnpm", "exec", "tsc", "-p", "native/tsconfig.json"],
-                    ["rustc", "--edition=2021", "--test", "native/patches/gpu_clip_bounds.rs", "-o", "native/build/gpu-clip-tests"],
+                    ["rustc", "--edition=2021", "--test", "native/upstream/zed/crates/gpui_apple/src/gpu_clip_bounds.rs", "-o", "native/build/gpu-clip-tests"],
                     ["native/build/gpu-clip-tests"]]
         if finish_only: commands = commands[2:]
         for command in commands:

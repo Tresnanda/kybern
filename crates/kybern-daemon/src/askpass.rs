@@ -15,6 +15,7 @@
 //! A prompt is never answered automatically in any permission mode, and the
 //! answer is neither stored nor logged.
 
+use kybern_protocol::process::NoWindow;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -180,7 +181,7 @@ pub struct Proc {
 }
 
 fn proc_of(pid: u32) -> Option<Proc> {
-    let output = std::process::Command::new("ps").args(["-o", "ppid=,command=", "-p", &pid.to_string()]).output().ok()?;
+    let output = std::process::Command::new("ps").no_window().args(["-o", "ppid=,command=", "-p", &pid.to_string()]).output().ok()?;
     let text = String::from_utf8_lossy(&output.stdout);
     let line = text.lines().next()?.trim();
     let (ppid, command) = line.split_once(char::is_whitespace)?;
@@ -249,6 +250,7 @@ pub fn connection_owned_by(pid: u32, peer: std::net::SocketAddr) -> bool {
     // The system copy on macOS, so a PATH entry cannot answer for it.
     let lsof = if cfg!(target_os = "macos") { "/usr/sbin/lsof" } else { "lsof" };
     let Ok(output) = std::process::Command::new(lsof)
+        .no_window()
         .args(["-nP", "-a", "-p", &pid.to_string(), &format!("-iTCP@{}:{}", lsof_host(peer.ip()), peer.port()), "-Fn"])
         .output()
     else {

@@ -5,7 +5,7 @@ import { isUserInput, connectorApproval } from '../../../../packages/kybern-clie
 import { pickRequestInput } from '../../../../packages/kybern-client/src/pickRequest.ts'
 import { secretRequestInput } from '../../../../packages/kybern-client/src/secretRequest.ts'
 import { LOGIN_REQUEST_TOOL, PERMISSION_REQUEST_TOOL, PROMPT_REQUEST_TOOL } from '../../../../packages/kybern-client/src/types.ts'
-import { briefProposalInput, leadGitCardInput, settingsProposalInput } from '../../../../packages/kybern-client/src/coordinatorCards.ts'
+import { briefProposalInput, leadGitCardInput, noteChangesProposalInput, settingsProposalInput } from '../../../../packages/kybern-client/src/coordinatorCards.ts'
 import { sendToThread } from '../composer/store.ts'
 import { kitOverlayOpen } from '../kit/AlertDialog.tsx'
 import { getNav } from '../nav/store.ts'
@@ -20,7 +20,7 @@ export const SUMMONED_TOOLS: ReadonlySet<string> = new Set([LOGIN_REQUEST_TOOL, 
 
 /** Whether the first pending request is a tool approval or consent the card answers with numbered rows (not a form or question). */
 export function isRowCard(approval: ApprovalRequest): boolean {
-  if (secretRequestInput(approval) || pickRequestInput(approval) || briefProposalInput(approval) || settingsProposalInput(approval) || leadGitCardInput(approval)) return false
+  if (secretRequestInput(approval) || pickRequestInput(approval) || briefProposalInput(approval) || settingsProposalInput(approval) || noteChangesProposalInput(approval) || leadGitCardInput(approval)) return false
   if (SUMMONED_TOOLS.has(approval.tool_name)) return false
   return !isUserInput(approval) || !!connectorApproval(approval)
 }

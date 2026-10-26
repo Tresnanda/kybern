@@ -19,16 +19,25 @@ import { IconButton } from '../kit/IconButton.tsx'
 import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { openUrl } from '../pulls/PrStates.tsx'
 import { ink, Label, LOGO_SVG, REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { canSelfUpdate, closeUpdateDetails, dismissUpdateAnnouncement, installAppUpdate, openUpdateDetails, useAppUpdate } from './update.ts'
+import { canCheckForUpdates, closeUpdateDetails, dismissUpdateAnnouncement, installAppUpdate, manualUpdateText, openUpdateDetails, useAppUpdate } from './update.ts'
 import { pressTransform } from '../motion/press.ts'
 import { BLUR, EASE, SCALE } from '../motion/kit.tsx'
 import { Presence } from '../motion/Presence.tsx'
 import { frostBackdrop, frostFill, useGlass } from './glass.ts'
+import { writeClipboardText } from './os.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 
 const ICON = { download: glyph(Download04Icon), arrowRight: glyph(ArrowRight01Icon), arrowUpRight: glyph(ArrowUpRight01Icon), x: glyph(Cancel01Icon) }
 
-/** `release-background.png` (AGENTS.md: the branded artwork), from the desktop's public folder or the app's Resources. */
+/**
+ * `release-background.png` (AGENTS.md: the branded artwork), from the desktop's public folder or the app's Resources.
+ * Off macOS copies pre-filtered near their drawn size (`sips -Z`): 420 px for the compact card (`release-artwork-card.jpg`),
+ * 768 px for the dialog (`release-artwork.jpg`). The art is a fine dot grid and the renderer samples images bilinearly
+ * without mipmaps, so the 2560 px original drawn into the 326 px card at 1x (8x smaller) showed heavy moire on Windows.
+ * macOS draws at 2x from the original as before.
+ */
+const OFF_MAC_ARTWORK = { card: 'release-artwork-card.jpg', dialog: 'release-artwork.jpg' } as const
+const artwork = (compact: boolean) => process.platform !== 'darwin' ? fileURLToPath(new URL(`../assets/${OFF_MAC_ARTWORK[compact ? 'card' : 'dialog']}`, import.meta.url)) : ARTWORK
 const ARTWORK = (() => {
   const packaged = process.env.KYBERN_GPUIX_RESOURCES && path.join(process.env.KYBERN_GPUIX_RESOURCES, 'release-background.png')
   return packaged && existsSync(packaged) ? packaged : fileURLToPath(new URL('../../../desktop/public/release-background.png', import.meta.url))
@@ -45,9 +54,11 @@ function useUpdateLabel() {
   const phase = useAppUpdate(s => s.phase)
   const progress = useAppUpdate(s => s.progress)
   const errorKind = useAppUpdate(s => s.errorKind)
+  // A deb or rpm install downloads the package for the user to install (`update.ts` `manualUpdate`).
+  const manual = useAppUpdate(s => s.manual)
   const busy = phase === 'installing' || phase === 'checking'
-  const label = phase === 'installing' ? (progress === null ? 'Updating…' : `Updating… ${Math.round(progress * 100)}%`) : errorKind === 'install' ? 'Retry update' : 'Update and restart'
-  return { busy, label, errorKind }
+  const label = manual ? 'Download update' : phase === 'installing' ? (progress === null ? 'Updating…' : `Updating… ${Math.round(progress * 100)}%`) : errorKind === 'install' ? 'Retry update' : 'Update and restart'
+  return { busy, label, errorKind, manual }
 }
 
 function ReleaseArtwork({ compact = false }: { compact?: boolean }) {
@@ -55,7 +66,7 @@ function ReleaseArtwork({ compact = false }: { compact?: boolean }) {
   // `h-36` compact, `h-[clamp(5rem,20vh,11rem)]` in the dialog.
   const height = compact ? 144 : Math.min(176, Math.max(80, size.height * 0.2))
   return <div style={{ display: 'flex', position: 'relative', alignItems: 'center', justifyContent: 'center', marginLeft: 12, marginRight: 12, marginTop: 12, height, flexShrink: 0, borderRadius: 16, overflow: 'hidden', pointerEvents: 'none' }}>
-    <img src={ARTWORK} objectFit="cover" style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'none' }} />
+    <img src={artwork(compact)} objectFit="cover" style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'none' }} />
     <svg source={LOGO_SVG} style={{ width: compact ? 76 : 96, height: (compact ? 76 : 96) * 315 / 504, color: '#ffffff', pointerEvents: 'none' }} />
   </div>
 }
@@ -73,10 +84,10 @@ function ArtworkClose({ label, onClick, testId }: { label: string; onClick: () =
 export function RailUpdateButton() {
   const t = useTheme()
   const version = useAppUpdate(s => s.version)
-  const { busy, label, errorKind } = useUpdateLabel()
+  const { busy, label, errorKind, manual } = useUpdateLabel()
   const [open, setOpen] = useState(false)
   const pressedWhileOpen = useRef(false)
-  if (!version || !canSelfUpdate()) return null
+  if (!version || !canCheckForUpdates()) return null
   const short = version.replace(/^v/, '')
   return <div style={{ display: 'flex', position: 'relative' }}>
     <Tip label={busy ? label : `Kybern v${short} is ready`} side="right" sideOffset={6} size={36} disabled={open}>
@@ -95,7 +106,7 @@ export function RailUpdateButton() {
       style={{ display: 'flex', flexDirection: 'column', gap: 12, width: 288, padding: 16, borderRadius: 16, borderWidth: 1, borderColor: t.border, backgroundColor: t.popover, boxShadow: surfaceShadow(t) }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <Label color={t.text} size={13} lineHeight={17} weight={500}>{`Kybern v${short} is ready`}</Label>
-        <Label color={muted(t, 1)} size={12} lineHeight={19}>{errorKind === 'install' ? 'The last update didn’t install. Try again, or see the release details.' : 'Updating restarts Kybern and the agents running on this machine.'}</Label>
+        <Label color={muted(t, 1)} size={12} lineHeight={19} style={manual ? { userSelect: 'text' } : undefined}>{manual ? manualUpdateText(manual) : errorKind === 'install' ? 'The last update didn’t install. Try again, or see the release details.' : 'Updating restarts Kybern and the agents running on this machine.'}</Label>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
         <Button size="sm" variant="ghost" testId="rail-update-details" onClick={() => { setOpen(false); openUpdateDetails() }}>See what’s new</Button>
@@ -129,6 +140,17 @@ function UpdateAnnouncement({ version, notes, leaving, onGone }: { version: stri
   </anchored>
 }
 
+/** A deb or rpm install updates with a command (`manualUpdate` in `update.ts`); this puts it on the clipboard. */
+export function CopyUpdateCommand({ command, size, testId }: { command: string; size?: 'sm' | 'lg'; testId: string }) {
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 1500)
+    return () => clearTimeout(timer)
+  }, [copied])
+  return <Button size={size} variant="secondary" testId={testId} onClick={() => void writeClipboardText(command).then(() => setCopied(true), () => {})}>{copied ? 'Copied' : 'Copy command'}</Button>
+}
+
 function UpdateDetails({ version, notes }: { version: string; notes: string | null }) {
   const t = useTheme()
   const size = useWindowSize({ intervalMs: 250 })
@@ -136,7 +158,7 @@ function UpdateDetails({ version, notes }: { version: string; notes: string | nu
   const phase = useAppUpdate(s => s.phase)
   const progress = useAppUpdate(s => s.progress)
   const error = useAppUpdate(s => s.error)
-  const { busy, label } = useUpdateLabel()
+  const { busy, label, manual } = useUpdateLabel()
   return <Dialog onClose={closeUpdateDetails} width={576} radius={24} testId="update-details">
     <div style={{ display: 'flex', flexDirection: 'column', position: 'relative', maxHeight: size.height - 32, minHeight: 0 }}>
       <ReleaseArtwork />
@@ -157,11 +179,13 @@ function UpdateDetails({ version, notes }: { version: string; notes: string | nu
             <Label color={muted(t, 1)} size={12}>{progress === 1 ? 'Finishing installation…' : 'Downloading the update…'}</Label>
             {progress !== null && <div style={{ height: 4, borderRadius: 2, backgroundColor: ink(t, 0.12), overflow: 'hidden' }}><div style={{ width: `${Math.round(progress * 1000) / 10}%`, height: 4, backgroundColor: t.text }} /></div>}
           </div>
+          : manual ? <Label color={muted(t, 1)} size={12} lineHeight={19} style={{ userSelect: 'text' }}>{manualUpdateText(manual)}</Label>
           : <Label color={muted(t, 1)} size={12} lineHeight={19}>Installing restarts Kybern and the agents running on this machine.</Label>}
         {error && <Label color={t.red} size={12} lineHeight={19}>{error}</Label>}
       </div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, paddingLeft: 24, paddingRight: 24, paddingTop: 16, paddingBottom: 20, flexShrink: 0 }}>
         <Button size="lg" variant="ghost" testId="update-details-later" onClick={closeUpdateDetails}>Later</Button>
+        {manual?.command && phase !== 'installing' && <CopyUpdateCommand command={manual.command} size="lg" testId="update-details-copy" />}
         <Button size="lg" variant="primary" testId="update-details-install" disabled={busy} onClick={() => void installAppUpdate()}>{label}</Button>
       </div>
     </div>

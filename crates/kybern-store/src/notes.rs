@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
-use kybern_protocol::methods::{Note, NoteChecklist, NoteId, NoteScope, NoteSearchHit, NoteSummary, ProjectNoteRole};
+use kybern_protocol::methods::{Note, NoteCategory, NoteChecklist, NoteId, NoteScope, NoteSearchHit, NoteSummary, ProjectNoteRole};
 use kybern_protocol::{ProjectId, ThreadId, is_free_chat_project};
 use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
@@ -78,6 +78,19 @@ impl Store {
         body: &str,
         created_by_thread: Option<ThreadId>,
     ) -> Result<Note> {
+        self.note_create_categorized(scope, project_id, title, body, created_by_thread, None)
+    }
+
+    /// [`Store::note_create_by`] with the kind of memory the note holds.
+    pub fn note_create_categorized(
+        &self,
+        scope: NoteScope,
+        project_id: Option<ProjectId>,
+        title: &str,
+        body: &str,
+        created_by_thread: Option<ThreadId>,
+        category: Option<NoteCategory>,
+    ) -> Result<Note> {
         check_content(Some(title), Some(body))?;
         self.with(|c| {
             let project_id = match (scope, project_id) {
@@ -95,8 +108,8 @@ impl Store {
             let id = Uuid::now_v7();
             let now = Utc::now().to_rfc3339();
             c.execute(
-                "INSERT INTO notes(id, scope, project_id, title, body, pinned, revision, created_at, updated_at, created_by_thread_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 0, 1, ?6, ?6, ?7)",
+                "INSERT INTO notes(id, scope, project_id, title, body, pinned, revision, created_at, updated_at, created_by_thread_id, category)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0, 1, ?6, ?6, ?7, ?8)",
                 params![
                     id.to_string(),
                     scope.as_str(),
@@ -104,11 +117,18 @@ impl Store {
                     title,
                     body,
                     now,
-                    created_by_thread.map(|id| id.to_string())
+                    created_by_thread.map(|id| id.to_string()),
+                    category.map(NoteCategory::as_str)
                 ],
             )?;
             expect_note(c, id)
         })
+    }
+
+    /// When categories were introduced (the migration time). Uncategorized project
+    /// notes created before it are undated.
+    pub fn notes_history_since(&self) -> Result<Option<DateTime<Utc>>> {
+        self.with(history_since)
     }
 
     /// The live project-scope notes of a project (the brief and setup note included),
@@ -174,6 +194,20 @@ impl Store {
     /// Save a new title and/or body. Unchanged content returns the current note
     /// without a revision bump, so a retry after a lost reply is harmless.
     pub fn note_update(&self, target: NoteTarget, expected_revision: i64, title: Option<&str>, body: Option<&str>) -> Result<Note> {
+        self.note_update_with(target, expected_revision, title, body, None)
+    }
+
+    /// [`Store::note_update`] that can also change the note's category: `None`
+    /// leaves it, `Some(None)` clears it, `Some(Some(_))` sets it. A different
+    /// category counts as a change: the revision moves.
+    pub fn note_update_with(
+        &self,
+        target: NoteTarget,
+        expected_revision: i64,
+        title: Option<&str>,
+        body: Option<&str>,
+        category: Option<Option<NoteCategory>>,
+    ) -> Result<Note> {
         check_content(title, body)?;
         self.with(|c| {
             let tx = c.unchecked_transaction()?;
@@ -200,9 +234,17 @@ impl Store {
                     let id = Uuid::now_v7();
                     let now = Utc::now().to_rfc3339();
                     tx.execute(
-                        "INSERT INTO notes(id, scope, project_id, thread_id, title, body, pinned, revision, created_at, updated_at)
-                         VALUES (?1, 'thread', ?2, ?3, ?4, ?5, 0, 1, ?6, ?6)",
-                        params![id.to_string(), project_id, thread_id.to_string(), thread_title, body.unwrap_or_default(), now],
+                        "INSERT INTO notes(id, scope, project_id, thread_id, title, body, pinned, revision, created_at, updated_at, category)
+                         VALUES (?1, 'thread', ?2, ?3, ?4, ?5, 0, 1, ?6, ?6, ?7)",
+                        params![
+                            id.to_string(),
+                            project_id,
+                            thread_id.to_string(),
+                            thread_title,
+                            body.unwrap_or_default(),
+                            now,
+                            category.flatten().map(NoteCategory::as_str)
+                        ],
                     )?;
                     expect_note(&tx, id)?
                 }
@@ -212,7 +254,8 @@ impl Store {
                     }
                     // A thread note is titled after its thread until its own title is edited; from then on it keeps that title.
                     let renamed = title.is_some_and(|title| title != note.summary.title);
-                    if !renamed && body.is_none_or(|body| body == note.body) {
+                    let recategorized = category.is_some_and(|category| note.summary.category != category);
+                    if !renamed && !recategorized && body.is_none_or(|body| body == note.body) {
                         return Ok(note);
                     }
                     if note.summary.revision != expected_revision {
@@ -221,8 +264,16 @@ impl Store {
                     let snapshot = title.unwrap_or(&note.summary.title).to_owned();
                     tx.execute(
                         "UPDATE notes SET title = ?2, body = ?3, revision = revision + 1, updated_at = ?4,
-                            title_edited = title_edited OR ?5 WHERE id = ?1",
-                        params![note.summary.id.to_string(), snapshot, body.unwrap_or(&note.body), Utc::now().to_rfc3339(), renamed],
+                            title_edited = title_edited OR ?5, category = CASE WHEN ?6 THEN ?7 ELSE category END WHERE id = ?1",
+                        params![
+                            note.summary.id.to_string(),
+                            snapshot,
+                            body.unwrap_or(&note.body),
+                            Utc::now().to_rfc3339(),
+                            renamed,
+                            category.is_some(),
+                            category.flatten().map(NoteCategory::as_str)
+                        ],
                     )?;
                     expect_note(&tx, note.summary.id)?
                 }
@@ -474,17 +525,39 @@ fn check_project(c: &Connection, id: ProjectId) -> Result<()> {
 
 const NOTE_SELECT: &str = "SELECT n.id, n.scope, n.project_id, n.thread_id,
         CASE WHEN n.scope = 'thread' AND n.title_edited = 0 THEN COALESCE(t.title, n.title) ELSE n.title END,
-        n.body, n.pinned, n.revision, n.created_at, n.updated_at, n.deleted_at, n.origin, n.created_by_thread_id, n.project_role
+        n.body, n.pinned, n.revision, n.created_at, n.updated_at, n.deleted_at, n.origin, n.created_by_thread_id, n.project_role, n.category
     FROM notes n LEFT JOIN threads t ON t.id = n.thread_id";
 
 fn query_notes<P: rusqlite::Params>(c: &Connection, clause: &str, params: P) -> Result<Vec<Note>> {
     let mut st = c.prepare(&format!("{NOTE_SELECT} {clause}"))?;
     let rows = st.query_map(params, row_to_note)?;
-    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    let mut notes = rows.collect::<Result<Vec<_>, _>>()?;
+    let since = history_since(c)?;
+    for note in &mut notes {
+        mark_undated(&mut note.summary, since);
+    }
+    Ok(notes)
 }
 
 fn fetch_note<P: rusqlite::Params>(c: &Connection, clause: &str, params: P) -> Result<Option<Note>> {
-    Ok(c.query_row(&format!("{NOTE_SELECT} {clause}"), params, row_to_note).optional()?)
+    let mut note = c.query_row(&format!("{NOTE_SELECT} {clause}"), params, row_to_note).optional()?;
+    if let Some(note) = &mut note {
+        mark_undated(&mut note.summary, history_since(c)?);
+    }
+    Ok(note)
+}
+
+fn history_since(c: &Connection) -> Result<Option<DateTime<Utc>>> {
+    let value: Option<String> = c.query_row("SELECT value FROM meta WHERE key = 'notes_history_since'", [], |r| r.get(0)).optional()?;
+    Ok(value.and_then(|value| DateTime::parse_from_rfc3339(&value).ok()).map(|time| time.with_timezone(&Utc)))
+}
+
+/// Project memory written before categories existed: no category, not a brief or setup note.
+fn mark_undated(summary: &mut NoteSummary, since: Option<DateTime<Utc>>) {
+    summary.undated = summary.category.is_none()
+        && summary.scope == NoteScope::Project
+        && summary.project_role.is_none()
+        && since.is_some_and(|since| summary.created_at < since);
 }
 
 fn expect_note(c: &Connection, id: NoteId) -> Result<Note> {
@@ -517,6 +590,9 @@ fn row_to_note(r: &rusqlite::Row<'_>) -> rusqlite::Result<Note> {
                 .get::<_, Option<String>>(13)?
                 .map(|role| serde_json::from_value(serde_json::Value::String(role)).map_err(other))
                 .transpose()?,
+            category: r.get::<_, Option<String>>(14)?.and_then(|category| NoteCategory::parse(&category)),
+            stale: None,
+            undated: false,
         },
         body,
     })
@@ -788,6 +864,56 @@ mod tests {
             ("thread", "p1", "Fix login|Remember the redirect", 4, "t1")
         );
         assert_eq!(conn.query_row("SELECT COUNT(*) FROM thread_notes", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
+    }
+
+    #[test]
+    fn category_migration_marks_old_project_notes_undated_and_new_ones_not() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate_to(&conn, crate::schema::migration_count() - 1).unwrap();
+        conn.execute_batch(
+            "INSERT INTO projects(id, name, path, is_git, created_at, updated_at) VALUES ('00000000-0000-0000-0000-0000000000a1', 'kybern', '/k', 0, '2026-09-01T00:00:00+00:00', '2026-09-01T00:00:00+00:00');
+             INSERT INTO notes(id, scope, project_id, title, body, pinned, revision, created_at, updated_at)
+               VALUES ('00000000-0000-0000-0000-0000000000b1', 'project', '00000000-0000-0000-0000-0000000000a1', 'Old', 'x', 0, 1, '2026-09-02T00:00:00+00:00', '2026-09-02T00:00:00+00:00');",
+        )
+        .unwrap();
+        assert!(conn.query_row("SELECT value FROM meta WHERE key = 'notes_history_since'", [], |r| r.get::<_, String>(0)).is_err());
+        crate::schema::migrate(&conn).unwrap();
+        assert!(conn.query_row("SELECT value FROM meta WHERE key = 'notes_history_since'", [], |r| r.get::<_, String>(0)).is_ok());
+        let since = history_since(&conn).unwrap().expect("recorded");
+        let old = expect_note(&conn, uuid::Uuid::parse_str("00000000-0000-0000-0000-0000000000b1").unwrap()).unwrap();
+        assert!(old.summary.created_at < since);
+        assert_eq!(old.summary.category, None);
+        assert!(old.summary.undated);
+        // The check constraint refuses an unknown category.
+        assert!(conn.execute("UPDATE notes SET category = 'other'", []).is_err());
+    }
+
+    #[test]
+    fn category_round_trips_and_a_new_category_bumps_the_revision() {
+        let store = Store::open_in_memory().unwrap();
+        assert!(store.notes_history_since().unwrap().is_some(), "a fresh database records when categories began");
+        let project = project(&store, "kybern");
+        let note =
+            store.note_create_categorized(NoteScope::Project, Some(project.id), "Auth", "- a", None, Some(NoteCategory::Decision)).unwrap();
+        assert_eq!(note.summary.category, Some(NoteCategory::Decision));
+        assert!(!note.summary.undated, "notes written after the migration are never undated");
+        let plain = store.note_create(NoteScope::Project, Some(project.id), "Plain", "b").unwrap();
+        assert_eq!(plain.summary.category, None);
+        assert!(!plain.summary.undated);
+        let saved = store.note_update_with(NoteTarget::Id(plain.summary.id), 1, None, None, Some(Some(NoteCategory::Gotcha))).unwrap();
+        assert_eq!((saved.summary.category, saved.summary.revision), (Some(NoteCategory::Gotcha), 2));
+        // Leaving the category out keeps it; the same category again changes nothing.
+        let kept = store.note_update(NoteTarget::Id(plain.summary.id), 2, Some("Renamed"), None).unwrap();
+        assert_eq!(kept.summary.category, Some(NoteCategory::Gotcha));
+        let same = store.note_update_with(NoteTarget::Id(plain.summary.id), 3, None, None, Some(Some(NoteCategory::Gotcha))).unwrap();
+        assert_eq!(same.summary.revision, 3);
+        let listed = store.notes_list().unwrap();
+        assert!(listed.iter().any(|n| n.id == plain.summary.id && n.category == Some(NoteCategory::Gotcha)));
+        // An explicit clear removes it.
+        let cleared = store.note_update_with(NoteTarget::Id(plain.summary.id), 3, None, None, Some(None)).unwrap();
+        assert_eq!((cleared.summary.category, cleared.summary.revision), (None, 4));
+        let again = store.note_update_with(NoteTarget::Id(plain.summary.id), 4, None, None, Some(None)).unwrap();
+        assert_eq!(again.summary.revision, 4, "clearing a note without a category changes nothing");
     }
 
     #[test]

@@ -8,6 +8,7 @@
 use crate::state::AppState;
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
+use kybern_protocol::process::NoWindow;
 use kybern_protocol::{DaemonUpdate, DaemonUpdateStatus as Status};
 use kybern_store::Store;
 use sha2::{Digest, Sha256};
@@ -212,6 +213,7 @@ async fn install(client: &reqwest::Client, version: &str) -> Result<()> {
         let archive_path = stage.join(&name);
         std::fs::write(&archive_path, &archive)?;
         let output = tokio::process::Command::new("tar")
+            .no_window()
             .arg("-xf")
             .arg(&archive_path)
             .arg("-C")
@@ -371,7 +373,7 @@ pub fn restart(log_file: &Path) -> ! {
         std::process::exit(RESTART_EXIT_CODE);
     }
     let exe = std::env::current_exe().expect("current executable");
-    let mut command = std::process::Command::new(exe);
+    let mut command = std::process::Command::new(exe).no_window();
     command.args(std::env::args_os().skip(1)).stdin(std::process::Stdio::null());
     match std::fs::OpenOptions::new().append(true).create(true).open(log_file) {
         Ok(log) => {

@@ -1,0 +1,18 @@
+# The GPUIX source update.sh builds: Kybern's fork of remorses/gpuix, whose
+# `kybern` branch is the upstream release in `upstream` plus our commits. Its
+# zed submodule points at Tresnanda/zed's `kybern` branch (the GPUI commits).
+# A native change is a commit on those branches and a new pin here; see
+# README.md, "Changing the native module".
+repo=https://github.com/Tresnanda/gpuix.git
+# CI triage: the heads of the forks' `ci-fix` branches: `next` (WP1 + WP10 Windows)
+# plus the Linux screenshot through a wgpu readback and KYBERN_ROUNDED_CLIP=0 keeping
+# edge fades, until they are merged into `kybern`; then pin the merged kybern heads.
+# WP5 (notifications): the forks' `wp5` branches, one commit each on top of that.
+# Second real-Windows pass: the forks' `winhw2` branches on `next` (window-state events off macOS, the window
+# menu on a right click on the caption, autoFocus inside an autoFocus parent), until merged into `kybern`.
+# gpuix `regressfix2`: that plus addLayoutObserver queued off macOS (no waited call per mounted row).
+commit=a18d072ea7cf097ff752b47020b3c443f8a848b3
+# The zed submodule commit `commit` records; update.sh refuses a checkout that differs.
+zed=9a8ab049501e22e1fa05813cbb775c04e65c40a1
+# The upstream tag `commit` is based on. It must be `@gpuix/native@<VERSION>`.
+upstream=@gpuix/native@0.11.0

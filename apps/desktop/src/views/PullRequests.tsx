@@ -11,7 +11,7 @@ import { useStore } from "@/state/store"
 
 import { PrReview } from "./PrReview"
 import { PrList } from "./pullRequests/PrList"
-import { prRowId } from "./pullRequests/prIds"
+import { prRef, prRowId } from "./pullRequests/prIds"
 import { PR_FINE_TEXT, PR_QUIET_INK } from "./pullRequests/prText"
 import { cn } from "@/lib/utils"
 import "./pullRequests/review.css"
@@ -32,7 +32,8 @@ export function PullRequests() {
   const detailRef = useRef<HTMLElement>(null)
 
   const backToList = () => {
-    const selectedRow = selection && prRowId(selection.projectId, selection.number)
+    const selectedRow = selection &&
+      prRowId(selection.projectId, selection.number, selection.repo)
     useStore.getState().set({ prSelection: null })
     requestAnimationFrame(() => {
       if (selectedRow) document.getElementById(selectedRow)?.focus()
@@ -100,9 +101,10 @@ export function PullRequests() {
             aria-label="Selected pull request"
           >
             <PrReview
-              key={`${selection.projectId}:${selection.number}`}
+              key={prRef(selection.projectId, selection.number, selection.repo)}
               projectId={selection.projectId}
               number={selection.number}
+              repo={selection.repo}
               onBack={backToList}
             />
           </section>

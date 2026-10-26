@@ -121,6 +121,8 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
   const running = !failed && (group.running || (threadRunning && isLast && !group.end))
   const tasksByToolCall = useMemo(() => tasksOf(group.work), [group.work])
   const hierarchy = useMemo(() => buildWorkHierarchy(group.work), [group.work])
+  // A context refresh lands in the turn it followed but is its own row below the turn (`Transcript.tsx`), not part of its work.
+  const roots = useMemo(() => hierarchy.roots.filter((block) => block.kind !== 'rotation'), [hierarchy])
   // Launch rows open the child thread they started; look the children up only when there are launches.
   const launches = useMemo(
     () => group.work.some((b) => (b.kind === 'tool' && (isAgentLaunchBlock(b, tasksByToolCall.get(b.call.id)) || isDelegationLaunchBlock(b))) || (b.kind === 'runtime_task' && b.task.kind === 'agent')),
@@ -133,7 +135,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
   const settled = useMemo(() => {
     const agentBlocks: Block[] = []
     const disclosureBlocks: Block[] = []
-    for (const block of hierarchy.roots) {
+    for (const block of roots) {
       if (
         (block.kind === 'tool' && isAgentLaunchBlock(block, tasksByToolCall.get(block.call.id))) ||
         (block.kind === 'runtime_task' && block.task.kind === 'agent') ||
@@ -146,7 +148,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
       else if (block.kind !== 'visual') disclosureBlocks.push(block)
     }
     return { agentBlocks, disclosureBlocks }
-  }, [hierarchy, tasksByToolCall])
+  }, [roots, tasksByToolCall])
   const [expanded, setExpanded] = useRowState(`work:${group.turnId}`, false)
   // The fold: when this turn settles while it is on screen at the tail, the "Worked for" disclosure first shows its work, then closes
   // with the same 220 ms height tween as a click (the rows fold away instead of vanishing). A turn first rendered settled, one the reader
@@ -173,7 +175,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
       (b.kind === 'approval' && !b.decision),
   )
   // Between calls the newest run says "thinking" in its tail, instead of a separate row blinking in under it.
-  const endsInRun = useMemo(() => running && !hasLiveWork && chunkRuns(hierarchy.roots, tasksByToolCall).at(-1)?.kind === 'run', [running, hasLiveWork, hierarchy, tasksByToolCall])
+  const endsInRun = useMemo(() => running && !hasLiveWork && chunkRuns(roots, tasksByToolCall).at(-1)?.kind === 'run', [running, hasLiveWork, roots, tasksByToolCall])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -189,9 +191,9 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
       {running && (
         <div testId="live-work" style={{ display: 'flex', flexDirection: 'column', paddingBottom: 8 }}>
           <WorkingHeader since={group.user?.at ?? group.work[0]?.at ?? ''} />
-          {hierarchy.roots.length > 0 && (
+          {roots.length > 0 && (
             <div style={{ marginTop: 4 }}>
-              <WorkRows compact blocks={hierarchy.roots} ctx={ctx} tone="bright" liveTextId={group.liveTextId} liveThinkingId={group.liveThinkingId} waiting={endsInRun} />
+              <WorkRows compact blocks={roots} ctx={ctx} tone="bright" liveTextId={group.liveTextId} liveThinkingId={group.liveThinkingId} waiting={endsInRun} />
             </div>
           )}
           {/* `thinkingRow`: `t-row-enter` each time it mounts. */}

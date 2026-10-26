@@ -10,11 +10,11 @@
 use std::collections::BTreeSet;
 
 /// Bumped with every wording change so a changed guide is a deliberate act.
-pub(crate) const GUIDE_VERSION: u32 = 16;
+pub(crate) const GUIDE_VERSION: u32 = 18;
 
 /// Hard ceiling for the rendered guide (about 1.5k tokens at 4 bytes a token).
 #[cfg(test)]
-pub(crate) const MAX_GUIDE_BYTES: usize = 7200;
+pub(crate) const MAX_GUIDE_BYTES: usize = 7800;
 
 /// Which groups of Kybern tools a session has.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -105,10 +105,15 @@ pub(crate) fn render(tools: &GuideTools) -> String {
             "\n## Notes and tasks\n\
              To mention a note or task, paste the `markdown` link from its tool result, such as `[ADE-12 Fix login](kybern://task/<id>)`. Never write a raw `kybern://` URI or bare id; Kybern turns the link into a chip the user can click.\n",
         );
+        if tools.has("kybern_note_create") || tools.has("kybern_note_append") {
+            out.push_str(
+                "Notes are memory. File a claim as `- 2026-10-25 · As of `abc1234`: what is true (`path`).` with a `category` (preference, decision, convention or gotcha); quote the user for preferences. Never write \"currently\", \"now\" or \"is\" about code without a date or commit. Retire an old claim with `supersedes` on `kybern_note_append`; decision and gotcha notes are not rewritten.\n",
+            );
+        }
     }
     let threads = tools.present(&THREAD_TOOLS);
     let inspect = tools.present(&INSPECT_TOOLS);
-    if !threads.is_empty() || !inspect.is_empty() {
+    if !threads.is_empty() || !inspect.is_empty() || tools.has("kybern_project_map") {
         out.push_str("\n## Threads and the workspace\n");
         if !threads.is_empty() {
             out.push_str(&format!(
@@ -123,6 +128,9 @@ pub(crate) fn render(tools: &GuideTools) -> String {
         }
         if !inspect.is_empty() {
             out.push_str(&format!("Inspect this thread with {}.\n", describe(&inspect)));
+        }
+        if tools.has("kybern_project_map") {
+            out.push_str("`kybern_project_map` shows the project's layout, commands and recent changes, stamped with a commit.\n");
         }
     }
     out.push_str("\n## Native subagents\nUsers can message an active Claude native subagent in its own thread. These messages arrive at that child's next tool call as additional context; they never enter the parent's input. Pending means not yet delivered. Attachments arrive as file references, not images. If the child finishes first, the message stays undelivered and only the user's explicit Send to parent action queues it for the parent. Other harnesses' native child threads remain read-only.\n");
@@ -204,7 +212,7 @@ mod tests {
             include_str!("agent_guide_full.golden.txt"),
             "guide wording changed: bump GUIDE_VERSION and update the golden file (KYBERN_UPDATE_GOLDEN=1)"
         );
-        assert_eq!(GUIDE_VERSION, 16);
+        assert_eq!(GUIDE_VERSION, 18);
     }
 
     #[test]
@@ -235,6 +243,8 @@ mod tests {
 
         let notes = guide_for(&["kybern_note_create"]);
         assert!(notes.contains("## Notes and tasks") && notes.contains("`markdown` link") && !notes.contains("## Helpers"));
+        assert!(notes.contains("As of `abc1234`") && notes.contains("supersedes") && notes.contains("Never write \"currently\""));
+        assert!(!guide_for(&["kybern_note_read"]).contains("As of `abc1234`"), "read-only agents need no claim format");
 
         let threads = guide_for(&["kybern_thread_read"]);
         assert!(threads.contains("`kybern_thread_read` (read a thread)") && !threads.contains("kybern_thread_send"));

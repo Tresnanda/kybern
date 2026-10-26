@@ -106,6 +106,7 @@ fn main() {
     method::<ProjectsRemove>(&mut methods);
     method::<ProjectsScanRepos>(&mut methods);
     method::<ProjectsMembersStatus>(&mut methods);
+    method::<ProjectsMap>(&mut methods);
     method::<ProjectsInstructionsCreate>(&mut methods);
     method::<SpacesList>(&mut methods);
     method::<SpacesCreate>(&mut methods);
@@ -138,6 +139,9 @@ fn main() {
     method::<NotesRestore>(&mut methods);
     method::<NotesPurge>(&mut methods);
     method::<NotesSearch>(&mut methods);
+    method::<NotesTidyOffer>(&mut methods);
+    method::<NotesTidySnooze>(&mut methods);
+    method::<NotesTidyStart>(&mut methods);
     method::<TaskItemsList>(&mut methods);
     method::<TaskItemsGet>(&mut methods);
     method::<TaskItemsCreate>(&mut methods);
@@ -163,6 +167,8 @@ fn main() {
     method::<CoordinatorOpen>(&mut methods);
     method::<CoordinatorSetup>(&mut methods);
     method::<CoordinatorSwitchHarness>(&mut methods);
+    method::<CoordinatorRefreshContext>(&mut methods);
+    method::<CoordinatorEditHandoff>(&mut methods);
     method::<TasksList>(&mut methods);
     method::<TaskStop>(&mut methods);
     method::<TaskBackground>(&mut methods);

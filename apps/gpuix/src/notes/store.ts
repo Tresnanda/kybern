@@ -10,12 +10,13 @@ import { load, save } from '../shell/persist.ts'
 import { toast } from '../shell/toasts.tsx'
 import { isFreeChatProject } from '../../../../packages/kybern-client/src/types.ts'
 import { resolveNewNoteHome } from '@/state/notesModel'
+import { osLabels } from '../platform/os.ts'
 
 export interface Capture { text: string; threadTitle: string; threadId: string }
 interface Display { layout: 'gallery' | 'list'; group: NotesGroupBy; sort: NotesSortBy; hints: boolean; outline: boolean }
-interface State { notes: NoteSummary[]; loaded: boolean; error: string | null; selected: string | null; filter: NotesFilter; display: Display; quick: boolean; capture: Capture | null; query: string }
+interface State { notes: NoteSummary[]; /** When categories began (`notes.list` `history_since`): undated notes predate it. */ historySince: string | null; loaded: boolean; error: string | null; selected: string | null; filter: NotesFilter; display: Display; quick: boolean; capture: Capture | null; query: string }
 const defaults: Display = { layout: 'gallery', group: 'none', sort: 'edited', hints: true, outline: true }
-const initialState = (): State => ({ notes: [], loaded: false, error: null, selected: load<string | null>('kybern.notes.lastOpenId', null), filter: { kind: 'all' }, display: { ...defaults, ...load<Partial<Display>>('kybern.notes.display', {}) }, quick: false, capture: null, query: '' })
+const initialState = (): State => ({ notes: [], historySince: null, loaded: false, error: null, selected: load<string | null>('kybern.notes.lastOpenId', null), filter: { kind: 'all' }, display: { ...defaults, ...load<Partial<Display>>('kybern.notes.display', {}) }, quick: false, capture: null, query: '' })
 let state: State = initialState()
 const listeners = new Set<() => void>()
 export const getNotes = () => state
@@ -53,7 +54,7 @@ export function refreshNotes(): Promise<void> {
         if (owner !== activeEnvironment()) return
         if (sharesHome()) {
           const home = await homeClient(() => void refreshNotes()).call('notes.list', {}).catch((error) => {
-            if (owner === activeEnvironment()) setNotes({ notes: [...result.notes.filter((note) => note.scope !== 'global'), ...state.notes.filter((note) => homeIds.has(note.id))], loaded: true, error: `Global notes on this Mac are unavailable. Reconnect and try again. ${String(error)}` })
+            if (owner === activeEnvironment()) setNotes({ notes: [...result.notes.filter((note) => note.scope !== 'global'), ...state.notes.filter((note) => homeIds.has(note.id))], loaded: true, error: `Global notes ${osLabels().onThisComputer} are unavailable. Reconnect and try again. ${String(error)}` })
             return null
           })
           if (!home) return
@@ -61,10 +62,10 @@ export function refreshNotes(): Promise<void> {
           homeIds.clear()
           const globals = home.notes.filter((note) => note.scope === 'global')
           globals.forEach((note) => homeIds.add(note.id))
-          setNotes({ notes: [...result.notes.filter((note) => note.scope !== 'global'), ...globals], loaded: true, error: null })
+          setNotes({ notes: [...result.notes.filter((note) => note.scope !== 'global'), ...globals], historySince: result.history_since ?? null, loaded: true, error: null })
         } else {
           homeIds.clear()
-          setNotes({ notes: result.notes, loaded: true, error: null })
+          setNotes({ notes: result.notes, historySince: result.history_since ?? null, loaded: true, error: null })
         }
       } catch (e) {
         if (owner !== activeEnvironment()) return

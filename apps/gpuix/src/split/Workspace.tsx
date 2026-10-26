@@ -169,7 +169,7 @@ function Leaf({ id, split, children }: { id: string; split: boolean; children: R
     {split && <FocusRing focused={focused} color={alpha(t.v('--color-border-focus'), .55)} />}
   </div></PaneProvider>
 }
-/** `.split-thread-pane::after`: the focused pane's ring fades in and out over 120 ms. Focus moved from the keyboard (⌘⌥←/→) swaps it at once. Paint-only. */
+/** `.split-thread-pane::after`: the focused pane's ring fades in and out over 120 ms. Focus moved from the keyboard (⌘⌥←/→, Alt+Shift+←/→ off macOS) swaps it at once. Paint-only. */
 function FocusRing({ focused, color }: { focused: boolean; color: string }) {
   const keyboard = getNav().keyboardNav
   const enter = PATCHED_NATIVE && !keyboard ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: 0.12, ease: [...EASE.out] as [number, number, number, number] } } : undefined

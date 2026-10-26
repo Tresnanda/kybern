@@ -30,6 +30,7 @@ export async function uploadImageFile(path: string): Promise<UploadedImage> {
  * Esc cancels. Resolves with the PNG bytes, or null when the user cancelled. `onChild` gets the process so a closing card can stop it.
  */
 export function captureWindow(onChild?: (child: ChildProcess | null) => void): Promise<Buffer | null> {
+  if (process.platform !== 'darwin') return Promise.reject(new Error('Window capture is available on macOS only. Attach an image instead.'))
   const path = join(tmpdir(), `kybern-window-${crypto.randomUUID()}.png`)
   return new Promise((resolve, reject) => {
     const proc = spawn('screencapture', ['-i', '-W', '-o', '-x', path], { stdio: 'ignore' })

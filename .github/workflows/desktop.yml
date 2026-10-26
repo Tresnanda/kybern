@@ -270,21 +270,29 @@ jobs:
 
   gpuix:
     # Kybern GPUIX (apps/gpuix) ships as its own app next to the Tauri desktop
-    # app, for Apple Silicon and Intel Macs. Each target packages dist's
-    # kybernd and kybern for that target and builds its own patched native
-    # addon (reusing main's cargo output, see .github/actions/gpuix-addon), with
-    # the on-screen native checks skipped (runners have no usable display).
-    # Intel's addon is cross-built on the arm64 runner, like the Tauri x86_64
-    # bundle; its load check runs under Rosetta.
+    # app, for Apple Silicon and Intel Macs (Linux x64 and Windows x64 are the
+    # `gpuix-linux` and `gpuix-windows` jobs below). Each target packages dist's
+    # kybernd and kybern for that target and builds its own patched native addon
+    # (reusing main's cargo output, see .github/actions/gpuix-addon), with the
+    # on-screen native checks skipped (runners have no usable display). Intel's
+    # addon is cross-built on the arm64 runner, like the Tauri x86_64 bundle; its
+    # load check runs under Rosetta.
     needs: binaries
     if: ${{ !cancelled() && (needs.binaries.result == 'success' || needs.binaries.result == 'skipped') && (github.event_name != 'push' || github.ref_type == 'tag') }}
     name: bundle (gpuix ${{ matrix.target }})
     strategy:
       fail-fast: false
       matrix:
-        target: [aarch64-apple-darwin, x86_64-apple-darwin]
-    runs-on: macos-15
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-15
+          - target: x86_64-apple-darwin
+            os: macos-15
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -293,6 +301,8 @@ jobs:
       KYBERN_GPUIX_TARGET: ${{ matrix.target }}
       # scripts/bundle-gpuix.sh packages these instead of target/release.
       KYBERN_BIN_DIR: dist-binaries/bin
+      PYTHON: python3
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
@@ -353,11 +363,275 @@ jobs:
           path: dist/kybern-gpuix_*
           if-no-files-found: error
 
+  gpuix-wpe:
+    # The private WPE WebKit the Linux GPUIX packages carry for the embedded web
+    # view (WP10), from main's cache or built cold (about 92 minutes, alongside
+    # `binaries`); see gpuix-wpe.yml.
+    if: ${{ github.event_name != 'push' || github.ref_type == 'tag' }}
+    uses: ./.github/workflows/gpuix-wpe.yml
+
+  gpuix-linux:
+    # Kybern GPUIX for x86_64 Linux (beta): an AppImage (the updater artifact),
+    # a .deb and an .rpm (scripts/bundle-gpuix-linux.sh). It builds on
+    # ubuntu-22.04 for the same glibc floor as the Tauri AppImage and packages
+    # the static musl daemon and CLI the Tauri Linux bundle uses, with the
+    # embedded web view (`gpuix-wpe` and the companion; required). Like
+    # `gpuix-windows`, it is a job of its own so that its failure can never skip
+    # the manifest job: the release then simply has no `linux-x86_64-gpuix`
+    # entry (scripts/updater-manifest.mjs skips a missing AppImage). It runs
+    # whatever `gpuix-wpe` did, so a failed WPE build fails this job instead
+    # of skipping it.
+    needs: [binaries, gpuix-wpe]
+    if: ${{ !cancelled() && (needs.binaries.result == 'success' || needs.binaries.result == 'skipped') && (github.event_name != 'push' || github.ref_type == 'tag') }}
+    name: bundle (gpuix x86_64-unknown-linux-gnu)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      KYBERN_NATIVE_CHECKS: "0"
+      KYBERN_GPUIX_TARGET: x86_64-unknown-linux-gnu
+      # dist builds the Linux daemon and CLI as static musl binaries.
+      KYBERN_DIST_TARGET: x86_64-unknown-linux-musl
+      # scripts/bundle-gpuix-linux.sh packages these instead of target/release.
+      KYBERN_BIN_DIR: dist-binaries/bin
+      PYTHON: python3
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: "1.99.1"
+          targets: x86_64-unknown-linux-gnu
+      - name: Install the GPUIX Rust toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal --target "$KYBERN_GPUIX_TARGET"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+          # The Bun binary downloads in seconds; a cache entry saved under a tag could never be restored.
+          no-cache: true
+      - name: Require the updater signing key
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set; add the repository secret before releasing" >&2
+            exit 1
+          fi
+      - id: release
+        name: Resolve the release tag
+        env:
+          BINARIES_FROM: ${{ github.event_name == 'workflow_dispatch' && inputs.binaries_from || '' }}
+        run: |
+          tag=""
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then tag="${GITHUB_REF_NAME}"; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "release tag: ${tag:-<none, dry run>}"
+          echo "binaries-tag=$BINARIES_FROM" >> "$GITHUB_OUTPUT"
+      - name: Download dist's archives from this run
+        if: steps.release.outputs.binaries-tag == ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: artifacts-build-local-*
+          path: dist-binaries/archives
+          merge-multiple: true
+      - name: Download dist's archives from a release
+        if: steps.release.outputs.binaries-tag != ''
+        run: gh release download "${{ steps.release.outputs.binaries-tag }}" --pattern "kybern-$KYBERN_DIST_TARGET.*" --dir dist-binaries/archives
+      - name: Extract the daemon and CLI
+        run: node scripts/dist-binaries.mjs --target "$KYBERN_DIST_TARGET" --from dist-binaries/archives --out "$KYBERN_BIN_DIR"
+      - uses: ./.github/actions/setup-pnpm-apps
+        with:
+          gpuix: 'true'
+      # The compiled addon inside update.sh comes from main's cache when its inputs
+      # are unchanged; a dry run saves one, a tag never does. The realign,
+      # re-sign and load checks run either way.
+      # Before the addon: update.sh builds the web view companion when WPE is unpacked.
+      - uses: ./.github/actions/gpuix-wpe
+      - uses: ./.github/actions/gpuix-addon
+        with:
+          target: x86_64-unknown-linux-gnu
+          save: ${{ github.event_name == 'workflow_dispatch' }}
+      # update.sh only warns when the companion does not build; here that is an error.
+      - name: Build the web view companion
+        working-directory: apps/gpuix
+        run: |
+          bun native/build-webview.ts
+          readelf -d native/build/libkybern-webview.so | grep -E 'NEEDED|RUNPATH'
+      # dpkg-shlibdeps names the deb's dependencies from the libraries the
+      # addon action installed. appimagetool and its runtime are pinned by
+      # checksum; appimagetool would otherwise fetch the newest runtime.
+      - name: Install the Linux packaging tools
+        env:
+          APPIMAGETOOL_URL: https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+          RUNTIME_URL: https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+          RUNTIME_SHA256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+        run: |
+          sudo apt-get install -y --no-install-recommends dpkg-dev rpm desktop-file-utils
+          tools="$RUNNER_TEMP/appimage"
+          mkdir -p "$tools"
+          curl -fsSL --retry 3 -o "$tools/appimagetool" "$APPIMAGETOOL_URL"
+          curl -fsSL --retry 3 -o "$tools/runtime" "$RUNTIME_URL"
+          printf '%s  %s\n' "$APPIMAGETOOL_SHA256" "$tools/appimagetool" "$RUNTIME_SHA256" "$tools/runtime" | sha256sum -c -
+          chmod +x "$tools/appimagetool"
+          echo "APPIMAGETOOL=$tools/appimagetool" >> "$GITHUB_ENV"
+          echo "APPIMAGE_RUNTIME=$tools/runtime" >> "$GITHUB_ENV"
+      - name: Package Kybern GPUIX (AppImage, deb, rpm) and sign the AppImage
+        env:
+          # Without the companion and WPE package-linux.ts would package the browser fallback.
+          KYBERN_REQUIRE_WEBVIEW: "1"
+        run: scripts/bundle-gpuix-linux.sh
+      # Blocking, and before the upload, like the Windows installer check:
+      # checks that every package carries the web view (companion, WPE, the
+      # deb's AppArmor profile, EGL/GLES and bubblewrap), installs the deb,
+      # smoke-runs it and the AppImage (KYBERN_GPUIX_SMOKE=1: the addon loads
+      # with its libraries and every module imports), reads the rpm's header
+      # and removes the deb again.
+      - name: Check the packages (install, smoke run, remove)
+        run: apps/gpuix/packaging/verify-linux.sh dist
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-gpuix-x86_64-unknown-linux-gnu
+          compression-level: 0
+          path: dist/kybern-gpuix_*
+          if-no-files-found: error
+
+  gpuix-windows:
+    # Kybern GPUIX for Windows x64 (beta): a per-user NSIS installer
+    # (scripts/bundle-gpuix-windows.sh), built natively on windows-2022. It is a
+    # job of its own, not a leg of `gpuix`, so that its failure can never skip the
+    # manifest job: `manifest` needs `gpuix` to succeed and accepts this job
+    # succeeding or failing. When it fails the release simply has no
+    # `windows-x86_64-gpuix` entry, which the updater and scripts/updater-manifest.mjs
+    # treat as "not published yet". Drop the beta handling in `manifest` once this
+    # job has shipped cleanly.
+    needs: binaries
+    if: ${{ !cancelled() && (needs.binaries.result == 'success' || needs.binaries.result == 'skipped') && (github.event_name != 'push' || github.ref_type == 'tag') }}
+    name: bundle (gpuix x86_64-pc-windows-msvc)
+    runs-on: windows-2022
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      KYBERN_NATIVE_CHECKS: "0"
+      KYBERN_GPUIX_TARGET: x86_64-pc-windows-msvc
+      # scripts/bundle-gpuix-windows.sh packages these instead of target/release.
+      KYBERN_BIN_DIR: dist-binaries/bin
+      # update.sh runs in Git Bash on Windows, which has `python`, not `python3`;
+      # the patch drivers read and write UTF-8 (the Windows default is cp1252).
+      PYTHON: python
+      PYTHONUTF8: "1"
+    steps:
+      - name: Allow long paths (zed's tree) and keep LF line endings
+        run: |
+          git config --global core.longpaths true
+          git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: "1.99.1"
+          targets: x86_64-pc-windows-msvc
+      - name: Install the GPUIX Rust toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal --target "$KYBERN_GPUIX_TARGET"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+          # The Bun binary downloads in seconds; a cache entry saved under a tag could never be restored.
+          no-cache: true
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Install NSIS
+        run: |
+          # The installer is built with makensis; the image may already carry it.
+          if [ ! -x "/c/Program Files (x86)/NSIS/makensis.exe" ]; then
+            choco install nsis --version=3.11 --no-progress -y
+          fi
+          echo 'C:\Program Files (x86)\NSIS' >> "$GITHUB_PATH"
+      - name: Require the updater signing key
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set; add the repository secret before releasing" >&2
+            exit 1
+          fi
+      - id: release
+        name: Resolve the release tag
+        env:
+          BINARIES_FROM: ${{ github.event_name == 'workflow_dispatch' && inputs.binaries_from || '' }}
+        run: |
+          tag=""
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then tag="${GITHUB_REF_NAME}"; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "release tag: ${tag:-<none, dry run>}"
+          echo "binaries-tag=$BINARIES_FROM" >> "$GITHUB_OUTPUT"
+      - name: Download dist's archives from this run
+        if: steps.release.outputs.binaries-tag == ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: artifacts-build-local-*
+          path: dist-binaries/archives
+          merge-multiple: true
+      - name: Download dist's archives from a release
+        if: steps.release.outputs.binaries-tag != ''
+        run: gh release download "${{ steps.release.outputs.binaries-tag }}" --pattern "kybern-$KYBERN_GPUIX_TARGET.*" --dir dist-binaries/archives
+      - name: Extract the daemon and CLI
+        run: node scripts/dist-binaries.mjs --target "$KYBERN_GPUIX_TARGET" --from dist-binaries/archives --out "$KYBERN_BIN_DIR"
+      - uses: ./.github/actions/setup-pnpm-apps
+        with:
+          gpuix: 'true'
+      # The compiled addon inside update.sh comes from main's cache when its inputs
+      # are unchanged; a dry run saves one, a tag never does. The load checks run either way.
+      - uses: ./.github/actions/gpuix-addon
+        with:
+          target: x86_64-pc-windows-msvc
+          save: ${{ github.event_name == 'workflow_dispatch' }}
+      - name: Package and sign Kybern GPUIX (NSIS installer)
+        run: |
+          makensis -VERSION
+          scripts/bundle-gpuix-windows.sh
+      # Blocking, and before the upload, so a broken installer is never published.
+      # Installs the installer on the runner and checks the files, Add/Remove
+      # Programs, the Start-menu shortcut's AppUserModelID, that only `bin` is on the
+      # user Path, a smoke run of the installed app (it must load its native addon
+      # and import its whole module graph, KYBERN_GPUIX_SMOKE=1), an update over a
+      # running daemon (the locked kybernd.exe moves aside), and an uninstall that
+      # stops that daemon and leaves no folder behind.
+      - name: Check the installer (install, smoke run, update, uninstall)
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File apps/gpuix/packaging/windows/verify-install.ps1 \
+            -Installer "$(cygpath -w "$(ls dist/kybern-gpuix_*_x64-setup.exe)")"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-gpuix-x86_64-pc-windows-msvc
+          compression-level: 0
+          path: dist/kybern-gpuix_*
+          if-no-files-found: error
+      # Informational: starts the installed app against a scratch data folder and
+      # waits for its bundled daemon. A software-rendered runner desktop is not
+      # proof the app works on real hardware, and a failure here does not
+      # block the release.
+      - name: Launch the installed app
+        continue-on-error: true
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File apps/gpuix/packaging/windows/verify-install.ps1 -Launch \
+            -Installer "$(cygpath -w "$(ls dist/kybern-gpuix_*_x64-setup.exe)")"
+
   manifest:
     name: updater manifest
-    needs: [bundle, gpuix]
-    # Publish only when every platform bundle succeeded.
-    if: ${{ !cancelled() && needs.bundle.result == 'success' && needs.gpuix.result == 'success' }}
+    needs: [bundle, gpuix, gpuix-linux, gpuix-windows]
+    # Publish only when every Tauri bundle and the macOS GPUIX bundles
+    # succeeded. The Linux and Windows builds are betas: success adds the
+    # `linux-x86_64-gpuix` / `windows-x86_64-gpuix` entry, failure leaves it out
+    # (updater-manifest.mjs skips a missing asset). A skipped or cancelled beta
+    # job is not a failure, so it does not publish.
+    if: ${{ !cancelled() && needs.bundle.result == 'success' && needs.gpuix.result == 'success' && (needs.gpuix-linux.result == 'success' || needs.gpuix-linux.result == 'failure') && (needs.gpuix-windows.result == 'success' || needs.gpuix-windows.result == 'failure') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -393,6 +667,7 @@ jobs:
           cp scripts/install-remote.sh dist/kybern-remote-install.sh
           cp scripts/install-mac.sh dist/kybern-mac-install.sh
           cp scripts/install-mac-gpuix.sh dist/kybern-gpuix-mac-install.sh
+          cp scripts/install-linux-gpuix.sh dist/kybern-gpuix-linux-install.sh
           cat dist/latest.json
       - name: Collect the release assets
         run: |

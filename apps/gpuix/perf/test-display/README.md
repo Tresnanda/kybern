@@ -12,7 +12,7 @@ clang -fobjc-arc -framework Foundation -framework CoreGraphics perf/test-display
 kill %1                         # removes the display and the marker
 ```
 
-Placement: `native/patches/automation_display.rs` (native windows) and
+Placement: `automation_display.rs` in the gpuix fork (`native/upstream/packages/native/src/`, native windows) and
 `src/shell/window.ts` (the app opens hidden, then moves by origin, because
 `setFrameFromString:` snaps a window back onto the main screen) target the id
 in `/tmp/kybern-gpuix-test-display`, else the built-in display.

@@ -23,13 +23,23 @@ export const PATCHED_NATIVE =
 
 if (PATCHED_NATIVE && !process.env.NAPI_RS_NATIVE_LIBRARY_PATH) process.env.NAPI_RS_NATIVE_LIBRARY_PATH = built
 
-/** Native `edgeFade` (an alpha ramp toward an element's edges, `src/native/backdrop.ts`). Read once from the
- * addon this process loads; the stock addon and patched builds without it report false. */
-export const EDGE_FADE: boolean = PATCHED_NATIVE && (() => {
+interface Capabilities { edgeFade?: boolean; backdrop?: boolean; windowMaterials?: unknown }
+/** `kybernCapabilities()` of the addon this process loads, read once; the stock addon has none. */
+const CAPABILITIES: Capabilities = PATCHED_NATIVE ? (() => {
   try {
-    const addon = createRequire(import.meta.url)(process.env.NAPI_RS_NATIVE_LIBRARY_PATH!) as { kybernCapabilities?: () => { edgeFade?: boolean } }
-    return addon.kybernCapabilities?.()?.edgeFade === true
-  } catch { return false }
-})()
+    const addon = createRequire(import.meta.url)(process.env.NAPI_RS_NATIVE_LIBRARY_PATH!) as { kybernCapabilities?: () => Capabilities }
+    return addon.kybernCapabilities?.() ?? {}
+  } catch { return {} }
+})() : {}
+/** Native `edgeFade` (an alpha ramp toward an element's edges, `src/native/backdrop.ts`); patched builds without it report false. */
+export const EDGE_FADE: boolean = CAPABILITIES.edgeFade === true
+/**
+ * The scene `backdrop` filter blurs on this OS's renderer: Metal in every patched macOS build, wgpu (Linux) and Direct3D 11
+ * (Windows) in builds that report it (WP9). Without it a `backdrop` prop draws nothing and only the fill above it shows, so
+ * frosted surfaces take their dense fills instead (`platform/glass.ts`, `platform/material.ts`).
+ */
+export const BACKDROP_BLUR: boolean = PATCHED_NATIVE && (process.platform === 'darwin' || CAPABILITIES.backdrop === true)
+/** Window backgrounds the addon takes beyond opaque/blurred/transparent: `mica`, `mica-alt`, `acrylic` on Windows (WP9). */
+export const WINDOW_MATERIALS: readonly string[] = Array.isArray(CAPABILITIES.windowMaterials) ? CAPABILITIES.windowMaterials.filter((m): m is string => typeof m === 'string') : []
 // The reconciler forwards only listed props from built-in elements; the pinned JS patch predates `edgeFade`.
 if (EDGE_FADE) (UNIVERSAL_PROPS as Set<string>).add('edgeFade')

@@ -1,5 +1,6 @@
 import { GlassEdge } from '../kit/GlassEdge.tsx'
 import { frostBackdrop, frostFill, useGlass } from '../platform/glass.ts'
+import { isEmacsCtrl } from '../platform/keys.ts'
 // The composer's picker menus (`ComposerPickerMenuPopup` + `components/kit/menu.tsx`,
 // "normal" picker size in `kit.css:2960`): a 0.65rem-radius opaque popover with a
 // 1px border and the composer's soft shadow, 4px body padding, 26px option rows
@@ -442,8 +443,8 @@ export function PickerMenu({
           onKeyDown={(e) => {
             // Esc closes the menu only: a dock or dialog around the chip must not take the same press.
             if (e.key === 'escape') { e.preventDefault(); setOpen(false) }
-            else if (e.key === 'down' || (e.key === 'n' && e.modifiers?.ctrl)) move(1)
-            else if (e.key === 'up' || (e.key === 'p' && e.modifiers?.ctrl)) move(-1)
+            else if (e.key === 'down' || (e.key === 'n' && isEmacsCtrl(e.modifiers))) move(1)
+            else if (e.key === 'up' || (e.key === 'p' && isEmacsCtrl(e.modifiers))) move(-1)
             else if ((e.key === 'enter' || e.key === 'space') && active) pick(active)
           }}
           style={{

@@ -29,6 +29,7 @@ import { SPACE_GLYPHS } from './glyphs.ts'
 import { SpaceLogo } from './SpaceLogo.tsx'
 import { createSpace, moveProjectToSpace, updateSpace, useSpaces } from './store.ts'
 import { closeSpaceEditor, useSpaceUi } from './ui.ts'
+import { isPrimary } from '../platform/keys.ts'
 
 const EXTENSIONS: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' }
 
@@ -131,7 +132,7 @@ export function SpaceEditor({ mode, space, still }: { mode: 'create' | 'edit'; s
   const onKey = (e: EventPayload) => {
     const key = e.key
     if (key === 'escape') { closeSpaceEditor(); return }
-    if (key === 'enter' && e.modifiers?.cmd) { void submit(); return }
+    if (key === 'enter' && isPrimary(e.modifiers)) { void submit(); return }
     if (key === 'tab') {
       const at = ZONES.indexOf(zone)
       goto(ZONES[(at + (e.modifiers?.shift ? ZONES.length - 1 : 1)) % ZONES.length]!)

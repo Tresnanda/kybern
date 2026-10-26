@@ -1,6 +1,7 @@
 //! Git status and GitHub pull requests through the user's `gh` CLI, which
 //! already holds their credentials.
 
+use kybern_protocol::process::NoWindow;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
@@ -14,6 +15,7 @@ static GH_AVAILABLE: OnceCell<bool> = OnceCell::const_new();
 
 pub(crate) async fn run(cwd: &Path, program: &str, args: &[&str]) -> Result<String> {
     let out = Command::new(program)
+        .no_window()
         .current_dir(cwd)
         .args(args)
         .stdin(std::process::Stdio::null())
@@ -29,6 +31,7 @@ pub(crate) async fn run(cwd: &Path, program: &str, args: &[&str]) -> Result<Stri
 /// `run`, with `input` written to the program's standard input.
 pub(crate) async fn run_stdin(cwd: &Path, program: &str, args: &[&str], input: &str) -> Result<String> {
     let mut child = Command::new(program)
+        .no_window()
         .current_dir(cwd)
         .args(args)
         .stdin(std::process::Stdio::piped())
@@ -68,7 +71,9 @@ pub async fn branches(cwd: &Path) -> Result<GitBranchesResult> {
 }
 
 pub async fn gh_available() -> bool {
-    *GH_AVAILABLE.get_or_init(|| async { Command::new("gh").arg("--version").output().await.is_ok_and(|o| o.status.success()) }).await
+    *GH_AVAILABLE
+        .get_or_init(|| async { Command::new("gh").no_window().arg("--version").output().await.is_ok_and(|o| o.status.success()) })
+        .await
 }
 
 pub async fn status(cwd: &Path) -> Result<GitStatus> {
@@ -135,6 +140,7 @@ pub(crate) fn parse_pr(v: &Value) -> Option<PullRequest> {
         mergeable: None,
         labels: Vec::new(),
         checks_summary: None,
+        repo: None,
     })
 }
 
@@ -248,6 +254,11 @@ pub async fn commit_all_excluding(cwd: &Path, message: &str, exclude: &[String])
     run(cwd, "git", &["rev-parse", "HEAD"]).await
 }
 
+/// Whether the repository has any remote at all.
+pub async fn has_any_remote(cwd: &Path) -> bool {
+    run(cwd, "git", &["remote"]).await.is_ok_and(|names| !names.trim().is_empty())
+}
+
 /// Whether `origin` points at GitHub.
 pub async fn has_github_remote(cwd: &Path) -> bool {
     run(cwd, "git", &["remote", "get-url", "origin"]).await.is_ok_and(|url| url.contains("github.com"))
@@ -330,10 +341,14 @@ pub fn cross_link_block(chat_title: &str, references: &[String]) -> String {
 }
 
 pub async fn pr_list(cwd: &Path, state: &str, limit: u32) -> Result<Vec<PullRequest>> {
+    pr_list_with("gh", cwd, state, limit).await
+}
+
+pub async fn pr_list_with(gh: &str, cwd: &Path, state: &str, limit: u32) -> Result<Vec<PullRequest>> {
     let limit = limit.to_string();
     let json = run(
         cwd,
-        "gh",
+        gh,
         &[
             "pr",
             "list",

@@ -1,19 +1,57 @@
-# ADE-52 spike: build the Kybern-patched GPUIX addon on Linux x64 and Windows x64
-# and put the app on screen there (#113, apps/gpuix/PORTING-PLATFORMS.md).
+# The GPUIX on-screen checks on Linux and Windows (ADE-52 spike, WP7 harness;
+# apps/gpuix/PORTING-PLATFORMS.md, apps/gpuix/native/README.md "Running the
+# checks on Linux and Windows").
 #
-# Manual only. Each job builds `kybernd` for its platform, runs
-# `apps/gpuix/native/update.sh` with the on-screen macOS checks off, then
-# `apps/gpuix/scripts/platform-smoke.ts`: a scratch daemon with one seeded
-# thread (no agent runs), the app and the rounded-clip lab captured to PNGs,
-# with rounded clipping on and off (KYBERN_ROUNDED_CLIP=0, the before state).
-# Neither runner has a GPU: Linux renders with Mesa's lavapipe (software
-# Vulkan) under Xvfb; Windows uses Direct3D 11 on WARP (the Microsoft Basic
-# Render Driver). Screenshots, logs and the addon are uploaded as artifacts.
+# Manual only. Each job builds `kybernd` and the patched addon for its platform
+# (the addon through .github/actions/gpuix-addon, whose cargo cache is keyed on
+# apps/gpuix/native/FORK), then runs apps/gpuix/scripts/run-platform-checks.ts:
+# the same `native/*-check.ts` files, platform smoke and no-web-view app check a
+# developer runs on a Mac, through the addon's automation client, plus WP1's
+# `scripts/frame-wake-check.tsx` (no JS polling or per-frame JS wakes, onFrame
+# delivery, UI-thread bridge calls per frame, scroll-phase injection, repaint of
+# cached islands at both frame parities with a KYBERN_FULL_INVALIDATE=1
+# control, the UI-exit wake, DPI info on Windows, the Wayland seat), the
+# transcript-scroll bridge scenario in the smoke, and a stale WAYLAND_DISPLAY
+# run that must fall back to X11; `scripts/assert-platform-reports.ts` lists
+# those facts on the run page. Screenshots, per-check logs and JSON,
+# report.jsonl and summary.md/json are uploaded as an artifact and the summary
+# is shown on the run page. The job fails when a check fails. Known gaps (wheel
+# input, ⌘ shortcuts, Menlo) are listed in the summary and do not fail the job
+# unless "strict" is on.
+#
+# Neither runner has a GPU: Linux renders with Mesa's lavapipe (software Vulkan)
+# under Xvfb; Windows uses Direct3D 11 on WARP. The Wayland job runs frame-wake
+# and the app smoke (no captures: nothing can grab the screen) in headless
+# Weston, which has no wl_seat; upstream gpui_linux unwrapped it until WP1.
+# To check a patch rather than a release build, turn "lto" off.
+#
+# WP10 Linux: every Linux job unpacks the private WPE WebKit (gpuix-wpe.yml, from
+# its cache or built cold, about 92 minutes) so that update.sh builds the web
+# view companion, and runs `webview` (the lab, webview-linux-check.ts; no pixels
+# under Weston) and `webview-app` (the real app with the embedded web view). The
+# linux-noble job repeats the web view checks and `nowebview` on ubuntu-24.04:
+# jammy's lavapipe can leave X captures black, and 24.04 is where the web
+# process needs the .deb's AppArmor profile for Kybern's own bwrap.
 name: GPUIX platforms
 
 on:
   workflow_dispatch:
     inputs:
+      checks:
+        description: 'Checks to run: all, or a comma list of focus, clip, rounded, backdrop, markdown-document, text, smoke, nowebview, webview (Windows, Linux), webview-app (Linux), window-chrome, frame-wake, notify'
+        required: false
+        type: string
+        default: all
+      strict:
+        description: Fail on known gaps too (use once WP1 and WP3 have landed)
+        required: false
+        type: boolean
+        default: false
+      wayland:
+        description: Also run frame-wake and the app smoke under headless Weston (Wayland without a seat, WP1)
+        required: false
+        type: boolean
+        default: true
       lto:
         description: Build the addon with the release profile's fat LTO (slower; off is enough to check a patch)
         required: false
@@ -28,32 +66,53 @@ permissions:
   contents: read
 
 jobs:
-  platform:
-    name: ${{ matrix.os }} (${{ matrix.target }})
+  plan:
+    name: plan
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - id: matrix
+        env:
+          WAYLAND: ${{ inputs.wayland }}
+        run: |
+          matrix='[
+            {"id":"linux","os":"linux","runner":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","display":"xvfb","experimental":false},
+            {"id":"windows","os":"windows","runner":"windows-2022","target":"x86_64-pc-windows-msvc","display":"desktop","experimental":false},
+            {"id":"linux-noble","os":"linux","runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","display":"xvfb-noble","experimental":false}
+          ]'
+          if [ "$WAYLAND" = true ]; then
+            matrix=$(echo "$matrix" | jq -c '. + [{"id":"linux-wayland","os":"linux","runner":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","display":"wayland","experimental":false}]')
+          else
+            matrix=$(echo "$matrix" | jq -c .)
+          fi
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  wpe:
+    name: wpe
+    uses: ./.github/workflows/gpuix-wpe.yml
+
+  checks:
+    name: ${{ matrix.id }}
+    needs: [plan, wpe]
+    # A failed WPE build still runs every check (the web view ones then fail).
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: linux
-            runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-          - os: windows
-            runner: windows-2022
-            target: x86_64-pc-windows-msvc
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
+    continue-on-error: ${{ matrix.experimental }}
+    timeout-minutes: 150
     defaults:
       run:
         shell: bash
     env:
-      KYBERN_GPUIX_TARGET: ${{ matrix.target }}
-      KYBERN_NATIVE_CHECKS: '0'
-      CARGO_INCREMENTAL: '0'
-      CARGO_PROFILE_RELEASE_LTO: ${{ inputs.lto && 'true' || 'off' }}
       # Git Bash on Windows has `python`, not `python3`; the hook drivers read
       # and write UTF-8 (Windows' default code page is cp1252).
       PYTHON: ${{ matrix.os == 'windows' && 'python' || 'python3' }}
       PYTHONUTF8: '1'
+      CARGO_INCREMENTAL: '0'
     steps:
       - name: Allow long paths (zed's tree) and keep LF line endings
         if: matrix.os == 'windows'
@@ -61,14 +120,21 @@ jobs:
           git config --global core.longpaths true
           git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install GPUI's system packages, Xvfb, Mesa lavapipe and ImageMagick
+      - name: Install GPUI's system packages, Xvfb, Mesa lavapipe, xwininfo, ImageMagick and the emoji and CJK fonts
         if: matrix.os == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             gcc g++ clang pkg-config libfontconfig-dev libfreetype-dev libwayland-dev \
             libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev libssl-dev libzstd-dev \
-            libvulkan1 mesa-vulkan-drivers vulkan-tools xvfb xauth imagemagick fonts-dejavu-core
+            libvulkan1 mesa-vulkan-drivers vulkan-tools xvfb xauth x11-utils imagemagick fonts-dejavu-core \
+            dbus python3-gi gir1.2-glib-2.0 fonts-noto-color-emoji fonts-noto-cjk
+      - name: Install a compositing window manager and real X input (WP3 window-chrome check)
+        if: matrix.display == 'xvfb'
+        run: sudo apt-get install -y --no-install-recommends xfwm4 xdotool dbus-x11
+      - name: Install Weston (headless Wayland compositor)
+        if: matrix.display == 'wayland'
+        run: sudo apt-get install -y --no-install-recommends weston
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: "1.99.1"
@@ -78,7 +144,7 @@ jobs:
         with:
           bun-version: 1.4.3
           no-cache: true
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         if: matrix.os == 'windows'
         with:
           python-version: '3.12'
@@ -87,59 +153,142 @@ jobs:
           gpuix: 'true'
       - name: Build the scratch daemon
         run: cargo build -p kybern
+      # Before the addon: update.sh builds the web view companion against it.
+      - name: Unpack the WPE WebKit build (WP10)
+        if: matrix.os == 'linux' && needs.wpe.result == 'success'
+        uses: ./.github/actions/gpuix-wpe
+        with:
+          apparmor: ${{ matrix.runner == 'ubuntu-24.04' }}
       - name: Build the patched GPUIX addon
-        working-directory: apps/gpuix/native
-        run: |
-          start=$(date +%s)
-          ./update.sh
-          echo "addon build took $(( $(date +%s) - start )) s (LTO: $CARGO_PROFILE_RELEASE_LTO)"
-          ls -la build/gpuix-native.*.node
-      - name: Typecheck the app
+        id: addon
+        uses: ./.github/actions/gpuix-addon
+        with:
+          target: ${{ matrix.target }}
+          # A dispatched run may save: the cache is scoped to the branch that ran it.
+          save: 'true'
+          lto: ${{ inputs.lto && 'true' || 'off' }}
+      - name: Harness unit tests
         working-directory: apps/gpuix
-        run: pnpm typecheck
-      - name: Smoke test on screen (Linux, Xvfb + lavapipe)
+        run: bun test native/check-harness.test.ts
+      - name: Describe the Vulkan device (Linux)
         if: matrix.os == 'linux'
+        run: vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|driverName|apiVersion' || true
+      # Later steps run after an earlier check step failed (`!cancelled()`), so one failure still leaves every report.
+      # `-extension Composite`: with it Xvfb offers a 32-bit visual, GPUI's window takes it and is redirected
+      # off-screen with no compositing manager to draw it back, so every X capture is black.
+      - name: Run the on-screen checks (Linux, Xvfb + lavapipe)
+        if: ${{ !cancelled() && steps.addon.outcome == 'success' && matrix.display == 'xvfb' }}
+        working-directory: apps/gpuix
+        env:
+          CHECKS: ${{ inputs.checks }}
+          STRICT: ${{ inputs.strict && '--strict' || '' }}
+        run: |
+          xvfb-run -a -s '-screen 0 1440x900x24 -extension Composite' \
+            bun scripts/run-platform-checks.ts --kybernd "$GITHUB_WORKSPACE/target/debug/kybernd" \
+            --out gpuix-checks --checks "$CHECKS" $STRICT
+      - name: Frame wake with a stale WAYLAND_DISPLAY (Linux, Xvfb; GPUI must fall back to X11)
+        if: ${{ !cancelled() && steps.addon.outcome == 'success' && matrix.display == 'xvfb' }}
         working-directory: apps/gpuix
         run: |
-          vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|driverName' || true
-          for clip in 1 0; do
-            KYBERN_ROUNDED_CLIP=$clip timeout 600 xvfb-run -a -s '-screen 0 1440x900x24' \
-              bun scripts/platform-smoke.ts --kybernd "$GITHUB_WORKSPACE/target/debug/kybernd" \
-              --out "smoke/clip-$clip" --port $((4377 + clip))
-          done
-      - name: Smoke test on screen (Windows, D3D11)
-        if: matrix.os == 'windows'
+          # No compositor answers on this socket; with DISPLAY set GPUI logs it and uses X11 (WP1).
+          export XDG_RUNTIME_DIR="$(mktemp -d)"
+          WAYLAND_DISPLAY=wayland-missing xvfb-run -a -s '-screen 0 1440x900x24 -extension Composite' \
+            bun scripts/run-platform-checks.ts --kybernd "$GITHUB_WORKSPACE/target/debug/kybernd" \
+            --out gpuix-checks-stale-wayland --checks frame-wake
+      # WP3: client-side decorations need a compositing manager that supports _GTK_FRAME_EXTENTS (GPUI falls back to the
+      # window manager's frame otherwise), so this run keeps Xvfb's Composite extension and starts xfwm4 with its
+      # compositor; xdotool gives the check real X input (the drawn buttons, the drag, the resize edge).
+      - name: Window chrome under a compositing window manager (Linux, Xvfb + xfwm4)
+        if: ${{ !cancelled() && steps.addon.outcome == 'success' && matrix.display == 'xvfb' }}
         working-directory: apps/gpuix
         run: |
-          for clip in 1 0; do
-            KYBERN_ROUNDED_CLIP=$clip timeout 600 \
-              bun scripts/platform-smoke.ts --kybernd "$GITHUB_WORKSPACE/target/debug/kybernd.exe" \
-              --out "smoke/clip-$clip" --port $((4377 + clip))
-          done
-      # Only the PNGs and daemon logs: the scratch dirs also hold the app's
-      # sockets, which the upload cannot read on Windows.
-      - name: Collect screenshots and logs
-        if: always()
+          cat > "$RUNNER_TEMP/wm-checks.sh" <<'SCRIPT'
+          set -eu
+          dbus-launch --exit-with-session xfwm4 --compositor=on --replace > "$PWD/xfwm4.log" 2>&1 &
+          # GPUI picks client-side decorations at startup only when the window manager lists _GTK_FRAME_EXTENTS and a
+          # compositing manager runs; xfwm4 starts its compositor a moment after it takes the screen.
+          for i in $(seq 100); do xprop -root _NET_SUPPORTED 2>/dev/null | grep -q _GTK_FRAME_EXTENTS && break; sleep 0.2; done
+          xprop -root _NET_SUPPORTED | grep -q _GTK_FRAME_EXTENTS || { echo "xfwm4 does not list _GTK_FRAME_EXTENTS"; cat "$PWD/xfwm4.log"; }
+          sleep 5
+          KYBERN_EXPECT_DECORATIONS=client bun scripts/run-platform-checks.ts --kybernd "$KYBERND" --out gpuix-checks-wm --checks window-chrome
+          SCRIPT
+          KYBERND="$GITHUB_WORKSPACE/target/debug/kybernd" xvfb-run -a -s '-screen 0 1440x900x24' bash "$RUNNER_TEMP/wm-checks.sh"
+      - name: Frame wake and the app smoke (Linux, headless Weston without a seat)
+        if: ${{ !cancelled() && steps.addon.outcome == 'success' && matrix.display == 'wayland' }}
         working-directory: apps/gpuix
+        env:
+          STRICT: ${{ inputs.strict && '--strict' || '' }}
         run: |
-          mkdir -p smoke-out
-          for dir in smoke/clip-*; do
-            [ -d "$dir" ] || continue
-            name=$(basename "$dir")
-            for png in "$dir"/*.png; do [ -f "$png" ] && cp "$png" "smoke-out/$name-$(basename "$png")"; done
-            [ -f "$dir/scratch/daemon.log" ] && cp "$dir/scratch/daemon.log" "smoke-out/$name-app-daemon.log"
-          done
-          ls -la smoke-out
-      - name: Upload screenshots and logs
+          export XDG_RUNTIME_DIR="$(mktemp -d)"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          # The headless backend has no input devices, so no wl_seat (WP1: GPUI used to unwrap it).
+          weston --backend=headless-backend.so --socket=wayland-kybern --width=1440 --height=900 --use-pixman --idle-time=0 > weston.log 2>&1 &
+          for i in $(seq 100); do [ -S "$XDG_RUNTIME_DIR/wayland-kybern" ] && break; sleep 0.1; done
+          [ -S "$XDG_RUNTIME_DIR/wayland-kybern" ] || { cat weston.log; exit 1; }
+          unset DISPLAY
+          export WAYLAND_DISPLAY=wayland-kybern
+          # frame-wake asserts getPlatformInfo().seat === false: GPUI really ran without a wl_seat.
+          export KYBERN_EXPECT_SEAT=false
+          bun scripts/run-platform-checks.ts --kybernd "$GITHUB_WORKSPACE/target/debug/kybernd" \
+            --out gpuix-checks --checks frame-wake,smoke,webview --capture none $STRICT
+      # Ubuntu 24.04 also refuses user namespaces to the daemon's preview browser (chrome-headless-shell, which draws the
+      # visuals' pictures), so it exits at start; let the copies it downloads into the checks' scratch data directories
+      # create them. Desktops on 24.04 need the same (or Chrome's SUID sandbox) for visual pictures.
+      - name: AppArmor profile for the daemon's preview browser (Ubuntu 24.04)
+        if: matrix.display == 'xvfb-noble'
+        run: |
+          printf '%s\n' 'abi <abi/4.0>,' 'include <tunables/global>' \
+            'profile kybern-checks-preview-browser /tmp/gpuix-scratch/**/chrome-headless-shell flags=(unconfined) {' '  userns,' '}' \
+            | sudo tee /etc/apparmor.d/kybern-checks-preview-browser >/dev/null
+          sudo apparmor_parser -r -T -W /etc/apparmor.d/kybern-checks-preview-browser
+      # Mesa 24's lavapipe presents to Xvfb (without the Composite switch the 22.04 job needs); the web process uses
+      # Kybern's bwrap under the AppArmor profile the step above installed, as the .deb does on Ubuntu 23.10+.
+      - name: Web view checks on Ubuntu 24.04 (Linux, Xvfb + lavapipe; WP10)
+        if: ${{ !cancelled() && steps.addon.outcome == 'success' && matrix.display == 'xvfb-noble' }}
+        working-directory: apps/gpuix
+        env:
+          CHECKS: ${{ inputs.checks }}
+          STRICT: ${{ inputs.strict && '--strict' || '' }}
+        run: |
+          if [ "$CHECKS" = all ]; then
+            selected=nowebview,webview,webview-app,webview-sandbox
+          else
+            selected=$(echo "$CHECKS" | tr ',' '\n' | tr -d ' ' | grep -xE 'nowebview|webview|webview-app|webview-sandbox' | paste -sd, - || true)
+          fi
+          if [ -z "$selected" ]; then echo "No web view check selected"; exit 0; fi
+          xvfb-run -a -s '-screen 0 1440x1300x24' \
+            bun scripts/run-platform-checks.ts --kybernd "$GITHUB_WORKSPACE/target/debug/kybernd" \
+            --out gpuix-checks --checks "$selected" $STRICT
+      - name: Run the on-screen checks (Windows, Direct3D 11 on WARP)
+        if: ${{ !cancelled() && steps.addon.outcome == 'success' && matrix.os == 'windows' }}
+        working-directory: apps/gpuix
+        env:
+          CHECKS: ${{ inputs.checks }}
+          STRICT: ${{ inputs.strict && '--strict' || '' }}
+        run: |
+          bun scripts/run-platform-checks.ts --kybernd "$GITHUB_WORKSPACE/target/debug/kybernd.exe" \
+            --out gpuix-checks --checks "$CHECKS" $STRICT
+      - name: Assert the WP1 platform reports
+        if: ${{ !cancelled() && steps.addon.outcome == 'success' && matrix.id != 'linux-noble' }}
+        working-directory: apps/gpuix
+        env:
+          JOB: ${{ matrix.id }}
+        run: bun scripts/assert-platform-reports.ts "$JOB"
+      - name: Upload screenshots, logs and the summary
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: gpuix-${{ matrix.os }}-screens
-          path: apps/gpuix/smoke-out
+          name: gpuix-${{ matrix.id }}-checks
+          path: |
+            apps/gpuix/gpuix-checks
+            apps/gpuix/gpuix-checks-stale-wayland
+            apps/gpuix/gpuix-checks-wm
+            apps/gpuix/xfwm4.log
+            apps/gpuix/weston.log
           if-no-files-found: warn
           retention-days: 14
       - name: Upload the addon
-        if: success()
+        if: success() && matrix.display != 'wayland' && matrix.display != 'xvfb-noble'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: gpuix-native-${{ matrix.target }}

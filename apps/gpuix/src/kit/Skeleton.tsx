@@ -7,7 +7,7 @@
 //
 // GPUIX: the band is a child element (two halves with two-stop horizontal gradients; the desktop's 30° slant moves the
 // band by under 12 px across a 40 px-tall block, which this approximates with the band position at the block's
-// vertical centre) that a linear paint-only translation (`paintTransform`, `native/patches/subtree_transform.rs`)
+// vertical centre) that a linear paint-only translation (`paintTransform`, `native/upstream/packages/native/src/subtree_transform.rs`)
 // carries across the block: frames re-place the retained band without a render, layout or island wake. One pass
 // covers one crossing; the next (a new generation, which restarts from `initial`) starts, re-phased from the shared
 // clock, while the band is outside the block, so the restart is never visible. No JS runs per frame; the band holds

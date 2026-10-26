@@ -9,7 +9,7 @@ import {spawn} from 'node:child_process'
 import {launchFixture} from '../../src/requests/harness.ts'
 import {actionFixture} from '../../src/pulls/verify.fixture.ts'
 import {emptyResult,type Result,type Scenario} from './model.ts'
-import {Telemetry,parseResources} from './telemetry.ts'
+import {Telemetry,bridgeDelta,parseResources,type BridgeStats} from './telemetry.ts'
 import {requireWindowOnscreen,waitForWindowOnscreen,checkWindowOnscreenAsync} from './window-onscreen.ts'
 import {drive,type Point} from './input.ts'
 import type {seed} from './seed.ts'
@@ -253,6 +253,8 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
    unregisterChildren.push(unsampler)
    const resourceStart=performance.now()
    const sampleTextPromise=new Response(sampler.stdout).text(),sampleErrorPromise=new Response(sampler.stderr).text()
+   const bridgeStats=async()=>((await (await fetch(`http://127.0.0.1:${controlPort}`,{method:'POST',body:JSON.stringify({action:'bridge'})})).json()) as {bridge:BridgeStats|null}).bridge
+   const bridgeBefore=await bridgeStats()
    const resourceMark=telemetry.mark()
    const profiler=options.profile?Bun.spawn(['sample',String(launch!.pid),'5','-file',path.join(evidence,`profile-${name}-${run}.txt`)],{stdout:'ignore',stderr:'ignore'}):undefined
    if(profiler)children.push(profiler)
@@ -264,6 +266,7 @@ async function runScenario(name:Scenario,runs:number,fixture:Fixture,evidence:st
    // the subsequent CG read must not leak idle/bridge scenes into this window.
    await delay(0)
    const measured=telemetry.result(resourceMark,input?.sent,scrolling)
+   r.evidence.bridge=bridgeDelta(bridgeBefore,await bridgeStats())
    telemetry.raw+=`[bench-window-end] run=${run} native=${telemetry.submissions.at(-1)?.native??0} js=${performance.now()}\n`
    if(useAppkit&&scrolling&&run<runs)bridge=bridgeInput()
    r.evidence.windowAfter=requireWindowOnscreen(launch!.pid).windows

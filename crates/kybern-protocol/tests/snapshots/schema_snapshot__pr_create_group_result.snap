@@ -135,6 +135,13 @@ expression: schema_for!(PrCreateGroupResult)
               "type": "null"
             }
           ]
+        },
+        "repo": {
+          "description": "Group projects: the member repository (path relative to the group folder)\nthis pull request belongs to. None for single-repository projects.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

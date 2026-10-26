@@ -32,7 +32,7 @@ const sonnet = { provider: claude.provider, model: "claude-sonnet-5-5" };
 
 test("the resolver takes the project, then Settings, then the built-in default", () => {
   const builtin = effectiveCoordinatorSettings(undefined, undefined);
-  assert.deepEqual(builtin, { role_defaults: {}, lead_autonomy: "propose_large", lead_workspace: "shared", lead_push_without_asking: false, lead_max_children: 6 });
+  assert.deepEqual(builtin, { role_defaults: {}, lead_autonomy: "propose_large", lead_workspace: "shared", lead_push_without_asking: false, lead_max_children: 6, rotation_budget_tokens: 200000 });
   const global = { max_active_children: 4, lead_max_children: 4, max_depth: 2, lead_autonomy: "propose_first", role_defaults: { research: sonnet, review: { model: "m" } } };
   const project = { lead_autonomy: "act", lead_push_without_asking: true, role_defaults: { research: opus } };
   const effective = effectiveCoordinatorSettings(global, project);

@@ -3,7 +3,7 @@
 // (150 ms) coming back, both on `--ease-out`. Wide row-like controls (rows, full-width buttons, menu/select triggers)
 // never scale, and Reduce Motion drops the scale (`scale: 1`).
 //
-// Patched native build (`native/patches/subtree_transform.rs`): `paintTransform.press` squashes the host's whole painted
+// Patched native build (`native/upstream/packages/native/src/subtree_transform.rs`): `paintTransform.press` squashes the host's whole painted
 // subtree about its centre on a primary mouse down and restores it on release, natively: no React state, no render or
 // layout per frame, and hit testing follows the paint like a CSS transform. With the stock addon it does nothing.
 import type { StyleDesc } from '@gpuix/react'

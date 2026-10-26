@@ -14,9 +14,9 @@ Markdown source view, no edit mode.
 | `slash.ts`, `icons.ts` | Slash and Turn into items, search ranking and icons (desktop `slashItems.ts`) |
 | `images.ts` | Image loading (`kybern://asset/…` from the note's daemon) and upload |
 | `lab.tsx`, `check.ts`, `perf.ts`, `samples.ts` | Lab window, four-mode behaviour check, typing latency |
-| `../../native/patches/rich_doc.rs` | Document model: blocks, runs, ProseMirror-style rules, history |
-| `../../native/patches/rich_editor.rs` | The `<rich-editor>` element: layout, paint, keys, mouse, IME, clipboard |
-| `../../native/patches/text_scale_gpui.py` | GPUI patch: per-run font size in one shaped line |
+| `native/upstream/packages/native/src/rich_doc.rs` | Document model: blocks, runs, ProseMirror-style rules, history |
+| `native/upstream/packages/native/src/rich_editor.rs` | The `<rich-editor>` element: layout, paint, keys, mouse, IME, clipboard |
+| zed fork commit "Per-run text size scale (kszl)" (from `text_scale_gpui.py`) | GPUI: per-run font size in one shaped line |
 
 ## Using it
 

@@ -79,7 +79,7 @@ export function useLoaderTime(active = true) { return useLoaderSnapshot(() => no
 /** Historical port clock, retained until the smooth-loop resource gate passes. */
 export function useLoaderStep(active = true) { return useLoaderSnapshot(() => Math.floor(now / 200) % 8, active) }
 
-/** Marks a fixed-size `cache` island (native/patches/cache_island.rs). */
+/** Marks a fixed-size `cache` island (native/upstream/packages/native/src/cache_island.rs). */
 export const ISLAND = { cache: true } as Record<string, unknown>
 /** An island sized by its parent (flex-grow / stretch) instead of its own width and height. */
 export const FILL_ISLAND = { cache: 'fill' } as Record<string, unknown>

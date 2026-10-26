@@ -27,7 +27,8 @@ function bundlePath(): string | null {
   ]
   return candidates.find((file): file is string => !!file && existsSync(file)) ?? null
 }
-export const mermaidAvailable = () => bundlePath() !== null
+/** The renderer is a hidden web document: without an embedded web view nothing is drawn and the fence keeps its source. */
+export const mermaidAvailable = () => webHost.available && bundlePath() !== null
 
 // Nothing in the renderer needs the network: Mermaid's strict mode is the first line, this CSP
 // the second (the bundle and jobs arrive through evaluateJavaScript, which CSP does not gate).

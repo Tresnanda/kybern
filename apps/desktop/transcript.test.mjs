@@ -628,6 +628,36 @@ test("mobile live projection removes a provisional summary when Claude resumes",
 })
 
 
+// The same captures and row signatures as `rotation_fixtures_project_to_the_shared_signatures`
+// in crates/kybern-store/src/projection.rs.
+test("rotation fixtures fold to the signatures the reload projector produces", async () => {
+  const fixture = (name) => JSON.parse(readFileSync(new URL(`../../fixtures/transcript/${name}.json`, import.meta.url), "utf8"))
+  const expected = fixture("coordinator-rotation.expected")
+  const mobile = await import("../mobile/src/state/transcript.ts")
+  const signature = (blocks) =>
+    blocks.flatMap((block) => {
+      if (block.kind === "user") return [`user:${block.seq}`]
+      if (block.kind === "turn_end") return [`end:${block.seq}`]
+      if (block.kind !== "rotation") return []
+      const lines = block.handoff?.split("\n")
+      return [[
+        "rotation", block.seq, block.pending ? "pending" : "settled", block.reason, block.handoffStatus?.status ?? "-",
+        block.edited ? "edited" : "unedited", lines ? `${lines[0]}/${lines.length}` : "-",
+        block.carried ? [block.carried.children, block.carried.pull_requests, block.carried.tasks, block.carried.commits].join("/") : "-",
+        block.to?.kind ?? "-", `turn=${block.turnId.slice(-2)}`,
+      ].join(":")]
+    })
+  for (const [name, rows] of Object.entries(expected)) {
+    const events = fixture(name)
+    for (const reducer of [{ emptyThreadState, applyEvent }, mobile]) {
+      let state = reducer.emptyThreadState()
+      for (const event of events) state = reducer.applyEvent(state, event)
+      assert.deepEqual(signature(state.blocks), rows, name)
+    }
+  }
+  assert.equal(Object.keys(expected).length, 5)
+})
+
 test("steering adds chronological user input without replacing the original prompt", () => {
   const prompt = { kind: "message_steered", message_id: "steered", message: { parts: [{ type: "text", text: "Also verify mobile" }] } }
   const state = fold([start, prompt, prompt, done])

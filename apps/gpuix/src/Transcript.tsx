@@ -29,6 +29,7 @@ import { T } from './transcript/glyphs.ts'
 import { alpha, muted, Para } from './transcript/kit.tsx'
 import { over } from './theme.ts'
 import { AnswerImages, DateSeparator, Turn, TurnFooter, turnTimestamp } from './transcript/Turn.tsx'
+import { RotationRow } from './transcript/Rotation.tsx'
 import { useComposerOverlayHeight } from './composer/height.ts'
 import { GlassEdge } from './kit/GlassEdge.tsx'
 import { frostBackdrop, frostFill, frostHoverFill, useGlass } from './platform/glass.ts'
@@ -216,6 +217,8 @@ export function Transcript() {
         }
       }
       result.push({ key: `${key}:footer`, turn, estimate: 35, node: <Row><TurnFooter group={turn} threadId={threadId!} isLast={i === turns.length - 1} /></Row> })
+      // Context refreshes (Coordinator): each is its own row after the turn it followed, settling in place.
+      for (const block of turn.work) if (block.kind === 'rotation') result.push({ key: `${key}:${block.id}`, turn, estimate: 34, node: <Row><RotationRow block={block} threadId={threadId!} /></Row> })
       return remember()
     })
     for(const key of rowCache.keys()) if(!keep.has(key)) rowCache.delete(key)

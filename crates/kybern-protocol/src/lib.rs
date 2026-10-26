@@ -14,6 +14,7 @@ pub mod event;
 pub mod integrations;
 pub mod methods;
 pub mod model;
+pub mod process;
 pub mod rpc;
 pub mod thread_read;
 pub mod user_input;

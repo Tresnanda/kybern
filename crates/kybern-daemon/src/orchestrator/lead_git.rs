@@ -429,7 +429,7 @@ fn join_or(names: &[String]) -> String {
 
 /// The members nested in `path`'s checkout: every other member when `path` is
 /// the group folder itself, else none.
-fn nested_members(project: &Project, path: &str) -> Vec<String> {
+pub(super) fn nested_members(project: &Project, path: &str) -> Vec<String> {
     if path != "." {
         return Vec::new();
     }

@@ -3,10 +3,10 @@
 // the one submit control: the answer bar under the figure. Typing a message instead answers as `replied`; Skip denies.
 // While the figure is out of view, a stub above the composer says what is waiting. Once answered, the bar becomes a
 // one-line receipt and the picture is redrawn in the page's answered look (`kybern-visual-lock`).
-import { useSyncExternalStore } from 'react'
+import { useSyncExternalStore, type ReactNode } from 'react'
 import { DashboardSquare01Icon, Hold04Icon, SlidersHorizontalIcon, ArrowTurnBackwardIcon, ArrowUp02Icon, Cancel01Icon } from '@hugeicons/core-free-icons'
 import type { ApprovalRequest, HtmlVisual, JsonValue, UserMessage, VisualAnswerRecord } from '../../../../packages/kybern-client/src/types.ts'
-import { ANSWER_COPY, answerAction, answerHint, answerKind, answerReceipt, answerStubTitle, answerTitle, draftLabel, lateAnswerMessage, visualAnswerInput, type AnswerKind } from '../../../../packages/kybern-client/src/visualAnswer.ts'
+import { ANSWER_COPY, answerAction, answerKind, answerReceipt, answerStubTitle, answerTitle, draftLabel, lateAnswerMessage, visualAnswerInput, type AnswerKind } from '../../../../packages/kybern-client/src/visualAnswer.ts'
 import { getState, useApp } from '../state.ts'
 import { respondApproval } from '../transcript/store.ts'
 import { agentName } from './model.ts'
@@ -19,6 +19,8 @@ import { glyph, Icon } from '../icons.tsx'
 import { T } from '../transcript/glyphs.ts'
 import { useGlass } from '../platform/glass.ts'
 import { HOVER_FADE, EASE } from '../motion/kit.tsx'
+import { webHost } from '../native/webview.ts'
+import { answerBarCopy, answerStubHint } from '../transcript/visualFallback.ts'
 
 const GLYPH: Record<AnswerKind, string> = { choice: glyph(DashboardSquare01Icon), settings: glyph(SlidersHorizontalIcon), answer: glyph(Hold04Icon) }
 const REPLY = glyph(ArrowTurnBackwardIcon), SKIPPED = glyph(Cancel01Icon), UP = glyph(ArrowUp02Icon)
@@ -121,13 +123,16 @@ export function useVisualAnswer(visual: HtmlVisual, record: VisualAnswerRecord |
   }
 }
 
-/** Under a waiting figure, in place of the caption: what is asked, the hint, Skip and the one send button. */
-export function AnswerBar({ ask, live }: { ask: VisualAsk; live: boolean }) {
+/** Under a waiting figure, in place of the caption: what is asked, the hint, the figure's `tools`, Skip and the one send button. */
+export function AnswerBar({ ask, live, tools, onReply }: { ask: VisualAsk; live: boolean; tools?: ReactNode; onReply?: () => void }) {
   const t = useTheme(), c = useControls(), g = useGlass()
+  // No embedded page to choose in: the bar says so, offers the composer to answer in words, and Skip. There is no send button.
+  const words = !webHost.available
+  const copy = answerBarCopy(webHost.available, ask.kind, ask.agent, ask.draftLabel)
   const light = t.variant === 'light'
   const sendingNow = ask.state === 'sending'
   const ready = !!ask.draftLabel && !sendingNow
-  const hint = ask.state === 'error' ? ANSWER_COPY.sendError : ask.late ? `${ask.agent} stopped waiting. Send ${ask.draftLabel} as a message.` : answerHint(ask.kind, ask.draftLabel)
+  const hint = ask.state === 'error' ? ANSWER_COPY.sendError : ask.late ? `${ask.agent} stopped waiting. Send ${ask.draftLabel} as a message.` : copy.hint
   return <div testId="visual-answer-bar" role="group" aria-label={answerTitle(ask.kind, ask.agent)} tabIndex={0}
     onKeyDown={e => { if (e.key === 'enter' && ready) ask.submit() }}
     style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: live ? 16 : 10, paddingTop: 8, paddingBottom: 8, paddingLeft: 12, paddingRight: 8, borderRadius: 12,
@@ -138,11 +143,13 @@ export function AnswerBar({ ask, live }: { ask: VisualAsk; live: boolean }) {
       <Icon source={GLYPH[ask.kind]} size={14} color={c.accentFg} />
     </div>
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, minWidth: 0 }}>
-      <Label color={t.text} size={13} lineHeight={18} weight={600} truncate>{ask.late ? `${ask.agent} went on without your choice` : answerTitle(ask.kind, ask.agent)}</Label>
-      <div testId="visual-answer-hint" style={{ display: 'flex', minWidth: 0 }}><Label color={ask.state === 'error' ? t.red : t.textSecondary} size={12} lineHeight={17} truncate>{hint}</Label></div>
+      <Label color={t.text} size={13} lineHeight={18} weight={600} truncate>{ask.late ? `${ask.agent} went on without your choice` : copy.title}</Label>
+      <div testId="visual-answer-hint" style={{ display: 'flex', minWidth: 0 }}><Label color={ask.state === 'error' ? t.red : t.textSecondary} size={12} lineHeight={17} truncate={!words} style={words ? { whiteSpace: 'normal', lineClamp: 2 } : undefined}>{hint}</Label></div>
     </div>
+    {tools}
     {!sendingNow && !ask.late && <Button size="sm" variant="ghost" testId="visual-answer-skip" style={{ height: 28 }} onClick={ask.skip}>{ANSWER_COPY.skip}</Button>}
-    <div paintTransform={{ initial: false, animate: { opacity: ready || sendingNow ? 1 : 0.45 }, transition: { duration: HOVER_FADE.duration, ease: [...EASE.out] as [number, number, number, number] }, retain: true }} style={{ display: 'flex', flexShrink: 0 }}>
+    {words && <Button size="sm" variant="primary" testId="visual-answer-reply" icon={REPLY} style={{ height: 28 }} onClick={onReply}>{copy.replyLabel}</Button>}
+    {!words && <div paintTransform={{ initial: false, animate: { opacity: ready || sendingNow ? 1 : 0.45 }, transition: { duration: HOVER_FADE.duration, ease: [...EASE.out] as [number, number, number, number] }, retain: true }} style={{ display: 'flex', flexShrink: 0 }}>
       <div testId="visual-answer-send" role="button" tabIndex={ready ? 0 : -1} aria-disabled={!ready || undefined} aria-label={answerAction(ask.kind, ask.draftLabel)}
         onClick={ready ? ask.submit : undefined} onKeyDown={e => { if (ready && (e.key === 'enter' || e.key === 'space')) ask.submit() }}
         style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, paddingLeft: 10, paddingRight: 6, borderRadius: 8, cursor: ready ? 'pointer' : 'default',
@@ -152,12 +159,12 @@ export function AnswerBar({ ask, live }: { ask: VisualAsk; live: boolean }) {
         <Label color={c.accentFg} size={12} lineHeight={16} weight={600}>{sendingNow ? ANSWER_COPY.sending : answerAction(ask.kind, ask.draftLabel)}</Label>
         {!sendingNow && <div style={{ display: 'flex', borderRadius: 4, boxShadow: { offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: 1, color: c.acc(0.5), inset: true } }}><Kbd keys={['↵']} /></div>}
       </div>
-    </div>
+    </div>}
   </div>
 }
 
-/** The one-line record under an answered visual: ✓ You chose …, ↩ You replied instead, × Skipped. */
-export function AnswerReceipt({ record, ask, title }: { record: VisualAnswerRecord; ask: VisualAsk; title: string }) {
+/** The one-line record under an answered visual: ✓ You chose …, ↩ You replied instead, × Skipped; the figure's `tools` at the end. */
+export function AnswerReceipt({ record, ask, title, tools }: { record: VisualAnswerRecord; ask: VisualAsk; title: string; tools?: ReactNode }) {
   const t = useTheme()
   const light = t.variant === 'light'
   const at = new Date(record.at)
@@ -168,6 +175,7 @@ export function AnswerReceipt({ record, ask, title }: { record: VisualAnswerReco
     <Label color={t.text} size={12} lineHeight={16} weight={500} truncate style={{ flexShrink: 1, minWidth: 0 }}>{answerReceipt(record, ask.kind, ask.agent)}</Label>
     <Label color={t.textTertiary} size={12} lineHeight={16} truncate style={{ flexShrink: 2, minWidth: 0 }}>{`· ${title}`}</Label>
     {time && <Label color={t.textTertiary} size={12} lineHeight={16} style={{ flexShrink: 0, fontVariantNumeric: 'tabular-nums' } as never}>{`· ${time}`}</Label>}
+    {tools && <><div style={{ flexGrow: 1 }} />{tools}</>}
   </div>
 }
 
@@ -193,6 +201,6 @@ export function VisualAnswerStub({ approval, count }: { approval: ApprovalReques
       {count > 1 && <Label color={c.accentFg} size={11.5} lineHeight={14} weight={600}>{`1 of ${count}`}</Label>}
       <Button size="sm" variant="secondary" testId="visual-answer-show" icon={UP} style={{ height: 26 }} onClick={() => reveals.get(input.visual_id)?.()}>{ANSWER_COPY.show}</Button>
     </div>
-    <Label color={t.textTertiary} size={12} lineHeight={17} style={{ marginLeft: 34 }}>{ANSWER_COPY.stubHint}</Label>
+    <Label color={t.textTertiary} size={12} lineHeight={17} style={{ marginLeft: 34 }}>{answerStubHint(webHost.available, ANSWER_COPY.stubHint)}</Label>
   </div>
 }

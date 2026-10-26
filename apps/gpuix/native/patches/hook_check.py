@@ -1,16 +1,17 @@
-"""Shared `--check` support for the anchored hook drivers.
+"""Shared `--check` support for the anchored JS package patches.
 
-Normally an anchor that moved stops the driver at the first miss (and
-`apply_hooks.py` writes nothing). With `--check` every driver keeps going and
-collects every missing or duplicated anchor, so a GPUIX update shows the whole
-porting list at once instead of one miss per run:
+The native sources live in the Kybern forks (`../FORK`); only the npm JS
+packages are still patched by anchored edits (`patch_js.py`, `patch_react.py`).
+Normally an anchor that moved stops the driver at the first miss and nothing is
+written. With `--check` every driver keeps going and collects every missing or
+duplicated anchor, so a GPUIX update shows the whole porting list at once
+instead of one miss per run:
 
-    python3 patches/apply_hooks.py <upstream>/packages/native/src --check
-    python3 patches/backdrop_gpui.py <upstream>/zed --check
+    python3 patches/patch_js.py <dir of the @gpuix/native package> --check
+    python3 patches/patch_react.py <dir of the @gpuix/react package> --check
 
-Run it against a disposable checkout (`update.sh` resets `packages/native/src`
-each time): the drivers still write the hooks that did match. Exit code 1 when
-anything is missing, with one `MISSING` line per anchor. A miss can cascade,
+Run it against a disposable copy: the drivers still write the hooks that did
+match. Exit code 1 when anything is missing, with one `MISSING` line per anchor. A miss can cascade,
 since later edits sometimes anchor on text an earlier edit would have added;
 fix the first miss in a file first and rerun.
 """

@@ -2,6 +2,7 @@
 //! auth (the connection layer already did), and returns a typed result.
 
 use kybern_protocol::methods::*;
+use kybern_protocol::process::NoWindow;
 use kybern_protocol::*;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -216,6 +217,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: ProjectsMembersStatusParams = parse(params)?;
             ok(state.orchestrator.members_status(p.project_id).await?)
         }
+        ProjectsMap::NAME => ok(state.orchestrator.projects_map(parse(params)?).await.map_err(bad)?),
         ProjectsInstructionsCreate::NAME => {
             let p: ProjectsInstructionsCreateParams = parse(params)?;
             ok(state.orchestrator.create_group_instructions(p.project_id)?)
@@ -495,10 +497,19 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         ThreadNotesSet::NAME => ok(state.orchestrator.set_notes(parse(params)?).map_err(note_err)?),
         NotesList::NAME => {
             let orchestrator = state.orchestrator.clone();
-            let notes = tokio::task::spawn_blocking(move || orchestrator.notes_list()).await.map_err(internal)?.map_err(note_err)?;
-            ok(NotesListResult { notes })
+            let (notes, history_since) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+                Ok((orchestrator.notes_list()?, orchestrator.notes_history_since()?))
+            })
+            .await
+            .map_err(internal)?
+            .map_err(note_err)?;
+            ok(NotesListResult { notes, history_since })
         }
-        NotesGet::NAME => ok(NotesGetResult { note: state.orchestrator.note_get(parse_or_default(params)?).map_err(note_err)? }),
+        NotesGet::NAME => {
+            let (orchestrator, params) = (state.orchestrator.clone(), parse_or_default(params)?);
+            let note = tokio::task::spawn_blocking(move || orchestrator.note_get(params)).await.map_err(internal)?.map_err(note_err)?;
+            ok(NotesGetResult { note })
+        }
         NotesCreate::NAME => ok(state.orchestrator.note_create(parse(params)?).map_err(note_err)?),
         NotesUpdate::NAME => ok(state.orchestrator.note_update(parse(params)?).map_err(note_err)?),
         NotesPin::NAME => {
@@ -568,7 +579,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         ThreadsCompact::NAME => {
             let p: ThreadsInterruptParams = parse(params)?;
             let (turn_id, message_id) = state.orchestrator.send(p.thread_id, UserMessage::text("/compact")).await.map_err(bad)?;
-            ok(ThreadsSendResult { turn_id, message_id })
+            ok(ThreadsSendResult { turn_id, message_id, queued: false })
         }
         ThreadsInterrupt::NAME => {
             let p: ThreadsInterruptParams = parse(params)?;
@@ -598,8 +609,24 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             ok(state.orchestrator.coordinator_get(p.project_id).map_err(bad)?)
         }
         CoordinatorOpen::NAME => ok(state.orchestrator.coordinator_open(parse(params)?).await.map_err(bad)?),
+        NotesTidyOffer::NAME => {
+            let orchestrator = state.orchestrator.clone();
+            let params: NotesTidyParams = parse(params)?;
+            ok(tokio::task::spawn_blocking(move || orchestrator.notes_tidy_offer(params)).await.map_err(internal)?.map_err(bad)?)
+        }
+        NotesTidySnooze::NAME => {
+            let orchestrator = state.orchestrator.clone();
+            let params: NotesTidyParams = parse(params)?;
+            ok(tokio::task::spawn_blocking(move || orchestrator.notes_tidy_snooze(params)).await.map_err(internal)?.map_err(bad)?)
+        }
+        NotesTidyStart::NAME => ok(state.orchestrator.notes_tidy_start(parse(params)?).await.map_err(bad)?),
         CoordinatorSetup::NAME => ok(state.orchestrator.coordinator_setup(parse(params)?).await.map_err(bad)?),
         CoordinatorSwitchHarness::NAME => ok(state.orchestrator.coordinator_switch_harness(parse(params)?).await.map_err(bad)?),
+        CoordinatorRefreshContext::NAME => ok(state.orchestrator.coordinator_refresh_context(parse(params)?).await.map_err(bad)?),
+        CoordinatorEditHandoff::NAME => {
+            state.orchestrator.coordinator_edit_handoff(parse(params)?).await.map_err(bad)?;
+            ok(Empty {})
+        }
         TasksList::NAME => {
             let p: TasksListParams = parse(params)?;
             let mut tasks = state.store.runtime_tasks_for_thread(p.thread_id).map_err(internal)?;
@@ -1041,27 +1068,42 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         PrList::NAME => {
             let p: PrListParams = parse(params)?;
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+            if project.kind == ProjectKind::Group {
+                return ok(state.orchestrator.group_pr_list(&project, &p.state, p.limit, "gh").await);
+            }
             ok(PrListResult {
                 pull_requests: crate::github::pr_list(std::path::Path::new(&project.path), &p.state, p.limit).await.map_err(bad)?,
+                repos: Vec::new(),
             })
         }
         PrDetail::NAME => {
             let p: PrDetailParams = parse(params)?;
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
-            ok(crate::github_review::detail(std::path::Path::new(&project.path), p.number).await.map_err(bad)?)
+            let dir = pr_dir(&project, p.repo.as_deref())?;
+            let mut detail = crate::github_review::detail(&dir, p.number).await.map_err(bad)?;
+            // Group calls always name their member (`pr_dir`); single projects stay untagged.
+            detail.pull_request.repo = p.repo;
+            ok(detail)
         }
         PrPage::NAME => {
             let p: PrPageParams = parse(params)?;
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
-            ok(crate::github_review::page(std::path::Path::new(&project.path), &p).await.map_err(bad)?)
+            let dir = pr_dir(&project, p.repo.as_deref())?;
+            ok(crate::github_review::page(&dir, &p).await.map_err(bad)?)
         }
         PrAction::NAME => {
             let p: PrActionParams = parse(params)?;
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+            let dir = pr_dir(&project, p.repo.as_deref())?;
             if matches!(p.action, PrActionKind::Checkout) {
+                if p.repo.is_some() {
+                    return Err(RpcError::invalid_params(
+                        "A pull request of a group project can't be checked out into a chat yet. Open that repository as its own project.",
+                    ));
+                }
                 state.orchestrator.pr_checkout(&p).await.map_err(bad)?;
             } else {
-                crate::github_review::action(std::path::Path::new(&project.path), &p).await.map_err(bad)?;
+                crate::github_review::action(&dir, &p).await.map_err(bad)?;
             }
             ok(Empty {})
         }
@@ -1135,6 +1177,11 @@ fn secrets_workspace(state: &AppState, workspace: &SecretsWorkspace) -> Result<S
     }
 }
 
+/// The folder a pull request call runs in: the project, or the member `repo` of a group project.
+fn pr_dir(project: &Project, repo: Option<&str>) -> Result<std::path::PathBuf, RpcError> {
+    crate::orchestrator::pr_repo_dir(project, repo).map_err(RpcError::invalid_params)
+}
+
 fn internal(e: impl std::fmt::Display) -> RpcError {
     RpcError::internal(e)
 }
@@ -1200,6 +1247,7 @@ fn provider_err(e: anyhow::Error) -> RpcError {
 
 fn hostname() -> String {
     std::process::Command::new("hostname")
+        .no_window()
         .output()
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())

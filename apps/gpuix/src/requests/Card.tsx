@@ -26,6 +26,7 @@ import { splitChecklistPreview } from '../../../../packages/kybern-client/src/ag
 import { clampRows, commandRows, shellTokens, type CodeRow, type TokenKind } from './shell.ts'
 import type { CardModel, DiffLine, DiffSpec, GrantLine, Part, WellSpec } from './model.ts'
 import { registerCardFocus, someoneIsTyping } from './ui.ts'
+import { isOtherCommand, isPrimary, isPrimaryChord } from '../platform/keys.ts'
 
 /** The colours of the card's parts: Direction C's ink and accent alphas, with the glass and light variants of the well. */
 export function useCardTokens() {
@@ -102,8 +103,8 @@ export function CardShell({ testId, onKey, children, stealFocus = true, cmdKeys,
         if (focused != null && root.current && focused !== root.current.id) return
         onFocusChange?.(true)
         const m = e.modifiers
-        if (m?.alt || m?.ctrl || m?.shift) return
-        if (m?.cmd && e.key !== 'e' && !cmdKeys?.includes(e.key ?? '')) return
+        if (m?.alt || isOtherCommand(m) || m?.shift) return
+        if (isPrimary(m) && e.key !== 'e' && !cmdKeys?.includes(e.key ?? '')) return
         if (onKey?.(e)) e.preventDefault()
       }}
       style={{ display: 'flex', flexDirection: 'column', minWidth: 0, paddingLeft: 16, paddingRight: 16, paddingTop: 14, paddingBottom: 12 }}
@@ -113,12 +114,12 @@ export function CardShell({ testId, onKey, children, stealFocus = true, cmdKeys,
   )
 }
 
-/** ⌘E toggles a clamped well from anywhere in the window while it is on screen. */
+/** ⌘E (Ctrl+E off macOS) toggles a clamped well from anywhere in the window while it is on screen. */
 export function useExpandShortcut(active: boolean, toggle: () => void) {
   const latest = useRef(toggle)
   latest.current = toggle
   useEffect(() => active ? addWindowKeyHandler((e) => {
-    if (e.key !== 'e' || !e.modifiers?.cmd || e.modifiers.alt || e.modifiers.ctrl || e.modifiers.shift) return false
+    if (e.key !== 'e' || !isPrimaryChord(e.modifiers)) return false
     latest.current()
     return true
   }) : undefined, [active])

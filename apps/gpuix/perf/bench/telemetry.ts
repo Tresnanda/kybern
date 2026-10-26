@@ -44,3 +44,17 @@ export function parseGroup(raw:string,name:string){
  const match=(end<0?lines:lines.slice(0,end)).join('\n').match(/total\s+\S+ MiB\s+cpu\s+([\d.]+)%\s+gpu\s+([\d.-]+) ms/)
  return match?{cpuPercent:Number(match[1]),gpuMs:Number(match[2])}:null
 }
+/** `getBridgeStats()` from the native addon (WP1): commands sent to GPUI's UI thread, the ones that waited, and frames. */
+export type BridgeStats={bridged:boolean;sent:number;waited:number;waitMs:number;servedFrames:number|null;drawnFrames?:number|null;callbackFrames?:number|null;frameWakes:number;platform:string}
+/** Bridge traffic over one timed window. Off macOS, per-frame values divide by the window's served frames (frames that drew
+ * or only ran next-frame callbacks, split as `drawnFrames`/`callbackFrames` when the addon reports them); a regression shows
+ * as more `waitedPerFrame`. macOS runs hooks on the JS thread (`bridged: false`): only its frame wakes are counted. Null
+ * when the addon predates the counters. */
+export function bridgeDelta(before:BridgeStats|null,after:BridgeStats|null){
+ if(!before||!after)return null
+ const frames=before.servedFrames!=null&&after.servedFrames!=null?after.servedFrames-before.servedFrames:null
+ const perFrame=(value:number)=>frames?value/frames:null
+ const sent=after.sent-before.sent,waited=after.waited-before.waited,waitMs=after.waitMs-before.waitMs
+ const split=(key:'drawnFrames'|'callbackFrames')=>before[key]!=null&&after[key]!=null?after[key]!-before[key]!:null
+ return {platform:after.platform,bridged:after.bridged,servedFrames:frames,drawnFrames:split('drawnFrames'),callbackFrames:split('callbackFrames'),frameWakes:after.frameWakes-before.frameWakes,sent,waited,waitMs,sentPerFrame:perFrame(sent),waitedPerFrame:perFrame(waited),waitMsPerFrame:perFrame(waitMs)}
+}

@@ -1,6 +1,7 @@
 //! Kybern-owned, checksum-pinned Chrome for Testing. Never discovers user browsers.
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use futures::{SinkExt, StreamExt};
+use kybern_protocol::process::NoWindow;
 use kybern_protocol::{
     VisualHeight,
     methods::{HtmlConsoleMessage, HtmlPreviewResult},
@@ -60,13 +61,16 @@ async fn executable(root: &Path) -> Result<PathBuf> {
     installs.insert(cache.clone(), None);
     drop(installs);
     tokio::spawn(async move {
+        tracing::info!(version = VERSION, platform, "installing the preview browser");
         let result = install(&cache, &destination, platform, bytes, hash).await;
         if let Ok(mut installs) = installations().lock() {
             match result {
                 Ok(()) => {
+                    tracing::info!("the preview browser is installed");
                     installs.remove(&cache);
                 }
                 Err(error) => {
+                    tracing::warn!(error = format!("{error:#}"), "the preview browser could not install");
                     installs.insert(cache, Some(error.to_string()));
                 }
             }
@@ -100,18 +104,28 @@ async fn install(cache: &Path, destination: &Path, platform: &str, size: u64, ha
             received == size && digest.finalize().iter().map(|byte| format!("{byte:02x}")).collect::<String>() == hash,
             "The browser archive failed its SHA-256 or size check."
         );
+        tracing::debug!(bytes = received, "preview browser downloaded; extracting");
         let unpack = staging.join("unpacked");
         tokio::fs::create_dir(&unpack).await?;
         // Only an exact hash-verified archive reaches the system extractor.
         #[cfg(not(windows))]
-        let status = Command::new("unzip").arg("-q").arg(&archive).arg("-d").arg(&unpack).status().await?;
+        let status = Command::new("unzip").no_window().arg("-q").arg(&archive).arg("-d").arg(&unpack).status().await?;
+        // `-Command` joins every later argument into the script text, so `$args` would be empty: the paths go
+        // through the environment instead.
         #[cfg(windows)]
         let status = Command::new("powershell")
-            .args(["-NoProfile", "-Command", "Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1]"])
-            .arg(&archive)
-            .arg(&unpack)
+            .no_window()
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Expand-Archive -LiteralPath $env:KYBERN_PREVIEW_ARCHIVE -DestinationPath $env:KYBERN_PREVIEW_UNPACK",
+            ])
+            .env("KYBERN_PREVIEW_ARCHIVE", &archive)
+            .env("KYBERN_PREVIEW_UNPACK", &unpack)
             .status()
             .await?;
+        tracing::debug!(%status, "preview browser extractor exited");
         ensure!(status.success(), "Install an archive extractor and retry preview.");
         ensure!(
             tokio::fs::try_exists(unpack.join(format!("chrome-headless-shell-{platform}")).join(executable_name())).await?,
@@ -300,6 +314,7 @@ impl Session {
             }
         }));
         let mut child = Command::new(executable)
+            .no_window()
             .args([
                 "--headless=new",
                 "--remote-debugging-address=127.0.0.1",
@@ -322,6 +337,7 @@ impl Session {
             .kill_on_drop(true)
             .spawn()
             .context("The preview browser could not start. On Linux, install Chrome's system libraries and sandbox support.")?;
+        tracing::debug!(pid = child.id(), "preview browser started");
         let port = loop {
             if let Ok(contents) = tokio::fs::read_to_string(profile.join("DevToolsActivePort")).await
                 && let Some(port) = contents.lines().next().and_then(|n| n.parse::<u16>().ok())

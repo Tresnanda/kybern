@@ -7,17 +7,17 @@ export type BoundsTarget = number | { testId: string } | { id: number }
 interface LayoutRenderer {
   addLayoutObserver(target: number | { testId: string } | null, callback: (error: Error | null, value: unknown) => void): number
   removeLayoutObserver(token: number): void
-  isLayoutObserverActive(token: number): boolean
 }
 function observe<T>(renderer: object, target: number | { testId: string } | null, callback: (event: T) => void): () => void {
   const native = renderer as LayoutRenderer
-  if (typeof native.addLayoutObserver !== 'function' || typeof native.isLayoutObserverActive !== 'function') throw Error('Layout observers require the current Kybern native build')
+  if (typeof native.addLayoutObserver !== 'function') throw Error('Layout observers require the current Kybern native build')
   let live = true
+  // `live` drops callbacks queued before a JS removal. No native liveness check per callback: off macOS it is a
+  // waited UI-thread round trip on every layout event (scrolling). A callback queued as the window closes still
+  // runs; the window and app are going away with it.
   const token = native.addLayoutObserver(target, (error, event) => {
     if (!live) return
     if (error) { console.error(error); return }
-    // A callback may already be in the JS queue when the native window closes.
-    try { if (!native.isLayoutObserverActive(token)) return } catch { return }
     callback(event as T)
   })
   return () => {

@@ -1,5 +1,6 @@
 mod accounts;
 mod coordinator;
+mod credentials;
 mod render;
 mod requests;
 mod spaces;
@@ -148,6 +149,12 @@ enum Cmd {
         #[command(subcommand)]
         cmd: requests::RequestsCmd,
     },
+    /// The system credential store for Kybern's own entries (the secret goes through standard input and output).
+    #[command(hide = true)]
+    Credentials {
+        #[command(subcommand)]
+        cmd: credentials::CredentialsCmd,
+    },
     /// Show daemon info.
     Info,
     /// Show what the daemon is holding open: clients, agent processes, terminals, queued work.
@@ -229,6 +236,7 @@ enum Cmd {
         run: bool,
     },
     /// Manage projects.
+    #[command(alias = "project")]
     Projects {
         #[command(subcommand)]
         cmd: ProjectsCmd,
@@ -562,6 +570,9 @@ enum NoteCmd {
         /// Read the markdown body from this file (`-` reads stdin).
         #[arg(long)]
         file: Option<String>,
+        /// What kind of memory this is: preference, decision, convention or gotcha.
+        #[arg(long, value_parser = parse_note_category)]
+        category: Option<NoteCategory>,
     },
     /// Replace a note's body from a file (`-` reads stdin), and optionally its title.
     Edit {
@@ -571,6 +582,20 @@ enum NoteCmd {
         file: Option<String>,
         #[arg(long)]
         title: Option<String>,
+        /// Set the note's category: preference, decision, convention or gotcha.
+        #[arg(long, value_parser = parse_note_category)]
+        category: Option<NoteCategory>,
+    },
+    /// Show the project's "Tidy notes" offer (notes whose cited files changed), snooze it, or send it to the Coordinator.
+    Tidy {
+        /// Project name, path or id.
+        project: String,
+        /// "Not now": hide the offer for 7 days.
+        #[arg(long, conflicts_with = "start")]
+        not_now: bool,
+        /// Ask the project's Coordinator to check the flagged notes and propose changes.
+        #[arg(long)]
+        start: bool,
     },
     /// Move a note to Recently deleted.
     Delete { id: String },
@@ -860,6 +885,11 @@ enum ProjectsCmd {
         #[arg(long, value_delimiter = ',')]
         copy: Option<Vec<String>>,
     },
+    /// Show the project map: repositories, layout, commands, busy areas and recent removals, stamped with HEAD.
+    Map {
+        /// A project id, name or path.
+        project: String,
+    },
     /// Create the group folder's missing shared AGENTS.md and CLAUDE.md.
     Instructions {
         /// A project id, name or path.
@@ -889,7 +919,13 @@ enum TokensCmd {
 #[derive(Subcommand)]
 enum PrCmd {
     /// Read pull request description, checks and requested reviewers.
-    View { project: String, number: u64 },
+    View {
+        project: String,
+        number: u64,
+        /// Member repository of a group project.
+        #[arg(long)]
+        repo: Option<String>,
+    },
     /// Read one bounded page of files, comments, reviews or review_comments.
     Page {
         project: String,
@@ -897,6 +933,9 @@ enum PrCmd {
         kind: String,
         #[arg(long, default_value = "1")]
         page: u32,
+        /// Member repository of a group project.
+        #[arg(long)]
+        repo: Option<String>,
     },
     /// Explicitly comment, approve, request_changes, checkout, merge or close.
     /// Read structured PrActionParams from a JSON file (or stdin with -).
@@ -1200,6 +1239,11 @@ pub async fn run() -> Result<()> {
     if let Cmd::Askpass { prompt } = &cli.cmd {
         return requests::askpass(prompt).await;
     }
+    // Local too: the GPUIX client calls this to keep device tokens in the platform store.
+    if let Cmd::Credentials { cmd } = &cli.cmd {
+        let code = credentials::run(cmd);
+        std::process::exit(code);
+    }
     let ep = Endpoint::resolve(cli.url.clone(), cli.token.clone(), cli.data_dir.clone())?;
     let client = Client::connect(&ep).await?;
     let json = cli.json;
@@ -1207,6 +1251,7 @@ pub async fn run() -> Result<()> {
     match cli.cmd {
         Cmd::Cursor { .. } => unreachable!("local Cursor setup handled before connecting"),
         Cmd::Askpass { .. } => unreachable!("askpass handled before connecting"),
+        Cmd::Credentials { .. } => unreachable!("credentials handled before connecting"),
         Cmd::Requests { cmd } => requests::requests(&client, cmd).await?,
         Cmd::Coordinator { cmd } => coordinator::coordinator(&client, cmd).await?,
         Cmd::History { cmd } => coordinator::history(&client, cmd).await?,
@@ -1497,6 +1542,11 @@ pub async fn run() -> Result<()> {
                     let project = client.call::<ProjectsList>(ProjectsListParams { refresh_git: Some(false) }).await?.projects;
                     render::members(&status, project.iter().find(|p| p.id == project_id))
                 }
+            }
+            ProjectsCmd::Map { project } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                let result = client.call::<ProjectsMap>(ProjectsMapParams { project_id }).await?;
+                if json { println!("{}", serde_json::to_string_pretty(&result)?) } else { render::project_map(&result.map) }
             }
             ProjectsCmd::Instructions { project, dismiss } => {
                 let project_id = resolve_project(&client, &project, false).await?;
@@ -2276,15 +2326,15 @@ pub async fn run() -> Result<()> {
             println!("{}  {}", &r.commit[..10], r.message.lines().next().unwrap_or(""));
         }
         Cmd::Pr { cmd } => match cmd {
-            PrCmd::View { project, number } => {
+            PrCmd::View { project, number, repo } => {
                 let project_id = resolve_project(&client, &project, false).await?;
-                let result = client.call::<PrDetail>(PrDetailParams { project_id, number }).await?;
+                let result = client.call::<PrDetail>(PrDetailParams { project_id, number, repo }).await?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }
-            PrCmd::Page { project, number, kind, page } => {
+            PrCmd::Page { project, number, kind, page, repo } => {
                 let project_id = resolve_project(&client, &project, false).await?;
                 let kind = serde_json::from_value(serde_json::Value::String(kind))?;
-                let result = client.call::<PrPage>(PrPageParams { project_id, number, kind, page }).await?;
+                let result = client.call::<PrPage>(PrPageParams { project_id, number, kind, page, repo }).await?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }
             PrCmd::Action { file } => {
@@ -2308,7 +2358,11 @@ pub async fn run() -> Result<()> {
                 let project_id = resolve_project(&client, &project, false).await?;
                 let r = client.call::<PrList>(PrListParams { project_id, state, limit: 30 }).await?;
                 for pr in r.pull_requests {
-                    println!("#{:<5} {:<8} {}  {}", pr.number, pr.state.to_lowercase(), pr.title, pr.url);
+                    let repo = pr.repo.as_deref().map(|repo| format!("{repo}  ")).unwrap_or_default();
+                    println!("#{:<5} {:<8} {repo}{}  {}", pr.number, pr.state.to_lowercase(), pr.title, pr.url);
+                }
+                for repo in r.repos.iter().filter(|repo| repo.error.is_some()) {
+                    eprintln!("{}: {}", repo.name, repo.error.as_deref().unwrap_or_default());
                 }
             }
         },
@@ -2398,6 +2452,35 @@ async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
                 render::notes(&result.notes);
             }
         }
+        NoteCmd::Tidy { project, not_now, start } => {
+            let project_id = resolve_project(client, &project, false).await?;
+            let params = NotesTidyParams { project_id };
+            if start {
+                let started = client.call::<NotesTidyStart>(params).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&started)?);
+                } else {
+                    println!("Asked the Coordinator ({}) to check {} notes.", started.thread_id, started.notes);
+                }
+                return Ok(());
+            }
+            let offer = if not_now { client.call::<NotesTidySnooze>(params).await? } else { client.call::<NotesTidyOffer>(params).await? };
+            if json {
+                println!("{}", serde_json::to_string_pretty(&offer)?);
+            } else if offer.stale.is_empty() {
+                println!("No notes look outdated.");
+            } else {
+                let state = match (offer.offer, offer.snoozed_until) {
+                    (true, _) => "offered".to_owned(),
+                    (false, Some(until)) => format!("snoozed until {}", until.format("%Y-%m-%d")),
+                    (false, None) => format!("below the {NOTES_TIDY_THRESHOLD}-note threshold"),
+                };
+                println!("{} notes may be outdated ({state}).", offer.stale.len());
+                for id in &offer.stale {
+                    println!("{id}");
+                }
+            }
+        }
         NoteCmd::Show { id } => {
             let note = client.call::<NotesGet>(NotesGetParams { id: Some(resolve_note(client, &id).await?), thread_id: None }).await?.note;
             let note = note.ok_or_else(|| anyhow!("note {id} not found; run `kybern note list` for ids"))?;
@@ -2410,7 +2493,7 @@ async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
                 println!("{}", note.body);
             }
         }
-        NoteCmd::New { project, title, file } => {
+        NoteCmd::New { project, title, file, category } => {
             let project_id = match &project {
                 Some(project) => Some(resolve_project(client, project, false).await?),
                 None => None,
@@ -2422,6 +2505,7 @@ async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
                     title,
                     body: file.as_deref().map(read_input).transpose()?,
                     project_role: None,
+                    category,
                 })
                 .await?;
             if json {
@@ -2430,9 +2514,9 @@ async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
                 println!("{}", note.summary.id);
             }
         }
-        NoteCmd::Edit { id, file, title } => {
-            if file.is_none() && title.is_none() {
-                return Err(anyhow!("nothing to change; pass --file <path|-> for the body or --title for the title"));
+        NoteCmd::Edit { id, file, title, category } => {
+            if file.is_none() && title.is_none() && category.is_none() {
+                return Err(anyhow!("nothing to change; pass --file <path|-> for the body, --title for the title or --category"));
             }
             let id = resolve_note(client, &id).await?;
             let current = client
@@ -2447,6 +2531,8 @@ async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
                     expected_revision: current.summary.revision,
                     title,
                     body: file.as_deref().map(read_input).transpose()?,
+                    category,
+                    clear_category: false,
                 })
                 .await?;
             if json {
@@ -2488,6 +2574,11 @@ async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn parse_note_category(value: &str) -> Result<NoteCategory, String> {
+    NoteCategory::parse(&value.to_ascii_lowercase())
+        .ok_or_else(|| format!("unknown category {value}; use preference, decision, convention or gotcha"))
 }
 
 fn parse_task_status(value: &str) -> Result<TaskStatus, String> {

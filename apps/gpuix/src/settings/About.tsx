@@ -4,8 +4,9 @@
 import { useEffect, useState } from 'react'
 import { Label, useTheme } from '../ui.tsx'
 import { toast } from '../shell/toasts.tsx'
-import { canSelfUpdate, checkForAppUpdate, installAppUpdate, useAppUpdate } from '../platform/update.ts'
-import { cliStatus, installCli, removeOtherCli, uninstallCli, type CliStatus } from '../platform/cli.ts'
+import { canCheckForUpdates, checkForAppUpdate, installAppUpdate, manualUpdateText, useAppUpdate } from '../platform/update.ts'
+import { CopyUpdateCommand } from '../platform/UpdateSurface.tsx'
+import { cliStatus, installCli, managedCliCopy, removeOtherCli, uninstallCli, type CliStatus } from '../platform/cli.ts'
 import { Row, Section } from './controls.tsx'
 import { Button } from '../kit/Button.tsx'
 import { useResource } from './resource.ts'
@@ -29,15 +30,16 @@ function AppUpdateRow() {
   const busy = update.phase === 'checking' || update.phase === 'installing'
   const label = update.phase === 'checking' ? 'Checking…'
     : update.phase === 'installing' ? (update.progress === null ? 'Installing…' : `Installing… ${Math.round(update.progress * 100)}%`)
-    : update.phase === 'available' ? `Update to ${update.version}`
+    : update.phase === 'available' ? (update.manual ? `Download ${update.version}` : `Update to ${update.version}`)
     : 'Check for updates'
-  const status = update.phase === 'available' ? `${update.version} is ready. Installing restarts the app and the agents running on this machine.`
+  const status = update.phase === 'available' ? (update.manual ? `${update.version} is out. ${manualUpdateText(update.manual)}` : `${update.version} is ready. Installing restarts the app and the agents running on this machine.`)
     : update.phase === 'error' ? update.error
     : update.phase === 'current' && update.unpublished ? `Kybern ${update.unpublished} is out. This preview updates once its build is published.`
     : update.phase === 'current' && update.checkedAt ? `Up to date · checked ${new Date(update.checkedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
     : null
   return <DetailRow title="Kybern" testId="about-app" lines={[{ text: update.appVersion ?? '…' }, ...(status ? [{ text: status, tone: update.phase === 'error' ? 'error' as const : 'muted' as const }] : [])]}>
-    {canSelfUpdate() && <Button testId="about-update" disabled={busy} onClick={() => void (update.phase === 'available' ? installAppUpdate() : checkForAppUpdate({ manual: true }))}>{label}</Button>}
+    {update.phase === 'available' && update.manual?.command && <CopyUpdateCommand command={update.manual.command} testId="about-update-copy" />}
+    {canCheckForUpdates() && <Button testId="about-update" disabled={busy} onClick={() => void (update.phase === 'available' ? installAppUpdate() : checkForAppUpdate({ manual: true }))}>{label}</Button>}
   </DetailRow>
 }
 
@@ -55,7 +57,7 @@ export function About() {
   </>
 }
 
-/** The `kybern` command shipped inside the app, put on PATH the way macOS expects. */
+/** The `kybern` command shipped inside the app: a link made here (macOS, a Linux AppImage), or the installer's or package's own (Windows, deb, rpm). */
 function CommandLineRow() {
   const [status, setStatus] = useState<CliStatus | null>(null)
   const [busy, setBusy] = useState<'install' | 'uninstall' | 'remove' | null>(null)
@@ -79,8 +81,13 @@ function CommandLineRow() {
   if (!status) return <Row title="Terminal command" description="Checking…" />
   if (status.method === 'unavailable') return <Row title="Terminal command" description={status.problem ?? 'Not available in this build.'} />
   // Shorter, familiar paths in a terminal context: ~/.local/bin/kybern.
-  const tidy = (file: string) => status.home && file.startsWith(`${status.home}/`) ? `~${file.slice(status.home.length)}` : file
+  const tidy = (file: string) => status.home && (file.startsWith(`${status.home}/`) || file.startsWith(`${status.home}\\`)) ? `~${file.slice(status.home.length)}` : file
   const where = tidy(status.target ?? '')
+  // The Windows installer and Linux packages own the command: say whether it is on PATH, offer nothing to install or remove.
+  if (status.method === 'path' || status.method === 'package') {
+    const copy = managedCliCopy(status.method === 'path' ? 'installer' : 'package') ?? ''
+    return <DetailRow title="Terminal command" testId="about-cli" lines={[{ text: status.installed ? `Installed at ${where}. It updates with the app.` : copy }, ...(status.problem ? [{ text: status.problem, tone: 'warning' as const }] : [])]} />
+  }
   const description = status.installed ? `Installed at ${where}. It updates with the app.` : 'Run Kybern from a terminal with kybern. It stays in step with the app.'
   const other = status.resolved && (status.shadowed || !status.installed) ? status.resolved : null
   const otherVersion = status.resolved_version ? `kybern ${status.resolved_version}` : 'another kybern'
@@ -88,7 +95,7 @@ function CommandLineRow() {
   if (status.problem) notes.push({ text: status.problem, tone: 'warning' })
   if (status.installed && status.shadowed && other) notes.push({ text: `Terminals still run ${otherVersion} at ${tidy(other)}, which comes first on your PATH.`, tone: 'warning' })
   else if (!status.installed && other) notes.push({ text: `Terminals currently run ${otherVersion} at ${tidy(other)}.` })
-  if (status.installed && !status.target_on_path) notes.push({ text: `Add ${tidy(status.target ?? '').replace(/\/[^/]+$/, '')} to your PATH to use it.`, tone: 'warning' })
+  if (status.installed && !status.target_on_path) notes.push({ text: `Add ${tidy(status.target ?? '').replace(/[\\/][^\\/]+$/, '')} to your PATH to use it.`, tone: 'warning' })
   else if (justInstalled && !status.shadowed) notes.push({ text: 'Open a new terminal window to use it.' })
   const canInstall = !status.installed && !status.problem
   return <DetailRow title="Terminal command" testId="about-cli" lines={[{ text: description }, ...notes]}>

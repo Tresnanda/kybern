@@ -613,6 +613,105 @@ method!(
     ProjectsMembersStatusResult
 );
 
+/// The project map: a daemon-built description of the project's repositories,
+/// stamped with each repository's HEAD. Built from git and manifests only, with no
+/// model involved, and rebuilt when a request sees a different HEAD.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectsMapParams {
+    pub project_id: ProjectId,
+}
+/// One repository of the project as the map saw it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectMapRepo {
+    /// Member path relative to the project folder; "." for a single project or the group folder itself.
+    pub path: String,
+    pub name: String,
+    /// The branch work lands on: the remote's default, else `main` or `master`, else the current branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_branch: Option<String>,
+    /// The branch checked out when the map was built; absent when HEAD is detached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Full HEAD commit id the map describes.
+    pub head: String,
+    /// Tracked files counted, at most 20 000.
+    pub files: u32,
+    /// More files are tracked than were counted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
+}
+/// A directory (top two levels) with its tracked-file count.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectMapArea {
+    /// The repository's member path (see [`ProjectMapRepo::path`]).
+    pub repo: String,
+    /// Directory relative to the repository, '/'-separated; "." is the repository root.
+    pub path: String,
+    pub files: u32,
+    /// Name from the manifest in this directory (Cargo package, npm package, Go module, Python project).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// `cargo`, `npm`, `go` or `python`, when a manifest is here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<String>,
+}
+/// A command the project itself documents.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectMapCommand {
+    pub repo: String,
+    /// The file it comes from, relative to the repository (`apps/desktop/package.json`, `Makefile`, `AGENTS.md`).
+    pub source: String,
+    /// Script, alias or target name; for a fenced block, the heading text copied verbatim.
+    pub name: String,
+    /// The script body, alias expansion, `make`/`just` invocation or fenced block text.
+    pub run: String,
+}
+/// Commits per directory (two levels deep) over the last 30 days.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectMapBusy {
+    pub repo: String,
+    pub path: String,
+    pub commits: u32,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectMapChangeKind {
+    Deleted,
+    Renamed,
+}
+/// A file deleted or renamed in the last 14 days.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectMapChange {
+    pub repo: String,
+    pub kind: ProjectMapChangeKind,
+    /// The path that is gone (deleted), or the new path (renamed).
+    pub path: String,
+    /// Renamed only: the old path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    pub commit: String,
+    /// Commit date, strict ISO 8601.
+    pub date: String,
+    pub subject: String,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectMap {
+    pub built_at: chrono::DateTime<chrono::Utc>,
+    pub repos: Vec<ProjectMapRepo>,
+    pub layout: Vec<ProjectMapArea>,
+    pub commands: Vec<ProjectMapCommand>,
+    pub busy: Vec<ProjectMapBusy>,
+    pub removed: Vec<ProjectMapChange>,
+    /// The part sessions receive: at most 6 KiB, starting `Map as of {repo}@{sha}`.
+    pub header: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectsMapResult {
+    pub project_id: ProjectId,
+    pub map: ProjectMap,
+}
+method!(ProjectsMap, "projects.map", Some(Scope::OrchestrationRead), ProjectsMapParams, ProjectsMapResult);
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProjectsInstructionsCreateParams {
     pub project_id: ProjectId,
@@ -984,8 +1083,14 @@ pub struct ThreadsSendParams {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsSendResult {
+    /// The turn the message started. Nil when `queued`.
     pub turn_id: TurnId,
     pub message_id: MessageId,
+    /// The message waits in the thread's queue instead of starting a turn (a
+    /// Coordinator's context is being refreshed). It starts the next turn by
+    /// itself; a retry with the same `message_id` returns this result again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub queued: bool,
 }
 method!(ThreadsSend, "threads.send", Some(Scope::OrchestrationOperate), ThreadsSendParams, ThreadsSendResult);
 
@@ -1139,8 +1244,14 @@ pub struct CoordinatorSetupParams {
 }
 method!(CoordinatorSetup, "coordinator.setup", Some(Scope::OrchestrationOperate), CoordinatorSetupParams, Thread);
 
-/// Move the Coordinator to another harness, model or account. Its session restarts
-/// with the same lead instructions; the thread and its history stay.
+/// Move the Coordinator to another harness, model or account. This is a context
+/// refresh onto the new harness: the old session writes a handoff (unless its
+/// harness is signed out), its process closes, and the next message starts the
+/// new session with the handoff. The thread and its history stay.
+///
+/// The call returns only when the refresh is over: up to 90 s for the handoff
+/// and 90 s more for one correction, so allow about three minutes. Messages
+/// sent meanwhile queue and start on the new harness.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CoordinatorSwitchHarnessParams {
     pub project_id: ProjectId,
@@ -1153,6 +1264,35 @@ pub struct CoordinatorSwitchHarnessParams {
     pub permission_mode: Option<PermissionMode>,
 }
 method!(CoordinatorSwitchHarness, "coordinator.switch_harness", Some(Scope::OrchestrationOperate), CoordinatorSwitchHarnessParams, Thread);
+
+/// Refresh an idle Coordinator's context now: its session writes a handoff and is
+/// replaced by a fresh one, inside the same thread. Refused while it is busy.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CoordinatorRefreshContextParams {
+    pub thread_id: ThreadId,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CoordinatorRefreshContextResult {
+    pub rotation_id: String,
+}
+method!(
+    CoordinatorRefreshContext,
+    "coordinator.refresh_context",
+    Some(Scope::OrchestrationOperate),
+    CoordinatorRefreshContextParams,
+    CoordinatorRefreshContextResult
+);
+
+/// Replace the handoff of the Coordinator's latest context refresh. Before the
+/// fresh session's first message it replaces the handoff that message carries;
+/// after it, the correction is sent once with the next message.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CoordinatorEditHandoffParams {
+    pub thread_id: ThreadId,
+    pub rotation_id: String,
+    pub text: String,
+}
+method!(CoordinatorEditHandoff, "coordinator.edit_handoff", Some(Scope::OrchestrationOperate), CoordinatorEditHandoffParams, Empty);
 
 // ---- daemon-owned follow-ups ----
 
@@ -1974,6 +2114,10 @@ pub struct PullRequest {
     pub labels: Vec<PrLabel>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checks_summary: Option<PrChecksSummary>,
+    /// Group projects: the member repository (path relative to the group folder)
+    /// this pull request belongs to. None for single-repository projects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -2059,7 +2203,28 @@ fn default_pr_limit() -> u32 {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PrListResult {
+    /// Group projects: the pull requests of every member that answered, in
+    /// member order, each tagged with `repo`.
     pub pull_requests: Vec<PullRequest>,
+    /// Group projects only: one row per member repository, in order, with the
+    /// sentence explaining why its pull requests could not be listed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repos: Vec<PrListRepo>,
+}
+/// One member repository of a group project in a `github.pr.list` answer.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrListRepo {
+    /// Member path, relative to the group folder ("." is the folder itself).
+    pub repo: String,
+    /// Display name of the member.
+    pub name: String,
+    /// Why this member has no list: "No GitHub remote", a missing folder or the `gh` error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// The member is not on GitHub (no remote, or none `gh` knows): nothing to list, and
+    /// clients show no error for it. `error` still says why.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub skipped: bool,
 }
 method!(PrList, "github.pr.list", Some(Scope::OrchestrationRead), PrListParams, PrListResult);
 
@@ -2068,6 +2233,10 @@ method!(PrList, "github.pr.list", Some(Scope::OrchestrationRead), PrListParams, 
 pub struct PrDetailParams {
     pub project_id: ProjectId,
     pub number: u64,
+    /// Group projects: the member repository (a `PullRequest.repo`) the pull
+    /// request belongs to. Required for a group project; rejected for a single project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PrCheck {
@@ -2126,6 +2295,10 @@ pub struct PrPageParams {
     pub kind: PrPageKind,
     #[serde(default = "default_pr_page")]
     pub page: u32,
+    /// Group projects: the member repository (a `PullRequest.repo`) the pull
+    /// request belongs to. Required for a group project; rejected for a single project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
 }
 fn default_pr_page() -> u32 {
     1
@@ -2202,6 +2375,10 @@ pub struct PrActionParams {
     /// Verified repair preparation may preserve local changes belonging to this PR.
     #[serde(default)]
     pub for_repair: bool,
+    /// Group projects: the member repository (a `PullRequest.repo`) the pull
+    /// request belongs to. Required for a group project; rejected for a single project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
 }
 method!(PrAction, "github.pr.action", Some(Scope::OrchestrationOperate), PrActionParams, Empty);
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -2840,6 +3017,52 @@ impl ProjectNoteRole {
     }
 }
 
+/// What kind of memory a project note holds. Agents file dated claims under one;
+/// the Coordinator's notes index groups by it. A note without a category is
+/// "Other", or "Undated" when it predates categories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NoteCategory {
+    /// What the user wants, in their words.
+    Preference,
+    Decision,
+    Convention,
+    Gotcha,
+}
+
+impl NoteCategory {
+    pub const ALL: [NoteCategory; 4] = [NoteCategory::Preference, NoteCategory::Decision, NoteCategory::Convention, NoteCategory::Gotcha];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NoteCategory::Preference => "preference",
+            NoteCategory::Decision => "decision",
+            NoteCategory::Convention => "convention",
+            NoteCategory::Gotcha => "gotcha",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|category| category.as_str() == text)
+    }
+
+    /// Decisions and gotchas are history: agents add dated claims and retire old
+    /// ones instead of rewriting the body.
+    pub fn is_history(self) -> bool {
+        matches!(self, NoteCategory::Decision | NoteCategory::Gotcha)
+    }
+}
+
+/// Why a note may be outdated: a claim in it cites a commit (`As of \`abc1234\``)
+/// and a file, and that file changed after the commit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct StaleInfo {
+    /// The cited path that changed, as the note writes it.
+    pub path: String,
+    /// Short id of the latest commit that changed it after the cited one.
+    pub commit: String,
+}
+
 /// A note without its body, as listed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct NoteSummary {
@@ -2875,6 +3098,17 @@ pub struct NoteSummary {
     /// user edits the brief; only the project's Coordinator writes the setup note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_role: Option<ProjectNoteRole>,
+    /// The kind of memory this note holds. Absent for ordinary notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<NoteCategory>,
+    /// Set when a dated claim in the note cites a file that changed since the
+    /// commit it names. Computed by the daemon from git, never stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale: Option<StaleInfo>,
+    /// A project note without a category that was written before categories existed
+    /// (see `NotesListResult::history_since`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub undated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -2888,6 +3122,10 @@ pub struct Note {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct NotesListResult {
     pub notes: Vec<NoteSummary>,
+    /// When categories were introduced. Uncategorized project notes created before
+    /// it are `undated`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_since: Option<chrono::DateTime<chrono::Utc>>,
 }
 method!(NotesList, "notes.list", Some(Scope::OrchestrationRead), Empty, NotesListResult);
 
@@ -2920,6 +3158,8 @@ pub struct NotesCreateParams {
     /// `project_id`). A project has at most one of each. Absent for an ordinary note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_role: Option<ProjectNoteRole>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<NoteCategory>,
 }
 method!(NotesCreate, "notes.create", Some(Scope::OrchestrationOperate), NotesCreateParams, Note);
 
@@ -2937,6 +3177,12 @@ pub struct NotesUpdateParams {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
+    /// Sets the note's category. Absent leaves it as it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<NoteCategory>,
+    /// Removes the note's category. Not together with `category`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clear_category: bool,
 }
 method!(NotesUpdate, "notes.update", Some(Scope::OrchestrationOperate), NotesUpdateParams, Note);
 
@@ -2985,6 +3231,45 @@ pub struct NotesSearchResult {
     pub results: Vec<NoteSearchHit>,
 }
 method!(NotesSearch, "notes.search", Some(Scope::OrchestrationRead), NotesSearchParams, NotesSearchResult);
+
+/// Stale notes a project needs before the Coordinator offers to tidy them.
+pub const NOTES_TIDY_THRESHOLD: u32 = 5;
+/// Days the "Tidy notes" offer stays quiet after the user chose "Not now".
+pub const NOTES_TIDY_SNOOZE_DAYS: i64 = 7;
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NotesTidyParams {
+    pub project_id: ProjectId,
+}
+
+/// The state of a project's "Tidy notes" offer: the card "N notes may be outdated".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TidyOffer {
+    /// Live project notes whose claims cite files that changed since.
+    pub stale: Vec<NoteId>,
+    /// True when `stale` holds at least [`NOTES_TIDY_THRESHOLD`] notes and the
+    /// offer is not snoozed: clients show the card.
+    pub offer: bool,
+    /// While set and in the future, the offer is snoozed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snoozed_until: Option<chrono::DateTime<chrono::Utc>>,
+}
+method!(NotesTidyOffer, "notes.tidy_offer", Some(Scope::OrchestrationRead), NotesTidyParams, TidyOffer);
+
+// "Not now": snoozes the offer for 7 days. Returns the offer as it is now.
+method!(NotesTidySnooze, "notes.tidy_snooze", Some(Scope::OrchestrationOperate), NotesTidyParams, TidyOffer);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NotesTidyStartResult {
+    /// The Coordinator thread that received the request.
+    pub thread_id: ThreadId,
+    /// How many flagged notes the request named.
+    pub notes: u32,
+}
+// "Tidy notes": sends the project's Coordinator a request to check the flagged
+// claims against HEAD and propose changes. Fails when the project has no
+// Coordinator, or none of its notes is flagged.
+method!(NotesTidyStart, "notes.tidy_start", Some(Scope::OrchestrationOperate), NotesTidyParams, NotesTidyStartResult);
 
 /// Params of the `notes.changed` notification.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -3450,6 +3735,7 @@ registry!(
     ProjectsRemove,
     ProjectsScanRepos,
     ProjectsMembersStatus,
+    ProjectsMap,
     ProjectsInstructionsCreate,
     SpacesList,
     SpacesCreate,
@@ -3482,6 +3768,9 @@ registry!(
     NotesRestore,
     NotesPurge,
     NotesSearch,
+    NotesTidyOffer,
+    NotesTidySnooze,
+    NotesTidyStart,
     TaskItemsList,
     TaskItemsGet,
     TaskItemsCreate,
@@ -3507,6 +3796,8 @@ registry!(
     CoordinatorOpen,
     CoordinatorSetup,
     CoordinatorSwitchHarness,
+    CoordinatorRefreshContext,
+    CoordinatorEditHandoff,
     TasksList,
     TaskStop,
     TaskBackground,

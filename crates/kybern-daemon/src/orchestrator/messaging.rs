@@ -340,6 +340,8 @@ impl Orchestrator {
             // example a delegated child that failed) is started directly.
             if recipient.status == ThreadStatus::Failed {
                 match self.send_with_id(recipient.id, record.id, queued.message.clone(), false, false).await {
+                    // A Coordinator refreshing its context queued it for its fresh session.
+                    Ok((_, _, super::Admission::Queued)) => return Ok(ThreadMessageState::Queued),
                     Ok(_) => return Ok(ThreadMessageState::Delivered),
                     Err(error) if error.downcast_ref::<super::ThreadBusy>().is_some() => {
                         tracing::debug!(thread_id = %recipient.id, "failed recipient is busy again; queueing the message instead")

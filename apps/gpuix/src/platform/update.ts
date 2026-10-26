@@ -12,18 +12,45 @@
 // `darwin-aarch64-gpuix` (Tauri's `{target}-{bundle}` key form); the desktop's
 // `darwin-aarch64` artifact is a different app and is never installed here.
 //
+// Windows (beta) is a per-user NSIS install (`packaging/windows/installer.nsi`),
+// feed key `windows-x86_64-gpuix`. The signed asset is the installer itself: it
+// is downloaded, verified, started silently (`/S /UPDATE`) and this process
+// quits. Before that the other GPUIX window processes are asked to quit (each
+// holds the install's files open; `windows/registry.ts`), and the installer is
+// told the folder of this copy (`/D=`). The installer waits for the app to
+// exit, replaces the files (a locked daemon is moved aside, not killed) and
+// starts the new app with this process's environment. The signature must name
+// this release's installer, so a validly signed Tauri setup or an older GPUIX
+// installer in the feed is refused. Only an installed copy updates; a loose
+// `Kybern GPUIX.exe` has no `uninstall.exe` beside it and stays put.
+//
+// Linux (`linux-x86_64-gpuix`, the AppImage): a running AppImage replaces its
+// own file and relaunches it. Its signature must name exactly this release's
+// AppImage (`kybern-gpuix_<version>_x86_64.AppImage`) and a newer version, the
+// same check as the Windows installer (`assertSignedRelease`), and the download
+// must be an x86-64 type 2 AppImage before it is swapped in. An AppImage whose
+// folder the user cannot write, a deb or rpm install, and an unpacked AppImage
+// only announce the release with a download link (a package's install command
+// too; `linuxPackage.ts` reads which format this is).
+//
 // Tests point the app at a local feed with KYBERN_UPDATE_FEED (loopback only)
 // and KYBERN_UPDATE_PUBKEY; nothing else can change the key.
 import { spawn, execFile } from 'node:child_process'
-import { mkdtemp, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { chmod, mkdtemp, open, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { useSyncExternalStore } from 'react'
 import conf from '../../../desktop/src-tauri/tauri.conf.json'
-import { desktopVersion } from '../shell/daemon.ts'
+import { desktopVersion, relaunchEnv } from '../shell/daemon.ts'
 import { compareVersions } from '../shell/platform.ts'
 import { readPref, writePref } from './prefs.ts'
 import { verifyMinisign } from './minisign.ts'
+import { installerName } from '../../packaging/windows/lib.ts'
+import { quitOtherWindows } from '../windows/registry.ts'
+import { appImageName, imageDirWritable, linuxInstall, packageCommand } from './linuxPackage.ts'
+import { installedWindowsFolder } from './windowsInstall.ts'
 
 const run = promisify(execFile)
 
@@ -42,9 +69,12 @@ export interface AppUpdateState {
   detailsOpen: boolean
   /** A newer release whose feed has no GPUIX build yet (not installable). */
   unpublished: string | null
+  /** For a deb or rpm install (or an unpacked AppImage): where to download the release, and the command that installs it. */
+  manual: ManualUpdate | null
 }
+export interface ManualUpdate { url: string; file: string; command: string | null }
 
-let state: AppUpdateState = { phase: 'idle', appVersion: null, version: null, notes: null, progress: null, error: null, errorKind: null, checkedAt: null, announcementOpen: false, detailsOpen: false, unpublished: null }
+let state: AppUpdateState = { phase: 'idle', appVersion: null, version: null, notes: null, progress: null, error: null, errorKind: null, checkedAt: null, announcementOpen: false, detailsOpen: false, unpublished: null, manual: null }
 const listeners = new Set<() => void>()
 const set = (patch: Partial<AppUpdateState>) => { state = { ...state, ...patch }; for (const l of listeners) l() }
 export const getAppUpdate = () => state
@@ -55,7 +85,10 @@ export function useAppUpdate<T>(select: (s: AppUpdateState) => T): T {
 const FIRST_CHECK_DELAY = 15_000
 const CHECK_INTERVAL = 6 * 60 * 60 * 1000
 const DISMISSED_UPDATE_KEY = 'kybern.update.dismissed-version'
-export const PLATFORM_KEY = `darwin-${process.arch === 'arm64' ? 'aarch64' : 'x86_64'}-gpuix`
+/** The feed entry for this build (Tauri's `{os}-{arch}-{bundle}` form). Windows is x64 only. */
+export const platformKey = (platform: NodeJS.Platform, arch: string) =>
+  platform === 'win32' ? 'windows-x86_64-gpuix' : `${platform === 'linux' ? 'linux' : 'darwin'}-${arch === 'arm64' ? 'aarch64' : 'x86_64'}-gpuix`
+export const PLATFORM_KEY = platformKey(process.platform, process.arch)
 
 interface FeedEntry { url: string; signature: string }
 interface Pending { version: string; notes: string | null; entry: FeedEntry }
@@ -72,6 +105,17 @@ export function appBundle(execPath = process.execPath): string | null {
   const match = /^(.*\.app)\/Contents\/MacOS\/[^/]+$/.exec(execPath)
   return match ? match[1]! : null
 }
+
+/**
+ * The install folder this process runs from on Windows, or null for anything
+ * else: a loose copy, `bun`, a build output folder. The installer writes
+ * `uninstall.exe` beside the app, which is what marks an installed copy.
+ */
+export function windowsInstall(execPath = process.execPath, exists: (file: string) => boolean = existsSync): string | null {
+  // Checks against a local feed may name a scratch folder to treat as the install.
+  if (process.env.KYBERN_UPDATE_BUNDLE && testFeed()) return process.env.KYBERN_UPDATE_BUNDLE
+  return installedWindowsFolder(execPath, exists)
+}
 function testFeed(): URL | null {
   const override = process.env.KYBERN_UPDATE_FEED
   if (!override) return null
@@ -86,16 +130,39 @@ function feed(): { endpoints: string[]; pubkey: string } {
   return { endpoints: conf.plugins.updater.endpoints, pubkey: conf.plugins.updater.pubkey }
 }
 
-/** True when this build can replace itself: a packaged, writable `.app`. */
-export const canSelfUpdate = (): boolean => process.platform === 'darwin' && !!appBundle() && process.env.KYBERN_DISABLE_UPDATES !== '1'
+/** True when this build can replace itself: a packaged `.app` on macOS, an installed copy on Windows, a running AppImage in a folder its user can write. */
+export const canSelfUpdate = (): boolean => process.env.KYBERN_DISABLE_UPDATES !== '1' &&
+  (process.platform === 'darwin' ? !!appBundle() : process.platform === 'win32' ? !!windowsInstall() : appImageUpdatable())
+function appImageUpdatable(install = linuxInstall(), writable = imageDirWritable) {
+  return install?.kind === 'appimage' && writable(install.image)
+}
+/** True when this build looks for releases: every packaged build. deb and rpm installs only announce them. */
+export const canCheckForUpdates = (): boolean => canSelfUpdate() || (process.env.KYBERN_DISABLE_UPDATES !== '1' && linuxInstall() !== null)
+
+/**
+ * What a build that cannot replace itself offers instead. The feed carries only
+ * the AppImage; the deb and rpm are its release siblings with the same name stem.
+ */
+export function manualUpdate(entry: FeedEntry, install = linuxInstall(), writable = imageDirWritable): ManualUpdate | null {
+  if (!install || (install.kind === 'appimage' && writable(install.image))) return null
+  const kind = install.kind === 'unpacked' || install.kind === 'appimage' ? null : install.kind
+  const url = kind ? entry.url.replace(/\.AppImage$/, `.${kind}`) : entry.url
+  const file = decodeURIComponent(url.slice(url.lastIndexOf('/') + 1))
+  return { url, file, command: kind && url !== entry.url ? packageCommand(kind, file) : null }
+}
 
 export function loadAppVersion() {
   try { set({ appVersion: desktopVersion() }) } catch { /* About shows an ellipsis instead. */ }
 }
 
+/** What to do with a release this build cannot install itself. */
+export const manualUpdateText = (manual: ManualUpdate) => manual.command
+  ? `Download the package, then run ${manual.command} in the folder it saved to.`
+  : 'Download the new AppImage and replace this copy with it.'
+
 /** Ask the release feed for a newer version. */
 export function checkForAppUpdate(options: { manual?: boolean } = {}): Promise<void> {
-  if (!canSelfUpdate()) return Promise.resolve()
+  if (!canCheckForUpdates()) return Promise.resolve()
   if (installInFlight) return installInFlight
   if (checkInFlight) return checkInFlight
   checkInFlight = runUpdateCheck(options).finally(() => { checkInFlight = null })
@@ -128,24 +195,25 @@ async function runUpdateCheck(options: { manual?: boolean }) {
     const result = await readFeed(desktopVersion(), feed().endpoints)
     if (!result || !result.entry) {
       pending = null
-      set({ phase: 'current', version: null, notes: null, checkedAt: Date.now(), announcementOpen: false, detailsOpen: false, unpublished: result?.version ?? null })
+      set({ phase: 'current', version: null, notes: null, checkedAt: Date.now(), announcementOpen: false, detailsOpen: false, unpublished: result?.version ?? null, manual: null })
       return
     }
     pending = { version: result.version, notes: result.notes, entry: result.entry }
-    set({ phase: 'available', version: result.version, notes: result.notes, checkedAt: Date.now(), unpublished: null, announcementOpen: dismissedUpdateVersion() !== result.version })
+    set({ phase: 'available', version: result.version, notes: result.notes, checkedAt: Date.now(), unpublished: null, manual: manualUpdate(result.entry), announcementOpen: dismissedUpdateVersion() !== result.version })
   } catch (error) {
     set({ phase: pending ? 'available' : 'error', error: describe(error), errorKind: 'check', checkedAt: Date.now() })
     if (options.manual) void import('../shell/toasts.tsx').then(({ toast }) => toast.error('Unable to check for updates', { description: describe(error) }))
   }
 }
 
-/** Download, verify and install the pending update, then relaunch. */
+/** Download, verify and install the pending update, then relaunch. A deb or rpm install opens the package's download instead. */
 export function installAppUpdate(): Promise<void> {
   if (installInFlight) return installInFlight
   if (state.phase === 'installing') return Promise.resolve()
   if (checkInFlight) return checkInFlight.then(() => installAppUpdate())
   const update = pending
   if (!update) return Promise.resolve()
+  if (state.manual) return import('../pulls/PrStates.tsx').then(({ openUrl }) => openUrl(state.manual!.url))
   installInFlight = runUpdateInstall(update).finally(() => { installInFlight = null })
   return installInFlight
 }
@@ -196,19 +264,136 @@ export async function replaceBundle(bundle: string, archive: Uint8Array, identif
   }
 }
 
+/** ELF `e_machine` of the architectures the feed carries a GPUIX AppImage for. */
+const ELF_MACHINE: Record<string, number> = { x64: 62, arm64: 183 }
+
+/**
+ * Replace the running AppImage `image` with a verified download. The new file
+ * is written beside it (created exclusively, with the old file's mode) and
+ * renamed over it, so the mounted old image keeps running until the relaunch.
+ * `signedName` is the file name the release signature covers and must be exactly
+ * this `version`'s AppImage: Tauri's AppImage and older GPUIX releases are signed
+ * with the same key, so a mislabelled feed entry must not replace Kybern GPUIX
+ * with them. The bytes must be a type 2 AppImage for this machine's architecture.
+ */
+export async function replaceAppImage(image: string, data: Uint8Array, signedName: string, version: string, arch: string = process.arch) {
+  if (signedName !== appImageName(version, arch)) throw Error(`The update is ${signedName || 'another file'}, not a Kybern GPUIX ${version} AppImage`)
+  // A type 2 AppImage is an ELF runtime with the magic bytes `AI\x02` at offset 8. Byte 4 is the class (2 = 64-bit),
+  // byte 5 the data encoding (1 = little endian) and bytes 18–19 `e_machine` (62 = x86-64, 183 = AArch64).
+  const elf = data[0] === 0x7f && data[1] === 0x45 && data[2] === 0x4c && data[3] === 0x46
+  if (!elf || data[8] !== 0x41 || data[9] !== 0x49 || data[10] !== 0x02) throw Error('The update is not an AppImage')
+  if (data[4] !== 2 || data[5] !== 1 || data.length < 20 || (data[18]! | (data[19]! << 8)) !== ELF_MACHINE[arch]) throw Error(`The update is not an AppImage for ${arch === 'arm64' ? 'arm64' : 'x86-64'}`)
+  const next = path.join(path.dirname(image), `.${path.basename(image)}.update-${process.pid}`)
+  let created = false
+  try {
+    const mode = ((await stat(image)).mode & 0o777) | 0o100
+    const handle = await open(next, 'wx', mode)
+    created = true
+    try { await handle.writeFile(data) } finally { await handle.close() }
+    await chmod(next, mode)
+    await rename(next, image)
+  } catch (error) {
+    if (created) await rm(next, { force: true })
+    if ((error as NodeJS.ErrnoException).code === 'EACCES' || (error as NodeJS.ErrnoException).code === 'EROFS') throw Error(`Kybern can’t write to ${path.dirname(image)}. Move the AppImage to a folder you own, or download the update from the release page.`)
+    throw error
+  }
+}
+
 async function runUpdateInstall(update: Pending) {
   set({ phase: 'installing', progress: null, error: null, errorKind: null })
   try {
-    const bundle = appBundle()
+    const install = process.platform === 'linux' ? linuxInstall() : null
+    if (install?.kind === 'appimage') {
+      const data = await download(update.entry.url, (progress) => set({ progress }))
+      const { trustedComment } = verifyMinisign(data, update.entry.signature, feed().pubkey)
+      assertSignedRelease(trustedComment, appImageName(update.version), update.version, desktopVersion())
+      await replaceAppImage(install.image, data, signedFile(trustedComment) ?? '', update.version)
+      return await relaunchAppImage(install.image)
+    }
+    const windows = process.platform === 'win32'
+    const bundle = windows ? windowsInstall() : appBundle()
     if (!bundle) throw Error('Only the packaged app can update itself')
     const archive = await download(update.entry.url, (progress) => set({ progress }))
-    verifyMinisign(archive, update.entry.signature, feed().pubkey)
+    const { trustedComment } = verifyMinisign(archive, update.entry.signature, feed().pubkey)
+    if (windows) {
+      assertWindowsInstaller(trustedComment, update.version, desktopVersion())
+      return await runWindowsInstaller(archive, bundle)
+    }
     await replaceBundle(bundle, archive)
     await relaunch(bundle)
   } catch (error) {
     set({ phase: 'available', progress: null, error: describe(error), errorKind: 'install' })
     void import('../shell/toasts.tsx').then(({ toast }) => toast.error('Unable to install the update', { description: describe(error) }))
   }
+}
+
+/** The `file:` field of a `tauri signer sign` trusted comment (`timestamp:<unix>\tfile:<name>`). */
+export const signedFile = (trustedComment: string) => trustedComment.split('\t').find(field => field.startsWith('file:'))?.slice('file:'.length) ?? null
+
+/**
+ * The trusted comment is covered by the signature, so it binds the download to a file name. The updater key also
+ * signs Tauri's own `-setup.exe` and `.AppImage` and older GPUIX releases, so a swapped feed entry would otherwise
+ * install a validly signed build of the wrong app or version. Windows and the Linux AppImage check it; the macOS
+ * archive is checked by its bundle identifier instead (`replaceBundle`).
+ */
+export function assertSignedRelease(trustedComment: string, expected: string, version: string, current: string) {
+  if (signedFile(trustedComment) !== expected) throw Error('The update is not the build for this release. Download it from the release page.')
+  if (compareVersions(version, current) <= 0) throw Error('The update is not newer than this version. Download it from the release page.')
+}
+export const assertWindowsInstaller = (trustedComment: string, version: string, current: string) =>
+  assertSignedRelease(trustedComment, installerName(version), version, current)
+
+const INSTALLER_DIR_PREFIX = 'kybern-gpuix-update-'
+
+/** Write a verified installer to its own scratch folder; the installer cannot delete itself while it runs. */
+export async function stageWindowsInstaller(installer: Uint8Array, parent = tmpdir()): Promise<string> {
+  // Every PE file starts with "MZ"; a feed entry that points at something else is refused before it runs.
+  if (installer[0] !== 0x4d || installer[1] !== 0x5a) throw Error('The update is not a Windows installer')
+  const dir = await mkdtemp(path.join(parent, INSTALLER_DIR_PREFIX))
+  const file = path.join(dir, 'kybern-gpuix-setup.exe')
+  await writeFile(file, installer)
+  return file
+}
+
+/** Installers from earlier updates (they cannot remove themselves); best effort. */
+export async function removeStaleInstallers(parent = tmpdir(), now = Date.now()) {
+  for (const name of await readdir(parent).catch(() => [] as string[])) {
+    if (!name.startsWith(INSTALLER_DIR_PREFIX)) continue
+    const dir = path.join(parent, name)
+    const modified = await stat(dir).then(value => value.mtimeMs, () => now)
+    if (now - modified > 60 * 60 * 1000) await rm(dir, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
+/**
+ * The PowerShell command that starts the installer. NSIS wants `/D=<dir>` last, unquoted, even when the folder
+ * has spaces, and reads the program name from a quoted first token; a Node or Bun argument array quotes
+ * the argument instead. `Start-Process` takes one argument string and passes it through as written.
+ */
+export function windowsInstallerCommand(file: string, installDir: string, systemRoot = process.env.SystemRoot ?? 'C:\\Windows') {
+  const quote = (value: string) => `'${value.replaceAll("'", "''")}'`
+  const dir = /^[A-Za-z]:\\$/.test(installDir) ? installDir : installDir.replace(/\\+$/, '')
+  return {
+    command: path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+    args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `Start-Process -FilePath ${quote(file)} -ArgumentList ${quote(`/S /UPDATE /D=${dir}`)}`],
+  }
+}
+
+/**
+ * Run the installer silently and quit. `/UPDATE` makes it start the new app
+ * itself when it finishes (this process is gone by then); the environment is
+ * handed over so the same daemon and data folder are used. The other windows
+ * are asked to quit first; any that stay (the wait is 10 s) keep running the
+ * old files, which the installer moves aside as `.old`, until they are closed.
+ */
+async function runWindowsInstaller(installer: Uint8Array, installDir: string) {
+  const file = await stageWindowsInstaller(installer)
+  const stayed = await quitOtherWindows().catch(() => [] as number[])
+  if (stayed.length) console.error('[update] other Kybern GPUIX windows are still open:', stayed.join(', '))
+  if (process.env.KYBERN_UPDATE_NO_RELAUNCH === '1') { console.error('[update] staged', file); process.exit(0) }
+  const { command, args } = windowsInstallerCommand(file, installDir)
+  await run(command, args, { windowsHide: true, env: relaunchEnv(process.env) })
+  process.exit(0)
 }
 
 /**
@@ -220,7 +405,21 @@ async function runUpdateInstall(update: Pending) {
 async function relaunch(bundle: string) {
   if (process.env.KYBERN_UPDATE_NO_RELAUNCH === '1') { console.error('[update] installed', bundle); process.exit(0) }
   const { stdout } = await run('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleExecutable', path.join(bundle, 'Contents/Info.plist')])
-  const child = spawn(path.join(bundle, 'Contents/MacOS', stdout.trim()), [], { detached: true, stdio: 'ignore', env: process.env })
+  const child = spawn(path.join(bundle, 'Contents/MacOS', stdout.trim()), [], { detached: true, stdio: 'ignore', env: relaunchEnv(process.env) })
+  await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
+  child.unref()
+  process.exit(0)
+}
+
+/**
+ * Start the replaced AppImage, then quit. It mounts afresh and sets its own
+ * APPIMAGE and APPDIR; the rest of the environment is kept, as on macOS, except
+ * the daemon and CLI this process resolved, which the new image resolves for itself.
+ */
+async function relaunchAppImage(image: string) {
+  if (process.env.KYBERN_UPDATE_NO_RELAUNCH === '1') { console.error('[update] installed', image); process.exit(0) }
+  const env = relaunchEnv(process.env)
+  const child = spawn(image, [], { detached: true, stdio: 'ignore', env })
   await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
   child.unref()
   process.exit(0)
@@ -241,7 +440,9 @@ export const closeUpdateDetails = () => set({ detailsOpen: false })
 /** Load the app version and, in packaged builds, check shortly after launch and every few hours after that. */
 export function startAppUpdateChecks() {
   loadAppVersion()
-  if (!canSelfUpdate() || timer) return
+  // Installers of earlier updates cannot remove themselves.
+  if (process.platform === 'win32') void removeStaleInstallers()
+  if (!canCheckForUpdates() || timer) return
   const schedule = (delay: number) => {
     if (timer) clearTimeout(timer)
     timer = setTimeout(() => { void checkForAppUpdate().finally(() => schedule(CHECK_INTERVAL)) }, delay)

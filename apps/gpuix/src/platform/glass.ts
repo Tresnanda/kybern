@@ -11,7 +11,7 @@
 import { backdropAllowed } from './material.ts'
 import { FROST_ENABLED, frostQuietInk, type FrostClass } from './translucency.ts'
 import { BACKDROP, type BackdropFilter } from '../native/backdrop.ts'
-import { PATCHED_NATIVE } from '../native/local-build.ts'
+import { BACKDROP_BLUR } from '../native/local-build.ts'
 import { over, type GlassTokens, type Theme } from '../theme.ts'
 import { ink, useMaterial } from '../ui.tsx'
 
@@ -25,8 +25,8 @@ export const raisedRim = (g: GlassTokens, solid: string) => g.on ? g.rim : solid
 export const wash = (t: Theme, g: GlassTokens, a: number) => g.on ? ink(t, a) : over(ink(t, a), t.surface)
 /** The rule behind `frosted`, with its four inputs spelled out. */
 export const frostedWith = (on: boolean, backdrops: boolean, patched: boolean, enabled: ReadonlySet<FrostClass>, c: FrostClass) => on && backdrops && patched && enabled.has(c)
-/** Whether a frost class blurs right now: whole-window glass, scene backdrops allowed, patched addon, class enabled. */
-export const frosted = (g: GlassTokens, c: FrostClass) => frostedWith(g.on, backdropAllowed(), PATCHED_NATIVE, FROST_ENABLED, c)
+/** Whether a frost class blurs right now: whole-window glass, scene backdrops allowed, an addon whose renderer blurs (`BACKDROP_BLUR`), class enabled. */
+export const frosted = (g: GlassTokens, c: FrostClass) => frostedWith(g.on, backdropAllowed(), BACKDROP_BLUR, FROST_ENABLED, c)
 /** The `backdrop` prop for a frosted element, or undefined. */
 export const frostBackdrop = (g: GlassTokens, c: FrostClass, radius: number): BackdropFilter | undefined => frosted(g, c) ? { ...BACKDROP.frost, radius } : undefined
 /** A frost class's fill: the frost tint when it blurs, `denseFloat` when glass but not blurred, else the Solid fill. */

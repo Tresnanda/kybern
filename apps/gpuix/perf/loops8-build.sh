@@ -4,7 +4,7 @@ set -eu
 cd "$(dirname "$0")/../native"
 here=$(pwd)
 if [ "${KYBERN_LOOPS_PACKAGE_ONLY:-0}" != 1 ]; then
-python3 patches/backdrop_gpui.py upstream/zed
+# upstream/ is the pinned fork checkout (update.sh); edit it in place to iterate.
 (cd upstream/packages/native && RUSTC_WRAPPER= HOST_CC=cc HOST_CXX=c++ CC=cc CXX=c++ CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$here/build/target" cargo +1.97.1 build --release --lib)
 fi
 cp build/target/release/libgpuix_native.dylib build/gpuix-native.darwin-arm64.node

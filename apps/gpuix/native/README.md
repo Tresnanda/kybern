@@ -18,16 +18,33 @@ anchor. Metadata and the height summary remain proportional to loaded logical
 rows; fibers, retained hosts, bounds observers and native row construction follow
 the viewport plus selection/focus/overlay/animation owners.
 
-Patches: `sparse_list_hooks.py`, `sparse_list_gpui.py`, `sparse_list.rs`, each
-reconstructed by the existing anchored-hook drivers. `KYBERN_SPARSE_LIST=0` is
+Code: the "Sparse React windows with semantic row identity" (gpuix fork) and
+"Sparse list: SumTree scrolling, O(changed range) topology" (zed fork) commits,
+and `sparse_list.rs` (formerly `sparse_list_hooks.py`, `sparse_list_gpui.py`). `KYBERN_SPARSE_LIST=0` is
 the dense-slot comparison control. Ordinary lists do not enter this path.
 Checks and paired measurements are in `perf/scroll2/`.
 
 # Patched GPUIX native module
 
 The client runs on our own build of `@gpuix/native`: the upstream release in
-`VERSION` plus the capabilities below. The upstream checkout is disposable; all
-changes are reconstructed by the checked-in patches and anchored hooks.
+`VERSION` plus the capabilities below, built from two forks that carry them as
+commits:
+
+- [`Tresnanda/gpuix`](https://github.com/Tresnanda/gpuix/tree/kybern), branch
+  `kybern`: the release tag plus our native-crate commits
+  (`packages/native/src`), with its `zed` submodule pointing at
+- [`Tresnanda/zed`](https://github.com/Tresnanda/zed/tree/kybern), branch
+  `kybern`: the GPUI commit the release pins plus our GPUI, Metal, WGSL and
+  HLSL commits.
+
+`FORK` pins the exact commits; `update.sh` fetches them into the disposable
+`upstream/` checkout and builds. Until 2026-10-25 the same changes were a patch
+queue here (`patches/*.rs` copied into the crate, `apply_hooks.py` and
+`backdrop_gpui.py` running anchored edits). The forks hold it as one commit per
+former script, and each commit body names its script, so a `patches/<name>`
+mentioned below or in `../perf` is found with
+`git log --grep 'From <name>'` on the fork, or as
+`packages/native/src/<name>.rs` (gpuix) or `crates/*/src/<name>.rs` (zed).
 
 ## Transcript row geometry and logical anchors
 
@@ -214,58 +231,78 @@ measurements and the resolved width-measurement issue are recorded below.
 
 | Path | What |
 |---|---|
-| `VERSION` | Upstream `@gpuix/native` release the patch targets |
-| `patches/cache_island.rs` | The feature: island views, invalidation, bounds replay |
+| `VERSION` | Upstream `@gpuix/native` release the forks are based on (the npm packages) |
+| `FORK` | The pinned `Tresnanda/gpuix` commit, the zed commit it records, and its upstream tag |
+| fork `packages/native/src/cache_island.rs` | The feature: island views, invalidation, bounds replay |
 | `../scripts/island-lab.tsx`, `../scripts/island-check.ts` | The lab and the automated check (identity, hover, animation, late updates, lists) |
-| `patches/apply_hooks.py` | Atomic anchored edits; refuses and names the anchor if upstream moved |
-| `patches/patch_js.py`, `patches/patch_react.py` | Native bridge, motion identity, declarations; reproducible pnpm patches in `../patches/` |
+| `patches/patch_js.py`, `patches/patch_react.py` | Native bridge, motion identity, declarations for the npm JS packages; reproducible pnpm patches in `../patches/`. The only anchored edits left (`patches/hook_check.py` gives them `--check`) |
 | `tools/align_strtab.py` | Fixes Xcode 27 ld's misaligned LINKEDIT string pool, which dyld rejects |
-| `update.sh` | Fetch → patch → build → repair → sign → load check → capability checks |
+| `tools/gpuix_canary.py` | Rebases the fork commits onto a new upstream release and reports conflicts (weekly in CI) |
+| `update.sh` | Fetch the pinned fork → build → unit tests → repair → sign → load check → capability checks |
 | `upstream/`, `build/` | Git-ignored checkout and build output |
 
-## Staying current with GPUIX
+## Changing the native module
+
+A native change is a commit on a fork, then a new pin:
 
 ```sh
-apps/gpuix/native/update.sh 0.11.0   # new upstream release
+git clone --filter=blob:none --recurse-submodules --also-filter-submodules -b kybern \
+  https://github.com/Tresnanda/gpuix.git ~/src/gpuix
+cd ~/src/gpuix/zed && git switch kybern     # the submodule checks out detached
+# GPUI / Metal / WGSL / HLSL: commit in zed/. Native crate: commit in packages/native.
+KYBERN_GPUIX_SOURCE=~/src/gpuix apps/gpuix/native/update.sh   # build and check it unpushed
+git -C ~/src/gpuix/zed push origin kybern
+git -C ~/src/gpuix add zed && git -C ~/src/gpuix commit -m "Bump zed"   # when zed moved
+git -C ~/src/gpuix push origin kybern
 ```
 
-It moves the checkout to the tag, re-applies the patch from scratch, builds,
-bumps `@gpuix/react` + `@gpuix/native` on npm, recreates the JS patch and runs
-the checks. If upstream moved code a hook anchors on, `apply_hooks.py` names the
-anchor and writes nothing: adjust that one edit and rerun. Then run the app's
-usual checks and commit `VERSION`, `patches/` and the lockfile.
+Then set `commit` (and `zed`) in `FORK` to the new heads, run `update.sh`, and
+commit `FORK` with the app change that needs it. `update.sh` refuses a pin whose
+gpuix commit records a different zed commit than `FORK` says. Only add commits
+on top: a pinned commit has to stay fetchable. A Metal-only GPU change needs its
+WGSL/HLSL counterpart in the same commit, or Linux/Windows draw it wrong.
 
-**List every moved anchor first.** A hook driver stops at its first miss, which
-turns a port into one rerun per anchor. `--check` keeps going and prints all of
-them (a miss can cascade into later edits that anchor on text it would have
-added, so fix a file's first miss first):
+## Moving to a new GPUIX release
+
+1. Keep the current heads reachable: tag them `kybern-<old version>` in both
+   forks (`git tag kybern-0.11.0 kybern && git push origin kybern-0.11.0`).
+2. zed, when the new tag pins a different zed commit `Z'`:
+   `git rebase --onto Z' <old zed base> kybern`, resolve, `git push --force-with-lease origin kybern`.
+3. gpuix: add `remorses/gpuix` as a remote, fetch the tag, and
+   `git rebase --onto @gpuix/native@<new> @gpuix/native@<old> kybern`. The last
+   commit sets the zed submodule: resolve it to the rebased zed head. Push.
+4. Set `commit`, `zed` and `upstream` in `FORK`, then
 
 ```sh
-cd apps/gpuix/native && git -C upstream checkout -q --force @gpuix/native@0.12.0
-git -C upstream submodule update -q --init zed && cp patches/*.rs upstream/packages/native/src/
-python3 patches/apply_hooks.py upstream/packages/native/src --check   # native crate
-python3 patches/backdrop_gpui.py upstream/zed --check                 # GPUI fork
-python3 patches/patch_js.py <dir of the npm package> --check          # also patch_react.py
+apps/gpuix/native/update.sh 0.12.0   # new upstream release
 ```
 
-Each prints `MISSING <file>: expected N anchor(s), found M` with the first line
-of the anchor, and exits 1 when anything is missing (`patches/hook_check.py`).
-Run it on a disposable checkout; the drivers still write the hooks that matched.
-`update.sh` resets zed (`reset --hard`, `clean`) before moving its submodule,
-since the previous run edited it in place.
+builds the pin, bumps `@gpuix/react` + `@gpuix/native` on npm, recreates the JS
+patch and runs the checks. Run the app's usual checks and commit `VERSION`,
+`FORK`, `../patches/` and the lockfile.
+
+`tools/gpuix_canary.py --version <new> --keep <dir>` does steps 2 and 3 in a
+throwaway checkout and lists every commit that conflicts, before you start. The
+JS patches still use anchors: `python3 patches/patch_js.py <dir of the npm
+package> --check` (also `patch_react.py`) prints every `MISSING <file>: expected
+N anchor(s), found M` at once and exits 1 (`patches/hook_check.py`).
 
 **Weekly canary.** `.github/workflows/gpuix-canary.yml` runs
 `tools/gpuix_canary.py` every Monday and on demand. It skips when npm's latest is
-`VERSION`; otherwise it runs the four `--check` passes above against the new
-release on a Linux runner (a couple of minutes, no cargo), and lists the napi
-methods the release added that one of our patches also defines (a clash is a
-compile error, and one clash hides the next). When the hooks match, a macOS job
-runs `KYBERN_NATIVE_CHECKS=0 update.sh <latest>` and the app's typecheck and unit
-tests, which is what a static check cannot see. The result is one issue labelled
-`gpuix-canary`: "the patches no longer apply" with the anchors,
-"the build fails", or "ready to adopt"; it closes itself when `VERSION` catches
-up. The canary never pushes. Locally:
-`python3 -I tools/gpuix_canary.py --version 0.12.0 --report /tmp/canary.md`.
+`VERSION`; otherwise, on a Linux runner (a couple of minutes, no cargo), it
+rebases both `kybern` series onto the new release in a throwaway checkout,
+listing each commit that conflicts with its files (a conflicting commit is
+replayed with our side, so the next one reports only its own collision), runs the
+JS patches' `--check`, and lists the napi methods the release added that one of
+our commits also defines (a clash is a compile error, and one clash hides the
+next). When all of that is clean, a macOS job rebases again with `--tree`, runs
+`KYBERN_GPUIX_SOURCE=<tree> KYBERN_NATIVE_CHECKS=0 update.sh <latest>` and the
+app's typecheck and unit tests, which is what a static check cannot see. The
+result is one issue labelled `gpuix-canary`: "our commits conflict" with the
+list, "the build fails", or "ready to adopt"; it closes itself when `VERSION`
+catches up. The canary never pushes. Locally:
+`python3 -I tools/gpuix_canary.py --version 0.12.0 --report /tmp/canary.md`, or
+`--ref main` to preview upstream's next release.
 
 Prerequisites: Rust 1.97.1 (from upstream's `rust-toolchain.toml`) and Xcode's
 Metal Toolchain (`xcodebuild -downloadComponent MetalToolchain`). The first
@@ -285,23 +322,42 @@ Linux and Windows (ADE-52 spike): run `update.sh` on that OS with
 `KYBERN_NATIVE_CHECKS=0` (Git Bash on Windows, with `PYTHON=python` and
 `PYTHONUTF8=1`). It writes `build/gpuix-native.linux-x64-gnu.node` (or
 `linux-arm64-gnu`) and `build/gpuix-native.win32-x64-msvc.node`, which
-`src/native/local-build.ts` loads. Two drivers run last and only touch
-Linux/Windows code:
+`src/native/local-build.ts` loads. Two fork commits (formerly the drivers that
+ran last) only touch Linux/Windows code:
 
-- `patches/platforms_hooks.py` (native crate): off macOS, `update_window` and
+- "Linux and Windows: UI-thread bridge (ADE-52)" (gpuix, from `platforms_hooks.py`): off macOS, `update_window` and
   `update_window_without_view` box the hook's closure into `UiCommand::Run`,
   run it on the `gpuix-ui` thread and wait for its result, so a hook is
   written once and only has to be `Send + 'static`. Keep paint-time
   thread-local reads inside the closure: outside it they read the JS thread's
   empty copy.
-- `patches/platforms_gpui.py` (GPUI): backdrop batches draw nothing on wgpu and
+- "Linux (wgpu) and Windows (Direct3D 11) build and draw (ADE-52)" (zed, from
+  `platforms_gpui.py`): backdrop batches draw nothing on wgpu and
   Direct3D; `ContentMask` and the rounded clip chain walk in WGSL and HLSL
   (`KYBERN_ROUNDED_CLIP=0` squares every chain, for before/after checks);
-  compositor loops stay in the scene. A new Metal-only GPU patch needs its
-  WGSL/HLSL counterpart here, or Linux/Windows draw it wrong.
+  compositor loops stay in the scene. A new Metal-only GPU change needs its
+  WGSL/HLSL counterpart, or Linux/Windows draw it wrong.
 
-`.github/workflows/gpuix-platforms.yml` builds both and runs
-`scripts/platform-smoke.ts` on screen (Xvfb + lavapipe, D3D11 on WARP). On a
+WP1 (`wp1` branches, `../PORTING-PLATFORMS.md#wp1-native-platform-core-status`)
+added, still Linux/Windows only:
+
+- "Frame wake hook off macOS (WP1)" (zed): `gpui::set_frame_wake_hook`, called
+  after a frame request that drew or ran next-frame callbacks. The native
+  crate turns it into `setFrameWakeCallback` (true on every desktop platform),
+  so the JS frame loop runs on native frames there too.
+- "Wayland: run without a seat, fall back to X11 (WP1)" (zed).
+- "Windows and Linux: native frame wake, bridge cost, scroll phases, DPI info
+  (WP1)" (gpuix): `()` hooks that need no answer use `update_window_detached` /
+  `update_window_without_view_detached` (queued, not waited for; on macOS the
+  plain call). Use them for new hooks that return nothing and run often.
+  `UiCommand::Invalidate` takes the island path like macOS
+  (`KYBERN_FULL_INVALIDATE=1` restores `window.refresh()`). `getBridgeStats()`
+  and `getPlatformInfo()` are for checks and `perf/bench`.
+
+`.github/workflows/gpuix-platforms.yml` builds both and runs the WP7 checks on
+screen (Xvfb + lavapipe, D3D11 on WARP), including `scripts/platform-smoke.ts`
+and `scripts/frame-wake-check.tsx` (check id `frame-wake`) on X11, headless
+Weston and Windows. On a
 Mac, an arm64 Linux container gives the same check in about a minute.
 
 ## The 0.11.0 port (from 0.10.0)
@@ -628,6 +684,88 @@ are retained for the integrating agent, as requested. Free disk went from
 73 GiB before the first native build to 68 GiB at completion; other agents
 were working concurrently, so the total change is not solely this build.
 
+## Embedded web view on Linux (WP10)
+
+`webview-linux.c` (`libkybern-webview.so`) is the Linux counterpart of `webview.m`: WPE WebKit renders offscreen and
+the fork's `<websurface>` element (`custom_elements/websurface.rs`) paints the page as a texture inside the element
+tree. Design, status and gaps: [`../WEBVIEW-PLATFORMS.md`](../WEBVIEW-PLATFORMS.md#linux-implementation-wp10-2026-10-26).
+
+```sh
+sudo apt-get install $(wpe/build-wpe.sh deps)    # ubuntu-22.04, the glibc floor the packages target
+wpe/build-wpe.sh build/wpe                        # ~1.5 h on 4 cores; WPE_WORK, WPE_JOBS, WPE_KEEP_WORK
+bun build-webview.ts                              # build/libkybern-webview.so (RUNPATH $ORIGIN/wpe/lib); also update.sh
+xvfb-run -a bun webview-linux-check.ts            # the lab: rounded clip, popup over the page, input, <select>, snapshot
+```
+
+On a distro that packages WPE WebKit 2.0 (Debian sid) `build-webview.ts` links the system one instead, for
+development. Pages are never run unsandboxed: without a working bubblewrap, inside a Snap environment or Flatpak, or
+with `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS` set, the web view is off (`webHost.unavailableReason === 'sandbox'`) and
+every surface falls back to the browser (WP4); Kybern's WebKit aborts rather than start an unsandboxed web process
+(`wpe/wpe-sandbox.patch`). There is no unsandboxed test mode: containers without user namespaces cannot run the web
+view. `bun webview-linux-sandbox-check.ts` checks those refusals. `KYBERN_WEBVIEW_DEBUG=1` logs the companion's frame rate and
+copy cost; `KYBERN_DEBUG_WEBSURFACE=1` the element's uploads.
+
+## Running the checks on Linux and Windows (WP7)
+
+A first set of the on-screen checks runs on all three OSes through one harness, `native/check-harness.ts`, and one
+runner, `scripts/run-platform-checks.ts`. The checks drive the app and the labs through the addon's automation client
+(`mouse.*`, `press`, `getPaintedText`, element bounds: input is synthesized inside the process, so no NSEvent, Swift or
+xdotool) and capture with `capture(fixture, file)`:
+
+| OS | Capture |
+| --- | --- |
+| macOS | the addon screenshot, as before; `{ webViews: true }` captures the real window (Swift window id + `screencapture -l`) to include an embedded web view |
+| Windows | the addon screenshot (Direct3D 11; WARP in CI) |
+| Linux | the addon screenshot (GPUI renders the scene and reads it back through wgpu; lavapipe in CI). An older addon falls back to the X server (`xwininfo -root -tree` picks the window, ImageMagick `import` reads it), which needs Xvfb started with `-extension Composite` (with Composite, GPUI's 32-bit window is redirected off-screen and captures black). `KYBERN_CHECK_CAPTURE=addon\|x11` forces one; the log names the choice |
+
+| Check | Run by `--checks` | What it proves |
+| --- | --- | --- |
+| `native/focus-check.ts` | `focus` | Tab/Shift+Tab move one stop, a consumed Tab stays, the image preview traps Tab (no pixels) |
+| `native/clip-check.ts` | `clip` | rounded clip hit tests and painted corners (dark/light, motion on/off) |
+| `native/rounded-check.ts` | `rounded` | rounded input backgrounds, outset clamps, wrapped fragments, selection |
+| `native/text-check.ts` | `text` | WP8: on a type specimen (`text-lab.tsx`), every kit weight of the UI font and of Inter paints wider than the one below it (the `wght` axis), line boxes, cap heights and baselines of Inter and JetBrains Mono within 1 px of macOS (`text-macos.json`, `--record` on a Mac), the code face advance, `kszl` inline code, colour emoji and CJK fallback; writes `text-<os>.png` and `text-metrics-<os>.json` (with DirectWrite's `KYBERN_FONT_DEBUG` lines) |
+| `native/markdown-document-check.ts` | `markdown-document` | document API; document pixels equal the original Markdown path (same renderer, exact); selection, wrap, grid. Off macOS a subset of the interior cases (`MD_INTERIOR_CASES`) |
+| `scripts/platform-smoke.ts` | `smoke` | the real app on a seeded daemon: sidebar rows, Markdown + code transcript, composer; the clip lab with rounded clip on and off (Linux/Windows) |
+| `scripts/nowebview-app-check.ts` | `nowebview` | WP4: the app with the web view off: preview in the browser, visual, question, Mermaid, artifact |
+| `native/notify-check.ts` | `notify` (Linux, Windows) | WP5: system notifications through the app's `notifications` module. Linux: against a test D-Bus notification server (`native/notify-server.py`, needs `dbus python3-gi`) under `dbus-run-session`: the `Notify` fields, `replaces_id` per thread, no second sound for a quick replacement, two quick posts as one notification, `CloseNotification` on dismiss, no stale `replaces_id` after a server restart, markup escaped only for a `body-markup` server, `ActionInvoked` reaching the app once per click, `unsupported` with no daemon. Windows: the toast API with the loose run's AUMID (`dev.kybern.gpuix.dev`), its `AppUserModelId` registry entry (and none for the installed id), the posts, the action-center history, a dismissal, a post after the action center was cleared. A click on a toast is checked by hand |
+| `native/webview-win-check.ts` | `webview` (Windows only) | WP10: a WebView2 visual in a GPUIX window driven with real OS input (user32) and checked on captures of the composed window (`PrintWindow`, which includes the WebView2 visuals the addon screenshot never sees): stacking, rounded clip, transparency, menu cut-out, modal dim, bridge both ways, click, double click, wheel, typing, Ctrl shortcuts, Escape and outside-press handback, `kybern.answer.draft`, `present`/`probe`, `snapshot` with alpha, `snapshotRect`, `frame`, hide and destroy |
+| `scripts/window-chrome-check.ts` | `window-chrome` | WP3: the real app's title bar per OS: the traffic-light room on macOS; Windows caption buttons driven with real input (place and size, red close hover, maximize/restore, double click, a drag that moves the window, a control in the bar keeping its click, minimize, close); Linux client-side decorations under xfwm4's compositor through `xdotool` (the same plus a right-edge resize; `KYBERN_EXPECT_DECORATIONS=client`); the Ctrl (⌘) shortcut key everywhere. Writes `titlebar*.png` crops and `window-chrome.json` |
+
+Off macOS GPUI dispatches synthesized input on its UI thread and the app's handler runs on the JS thread after the
+automation call returns, so a check reads what a click changed through `settled(read, done)`, not once.
+Pixel assertions tolerate software rendering: `tolerance` (3 on macOS, 8 elsewhere, `KYBERN_CHECK_TOLERANCE`), regions
+that must hold painted content (`assertPainted`), structure (bounds, test ids, painted text), and exact equality only
+between two renders of the same renderer. Steps that need a capability still blocked off macOS are wrapped in
+`step(label, fn, { gap })` with a `GAPS.*` reason (wheel input: scroll phase injection, WP1; ⌘ shortcuts, WP3; Menlo
+advances, WP8, which reports closed since the labs use the bundled JetBrains Mono off macOS). Off macOS a gap failure is recorded and listed in the summary, not failed, until `--strict` /
+`KYBERN_CHECK_STRICT=1`; a gap that passes is reported as closed so its marker can go.
+`KYBERN_OPEN_LOG=<file>` makes `os.openTarget` append instead of opening, so a check can assert what the app opened on
+any OS.
+
+Locally (Linux needs `xvfb xauth x11-utils imagemagick` and Mesa's `mesa-vulkan-drivers`):
+
+```sh
+cd apps/gpuix && pnpm install --frozen-lockfile && (cd ../desktop && pnpm install --frozen-lockfile)
+cargo build -p kybern                                    # the scratch daemon
+native/update.sh                                         # or set NAPI_RS_NATIVE_LIBRARY_PATH to a built addon
+xvfb-run -a -s '-screen 0 1440x900x24 -extension Composite' \
+  bun scripts/run-platform-checks.ts --kybernd ../../target/debug/kybernd --out /tmp/gpuix-checks --checks clip,focus
+bun scripts/run-platform-checks.ts --list                 # the check names
+# A display nothing can grab (headless Weston): the smoke runs once without PNGs
+bun scripts/run-platform-checks.ts --kybernd ../../target/debug/kybernd --checks frame-wake,smoke --capture none
+```
+
+Windows and macOS use the desktop session (no Xvfb). Any single check also runs by hand
+(`KYBERN_VERIFY_OUTPUT=<dir> bun native/clip-check.ts`); with no `KYBERN_DATA_DIR` the harness uses a temp folder, never
+`~/.kybern`. Output per check: PNGs and `log.txt` under `<out>/<check>/`, plus `report.jsonl`, `summary.md` and
+`summary.json`.
+
+CI: `.github/workflows/gpuix-platforms.yml` (manual: Actions → "GPUIX platforms" → Run workflow). Inputs: `checks`
+(`all` or a comma list), `strict`, `wayland` (on by default: a headless-Weston job, no `wl_seat`, that runs `frame-wake` and the smoke with
+`--capture none`, since nothing can grab that screen), `lto` (off builds the addon without fat LTO: enough to check a
+patch, and cached under its own key). Jobs: `ubuntu-22.04` (Xvfb 1440x900 + lavapipe) and `windows-2022` (WARP, the desktop's
+1024x768). Artifacts `gpuix-<id>-checks` hold the screenshots and logs; the run page shows `summary.md`.
+
 ## Extension performance (2026-10-15)
 
 Apple M1, macOS 27.0 (26A428), Bun 1.4.0, GPUIX 0.10.0, 1280×820 background
@@ -801,6 +939,11 @@ No bearer token is sent to a page. Only main-frame wrapper messages enter the
 public message bridge; a separate isolated WKContentWorld retains the direct
 child's frame for back/forward/reload/stop. Untrusted child script cannot use it.
 
+Windows (WP10) has the same host in `native/webview-win` (Rust, `kybern-webview.dll`, built by
+`native/build-webview.ts` and `update.sh` on Windows): WebView2 `CompositionController`s under a
+Windows.UI.Composition target above GPUI's swap chain, the same three C exports and JSON channel,
+so `webview.ts` only picks the file. Its design and parity table are in `../WEBVIEW-PLATFORMS.md`.
+
 `src/preview/relay.ts` mirrors the Tauri relay's HTTP request-head rewrite and
 raw WebSocket splice. A loopback-only listener checks Host, refuses CONNECT and
 absolute targets, and only targets a ticket on the configured daemon. Page
@@ -868,6 +1011,9 @@ absent or ambiguous, they produce null until unique again. Numeric IDs remain ti
 to that host, returning null after unmount. Unsubscribe is safe after window close;
 queued JS callbacks check native subscription liveness before invoking app code.
 The view drops all subscriptions on close. At most 256 observers may be active.
+Off macOS `addLayoutObserver` returns its token without waiting for the UI thread
+(the add is queued in order with the other commands), so a refused target arrives
+as the callback's error instead of a throw; macOS still throws.
 
 `layout-hooks.ts` exposes `useNativeWindowSize()` and `useElementBounds(testId)`.
 The window hook performs one initial size read and then subscribes. Resize and
@@ -1263,7 +1409,7 @@ Offscreen, unmounted and zero-opacity regions add no filter primitive. No contin
 repaint or polling is introduced; a changed frame still recomputes its visible
 filters even when the change was elsewhere in the window.
 
-This is a **macOS-only** native build extension. It samples GPUI's scene, not other
+Linux and Windows draw it too since WP9 (below). It samples GPUI's scene, not other
 windows or the wallpaper under NSVisualEffectView. It does not add subtree blur,
 scale transforms, arbitrary CSS filter strings or general mask-image support.
 The Gaussian/underline rasterization is not pixel-identical to WebKit.
@@ -1287,6 +1433,63 @@ the alpha is blurred with the colour. A Metal function constant (`programmable_b
 GPUs (Intel Macs cannot read the target in a shader) keep the fixed-function blend and the old look.
 `KYBERN_BACKDROP_PROGRAMMABLE=0` forces the old pass. `src/platform/verify.blur.ts` measures it: the "…" menu's window-alpha
 detail over dense text is 0.33 with the old pass and 0.005 with the new one (`perf/translucency-ade58-2026-10-23.md`).
+
+### Off macOS: wgpu and Direct3D 11 (WP9)
+
+The filter draws on Linux (`gpui_wgpu`, `backdrop.wgsl`, `wgpu_backdrop.rs`) and Windows (`gpui_windows`, `backdrop.hlsl`,
+`directx_backdrop.rs`) with the Metal algorithm: the same kernels and crop (`gpui::backdrop_kernel`, which Metal now uses
+too; `packages/native/src/backdrop_kernel.rs` is the same file, compiled standalone by `update.sh`, which checks they match),
+3-sigma halo, half-resolution path above 8 device px (`KYBERN_BACKDROP_HALFRES=0` keeps full size), saturation, own radius,
+rounded clip chain with edge fades, fade-top and opacity. Per filter:
+
+1. copy the target region behind it (clip plus halo, inside the target) into a pooled scratch: a swap chain image cannot be
+   bound as a texture, so this replaces Metal's direct sample of the target, and it is cropped to the filter. The crop is
+   copied exactly, odd sizes included: rounding it to the half-resolution grid either reached past the target or left the
+   last column or row uncopied, where step 3 reads the destination (a full-width frost on an odd-width window under any
+   coverage below 1: opacity, an edge fade, a rounded corner at the edge);
+2. horizontal pass from the copy into a second scratch (`ceil(crop / scale)`: an odd crop's last half block reads its one
+   copied column or row, both passes clamping their reads to the copied size). Crops under 2 px use full resolution;
+3. vertical pass into the target over the clip, writing `mix(destination, blurred, coverage)` on all four channels with the
+   destination read from the copy, blending off. That is the result of Metal's programmable blending (ADE-58), so a
+   translucent Windows window (Mica) gets a blurred alpha instead of text-shaped holes, without framebuffer fetch.
+
+The copy and the blur scratch are pooled separately, each following N1: 64 px buckets, released after 30 frames without a
+planned filter, re-created smaller when the last 120 frames needed under half their area. The blur scratch is sized by the
+largest `scratch_size`, so at half resolution it holds a quarter of the copy's texels. wgpu writes every filter's two
+parameter blocks into one reused buffer, uploads them into one uniform buffer per frame (dynamic offsets) and rebinds only
+when that or the clip chain buffer changed; Direct3D maps one constant buffer per pass. Shaders: wgpu compiles WGSL at runtime (naga-validated in
+`gpui_wgpu`'s tests); `gpui_windows/build.rs` compiles `backdrop.hlsl` with fxc (vs/ps 4.1) like `shaders.hlsl`.
+
+Fallbacks, each leaving the fill above the filter as before: wgpu on WebGL (no storage buffers) or a surface without
+`COPY_SRC`, and `KYBERN_BACKDROP_FILTER=0` on both backends (the A/B control the `backdrop` check uses).
+`kybernCapabilities().backdrop` tells the app this build's renderer can blur (`BACKDROP_BLUR` in `src/native/local-build.ts`;
+false with `KYBERN_BACKDROP_FILTER=0`), and the renderer's `backdropFilterSupported()` whether the open window does
+(`Window::backdrop_filter_supported` in the zed fork: false for the wgpu fallbacks above). The app reads it once the window is
+up (`readWindowBackdrop` in `src/platform/material.ts`); without either, frosted surfaces keep their dense fills.
+
+Checks: `cargo test -p gpui_wgpu --lib backdrop` in the zed fork validates the WGSL and renders two scenes through the
+filter on whatever adapter the machine has (Metal on a Mac, lavapipe in a Linux container): stripes under a rounded filter,
+and an odd 201 x 121 target under a half-coverage filter whose last column and row must keep the background (it fails
+without the exact crop). `native/backdrop-check.ts` (`run-platform-checks --checks backdrop`) asserts blur, tint, radius and
+chain clip, saturation, sharp later content, the odd 721 x 481 window (`BACKDROP_LAB_ODD=1`), the fallback and
+`backdropFilterSupported()` on every OS, and measures frames and CPU per frame over a busy scene (`perf.json`).
+
+### Window materials on Windows (WP9)
+
+`setWindowBackground` and `windowBackground` also take `mica`, `mica-alt` and `acrylic` on Windows. On Windows 11 22H2+
+(build 22621, `DWMWA_SYSTEMBACKDROP_TYPE`) GPUI sets the DWM system backdrop and extends the frame over the client area, so
+the composition swap chain's transparent clear shows it; `blurred` is Acrylic there too, and each mode resets the other
+mechanism (DWMSBT_NONE, accent 0, zero margins). Older Windows ignores the system backdrops and keeps the accent blur for
+`blurred`. DWM tints both by `DWMWA_USE_IMMERSIVE_DARK_MODE`, which GPUI set from the system theme and reset on every
+`WM_SETTINGCHANGE`; the renderer's `setWindowAppearance('dark' | 'light' | null)` (gpui `set_window_appearance`, now
+implemented on Windows) sets it from Kybern's theme for every window and keeps it, while `window_appearance` still reports
+the system's for "System". `src/shell/appearance.ts` calls it with the theme variant. The app picks the materials in
+`src/platform/desktopMaterial.ts` / `src/shell/windowMaterial.ts` and Settings › Appearance (Backdrop: Mica or Acrylic; the
+system sets their strength). They are opt-in (`KYBERN_DESKTOP_MATERIAL=dwm`, `DWM_BY_DEFAULT`) until seen on a real
+Windows 11 desktop; without them Windows 11 is opaque like Windows 10. Linux has no compositor material standard: the window stays opaque and
+the theme paints the Solid frame colour under the glass coats, so frosted surfaces still blur the app's own content.
+`native/window-material-lab.tsx` (`MATERIAL_LAB_BACKGROUND=mica|acrylic|…`, `KYBERN_DWM_EXTEND_FRAME=1`) is the look on a real
+Windows desktop; CI captures read GPUI's scene and cannot show what DWM composes behind it.
 
 ## Round 3: scoped leaf paint
 
@@ -1492,7 +1695,8 @@ text system records a scale per FontId (stripping the pseudo feature before Core
 `layout_line` applies it per run, shaped runs map back to the scaled FontId by point
 size, and `paint_line` rasterizes glyphs at the scaled size. The editor uses it for
 inline code (0.833em) and task references (13/15), like `.note-prose code` and
-`.task-ref`. Ordinary fonts are unchanged (scale 1).
+`.task-ref`. Ordinary fonts are unchanged (scale 1). DirectWrite and cosmic-text do the
+same since WP8 (PORTING-PLATFORMS.md, "WP8 text: status").
 
 ## Paint-only subtree transforms (Phase 2, render9)
 

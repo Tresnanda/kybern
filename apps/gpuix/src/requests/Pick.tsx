@@ -7,7 +7,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useGpuixRequired } from '@gpuix/react'
 import type { ChildProcess } from 'node:child_process'
-import { basename } from 'node:path'
+import { basename, isAbsolute, relative, sep } from 'node:path'
+import { osLabels } from '../platform/os.ts'
 import type { ApprovalRequest, FileEntry, PickRequestInput } from '../../../../packages/kybern-client/src/types.ts'
 import { isElementPick, pickOverlayLabel, pickTitle } from '../../../../packages/kybern-client/src/pickRequest.ts'
 import { Icon, ICONS } from '../icons.tsx'
@@ -30,12 +31,13 @@ import { beginElementPick, declinePick, endPick, sendElementPick, stopElementPic
 import { forgetPickUi, patchPickUi, usePickUi } from '../pick/store.ts'
 import { addWindowKeyHandler } from '../nav/keys.ts'
 import { KYBERN_SCREEN_RECORDING, screenRecordingGranted } from '../pick/screenRecording.ts'
-import { openSystemSettings } from '../settings/external.ts'
+import { openSystemSettings, systemSettingsFailure } from '../settings/external.ts'
 import { permissionTitle, permissionWaitingLine } from '../../../../packages/kybern-client/src/requestCards.ts'
 import { agentFor } from './choices.tsx'
 import { paneGlyph } from './glyphs.ts'
 import { AppWell } from './Permission.tsx'
 import { PhaseIn } from './summoned.tsx'
+import { isPrimary } from '../platform/keys.ts'
 
 const quote = (text: string) => `“${text}”`
 const DECLINE = 'Decline'
@@ -238,8 +240,9 @@ function PathPick({ approval, input, badge }: { approval: ApprovalRequest; input
     const paths = await renderer.promptForPaths?.({ files: !folder, directories: folder, multiple: false, prompt: 'Choose' })
     const picked = paths?.[0]
     if (!picked) return
-    const root = (thread?.cwd ?? '').replace(/\/$/, '')
-    if (root && (picked === root || picked.startsWith(`${root}/`))) { void send(picked === root ? '.' : picked.slice(root.length + 1)); return }
+    const root = (thread?.cwd ?? '').replace(/[\\/]$/, '')
+    const inside = root ? relative(root, picked) : null
+    if (inside !== null && inside !== '..' && !inside.startsWith(`..${sep}`) && !isAbsolute(inside)) { void send(inside === '' ? '.' : inside.split(sep).join('/')); return }
     setError(`Choose something inside ${root ? basename(root) : 'this workspace'}, or decline and say where it is.`)
   }
   const label = selected === null ? null : selected === '' ? 'the workspace' : basename(selected)
@@ -265,7 +268,7 @@ function PathPick({ approval, input, badge }: { approval: ApprovalRequest; input
         left={<HintText>{folder ? 'Click a folder to select it · type to filter' : 'Click a file to select it · type to filter'}</HintText>}
         right={
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-            <Button variant="ghost" size="sm" testId="pick-finder" disabled={busy} onClick={() => void chooseInFinder()}>Choose in Finder…</Button>
+            <Button variant="ghost" size="sm" testId="pick-finder" disabled={busy} onClick={() => void chooseInFinder()}>{osLabels().choose}</Button>
             <Button variant="ghost" size="sm" testId="pick-decline" disabled={busy} onKeyboard={keyboardAnswer} onClick={() => void declinePick(approval)}>{DECLINE}</Button>
             <Button variant="primary" size="sm" kbd="↵" testId="pick-send" busy={busy} disabled={busy || selected === null} onKeyboard={keyboardAnswer} onClick={() => void send(selected)}>{label ? `Send ${label.length > 22 ? `${label.slice(0, 21)}…` : label}` : 'Send'}</Button>
           </div>
@@ -370,7 +373,7 @@ function ImagePick({ approval, input, badge }: { approval: ApprovalRequest; inpu
 function PasteListener({ onPaste }: { onPaste: () => boolean }) {
   const latest = useRef(onPaste)
   latest.current = onPaste
-  useEffect(() => addWindowKeyHandler(e => e.key === 'v' && !!e.modifiers?.cmd && !e.modifiers.alt && !e.modifiers.shift ? latest.current() : false), [])
+  useEffect(() => addWindowKeyHandler(e => e.key === 'v' && isPrimary(e.modifiers) && !e.modifiers?.alt && !e.modifiers?.shift ? latest.current() : false), [])
   return null
 }
 
@@ -393,7 +396,7 @@ function ScreenRecordingStep({ approval, input, badge, onReady }: { approval: Ap
   }, [waiting])
   const open = () => {
     setError('')
-    openSystemSettings(permission.url).then(() => setWaiting(true), () => setError(`Unable to open System Settings. Open ${permission.pane_label} yourself, then capture anyway.`))
+    openSystemSettings(permission.url).then(() => setWaiting(true), () => setError(systemSettingsFailure(permission.pane_label, ', then capture anyway')))
   }
   const asked = input.prompt ? ` ${agentFor(approval)} asked: ${quote(input.prompt)}` : ''
   return (

@@ -1,21 +1,22 @@
 // Live visual documents (ADE-69). A visual rests as a picture; clicking it makes one WK document live in its place.
-// The document belongs to this module, not to a component, so "Open in a tab" moves the same document (owner `inline`
-// → `tab`) with its state, and a row the virtualiser unmounts does not reload it. At most MAX_DOCS documents exist,
-// live or warm: a warm one is hidden with its state for WARM_MS, then destroyed. Opening a third retires the least
-// recently used one: its owner first turns it back into a picture (`retire`), then it is destroyed.
+// The document belongs to this module, not to a component, so "Open in a tab" and "Full screen" move the same document
+// (owner `inline` → `tab` or `modal`) with its state, and a row the virtualiser unmounts does not reload it. At most
+// MAX_DOCS documents exist, live or warm: a warm one is hidden with its state for WARM_MS, then destroyed. Opening a
+// third retires the least recently used one: its owner first turns it back into a picture (`retire`), then it is destroyed.
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import { visualHeight, visualLink, visualThemeFragment, type VisualTheme } from '../../../../packages/kybern-client/src/visuals.ts'
 import { activeEnvironment, onEnvironmentChange } from '../shell/environment.ts'
 import { getClient } from '../state.ts'
 import { launchBrowser } from '../preview/browser.ts'
 import { webHost, type WebEvent } from '../native/webview.ts'
+import { VISUAL_NO_WEB_VIEW } from './visualFallback.ts'
 
 export const MAX_DOCS = 2
 const WARM_MS = 60_000
 /** How long a retiring owner may take to freeze its document before it is destroyed anyway. */
 const RETIRE_MS = 600
 
-export type DocOwner = 'inline' | 'tab'
+export type DocOwner = 'inline' | 'tab' | 'modal'
 export type DocMessage =
   | { kind: 'ready'; height: number | null }
   | { kind: 'size'; height: number }
@@ -126,8 +127,8 @@ function evict(except: string) {
 }
 
 /**
- * Claim the visual's document for `owner`, creating it (hidden until it reports its size) when there is none. A tab
- * takes it from the inline figure; the figure takes it back only when no tab holds it.
+ * Claim the visual's document for `owner`, creating it (hidden until it reports its size) when there is none. A tab or
+ * the full-screen viewer takes it from the inline figure; the figure takes it back only when neither holds it.
  */
 export function claimDoc(threadId: string, visualId: string, owner: DocOwner, theme: VisualTheme): string {
   route()
@@ -135,7 +136,7 @@ export function claimDoc(threadId: string, visualId: string, owner: DocOwner, th
   let doc = docs.get(id)
   if (doc?.retiring) { destroy(doc); doc = undefined }
   if (doc) {
-    if (doc.owner === 'tab' && owner === 'inline') return id
+    if (doc.owner && doc.owner !== 'inline' && owner === 'inline') return id
     clearTimeout(doc.warm)
     doc.owner = owner; doc.usedAt = Date.now(); doc.theme = theme
     changed()
@@ -146,6 +147,8 @@ export function claimDoc(threadId: string, visualId: string, owner: DocOwner, th
   docs.set(id, doc)
   changed()
   const created = doc, client = getClient(), environment = activeEnvironment()
+  // No embedded web view: nothing can show a live page, and a frame ticket minted for it would never be served.
+  if (!webHost.available) { created.error = VISUAL_NO_WEB_VIEW; changed(); return id }
   if (!client) { created.error = 'Kybern is not connected. Reconnect, then reload the visual.'; changed(); return id }
   void client.call('threads.visuals.frame', { thread_id: threadId, visual_id: visualId }).then(result => {
     if (docs.get(id) !== created || environment !== activeEnvironment()) { void client.call('threads.visuals.revoke', { thread_id: threadId, ticket: result.ticket }).catch(() => {}); return }
@@ -200,3 +203,17 @@ export function freezeDoc(id: string, path: string): number {
 }
 
 onEnvironmentChange(() => { for (const doc of [...docs.values()]) destroy(doc) })
+
+/**
+ * Open the visual's page in the default browser (no embedded web view). It takes a fresh frame ticket, which the daemon serves
+ * once and drops after 60 s, so "open again" always asks for another; a ticket the browser never received is revoked. The
+ * page runs as a plain top-level document there: it can be explored but cannot answer (its bridge posts to a parent frame
+ * only), so a question is answered in Kybern.
+ */
+export async function openVisualInBrowser(threadId: string, visualId: string, theme: VisualTheme): Promise<void> {
+  const client = getClient()
+  if (!client) throw Error('Kybern is not connected. Reconnect, then open the visual again.')
+  const { ticket } = await client.call('threads.visuals.frame', { thread_id: threadId, visual_id: visualId })
+  try { await launchBrowser(`${httpBase(client.endpoint.url)}/visual-frame/${encodeURIComponent(ticket)}` + visualThemeFragment(theme)) }
+  catch (error) { void client.call('threads.visuals.revoke', { thread_id: threadId, ticket }).catch(() => {}); throw error }
+}

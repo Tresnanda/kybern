@@ -7,6 +7,7 @@
 //! turn that ends with a `result` frame. Permission prompts arrive as
 //! `control_request{subtype:"can_use_tool"}` and are answered on stdin.
 
+use kybern_protocol::process::NoWindow;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::Write;
@@ -73,6 +74,7 @@ impl AgentDriver for ClaudeDriver {
             std::time::Duration::from_secs(60),
             crate::process_tree::output(
                 Command::new(&bin)
+                    .no_window()
                     .current_dir(cwd)
                     .args([
                         "-p",
@@ -129,7 +131,7 @@ impl AgentDriver for ClaudeDriver {
             _ => Uuid::new_v4().to_string(),
         };
 
-        let mut cmd = Command::new(&bin);
+        let mut cmd = Command::new(&bin).no_window();
         cmd.current_dir(&config.cwd)
             .args(["--output-format", "stream-json", "--input-format", "stream-json", "--verbose", "--include-partial-messages"])
             .args(["--permission-prompt-tool", "stdio"]);
@@ -565,7 +567,7 @@ fn claude_efforts(help: &str) -> Vec<String> {
 }
 
 pub(crate) fn contextual_command(binary: &std::path::Path, context: &ProbeContext) -> Command {
-    let mut command = Command::new(binary);
+    let mut command = Command::new(binary).no_window();
     if let Some(cwd) = context.cwd.as_deref() {
         command.current_dir(cwd);
     }
@@ -2396,6 +2398,7 @@ mod tests {
                     permission_mode: kybern_protocol::PermissionMode::FullAccess,
                     native_tool_bridge: enabled.then_some(bridge),
                     resume_session_id: resume.then(|| "existing-provider-session".into()),
+                    resume_lacks_instructions: false,
                     fork,
                     rewind: None,
                     binary: Some(binary),
@@ -2467,6 +2470,7 @@ mod tests {
                     permission_mode: kybern_protocol::PermissionMode::FullAccess,
                     native_tool_bridge: Some(bridge),
                     resume_session_id: None,
+                    resume_lacks_instructions: false,
                     fork: false,
                     rewind: None,
                     binary: Some(binary),
@@ -2513,6 +2517,7 @@ mod tests {
                     permission_mode: mode,
                     native_tool_bridge: None,
                     resume_session_id: resume.map(str::to_string),
+                    resume_lacks_instructions: false,
                     fork,
                     rewind: None,
                     binary: Some(binary),
@@ -2596,6 +2601,7 @@ mod tests {
                     permission_mode: kybern_protocol::PermissionMode::FullAccess,
                     native_tool_bridge: None,
                     resume_session_id: None,
+                    resume_lacks_instructions: false,
                     fork: false,
                     rewind: None,
                     binary: Some(binary),

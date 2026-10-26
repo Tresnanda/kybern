@@ -39,6 +39,7 @@ expression: names
 - projects.remove
 - projects.scan_repos
 - projects.members.status
+- projects.map
 - projects.instructions.create
 - spaces.list
 - spaces.create
@@ -71,6 +72,9 @@ expression: names
 - notes.restore
 - notes.purge
 - notes.search
+- notes.tidy_offer
+- notes.tidy_snooze
+- notes.tidy_start
 - tasks.items.list
 - tasks.items.get
 - tasks.items.create
@@ -96,6 +100,8 @@ expression: names
 - coordinator.open
 - coordinator.setup
 - coordinator.switch_harness
+- coordinator.refresh_context
+- coordinator.edit_handoff
 - tasks.list
 - tasks.stop
 - tasks.background

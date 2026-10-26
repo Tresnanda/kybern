@@ -7,6 +7,7 @@
 //! success only by running the recipe's verify command every two seconds. The
 //! tool returns once the CLI is signed in, the user declines, or the wait ends.
 
+use kybern_protocol::process::NoWindow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -184,7 +185,7 @@ impl Checker {
         match &self.plan {
             Plan::Known(recipe) => cli_login::verify(recipe, &self.binary, &self.cwd).await,
             Plan::Custom { verify, .. } => {
-                let mut command = tokio::process::Command::new(cli_login::shell());
+                let mut command = tokio::process::Command::new(cli_login::shell()).no_window();
                 command
                     .args(["-lc", verify])
                     .current_dir(&self.cwd)

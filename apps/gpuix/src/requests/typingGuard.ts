@@ -12,7 +12,7 @@ import type { ApprovalRequest } from '../../../../packages/kybern-client/src/typ
 import { isUserInput } from '../../../../packages/kybern-client/src/userInput.ts'
 import { isElementPick, pickRequestInput } from '../../../../packages/kybern-client/src/pickRequest.ts'
 import { secretRequestInput } from '../../../../packages/kybern-client/src/secretRequest.ts'
-import { briefProposalInput, settingsProposalInput } from '../../../../packages/kybern-client/src/coordinatorCards.ts'
+import { briefProposalInput, noteChangesProposalInput, settingsProposalInput } from '../../../../packages/kybern-client/src/coordinatorCards.ts'
 import { loginRequestInput, promptRequestInput } from '../../../../packages/kybern-client/src/requestCards.ts'
 import { agentName } from './model.ts'
 import { someoneIsTyping } from './ui.ts'
@@ -134,7 +134,7 @@ export function holdTitle(approval: ApprovalRequest, provider: string | undefine
   if (loginRequestInput(approval)) return `${cap} needs a sign-in code`
   const pick = pickRequestInput(approval)
   if (pick && !isElementPick(pick.kind)) return `${cap} needs you to choose something`
-  if (briefProposalInput(approval) || settingsProposalInput(approval)) return `${cap} has a proposal`
+  if (briefProposalInput(approval) || settingsProposalInput(approval) || noteChangesProposalInput(approval)) return `${cap} has a proposal`
   if (isUserInput(approval)) return `${cap} has a question`
   return `${cap} needs your input`
 }

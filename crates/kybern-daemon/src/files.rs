@@ -1,6 +1,7 @@
 //! Project file listing for @mentions: `git ls-files` where there is a
 //! repository (so ignores apply), a bounded walk otherwise.
 
+use kybern_protocol::process::NoWindow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -8,10 +9,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-const MAX_FILES: usize = 20_000;
+pub(crate) const MAX_FILES: usize = 20_000;
 const MAX_INDEX_SLOTS: usize = 8;
 const INDEX_CACHE_TTL: Duration = Duration::from_secs(3);
-const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", ".next", "dist", "build", ".venv", "venv", "__pycache__", ".cache"];
+pub(crate) const SKIP_DIRS: &[&str] =
+    &[".git", "node_modules", "target", ".next", "dist", "build", ".venv", "venv", "__pycache__", ".cache"];
 
 struct CachedIndex {
     loaded_at: Instant,
@@ -122,6 +124,7 @@ async fn list_uncached(root: &Path) -> Result<Vec<String>> {
 /// `git ls-files` of a repository, or `None` when `dir` is not one.
 async fn git_files(dir: &Path) -> Option<Vec<String>> {
     let out = tokio::process::Command::new("git")
+        .no_window()
         .args(["-C"])
         .arg(dir)
         .args(["ls-files", "--cached", "--others", "--exclude-standard", "-z"])

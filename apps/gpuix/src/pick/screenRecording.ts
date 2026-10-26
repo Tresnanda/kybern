@@ -6,6 +6,7 @@ import type { PermissionRequestInput } from '../../../../packages/kybern-client/
 
 /** True or false from CoreGraphics; null when it cannot be asked (not macOS, or the symbol is missing). */
 export function screenRecordingGranted(): boolean | null {
+  if (process.platform !== 'darwin') return null
   try {
     const lib = dlopen('/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics', { CGPreflightScreenCaptureAccess: { args: [], returns: FFIType.bool } })
     return !!lib.symbols.CGPreflightScreenCaptureAccess()
@@ -28,5 +29,6 @@ export const KYBERN_SCREEN_RECORDING: PermissionRequestInput = {
 
 /** Open System Settings at Screen Recording (the Attach menu of a question, which has no card of its own to wait in). */
 export function openScreenRecordingSettings(): void {
+  if (process.platform !== 'darwin') return
   try { Bun.spawn(['open', KYBERN_SCREEN_RECORDING.url], { stdout: 'ignore', stderr: 'ignore' }) } catch { /* System Settings did not open; the error line says what to do. */ }
 }

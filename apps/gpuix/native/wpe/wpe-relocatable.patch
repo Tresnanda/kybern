@@ -1,0 +1,132 @@
+--- a/Source/WebKit/Shared/glib/ProcessExecutablePathGLib.cpp
++++ b/Source/WebKit/Shared/glib/ProcessExecutablePathGLib.cpp
+@@ -30,6 +30,29 @@
+ #include <glib.h>
+ #include <wtf/FileSystem.h>
+ 
++// Kybern: WPE ships inside Kybern's packages (AppImage, .deb, .rpm) at a path only known at run time, so the
++// directories compiled in as LIBDIR/PKGLIBDIR/PKGLIBEXECDIR are resolved beside the loaded libWPEWebKit instead.
++// See apps/gpuix/native/wpe/README.md in the Kybern repository.
++#ifndef KYBERN_RELOCATED_DIRS
++#define KYBERN_RELOCATED_DIRS
++#include <dlfcn.h>
++static const char* kybernRelocatedLibDir()
++{
++    static char* directory = [] {
++        Dl_info info;
++        if (dladdr(reinterpret_cast<void*>(&kybernRelocatedLibDir), &info) && info.dli_fname && info.dli_fname[0] == '/')
++            return g_path_get_dirname(info.dli_fname);
++        return g_strdup(LIBDIR);
++    }();
++    return directory;
++}
++static const char* kybernRelocatedPkgLibDir()
++{
++    static char* directory = g_build_filename(kybernRelocatedLibDir(), "wpe-webkit-2.0", nullptr);
++    return directory;
++}
++#endif
++
+ namespace WebKit {
+ 
+ #if ENABLE(DEVELOPER_MODE)
+@@ -60,7 +83,7 @@
+     }
+ #endif
+ 
+-    return FileSystem::pathByAppendingComponent(FileSystem::stringFromFileSystemRepresentation(PKGLIBEXECDIR), processName);
++    return FileSystem::pathByAppendingComponent(FileSystem::stringFromFileSystemRepresentation(kybernRelocatedPkgLibDir()), processName);
+ }
+ 
+ String executablePathOfWebProcess()
+--- a/Source/WebKit/UIProcess/API/glib/WebKitWebContext.cpp
++++ b/Source/WebKit/UIProcess/API/glib/WebKitWebContext.cpp
+@@ -77,6 +77,29 @@
+ #include <wtf/glib/WTFGType.h>
+ #include <wtf/text/CString.h>
+ 
++// Kybern: WPE ships inside Kybern's packages (AppImage, .deb, .rpm) at a path only known at run time, so the
++// directories compiled in as LIBDIR/PKGLIBDIR/PKGLIBEXECDIR are resolved beside the loaded libWPEWebKit instead.
++// See apps/gpuix/native/wpe/README.md in the Kybern repository.
++#ifndef KYBERN_RELOCATED_DIRS
++#define KYBERN_RELOCATED_DIRS
++#include <dlfcn.h>
++static const char* kybernRelocatedLibDir()
++{
++    static char* directory = [] {
++        Dl_info info;
++        if (dladdr(reinterpret_cast<void*>(&kybernRelocatedLibDir), &info) && info.dli_fname && info.dli_fname[0] == '/')
++            return g_path_get_dirname(info.dli_fname);
++        return g_strdup(LIBDIR);
++    }();
++    return directory;
++}
++static const char* kybernRelocatedPkgLibDir()
++{
++    static char* directory = g_build_filename(kybernRelocatedLibDir(), "wpe-webkit-2.0", nullptr);
++    return directory;
++}
++#endif
++
+ #if PLATFORM(GTK)
+ #include "WebKitRemoteInspectorProtocolHandler.h"
+ #endif
+@@ -347,7 +370,7 @@
+     if (bundleDirectory && g_file_test(bundleDirectory, G_FILE_TEST_IS_DIR))
+         return bundleDirectory;
+ 
+-    static const char* injectedBundlePath = PKGLIBDIR G_DIR_SEPARATOR_S "injected-bundle" G_DIR_SEPARATOR_S;
++    static const char* injectedBundlePath = g_build_filename(kybernRelocatedPkgLibDir(), "injected-bundle", G_DIR_SEPARATOR_S, nullptr);
+     return injectedBundlePath;
+ }
+ 
+--- a/Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp
++++ b/Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp
+@@ -30,6 +30,29 @@
+ #include <wtf/NeverDestroyed.h>
+ #include <wtf/UUID.h>
+ #include <wtf/UniStdExtras.h>
++
++// Kybern: WPE ships inside Kybern's packages (AppImage, .deb, .rpm) at a path only known at run time, so the
++// directories compiled in as LIBDIR/PKGLIBDIR/PKGLIBEXECDIR are resolved beside the loaded libWPEWebKit instead.
++// See apps/gpuix/native/wpe/README.md in the Kybern repository.
++#ifndef KYBERN_RELOCATED_DIRS
++#define KYBERN_RELOCATED_DIRS
++#include <dlfcn.h>
++static const char* kybernRelocatedLibDir()
++{
++    static char* directory = [] {
++        Dl_info info;
++        if (dladdr(reinterpret_cast<void*>(&kybernRelocatedLibDir), &info) && info.dli_fname && info.dli_fname[0] == '/')
++            return g_path_get_dirname(info.dli_fname);
++        return g_strdup(LIBDIR);
++    }();
++    return directory;
++}
++static const char* kybernRelocatedPkgLibDir()
++{
++    static char* directory = g_build_filename(kybernRelocatedLibDir(), "wpe-webkit-2.0", nullptr);
++    return directory;
++}
++#endif
+ #include <wtf/glib/Application.h>
+ #include <wtf/glib/GRefPtr.h>
+ #include <wtf/glib/GSpanExtras.h>
+@@ -828,7 +851,7 @@
+         "--ro-bind-try", "/lib", "/lib",
+         "--ro-bind-try", "/usr/lib", "/usr/lib",
+         "--ro-bind-try", "/usr/local/lib", "/usr/local/lib",
+-        "--ro-bind-try", LIBDIR, LIBDIR,
++        "--ro-bind-try", kybernRelocatedLibDir(), kybernRelocatedLibDir(),
+ #if defined(WEBKIT_SWIFT_STDLIB_LIBRARY_PATH)
+         "--ro-bind-try", WEBKIT_SWIFT_STDLIB_LIBRARY_PATH, WEBKIT_SWIFT_STDLIB_LIBRARY_PATH,
+ #endif
+@@ -842,7 +865,7 @@
+         "--ro-bind-try", "/usr/local/lib32", "/usr/local/lib32",
+ #endif
+ 
+-        "--ro-bind-try", PKGLIBEXECDIR, PKGLIBEXECDIR,
++        "--ro-bind-try", kybernRelocatedPkgLibDir(), kybernRelocatedPkgLibDir(),
+     };
+ 
+     if (enableDebugPermissions()) {

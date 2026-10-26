@@ -1,4 +1,4 @@
-import { COORDINATOR_BRIEF_TOOL, COORDINATOR_SETTINGS_TOOL, CURSOR_QUESTION_TOOL, LOGIN_REQUEST_TOOL, NORMALIZED_ANSWERS_KEY, PICK_REQUEST_TOOL, PROMPT_REQUEST_TOOL, SECRET_REQUEST_TOOL, VISUAL_ANSWER_TOOL, type ApprovalRequest, type PendingRequestKind, type ContentPart, type UserInputAnswer, type UserInputAttachment } from "./types.ts"
+import { COORDINATOR_BRIEF_TOOL, COORDINATOR_NOTES_TOOL, COORDINATOR_SETTINGS_TOOL, CURSOR_QUESTION_TOOL, LOGIN_REQUEST_TOOL, NORMALIZED_ANSWERS_KEY, PICK_REQUEST_TOOL, PROMPT_REQUEST_TOOL, SECRET_REQUEST_TOOL, VISUAL_ANSWER_TOOL, type ApprovalRequest, type PendingRequestKind, type ContentPart, type UserInputAnswer, type UserInputAttachment } from "./types.ts"
 
 export const record = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -94,7 +94,7 @@ export function normalizedResponse(questions: Pick<QuestionSpec, "id">[], answer
 
 /** Whether a request waits for an answer (a question, a form, a sign-in, a secret) or an approval; `ApprovalRequest::pending_kind`. */
 export function pendingKind(approval: Pick<ApprovalRequest, "tool_name" | "input">): PendingRequestKind {
-  const answers = isUserInput(approval) || [SECRET_REQUEST_TOOL, VISUAL_ANSWER_TOOL, PICK_REQUEST_TOOL, LOGIN_REQUEST_TOOL, PROMPT_REQUEST_TOOL, COORDINATOR_BRIEF_TOOL, COORDINATOR_SETTINGS_TOOL].includes(approval.tool_name)
+  const answers = isUserInput(approval) || [SECRET_REQUEST_TOOL, VISUAL_ANSWER_TOOL, PICK_REQUEST_TOOL, LOGIN_REQUEST_TOOL, PROMPT_REQUEST_TOOL, COORDINATOR_BRIEF_TOOL, COORDINATOR_SETTINGS_TOOL, COORDINATOR_NOTES_TOOL].includes(approval.tool_name)
   return answers && !connectorApproval(approval as ApprovalRequest) ? "question" : "approval"
 }
 

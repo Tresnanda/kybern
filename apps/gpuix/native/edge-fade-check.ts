@@ -1,4 +1,4 @@
-// Native `edgeFade` (N3, patches/edge_fade.rs + the fade link in rounded_clip.rs).
+// Native `edgeFade` (N3, native/upstream/packages/native/src/edge_fade.rs + the fade link in rounded_clip.rs).
 // On a transparent window the captured alpha of opaque content is the fade:
 // at d px from a faded edge with ramp b it must be (d/b)² ± 0.02, for a quad, an
 // image and glyphs (glyphs as a ratio to an unfaded copy); nested scopes multiply;

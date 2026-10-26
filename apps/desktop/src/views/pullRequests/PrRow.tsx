@@ -1,5 +1,6 @@
 import { memo } from "react"
 
+import { Badge } from "@/components/kit/badge"
 import { DiffStat } from "@/components/kit/diff-stat"
 import { relativeTime } from "@/lib/format"
 import { SIDEBAR_ROW_HOVER_CLASS_NAME } from "@/lib/kit/sidebarRowStyles"
@@ -7,7 +8,7 @@ import { cn } from "@/lib/utils"
 import type { ProjectId, PullRequest } from "@/protocol"
 import { openPullRequest } from "@/state/prReview"
 
-import { prRowId } from "./prIds"
+import { prRef, prRowId } from "./prIds"
 import { PrAvatar } from "./PrAvatar"
 import { checksDotLabel } from "./prChecks"
 import { resolvePrState } from "./prState"
@@ -25,12 +26,15 @@ function ciDotClass(failed: number, pending: number) {
 export const PrRow = memo(function PrRow({
   pr,
   projectId,
+  memberName,
   selected,
   tabbable,
   onFocusRow,
 }: {
   pr: PullRequest
   projectId: ProjectId
+  /** Group projects: display name of the member repository this PR is in. */
+  memberName?: string
   selected: boolean
   tabbable: boolean
   onFocusRow: (key: string) => void
@@ -38,17 +42,18 @@ export const PrRow = memo(function PrRow({
   const state = resolvePrState(pr)
   const summary = pr.checks_summary
   const updated = new Date(pr.updated_at)
+  const key = prRef(projectId, pr.number, pr.repo)
   return (
     <button
-      id={prRowId(projectId, pr.number)}
+      id={prRowId(projectId, pr.number, pr.repo)}
       data-pr-row
-      data-row-key={`${projectId}:${pr.number}`}
+      data-row-key={key}
       type="button"
       aria-current={selected ? "page" : undefined}
       tabIndex={tabbable ? 0 : -1}
-      title={`${pr.title} #${pr.number}`}
-      onFocus={() => onFocusRow(`${projectId}:${pr.number}`)}
-      onClick={() => openPullRequest(projectId, pr.number)}
+      title={`${memberName ? `${memberName}: ` : ""}${pr.title} #${pr.number}`}
+      onFocus={() => onFocusRow(key)}
+      onClick={() => openPullRequest(projectId, pr.number, pr.repo)}
       className={cn(
         "pr-row -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 flex-col gap-1 rounded-lg px-3 py-2 text-start outline-none focus-visible:ring-1 focus-visible:ring-ring",
         SIDEBAR_ROW_HOVER_CLASS_NAME,
@@ -76,6 +81,15 @@ export const PrRow = memo(function PrRow({
           aria-label={state.label}
           className={cn("size-3.5 shrink-0", state.colorClass)}
         />
+        {memberName && (
+          <Badge
+            variant="secondary"
+            size="sm"
+            className="max-w-[40%] min-w-0 justify-start"
+          >
+            <span className="truncate">{memberName}</span>
+          </Badge>
+        )}
         <PrAvatar
           login={pr.author}
           url={pr.author_avatar_url}

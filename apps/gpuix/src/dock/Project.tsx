@@ -23,6 +23,8 @@ import { DockFooter, DockSection as Section, ScopeHeader } from './Notes.tsx'
 import { ErrorLine, SwitchRow } from './parts.tsx'
 import { Button } from '../kit/Button.tsx'
 import { Segmented } from '../kit/Segmented.tsx'
+import { Select } from '../settings/controls.tsx'
+import { ROTATION_COPY, rotationBudgetChoices } from '../../../../packages/kybern-client/src/rotation.ts'
 import { TextArea } from '../kit/TextArea.tsx'
 
 export function ProjectPane({ thread }: { thread: Thread }) {
@@ -81,6 +83,7 @@ export function ProjectPane({ thread }: { thread: Thread }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Choice label={COPY.autonomy} value={effective.lead_autonomy} options={AUTONOMY_OPTIONS} disabled={busy} onChange={value => void write(withOverrideField(current(), 'lead_autonomy', value as typeof effective.lead_autonomy))} />
         <Label color={t.textTertiary} size={13} lineHeight={18.2}>{AUTONOMY_OPTIONS.find(o => o.value === effective.lead_autonomy)!.hint}</Label></div>
         <Choice label={COPY.workspace} value={effective.lead_workspace} options={WORKSPACE_OPTIONS} disabled={busy} onChange={value => void write(withOverrideField(current(), 'lead_workspace', value as typeof effective.lead_workspace))} />
+        <RotationBudget value={project?.coordinator?.rotation_budget_tokens} disabled={busy} onChange={value => void write(withOverrideField(current(), 'rotation_budget_tokens', value))} />
         <SwitchRow title={COPY.push} detail={COPY.pushDetail} checked={effective.lead_push_without_asking} disabled={busy} onChange={() => void write(withOverrideField(current(), 'lead_push_without_asking', !effective.lead_push_without_asking))} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Label color={t.textSecondary} size={13} lineHeight={16}>{COPY.models}</Label><div style={{ display: 'flex', flexDirection: 'column', borderRadius: 8, borderWidth: 1, borderColor: t.borderLight, backgroundColor: t.v('--color-background-elevated-primary-opaque'), overflow: 'hidden' }}>
         {COORDINATOR_ROLES.map(({ role, label }) => {
@@ -125,6 +128,19 @@ export function ProjectPane({ thread }: { thread: Thread }) {
 function Hint({ children }: { children: string }) {
   const t = useTheme()
   return <div style={{ display: 'flex', width: '100%', paddingLeft: 14, paddingRight: 14, paddingTop: 2, paddingBottom: 8 }}><Label color={t.textTertiary} size={13} lineHeight={16} style={{ flexGrow: 1, minWidth: 0, whiteSpace: 'normal' }}>{children}</Label></div>
+}
+
+/** "Refresh Coordinator context at": this project's override of the budget, or the Settings default. */
+function RotationBudget({ value, disabled, onChange }: { value: number | null | undefined; disabled: boolean; onChange: (value: number | null) => void }) {
+  const t = useTheme()
+  const options = [...rotationBudgetChoices(value), { value: 'default', label: ROTATION_COPY.useDefault }]
+  return <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+      <Label color={t.textSecondary} size={13} lineHeight={16} truncate>{ROTATION_COPY.settingTitle}</Label>
+      <Select compact label={ROTATION_COPY.settingTitle} testId="dock-project-rotation-budget" value={typeof value === 'number' ? String(value) : 'default'} options={options} disabled={disabled} onChange={next => onChange(next === 'default' ? null : Number(next))} />
+    </div>
+    <Label color={t.textTertiary} size={13} lineHeight={18.2}>{ROTATION_COPY.settingDetail}</Label>
+  </div>
 }
 
 function Choice({ label, value, options, disabled, onChange }: { label: string; value: string; options: readonly { value: string; label: string }[]; disabled: boolean; onChange: (value: string) => void }) {

@@ -63,6 +63,10 @@ export const ENTER = {
   pane: { distance: DISTANCE.micro, duration: DURATION.fast, scale: 0.995 },
   /** `sidebar-surface-enter`: the sidebar list after its surface changed (`--ease-out`, 160 ms). */
   surface: { distance: DISTANCE.micro, duration: 0.16, ease: EASE.out },
+  /** A status row's label arriving in the transcript (rotation row): opacity and a 4 px rise, 250 ms `--ease-out`. */
+  label: { distance: DISTANCE.micro, duration: DURATION.fast, ease: EASE.out },
+  /** A rare meta label appearing after an action ("Edited by you"): opacity and a 4 px blur, 250 ms `--ease-out`. */
+  meta: { distance: 0, duration: DURATION.fast, blur: 4, ease: EASE.out },
   /** `t-img`: an image that finished loading, resolving from a 8 px blur. */
   image: { distance: 0, duration: DURATION.slow, scale: 0.985, blur: BLUR.large },
 } as const satisfies Record<string, { distance: number; duration: number; scale?: number; blur?: number; ease?: Ease; delayStep?: number; origin?: [number, number] }>
@@ -90,6 +94,22 @@ export function enterTransform(kind: EnterKind, index = 0): PaintTransformProps 
     transition: tween(spec.duration, spec.ease ?? EASE.smoothOut, spec.delayStep ? index * spec.delayStep : 0),
     ...(spec.origin ? { origin: spec.origin } : {}),
   }
+}
+
+/**
+ * A hairline growing out of the label it flanks (`scaleX .6 → 1` from `origin`, with opacity), 250 ms `--ease-out`. Reduce Motion
+ * fades only; `undefined` with the stock addon.
+ */
+export function lineEnterTransform(origin: [number, number]): PaintTransformProps | undefined {
+  if (!PATCHED_NATIVE) return undefined
+  if (REDUCED_MOTION) return REDUCED_FADE
+  const initial: PaintTransformValue = { opacity: 0, scaleX: 0.6 }
+  return { initial, animate: restOf(initial), transition: tween(DURATION.fast, EASE.out), origin }
+}
+
+/** A 150 ms opacity cross-fade for content that swaps in place (read ↔ edit); `undefined` with the stock addon. */
+export function fadeTransform(): PaintTransformProps | undefined {
+  return PATCHED_NATIVE ? REDUCED_FADE : undefined
 }
 
 /**
@@ -313,11 +333,20 @@ export function Collapse({ open, children, height: known, testId, closeDuration 
 let swapGeneration = 3_000_000
 
 /** `t-text-swap` (`motion.css:206`) and `t-icon-swap` (`:250`): [incoming, outgoing] start/end values and timings. */
-function swapTransforms(kind: 'text' | 'icon', generation: number, blur = true): { enter: PaintTransformProps; leave: PaintTransformProps } | undefined {
+function swapTransforms(kind: 'text' | 'icon' | 'state', generation: number, blur = true): { enter: PaintTransformProps; leave: PaintTransformProps } | undefined {
   if (!PATCHED_NATIVE || REDUCED_MOTION) return undefined
   if (kind === 'icon') {
     const hidden: PaintTransformValue = { opacity: 0, scale: 0.6, blur: BLUR.small }
     const transition = tween(DURATION.fast, EASE.inOut)
+    return {
+      enter: { initial: hidden, animate: restOf(hidden), transition },
+      leave: { initial: restOf(hidden), animate: hidden, transition, generation },
+    }
+  }
+  if (kind === 'state') {
+    // A label that changes state in place: no movement, opacity and a 4 px blur both ways, 300 ms.
+    const hidden: PaintTransformValue = { opacity: 0, blur: 4 }
+    const transition = tween(0.3, EASE.swap)
     return {
       enter: { initial: hidden, animate: restOf(hidden), transition },
       leave: { initial: restOf(hidden), animate: hidden, transition, generation },
@@ -337,6 +366,8 @@ function swapTransforms(kind: 'text' | 'icon', generation: number, blur = true):
  *
  *  - `kind="text"` (default): in 250 ms `--ease-smooth-out` from 4 px below with a 2 px blur; out 150 ms `--ease-in-out` to 4 px
  *    above with a 2 px blur. The outgoing copy sits at the wrapper's top-left.
+ *  - `kind="state"`: a status label that becomes another (rotation row "Refreshing context…" → "Context refreshed"): opacity and a
+ *    4 px blur both ways over 300 ms `[.2, 0, 0, 1]`, no movement; the outgoing copy sits at the wrapper's top-left.
  *  - `kind="icon"`: both 250 ms `--ease-in-out`, scale 0.6 and a 2 px blur on the way out and in; the outgoing copy is
  *    centred over the incoming one.
  *
@@ -351,7 +382,7 @@ export function Swap({ active, children, style, kind = 'text', still = false, in
   active: string
   children: ReactNode
   style?: StyleDesc
-  kind?: 'text' | 'icon'
+  kind?: 'text' | 'icon' | 'state'
   still?: boolean
   /** Extra style for the incoming and the outgoing child's box (a truncating title needs `minWidth: 0` / `flexGrow: 1` on both). */
   innerStyle?: StyleDesc
@@ -400,7 +431,7 @@ export function Swap({ active, children, style, kind = 'text', still = false, in
  * change cross-swaps, including the very first one (the previous state is kept for its exit). Use this, not a plain div
  * until the first change and a `Swap` after it: that would lose the outgoing state of the first change.
  */
-export function SwapOnChange({ active, children, style, kind = 'text', innerStyle, leavingStyle, blur }: { active: string; children: ReactNode; style?: StyleDesc; kind?: 'text' | 'icon'; innerStyle?: StyleDesc; leavingStyle?: StyleDesc; blur?: boolean }) {
+export function SwapOnChange({ active, children, style, kind = 'text', innerStyle, leavingStyle, blur }: { active: string; children: ReactNode; style?: StyleDesc; kind?: 'text' | 'icon' | 'state'; innerStyle?: StyleDesc; leavingStyle?: StyleDesc; blur?: boolean }) {
   return <Swap active={active} style={style} kind={kind} innerStyle={innerStyle} leavingStyle={leavingStyle} blur={blur} still>{children}</Swap>
 }
 

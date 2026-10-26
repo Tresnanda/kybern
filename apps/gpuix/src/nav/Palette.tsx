@@ -36,6 +36,7 @@ import { N } from './glyphs.ts'
 import { canMoveNavHistory, goBack, goForward, goPage, isNavEntryValid, newThread, openThread } from './history.ts'
 import { Dialog, muted } from './overlay.tsx'
 import { Kbd } from '../kit/Kbd.tsx'
+import { isEmacsCtrl, SHORTCUT, shortcutCaps } from '../platform/keys.ts'
 import { getNav, setNav, useNav } from './store.ts'
 
 interface Item {
@@ -83,7 +84,7 @@ function PaletteDialog() {
   const groups = useMemo(() => {
     const kbd = (keys: string[]) => <Kbd keys={keys} />
     const projectName = (id: string) => (isFreeChatProject(id) ? 'Free chat' : (projects.find((p) => p.id === id)?.name ?? ''))
-    // Every other space, then "New space…" (§7.11): ⌃1–⌃8 and ⌃9 for the last, as on the rail.
+    // Every other space, then "New space…" (§7.11): ⌃1–⌃8 and ⌃9 for the last (Alt off macOS), as on the rail.
     const spaceCommands = (): Item[] => [
       ...spaces.flatMap((space, index): Item[] => space.id === spaceId ? [] : [{
         id: `space:${space.id}`,
@@ -91,7 +92,7 @@ function PaletteDialog() {
         keywords: `switch space ${space.name}`,
         group: 'Suggested',
         icon: <SpaceLogo space={space} size={16} />,
-        meta: spaces.length >= 2 && (index < 8 || (index === spaces.length - 1 && spaces.length > 8)) ? kbd(['⌃', index === spaces.length - 1 && spaces.length > 8 ? '9' : String(index + 1)]) : undefined,
+        meta: spaces.length >= 2 && (index < 8 || (index === spaces.length - 1 && spaces.length > 8)) ? kbd([SHORTCUT.space, index === spaces.length - 1 && spaces.length > 8 ? '9' : String(index + 1)]) : undefined,
         run: () => { switchSpace(space.id, 'pointer') },
       }]),
       ...(current ? [{ id: 'space-rename', label: SPACE_COPY.paletteRename, keywords: 'rename edit space name color icon', group: 'Suggested' as const, icon: <Icon source={N.pencil} size={15} color={muted(t, 1)} />, run: () => openSpaceEditor({ anchor: current.id, mode: 'edit', still: true }) }] : []),
@@ -131,10 +132,10 @@ function PaletteDialog() {
         ? [{ id: 'close-pane', label: 'Close pane', keywords: 'close pane split group column', group: 'Suggested' as const, icon: <Icon source={N.x} size={15} color={muted(t, 1)} />, meta: kbd(['⌘', '⇧', 'W']), run: () => void closeFocusedPane() }]
         : []),
       ...(settingsOpen || canMoveNavHistory(history, -1, isNavEntryValid)
-        ? [{ id: 'go-back', label: 'Go back', keywords: 'back previous history navigate return', group: 'Suggested' as const, icon: <Icon source={N.arrowLeft} size={15} color={muted(t, 1)} />, meta: kbd(['⌘', '[']), run: () => void goBack() }]
+        ? [{ id: 'go-back', label: 'Go back', keywords: 'back previous history navigate return', group: 'Suggested' as const, icon: <Icon source={N.arrowLeft} size={15} color={muted(t, 1)} />, meta: kbd(shortcutCaps(SHORTCUT.back)), run: () => void goBack() }]
         : []),
       ...(!settingsOpen && canMoveNavHistory(history, 1, isNavEntryValid)
-        ? [{ id: 'go-forward', label: 'Go forward', keywords: 'forward next history navigate', group: 'Suggested' as const, icon: <Icon source={N.arrowRight} size={15} color={muted(t, 1)} />, meta: kbd(['⌘', ']']), run: () => void goForward() }]
+        ? [{ id: 'go-forward', label: 'Go forward', keywords: 'forward next history navigate', group: 'Suggested' as const, icon: <Icon source={N.arrowRight} size={15} color={muted(t, 1)} />, meta: kbd(shortcutCaps(SHORTCUT.forward)), run: () => void goForward() }]
         : []),
       ...(spacesOn ? spaceCommands() : []),
       ...(renamable
@@ -286,8 +287,8 @@ function PaletteDialog() {
             onKeyDown={(e) => {
               const key = e.key ?? ''
               if (key === 'escape') close()
-              else if (key === 'down' || (key === 'n' && e.modifiers?.ctrl)) move(1)
-              else if (key === 'up' || (key === 'p' && e.modifiers?.ctrl)) move(-1)
+              else if (key === 'down' || (key === 'n' && isEmacsCtrl(e.modifiers))) move(1)
+              else if (key === 'up' || (key === 'p' && isEmacsCtrl(e.modifiers))) move(-1)
             }}
           />
         </div>

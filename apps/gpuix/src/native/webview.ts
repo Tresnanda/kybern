@@ -1,11 +1,49 @@
 import { dlopen, FFIType, JSCallback, ptr } from 'bun:ffi'
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import path from 'node:path'
 import type { LayoutRect, RoundedLayoutClip } from './layout.ts'
+import { spawnSync } from 'node:child_process'
+import { linuxSandboxProbe, noteWebViewUnavailable, webViewSupport, type LinuxWebViewProbe, type WindowsHostState } from './webview-support.ts'
 
 export type WebEvent = { id: string; generation?: number; type: string; message?: string; url?: string; visible?: boolean; key?: string; modifiers?: { cmd: boolean; ctrl: boolean; alt: boolean; shift: boolean }; data?: Record<string, unknown>
   /** `outsidePress`: window points; `snapshot`: the PNG's pixel size. */
-  x?: number; y?: number; width?: number; height?: number; path?: string; ok?: boolean; token?: number }
+  x?: number; y?: number; width?: number; height?: number; path?: string; ok?: boolean; token?: number
+  /** Linux browser UI Kybern draws (`WebPageUi.tsx`): `optionMenu` and `contextMenu` items. */
+  items?: WebMenuItem[] }
+/** A `<select>` option (`optionMenu`) or a WebKit context menu item (`contextMenu`, with its `index`). */
+export type WebMenuItem = { label?: string; enabled?: boolean; selected?: boolean; group?: boolean; child?: boolean; index?: number; separator?: boolean }
+/** The host library: `native/webview.m` on macOS, `native/webview-win` (WebView2) on Windows, `native/webview-linux.c` (WPE) on Linux. */
+function libraryPath() {
+  const name = process.platform === 'win32' ? 'kybern-webview.dll' : process.platform === 'linux' ? 'libkybern-webview.so' : 'kybern-webview.dylib'
+  return process.env.KYBERN_GPUIX_RESOURCES ? path.join(process.env.KYBERN_GPUIX_RESOURCES, name) : fileURLToPath(new URL(`../../native/build/${name}`, import.meta.url))
+}
+/** Windows: the library is there and finds a WebView2 Runtime (`kybern_web_available`), read once at startup. */
+function windowsHost(): WindowsHostState {
+  const file = libraryPath()
+  if (!existsSync(file)) return 'missing'
+  try {
+    const probe = dlopen(file, { kybern_web_available: { args: [], returns: FFIType.i32 } })
+    const ready = probe.symbols.kybern_web_available() === 1
+    probe.close()
+    return ready ? 'ready' : 'runtime'
+  } catch { return 'missing' }
+}
+/**
+ * Decided once: without a host (Linux, Windows without the WebView2 Runtime, or `KYBERN_GPUIX_NO_WEBVIEW=1`) no library
+ * stays loaded and every `webHost` call is a no-op. Linux: `linuxSandboxProbe` (pages never run unsandboxed).
+ */
+const linuxProbe: LinuxWebViewProbe = () => linuxSandboxProbe(libraryPath(), {
+  env: process.env,
+  exists: existsSync,
+  bwrapWorks: bwrap => existsSync(bwrap) && spawnSync(bwrap, ['--unshare-all', '--die-with-parent', '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', 'true'], { stdio: 'ignore', timeout: 5000 }).status === 0,
+})
+const SUPPORT = webViewSupport(process.platform, process.env, process.platform === 'win32' ? windowsHost : undefined, process.platform === 'linux' ? linuxProbe : undefined)
+noteWebViewUnavailable(SUPPORT.reason, SUPPORT.message)
+/** Linux draws documents in GPUIX's scene (`<websurface>`, `WebSurface.tsx`); macOS and Windows float native views over the window. */
+const SURFACES = SUPPORT.available && process.platform === 'linux'
+/** Where each document was last placed (window pixels), to anchor the menus Kybern draws for it on Linux. */
+const placed = new Map<string, LayoutRect>()
 let bridge: ReturnType<typeof load> | undefined, wake: JSCallback | undefined
 let nextGeneration = 0
 let pointerCaptures = 0
@@ -24,6 +62,7 @@ let requestId = 0
 const pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>()
 /** One native request, answered by a `frameResult` or `snapshot` event with its `rid`. */
 function request(rid: string, send: () => void, timeoutMs = 8000): Promise<unknown> {
+  if (!SUPPORT.available) return Promise.reject(new Error("This page can't run here because Kybern has no embedded web view on this platform yet."))
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => { pending.delete(rid); reject(new Error('The page did not answer. Reload it and try again.')) }, timeoutMs)
     pending.set(rid, { resolve, reject, timer })
@@ -40,9 +79,7 @@ function settle(event: WebEvent) {
 }
 function initialize() {
   if (bridge) return
-  const file = process.env.KYBERN_GPUIX_RESOURCES
-    ? `${process.env.KYBERN_GPUIX_RESOURCES}/kybern-webview.dylib`
-    : fileURLToPath(new URL('../../native/build/kybern-webview.dylib', import.meta.url))
+  const file = libraryPath()
   if (!existsSync(file)) throw Error('Build the embedded preview host with bun native/build-webview.ts, then reopen Kybern.')
   const loaded = load(file)
   wake = new JSCallback(() => {
@@ -59,17 +96,23 @@ function initialize() {
   if (pointerCaptures) command({ op: 'capture', id: '', active: true })
 }
 function command(fields: Record<string, unknown>) {
+  if (!SUPPORT.available) return
   initialize()
   const bytes = Buffer.from(JSON.stringify(fields) + '\0')
   bridge!.symbols.kybern_web_command(ptr(bytes))
 }
 
 /** Trusted wrapper, opaque sandboxed child. No bearer token or native bridge is
- * exposed to the child. The daemon supplies the child's actual CSP. */
-export function webDocument(url: string, kind: 'file' | 'server' | 'visual') {
+ * exposed to the child. The daemon supplies the child's actual CSP. `send` is WKWebView's message API; on Windows the
+ * host defines it in the wrapper over `chrome.webview.postMessage` (`native/webview-win/src/host.rs`).
+ * Windows and Linux leave out `allow-modals`: on Windows it is what keeps `print()` from opening WebView2's print UI, and
+ * alert, confirm and prompt then return at once, as they do in a WKWebView without a UI delegate; Linux answers them at
+ * once too (`on_script_dialog` in `webview-linux.c`), so no page can open a Kybern dialog. */
+export function webDocument(url: string, kind: 'file' | 'server' | 'visual', platform: NodeJS.Platform = process.platform) {
   const parsed = new URL(url)
   if (!/^https?:$/.test(parsed.protocol) || parsed.username || parsed.password) throw Error('Invalid preview address')
-  const sandbox = kind === 'visual' ? 'allow-scripts' : kind === 'file' ? 'allow-scripts allow-forms allow-modals' : 'allow-scripts allow-same-origin allow-forms allow-modals allow-downloads'
+  const modals = platform === 'win32' || platform === 'linux' ? '' : ' allow-modals'
+  const sandbox = kind === 'visual' ? 'allow-scripts' : kind === 'file' ? `allow-scripts allow-forms${modals}` : `allow-scripts allow-same-origin allow-forms${modals} allow-downloads`
   const value = JSON.stringify(url).replaceAll('<', '\\u003c')
   return `<!doctype html><meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width, initial-scale=1"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}iframe{border:0;position:absolute;transform-origin:0 0;width:100%;height:100%}</style><iframe sandbox="${sandbox}" referrerpolicy="no-referrer"></iframe><script>
   const frame=document.querySelector('iframe'), send=data=>window.webkit.messageHandlers.kybern.postMessage(data);
@@ -86,6 +129,14 @@ export function webDocument(url: string, kind: 'file' | 'server' | 'visual') {
 }
 
 export const webHost = {
+  /** False where no embedded web view exists: callers check this and draw their fallback instead of catching errors. */
+  available: SUPPORT.available,
+  /** Why it is unavailable (`platform`, `disabled` by `KYBERN_GPUIX_NO_WEBVIEW`, Windows `runtime` or `missing`, Linux `sandbox`), else null. */
+  unavailableReason: SUPPORT.reason,
+  /** Linux: the companion's path, for `<websurface lib>` (the element shares the library bun loaded); null elsewhere. */
+  surfaceLibrary: SURFACES ? libraryPath() : null,
+  /** The window rect a document was last placed at (Linux menus anchor to it). */
+  placement(id: string): LayoutRect | undefined { return placed.get(id) },
   /** A trusted, never-placed document with no child frame (the Mermaid renderer): script runs, the page is not shown. */
   createDocument(id: string, html: string) {
     const generation = ++nextGeneration
@@ -94,14 +145,23 @@ export const webHost = {
   },
   create(id: string, url: string, kind: 'file' | 'server' | 'visual') {
     const generation = ++nextGeneration
+    if (!SUPPORT.available) return generation
     command({ op: 'create', id, category: kind === 'visual' ? 'visual' : 'preview', generation, allowedOrigins: [new URL(url).origin], html: webDocument(url, kind) })
     live.add(id)
     return generation
   },
-  place(id: string, rect: LayoutRect, clip: LayoutRect, logical: { width: number; height: number; scale: number; left: number; top: number; radius?: number; roundedClips?: RoundedLayoutClip[] | null }, visible = true, layer = 0) {
+  /**
+   * `slot` names the placeholder showing the document and `slotRect` its box (default `rect`): on Linux the page is
+   * painted by that placeholder's `<websurface slot>` at `rect` relative to it, so it follows the placeholder in the
+   * same frame while scrolling, under GPUI's own clips and popups.
+   */
+  place(id: string, rect: LayoutRect, clip: LayoutRect, logical: { width: number; height: number; scale: number; left: number; top: number; radius?: number; roundedClips?: RoundedLayoutClip[] | null; slot?: string; slotRect?: LayoutRect }, visible = true, layer = 0) {
     if (!bridge) return
+    placed.set(id, rect)
+    const slot = logical.slotRect ?? rect
     command({ op: 'place', id, x: clip.x, y: clip.y, width: clip.width, height: clip.height, offsetX: rect.x - clip.x, offsetY: rect.y - clip.y, logicalWidth: rect.width, logicalHeight: rect.height, visible,
-      layer, radius: logical.radius ?? 0, roundedClips: logical.roundedClips ?? [], layout: `window.kybernLayout?.(${[logical.width, logical.height, logical.scale, logical.left, logical.top].join(',')})` })
+      layer, radius: logical.radius ?? 0, roundedClips: logical.roundedClips ?? [], layout: `window.kybernLayout?.(${[logical.width, logical.height, logical.scale, logical.left, logical.top].join(',')})`,
+      slot: logical.slot ?? '', frameX: rect.x - slot.x, frameY: rect.y - slot.y })
   },
   hide(id: string) { if (bridge) command({ op: 'hide', id }) },
   /** Give the keyboard back to GPUI if a document holds it (`native/webview.m` `releaseFocus`); otherwise nothing. */
@@ -125,7 +185,11 @@ export const webHost = {
   theme(id: string, theme: unknown) { command({ op: 'post', id, script: `window.kybernTheme?.(${JSON.stringify(theme)})` }) },
   navigate(id: string, url: string) { command({ op: 'navigate', id, url }) },
   action(id: string, action: 'reload' | 'back' | 'forward' | 'stop') { command({ op: 'action', id, action }) },
-  destroy(id: string) { live.delete(id); if (bridge) command({ op: 'destroy', id }) },
+  destroy(id: string) { live.delete(id); placed.delete(id); if (bridge) command({ op: 'destroy', id }) },
+  /** Linux: answer a page's `<select>` (`optionMenu` event) with an item index, or -1 to dismiss. */
+  optionMenu(id: string, index: number) { if (bridge) command({ op: 'optionMenu', id, index }) },
+  /** Linux: run a context menu item (`contextMenu` event) by its `index`, or -1 to dismiss. */
+  contextMenu(id: string, index: number) { if (bridge) command({ op: 'contextMenu', id, index }) },
   /** Ids of the documents that exist now (created, not destroyed). */
   documents(): string[] { return [...live] },
   /** Give the document the keyboard (picking: Esc is read by the page). */

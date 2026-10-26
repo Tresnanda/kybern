@@ -3,6 +3,7 @@
 // resolver the daemon uses (`OrchestrationSettings::effective_for`), mirrored here so a
 // client can say what is in force without asking. The copy lives here too.
 import { findModel } from "./models.ts";
+import { rotationBudgetLabel } from "./rotation.ts";
 import {
   PROVIDER_DISPLAY_NAME,
   type CoordinatorOverrides,
@@ -65,6 +66,7 @@ export const BUILTIN_COORDINATOR_SETTINGS: EffectiveCoordinatorSettings = {
   lead_workspace: "shared",
   lead_push_without_asking: false,
   lead_max_children: 6,
+  rotation_budget_tokens: 200_000,
 };
 
 export function autonomyHint(value: LeadAutonomy): string {
@@ -84,6 +86,7 @@ export function effectiveCoordinatorSettings(
     lead_workspace: project?.lead_workspace ?? global?.lead_workspace ?? BUILTIN_COORDINATOR_SETTINGS.lead_workspace,
     lead_push_without_asking: project?.lead_push_without_asking ?? global?.lead_push_without_asking ?? BUILTIN_COORDINATOR_SETTINGS.lead_push_without_asking,
     lead_max_children: project?.lead_max_children ?? global?.lead_max_children ?? BUILTIN_COORDINATOR_SETTINGS.lead_max_children,
+    rotation_budget_tokens: project?.rotation_budget_tokens ?? global?.rotation_budget_tokens ?? BUILTIN_COORDINATOR_SETTINGS.rotation_budget_tokens,
   };
 }
 
@@ -115,10 +118,11 @@ export function cleanOverrides(value: CoordinatorOverrides | null | undefined): 
   if (value.lead_workspace) out.lead_workspace = value.lead_workspace;
   if (typeof value.lead_push_without_asking === "boolean") out.lead_push_without_asking = value.lead_push_without_asking;
   if (typeof value.lead_max_children === "number") out.lead_max_children = value.lead_max_children;
+  if (typeof value.rotation_budget_tokens === "number") out.rotation_budget_tokens = value.rotation_budget_tokens;
   return Object.keys(out).length ? out : null;
 }
 
-export type CoordinatorField = "lead_autonomy" | "lead_workspace" | "lead_push_without_asking";
+export type CoordinatorField = "lead_autonomy" | "lead_workspace" | "lead_push_without_asking" | "rotation_budget_tokens";
 
 /** The project's overrides with one field set (or, with `null`, reset to the default). */
 export function withOverrideField<K extends CoordinatorField>(current: CoordinatorOverrides | null | undefined, field: K, value: CoordinatorOverrides[K] | null): CoordinatorOverrides | null {
@@ -188,6 +192,7 @@ export function settingValueLabel(path: string, value: unknown, providers: reado
   if (path === "lead_autonomy") return AUTONOMY_OPTIONS.find((option) => option.value === value)?.label ?? String(value);
   if (path === "lead_workspace") return WORKSPACE_OPTIONS.find((option) => option.value === value)?.label ?? String(value);
   if (path === "lead_push_without_asking") return value === true ? "Without asking" : "Ask first";
+  if (path === "rotation_budget_tokens") return typeof value === "number" ? rotationBudgetLabel(value) : String(value);
   if (path === "lead_max_children") return typeof value === "number" ? `${value} ${value === 1 ? "agent" : "agents"}` : String(value);
   if (path.startsWith("role_defaults.")) {
     if (typeof value !== "object") return String(value);

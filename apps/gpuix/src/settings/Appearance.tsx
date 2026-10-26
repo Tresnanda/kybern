@@ -17,14 +17,18 @@ import { Segmented } from '../kit/Segmented.tsx'
 import { Slider } from '../kit/Slider.tsx'
 import { FocusRing, Switch, useFocusRing } from '../kit/Switch.tsx'
 import { useAccessibilityDisplay } from '../platform/material.ts'
+import { solidReason } from '../platform/osDisplay.ts'
 import { raisedFill, useGlass } from '../platform/glass.ts'
 import {
   BLUR_MAX, BLUR_MIN, OPACITY_MIN, SURFACE_DEFAULT, SURFACE_MIN, VIBRANCY_EQUIVALENT_BLUR, advancedDefaults, isAdvancedDefault, isSidebarOnly, type ThemeVariant,
 } from '../platform/translucency.ts'
 import { useBlurUnavailable } from '../shell/windowMaterial.ts'
+import { DESKTOP_MATERIAL } from '../platform/desktopMaterial.ts'
 import { previewWindowMaterial, setAppearance, setWindowMaterial, useAppearance } from './appearance.ts'
 
 const WINDOW_OPTIONS = [{ value: 'solid', label: 'Solid' }, { value: 'translucent', label: 'Translucent' }] as const
+/** Windows 11: the system backdrop instead of a blur radius (Windows sets the strength); Acrylic keeps a numeric blur in the prefs. */
+const DWM_OPTIONS = [{ value: 'mica', label: 'Mica' }, { value: 'acrylic', label: 'Acrylic' }] as const
 const PREVIEW_MS = 100
 /** Whether each variant's Advanced section is open: kept while the app runs, not saved. */
 const advancedOpen: Partial<Record<ThemeVariant, boolean>> = {}
@@ -106,21 +110,18 @@ function VariantSection({ variant, active, save }: { variant: ThemeVariant; acti
   const toggleAdvanced = () => { advancedOpen[variant] = !open; setOpen(!open) }
   const advanced = open ? discloseTransform() : undefined
 
-  const status = !active ? undefined
-    : a11y.reduceTransparency && a11y.increaseContrast ? 'Reduce transparency and Increase contrast are on in System Settings, so Kybern stays solid.'
-    : a11y.reduceTransparency ? 'Reduce transparency is on in System Settings, so Kybern stays solid.'
-    : a11y.increaseContrast ? 'Increase contrast is on in System Settings, so Kybern stays solid.'
-    : undefined
+  const status = active ? solidReason(a11y) : undefined
   const inactive = prefs.theme === 'system' ? `Used when your system switches to ${variant}` : variant === 'dark' ? 'Used when you choose Dark or System' : 'Used when you choose Light or System'
   const accessory = active ? <Label color={t.textSecondary} size={13} lineHeight={18}>In use now</Label>
     : <><Label color={t.textSecondary} size={13} lineHeight={18}>{inactive}</Label><Button variant="secondary" size="sm" testId={`settings-use-${variant}`} onClick={() => save(() => setAppearance({ theme: variant }))}>{`Use ${variant} theme`}</Button></>
-  const summary = `Sidebar ${m.sidebarOpacity}% · Content ${m.contentOpacity}% · Surface ${m.surfaceOpacity ?? SURFACE_DEFAULT[variant]}% · Blur ${m.blur === null ? 'Auto' : m.blur}`
+  const backdrop = DESKTOP_MATERIAL === 'dwm' ? (m.blur === null ? 'Mica' : 'Acrylic') : `Blur ${m.blur === null ? 'Auto' : m.blur}`
+  const summary = `Sidebar ${m.sidebarOpacity}% · Content ${m.contentOpacity}% · Surface ${m.surfaceOpacity ?? SURFACE_DEFAULT[variant]}%${DESKTOP_MATERIAL === 'none' ? '' : ` · ${backdrop}`}`
 
   return <Section title={`${Name} theme`} accessory={accessory}>
-    <Row title="Window" description="Translucent lets your desktop show through Kybern." status={status}>
+    <Row title="Window" description={DESKTOP_MATERIAL === 'none' ? 'Translucent turns the sidebar, menus and composer to glass. On this system the window itself stays solid.' : 'Translucent lets your desktop show through Kybern.'} status={status}>
       <Segmented testId={`settings-window-${variant}`} aria-label={`${Name} theme window material`} options={WINDOW_OPTIONS} value={m.material} onChange={(material) => { setDisclose(true); patch({ material: material as typeof m.material }) }} />
     </Row>
-    {translucent && <div key="sidebar" paintTransform={rise}><Row title="Sidebar only" description="Keep the conversation solid. Only the sidebar and window frame are translucent.">
+    {translucent && <div key="sidebar" paintTransform={rise}><Row title="Sidebar only" description={DESKTOP_MATERIAL === 'none' ? 'Keep the conversation solid. Only the sidebar and window frame are glass.' : 'Keep the conversation solid. Only the sidebar and window frame are translucent.'}>
       <Switch aria-label={`${Name} theme translucent sidebar only`} testId={`settings-sidebar-only-${variant}`} checked={sidebarOnly} onCheckedChange={(next) => patch({ sidebarOnly: next })} />
     </Row></div>}
     {translucent && <div key="advanced" paintTransform={rise}><AdvancedRow testId={`settings-advanced-${variant}`} open={open} summary={summary} label={`${Name} theme advanced window settings`} onToggle={toggleAdvanced} /></div>}
@@ -133,7 +134,10 @@ function VariantSection({ variant, active, save }: { variant: ThemeVariant; acti
     {translucent && open && <div key="surface-opacity" paintTransform={advanced}><Row title="Surface opacity" description="How solid the composer, menus and cards are on glass. Applies once content opacity is below 100%.">
       <Slider testId={`settings-surface-opacity-${variant}`} aria-label={`${Name} theme surface opacity`} ariaValueText={`${surfaceValue} percent`} value={surfaceValue} min={SURFACE_MIN} max={100} valueLabel={`${surfaceValue}%`} onChange={surface.onChange} onCommit={surface.onCommit} />
     </Row></div>}
-    {translucent && open && <div key="blur" paintTransform={advanced}><Row title="Blur" description="How much your desktop is blurred behind the whole window. Auto uses the macOS material.">
+    {translucent && open && DESKTOP_MATERIAL === 'dwm' && <div key="backdrop" paintTransform={advanced}><Row title="Backdrop" description="Mica tints Kybern with your desktop wallpaper. Acrylic also blurs the windows behind it. Windows sets the strength of both.">
+      <Segmented testId={`settings-backdrop-${variant}`} aria-label={`${Name} theme window backdrop`} options={DWM_OPTIONS} value={m.blur === null ? 'mica' : 'acrylic'} onChange={(value) => patch({ blur: value === 'mica' ? null : m.blur ?? VIBRANCY_EQUIVALENT_BLUR })} />
+    </Row></div>}
+    {translucent && open && DESKTOP_MATERIAL === 'vibrancy' && <div key="blur" paintTransform={advanced}><Row title="Blur" description="How much your desktop is blurred behind the whole window. Auto uses the macOS material.">
       {m.blur !== null && <Button variant="secondary" size="sm" testId={`settings-blur-auto-${variant}`} label={`${Name} theme automatic blur`} onClick={() => patch({ blur: null })}>{active && unavailable ? 'Unavailable, use Auto' : 'Auto'}</Button>}
       <Slider testId={`settings-blur-${variant}`} aria-label={`${Name} theme blur`} ariaValueText={blurValue === null ? 'Automatic' : `${blurValue} points`} value={blurValue ?? VIBRANCY_EQUIVALENT_BLUR} min={BLUR_MIN} max={BLUR_MAX} muted={blurValue === null} valueLabel={blurValue === null ? 'Auto' : String(blurValue)} onChange={blur.onChange} onCommit={blur.onCommit} />
     </Row></div>}

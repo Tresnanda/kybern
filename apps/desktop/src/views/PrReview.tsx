@@ -26,6 +26,7 @@ import "./pullRequests/review.css"
 export function PrReview({
   projectId,
   number,
+  repo,
   threadId,
   dock = false,
   active = true,
@@ -33,15 +34,20 @@ export function PrReview({
 }: {
   projectId: ProjectId
   number: number
+  /** Group projects: the member repository the pull request is in. */
+  repo?: string
   threadId?: ThreadId
   dock?: boolean
   active?: boolean
   onBack?: () => void
 }) {
   const environmentId = useStore((s) => s.environmentId)
-  const key = `${environmentId}:${projectId}:${number}`
+  const key = `${environmentId}:${projectId}${repo ? `/${repo}` : ""}:${number}`
   const project = useStore((s) => s.projects[projectId])
-  const actions = usePrActions(key, projectId, number, threadId)
+  const memberName = repo
+    ? (project?.members?.find((m) => m.path === repo)?.name ?? repo)
+    : undefined
+  const actions = usePrActions(key, projectId, number, threadId, repo)
   const { review, detail, busy, linked, linkedThread, actionError, confirmation } = actions
   const [sendOpen, setSendOpen] = useState(false)
   const [reviewOpen, setReviewOpen] = useState(false)
@@ -56,9 +62,10 @@ export function PrReview({
         number,
         undefined,
         1,
-        current.workspace === "overview" && current.kind !== "checks"
+        current.workspace === "overview" && current.kind !== "checks",
+        repo
       )
-  }, [active, key, number, projectId])
+  }, [active, key, number, projectId, repo])
 
   // Mergeability is computed lazily by GitHub: read it once more shortly after.
   const mergeUnknown =
@@ -69,10 +76,10 @@ export function PrReview({
     if (!active || !mergeUnknown || rechecked) return
     const id = window.setTimeout(() => {
       setRechecked(true)
-      void loadReview(projectId, number, undefined, 1, true)
+      void loadReview(projectId, number, undefined, 1, true, repo)
     }, 4000)
     return () => window.clearTimeout(id)
-  }, [active, mergeUnknown, rechecked, projectId, number])
+  }, [active, mergeUnknown, rechecked, projectId, number, repo])
 
   if (!active) return null
   const workspace = review?.workspace ?? "overview"
@@ -83,7 +90,7 @@ export function PrReview({
     if (next !== "overview") {
       const kind = reviewWorkspaceKind(next, review?.kind ?? "files")
       if (review?.kind !== kind || !review.page)
-        void loadReview(projectId, number, kind)
+        void loadReview(projectId, number, kind, 1, false, repo)
     }
   }
   const error = review?.error
@@ -112,7 +119,9 @@ export function PrReview({
         onBack={onBack}
         onOpenFull={() => {
           useStore.getState().selectPulls()
-          useStore.getState().set({ prSelection: { projectId, number } })
+          useStore
+            .getState()
+            .set({ prSelection: { projectId, number, ...(repo ? { repo } : {}) } })
         }}
         sendOpen={sendOpen}
         onSendOpen={setSendOpen}
@@ -157,14 +166,20 @@ export function PrReview({
             {workspace === "overview" ? (
               <PrSummaryTab
                 detail={detail}
-                projectName={project?.name}
+                projectName={
+                  memberName ? `${project?.name} · ${memberName}` : project?.name
+                }
                 number={number}
                 dock={dock}
                 pagedChecks={kind === "checks" ? (review?.page ?? null) : null}
                 checksKind={kind === "checks"}
                 loading={!!review?.loading}
-                onLoadChecks={() => void loadReview(projectId, number, "checks")}
-                onChecksPage={(page) => void loadReview(projectId, number, "checks", page)}
+                onLoadChecks={() =>
+                  void loadReview(projectId, number, "checks", 1, false, repo)
+                }
+                onChecksPage={(page) =>
+                  void loadReview(projectId, number, "checks", page, false, repo)
+                }
                 onOpenTimeline={() => selectWorkspace("conversation")}
                 linkedTitle={linkedThread?.title}
                 onOpenConversation={
@@ -178,6 +193,7 @@ export function PrReview({
                   stateKey={key}
                   projectId={projectId}
                   number={number}
+                  repo={repo}
                   mode={mode}
                 />
               ) : (
@@ -190,6 +206,7 @@ export function PrReview({
                 actions={actions}
                 projectId={projectId}
                 number={number}
+                repo={repo}
                 panelId={panelId}
                 onSend={() => setSendOpen(true)}
               />
@@ -238,9 +255,10 @@ export function PrReviewDock({
     )
   return (
     <PrReview
-      key={reviewKey(thread.project_id, git.pull_request.number)}
+      key={reviewKey(thread.project_id, git.pull_request.number, git.pull_request.repo)}
       projectId={thread.project_id}
       number={git.pull_request.number}
+      repo={git.pull_request.repo}
       threadId={threadId}
       dock
       active={active}

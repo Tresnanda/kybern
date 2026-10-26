@@ -7,6 +7,7 @@
 //! requests, while pi uses Kybern's bundled blocking tool hook; pi signals run
 //! completion with `agent_settled`, omp with `agent_end.isTerminal`.
 
+use kybern_protocol::process::NoWindow;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -149,7 +150,7 @@ impl PiDriver {
 }
 
 async fn model_command_output(bin: &std::path::Path, args: &[&str], context: &ProbeContext) -> Option<Vec<u8>> {
-    let mut command = Command::new(bin);
+    let mut command = Command::new(bin).no_window();
     command.args(args).stdin(std::process::Stdio::null()).kill_on_drop(true);
     if let Some(cwd) = &context.cwd {
         command.current_dir(cwd);
@@ -250,7 +251,7 @@ impl AgentDriver for PiDriver {
             }
             Flavor::Omp => None,
         };
-        let mut cmd = Command::new(&bin);
+        let mut cmd = Command::new(&bin).no_window();
         cmd.current_dir(&config.cwd).args(["--mode", "rpc"]);
         let new_session_id = Uuid::new_v4().to_string();
         match self.flavor {

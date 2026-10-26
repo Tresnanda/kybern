@@ -211,7 +211,7 @@ export function commandRows(command: string): CodeRow[] {
   return rows
 }
 
-/** Roughly how many characters of 12 pt Menlo fit one line of the well at the card's width. */
+/** Roughly how many characters of 12 pt code (Menlo, JetBrains Mono) fit one line of the well at the card's width. */
 export const WELL_COLUMNS = 84
 
 const wrapped = (text: string, columns: number) => Math.max(1, Math.ceil(text.length / columns))

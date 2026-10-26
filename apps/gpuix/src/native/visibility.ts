@@ -3,11 +3,14 @@
 // occlusion state has the Visible bit and it is not minimized. Covered by other
 // windows, minimized, or on another Space means hidden. The state is read
 // through the Objective-C runtime when AppKit reports a window-state change
-// (`windowState.ts`); an addon without that callback polls instead. Never
-// touches React; listeners only hear about changes.
+// (`windowState.ts`); an addon without that callback polls instead. Off macOS
+// the event carries the state: on Windows minimized, hidden or cloaked on
+// another virtual desktop means hidden (being covered by other windows is not
+// reported); Linux cannot tell, so its windows count as visible. Never touches
+// React; listeners only hear about changes.
 import type { Pointer } from 'bun:ffi'
 import { cls, each, getObjc, sel, withPool } from './objc.ts'
-import { hasWindowStateEvents, onWindowStateChange } from './windowState.ts'
+import { hasWindowStateEvents, onWindowStateChange, windowStateReport } from './windowState.ts'
 
 const NS_WINDOW_OCCLUSION_STATE_VISIBLE = 1 << 1
 const POLL_MS = 400
@@ -18,7 +21,7 @@ let stopEvents: (() => void) | undefined
 const listeners = new Set<(visible: boolean) => void>()
 
 function read(): boolean {
-  if (process.platform !== 'darwin') return true
+  if (process.platform !== 'darwin') return windowStateReport()?.visible ?? true
   try {
     const o = getObjc()
     return withPool(o, () => {

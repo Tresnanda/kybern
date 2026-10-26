@@ -217,3 +217,115 @@ async fn group_pull_requests_skip_repos_without_a_remote_and_cross_link_the_rest
     assert!(untouched.pull_requests.is_empty());
     assert_eq!(untouched.skipped[0].reason, "This chat didn't change it");
 }
+
+/// A fake `gh` for listing: `api` has #3 and #9, `web` fails like a signed-out `gh`,
+/// `lab` has only a remote `gh` doesn't know (GitLab), `quiet` fails with no stderr.
+#[cfg(unix)]
+fn fake_list_gh(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(dir).unwrap();
+    let script = dir.join("gh");
+    let body = r#"#!/bin/sh
+name=$(basename "$PWD")
+case "$name" in
+  web) echo "HTTP 401: Bad credentials" >&2; exit 1 ;;
+  lab) echo "none of the git remotes configured for this repository point to a known GitHub host" >&2; exit 1 ;;
+  quiet) exit 1 ;;
+  api) echo '[{"number":3,"title":"Add SSO","url":"https://github.com/acme/api/pull/3","state":"OPEN","headRefName":"sso","baseRefName":"main","isDraft":false,"author":{"login":"me"},"updatedAt":"2026-01-02T00:00:00Z"},{"number":9,"title":"Fix","url":"https://github.com/acme/api/pull/9","state":"OPEN","headRefName":"fix","baseRefName":"main","isDraft":true,"author":{"login":"me"},"updatedAt":"2026-01-01T00:00:00Z"}]' ;;
+  *) echo '[{"number":1,"title":"Docs","url":"https://github.com/acme/x/pull/1","state":"OPEN","headRefName":"d","baseRefName":"main","isDraft":false,"author":{"login":"me"},"updatedAt":"2026-01-01T00:00:00Z"}]' ;;
+esac
+"#;
+    std::fs::write(&script, body).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    script
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn group_pull_request_list_tags_members_and_keeps_going_past_a_failing_one() {
+    let fixture = Fixture::new();
+    let folder = fixture.root.join("acme");
+    // api answers, ops answers through a remote named `upstream`, web's `gh` fails,
+    // infra has no remote, lab is on GitLab, quiet fails silently, docs was deleted.
+    for (name, remote) in
+        [("api", Some("origin")), ("web", Some("origin")), ("infra", None), ("ops", Some("upstream")), ("lab", Some("origin")), ("quiet", Some("origin"))]
+    {
+        let dir = folder.join(name);
+        pr_init_member(&dir, "a.txt");
+        if let Some(remote) = remote {
+            let host = if name == "lab" { "gitlab.com" } else { "github.com" };
+            git_in(&dir, &["remote", "add", remote, &format!("https://{host}/acme/{name}.git")]);
+        }
+    }
+    let mut project = fixture.project.clone();
+    project.kind = ProjectKind::Group;
+    project.path = folder.to_string_lossy().into_owned();
+    project.members = ["api", "web", "infra", "ops", "lab", "quiet", "docs"]
+        .into_iter()
+        .map(|path| ProjectMember { path: path.into(), name: path.into(), status: MemberStatus::Ok })
+        .collect();
+    let gh = fake_list_gh(&fixture.root.join("bin"));
+
+    let result = fixture.orchestrator.group_pr_list(&project, "open", 30, &gh.to_string_lossy()).await;
+    let listed: Vec<_> = result.pull_requests.iter().map(|p| (p.repo.as_deref().unwrap(), p.number)).collect();
+    assert_eq!(listed, [("api", 3), ("api", 9), ("ops", 1)], "member order, each tagged with its member");
+    let rows: Vec<_> = result.repos.iter().map(|r| (r.repo.as_str(), r.error.as_deref(), r.skipped)).collect();
+    assert_eq!(
+        rows,
+        [
+            ("api", None, false),
+            ("web", Some("HTTP 401: Bad credentials"), false),
+            ("infra", Some("No GitHub remote"), true),
+            ("ops", None, false),
+            ("lab", Some("No GitHub remote"), true),
+            ("quiet", Some("gh exited with an error. Run gh auth status in that repository to see why."), false),
+            ("docs", Some("docs is missing from fixture. Restore the folder or remove it in the project's settings."), false),
+        ]
+    );
+    // The wire form leaves the new fields out for single projects.
+    let single = methods::PrListResult { pull_requests: Vec::new(), repos: Vec::new() };
+    assert_eq!(serde_json::to_value(&single).unwrap(), serde_json::json!({"pull_requests": []}));
+
+    // A single repository lists exactly as before: untagged, no member rows.
+    let api = folder.join("api");
+    let prs = crate::github::pr_list_with(&gh.to_string_lossy(), &api, "open", 30).await.unwrap();
+    assert_eq!(prs.iter().map(|p| p.number).collect::<Vec<_>>(), [3, 9]);
+    assert!(prs.iter().all(|p| p.repo.is_none()));
+}
+
+#[test]
+fn pull_request_calls_run_in_the_chosen_member_folder() {
+    let fixture = Fixture::new();
+    let single = fixture.project.clone();
+    assert_eq!(super::groups::pr_repo_dir(&single, None).unwrap(), std::path::PathBuf::from(&single.path));
+    assert!(super::groups::pr_repo_dir(&single, Some("api")).is_err(), "a single project takes no repo");
+
+    let folder = fixture.root.join("acme");
+    pr_init_member(&folder.join("api"), "a.rs");
+    std::fs::create_dir_all(folder.join("notes")).unwrap();
+    let mut group = single;
+    group.kind = ProjectKind::Group;
+    group.path = folder.to_string_lossy().into_owned();
+    group.members = ["api", "notes", "gone"]
+        .into_iter()
+        .map(|path| ProjectMember { path: path.into(), name: path.into(), status: MemberStatus::Ok })
+        .collect();
+    assert_eq!(super::groups::pr_repo_dir(&group, Some("api")).unwrap(), folder.join("api"));
+    // No default member: a client from before member tags must not act on the primary's #N.
+    assert!(super::groups::pr_repo_dir(&group, None).unwrap_err().contains("needs its repository"));
+    assert_eq!(super::groups::pr_repo_dir(&group, Some("web")).unwrap_err(), "web isn't a repository of fixture.");
+    // Only exact member paths resolve: nothing outside the group folder.
+    for escape in ["../api", "api/..", "/etc", folder.join("api").to_str().unwrap(), "", "."] {
+        assert!(super::groups::pr_repo_dir(&group, Some(escape)).is_err(), "{escape:?} must not resolve");
+    }
+    assert_eq!(
+        super::groups::pr_repo_dir(&group, Some("notes")).unwrap_err(),
+        "notes is no longer a git repository. Restore its .git folder or remove it in the project's settings."
+    );
+    assert_eq!(
+        super::groups::pr_repo_dir(&group, Some("gone")).unwrap_err(),
+        "gone is missing from fixture. Restore the folder or remove it in the project's settings."
+    );
+    group.members.clear();
+    assert_eq!(super::groups::pr_repo_dir(&group, None).unwrap_err(), "fixture has no repositories yet. Add one in its settings.");
+}

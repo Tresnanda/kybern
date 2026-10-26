@@ -9,7 +9,8 @@ import { onEnvironmentLeaving } from '../shell/environment.ts'
 import { openRelay } from './relay.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { recordRecent, recentsKeyForThread } from './recents.ts'
-import { currentAddress } from './address.ts'
+import { browserAddress, currentAddress } from './address.ts'
+import { webHost } from '../native/webview.ts'
 export type PreviewLoad = { phase: 'idle' | 'resolving' | 'ready' | 'external' } | { phase: 'waiting'; error: 'connection_refused' | 'timed_out'; startedAt: number } | { phase: 'blocked'; header: string; value: string } | { phase: 'error'; error?: string; status?: number; message?: string } | { phase: 'not-found'; name: string } | { phase: 'relay-failed' }
 export interface Entry { target?: PreviewTargetInfo; proxy?: boolean; query?: string; address: string; url: string; frameUrl?: string; closeRelay?: () => void; title: string; ticket?: string; kind: 'file' | 'server' | 'external'; releaseTicket?: () => void; released?: boolean }
 export interface PreviewState { entries: Entry[]; load: PreviewLoad; loading: boolean; wsFailed?: boolean; wsNoticeDismissed?: boolean; attemptedAddress?: string; navigatedAway?: boolean; index: number; floating: boolean; busy: boolean; error: string | null; permission?: { address: string; folder: string; grantable: boolean }; opened?: boolean; device: boolean; width: number; height: number; preset: string | null; bridge?: { back: number; forward: number }; pageTitle?: string; pagePath?: string; focusAddress?: number }
@@ -24,6 +25,8 @@ export const floatingPreview = () => [...sessions].find(([, s]) => s.floating &&
 export const releasePreviewEntry = (entry: Entry) => { if (entry.released) return; entry.released = true; entry.closeRelay?.(); entry.releaseTicket?.() }
 const release = releasePreviewEntry
 export function setPreview(id: string, patch: Partial<PreviewState>) {
+  // The mini player floats the embedded page; without a web view there is nothing to float.
+  if (patch.floating && !webHost.available) patch = { ...patch, floating: false }
   if (patch.floating) for (const [other, state] of sessions) if (other !== id && state.floating) sessions.set(other, { ...state, floating: false })
   if (!sessions.has(id) && sessions.size >= 40) { const key = sessions.keys().next().value!; sessions.get(key)?.entries.forEach(release); sessions.delete(key); generations.delete(key) }
   sessions.set(id, { ...previewState(id), ...patch }); listeners.forEach(l => l())
@@ -44,7 +47,7 @@ function commitEntry(id: string, entry: Entry, replace: boolean, load: PreviewLo
     entries = [...current.entries.slice(0, current.index + 1), entry]
     if (entries.length > 16) entries.splice(0, entries.length - 16).forEach(release)
   }
-  setPreview(id, { entries, index: replacing ? current.index : entries.length - 1, floating: entry.kind === 'external' ? false : current.floating, busy: false, loading: load.phase === 'ready', load, wsFailed: false, wsNoticeDismissed: false, navigatedAway: false, opened: false, bridge: undefined, pageTitle: undefined, pagePath: undefined })
+  setPreview(id, { entries, index: replacing ? current.index : entries.length - 1, floating: entry.kind === 'external' ? false : current.floating, busy: false, loading: load.phase === 'ready' && webHost.available, load, wsFailed: false, wsNoticeDismissed: false, navigatedAway: false, opened: false, bridge: undefined, pageTitle: undefined, pagePath: undefined })
 }
 export async function openPreview(id: string, raw: string, allowFolder = false, launch = false, replace = false, options: { proxy?: boolean; retry?: boolean; suffix?: string } = {}) {
   const thread = getState().threads.find(t => t.id === id)
@@ -93,7 +96,8 @@ export async function openPreview(id: string, raw: string, allowFolder = false, 
     commitEntry(id, entry, replace, load)
     pendingEntry = undefined
     if (entry.kind !== 'external') recordRecent(recentsKeyForThread(id), { kind: entry.kind, value: entry.address, title: entry.title, at: Date.now() })
-    if (launch) await launchPreview(id)
+    // No embedded web view: the page opens in the default browser as soon as it is ready (the entry keeps its ticket and relay until replaced or closed).
+    if (launch || (!webHost.available && entry.kind !== 'external' && load.phase === 'ready')) await launchPreview(id)
     return true
   } catch (e) {
     if (pendingEntry) release(pendingEntry)
@@ -114,8 +118,13 @@ export async function launchPreview(id: string) {
   const current = () => previewState(id).entries[previewState(id).index] === entry
   try {
     if (entry.kind === 'file' && !activeEnvironment().local) return
-    await launchBrowser(entry.kind === 'file' ? `file://${currentAddress(entry, previewState(id).pagePath).full}` : entry.address); if (current()) setPreview(id, { opened: true, error: null }) }
+    await launchBrowser(browserAddress(entry, previewState(id).pagePath, activeEnvironment().local, webHost.available)); if (current()) setPreview(id, { opened: true, error: null }) }
   catch (error) { if (current()) setPreview(id, { error: String(error) }) }
+}
+/** What the browser-only state copies: the page's address (never a ticket URL, which works once). */
+export function previewLink(id: string): string | null {
+  const s = previewState(id), entry = s.entries[s.index]
+  return entry ? currentAddress(entry, s.pagePath).full : null
 }
 export function navigatePreview(id: string, direction: number) {
   const current = previewState(id), index = current.index + direction

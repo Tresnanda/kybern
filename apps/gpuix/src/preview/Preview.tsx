@@ -53,6 +53,7 @@ function FloatingState({ children }: { children: ReactNode }) {
 import { forgetRecent, recentsKeyForThread, useRecents } from './recents.ts'
 import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
 import { load, save } from '../shell/persist.ts'
+import { isAltGrText, isMacKeys, isPrimary, isPrimaryChord } from '../platform/keys.ts'
 
 export function PreviewPane({ threadId }: { threadId: string }) {
   const t = useTheme(), s = usePreview(threadId)
@@ -81,7 +82,7 @@ export function PreviewPane({ threadId }: { threadId: string }) {
     {s.wsFailed && !s.wsNoticeDismissed && entry?.proxy && <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 12, height: 28 }}><Label color={t.textSecondary} size={11} truncate>{`Live reload isn't connected through ${environment.name}. Reload to see changes.`}</Label><Button variant="ghost" size="sm" onClick={() => previewCommand(threadId, 'reload')}>Reload</Button><IconButton icon={N.x} label="Dismiss" size="sm" onClick={() => setPreview(threadId, { wsNoticeDismissed: true })} /></div>}
     {s.permission ? <PreviewStateView threadId={threadId} />
     : s.busy && s.load.phase !== 'waiting' ? <DockEmpty icon={N.globe} title="Opening preview…" />
-    : entry ? s.floating ? <FloatingState><Button size="sm" testId="preview-return" onClick={() => setPreview(threadId, { floating: false })}>Return to tab</Button></FloatingState> : s.load.phase !== 'ready' ? <PreviewStateView threadId={threadId} /> : <PreviewSlot threadId={threadId} kind="dock" />
+    : entry ? s.floating ? <FloatingState><Button size="sm" testId="preview-return" onClick={() => setPreview(threadId, { floating: false })}>Return to tab</Button></FloatingState> : s.load.phase !== 'ready' || !webHost.available ? <PreviewStateView threadId={threadId} /> : <PreviewSlot threadId={threadId} kind="dock" />
     : sorted.length || recents.length ? <virtual-list style={{ flexGrow: 1, minHeight: 0, width: '100%' }}><div style={{ paddingLeft: 12, paddingRight: 12, paddingTop: 16, paddingBottom: 16 }}>
       <DockSection label={environment.local ? 'Local servers' : `Servers on ${environment.name}`} count={servers.length} />
       <div style={{ display: 'flex', flexDirection: 'column', marginLeft: 12, marginRight: 12, padding: 4, borderRadius: 10, backgroundColor: t.buttonSecondary }}>
@@ -127,19 +128,21 @@ export function PreviewIntegration({ insetBottom = 0 }: { insetBottom?: number }
   const insetEnd = dock.open && page === 'home' && !settings ? dockGeometry(windowWidth, sidebarOpen ? sidebarWidth : 0, dock.width).width : 0
   useEffect(() => webHost.subscribe(event => { if (event.type === 'shortcut') onWindowKeyDown({ elementId: 0, eventType: 'keyDown', key: event.key, modifiers: event.modifiers }) }), [])
   useEffect(() => addWindowKeyHandler(e => {
-    if (!id || page !== 'home' || settings || !e.modifiers?.cmd) return
-    if (e.key === 'l' && !e.modifiers.alt) { showPreview(id); setPreview(id, { focusAddress: Date.now() }); return true }
-    if (e.key === 'r' && !e.modifiers.alt) { previewCommand(id, 'reload', !!e.modifiers.shift); return true }
+    if (!id || page !== 'home' || settings || !isPrimary(e.modifiers)) return
+    if (e.key === 'l' && !e.modifiers?.alt) { showPreview(id); setPreview(id, { focusAddress: Date.now() }); return true }
+    if (e.key === 'r' && !e.modifiers?.alt) { previewCommand(id, 'reload', !!e.modifiers?.shift); return true }
   }), [id, page, settings])
   useEffect(() => {
     if (!connected) return
     return getClient()!.onNotification('previews.open_requested', payload => { const request = payload as PreviewOpenRequestedNotification; showPreview(request.thread_id, true); void openPreview(request.thread_id, request.target) })
   }, [connected])
-  useEffect(() => addWindowKeyHandler(e => { if (id && page === 'home' && !settings && e.modifiers?.cmd && e.modifiers.alt && e.key === 'p') { setNav({ keyboardNav: true }); const s = previewState(id); if (s.entries.length) { setPreview(id, { floating: !s.floating }); if (s.floating) showPreview(id) } else showPreview(id); return true } }), [id, page, settings])
+  useEffect(() => addWindowKeyHandler(e => { if (id && page === 'home' && !settings && isPrimaryChord(e.modifiers, { alt: true, shift: 'any' }) && !(!isMacKeys() && isAltGrText(e)) && e.key === 'p') { if (!webHost.available) { showPreview(id); return true } setNav({ keyboardNav: true }); const s = previewState(id); if (s.entries.length) { setPreview(id, { floating: !s.floating }); if (s.floating) showPreview(id) } else showPreview(id); return true } }), [id, page, settings])
   // One native document per thread: the threads whose browser tab is active in some group, the selected one, and the floating one.
   const groups = useGroups()
   const shown = Object.values(groups).filter((g) => g.threadId && g.active === 'preview').map((g) => g.threadId)
   const ids = [...new Set([id, floating, ...shown].filter((value): value is string => !!value))].sort()
+  // Without an embedded web view there are no native documents to own or float: the page is in the browser.
+  if (!webHost.available) return null
   return <>{ids.map(threadId => <PreviewSurface key={threadId} threadId={threadId} />)}{floating && page === 'home' && !settings ? <MiniPlayer key={floating} insetBottom={insetBottom} insetEnd={insetEnd} threadId={floating} /> : null}<PreviewResizeCapture /></>
 }
 function MiniPlayer({ threadId, insetBottom, insetEnd }: { threadId: string; insetBottom: number; insetEnd: number }) {
@@ -170,7 +173,7 @@ function MiniBody({ threadId, entry, corner, size, available, setSize }: { threa
     return () => clearTimeout(timer)
   }, [hover])
   return <div onMouseEnter={() => setOverBody(true)} onMouseLeave={() => setOverBody(false)} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, position: 'relative' }}>
-    {s.load.phase === 'ready' ? <PreviewSlot threadId={threadId} kind="mini" /> : <PreviewStateView threadId={threadId} />}
+    {s.load.phase === 'ready' && webHost.available ? <PreviewSlot threadId={threadId} kind="mini" /> : <PreviewStateView threadId={threadId} />}
     {(hover || shown) && <MiniChrome title={s.pageTitle || entry.title} otherThread={selectedElsewhere ? threadTitle : undefined} revealed={hover} onHover={setOverHeader}><IconButton icon={N.panelRight} size="sm" testId="preview-mini-return" label="Return to tab" onClick={() => { setPreview(threadId, { floating: false }); showPreview(threadId) }} /><IconButton icon={N.x} size="sm" testId="preview-mini-close" label="Close preview" onClick={() => { setPreview(threadId, { floating: false }) }} /></MiniChrome>}
     <MiniResize corner={corner} size={size} bounds={available} onResize={next => { setSize(next); save('kybern.preview.size', next) }} />
   </div>

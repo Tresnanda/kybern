@@ -51,7 +51,8 @@ function Entry({
 }: {
   entry: PrReviewEntry
   checked: boolean
-  onToggle: () => void
+  /** Absent when findings can't be sent (a member pull request of a group project). */
+  onToggle?: () => void
 }) {
   const [open, setOpen] = useState(true)
   const [clamped, setClamped] = useState(true)
@@ -60,11 +61,13 @@ function Entry({
   return (
     <article className="border-b border-[color:var(--app-surface-divider)] last:border-b-0">
       <div className="flex items-center gap-2 py-2.5">
-        <Checkbox
-          aria-label={`Select finding by ${entry.author}`}
-          checked={checked}
-          onCheckedChange={onToggle}
-        />
+        {onToggle && (
+          <Checkbox
+            aria-label={`Select finding by ${entry.author}`}
+            checked={checked}
+            onCheckedChange={onToggle}
+          />
+        )}
         <button
           type="button"
           aria-expanded={open}
@@ -123,21 +126,25 @@ export function PrTimelineTab({
   actions,
   projectId,
   number,
+  repo,
   panelId,
   onSend,
 }: {
   actions: PrActions
   projectId: ProjectId
   number: number
+  repo?: string
   panelId: string
   onSend: () => void
 }) {
   const { review, draft, toggleFinding, clearSelection } = actions
+  // Send to agent checks the pull request out into a chat, which member pull requests can't do yet.
+  const selectable = !repo
   const kind = review?.kind ?? "comments"
   const entries = review?.page?.entries ?? []
   const page = review?.page?.page ?? 1
   const label = SOURCES.find((s) => s.value === kind)?.label.toLowerCase() ?? "comments"
-  const go = (next: number) => void loadReview(projectId, number, kind, next)
+  const go = (next: number) => void loadReview(projectId, number, kind, next, false, repo)
   return (
     <div className="pr-timeline">
       <div className="px-6 pt-4">
@@ -145,7 +152,7 @@ export function PrTimelineTab({
           size="sm"
           value={kind}
           tabs={SOURCES}
-          onChange={(next) => void loadReview(projectId, number, next)}
+          onChange={(next) => void loadReview(projectId, number, next, 1, false, repo)}
           label="Conversation source"
           id={`${panelId}-conversation`}
         />
@@ -164,7 +171,7 @@ export function PrTimelineTab({
             key={`${kind}:${entry.id}`}
             entry={entry}
             checked={draft.selected.includes(`${kind}:${entry.id}`)}
-            onToggle={() => toggleFinding(entry)}
+            onToggle={selectable ? () => toggleFinding(entry) : undefined}
           />
         ))}
         {!entries.length && (
@@ -192,7 +199,7 @@ export function PrTimelineTab({
           </Button>
         </div>
       </div>
-      {draft.selected.length > 0 && (
+      {selectable && draft.selected.length > 0 && (
         <div className="sticky bottom-3 flex justify-center px-6 pb-3">
           <div
             role="region"

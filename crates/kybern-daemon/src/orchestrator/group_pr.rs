@@ -45,7 +45,58 @@ fn parse_pr_text(text: &str, fallback: &str) -> (String, String) {
     (title, body.trim().to_string())
 }
 
+/// What to show for a failed `gh`/`git` call: its stderr, without the command line.
+fn failure_reason(error: &anyhow::Error) -> String {
+    let text = format!("{error:#}");
+    let reason = text.split_once(": ").map_or(text.as_str(), |(_, rest)| rest).trim();
+    if reason.is_empty() {
+        return "gh exited with an error. Run gh auth status in that repository to see why.".to_string();
+    }
+    reason.chars().take(300).collect()
+}
+
+/// `gh`'s refusal for a repository with no GitHub remote it knows.
+fn not_on_github(reason: &str) -> bool {
+    reason.contains("no git remotes found") || reason.contains("known GitHub host")
+}
+
 impl Orchestrator {
+    /// `github.pr.list` of a group project: every member folder, a few at a time.
+    /// A member that can't be listed (no remote, missing folder, `gh` error) gets
+    /// its reason in `repos` and never fails the others.
+    pub async fn group_pr_list(&self, project: &Project, state: &str, limit: u32, gh: &str) -> methods::PrListResult {
+        let work: Vec<(ProjectMember, Result<PathBuf, String>)> =
+            project.members.iter().map(|member| (member.clone(), super::groups::pr_repo_dir(project, Some(&member.path)))).collect();
+        let rows: Vec<(methods::PrListRepo, Vec<PullRequest>)> = stream::iter(work)
+            .map(|(member, dir)| async move {
+                // `gh` picks the GitHub remote itself (any name, Enterprise hosts): only a
+                // member with no remote at all is skipped before it runs.
+                let listed = match dir {
+                    Err(reason) => Err((reason, false)),
+                    Ok(dir) if !github::has_any_remote(&dir).await => Err(("No GitHub remote".to_string(), true)),
+                    Ok(dir) => github::pr_list_with(gh, &dir, state, limit).await.map_err(|error| {
+                        let reason = failure_reason(&error);
+                        if not_on_github(&reason) { ("No GitHub remote".to_string(), true) } else { (reason, false) }
+                    }),
+                };
+                let (pull_requests, error, skipped) = match listed {
+                    Ok(mut prs) => {
+                        for pr in &mut prs {
+                            pr.repo = Some(member.path.clone());
+                        }
+                        (prs, None, false)
+                    }
+                    Err((reason, skipped)) => (Vec::new(), Some(reason), skipped),
+                };
+                (methods::PrListRepo { repo: member.path, name: member.name, error, skipped }, pull_requests)
+            })
+            .buffered(PARALLEL)
+            .collect()
+            .await;
+        let (repos, lists): (Vec<_>, Vec<_>) = rows.into_iter().unzip();
+        methods::PrListResult { pull_requests: lists.into_iter().flatten().collect(), repos }
+    }
+
     /// `git.status` of a group thread: the fields are the primary's, `repos`
     /// has every member in order, deselected and missing ones included.
     pub async fn group_git_status(&self, thread: &Thread) -> Result<GitStatus> {
@@ -86,6 +137,11 @@ impl Orchestrator {
                     },
                     _ => no_repository(),
                 };
+                let mut git = git;
+                // The review dock opens this pull request by member (`github.pr.detail` needs `repo`).
+                if let Some(pr) = git.pull_request.as_mut() {
+                    pr.repo = Some(member.path.clone());
+                }
                 RepoGitStatus { repo: member.path.clone(), name: member.name.clone(), included: member.included, status, git }
             })
             .buffered(PARALLEL)

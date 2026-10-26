@@ -4,6 +4,7 @@
 // lines they leave, and Kybern's own "Setup started" row. Words come from
 // `packages/kybern-client/src/coordinatorCards.ts`, shared with desktop.
 import * as Haptics from "expo-haptics";
+import { router } from "expo-router";
 import { useState } from "react";
 import { StyleSheet, Text, TextInput, View } from "react-native";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
@@ -16,6 +17,10 @@ import {
   mergeMethodLabel,
   type CardTextPart,
 } from "../../../../packages/kybern-client/src/coordinatorCards";
+import { rotationLabel } from "../../../../packages/kybern-client/src/rotation";
+import type { Block } from "../../../../packages/kybern-client/src/transcript";
+
+type RotationBlock = Extract<Block, { kind: "rotation" }>;
 import { settingValueLabel } from "../../../../packages/kybern-client/src/coordinatorSettings";
 import type { ApprovalDecision, ApprovalRequest, BriefProposalInput, LeadGitCardInput, SettingsProposalInput } from "../state/protocol";
 import { errorText, loadThread, refresh, rpc, useApp } from "../state/runtime";
@@ -250,14 +255,51 @@ export function CoordinatorCardLine({ parts, decision }: { parts: readonly CardT
   );
 }
 
-/** A row Kybern adds to the conversation ("Setup started"): centered, quiet, hairlines to either side. */
-export function SystemRowLine({ text }: { text: string }) {
+/**
+ * A row Kybern adds to the conversation ("Setup started"): centered, quiet, hairlines to either side.
+ * With `onPress` the label opens something (a Coordinator's handoff) and ends in a chevron.
+ */
+export function SystemRowLine({ text, onPress, hint, busy }: { text: string; onPress?: () => void; hint?: string; busy?: boolean }) {
   const { colors } = useTheme();
+  const label = (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+      <T variant="footnote" tone={busy ? "muted" : "secondary"}>{text}</T>
+      {onPress && <Icon name="chevron.right" size={11} color={colors.muted} />}
+    </View>
+  );
   return (
-    <View accessibilityRole="text" style={[styles.line, { gap: 10, marginVertical: 14 }]}>
+    <View accessibilityRole={onPress ? undefined : "text"} accessibilityState={busy ? { busy: true } : undefined} style={[styles.line, { gap: 10, marginVertical: 14 }]}>
       <View style={{ flex: 1, height: 1, backgroundColor: colors.line }} />
-      <T variant="footnote" tone="secondary">{text}</T>
+      {onPress ? (
+        <Tap label={text} hint={hint} onPress={onPress} hitSlop={{ top: 14, bottom: 14, left: 8, right: 8 }}>
+          {label}
+        </Tap>
+      ) : (
+        label
+      )}
       <View style={{ flex: 1, height: 1, backgroundColor: colors.line }} />
     </View>
+  );
+}
+
+const rotationTime = (at: string) => {
+  const date = new Date(at);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+};
+
+/** A Coordinator's context refresh: "Context refreshed · 2:02 PM", opening the handoff once it has settled. */
+export function RotationRow({ block, threadId }: { block: RotationBlock; threadId: string }) {
+  const text = rotationLabel(block, rotationTime(block.at));
+  return (
+    <SystemRowLine
+      text={text}
+      busy={block.pending}
+      hint={block.pending ? undefined : "Opens the handoff"}
+      onPress={
+        block.pending
+          ? undefined
+          : () => router.push({ pathname: "/handoff", params: { threadId, rotationId: block.rotationId } })
+      }
+    />
   );
 }

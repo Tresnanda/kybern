@@ -4,6 +4,7 @@ import path from 'node:path'
 import type { Endpoint } from '../../../../packages/kybern-client/src/client.ts'
 import { normalizeDaemonUrl } from '../../../../packages/kybern-client/src/address.ts'
 import { readCredential } from './credentials.ts'
+import { desktopConfigDir, osLabels } from '../platform/os.ts'
 
 export interface EnvironmentProfile {
   id: string; name: string; url?: string | null; environment_id?: string | null; hostname?: string | null; local: boolean
@@ -12,8 +13,8 @@ export interface EnvironmentProfile {
 export interface Registry { selected_id: string; environments: EnvironmentProfile[] }
 export const localDataDir = process.env.KYBERN_DATA_DIR ?? path.join(homedir(), '.kybern')
 const configuredUrl = process.env.KYBERN_URL
-export const localProfile: EnvironmentProfile = { id: 'local', name: process.env.KYBERN_ENVIRONMENT_NAME ?? (configuredUrl ? 'Configured environment' : 'This Mac'), local: !configuredUrl, url: configuredUrl }
-export const configDir = () => process.env.KYBERN_CLIENT_CONFIG_DIR ?? path.join(homedir(), 'Library/Application Support/dev.kybern.desktop')
+export const localProfile: EnvironmentProfile = { id: 'local', name: process.env.KYBERN_ENVIRONMENT_NAME ?? (configuredUrl ? 'Configured environment' : osLabels().thisComputer), local: !configuredUrl, url: configuredUrl }
+export const configDir = () => desktopConfigDir()
 export function readRegistry(): Registry {
   try {
     const value = JSON.parse(readFileSync(path.join(configDir(), 'environments.json'), 'utf8')) as Registry
@@ -38,17 +39,21 @@ export function profileById(id: string) {
   if (!profile) throw Error('This environment was removed. Choose another environment.')
   return profile
 }
-export function profileEndpoint(profile: EnvironmentProfile): Endpoint {
-  if (profile.id === 'local') {
-    const configuredUrl = process.env.KYBERN_URL, configuredToken = process.env.KYBERN_TOKEN
-    if (configuredUrl) {
-      if (!configuredToken) throw Error('Set KYBERN_TOKEN for the daemon configured by KYBERN_URL')
-      return { url: normalizeDaemonUrl(configuredUrl), token: configuredToken }
-    }
-    const port = readFileSync(path.join(localDataDir, 'daemon.port'), 'utf8').trim()
-    const token = readFileSync(path.join(localDataDir, 'daemon.token'), 'utf8').trim()
-    return { url: `ws://127.0.0.1:${port}/ws`, token }
+/** The local daemon's address and token, from the data folder (or `KYBERN_URL` and `KYBERN_TOKEN`). Synchronous: two small files. */
+export function localEndpoint(): Endpoint {
+  const configuredUrl = process.env.KYBERN_URL, configuredToken = process.env.KYBERN_TOKEN
+  if (configuredUrl) {
+    if (!configuredToken) throw Error('Set KYBERN_TOKEN for the daemon configured by KYBERN_URL')
+    return { url: normalizeDaemonUrl(configuredUrl), token: configuredToken }
   }
+  const port = readFileSync(path.join(localDataDir, 'daemon.port'), 'utf8').trim()
+  const token = readFileSync(path.join(localDataDir, 'daemon.token'), 'utf8').trim()
+  return { url: `ws://127.0.0.1:${port}/ws`, token }
+}
+/** A saved environment's endpoint. The device token comes from the credential store, which is asynchronous off macOS. */
+export function profileEndpoint(profile: EnvironmentProfile): Endpoint | Promise<Endpoint> {
+  if (profile.id === 'local') return localEndpoint()
   if (!profile.url) throw Error('Edit this environment and enter its address.')
-  return { url: normalizeDaemonUrl(profile.url), token: readCredential(profile.id), environmentId: profile.environment_id ?? undefined }
+  const url = normalizeDaemonUrl(profile.url), environmentId = profile.environment_id ?? undefined
+  return readCredential(profile.id).then(token => ({ url, token, environmentId }))
 }

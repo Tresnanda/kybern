@@ -40,6 +40,8 @@ let objc: Objc | null = null
 const selectors = new Map<string, Pointer>()
 
 export function getObjc(): Objc {
+  // AppKit and the Objective-C runtime exist on macOS only; say so here instead of failing inside dlopen.
+  if (process.platform !== 'darwin') throw new Error('Native macOS windows need macOS')
   objc ??= load()
   return objc
 }

@@ -1,15 +1,19 @@
 name: Build the patched GPUIX native addon
 description: >-
-  Runs apps/gpuix/native/update.sh for one macOS target, reusing the cargo
-  output (the slow part, about seven minutes) from a cache keyed on every input
-  of the fetch, patch and build steps, plus the Markdown parity test a cache
-  hit skips (the build that saved the entry ran it on the same inputs). The realign, re-sign, load check,
-  capability checks and webview companion run on every call, cache hit or not.
-  The caller installs Rust 1.97.1 for the target, Bun and Python.
+  Runs apps/gpuix/native/update.sh for one target (macOS, Windows x64 or Linux
+  x64), reusing the cargo output (the slow part, about seven minutes) from a
+  cache keyed on every input of the fetch, patch and build steps, plus the
+  Markdown parity test a cache hit skips (the build that saved the entry ran it
+  on the same inputs). The realign, re-sign, load check, capability checks and
+  webview companion (each where the target has one) run on every call, cache
+  hit or not. The caller installs Rust 1.97.1 for the target, Bun and Python
+  (Windows runs the script in Git Bash and needs `python` with PYTHONUTF8=1);
+  on Linux the action installs GPUI's system packages itself, since the load
+  check needs their runtime libraries even on a cache hit.
 
 inputs:
   target:
-    description: aarch64-apple-darwin or x86_64-apple-darwin
+    description: aarch64-apple-darwin, x86_64-apple-darwin, x86_64-pc-windows-msvc or x86_64-unknown-linux-gnu
     required: true
   save:
     description: >-
@@ -17,6 +21,18 @@ inputs:
       runs should: a cache saved under a tag can never be restored.
     required: false
     default: 'false'
+  lto:
+    description: >-
+      'off' builds without the release profile's fat LTO: faster, enough to
+      check a patch (gpuix-platforms.yml's `lto` input), cached under its own
+      key. Release builds keep the default.
+    required: false
+    default: 'true'
+
+outputs:
+  library:
+    description: The cargo output for this target (libgpuix_native.dylib, gpuix_native.dll or libgpuix_native.so), relative to the repository root
+    value: ${{ steps.inputs.outputs.library }}
 
 runs:
   using: composite
@@ -26,23 +42,66 @@ runs:
       shell: bash
       run: arch -x86_64 /usr/bin/true 2>/dev/null || softwareupdate --install-rosetta --agree-to-license
     - id: key
+      if: runner.os != 'Linux'
       shell: bash
       env:
         TARGET: ${{ inputs.target }}
       run: |
         host=$(rustc +1.97.1 -vV | sed -n 's/^host: //p')
         if [ "$TARGET" = "$host" ]; then release=build/target/release; else release=build/target/$TARGET/release; fi
-        echo "dylib=apps/gpuix/native/$release/libgpuix_native.dylib" >> "$GITHUB_OUTPUT"
-        # The linker and SDK shape the dylib as much as the sources do.
-        tools=$({ rustc +1.97.1 -vV; xcodebuild -version; sw_vers -productVersion; } | shasum -a 256 | cut -c1-16)
+        # The linker and SDK shape the built library as much as the sources do.
+        case "$TARGET" in
+          *-apple-darwin)
+            lib=libgpuix_native.dylib
+            tools=$({ rustc +1.97.1 -vV; xcodebuild -version; sw_vers -productVersion; } | shasum -a 256 | cut -c1-16) ;;
+          x86_64-pc-windows-msvc)
+            lib=gpuix_native.dll
+            vswhere="/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
+            tools=$({ rustc +1.97.1 -vV; "$vswhere" -latest -products '*' -property catalog_productDisplayVersion; echo "${ImageVersion:-}"; } | sha256sum | cut -c1-16) ;;
+          *) echo "::error::unsupported GPUIX addon target: $TARGET" >&2; exit 1 ;;
+        esac
+        echo "dylib=apps/gpuix/native/$release/$lib" >> "$GITHUB_OUTPUT"
         echo "tools=$tools" >> "$GITHUB_OUTPUT"
+    # The packages gpuix-platforms.yml builds with, without its Xvfb, Mesa and
+    # capture tools. libvulkan1 is what wgpu loads at run time.
+    - name: Install GPUI's system packages (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          gcc g++ clang pkg-config libfontconfig-dev libfreetype-dev libwayland-dev \
+          libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev libssl-dev libzstd-dev libvulkan1
+    - id: key-linux
+      if: runner.os == 'Linux'
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        case "$TARGET" in
+          *-unknown-linux-gnu) ;;
+          *) echo "::error::$TARGET is not a Linux GNU target" >&2; exit 1 ;;
+        esac
+        host=$(rustc +1.97.1 -vV | sed -n 's/^host: //p')
+        if [ "$TARGET" = "$host" ]; then release=build/target/release; else release=build/target/$TARGET/release; fi
+        echo "library=apps/gpuix/native/$release/libgpuix_native.so" >> "$GITHUB_OUTPUT"
+        # The compiler, linker and glibc the .so is built against (glibc sets the floor it runs on).
+        tools=$({ rustc +1.97.1 -vV; cc --version; ld --version | sed -n 1p; ldd --version | sed -n 1p; . /etc/os-release && echo "$ID $VERSION_ID"; } | sha256sum | cut -c1-16)
+        echo "tools=$tools" >> "$GITHUB_OUTPUT"
+    # One place for what the cache and the callers need, whichever OS step ran.
+    - id: inputs
+      shell: bash
+      run: |
+        echo "library=${{ steps.key.outputs.dylib }}${{ steps.key-linux.outputs.library }}" >> "$GITHUB_OUTPUT"
+        # A build without LTO is a different library; the default adds nothing, so release keys do not change.
+        echo "tools=${{ steps.key.outputs.tools }}${{ steps.key-linux.outputs.tools }}${{ inputs.lto == 'off' && '-nolto' || '' }}" >> "$GITHUB_OUTPUT"
     - id: cache
       uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
         path: |
-          ${{ steps.key.outputs.dylib }}
+          ${{ steps.inputs.outputs.library }}
           apps/gpuix/native/upstream/zed/crates/gpui/src/arena.rs
-        key: gpuix-addon-${{ inputs.target }}-${{ steps.key.outputs.tools }}-${{ hashFiles('apps/gpuix/native/VERSION', 'apps/gpuix/native/update.sh', 'apps/gpuix/native/patches/**', 'apps/gpuix/native/markdown-document-test.py') }}
+        key: gpuix-addon-${{ inputs.target }}-${{ steps.inputs.outputs.tools }}-${{ hashFiles('apps/gpuix/native/VERSION', 'apps/gpuix/native/update.sh', 'apps/gpuix/native/FORK', 'apps/gpuix/native/markdown-document-test.py') }}
     - name: Build the patched GPUIX native addon
       working-directory: apps/gpuix/native
       shell: bash
@@ -50,12 +109,15 @@ runs:
         KYBERN_GPUIX_TARGET: ${{ inputs.target }}
         KYBERN_NATIVE_CHECKS: '0'
         KYBERN_GPUIX_PREBUILT: ${{ steps.cache.outputs.cache-hit == 'true' && '1' || '0' }}
-      run: ./update.sh
+        LTO: ${{ inputs.lto }}
+      run: |
+        if [ "$LTO" = off ]; then export CARGO_PROFILE_RELEASE_LTO=off; fi
+        ./update.sh
     - name: Save the cargo output
       if: inputs.save == 'true' && steps.cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
         path: |
-          ${{ steps.key.outputs.dylib }}
+          ${{ steps.inputs.outputs.library }}
           apps/gpuix/native/upstream/zed/crates/gpui/src/arena.rs
-        key: gpuix-addon-${{ inputs.target }}-${{ steps.key.outputs.tools }}-${{ hashFiles('apps/gpuix/native/VERSION', 'apps/gpuix/native/update.sh', 'apps/gpuix/native/patches/**', 'apps/gpuix/native/markdown-document-test.py') }}
+        key: gpuix-addon-${{ inputs.target }}-${{ steps.inputs.outputs.tools }}-${{ hashFiles('apps/gpuix/native/VERSION', 'apps/gpuix/native/update.sh', 'apps/gpuix/native/FORK', 'apps/gpuix/native/markdown-document-test.py') }}

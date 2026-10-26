@@ -1,4 +1,4 @@
-// Markdown ⇄ the native editor's blocks (`<rich-editor>`, `native/patches/rich_editor.rs`).
+// Markdown ⇄ the native editor's blocks (`<rich-editor>`, `native/upstream/packages/native/src/rich_editor.rs`).
 //
 // A note is stored as Markdown. `parseDoc` turns it into the flat block list the
 // native editor edits (nesting is `depth` for list levels, `quote` for quote

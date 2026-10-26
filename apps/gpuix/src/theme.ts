@@ -8,7 +8,9 @@ import {
   buildThemeCssVariables,
   type ThemeVariant,
 } from '../../desktop/src/lib/kit/theme/theme.logic.ts'
+import type { DesktopMaterial } from './platform/desktopMaterial.ts'
 import { SINGLE_FILL, effectiveSurface, glassRecipe, materialCoverage, materialVars, opacityVarsFor, surfaceScale, type WindowScope } from './platform/translucency.ts'
+import { FONTS } from './platform/fonts.ts'
 
 type Vars = Record<string, string>
 
@@ -282,16 +284,21 @@ function glassTokens(variant: ThemeVariant, scope: WindowScope, opaque: Vars, su
 
 /**
  * The material for a scope and the opacities, memoized so the same inputs give the same object (and no render). Scope none
- * ignores them all; Sidebar only ignores the content opacity and the Surface opacity (its content is Solid).
+ * ignores them all; Sidebar only ignores the content opacity and the Surface opacity (its content is Solid). `desktop`
+ * `none` (no desktop material behind the window on this OS, `platform/desktopMaterial.ts`) puts the frame coat on the
+ * Solid frame colour, so the opaque window reads as glass over a solid backdrop.
  */
-export function materialFor(variant: ThemeVariant, scope: WindowScope, sidebarOpacity: number, contentOpacity = 100, surfaceOpacity: number | null = null): Material {
-  const key = scope === 'none' ? `${variant}:none` : scope === 'sidebar' ? `${variant}:sidebar:${sidebarOpacity}` : `${variant}:window:${sidebarOpacity}:${contentOpacity}:${surfaceOpacity ?? ''}`
+export function materialFor(variant: ThemeVariant, scope: WindowScope, sidebarOpacity: number, contentOpacity = 100, surfaceOpacity: number | null = null, desktop: DesktopMaterial = 'vibrancy'): Material {
+  const base = scope === 'none' ? `${variant}:none` : scope === 'sidebar' ? `${variant}:sidebar:${sidebarOpacity}` : `${variant}:window:${sidebarOpacity}:${contentOpacity}:${surfaceOpacity ?? ''}`
+  const key = desktop === 'none' && scope !== 'none' ? `${base}:solid-window` : base
   let material = materials.get(key)
   if (material) return material
   const opaque = opaqueVars(variant)
   const raw: Vars = { ...opaque, ...materialVars(variant, opaque, scope, sidebarOpacity, contentOpacity) }
   const v = (name: string) => resolve(raw[name] ?? 'transparent', raw)
-  const frame = v('--app-frame-surface')
+  // No desktop material behind the window on this OS (`platform/desktopMaterial.ts`): the window is opaque, so the frame
+  // coat sits on the Solid frame colour instead of on whatever the cleared window would show (black or white).
+  const frame = desktop === 'none' && scope !== 'none' ? over(v('--app-frame-surface'), resolve(opaque['--app-frame-surface'] ?? 'transparent', opaque)) : v('--app-frame-surface')
   const sidebar = v('--app-sidebar-surface')
   material = {
     frame,
@@ -310,4 +317,7 @@ export const materialCount = () => materials.size
 export const windowCoverage = (variant: ThemeVariant, scope: WindowScope, sidebarOpacity: number, contentOpacity = 100) => materialCoverage(variant, opaqueVars(variant), scope, sidebarOpacity, contentOpacity)
 
 export const FONT_UI = '.SystemUIFont'
-export const FONT_MONO = 'Menlo'
+/** Menlo on macOS, the bundled JetBrains Mono elsewhere (`platform/fonts.ts`). */
+export const FONT_MONO = FONTS.mono
+/** The code face's advance in em: what the code wrap and fixed-width columns compute with. */
+export const MONO_ADVANCE = FONTS.monoAdvance

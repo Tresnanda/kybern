@@ -36,7 +36,7 @@ import { showToast } from "../ui/Toast";
 import { useStreamedText } from "../ui/useStreamedText";
 import { radius, space, useTheme } from "../ui/theme";
 import { ApprovalPanel } from "./Approvals";
-import { CoordinatorCardLine, SystemRowLine } from "./CoordinatorCards";
+import { CoordinatorCardLine, RotationRow, SystemRowLine } from "./CoordinatorCards";
 import { EditedFilesCard, confirmRewind } from "./EditedFiles";
 import { Lightbox } from "./Lightbox";
 import { LongPressArea } from "./LongPressArea";
@@ -89,6 +89,7 @@ const threadLive = (threadId: string) =>
 function rowGap(row: Extract<TurnRow, { kind: "block" }>) {
   const kind = row.block.kind;
   if (row.nested) return kind === "tool" || kind === "runtime_task" ? 0 : space.sm;
+  if (kind === "rotation") return 0;
   if (kind === "user") return row.first ? space["2xl"] : space.md;
   if (kind === "turn_end") return space.xs;
   if (kind === "tool" || kind === "runtime_task") return space.xs;
@@ -441,6 +442,8 @@ export const TranscriptBlock = memo(function TranscriptBlock({
       );
     case "outside_repo_changed":
       return <OutsideChangeRow block={block} threadId={threadId} />;
+    case "rotation":
+      return <RotationRow block={block} threadId={threadId} />;
     case "reverted":
       return <SettledLine icon="arrow.uturn.backward" text={`Rewound to checkpoint ${block.commit.slice(0, 7)}`} />;
     case "visual":

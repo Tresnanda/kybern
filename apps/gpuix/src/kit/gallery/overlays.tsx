@@ -6,9 +6,10 @@ import { AlertDialog, AlertDialogClose, AlertDialogDescription, AlertDialogFoote
 import { Button } from '../Button.tsx'
 import { Select } from '../Select.tsx'
 import { Sheet, SheetClose, SheetDescription, SheetFooter, SheetHeader, SheetPanel, SheetTitle, type SheetSide } from '../Sheet.tsx'
+import { osLabels } from '../../platform/os.ts'
 
 const regions = [
-  { value: 'local', label: 'This Mac' },
+  { value: 'local', label: osLabels().thisComputer },
   { value: 'worktree', label: 'New worktree' },
   { value: 'remote', label: 'Remote host' },
 ]

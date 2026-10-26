@@ -184,7 +184,7 @@ export interface AppState {
   /** `threadId:turnId` → diff, filled lazily for "Edited N files" cards and the changes panel. */
   diffs: Record<string, Diff>
   /** Shared git status snapshots so the dock and Environment panel do not duplicate `git`/`gh` work. */
-  prSelection: { projectId: ProjectId; number: number } | null
+  prSelection: { projectId: ProjectId; number: number; repo?: string } | null
   worktreeCleanupThread: ThreadId | null
   gitStatuses: Record<ThreadId, GitStatus>
   selected:

@@ -3,7 +3,8 @@
 // Must stay the first import: it picks the native module before @gpuix loads.
 import './native/local-build.ts'
 import { startupMark } from './perf/startup.ts'
-import { fstatSync, readFileSync } from 'node:fs'
+import { fstatSync, readFileSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { render, useGpuixRequired } from '@gpuix/react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { onWindowKeyDown } from './nav/keys.ts'
@@ -15,14 +16,18 @@ import { startPerfProbe } from './perf/probe.ts'
 import { startPickHub } from './pick/hub.ts'
 import { getAccessibilityDisplay } from './platform/material.ts'
 import { resolveScope, type ThemeVariant } from './platform/translucency.ts'
-import { backingFor, installWindowMaterial } from './shell/windowMaterial.ts'
+import { backingFor, installWindowMaterial, nativeBackground } from './shell/windowMaterial.ts'
 import { startAppUpdateChecks } from './platform/update.ts'
 import { installFrameSource } from './native/frame.ts'
 import { handbackOnFocus, installFocusHandback } from './native/focusHandback.ts'
 import { hasSavedFrame, installWindowFrame, startWindowShell } from './shell/window.ts'
+import { savedFrameOptions, startWindowChrome } from './shell/windowChrome.ts'
 import { startEnvironmentWindow } from './windows/window.ts'
 import { installRuntimeSafetyNet } from './shell/errors.ts'
 import { startMemoryLog } from './perf/memoryLog.ts'
+import { setOsHost } from './platform/os.ts'
+import { attachNotificationHost, setEarlyAppIdentity } from './native/notifications.ts'
+import { installUiFont } from './platform/fonts.ts'
 
 // The terminal draws xterm's weights (300 text, 500 bold); italics are their own family until GPUIX styles take `fontStyle`.
 const FONTS = ['CalSans-Regular.ttf', 'JetBrainsMono-Regular.ttf', 'JetBrainsMono-Light.ttf', 'JetBrainsMono-Medium.ttf', 'JetBrainsMono-LightItalic.ttf', 'JetBrainsMono-MediumItalic.ttf']
@@ -32,6 +37,10 @@ function Fonts({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false)
   useEffect(() => {
     startupMark('fonts-start')
+    // Windows and Linux use the addon's clipboard, open and picker bindings when it has them (`platform/os.ts`).
+    setOsHost(renderer)
+    // Windows and Linux post system notifications through the same renderer (`native/notifications.ts`).
+    attachNotificationHost(renderer)
     installFrameSource(renderer)
     // Focus that GPUIX moves takes the keyboard back from a clicked web document (`native/focusHandback.ts`).
     installFocusHandback(renderer)
@@ -47,10 +56,14 @@ function Fonts({ children }: { children: ReactNode }) {
         console.error(`[fonts] ${file}:`, error)
       }
     }
+    // Off macOS the system UI font is a variable face, so the kit's weights land on its `wght` axis (`platform/fonts.ts`).
+    installUiFont(renderer)
     startupMark('fonts-ready')
     setReady(true)
     startPerfProbe(renderer)
     startWindowShell(renderer)
+    // Windows and Linux: the title bar's window state, the OS theme and motion, the saved frame (`shell/windowChrome.ts`).
+    startWindowChrome(renderer)
     // One window per environment across processes; the title names the environment (`windows/`).
     startEnvironmentWindow(renderer)
     // Debug: minimize after launch to check that hidden windows stop their loops.
@@ -60,6 +73,27 @@ function Fonts({ children }: { children: ReactNode }) {
 }
 
 startupMark('modules-ready')
+// The notification identity (the Windows AppUserModelID) goes to the addon before any window exists, in this process and in
+// every environment window's, which starts here too: the taskbar groups a window by the id it was created under.
+setEarlyAppIdentity()
+// KYBERN_GPUIX_SMOKE=1 (the installer check, `packaging/windows/verify-install.ps1`): prove that a packaged build
+// loads its native addon with every DLL it needs and imports its whole module graph and resources, then exit before
+// a window, daemon or network connection exists. A failure is written to KYBERN_GPUIX_SMOKE_OUT (a GUI build has no console).
+if (process.env.KYBERN_GPUIX_SMOKE === '1') {
+  const out = process.env.KYBERN_GPUIX_SMOKE_OUT
+  try {
+    const addon = process.env.NAPI_RS_NATIVE_LIBRARY_PATH
+    if (!addon) throw Error('No patched native addon is set (NAPI_RS_NATIVE_LIBRARY_PATH)')
+    createRequire(import.meta.url)(addon)
+    await import('./App.tsx')
+    readFileSync(new URL(`./assets/fonts/${FONTS[0]}`, import.meta.url))
+    if (out) writeFileSync(out, 'ok')
+  } catch (error) {
+    if (out) writeFileSync(out, error instanceof Error ? error.stack ?? error.message : String(error))
+    process.exit(1)
+  }
+  process.exit(0)
+}
 // Restore selection before the socket opens, so its content can hydrate while
 // the workspace modules and native window initialize.
 startSplitView()
@@ -100,13 +134,19 @@ render(
     height: Number(process.env.KYBERN_WINDOW_SIZE?.split('x')[1]) || 820,
     titlebarTransparent: true,
     // Opaque for Solid, an accessibility override or `KYBERN_OPAQUE`; else the native vibrancy (Blur Auto) or a
-    // transparent window with the adjustable desktop blur behind it (`shell/windowMaterial.ts`).
-    windowBackground: launchBacking.mode,
+    // transparent window with the adjustable desktop blur behind it (`shell/windowMaterial.ts`). Windows 11: Mica or
+    // Acrylic; Linux and Windows 10: opaque.
+    windowBackground: nativeBackground(launchBacking),
     trafficLightX: 16,
     trafficLightY: 16,
     ...(process.env.KYBERN_PERF_PROBE === '1' ? { debugFrameOverlay: 'minimal' as const } : {}),
     minWidth: 900,
     minHeight: 600,
+    // Windows and Linux reopen the saved frame here (macOS restores AppKit's frame after the window opens).
+    ...(process.env.KYBERN_WINDOW_SIZE ? {} : savedFrameOptions({ width: 900, height: 600 })),
+    // Linux: Kybern draws the title bar, its buttons and the resize edges (`nav/WindowControls.tsx`). X11 without a
+    // compositing manager falls back to the window manager's frame.
+    ...(process.platform === 'linux' && process.env.KYBERN_WINDOW_DECORATIONS !== 'server' ? { windowDecorations: 'client' } : {}),
     // An agent checking its own work must not take the keyboard from the user.
     focus: process.env.GPUIX_BACKGROUND !== '1',
     // A saved frame is restored before the window is shown (`shell/window.ts`).

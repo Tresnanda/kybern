@@ -3,7 +3,10 @@
 import assert from 'node:assert/strict'
 import { readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { setKeyPlatform } from '../platform/keys.ts'
 
+// The ⌘W case is written for macOS shortcuts; CI runs this on Linux.
+setKeyPlatform('darwin')
 const file = path.join(process.env.KYBERN_DATA_DIR!, 'gpuix-ui.json')
 const leaf = (id: string, threadId: string | null) => ({ kind: 'leaf', id, threadId })
 writeFileSync(file, JSON.stringify({

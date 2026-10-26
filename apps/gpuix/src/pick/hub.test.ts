@@ -37,7 +37,60 @@ describe('the picker script', () => {
     expect(PICKER_SOURCE).toContain('webkit.messageHandlers.kybernFrame.postMessage')
     expect(PICKER_SOURCE).not.toContain('eval(')
   })
+  test('synthetic events from the page never become an anchor, a pick or a cancel', () => {
+    const { fire, posted, picker } = runPicker()
+    const button = element('button')
+    for (const type of ['mousedown', 'click']) fire(type, { isTrusted: false, altKey: true, button: 0, target: button })
+    expect(posted).toEqual([])
+    fire('mousedown', { isTrusted: true, altKey: true, button: 0, target: button })
+    fire('click', { isTrusted: true, altKey: true, button: 0, target: button })
+    expect(posted.map(m => m.event)).toEqual(['anchor'])
+    expect(posted[0]!.payload).toMatchObject({ tag: 'button', selector: 'button' })
+
+    posted.length = 0
+    expect(picker().start('Pick')).toBe('picking')
+    fire('mousemove', { isTrusted: false, target: button })
+    fire('click', { isTrusted: false, target: button })
+    fire('keydown', { isTrusted: false, key: 'Enter' })
+    fire('keydown', { isTrusted: false, key: 'Escape' })
+    expect(posted).toEqual([])
+    fire('mousemove', { isTrusted: true, target: button })
+    fire('click', { isTrusted: true, target: button })
+    expect(posted.map(m => m.event)).toEqual(['picked'])
+    posted.length = 0
+    picker().start('Pick')
+    fire('keydown', { isTrusted: true, key: 'Escape' })
+    expect(posted.map(m => m.event)).toEqual(['cancelled'])
+  })
 })
+
+/** A DOM element as far as the picker reads one. */
+function element(tag: string): any {
+  return {
+    nodeType: 1, localName: tag, id: '', classList: [], parentElement: null, innerText: 'Buy', textContent: 'Buy', outerHTML: `<${tag}>Buy</${tag}>`,
+    getAttribute: () => null, closest: () => null, getBoundingClientRect: () => ({ x: 1, y: 2, left: 1, top: 2, width: 30, height: 10, bottom: 12 }),
+  }
+}
+
+/** The picker source run against a stub window and document; `fire` calls its capture listeners like the DOM would. */
+function runPicker() {
+  const listeners = new Map<string, ((event: any) => void)[]>()
+  const target = () => ({
+    addEventListener: (type: string, listener: (event: any) => void) => listeners.set(type, [...listeners.get(type) ?? [], listener]),
+    removeEventListener: (type: string, listener: (event: any) => void) => listeners.set(type, (listeners.get(type) ?? []).filter(l => l !== listener)),
+  })
+  const posted: { kind: string; event: string; payload: any }[] = []
+  const node = (): any => ({ style: {}, className: '', textContent: '', appendChild: () => {}, addEventListener: () => {}, remove: () => {}, attachShadow: () => node() })
+  const document = { ...target(), querySelectorAll: () => ({ length: 1 }), documentElement: { appendChild: () => {} }, createElement: node, createTextNode: () => ({}) }
+  const window: any = { ...target(), innerHeight: 800, innerWidth: 1000, focus: () => {}, webkit: { messageHandlers: { kybernFrame: { postMessage: (m: any) => posted.push(m) } } } }
+  const location = { href: 'http://localhost:5173/' }
+  new Function('window', 'document', 'location', 'requestAnimationFrame', 'CSS', `return ${PICKER_SOURCE}`)(window, document, location, () => {}, undefined)
+  const fire = (type: string, init: Record<string, unknown>) => {
+    const event = { preventDefault() {}, stopPropagation() {}, stopImmediatePropagation() {}, metaKey: false, ...init }
+    for (const listener of listeners.get(type) ?? []) listener(event)
+  }
+  return { fire, posted, picker: () => window.__kybernPicker }
+}
 
 describe('composer chips', () => {
   test('a secret chip carries a name and a file, never a value', () => {

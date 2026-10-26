@@ -10,6 +10,7 @@ import { VisualReply } from "./VisualReply"
 import { SecretRequestLine } from "./SecretRequestPanel"
 import { CoordinatorCardLine, SystemRowLine } from "./coordinator/CoordinatorRows"
 import { coordinatorCardKind, coordinatorCardLine } from "../../../../packages/kybern-client/src/coordinatorCards"
+import { rotationLabel } from "../../../../packages/kybern-client/src/rotation"
 import { secretRequestInput } from "../../../../packages/kybern-client/src/secretRequest"
 import { AgentItemCard } from "./AgentItemCard"
 import { openNote } from "@/state/notes"
@@ -166,7 +167,7 @@ function clockDuration(ms: number): string {
 
 function settledWorkPresentation(blocks: readonly Block[], tasks: readonly RuntimeTask[]): SettledWorkPresentation {
   const tasksByToolCall = new Map(tasks.flatMap((task) => (task.tool_call_id ? [[task.tool_call_id, task] as const] : [])))
-  const hierarchy = buildWorkHierarchy(blocks)
+  const hierarchy = buildWorkHierarchy(blocks.filter((block) => block.kind !== "rotation"))
   const agentBlocks: Block[] = []
   const disclosureBlocks: Block[] = []
   for (const block of hierarchy.roots) {
@@ -890,6 +891,8 @@ const Turn = memo(function Turn({ group, threadId, isLast, onOpenAgentActivity, 
                 {group.end?.at && <time dateTime={group.end.at} title={new Date(group.end.at).toLocaleString()} className="tabular-nums">{clockTime(group.end.at)}</time>}
               </div>
             )}
+
+            {group.work.map((block) => block.kind === "rotation" && <RotationNoticeRow key={block.id} block={block} />)}
           </div>
         </div>
       )}
@@ -1568,6 +1571,15 @@ const WorkRow = memo(function WorkRow({
       return null
   }
 })
+
+/** A Coordinator's context refresh: its label only; the handoff itself is read in the GPUIX client. */
+function RotationNoticeRow({ block }: { block: Extract<Block, { kind: "rotation" }> }) {
+  return (
+    <p className="chat-paint-host mt-2 leading-6 text-muted-foreground" style={CHAT_FONT} data-timeline-row-kind="rotation">
+      {rotationLabel(block, new Date(block.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }))}
+    </p>
+  )
+}
 
 function NoticeRow({ block }: { block: Extract<Block, { kind: "notice" }> }) {
   // Decided once on mount: only a notice that just arrived plays the entrance.

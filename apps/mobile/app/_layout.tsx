@@ -259,6 +259,7 @@ function Navigation() {
         <Stack.Screen name="tasks" options={{ title: "Agents & processes" }} />
         <Stack.Screen name="agents" options={{ title: "Agents & processes", ...sheet }} />
         <Stack.Screen name="queued" options={{ title: "Queued messages", ...sheet }} />
+        <Stack.Screen name="handoff" options={{ title: "Handoff", ...sheet }} />
         <Stack.Screen
           name="thread-picker"
           options={{

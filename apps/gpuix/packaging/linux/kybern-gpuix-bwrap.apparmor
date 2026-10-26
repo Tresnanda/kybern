@@ -1,0 +1,54 @@
+# Kybern GPUIX (WP10): lets Kybern's own bubblewrap, the sandbox of its embedded web pages (WPE WebKit), create the
+# unprivileged user namespace Ubuntu 23.10+ refuses to unprofiled programs. Installed by the .deb's postinst where
+# AppArmor 4 is present; the binary is the one at the path below and nothing else.
+#
+# Modelled on Ubuntu's own `bwrap-userns-restrict` (AppArmor's profiles/apparmor/profiles/extras): bwrap itself may
+# use the capabilities it gains in its new user namespace to build the sandbox, but everything it runs (WebKit's web
+# process, xdg-dbus-proxy, or anything another local user starts through this bwrap) is stacked with the child profile
+# below, which denies every capability. So this profile is no general way around Ubuntu's restriction on unprivileged user namespaces.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile kybern-gpuix-bwrap @BWRAP@ flags=(attach_disconnected,mediate_deleted) {
+  allow capability,
+  # Everything else stays open: 'm' everywhere so children can map their libraries under the stacked profile.
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow ptrace,
+  allow signal,
+  allow mqueue,
+  allow io_uring,
+  allow userns,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow dbus,
+
+  # What bwrap executes is stacked with the capability-less child profile. `pix`, as upstream: bwrap runs its child
+  # with no-new-privs, under which a plain `px` transition is refused (execvp: Permission denied).
+  allow pix /** -> &kybern-gpuix-bwrap//&kybern-gpuix-bwrap-child,
+
+  include if exists <local/kybern-gpuix-bwrap>
+}
+
+profile kybern-gpuix-bwrap-child flags=(attach_disconnected,mediate_deleted) {
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow ptrace,
+  allow signal,
+  allow mqueue,
+  allow io_uring,
+  allow userns,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow dbus,
+
+  allow pix /** -> &kybern-gpuix-bwrap-child,
+
+  audit deny capability,
+
+  include if exists <local/kybern-gpuix-bwrap-child>
+}

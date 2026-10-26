@@ -94,6 +94,41 @@ pub(crate) fn member_dir(folder: &Path, path: &str) -> PathBuf {
     if path == GROUP_FOLDER_MEMBER { folder.to_path_buf() } else { path.split('/').fold(folder.to_path_buf(), |dir, part| dir.join(part)) }
 }
 
+/// The folder a pull request call of `project` runs in: the project folder for
+/// a single repository, else the folder of the member `repo`. A group call must
+/// name its member: defaulting to the primary would let a client from before
+/// member tags open, approve or close the primary's pull request of that number.
+pub(crate) fn pr_repo_dir(project: &Project, repo: Option<&str>) -> Result<PathBuf, String> {
+    let folder = Path::new(&project.path);
+    if project.kind != ProjectKind::Group {
+        return match repo {
+            None => Ok(folder.to_path_buf()),
+            Some(_) => Err(format!("{} is a single repository, so pull requests take no repo.", project.name)),
+        };
+    }
+    let member = match repo {
+        Some(repo) => {
+            project.members.iter().find(|m| m.path == repo).ok_or_else(|| format!("{repo} isn't a repository of {}.", project.name))?
+        }
+        None if project.members.is_empty() => return Err(format!("{} has no repositories yet. Add one in its settings.", project.name)),
+        None => {
+            return Err(format!(
+                "{} has several repositories, so this pull request needs its repository. Update Kybern on this device, then open it again.",
+                project.name
+            ));
+        }
+    };
+    match probe_member(folder, &member.path) {
+        MemberStatus::Ok => Ok(member_dir(folder, &member.path)),
+        MemberStatus::Missing => {
+            Err(format!("{} is missing from {}. Restore the folder or remove it in the project's settings.", member.name, project.name))
+        }
+        MemberStatus::NotGit => {
+            Err(format!("{} is no longer a git repository. Restore its .git folder or remove it in the project's settings.", member.name))
+        }
+    }
+}
+
 /// '/'-separated relative form of `dir` inside `folder`, "." for the folder itself.
 fn relative_member(folder: &Path, dir: &Path) -> Option<String> {
     let rest = dir.strip_prefix(folder).ok()?;

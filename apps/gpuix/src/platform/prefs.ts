@@ -3,10 +3,10 @@
 // update announcement, for example. One small JSON file beside the GPUIX
 // appearance files; `KYBERN_CLIENT_CONFIG_DIR` moves it for tests.
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import path from 'node:path'
+import { gpuixConfigDir } from './os.ts'
 
-const file = () => path.join(process.env.KYBERN_CLIENT_CONFIG_DIR ?? path.join(homedir(), 'Library/Application Support/kybern-gpuix'), 'app.json')
+const file = () => path.join(gpuixConfigDir(), 'app.json')
 let cache: Record<string, unknown> | null = null
 function all(): Record<string, unknown> {
   if (cache) return cache

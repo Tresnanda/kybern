@@ -668,7 +668,7 @@ impl Orchestrator {
             ensure!(previous == signature, "Continuation id belongs to a different account or request.");
             if let Some((owner, turn_id, _)) = self.inner.store.turn_started_receipt(params.message_id)? {
                 ensure!(owner == params.thread_id, "Continuation id belongs to another thread.");
-                return Ok(methods::ThreadsSendResult { turn_id, message_id: params.message_id });
+                return Ok(methods::ThreadsSendResult { turn_id, message_id: params.message_id, queued: false });
             }
         } else {
             ensure!(

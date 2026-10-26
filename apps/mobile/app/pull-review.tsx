@@ -29,10 +29,10 @@ const VERB: Record<Kind, string> = { comment: "Post comment", approve: "Approve"
 const DONE: Record<Kind, string> = { comment: "Comment posted", approve: "Pull request approved", request_changes: "Changes requested" };
 
 export default function PullReviewSheet() {
-  const { projectId = "", number: raw = "0" } = useLocalSearchParams<{ projectId: string; number: string }>();
+  const { projectId = "", number: raw = "0", repo } = useLocalSearchParams<{ projectId: string; number: string; repo?: string }>();
   const number = Number(raw);
   const { colors } = useTheme();
-  const pr = usePullRequest(projectId, number);
+  const pr = usePullRequest(projectId, number, repo);
   const [kind, setKind] = useState<Kind>("comment");
   const [error, setError] = useState("");
   const head = pr.detail?.head_sha;

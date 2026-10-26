@@ -3,12 +3,13 @@
 import { existsSync, closeSync, openSync, readFileSync, statSync } from 'node:fs'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
-import { homedir } from 'node:os'
+import { executableName, pathPlan, withPath } from '../platform/os.ts'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Endpoint } from '../../../../packages/kybern-client/src/client.ts'
 import { PROTOCOL_VERSION, type DaemonInfo } from '../../../../packages/kybern-client/src/types.ts'
 import { normalizeDaemonUrl } from '../../../../packages/kybern-client/src/address.ts'
+import { compareVersions } from './platform.ts'
 
 export function desktopVersion() {
   if (process.env.KYBERN_GPUIX_VERSION) return process.env.KYBERN_GPUIX_VERSION
@@ -18,13 +19,57 @@ export function desktopVersion() {
   return version
 }
 
-export function bundledCommand(name: 'kybern' | 'kybernd') {
-  const explicit = process.env[name === 'kybern' ? 'KYBERN_BUNDLED_CLI' : 'KYBERND']
-  const candidates = [explicit, path.join(path.dirname(process.execPath), name),
+/**
+ * A running AppImage's mount (`$APPDIR`), or null. The mount disappears when the app quits, so neither the daemon, which
+ * outlives the app, nor a linked CLI may run from it (`platform/linuxPackage.ts` stages copies outside it).
+ */
+export function appImageMount(env: NodeJS.ProcessEnv = process.env, execPath?: string) {
+  if (!env.APPIMAGE || !env.APPDIR) return null
+  const mount = env.APPDIR.replace(/\/+$/, '')
+  // Variables inherited from another AppImage's terminal name a mount this process does not run from.
+  return execPath === undefined || execPath.startsWith(`${mount}/`) ? mount : null
+}
+const inMount = (file: string, mount: string | null) => !!mount && (file === mount || file.startsWith(`${mount}/`))
+
+export function bundledCommand(name: 'kybern' | 'kybernd', env: NodeJS.ProcessEnv = process.env, execPath = process.execPath) {
+  const explicit = env[name === 'kybern' ? 'KYBERN_BUNDLED_CLI' : 'KYBERND']
+  const file = executableName(name, process.platform)
+  const mount = appImageMount(env, execPath)
+  // An AppImage runs only the copies it staged outside its mount (`KYBERND`, `KYBERN_BUNDLED_CLI`); a missing copy is an
+  // error to show, never a reason to run the mounted file or whatever `kybernd` is on PATH.
+  const candidates = mount ? [explicit] : [explicit, path.join(path.dirname(execPath), file),
+    // The Windows installer keeps the command-line tools in `bin`, the only folder it adds to PATH.
+    path.join(path.dirname(execPath), 'bin', file),
     // Development builds use this checkout's artifacts only.
-    fileURLToPath(new URL(`../../../../target/debug/${name}`, import.meta.url)),
-    ...(process.env.PATH ?? '').split(path.delimiter).filter(Boolean).map(dir => path.join(dir, name))]
-  return candidates.find((candidate): candidate is string => !!candidate && existsSync(candidate) && statSync(candidate).isFile())
+    fileURLToPath(new URL(`../../../../target/debug/${file}`, import.meta.url)),
+    ...(env.PATH ?? '').split(path.delimiter).filter(Boolean).map(dir => path.join(dir, file))]
+  return candidates.find((candidate): candidate is string => !!candidate && !inMount(candidate, mount) && existsSync(candidate) && statSync(candidate).isFile())
+}
+
+/**
+ * Variables of this app's own process that mean nothing to the daemon and the agents it starts, and that are wrong for
+ * them: an AppImage's mount paths (`APPDIR`, `ARGV0`, `OWD`), the addon and resources of this install, and the
+ * locations of the daemon and CLI this app resolved. A daemon started by one install outlives it and is later adopted
+ * by another. `KYBERN_BUNDLED_CLI` stays when it names a stable file (askpass falls back to it), never a path in the mount.
+ */
+const APP_INTERNAL_ENV = ['KYBERN_GPUIX_RESOURCES', 'NAPI_RS_NATIVE_LIBRARY_PATH', 'KYBERN_GPUIX_VERSION', 'KYBERN_GPUIX_NATIVE', 'KYBERND', 'KYBERN_GPUIX_PACKAGED_DAEMON', 'APPIMAGE', 'APPDIR', 'OWD', 'ARGV0']
+export function daemonLaunchEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env = { ...source }
+  const mount = appImageMount(source)
+  for (const name of APP_INTERNAL_ENV) delete env[name]
+  if (env.KYBERN_BUNDLED_CLI && inMount(env.KYBERN_BUNDLED_CLI, mount)) delete env.KYBERN_BUNDLED_CLI
+  return env
+}
+
+/** Variables a spawned copy of this app must not inherit, so it resolves its own daemon and CLI (`update.ts`, `windows/registry.ts`). */
+export const APP_RESOLVED_ENV = ['KYBERND', 'KYBERN_BUNDLED_CLI', 'KYBERN_GPUIX_PACKAGED_DAEMON']
+/** The AppImage runtime's own variables; a new image sets them for its own mount. */
+export const APPIMAGE_ENV = ['APPIMAGE', 'APPDIR', 'ARGV0', 'OWD']
+/** The environment a relaunched or spawned copy of the app starts with: this process's, minus what only that copy can resolve. */
+export function relaunchEnv(source: NodeJS.ProcessEnv, options: { appImage?: boolean } = {}): NodeJS.ProcessEnv {
+  const env = { ...source }
+  for (const name of [...APP_RESOLVED_ENV, ...(options.appImage ? APPIMAGE_ENV : [])]) delete env[name]
+  return env
 }
 
 /**
@@ -33,17 +78,44 @@ export function bundledCommand(name: 'kybern' | 'kybernd') {
  * bundled kybernd. A development run (bun, a checkout's target/debug/kybernd,
  * a KYBERND override) never stops a daemon it did not start: a fresh checkout
  * build is newer than any running daemon, so the policy would replace the
- * user's own daemon. KYBERN_ALLOW_DAEMON_RESTART=1 opts in.
+ * user's own daemon. KYBERN_ALLOW_DAEMON_RESTART=1 opts in. A Linux AppImage
+ * runs its daemon from a copy outside the image (`packaging/entry-linux.ts`),
+ * which it names in KYBERN_GPUIX_PACKAGED_DAEMON.
  */
-export function mayRestartDaemon(binary: string, env: NodeJS.ProcessEnv = process.env, execPath = process.execPath) {
+export function mayRestartDaemon(binary: string, env: NodeJS.ProcessEnv = process.env, execPath = process.execPath, platform: NodeJS.Platform = process.platform) {
   if (env.KYBERN_ALLOW_DAEMON_RESTART === '1') return true
-  const name = path.basename(execPath)
-  return name !== 'bun' && name !== 'node' && path.resolve(binary) === path.resolve(path.dirname(execPath), 'kybernd')
+  // Windows paths ignore case and executables end in `.exe` (`bun.exe`, `kybernd.exe`).
+  const windows = platform === 'win32', p = windows ? path.win32 : path.posix
+  const fold = (value: string) => windows ? value.toLowerCase() : value
+  const runtime = p.basename(fold(execPath), windows ? '.exe' : '')
+  const packaged = env.KYBERN_GPUIX_PACKAGED_DAEMON || p.join(p.dirname(execPath), windows ? 'kybernd.exe' : 'kybernd')
+  return runtime !== 'bun' && runtime !== 'node' && fold(p.resolve(binary)) === fold(p.resolve(packaged))
 }
 
-export function daemonNeedsRestart(info: Pick<DaemonInfo, 'protocol_version' | 'version' | 'started_at'>, version: string, modifiedMs?: number) {
-  return info.protocol_version !== PROTOCOL_VERSION || info.version !== version || (modifiedMs !== undefined && modifiedMs > Date.parse(info.started_at))
+/**
+ * What this app does with the daemon already running in a data folder.
+ *
+ * - `restart`: the bundled daemon is newer (a higher version) or speaks a newer protocol than the running one, or it
+ *   is the same version but was built after the running daemon started (a reinstall or development rebuild).
+ * - `keep`: the same daemon.
+ * - `newer-daemon`: the running daemon is a higher version on the same protocol. Another, newer install owns this data
+ *   folder (a stale deb or rpm, or an old AppImage copy, beside an update). This app talks to it as it is: stopping it
+ *   would kill the agents it runs, and the older binary would run against a store the newer one migrated.
+ * - `newer-protocol`: the running daemon speaks a newer protocol than this app can. Nothing is restarted; the app asks
+ *   the user to update.
+ * An unreadable daemon version restarts, which is the state the shell can vouch for.
+ */
+export type DaemonPlan = 'keep' | 'restart' | 'newer-daemon' | 'newer-protocol'
+export function daemonPlan(info: Pick<DaemonInfo, 'protocol_version' | 'version' | 'started_at'>, version: string, modifiedMs?: number): DaemonPlan {
+  if (info.protocol_version > PROTOCOL_VERSION) return 'newer-protocol'
+  if (info.protocol_version < PROTOCOL_VERSION) return 'restart'
+  let order: number
+  try { order = compareVersions(version, info.version) } catch { return info.version === version ? 'keep' : 'restart' }
+  if (order > 0) return 'restart'
+  if (order < 0) return 'newer-daemon'
+  return modifiedMs !== undefined && modifiedMs > Date.parse(info.started_at) ? 'restart' : 'keep'
 }
+export const daemonNeedsRestart = (info: Pick<DaemonInfo, 'protocol_version' | 'version' | 'started_at'>, version: string, modifiedMs?: number) => daemonPlan(info, version, modifiedMs) === 'restart'
 export async function preferredDaemonPort(root: string) {
   for (const name of ['daemon.port', 'desktop.port']) {
     let value: string
@@ -95,11 +167,13 @@ export interface DaemonDependencies {
   now: () => number
 }
 let loginPath: Promise<string> | undefined
+/** The PATH the daemon (and the agents it starts) sees: the login shell's on macOS and Linux, the inherited one on Windows (`pathPlan`). */
 function daemonPath() {
   return loginPath ??= new Promise<string>(resolve => {
-    const fallback = [path.join(homedir(), '.local/bin'), path.join(homedir(), '.cargo/bin'), path.join(homedir(), '.bun/bin'), '/opt/homebrew/bin', '/usr/local/bin', process.env.PATH ?? ''].join(path.delimiter)
-    if (!process.env.SHELL) return resolve(fallback)
-    execFile(process.env.SHELL, ['-ilc', 'printf \'%s\' "$PATH"'], { timeout: 5000, maxBuffer: 128 * 1024 }, (error, output) => resolve(!error && output.trim() ? `${output.trim()}${path.delimiter}${fallback}` : fallback))
+    const plan = pathPlan()
+    const fallback = plan.fallback.join(path.delimiter)
+    if (!plan.shell) return resolve(fallback)
+    execFile(plan.shell.command, plan.shell.args, { timeout: 5000, maxBuffer: 128 * 1024, windowsHide: true }, (error, output) => resolve(!error && output.trim() ? `${output.trim()}${path.delimiter}${fallback}` : fallback))
   })
 }
 const defaults: DaemonDependencies = {
@@ -107,9 +181,9 @@ const defaults: DaemonDependencies = {
   launch: async (binary, args, root) => {
     const log = openSync(path.join(root, 'daemon.log'), 'a', 0o600)
     try {
-      const env: NodeJS.ProcessEnv = { ...process.env, PATH: await daemonPath() }
+      const env: NodeJS.ProcessEnv = withPath(daemonLaunchEnv(process.env), await daemonPath())
       delete env.CARGO_TARGET_DIR
-      const child = spawn(binary, args, { detached: true, stdio: ['ignore', log, log], env })
+      const child = spawn(binary, args, { detached: true, stdio: ['ignore', log, log], env, windowsHide: true })
       // Handle asynchronous spawn failure; never leave an unhandled error event.
       await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
       child.unref()
@@ -121,7 +195,7 @@ export function createLocalDaemonResolver(options: LocalDaemonOptions, dependenc
   const deps = { ...defaults, ...dependencies }
   let resolving: Promise<Endpoint> | undefined
   let starting: { endpoint: Endpoint; at: number; child: ChildProcess } | undefined
-  const info = (endpoint: Endpoint) => deps.rpc<DaemonInfo>(endpoint, 'daemon.info').catch(() => null)
+  const info = (endpoint: Endpoint, timeoutMs?: number) => deps.rpc<DaemonInfo>(endpoint, 'daemon.info', timeoutMs).catch(() => null)
   async function resolve(): Promise<Endpoint> {
     if (starting && deps.now() - starting.at < 10000) {
       if (starting.child.exitCode !== null || starting.child.signalCode !== null) { starting = undefined; throw Error('kybernd exited during startup. Check daemon.log and reconnect.') }
@@ -146,21 +220,31 @@ export function createLocalDaemonResolver(options: LocalDaemonOptions, dependenc
       try { const port = await preferredDaemonPort(root); if (port) endpoint = { url: `ws://127.0.0.1:${port}/ws`, token: (await readFile(path.join(root, 'daemon.token'), 'utf8')).trim() } }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     }
-    const existing = endpoint && await info(endpoint)
+    // A busy local daemon or a slow first frame (software rendering) can miss the quick probe. Starting a second
+    // daemon then fails on the held port, so ask once more, patiently; nothing listening still fails at once.
+    const existing = endpoint && (await info(endpoint) ?? (configured ? null : await info(endpoint, 5000)))
     if (configured) {
       if (!existing) throw Error('The daemon configured by KYBERN_URL is not reachable or rejected the configured token')
       if (existing.protocol_version !== PROTOCOL_VERSION) throw Error('This environment uses an incompatible protocol. Update Kybern on the client and host')
       return endpoint!
     }
     const binary = options.binary ?? bundledCommand('kybernd')
-    if (!binary) throw Error('kybernd not found next to the app or on PATH. Install the daemon, then reconnect.')
+    if (!binary) throw Error(appImageMount(process.env, process.execPath)
+      ? 'Kybern couldn’t copy its daemon out of the AppImage. Make ~/.local/share/kybern-gpuix writable or free some disk space, then reopen the app.'
+      : 'kybernd not found next to the app or on PATH. Install the daemon, then reconnect.')
     const version = options.version ?? desktopVersion()
     const port = options.port === undefined ? await preferredDaemonPort(root) : Number(options.port)
     if (!Number.isInteger(port) || port < 0 || port > 65535) throw Error('Set KYBERN_PORT to a port between 0 and 65535')
     await mkdir(root, { recursive: true })
     if (port) await writeFile(path.join(root, 'desktop.port'), String(port))
     if (existing) {
-      if (!daemonNeedsRestart(existing, version, statSync(binary).mtimeMs)) return endpoint!
+      const plan = daemonPlan(existing, version, statSync(binary).mtimeMs)
+      if (plan === 'keep') return endpoint!
+      if (plan === 'newer-protocol') throw Error(`A newer Kybern is running in ${root} (kybernd ${existing.version}). Update this copy of Kybern, or quit the newer one and reopen this app.`)
+      if (plan === 'newer-daemon') {
+        console.error(`[daemon] ${root}: keeping kybernd ${existing.version}, newer than this app's ${version}; update this copy of Kybern`)
+        return endpoint!
+      }
       if (!(options.allowRestart ?? mayRestartDaemon(binary))) {
         if (existing.protocol_version !== PROTOCOL_VERSION) throw Error(`The daemon in ${root} uses another protocol. Restart it yourself, or set KYBERN_ALLOW_DAEMON_RESTART=1 to let this development build replace it.`)
         console.error(`[daemon] ${root}: keeping kybernd ${existing.version} (this development build does not restart daemons it did not start; set KYBERN_ALLOW_DAEMON_RESTART=1 to allow it)`)

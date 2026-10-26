@@ -12,7 +12,9 @@
 //   environment (asking it over its socket), and only spawns a process when
 //   none does. The spawned pid is claimed before the child is up, so a second
 //   click waits for that window instead of opening another;
-// - claims of processes that are gone are dropped when read.
+// - claims of processes that are gone are dropped when read;
+// - the updater asks every other window to quit before it runs the installer
+//   (`quitOtherWindows`), because each process keeps the install's files locked.
 //
 // The directory follows `KYBERN_CLIENT_CONFIG_DIR`, so checks never see the
 // user's windows. No timers: the socket only wakes on a request.
@@ -24,16 +26,22 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { configDir } from '../environments/registry.ts'
+import { linuxInstall } from '../platform/linuxPackage.ts'
+import { relaunchEnv } from '../shell/daemon.ts'
 
 export interface WindowClaim { pid: number; environment: string; name?: string; socket: string; pending?: boolean; at: number }
-type Request = { type: 'focus' } | { type: 'ping' }
+type Request = { type: 'focus' } | { type: 'ping' } | { type: 'quit' }
 export interface WindowReply { ok: boolean; pid: number; environment: string; focused: number }
 export type OpenResult = { action: 'self' | 'focused' | 'opened'; pid: number }
 
 const dir = () => path.join(configDir(), 'gpuix-windows')
 const claimFile = (pid: number) => path.join(dir(), `${pid}.json`)
-/** Unix socket paths are limited to 104 bytes on macOS; long config dirs fall back to a hashed tmp path. */
-export function socketPath(pid: number) {
+/**
+ * Unix socket paths are limited to 104 bytes on macOS; long config dirs fall back to a hashed tmp path.
+ * Windows has no socket files for Node's `net`: the endpoint is a named pipe keyed by the config dir and pid.
+ */
+export function socketPath(pid: number, platform: NodeJS.Platform = process.platform) {
+  if (platform === 'win32') return `\\\\.\\pipe\\kybern-gpuix-${createHash('sha1').update(dir()).digest('hex').slice(0, 12)}-${pid}`
   const inside = path.join(dir(), `${pid}.sock`)
   if (Buffer.byteLength(inside) < 100) return inside
   return path.join(tmpdir(), `kybern-gpuix-${createHash('sha1').update(dir()).digest('hex').slice(0, 12)}-${pid}.sock`)
@@ -94,7 +102,7 @@ async function askStarting(claim: WindowClaim, request: Request, timeoutMs: numb
   return null
 }
 
-interface Host { environment: () => { id: string; name: string }; focus: () => void }
+interface Host { environment: () => { id: string; name: string }; focus: () => void; /** Leave the app; the process exit flushes persisted state. */ quit?: () => void }
 let host: Host | null = null
 let server: Server | null = null
 let focusCount = 0
@@ -118,7 +126,8 @@ export function startWindowRegistry(next: Host) {
       try { request = JSON.parse(buffer.slice(0, line)) as Request } catch { /* answered as not ok */ }
       if (request?.type === 'focus') { focusCount++; host!.focus() }
       const reply: WindowReply = { ok: !!request, pid: process.pid, environment: host!.environment().id, focused: focusCount }
-      connection.end(`${JSON.stringify(reply)}\n`)
+      // Answer first so the asker sees the request was taken, then leave.
+      connection.end(`${JSON.stringify(reply)}\n`, () => { if (request?.type === 'quit') (host!.quit ?? (() => process.exit(0)))() })
     })
   })
   server.on('error', error => console.error('[windows] registry socket:', error))
@@ -134,10 +143,36 @@ export function publishWindow() {
   writeClaim({ pid: process.pid, environment: id, name, socket: socketPath(process.pid), at: Date.now() })
 }
 
-/** The process that becomes a window pinned to `id`: the same entry point, environment fixed by `KYBERN_GPUIX_ENVIRONMENT`. */
+/**
+ * Ask every other window process to quit and wait for them to exit. The Windows updater calls this before
+ * it starts the installer: each environment window is its own process and keeps the install's executables
+ * and DLLs open. Returns the pids still running when the wait ends (the installer then moves their files
+ * aside as `.old`, and those windows keep running the old version until they are closed).
+ */
+export async function quitOtherWindows(timeoutMs = 10000): Promise<number[]> {
+  const others = windowClaims().filter(claim => claim.pid !== process.pid)
+  await Promise.all(others.map(claim => askWindow(claim, { type: 'quit' }, 2000)))
+  const deadline = Date.now() + timeoutMs
+  let running = others.filter(claim => alive(claim.pid))
+  while (running.length && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 100))
+    running = running.filter(claim => alive(claim.pid))
+  }
+  return running.map(claim => claim.pid)
+}
+
+/**
+ * The process that becomes a window pinned to `id`: the same entry point, environment fixed by `KYBERN_GPUIX_ENVIRONMENT`.
+ * An AppImage starts the image itself: this process's mount goes away when it quits, and the new window would lose its files.
+ */
 export function spawnEnvironmentWindow(id: string) {
   const args = process.env.KYBERN_GPUIX_RESOURCES ? [] : [fileURLToPath(new URL('../main.tsx', import.meta.url))]
-  const child = spawn(process.execPath, args, { detached: true, stdio: 'ignore', env: { ...process.env, KYBERN_GPUIX_ENVIRONMENT: id, KYBERN_GPUIX_THREAD: '' } })
+  const install = linuxInstall()
+  // A packaged Linux window resolves its own daemon and CLI; an AppImage's are staged copies named by this process's
+  // environment, and its mount variables belong to this image's mount.
+  const env: NodeJS.ProcessEnv = { ...(install ? relaunchEnv(process.env, { appImage: install.kind === 'appimage' }) : process.env), KYBERN_GPUIX_ENVIRONMENT: id, KYBERN_GPUIX_THREAD: '' }
+  // No `windowsHide`: the child is the GUI app (no console to hide), and Windows would hide its window.
+  const child = spawn(install?.kind === 'appimage' ? install.image : process.execPath, args, { detached: true, stdio: 'ignore', env })
   child.unref()
   if (!child.pid) throw Error('Unable to open window. Reopen Kybern and try again.')
   return child.pid

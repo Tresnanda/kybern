@@ -30,6 +30,7 @@ import { Agents } from './Agents.tsx'
 import { DiffPane } from './Diff.tsx'
 import { Explorer } from './Explorer.tsx'
 import { ProjectPane } from './Project.tsx'
+import { MapPane } from './Map.tsx'
 import { ArtifactsPane } from './Artifacts.tsx'
 import { NotesPane } from './Notes.tsx'
 import { TasksPane } from './Tasks.tsx'
@@ -64,6 +65,7 @@ const VIEWERS: { id: string; label: string; icon: string; open: (threadId: strin
 const PANELS: { id: DockTab; label: string; icon: string; width: number }[] = [
   { id: 'agents', label: 'Agents', icon: N.users, width: 100 },
   { id: 'project', label: 'Project', icon: N.note, width: 104 },
+  { id: 'map', label: 'Map', icon: DOCK_ICONS.map, width: 90 },
   { id: 'activity', label: 'Activity', icon: DOCK_ICONS.activity, width: 104 },
   { id: 'changes', label: 'Changes', icon: DOCK_ICONS.changes, width: 104 },
   { id: 'artifacts', label: 'Artifacts', icon: DOCK_ICONS.artifacts, width: 110 },
@@ -71,6 +73,9 @@ const PANELS: { id: DockTab; label: string; icon: string; width: number }[] = [
   { id: 'notes', label: 'Notes', icon: N.note, width: 96 },
   { id: 'tasks', label: 'Tasks', icon: N.tasks, width: 96 },
 ]
+
+/** Panels that exist only on a project's Coordinator thread. */
+const COORDINATOR_ONLY = new Set<DockTab | null>(['project', 'map'])
 
 export function Dock({ sidebarOpen }: { sidebarOpen: boolean }) {
   const t = useTheme()
@@ -140,7 +145,7 @@ function DockContent({ threadId, thread, width }: { threadId: string | null; thr
  */
 function NoPanels({ threadId, coordinator, instant }: { threadId: string; coordinator: boolean; instant: boolean }) {
   const t = useTheme()
-  const panels = PANELS.filter((panel) => panel.id !== 'project' || coordinator)
+  const panels = PANELS.filter((panel) => !COORDINATOR_ONLY.has(panel.id) || coordinator)
   return (
     <Empty testId="dock-empty" style={{ padding: 24 }}>
       <EmptyHeader play={!instant}>
@@ -163,7 +168,7 @@ function ThreadDock({ thread, width }: { thread: Thread; width: number }) {
   const tasks = useRuntimeTasks(thread.id)
   const [stats, setStats] = useState<[number, number]>([0, 0])
   const onStats = useCallback((adds: number, dels: number) => setStats((previous) => previous[0] === adds && previous[1] === dels ? previous : [adds, dels]), [])
-  const tab = dock.tab === 'project' && !thread.coordinator_project_id ? dock.tabs.find((id) => id !== 'project') ?? null : dock.tab
+  const tab = COORDINATOR_ONLY.has(dock.tab) && !thread.coordinator_project_id ? dock.tabs.find((id) => !COORDINATOR_ONLY.has(id)) ?? null : dock.tab
   const keyboard = useNav((s) => s.keyboardNav)
   // `t-pane`: only a pane switched to after the dock was up, by pointer, enters (the first pane, keyboard and instant changes do not).
   const seen = useRef<DockTab | null | undefined>(undefined)
@@ -183,7 +188,8 @@ function ThreadDock({ thread, width }: { thread: Thread; width: number }) {
         : tab === 'activity' ? <Activity {...tasks} />
         : tab === 'changes' ? <DiffPane thread={thread} onStats={onStats} />
         : tab === 'explorer' ? <Explorer key={thread.project_id} projectId={thread.project_id} width={width} />
-        : tab === 'project' && thread.coordinator_project_id ? <ProjectPane thread={thread} /> : null}
+        : tab === 'project' && thread.coordinator_project_id ? <ProjectPane thread={thread} />
+        : tab === 'map' && thread.coordinator_project_id ? <MapPane thread={thread} /> : null}
       </PaneEnter>}
     </div>
   </>
@@ -209,9 +215,9 @@ function TabStrip({ threadId, width: _width, coordinator, activeTasks, stats }: 
   const { renderer } = useGpuix()
   const nodes = useRef(new Map<string, PublicInstance>())
   const strip = useRef<PublicInstance | null>(null)
-  const panels = PANELS.filter((panel) => panel.id !== 'project' || coordinator)
+  const panels = PANELS.filter((panel) => !COORDINATOR_ONLY.has(panel.id) || coordinator)
   const liveTabs = useMemo(() => dock.tabs.flatMap((id) => { const panel = panels.find((p) => p.id === id); return panel ? [panel] : [] }), [dock.tabs, coordinator])
-  const tab = dock.tab === 'project' && !coordinator ? liveTabs[0]?.id ?? null : dock.tab
+  const tab = COORDINATOR_ONLY.has(dock.tab) && !coordinator ? liveTabs[0]?.id ?? null : dock.tab
   const widths = liveTabs.map((panel) => { const node = nodes.current.get(panel.id); return (node && renderer?.getElementBounds?.(node.id)?.width) || panel.width })
   setTabContext({ threadId, ids: liveTabs.map((p) => p.id), widths, icons: liveTabs.map((p) => p.icon), labels: liveTabs.map((p) => p.label), scroll: strip.current, row: strip.current })
   const select = (id: DockTab, instant = false) => { setDock(threadId, { instant }); chooseTab(threadId, id) }

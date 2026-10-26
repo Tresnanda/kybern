@@ -10,7 +10,6 @@ import { isWindowVisible } from '../native/visibility.ts'
 import { toast } from '../shell/toasts.tsx'
 import { activeEnvironment } from '../shell/environment.ts'
 import { useGpuix, useGpuixRequired, type PublicInstance } from '@gpuix/react'
-import { spawn } from 'node:child_process'
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { FileEntry, FilesReadResult } from '../../../../packages/kybern-client/src/types.ts'
 
@@ -33,6 +32,8 @@ import { openTab } from '../tabs/open.ts'
 import { DockEmpty, ErrorLine } from './parts.tsx'
 import { MotionFileTreeRows, type TreeRow } from './MotionFileTree.tsx'
 import { TREE_ROW_HEIGHT, TREE_WINDOW_THRESHOLD, treeWindowRange } from './fileTreeMotion.ts'
+import { osLabels, revealQuietly } from '../platform/os.ts'
+import { isOtherCommand, isPrimary } from '../platform/keys.ts'
 
 type Listing = FileEntry[] | 'loading' | 'error'
 // Reuse the native row geometry/input path used by the PR viewports. Paint,
@@ -261,11 +262,11 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
     if (!keys) return
     const handler = (event: DocumentKey) => {
       const m = event.modifiers
-      if (!m?.cmd || m.ctrl || m.alt) return false
-      if (event.key === 's' && !m.shift) { save(); return true }
-      if (event.key === 'f' && !m.shift && editable && !showPreviewRef.current) { editor.current?.find(); return true }
-      if (event.key === 'g') return editor.current?.findNext(!!m.shift) ?? false
-      if (event.key === 'o' && m.shift) { openIn(defaultEditor()); return true }
+      if (!isPrimary(m) || isOtherCommand(m) || m?.alt) return false
+      if (event.key === 's' && !m?.shift) { save(); return true }
+      if (event.key === 'f' && !m?.shift && editable && !showPreviewRef.current) { editor.current?.find(); return true }
+      if (event.key === 'g') return editor.current?.findNext(!!m?.shift) ?? false
+      if (event.key === 'o' && m?.shift) { openIn(defaultEditor()); return true }
       return false
     }
     keys.current = handler
@@ -285,7 +286,7 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
           {editors.map((candidate) => <MenuItem key={candidate.id} id={`open-${candidate.id}`} label={candidate.name} shortcut={candidate.id === preferred?.id ? '⌘⇧O' : undefined} testId={`file-open-${candidate.id}`} onSelect={() => openIn(candidate)} />)}
           <MenuSeparator />
         </>}
-        <MenuItem id="reveal" label="Reveal in Finder" icon={N.folder} disabled={!absolutePath || !activeEnvironment().local} onSelect={() => { if (absolutePath && activeEnvironment().local) spawn('open', ['-R', absolutePath], { stdio: 'ignore' }).on('error', () => {}) }} />
+        <MenuItem id="reveal" label={osLabels().reveal} icon={N.folder} disabled={!absolutePath || !activeEnvironment().local} onSelect={() => { if (absolutePath && activeEnvironment().local) revealQuietly(absolutePath) }} />
         <MenuSeparator />
         <MenuItem id="relative" label="Copy relative path" onSelect={() => copyText(path)} />
         <MenuItem id="absolute" label="Copy absolute path" disabled={!absolutePath} onSelect={() => { if (absolutePath) copyText(absolutePath) }} />

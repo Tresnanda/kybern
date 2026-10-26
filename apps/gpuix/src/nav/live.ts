@@ -14,7 +14,6 @@ import { environmentKey, onEnvironmentChange } from '../shell/environment.ts'
 //
 // Text deltas cost one switch here and nothing else: no state changes, no render.
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { isChildThread } from '../../../../packages/kybern-client/src/subagents.ts'
@@ -32,6 +31,7 @@ import { getClient, getState, onThreadActivity, set, subscribe } from '../state.
 import { DEFAULT_FILTER, getNav, setNav, subscribeNav, type NavState } from './store.ts'
 import { followSpaces, loadSpaces } from '../spaces/store.ts'
 import { followWorkspaceProgress } from '../groups/store.ts'
+import { gpuixConfigDir } from '../platform/os.ts'
 
 const LIMITS_POLL_MS = 60_000
 const ACTIVITY_DEBOUNCE_MS = 600
@@ -221,7 +221,7 @@ export function askLimits(refresh = false) {
 
 /** The sidebar-preferences file of an environment key (`environmentKey()`), so forgetting an environment can remove it. */
 export const prefsFileFor = (key: string) => path.join(
-  process.env.KYBERN_CLIENT_CONFIG_DIR ?? path.join(homedir(), 'Library/Application Support/kybern-gpuix'),
+  gpuixConfigDir(),
   `workspace-${createHash('sha1').update(key).digest('hex').slice(0, 12)}.json`,
 )
 const prefsFile = () => prefsFileFor(environmentKey())

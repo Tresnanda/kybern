@@ -6,6 +6,7 @@ import { globalNotesHome, setGlobalNotesHome, watchGlobalNotesHome } from '../no
 import { PERMISSION_HINT, PERMISSION_LABEL } from '../../../desktop/src/lib/format.ts'
 import { AUTONOMY_OPTIONS, WORKSPACE_OPTIONS, COORDINATOR_ROLES, COORDINATOR_SETTINGS_COPY as COPY, autonomyHint, effectiveCoordinatorSettings, withGlobalRoleDefault } from '../../../../packages/kybern-client/src/coordinatorSettings.ts'
 import type { PermissionMode, ProviderKind, OrchestrationSettings, RoleDefault } from '../../../../packages/kybern-client/src/types.ts'
+import { ROTATION_COPY, rotationBudgetChoices } from '../../../../packages/kybern-client/src/rotation.ts'
 import { ASK_DEADLINE_DEFAULTS, askDeadlineOptions } from '../../../../packages/kybern-client/src/requestCards.ts'
 import { getClient, useApp } from '../state.ts'
 import { useNav } from '../nav/store.ts'
@@ -25,6 +26,8 @@ import { setAppearance, useAppearance } from './appearance.ts'
 import { useResource } from './resource.ts'
 import { defaultEditor, installedEditors, setDefaultEditor } from '../dock/editors.ts'
 import { setWrapLines, useWrapLines } from '../dock/filePrefs.ts'
+import { osLabels } from '../platform/os.ts'
+import { shortcutLabel } from '../platform/keys.ts'
 
 export function General() {
   const { settings: s, saving } = useSettings()
@@ -45,7 +48,7 @@ export function General() {
       <Row title="Ask before closing while threads work" description="Agents keep going after the window closes. The prompt lists them and offers to stop them."><Switch testId="settings-close-confirmation" aria-label="Ask before closing while threads work" checked={ask} onCheckedChange={value => { save('kybern.askBeforeClose', value); setAsk(value) }} /></Row>
     </Section>
     <FilesSection />
-    <Section title="Notes"><Row title="Global notes" description="Notes that belong to no project. Shared keeps one set on this Mac for every environment window. Switching never moves or deletes a note."><Select label="Global notes" testId="settings-global-notes" value={notesHome} onChange={(value) => setGlobalNotesHome(value as 'shared' | 'separate')} options={[{ value: 'shared', label: 'Shared across environments' }, { value: 'separate', label: 'Separate per environment' }]} /></Row></Section>
+    <Section title="Notes"><Row title="Global notes" description={`Notes that belong to no project. Shared keeps one set ${osLabels().onThisComputer} for every environment window. Switching never moves or deletes a note.`}><Select label="Global notes" testId="settings-global-notes" value={notesHome} onChange={(value) => setGlobalNotesHome(value as 'shared' | 'separate')} options={[{ value: 'shared', label: 'Shared across environments' }, { value: 'separate', label: 'Separate per environment' }]} /></Row></Section>
     <PreviewFolders />
   </>
 }
@@ -56,7 +59,7 @@ function FilesSection() {
   const [editor, setEditor] = useState(() => defaultEditor()?.id ?? '')
   const wrap = useWrapLines()
   return <Section title="Files">
-    <Row title="Open files in" description={editors.length ? 'The editor File actions › Open in and ⌘⇧O use. Picking another editor there makes it the default.' : 'No code editor was found in Applications. Install one to open files from their tabs.'}>
+    <Row title="Open files in" description={editors.length ? `The editor File actions › Open in and ${shortcutLabel('⌘⇧O')} use. Picking another editor there makes it the default.` : 'No code editor was found in Applications. Install one to open files from their tabs.'}>
       {editors.length > 0 && <Select label="Open files in" testId="settings-file-editor" value={editor} onChange={(value) => { setDefaultEditor(value); setEditor(value) }} options={editors.map((candidate) => ({ value: candidate.id, label: candidate.name }))} />}
     </Row>
     <Row title="Wrap lines" description="Long lines in file tabs wrap at the tab's width. Off, they scroll sideways."><Switch aria-label="Wrap lines" testId="settings-file-wrap" checked={wrap} onCheckedChange={setWrapLines} /></Row>
@@ -102,6 +105,7 @@ export function Agents() {
     <Section title="Delegation">
       <Row title="Active agents per thread" description="How many delegated agents one thread can have working at once. At the limit, the thread waits for one to finish before delegating again."><NumberField label="Active agents per thread" testId="settings-max-agents" unit="agents" min={1} max={16} value={current.max_active_children} disabled={saving} onCommit={(max_active_children) => change({ max_active_children })} /></Row>
       <Row title="Active agents per Coordinator" description="The same limit for a project's Coordinator, which usually runs more agents at once than an ordinary thread."><NumberField label="Active agents per Coordinator" unit="agents" min={1} max={16} value={current.lead_max_children} disabled={saving} onCommit={(lead_max_children) => change({ lead_max_children })} /></Row>
+      <Row title={ROTATION_COPY.settingTitle} description={ROTATION_COPY.settingDetail}><Select label={ROTATION_COPY.settingTitle} testId="settings-rotation-budget" compact value={String(effective.rotation_budget_tokens)} options={rotationBudgetChoices(effective.rotation_budget_tokens)} disabled={saving} onChange={(v) => change({ rotation_budget_tokens: Number(v) })} /></Row>
       <Row title="Delegation depth" description="1 lets only top-level threads delegate. 2 also lets their agents delegate again."><NumberField label="Delegation depth" unit="levels" min={1} max={4} value={current.max_depth} disabled={saving} onCommit={(max_depth) => change({ max_depth })} /></Row>
     </Section>
     <AskDeadlineSection />

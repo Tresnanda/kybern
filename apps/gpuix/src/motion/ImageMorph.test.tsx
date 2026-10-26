@@ -1,8 +1,13 @@
-import { expect, mock, test } from 'bun:test'
+import { afterAll, expect, mock, test } from 'bun:test'
+import { setKeyPlatform } from '../platform/keys.ts'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import path from 'node:path'
 import type { ReactNode } from 'react'
+
+// Written for macOS shortcuts (⌘, ⌃); the off-macOS cases set their platform themselves. CI runs these on Linux.
+const restoreKeys = setKeyPlatform('darwin')
+afterAll(() => restoreKeys())
 
 mock.module('../native/visibility.ts', () => ({ isWindowVisible: () => true, onWindowVisibility: () => () => {} }))
 mock.module('../native/local-build.ts', () => ({ PATCHED_NATIVE: true }))
@@ -154,6 +159,7 @@ test('Tab and Shift-Tab wrap inside the open preview, and it follows window resi
 // ADE-55 follow-up: the preview zooms. A tall screenshot sheet used to open as a sliver.
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+
 
 function pngOfSize(width: number, height: number) {
   const bytes = Buffer.alloc(33)

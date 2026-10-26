@@ -12,16 +12,16 @@
 // reports a window-state change (`native/windowState.ts`); an addon without
 // that callback polls them every 900 ms. Window size is never polled.
 // Every failure falls back to GPUI's default (the window just keeps its size).
-import { dlopen, FFIType, type Pointer } from 'bun:ffi'
+import { dlopen, FFIType, ptr, type Pointer } from 'bun:ffi'
 import { readFileSync } from 'node:fs'
 import type { NativeRenderer } from '@gpuix/react'
 import { cls, cstr, each, getObjc, nsApp, sel, withPool, type Objc } from '../native/objc.ts'
 import { onWindowResize } from '../native/layout.ts'
-import { hasWindowStateEvents, installWindowState, onWindowStateChange } from '../native/windowState.ts'
-import { readSystemVariant, setSystemVariant } from './appearance.ts'
+import { hasWindowStateEvents, installWindowState, onWindowStateChange, windowStateReport } from '../native/windowState.ts'
+import { readSystemVariant, setAppearanceRenderer, setSystemVariant } from './appearance.ts'
 import { setWindowWidth } from './layout.ts'
 import { load, save } from './persist.ts'
-import { refreshAccessibilityDisplay } from '../platform/material.ts'
+import { readWindowBackdrop, refreshAccessibilityDisplay } from '../platform/material.ts'
 import { installIdleMemory } from '../platform/idleMemory.ts'
 
 const FRAME_KEY = 'kybern.window.frame'
@@ -166,9 +166,26 @@ export function focusAppWindow(renderer: NativeRenderer) {
   if (!background) (renderer as { activateWindow?: () => void }).activateWindow?.()
 }
 
-/** Whether the app's window is the key (focused) window; true when unknown. */
+const openUser32 = () => dlopen('user32.dll', {
+  GetForegroundWindow: { args: [], returns: FFIType.u64 },
+  GetWindowThreadProcessId: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.u32 },
+}).symbols
+let user32: ReturnType<typeof openUser32> | null | undefined
+/** Windows: each environment window is its own process, so the window is focused when the foreground window is this process's. */
+function windowsFocused(): boolean {
+  if (user32 === undefined) { try { user32 = openUser32() } catch { user32 = null } }
+  if (!user32) return true
+  const pid = new Uint32Array(1)
+  user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), ptr(pid))
+  return pid[0] === process.pid
+}
+
+/** Whether the app's window is the key (focused) window; on Linux GPUI's activation from the last window-state event,
+ *  true before one. Agent toasts post a system notification only while it is not, so `true` everywhere would mean none
+ *  are ever posted. */
 export function isWindowFocused(): boolean {
-  if (!mac) return true
+  if (process.platform === 'win32') return windowsFocused()
+  if (!mac) return windowStateReport()?.focused ?? true
   try {
     const o = getObjc()
     return withPool(o, () => {
@@ -187,7 +204,8 @@ export function startWindowShell(renderer: NativeRenderer) {
   started = true
   let lastFrame = ''
   const readPlatformState = () => {
-    if (!mac) return
+    // Off macOS only the accessibility display is read here (`platform/osDisplay.ts`); there is no frame or appearance to poll.
+    if (!mac) return refreshAccessibilityDisplay()
     try {
       const o = getObjc()
       withPool(o, () => {
@@ -211,9 +229,14 @@ export function startWindowShell(renderer: NativeRenderer) {
     readPlatformState()
   })
   installWindowState(renderer)
+  // Before the app below the font gate renders: frosted surfaces need to know whether this window blurs.
+  readWindowBackdrop(renderer)
+  setAppearanceRenderer(renderer)
   readPlatformState()
   if (hasWindowStateEvents()) onWindowStateChange(readPlatformState)
-  else setInterval(readPlatformState, POLL_MS)
+  // Windows raises no window-state event when Transparency effects or a contrast theme change while Kybern runs: keep
+  // polling `osDisplay.ts`'s two registry reads there.
+  if (!hasWindowStateEvents() || process.platform === 'win32') setInterval(readPlatformState, POLL_MS)
   // Checks drive the options through a file (`KYBERN_A11Y_FILE`), which raises no AppKit event.
   if (process.env.KYBERN_A11Y_FILE) setInterval(refreshAccessibilityDisplay, 250)
   installIdleMemory(renderer, isWindowFocused)

@@ -3,6 +3,7 @@ import { startSplitView } from './split/store.ts'
 import { useMeasureComposerOverlay } from './composer/height.ts'
 import { CloseGuard } from './shell/CloseGuard.tsx'
 import { CloseDirtyDialog } from './tabs/CloseDirty.tsx'
+import { WebPageUi } from './native/WebPageUi.tsx'
 import { WorkspaceDialogs } from './dialogs/Dialogs.tsx'
 import { EnvironmentDialogs } from './environments/Dialogs.tsx'
 import { useEnvironment } from './shell/environment.ts'
@@ -69,6 +70,7 @@ import { COLUMN, GUTTER, Transcript } from './Transcript.tsx'
 import { ThreadRequests, useBlockingRequest } from './transcript/Requests.tsx'
 import { Label, REDUCED_MOTION, useMaterial, useTheme } from './ui.tsx'
 import { RAIL, TITLEBAR } from './nav/TitleBar.tsx'
+import { ResizeEdges } from './nav/WindowControls.tsx'
 import { SINGLE_FILL } from './platform/translucency.ts'
 
 const INSET = 8
@@ -238,6 +240,7 @@ function Workspace() {
       <WorkspaceDialogs />
       <CloseGuard />
       <CloseDirtyDialog />
+      <WebPageUi />
       <Toaster />
       <AppUpdateSurface />
       <SidebarDragLayer />
@@ -248,6 +251,8 @@ function Workspace() {
       <TabDragLayer />
       <SplitDragLayer />
       <TabsDragLayer />
+      {/* Linux client-side decorations: the window's resize edges, over everything (`nav/WindowControls.tsx`). */}
+      <ResizeEdges />
       <ThemeFade />
     </div>
   )

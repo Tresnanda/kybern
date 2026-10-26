@@ -4,7 +4,7 @@
  *
  * Seeds the shared bench dataset (perf/bench/seed.ts) on scratch port 4379 and launches the full app through
  * perf/bench/app.ts on the hidden test display (one UI lease per scenario), with the native motion trace on
- * (`KYBERN_MOTION_TRACE=1`, native/patches/motion_trace_gpui.py). Every open is a real pointer click; the trace puts
+ * (`KYBERN_MOTION_TRACE=1`, the fork commit from motion_trace_gpui.py). Every open is a real pointer click; the trace puts
  * the click, React batches, renders, retained `paintTransform` ticks and presents on one native clock:
  *
  * - `firstPaint`: click → the first present that contains the new popup at all (any opacity);

@@ -1,3 +1,4 @@
+use kybern_protocol::process::NoWindow;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
@@ -33,7 +34,7 @@ async fn discover_with_timeout(bin: &Path, context: &ProbeContext, timeout: Dura
 }
 
 async fn discover_inner(bin: &Path, context: &ProbeContext) -> Result<Discovery> {
-    let mut command = Command::new(bin);
+    let mut command = Command::new(bin).no_window();
     // Preserve Pi's saved/default project-trust policy. In RPC mode an
     // undecided project is safely probed without loading its local resources.
     command.args(["--mode", "rpc", "--no-session"]);
