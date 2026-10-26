@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { isAltOnly, isBackKey, isEmacsCtrl, isForwardKey, isOpenParentKey, isOtherCommand, isPrimary, isPrimaryChord, isSpaceModifier, keyCaps, setKeyPlatform, SHORTCUT, shortcutCaps, shortcutLabel } from './keys.ts'
+import { isAltGrText, isAltOnly, isBackKey, isEmacsCtrl, isFocusGroupModifier, isForwardKey, isOpenParentKey, isOtherCommand, isPrimary, isPrimaryChord, isPrimaryNotAltGr, isSpaceModifier, keyCaps, setKeyPlatform, SHORTCUT, shortcutCaps, shortcutLabel } from './keys.ts'
 
 let restore: (() => void) | null = null
 const on = (platform: NodeJS.Platform) => { restore?.(); restore = setKeyPlatform(platform) }
@@ -107,4 +107,43 @@ test('shortcutCaps splits modifiers from the key', () => {
   expect(shortcutCaps('⌘End')).toEqual(['⌘', 'End'])
   expect(shortcutCaps('⌥-click')).toEqual(['⌥', '-click'])
   expect(shortcutCaps('⌥←')).toEqual(['⌥', '←'])
+})
+
+test('focus group: ⌘⌥ on macOS, Alt+Shift elsewhere (not Ctrl+Alt: GNOME workspaces, Intel rotation, AltGr)', () => {
+  const m = (mods: { cmd?: boolean; ctrl?: boolean; alt?: boolean; shift?: boolean }) => ({ cmd: false, ctrl: false, alt: false, shift: false, ...mods })
+  let restore = setKeyPlatform('darwin')
+  try {
+    expect(isFocusGroupModifier(m({ cmd: true, alt: true }))).toBe(true)
+    expect(isFocusGroupModifier(m({ alt: true, shift: true }))).toBe(false)
+    expect(SHORTCUT.focusGroup).toBe('⌘⌥')
+  } finally { restore() }
+  for (const platform of ['win32', 'linux'] as const) {
+    restore = setKeyPlatform(platform)
+    try {
+      expect(isFocusGroupModifier(m({ alt: true, shift: true }))).toBe(true)
+      expect(isFocusGroupModifier(m({ ctrl: true, alt: true }))).toBe(false)
+      expect(isFocusGroupModifier(m({ ctrl: true, alt: true, shift: true }))).toBe(false)
+      expect(isFocusGroupModifier(m({ alt: true }))).toBe(false)
+      expect(shortcutLabel(SHORTCUT.focusGroup + '←')).toBe('Alt+Shift+←')
+    } finally { restore() }
+  }
+})
+
+test('AltGr: Ctrl+Alt with a composed character is text, and primary shortcuts off macOS skip it', () => {
+  const ev = (key: string, keyChar: string | undefined, mods: { cmd?: boolean; ctrl?: boolean; alt?: boolean; shift?: boolean }) => ({ key, keyChar, modifiers: { cmd: false, ctrl: false, alt: false, shift: false, ...mods } })
+  expect(isAltGrText(ev('q', '@', { ctrl: true, alt: true }))).toBe(true)
+  expect(isAltGrText(ev('7', '{', { ctrl: true, alt: true }))).toBe(true)
+  expect(isAltGrText(ev('q', 'q', { ctrl: true, alt: true }))).toBe(false)
+  expect(isAltGrText(ev('q', undefined, { ctrl: true, alt: true }))).toBe(false)
+  expect(isAltGrText(ev('q', '@', { ctrl: true }))).toBe(false)
+  expect(isAltGrText(ev('q', '@', { ctrl: true, alt: true, cmd: true }))).toBe(false)
+  let restore = setKeyPlatform('win32')
+  try {
+    expect(isPrimaryNotAltGr({ ctrl: true })).toBe(true)
+    expect(isPrimaryNotAltGr({ ctrl: true, alt: true })).toBe(false)
+  } finally { restore() }
+  restore = setKeyPlatform('darwin')
+  try {
+    expect(isPrimaryNotAltGr({ cmd: true, alt: true })).toBe(true)
+  } finally { restore() }
 })

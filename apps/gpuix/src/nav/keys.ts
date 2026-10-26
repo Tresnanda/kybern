@@ -5,13 +5,14 @@ import { paneRects } from '../split/Workspace.tsx'
 // parent, ⌘, Settings. In-thread tabs (ADE-54): ⌘1 the chat, ⌘2–⌘9 the tabs (⌘9 the
 // last), ⌃Tab / ⌃⇧Tab cycle, ⌘W closes the tab (never the thread; on a split's chat
 // tab, the pane), ⌘⇧W closes the focused pane, ⌘⇧T reopens the last closed one,
-// ⌘\ / ⌘⇧\ move the tab into a new group (on the chat: a second thread pane), ⌘⌥←/→/↑/↓ focus the next group. They work while typing, like the desktop's
+// ⌘\ / ⌘⇧\ move the tab into a new group (on the chat: a second thread pane), ⌘⌥←/→/↑/↓ (Alt+Shift+arrows off
+// macOS, `isFocusGroupModifier`) focus the next group. They work while typing, like the desktop's
 // `allowInInput`. Nothing they change animates: they set `keyboardNav` first.
 //
 // Off macOS ⌘ is Ctrl (`platform/keys.ts`), with these exceptions: back and forward are Alt+← / Alt+→ (Ctrl+[ is Escape
 // in a terminal), a subagent's parent is Alt+↑. While a terminal has focus there, Ctrl+key without Shift and Alt+key
 // belong to its shell (Ctrl+C, Ctrl+K, Ctrl+W, Alt+← word left…), so no window shortcut or handler takes them; Ctrl+Tab,
-// Ctrl+Alt+arrows and the Ctrl+Shift shortcuts still work there.
+// Alt+Shift+arrows and the Ctrl+Shift shortcuts still work there.
 //
 // `main.tsx` passes `onWindowKeyDown` to `render()`. Other surfaces can add
 // their own window shortcuts with `addWindowKeyHandler`; a handler that returns
@@ -21,7 +22,7 @@ import { toggleDock } from '../dock/store.ts'
 import { getState, set } from '../state.ts'
 import { goBack, goForward, newThread, openThread } from './history.ts'
 import { getNav, setNav } from './store.ts'
-import { isAltOnly, isBackKey, isForwardKey, isMacKeys, isOpenParentKey, isOtherCommand, isPrimary, isPrimaryChord } from '../platform/keys.ts'
+import { isAltOnly, isBackKey, isFocusGroupModifier, isForwardKey, isMacKeys, isOpenParentKey, isOtherCommand, isPrimary, isPrimaryChord } from '../platform/keys.ts'
 import { terminalHasFocus } from '../terminal/focus.ts'
 
 type Handler = (event: EventPayload) => boolean | void
@@ -43,13 +44,13 @@ function subagentParent(): string | null {
 type Arrow = 'left' | 'right' | 'up' | 'down'
 const ARROWS = new Set<string>(['left', 'right', 'up', 'down'])
 
-/** The tab shortcuts that are not ⌘-only: ⌃Tab cycles, ⌘⌥ arrows (Ctrl+Alt off macOS) move between groups. */
+/** The tab shortcuts that are not ⌘-only: ⌃Tab cycles, ⌘⌥ arrows (Alt+Shift off macOS) move between groups. */
 function tabShortcut(event: EventPayload): boolean {
   const m = event.modifiers
   const nav = getNav()
   if (nav.page !== 'home' || nav.settingsOpen || nav.paletteOpen) return false
   if (m?.ctrl && !m.cmd && !m.alt && event.key === 'tab') return cycleTabs(m.shift ? -1 : 1)
-  if (isPrimaryChord(m, { alt: true }) && ARROWS.has(event.key ?? '')) return focusGroupToward(event.key as Arrow, paneRects())
+  if (isFocusGroupModifier(m) && ARROWS.has(event.key ?? '')) return focusGroupToward(event.key as Arrow, paneRects())
   return false
 }
 
@@ -126,7 +127,7 @@ export function onWindowKeyDown(event: EventPayload) {
 const isShortcut = (event: EventPayload) => {
   const m = event.modifiers
   if (m?.ctrl && !m.cmd && !m.alt && event.key === 'tab') return true
-  if (isPrimaryChord(m, { alt: true, shift: 'any' }) && ARROWS.has(event.key ?? '')) return true
+  if (isFocusGroupModifier(m, 'any') && ARROWS.has(event.key ?? '')) return true
   if (isBackKey(event) || isForwardKey(event) || isOpenParentKey(event)) return true
   return isPrimaryChord(m, { shift: 'any' }) && (!m?.shift || event.key === '\\' || event.key === 't' || event.key === 'w')
 }

@@ -55,7 +55,7 @@ import { FONT_UI } from './theme.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from './ui.tsx'
 import { GlassEdge } from './kit/GlassEdge.tsx'
 import { frostBackdrop, frostFill, raisedFill, useGlass } from './platform/glass.ts'
-import { isPrimary, shortcutLabel } from './platform/keys.ts'
+import { isPrimary, isPrimaryChord, shortcutLabel } from './platform/keys.ts'
 import { addWindowKeyHandler } from './nav/keys.ts'
 import { keyboardAnswer } from './requests/Panel.tsx'
 import { isUserInput, connectorApproval } from '../../../packages/kybern-client/src/userInput.ts'
@@ -1001,7 +1001,8 @@ export function ComposerView(input: ComposerViewProps) {
               }}
               onKeyDown={(e) => {
                 readSelection()
-                if (isPrimary(e.modifiers) && e.key === 'v' && !props.readOnly) {
+                // Not with Alt: Windows sends AltGr as Ctrl+Alt (Hungarian AltGr+V is `@`), which is text, not a paste.
+                if (isPrimaryChord(e.modifiers, { shift: 'any' }) && e.key === 'v' && !props.readOnly) {
                   try {
                     const payload = clipboardAttachments(renderer)
                     if (payload.paths.length || payload.image) {

@@ -820,7 +820,8 @@ App side:
   5 px resize bands and 12 px corners (`ResizeEdges`) unless tiled or maximized.
 - **Shortcuts** (`platform/keys.ts`): one `isPrimary`; the conflict review is in its header and in `nav/keys.ts`: a
   focused terminal off macOS gets Ctrl+key and Alt+key (its copy/paste/find move to Ctrl+Shift+C/V/F); back/forward
-  Alt+←/→, open parent Alt+↑, spaces Alt+1–9, focus group Ctrl+Alt+arrows; Emacs ⌃A/⌃E/⌃N/⌃P macOS-only.
+  Alt+←/→, open parent Alt+↑, spaces Alt+1–9, focus group Alt+Shift+arrows (not Ctrl+Alt: GNOME workspaces, Intel
+  rotation hotkeys, AltGr); Emacs ⌃A/⌃E/⌃N/⌃P macOS-only.
 - **Window state** (`shell/windowChrome.ts`, `platform/systemPrefs.ts`): theme and reduced motion at launch and live,
   the frame saved and restored per display, the minimum size (900×600) on every OS, the close guard through
   `WM_CLOSE` / `closeWindow`.
@@ -852,6 +853,40 @@ Not covered by CI (needs the real PC or desktops): Windows 11 Snap Layouts flyou
 is Server 2022), mixed-DPI caption hit tests, the system menu on right click, GNOME Wayland and KDE (portal
 `color-scheme` / `gtk-decoration-layout` live updates), `enable-animations` and Windows Animation effects toggled
 while running, and the restored frame across monitors.
+
+#### WP3 review fixes
+
+Fork branches `wp3fix` (one commit each on `next`; `native/FORK` pins them): zed "Windows: hit-test the
+WM_NCHITTEST point, balance right caption presses, live Animation effects (WP3 review)", gpuix "Window chrome off
+macOS: WP3 review fixes".
+
+| Finding | Fix |
+| --- | --- |
+| AltGr text in the terminal (Windows sends Ctrl+Alt plus `keyChar`) | `terminalKey` sends the composed character off macOS (`isAltGrText`, `platform/keys.ts`) before the Ctrl branches; Ctrl+Alt without one is unchanged. Audit: composer Ctrl+V and Preview Ctrl+Alt+P use `isPrimaryChord`; Notes Ctrl+S/F, Pull requests Ctrl+F, login Ctrl+C, approval Ctrl+E and the Tasks page's Ctrl shortcuts skip Alt off macOS (`isPrimaryNotAltGr`); a key the native text field holds back for JS is replayed with its `prefer_character_input` (`Window::dispatch_key_down`), so a ctrl-alt editor binding (headings, code block) cannot take AltGr text |
+| Hit test at the cursor, not the message's point | `hit_test_position` (the `WM_NCHITTEST` point during its hit test); the window-chrome check now probes with the cursor parked in the content |
+| Composer Ctrl+V with Alt (Hungarian AltGr+V `@`) | `isPrimaryChord(m, { shift: 'any' })` |
+| Orphaned `gsettings monitor` children | `watchGsettings`: one monitor per schema shared by all listeners (`osDisplay.ts` included), line-buffered, killed on exit, SIGTERM and SIGINT; the double-click watcher uses the value it gets. Launch reads: the registry through bun:ffi (no `reg`), one `gsettings list-recursively` for theme and animations, the double click read without blocking |
+| Re-render per move/resize step | `bounds` are kept out of the React snapshot (`sameChrome`); the addon keeps reduced motion, the button layout and the display id between notifications and sends a bounds-only change once the frame rests (200 ms) |
+| Linux launch theme overwritten by the first report | `takesAppearance`: on Linux the first report does not override a theme the launch read found; later changes do |
+| X11 saved frame on an unplugged monitor | Off-display title bar → centered on the primary display (`window_chrome::on_a_display`) |
+| Right caption press left open on Windows | `run_caption_press` balances the right button too |
+| Animation effects not live on Windows | `WM_SETTINGCHANGE` `SPI_SETCLIENTAREAANIMATION` calls the appearance observers |
+| Text fields off macOS | Ctrl+Y redo, Ctrl+Home/End (with Shift) |
+| Ctrl+Alt+←/→ collisions | Alt+Shift+arrows off macOS (`isFocusGroupModifier`, `SHORTCUT.focusGroup`) |
+| Linux right click on a title-bar control | `control()` marks presses of any button, so the region does not open the window menu |
+
+The WP10 merge on `next` left two `cfg(linux|freebsd)` dependency tables in the native crate's `Cargo.toml`, which
+cargo rejects; `wp3fix` folds them into one.
+
+Follow-up (not done): client-side decorations on Linux draw no inset or shadow around the window.
+
+CI (throwaway `spike/wp3fix-1` and `-2`, 2026-10-26): [40281977524](https://github.com/Tresnanda/kybern/actions/runs/40281977524)
+(window-chrome, smoke, nowebview, focus): window-chrome passes on Windows (WARP, hit tests probed with the cursor in the
+content), Linux X11 and under xfwm4; smoke and focus pass everywhere; Windows nowebview times out installing the preview
+browser (the daemon connection drops), as it does on `feat/gpuix-platforms` without these commits (run 40283556066).
+Strict, all checks: [40281980707](https://github.com/Tresnanda/kybern/actions/runs/40281980707): only the wheel gaps
+(clip, Linux markdown-document) and nowebview (as above; Linux lacks the WPE pkg-config there) fail. macOS on the
+`wp3fix` addon: window-chrome, focus, smoke (both clip modes) and clip pass.
 
 ### Where the forks help
 

@@ -53,7 +53,7 @@ function FloatingState({ children }: { children: ReactNode }) {
 import { forgetRecent, recentsKeyForThread, useRecents } from './recents.ts'
 import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
 import { load, save } from '../shell/persist.ts'
-import { isPrimary } from '../platform/keys.ts'
+import { isAltGrText, isMacKeys, isPrimary, isPrimaryChord } from '../platform/keys.ts'
 
 export function PreviewPane({ threadId }: { threadId: string }) {
   const t = useTheme(), s = usePreview(threadId)
@@ -136,7 +136,7 @@ export function PreviewIntegration({ insetBottom = 0 }: { insetBottom?: number }
     if (!connected) return
     return getClient()!.onNotification('previews.open_requested', payload => { const request = payload as PreviewOpenRequestedNotification; showPreview(request.thread_id, true); void openPreview(request.thread_id, request.target) })
   }, [connected])
-  useEffect(() => addWindowKeyHandler(e => { if (id && page === 'home' && !settings && isPrimary(e.modifiers) && e.modifiers?.alt && e.key === 'p') { if (!webHost.available) { showPreview(id); return true } setNav({ keyboardNav: true }); const s = previewState(id); if (s.entries.length) { setPreview(id, { floating: !s.floating }); if (s.floating) showPreview(id) } else showPreview(id); return true } }), [id, page, settings])
+  useEffect(() => addWindowKeyHandler(e => { if (id && page === 'home' && !settings && isPrimaryChord(e.modifiers, { alt: true, shift: 'any' }) && !(!isMacKeys() && isAltGrText(e)) && e.key === 'p') { if (!webHost.available) { showPreview(id); return true } setNav({ keyboardNav: true }); const s = previewState(id); if (s.entries.length) { setPreview(id, { floating: !s.floating }); if (s.floating) showPreview(id) } else showPreview(id); return true } }), [id, page, settings])
   // One native document per thread: the threads whose browser tab is active in some group, the selected one, and the floating one.
   const groups = useGroups()
   const shown = Object.values(groups).filter((g) => g.threadId && g.active === 'preview').map((g) => g.threadId)

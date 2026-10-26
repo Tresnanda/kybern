@@ -1,5 +1,5 @@
 import type { EventPayload } from '@gpuix/react'
-import { isMacKeys, isPrimaryChord } from '../platform/keys.ts'
+import { isAltGrText, isMacKeys, isPrimaryChord } from '../platform/keys.ts'
 const KEY_MODIFIERS = (m: { shift?: boolean; alt?: boolean; ctrl?: boolean; cmd?: boolean } | undefined) => (m?.shift ? 1 : 0) | (m?.alt ? 2 : 0) | (m?.ctrl ? 4 : 0) | (m?.cmd ? 8 : 0)
 /** Keys whose Shift+PageUp/PageDown scroll the viewport instead of reaching the program, and Cmd+A (Ctrl+Shift+A off macOS). */
 export function terminalViewportKey(event: Pick<EventPayload, 'key' | 'modifiers'>): 'pageup' | 'pagedown' | 'selectall' | null {
@@ -58,6 +58,9 @@ export function terminalKey(event: Pick<EventPayload, 'key' | 'keyChar' | 'modif
     case 'f11': return tilde(23)
     case 'f12': return tilde(24)
   }
+  // Windows reports AltGr as Ctrl+Alt with the composed character (German AltGr+Q `@`, AltGr+7 `{`): that is text,
+  // not a control byte. Ctrl+Alt with nothing composed falls through to the Ctrl branches as before.
+  if (!isMacKeys() && isAltGrText(event)) return event.keyChar!
   if (m?.ctrl && !m.shift && !m.alt) {
     if (key.length === 1 && key >= 'a' && key <= 'z') return String.fromCharCode(key.charCodeAt(0) - 96)
     if (key === 'space' || key === ' ') return '\0'

@@ -37,6 +37,24 @@ export function isPrimaryChord(m: KeyMods, want: { shift?: Want; alt?: Want } = 
   return isPrimary(m) && !isOtherCommand(m) && wanted(m?.alt, want.alt ?? false) && wanted(m?.shift, want.shift ?? false)
 }
 
+/**
+ * Primary held, and off macOS without Alt. Windows sends AltGr as Ctrl+Alt, so a Ctrl+letter shortcut that ignored Alt
+ * would fire while someone types AltGr text (Polish AltGr+S `ś`, AltGr+N `ń`). macOS is unchanged: ⌘ alone decides.
+ */
+export const isPrimaryNotAltGr = (m: KeyMods) => isPrimary(m) && (isMacKeys() || !m?.alt)
+
+/**
+ * Text typed with AltGr: Windows reports AltGr as Ctrl+Alt, with the composed character in `keyChar` (German AltGr+Q
+ * `@`). True when Ctrl and Alt are held (not the Windows / Super key) and `keyChar` is one printable character other than
+ * the key itself. Callers apply it off macOS, where ⌃⌥ composes nothing.
+ */
+export function isAltGrText(event: { key?: string | null; keyChar?: string | null; modifiers?: KeyMods }): boolean {
+  const m = event.modifiers, char = event.keyChar
+  if (!m?.ctrl || !m.alt || m.cmd || !char || char === event.key || [...char].length !== 1) return false
+  const code = char.codePointAt(0)!
+  return code >= 0x20 && code !== 0x7f && !(code >= 0x80 && code < 0xa0)
+}
+
 /** ⌃ as the Emacs list and caret key (⌃N ⌃P in menus): macOS only; elsewhere Ctrl is the shortcut key (Ctrl+N new thread). */
 export const isEmacsCtrl = (m: KeyMods) => isMacKeys() && !!m?.ctrl
 
@@ -51,6 +69,12 @@ export const isBackKey = (e: KeyEvent) => isMacKeys() ? isPrimaryChord(e.modifie
 export const isForwardKey = (e: KeyEvent) => isMacKeys() ? isPrimaryChord(e.modifiers) && e.key === ']' : isAltOnly(e.modifiers) && e.key === 'right'
 /** A subagent's parent: ⌘↑ on macOS; Alt+↑ elsewhere (Explorer's "up one level"; Ctrl+↑ moves the caret or scrolls). */
 export const isOpenParentKey = (e: KeyEvent) => isMacKeys() ? isPrimaryChord(e.modifiers) && e.key === 'up' : isAltOnly(e.modifiers) && e.key === 'up'
+/**
+ * The focus-group modifiers, before an arrow: ⌘⌥ on macOS; Alt+Shift elsewhere. Ctrl+Alt+arrows switch workspaces on
+ * GNOME and rotate the screen with Intel's graphics hotkeys on Windows, and Windows sends AltGr as Ctrl+Alt; Alt+Shift
+ * arrows are free there (Windows Terminal uses them for its panes too).
+ */
+export const isFocusGroupModifier = (m: KeyMods, shift: Want = false) => isMacKeys() ? isPrimaryChord(m, { alt: true, shift }) : !!m?.alt && !!m.shift && !m.ctrl && !m.cmd
 /** The space shortcut modifier: ⌃ on macOS; Alt elsewhere, because Ctrl+1–9 picks tabs there. */
 export const isSpaceModifier = (m: KeyMods) => isMacKeys() ? !!m?.ctrl && !m.cmd && !m.alt && !m.shift : isAltOnly(m)
 
@@ -59,6 +83,8 @@ export const SHORTCUT = {
   get back() { return isMacKeys() ? '⌘[' : '⌥←' },
   get forward() { return isMacKeys() ? '⌘]' : '⌥→' },
   get openParent() { return isMacKeys() ? '⌘↑' : '⌥↑' },
+  /** Focus the group toward an arrow; the arrow follows. */
+  get focusGroup() { return isMacKeys() ? '⌘⌥' : '⌥⇧' },
   /** The space modifier glyph; the digit follows. */
   get space() { return isMacKeys() ? '⌃' : '⌥' },
   // A focused terminal: Ctrl+C/V/F reach the shell off macOS, so the app's own take Shift (Windows Terminal, GNOME Terminal).

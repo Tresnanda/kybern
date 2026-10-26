@@ -20,7 +20,7 @@ import { NoteThumb } from './NoteThumb.tsx'
 import { cardIn, cardLeave, useFreshNotes, useLeavingNotes } from './motion.ts'
 import { NOTES_META, NOTES_UI, ProjectDot, Ring, notesTokens, useNotesTokens } from './kit.tsx'
 import { deleteNote, display, getNotes, openNote, refreshNotes, searchNotes, setNotes, useNotes } from './store.ts'
-import { isPrimary, shortcutLabel } from '../platform/keys.ts'
+import { isPrimaryNotAltGr, shortcutLabel } from '../platform/keys.ts'
 
 let galleryEntered = false
 
@@ -110,7 +110,7 @@ export function NotesGallery() {
   }
   useEffect(() => addWindowKeyHandler((e) => {
     if (getNav().paletteOpen || getNav().settingsOpen || getNotes().quick || getNotes().capture) return
-    if (isPrimary(e.modifiers) && !e.modifiers?.shift && e.key === 'f') { if (notesSearchRef.current) renderer?.focusElement?.(notesSearchRef.current.id); return true }
+    if (isPrimaryNotAltGr(e.modifiers) && !e.modifiers?.shift && e.key === 'f') { if (notesSearchRef.current) renderer?.focusElement?.(notesSearchRef.current.id); return true }
   }), [renderer])
 
   const chip = (value: NotesFilter['kind'], label: string, dot?: string | null) => {

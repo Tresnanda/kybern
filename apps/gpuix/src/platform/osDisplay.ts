@@ -4,13 +4,15 @@
 //            and a contrast theme (SystemParametersInfo SPI_GETHIGHCONTRAST, HCF_HIGHCONTRASTON). Read through bun:ffi on
 //            every poll of the window shell: two calls of a few microseconds, no process.
 //   Linux    increaseContrast only (no desktop has a transparency switch): GNOME's
-//            `org.gnome.desktop.a11y.interface high-contrast`, followed live by one `gsettings monitor` child, and the
+//            `org.gnome.desktop.a11y.interface high-contrast`, followed live by the schema's shared `gsettings monitor`
+//            (`systemPrefs.ts` `watchGsettings`, killed on exit), and the
 //            freedesktop portal's `org.freedesktop.appearance contrast` (GNOME 47+, KDE Plasma 6), read once at launch.
 //
 // Reduce motion is not read here: WP3 reads the OS theme and reduced motion off macOS in its own module; this one stays
 // limited to the two options that turn scene backdrops and the window material off.
 import { dlopen, FFIType } from 'bun:ffi'
 import { spawn } from 'node:child_process'
+import { watchGsettings } from './systemPrefs.ts'
 
 export interface OsDisplay { reduceTransparency: boolean; increaseContrast: boolean }
 
@@ -103,7 +105,7 @@ function setLinuxContrast(source: 'gnome' | 'portal', value: boolean) {
 function startLinux() {
   if (linuxStarted) return
   linuxStarted = true
-  const run = (command: string, args: string[], onLine: (line: string) => void, keep = false) => {
+  const run = (command: string, args: string[], onLine: (line: string) => void) => {
     try {
       const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'ignore'] })
       child.on('error', () => { /* Not installed: the option stays off. */ })
@@ -115,14 +117,12 @@ function startLinux() {
         for (const line of lines) onLine(line)
       })
       child.stdout.on('end', () => { if (buffered) onLine(buffered) })
-      // The monitor runs for the whole session; it must not keep the process alive on exit.
-      if (keep) child.unref()
     } catch { /* The option stays off. */ }
   }
   const schema = 'org.gnome.desktop.a11y.interface'
   const gnome = (line: string) => { const value = parseGsettingsBool(line); if (value !== null) setLinuxContrast('gnome', value) }
   run('gsettings', ['get', schema, 'high-contrast'], gnome)
-  run('gsettings', ['monitor', schema, 'high-contrast'], gnome, true)
+  watchGsettings(schema, ['high-contrast'], (_key, value) => gnome(value))
   run('gdbus', ['call', '--session', '--dest', 'org.freedesktop.portal.Desktop', '--object-path', '/org/freedesktop/portal/desktop',
     '--method', 'org.freedesktop.portal.Settings.ReadOne', 'org.freedesktop.appearance', 'contrast'], (line) => {
     const value = parsePortalContrast(line)

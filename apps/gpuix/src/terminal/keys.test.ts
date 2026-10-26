@@ -34,3 +34,27 @@ for (const platform of ['win32', 'linux'] as const) test(`${platform}: Ctrl+Shif
     expect(terminalKey(key('c', { ctrl: true, shift: true }))).toBeNull()
   } finally { restore() }
 })
+
+for (const platform of ['win32', 'linux'] as const) test(`${platform}: AltGr (Ctrl+Alt with a composed character) types the character`, () => {
+  const restore = setKeyPlatform(platform)
+  try {
+    // German layout: AltGr+Q is `@`, AltGr+7 is `{`, AltGr+E is `€`.
+    expect(terminalKey({ ...key('q', { ctrl: true, alt: true }), keyChar: '@' })).toBe('@')
+    expect(terminalKey({ ...key('7', { ctrl: true, alt: true }), keyChar: '{' })).toBe('{')
+    expect(terminalKey({ ...key('e', { ctrl: true, alt: true }), keyChar: '€' })).toBe('€')
+    expect(terminalKey({ ...key('ß', { ctrl: true, alt: true }), keyChar: '\\' })).toBe('\\')
+    // Ctrl+Alt with nothing composed behaves as before.
+    expect(terminalKey(key('a', { ctrl: true, alt: true }))).toBeNull()
+    expect(terminalKey({ ...key('a', { ctrl: true, alt: true }), keyChar: 'a' })).toBeNull()
+    expect(terminalKey({ ...key('a', { ctrl: true, alt: true }), keyChar: '\x01' })).toBeNull()
+    expect(terminalKey({ ...key('2', { ctrl: true, alt: true }), keyChar: '@' })).toBe('@')
+    expect(terminalKey({ ...key('2', { ctrl: true }), keyChar: '@' })).toBe('\0')
+  } finally { restore() }
+})
+
+test('macOS: ⌃⌥ with a composed character is not AltGr', () => {
+  const restore = setKeyPlatform('darwin')
+  try {
+    expect(terminalKey({ ...key('2', { ctrl: true, alt: true }), keyChar: '@' })).toBe('\0')
+  } finally { restore() }
+})

@@ -158,8 +158,9 @@ export function windowState(hwnd: number) {
 }
 
 const HIT: Record<number, string> = { 0: 'nowhere', 1: 'client', 2: 'caption', 8: 'minimize', 9: 'maximize', 12: 'top', 13: 'top-left', 14: 'top-right', 20: 'close' }
-/** What the window answers `WM_NCHITTEST` with at a window point (`caption`, `maximize`, `client`, …). GPUI answers from
- *  the hitboxes under the pointer as of its last mouse move, so move there first. */
+/** What the window answers `WM_NCHITTEST` with at a window point (`caption`, `maximize`, `client`, …). The point travels
+ *  in the message, and GPUI hit-tests that point, not the cursor's position (a touch or pen tap moves no cursor), so
+ *  the cursor can stay where it is. */
 export function hitTest(window: ReturnType<typeof windowOf>, x: number, y: number): string {
   const [sx, sy] = window.screen(x, y)
   const code = Number(user32.SendMessageW(BigInt(window.hwnd), 0x84, 0n, BigInt(((sy & 0xffff) << 16) | (sx & 0xffff))))

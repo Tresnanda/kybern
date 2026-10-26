@@ -162,7 +162,7 @@ export function splitActive(direction: SplitDirection): boolean {
   return splitFocusedPane(direction)
 }
 
-/** ⌘⌥←/→/↑/↓: focus the nearest group in that direction, by the groups' on-screen rects. */
+/** ⌘⌥←/→/↑/↓ (Alt+Shift+arrows off macOS): focus the nearest group in that direction, by the groups' on-screen rects. */
 export function focusGroupToward(direction: 'left' | 'right' | 'up' | 'down', rects: Map<string, { x: number; y: number; width: number; height: number }>): boolean {
   if (getSplitRoot().kind === 'leaf') return false
   const from = rects.get(getFocusedPaneId())

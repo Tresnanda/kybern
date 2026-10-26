@@ -180,16 +180,16 @@ async function windows() {
     assert.ok(near(pixel, [196, 43, 28], tolerance + 6), `close hover fill is #C42B1C, got ${pixel}`)
     await w.move(win, 300, 300)
   })
-  await soft('Windows: the hit test answers the caption, its buttons and the controls in it', async () => {
+  await soft('Windows: the hit test answers the caption, its buttons and the controls in it, at the point it is sent', async () => {
     const probes: Record<string, string> = {}
+    // The cursor stays in the content: GPUI must hit-test the message's point, as for a touch or pen tap.
+    await w.move(win, 300, 300); await Bun.sleep(150)
     for (const [name, at] of [['minimize', await centre('window-minimize')], ['maximize', await centre('window-maximize')], ['close', await centre('window-close')], ['empty bar', await emptyBar()], ['sidebar toggle', await centre('sidebar-toggle')]] as const) {
-      await w.move(win, at[0], at[1]); await Bun.sleep(150)
-      // A hit test that reaches GPUI mid-update answers from its last one, as for the previous position; Windows asks
+      // A hit test that reaches GPUI mid-update answers from its last one, as for the previous point; Windows asks
       // again on the press, so the probe does too.
       const want = name === 'empty bar' ? 'caption' : name === 'sidebar toggle' ? 'client' : name
       for (let attempt = 0; attempt < 4 && (probes[name] = w.hitTest(win, at[0], at[1])) !== want; attempt++) await Bun.sleep(150)
     }
-    await w.move(win, 300, 300)
     facts.hitTest = probes
     assert.deepEqual(probes, { minimize: 'minimize', maximize: 'maximize', close: 'close', 'empty bar': 'caption', 'sidebar toggle': 'client' })
   })

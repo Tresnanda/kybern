@@ -25,7 +25,7 @@ import { Segmented } from '../kit/Segmented.tsx'
 import { Detail } from './PrDetail.tsx'
 import { PrLoading, Problem } from './PrStates.tsx'
 import { SwapOnChange } from '../motion/kit.tsx'
-import { isPrimary } from '../platform/keys.ts'
+import { isPrimaryNotAltGr } from '../platform/keys.ts'
 
 interface Row { project: Project; pr: PullRequest }
 interface Loaded { rows: PullRequest[]; errors: string[] }
@@ -108,7 +108,7 @@ export function PullRequestsPage() {
   const open = (r: Row) => { const next = { project: r.project, number: r.pr.number, ...(r.pr.repo ? { repo: r.pr.repo } : {}) }; lastSelection = next; setSelection(next) }
   const back = () => { lastSelection = null; setSelection(null) }
   useEffect(() => addWindowKeyHandler(e => {
-    if (isPrimary(e.modifiers) && e.key === 'f') { if (!wide) back(); renderer?.focusElement?.(search.current?.id ?? 0); return true }
+    if (isPrimaryNotAltGr(e.modifiers) && e.key === 'f') { if (!wide) back(); renderer?.focusElement?.(search.current?.id ?? 0); return true }
   }), [renderer, wide])
   const keyFor = (r: Row) => refOf(r.project.id, r.pr.number, r.pr.repo)
   const stateWord = filter === 'all' ? '' : `${filter} `

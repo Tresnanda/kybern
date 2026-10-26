@@ -3,10 +3,11 @@
 // - the title bar's state (`useWindowChrome`): maximized, active, client- or server-side decorations and tiling, the
 //   controls the compositor offers and the desktop's button order (Linux);
 // - the OS appearance and reduced motion, live: GPUI follows the registry on Windows and the portal's `color-scheme`
-//   on Linux (`setSystemVariant`); Windows' "Animation effects" comes with the state, GNOME's `enable-animations`
-//   through `gsettings monitor` (`setPlatformReducedMotion`);
-// - the frame (size, position, maximized, display; `bounds` in each state), saved as it changes and passed to `render` at the next launch
-//   (`savedFrameOptions`), the way `shell/window.ts` restores AppKit's frame string on macOS;
+//   on Linux (`setSystemVariant`; on Linux not the first report, see `takesAppearance`); Windows' "Animation effects"
+//   comes with the state, GNOME's `enable-animations` through `gsettings monitor` (`setPlatformReducedMotion`);
+// - the frame (size, position, maximized, display; `bounds` in each report), saved as it changes and passed to `render`
+//   at the next launch (`savedFrameOptions`), the way `shell/window.ts` restores AppKit's frame string on macOS. Bounds
+//   are not part of the React snapshot: a move or resize step that changes only them re-renders nothing;
 // - the title-bar double click on Linux: GNOME's `action-double-click-titlebar` (Windows does its own).
 //
 // macOS keeps `shell/window.ts`, `shell/appearance.ts` and the traffic lights: nothing here runs there.
@@ -15,7 +16,7 @@ import type { NativeRenderer } from '@gpuix/react'
 import { setSystemVariant } from './appearance.ts'
 import { load, save } from './persist.ts'
 import { setPlatformReducedMotion } from '../platform/material.ts'
-import { readTitlebarDoubleClick, watchGnomeSetting } from '../platform/systemPrefs.ts'
+import { parseTitlebarDoubleClick, readSystemVariant, readTitlebarDoubleClick, watchGsettings } from '../platform/systemPrefs.ts'
 
 export interface WindowChrome {
   platform: 'macos' | 'windows' | 'linux'
@@ -30,15 +31,15 @@ export interface WindowChrome {
   buttonLayout: { left: WindowButton[]; right: WindowButton[] } | null
   appearance: 'light' | 'dark'
   reducedMotion: boolean | null
-  /** The frame to save (`getWindowBounds`). */
-  bounds: SavedFrame
 }
+/** What the addon reports: the state and the frame to save (`getWindowBounds`). */
+export type WindowChromeReport = WindowChrome & { bounds?: SavedFrame }
 export type WindowButton = 'minimize' | 'maximize' | 'close'
 export type ResizeEdge = 'top' | 'top-right' | 'right' | 'bottom-right' | 'bottom' | 'bottom-left' | 'left' | 'top-left'
 
 type ChromeRenderer = {
-  getWindowChrome?: () => WindowChrome
-  setWindowChromeCallback?: (callback: ((error: Error | null, chrome: WindowChrome) => void) | null) => void
+  getWindowChrome?: () => WindowChromeReport
+  setWindowChromeCallback?: (callback: ((error: Error | null, chrome: WindowChromeReport) => void) | null) => void
   startWindowResize?: (edge: ResizeEdge) => void
   showWindowMenu?: (x: number, y: number) => void
   setTitlebarDoubleClick?: (action: string) => void
@@ -63,16 +64,37 @@ export const getWindowChrome = () => chrome
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } }
 export const useWindowChrome = (): WindowChrome | null => useSyncExternalStore(subscribe, getWindowChrome)
 
+/**
+ * Whether a reported appearance becomes the system variant. A change always does. The first report does except on
+ * Linux when the launch read found a theme: GPUI follows only the portal's `color-scheme`, which reads light when the
+ * portal states no preference (XFCE, MATE, Cinnamon), while the launch read also knows GNOME's `color-scheme` and the
+ * GTK theme's name (`Adwaita-dark`); the first frame must not flip dark → light.
+ */
+export function takesAppearance(platform: NodeJS.Platform, previous: WindowChrome['appearance'] | null, next: WindowChrome['appearance'], launchKnown: boolean): boolean {
+  if (previous === null) return !(platform === 'linux' && launchKnown)
+  return next !== previous
+}
+
+/** The snapshot fields compared for a change (everything React reads; `bounds` is not). */
+export const sameChrome = (a: WindowChrome | null, b: WindowChrome) => !!a && a.platform === b.platform && a.decorations === b.decorations && a.maximized === b.maximized
+  && a.fullscreen === b.fullscreen && a.active === b.active && a.resizable === b.resizable && a.minimizable === b.minimizable
+  && a.appearance === b.appearance && a.reducedMotion === b.reducedMotion && JSON.stringify([a.tiling, a.controls, a.buttonLayout]) === JSON.stringify([b.tiling, b.controls, b.buttonLayout])
+
 let saveTimer: ReturnType<typeof setTimeout> | undefined
 let savedFrame = ''
-/** Take a new state: the launch read, then each change the addon sends (no waited bridge call per change). */
-function apply(next: WindowChrome) {
-  const appearance = next.appearance !== chrome?.appearance
-  chrome = next
-  if (appearance && !process.env.KYBERN_APPEARANCE) setSystemVariant(next.appearance)
-  setPlatformReducedMotion(next.reducedMotion)
-  for (const listener of [...listeners]) listener()
-  const frame = next.bounds
+/** The appearance in the last report (null before the first), apart from the snapshot's. */
+let reported: WindowChrome['appearance'] | null = null
+/** Take a new report: the launch read, then each change the addon sends (no waited bridge call per change). */
+function apply(report: WindowChromeReport) {
+  const { bounds: frame, ...next } = report
+  if (!process.env.KYBERN_APPEARANCE && takesAppearance(process.platform, reported, next.appearance, reported === null && readSystemVariant() !== null)) setSystemVariant(next.appearance)
+  reported = next.appearance
+  // A move or resize step changes only the bounds: the title bar, controls and edges keep their snapshot.
+  if (!sameChrome(chrome, next)) {
+    chrome = next
+    setPlatformReducedMotion(next.reducedMotion)
+    for (const listener of [...listeners]) listener()
+  }
   if (!automated && frame && frame.state !== 'fullscreen' && frame.width > 0 && frame.height > 0 && JSON.stringify(frame) !== savedFrame) {
     savedFrame = JSON.stringify(frame)
     // Bounds change on every step of a drag; write once it rests.
@@ -89,11 +111,11 @@ export function startWindowChrome(renderer: NativeRenderer) {
   try { apply(native.getWindowChrome()) } catch { return }
   try { native.setWindowChromeCallback?.((error, next) => { if (!error && next) apply(next) }) } catch { /* Older addon: state stays at the launch read. */ }
   if (process.platform === 'linux') {
-    try { native.setTitlebarDoubleClick?.(readTitlebarDoubleClick()) } catch { /* Keep the default (maximize). */ }
-    watchGnomeSetting('org.gnome.desktop.wm.preferences', 'action-double-click-titlebar', () => {
-      try { native?.setTitlebarDoubleClick?.(readTitlebarDoubleClick()) } catch { /* Window closed. */ }
-    })
-    watchGnomeSetting('org.gnome.desktop.interface', 'enable-animations', (value) => setPlatformReducedMotion(value === 'false'))
+    const doubleClick = (action: string) => { try { native?.setTitlebarDoubleClick?.(action) } catch { /* Window closed. */ } }
+    // Until the read answers, the addon keeps its default (maximize).
+    readTitlebarDoubleClick(doubleClick)
+    watchGsettings('org.gnome.desktop.wm.preferences', ['action-double-click-titlebar'], (_key, value) => doubleClick(parseTitlebarDoubleClick(value)))
+    watchGsettings('org.gnome.desktop.interface', ['enable-animations'], (_key, value) => setPlatformReducedMotion(value === 'false'))
   }
 }
 
