@@ -71,3 +71,15 @@ of the machine that builds the installer. These files are Microsoft software, re
 under the terms of the Visual Studio license ("Distributable Code": the Microsoft Visual C++
 Redistributable files listed in the REDIST.TXT of the Visual Studio installation). They are not
 covered by Kybern's license.
+
+## Microsoft Edge WebView2 (Windows)
+
+`kybern-webview.dll`, the embedded web view of Kybern GPUIX on Windows (`apps/gpuix/native/webview-win`),
+statically links the WebView2 loader (`WebView2LoaderStatic.lib` from the Microsoft.Web.WebView2 SDK
+1.0.3650.58, shipped in the `webview2-com-sys` crate) and uses the `webview2-com` and `windows` crates
+(MIT or Apache-2.0). The WebView2 SDK is Microsoft software under the license in its NuGet package
+(Microsoft.Web.WebView2, LICENSE.txt). The Windows installer also carries Microsoft's Evergreen
+WebView2 Runtime bootstrapper (`MicrosoftEdgeWebview2Setup.exe`), redistributable under the WebView2
+Runtime distribution terms (https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution);
+it runs only when the runtime is missing and installs Microsoft's runtime, which Microsoft updates.
+These are not covered by Kybern's license.

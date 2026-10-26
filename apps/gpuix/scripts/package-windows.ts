@@ -6,10 +6,16 @@
  *
  *   bun scripts/package-windows.ts [--out <dir>] [--addon <file>] [--makensis <path>]
  *                                  [--no-installer] [--no-vc-runtime] [--nsis-ansi]
+ *                                  [--webview <dll>] [--no-webview]
+ *                                  [--webview2-bootstrapper <exe>] [--no-webview2-bootstrapper]
  *
- * Inputs: the patched addon (`native/build/gpuix-native.win32-x64-msvc.node`, from
- * `native/update.sh` on Windows), `kybernd.exe` and `kybern.exe` in KYBERN_BIN_DIR
- * (default `target/release`), and `makensis` on PATH (NSIS 3). Output: `<out>/payload`
+ * Inputs: the patched addon (`native/build/gpuix-native.win32-x64-msvc.node`) and the
+ * WebView2 host (`native/build/kybern-webview.dll`), both from `native/update.sh` on
+ * Windows, `kybernd.exe` and `kybern.exe` in KYBERN_BIN_DIR (default `target/release`),
+ * and `makensis` on PATH (NSIS 3). The installer carries Microsoft's Evergreen WebView2
+ * bootstrapper, downloaded here (Windows checks its Microsoft signature) unless a copy is
+ * given; it runs only on machines without the runtime. `--no-webview` (a cross-build) leaves
+ * the host out, and the app then opens pages in the browser. Output: `<out>/payload`
  * (the app folder, default `dist/windows`) and `<out>/kybern-gpuix_<version>_x64-setup.exe`.
  * Nothing is installed, signed or run; `scripts/bundle-gpuix-windows.sh` signs the installer.
  */
@@ -18,6 +24,7 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { resourceUrlPlugin } from './resource-urls.ts'
 import { installerName, nsisIncludes, VC_RUNTIME_DLLS, vcRuntimeCandidates, versionQuad } from '../packaging/windows/lib.ts'
+import { webView2Bootstrapper } from '../packaging/windows/webview2.ts'
 
 const root = path.resolve(import.meta.dir, '..')
 const flag = (name: string) => { const at = process.argv.indexOf(name); return at >= 0 ? process.argv[at + 1] : undefined }
@@ -33,8 +40,10 @@ const addon = path.resolve(flag('--addon') ?? path.join(root, 'native/build/gpui
 const binDir = process.env.KYBERN_BIN_DIR ? path.resolve(process.env.KYBERN_BIN_DIR) : path.resolve(root, '../../target/release')
 const binaries = ['kybernd.exe', 'kybern.exe'].map(name => ({ name, source: path.join(binDir, name) }))
 const icon = path.join(root, '../desktop/src-tauri/icons/icon.ico')
+const webview = has('--no-webview') ? undefined : path.resolve(flag('--webview') ?? path.join(root, 'native/build/kybern-webview.dll'))
 
 if (!existsSync(addon)) throw Error(`Build the patched native addon for Windows first (native/update.sh on Windows): ${addon}`)
+if (webview && !existsSync(webview)) throw Error(`Build the WebView2 host for Windows first (native/update.sh on Windows), or pass --no-webview: ${webview}`)
 for (const { source } of binaries) if (!existsSync(source)) throw Error(`Windows kybernd.exe and kybern.exe are needed in ${binDir} (set KYBERN_BIN_DIR): ${source}`)
 
 rmSync(out, { recursive: true, force: true })
@@ -45,6 +54,10 @@ mkdirSync(payload, { recursive: true })
 // `kybernd.exe` and the runtime DLLs stay out of the user's command namespace.
 for (const { name, source } of binaries) cpSync(source, path.join(payload, name === 'kybern.exe' ? 'bin' : '.', name))
 cpSync(addon, path.join(payload, 'gpuix-native.win32-x64-msvc.node'))
+// The embedded web view (`src/native/webview.ts` loads it from KYBERN_GPUIX_RESOURCES, this folder).
+if (webview) cpSync(webview, path.join(payload, 'kybern-webview.dll'))
+// Mermaid for transcript diagrams (`src/transcript/mermaid.ts` runs it in a hidden web view document).
+if (webview) cpSync(path.join(root, '../desktop/node_modules/mermaid/dist/mermaid.min.js'), path.join(payload, 'mermaid.min.js'))
 writeFileSync(path.join(payload, 'version'), version)
 cpSync(icon, path.join(payload, 'icon.ico'))
 cpSync(path.join(root, 'src/assets/fonts'), path.join(payload, 'src/assets/fonts'), { recursive: true })
@@ -96,9 +109,12 @@ mkdirSync(generated, { recursive: true })
 const { install, uninstall } = nsisIncludes(entries, payload)
 writeFileSync(path.join(generated, 'install-files.nsh'), install)
 writeFileSync(path.join(generated, 'uninstall-files.nsh'), uninstall)
+const bootstrapper = has('--no-webview2-bootstrapper') || has('--no-webview') ? undefined
+  : await webView2Bootstrapper(generated, { given: flag('--webview2-bootstrapper'), verify: native })
 const makensis = flag('--makensis') ?? process.env.MAKENSIS ?? (native ? 'makensis.exe' : 'makensis')
 execFileSync(makensis, [
-  '-V2', ...(has('--nsis-ansi') ? ['-DANSI'] : []), `-DAPP_VERSION=${version}`, `-DVERSION_QUAD=${versionQuad(version)}`,
+  '-V2', ...(has('--nsis-ansi') ? ['-DANSI'] : []), ...(bootstrapper ? [`-DWEBVIEW2_BOOTSTRAPPER=${bootstrapper}`] : []),
+  `-DAPP_VERSION=${version}`, `-DVERSION_QUAD=${versionQuad(version)}`,
   `-DPAYLOAD_DIR=${payload}`, `-DGENERATED_DIR=${generated}`, `-DOUT_FILE=${installer}`,
   path.join(root, 'packaging/windows/installer.nsi'),
 ], { stdio: 'inherit' })

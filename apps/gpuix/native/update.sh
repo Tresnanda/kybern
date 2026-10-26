@@ -41,8 +41,9 @@
 # Linux and Windows (ADE-52 spike, `.github/workflows/gpuix-platforms.yml`): run
 # natively on that OS (Git Bash on Windows, PYTHON=python there) with
 # KYBERN_NATIVE_CHECKS=0. Output: build/gpuix-native.linux-x64-gnu.node or
-# build/gpuix-native.win32-x64-msvc.node. The Mach-O realign, codesign and the
-# Cocoa webview companion are macOS-only and skipped; so are the on-screen checks.
+# build/gpuix-native.win32-x64-msvc.node, and on Windows the WebView2 companion
+# build/kybern-webview.dll (webview-win/, WP10). The Mach-O realign, codesign and
+# the Cocoa companion are macOS-only and skipped; so are the on-screen checks.
 set -eu
 cd "$(dirname "$0")"
 here=$(pwd)
@@ -194,8 +195,8 @@ fi
 echo "native module loads"
 "$py" tools/check_arena.py
 case "$target" in
-  *-apple-darwin) bun build-webview.ts ;;
-  *) echo "webview companion: macOS only (previews open in the browser elsewhere)" ;;
+  *-apple-darwin | x86_64-pc-windows-msvc) bun build-webview.ts ;;
+  *) echo "webview companion: macOS and Windows only (previews open in the browser elsewhere)" ;;
 esac
 
 if [ "$version" != "$pinned" ]; then

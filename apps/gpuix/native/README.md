@@ -705,6 +705,7 @@ xdotool) and capture with `capture(fixture, file)`:
 | `native/markdown-document-check.ts` | `markdown-document` | document API; document pixels equal the original Markdown path (same renderer, exact); selection, wrap, grid. Off macOS a subset of the interior cases (`MD_INTERIOR_CASES`) |
 | `scripts/platform-smoke.ts` | `smoke` | the real app on a seeded daemon: sidebar rows, Markdown + code transcript, composer; the clip lab with rounded clip on and off (Linux/Windows) |
 | `scripts/nowebview-app-check.ts` | `nowebview` | WP4: the app with the web view off: preview in the browser, visual, question, Mermaid, artifact |
+| `native/webview-win-check.ts` | `webview` (Windows only) | WP10: a WebView2 visual in a GPUIX window driven with real OS input (user32) and checked on captures of the composed window (`PrintWindow`, which includes the WebView2 visuals the addon screenshot never sees): stacking, rounded clip, transparency, menu cut-out, modal dim, bridge both ways, click, double click, wheel, typing, Ctrl shortcuts, Escape and outside-press handback, `kybern.answer.draft`, `present`/`probe`, `snapshot` with alpha, `snapshotRect`, `frame`, hide and destroy |
 
 Pixel assertions tolerate software rendering: `tolerance` (3 on macOS, 8 elsewhere, `KYBERN_CHECK_TOLERANCE`), regions
 that must hold painted content (`assertPainted`), structure (bounds, test ids, painted text), and exact equality only
@@ -911,6 +912,11 @@ child to its ticket/relay origin and forbid top-level replacement and popups.
 No bearer token is sent to a page. Only main-frame wrapper messages enter the
 public message bridge; a separate isolated WKContentWorld retains the direct
 child's frame for back/forward/reload/stop. Untrusted child script cannot use it.
+
+Windows (WP10) has the same host in `native/webview-win` (Rust, `kybern-webview.dll`, built by
+`native/build-webview.ts` and `update.sh` on Windows): WebView2 `CompositionController`s under a
+Windows.UI.Composition target above GPUI's swap chain, the same three C exports and JSON channel,
+so `webview.ts` only picks the file. Its design and parity table are in `../WEBVIEW-PLATFORMS.md`.
 
 `src/preview/relay.ts` mirrors the Tauri relay's HTTP request-head rewrite and
 raw WebSocket splice. A loopback-only listener checks Host, refuses CONNECT and

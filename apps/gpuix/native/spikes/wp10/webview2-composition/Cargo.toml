@@ -12,6 +12,11 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
+# W-S1: the coexistence spike, run on windows-2022 (`.github/workflows/wp10-win-spike.yml` on a spike branch).
+[[bin]]
+name = "coexist"
+path = "src/bin/coexist.rs"
+
 # Exact pins. `windows` 0.61 is the version the zed fork's workspace uses
 # (Cargo.toml `[workspace.dependencies.windows] version = "0.61"`), so the host
 # can share COM pointers with gpui_windows without crossing crate versions.
@@ -34,13 +39,21 @@ features = [
     "UI_Composition_Desktop",
     "Win32_Foundation",
     "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_DirectComposition",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Direct2D_Common",
     "Win32_Graphics_Gdi",
+    "Win32_Storage_Xps",
+    "Win32_System_LibraryLoader",
     "Win32_System_Com",
     "Win32_System_WinRT",
     "Win32_System_WinRT_Composition",
     "Win32_System_WinRT_Graphics_Direct2D",
     "Win32_UI_Controls",
+    "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",

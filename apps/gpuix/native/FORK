@@ -4,10 +4,12 @@
 # A native change is a commit on those branches and a new pin here; see
 # README.md, "Changing the native module".
 repo=https://github.com/Tresnanda/gpuix.git
-# WP1: the heads of the forks' `wp1` branches (kybern plus the WP1 commits) until
-# they are merged into `kybern`; then pin the merged kybern heads.
-commit=cc034f141a35ea5cf81aeb744c6cfaddc24c02f0
+# WP1 + WP10 (Windows): the heads of the forks' `wp10-win` branches (`wp1` plus, for
+# the embedded web view, GPUI's DirectComposition target made not topmost and keys
+# left to non-GPUI windows on its thread) until they are merged into `kybern`; then
+# pin the merged kybern heads.
+commit=295c06b3883bc0d78d977b662cc6f15890803be4
 # The zed submodule commit `commit` records; update.sh refuses a checkout that differs.
-zed=0f49045201c7e3f6f57762d77bc59437157ec49f
+zed=e641224b21fc6c108744417b4801f7d0d17f466b
 # The upstream tag `commit` is based on. It must be `@gpuix/native@<VERSION>`.
 upstream=@gpuix/native@0.11.0

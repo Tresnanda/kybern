@@ -88,6 +88,10 @@ const CHECKS: Record<string, Check> = {
       minutes: 20,
     }],
   },
+  webview: {
+    description: 'WP10 (Windows): the WebView2 web view in a GPUIX window: stacking, rounded clip, menu cut-out, dim, input, bridge, draft, present, snapshots',
+    runs: ({ out }) => platform === 'windows' ? [{ name: 'webview', args: [native('webview-win-check.ts'), '--out', path.join(out, 'webview')], minutes: 10 }] : [],
+  },
   'frame-wake': {
     description: 'WP1: no JS polling while idle, native frame wakes and unwaited bridge calls while animating, scroll phases, DPI info (Windows)',
     runs: ({ out }) => [{

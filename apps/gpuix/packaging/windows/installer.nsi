@@ -5,6 +5,8 @@
 ;   APP_VERSION     0.15.1                       VERSION_QUAD  0.15.1.0
 ;   PAYLOAD_DIR     the staged app folder        GENERATED_DIR install-files.nsh, uninstall-files.nsh
 ;   OUT_FILE        kybern-gpuix_<v>_x64-setup.exe
+;   WEBVIEW2_BOOTSTRAPPER  (optional) Microsoft's Evergreen WebView2 bootstrapper,
+;                   MicrosoftEdgeWebview2Setup.exe, run only when the runtime is missing
 ; Layout and choices are documented in packaging/README.md ("Windows").
 ;
 ; Silent mode (`/S`) is the updater's path (src/platform/update.ts): it reuses the
@@ -44,6 +46,8 @@ SetCompressor /SOLID lzma
 !define REG_UNINSTALL "Software\Microsoft\Windows\CurrentVersion\Uninstall\Kybern GPUIX"
 !define REG_AUMID "Software\Classes\AppUserModelId\${AUMID}"
 !define POWERSHELL "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+; The Microsoft Edge WebView2 Runtime's EdgeUpdate client key (Microsoft's documented install check).
+!define WEBVIEW2_CLIENT "Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 
 Name "${APP_NAME}"
 OutFile "${OUT_FILE}"
@@ -187,6 +191,37 @@ Function CreateAppShortcut
   ${EndIf}
 FunctionEnd
 
+; The embedded web view (previews, interactive visuals, artifacts; native/webview-win) needs the Microsoft Edge
+; WebView2 Runtime. Windows 11 and most Windows 10 machines have it; otherwise Microsoft's Evergreen bootstrapper
+; installs it, per-user (this installer is not elevated, so no UAC prompt) and silently, also in /S updates. It
+; downloads the runtime, so it needs the internet. A failure never fails the install: the app opens pages in the
+; browser and says how to get the runtime. The runtime is Microsoft's and updates itself; uninstall leaves it.
+!ifdef WEBVIEW2_BOOTSTRAPPER
+Function InstallWebView2
+  ; NSIS reads the 32-bit view, which is HKLM\SOFTWARE\WOW6432Node on 64-bit Windows: the per-machine key.
+  ReadRegStr $0 HKLM "SOFTWARE\${WEBVIEW2_CLIENT}" "pv"
+  ${If} $0 == ""
+  ${OrIf} $0 == "0.0.0.0"
+    ReadRegStr $0 HKCU "Software\${WEBVIEW2_CLIENT}" "pv"
+  ${EndIf}
+  ${If} $0 != ""
+  ${AndIf} $0 != "0.0.0.0"
+    DetailPrint "Microsoft Edge WebView2 Runtime $0 is installed."
+    Return
+  ${EndIf}
+  DetailPrint "Installing the Microsoft Edge WebView2 Runtime..."
+  File "/oname=$PLUGINSDIR\MicrosoftEdgeWebview2Setup.exe" "${WEBVIEW2_BOOTSTRAPPER}"
+  ClearErrors
+  ExecWait '"$PLUGINSDIR\MicrosoftEdgeWebview2Setup.exe" /silent /install' $1
+  ${If} ${Errors}
+  ${OrIf} $1 != 0
+    DetailPrint "The WebView2 Runtime was not installed ($1). ${APP_NAME} opens pages in your browser until it is."
+  ${Else}
+    DetailPrint "The WebView2 Runtime is installed."
+  ${EndIf}
+FunctionEnd
+!endif
+
 Function BroadcastEnvironment
   System::Call 'user32::SendMessageTimeoutW(p 0xffff, i ${WM_SETTINGCHANGE}, p 0, w "Environment", i 2, i 5000, *p .r0)'
 FunctionEnd
@@ -228,6 +263,9 @@ Section "${APP_NAME}" SecApp
   StrCpy $R8 "$SMPROGRAMS\${APP_NAME}.lnk"
   Call CreateAppShortcut
   Call ApplyOptions
+!ifdef WEBVIEW2_BOOTSTRAPPER
+  Call InstallWebView2
+!endif
 SectionEnd
 
 ; Checkboxes only: ApplyOptions acts on them.
@@ -342,6 +380,8 @@ Section "Uninstall"
 
   ; Only what the installer put here: a folder the user chose may hold other files.
   !include "${GENERATED_DIR}\uninstall-files.nsh"
+  ; The embedded web view's WebView2 user data (caches only: every page runs InPrivate). Never the install folder.
+  RMDir /r /REBOOTOK "$LOCALAPPDATA\kybern-gpuix\WebView2"
   Delete "$INSTDIR\*.old"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"

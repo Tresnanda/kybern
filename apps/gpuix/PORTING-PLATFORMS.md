@@ -181,7 +181,7 @@ nothing but `platforms_hooks.py`.
 | Secure input (Carbon) | `secure_input.rs` | fallback | fallback | No-op |
 | Automation test display | `automation_display.rs` | fallback | fallback | Centered on the primary display. Not needed by the WP7 harness: captures are the addon's screenshot (or the X window, Linux) and input is synthesized in-process, so the window's position never matters |
 | Scroll phase injection | `scroll_hooks.py` | works (WP1) | works (WP1) | `simulateScrollPhase` on every desktop platform and in `TestGpuixRenderer`; compile-checked, on screen in `frame-wake-check`. The WP7 checks still mark every wheel step `GAPS.wheel` until a CI run passes: a pass is reported as a closed gap, then the marker goes |
-| Web view (previews, Visual, Artifacts, Mermaid) | `webview.m`, `src/native/webview.ts` | blocked | blocked | `dlopen` of the `.dylib` throws on use. No library is loaded off macOS (`webHost.available` is false; `KYBERN_GPUIX_NO_WEBVIEW=1` forces it anywhere). Fallbacks shipped in WP4: see *Without a web view*. WP5 |
+| Web view (previews, Visual, Artifacts, Mermaid) | `webview.m`, `native/webview-win`, `src/native/webview.ts` | works (WP10: WebView2 under WinComp, `kybern-webview.dll`; needs the WebView2 Runtime, else WP4's fallbacks) | blocked | Linux loads no library (`webHost.available` is false; `KYBERN_GPUIX_NO_WEBVIEW=1` forces it anywhere). Fallbacks shipped in WP4: see *Without a web view*. Windows status and parity: `WEBVIEW-PLATFORMS.md` |
 | Notifications | `packaging/notifications.m` | fallback | fallback | Already skipped outside a macOS `.app` |
 | objc FFI shell (frame restore, appearance, visibility, locale) | `shell/*.ts`, `native/*.ts` | fallback | fallback | Guarded: no restore, no system theme |
 | `pbcopy`, `open`, `osascript`, `~/Library`, Keychain | `src/**` via `src/platform/os.ts` | fallback | fallback | WP2 done: commands per OS, unit-tested; not run on a real Windows/Linux desktop. [Details](#f-js-platform-services-src) |
@@ -524,7 +524,7 @@ agents (one OS-specific lane can split W/L).
 | — | **Windows beta** adds WP6(W) and Windows-only fixes from WP1/WP3 | | | ≈ +6–10 | ≈ +1–1.5 weeks |
 | WP8 | Text parity (section C): variable `wght` and `kszl` on DirectWrite and cosmic-text, system font choice | zed fork: `gpui_macos/src/font_weight.rs`, the "Per-run text size scale (kszl)" commit, `src/theme.ts` | WP0 | 4–6 | after beta |
 | WP9 | GPU parity: backdrop blur in WGSL and HLSL (scratch copy + two-pass blur), Mica on Windows 11 | zed fork commits on `kybern` (`gpui_wgpu`, `gpui_windows` shaders) | WP0 | 6–8 | after beta |
-| WP10 | Embedded web view: WebView2 composition host (W, 8–12); WebKitGTK/WPE (L, phase 2, 10–15, risky) | `native/webview-*/**` | WP3, WP4 | 18–27 | after beta |
+| WP10 (W done) | Embedded web view: WebView2 composition host (W, done: `native/webview-win`, fork `wp10-win` commits, CI check `webview`; see `WEBVIEW-PLATFORMS.md`); WebKitGTK/WPE (L, phase 2, 20–24, risky) | `native/webview-*/**` | WP3, WP4 | 20–24 (L) | after beta |
 
 Totals: about 36–51 agent-days to both betas, 28–41 more for full parity
 (text, blur, embedded web view). With three or four lanes the Linux beta is

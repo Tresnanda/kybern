@@ -3,8 +3,78 @@
 This document is the design for WP10 of [PORTING-PLATFORMS.md](PORTING-PLATFORMS.md): the embedded web view behind
 Preview, interactive HTML visuals (inline, tab and full-screen viewer, `await_answer` questions), Artifacts and
 Mermaid. On macOS it is `native/webview.m` (`kybern-webview.dylib`) driven by `src/native/webview.ts` (`webHost`).
-It covers decisions, evidence and a plan. It does not implement the feature. Written 2026-10-26 against
-`Tresnanda/zed@kybern` 7c2b5c6d4 and `Tresnanda/gpuix@kybern` 712950faa.
+It covers decisions, evidence and a plan. Written 2026-10-26 against
+`Tresnanda/zed@kybern` 7c2b5c6d4 and `Tresnanda/gpuix@kybern` 712950faa. **The Windows half is implemented**
+(`native/webview-win`, see [Windows status](#windows-status-wp10)); Linux is still the plan below.
+
+## Windows status (WP10)
+
+Implemented 2026-10-26 as `native/webview-win` (Rust cdylib `kybern-webview.dll`, same three C exports and JSON
+channel as `webview.m`), loaded by `webview.ts` on win32. `webHost.available` is true when the DLL is beside the app
+and `GetAvailableCoreWebView2BrowserVersionString` finds a runtime (`kybern_web_available`); otherwise WP4's fallbacks
+stay, with copy that names the reason (`runtime`: install the WebView2 Runtime; `missing`: reinstall).
+
+**W-S1 passed: option C works.** `native/spikes/wp10/webview2-composition/src/bin/coexist.rs` builds GPUI's half
+exactly (`WS_EX_NOREDIRECTIONBITMAP`, premultiplied composition swap chain on `CreateTargetForHwnd`) and adds a
+WinComp `DesktopWindowTarget` with a WebView2 composition controller. On `windows-2022` (WARP, WebView2 131): with
+GPUI's target topmost, `CreateDesktopWindowTarget(topmost)` fails with `DCOMPOSITION_ERROR_WINDOW_ALREADY_COMPOSED`
+(0x88980800); with it not topmost both targets compose, and screen `BitBlt` and `PrintWindow(PW_RENDERFULLCONTENT)`
+both show the page above GPUI, GPUI through a transparent page and outside a 32 px rounded corner, GPUI's popup
+through a hole cut in an opaque part of the page, the bridge round trip, a forwarded click, and a CDP snapshot that
+keeps alpha. Option B′ was not needed.
+
+What differs from the plan above, and why:
+
+- **Fork commits (zed `wp10-win`, two):** GPUI's DirectComposition target is not topmost (the one argument); and
+  `translate_accelerator` in GPUI's message loop only handles GPUI's own windows. It sent `WM_GPUI_KEYDOWN` to every
+  `WM_KEYDOWN` on the thread, WebView2's input window answered 0, and the key was dropped before
+  `TranslateMessage`/`DispatchMessage`, so typing never reached a page. No window-procedure hook, HWND or scale export
+  and no `run_on_ui_thread` were needed.
+- **Getting onto the UI thread:** a `WH_GETMESSAGE` hook on GPUI's thread plus a registered message posted to a GPUI
+  window (`Zed::Window`, found with `EnumWindows`); the hook runs the queued commands as the loop takes the message.
+- **Pointer filter:** the companion subclasses GPUI's window (`SetWindowLongPtrW`) instead of a fork hook. Hit
+  testing is `Mask::hit`, the same model as the composition clip. Presses capture the pointer until the last button
+  is up, a second press in time and place becomes the double click WebView2 expects (GPUI's class has no
+  `CS_DBLCLKS`), entering a page sends GPUI a `WM_MOUSELEAVE` so its hover clears, `WM_SETCURSOR` shows the page's
+  `Cursor`.
+- **Bridge:** `webDocument` and the Mermaid renderer are unchanged: a document-created script defines
+  `window.webkit.messageHandlers.kybern` over `chrome.webview.postMessage` in the wrapper only.
+- **`frame`, `navigate`, `action`, the picker:** `ICoreWebView2Frame2::ExecuteScript` in the child's own world (the
+  plan's fallback; WebView2 has no content worlds). The child's script (document-created, also in the child) posts
+  `navigation`, picker messages and the unhandled Escape through the frame's own `WebMessageReceived`, whose source is
+  the frame's URL. A page can post these too; picker data is untrusted and re-bounded on every OS.
+- **Hidden documents:** `IsVisible(false)` and `SetIsMuted(true)`; no `TrySuspend`.
+- **`probe`:** reports `present`'s targets and whether its `CompositionScopedBatch` is still running.
+
+| `webHost` op / behaviour | Windows | Evidence (CI, WARP) |
+| --- | --- | --- |
+| `create` (InPrivate, wrapper on `http://tauri.localhost/embedded/<id>`, ≤2 previews), `createDocument` | Native | loaded + bridge in the lab |
+| `place` (rect, device mode, own radius, `roundedClips`) | Native (`CompositionGeometricClip`) | rounded corner pixels |
+| `occlusion` holes, `dim`, `inputOnly` | Native | menu cut out, press on menu not in page, dim pixels |
+| `hide` / visibility (placed, window shown, not minimized) | Native | hide/show, page gets `kybernVisible`, no reload |
+| `present` fade + scale (cubic bezier, compositor clock) | Native | probe animating then settled |
+| `probe` | Emulated (targets + scoped batch) | as above |
+| `snapshot` | Emulated (CDP `Page.captureScreenshot`, fresh frame) | PNG 560×360, alpha 0 in the transparent part |
+| `snapshotRect` | Native (CDP `clip`) | PNG written |
+| `post` / `send` / `theme` / `navigate` / `action` | Native (`ExecuteScript`; child via `Frame2`) | round trip |
+| `message` (wrapper only, `Source` checked) | Native | `kybern.answer.draft` from the daemon's `bootstrap.js` |
+| `frame` / `frameMessage` | Emulated (child's own world, not isolated) | `frame` returns the page's values |
+| Navigation policy, `externalNavigation`, `loaded`, `failed`, `terminated` | Native | no unexpected block or failure |
+| `focus` / click to focus / `releaseFocus` / outside press | Native | typing reaches the page and not GPUI; outside press takes it back |
+| Unhandled Escape | Emulated (bubble check after dispatch) | next key reaches GPUI |
+| Ctrl shortcuts (`shortcut`) | Native (`AcceleratorKeyPressed`) | Ctrl+L re-emitted |
+| `outsidePress` | Native | window points, not for presses inside |
+| `capturePointer` | Native (filter off) | not exercised in CI |
+| Wheel, double click | Native / synthesized double click | scroller scrolled, word selected |
+| Transparent visuals | Native (background alpha 0 at creation) | GPUI through the page |
+| Window occlusion by other windows | **Gap** (minimize and hide only) | — |
+| IME, touch and pen, drag and drop, page accessibility | **Unverified / gap** (touch and pen are not forwarded) | needs hardware |
+| DPI other than 100 %, per-monitor moves | **Unverified** (raw pixels, rasterization scale, re-place on `WM_DPICHANGED`) | WARP is 100 % |
+
+Checks: `native/webview-win-check.ts` (`run-platform-checks.ts --checks webview`, Windows only) drives
+`native/webview-win-lab.tsx` with real OS input and captures the composed window with `PrintWindow`. Packaging:
+`kybern-webview.dll` and `mermaid.min.js` beside the exe; the NSIS installer carries Microsoft's Evergreen bootstrapper
+and runs it per-user and silently only when the runtime's `pv` is missing (`packaging/README.md`).
 
 ## Recommendation
 
@@ -468,7 +538,9 @@ The two OSes can run in parallel lanes. The shared JS work (loader, per-platform
 
 ## Proof of concept
 
-### Windows: `native/spikes/wp10/webview2-composition` (compile-checked, not run)
+### Windows: `native/spikes/wp10/webview2-composition` (the sketch; `src/bin/coexist.rs` is W-S1, run in CI)
+
+The shipped host is `native/webview-win`; this crate stays as the spike and its record.
 
 This is a standalone crate with its own workspace, exact pins and nothing referenced by the app:
 

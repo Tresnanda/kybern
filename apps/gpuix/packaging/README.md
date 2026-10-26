@@ -44,7 +44,10 @@ cd apps/gpuix && bun scripts/package-app.ts --windows              # package onl
 
 `package-app.ts` hands off to `scripts/package-windows.ts` on Windows or with `--windows`.
 Options: `--out`, `--addon`, `--makensis`, `--no-installer` (stop after the app folder),
-`--no-vc-runtime`, `--nsis-ansi`. It compiles `packaging/entry-windows.ts` with
+`--no-vc-runtime`, `--nsis-ansi`, `--webview <dll>` / `--no-webview` (the embedded web view
+host, default `native/build/kybern-webview.dll` from `native/update.sh`), and
+`--webview2-bootstrapper <exe>` / `--no-webview2-bootstrapper` (default: downloaded from
+Microsoft and, on Windows, checked for a valid Microsoft Authenticode signature). It compiles `packaging/entry-windows.ts` with
 `bun build --compile --target=bun-windows-x64` (a GUI-subsystem exe, no console window;
 the icon and file properties are set only when built on Windows, since Bun needs Windows
 APIs for them), lays out the app folder, and runs `makensis` on `windows/installer.nsi`.
@@ -55,7 +58,7 @@ compile the check with `--nsis-ansi`:
 
 ```sh
 KYBERN_BIN_DIR=<folder with stub kybernd.exe and kybern.exe> \
-  bun scripts/package-app.ts --windows --nsis-ansi --out /tmp/win --addon <any file>
+  bun scripts/package-app.ts --windows --nsis-ansi --out /tmp/win --addon <any file> --no-webview
 ```
 
 ### What the installer does
@@ -69,8 +72,18 @@ KYBERN_BIN_DIR=<folder with stub kybernd.exe and kybern.exe> \
   `version`, `release-background.png`, `THIRD_PARTY_NOTICES.md`, `src\assets\{fonts,providers}`,
   `tools\{path,shortcut,stop}.ps1`, `uninstall.exe`, and `bin\kybern.exe` with its own copy of
   the runtime DLLs (it looks beside itself first). The app finds all of it beside its own
-  executable (`packaging/entry-windows.ts`). `mermaid.min.js` and the web view companion are not
-  shipped: Windows has no embedded web view yet.
+  executable (`packaging/entry-windows.ts`). `kybern-webview.dll` is the embedded web view
+  (`native/webview-win`, WebView2; WP10), and `mermaid.min.js` the Mermaid bundle it renders
+  diagrams with (both left out by `--no-webview`).
+- **WebView2 Runtime:** previews, interactive visuals and artifacts need the Microsoft Edge
+  WebView2 Runtime. Windows 11 and most Windows 10 machines have it. The installer reads
+  Microsoft's documented key (`EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}` `pv`,
+  per-machine and per-user) and, only when it is missing, runs Microsoft's Evergreen bootstrapper
+  (`MicrosoftEdgeWebview2Setup.exe /silent /install`, about 2 MB, carried in the installer, not
+  installed). Unelevated, it installs the runtime per-user without a UAC prompt; it downloads the
+  runtime, so it needs the internet. It runs in silent updates too. A failure never fails the
+  install: the app then opens pages in the browser and says how to get the runtime. The runtime
+  is Microsoft's and updates itself.
 - **Shortcuts:** a Start-menu shortcut, always, and a desktop shortcut (off by default).
   Both carry the AppUserModelID `dev.kybern.gpuix` (set by `tools\shortcut.ps1`; NSIS cannot
   set it, and a plain shortcut is the fallback), and the id is registered under
@@ -98,8 +111,10 @@ KYBERN_BIN_DIR=<folder with stub kybernd.exe and kybern.exe> \
 - **Uninstall:** `uninstall.exe` (or Add/Remove Programs) first stops the daemon running from the
   install folder (`kybern stop-daemon`, then ends what is left in that folder; this runs after
   the confirm page, so cancelling it leaves the daemon alone), then removes only the files the
-  installer wrote, the shortcuts, the Path entry and the registry keys, and the folder itself.
-  Chats, settings and the daemon's data (`~/.kybern`) are never touched.
+  installer wrote, the shortcuts, the Path entry and the registry keys, the embedded web view's
+  WebView2 data (`%LOCALAPPDATA%\kybern-gpuix\WebView2`, caches only; pages run InPrivate), and
+  the folder itself. The WebView2 Runtime stays (other apps use it). Chats, settings and the
+  daemon's data (`~/.kybern`) are never touched.
 
 ### Next to the Tauri Kybern app
 
@@ -147,9 +162,9 @@ against a local feed.
 
 ### Requirements and known gaps
 
-Windows 10 1809 or later (Bun's floor), x64. **WebView2 is not required**: previews open in the
-browser and Mermaid shows as text until the embedded web view (WP10) exists; the WebView2
-bootstrapper joins the installer then. Direct3D 11 is the renderer; the CI runner proves it only
+Windows 10 1809 or later (Bun's floor, and the floor of the composition clip the embedded web
+view uses), x64. **WebView2 is optional**: without the runtime, previews open in the browser and
+Mermaid shows as text (WP4's fallbacks); with it, they run in the app (WP10). Direct3D 11 is the renderer; the CI runner proves it only
 on WARP (software). The fallbacks for everything macOS-only (no backdrop blur or Mica, fonts,
 Win-key shortcuts instead of Ctrl, title-bar controls, notifications, credentials, clipboard and
 `open` shell-outs) are the "macOS-only patches off macOS" table in

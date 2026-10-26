@@ -1,12 +1,25 @@
-// The web view capability: decided from the platform and `KYBERN_GPUIX_NO_WEBVIEW`, passed in so no global is touched.
+// The web view capability: decided from the platform, `KYBERN_GPUIX_NO_WEBVIEW` and (Windows) the host's runtime probe,
+// passed in so no global is touched.
 import { expect, test } from 'bun:test'
-import { webViewSupport } from './webview-support.ts'
+import { noteWebViewUnavailable, WEB_VIEW_MISSING, webViewMissingText, webViewSupport } from './webview-support.ts'
 import { fileURLToPath } from 'node:url'
 
-test('only macOS has an embedded web view, until WP10 adds Windows and Linux', () => {
+test('macOS always has an embedded web view, Windows when its host finds a WebView2 Runtime, Linux not yet', () => {
   expect(webViewSupport('darwin', {})).toEqual({ available: true, reason: null })
+  expect(webViewSupport('win32', {}, () => 'ready')).toEqual({ available: true, reason: null })
+  expect(webViewSupport('win32', {}, () => 'runtime')).toEqual({ available: false, reason: 'runtime' })
+  expect(webViewSupport('win32', {}, () => 'missing')).toEqual({ available: false, reason: 'missing' })
   expect(webViewSupport('win32', {})).toEqual({ available: false, reason: 'platform' })
-  expect(webViewSupport('linux', {})).toEqual({ available: false, reason: 'platform' })
+  expect(webViewSupport('linux', {}, () => 'ready')).toEqual({ available: false, reason: 'platform' })
+  expect(webViewSupport('win32', { KYBERN_GPUIX_NO_WEBVIEW: '1' }, () => 'ready')).toEqual({ available: false, reason: 'disabled' })
+})
+test('the fallback copy says what to do for each reason', () => {
+  expect(webViewMissingText('runtime')).toMatch(/^Install the Microsoft Edge WebView2 Runtime .*then reopen Kybern/)
+  expect(webViewMissingText('missing')).toMatch(/Reinstall Kybern/)
+  expect(webViewMissingText('platform')).toBe("Kybern can't embed web pages on this platform yet.")
+  noteWebViewUnavailable('runtime')
+  expect(WEB_VIEW_MISSING).toBe(webViewMissingText('runtime'))
+  noteWebViewUnavailable('platform')
 })
 test('KYBERN_GPUIX_NO_WEBVIEW turns the capability off anywhere and other values do not', () => {
   for (const value of ['1', 'true', 'YES', 'on']) expect(webViewSupport('darwin', { KYBERN_GPUIX_NO_WEBVIEW: value })).toEqual({ available: false, reason: 'disabled' })

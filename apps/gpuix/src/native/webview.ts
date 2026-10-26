@@ -1,14 +1,35 @@
 import { dlopen, FFIType, JSCallback, ptr } from 'bun:ffi'
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import path from 'node:path'
 import type { LayoutRect, RoundedLayoutClip } from './layout.ts'
-import { webViewSupport } from './webview-support.ts'
+import { noteWebViewUnavailable, webViewSupport, type WindowsHostState } from './webview-support.ts'
 
 export type WebEvent = { id: string; generation?: number; type: string; message?: string; url?: string; visible?: boolean; key?: string; modifiers?: { cmd: boolean; ctrl: boolean; alt: boolean; shift: boolean }; data?: Record<string, unknown>
   /** `outsidePress`: window points; `snapshot`: the PNG's pixel size. */
   x?: number; y?: number; width?: number; height?: number; path?: string; ok?: boolean; token?: number }
-/** Decided once: off macOS (or with `KYBERN_GPUIX_NO_WEBVIEW=1`) no library is ever loaded and every `webHost` call is a no-op. */
-const SUPPORT = webViewSupport()
+/** The host library: `native/webview.m` on macOS, `native/webview-win` (WebView2) on Windows. */
+function libraryPath() {
+  const name = process.platform === 'win32' ? 'kybern-webview.dll' : 'kybern-webview.dylib'
+  return process.env.KYBERN_GPUIX_RESOURCES ? path.join(process.env.KYBERN_GPUIX_RESOURCES, name) : fileURLToPath(new URL(`../../native/build/${name}`, import.meta.url))
+}
+/** Windows: the library is there and finds a WebView2 Runtime (`kybern_web_available`), read once at startup. */
+function windowsHost(): WindowsHostState {
+  const file = libraryPath()
+  if (!existsSync(file)) return 'missing'
+  try {
+    const probe = dlopen(file, { kybern_web_available: { args: [], returns: FFIType.i32 } })
+    const ready = probe.symbols.kybern_web_available() === 1
+    probe.close()
+    return ready ? 'ready' : 'runtime'
+  } catch { return 'missing' }
+}
+/**
+ * Decided once: without a host (Linux, Windows without the WebView2 Runtime, or `KYBERN_GPUIX_NO_WEBVIEW=1`) no library
+ * stays loaded and every `webHost` call is a no-op.
+ */
+const SUPPORT = webViewSupport(process.platform, process.env, process.platform === 'win32' ? windowsHost : undefined)
+noteWebViewUnavailable(SUPPORT.reason)
 let bridge: ReturnType<typeof load> | undefined, wake: JSCallback | undefined
 let nextGeneration = 0
 let pointerCaptures = 0
@@ -44,9 +65,7 @@ function settle(event: WebEvent) {
 }
 function initialize() {
   if (bridge) return
-  const file = process.env.KYBERN_GPUIX_RESOURCES
-    ? `${process.env.KYBERN_GPUIX_RESOURCES}/kybern-webview.dylib`
-    : fileURLToPath(new URL('../../native/build/kybern-webview.dylib', import.meta.url))
+  const file = libraryPath()
   if (!existsSync(file)) throw Error('Build the embedded preview host with bun native/build-webview.ts, then reopen Kybern.')
   const loaded = load(file)
   wake = new JSCallback(() => {
@@ -70,7 +89,8 @@ function command(fields: Record<string, unknown>) {
 }
 
 /** Trusted wrapper, opaque sandboxed child. No bearer token or native bridge is
- * exposed to the child. The daemon supplies the child's actual CSP. */
+ * exposed to the child. The daemon supplies the child's actual CSP. `send` is WKWebView's message API; on Windows the
+ * host defines it in the wrapper over `chrome.webview.postMessage` (`native/webview-win/src/host.rs`). */
 export function webDocument(url: string, kind: 'file' | 'server' | 'visual') {
   const parsed = new URL(url)
   if (!/^https?:$/.test(parsed.protocol) || parsed.username || parsed.password) throw Error('Invalid preview address')
@@ -93,7 +113,7 @@ export function webDocument(url: string, kind: 'file' | 'server' | 'visual') {
 export const webHost = {
   /** False where no embedded web view exists: callers check this and draw their fallback instead of catching errors. */
   available: SUPPORT.available,
-  /** Why it is unavailable (`platform`, or `disabled` by `KYBERN_GPUIX_NO_WEBVIEW`), else null. */
+  /** Why it is unavailable (`platform`, `disabled` by `KYBERN_GPUIX_NO_WEBVIEW`, Windows `runtime` or `missing`), else null. */
   unavailableReason: SUPPORT.reason,
   /** A trusted, never-placed document with no child frame (the Mermaid renderer): script runs, the page is not shown. */
   createDocument(id: string, html: string) {
