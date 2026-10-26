@@ -329,6 +329,7 @@ Fork branches `wp8` (on `next`, merged with its ci-fix heads; `native/FORK` pins
 | zed | "Choose the family .SystemUIFont resolves to (WP8)" | `TextSystem::set_system_ui_font`: GPUI core resolves `.SystemUIFont` (and text with no family) to the app's choice before the platform text system sees it |
 | zed | "DirectWrite: axis values on every variable range, KYBERN_FONT_DEBUG", "find variable fonts by typographic family; unhinted glyphs" | The font set lists a variable font's named instances under their weight-stretch-style family, so `Inter Variable` matched nothing (every weight drew one fallback face): a family with no match is looked up as a typographic family and matched and laid out under its WWS name. `KYBERN_FONT_DEBUG=1` prints the matching (the `text` check collects it). No grid fitting |
 | gpuix | "setSystemUiFont, and use the zed wp8 branch" | napi `setSystemUiFont(family \| null)` (UI thread off macOS, like `registerFont`) |
+| zed | "WP8 review fixes: kszl per input run, system UI fallback, VS16 emoji, hinting at 1x" (`wp8fix`) | **DirectWrite**: a glyph run takes its `kszl` scale from the input run it starts in (`textPosition`) and a scaled font for the face it resolved to, made on demand per (font, scale ‰): fonts that share a face (the rich editor's `tnum` list numbers and its task chips) or a fallback face (emoji in inline code) drew at full size. Cache entries hold their face. Emoji presentation (U+FE0F, keycaps) goes to Segoe UI Emoji; **cosmic-text** spans them to Noto Color Emoji. **Core**: an unresolvable `setSystemUiFont` family falls back to the platform UI font at the same weight (unit test). Grid fitting / swash hinting stay on below 1.5x |
 
 Kybern side: `src/platform/fonts.ts` picks the faces (`fontPlan`, unit-tested) and `installUiFont` registers Inter
 and calls `setSystemUiFont` at startup (`main.tsx`) and in labs (`registerBrandFonts`); `theme.ts` exports `FONT_MONO`
@@ -347,9 +348,15 @@ Verified 2026-10-26: `text` and `rounded` pass `--strict` on Linux X11 (lavapipe
 pin (run 40267454901; its Windows `text` failure was the previous, whole-row cap measure). On the user's Windows 11
 PC (RTX 3060) `text` passes with `.SystemUIFont` on Segoe UI Variable Text (300→700: 506, 532, 537, 542, 546, 550, 561,
 572 px). Inter's ladder is within 1 px of macOS on Linux and 2–3 px wider on DirectWrite; cap heights and baselines are
-within 0.8 px of macOS everywhere. The WP7 "Menlo glyph advances" gap passes in both `rounded` steps. Known gaps: ❤️
-draws as the white text glyph on Linux and the Windows CI image (the variation selector does not force the colour
-face when a text font covers U+2764); Windows has no flag emoji (Segoe UI Emoji draws 🇯🇵 as "JP").
+within 0.8 px of macOS everywhere. The WP7 "Menlo glyph advances" gap passes in both `rounded` steps. Known gap: Windows has
+no flag emoji (Segoe UI Emoji draws 🇯🇵 as "JP"). The ❤️ gap is closed by the review fixes below.
+
+WP8 review fixes (`wp8fix`): the `text` check adds a task chip shaped after a `tnum` list on the same face (as wide as
+one shaped before it), an emoji inside inline code (drawn at 0.833 of one outside it) and a U+FE0F row (❤️ ⚠️ ☀️ 1️⃣ in
+colour). Off macOS `installUiFont` registers Inter only when the plan draws with it (not with Segoe UI Variable) plus
+JetBrains Mono SemiBold and Bold (v2.304, for code at 600 and bold syntax; macOS keeps its faces). Grid fitting returns
+at 1x and 1.25x; hinted cap heights and baselines snap to whole pixels (up to 1.33 px from macOS on the Linux runner), so
+the cap check allows 1.5 px there.
 
 ### D. Window and input integration
 

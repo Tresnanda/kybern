@@ -84,6 +84,32 @@ Runtime distribution terms (https://learn.microsoft.com/microsoft-edge/webview2/
 it runs only when the runtime is missing and installs Microsoft's runtime, which Microsoft updates.
 These are not covered by Kybern's license.
 
+## JetBrains Mono (fonts)
+
+Source: https://github.com/JetBrains/JetBrainsMono (Regular, Light, Medium and their italics: version 2.211;
+SemiBold and Bold: release v2.304, `JetBrainsMono-2.304.zip`, `fonts/ttf/`)
+Used in: apps/gpuix/src/assets/fonts/JetBrainsMono-*.ttf. Kybern GPUIX draws code with them on Windows and Linux and
+the terminal and artifacts with them on every OS. The files are unmodified. SHA-256 of the v2.304 files (identical to
+the blobs at the repository's `v2.304` tag):
+
+- `JetBrainsMono-SemiBold.ttf`: 1b3bfa1ed5665a4ce3f9feb68d2d4e40e70bf8b4b7d9a3edd418f321b4e166a0
+- `JetBrainsMono-Bold.ttf`: 5590990c82e097397517f275f430af4546e1c45cff408bde4255dad142479dcb
+
+Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1, the text of which is reproduced in
+full in the Inter section below and is also available with a FAQ at: https://openfontlicense.org
+
+## Cal Sans (font)
+
+Source: https://github.com/calcom/font (`CalSans-Regular.ttf`, version 1.000)
+Used in: apps/gpuix/src/assets/fonts/CalSans-Regular.ttf, the sidebar's brand wordmark. The file is unmodified.
+
+Copyright 2021 The Cal Sans Project Authors (https://github.com/calcom/font)
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1, the text of which is reproduced in
+full in the Inter section below and is also available with a FAQ at: https://openfontlicense.org
+
 ## Inter (fonts, Windows and Linux)
 
 Source: https://github.com/rsms/inter (release v4.1, `Inter-4.1.zip`: `InterVariable.ttf`, `InterVariable-Italic.ttf`)

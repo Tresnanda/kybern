@@ -19,6 +19,13 @@ export const INLINE = 'M'.repeat(20)
 export const EDITOR_SIZE = 16.1538
 export const INLINE_SCALE = 0.833
 export const EMOJI = '😀👍🏽🚀❤️🇯🇵'
+/** Emoji presentation asked for by U+FE0F (and a keycap) on characters a text font covers too. */
+export const EMOJI_VS16 = '❤️⚠️☀️1️⃣'
+/** A task chip (drawn at 0.867, `kszl`) and an ordered list (its numbers in the same font with `tnum`, sharing the face). */
+export const CHIP = `[${'M'.repeat(12)}](kybern://task/11111111-1111-4111-8111-111111111111)`
+export const ORDERED = '1. One\n2. Two'
+/** An emoji outside and inside inline code: the code's fallback glyph is drawn at 0.833 too. */
+export const CODE_EMOJI = '😀 `😀`'
 export const CJK = '漢字かなカナ한국어中文'
 export const WRAP = 'Kybern drives coding agents. Long agent replies wrap across several lines at the chat column width, so every line box has to match.'
 export const WRAP_WIDTH = 260

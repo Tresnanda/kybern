@@ -19,6 +19,11 @@ export interface FontPlan {
 /** Inter 4.1's variable roman and italic (`src/assets/fonts`, OFL; THIRD_PARTY_NOTICES.md). */
 export const INTER = 'Inter Variable'
 export const INTER_FILES = ['InterVariable.ttf', 'InterVariable-Italic.ttf']
+/**
+ * JetBrains Mono 2.304's SemiBold and Bold (the official release, OFL; THIRD_PARTY_NOTICES.md), for code at 600 and bold
+ * syntax off macOS. macOS draws code in Menlo, and its JetBrains Mono uses (terminal, artifacts) keep the faces they had.
+ */
+export const MONO_WEIGHT_FILES = ['JetBrainsMono-SemiBold.ttf', 'JetBrainsMono-Bold.ttf']
 /** Windows 11's variable UI font, in its text optical size. */
 export const SEGOE_VARIABLE = 'Segoe UI Variable Text'
 
@@ -37,15 +42,22 @@ interface FontHost {
   setSystemUiFont?: (family: string | null) => void
 }
 
+/** The bundled files `installUiFont` registers for a plan: Inter only when the plan draws with it. */
+export function uiFontFiles(plan: FontPlan): string[] {
+  if (plan.systemUi === null) return []
+  return [...(plan.systemUi === INTER ? INTER_FILES : []), ...MONO_WEIGHT_FILES]
+}
+
 /**
- * Off macOS: register Inter and point `.SystemUIFont` at the plan's family. Call it with the other bundled fonts, before
- * the first text is laid out (a family resolved earlier keeps its font). An addon without `setSystemUiFont` keeps the
- * platform's UI font.
+ * Off macOS: register the plan's bundled faces (`uiFontFiles`) and point `.SystemUIFont` at the plan's family. Call it with
+ * the other bundled fonts, before the first text is laid out (a family resolved earlier keeps its font). A family that does
+ * not resolve falls back to the platform's UI font at the same weight (the zed fork's `TextSystem::font_id`); an addon
+ * without `setSystemUiFont` keeps the platform's UI font.
  */
 export function installUiFont(renderer: object, plan: FontPlan = FONTS) {
   if (plan.systemUi === null) return
   const host = renderer as FontHost
-  for (const file of host.registerFont ? INTER_FILES : []) {
+  for (const file of host.registerFont ? uiFontFiles(plan) : []) {
     try {
       host.registerFont!.call(renderer, readFileSync(new URL(`../assets/fonts/${file}`, import.meta.url)))
     } catch (error) {

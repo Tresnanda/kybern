@@ -2,10 +2,15 @@
 //   - every kit weight (450, 550 and 650 included) paints wider than the one below it, in the UI font and in Inter: off
 //     macOS that needs the `wght` axis on DirectWrite / cosmic-text and a variable UI font (`platform/fonts.ts`);
 //   - line boxes are the line heights the kit asks for, and the cap height and baseline of Inter and JetBrains Mono (the
-//     same files on every OS) sit where macOS draws them, within 1 px (`text-macos.json`, written by `--record` on a Mac);
+//     same files on every OS) sit where macOS draws them, within 1 px (1.5 px where glyphs are hinted, below 1.5x)
+//     (`text-macos.json`, written by `--record` on a Mac);
 //   - code is the code face: its painted width is the character count times the advance the code wrap computes with;
 //   - inline code in the rich editor is drawn at its reduced scale (`kszl`);
-//   - emoji draw in colour and CJK falls back to a font that has it, a full em per character.
+//   - a `kszl` run is drawn at its scale whichever font its face maps back to: a task chip shaped after an ordered list
+//     selected the same face with `tnum` paints as wide as one shaped before it, and an emoji inside inline code is drawn
+//     smaller than one outside it;
+//   - emoji draw in colour, U+FE0F sequences (❤️ ⚠️ ☀️ 1️⃣) included, and CJK falls back to a font that has it, a full em
+//     per character.
 // Writes text-<platform>.png and text-metrics-<platform>.json (side-by-side review across OSes).
 //   bun native/text-check.ts [--record]
 import '../src/native/local-build.ts'
@@ -26,6 +31,7 @@ const reference: Reference | null = !record && existsSync(referenceFile) ? JSON.
 type Box = { x: number; y: number; width: number; height: number }
 const differs = (p: number[]) => p.some((v, i) => Math.abs(v - BACKGROUND[i]!) > 24)
 /** How much of a pixel the text covers, from the specimen's background (0) to its text colour (1). */
+const saturated = (p: number[]) => Math.max(...p) - Math.min(...p) > 60
 const coverage = (p: number[]) => Math.min(1, Math.max(0, ((p[0]! + p[1]! + p[2]!) / 3 - BACKGROUND[0]) / (FOREGROUND[0] - BACKGROUND[0])))
 
 /**
@@ -59,6 +65,7 @@ try {
   const a = f.app
   await a.getByTestId('text-ready').waitFor()
   await a.getByTestId('editor').waitFor()
+  await a.getByTestId('chip-late').waitFor()
   await Bun.sleep(400)
   const box = async (id: string): Promise<Box> => a.getByTestId(id).bounds()
   const metrics: Record<string, unknown> = { platform, uiFont: FONTS.systemUi ?? '.SystemUIFont (SF Pro)', mono: FONTS.mono }
@@ -103,15 +110,35 @@ try {
   const unscaled = INLINE.length * FONTS.monoAdvance * EDITOR_SIZE
   metrics.inline = { painted: +inline.toFixed(2), scaledText: +(unscaled * INLINE_SCALE).toFixed(2), unscaledText: +unscaled.toFixed(2) }
 
-  const emoji = await box('emoji')
-  let colour = 0
-  for (let y = Math.ceil((emoji.y + top) * scale); y < Math.floor((emoji.y + top + emoji.height) * scale); y++) {
-    for (let x = Math.ceil(emoji.x * scale); x < Math.floor((emoji.x + emoji.width) * scale); x++) {
-      const p = png.at(x, y)
-      if (Math.max(...p) - Math.min(...p) > 60) colour++
+  /** The columns (device px) of a box whose pixels pass `hit`, with how many hit pixels each has. */
+  const columns = (b: Box, hit: (p: number[]) => boolean) => {
+    const counts = new Map<number, number>()
+    for (let y = Math.ceil((b.y + top) * scale); y < Math.floor((b.y + top + b.height) * scale); y++) {
+      for (let x = Math.ceil(b.x * scale); x < Math.floor((b.x + b.width) * scale); x++) if (hit(png.at(x, y))) counts.set(x, (counts.get(x) ?? 0) + 1)
     }
+    return counts
   }
+  const countIn = (counts: Map<number, number>) => [...counts.values()].reduce((sum, n) => sum + n, 0)
+  /** Logical width of the ink in a box, from its first to its last column. */
+  const inkWidth = (counts: Map<number, number>) => counts.size ? (Math.max(...counts.keys()) - Math.min(...counts.keys()) + 1) / scale : NaN
+  /** Logical widths of the runs of hit columns separated by a gap of at least `gap` logical px. */
+  const clusters = (counts: Map<number, number>, gap: number) => {
+    const xs = [...counts.keys()].sort((p, q) => p - q), out: number[] = []
+    let start = xs[0]!, prev = xs[0]!
+    for (const x of xs.slice(1)) { if (x - prev > gap * scale) { out.push((prev - start + 1) / scale); start = x } prev = x }
+    if (xs.length) out.push((prev - start + 1) / scale)
+    return out
+  }
+
+  const emoji = await box('emoji')
+  const colour = countIn(columns(emoji, saturated))
   metrics.emoji = { width: emoji.width, colourPixels: colour }
+  const vs16Colour = countIn(columns(await box('emoji-vs16'), saturated))
+  metrics.emojiVs16 = { colourPixels: vs16Colour }
+  const chips = { early: inkWidth(columns(await box('chip-early'), differs)), late: inkWidth(columns(await box('chip-late'), differs)) }
+  metrics.chips = chips
+  const codeEmoji = clusters(columns(await box('code-emoji'), saturated), 3)
+  metrics.codeEmoji = codeEmoji
   const cjk = await box('cjk'), em = cjk.width / [...CJK].length / 16
   metrics.cjk = { width: cjk.width, emPerCharacter: +em.toFixed(3) }
   metrics.fontDebug = fontDebug
@@ -148,6 +175,19 @@ try {
     assert.ok(colour > 40 * scale * scale, `emoji painted ${colour} coloured pixels`)
     assert.ok(emoji.width > 5 * 16 * 0.9, `emoji row is ${emoji.width} wide`)
   })
+  await check('U+FE0F sequences draw in colour', () => {
+    // Four emoji at 16 px; a text glyph (❤ in the UI font) has no saturated pixels.
+    assert.ok(vs16Colour > 4 * 30 * scale * scale, `❤️⚠️☀️1️⃣ painted ${vs16Colour} coloured pixels`)
+  })
+  await check('a task chip shaped after a tnum font on its face keeps its scale (kszl)', () => {
+    assert.ok(Number.isFinite(chips.early) && Number.isFinite(chips.late), `chips not painted: ${JSON.stringify(chips)}`)
+    assert.ok(Math.abs(chips.late - chips.early) <= 1, `the chip shaped after the ordered list is ${chips.late} wide, the one before it ${chips.early}`)
+  })
+  await check('an emoji inside inline code is drawn at the code scale', () => {
+    assert.equal(codeEmoji.length, 2, `expected two emoji, found ink clusters ${JSON.stringify(codeEmoji)}`)
+    const ratio = codeEmoji[1]! / codeEmoji[0]!
+    assert.ok(ratio < 0.92 && ratio > 0.7, `the inline-code emoji is ${ratio.toFixed(3)} of the other (0.833 expected)`)
+  })
   await check('CJK falls back to a font that has it', () => {
     assert.ok(em > 0.85 && em < 1.15, `CJK is ${em.toFixed(2)} em per character (a full em expected; boxes or a proportional fallback otherwise)`)
     inkRows(png, scale, top, cjk)
@@ -158,10 +198,13 @@ try {
     writeFileSync(referenceFile, JSON.stringify({ caps, wrap, inline: +inline.toFixed(2) } satisfies Reference, null, 2) + '\n')
     console.log(`recorded ${referenceFile}`)
   } else if (reference) {
-    await check('cap heights and baselines match macOS within 1 px (Inter, JetBrains Mono)', () => {
+    // Below 1.5x DirectWrite and swash hint glyphs, which snaps the cap height and baseline to whole pixels: up to half a
+    // pixel per edge on top of the 1 px the unhinted outlines are held to.
+    const capTolerance = platform !== 'macos' && scale < 1.5 ? 1.5 : 1
+    await check(`cap heights and baselines match macOS within ${capTolerance} px (Inter, JetBrains Mono)`, () => {
       const off = Object.entries(caps).filter(([id, v]) => {
         const r = reference.caps[id]
-        return !r || Math.abs(v.top - r.top) > 1 || Math.abs(v.baseline - r.baseline) > 1
+        return !r || Math.abs(v.top - r.top) > capTolerance || Math.abs(v.baseline - r.baseline) > capTolerance
       }).map(([id, v]) => `${id}: top ${v.top} baseline ${v.baseline} vs macOS ${JSON.stringify(reference.caps[id])}`)
       assert.deepEqual(off, [], off.join('; '))
     })

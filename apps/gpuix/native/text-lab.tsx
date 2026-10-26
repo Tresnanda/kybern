@@ -3,17 +3,20 @@
 // in the code face, inline code at the rich editor's reduced scale (`kszl`), emoji and CJK fallback.
 import '../src/native/local-build.ts'
 import { readFileSync } from 'node:fs'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { render, useGpuixRequired } from '@gpuix/react'
 import { RichEditor } from '../src/editor/RichEditor.tsx'
 import { registerBrandFonts } from '../src/native/fonts.ts'
 import { INTER, INTER_FILES } from '../src/platform/fonts.ts'
 import { FONT_MONO, FONT_UI } from '../src/theme.ts'
-import { BACKGROUND, CAPS, CJK, EMOJI, FOREGROUND, INLINE, LADDER, MONO, MONO_PROBE, MONO_PROBE_SIZE, MONO_SIZE, SIZES, WEIGHTS, WRAP, WRAP_WIDTH } from './text-specimen.ts'
+import { BACKGROUND, CAPS, CHIP, CJK, CODE_EMOJI, EMOJI, EMOJI_VS16, FOREGROUND, ORDERED, INLINE, LADDER, MONO, MONO_PROBE, MONO_PROBE_SIZE, MONO_SIZE, SIZES, WEIGHTS, WRAP, WRAP_WIDTH } from './text-specimen.ts'
 
 const rgb = (c: readonly number[]) => `rgb(${c.join(', ')})`
 const fg = rgb(FOREGROUND), muted = 'rgb(150, 150, 150)'
 const line = (family: string, size: number, lineHeight: number, weight = 400) => ({ color: fg, fontFamily: family, fontSize: size, lineHeight, fontWeight: weight, whiteSpace: 'nowrap', alignSelf: 'flex-start' }) as const
+const editor = (testId: string, value: string) => <div style={{ display: 'flex', flexDirection: 'column', width: 300 }}>
+  <RichEditor testId={testId} value={value} epoch={0} variant="page" readOnly images={null} />
+</div>
 const heading = (label: string) => <text style={{ color: muted, fontFamily: FONT_UI, fontSize: 11, lineHeight: 16, marginTop: 6 }}>{label}</text>
 
 function Lab() {
@@ -24,6 +27,14 @@ function Lab() {
     registerBrandFonts(renderer)
     if (process.platform === 'darwin') for (const file of INTER_FILES) (renderer as { registerFont(bytes: Uint8Array): void }).registerFont(readFileSync(new URL(`../src/assets/fonts/${file}`, import.meta.url)))
   })
+  // The first chip is shaped before any `tnum` font exists; the ordered list then selects one on the same face, and the
+  // second chip is shaped after it (a `kszl` run must still be drawn at its scale whichever font the face maps back to).
+  const [stage, setStage] = useState(0)
+  useEffect(() => {
+    if (stage >= 2) return
+    const timer = setTimeout(() => setStage(stage + 1), 400)
+    return () => clearTimeout(timer)
+  }, [stage])
   return <div testId="text-ready" style={{ display: 'flex', gap: 28, padding: 16, width: '100%', height: '100%', backgroundColor: rgb(BACKGROUND) }}>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 2, width: 600 }}>
       {heading('UI font, 14/20')}
@@ -40,6 +51,7 @@ function Lab() {
       </div>
       {heading('Emoji and CJK, UI font 16/24')}
       <text testId="emoji" style={line(FONT_UI, 16, 24)}>{EMOJI}</text>
+      <text testId="emoji-vs16" style={line(FONT_UI, 16, 24)}>{EMOJI_VS16}</text>
       <text testId="cjk" style={line(FONT_UI, 16, 24)}>{CJK}</text>
     </div>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -51,6 +63,11 @@ function Lab() {
       </div>)}
       {heading(`Wrapped, Inter 14/20 in ${WRAP_WIDTH}`)}
       <text testId="wrap" style={{ color: fg, fontFamily: INTER, fontSize: 14, lineHeight: 20, width: WRAP_WIDTH }}>{WRAP}</text>
+      {heading('Scaled runs: task chips around a tnum list, emoji in inline code')}
+      {editor('chip-early', CHIP)}
+      {stage >= 1 && editor('ordered', ORDERED)}
+      {stage >= 2 && editor('chip-late', CHIP)}
+      {editor('code-emoji', CODE_EMOJI)}
     </div>
   </div>
 }
