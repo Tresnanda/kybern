@@ -167,7 +167,8 @@ async function execute(checkName: string, run: Run) {
     const text = chunk.toString()
     process.stdout.write(text)
     appendFileSync(log, text)
-    for (const line of text.split('\n')) if (line.trim()) { tail.push(line); if (tail.length > 25) tail.shift() }
+    // A diagnostics dump is one huge line; the summary keeps its start (log.txt has all of it).
+    for (const line of text.split('\n')) if (line.trim()) { tail.push(line.length > 400 ? `${line.slice(0, 400)}…` : line); if (tail.length > 25) tail.shift() }
   }
   child.stdout.on('data', sink)
   child.stderr.on('data', sink)

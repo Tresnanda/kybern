@@ -57,6 +57,25 @@ const row = db.query("SELECT seq, payload FROM events WHERE thread_id = ?1 AND p
 if (!row) throw Error('The published visual has no event')
 const published = JSON.parse(row.payload)
 console.log('published event kind:', published.kind)
+// No installed preview browser to link (CI): the pictures would race the daemon's 120 MB install, whose first
+// snapshot fails with "installing". One snapshot starts that install; wait for it before the app asks.
+if (!existsSync(linked)) {
+  const started = Date.now()
+  let last = ''
+  for (;;) {
+    try {
+      await client.call('threads.visuals.snapshot', { thread_id: thread.id, visual_id: bundle.visual.id, width: 640, theme: { appearance: variant, variables: {} }, lock: null })
+      break
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (message !== last) console.log(`[nowebview] preview browser: ${message}`)
+      last = message
+    }
+    if (Date.now() - started > 600_000) throw Error(`Timed out: the preview browser install (${last})`)
+    await Bun.sleep(2000)
+  }
+  console.log(`[nowebview] preview browser ready in ${Math.round((Date.now() - started) / 1000)} s`)
+}
 const target = published.visual ?? published.html_visual ?? published
 target.ask = { schema: LAYOUT_SCHEMA }
 db.prepare('UPDATE events SET payload = ?2 WHERE seq = ?1').run(row.seq, JSON.stringify(published))

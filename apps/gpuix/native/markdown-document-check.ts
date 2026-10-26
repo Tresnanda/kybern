@@ -70,9 +70,9 @@ for(const mode of (process.env.MD_API_ONLY==='1'?[]:['dark','light'])) {
  const after=await settled(()=>a.getByTestId('wrap-code').bounds(),b=>b.height>before.height+30);assert.ok(after.height>before.height+30,`Wrap must grow code: ${before.height} -> ${after.height}`)
  const file=path.join(out,`capability-${mode}.png`);await capture(f,file);const grid=pixels(file)
  await a.getByTestId('grid').click();await a.clock.fastForward(32)
- const file2=path.join(out,`capability-${mode}-no-grid.png`);await capture(f,file2);const plain=pixels(file2)
- let redBefore=0,redAfter=0
- for(let y=0;y<grid.h;y++)for(let x=0;x<grid.w;x++){const c=grid.at(x,y),d=plain.at(x,y);if(c[0]!>240&&c[1]!<20&&c[2]!<20)redBefore++;if(d[0]!>240&&d[1]!<20&&d[2]!<20)redAfter++}
+ const red=(png:ReturnType<typeof pixels>)=>{let n=0;for(let y=0;y<png.h;y++)for(let x=0;x<png.w;x++){const c=png.at(x,y);if(c[0]!>240&&c[1]!<20&&c[2]!<20)n++}return n}
+ const redBefore=red(grid),file2=path.join(out,`capability-${mode}-no-grid.png`)
+ const redAfter=await settled(async()=>red(pixels(await capture(f,file2))),n=>redBefore>n+500)
  assert.ok(redBefore>redAfter+500,'Grid adds actual outer/vertical borders')
  console.log(`ok ${mode}: exact Unicode selection across padded boxes, paragraph search, code wrap ${before.height} -> ${after.height}, grid paint`)
  }catch(e){console.error(f.diagnostics());throw e}finally{await f.close()}
@@ -107,11 +107,14 @@ if(process.env.MD_API_ONLY!=='1') for(const [name,source] of Object.entries({
    } finally {await f.close()}
   }
   for(const position of ['top','middle']) {
-   const a=pixels(`${out}/interior-${name}-${mode}-0-${position}.png`),b=pixels(`${out}/interior-${name}-${mode}-1-${position}.png`)
-   assert.equal(a.w,b.w);assert.equal(a.h,b.h)
-   let changed=0
-   for(let y=12;y<a.h-12;y++)for(let x=8;x<a.w-8;x++)if(a.at(x,y).some((v,i)=>v!==b.at(x,y)[i]))changed++
-   assert.equal(changed,0,`${name}/${mode}/${position}: ${changed} changed pixels`)
+   // The middle capture follows a wheel jump, which each launch may or may not receive off macOS.
+   await step(`${name}/${mode} ${position}`,()=>{
+    const a=pixels(`${out}/interior-${name}-${mode}-0-${position}.png`),b=pixels(`${out}/interior-${name}-${mode}-1-${position}.png`)
+    assert.equal(a.w,b.w);assert.equal(a.h,b.h)
+    let changed=0
+    for(let y=12;y<a.h-12;y++)for(let x=8;x<a.w-8;x++)if(a.at(x,y).some((v,i)=>v!==b.at(x,y)[i]))changed++
+    assert.equal(changed,0,`${name}/${mode}/${position}: ${changed} changed pixels`)
+   },position==='middle'?{gap:GAPS.wheel}:{})
   }
   console.log(`ok ${name}/${mode}: huge semantic block pixels equal before and after wheel jump`)
  }

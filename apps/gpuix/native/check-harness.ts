@@ -9,10 +9,10 @@
  *            captures the real window instead (Swift window id + `screencapture -l`), the only way to see an embedded
  *            web view.
  *   Windows  `app.screenshot` (Direct3D 11 on WARP in CI).
- *   Linux    `app.screenshot` when the addon supports it, else the window's pixels from the X server (`xwininfo` +
- *            ImageMagick `import`, under Xvfb started with `-extension Composite`: otherwise GPUI's window takes the
- *            32-bit visual, is redirected off-screen and captures black). `KYBERN_CHECK_CAPTURE=addon|x11` forces one.
- *            The first capture logs which.
+ *   Linux    `app.screenshot` (GPUI renders the scene through a wgpu readback; lavapipe under Xvfb in CI). An addon
+ *            without it falls back to the window's pixels from the X server (`xwininfo` + ImageMagick `import`, under
+ *            Xvfb started with `-extension Composite`: otherwise GPUI's window takes the 32-bit visual, is redirected
+ *            off-screen and captures black). `KYBERN_CHECK_CAPTURE=addon|x11` forces one. The first capture logs which.
  *
  * Software rendering (lavapipe, WARP) is not bit-identical to Metal, so pixel assertions go through `tolerance` and
  * structure (bounds, painted text, same-renderer A/B equality) rather than golden hashes.

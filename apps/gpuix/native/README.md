@@ -695,7 +695,7 @@ xdotool) and capture with `capture(fixture, file)`:
 | --- | --- |
 | macOS | the addon screenshot, as before; `{ webViews: true }` captures the real window (Swift window id + `screencapture -l`) to include an embedded web view |
 | Windows | the addon screenshot (Direct3D 11; WARP in CI) |
-| Linux | the addon screenshot if it works, else the X server (`xwininfo -root -tree` picks the window, ImageMagick `import` reads it). `KYBERN_CHECK_CAPTURE=addon\|x11` forces one; the log names the choice |
+| Linux | the addon screenshot (GPUI renders the scene and reads it back through wgpu; lavapipe in CI). An older addon falls back to the X server (`xwininfo -root -tree` picks the window, ImageMagick `import` reads it), which needs Xvfb started with `-extension Composite` (with Composite, GPUI's 32-bit window is redirected off-screen and captures black). `KYBERN_CHECK_CAPTURE=addon\|x11` forces one; the log names the choice |
 
 | Check | Run by `--checks` | What it proves |
 | --- | --- | --- |
@@ -707,6 +707,8 @@ xdotool) and capture with `capture(fixture, file)`:
 | `scripts/nowebview-app-check.ts` | `nowebview` | WP4: the app with the web view off: preview in the browser, visual, question, Mermaid, artifact |
 | `native/webview-win-check.ts` | `webview` (Windows only) | WP10: a WebView2 visual in a GPUIX window driven with real OS input (user32) and checked on captures of the composed window (`PrintWindow`, which includes the WebView2 visuals the addon screenshot never sees): stacking, rounded clip, transparency, menu cut-out, modal dim, bridge both ways, click, double click, wheel, typing, Ctrl shortcuts, Escape and outside-press handback, `kybern.answer.draft`, `present`/`probe`, `snapshot` with alpha, `snapshotRect`, `frame`, hide and destroy |
 
+Off macOS GPUI dispatches synthesized input on its UI thread and the app's handler runs on the JS thread after the
+automation call returns, so a check reads what a click changed through `settled(read, done)`, not once.
 Pixel assertions tolerate software rendering: `tolerance` (3 on macOS, 8 elsewhere, `KYBERN_CHECK_TOLERANCE`), regions
 that must hold painted content (`assertPainted`), structure (bounds, test ids, painted text), and exact equality only
 between two renders of the same renderer. Steps that need a capability still blocked off macOS are wrapped in

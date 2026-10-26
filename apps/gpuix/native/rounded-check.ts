@@ -31,8 +31,11 @@ for(const mode of ['dark','light']){
  // At the top of wrapped middle fragments both ends are square; the first/last retain exterior curves.
  const b=boxes.wrap!,fill=mode==='dark'?[40,81,124]:[173,212,252]
  const filled=(im:ReturnType<typeof pixels>,x:number,y:number)=>im.at(x*scale,y*scale).every((c,i)=>Math.abs(c-fill[i]!)<tolerance)
- assert.ok(!filled(round,b.x+0.5,b.y+0.5),'First external corner is rounded')
- assert.ok(filled(round,b.x+0.5,b.y+24.5),'Continuation left corner is square')
+ // Off macOS the fallback face is wider: `edges` wraps too and its second line lands where these samples look (WP8).
+ await step(`${mode} wrapped fragment corners`,()=>{
+  assert.ok(!filled(round,b.x+0.5,b.y+0.5),'First external corner is rounded')
+  assert.ok(filled(round,b.x+0.5,b.y+24.5),'Continuation left corner is square')
+ },{gap:GAPS.font})
  // Same-color adjacent atoms retain their own external corners instead of coalescing.
  const touch=boxes.touching!
  // 48.2 = four Menlo advances at 20 px; off macOS Menlo is a fallback face whose advances differ (WP8).
