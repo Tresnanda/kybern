@@ -59,7 +59,7 @@ test('copies kybernd and kybern out of the image once per version', () => {
   expect(statSync(staged.kybernd).ino).not.toBe(before)
   // Neither folder writable: null, so the caller shows an error instead of running the mounted copies.
   writeFileSync(path.join(root, 'file'), '')
-  expect(stageAppImageCommands(app, '0.16.1', path.join(root, 'file'), undefined)).toBeNull()
+  expect(stageAppImageCommands(app, '0.16.1', path.join(root, 'file'), '')).toBeNull()
   expect(stageAppImageCommands(app, '0.16.1', path.join(root, 'file'), path.join(root, 'file'))).toBeNull()
 })
 

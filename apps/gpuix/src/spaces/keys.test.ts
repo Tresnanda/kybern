@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from 'bun:test'
+import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import type { EventPayload } from '@gpuix/react'
 import type { Project, Space } from '../../../../packages/kybern-client/src/types.ts'
 import { getNav, setNav } from '../nav/store.ts'
@@ -8,6 +8,10 @@ import { setKeyPlatform } from '../platform/keys.ts'
 import { spaceForDigit, spaceKey } from './keys.ts'
 import { startSpaces } from './current.ts'
 import { setSpacesState } from './store.ts'
+
+// Written for macOS shortcuts (⌘, ⌃); the off-macOS cases set their platform themselves. CI runs these on Linux.
+const restoreKeys = setKeyPlatform('darwin')
+afterAll(() => restoreKeys())
 
 const space = (id: string, position: number): Space => ({
   id, name: id, color: 'blue', logo: { kind: 'initials' }, position, is_default: position === 0, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',

@@ -1,6 +1,10 @@
-import { expect, test } from 'bun:test'
+import { afterAll, expect, test } from 'bun:test'
 import { setKeyPlatform } from '../platform/keys.ts'
 import { actionParts, keyGlyphs } from './action.ts'
+
+// Written for macOS shortcuts (⌘, ⌃); the off-macOS cases set their platform themselves. CI runs these on Linux.
+const restoreKeys = setKeyPlatform('darwin')
+afterAll(() => restoreKeys())
 test('quoted subjects and key chords split like the desktop caption', () => {
   expect(actionParts('Pressed “Continue”')).toEqual([{ text: 'Pressed', subject: false }, { text: 'Continue', subject: true }])
   expect(actionParts('Pressed cmd+shift+s')).toEqual([{ text: 'Pressed', subject: false }, { text: '⌘⇧S', subject: true, keys: true }])

@@ -2,6 +2,7 @@
 use super::*;
 use anyhow::ensure;
 use kybern_protocol::methods::*;
+#[cfg(target_os = "macos")]
 use kybern_protocol::process::NoWindow;
 use std::path::Path;
 

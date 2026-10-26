@@ -1,5 +1,10 @@
-import { expect, test } from 'bun:test'
+import { afterAll, expect, test } from 'bun:test'
+import { setKeyPlatform } from '../platform/keys.ts'
 import { ZoomController, type ZoomConfig } from './zoomController.ts'
+
+// Written for macOS shortcuts (⌘, ⌃); the off-macOS cases set their platform themselves. CI runs these on Linux.
+const restoreKeys = setKeyPlatform('darwin')
+afterAll(() => restoreKeys())
 
 const config = (over: Partial<ZoomConfig> = {}): ZoomConfig => ({ image: { width: 3240, height: 2594 }, viewport: { width: 1000, height: 700 }, origin: { x: 100, y: 50 }, scaleFactor: 2, reduced: false, ...over })
 const make = (over: Partial<ZoomConfig> = {}) => { const c = new ZoomController(); c.configure(config(over)); return c }
