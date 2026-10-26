@@ -3423,6 +3423,7 @@ impl Orchestrator {
         let restrictions = self.native_tool_restrictions(thread)?;
         if thread.coordinator_project_id.is_some() {
             self.refresh_project_map(thread.project_id).await;
+            self.record_first_session_heads(thread).await;
         }
         if !is_free_chat_project(thread.project_id) {
             // The notes index states which notes may be outdated; check them off the runtime first.

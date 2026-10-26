@@ -788,8 +788,28 @@ impl Orchestrator {
         Ok((carried, RotationSeed { rotation_id: rotation.id.clone(), text, handoff: handoff_range }))
     }
 
-    /// The git changes since the heads recorded at the last refresh (or, before the
-    /// first one, since the Coordinator's last change report). Records the current
+    /// Record the heads at the Coordinator's first session start: the baseline of the
+    /// first refresh's git facts, so commits its change reports already showed the old
+    /// session still reach the fresh one. Later refreshes record their own heads.
+    pub(super) async fn record_first_session_heads(&self, thread: &Thread) {
+        let key = rotation_heads_key(thread.id);
+        if self.inner.store.meta_get(&key).ok().flatten().is_some() {
+            return;
+        }
+        let now = self.lead_git_heads(thread).await;
+        if now.is_empty() {
+            return;
+        }
+        if let Ok(json) = serde_json::to_string(&now)
+            && let Err(error) = self.inner.store.meta_set(&key, &json)
+        {
+            tracing::warn!(thread_id = %thread.id, %error, "could not record the heads at the session start");
+        }
+    }
+
+    /// The git changes since the heads recorded at the last refresh or the first
+    /// session start (for a Coordinator older than that record, since its last
+    /// change report). Records the current
     /// heads for the next refresh and marks them seen, so the next change report
     /// doesn't repeat what the seed already carried.
     async fn seed_git_section(&self, thread: &Thread) -> Option<String> {

@@ -584,6 +584,23 @@ async fn the_seed_map_is_as_of_the_heads_at_the_refresh_not_the_old_sessions_sta
 }
 
 #[tokio::test]
+async fn the_first_seed_lists_commits_the_old_session_already_saw_in_a_change_report() {
+    let lead = Lead::in_git().await;
+    lead.turn("plan", 10, 1_000_000).await;
+
+    // A child's commit lands; the next turn's change report shows it to the old session.
+    std::fs::write(lead.fixture.root.join("src/auth/session.ts"), "export const x = 1\n").unwrap();
+    run_git(&lead.fixture.root, &["commit", "-q", "-am", "Change the session"]);
+    let child = lead.turn("next", 10, 1_000_000).await;
+    assert!(child.messages.lock().await.iter().any(|message| message.plain_text().contains("Change the session")));
+    refresh_with_handoff(&lead, &child, 1).await;
+
+    // The fresh session never saw that report: its seed carries the commit.
+    let seed = lead.seed().unwrap().text;
+    assert!(seed.contains("Change the session"), "{seed}");
+}
+
+#[tokio::test]
 async fn a_seed_whose_turn_failed_is_sent_again_with_the_next_message() {
     let lead = Lead::new().await;
     let child = lead.turn("plan", 10, 1_000_000).await;
