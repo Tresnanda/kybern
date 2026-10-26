@@ -1,6 +1,6 @@
 // Settings › Notifications (desktop `SettingsScreen.tsx` `Notifications` and
 // `NotificationSettings`): the daemon's agent-notification switch, and access
-// to macOS notifications for the packaged app (`native/notifications.ts`).
+// to system notifications: macOS for the packaged app, the toast and freedesktop services elsewhere (`native/notifications.ts`).
 import { useEffect, useState } from 'react'
 import { notifications, type NotificationStatus } from '../native/notifications.ts'
 import { toast } from '../shell/toasts.tsx'

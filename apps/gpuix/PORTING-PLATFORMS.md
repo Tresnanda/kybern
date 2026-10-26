@@ -189,7 +189,7 @@ nothing but `platforms_hooks.py`.
 | Automation test display | `automation_display.rs` | fallback | fallback | Centered on the primary display. Not needed by the WP7 harness: captures are the addon's screenshot (or the X window, Linux) and input is synthesized in-process, so the window's position never matters |
 | Scroll phase injection | `scroll_hooks.py` | works (WP1) | works (WP1) | `simulateScrollPhase` on every desktop platform and in `TestGpuixRenderer`; compile-checked, on screen in `frame-wake-check`. The WP7 checks still mark every wheel step `GAPS.wheel` until a CI run passes: a pass is reported as a closed gap, then the marker goes |
 | Web view (previews, Visual, Artifacts, Mermaid) | `webview.m`, `native/webview-win`, `src/native/webview.ts` | works (WP10: WebView2 under WinComp, `kybern-webview.dll`; needs the WebView2 Runtime, else WP4's fallbacks) | blocked | Linux loads no library (`webHost.available` is false; `KYBERN_GPUIX_NO_WEBVIEW=1` forces it anywhere). Fallbacks shipped in WP4: see *Without a web view*. Windows status and parity: `WEBVIEW-PLATFORMS.md` |
-| Notifications | `packaging/notifications.m` | fallback | fallback | Already skipped outside a macOS `.app` |
+| Notifications | `packaging/notifications.m` (macOS); GPUI's own on Windows and Linux through `src/native/notifications.ts` | works (WP5: toasts under the installer's AUMID, `notify` check) | works (WP5: freedesktop `Notify`, `notify` check) | macOS keeps the companion. Not yet run on a real Windows toast click or a Linux desktop shell. [Details](#wp5-notifications-status) |
 | objc FFI shell (frame restore, appearance, visibility, locale) | `shell/*.ts`, `native/*.ts` | fallback | fallback | Guarded: no restore, no system theme |
 | `pbcopy`, `open`, `osascript`, `~/Library`, Keychain | `src/**` via `src/platform/os.ts` | fallback | fallback | WP2 done: commands per OS, unit-tested; not run on a real Windows/Linux desktop. [Details](#f-js-platform-services-src) |
 | ⌘ shortcuts | 26 files | blocked | blocked | `cmd` maps to Super/Windows off macOS. WP3 |
@@ -524,7 +524,7 @@ agents (one OS-specific lane can split W/L).
 | WP2 (done) | JS platform services (section F): `src/platform/os.ts` over GPUI clipboard, `open_url`/`reveal_path`, path prompts, credentials (Credential Manager / Secret Service, file store fallback), config/cache dirs, PATH and `.exe`, CLI install, "This computer" copy, the `preview/resize.tsx` guard | `src/platform/**`, `src/environments/credentials.ts`, shell-out call sites | — (JS only; mock the addon) | 5–7 | B |
 | WP3 | Window and input (section D): caption buttons and drag/snap on Windows (`WindowControlArea`), CSD buttons on Linux, title-bar double-click in JS, one `isPrimary(mods)` key helper with a conflict review (terminal Ctrl+C, editors), the rich-editor key interceptor off macOS, close guard and DPI checks | `src/nav/TitleBar.tsx`, key helper + call sites, fork: `packages/native/src/{window_*,rich_editor}.rs` | WP1 | 6–8 | C |
 | WP4 | Previews and Mermaid without the embedded web view: open previews in the default browser through the existing relay, Mermaid as static text (or SVG from a headless helper on Linux later) | `src/native/webview.ts` loader, `src/preview/browser.ts`, `src/transcript/mermaid.ts` | WP2 | 2–3 | B |
-| WP5 | Notifications over GPUI (`show_system_notification`); Windows needs the AUMID from WP7's installer | new fork commits (native crate), `src/native/notifications.ts` | WP1 | 2–3 | C |
+| WP5 (done; CI-verified, real-PC click pending: see below) | Notifications over GPUI (`show_system_notification`); Windows needs the AUMID from WP7's installer | new fork commits (native crate), `src/native/notifications.ts` | WP1 | 2–3 | C |
 | WP6 (L/W) | Packaging and updater (section G): `bun build --compile` per target, AppImage + `.deb` (L), NSIS per-user installer with the AUMID shortcut (W), updater keys and in-place update, manifest entries. **L and W in (ADE-78): AppImage, `.deb` and `.rpm`; NSIS installer; not yet released** | `scripts/package-app.ts`, `scripts/bundle-gpuix*`, `scripts/updater-manifest.mjs`, `src/platform/update.ts` | WP0 | L 5–6, W 6–8 | D |
 | WP7 (first set done, CI-unverified) | Cross-platform check harness: `native/check-harness.ts` (capture per OS, tolerance, known-gap steps), `scripts/run-platform-checks.ts` (runner, summary, artifacts), ported `clip-check`, `rounded-check`, `markdown-document-check`, `focus-check`, `platform-smoke.ts` (now asserting sidebar, Markdown/code transcript, composer) and `nowebview-app-check.ts`; `gpuix-platforms.yml` runs them on `ubuntu-22.04` (Xvfb + lavapipe), `windows-2022` (WARP) and headless Weston (`frame-wake` + smoke, no captures). WP1's `scripts/frame-wake-check.tsx` is the `frame-wake` check id. Passing on macOS; the Linux/Windows runs have not happened yet. Left: port the other checks, flip `--strict` once WP1/WP3 close the gaps | `native/check-harness.ts`, `native/*-check.ts`, `scripts/{run-platform-checks,platform-smoke,nowebview-app-check}.ts`, `.github/workflows/gpuix-platforms.yml` | WP1 | 4–6 | A |
 | — | **Linux beta** = WP0–WP5 + WP6(L) + WP7 | | | ≈ 30–41 | 3–4 lanes: ≈ 2.5–3 calendar weeks |
@@ -536,6 +536,48 @@ agents (one OS-specific lane can split W/L).
 Totals: about 36–51 agent-days to both betas, 28–41 more for full parity
 (text, blur, embedded web view). With three or four lanes the Linux beta is
 about 2.5–3 calendar weeks out and Windows 1–1.5 weeks after it.
+
+### WP5 notifications: status
+
+Same behaviour on all three OSes: the daemon's `notifications` setting (Settings → Notifications → "Show agent notifications")
+gates every post, `agentToasts.ts` decides what to announce (a turn that finished or failed, an approval or a question
+waiting; nothing for the thread being read in a focused window), and a click raises the window and opens the thread.
+"Notification access" asks the OS for its answer: macOS shows the system prompt, Windows reports the toast setting of the
+AUMID (`denied` when the user turned Kybern off, `granted` otherwise), Linux reports whether a notification daemon answers
+(`unsupported` when none does, with the reason in Settings). The button then sends a test notification.
+
+| | macOS | Windows | Linux |
+| --- | --- | --- | --- |
+| Mechanism | `notifications.dylib` (UserNotifications), loaded with `bun:ffi` in a packaged `.app` | GPUI `show_system_notification`: WinRT `ToastNotification`s, `ToastNotifier` for the AUMID `dev.kybern.gpuix` | GPUI `show_system_notification`: `org.freedesktop.Notifications.Notify` over D-Bus (`notify-rust`) |
+| Identity | bundle id `dev.kybern.gpuix` | `set_app_identity("dev.kybern.gpuix", "Kybern")`: the process AUMID, the same one `packaging/windows/shortcut.ps1` puts on the Start-menu shortcut; also written to `HKCU\Software\Classes\AppUserModelId\dev.kybern.gpuix` (DisplayName) so a portable or dev run still shows toasts under the right name | app name `Kybern`, icon and `desktop-entry` hint `dev.kybern.gpuix` (the `.desktop` file and icon the deb, rpm and AppImage install) |
+| Replace | one notification per id | one per thread: the toast tag (hashed) + `Hide` of the previous one | one per thread: `replaces_id` of the server id the thread's last post got; a post whose notification the server closed starts a new one |
+| Click | the delegate activates the app, then the click event | `ToastNotification.Activated` (WinRT thread) → UI thread → `cx.activate` + `activate_window` (restores a minimised window, foreground via GPUI's input trick) → JS | the default `ActionInvoked` → same path; a Wayland compositor may refuse to raise the window without an activation token, then the thread still opens |
+| Focus Assist / Do Not Disturb | the system | the system: toasts go to the action center, sound is the system's (the toast has no `silent` audio) | the daemon's (`sound-name` `message-new-instant` is a hint it may ignore) |
+| No service | not packaged: `unsupported` | not registered or disabled: `unsupported` / `denied`; the in-app toasts carry on | no daemon: `unsupported`, a debug log, nothing posted |
+
+When the app is not running: the daemon outlives it, but a notification is posted by the app, so nothing new appears. A toast
+that is still in the Windows action center does nothing when clicked, because the shortcut has no COM activator (that would
+launch a fresh process with the toast's arguments; not built, an open item). A Linux notification whose app exited has no
+listener, so a click does nothing. Click handling needs the app running; macOS relaunches the app, which is the one place it
+differs.
+
+Fork branches `wp5` (on top of the heads `native/FORK` pinned before; `FORK` pins them until they are merged):
+
+| Fork | Commit | What |
+| --- | --- | --- |
+| `Tresnanda/zed` | "System notifications: replace per tag, app icon and sound (WP5)" | Linux: `replaces_id` per tag with a generation so only the newest post reports a click, the identifier as icon and desktop entry, the name as app name, the `sound-name` hint, no daemon logged at debug level. Windows: no `<audio silent>` |
+| `Tresnanda/gpuix` | "System notifications: addon methods for Windows and Linux (WP5)" | `GpuixRenderer.setAppIdentity`, `showSystemNotification`, `dismissSystemNotification`, `setSystemNotificationCallback` (`{ tag, action }`; raises the window first), `systemNotificationStatus` (async); `src/system_notifications.rs` |
+
+Proven in CI (run 40265425463 on `spike/wp5-a`, windows-2022 and ubuntu-22.04): Linux against the test D-Bus server
+(`Notify` fields, `replaces_id`, `ActionInvoked` once per click, `unsupported` without a daemon); Windows through the real
+toast API with the AUMID (status `granted`, the three posts return, the `AppUserModelId` registry entry exists, and the
+action-center history holds two toasts for three posts: the thread's second post replaced its first). Not proven: a click
+on a real toast (it needs a person at the shell; the user's PC was unreachable), a Linux desktop shell's own daemon, and
+the Wayland activation token.
+
+Checks: `bun test src/native/notifications.test.ts` (payload building, the per-OS backend choice and the Linux markup
+escaping, tag/id mapping, status caching, "no daemon", all with an injected platform and fake host); the Rust unit tests
+in `system_notifications.rs` and the zed Linux slot tests; `bun scripts/run-platform-checks.ts --checks notify`.
 
 ### WP1 native platform core: status
 

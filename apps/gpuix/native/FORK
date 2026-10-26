@@ -7,8 +7,9 @@ repo=https://github.com/Tresnanda/gpuix.git
 # CI triage: the heads of the forks' `ci-fix` branches: `next` (WP1 + WP10 Windows)
 # plus the Linux screenshot through a wgpu readback and KYBERN_ROUNDED_CLIP=0 keeping
 # edge fades, until they are merged into `kybern`; then pin the merged kybern heads.
-commit=29ab89f31d39f8dbb3d448ceffe99e1475735fb9
+# WP5 (notifications): the forks' `wp5` branches, one commit each on top of that.
+commit=d923f6fefc15ba3cd91217ea145e364a76e10c0c
 # The zed submodule commit `commit` records; update.sh refuses a checkout that differs.
-zed=2b84bac384c0afea7ec0dad1207b404566a4f511
+zed=42f00c7a09efd7f55190281ca0745aa52a31f5d3
 # The upstream tag `commit` is based on. It must be `@gpuix/native@<VERSION>`.
 upstream=@gpuix/native@0.11.0

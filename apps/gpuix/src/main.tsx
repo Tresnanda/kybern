@@ -25,6 +25,7 @@ import { startEnvironmentWindow } from './windows/window.ts'
 import { installRuntimeSafetyNet } from './shell/errors.ts'
 import { startMemoryLog } from './perf/memoryLog.ts'
 import { setOsHost } from './platform/os.ts'
+import { attachNotificationHost } from './native/notifications.ts'
 
 // The terminal draws xterm's weights (300 text, 500 bold); italics are their own family until GPUIX styles take `fontStyle`.
 const FONTS = ['CalSans-Regular.ttf', 'JetBrainsMono-Regular.ttf', 'JetBrainsMono-Light.ttf', 'JetBrainsMono-Medium.ttf', 'JetBrainsMono-LightItalic.ttf', 'JetBrainsMono-MediumItalic.ttf']
@@ -36,6 +37,8 @@ function Fonts({ children }: { children: ReactNode }) {
     startupMark('fonts-start')
     // Windows and Linux use the addon's clipboard, open and picker bindings when it has them (`platform/os.ts`).
     setOsHost(renderer)
+    // Windows and Linux post system notifications through the same renderer (`native/notifications.ts`).
+    attachNotificationHost(renderer)
     installFrameSource(renderer)
     // Focus that GPUIX moves takes the keyboard back from a clicked web document (`native/focusHandback.ts`).
     installFocusHandback(renderer)

@@ -30,7 +30,7 @@ on:
   workflow_dispatch:
     inputs:
       checks:
-        description: 'Checks to run: all, or a comma list of focus, clip, rounded, markdown-document, smoke, nowebview, webview (Windows), frame-wake'
+        description: 'Checks to run: all, or a comma list of focus, clip, rounded, markdown-document, smoke, nowebview, webview (Windows), frame-wake, notify'
         required: false
         type: string
         default: all
@@ -112,7 +112,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             gcc g++ clang pkg-config libfontconfig-dev libfreetype-dev libwayland-dev \
             libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev libssl-dev libzstd-dev \
-            libvulkan1 mesa-vulkan-drivers vulkan-tools xvfb xauth x11-utils imagemagick fonts-dejavu-core
+            libvulkan1 mesa-vulkan-drivers vulkan-tools xvfb xauth x11-utils imagemagick fonts-dejavu-core \
+            dbus python3-gi gir1.2-glib-2.0
       - name: Install Weston (headless Wayland compositor)
         if: matrix.display == 'wayland'
         run: sudo apt-get install -y --no-install-recommends weston

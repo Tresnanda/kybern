@@ -94,7 +94,7 @@ KYBERN_BIN_DIR=<folder with stub kybernd.exe and kybern.exe> \
   Both carry the AppUserModelID `dev.kybern.gpuix` (set by `tools\shortcut.ps1`; NSIS cannot
   set it, and a plain shortcut is the fallback), and the id is registered under
   `HKCU\Software\Classes\AppUserModelId\dev.kybern.gpuix` with the app name and icon. Toasts
-  need that id; the notification work itself (WP5) is not part of this installer.
+  need that id: the app posts them under it (`src/native/notifications.ts`, WP5), and GPUI re-writes only the `DisplayName` value on its first toast, so the icon the installer registered stays.
 - **Registry (all HKCU):** `Software\Kybern GPUIX` (`InstallDir`, `Version`, and the choices
   `PathCommand` and `DesktopShortcut`, which updates keep), the Add/Remove Programs entry
   `Software\Microsoft\Windows\CurrentVersion\Uninstall\Kybern GPUIX` (name, version, publisher,
@@ -372,6 +372,12 @@ automation protocol. `pointer-check.ts` mirrors the combined pointer check with
 only its harness/dock-wait import locations changed.
 
 ## Notifications
+
+macOS is described below. Windows and Linux (WP5) post through the addon instead of a companion library:
+`attachNotificationHost(renderer)` (called with `setOsHost` in `main.tsx`) gives `notifications` the renderer's
+`showSystemNotification` and friends. Windows shows toasts under the AppUserModelID above, Linux calls
+`org.freedesktop.Notifications.Notify` with the desktop entry `dev.kybern.gpuix`. Posts carry a `group` (the thread id),
+and a later post in the group replaces the earlier one. See `PORTING-PLATFORMS.md`, "WP5 notifications".
 
 `src/native/notifications.ts` exposes `status()`, `requestPermission()`,
 `post({id,title,body})`, `onClick(callback)` and `reason`. Unbundled calls return
