@@ -45,6 +45,39 @@ impl RoundedRect {
     }
 }
 
+/// A box in whole device pixels. Composition offsets and sizes are set from it, never from `points × scale`, so the clip
+/// edge lands on a pixel at 125, 150 and 175 % and the mask and the pointer filter use the box that is painted.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PixelRect {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+impl PixelRect {
+    /// Each edge rounded on its own, so boxes that touch in points touch in pixels and the size never drifts.
+    pub fn snap(x: f64, y: f64, width: f64, height: f64, scale: f64) -> Self {
+        let px = |v: f64| (v * scale).round() as i32;
+        let (left, top) = (px(x), px(y));
+        PixelRect { left, top, right: px(x + width).max(left), bottom: px(y + height).max(top) }
+    }
+
+    pub fn width(&self) -> i32 {
+        self.right - self.left
+    }
+
+    pub fn height(&self) -> i32 {
+        self.bottom - self.top
+    }
+
+    /// The same box in window points (what `Mask::build` and the pointer filter take).
+    pub fn points(&self, scale: f64, radius: f64) -> RoundedRect {
+        let s = if scale > 0.0 { scale } else { 1.0 };
+        RoundedRect::uniform(self.left as f64 / s, self.top as f64 / s, self.width() as f64 / s, self.height() as f64 / s, radius)
+    }
+}
+
 /// One `occlusion` command (`webHost.occlusion`), in window points.
 #[derive(Clone, Copy, Debug)]
 pub struct Occlusion {
@@ -105,6 +138,41 @@ impl Mask {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boxes_snap_to_whole_device_pixels() {
+        for scale in [1.25, 1.5, 1.75] {
+            let clip = PixelRect::snap(20.3, 100.1, 560.5, 360.7, scale);
+            assert_eq!(clip.left, (20.3 * scale).round() as i32);
+            assert_eq!(clip.right, ((20.3 + 560.5) * scale).round() as i32);
+            assert_eq!(clip.width(), clip.right - clip.left);
+            // Back in points, the box multiplies to the same whole pixels (what the Direct2D path is drawn from).
+            let points = clip.points(scale, 0.0);
+            assert!(((points.x * scale) - clip.left as f64).abs() < 1e-9, "{scale}");
+            assert!(((points.width * scale) - clip.width() as f64).abs() < 1e-9, "{scale}");
+            assert!(((points.height * scale) - clip.height() as f64).abs() < 1e-9, "{scale}");
+            // Neighbours in points share an edge in pixels: no seam, no overlap.
+            let left = PixelRect::snap(0.0, 0.0, 33.3, 10.0, scale);
+            let right = PixelRect::snap(33.3, 0.0, 33.3, 10.0, scale);
+            assert_eq!(left.right, right.left, "{scale}");
+        }
+        // 1.5 × 0.5 pt rounds half away from zero on both edges, so the size stays the sum of its parts.
+        let odd = PixelRect::snap(0.5, 0.5, 1.0, 1.0, 1.5);
+        assert_eq!((odd.left, odd.right, odd.width()), (1, 2, 1));
+        assert_eq!(PixelRect::snap(10.0, 10.0, -4.0, 0.0, 1.25).width(), 0, "never negative");
+    }
+
+    #[test]
+    fn hit_testing_uses_the_snapped_box() {
+        let scale = 1.75;
+        let snapped = PixelRect::snap(20.2, 100.2, 100.0, 50.0, scale);
+        let clip = snapped.points(scale, 0.0);
+        let mask = Mask::build(clip, 0.0, &[], &[], 0);
+        // The painted box ends at its rounded right edge: a point just inside it hits, just past it misses.
+        let right = snapped.width() as f64 / scale;
+        assert!(mask.hit(right - 0.01, 10.0));
+        assert!(!mask.hit(right + 0.01, 10.0));
+    }
 
     #[test]
     fn corners_and_holes_follow_the_macos_mask() {

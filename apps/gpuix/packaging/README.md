@@ -46,8 +46,12 @@ cd apps/gpuix && bun scripts/package-app.ts --windows              # package onl
 Options: `--out`, `--addon`, `--makensis`, `--no-installer` (stop after the app folder),
 `--no-vc-runtime`, `--nsis-ansi`, `--webview <dll>` / `--no-webview` (the embedded web view
 host, default `native/build/kybern-webview.dll` from `native/update.sh`), and
-`--webview2-bootstrapper <exe>` / `--no-webview2-bootstrapper` (default: downloaded from
-Microsoft and, on Windows, checked for a valid Microsoft Authenticode signature). It compiles `packaging/entry-windows.ts` with
+`--webview2-bootstrapper <exe>` / `--no-webview2-bootstrapper` (default: the copy cached in
+the user cache folder's `kybern-gpuix-packaging`, else downloaded from Microsoft; either way it
+must match the SHA-256 pinned in `windows/webview2.ts`, and on Windows its Authenticode
+signature must be Microsoft Corporation's from a Microsoft Code Signing PCA. When Microsoft
+replaces the file the build fails until `bun packaging/windows/webview2.ts --accept`, on
+Windows, has checked the new one and printed the pin to update). It compiles `packaging/entry-windows.ts` with
 `bun build --compile --target=bun-windows-x64` (a GUI-subsystem exe, no console window;
 the icon and file properties are set only when built on Windows, since Bun needs Windows
 APIs for them), lays out the app folder, and runs `makensis` on `windows/installer.nsi`.
@@ -81,9 +85,11 @@ KYBERN_BIN_DIR=<folder with stub kybernd.exe and kybern.exe> \
   per-machine and per-user) and, only when it is missing, runs Microsoft's Evergreen bootstrapper
   (`MicrosoftEdgeWebview2Setup.exe /silent /install`, about 2 MB, carried in the installer, not
   installed). Unelevated, it installs the runtime per-user without a UAC prompt; it downloads the
-  runtime, so it needs the internet. It runs in silent updates too. A failure never fails the
-  install: the app then opens pages in the browser and says how to get the runtime. The runtime
-  is Microsoft's and updates itself.
+  runtime, so it needs the internet. It gets at most 5 minutes (2 in a silent update). A silent
+  install that fails or times out records it (`HKCU\Software\Kybern GPUIX`
+  `WebView2BootstrapperFailed`) and later silent updates skip the bootstrapper; an interactive
+  install always tries. A failure never fails the install: the app then opens pages in the
+  browser and says how to get the runtime. The runtime is Microsoft's and updates itself.
 - **Shortcuts:** a Start-menu shortcut, always, and a desktop shortcut (off by default).
   Both carry the AppUserModelID `dev.kybern.gpuix` (set by `tools\shortcut.ps1`; NSIS cannot
   set it, and a plain shortcut is the fallback), and the id is registered under

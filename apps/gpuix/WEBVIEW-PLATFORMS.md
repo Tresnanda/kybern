@@ -11,7 +11,8 @@ It covers decisions, evidence and a plan. Written 2026-10-26 against
 
 Implemented 2026-10-26 as `native/webview-win` (Rust cdylib `kybern-webview.dll`, same three C exports and JSON
 channel as `webview.m`), loaded by `webview.ts` on win32. `webHost.available` is true when the DLL is beside the app
-and `GetAvailableCoreWebView2BrowserVersionString` finds a runtime (`kybern_web_available`); otherwise WP4's fallbacks
+and `GetAvailableCoreWebView2BrowserVersionString` finds a runtime at least 101.0.1210.39 (`CompareBrowserVersions`;
+the floor of `ICoreWebView2_11` and `ICoreWebView2Environment10`, `kybern_web_available`); otherwise WP4's fallbacks
 stay, with copy that names the reason (`runtime`: install the WebView2 Runtime; `missing`: reinstall).
 
 **W-S1 passed: option C works.** `native/spikes/wp10/webview2-composition/src/bin/coexist.rs` builds GPUI's half
@@ -32,23 +33,51 @@ What differs from the plan above, and why:
   and no `run_on_ui_thread` were needed.
 - **Getting onto the UI thread:** a `WH_GETMESSAGE` hook on GPUI's thread plus a registered message posted to a GPUI
   window (`Zed::Window`, found with `EnumWindows`); the hook runs the queued commands as the loop takes the message.
-- **Pointer filter:** the companion subclasses GPUI's window (`SetWindowLongPtrW`) instead of a fork hook. Hit
-  testing is `Mask::hit`, the same model as the composition clip. Presses capture the pointer until the last button
-  is up, a second press in time and place becomes the double click WebView2 expects (GPUI's class has no
-  `CS_DBLCLKS`), entering a page sends GPUI a `WM_MOUSELEAVE` so its hover clears, `WM_SETCURSOR` shows the page's
-  `Cursor`.
+- **Pointer filter:** the companion subclasses GPUI's window (`SetWindowSubclass`, looked up in comctl32 at run time,
+  removed on `WM_NCDESTROY`; documents are torn down on `WM_DESTROY`) instead of a fork hook. Hit testing is
+  `Mask::hit`, the same model as the composition clip. A press belongs to what it started on until every button is
+  up (`webview-win/src/pointer.rs`): a page keeps its drag outside it (with `SetCapture`), GPUI keeps a drag that
+  crosses a page (a selection, a divider), and a page never gets an up, a held move or a second button without its
+  own down; `WM_CAPTURECHANGED` and `WM_CANCELMODE` end a press. A second press in time and place becomes the double
+  click WebView2 expects (GPUI's class has no `CS_DBLCLKS`), entering a page with no button held sends GPUI a
+  `WM_MOUSELEAVE` so its hover clears, `WM_SETCURSOR` shows the page's `Cursor`.
 - **Bridge:** `webDocument` and the Mermaid renderer are unchanged: a document-created script defines
   `window.webkit.messageHandlers.kybern` over `chrome.webview.postMessage` in the wrapper only.
-- **`frame`, `navigate`, `action`, the picker:** `ICoreWebView2Frame2::ExecuteScript` in the child's own world (the
-  plan's fallback; WebView2 has no content worlds). The child's script (document-created, also in the child) posts
-  `navigation`, picker messages and the unhandled Escape through the frame's own `WebMessageReceived`, whose source is
-  the frame's URL. A page can post these too; picker data is untrusted and re-bounded on every OS.
+- **`frame`, `navigate`, `action`, the picker: a real isolated world.** The plan's CDP route, with no fallback. The
+  wrapper's target auto-attaches the child frame's own target (`Target.setAutoAttach {flatten, waitForDebuggerOnStart,
+  filter: iframe}`; the child is cross-site, so out of process). Paused before its first script, that session gets
+  `Runtime.addBinding {executionContextName: "KybernPreview"}` and `Page.addScriptToEvaluateOnNewDocument {worldName:
+  "KybernPreview"}` with `frame.js`, then resumes (`CallDevToolsProtocolMethodForSession`, `ICoreWebView2_11`). Scripts
+  run there with `Page.createIsolatedWorld` (same name, same world) and `Runtime.evaluate {contextId}`; `frame.js`
+  defines `webkit.messageHandlers.kybernFrame` in that world only and posts `navigation` (`location.href`, trusted
+  `popstate`/`hashchange`), picker messages and the trusted unhandled Escape through the binding, which arrive as
+  `Runtime.bindingCalled` from that session and nowhere else. Nothing is added to the page's own world and no frame
+  `WebMessageReceived` handler exists, so a page can neither see the handler nor post through it, predefine
+  `__kybernPicker`, or override the `history`/`location` the host uses. The wrapper's own target is armed the same
+  way, which covers a child that shares its process. On the paused child, `runImmediately` must stay off: there it
+  never answers and the resume queued behind it never runs (the frame hangs before its first script).
+  `KYBERN_GPUIX_WEBVIEW_TRACE=1` makes the host emit `trace` events for each setup step (the Windows check sets it). The picker also ignores untrusted events on every OS
+  (`event.isTrusted`), so synthetic ⌥-clicks, clicks and keys from the page's world never become an anchor or a pick.
+- **Per-document storage:** every document gets its own InPrivate WebView2 profile (`ProfileName` `doc-<generation>-<n>`),
+  so two projects' `localhost:3000` previews, a later document on the same origin and the long-lived Mermaid renderer
+  share no cookies, storage, caches or service workers, and all of it goes when the controller closes (macOS: a
+  `nonPersistentDataStore` per document). `WEBVIEW2_*` environment variables are removed before the environment
+  starts and its options are explicit, so an inherited `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` (a remote-debugging
+  port) or browser folder is never used.
+- **Browser UI:** script dialogs are off (`AreDefaultScriptDialogsEnabled = false`; `ScriptDialogOpening` leaves
+  alert/confirm/prompt unaccepted, so they return at once as in a WKWebView without a UI delegate, and accepts
+  `beforeunload`). Preview pages run without `allow-modals` on Windows (`webDocument`), which keeps `print()` from
+  opening the print UI; Ctrl+P is off with the browser accelerator keys. The default context menu keeps only editing
+  and copying (`ContextMenuRequested`); Reload, Back, Save as, Print and Inspect are removed.
+- **DPI:** the clip's offset and size and the page's offset are whole device pixels (`PixelRect::snap`, each edge
+  rounded), and the mask and the pointer filter use that snapped box, so the clip edge and hit testing agree at 125,
+  150 and 175 %. Mouse input goes to WebView2 in the same pixels (client pixels minus the page's origin).
 - **Hidden documents:** `IsVisible(false)` and `SetIsMuted(true)`; no `TrySuspend`.
 - **`probe`:** reports `present`'s targets and whether its `CompositionScopedBatch` is still running.
 
 | `webHost` op / behaviour | Windows | Evidence (CI, WARP) |
 | --- | --- | --- |
-| `create` (InPrivate, wrapper on `http://tauri.localhost/embedded/<id>`, ≤2 previews), `createDocument` | Native | loaded + bridge in the lab |
+| `create` (InPrivate profile per document, wrapper on `http://tauri.localhost/embedded/<id>`, ≤2 previews), `createDocument` | Native | loaded + bridge in the lab |
 | `place` (rect, device mode, own radius, `roundedClips`) | Native (`CompositionGeometricClip`) | rounded corner pixels |
 | `occlusion` holes, `dim`, `inputOnly` | Native | menu cut out, press on menu not in page, dim pixels |
 | `hide` / visibility (placed, window shown, not minimized) | Native | hide/show, page gets `kybernVisible`, no reload |
@@ -56,25 +85,33 @@ What differs from the plan above, and why:
 | `probe` | Emulated (targets + scoped batch) | as above |
 | `snapshot` | Emulated (CDP `Page.captureScreenshot`, fresh frame) | PNG 560×360, alpha 0 in the transparent part |
 | `snapshotRect` | Native (CDP `clip`) | PNG written |
-| `post` / `send` / `theme` / `navigate` / `action` | Native (`ExecuteScript`; child via `Frame2`) | round trip |
+| `post` / `send` / `theme` | Native (`ExecuteScript` in the wrapper) | round trip |
+| `navigate` / `action` | Native (CDP, the child's isolated world) | `history.back` despite the page's override |
 | `message` (wrapper only, `Source` checked) | Native | `kybern.answer.draft` from the daemon's `bootstrap.js` |
-| `frame` / `frameMessage` | Emulated (child's own world, not isolated) | `frame` returns the page's values |
+| `frame` / `frameMessage` | Native (CDP isolated world on the child's own target, world-scoped binding) | `frame` returns the page's values; a hostile page forges nothing, a real click picks |
 | Navigation policy, `externalNavigation`, `loaded`, `failed`, `terminated` | Native | no unexpected block or failure |
 | `focus` / click to focus / `releaseFocus` / outside press | Native | typing reaches the page and not GPUI; outside press takes it back |
 | Unhandled Escape | Emulated (bubble check after dispatch) | next key reaches GPUI |
 | Ctrl shortcuts (`shortcut`) | Native (`AcceleratorKeyPressed`) | Ctrl+L re-emitted |
 | `outsidePress` | Native | window points, not for presses inside |
+| GPUI drag across a page | Native (press ownership) | page gets no down, move or up; GPUI keeps its moves and the release |
+| JS dialogs, print, context menu | Suppressed / suppressed / editing items only | not exercised in CI |
 | `capturePointer` | Native (filter off) | not exercised in CI |
 | Wheel, double click | Native / synthesized double click | scroller scrolled, word selected |
 | Transparent visuals | Native (background alpha 0 at creation) | GPUI through the page |
 | Window occlusion by other windows | **Gap** (minimize and hide only) | — |
 | IME, touch and pen, drag and drop, page accessibility | **Unverified / gap** (touch and pen are not forwarded) | needs hardware |
-| DPI other than 100 %, per-monitor moves | **Unverified** (raw pixels, rasterization scale, re-place on `WM_DPICHANGED`) | WARP is 100 % |
+| DPI other than 100 %, per-monitor moves | **Unverified on screen** (raw pixels snapped to whole pixels, rasterization scale, re-place on `WM_DPICHANGED`) | rounding unit-tested at 125/150/175 %; WARP is 100 % |
 
 Checks: `native/webview-win-check.ts` (`run-platform-checks.ts --checks webview`, Windows only) drives
-`native/webview-win-lab.tsx` with real OS input and captures the composed window with `PrintWindow`. Packaging:
-`kybern-webview.dll` and `mermaid.min.js` beside the exe; the NSIS installer carries Microsoft's Evergreen bootstrapper
-and runs it per-user and silently only when the runtime's `pv` is missing (`packaging/README.md`).
+`native/webview-win-lab.tsx` with real OS input and captures the composed window with `PrintWindow`; it also drags
+across the page from GPUI and loads `/forge`, a page that tries every forgery (WebKit's and WebView2's message
+objects, a guessed binding, a predefined picker, overridden `history`, synthetic ⌥-clicks, clicks, keys and popstate)
+and asserts that no `frameMessage` reaches the host, the only thing the pick hub and the composer listen to, while a
+real click still picks (and a real ⌥-click anchors, reported as a note). 36/36 on `windows-2022`, 2026-10-26. Packaging: `kybern-webview.dll` and `mermaid.min.js` beside the exe; the NSIS installer carries
+Microsoft's Evergreen bootstrapper, pinned by SHA-256 and cached (`packaging/windows/webview2.ts`), and runs it
+per-user and silently only when the runtime's `pv` is missing, with a timeout, skipping it in later silent updates
+after a recorded failure (`packaging/README.md`).
 
 ## Recommendation
 
@@ -187,7 +224,7 @@ there through the existing `run_on_ui_thread` bridge. That is the Windows equiva
   the animation's `CompositionScopedBatch` has completed. WinComp has no presentation-value read, so this is
   emulated.
 - **DPI.** `BoundsMode = UseRawPixels`, `ShouldDetectMonitorScaleChanges = false`, and `RasterizationScale = window
-  scale`. Visual offsets are device pixels (`place` multiplies by the scale). GPUI handles `WM_DPICHANGED` and
+  scale`. Visual offsets are whole device pixels (`place` snaps each edge). GPUI handles `WM_DPICHANGED` and
   re-lays-out, so `place` arrives again with the new scale. Per-monitor moves at 125–175 % need real hardware.
 - **Pointer.** One hook in `gpui_windows`' window procedure (a fork commit, like the macOS `NSEvent` local monitors)
   calls the addon's filter before GPUI handles `WM_MOUSE*`, wheel, `WM_SETCURSOR` and `WM_MOUSELEAVE`. If
@@ -225,8 +262,7 @@ there through the existing `run_on_ui_thread` bridge. That is the Windows equiva
 
   The child is cross-site (`tauri.localhost` vs the daemon's `127.0.0.1`), so it is an out-of-process iframe. The
   calls go to its session through `Target.setAutoAttach {flatten:true}` and `CallDevToolsProtocolMethodForSession`
-  (`ICoreWebView2_11`). If this proves fragile, `ICoreWebView2Frame2::ExecuteScript` runs in the frame's main world.
-  That gives up isolation, but `pick/hub.ts` already treats picker results as untrusted.
+  (`ICoreWebView2_11`). Shipped this way, with no main-world fallback (Windows status above).
 - **Snapshots.** `Page.captureScreenshot` takes a `clip {x,y,width,height,scale}`, which covers both `snapshot` and
   `snapshotRect`. It runs after `Emulation.setDefaultBackgroundColorOverride {a:0}` for transparent pages. It draws a
   fresh frame rather than "what is on screen". That is fine for freezing a visual back to its picture, and the
@@ -357,8 +393,8 @@ So `webDocument` needs no change on Linux.
 | `snapshotRect` (CSS rect in child frame) | `takeSnapshot` with rect | Native: CDP `clip` | Native: crop of last buffer |
 | `theme` / `send` / `post` (host → page script) | `evaluateJavaScript` | Native: `ExecuteScript` | Native: `webkit_web_view_evaluate_javascript` |
 | `message` (page → host, wrapper only) | `kybern` handler, main frame only | Native: `WebMessageReceived` (top level only) + `Source` check | Native: `script-message-received::kybern` |
-| `frame` / `frameMessage` (isolated world in child) | `WKContentWorld` "KybernPreview" | Emulated: CDP isolated world + world-scoped binding on the OOPIF session; fallback `Frame2.ExecuteScript` (not isolated) | Native: `WebKitScriptWorld` "KybernPreview" |
-| `navigate` / `action` in child | Isolated-world script | Emulated: CDP or `ICoreWebView2Frame2::ExecuteScript` | Native: script world |
+| `frame` / `frameMessage` (isolated world in child) | `WKContentWorld` "KybernPreview" | Emulated: CDP isolated world + world-scoped binding on the OOPIF session | Native: `WebKitScriptWorld` "KybernPreview" |
+| `navigate` / `action` in child | Isolated-world script | Emulated: CDP, the same isolated world | Native: script world |
 | Navigation policy (top level = wrapper, frames = allowed origins, no popups/schemes) | `decidePolicyFor…` | Native: `NavigationStarting`, `FrameNavigationStarting`, `NewWindowRequested`, `LaunchingExternalUriScheme`, `DownloadStarting` | Native: `decide-policy`, `create` signal refused |
 | `externalNavigation`, `failed`, `terminated`, `loaded` events | Delegates | Native: same events + `ProcessFailed` | Native: `load-failed`, `web-process-terminated` |
 | `focus` / click-to-focus | `makeFirstResponder` | Native: `MoveFocus` | Native: `wpe_view_focus_in` + GPUI focus on the element |
@@ -472,9 +508,9 @@ covered in [Options](#options-1).
 | Child page cannot reach the host bridge | Sandboxed iframe without `allow-same-origin` (daemon CSP) + handler accepts main frame only | Same daemon CSP; `WebMessageReceived` is top-level only and `Source` is checked; no host objects (`AreHostObjectsAllowed = false`) | Same daemon CSP; `script-message-received` checks the frame (main frame only) |
 | Only the wrapper is top level; frames stay on the ticket's origins; no popups, downloads or external schemes | `decidePolicyForNavigationAction/Response` | `NavigationStarting` (also fires on redirects), `FrameNavigationStarting`, `NewWindowRequested` handled, `LaunchingExternalUriScheme` cancelled, `DownloadStarting` cancelled | `decide-policy` (navigation, new window, response), `create` returns NULL, downloads refused |
 | Wrapper served only by the host, never the network | `tauri://` scheme handler | `WebResourceRequested` answers every URL under the prefix (404 for others). `.localhost` resolves to loopback in Chromium, so the filter must stay registered before the first navigation, as in the sketch | `tauri://` URI scheme handler |
-| No persistent cookies/storage | `nonPersistentDataStore` | InPrivate controller (`IsInPrivateModeEnabled`) | Ephemeral network session |
-| Host scripts isolated from page scripts | `WKContentWorld` | CDP isolated world + world-scoped binding (fallback is not isolated; picker data is re-bounded anyway) | `WebKitScriptWorld` |
-| No DevTools or remote debugging | Not enabled | `AreDevToolsEnabled = false`; never pass `--remote-debugging-port`. A user who sets `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` already controls the machine | Inspector off (`enable-developer-extras` false) |
+| No persistent cookies/storage, none shared between documents | `nonPersistentDataStore` per document | An InPrivate profile per document (`ProfileName`, `IsInPrivateModeEnabled`) | Ephemeral network session |
+| Host scripts isolated from page scripts | `WKContentWorld` | CDP isolated world + world-scoped binding; picker input must be `isTrusted` on every OS | `WebKitScriptWorld` |
+| No DevTools or remote debugging | Not enabled | `AreDevToolsEnabled = false`; never pass `--remote-debugging-port`; inherited `WEBVIEW2_*` variables are removed before the environment starts | Inspector off (`enable-developer-extras` false) |
 | Web content process sandbox | WebKit's XPC sandbox | Chromium sandbox (as in Edge) | bubblewrap; **at risk inside an AppImage on Ubuntu 24.04** (above) |
 | Engine security updates | macOS updates | Evergreen runtime (Microsoft) | **Kybern releases** |
 

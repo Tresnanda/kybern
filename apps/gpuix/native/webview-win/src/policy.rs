@@ -49,11 +49,93 @@ pub fn frame_allows(url: &str, allowed: &[String]) -> bool {
 
 /// `snapshotRect` writes only PNGs under the temp folder (macOS: `NSTemporaryDirectory()`), never through `..`.
 pub fn snapshot_path_allowed(path: &str, temp: &Path) -> bool {
+    snapshot_path_allowed_in(path, &[temp])
+}
+
+/// `snapshot` (a live visual going back to its picture) writes into the app's image cache, `snapshotRect` into the temp
+/// folder: a PNG under one of `roots`, never through `..`.
+pub fn snapshot_path_allowed_in(path: &str, roots: &[&Path]) -> bool {
     let candidate = Path::new(path);
     candidate.is_absolute()
-        && candidate.starts_with(temp)
+        && roots.iter().any(|root| root.is_absolute() && candidate.starts_with(root))
         && !candidate.components().any(|c| matches!(c, Component::ParentDir))
         && candidate.extension().is_some_and(|e| e.eq_ignore_ascii_case("png"))
+}
+
+/// The oldest WebView2 Runtime the host works with: `ICoreWebView2_11` (DevTools sessions for the child frame's isolated
+/// world, `ContextMenuRequested`) and `ICoreWebView2Environment10` (per-document InPrivate profiles) arrived with SDK
+/// 1.0.1245.22, whose runtime floor is this. `kybern_web_available` compares with `CompareBrowserVersions`.
+pub const MIN_RUNTIME: &str = "101.0.1210.39";
+
+/// A WebView2 profile name for one document: unique per document, so pages of different documents never share cookies,
+/// storage, caches or service workers (macOS: a `nonPersistentDataStore` per document). Profile names allow letters,
+/// digits and `#@$()+-_~.` up to 64 characters.
+pub fn profile_name(generation: Option<u64>, sequence: u64) -> String {
+    match generation {
+        Some(generation) => format!("doc-{generation}-{sequence}"),
+        None => format!("doc-{sequence}"),
+    }
+}
+
+/// Environment variables the WebView2 loader reads before its options (`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`,
+/// `WEBVIEW2_BROWSER_EXECUTABLE_FOLDER`, `WEBVIEW2_USER_DATA_FOLDER`, `WEBVIEW2_PIPE_FOR_SCRIPT_DEBUGGER`, ...). One
+/// inherited from a parent process could open a remote-debugging port or load another browser; the host drops them.
+pub fn is_webview2_override(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    upper.starts_with("WEBVIEW2_") || upper.starts_with("COREWEBVIEW2_")
+}
+
+/// Default context-menu items a page keeps: editing and copying (macOS shows those too). Navigation, Save as, Print,
+/// Inspect, share and the rest go.
+pub fn context_menu_keeps(name: &str) -> bool {
+    matches!(
+        name,
+        "cut"
+            | "copy"
+            | "paste"
+            | "pasteAndMatchStyle"
+            | "selectAll"
+            | "undo"
+            | "redo"
+            | "copyLinkLocation"
+            | "copyImage"
+            | "copyImageLocation"
+            | "emoji"
+    )
+}
+
+/// The child frame's isolated world name and its binding (`frame.js`; macOS: the `KybernPreview` content world and its
+/// `kybernFrame` handler). Neither is reachable from the page's own scripts.
+pub const FRAME_WORLD: &str = "KybernPreview";
+pub const FRAME_BINDING: &str = "__kybernFrameBinding";
+
+/// One message from `frame.js` in the child frame's isolated world, delivered as `Runtime.bindingCalled`.
+#[derive(Debug, PartialEq)]
+pub enum FrameMessage {
+    /// The frame's document or its history entry changed (`location.href`, read in the isolated world).
+    Navigation(String),
+    /// A trusted Escape the page left alone: give the keyboard back.
+    Escape,
+    /// A picker message (`src/pick/pickerScript.ts`): page data, re-bounded by the app.
+    Body(serde_json::Map<String, serde_json::Value>),
+}
+
+/// Decodes a binding payload: `{"kybernFrame": "frame" | "escape" | {...}, "url": "..."}`. At most 64 KB.
+pub fn frame_message(payload: &str) -> Option<FrameMessage> {
+    if payload.len() > 65536 {
+        return None;
+    }
+    let serde_json::Value::Object(mut data) = serde_json::from_str(payload).ok()? else { return None };
+    match data.remove("kybernFrame")? {
+        serde_json::Value::String(kind) if kind == "frame" => {
+            let url = data.get("url")?.as_str()?;
+            // The iframe's initial about:blank document is not a navigation the app shows.
+            (!url.starts_with("about:")).then(|| FrameMessage::Navigation(url.to_owned()))
+        }
+        serde_json::Value::String(kind) if kind == "escape" => Some(FrameMessage::Escape),
+        serde_json::Value::Object(body) => Some(FrameMessage::Body(body)),
+        _ => None,
+    }
 }
 
 /// Standard base64 (CDP `Page.captureScreenshot` data). Invalid characters are skipped.
@@ -125,6 +207,51 @@ mod tests {
         assert!(!snapshot_path_allowed(temp.join("x.jpg").to_str().unwrap(), &temp));
         assert!(!snapshot_path_allowed(temp.join("..").join("x.png").to_str().unwrap(), &temp));
         assert!(!snapshot_path_allowed("relative.png", &temp));
+    }
+
+    #[test]
+    fn snapshots_write_into_the_image_cache_or_temp() {
+        let temp = std::env::temp_dir();
+        let cache = temp.join("kybern-gpuix-test").join("images");
+        let roots = [temp.as_path(), cache.as_path()];
+        assert!(snapshot_path_allowed_in(cache.join("visual-frame-1.png").to_str().unwrap(), &roots));
+        assert!(!snapshot_path_allowed_in(cache.join("..").join("..").join("x.png").to_str().unwrap(), &roots));
+        assert!(!snapshot_path_allowed_in(cache.join("x.exe").to_str().unwrap(), &roots));
+        assert!(!snapshot_path_allowed_in("relative.png", &[Path::new("relative")]), "roots must be absolute");
+    }
+
+    #[test]
+    fn profiles_and_overrides() {
+        let names = [profile_name(Some(7), 1), profile_name(Some(7), 2), profile_name(None, 3)];
+        assert_eq!(names[0], "doc-7-1");
+        assert_ne!(names[0], names[1], "a recreated document gets a fresh profile");
+        for name in names.iter().chain([profile_name(Some(u64::MAX), u64::MAX)].iter()) {
+            assert!(name.len() <= 64 && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"#@$()+-_~.".contains(&b)), "{name}");
+        }
+        assert!(is_webview2_override("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"));
+        assert!(is_webview2_override("webview2_user_data_folder"));
+        assert!(is_webview2_override("COREWEBVIEW2_FORCED_HOSTING_MODE"));
+        assert!(!is_webview2_override("KYBERN_GPUIX_WEBVIEW2_DATA"));
+        assert!(context_menu_keeps("copy") && context_menu_keeps("paste"));
+        for gone in ["reload", "back", "print", "saveAs", "inspectElement", "share", "openLinkInNewWindow", "webCapture"] {
+            assert!(!context_menu_keeps(gone), "{gone}");
+        }
+    }
+
+    #[test]
+    fn frame_messages() {
+        assert_eq!(
+            frame_message(r#"{"kybernFrame":"frame","url":"http://127.0.0.1:5173/a#b"}"#),
+            Some(FrameMessage::Navigation("http://127.0.0.1:5173/a#b".into()))
+        );
+        assert_eq!(frame_message(r#"{"kybernFrame":"frame","url":"about:blank"}"#), None);
+        assert_eq!(frame_message(r#"{"kybernFrame":"escape","url":"x"}"#), Some(FrameMessage::Escape));
+        let Some(FrameMessage::Body(body)) = frame_message(r#"{"kybernFrame":{"kind":"pick","event":"anchor"}}"#) else { panic!() };
+        assert_eq!(body.get("event").and_then(|v| v.as_str()), Some("anchor"));
+        assert_eq!(frame_message(r#"{"kind":"pick"}"#), None);
+        assert_eq!(frame_message(r#"{"kybernFrame":"other"}"#), None);
+        assert_eq!(frame_message("not json"), None);
+        assert_eq!(frame_message(&format!(r#"{{"kybernFrame":{{"x":"{}"}}}}"#, "y".repeat(70_000))), None);
     }
 
     #[test]

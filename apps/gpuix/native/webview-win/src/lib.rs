@@ -6,6 +6,8 @@
 //!
 //! - `mask`: the clip/occlusion model shared by the composition clip and the pointer filter (unit-tested anywhere).
 //! - `policy`: URL and path rules plus the small decoders the host needs (unit-tested anywhere).
+//! - `pointer`: who gets a mouse message while buttons are held (unit-tested anywhere).
+//! - `wake`: the flag between Bun's thread and the UI thread (unit-tested anywhere).
 //! - `host` (Windows): WebView2 `CompositionController`s under a Windows.UI.Composition `DesktopWindowTarget` (topmost)
 //!   on GPUI's HWND, whose own DirectComposition target the zed fork creates as not topmost.
 
@@ -14,7 +16,9 @@ use std::ffi::{CStr, CString, c_char};
 use std::sync::Mutex;
 
 pub mod mask;
+pub mod pointer;
 pub mod policy;
+pub mod wake;
 
 #[cfg(windows)]
 mod host;
@@ -80,12 +84,13 @@ pub unsafe extern "C" fn kybern_web_command(json: *const c_char) {
     let _ = command;
 }
 
-/// 1 when the Microsoft Edge WebView2 Runtime (or a matching Edge channel) is installed, else 0. `webview.ts` reads it
-/// once to decide `webHost.available`; without a runtime the WP4 fallbacks stay.
+/// 1 when the Microsoft Edge WebView2 Runtime (or a matching Edge channel) is installed and at least
+/// [`policy::MIN_RUNTIME`], else 0. `webview.ts` reads it once to decide `webHost.available`; without a runtime the WP4
+/// fallbacks stay.
 #[unsafe(no_mangle)]
 pub extern "C" fn kybern_web_available() -> i32 {
     #[cfg(windows)]
-    return i32::from(host::runtime_version().is_some());
+    return i32::from(host::runtime_supported());
     #[cfg(not(windows))]
     0
 }

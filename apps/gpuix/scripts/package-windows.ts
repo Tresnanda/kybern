@@ -13,8 +13,9 @@
  * WebView2 host (`native/build/kybern-webview.dll`), both from `native/update.sh` on
  * Windows, `kybernd.exe` and `kybern.exe` in KYBERN_BIN_DIR (default `target/release`),
  * and `makensis` on PATH (NSIS 3). The installer carries Microsoft's Evergreen WebView2
- * bootstrapper, downloaded here (Windows checks its Microsoft signature) unless a copy is
- * given; it runs only on machines without the runtime. `--no-webview` (a cross-build) leaves
+ * bootstrapper, pinned by SHA-256 in `packaging/windows/webview2.ts` and cached between
+ * builds (Windows also checks its Microsoft signature); a given copy is checked the same
+ * way. It runs only on machines without the runtime. `--no-webview` (a cross-build) leaves
  * the host out, and the app then opens pages in the browser. Output: `<out>/payload`
  * (the app folder, default `dist/windows`) and `<out>/kybern-gpuix_<version>_x64-setup.exe`.
  * Nothing is installed, signed or run; `scripts/bundle-gpuix-windows.sh` signs the installer.
@@ -110,7 +111,7 @@ const { install, uninstall } = nsisIncludes(entries, payload)
 writeFileSync(path.join(generated, 'install-files.nsh'), install)
 writeFileSync(path.join(generated, 'uninstall-files.nsh'), uninstall)
 const bootstrapper = has('--no-webview2-bootstrapper') || has('--no-webview') ? undefined
-  : await webView2Bootstrapper(generated, { given: flag('--webview2-bootstrapper'), verify: native })
+  : await webView2Bootstrapper({ given: flag('--webview2-bootstrapper'), verify: native })
 const makensis = flag('--makensis') ?? process.env.MAKENSIS ?? (native ? 'makensis.exe' : 'makensis')
 execFileSync(makensis, [
   '-V2', ...(has('--nsis-ansi') ? ['-DANSI'] : []), ...(bootstrapper ? [`-DWEBVIEW2_BOOTSTRAPPER=${bootstrapper}`] : []),

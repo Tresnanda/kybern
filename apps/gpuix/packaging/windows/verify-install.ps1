@@ -68,7 +68,7 @@ $pathBefore = [Environment]::GetEnvironmentVariable('Path', 'User')
 try {
   RunSilently $Installer @('/S')
 
-  foreach ($file in 'Kybern GPUIX.exe', 'kybernd.exe', 'bin\kybern.exe', 'gpuix-native.win32-x64-msvc.node', 'version', 'icon.ico', 'uninstall.exe', 'tools\path.ps1', 'tools\shortcut.ps1', 'tools\stop.ps1', 'vcruntime140.dll', 'bin\vcruntime140.dll') {
+  foreach ($file in 'Kybern GPUIX.exe', 'kybernd.exe', 'bin\kybern.exe', 'gpuix-native.win32-x64-msvc.node', 'kybern-webview.dll', 'version', 'icon.ico', 'uninstall.exe', 'tools\path.ps1', 'tools\shortcut.ps1', 'tools\stop.ps1', 'vcruntime140.dll', 'bin\vcruntime140.dll') {
     Check (Test-Path -LiteralPath (Join-Path $dir $file)) "installed $file"
   }
   Check ((Get-ChildItem -LiteralPath (Join-Path $dir 'src\assets\fonts') -File).Count -gt 0) 'installed the bundled fonts'

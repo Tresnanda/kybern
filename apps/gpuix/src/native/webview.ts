@@ -90,11 +90,14 @@ function command(fields: Record<string, unknown>) {
 
 /** Trusted wrapper, opaque sandboxed child. No bearer token or native bridge is
  * exposed to the child. The daemon supplies the child's actual CSP. `send` is WKWebView's message API; on Windows the
- * host defines it in the wrapper over `chrome.webview.postMessage` (`native/webview-win/src/host.rs`). */
-export function webDocument(url: string, kind: 'file' | 'server' | 'visual') {
+ * host defines it in the wrapper over `chrome.webview.postMessage` (`native/webview-win/src/host.rs`).
+ * Windows leaves out `allow-modals`: there it is what keeps `print()` from opening WebView2's print UI, and alert, confirm
+ * and prompt then return at once, as they do in a WKWebView without a UI delegate. */
+export function webDocument(url: string, kind: 'file' | 'server' | 'visual', platform: NodeJS.Platform = process.platform) {
   const parsed = new URL(url)
   if (!/^https?:$/.test(parsed.protocol) || parsed.username || parsed.password) throw Error('Invalid preview address')
-  const sandbox = kind === 'visual' ? 'allow-scripts' : kind === 'file' ? 'allow-scripts allow-forms allow-modals' : 'allow-scripts allow-same-origin allow-forms allow-modals allow-downloads'
+  const modals = platform === 'win32' ? '' : ' allow-modals'
+  const sandbox = kind === 'visual' ? 'allow-scripts' : kind === 'file' ? `allow-scripts allow-forms${modals}` : `allow-scripts allow-same-origin allow-forms${modals} allow-downloads`
   const value = JSON.stringify(url).replaceAll('<', '\\u003c')
   return `<!doctype html><meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width, initial-scale=1"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}iframe{border:0;position:absolute;transform-origin:0 0;width:100%;height:100%}</style><iframe sandbox="${sandbox}" referrerpolicy="no-referrer"></iframe><script>
   const frame=document.querySelector('iframe'), send=data=>window.webkit.messageHandlers.kybern.postMessage(data);

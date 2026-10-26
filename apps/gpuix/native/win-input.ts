@@ -46,6 +46,35 @@ export async function click(window: ReturnType<typeof windowOf>, x: number, y: n
   user32.SetCursorPos(sx, sy); user32.mouse_event(MOVE, 0, 0, 0, 0n); await Bun.sleep(60)
   for (let n = 0; n < count; n++) { user32.mouse_event(LEFT_DOWN, 0, 0, 0, 0n); await Bun.sleep(30); user32.mouse_event(LEFT_UP, 0, 0, 0, 0n); await Bun.sleep(60) }
 }
+/**
+ * Press at the first point, move through the rest (`steps` moves between each pair), release at the last. `held` runs
+ * with the button still down, after the last move.
+ */
+export async function drag(window: ReturnType<typeof windowOf>, points: (readonly [number, number])[], steps = 6, held?: () => Promise<void>) {
+  const [first, ...rest] = points
+  const [sx, sy] = window.screen(...first!)
+  user32.SetCursorPos(sx, sy); user32.mouse_event(MOVE, 0, 0, 0, 0n); await Bun.sleep(80)
+  user32.mouse_event(LEFT_DOWN, 0, 0, 0, 0n); await Bun.sleep(60)
+  let from = first!
+  for (const to of rest) {
+    for (let n = 1; n <= steps; n++) {
+      const [x, y] = window.screen(from[0] + (to[0] - from[0]) * n / steps, from[1] + (to[1] - from[1]) * n / steps)
+      user32.SetCursorPos(x, y); user32.mouse_event(MOVE, 0, 0, 0, 0n); await Bun.sleep(25)
+    }
+    from = to
+  }
+  await Bun.sleep(60)
+  await held?.()
+  user32.mouse_event(LEFT_UP, 0, 0, 0, 0n); await Bun.sleep(120)
+}
+/** A click with keys held (`VK_MENU` 0x12 for ⌥-click). */
+export async function clickWith(window: ReturnType<typeof windowOf>, x: number, y: number, modifiers: number[]) {
+  for (const m of modifiers) user32.keybd_event(m, 0, 0, 0n)
+  await Bun.sleep(40)
+  await click(window, x, y)
+  for (const m of [...modifiers].reverse()) user32.keybd_event(m, 0, KEY_UP, 0n)
+  await Bun.sleep(150)
+}
 export async function move(window: ReturnType<typeof windowOf>, x: number, y: number) {
   const [sx, sy] = window.screen(x, y)
   user32.SetCursorPos(sx, sy); user32.mouse_event(MOVE, 0, 0, 0, 0n); await Bun.sleep(80)

@@ -50,3 +50,12 @@ test('with the web view off every webHost call is a safe no-op and nothing is lo
   const output = await new Response(child.stderr).text()
   expect(await child.exited, output).toBe(0)
 })
+test('Windows preview pages run without allow-modals (no print UI or dialogs); macOS keeps its sandbox', async () => {
+  const { webDocument } = await import('./webview.ts')
+  const sandbox = (html: string) => /sandbox="([^"]*)"/.exec(html)?.[1]
+  expect(sandbox(webDocument('http://localhost:3000/', 'server', 'darwin'))).toBe('allow-scripts allow-same-origin allow-forms allow-modals allow-downloads')
+  expect(sandbox(webDocument('http://127.0.0.1:4199/f', 'file', 'darwin'))).toBe('allow-scripts allow-forms allow-modals')
+  expect(sandbox(webDocument('http://localhost:3000/', 'server', 'win32'))).toBe('allow-scripts allow-same-origin allow-forms allow-downloads')
+  expect(sandbox(webDocument('http://127.0.0.1:4199/f', 'file', 'win32'))).toBe('allow-scripts allow-forms')
+  expect(sandbox(webDocument('http://127.0.0.1:4199/v', 'visual', 'win32'))).toBe('allow-scripts')
+})

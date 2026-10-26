@@ -209,10 +209,14 @@ FunctionEnd
 
 ; The embedded web view (previews, interactive visuals, artifacts; native/webview-win) needs the Microsoft Edge
 ; WebView2 Runtime. Windows 11 and most Windows 10 machines have it; otherwise Microsoft's Evergreen bootstrapper
-; installs it, per-user (this installer is not elevated, so no UAC prompt) and silently, also in /S updates. It
-; downloads the runtime, so it needs the internet. A failure never fails the install: the app opens pages in the
-; browser and says how to get the runtime. The runtime is Microsoft's and updates itself; uninstall leaves it.
+; (pinned by SHA-256, packaging/windows/webview2.ts) installs it, per-user (this installer is not elevated, so no UAC
+; prompt) and silently. It downloads the runtime, so it needs the internet. It gets at most 5 minutes, 2 in a silent
+; install (an update, /S); a silent install that fails or times out records it, and later silent updates skip the
+; bootstrapper rather than wait on it again (an interactive install always tries, and a success clears the record).
+; A failure never fails the install: the app opens pages in the browser and says how to get the runtime. The runtime
+; is Microsoft's and updates itself; uninstall leaves it.
 !ifdef WEBVIEW2_BOOTSTRAPPER
+!define WEBVIEW2_FAILED "WebView2BootstrapperFailed"
 Function InstallWebView2
   ; NSIS reads the 32-bit view, which is HKLM\SOFTWARE\WOW6432Node on 64-bit Windows: the per-machine key.
   ReadRegStr $0 HKLM "SOFTWARE\${WEBVIEW2_CLIENT}" "pv"
@@ -223,17 +227,31 @@ Function InstallWebView2
   ${If} $0 != ""
   ${AndIf} $0 != "0.0.0.0"
     DetailPrint "Microsoft Edge WebView2 Runtime $0 is installed."
+    DeleteRegValue HKCU "${REG_APP}" "${WEBVIEW2_FAILED}"
     Return
+  ${EndIf}
+  ${If} ${Silent}
+    ReadRegStr $1 HKCU "${REG_APP}" "${WEBVIEW2_FAILED}"
+    ${If} $1 != ""
+      DetailPrint "Skipping the WebView2 Runtime install, which did not work before ($1)."
+      Return
+    ${EndIf}
   ${EndIf}
   DetailPrint "Installing the Microsoft Edge WebView2 Runtime..."
   File "/oname=$PLUGINSDIR\MicrosoftEdgeWebview2Setup.exe" "${WEBVIEW2_BOOTSTRAPPER}"
-  ClearErrors
-  ExecWait '"$PLUGINSDIR\MicrosoftEdgeWebview2Setup.exe" /silent /install' $1
-  ${If} ${Errors}
-  ${OrIf} $1 != 0
-    DetailPrint "The WebView2 Runtime was not installed ($1). ${APP_NAME} opens pages in your browser until it is."
+  ; nsExec ends the bootstrapper after the timeout and returns "timeout" (or "error", or the exit code).
+  ${If} ${Silent}
+    nsExec::Exec /TIMEOUT=120000 '"$PLUGINSDIR\MicrosoftEdgeWebview2Setup.exe" /silent /install'
   ${Else}
+    nsExec::Exec /TIMEOUT=300000 '"$PLUGINSDIR\MicrosoftEdgeWebview2Setup.exe" /silent /install'
+  ${EndIf}
+  Pop $1
+  ${If} $1 == "0"
+    DeleteRegValue HKCU "${REG_APP}" "${WEBVIEW2_FAILED}"
     DetailPrint "The WebView2 Runtime is installed."
+  ${Else}
+    WriteRegStr HKCU "${REG_APP}" "${WEBVIEW2_FAILED}" "${APP_VERSION}: $1"
+    DetailPrint "The WebView2 Runtime was not installed ($1). ${APP_NAME} opens pages in your browser until it is."
   ${EndIf}
 FunctionEnd
 !endif

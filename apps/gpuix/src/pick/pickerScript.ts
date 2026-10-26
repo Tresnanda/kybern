@@ -1,5 +1,6 @@
 // The element picker that runs inside the Preview page and inline visuals (`native/webview.m` `frame`: the page's frame, in
-// Kybern's isolated content world). The page shares the DOM with it but cannot reach its globals or the `kybernFrame` message
+// Kybern's isolated content world; on Windows the same `KybernPreview` world through the DevTools protocol,
+// `native/webview-win/src/host.rs`). The page shares the DOM with it but cannot reach its globals or the `kybernFrame` message
 // handler, so a page cannot fake a pick. Everything it reads from the page (text, HTML, selector) is still the page's data.
 //
 // It installs once per document and does two things:
@@ -9,6 +10,8 @@
 //    parent, ↓ goes back down, ↵ picks the hovered element.
 //
 // Messages are `{ kind: 'pick', event, payload? }` through `webkit.messageHandlers.kybernFrame`; each payload is bounded (< 4 KB).
+// Only trusted input counts (`event.isTrusted`): the page shares the DOM and can dispatch synthetic ⌥-clicks, clicks and keys at
+// the picker's listeners, which must not become an anchor, a pick or a cancel.
 // No source in this string may contain a backtick or `${`: it is a raw template.
 
 export const PICKER_SOURCE = String.raw`(function () {
@@ -60,9 +63,9 @@ export const PICKER_SOURCE = String.raw`(function () {
   // ⌥-click: the person points at something while writing. Capture phase, so the page never sees the click.
   var anchorTarget = null;
   function inOverlay(event) { return overlay && event.target === overlay.host; }
-  function onAnchorDown(event) { if (!picking && event.altKey && event.button === 0) { event.preventDefault(); event.stopImmediatePropagation(); anchorTarget = event.target; } }
+  function onAnchorDown(event) { if (event.isTrusted && !picking && event.altKey && event.button === 0) { event.preventDefault(); event.stopImmediatePropagation(); anchorTarget = event.target; } }
   function onAnchorClick(event) {
-    if (picking || !event.altKey || event.button !== 0) return;
+    if (!event.isTrusted || picking || !event.altKey || event.button !== 0) return;
     event.preventDefault(); event.stopImmediatePropagation();
     var el = event.target;
     if (el && el.nodeType === 1) post('anchor', describe(el));
@@ -97,7 +100,7 @@ export const PICKER_SOURCE = String.raw`(function () {
     var stop = document.createElement('button'); stop.className = 'stop'; stop.type = 'button';
     stop.appendChild(document.createTextNode('Stop'));
     var kbd = document.createElement('kbd'); kbd.textContent = 'esc'; stop.appendChild(kbd);
-    stop.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); finish('cancelled'); });
+    stop.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); if (event.isTrusted) finish('cancelled'); });
     bar.appendChild(stop); root.appendChild(bar);
     document.documentElement.appendChild(host);
     requestAnimationFrame(function () { dim.className = 'dim on'; bar.className = 'bar on'; });
@@ -125,7 +128,7 @@ export const PICKER_SOURCE = String.raw`(function () {
   }
 
   function onMove(event) {
-    if (inOverlay(event)) return;
+    if (!event.isTrusted || inOverlay(event)) return;
     var el = event.target;
     if (!el || el.nodeType !== 1) return;
     if (el !== lastTarget) depth = 0;
@@ -137,11 +140,13 @@ export const PICKER_SOURCE = String.raw`(function () {
   function onClick(event) {
     if (inOverlay(event)) return;
     event.preventDefault(); event.stopImmediatePropagation();
+    if (!event.isTrusted) return;
     if (event.target && event.target.nodeType === 1 && event.target !== lastTarget) { lastTarget = event.target; depth = event.metaKey ? 1 : 0; }
     var el = current() || event.target;
     if (el && el.nodeType === 1) finish('picked', describe(el));
   }
   function onKey(event) {
+    if (!event.isTrusted) { event.stopImmediatePropagation(); return; }
     if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); finish('cancelled'); return; }
     if (event.key === 'ArrowUp') { event.preventDefault(); event.stopImmediatePropagation(); depth += 1; paint(); return; }
     if (event.key === 'ArrowDown') { event.preventDefault(); event.stopImmediatePropagation(); depth = Math.max(0, depth - 1); paint(); return; }

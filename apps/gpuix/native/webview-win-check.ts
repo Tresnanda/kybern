@@ -6,14 +6,16 @@
 // Proves: stacking above GPUI, the rounded clip, transparency, a GPUI menu cut out of the page, a modal's dim, the
 // message bridge both ways, clicks, double click, wheel, typing, Ctrl shortcuts, Escape and outside presses giving the
 // keyboard back, `kybern.answer.draft` from the daemon's bootstrap, `present`/`probe`, `snapshot` (alpha kept),
-// `snapshotRect`, `frame`, hide and destroy. Writes PNGs and `webview-win.json` to the output folder.
+// `snapshotRect`, `frame`, hide and destroy; a GPUI drag across the page reaching GPUI only; and a hostile page that
+// cannot forge picker messages (the `KybernPreview` isolated world). Writes PNGs and `webview-win.json` to the output
+// folder.
 // Not provable here: real GPUs, DPI other than 100 %, IME, touch and pen.
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { launchFixture } from '../src/requests/harness.ts'
-import { capture, click, key, move, wheel, windowOf } from './win-input.ts'
+import { capture, click, clickWith, drag, key, move, wheel, windowOf } from './win-input.ts'
 import { pixels } from './png.ts'
 
 if (process.platform !== 'win32') { console.log('webview-win-check: Windows only'); process.exit(0) }
@@ -23,23 +25,31 @@ mkdirSync(out, { recursive: true })
 const scratch = mkdtempSync(path.join(tmpdir(), 'kybern-webview-win-'))
 const results: { step: string; ok: boolean; detail?: unknown }[] = []
 const record = (step: string, ok: boolean, detail?: unknown) => { results.push({ step, ok, detail }); console.log(`${ok ? 'PASS' : 'FAIL'} ${step}${detail === undefined ? '' : ` ${JSON.stringify(detail)}`}`) }
+/** Reported, never failing: behavior this runner cannot settle. */
+const notes: { step: string; ok: boolean; detail?: unknown }[] = []
+const note = (step: string, ok: boolean, detail?: unknown) => { notes.push({ step, ok, detail }); console.log(`NOTE ${ok ? 'yes' : 'no'} ${step}${detail === undefined ? '' : ` ${JSON.stringify(detail)}`}`) }
 const near = (got: number[], want: number[], tolerance = 40) => got.every((v, i) => Math.abs(v - want[i]!) <= tolerance)
 const BACKGROUND = [36, 36, 36], BAND = [0, 120, 255]
 /** Window points of the slot (left 20, top 100, 560 × 360, radius 28) and of the page's parts. */
 const page = (x: number, y: number) => [20 + x, 100 + y] as const
 
-const fixture = await launchFixture(path.join(import.meta.dir, 'webview-win-lab.tsx'), { KYBERN_DATA_DIR: scratch, KYBERN_URL: '', KYBERN_GPUIX_WEBVIEW2_DATA: path.join(scratch, 'WebView2') })
+const fixture = await launchFixture(path.join(import.meta.dir, 'webview-win-lab.tsx'), { KYBERN_DATA_DIR: scratch, KYBERN_URL: '', KYBERN_GPUIX_WEBVIEW2_DATA: path.join(scratch, 'WebView2'), KYBERN_GPUIX_WEBVIEW_TRACE: '1' })
 const a = fixture.app
 let failed = false
 try {
   await a.getByTestId('app-ready').waitFor()
   const root = (await a.getByTestId('app-ready').element()).id
   const act = async (k: string, wait = 300) => { await a.call('keyDown', { elementId: root, key: k }); await Bun.sleep(wait) }
-  const inspect = async () => { await act('i', 150); return JSON.parse(await a.getByTestId('result').textContent()) as { log: any[]; appKeys: string[] } }
+  const inspect = async () => { await act('i', 150); return JSON.parse(await a.getByTestId('result').textContent()) as { log: any[]; appKeys: string[]; mouse: { down: number; up: number; move: number } } }
   const result = async () => JSON.parse(await a.getByTestId('result').textContent())
   const until = async (what: string, test: (log: any[]) => boolean, ms = 30000) => {
     const end = Date.now() + ms
-    for (;;) { const { log } = await inspect(); if (test(log)) return log; if (Date.now() > end) throw new Error(`${what} did not happen: ${JSON.stringify(log).slice(-3000)}`); await Bun.sleep(300) }
+    for (;;) {
+      const { log } = await inspect()
+      if (test(log)) return log
+      if (Date.now() > end) throw new Error(`${what} did not happen: ${JSON.stringify(log.filter(e => e.type !== 'trace')).slice(-3000)}\ntrace: ${JSON.stringify(log.filter(e => e.type === 'trace').map(e => e.message)).slice(-6000)}`)
+      await Bun.sleep(300)
+    }
   }
   const messages = (log: any[], kind: string) => log.filter(e => e.type === 'message' && e.data?.kind === kind)
 
@@ -122,6 +132,22 @@ try {
   record('press outside the visual → outsidePress in window points', Math.abs(outside.x - 700) < 2 && Math.abs(outside.y - 560) < 2, outside)
   await move(win, 700, 40)
 
+  // A GPUI drag across the page: the press is GPUI's until the release, so the page gets no down, move or up (not even
+  // the up over it) and GPUI keeps getting moves over the page and the release.
+  const stats = async () => {
+    const count = messages((await inspect()).log, 'stats').length
+    await act('m', 200)
+    return messages(await until('the page mouse stats', log => messages(log, 'stats').length > count, 5000), 'stats').at(-1).data
+  }
+  const pageBefore = await stats(), gpuiBefore = (await inspect()).mouse
+  let pageHeld: any = null
+  await drag(win, [[700, 300], [300, 300], [10, 300], [300, 380]], 8, async () => { pageHeld = await stats() })
+  const gpuiAfter = (await inspect()).mouse, pageAfter = await stats()
+  const same = (a: any, b: any) => a.down === b.down && a.up === b.up && a.move === b.move
+  record('a GPUI drag across the page reaches no page (no down, move or up)', same(pageHeld, pageBefore) && pageAfter.down === pageBefore.down && pageAfter.up === pageBefore.up && pageAfter.move - pageBefore.move <= 2, { pageBefore, pageHeld, pageAfter })
+  record('GPUI keeps its drag over the page (moves and the release)', gpuiAfter.down === gpuiBefore.down + 1 && gpuiAfter.up === gpuiBefore.up + 1 && gpuiAfter.move - gpuiBefore.move >= 12, { gpuiBefore, gpuiAfter })
+  await move(win, 700, 40)
+
   await act('e', 150)
   await act('g', 100)
   log = (await inspect()).log
@@ -161,6 +187,49 @@ try {
   log = await until('visible again', log => log.filter(e => e.type === 'visibility').at(-1)?.visible === true, 5000)
   record('show again keeps the same document (no reload)', log.filter(e => e.type === 'loaded').length === 1)
 
+  // A page cannot forge picker messages: the picker and Kybern's frame scripts run in the `KybernPreview` isolated world
+  // through the DevTools protocol, and the page's own world has no handler, binding or bridge (`/forge` in the lab). The
+  // hub (`src/pick/hub.ts`) and the composer hear only `frameMessage` events, so none may arrive except the real pick.
+  const mark = log.length
+  const forged = (log: any[]) => log.slice(mark).filter(e => e.type === 'frameMessage')
+  const navigations = (log: any[]) => log.slice(mark).filter(e => e.type === 'navigation')
+  await act('v', 300)
+  log = await until('the forgery page', log => messages(log.slice(mark), 'forge').some(e => e.data.ready) && navigations(log).some(e => String(e.url).endsWith('/forge')), 15000)
+  const tries = messages(log.slice(mark), 'forge').find(e => e.data.ready).data.tries
+  record('the page reaches no Kybern handler or binding in its own world', tries.webkit === 'unreachable' && tries.binding === 'unreachable' && tries.pushState === '#two', tries)
+  await act('q', 1500)
+  const install = (await result()).install
+  await act('w', 1500)
+  const started2 = (await result()).start
+  await act('o', 1200)
+  const world = (await result()).page
+  log = (await inspect()).log
+  record("the picker installs and starts in Kybern's world, not the page's predefined one", install === 'ready' && started2 === 'picking' && world?.picker === 'object' && world?.hasBinding === 'function' && !messages(log.slice(mark), 'forge').some(e => e.data.fake), { install, started: started2, world })
+  const navigationsBefore = navigations(log).length
+  await act('y', 300)
+  log = await until('the synthetic events', log => messages(log.slice(mark), 'forge').filter(e => e.data.fired).length === 1, 5000)
+  await Bun.sleep(600)
+  log = (await inspect()).log
+  record('synthetic ⌥-click, click, Enter, Escape and popstate while picking forge nothing', forged(log).length === 0 && navigations(log).length === navigationsBefore, { forged: forged(log), navigations: navigations(log).slice(navigationsBefore) })
+  await click(win, ...page(140, 180))
+  log = await until('a real click to pick', log => forged(log).some(e => e.data?.event === 'picked'), 5000)
+  const picked = forged(log).filter(e => e.data?.event === 'picked')
+  record('a real click while picking posts picked through the isolated binding', picked.length === 1 && picked[0].data.payload?.selector === '#target' && forged(log).length === 1, forged(log))
+  await act('y', 300)
+  log = await until('the synthetic events again', log => messages(log.slice(mark), 'forge').filter(e => e.data.fired).length === 2, 5000)
+  await Bun.sleep(600)
+  log = (await inspect()).log
+  record('synthetic ⌥-clicks outside picking forge no anchor', forged(log).length === 1, forged(log))
+  const beforeBack = navigations(log).length
+  await act('b', 300)
+  log = await until('history.back in the isolated world', log => navigations(log).length > beforeBack, 5000)
+  const back = navigations(log).at(-1)
+  record("action back uses the isolated world's history, not the page's override", String(back.url).endsWith('/forge') && !messages(log.slice(mark), 'forge').some(e => e.data.fake), back)
+  await clickWith(win, ...page(140, 180), [0x12])
+  log = await until('a real ⌥-click', log => forged(log).some(e => e.data?.event === 'anchor'), 3000).catch(() => null) ?? (await inspect()).log
+  const anchor = forged(log).find(e => e.data?.event === 'anchor')
+  note('a real ⌥-click posts an anchor (WebView2 input carries Alt from the keyboard state)', !!anchor, anchor?.data ?? forged(log))
+
   await act('x', 800)
   log = (await inspect()).log
   shot = capture(win, path.join(out, '09-destroyed.png'))
@@ -173,7 +242,7 @@ try {
   try { console.error(fixture.diagnostics()) } catch {}
 } finally {
   await fixture.close()
-  writeFileSync(path.join(out, 'webview-win.json'), JSON.stringify({ results, failed }, null, 2))
+  writeFileSync(path.join(out, 'webview-win.json'), JSON.stringify({ results, notes, failed }, null, 2))
 }
 const failures = results.filter(r => !r.ok)
 console.log(`${results.length - failures.length}/${results.length} passed`)

@@ -17,20 +17,29 @@
 //! `dispatch_async` to the main queue). The first command for a window subclasses it, which is the pointer filter
 //! (macOS: `hitTest:` and the `NSEvent` monitors): presses, moves and the wheel over a document go to WebView2 with
 //! `SendMouseInput` and never reach GPUI; `WM_SETCURSOR` there shows the page's cursor.
+//!
+//! The page's frame (the wrapper's child, out of process) is reached only through the DevTools protocol on its own
+//! target: `frame.js`, the picker and `frame`/`navigate`/`action` scripts run in the `KybernPreview` isolated world, and
+//! its messages arrive as `Runtime.bindingCalled` from a binding that exists only in that world (macOS: the
+//! `KybernPreview` `WKContentWorld` and its `kybernFrame` handler). Nothing is added to the page's own world.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
+use std::path::PathBuf;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicIsize, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 use serde_json::{Map, Value, json};
 use webview2_com::Microsoft::Web::WebView2::Win32::*;
 use webview2_com::{
-    AcceleratorKeyPressedEventHandler, CallDevToolsProtocolMethodCompletedHandler, CreateCoreWebView2CompositionControllerCompletedHandler,
-    CreateCoreWebView2EnvironmentCompletedHandler, CursorChangedEventHandler, DownloadStartingEventHandler, ExecuteScriptCompletedHandler,
+    AcceleratorKeyPressedEventHandler, CallDevToolsProtocolMethodCompletedHandler, ContextMenuRequestedEventHandler,
+    CoreWebView2EnvironmentOptions, CreateCoreWebView2CompositionControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler,
+    CursorChangedEventHandler, DevToolsProtocolEventReceivedEventHandler, DownloadStartingEventHandler, ExecuteScriptCompletedHandler,
     FocusChangedEventHandler, FrameCreatedEventHandler, FrameDestroyedEventHandler, FrameNavigationCompletedEventHandler,
-    FrameWebMessageReceivedEventHandler, LaunchingExternalUriSchemeEventHandler, NavigationCompletedEventHandler,
-    NavigationStartingEventHandler, NewWindowRequestedEventHandler, PermissionRequestedEventHandler, ProcessFailedEventHandler,
+    LaunchingExternalUriSchemeEventHandler, NavigationCompletedEventHandler, NavigationStartingEventHandler,
+    NewWindowRequestedEventHandler, PermissionRequestedEventHandler, ProcessFailedEventHandler, ScriptDialogOpeningEventHandler,
     WebMessageReceivedEventHandler, WebResourceRequestedEventHandler,
 };
 use windows::Foundation::{TimeSpan, TypedEventHandler};
@@ -46,6 +55,7 @@ use windows::Win32::Graphics::Direct2D::{
 };
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::System::Com::IStream;
+use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
 use windows::Win32::System::WinRT::Composition::ICompositorDesktopInterop;
 use windows::Win32::System::WinRT::Graphics::Direct2D::{IGeometrySource2DInterop, IGeometrySource2DInterop_Impl};
@@ -53,38 +63,40 @@ use windows::Win32::System::WinRT::{CreateDispatcherQueueController, DQTAT_COM_N
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetDoubleClickTime, GetKeyState, ReleaseCapture, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_CONTROL,
-    VK_MENU, VK_SHIFT,
+    GetCapture, GetDoubleClickTime, GetFocus, GetKeyState, ReleaseCapture, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT,
+    TrackMouseEvent, VK_CONTROL, VK_MENU, VK_SHIFT,
 };
 use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{BOOL, HSTRING, Interface, PWSTR, Result, implement};
+use windows::core::{BOOL, HSTRING, Interface, PCSTR, PWSTR, Result, implement};
 use windows_numerics::{Vector2, Vector3};
 
 use crate::emit;
-use crate::mask::{Mask, Occlusion, RoundedRect};
-use crate::policy::{WRAPPER_PREFIX, base64_decode, frame_allows, js_string, origin_of, png_size, snapshot_path_allowed, wrapper_url};
+use crate::mask::{Mask, Occlusion, PixelRect, RoundedRect};
+use crate::pointer::{self, Owner, Route};
+use crate::policy::{
+    FRAME_BINDING, FRAME_WORLD, FrameMessage, MIN_RUNTIME, WRAPPER_PREFIX, base64_decode, context_menu_keeps, frame_allows, frame_message,
+    is_webview2_override, js_string, origin_of, png_size, profile_name, snapshot_path_allowed, snapshot_path_allowed_in, wrapper_url,
+};
+use crate::wake::WakeFlag;
 
-/// Run in every document at creation. In the wrapper (top level, served by us): `webview.ts` `webDocument` and the
-/// Mermaid renderer post with `window.webkit.messageHandlers.kybern.postMessage`, the WKWebView API, so it is mapped onto
-/// `chrome.webview.postMessage`; and an Escape the page left alone (no `preventDefault`) gives the keyboard back, which
-/// WebKit does through `cancelOperation:` (WebView2 has no unhandled-key signal; a page can fake this, which only gives
-/// focus back). In the wrapper's child frame: [`FRAME_SCRIPT`].
+/// Run in every top-level document at creation, in the wrapper only (served by us; child frames get nothing in their
+/// own world): `webview.ts` `webDocument` and the Mermaid renderer post with
+/// `window.webkit.messageHandlers.kybern.postMessage`, the WKWebView API, so it is mapped onto
+/// `chrome.webview.postMessage`; and a trusted Escape the wrapper left alone (no `preventDefault`) gives the keyboard
+/// back, which WebKit does through `cancelOperation:` (WebView2 has no unhandled-key signal).
 const DOCUMENT_SCRIPT: &str = concat!(
-    "(()=>{const top=window===window.top;",
-    "if(top&&location.href.startsWith('http://tauri.localhost/embedded/')){",
+    "(()=>{if(window===window.top&&location.href.startsWith('http://tauri.localhost/embedded/')){",
     "const post=m=>window.chrome.webview.postMessage(m);",
     "Object.defineProperty(window,'webkit',{value:Object.freeze({messageHandlers:Object.freeze({kybern:Object.freeze({postMessage:post})})})});",
-    "addEventListener('keydown',e=>{if(e.key==='Escape')setTimeout(()=>{if(!e.defaultPrevented)post({kybernHost:'escape'})})},true)",
-    "}else if(!top&&window.parent===window.top){",
-    include_str!("frame.js"),
+    "addEventListener('keydown',e=>{if(e.isTrusted&&e.key==='Escape')setTimeout(()=>{if(!e.defaultPrevented)post({kybernHost:'escape'})})},true)",
     "}})()"
 );
-/// The child frame's half (macOS: the `kybernFrame` handler and user script in the `KybernPreview` world). WebView2 has
-/// no content worlds, so this runs in the page's own world: `navigation` on load, `popstate` and `hashchange`; picker
-/// messages (`src/pick/pickerScript.ts` posts through `webkit.messageHandlers.kybernFrame`); the unhandled Escape.
-/// Messages reach the host only through the frame's own `WebMessageReceived` (`ICoreWebView2Frame2`), with the frame's
-/// URL as their source. A page can post them too; the picker's data is untrusted on every OS and re-bounded by the app.
+/// The child frame's half, in the `KybernPreview` isolated world (macOS: the `kybernFrame` handler and user script in
+/// that `WKContentWorld`): `navigation` on load, trusted `popstate` and `hashchange`; picker messages
+/// (`src/pick/pickerScript.ts` posts through `webkit.messageHandlers.kybernFrame`, defined in that world only); the
+/// trusted unhandled Escape. It posts through [`FRAME_BINDING`], a `Runtime.addBinding` scoped to the world by name, so
+/// the page's own scripts can neither see the handler nor send through it.
 const FRAME_SCRIPT: &str = include_str!("frame.js");
 
 /// The ⌘ key list of `webview.m`'s key monitor, with Ctrl (the primary modifier off macOS): re-emitted as `shortcut`
@@ -109,7 +121,7 @@ const SHORTCUT_KEYS: &[(u32, &str)] = &[
 static PENDING: Mutex<VecDeque<Map<String, Value>>> = Mutex::new(VecDeque::new());
 /// The GPUI window to wake (any of them: all share the UI thread).
 static TARGET: AtomicIsize = AtomicIsize::new(0);
-static WAKE_POSTED: AtomicBool = AtomicBool::new(false);
+static WAKE: WakeFlag = WakeFlag::new();
 static HOOKED_THREADS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
 fn wake_message() -> u32 {
@@ -154,6 +166,18 @@ fn wake_target() -> Option<HWND> {
     Some(found)
 }
 
+fn now_ms() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
+
+/// Post the wake to `hwnd` unless one is on its way (and not stale, `wake.rs`).
+fn post_wake(hwnd: HWND) {
+    if WAKE.claim(now_ms()) && unsafe { PostMessageW(Some(hwnd), wake_message(), WPARAM(0), LPARAM(0)) }.is_err() {
+        WAKE.clear();
+    }
+}
+
 /// `kybern_web_command`, on Bun's thread.
 pub fn command(command: Map<String, Value>) {
     let Some(hwnd) = wake_target() else {
@@ -177,13 +201,7 @@ pub fn command(command: Map<String, Value>) {
             hooked.push(thread);
         }
     }
-    if !WAKE_POSTED.swap(true, Ordering::AcqRel) {
-        unsafe {
-            if PostMessageW(Some(hwnd), wake_message(), WPARAM(0), LPARAM(0)).is_err() {
-                WAKE_POSTED.store(false, Ordering::Release);
-            }
-        }
-    }
+    post_wake(hwnd);
 }
 
 /// On the UI thread, as GPUI's loop takes a message off its queue.
@@ -200,7 +218,7 @@ unsafe extern "system" fn get_message(code: i32, wparam: WPARAM, lparam: LPARAM)
 }
 
 fn drain() {
-    WAKE_POSTED.store(false, Ordering::Release);
+    WAKE.clear();
     loop {
         let next = PENDING.lock().ok().and_then(|mut pending| pending.pop_front());
         let Some(command) = next else { break };
@@ -218,8 +236,17 @@ thread_local! {
     /// Work that arrived while the host was busy (a WebView2 or window callback re-entering a host call); the borrower
     /// runs it before letting go.
     static DEFERRED: RefCell<VecDeque<Deferred>> = RefCell::new(VecDeque::new());
-    /// Each subclassed window's original procedure, read without borrowing the host.
-    static PROCS: RefCell<HashMap<isize, isize>> = RefCell::new(HashMap::new());
+    /// Windows this host subclassed (`SetWindowSubclass`), read without borrowing the host.
+    static SUBCLASSED: RefCell<Vec<isize>> = const { RefCell::new(Vec::new()) };
+    /// The documents whose WebView2 holds the keyboard, by id, with their window: set straight from `GotFocus` and
+    /// `LostFocus`, never deferred behind a busy host.
+    static FOCUS_OWNERS: RefCell<HashMap<String, isize>> = RefCell::new(HashMap::new());
+}
+
+fn run_deferred(host: &mut Host) {
+    while let Some(next) = DEFERRED.with(|d| d.borrow_mut().pop_front()) {
+        next(host);
+    }
 }
 
 fn with_host(work: impl FnOnce(&mut Host) + 'static) {
@@ -227,19 +254,20 @@ fn with_host(work: impl FnOnce(&mut Host) + 'static) {
         Ok(mut slot) => {
             let host = slot.get_or_insert_with(Host::new);
             work(host);
-            while let Some(next) = DEFERRED.with(|d| d.borrow_mut().pop_front()) {
-                next(host);
-            }
+            run_deferred(host);
         }
         Err(_) => DEFERRED.with(|d| d.borrow_mut().push_back(Box::new(work))),
     });
 }
 
-/// The host now, or `None` when it is busy further up this thread's stack.
+/// The host now, or `None` when it is busy further up this thread's stack. Work deferred meanwhile runs after it.
 fn try_host<R>(work: impl FnOnce(&mut Host) -> R) -> Option<R> {
     HOST.with(|cell| {
         let mut slot = cell.try_borrow_mut().ok()?;
-        Some(work(slot.get_or_insert_with(Host::new)))
+        let host = slot.get_or_insert_with(Host::new);
+        let result = work(host);
+        run_deferred(host);
+        Some(result)
     })
 }
 
@@ -250,14 +278,54 @@ pub fn runtime_version() -> Option<String> {
     (!version.is_empty()).then_some(version)
 }
 
+/// A runtime is installed and is at least [`MIN_RUNTIME`].
+pub fn runtime_supported() -> bool {
+    let Some(version) = runtime_version() else { return false };
+    let mut order = 0i32;
+    unsafe { CompareBrowserVersions(&HSTRING::from(version), &HSTRING::from(MIN_RUNTIME), &mut order) }.is_ok() && order >= 0
+}
+
+// ---- comctl32 subclassing ----
+
+type SubclassProc = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM, usize, usize) -> LRESULT;
+type SetSubclass = unsafe extern "system" fn(HWND, Option<SubclassProc>, usize, usize) -> BOOL;
+type RemoveSubclass = unsafe extern "system" fn(HWND, Option<SubclassProc>, usize) -> BOOL;
+type DefaultSubclass = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT;
+type Export = unsafe extern "system" fn() -> isize;
+
+/// `SetWindowSubclass`, `RemoveWindowSubclass` and `DefSubclassProc`, looked up at run time: comctl32 5.82 (no
+/// common-controls 6 manifest, as in a bare `bun.exe`) exports them by ordinal only, and a missing import would keep
+/// the whole library from loading.
+struct Subclassing {
+    set: SetSubclass,
+    remove: RemoveSubclass,
+    default: DefaultSubclass,
+}
+
+fn subclassing() -> Option<&'static Subclassing> {
+    static API: OnceLock<Option<Subclassing>> = OnceLock::new();
+    API.get_or_init(|| unsafe {
+        let module = LoadLibraryW(windows::core::w!("comctl32.dll")).ok()?;
+        let find = |name: &[u8], ordinal: usize| {
+            GetProcAddress(module, PCSTR(name.as_ptr())).or_else(|| GetProcAddress(module, PCSTR(ordinal as *const u8)))
+        };
+        Some(Subclassing {
+            set: std::mem::transmute::<Export, SetSubclass>(find(b"SetWindowSubclass\0", 410)?),
+            remove: std::mem::transmute::<Export, RemoveSubclass>(find(b"RemoveWindowSubclass\0", 412)?),
+            default: std::mem::transmute::<Export, DefaultSubclass>(find(b"DefSubclassProc\0", 413)?),
+        })
+    })
+    .as_ref()
+}
+
+/// This host's subclass id (any constant unique to it).
+const SUBCLASS_ID: usize = 0x6B79_6277;
+
 // ---- the window procedure filter ----
 
-unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    let original = PROCS.with(|procs| procs.borrow().get(&(hwnd.0 as isize)).copied()).unwrap_or(0);
-    let call = |message: u32, wparam: WPARAM, lparam: LPARAM| unsafe {
-        let original: WNDPROC = std::mem::transmute(original);
-        CallWindowProcW(original, hwnd, message, wparam, lparam)
-    };
+unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM, _id: usize, _data: usize) -> LRESULT {
+    let Some(api) = subclassing() else { return LRESULT(0) };
+    let call = |message: u32, wparam: WPARAM, lparam: LPARAM| unsafe { (api.default)(hwnd, message, wparam, lparam) };
     match message {
         WM_MOUSEMOVE | WM_LBUTTONDOWN | WM_LBUTTONUP | WM_LBUTTONDBLCLK | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_RBUTTONDBLCLK
         | WM_MBUTTONDOWN | WM_MBUTTONUP | WM_MBUTTONDBLCLK | WM_XBUTTONDOWN | WM_XBUTTONUP | WM_XBUTTONDBLCLK | WM_MOUSEWHEEL
@@ -275,16 +343,25 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
                 _ => {}
             }
         }
+        WM_CAPTURECHANGED | WM_CANCELMODE => {
+            // Capture went to another window (or a modal loop began): the press in progress is over for the pages.
+            let to = HWND(lparam.0 as *mut _);
+            if message == WM_CANCELMODE || to != hwnd {
+                with_host(move |host| host.press_cancelled(hwnd));
+            }
+        }
         WM_SIZE | WM_SHOWWINDOW | WM_DPICHANGED | WM_WINDOWPOSCHANGED => {
             let result = call(message, wparam, lparam);
             with_host(move |host| host.window_changed(hwnd));
             return result;
         }
-        WM_NCDESTROY => {
+        WM_DESTROY => {
+            // While the window still exists, so controllers close against a live parent.
             with_host(move |host| host.window_destroyed(hwnd));
-            unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, original) };
-            PROCS.with(|procs| procs.borrow_mut().remove(&(hwnd.0 as isize)));
-            return call(message, wparam, lparam);
+        }
+        WM_NCDESTROY => {
+            let _ = unsafe { (api.remove)(hwnd, Some(subclass), SUBCLASS_ID) };
+            SUBCLASSED.with(|list| list.borrow_mut().retain(|w| *w != hwnd.0 as isize));
         }
         _ => {}
     }
@@ -314,12 +391,22 @@ enum Environment {
 
 #[derive(Clone)]
 struct Placement {
-    /// Window points.
+    /// The clip box, snapped to whole device pixels (`PixelRect`) and given back in window points: the mask and the
+    /// pointer filter use the box that is painted.
     clip: RoundedRect,
+    /// The page's top-left in device pixels (window client coordinates).
+    web_px: (i32, i32),
     radius: f64,
     rounded: Vec<[f64; 8]>,
-    offset: (f64, f64),
     logical: (f64, f64),
+}
+
+/// The page's frame as the DevTools protocol sees it: the session of its own (out-of-process) target and its frame id,
+/// or the wrapper's session when the frame runs in the wrapper's process (`frame` is then looked up each time).
+#[derive(Clone, Debug, PartialEq)]
+struct ChildTarget {
+    session: String,
+    frame: Option<String>,
 }
 
 struct Doc {
@@ -348,10 +435,11 @@ struct Doc {
     scale: f64,
     bounds: (i32, i32),
     last_visible: Option<bool>,
-    focused: bool,
     cursor: isize,
     child: Option<ICoreWebView2Frame2>,
     child_loaded: bool,
+    /// Set when the child frame's own target attached (`Target.attachedToTarget`) and its isolated world is set up.
+    child_target: Option<ChildTarget>,
     /// `present` targets and whether its animation is still running (`probe`).
     shown: (f32, f32),
     animating: Arc<AtomicU64>,
@@ -367,8 +455,9 @@ struct Host {
     occlusions: BTreeMap<i64, Occlusion>,
     pointer_captured: bool,
     environment: Environment,
-    /// The document a button went down in: it gets every pointer event until the last button is up.
-    pressed: Option<String>,
+    /// Who the press in progress belongs to (`pointer.rs`): a page gets every pointer event until the last button is
+    /// up, and GPUI keeps a drag that started on it, even across a page.
+    press: Owner,
     hover: Option<String>,
     last_down: Option<(u32, POINT, String)>,
 }
@@ -402,22 +491,73 @@ fn exec(webview: &ICoreWebView2, script: &str, done: impl FnOnce(std::result::Re
     let _ = unsafe { webview.ExecuteScript(&HSTRING::from(script), &handler) };
 }
 
-fn exec_frame(frame: &ICoreWebView2Frame2, script: &str, done: impl FnOnce(std::result::Result<String, String>) + 'static) {
-    let handler = ExecuteScriptCompletedHandler::create(Box::new(move |result, json| {
-        done(result.map(|_| json).map_err(|e| e.message().to_string()));
-        Ok(())
-    }));
-    let _ = unsafe { frame.ExecuteScript(&HSTRING::from(script), &handler) };
+fn cdp(webview: &ICoreWebView2, method: &str, params: &str, done: impl FnOnce(std::result::Result<String, String>) + 'static) {
+    cdp_session(webview, "", method, params, done);
 }
 
-fn cdp(webview: &ICoreWebView2, method: &str, params: &str, done: impl FnOnce(std::result::Result<String, String>) + 'static) {
+/// A DevTools protocol call on `session` (a flat session from `Target.attachedToTarget`), or on the top page's own
+/// target when it is empty.
+fn cdp_session(
+    webview: &ICoreWebView2,
+    session: &str,
+    method: &str,
+    params: &str,
+    done: impl FnOnce(std::result::Result<String, String>) + 'static,
+) {
+    let done = Rc::new(RefCell::new(Some(done)));
+    let answer = done.clone();
     let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |result, json| {
-        done(result.map(|_| json).map_err(|e| e.message().to_string()));
+        if let Some(done) = answer.borrow_mut().take() {
+            done(result.map(|_| json).map_err(|e| e.message().to_string()));
+        }
         Ok(())
     }));
-    if let Err(error) = unsafe { webview.CallDevToolsProtocolMethod(&HSTRING::from(method), &HSTRING::from(params), &handler) } {
+    let sent = if session.is_empty() {
+        unsafe { webview.CallDevToolsProtocolMethod(&HSTRING::from(method), &HSTRING::from(params), &handler) }
+    } else {
+        webview.cast::<ICoreWebView2_11>().and_then(|webview| unsafe {
+            webview.CallDevToolsProtocolMethodForSession(&HSTRING::from(session), &HSTRING::from(method), &HSTRING::from(params), &handler)
+        })
+    };
+    if let Err(error) = sent {
         eprintln!("[kybern-webview] {method}: {error:?}");
+        if let Some(done) = done.borrow_mut().take() {
+            done(Err(error.message().to_string()));
+        }
     }
+}
+
+/// With `KYBERN_GPUIX_WEBVIEW_TRACE` set, a `trace` event for `id` (the DevTools setup of the page's frame; `webview.ts`
+/// listeners ignore the type). The Windows check turns it on so a failing run shows each step.
+fn trace(id: &str, message: impl FnOnce() -> String) {
+    static ON: OnceLock<bool> = OnceLock::new();
+    if *ON.get_or_init(|| std::env::var_os("KYBERN_GPUIX_WEBVIEW_TRACE").is_some()) {
+        emit(json!({"id": id, "type": "trace", "message": message()}));
+    }
+}
+
+/// `steps` on `session`, each sent when the one before answered (failures do not stop the chain), then `then`. `id` is
+/// the document the steps are for ([`trace`]).
+fn cdp_chain(
+    webview: ICoreWebView2,
+    session: String,
+    mut steps: VecDeque<(&'static str, String)>,
+    id: String,
+    then: impl FnOnce() + 'static,
+) {
+    let Some((method, params)) = steps.pop_front() else {
+        then();
+        return;
+    };
+    let caller = webview.clone();
+    let on = session.clone();
+    cdp_session(&webview, &session, method, &params, move |result| {
+        trace(&id, || format!("session {on:?} {method}: {}", result.as_ref().map(|_| "ok".to_owned()).unwrap_or_else(|e| e.clone())));
+        if let Err(message) = result {
+            eprintln!("[kybern-webview] {method}: {message}");
+        }
+        cdp_chain(caller, on, steps, id, then);
+    });
 }
 
 impl Host {
@@ -431,7 +571,7 @@ impl Host {
             occlusions: BTreeMap::new(),
             pointer_captured: false,
             environment: Environment::Idle,
-            pressed: None,
+            press: Owner::None,
             hover: None,
             last_down: None,
         }
@@ -527,13 +667,14 @@ impl Host {
                     return;
                 }
                 let literal = format!("[{}]", js_string(url));
-                match (&doc.child, doc.child_loaded) {
-                    (Some(child), true) => exec_frame(
-                        child,
-                        &format!("{{const url=({literal})[0];if(location.href===url)location.reload();else location.replace(url)}}"),
+                if doc.child_ready() {
+                    // In the isolated world: the page cannot replace `location.replace` or `reload` for us.
+                    doc.eval_child(
+                        format!("(()=>{{const url=({literal})[0];if(location.href===url)location.reload();else location.replace(url)}})()"),
                         |_| {},
-                    ),
-                    _ => doc.run(format!("document.querySelector('iframe').src=({literal})[0]")),
+                    );
+                } else {
+                    doc.run(format!("document.querySelector('iframe').src=({literal})[0]"));
                 }
             }
             "action" => {
@@ -551,15 +692,16 @@ impl Host {
                     "reload" => "location.reload()",
                     _ => return,
                 };
-                if let (Some(child), true) = (&doc.child, doc.child_loaded) {
-                    exec_frame(child, script, |_| {});
+                // The isolated world's own `history` and `location`, which a page's overrides never reach.
+                if doc.child_ready() {
+                    doc.eval_child(script.to_owned(), |_| {});
                 }
             }
             "destroy" => {
                 let index = self.docs.iter().position(|d| d.id == id).unwrap();
                 let doc = self.docs.remove(index);
-                if self.pressed.as_deref() == Some(&id) {
-                    self.pressed = None;
+                if self.press == Owner::Page(id.clone()) {
+                    self.press = Owner::None;
                     let _ = unsafe { ReleaseCapture() };
                 }
                 if self.hover.as_deref() == Some(&id) {
@@ -617,9 +759,12 @@ impl Host {
         let root = compositor.CreateContainerVisual().map_err(|e| e.message().to_string())?;
         target.SetRoot(&root).map_err(|e| e.message().to_string())?;
         let key = hwnd.0 as isize;
-        if !PROCS.with(|procs| procs.borrow().contains_key(&key)) {
-            let original = unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, subclass as *const () as isize) };
-            PROCS.with(|procs| procs.borrow_mut().insert(key, original));
+        if !SUBCLASSED.with(|list| list.borrow().contains(&key)) {
+            let api = subclassing().ok_or("This Windows version can't host web pages in Kybern (comctl32 subclassing is missing).")?;
+            if !unsafe { (api.set)(hwnd, Some(subclass), SUBCLASS_ID, 0) }.as_bool() {
+                return Err("The preview window could not take web pages.".into());
+            }
+            SUBCLASSED.with(|list| list.borrow_mut().push(key));
         }
         self.windows.insert(key, Window { _target: target, root: root.clone() });
         Ok(root)
@@ -694,10 +839,10 @@ impl Host {
             scale: scale_of(hwnd),
             bounds: (0, 0),
             last_visible: None,
-            focused: false,
             cursor: 0,
             child: None,
             child_loaded: false,
+            child_target: None,
             shown: (1.0, 1.0),
             animating: Arc::new(AtomicU64::new(0)),
         });
@@ -817,14 +962,35 @@ impl Host {
         if TARGET.load(Ordering::Acquire) == hwnd.0 as isize {
             TARGET.store(0, Ordering::Release);
         }
+        FOCUS_OWNERS.with(|owners| owners.borrow_mut().retain(|_, w| *w != hwnd.0 as isize));
+        // A wake posted to this window dies with it: clear the flag and wake another GPUI window for what is queued.
+        WAKE.clear();
+        let queued = PENDING.lock().is_ok_and(|pending| !pending.is_empty());
+        if queued && let Some(next) = gpui_windows().into_iter().find(|w| *w != hwnd) {
+            TARGET.store(next.0 as isize, Ordering::Release);
+            post_wake(next);
+        }
+    }
+
+    /// `WM_CAPTURECHANGED` to another window or `WM_CANCELMODE`: the press in progress ends without its up.
+    fn press_cancelled(&mut self, hwnd: HWND) {
+        let ours = match &self.press {
+            Owner::Page(id) => self.docs.iter().any(|d| d.id == *id && d.hwnd == hwnd),
+            Owner::Gpui => true,
+            Owner::None => false,
+        };
+        if ours {
+            self.press = Owner::None;
+        }
     }
 
     /// The pointer filter. `None` lets GPUI have the event.
     fn pointer(&mut self, hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<Pointer> {
-        if !self.docs.iter().any(|d| d.hwnd == hwnd && d.placed) {
+        if self.press == Owner::None && !self.docs.iter().any(|d| d.hwnd == hwnd && d.placed) {
             return None;
         }
         let scale = scale_of(hwnd);
+        // Client pixels.
         let mut point = POINT { x: (lparam.0 & 0xFFFF) as u16 as i16 as i32, y: ((lparam.0 >> 16) & 0xFFFF) as u16 as i16 as i32 };
         if matches!(message, WM_MOUSEWHEEL | WM_MOUSEHWHEEL) {
             let _ = unsafe { ScreenToClient(hwnd, &mut point) };
@@ -841,7 +1007,11 @@ impl Host {
         };
         match message {
             WM_SETCURSOR => {
-                let over = self.pressed.clone().or(hit)?;
+                let over = match &self.press {
+                    Owner::Page(id) => Some(id.clone()),
+                    Owner::Gpui => None,
+                    Owner::None => hit,
+                }?;
                 if (lparam.0 & 0xFFFF) as u32 != HTCLIENT {
                     return None;
                 }
@@ -856,7 +1026,7 @@ impl Host {
                 if let Some(previous) = self.hover.take()
                     && let Some(doc) = self.docs.iter().find(|d| d.id == previous)
                 {
-                    doc.send_mouse(COREWEBVIEW2_MOUSE_EVENT_KIND_LEAVE, 0, 0, (0.0, 0.0));
+                    doc.send_mouse(COREWEBVIEW2_MOUSE_EVENT_KIND_LEAVE, 0, 0, POINT::default());
                 }
                 return None;
             }
@@ -868,39 +1038,39 @@ impl Host {
         } else {
             0
         };
-        let down = matches!(
-            message,
-            WM_LBUTTONDOWN
-                | WM_RBUTTONDOWN
-                | WM_MBUTTONDOWN
-                | WM_XBUTTONDOWN
-                | WM_LBUTTONDBLCLK
-                | WM_RBUTTONDBLCLK
-                | WM_MBUTTONDBLCLK
-                | WM_XBUTTONDBLCLK
-        );
-        if down {
+        let kind = match message {
+            WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN | WM_LBUTTONDBLCLK | WM_RBUTTONDBLCLK | WM_MBUTTONDBLCLK
+            | WM_XBUTTONDBLCLK => pointer::Kind::Down,
+            WM_LBUTTONUP | WM_RBUTTONUP | WM_MBUTTONUP | WM_XBUTTONUP => pointer::Kind::Up,
+            WM_MOUSEMOVE => pointer::Kind::Move,
+            WM_MOUSEWHEEL | WM_MOUSEHWHEEL => pointer::Kind::Wheel,
+            _ => return None,
+        };
+        // MK_LBUTTON | MK_RBUTTON | MK_MBUTTON | MK_XBUTTON1 | MK_XBUTTON2, as held after this message.
+        let buttons = keys & 0x73 != 0;
+        let starts_press = kind == pointer::Kind::Down && self.press == Owner::None;
+        let route = pointer::route(&mut self.press, kind, buttons, hit.as_deref());
+        if starts_press {
             // A live visual goes back to its picture on a press anywhere else (window points, top-left origin).
             for doc in self.docs.iter().filter(|d| d.hwnd == hwnd && d.category == "visual" && d.placed) {
                 if hit.as_deref() != Some(doc.id.as_str()) {
                     emit(json!({"id": doc.id, "generation": doc.generation, "type": "outsidePress", "x": x, "y": y}));
                 }
             }
-            if hit.is_none() {
+            if route == Route::Gpui {
                 // A press on GPUI (or a popup cut out of a page) takes the keyboard back.
                 for doc in self.docs.iter().filter(|d| d.hwnd == hwnd) {
                     release_focus(doc);
                 }
-                return None;
             }
         }
-        let target = self.pressed.clone().or_else(|| hit.clone());
-        // Hover moves between documents and GPUI.
+        // Hover moves between documents and GPUI only while no button is held: a GPUI drag across a page and a page's
+        // drag outside it change nothing until the release.
         let mut leave_gpui = false;
-        if message == WM_MOUSEMOVE && self.hover != hit {
+        if kind == pointer::Kind::Move && self.press == Owner::None && self.hover != hit {
             if let Some(previous) = self.hover.take() {
                 if let Some(doc) = self.docs.iter().find(|d| d.id == previous) {
-                    doc.send_mouse(COREWEBVIEW2_MOUSE_EVENT_KIND_LEAVE, 0, 0, (0.0, 0.0));
+                    doc.send_mouse(COREWEBVIEW2_MOUSE_EVENT_KIND_LEAVE, 0, 0, POINT::default());
                 }
             } else if hit.is_some() {
                 leave_gpui = true;
@@ -912,9 +1082,9 @@ impl Host {
                 let _ = unsafe { TrackMouseEvent(&mut track) };
             }
         }
-        let target = target?;
+        let Route::Page(target) = route else { return None };
         let doc = self.docs.iter().find(|d| d.id == target)?;
-        let mut kind = match message {
+        let mut kind_2 = match message {
             WM_MOUSEMOVE => COREWEBVIEW2_MOUSE_EVENT_KIND_MOVE,
             WM_LBUTTONDOWN => COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOWN,
             WM_LBUTTONUP => COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_UP,
@@ -943,30 +1113,40 @@ impl Host {
                 && within(at.x, point.x, SM_CXDOUBLECLK)
                 && within(at.y, point.y, SM_CYDOUBLECLK)
             {
-                kind = COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOUBLE_CLICK;
+                kind_2 = COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOUBLE_CLICK;
             }
             self.last_down =
-                if kind == COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOUBLE_CLICK { None } else { Some((time, point, target.clone())) };
+                if kind_2 == COREWEBVIEW2_MOUSE_EVENT_KIND_LEFT_BUTTON_DOUBLE_CLICK { None } else { Some((time, point, target.clone())) };
         }
-        doc.send_mouse(kind, keys, data, (x, y));
-        if down {
+        doc.send_mouse(kind_2, keys, data, point);
+        if starts_press {
             // A press gives the page the keyboard (macOS: the WKWebView becomes first responder on click) and keeps the
             // pointer until the last button is up, so drags and selections work outside the page.
             if let Some(controller) = doc.controller.as_ref().and_then(|c| c.cast::<ICoreWebView2Controller>().ok()) {
                 let _ = unsafe { controller.MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC) };
             }
-            self.pressed = Some(target);
             unsafe { SetCapture(hwnd) };
-        } else if matches!(message, WM_LBUTTONUP | WM_RBUTTONUP | WM_MBUTTONUP | WM_XBUTTONUP) && keys & 0x73 == 0 {
-            self.pressed = None;
+        } else if kind == pointer::Kind::Up && !buttons && unsafe { GetCapture() } == hwnd {
             let _ = unsafe { ReleaseCapture() };
         }
         Some(if leave_gpui { Pointer::LeaveGpui } else { Pointer::Swallow(LRESULT(0)) })
     }
 }
 
+/// Give the keyboard back to GPUI if `doc`'s page holds it. The focus itself is read (`GetFocus`), not only the
+/// `GotFocus`/`LostFocus` record, which can lag: the keyboard is in this window but not on GPUI's own HWND, and either
+/// this document claims it or no document of the window does (another page's keyboard is left alone).
 fn release_focus(doc: &Doc) {
-    if doc.focused {
+    let focus = unsafe { GetFocus() };
+    if focus == doc.hwnd {
+        return;
+    }
+    let (claims, others) = FOCUS_OWNERS.with(|owners| {
+        let owners = owners.borrow();
+        (owners.contains_key(&doc.id), owners.iter().any(|(id, w)| *id != doc.id && *w == doc.hwnd.0 as isize))
+    });
+    let inside = !focus.is_invalid() && unsafe { GetAncestor(focus, GA_ROOT) } == doc.hwnd;
+    if (claims && (inside || focus.is_invalid())) || (inside && !others) {
         let _ = unsafe { SetFocus(Some(doc.hwnd)) };
     }
 }
@@ -976,24 +1156,50 @@ fn environment_failure(detail: &str) -> String {
 }
 
 /// One environment per app. The user data folder is `%LOCALAPPDATA%\kybern-gpuix\WebView2` (never the install folder;
-/// the uninstaller removes it); every controller is InPrivate, so cookies and storage never persist (macOS:
-/// `nonPersistentDataStore`). `KYBERN_GPUIX_WEBVIEW2_DATA` overrides the folder for checks.
+/// the uninstaller removes it); every document has its own InPrivate profile ([`request_controller`]), so cookies and
+/// storage never persist or cross documents (macOS: a `nonPersistentDataStore` per document).
+/// `KYBERN_GPUIX_WEBVIEW2_DATA` overrides the folder for checks.
+///
+/// The loader reads `WEBVIEW2_*` environment variables ahead of its options (an inherited
+/// `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=…` would open every page to other processes), so they
+/// are removed from this process first, and the options are explicit: no extra arguments, the oldest runtime this host
+/// supports.
 fn start_environment() -> Result<()> {
     let folder = std::env::var("KYBERN_GPUIX_WEBVIEW2_DATA").unwrap_or_else(|_| {
         let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
         format!("{base}\\kybern-gpuix\\WebView2")
     });
+    for (name, _) in std::env::vars_os() {
+        if name.to_str().is_some_and(is_webview2_override) {
+            // SAFETY: on the UI thread, before WebView2 starts; nothing else in this process reads these.
+            unsafe { std::env::remove_var(&name) };
+        }
+    }
+    let options = CoreWebView2EnvironmentOptions::default();
+    unsafe {
+        options.set_additional_browser_arguments(String::new());
+        options.set_target_compatible_browser_version(MIN_RUNTIME.to_owned());
+    }
+    let options: ICoreWebView2EnvironmentOptions = options.into();
     let handler = CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(move |result, environment| {
         with_host(move |host| host.environment_ready(result, environment));
         Ok(())
     }));
-    unsafe { CreateCoreWebView2EnvironmentWithOptions(None, &HSTRING::from(folder), None, &handler) }
+    unsafe { CreateCoreWebView2EnvironmentWithOptions(None, &HSTRING::from(folder), &options, &handler) }
 }
+
+/// Unique per controller for the life of the process (`policy::profile_name`).
+static PROFILES: AtomicU64 = AtomicU64::new(0);
 
 fn request_controller(environment: &ICoreWebView2Environment, doc: &Doc) -> Result<()> {
     let environment10: ICoreWebView2Environment10 = environment.cast()?;
     let options = unsafe { environment10.CreateCoreWebView2ControllerOptions()? };
     unsafe { options.SetIsInPrivateModeEnabled(true)? };
+    // Its own InPrivate profile: nothing (cookies, storage, caches, service workers) is shared with another document,
+    // a later document on the same origin (two projects' `localhost:3000`), or the long-lived Mermaid renderer, and all
+    // of it is gone when the controller closes.
+    let profile = profile_name(doc.generation.as_u64(), PROFILES.fetch_add(1, Ordering::Relaxed) + 1);
+    unsafe { options.SetProfileName(&HSTRING::from(profile))? };
     if doc.category == "visual" {
         // Transparent from the first frame (only alpha 0 or 255 is allowed): the thread's material shows through.
         if let Ok(options3) = options.cast::<ICoreWebView2ControllerOptions3>() {
@@ -1022,14 +1228,72 @@ impl Doc {
         self.placed && self.last_visible == Some(true) && self.mask.hit(x - placement.clip.x, y - placement.clip.y)
     }
 
-    fn send_mouse(&self, kind: COREWEBVIEW2_MOUSE_EVENT_KIND, keys: i32, data: u32, at: (f64, f64)) {
+    /// `at` in the window's client pixels; WebView2 takes pixels relative to the page's top-left.
+    fn send_mouse(&self, kind: COREWEBVIEW2_MOUSE_EVENT_KIND, keys: i32, data: u32, at: POINT) {
         let (Some(controller), Some(placement)) = (&self.controller, &self.placement) else { return };
-        let s = self.scale;
-        let point = POINT {
-            x: ((at.0 - placement.clip.x - placement.offset.0) * s).round() as i32,
-            y: ((at.1 - placement.clip.y - placement.offset.1) * s).round() as i32,
-        };
+        let point = POINT { x: at.x - placement.web_px.0, y: at.y - placement.web_px.1 };
         let _ = unsafe { controller.SendMouseInput(kind, COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS(keys), data, point) };
+    }
+
+    /// The child frame can take scripts: its own target is attached, or it has loaded in the wrapper's process.
+    fn child_ready(&self) -> bool {
+        self.webview.is_some() && (self.child_target.is_some() || self.child_loaded)
+    }
+
+    /// Run `expression` in the child frame's `KybernPreview` isolated world (macOS: `evaluateJavaScript:inFrame:
+    /// inContentWorld:`) and answer with its JSON value. [`FRAME_SCRIPT`] runs first (it returns at once when it already
+    /// ran), so the picker always finds `webkit.messageHandlers.kybernFrame` in that world.
+    fn eval_child(&self, expression: String, done: impl FnOnce(std::result::Result<Value, String>) + 'static) {
+        let Some(webview) = self.webview.clone() else {
+            done(Err("The page has not loaded yet.".into()));
+            return;
+        };
+        let target = self.child_target.clone().unwrap_or(ChildTarget { session: String::new(), frame: None });
+        let expression = format!("{FRAME_SCRIPT};\n{expression}");
+        let in_world = move |webview: ICoreWebView2, session: String, frame: Option<String>| {
+            let Some(frame) = frame else {
+                done(Err("The page has not loaded yet.".into()));
+                return;
+            };
+            let params = json!({"frameId": frame, "worldName": FRAME_WORLD, "grantUniveralAccess": false}).to_string();
+            let (caller, on) = (webview.clone(), session.clone());
+            cdp_session(&webview, &on, "Page.createIsolatedWorld", &params, move |result| {
+                let context = result.ok().and_then(|json| serde_json::from_str::<Value>(&json).ok()?.get("executionContextId")?.as_i64());
+                let Some(context) = context else {
+                    done(Err("The page has not loaded yet.".into()));
+                    return;
+                };
+                let params =
+                    json!({"expression": expression, "contextId": context, "returnByValue": true, "userGesture": false}).to_string();
+                cdp_session(&caller, &session, "Runtime.evaluate", &params, move |result| {
+                    let answer = result.and_then(|json| serde_json::from_str::<Value>(&json).map_err(|e| e.to_string()));
+                    done(match answer {
+                        Ok(answer) if answer.get("exceptionDetails").is_some() => Err(answer
+                            .pointer("/exceptionDetails/exception/description")
+                            .or_else(|| answer.pointer("/exceptionDetails/text"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("The page did not run the script.")
+                            .to_owned()),
+                        Ok(answer) => Ok(answer.pointer("/result/value").cloned().unwrap_or(Value::Null)),
+                        Err(message) => Err(message),
+                    });
+                });
+            });
+        };
+        match target.frame {
+            Some(frame) => in_world(webview, target.session, Some(frame)),
+            None => {
+                // The child shares the wrapper's process: it is the wrapper's only frame.
+                let caller = webview.clone();
+                cdp_session(&webview, "", "Page.getFrameTree", "{}", move |result| {
+                    let frame = result
+                        .ok()
+                        .and_then(|json| serde_json::from_str::<Value>(&json).ok())
+                        .and_then(|tree| tree.pointer("/frameTree/childFrames/0/frame/id").and_then(Value::as_str).map(str::to_owned));
+                    in_world(caller, String::new(), frame);
+                });
+            }
+        }
     }
 
     /// `post`, and every script the host sends; queued until the page exists.
@@ -1066,6 +1330,8 @@ impl Doc {
             settings.SetAreHostObjectsAllowed(false)?;
             settings.SetIsWebMessageEnabled(true)?;
             settings.SetIsZoomControlEnabled(false)?;
+            // alert, confirm and prompt are answered by `ScriptDialogOpening` below, never shown (macOS: no UI delegate).
+            settings.SetAreDefaultScriptDialogsEnabled(false)?;
             if let Ok(settings) = settings.cast::<ICoreWebView2Settings3>() {
                 // No browser shortcuts (print, find, reload, zoom); WKWebView has none either.
                 settings.SetAreBrowserAcceleratorKeysEnabled(false)?;
@@ -1169,12 +1435,11 @@ impl Doc {
             }));
             unsafe { webview4.add_DownloadStarting(&downloads, &mut token)? };
             let (id, generation) = (id.clone(), generation.clone());
-            let frame_event = event.clone();
             let created = FrameCreatedEventHandler::create(Box::new(move |_, args| {
                 let Some(args) = args else { return Ok(()) };
                 let frame = unsafe { args.Frame()? };
                 let Ok(frame2) = frame.cast::<ICoreWebView2Frame2>() else { return Ok(()) };
-                watch_frame(&frame2, id.clone(), generation.clone(), frame_event.clone())?;
+                watch_frame(&frame2, id.clone(), generation.clone())?;
                 let (id, generation) = (id.clone(), generation.clone());
                 with_host(move |host| {
                     if let Some(doc) = host.docs.iter_mut().find(|d| d.id == id && d.generation == generation) {
@@ -1197,6 +1462,31 @@ impl Doc {
             }));
             unsafe { webview18.add_LaunchingExternalUriScheme(&schemes, &mut token)? };
         }
+        // macOS shows no script dialog (no UI delegate): alert returns at once, confirm is false, prompt is null. Not
+        // accepting does exactly that; a `beforeunload` prompt is accepted so the navigation goes on, as there. Preview
+        // pages also run without `allow-modals` here (`webview.ts` `webDocument`), which keeps `print()` from opening
+        // the print UI; Ctrl+P is off with the browser accelerator keys.
+        let dialogs = ScriptDialogOpeningEventHandler::create(Box::new(|_, args| {
+            let Some(args) = args else { return Ok(()) };
+            let mut kind = COREWEBVIEW2_SCRIPT_DIALOG_KIND::default();
+            unsafe { args.Kind(&mut kind)? };
+            if kind == COREWEBVIEW2_SCRIPT_DIALOG_KIND_BEFOREUNLOAD {
+                unsafe { args.Accept()? };
+            }
+            Ok(())
+        }));
+        unsafe { webview.add_ScriptDialogOpening(&dialogs, &mut token)? };
+        let webview11: ICoreWebView2_11 = webview.cast()?;
+        // The default context menu keeps editing and copying; Reload, Back, Save as, Print, Inspect and the rest go.
+        let menus = ContextMenuRequestedEventHandler::create(Box::new(|_, args| {
+            let Some(args) = args else { return Ok(()) };
+            let items = unsafe { args.MenuItems()? };
+            if filter_menu(&items)? == 0 {
+                unsafe { args.SetHandled(true)? };
+            }
+            Ok(())
+        }));
+        unsafe { webview11.add_ContextMenuRequested(&menus, &mut token)? };
 
         // macOS: the `kybern` handler, main frame only. WebMessageReceived on the CoreWebView2 fires for the top-level
         // document only, and its source must be the wrapper.
@@ -1283,13 +1573,11 @@ impl Doc {
         }));
         unsafe { controller.add_CursorChanged(&cursor, &mut token)? };
         for focused in [true, false] {
-            let (id, generation) = (id.clone(), generation.clone());
+            let (id, window) = (id.clone(), self.hwnd.0 as isize);
             let handler = FocusChangedEventHandler::create(Box::new(move |_, _| {
-                let (id, generation) = (id.clone(), generation.clone());
-                with_host(move |host| {
-                    if let Some(doc) = host.docs.iter_mut().find(|d| d.id == id && d.generation == generation) {
-                        doc.focused = focused;
-                    }
+                FOCUS_OWNERS.with(|owners| {
+                    let mut owners = owners.borrow_mut();
+                    if focused { owners.insert(id.clone(), window) } else { owners.remove(&id) }
                 });
                 Ok(())
             }));
@@ -1331,7 +1619,13 @@ impl Doc {
             // Snapshots of a visual keep its transparency.
             cdp(&webview, "Emulation.setDefaultBackgroundColorOverride", r#"{"color":{"r":0,"g":0,"b":0,"a":0}}"#, |_| {});
         }
-        unsafe { webview.Navigate(&HSTRING::from(self.wrapper.as_str()))? };
+        // The wrapper loads once the child frame's isolated world is armed, so the frame never runs without it.
+        let (navigator, wrapper) = (webview.clone(), self.wrapper.clone());
+        isolate_child_frame(&webview, id.clone(), generation.clone(), event.clone(), move || {
+            if let Err(error) = unsafe { navigator.Navigate(&HSTRING::from(wrapper.as_str())) } {
+                eprintln!("[kybern-webview] Navigate: {error:?}");
+            }
+        })?;
         self.controller = Some(controller);
         self.webview = Some(webview.clone());
         self.bounds = (0, 0);
@@ -1387,20 +1681,22 @@ impl Doc {
                     .collect()
             })
             .unwrap_or_default();
+        // Whole device pixels at any scale: the clip edge, the page's origin and the mask all land on the same pixels.
+        let clip_px = PixelRect::snap(x, y, width, height, self.scale);
+        let web = PixelRect::snap(x + num(command, "offsetX"), y + num(command, "offsetY"), 0.0, 0.0, self.scale);
         let placement = Placement {
-            clip: RoundedRect::uniform(x, y, width, height, 0.0),
+            clip: clip_px.points(self.scale, 0.0),
+            web_px: (web.left, web.top),
             radius: num(command, "radius"),
             rounded,
-            offset: (num(command, "offsetX"), num(command, "offsetY")),
             logical: (num(command, "logicalWidth"), num(command, "logicalHeight")),
         };
         self.layer = command.get("layer").and_then(Value::as_i64).unwrap_or(0);
-        let s = self.scale as f32;
-        self.clip.SetOffset(Vector3 { X: x as f32 * s, Y: y as f32 * s, Z: 0.0 })?;
-        let size = Vector2 { X: width as f32 * s, Y: height as f32 * s };
+        self.clip.SetOffset(Vector3 { X: clip_px.left as f32, Y: clip_px.top as f32, Z: 0.0 })?;
+        let size = Vector2 { X: clip_px.width() as f32, Y: clip_px.height() as f32 };
         self.clip.SetSize(size)?;
         self.shade.SetSize(size)?;
-        self.web.SetOffset(Vector3 { X: placement.offset.0 as f32 * s, Y: placement.offset.1 as f32 * s, Z: 0.0 })?;
+        self.web.SetOffset(Vector3 { X: (web.left - clip_px.left) as f32, Y: (web.top - clip_px.top) as f32, Z: 0.0 })?;
         self.set_bounds(&placement);
         self.placement = Some(placement);
         self.apply_mask(occlusions, d2d, compositor)?;
@@ -1528,6 +1824,17 @@ impl Doc {
         let token = command.get("token").cloned().unwrap_or(json!(0));
         let mut event = self.event("snapshot");
         event.insert("token".into(), token);
+        if !snapshot_path_allowed_in(&path, &snapshot_roots().iter().map(PathBuf::as_path).collect::<Vec<_>>()) {
+            event.extend([
+                ("ok".into(), json!(false)),
+                ("path".into(), json!("")),
+                ("width".into(), json!(0)),
+                ("height".into(), json!(0)),
+                ("message".into(), json!("The snapshot path is not allowed.")),
+            ]);
+            emit(Value::Object(event));
+            return;
+        }
         let (Some(webview), Some(placement)) = (&self.webview, &self.placement) else {
             event.extend([
                 ("ok".into(), json!(false)),
@@ -1560,8 +1867,9 @@ impl Doc {
         });
     }
 
-    /// `frame`: `script` (an expression) in the page's frame, answered as `frameResult`. WebView2 has no content worlds,
-    /// so this is the page's own world (macOS: the isolated `KybernPreview` world); results are page data either way.
+    /// `frame`: `script` (an expression) in the page's frame, in the `KybernPreview` isolated world (macOS: the same
+    /// `WKContentWorld`), answered as `frameResult`. The page shares the DOM but not the world's globals; results are
+    /// page data either way.
     fn frame(&self, command: &Map<String, Value>) {
         let rid = command.get("rid").and_then(Value::as_str).map(str::to_owned);
         let mut event = self.event("frameResult");
@@ -1576,26 +1884,24 @@ impl Doc {
             }
         };
         let script = text(command, "script");
-        let (Some(child), true) = (&self.child, self.child_loaded) else {
+        if !self.child_ready() {
             fail(event, "The page has not loaded yet.");
             return;
-        };
+        }
         let wrapped = format!(
             "(()=>{{try{{const value=(\n{script}\n);return {{ok:true,value:value===undefined?null:value}}}}catch(error){{return {{ok:false,message:String(error&&error.message||error)}}}}}})()"
         );
-        exec_frame(child, &wrapped, move |result| {
-            let answer = result.ok().and_then(|json| serde_json::from_str::<Value>(&json).ok());
-            match answer {
-                Some(Value::Object(answer)) if answer.get("ok") == Some(&json!(true)) => {
-                    event.insert("ok".into(), json!(true));
-                    event.insert("value".into(), answer.get("value").cloned().unwrap_or(Value::Null));
-                    emit(Value::Object(event));
-                }
-                Some(Value::Object(answer)) => {
-                    fail(event, answer.get("message").and_then(Value::as_str).unwrap_or("The page did not run the script."))
-                }
-                _ => fail(event, "The page did not run the script."),
+        self.eval_child(wrapped, move |result| match result {
+            Ok(Value::Object(answer)) if answer.get("ok") == Some(&json!(true)) => {
+                event.insert("ok".into(), json!(true));
+                event.insert("value".into(), answer.get("value").cloned().unwrap_or(Value::Null));
+                emit(Value::Object(event));
             }
+            Ok(Value::Object(answer)) => {
+                fail(event, answer.get("message").and_then(Value::as_str).unwrap_or("The page did not run the script."))
+            }
+            Ok(_) => fail(event, "The page did not run the script."),
+            Err(message) => fail(event, &message),
         });
     }
 
@@ -1667,6 +1973,7 @@ impl Doc {
 
     fn dispose(self) {
         release_focus(&self);
+        FOCUS_OWNERS.with(|owners| owners.borrow_mut().remove(&self.id));
         if let Some(controller) = self.controller.as_ref().and_then(|c| c.cast::<ICoreWebView2Controller>().ok()) {
             let _ = unsafe { controller.Close() };
         }
@@ -1678,13 +1985,13 @@ impl Doc {
     }
 }
 
-/// The child frame's events: its navigations (`navigation` with the frame's URL), and its messages, which come only
-/// from [`FRAME_SCRIPT`] in practice: `frame` (a same-document navigation), `escape`, or a picker message.
-fn watch_frame(frame: &ICoreWebView2Frame2, id: String, generation: Value, event: impl Fn(&str, Value) + Clone + 'static) -> Result<()> {
+/// The child frame's lifetime as WebView2 sees it: loaded (scripts can reach it) and destroyed. Its messages never come
+/// through WebView2's frame messaging, which the page's own world can use; they come from [`isolate_child_frame`].
+fn watch_frame(frame: &ICoreWebView2Frame2, id: String, generation: Value) -> Result<()> {
     let mut token = 0i64;
     let (done_id, done_generation) = (id.clone(), generation.clone());
-    let completed = FrameNavigationCompletedEventHandler::create(Box::new(move |sender, args| {
-        let (Some(sender), Some(args)) = (sender, args) else { return Ok(()) };
+    let completed = FrameNavigationCompletedEventHandler::create(Box::new(move |_, args| {
+        let Some(args) = args else { return Ok(()) };
         let mut success = BOOL(0);
         unsafe { args.IsSuccess(&mut success)? };
         if !success.as_bool() {
@@ -1696,45 +2003,9 @@ fn watch_frame(frame: &ICoreWebView2Frame2, id: String, generation: Value, event
                 doc.child_loaded = true;
             }
         });
-        // The document-created script already runs in the child; this covers a frame it missed (guarded, runs once).
-        // WebView2 raises this only for the frame's first (about:blank) load; `navigation` comes from the script's
-        // `frame` message, whose source is the frame's URL (macOS: the `kybernFrame` message's frame info).
-        if let Ok(frame) = sender.cast::<ICoreWebView2Frame2>() {
-            exec_frame(&frame, FRAME_SCRIPT, |_| {});
-        }
         Ok(())
     }));
     unsafe { frame.add_NavigationCompleted(&completed, &mut token)? };
-    let (message_id, message_generation, message_event) = (id.clone(), generation.clone(), event.clone());
-    let messages = FrameWebMessageReceivedEventHandler::create(Box::new(move |_, args| {
-        let Some(args) = args else { return Ok(()) };
-        let source = take(|out| unsafe { args.Source(out) });
-        let json = take(|out| unsafe { args.WebMessageAsJson(out) });
-        if json.len() > 65536 {
-            return Ok(());
-        }
-        let Ok(Value::Object(mut data)) = serde_json::from_str::<Value>(&json) else { return Ok(()) };
-        match data.remove("kybernFrame") {
-            // The iframe's initial about:blank document is not a navigation the app shows.
-            Some(Value::String(kind)) if kind == "frame" => {
-                if !source.starts_with("about:") {
-                    message_event("navigation", json!({"url": source}))
-                }
-            }
-            Some(Value::String(kind)) if kind == "escape" => {
-                let (id, generation) = (message_id.clone(), message_generation.clone());
-                with_host(move |host| {
-                    if let Some(doc) = host.docs.iter().find(|d| d.id == id && d.generation == generation) {
-                        release_focus(doc);
-                    }
-                });
-            }
-            Some(Value::Object(body)) => message_event("frameMessage", json!({"data": body})),
-            _ => {}
-        }
-        Ok(())
-    }));
-    unsafe { frame.add_WebMessageReceived(&messages, &mut token)? };
     let destroyed = FrameDestroyedEventHandler::create(Box::new(move |_, _| {
         let (id, generation) = (id.clone(), generation.clone());
         with_host(move |host| {
@@ -1747,6 +2018,201 @@ fn watch_frame(frame: &ICoreWebView2Frame2, id: String, generation: Value, event
     }));
     let base: ICoreWebView2Frame = frame.cast()?;
     unsafe { base.add_Destroyed(&destroyed, &mut token) }
+}
+
+/// The DevTools steps that arm one target's frames: a binding that exists only in contexts named [`FRAME_WORLD`]
+/// (`Runtime.addBinding` `executionContextName`) and [`FRAME_SCRIPT`] in that world in every new document. `running`
+/// also runs it in the documents the target already has; a target paused before its first script has none, and there
+/// `runImmediately` never answers (seen on the windows-2022 runner), which would hold the resume queued behind it.
+fn world_steps(running: bool) -> VecDeque<(&'static str, String)> {
+    VecDeque::from([
+        ("Runtime.enable", "{}".to_owned()),
+        ("Runtime.addBinding", json!({"name": FRAME_BINDING, "executionContextName": FRAME_WORLD}).to_string()),
+        ("Page.enable", "{}".to_owned()),
+        (
+            "Page.addScriptToEvaluateOnNewDocument",
+            json!({"source": FRAME_SCRIPT, "worldName": FRAME_WORLD, "runImmediately": running}).to_string(),
+        ),
+    ])
+}
+
+fn event_session(args: &ICoreWebView2DevToolsProtocolEventReceivedEventArgs) -> String {
+    args.cast::<ICoreWebView2DevToolsProtocolEventReceivedEventArgs2>()
+        .map(|args| take(|out| unsafe { args.SessionId(out) }))
+        .unwrap_or_default()
+}
+
+fn event_params(args: &ICoreWebView2DevToolsProtocolEventReceivedEventArgs) -> Option<Value> {
+    serde_json::from_str(&take(|out| unsafe { args.ParameterObjectAsJson(out) })).ok()
+}
+
+/// The page's frame, reached only through the DevTools protocol (module docs). The wrapper's target auto-attaches the
+/// frame's own target (it is cross-site, so out of process) paused before its first script; there the binding and
+/// [`FRAME_SCRIPT`] go into the `KybernPreview` world before it resumes. The wrapper's own target gets the same, which
+/// covers a frame that shares the wrapper's process. `then` runs (and the wrapper may load) once the wrapper's target
+/// is armed.
+fn isolate_child_frame(
+    webview: &ICoreWebView2,
+    id: String,
+    generation: Value,
+    event: impl Fn(&str, Value) + Clone + 'static,
+    then: impl FnOnce() + 'static,
+) -> Result<()> {
+    let receiver = |name: &str| unsafe { webview.GetDevToolsProtocolEventReceiver(&HSTRING::from(name)) };
+    let mut token = 0i64;
+
+    // The only way the page's frame reaches the host: the binding, from the frame's own session.
+    let (message_id, message_generation) = (id.clone(), generation.clone());
+    let messages = DevToolsProtocolEventReceivedEventHandler::create(Box::new(move |_, args| {
+        let Some(args) = args else { return Ok(()) };
+        let session = event_session(&args);
+        let Some(params) = event_params(&args) else { return Ok(()) };
+        trace(&message_id, || {
+            format!("bindingCalled on session {session:?}: {}", params.to_string().chars().take(300).collect::<String>())
+        });
+        if params.get("name").and_then(Value::as_str) != Some(FRAME_BINDING) {
+            return Ok(());
+        }
+        let Some(message) = params.get("payload").and_then(Value::as_str).and_then(frame_message) else { return Ok(()) };
+        let (id, generation, event) = (message_id.clone(), message_generation.clone(), event.clone());
+        with_host(move |host| {
+            let Some(doc) = host.docs.iter().find(|d| d.id == id && d.generation == generation) else { return };
+            // From the frame's own target, or from the wrapper's while the frame shares its process (the wrapper's
+            // own world never posts: `frame.js` returns at once at the top level).
+            let from_frame = match &doc.child_target {
+                Some(target) => target.session == session,
+                None => session.is_empty(),
+            };
+            if !from_frame {
+                return;
+            }
+            match message {
+                FrameMessage::Navigation(url) => event("navigation", json!({"url": url})),
+                FrameMessage::Escape => release_focus(doc),
+                FrameMessage::Body(body) => event("frameMessage", json!({"data": body})),
+            }
+        });
+        Ok(())
+    }));
+    unsafe { receiver("Runtime.bindingCalled")?.add_DevToolsProtocolEventReceived(&messages, &mut token)? };
+
+    let (attach_id, attach_generation) = (id.clone(), generation.clone());
+    let attached = DevToolsProtocolEventReceivedEventHandler::create(Box::new(move |sender, args| {
+        let Some(args) = args else { return Ok(()) };
+        let parent = event_session(&args);
+        let params = event_params(&args);
+        trace(&attach_id, || {
+            format!("attachedToTarget from session {parent:?}: {}", params.as_ref().map(Value::to_string).unwrap_or_default())
+        });
+        let Some(webview) = sender else {
+            trace(&attach_id, || "attachedToTarget without a sender".into());
+            return Ok(());
+        };
+        let Some(params) = params else { return Ok(()) };
+        let Some(session) = params.get("sessionId").and_then(Value::as_str).map(str::to_owned) else { return Ok(()) };
+        let kind = params.pointer("/targetInfo/type").and_then(Value::as_str).unwrap_or("");
+        let frame = params.pointer("/targetInfo/targetId").and_then(Value::as_str).map(str::to_owned);
+        if kind != "iframe" || frame.is_none() || !parent.is_empty() {
+            // Not a frame (a worker, if the filter is unknown to this runtime): let it run, then let it go.
+            let (resumer, detach) = (webview.clone(), json!({"sessionId": session}).to_string());
+            cdp_session(&webview, &session, "Runtime.runIfWaitingForDebugger", "{}", move |_| {
+                cdp(&resumer, "Target.detachFromTarget", &detach, |_| {});
+            });
+            return Ok(());
+        }
+        let (id, generation, target) = (attach_id.clone(), attach_generation.clone(), ChildTarget { session: session.clone(), frame });
+        with_host(move |host| {
+            if let Some(doc) = host.docs.iter_mut().find(|d| d.id == id && d.generation == generation) {
+                doc.child_target = Some(target);
+            }
+        });
+        // Sent back to back: a session runs its commands in order, so the world is armed before the frame resumes, and
+        // the frame resumes even if an answer never comes.
+        let mut steps = world_steps(false);
+        steps.push_back(("Runtime.runIfWaitingForDebugger", "{}".to_owned()));
+        for (method, params) in steps {
+            let id = attach_id.clone();
+            cdp_session(&webview, &session, method, &params, move |result| {
+                trace(&id, || format!("child {method}: {}", result.map(|_| "ok".to_owned()).unwrap_or_else(|e| e)))
+            });
+        }
+        Ok(())
+    }));
+    unsafe { receiver("Target.attachedToTarget")?.add_DevToolsProtocolEventReceived(&attached, &mut token)? };
+
+    let chain_id = id.clone();
+    let detached = DevToolsProtocolEventReceivedEventHandler::create(Box::new(move |_, args| {
+        let Some(args) = args else { return Ok(()) };
+        let Some(session) = event_params(&args).and_then(|p| p.get("sessionId").and_then(Value::as_str).map(str::to_owned)) else {
+            return Ok(());
+        };
+        let (id, generation) = (id.clone(), generation.clone());
+        with_host(move |host| {
+            if let Some(doc) = host.docs.iter_mut().find(|d| d.id == id && d.generation == generation)
+                && doc.child_target.as_ref().is_some_and(|t| t.session == session)
+            {
+                doc.child_target = None;
+            }
+        });
+        Ok(())
+    }));
+    unsafe { receiver("Target.detachedFromTarget")?.add_DevToolsProtocolEventReceived(&detached, &mut token)? };
+
+    let mut steps = VecDeque::from([(
+        "Target.setAutoAttach",
+        json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true, "filter": [{"type": "iframe"}]}).to_string(),
+    )]);
+    steps.extend(world_steps(true));
+    cdp_chain(webview.clone(), String::new(), steps, chain_id, then);
+    Ok(())
+}
+
+/// Drops the default context-menu items a page does not keep (`policy::context_menu_keeps`), in submenus too, then the
+/// separators left at an edge or doubled. Returns how many items remain.
+fn filter_menu(items: &ICoreWebView2ContextMenuItemCollection) -> Result<u32> {
+    let kind_of = |item: &ICoreWebView2ContextMenuItem| -> Result<COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND> {
+        let mut kind = COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND::default();
+        unsafe { item.Kind(&mut kind)? };
+        Ok(kind)
+    };
+    let mut count = 0u32;
+    unsafe { items.Count(&mut count)? };
+    for index in (0..count).rev() {
+        let item = unsafe { items.GetValueAtIndex(index)? };
+        let keep = match kind_of(&item)? {
+            COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SEPARATOR => true,
+            COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SUBMENU => filter_menu(&unsafe { item.Children()? })? > 0,
+            _ => context_menu_keeps(&take(|out| unsafe { item.Name(out) })),
+        };
+        if !keep {
+            unsafe { items.RemoveValueAtIndex(index)? };
+        }
+    }
+    loop {
+        unsafe { items.Count(&mut count)? };
+        let mut separators = Vec::with_capacity(count as usize);
+        for index in 0..count {
+            separators.push(kind_of(&unsafe { items.GetValueAtIndex(index)? })? == COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SEPARATOR);
+        }
+        let stray = (0..separators.len()).find(|&i| separators[i] && (i == 0 || i + 1 == separators.len() || separators[i - 1]));
+        match stray {
+            Some(index) => unsafe { items.RemoveValueAtIndex(index as u32)? },
+            None => return Ok(count),
+        }
+    }
+}
+
+/// Where `snapshot` may write: the temp folder and the app's image cache (`src/transcript/imageFiles.ts`:
+/// `%LOCALAPPDATA%\kybern-gpuix\images`, or `image-cache` under `KYBERN_CLIENT_CONFIG_DIR`).
+fn snapshot_roots() -> Vec<PathBuf> {
+    let mut roots = vec![std::env::temp_dir()];
+    if let Some(base) = std::env::var_os("LOCALAPPDATA") {
+        roots.push(PathBuf::from(base).join("kybern-gpuix").join("images"));
+    }
+    if let Some(config) = std::env::var_os("KYBERN_CLIENT_CONFIG_DIR") {
+        roots.push(PathBuf::from(config).join("image-cache"));
+    }
+    roots
 }
 
 /// A rounded rectangle with per-corner radii as a Direct2D path, in device pixels.
