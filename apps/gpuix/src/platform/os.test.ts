@@ -104,6 +104,8 @@ test('the clipboard uses pbcopy, PowerShell, wl-clipboard or xclip by session', 
   expect(clipboardReadCommands(mac)).toEqual([{ command: 'pbpaste', args: [] }])
   expect(clipboardWriteCommands(linux).map(c => c.command)).toEqual(['xclip', 'xsel', 'wl-copy'])
   expect(clipboardWriteCommands(wayland).map(c => c.command)).toEqual(['wl-copy', 'xclip', 'xsel'])
+  // A stale WAYLAND_DISPLAY: GPUI fell back to X11, so the X11 tools come first.
+  expect(clipboardWriteCommands({ ...wayland, displayServer: 'X11' }).map(c => c.command)).toEqual(['xclip', 'xsel', 'wl-copy'])
   expect(clipboardReadCommands(wayland).map(c => c.command)).toEqual(['wl-paste', 'xclip', 'xsel'])
   expect(clipboardReadCommands(wayland)[0]!.args).toContain('--no-newline')
   const [write] = clipboardWriteCommands(win), [read] = clipboardReadCommands(win)

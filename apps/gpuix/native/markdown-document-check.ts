@@ -1,6 +1,6 @@
 import '../src/native/local-build.ts'
 import { waitForPainted } from '../src/requests/harness.ts'
-import { GAPS, beforeAddon, capture, launch, outputDir, step } from './check-harness.ts'
+import { GAPS, beforeAddon, capture, launch, outputDir, settled, step } from './check-harness.ts'
 import path from 'node:path'
 import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -67,7 +67,7 @@ for(const mode of (process.env.MD_API_ONLY==='1'?[]:['dark','light'])) {
  await a.getByTestId('check-ready').press('r');await a.clock.fastForward(32);await a.getByTestId('check-ready').press('g');assert.equal(JSON.parse(await a.getByTestId('result').textContent()).text,'one 😀é two','Reflow retains selection identity');await a.getByTestId('check-ready').press('r')
  const before=await a.getByTestId('wrap-code').bounds()
  await a.getByTestId('wrap').click();await a.clock.fastForward(32)
- const after=await a.getByTestId('wrap-code').bounds();assert.ok(after.height>before.height+30,`Wrap must grow code: ${before.height} -> ${after.height}`)
+ const after=await settled(()=>a.getByTestId('wrap-code').bounds(),b=>b.height>before.height+30);assert.ok(after.height>before.height+30,`Wrap must grow code: ${before.height} -> ${after.height}`)
  const file=path.join(out,`capability-${mode}.png`);await capture(f,file);const grid=pixels(file)
  await a.getByTestId('grid').click();await a.clock.fastForward(32)
  const file2=path.join(out,`capability-${mode}-no-grid.png`);await capture(f,file2);const plain=pixels(file2)

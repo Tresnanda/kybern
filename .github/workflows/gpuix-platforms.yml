@@ -7,9 +7,13 @@
 # apps/gpuix/native/FORK), then runs apps/gpuix/scripts/run-platform-checks.ts:
 # the same `native/*-check.ts` files, platform smoke and no-web-view app check a
 # developer runs on a Mac, through the addon's automation client, plus WP1's
-# `scripts/frame-wake-check.tsx` (native frame wakes with no JS polling while
-# idle, UI-thread bridge calls per frame while animating, scroll-phase
-# injection, DPI info on Windows). Screenshots, per-check logs and JSON,
+# `scripts/frame-wake-check.tsx` (no JS polling or per-frame JS wakes, onFrame
+# delivery, UI-thread bridge calls per frame, scroll-phase injection, repaint of
+# cached islands at both frame parities with a KYBERN_FULL_INVALIDATE=1
+# control, the UI-exit wake, DPI info on Windows, the Wayland seat), the
+# transcript-scroll bridge scenario in the smoke, and a stale WAYLAND_DISPLAY
+# run that must fall back to X11; `scripts/assert-platform-reports.ts` lists
+# those facts on the run page. Screenshots, per-check logs and JSON,
 # report.jsonl and summary.md/json are uploaded as an artifact and the summary
 # is shown on the run page. The job fails when a check fails. Known gaps (wheel
 # input, ⌘ shortcuts, Menlo) are listed in the summary and do not fail the job
@@ -131,6 +135,7 @@ jobs:
       - name: Build the scratch daemon
         run: cargo build -p kybern
       - name: Build the patched GPUIX addon
+        id: addon
         uses: ./.github/actions/gpuix-addon
         with:
           target: ${{ matrix.target }}
@@ -143,18 +148,30 @@ jobs:
       - name: Describe the Vulkan device (Linux)
         if: matrix.os == 'linux'
         run: vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|driverName|apiVersion' || true
+      # Later steps run after an earlier check step failed (`!cancelled()`), so one failure still leaves every report.
+      # `-extension Composite`: with it Xvfb offers a 32-bit visual, GPUI's window takes it and is redirected
+      # off-screen with no compositing manager to draw it back, so every X capture is black.
       - name: Run the on-screen checks (Linux, Xvfb + lavapipe)
-        if: matrix.display == 'xvfb'
+        if: ${{ !cancelled() && steps.addon.outcome == 'success' && matrix.display == 'xvfb' }}
         working-directory: apps/gpuix
         env:
           CHECKS: ${{ inputs.checks }}
           STRICT: ${{ inputs.strict && '--strict' || '' }}
         run: |
-          xvfb-run -a -s '-screen 0 1440x900x24' \
+          xvfb-run -a -s '-screen 0 1440x900x24 -extension Composite' \
             bun scripts/run-platform-checks.ts --kybernd "$GITHUB_WORKSPACE/target/debug/kybernd" \
             --out gpuix-checks --checks "$CHECKS" $STRICT
+      - name: Frame wake with a stale WAYLAND_DISPLAY (Linux, Xvfb; GPUI must fall back to X11)
+        if: ${{ !cancelled() && steps.addon.outcome == 'success' && matrix.display == 'xvfb' }}
+        working-directory: apps/gpuix
+        run: |
+          # No compositor answers on this socket; with DISPLAY set GPUI logs it and uses X11 (WP1).
+          export XDG_RUNTIME_DIR="$(mktemp -d)"
+          WAYLAND_DISPLAY=wayland-missing xvfb-run -a -s '-screen 0 1440x900x24 -extension Composite' \
+            bun scripts/run-platform-checks.ts --kybernd "$GITHUB_WORKSPACE/target/debug/kybernd" \
+            --out gpuix-checks-stale-wayland --checks frame-wake
       - name: Frame wake and the app smoke (Linux, headless Weston without a seat)
-        if: matrix.display == 'wayland'
+        if: ${{ !cancelled() && steps.addon.outcome == 'success' && matrix.display == 'wayland' }}
         working-directory: apps/gpuix
         env:
           STRICT: ${{ inputs.strict && '--strict' || '' }}
@@ -167,10 +184,12 @@ jobs:
           [ -S "$XDG_RUNTIME_DIR/wayland-kybern" ] || { cat weston.log; exit 1; }
           unset DISPLAY
           export WAYLAND_DISPLAY=wayland-kybern
+          # frame-wake asserts getPlatformInfo().seat === false: GPUI really ran without a wl_seat.
+          export KYBERN_EXPECT_SEAT=false
           bun scripts/run-platform-checks.ts --kybernd "$GITHUB_WORKSPACE/target/debug/kybernd" \
             --out gpuix-checks --checks frame-wake,smoke --capture none $STRICT
       - name: Run the on-screen checks (Windows, Direct3D 11 on WARP)
-        if: matrix.os == 'windows'
+        if: ${{ !cancelled() && steps.addon.outcome == 'success' && matrix.os == 'windows' }}
         working-directory: apps/gpuix
         env:
           CHECKS: ${{ inputs.checks }}
@@ -178,6 +197,12 @@ jobs:
         run: |
           bun scripts/run-platform-checks.ts --kybernd "$GITHUB_WORKSPACE/target/debug/kybernd.exe" \
             --out gpuix-checks --checks "$CHECKS" $STRICT
+      - name: Assert the WP1 platform reports
+        if: ${{ !cancelled() && steps.addon.outcome == 'success' }}
+        working-directory: apps/gpuix
+        env:
+          JOB: ${{ matrix.id }}
+        run: bun scripts/assert-platform-reports.ts "$JOB"
       - name: Upload screenshots, logs and the summary
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -185,6 +210,7 @@ jobs:
           name: gpuix-${{ matrix.id }}-checks
           path: |
             apps/gpuix/gpuix-checks
+            apps/gpuix/gpuix-checks-stale-wayland
             apps/gpuix/weston.log
           if-no-files-found: warn
           retention-days: 14

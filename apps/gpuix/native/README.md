@@ -722,7 +722,7 @@ Locally (Linux needs `xvfb xauth x11-utils imagemagick` and Mesa's `mesa-vulkan-
 cd apps/gpuix && pnpm install --frozen-lockfile && (cd ../desktop && pnpm install --frozen-lockfile)
 cargo build -p kybern                                    # the scratch daemon
 native/update.sh                                         # or set NAPI_RS_NATIVE_LIBRARY_PATH to a built addon
-xvfb-run -a -s '-screen 0 1440x900x24' \
+xvfb-run -a -s '-screen 0 1440x900x24 -extension Composite' \
   bun scripts/run-platform-checks.ts --kybernd ../../target/debug/kybernd --out /tmp/gpuix-checks --checks clip,focus
 bun scripts/run-platform-checks.ts --list                 # the check names
 # A display nothing can grab (headless Weston): the smoke runs once without PNGs

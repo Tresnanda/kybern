@@ -2,7 +2,7 @@ import '../src/native/local-build.ts'
 import assert from 'node:assert/strict'
 import { writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { GAPS, capture, launch, outputDir, step, tolerance } from './check-harness.ts'
+import { GAPS, capture, launch, outputDir, settled, step, tolerance } from './check-harness.ts'
 import { acquirePreviewUiLock } from '../scripts/preview-ui-lock.ts'
 import {pngPixels} from './clip-pixels.ts'
 const output=outputDir('clip')
@@ -55,8 +55,9 @@ try {
    },{gap:GAPS.wheel})
    const beforeWrap=await a.getByTestId('code-body').bounds()
    await a.getByTestId('code-wrap').click()
+   const wrapped=await settled(()=>a.getByTestId('code-body').bounds(),b=>b.height>beforeWrap.height)
    await capture(f,path.join(output,`${prefix}-wrapped.png`))
-   assert.ok((await a.getByTestId('code-body').bounds()).height>beforeWrap.height,'Wrapping must reflow the code body')
+   assert.ok(wrapped.height>beforeWrap.height,`Wrapping must reflow the code body (${beforeWrap.height} -> ${wrapped.height})`)
    await step(`${prefix} virtual wheel`,async()=>{
     await a.getByTestId('virtual').wheel(0,-120)
     await a.getByTestId('replay').click()

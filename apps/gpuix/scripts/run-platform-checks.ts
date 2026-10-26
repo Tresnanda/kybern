@@ -4,7 +4,7 @@
  *   bun scripts/run-platform-checks.ts --kybernd <path to kybernd> [--out gpuix-checks] [--checks all|clip,rounded,...]
  *                                      [--strict] [--capture none] [--list]
  *
- * Linux needs a display: `xvfb-run -a -s '-screen 0 1440x900x24' bun scripts/run-platform-checks.ts ...`.
+ * Linux needs a display: `xvfb-run -a -s '-screen 0 1440x900x24 -extension Composite' bun scripts/run-platform-checks.ts ...`.
  * Windows and macOS use the desktop session. The checks are the same files a developer runs by hand on a Mac
  * (`native/*-check.ts`, `scripts/platform-smoke.ts`, `scripts/nowebview-app-check.ts`); this runner only gives each a scratch
  * data directory, an output folder, a time limit and a shared event report (`report.jsonl`, written by `step` in
@@ -74,6 +74,8 @@ const CHECKS: Record<string, Check> = {
       args: [
         script('platform-smoke.ts'), '--kybernd', kybernd, '--out', path.join(out, `smoke-clip-${clip}`), '--data', path.join(scratch, `smoke-clip-${clip}`),
         '--port', String(4377 + clip), ...(capture === 'none' ? ['--capture', 'none'] : []),
+        // The transcript-scroll bridge scenario (WP1) runs once, with the clip on.
+        ...(clip ? [] : ['--scroll', '0']),
       ],
       env: { KYBERN_ROUNDED_CLIP: String(clip) },
       minutes: 20,
@@ -93,12 +95,18 @@ const CHECKS: Record<string, Check> = {
     runs: ({ out }) => platform === 'windows' ? [{ name: 'webview', args: [native('webview-win-check.ts'), '--out', path.join(out, 'webview')], minutes: 10 }] : [],
   },
   'frame-wake': {
-    description: 'WP1: no JS polling while idle, native frame wakes and unwaited bridge calls while animating, scroll phases, DPI info (Windows)',
-    runs: ({ out }) => [{
-      name: 'frame-wake',
-      args: [script('frame-wake-check.tsx'), '--out', path.join(out, 'frame-wake', `frame-wake-${(display ?? platform).toLowerCase()}.json`), ...(display ? ['--expect-platform', display] : [])],
+    description: 'WP1: no JS polling or per-frame wakes, onFrame delivery, unwaited bridge calls, scroll phases, repaint of cached islands at both parities (and a KYBERN_FULL_INVALIDATE=1 control), the UI-exit wake, DPI info (Windows), the Wayland seat',
+    // KYBERN_EXPECT_SEAT: what getPlatformInfo().seat must be (the headless Weston job sets false).
+    runs: ({ out, capture }) => [false, true].filter(full => !full || (platform !== 'macos' && capture !== 'none')).map(full => ({
+      name: full ? 'frame-wake-full' : 'frame-wake',
+      args: [
+        script('frame-wake-check.tsx'), '--out', path.join(out, full ? 'frame-wake-full' : 'frame-wake', `frame-wake-${(display ?? platform).toLowerCase()}.json`),
+        ...(display ? ['--expect-platform', display] : []), ...(process.env.KYBERN_EXPECT_SEAT ? ['--expect-seat', process.env.KYBERN_EXPECT_SEAT] : []),
+        ...(capture === 'none' ? ['--capture', 'none'] : []),
+      ],
+      ...(full ? { env: { KYBERN_FULL_INVALIDATE: '1' } } : {}),
       minutes: 5,
-    }],
+    })),
   },
 }
 

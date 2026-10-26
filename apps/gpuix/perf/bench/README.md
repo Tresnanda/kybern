@@ -186,11 +186,14 @@ measure them. `profiles.ts` reports inclusive stack counts; categories overlap.
 Every timed window also records `evidence.bridge` (WP1): `getBridgeStats()` read
 before and after it, as `bridgeDelta` in `telemetry.ts` computes it. Off macOS
 that is the UI-thread bridge's commands sent, the ones that waited for an answer
-and their wait, each per GPUI served frame (a frame that drew or ran next-frame
-callbacks); `waitedPerFrame` rising is the regression to look for. macOS runs
-hooks on the JS thread (`bridged: false`) and reports only frame wakes. An addon
-older than WP1 gives `null`. `scripts/frame-wake-check.tsx` applies the same
-counters to an idle and an animating window on every platform.
+and their wait, each per served frame of the window (a frame that drew,
+`drawnFrames`, or only ran next-frame callbacks, `callbackFrames`);
+`waitedPerFrame` rising is the regression to look for. macOS runs hooks on the
+JS thread (`bridged: false`) and reports only frame wakes (off macOS
+`frameWakes` is the UI-exit wake alone). An addon older than WP1 gives `null`.
+`scripts/frame-wake-check.tsx` applies the same counters to an idle and an
+animating window on every platform, and `platform-smoke.ts` to a scrolling
+transcript (`scroll.json`).
 Profiled runs are separate from the baseline because `sample` perturbs scheduling.
 
 Comparison uses medians of successful runs. Differences below **3 CPU percentage

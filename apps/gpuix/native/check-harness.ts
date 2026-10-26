@@ -10,7 +10,9 @@
  *            web view.
  *   Windows  `app.screenshot` (Direct3D 11 on WARP in CI).
  *   Linux    `app.screenshot` when the addon supports it, else the window's pixels from the X server (`xwininfo` +
- *            ImageMagick `import`, under Xvfb). `KYBERN_CHECK_CAPTURE=addon|x11` forces one. The first capture logs which.
+ *            ImageMagick `import`, under Xvfb started with `-extension Composite`: otherwise GPUI's window takes the
+ *            32-bit visual, is redirected off-screen and captures black). `KYBERN_CHECK_CAPTURE=addon|x11` forces one.
+ *            The first capture logs which.
  *
  * Software rendering (lavapipe, WARP) is not bit-identical to Metal, so pixel assertions go through `tolerance` and
  * structure (bounds, painted text, same-renderer A/B equality) rather than golden hashes.
@@ -107,6 +109,21 @@ export async function step<T>(label: string, run: () => Promise<T> | T, options:
     report({ step: label, status: 'fail', detail: error instanceof Error ? error.message.split('\n')[0] : String(error) })
     throw error
   }
+}
+
+/**
+ * Poll `read` until `done` holds or `timeoutMs` passes, and return the last value. Off macOS a click returns before its
+ * JS handler, React's commit, the queued invalidation and the next drawn frame (bounds are recorded at paint), so a
+ * check that reads layout right after input must wait for it rather than for a fixed clock step.
+ */
+export async function settled<T>(read: () => Promise<T>, done: (value: T) => boolean, timeoutMs = 3000): Promise<T> {
+  const deadline = Date.now() + timeoutMs
+  let value = await read()
+  while (!done(value) && Date.now() < deadline) {
+    await Bun.sleep(50)
+    value = await read()
+  }
+  return value
 }
 
 // ---- capture ----

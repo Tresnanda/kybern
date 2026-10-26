@@ -16,10 +16,13 @@ export interface OsContext {
   platform: NodeJS.Platform
   env: Record<string, string | undefined>
   home: string
+  /** Linux: the display server GPUI connected to ("Wayland" or "X11"), when known. It wins over `WAYLAND_DISPLAY`, which
+   * a session can inherit stale (GPUI then falls back to X11). */
+  displayServer?: string
 }
 /** The user's home folder: `USERPROFILE` on Windows (`HOME` is only set by Git Bash and the like), `HOME` elsewhere. */
 export const homeFor = (platform: NodeJS.Platform, env: Record<string, string | undefined>) => (platform === 'win32' ? env.USERPROFILE : env.HOME) || homedir()
-export const osContext = (): OsContext => ({ platform: process.platform, env: process.env, home: homeFor(process.platform, process.env) })
+export const osContext = (): OsContext => ({ platform: process.platform, env: process.env, home: homeFor(process.platform, process.env), ...(displayServer ? { displayServer } : {}) })
 export const osName = (platform: NodeJS.Platform): OsName => platform === 'darwin' ? 'macos' : platform === 'win32' ? 'windows' : 'linux'
 export const pathFor = (platform: NodeJS.Platform) => platform === 'win32' ? path.win32 : path.posix
 
@@ -195,7 +198,7 @@ export function powershell(script: string, options: { sta?: boolean; env?: Recor
 const UTF8_IO = '[Console]::InputEncoding=[Text.UTF8Encoding]::new($false);[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);'
 /** An environment value a child can hold: no NUL, which ends a Windows or POSIX environment string. */
 const envValue = (value: string) => value.replaceAll('\0', '')
-const isWayland = (ctx: OsContext) => !!ctx.env.WAYLAND_DISPLAY
+const isWayland = (ctx: OsContext) => ctx.displayServer ? ctx.displayServer === 'Wayland' : !!ctx.env.WAYLAND_DISPLAY
 /** Whether a Linux session has a display for a dialog to open on. */
 const hasDisplay = (ctx: OsContext) => !!(ctx.env.DISPLAY || ctx.env.WAYLAND_DISPLAY)
 
@@ -456,8 +459,16 @@ export interface OsHost {
   captureScreenshot?: (path: string) => void
 }
 let host: OsHost | null = null
-/** Register the renderer once at startup. */
-export function setOsHost(renderer: object | null) { host = renderer as OsHost | null }
+let displayServer: string | undefined
+/** Register the renderer once at startup. On Linux it also records which display server GPUI uses (`getPlatformInfo`). */
+export function setOsHost(renderer: object | null) {
+  host = renderer as OsHost | null
+  if (process.platform !== 'linux') return
+  try {
+    const platform = (renderer as { getPlatformInfo?: () => { platform?: string } } | null)?.getPlatformInfo?.()?.platform
+    displayServer = platform === 'Wayland' || platform === 'X11' ? platform : undefined
+  } catch { displayServer = undefined }
+}
 const native = (ctx: OsContext): OsHost | null => osName(ctx.platform) === 'macos' ? null : host
 
 // ---- the services ----

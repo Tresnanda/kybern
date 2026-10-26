@@ -3,7 +3,7 @@
  * thread, then the app and the rounded-clip lab on screen, each captured to a PNG
  * and asserted.
  *
- *   bun scripts/platform-smoke.ts --kybernd <path> --out <dir> [--data <scratch dir>] [--port 4377] [--only app|lab] [--capture none]
+ *   bun scripts/platform-smoke.ts --kybernd <path> --out <dir> [--data <scratch dir>] [--port 4377] [--only app|lab] [--capture none] [--scroll 0]
  *
  * Same seeding technique as perf/bench/seed.ts (RPC creates the records, SQL
  * appends synthetic provider events), without its macOS helpers; no agent runs.
@@ -21,9 +21,15 @@
  * Under a headless Wayland compositor (WP1) there is nothing to grab: `--capture none`
  * still requires both windows to come up and the seeded message to be painted
  * (automation tree), and writes no PNGs or pixel assertions.
+ *
+ * Transcript scroll (WP1, `--scroll 0` skips it): the app again, through
+ * `scripts/bridge-probe-app.ts`, on a third thread seeded with 24 long turns. It wheels
+ * the transcript up and back for 2 s and reads `getBridgeStats` around it: off
+ * macOS the app's own waited UI-thread calls (the wheel input subtracted) must stay
+ * under 0.5 per served frame, and the transcript must move. Writes `scroll.json`.
  */
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { Database } from 'bun:sqlite'
 import { assertPainted, capture, launch, near, platform, pngPixels, step, tolerance, type Fixture } from '../native/check-harness.ts'
@@ -43,6 +49,8 @@ const kybernd = path.resolve(arg('kybernd'))
 const port = Number(arg('port', '4377'))
 const settle = Number(arg('settle-ms', '4000'))
 const captureMode = arg('capture', 'png')
+const scrollScenario = arg('scroll', '1') !== '0'
+const SCROLL_TURNS = 24
 const os = process.platform === 'win32' ? 'windows' : process.platform
 // The scratch daemon's data. Keep it out of `--out` when that folder is uploaded: it holds sockets.
 const data = path.resolve(arg('data', path.join(out, 'scratch')))
@@ -99,6 +107,16 @@ try {
   const insert = db.query('INSERT INTO events(thread_id,turn_id,at,kind,payload) VALUES (?,?,?,?,?)')
   const at = '2026-10-22T00:00:00Z'
   const id = (n: number) => `00000000-0000-4000-a000-${String(n).padStart(12, '0')}`
+  // The scroll thread: SCROLL_TURNS turns of the same answer, ids from 1000 up.
+  const scrollEvents = Array.from({ length: SCROLL_TURNS }, (_, turn) => {
+    const base = 1000 + turn * 10
+    return { turn: id(base), events: [
+      { kind: 'turn_started', message_id: id(base + 1), message: { parts: [{ type: 'text', text: `Scroll turn ${turn + 1}` }] } },
+      // Long answers: earlier-history paging shows only the latest turns, which must still overflow the viewport.
+      { kind: 'assistant_message_completed', message_id: id(base + 2), origin: { kind: 'root' }, text: `${Array.from({ length: 6 }, () => answer).join('\n\n')}\n\nEnd of scroll turn ${turn + 1}.`, thinking: null },
+      { kind: 'turn_completed', stop_reason: 'completed', usage: { input_tokens: 10, output_tokens: 5, cache_read_tokens: 0, cache_write_tokens: 0 }, cost_usd: null, duration_ms: 1000, terminal_message_id: id(base + 2) },
+    ] }
+  })
   const events = [
     { kind: 'turn_started', message_id: id(1), message: { parts: [{ type: 'text', text: `Show me the GPUIX client running on ${os}.` }] } },
     { kind: 'tool_call_started', call: { id: id(2), name: 'Read', input: { file_path: 'apps/gpuix/PORTING-PLATFORMS.md' } }, origin: { kind: 'root' } },
@@ -108,7 +126,8 @@ try {
   ]
   db.transaction(() => {
     for (const event of events) insert.run(threads[0]!, id(10), at, event.kind, JSON.stringify(event))
-    db.query('UPDATE threads SET last_seq=(SELECT MAX(seq) FROM events WHERE thread_id=?),updated_at=? WHERE id=?').run(threads[0]!, at, threads[0]!)
+    for (const { turn, events } of scrollEvents) for (const event of events) insert.run(threads[2]!, turn, at, event.kind, JSON.stringify(event))
+    for (const thread of [threads[0]!, threads[2]!]) db.query('UPDATE threads SET last_seq=(SELECT MAX(seq) FROM events WHERE thread_id=?),updated_at=? WHERE id=?').run(thread, at, thread)
   })()
 } finally {
   db.close()
@@ -209,12 +228,68 @@ const scratchEnv = {
   KYBERN_TOKEN: '',
   KYBERN_GPUIX_THREAD: threads[0]!,
 }
+/** WP1: the app's waited bridge calls per frame while the transcript scrolls (`scripts/bridge-probe-app.ts`). */
+async function scrollBridge() {
+  const f = await launch(path.join(import.meta.dir, 'bridge-probe-app.ts'), { KYBERN_APPEARANCE: 'dark', ...scratchEnv, KYBERN_GPUIX_THREAD: threads[2]! })
+  try {
+    await f.app.getByTestId('app-ready').waitFor({ timeoutMs: 90_000 })
+    // The app restores the thread the app run left open (KYBERN_GPUIX_THREAD applies only with none): open it as a user would.
+    await f.app.getByTestId(`thread-${threads[2]}`).waitFor({ timeoutMs: 60_000 })
+    await f.app.getByTestId(`thread-${threads[2]}`).click()
+    for (let attempt = 0; ; attempt++) {
+      // The tail of the last answer, unique to this thread (followTail opens there).
+      try { await waitForPainted(f.app, `End of scroll turn ${SCROLL_TURNS}`, 20_000); break } catch (error) {
+        if (attempt >= 3) throw error
+        console.log('[smoke] the scroll thread is not on screen yet; pressing Reconnect')
+        await f.app.getByText('Reconnect').click().catch(() => {})
+      }
+    }
+    await Bun.sleep(1500)
+    const port = readFileSync(path.join(data, 'bridge-probe.port'), 'utf8').trim()
+    const response = await fetch(`http://127.0.0.1:${port}/`, { method: 'POST', body: JSON.stringify({ action: 'scroll', target: 'transcript', durationMs: 2000 }) })
+    const probe = await response.json() as { error?: string; seconds: number; inputCalls: number; offsets: (number[] | null)[]; calls?: Record<string, number>
+      before: { bridged: boolean; waited: number; sent: number; waitMs: number; servedFrames: number | null; drawnFrames?: number | null } | null
+      after: { bridged: boolean; waited: number; sent: number; waitMs: number; servedFrames: number | null; drawnFrames?: number | null } | null }
+    if (probe.error) throw new Error(`bridge probe: ${probe.error}`)
+    const { before, after } = probe
+    const frames = before?.servedFrames != null && after?.servedFrames != null ? after.servedFrames - before.servedFrames : null
+    const drawn = before?.drawnFrames != null && after?.drawnFrames != null ? after.drawnFrames - before.drawnFrames : null
+    const waited = before && after ? after.waited - before.waited : null
+    const appWaited = waited == null ? null : Math.max(0, waited - probe.inputCalls)
+    const result = {
+      bridged: after?.bridged ?? false, seconds: probe.seconds, inputCalls: probe.inputCalls, frames, drawnFrames: drawn,
+      sent: before && after ? after.sent - before.sent : null, waited, appWaited,
+      appWaitedPerFrame: appWaited == null || !frames ? null : appWaited / frames,
+      waitMs: before && after ? after.waitMs - before.waitMs : null, offsets: probe.offsets,
+      // Addon calls by method during the window (the probe's own wheel steps and offset read included).
+      calls: probe.calls ?? null,
+    }
+    console.log(`[smoke] transcript scroll bridge: ${JSON.stringify(result)}`)
+    writeFileSync(path.join(out, 'scroll.json'), JSON.stringify(result, null, 2))
+    await step('scroll: the transcript moves under the wheel', () => {
+      const [start, middle] = probe.offsets.map(offset => offset?.[1] ?? offset?.[0] ?? null)
+      assert.ok(start != null && middle != null && start !== middle, `the transcript offset did not change (${JSON.stringify(probe.offsets)})`)
+    })
+    if (result.bridged) await step('scroll: under 0.5 waited bridge calls per frame (wheel input excluded)', () => {
+      assert.ok(frames && frames >= 5, `only ${frames} frames served while scrolling: too few to judge per-frame cost`)
+      assert.ok(result.appWaitedPerFrame! < 0.5, `${result.appWaitedPerFrame!.toFixed(2)} waited calls per frame (${appWaited} over ${frames} frames)`)
+    })
+  } catch (error) {
+    console.error(f.diagnostics())
+    if (captureMode !== 'none') await capture(f, path.join(out, `${os}-scroll-failure.png`)).catch(() => {})
+    throw error
+  } finally {
+    await f.close().catch(() => {})
+  }
+}
+
 let failed = false
 try {
   // The lab first: on a cold runner the first launch (Bun's transpile cache, Mesa's
   // shader cache) can starve the app's daemon probe.
   if (only !== 'app') await shoot(path.join(import.meta.dir, '../native/clip-lab.tsx'), 'ready', `${os}-clip.png`, { KYBERN_DATA_DIR: data }, verifyLab)
   if (only !== 'lab') await shoot(app, 'app-ready', `${os}-app.png`, scratchEnv, verifyApp, `Show me the GPUIX client running on ${os}.`)
+  if (only !== 'lab' && scrollScenario) await scrollBridge()
 } catch (error) {
   failed = true
   console.error(`[smoke] FAILED: ${error instanceof Error ? error.message : error}`)

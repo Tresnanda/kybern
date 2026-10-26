@@ -124,9 +124,16 @@ Evidence:
    **WP1 did both:** `()` hooks queue without waiting (`update_window_detached`;
    the per-frame one is the animation-frame acknowledge), and `getBridgeStats()`
    counts sends, waited calls and wait time against GPUI's served frames;
-   `perf/bench` records it per window (`evidence.bridge`) and
-   `scripts/frame-wake-check.tsx` asserts fewer than 0.5 waited calls per
-   animated frame. The same work found that off macOS every mutation batch
+   `perf/bench` records it per window (`evidence.bridge`, served frames split
+   into drawn and callbacks-only), `scripts/frame-wake-check.tsx` asserts fewer
+   than 0.5 waited calls per animated frame and `platform-smoke.ts` the same
+   for a scrolling transcript. The layout-observer liveness check
+   (`isLayoutObserverActive` on every callback, a waited round trip per layout
+   event while scrolling) is gone from `src/native/layout.ts`, and off macOS
+   the transcript window (`src/transcript/Window.tsx`) takes the list anchor
+   from the list's own observation instead of a waited `getListScrollTop` per
+   row observation and range change: scrolling a 24-turn transcript under Xvfb
+   went from 1.78 to 0.1 waited calls per frame (the wheel input excluded). The same work found that off macOS every mutation batch
    invalidated with `window.refresh()`, which turns every cached island off; it
    now takes the macOS island path (`KYBERN_FULL_INVALIDATE=1` restores the
    refresh for A/B runs).
@@ -163,7 +170,7 @@ nothing but `platforms_hooks.py`.
 | Idle GPU release, window-state observer, autorelease tick pool | `idle_memory*` | fallback | fallback | No idle release; JS keeps its polling path |
 | Large-allocation mapper, small-allocation heap | `large_alloc.rs`, `code_small*`, `code_alloc.rs` | fallback | fallback | System allocator; their stats read 0 |
 | Shimmer band / hue, pop, rotate, stroke draw, hover/stream fades, subtree transforms | `shimmer_band_gpui.py`, `pop_gpui.py`, `rotate_gpui.py`, `stroke_draw*`, `hover_fade*`, `stream_fade*`, `subtree_*` | works | works | Evaluated in GPUI core's scene, not in Metal; compiled and running, not individually checked on screen |
-| Frame wake | upstream `set_frame_wake_hook` (0.11); WP1 zed commit "Frame wake hook off macOS" | works (WP1, not yet run) | works (WP1, not yet run) | JS wakes after each GPUI frame that drew or ran next-frame callbacks, paced by Wayland frame callbacks, the X11 RandR refresh loop or the DWM vsync thread, and once when the UI thread exits. The 8 ms JS poll (125 wakes/s) is gone; the runtime's 100 ms fallback stays. `scripts/frame-wake-check.tsx` checks it in CI |
+| Frame wake | upstream `set_frame_wake_hook` (0.11); WP1 zed commit "Frame wake hook off macOS" | works (WP1, CI: idle 10 ticks/s) | works (WP1, CI: idle 10 ticks/s) | `setFrameWakeCallback` returns true off macOS, so the JS loop runs on its 100 ms fallback instead of the 8 ms poll (125 wakes/s), and wakes once when the UI thread exits. No per-frame wake: off macOS `tick()` only reads whether the UI thread runs, animations use `subscribeAnimationFrames`, and a wake per served frame cost 60–240 JS wakeups/s during agent work (the first CI run measured 62/s animating). `scripts/frame-wake-check.tsx` checks it in CI |
 | Mutation invalidation (cached islands) | `request_invalidate` | works (WP1, not yet run) | works (WP1, not yet run) | Was `window.refresh()` on every batch (no cached views); now the macOS island path. `KYBERN_FULL_INVALIDATE=1` restores the refresh |
 | Wayland without `wl_seat`, stale `WAYLAND_DISPLAY` | WP1 zed commit "Wayland: run without a seat, fall back to X11" | works (WP1, not yet run) | — | Headless Weston (no seat) no longer panics; a seat that appears later gets its devices. An unreachable `WAYLAND_DISPLAY` with `DISPLAY` set uses X11 |
 | Per-monitor DPI | `enable_per_monitor_dpi` (0.11), `getPlatformInfo` (WP1) | — | works? | Bun's manifest declares no DPI awareness, so the UI thread's `SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)` succeeds; GPUI handles `WM_DPICHANGED`. WP1 reports the mode and the window's `GetDpiForWindow`. 125/150/175 % and monitor moves need hardware |
@@ -539,8 +546,11 @@ merged into `kybern`):
 | --- | --- | --- |
 | `Tresnanda/zed` | "Frame wake hook off macOS (WP1)" | `gpui::set_frame_wake_hook` and `served_frame_count`, called from GPUI's frame-request closure when a frame drew or ran next-frame callbacks (not on macOS) |
 | `Tresnanda/zed` | "Wayland: run without a seat, fall back to X11 (WP1)" | Optional `wl_seat` end to end; `WaylandClient::new` returns an error and `current_platform` falls back to X11 when `DISPLAY` is set |
+| `Tresnanda/zed` | "WP1 review: per-window frame counters, Wayland seat report, X11 fallback on missing globals" | `Window::frame_counters()` (drawn vs callbacks-only, readable off the UI thread), `gpui::wayland_seat()`, the fallback also when `wl_compositor`, `wl_shm` or `xdg_wm_base` cannot be bound |
+| `Tresnanda/zed` | "WGSL and HLSL: read the 40-byte rounded clip node with edge fades" | The fix for the first CI run (below): the shaders' `RoundedClipNode` lacked `kind`, so every clip chain past the first node was misread off macOS |
 | `Tresnanda/gpuix` | "Windows and Linux: native frame wake, bridge cost, scroll phases, DPI info (WP1)" | `setFrameWakeCallback` returns true off macOS; detached `()` hooks; island invalidation; `getBridgeStats()`, `getPlatformInfo()`; `simulateScrollPhase` everywhere |
-| `Tresnanda/gpuix` | "Use the zed wp1 branch (WP1)" | The gitlink |
+| `Tresnanda/gpuix` | "WP1 review: exit-only JS wake, frame counts, closed-window errors, capture as drawn" | Off macOS only the UI-exit wake; `getBridgeStats` per-window `drawnFrames`/`callbackFrames`; queued hooks fail on a closed window and log failures as errors; the frame clock delivers an acknowledge that missed a frame at once; `SetWindowTitle` notifies without `window.refresh()`; `getPlatformInfo` `seat` and the real DPI awareness (`dpiMode`, `dpiSource`); `closeWindow()`; `captureScreenshot(path, asDrawn)` |
+| `Tresnanda/gpuix` | "Use the zed wp1 branch (WP1)" | The gitlink (bumped with each zed commit) |
 
 Decided against in WP1: parking GPUI's X11 refresh loop and the Windows vsync
 thread while idle. Both still wake the UI thread every vsync for a no-op frame
@@ -560,9 +570,13 @@ What proves what:
   by exactly `getBridgeStats`, `getPlatformInfo` and
   `TestGpuixRenderer.simulateScrollPhase`; the app's typecheck and 952 unit
   tests pass; both addons launch the app against a scratch daemon and show the
-  seeded transcript (`platform-smoke.ts --capture none`); the idle JS loop is
-  the same (10 ticks/s, the fallback timer). The on-screen native checks were
-  not run: the Mac's screen was locked.
+  seeded transcript (`platform-smoke.ts --capture none`). The review round's
+  pin (`c379feb`/`6a76c18`) was checked on screen: `frame-wake-check` passes
+  on macOS, repaint captures correct at both parities. On screen the macOS
+  display link wakes the JS loop every vsync (60/s) even with nothing
+  animating (the previous check script reports the same against this addon,
+  and no macOS change here touches the display link), so that idle limit is a
+  warning on macOS and a failure only on Linux and Windows.
 - **Linux and Windows compile.** `cargo check` of the native crate for
   `x86_64-unknown-linux-gnu` and `x86_64-pc-windows-msvc` passes from macOS with
   stub C tools (`cargo check` never links the C dependencies, so a stub
@@ -579,15 +593,45 @@ throwaway `spike/*` branch with a push trigger as the ADE-52 spike did), inputs
 | Step | Proves |
 | --- | --- |
 | Build the patched GPUIX addon (all three jobs) | The `wp1` pin builds and links for real (the local check never linked) |
-| Smoke check on screen, `smoke-clip-1/*-app.png`, `smoke-clip-0/*` | The app still draws with island invalidation; compare with the ADE-52 captures (`.kybern-artifacts/ade-grill/`) for stale or missing content |
-| `frame-wake` check (Linux X11 job), `frame-wake/frame-wake-x11.json` | Idle: ≤ 15 JS ticks/s and ≤ 5 frame wakes/s; animating: ≥ 10 wakes/s and < 0.5 waited bridge calls per frame; `simulateScrollPhase` moves a scroller; `platform` is `X11` |
-| `linux-wayland` job (headless Weston, no seat): `frame-wake/frame-wake-wayland.json`, `smoke-clip-1` with `--capture none` | GPUI connects to a compositor with no `wl_seat` without panicking, `platform` is `Wayland`, the same frame-wake and scroll checks, and the whole app comes up there with the seeded message (no PNG: no grabber) |
-| `frame-wake` check (Windows job), `frame-wake/frame-wake-windows.json` | The same on Direct3D 11/WARP, plus `info.windows.dpiMode` (`process-per-monitor-v2` expected) and `windowDpi` agreeing with `scaleFactor × 96` (96 on the runner) |
+| Smoke check on screen, `smoke-clip-1/*-app.png`, `smoke-clip-0/*` | The app and the clip lab draw (rounded clips included) with island invalidation; compare with the ADE-52 captures (`.kybern-artifacts/ade-grill/`) |
+| Smoke transcript scroll, `smoke-clip-1/scroll.json` | Scrolling a 24-turn transcript waits on the UI thread < 0.5 times per served frame (the wheel input itself excluded), and the transcript moves |
+| `frame-wake` (every job), `frame-wake/frame-wake-<platform>.json` | Idle: ≤ 15 JS ticks/s, no JS frame wake off macOS, process CPU recorded (warns over 25 % on CI); animating: ≥ 10 `onFrame` deliveries/s, ticks ≥ wakes, ≤ 2 JS wakes/s off macOS, < 0.5 waited bridge calls per frame, frames split drawn/callbacks-only; `simulateScrollPhase` moves a scroller; repaint: a plain box, a cached island's leaf and a cached island changed in the same batch as its parent show the colour of `frame % 2` in captures as drawn at both parities (`frame-wake-even.png`, `frame-wake-odd.png`); `closeWindow()` ends the JS loop through the UI-exit wake |
+| `frame-wake-full` (X11 and Windows), `KYBERN_FULL_INVALIDATE=1` | The same repaint captures with the old full refresh: the control for the island path |
+| Linux X11: `gpuix-checks-stale-wayland/frame-wake/frame-wake-x11.json` | With `WAYLAND_DISPLAY=wayland-missing` under Xvfb, GPUI falls back to X11 (`platform` `X11`, `seat` null) |
+| `linux-wayland` job (headless Weston): `frame-wake/frame-wake-wayland.json`, `smoke-clip-1` with `--capture none` | `platform` is `Wayland` and `seat` is `false` (GPUI really ran without a `wl_seat`), the frame-wake checks without captures, and the whole app comes up with the seeded message |
+| Windows: `frame-wake/frame-wake-windows.json` | Direct3D 11/WARP, `info.windows.dpiMode` a per-monitor-v2 mode (the thread's real awareness), `windowDpi > 0` and `scaleFactor ≈ windowDpi / 96` |
+| "Assert the WP1 platform reports" (every job) | `scripts/assert-platform-reports.ts` lists each fact above on the run page and fails on a missing report |
 
-Repeat a Linux run with `KYBERN_FULL_INVALIDATE=1` if a capture differs, to
-tell the invalidation change apart from the rest. CI cannot change the display
-scale, so 125/150/175 % and moving between monitors stay on the real-hardware
-list.
+Check steps run with `!cancelled()` once the addon built, so one failing step still leaves every report.
+CI cannot change the display scale, so 125/150/175 % and moving between
+monitors stay on the real-hardware list.
+
+The first run of this pin (`spike/gpuix-platforms-1`, run 40246824783,
+2026-10-26; artifacts in `.kybern-artifacts/wp1-ci/`): Wayland passed (frame
+wake, app smoke); on X11 and Windows `frame-wake` passed but measured 62 JS
+wakes/s while animating, the reason the per-frame wake went. The smoke, clip,
+rounded and Markdown checks failed for three reasons that predate WP1:
+
+- Content inside rounded overflow clips was missing (Windows): the Metal-only
+  "Analytic rounded clip chains" commit grew `gpui::RoundedClip` to 40 bytes
+  (`kind`, for edge fades) and the WGSL and HLSL nodes stayed 36. Fixed on
+  `wp1` (commit table); in an arm64 Ubuntu 22.04 container under Xvfb the clip
+  lab now matches the macOS capture.
+- Every X11 capture was black: Xvfb's Composite extension offers a 32-bit
+  visual, GPUI's window takes it and is redirected off-screen with no
+  compositing manager to draw it back. The workflow starts Xvfb with
+  `-extension Composite` (GPUI then uses a 24-bit visual).
+- "Wrap must grow" read bounds a fixed 32 ms after a click, which off macOS can
+  land before the JS handler, the batch and the next drawn frame;
+  `clip-check` and `markdown-document-check` now wait for the reflow
+  (`settled` in `native/check-harness.ts`).
+
+With those fixed, in the container `clip-check`, `frame-wake` (X11, the full
+refresh control, a stale `WAYLAND_DISPLAY`, headless Weston without a seat)
+pass. Still failing there, not yet investigated: `rounded-check` ("First
+external corner is rounded", a one-pixel sample at 1×) and
+`markdown-document-check` ("Grid adds actual outer/vertical borders"); and in
+CI `nowebview` timed out waiting for the seeded pictures on both platforms.
 
 ### Where the forks help
 
