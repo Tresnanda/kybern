@@ -154,7 +154,14 @@ try {
   Check (@(InstalledProcesses 'kybernd').Count -ge 1) 'a daemon is running from the install folder before the uninstall'
   $env:KYBERN_DATA_DIR = $daemonData
   try { Uninstall } finally { Remove-Item Env:\KYBERN_DATA_DIR -ErrorAction SilentlyContinue }
-  WaitUntil { -not (Test-Path -LiteralPath $dir) } 60 'the uninstaller to remove the install folder'
+  try { WaitUntil { -not (Test-Path -LiteralPath $dir) } 60 'the uninstaller to remove the install folder' }
+  catch {
+    # Say what kept the folder: files the uninstaller does not list, or a process still holding one.
+    Write-Host "left in ${dir}:"; Get-ChildItem -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.FullName)" }
+    Write-Host 'still running from it:'; InstalledProcesses $null | ForEach-Object { Write-Host "  $($_.Id) $($_.Path)" }
+    Write-Host "the update's daemon: exited $($daemon.HasExited)"
+    throw
+  }
   Check ($daemon.HasExited) 'the uninstaller stopped the running daemon'
 } finally {
   StopInstalledProcesses
