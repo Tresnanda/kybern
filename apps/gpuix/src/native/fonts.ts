@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { installUiFont } from '../platform/fonts.ts'
 import { nativeCapabilities } from './api.ts'
 
 const registered = new WeakSet<object>()
@@ -8,5 +9,7 @@ export function registerBrandFonts(renderer: object): void {
   const api = nativeCapabilities(renderer)
   api.registerFont(readFileSync(new URL('../assets/fonts/CalSans-Regular.ttf', import.meta.url)))
   api.registerFont(readFileSync(new URL('../assets/fonts/JetBrainsMono-Regular.ttf', import.meta.url)))
+  // Off macOS, labs draw the app's UI font too (`platform/fonts.ts`).
+  installUiFont(renderer)
   registered.add(renderer)
 }

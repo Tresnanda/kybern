@@ -4,6 +4,7 @@ import {readFileSync,writeFileSync} from 'node:fs'
 import {inflateSync} from 'node:zlib'
 import path from 'node:path'
 import {GAPS,capture,launch,outputDir,step,tolerance} from './check-harness.ts'
+import {MONO_ADVANCE} from '../src/theme.ts'
 // Small PNG reader for native screenshots, avoiding a new test dependency.
 function pixels(file:string) {
  const png=readFileSync(file),chunks:Buffer[]=[];let w=0,h=0,bpp=0
@@ -38,8 +39,8 @@ for(const mode of ['dark','light']){
  },{gap:GAPS.font})
  // Same-color adjacent atoms retain their own external corners instead of coalescing.
  const touch=boxes.touching!
- // 48.2 = four Menlo advances at 20 px; off macOS Menlo is a fallback face whose advances differ (WP8).
- await step(`${mode} second atom radius`,()=>assert.ok(!filled(round,touch.x+48.2,touch.y+0.5),'Second atom retains its left radius'),{gap:GAPS.font})
+ // Four advances of the code face at 20 px (48.2 with Menlo; 48 with JetBrains Mono off macOS, WP8).
+ await step(`${mode} second atom radius`,()=>assert.ok(!filled(round,touch.x+Math.round(4*MONO_ADVANCE*20*10)/10,touch.y+0.5),'Second atom retains its left radius'),{gap:GAPS.font})
  await click('normal');await click('select');const selected=await shot('selected');assert.notDeepEqual(crop(round,'radius'),crop(selected,'radius'),'Selection paints over the pill')
  const pillBounds=boxes.radius!;assert.notDeepEqual(round.at((pillBounds.x+60)*scale,(pillBounds.y+2)*scale),selected.at((pillBounds.x+60)*scale,(pillBounds.y+2)*scale),'Selection changes an interior background pixel')
  await click('before');await a.getByTestId('radius').press('right');assert.equal(JSON.parse(await click('selection')).start,11)

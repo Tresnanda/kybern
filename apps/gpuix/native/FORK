@@ -8,8 +8,8 @@ repo=https://github.com/Tresnanda/gpuix.git
 # plus the Linux screenshot through a wgpu readback and KYBERN_ROUNDED_CLIP=0 keeping
 # edge fades, until they are merged into `kybern`; then pin the merged kybern heads.
 # WP5 (notifications): the forks' `wp5` branches, one commit each on top of that.
-commit=34b8717454a4fee35eb21cfaa998905389b9d9ca
+commit=87797905da10596ea9a51712dbea4be4a133779b
 # The zed submodule commit `commit` records; update.sh refuses a checkout that differs.
-zed=7320cdb89b6807badb0aacd9dc1eb306b56cfaf8
+zed=fa96d835c5acd417e7f53c7b8f3730c61766c6ab
 # The upstream tag `commit` is based on. It must be `@gpuix/native@<VERSION>`.
 upstream=@gpuix/native@0.11.0

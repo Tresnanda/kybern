@@ -4,12 +4,13 @@ import { useRef } from 'react'
 import { dockGeometry, useDock, useDockDrag } from '../dock/store.ts'
 import { usePanelOpen } from '../nav/TitleBar.tsx'
 import { useSidebarDragging, useSidebarWidth, useWindowWidth } from '../shell/layout.ts'
+import { MONO_ADVANCE } from '../theme.ts'
 import { CODE } from './kit.tsx'
 
 /** The 52px rail and the 8px frame inset (`App.tsx`). */
 const CHROME = 52 + 8
-/** Menlo's advance width at the code size. */
-const CHAR = CODE.size * 0.602
+/** The code face's advance width at the code size (Menlo on macOS, JetBrains Mono elsewhere). */
+const CHAR = CODE.size * MONO_ADVANCE
 /** `CodeChunk`'s 9.6px side padding (`pre { padding: .5rem .6rem }`). */
 const PADDING = 19.2
 

@@ -10,6 +10,7 @@ import {
 } from '../../desktop/src/lib/kit/theme/theme.logic.ts'
 import type { DesktopMaterial } from './platform/desktopMaterial.ts'
 import { SINGLE_FILL, effectiveSurface, glassRecipe, materialCoverage, materialVars, opacityVarsFor, surfaceScale, type WindowScope } from './platform/translucency.ts'
+import { FONTS } from './platform/fonts.ts'
 
 type Vars = Record<string, string>
 
@@ -316,4 +317,7 @@ export const materialCount = () => materials.size
 export const windowCoverage = (variant: ThemeVariant, scope: WindowScope, sidebarOpacity: number, contentOpacity = 100) => materialCoverage(variant, opaqueVars(variant), scope, sidebarOpacity, contentOpacity)
 
 export const FONT_UI = '.SystemUIFont'
-export const FONT_MONO = 'Menlo'
+/** Menlo on macOS, the bundled JetBrains Mono elsewhere (`platform/fonts.ts`). */
+export const FONT_MONO = FONTS.mono
+/** The code face's advance in em: what the code wrap and fixed-width columns compute with. */
+export const MONO_ADVANCE = FONTS.monoAdvance

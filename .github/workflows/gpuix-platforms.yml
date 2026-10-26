@@ -30,7 +30,7 @@ on:
   workflow_dispatch:
     inputs:
       checks:
-        description: 'Checks to run: all, or a comma list of focus, clip, rounded, backdrop, markdown-document, smoke, nowebview, webview (Windows), frame-wake, notify'
+        description: 'Checks to run: all, or a comma list of focus, clip, rounded, backdrop, markdown-document, text, smoke, nowebview, webview (Windows), frame-wake, notify'
         required: false
         type: string
         default: all
@@ -105,7 +105,7 @@ jobs:
           git config --global core.longpaths true
           git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install GPUI's system packages, Xvfb, Mesa lavapipe, xwininfo and ImageMagick
+      - name: Install GPUI's system packages, Xvfb, Mesa lavapipe, xwininfo, ImageMagick and the emoji and CJK fonts
         if: matrix.os == 'linux'
         run: |
           sudo apt-get update
@@ -113,7 +113,7 @@ jobs:
             gcc g++ clang pkg-config libfontconfig-dev libfreetype-dev libwayland-dev \
             libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev libssl-dev libzstd-dev \
             libvulkan1 mesa-vulkan-drivers vulkan-tools xvfb xauth x11-utils imagemagick fonts-dejavu-core \
-            dbus python3-gi gir1.2-glib-2.0
+            dbus python3-gi gir1.2-glib-2.0 fonts-noto-color-emoji fonts-noto-cjk
       - name: Install Weston (headless Wayland compositor)
         if: matrix.display == 'wayland'
         run: sudo apt-get install -y --no-install-recommends weston

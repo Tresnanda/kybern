@@ -174,9 +174,10 @@ nothing but `platforms_hooks.py`.
 | Mutation invalidation (cached islands) | `request_invalidate` | works (WP1, not yet run) | works (WP1, not yet run) | Was `window.refresh()` on every batch (no cached views); now the macOS island path. `KYBERN_FULL_INVALIDATE=1` restores the refresh |
 | Wayland without `wl_seat`, stale `WAYLAND_DISPLAY` | WP1 zed commit "Wayland: run without a seat, fall back to X11" | works (WP1, not yet run) | — | Headless Weston (no seat) no longer panics; a seat that appears later gets its devices. An unreachable `WAYLAND_DISPLAY` with `DISPLAY` set uses X11 |
 | Per-monitor DPI | `enable_per_monitor_dpi` (0.11), `getPlatformInfo` (WP1) | — | works? | Bun's manifest declares no DPI awareness, so the UI thread's `SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)` succeeds; GPUI handles `WM_DPICHANGED`. WP1 reports the mode and the window's `GetDpiForWindow`. 125/150/175 % and monitor moves need hardware |
-| Variable `wght` axis | `font_weight*` (CoreText) | fallback | fallback | Nearest installed weight; WP4 |
-| Per-run text scale (`kszl`) | `text_scale_gpui.py` (CoreText) | fallback | fallback | `font_scale()` default 1: rich-editor inline code at full size; WP4 |
-| Fonts | `theme.ts` `.SystemUIFont`, Menlo | fallback | fallback | GPUI maps `.SystemUIFont` per platform; Menlo falls back (DejaVu in CI). Bundled Cal Sans / JetBrains Mono load (wordmark visible) |
+| Variable `wght` axis | `font_weight*` (CoreText); WP8 zed commits on `wp8` | works (WP8, CI `text`) | works (WP8, CI `text`) | Every kit weight (450/550/650 too) on the face's `wght` axis. [WP8 status](#wp8-text-status) |
+| Per-run text scale (`kszl`) | `text_scale_gpui.py` (CoreText); WP8 | works (WP8, CI `text`) | works (WP8, CI `text`) | `font_scale()` on both: rich-editor inline code at 0.833 |
+| Fonts | `theme.ts`, `src/platform/fonts.ts` | works (WP8) | works (WP8) | `.SystemUIFont` → Segoe UI Variable Text on Windows 11, else the bundled Inter (`setSystemUiFont`); code in the bundled JetBrains Mono, whose advance the code wrap uses (`MONO_ADVANCE`). The WP7 "Menlo glyph advances" gap closes |
+| Text rendering | `cosmic_text_system.rs`, `direct_write.rs` | unhinted (WP8) | unhinted (WP8) | Glyphs drawn without hinting / grid fitting, like Core Text (`KYBERN_TEXT_HINTING=1` restores it); ClearType vs grayscale stays GPUI's choice |
 | Key interception, close guard, input selection/transactions, text selection, rich-editor commands and images, window background | `apply_hooks.py`, `editor9_hooks.py`, `image_memory_hooks.py`, `window_platform_hooks.py` | works (UI-thread bridge) | works (UI-thread bridge) | Were "macOS-only" stubs; the close guard is used at startup |
 | Rich-editor key interceptor | `rich_editor.rs:677` | fallback | fallback | Gated `macos`; editor shortcuts that rely on it do not fire. WP3 |
 | Title-bar double-click action | `window_platform_hooks.py` | blocked | blocked | Reads the macOS "double-click to zoom" default; JS should zoom/maximize itself. WP3 |
@@ -312,10 +313,43 @@ parity (WP9); their fallbacks are what the spike runs today.
 
 | Feature | Where | Windows | Linux | Effort |
 | --- | --- | --- | --- | --- |
-| Variable `wght` axis | `font_weight_gpui.py`, `font_weight.rs` (CoreText) | DirectWrite font axis values | cosmic-text / fontdb variations | 2 each |
-| Per-run text scale (`kszl`) | `text_scale_gpui.py` | DirectWrite | cosmic-text | 1 each |
+| Variable `wght` axis | `font_weight_gpui.py`, `font_weight.rs` (CoreText) | done (WP8): DirectWrite font axis values | done (WP8): cosmic-text weight + swash coordinates | 2 each |
+| Per-run text scale (`kszl`) | `text_scale_gpui.py` | done (WP8) | done (WP8) | 1 each |
 | `register_font` for the bundled fonts | `apply_hooks.py:272-279` (macOS-only branch) | `text_system().add_fonts` is cross-platform: drop the gate | same | 0.5 |
-| System fonts | `theme.ts:141-142` (`.SystemUIFont`, Menlo) | Segoe UI Variable / Cascadia Mono, or the bundled JetBrains Mono | Inter (bundle it) / JetBrains Mono | 1 |
+| System fonts | `theme.ts:141-142` (`.SystemUIFont`, Menlo) | done (WP8): Segoe UI Variable Text on Windows 11, else bundled Inter; JetBrains Mono | done (WP8): bundled Inter; JetBrains Mono | 1 |
+
+### WP8 text: status
+
+Fork branches `wp8` (on `next`, merged with its ci-fix heads; `native/FORK` pins them until they are merged into
+`kybern`):
+
+| Fork | Commit | What |
+| --- | --- | --- |
+| zed | "Variable font weights and kszl on DirectWrite and cosmic-text (WP8)" | **cosmic-text** (Linux): it already shapes a span at its `Attrs` weight on a `wght` axis, but GPUI passed the face's weight and measured and drew the default instance. A font now carries its weight and normalized coordinates into the attributes, metrics, advances and the swash scaler; `kszl` runs are shaped with scaled metrics; fallback glyphs keep the run's weight and scale. **DirectWrite** (Windows): a variable face is re-created from its `IDWriteFontResource` at the requested `wght` (other axes kept), its layout ranges get the same axis values (`IDWriteTextLayout4::SetFontAxisValues`), and glyph runs map back by family, style and `wght`; a `kszl` font is its unscaled font with a scale, told apart by em size. `KYBERN_FONT_WEIGHT_AXIS=0` keeps the nearest face, as on macOS |
+| zed | "Choose the family .SystemUIFont resolves to (WP8)" | `TextSystem::set_system_ui_font`: GPUI core resolves `.SystemUIFont` (and text with no family) to the app's choice before the platform text system sees it |
+| zed | "DirectWrite: axis values on every variable range, KYBERN_FONT_DEBUG", "find variable fonts by typographic family; unhinted glyphs" | The font set lists a variable font's named instances under their weight-stretch-style family, so `Inter Variable` matched nothing (every weight drew one fallback face): a family with no match is looked up as a typographic family and matched and laid out under its WWS name. `KYBERN_FONT_DEBUG=1` prints the matching (the `text` check collects it). No grid fitting |
+| gpuix | "setSystemUiFont, and use the zed wp8 branch" | napi `setSystemUiFont(family \| null)` (UI thread off macOS, like `registerFont`) |
+
+Kybern side: `src/platform/fonts.ts` picks the faces (`fontPlan`, unit-tested) and `installUiFont` registers Inter
+and calls `setSystemUiFont` at startup (`main.tsx`) and in labs (`registerBrandFonts`); `theme.ts` exports `FONT_MONO`
+(Menlo / JetBrains Mono) and `MONO_ADVANCE` (0.602 / 0.6 em), which `codeWidth.ts`, the diff marker and the rounded
+check use. macOS is unchanged: SF Pro, Menlo, CoreText untouched (`setSystemUiFont` is never called there).
+
+The `text` check (`native/text-check.ts` on `text-lab.tsx`) asserts: every weight of the UI font and of Inter paints
+wider than the one below it; line boxes are the kit line heights; Inter's and JetBrains Mono's cap heights and
+baselines are within 1 px of macOS (`text-macos.json`, `--record` on a Mac); the code face paints at `MONO_ADVANCE`;
+inline code is drawn at 0.833 (`kszl`); emoji are in colour; CJK falls back to a full-em font (the Linux runners
+install Noto Color Emoji and Noto CJK). It writes `text-<os>.png` and `text-metrics-<os>.json`. Bounds are whole
+pixels, so the specimen uses runs long enough for one weight step to move them.
+
+Verified 2026-10-26: `text` and `rounded` pass `--strict` on Linux X11 (lavapipe) and Windows Server 2022 (WARP)
+(`gpuix-platforms.yml` run 40269440313), and every other check passes on Linux X11, Wayland and Windows with this
+pin (run 40267454901; its Windows `text` failure was the previous, whole-row cap measure). On the user's Windows 11
+PC (RTX 3060) `text` passes with `.SystemUIFont` on Segoe UI Variable Text (300→700: 506, 532, 537, 542, 546, 550, 561,
+572 px). Inter's ladder is within 1 px of macOS on Linux and 2–3 px wider on DirectWrite; cap heights and baselines are
+within 0.8 px of macOS everywhere. The WP7 "Menlo glyph advances" gap passes in both `rounded` steps. Known gaps: ❤️
+draws as the white text glyph on Linux and the Windows CI image (the variation selector does not force the colour
+face when a text font covers U+2764); Windows has no flag emoji (Segoe UI Emoji draws 🇯🇵 as "JP").
 
 ### D. Window and input integration
 
@@ -529,7 +563,7 @@ agents (one OS-specific lane can split W/L).
 | WP7 (first set done, CI-unverified) | Cross-platform check harness: `native/check-harness.ts` (capture per OS, tolerance, known-gap steps), `scripts/run-platform-checks.ts` (runner, summary, artifacts), ported `clip-check`, `rounded-check`, `markdown-document-check`, `focus-check`, `platform-smoke.ts` (now asserting sidebar, Markdown/code transcript, composer) and `nowebview-app-check.ts`; `gpuix-platforms.yml` runs them on `ubuntu-22.04` (Xvfb + lavapipe), `windows-2022` (WARP) and headless Weston (`frame-wake` + smoke, no captures). WP1's `scripts/frame-wake-check.tsx` is the `frame-wake` check id. Passing on macOS; the Linux/Windows runs have not happened yet. Left: port the other checks, flip `--strict` once WP1/WP3 close the gaps | `native/check-harness.ts`, `native/*-check.ts`, `scripts/{run-platform-checks,platform-smoke,nowebview-app-check}.ts`, `.github/workflows/gpuix-platforms.yml` | WP1 | 4–6 | A |
 | — | **Linux beta** = WP0–WP5 + WP6(L) + WP7 | | | ≈ 30–41 | 3–4 lanes: ≈ 2.5–3 calendar weeks |
 | — | **Windows beta** adds WP6(W) and Windows-only fixes from WP1/WP3 | | | ≈ +6–10 | ≈ +1–1.5 weeks |
-| WP8 | Text parity (section C): variable `wght` and `kszl` on DirectWrite and cosmic-text, system font choice | zed fork: `gpui_macos/src/font_weight.rs`, the "Per-run text size scale (kszl)" commit, `src/theme.ts` | WP0 | 4–6 | after beta |
+| WP8 (code done, see [status](#wp8-text-status)) | Text parity (section C): variable `wght` and `kszl` on DirectWrite and cosmic-text, system font choice | zed fork: `gpui_macos/src/font_weight.rs`, the "Per-run text size scale (kszl)" commit, `src/theme.ts` | WP0 | 4–6 | after beta |
 | WP9 (code done) | GPU parity: backdrop blur in WGSL and HLSL (scratch copy + two-pass blur), Mica/Acrylic on Windows 11. [Status](#wp9-backdrop-blur-and-window-materials-status) | fork `wp9` commits (`gpui_wgpu`, `gpui_windows`, `gpui::backdrop_kernel`), `native/backdrop-check.ts`, `src/platform/desktopMaterial.ts` | WP0 | 6–8 | after beta |
 | WP10 (W done) | Embedded web view: WebView2 composition host (W, done: `native/webview-win`, fork `wp10-win` commits, CI check `webview`; see `WEBVIEW-PLATFORMS.md`); WebKitGTK/WPE (L, phase 2, 20–24, risky) | `native/webview-*/**` | WP3, WP4 | 20–24 (L) | after beta |
 

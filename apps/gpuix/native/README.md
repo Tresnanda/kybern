@@ -702,6 +702,7 @@ xdotool) and capture with `capture(fixture, file)`:
 | `native/focus-check.ts` | `focus` | Tab/Shift+Tab move one stop, a consumed Tab stays, the image preview traps Tab (no pixels) |
 | `native/clip-check.ts` | `clip` | rounded clip hit tests and painted corners (dark/light, motion on/off) |
 | `native/rounded-check.ts` | `rounded` | rounded input backgrounds, outset clamps, wrapped fragments, selection |
+| `native/text-check.ts` | `text` | WP8: on a type specimen (`text-lab.tsx`), every kit weight of the UI font and of Inter paints wider than the one below it (the `wght` axis), line boxes, cap heights and baselines of Inter and JetBrains Mono within 1 px of macOS (`text-macos.json`, `--record` on a Mac), the code face advance, `kszl` inline code, colour emoji and CJK fallback; writes `text-<os>.png` and `text-metrics-<os>.json` (with DirectWrite's `KYBERN_FONT_DEBUG` lines) |
 | `native/markdown-document-check.ts` | `markdown-document` | document API; document pixels equal the original Markdown path (same renderer, exact); selection, wrap, grid. Off macOS a subset of the interior cases (`MD_INTERIOR_CASES`) |
 | `scripts/platform-smoke.ts` | `smoke` | the real app on a seeded daemon: sidebar rows, Markdown + code transcript, composer; the clip lab with rounded clip on and off (Linux/Windows) |
 | `scripts/nowebview-app-check.ts` | `nowebview` | WP4: the app with the web view off: preview in the browser, visual, question, Mermaid, artifact |
@@ -714,7 +715,7 @@ Pixel assertions tolerate software rendering: `tolerance` (3 on macOS, 8 elsewhe
 that must hold painted content (`assertPainted`), structure (bounds, test ids, painted text), and exact equality only
 between two renders of the same renderer. Steps that need a capability still blocked off macOS are wrapped in
 `step(label, fn, { gap })` with a `GAPS.*` reason (wheel input: scroll phase injection, WP1; ⌘ shortcuts, WP3; Menlo
-advances, WP8). Off macOS a gap failure is recorded and listed in the summary, not failed, until `--strict` /
+advances, WP8, which reports closed since the labs use the bundled JetBrains Mono off macOS). Off macOS a gap failure is recorded and listed in the summary, not failed, until `--strict` /
 `KYBERN_CHECK_STRICT=1`; a gap that passes is reported as closed so its marker can go.
 `KYBERN_OPEN_LOG=<file>` makes `os.openTarget` append instead of opening, so a check can assert what the app opened on
 any OS.
@@ -1654,7 +1655,8 @@ text system records a scale per FontId (stripping the pseudo feature before Core
 `layout_line` applies it per run, shaped runs map back to the scaled FontId by point
 size, and `paint_line` rasterizes glyphs at the scaled size. The editor uses it for
 inline code (0.833em) and task references (13/15), like `.note-prose code` and
-`.task-ref`. Ordinary fonts are unchanged (scale 1).
+`.task-ref`. Ordinary fonts are unchanged (scale 1). DirectWrite and cosmic-text do the
+same since WP8 (PORTING-PLATFORMS.md, "WP8 text: status").
 
 ## Paint-only subtree transforms (Phase 2, render9)
 

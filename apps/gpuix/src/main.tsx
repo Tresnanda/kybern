@@ -26,6 +26,7 @@ import { installRuntimeSafetyNet } from './shell/errors.ts'
 import { startMemoryLog } from './perf/memoryLog.ts'
 import { setOsHost } from './platform/os.ts'
 import { attachNotificationHost } from './native/notifications.ts'
+import { installUiFont } from './platform/fonts.ts'
 
 // The terminal draws xterm's weights (300 text, 500 bold); italics are their own family until GPUIX styles take `fontStyle`.
 const FONTS = ['CalSans-Regular.ttf', 'JetBrainsMono-Regular.ttf', 'JetBrainsMono-Light.ttf', 'JetBrainsMono-Medium.ttf', 'JetBrainsMono-LightItalic.ttf', 'JetBrainsMono-MediumItalic.ttf']
@@ -54,6 +55,8 @@ function Fonts({ children }: { children: ReactNode }) {
         console.error(`[fonts] ${file}:`, error)
       }
     }
+    // Off macOS the system UI font is a variable face, so the kit's weights land on its `wght` axis (`platform/fonts.ts`).
+    installUiFont(renderer)
     startupMark('fonts-ready')
     setReady(true)
     startPerfProbe(renderer)

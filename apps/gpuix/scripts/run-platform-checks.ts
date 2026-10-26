@@ -70,6 +70,10 @@ const CHECKS: Record<string, Check> = {
       minutes: 40,
     }],
   },
+  text: {
+    description: 'WP8: kit weights (450/550/650) on the wght axis, line boxes and baselines vs macOS, the code face advance, kszl inline code, emoji and CJK',
+    runs: () => [{ name: 'text', args: [native('text-check.ts')], minutes: 5 }],
+  },
   smoke: {
     description: 'The app on a seeded daemon (sidebar, Markdown + code transcript, composer) and the clip lab, rounded clip on and off',
     // Without captures the clip switch cannot be told apart, so one run is enough.
