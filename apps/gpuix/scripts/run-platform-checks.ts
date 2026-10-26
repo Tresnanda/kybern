@@ -106,6 +106,10 @@ const CHECKS: Record<string, Check> = {
     description: 'WP5: system notifications through the addon. Linux: a test D-Bus notification server (Notify fields, replace per thread, ActionInvoked reaches the app once, no daemon = unsupported). Windows: the toast API with the AUMID, its registry entry, the posts and the history',
     runs: () => platform === 'macos' ? [] : [{ name: 'notify', args: [native('notify-check.ts')], minutes: 10 }],
   },
+  'window-chrome': {
+    description: 'WP3: the title bar per OS (window buttons, Windows caption hit tests with real input, Linux client-side decorations under a compositing window manager), drag, double click, minimize/maximize/close, resize edges, the Ctrl shortcut key',
+    runs: ({ kybernd, capture }) => capture === 'none' ? [] : [{ name: 'window-chrome', args: [script('window-chrome-check.ts'), '--kybernd', kybernd], minutes: 10 }],
+  },
   'frame-wake': {
     description: 'WP1: no JS polling or per-frame wakes, onFrame delivery, unwaited bridge calls, scroll phases, repaint of cached islands at both parities (and a KYBERN_FULL_INVALIDATE=1 control), the UI-exit wake, DPI info (Windows), the Wayland seat',
     // KYBERN_EXPECT_SEAT: what getPlatformInfo().seat must be (the headless Weston job sets false).

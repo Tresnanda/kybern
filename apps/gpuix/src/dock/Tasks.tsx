@@ -15,6 +15,7 @@ import { Label, useTheme } from '../ui.tsx'
 import { toast } from '../shell/toasts.tsx'
 import { DockFooter, DockSection, ScopeHeader } from './Notes.tsx'
 import { DockEmpty, ErrorLine, Section } from './parts.tsx'
+import { isPrimary } from '../platform/keys.ts'
 /** A task opens as a tab beside the chat (ADE-54); the Tasks page is a click away from its footer. */
 const open = (id: string) => { if (!openTabFromPane(getFocusedPaneId(), { kind: 'task', id })) { openTask(id); goPage('tasks') } }
 export function TasksPane({ thread }: { thread: Thread }) {
@@ -57,5 +58,5 @@ function QuickAdd({ project, done }: { project: string | null; done: () => void 
     catch (error) { draft.current.title ||= value; setTitle(draft.current.title); toast.error('Unable to add the task', { description: String(error) }) }
     finally { draft.current.busy = false }
   }
-  return <div style={{ display: 'flex', padding: 8, gap: 8, alignItems: 'center' }}><StatusGlyph status="inbox" /><TextField autoFocus testId="dock-task-title" label="New task title" placeholder="Task title" value={title} onChange={v => { draft.current.title = v; setTitle(v) }} onSubmit={e => void commit(e.modifiers?.cmd ? 'open' : 'keep')} onBlur={() => void commit('close')} onKeyDown={e => { if (e.key === 'escape') { draft.current.canceled = true; done() } }} theme={{ text: t.text, caret: t.text }} shell={{ flexGrow: 1 }} /></div>
+  return <div style={{ display: 'flex', padding: 8, gap: 8, alignItems: 'center' }}><StatusGlyph status="inbox" /><TextField autoFocus testId="dock-task-title" label="New task title" placeholder="Task title" value={title} onChange={v => { draft.current.title = v; setTitle(v) }} onSubmit={e => void commit(isPrimary(e.modifiers) ? 'open' : 'keep')} onBlur={() => void commit('close')} onKeyDown={e => { if (e.key === 'escape') { draft.current.canceled = true; done() } }} theme={{ text: t.text, caret: t.text }} shell={{ flexGrow: 1 }} /></div>
 }

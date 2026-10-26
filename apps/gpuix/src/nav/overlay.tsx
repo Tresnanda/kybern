@@ -31,6 +31,7 @@ import { muted, popoverStyle, PopupLayer, surfaceShadow } from '../composer/Menu
 import { Icon } from '../icons.tsx'
 import { hoverTrigger, useHover } from '../kit/hover.tsx'
 import { Kbd } from '../kit/Kbd.tsx'
+import { isEmacsCtrl, keyCaps, shortcutLabel } from '../platform/keys.ts'
 import { kitOverlayOpen } from '../kit/AlertDialog.tsx'
 import { TOOLTIP_DELAY_MS, TOOLTIP_SKIP_MS } from '../kit/hoverController.ts'
 import { ink, Label, useTheme } from '../ui.tsx'
@@ -221,8 +222,8 @@ function useMenuLevel(tree: MenuTree, depth: number, closeSelf: () => void) {
     const sub = entries.current.find((en) => en.key === activeRef.current && en.openSub && !en.disabled)
     if (e.key === 'right' || ((e.key === 'enter' || e.key === 'space') && sub)) {
       sub?.openSub?.(true)
-    } else if (e.key === 'down' || (e.key === 'n' && e.modifiers?.ctrl)) move(1)
-    else if (e.key === 'up' || (e.key === 'p' && e.modifiers?.ctrl)) move(-1)
+    } else if (e.key === 'down' || (e.key === 'n' && isEmacsCtrl(e.modifiers))) move(1)
+    else if (e.key === 'up' || (e.key === 'p' && isEmacsCtrl(e.modifiers))) move(-1)
     else if ((e.key === 'enter' || e.key === 'space') && activeRef.current) pick(activeRef.current)
   }
   useLayoutEffect(() => {
@@ -541,7 +542,7 @@ export function MenuItem({
       )}
       {shortcut && (
         <Label color={muted(t, 0.72)} size={12} weight={500}>
-          {shortcut}
+          {shortcutLabel(shortcut)}
         </Label>
       )}
       {checked !== undefined && (
@@ -778,7 +779,8 @@ const TIP_KBD_HEIGHT = 4 * 2 + 18 + 2
 /** Estimated tooltip width; GPUIX cannot measure a layer before it paints. */
 function tipWidth(label: string, keys?: string[]) {
   const text = label.length * 13 * TIP_TEXT_EM
-  const kbd = keys?.length ? 8 + keys.length * 21 - 3 : 0
+  // A one-glyph chip is 18 wide; a word ("Ctrl", "Enter" off macOS) is its 11px text plus 8 padding.
+  const kbd = keys?.length ? 8 + keys.reduce((sum, key) => sum + Math.max(18, Math.round(key.length > 1 ? key.length * 11 * 0.6 + 8 : 18)) + 3, 0) - 3 : 0
   return Math.round(text + kbd + 16 + 2)
 }
 
@@ -821,8 +823,11 @@ export function Tip({
   if (open && !present) setPresent(true)
   const leaving = !open && present
   if (disabled) return children
+  // Labels carry macOS glyphs ("Toggle sidebar (⌘B)"); off macOS they read Ctrl+B (`platform/keys.ts`).
+  label = shortcutLabel(label)
+  const caps = shortcut && keyCaps(shortcut)
   const vertical = side === 'left' || side === 'right'
-  const extent = vertical ? (shortcut?.length ? TIP_KBD_HEIGHT : TIP_HEIGHT) : tipWidth(label, shortcut)
+  const extent = vertical ? (caps?.length ? TIP_KBD_HEIGHT : TIP_HEIGHT) : tipWidth(label, caps)
   const alignOffset = Math.round((size - extent) / 2)
   return (
     <div style={{ display: 'flex', position: 'relative', alignItems: 'start', flexShrink: 0 }}>
@@ -860,7 +865,7 @@ export function Tip({
           <Label color={t.text} size={13} lineHeight={17} style={{ whiteSpace: 'nowrap' }}>
             {label}
           </Label>
-          {shortcut && <Kbd keys={shortcut} />}
+          {caps && <Kbd keys={shortcut!} />}
         </PopupLayer>
       )}
     </div>

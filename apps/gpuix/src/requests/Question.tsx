@@ -36,6 +36,7 @@ import { focusCard } from './ui.ts'
 import { keyboardAnswer } from './Panel.tsx'
 import { DeadlineHint, usePauseController } from './Deadline.tsx'
 import { actOnRequest, refreshProgress, useRequestProgress } from './progress.ts'
+import { isPrimary } from '../platform/keys.ts'
 
 /** "Wait for me": a quiet pill after the countdown; the question then waits with no deadline (`requests.act hold`). Gone once held. */
 function WaitForMe({ approvalId, disabled }: { approvalId: string; disabled: boolean }) {
@@ -352,7 +353,7 @@ function QuestionCard({ specs, count, busy, error, onSend, onDecline, deadline }
     else if (how === 'choose') setSelected({ ...selected, [q.id]: current.includes(option.label) ? current.filter((v) => v !== option.label) : [...current, option.label] })
   }
   const onKey = (e: { key?: string; modifiers?: { cmd?: boolean } }): boolean => {
-    if (busy || reviewing || e.modifiers?.cmd || !q) return false
+    if (busy || reviewing || isPrimary(e.modifiers) || !q) return false
     const key = e.key ?? ''
     if (/^([1-9]|up|down|space|enter)$/.test(key) || key.length === 1) pause.touch()
     setPointer(false)
@@ -581,7 +582,7 @@ export function UserInputPanel({ approval, count }: { approval: ApprovalRequest;
   }
   return (
     <CardShell testId="question-panel" onKey={(e) => {
-      if (busy || e.modifiers?.cmd) return false
+      if (busy || isPrimary(e.modifiers)) return false
       const n = /^[1-9]$/.test(e.key ?? '') ? Number(e.key) : 0
       if (confirm && n >= 1 && n <= 3) { keyboardAnswer(); void submit(n === 1 ? { confirmed: true } : n === 2 ? { confirmed: false } : undefined); return true }
       if (e.key === 'enter' && approval.tool_name !== 'ui_input' && approval.tool_name !== 'ui_editor' && !confirm && (approval.tool_name !== 'ui_select' || value)) { keyboardAnswer(); send(); return true }

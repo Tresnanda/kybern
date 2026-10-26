@@ -17,6 +17,7 @@ import { raisedFill, raisedRim, useGlass } from '../platform/glass.ts'
 import { DockShell, DOCK_FIELD_HEIGHT, DOCK_GUTTER } from './DockShell.tsx'
 import { RunComposer } from './RunComposer.tsx'
 import { markDockEscape, setTasks, useTasks } from './store.ts'
+import { shortcutLabel } from '../platform/keys.ts'
 
 const fade = { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.quick, ease: [...EASE.out] as [number, number, number, number] } }
 
@@ -62,7 +63,7 @@ export function TaskDock({ task, right, onHeight, emptyRef }: { task: TaskItem; 
       <Label color={k.fg3} size={13} lineHeight={19.5} truncate style={{ flexGrow: 1 }}>
         {following ? `Follow up with ${PROVIDER_LABEL[run!.provider.kind]}…` : `Tell an agent what to do with ${task.key}…`}
       </Label>
-      <Label color={k.fg4} size={12}>⌘↵</Label>
+      <Label color={k.fg4} size={12}>{shortcutLabel('⌘↵')}</Label>
     </div>
   )
   return (

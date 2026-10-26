@@ -69,6 +69,7 @@ import { COLUMN, GUTTER, Transcript } from './Transcript.tsx'
 import { ThreadRequests, useBlockingRequest } from './transcript/Requests.tsx'
 import { Label, REDUCED_MOTION, useMaterial, useTheme } from './ui.tsx'
 import { RAIL, TITLEBAR } from './nav/TitleBar.tsx'
+import { ResizeEdges } from './nav/WindowControls.tsx'
 import { SINGLE_FILL } from './platform/translucency.ts'
 
 const INSET = 8
@@ -248,6 +249,8 @@ function Workspace() {
       <TabDragLayer />
       <SplitDragLayer />
       <TabsDragLayer />
+      {/* Linux client-side decorations: the window's resize edges, over everything (`nav/WindowControls.tsx`). */}
+      <ResizeEdges />
       <ThemeFade />
     </div>
   )

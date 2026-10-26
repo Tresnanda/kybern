@@ -14,7 +14,9 @@ import { formatTokens, ROTATION_COPY } from '../../../../packages/kybern-client/
 // `views/Thread.tsx`): the sidebar toggle and back/forward (or New thread while
 // the panel is closed) after the traffic lights, then the route header over the
 // content column: provider mark, title (double-click renames), Hand off, the ⋯
-// thread menu, and the panel toggles.
+// thread menu, and the panel toggles. On Windows and Linux the window's own
+// buttons take the traffic lights' place (`WindowControls.tsx`): the leading
+// chrome starts and the trailing toggles end where they leave room.
 import { SettingsBreadcrumb } from '../settings/Breadcrumb.tsx'
 import { EnvironmentTrigger } from '../environment/Panel.tsx'
 import { ISLAND } from '../MatrixLoader.tsx'
@@ -38,11 +40,12 @@ import { getNav, setNav, useNav } from './store.ts'
 import { providerLabel } from '../sidebar/model.ts'
 import { useSidebarDragging, useSidebarWidth } from '../shell/layout.ts'
 import { drawerSlide, fadeTo } from '../shell/motion.ts'
+import { SHORTCUT } from '../platform/keys.ts'
+import { useWindowControlsLayout, WindowControls } from './WindowControls.tsx'
 
 export const TITLEBAR = 46
 export const RAIL = 52
 export const SIDEBAR = 256
-export const LEADING_X = 82
 
 
 /** Notes and Usage have no thread panel. Pull requests allow a temporary peek;
@@ -106,7 +109,8 @@ export function TitleBar({ panelOpen }: { panelOpen: boolean }) {
   const { canBack, canForward } = useNavigationAvailability()
   const sidebarWidth = useSidebarWidth()
   const resizing = useSidebarDragging()
-  const titleStart = panelOpen ? RAIL + sidebarWidth : LEADING_X + 84
+  const { leading, trailing } = useWindowControlsLayout()
+  const titleStart = panelOpen ? RAIL + sidebarWidth : leading + 84
   const panelless = page === 'notes' || page === 'usage'
   const toggle = () => {
     setNav({ panelInstant: false })
@@ -117,15 +121,15 @@ export function TitleBar({ panelOpen }: { panelOpen: boolean }) {
     // A cached island (native/README.md): replays while the rest of the window animates.
     <div {...ISLAND} windowDrag testId="titlebar-drag" style={{ display: 'flex', width: '100%', height: TITLEBAR, flexShrink: 0, position: 'relative' }}>
       {!panelless && !settingsOpen && (
-        <div style={{ position: 'absolute', left: LEADING_X, top: 0, height: TITLEBAR, display: 'flex', alignItems: 'center' }}>
+        <div style={{ position: 'absolute', left: leading, top: 0, height: TITLEBAR, display: 'flex', alignItems: 'center' }}>
           <ChromeIcon icon={N.layoutSidebar} label="Toggle thread sidebar" tooltip="Toggle sidebar (⌘B)" onClick={toggle} testId="sidebar-toggle" />
           {/* `IconSwap`: back/forward give way to New thread while the panel is closed.
               The incoming state fades up (kit `Swap`); ⌘B swaps at once. */}
           <NavSwap panelOpen={panelOpen} instant={REDUCED_MOTION || instant}>
             {panelOpen ? (
               <>
-                <ChromeIcon icon={N.arrowLeft} label="Back" tooltip="Back (⌘[)" disabled={!canBack} onClick={() => goBack()} testId="nav-back" />
-                <ChromeIcon icon={N.arrowRight} label="Forward" tooltip="Forward (⌘])" disabled={!canForward} onClick={() => goForward()} testId="nav-forward" />
+                <ChromeIcon icon={N.arrowLeft} label="Back" tooltip={`Back (${SHORTCUT.back})`} disabled={!canBack} onClick={() => goBack()} testId="nav-back" />
+                <ChromeIcon icon={N.arrowRight} label="Forward" tooltip={`Forward (${SHORTCUT.forward})`} disabled={!canForward} onClick={() => goForward()} testId="nav-forward" />
               </>
             ) : (
               <ChromeIcon icon={N.newThread} label="New thread" tooltip="New thread" onClick={() => newThread()} testId="titlebar-new-thread" />
@@ -143,7 +147,7 @@ export function TitleBar({ panelOpen }: { panelOpen: boolean }) {
         // takes every press there first (bubble order is topmost first) and moves the window instead.
         <>
           <SplitStrips panelOpen={panelOpen} />
-          <div testId="split-toggles" style={{ position: 'absolute', top: 0, right: 8, height: TITLEBAR, display: 'flex', alignItems: 'center', gap: 8, paddingRight: 12 }}>
+          <div testId="split-toggles" style={{ position: 'absolute', top: 0, right: 8 + trailing, height: TITLEBAR, display: 'flex', alignItems: 'center', gap: 8, paddingRight: 12 }}>
             <PanelToggles />
           </div>
         </>
@@ -151,15 +155,17 @@ export function TitleBar({ panelOpen }: { panelOpen: boolean }) {
         <motion.div
           windowDrag
           initial={false}
-          animate={{ left: panelless ? LEADING_X : titleStart }}
+          animate={{ left: panelless ? leading : titleStart }}
           transition={REDUCED_MOTION || instant || resizing ? { duration: 0 } : drawerSlide(panelOpen)}
-          style={{ position: 'absolute', top: 0, right: 8, height: TITLEBAR, display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 20, paddingRight: 12 }}
+          style={{ position: 'absolute', top: 0, right: 8 + trailing, height: TITLEBAR, display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 20, paddingRight: 12 }}
         >
           {!settingsOpen && page === 'home' && <ThreadHeader />}
           {!settingsOpen && page === 'notes' && <NotesBar />}
           {!settingsOpen && page === 'tasks' && <TasksBar />}
         </motion.div>
       )}
+      <WindowControls side="left" />
+      <WindowControls side="right" />
     </div>
   )
 }
@@ -386,7 +392,7 @@ export const ThreadHeader = memo(function ThreadHeader({ leafId: given, size = '
           {thread.subagent && (
             <>
               <MenuSeparator />
-              <MenuItem id="parent" icon={N.backToParent} label="Open parent" shortcut="⌘↑" onSelect={() => thread.parent_thread_id && openThread(thread.parent_thread_id)} />
+              <MenuItem id="parent" icon={N.backToParent} label="Open parent" shortcut={SHORTCUT.openParent} onSelect={() => thread.parent_thread_id && openThread(thread.parent_thread_id)} />
               {subagentPhase(thread.subagent.status) === 'working' && thread.subagent.capabilities?.stop !== false && (
                 <MenuItem id="stop" icon={N.stop} label="Stop" onSelect={() => void getClient()?.call('tasks.stop', { thread_id: thread.id }).catch(() => {})} />
               )}
@@ -443,8 +449,9 @@ function SplitStrips({ panelOpen }: { panelOpen: boolean }) {
   const rects = usePaneRects()
   const windowWidth = useWindowWidth()
   const leaves = collectThreadPanes(root).filter((leaf) => rects.has(leaf.id) && !isLowerLeaf(rects, leaf.id))
-  const minLeft = panelOpen ? 0 : LEADING_X + 84
-  const maxRight = windowWidth - 8 - TOGGLES_ROOM
+  const { leading, trailing } = useWindowControlsLayout()
+  const minLeft = panelOpen ? 0 : leading + 84
+  const maxRight = windowWidth - 8 - trailing - TOGGLES_ROOM
   return <>{leaves.map((leaf, index) => {
     const r = rects.get(leaf.id)!
     const left = Math.max(r.x, minLeft)

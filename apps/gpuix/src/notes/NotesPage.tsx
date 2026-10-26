@@ -20,6 +20,7 @@ import { NoteThumb } from './NoteThumb.tsx'
 import { cardIn, cardLeave, useFreshNotes, useLeavingNotes } from './motion.ts'
 import { NOTES_META, NOTES_UI, ProjectDot, Ring, notesTokens, useNotesTokens } from './kit.tsx'
 import { deleteNote, display, getNotes, openNote, refreshNotes, searchNotes, setNotes, useNotes } from './store.ts'
+import { isPrimary, shortcutLabel } from '../platform/keys.ts'
 
 let galleryEntered = false
 
@@ -109,7 +110,7 @@ export function NotesGallery() {
   }
   useEffect(() => addWindowKeyHandler((e) => {
     if (getNav().paletteOpen || getNav().settingsOpen || getNotes().quick || getNotes().capture) return
-    if (e.modifiers?.cmd && !e.modifiers.shift && e.key === 'f') { if (notesSearchRef.current) renderer?.focusElement?.(notesSearchRef.current.id); return true }
+    if (isPrimary(e.modifiers) && !e.modifiers?.shift && e.key === 'f') { if (notesSearchRef.current) renderer?.focusElement?.(notesSearchRef.current.id); return true }
   }), [renderer])
 
   const chip = (value: NotesFilter['kind'], label: string, dot?: string | null) => {
@@ -174,7 +175,7 @@ function Chip({ label, selected, dot, icon, onClick, testId }: { label: string; 
 /** `.notes-hints`: one quiet line, no key caps. */
 function Hints({ list }: { list: boolean }) {
   const k = useNotesTokens()
-  const item = (key: string, text: string) => <div key={text} style={{ display: 'flex', gap: 5 }}><Label color={k.fg2} size={NOTES_META} weight={500}>{key}</Label><Label color={k.fg3} size={NOTES_META}>{text}</Label></div>
+  const item = (key: string, text: string) => <div key={text} style={{ display: 'flex', gap: 5 }}><Label color={k.fg2} size={NOTES_META} weight={500}>{shortcutLabel(key)}</Label><Label color={k.fg3} size={NOTES_META}>{text}</Label></div>
   return <div style={{ display: 'flex', alignItems: 'center', gap: 20, height: 36, paddingLeft: 20, paddingRight: 20, flexShrink: 0 }}>
     {item(list ? '↑↓' : '←→', 'Move')}{item('↵', 'Open')}{item('⌫', 'Delete')}{item('⌘N', 'New note')}{item('⌘F', 'Search')}
     <div style={{ flexGrow: 1 }} />

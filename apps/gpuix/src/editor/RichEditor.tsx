@@ -21,6 +21,7 @@ import { loadEditorImage, uploadEditorImages, type ImageHome } from './images.ts
 import { parseDoc, serializeDoc, type DocBlock, type ParsedDoc } from './markdown.ts'
 import { filterSlashItems, slashItemsFor, type SlashItem } from './slash.ts'
 import { FormatBar, LinkBubble } from './FormatBar.tsx'
+import { shortcutLabel } from '../platform/keys.ts'
 
 /** What the native editor reports after edits, caret moves and focus changes. */
 export interface EditorState {
@@ -384,7 +385,7 @@ function MakeTaskButton({ line, compact, onClick }: { line: MakeTaskLine & { rec
   const row = over(k.hover, t.surface)
   const [x, y, w, h] = line.rect
   // Whole-window glass: a translucent row would show the line's own text through it, so the chip is a small dense plate with a hairline.
-  return <div testId="editor-make-task" role="button" aria-label="Make a task from this line (⌘⇧T)" onClick={onClick}
+  return <div testId="editor-make-task" role="button" aria-label={shortcutLabel('Make a task from this line (⌘⇧T)')} onClick={onClick}
     style={{ position: 'absolute', left: x + w - 120, top: y, width: 120, height: h, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', cursor: 'pointer' }}>
     {!g.on && <div style={{ width: 14, height: h, background: { type: 'linear-gradient', angle: 90, stops: [{ color: withAlpha(row, 0), position: 0 }, { color: row, position: 0.86 }] } }} />}
     <div style={{ display: 'flex', alignItems: 'center', gap: 5, height: h, backgroundColor: g.on ? g.denseFloat : row, ...(g.on ? { paddingLeft: 6, paddingRight: 6, borderRadius: 6, borderWidth: 1, borderColor: g.rim } : {}), hover: { opacity: 1 } }}>

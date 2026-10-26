@@ -33,6 +33,7 @@ import { DockEmpty, ErrorLine } from './parts.tsx'
 import { MotionFileTreeRows, type TreeRow } from './MotionFileTree.tsx'
 import { TREE_ROW_HEIGHT, TREE_WINDOW_THRESHOLD, treeWindowRange } from './fileTreeMotion.ts'
 import { osLabels, revealQuietly } from '../platform/os.ts'
+import { isOtherCommand, isPrimary } from '../platform/keys.ts'
 
 type Listing = FileEntry[] | 'loading' | 'error'
 // Reuse the native row geometry/input path used by the PR viewports. Paint,
@@ -261,11 +262,11 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
     if (!keys) return
     const handler = (event: DocumentKey) => {
       const m = event.modifiers
-      if (!m?.cmd || m.ctrl || m.alt) return false
-      if (event.key === 's' && !m.shift) { save(); return true }
-      if (event.key === 'f' && !m.shift && editable && !showPreviewRef.current) { editor.current?.find(); return true }
-      if (event.key === 'g') return editor.current?.findNext(!!m.shift) ?? false
-      if (event.key === 'o' && m.shift) { openIn(defaultEditor()); return true }
+      if (!isPrimary(m) || isOtherCommand(m) || m?.alt) return false
+      if (event.key === 's' && !m?.shift) { save(); return true }
+      if (event.key === 'f' && !m?.shift && editable && !showPreviewRef.current) { editor.current?.find(); return true }
+      if (event.key === 'g') return editor.current?.findNext(!!m?.shift) ?? false
+      if (event.key === 'o' && m?.shift) { openIn(defaultEditor()); return true }
       return false
     }
     keys.current = handler

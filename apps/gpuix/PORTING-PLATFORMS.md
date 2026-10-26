@@ -179,21 +179,21 @@ nothing but `platforms_hooks.py`.
 | Fonts | `theme.ts`, `src/platform/fonts.ts` | works (WP8) | works (WP8) | `.SystemUIFont` → Segoe UI Variable Text on Windows 11, else the bundled Inter (`setSystemUiFont`); code in the bundled JetBrains Mono, whose advance the code wrap uses (`MONO_ADVANCE`). The WP7 "Menlo glyph advances" gap closes |
 | Text rendering | `cosmic_text_system.rs`, `direct_write.rs` | unhinted (WP8) | unhinted (WP8) | Glyphs drawn without hinting / grid fitting, like Core Text (`KYBERN_TEXT_HINTING=1` restores it); ClearType vs grayscale stays GPUI's choice |
 | Key interception, close guard, input selection/transactions, text selection, rich-editor commands and images, window background | `apply_hooks.py`, `editor9_hooks.py`, `image_memory_hooks.py`, `window_platform_hooks.py` | works (UI-thread bridge) | works (UI-thread bridge) | Were "macOS-only" stubs; the close guard is used at startup |
-| Rich-editor key interceptor | `rich_editor.rs:677` | fallback | fallback | Gated `macos`; editor shortcuts that rely on it do not fire. WP3 |
-| Title-bar double-click action | `window_platform_hooks.py` | blocked | blocked | Reads the macOS "double-click to zoom" default; JS should zoom/maximize itself. WP3 |
+| Rich-editor and input key interceptors | `rich_editor.rs`, `custom_elements/input.rs` | works (WP3) | works (WP3) | No longer gated `macos`: capture, queue and replay run on the UI thread, JS answers through `resolveKeyEvent`. The editor's formatting keys are `secondary-*` (Ctrl off macOS); ⌃A/⌃E Emacs motion is macOS-only, Ctrl+Home/End are the document ends |
+| Title-bar double-click action | `window_drag.rs`, `src/shell/windowChrome.ts` | works (WP3) | works (WP3) | Windows: the native caption (HTCAPTION) maximizes. Linux: GNOME's `action-double-click-titlebar` (gsettings, followed live) through `setTitlebarDoubleClick`, maximize by default. macOS keeps AppKit's preference |
 | Save panel | `apply_hooks.py` `prompt_for_new_path` | works (UI thread) | works (UI thread) | Not opened in CI. `platform/files.ts` goes through `os.savePanelDialog`: the hook, else a PowerShell / zenity / kdialog panel (WP2) |
 | Clipboard image | `clipboard_hooks.py` | works (bridge) | works (bridge) | Not exercised |
-| Window drag regions | `window_drag.rs` | works? | works? | `WindowControlArea::Drag` is cross-platform; unverified (no pointer in CI) |
-| Traffic lights / window controls | `TitleBar.tsx`, `window_platform*` | blocked | blocked | With a transparent title bar Linux X11 shows no close/min/max at all (see screenshot). WP3 |
+| Window drag regions | `window_drag.rs` | works (WP3) | works (WP3) | Windows: only `WindowControlArea::Drag` (no GPUI handler may stop the press), so drag, Aero snap, double-click and the system menu are native; controls inside are `WindowControlArea::Client` (zed fork: the topmost area wins). Linux: the move starts on the first drag after a press; a right click opens the window menu. `window-chrome` check |
+| Traffic lights / window controls | `nav/TitleBar.tsx`, `nav/WindowControls.tsx`, `window_chrome.rs` | works (WP3: client-side decorations) | works (WP3) | Windows 11 caption buttons as `windowControl` hit-test areas (Snap Layouts); Linux GNOME-style buttons in the desktop's layout with resize edges, requested as client-side decorations (server-side ones, X11 without a compositing manager, draw none). [WP3 status](#wp3-window-and-input-status) |
 | Window material (NSVisualEffectView) | `native/material.ts`, WP9 `platform/desktopMaterial.ts` | fallback: opaque window, the glass coats over the Solid frame colour, frosted surfaces still blur | opt-in (WP9, `KYBERN_DESKTOP_MATERIAL=dwm`) on Windows 11 22H2+: Settings › Backdrop Mica or Acrylic (DWM), tinted in Kybern's theme; by default and on Windows 10 as Linux | No adjustable blur radius off macOS. Opt-in until seen on a real Windows desktop (CI captures cannot show DWM) |
 | Secure input (Carbon) | `secure_input.rs` | fallback | fallback | No-op |
 | Automation test display | `automation_display.rs` | fallback | fallback | Centered on the primary display. Not needed by the WP7 harness: captures are the addon's screenshot (or the X window, Linux) and input is synthesized in-process, so the window's position never matters |
 | Scroll phase injection | `scroll_hooks.py` | works (WP1) | works (WP1) | `simulateScrollPhase` on every desktop platform and in `TestGpuixRenderer`; compile-checked, on screen in `frame-wake-check`. The WP7 checks still mark every wheel step `GAPS.wheel` until a CI run passes: a pass is reported as a closed gap, then the marker goes |
 | Web view (previews, Visual, Artifacts, Mermaid) | `webview.m`, `native/webview-win`, `src/native/webview.ts` | works (WP10: WebView2 under WinComp, `kybern-webview.dll`; needs the WebView2 Runtime, else WP4's fallbacks) | blocked | Linux loads no library (`webHost.available` is false; `KYBERN_GPUIX_NO_WEBVIEW=1` forces it anywhere). Fallbacks shipped in WP4: see *Without a web view*. Windows status and parity: `WEBVIEW-PLATFORMS.md` |
 | Notifications | `packaging/notifications.m` (macOS); GPUI's own on Windows and Linux through `src/native/notifications.ts` | works (WP5: toasts under the installer's AUMID, `notify` check) | works (WP5: freedesktop `Notify`, `notify` check) | macOS keeps the companion. Not yet run on a real Windows toast click or a Linux desktop shell. [Details](#wp5-notifications-status) |
-| objc FFI shell (frame restore, appearance, visibility, locale) | `shell/*.ts`, `native/*.ts` | fallback | fallback | Guarded: no restore, no system theme |
+| objc FFI shell (frame restore, appearance, visibility, locale) | `shell/*.ts`, `native/*.ts` | works (WP3) for frame and theme | works (WP3) for frame and theme | `shell/windowChrome.ts`: the frame (size, position, maximized, display) saved through `getWindowBounds` and reopened through the window options; the OS theme live through GPUI's appearance; visibility and locale still guarded |
 | `pbcopy`, `open`, `osascript`, `~/Library`, Keychain | `src/**` via `src/platform/os.ts` | fallback | fallback | WP2 done: commands per OS, unit-tested; not run on a real Windows/Linux desktop. [Details](#f-js-platform-services-src) |
-| ⌘ shortcuts | 26 files | blocked | blocked | `cmd` maps to Super/Windows off macOS. WP3 |
+| ⌘ shortcuts | `src/platform/keys.ts` + call sites | works (WP3) | works (WP3) | `isPrimary`: Ctrl off macOS (GPUIX's `cmd` is the Windows/Super key there); labels convert centrally. [WP3 status](#wp3-window-and-input-status) |
 | Pointer-release watch | `preview/resize.tsx` | works | works | Guarded; the window-sized capture layer ends the drag on mouse-up or a move with no button (WP2) |
 | Copy "This Mac" | environment chip, sidebar, settings | works | works | "This computer" off macOS (`osLabels()`); Finder copy becomes Explorer / Files (WP2) |
 
@@ -456,7 +456,7 @@ command-based, works once the tool is present, with a sentence naming the tool w
 | Login-shell PATH, Homebrew | `shell/daemon.ts`, `platform/cli.ts` (`pathPlan`) | inherited PATH, `;`, `.exe` names (`bundledCommand`, `resolveCommand`) | `$SHELL -ilc`; `/home/linuxbrew/.linuxbrew/bin` instead of `/opt/homebrew/bin` |
 | CLI install | `platform/cli.ts`, `settings/About.tsx` | the installer owns PATH: the row reports whether `kybern` is there, no Install button | AppImage: `~/.local/bin/kybern` symlink to the AppImage file (needs AppRun to run the bundled `kybern` when `$ARGV0` is `kybern`; WP6 lane); deb/rpm: the package owns `/usr/bin/kybern`, reported only; portable build: `~/.local/bin` symlink |
 | `screencapture -l` | `transcript/live.ts` via `os.captureWindowImage` | test-only: the automation client's `screenshot`; scripts say so and stop | same |
-| Window capture attach, `sips` downscale, reduced motion and appearance (`defaults`), screen-recording check | `requests/attach.ts`, `transcript/imageFiles.ts`, `platform/reducedMotion.ts`, `ui.tsx`, `pick/screenRecording.ts` | the attach item is hidden; images show at full size; motion on, light theme (WP3 reads the real settings); no screen-recording card | same |
+| Window capture attach, `sips` downscale, reduced motion and appearance (`defaults`), screen-recording check | `requests/attach.ts`, `transcript/imageFiles.ts`, `platform/reducedMotion.ts`, `ui.tsx`, `pick/screenRecording.ts` | the attach item is hidden; images show at full size; appearance from `AppsUseLightTheme` then GPUI live, reduced motion from `SPI_GETCLIENTAREAANIMATION` (WP3); no screen-recording card | GNOME `color-scheme` then the portal live, `enable-animations` (gsettings, monitored) (WP3) |
 | Editors ("Open in…") | `dock/editors.ts` | "Default app" (the system's choice) | `code`, `cursor`, `windsurf`, `zed`, `subl`, `idea`, `webstorm` on PATH, plus "Default app" |
 
 #### Native bindings wanted (not added: `native/` is frozen for the fork move)
@@ -563,7 +563,7 @@ agents (one OS-specific lane can split W/L).
 | WP0 | Forks + CI. ~~Move to `Tresnanda/gpuix` and `Tresnanda/zed` with the patch queue as commits~~ (done 2026-10-25, see [Where the forks help](#where-the-forks-help)). Then: `desktop.yml` lanes that build and cache the Linux/Windows addons (generalize `.github/actions/gpuix-addon` by target), run the app's unit tests there, and keep `gpuix-platforms.yml` as the on-screen check. **Linux and Windows addon lanes and caches done (ADE-78)** | `native/update.sh`, `.github/actions/gpuix-addon`, `.github/workflows/*gpuix*` | — | 2–3 (+ fork move) | A |
 | WP1 (code done, CI run pending) | Native platform core: confirm Windows on screen at DPI 100/150 %; Wayland (a real GNOME/KDE session: headless Weston has no `wl_seat` and upstream `gpui_linux` unwraps it, `wayland/client.rs:832`); bridge cost: `()`-returning hooks send without waiting, count bridged calls per frame in `perf/bench`; unify scroll-phase injection; a frame-wake hook on Linux/Windows instead of the timer (Wayland frame callback / DXGI `WaitForVBlank`). [Status](#wp1-native-platform-core-status) | fork commits "… (WP1)" on both `wp1` branches, `perf/bench`, `scripts/frame-wake-check.tsx` | WP0 | 3–5 | A |
 | WP2 (done) | JS platform services (section F): `src/platform/os.ts` over GPUI clipboard, `open_url`/`reveal_path`, path prompts, credentials (Credential Manager / Secret Service, file store fallback), config/cache dirs, PATH and `.exe`, CLI install, "This computer" copy, the `preview/resize.tsx` guard | `src/platform/**`, `src/environments/credentials.ts`, shell-out call sites | — (JS only; mock the addon) | 5–7 | B |
-| WP3 | Window and input (section D): caption buttons and drag/snap on Windows (`WindowControlArea`), CSD buttons on Linux, title-bar double-click in JS, one `isPrimary(mods)` key helper with a conflict review (terminal Ctrl+C, editors), the rich-editor key interceptor off macOS, close guard and DPI checks | `src/nav/TitleBar.tsx`, key helper + call sites, fork: `packages/native/src/{window_*,rich_editor}.rs` | WP1 | 6–8 | C |
+| WP3 (code done, CI below) | Window and input (section D): caption buttons and drag/snap on Windows (`WindowControlArea`), CSD buttons on Linux, title-bar double-click in JS, one `isPrimary(mods)` key helper with a conflict review (terminal Ctrl+C, editors), the rich-editor key interceptor off macOS, close guard and DPI checks | `src/nav/TitleBar.tsx`, key helper + call sites, fork: `packages/native/src/{window_*,rich_editor}.rs` | WP1 | 6–8 | C |
 | WP4 | Previews and Mermaid without the embedded web view: open previews in the default browser through the existing relay, Mermaid as static text (or SVG from a headless helper on Linux later) | `src/native/webview.ts` loader, `src/preview/browser.ts`, `src/transcript/mermaid.ts` | WP2 | 2–3 | B |
 | WP5 (done; CI-verified, real-PC click pending: see below) | Notifications over GPUI (`show_system_notification`); Windows needs the AUMID from WP7's installer | new fork commits (native crate), `src/native/notifications.ts` | WP1 | 2–3 | C |
 | WP6 (L/W) | Packaging and updater (section G): `bun build --compile` per target, AppImage + `.deb` (L), NSIS per-user installer with the AUMID shortcut (W), updater keys and in-place update, manifest entries. **L and W in (ADE-78): AppImage, `.deb` and `.rpm`; NSIS installer; not yet released** | `scripts/package-app.ts`, `scripts/bundle-gpuix*`, `scripts/updater-manifest.mjs`, `src/platform/update.ts` | WP0 | L 5–6, W 6–8 | D |
@@ -793,6 +793,62 @@ pass. Still failing there, not yet investigated: `rounded-check` ("First
 external corner is rounded", a one-pixel sample at 1×) and
 `markdown-document-check` ("Grid adds actual outer/vertical borders"); and in
 CI `nowebview` timed out waiting for the seeded pictures on both platforms.
+
+### WP3 window and input: status
+
+Fork branches `wp3` (`next`, i.e. the ci-fix heads, plus WP3; `native/FORK` pins them):
+
+| Fork | Commit | What |
+| --- | --- | --- |
+| `Tresnanda/zed` | "Windows: controls inside a caption area keep their press (WP3)" | `WindowControlArea::Client`; the window-control hit test takes the topmost area under the pointer, so a button in a custom title bar answers HTCLIENT, not HTCAPTION |
+| `Tresnanda/zed` | "Windows: hit-test window controls where the pointer is now (WP3)" | The answer comes from a hit test at the cursor's position, not `mouse_hit_test` (as new as the last dispatched event, while Windows asks before the move or press that updates it); the last answer stands in when the app is borrowed |
+| `Tresnanda/zed` | "Keep window-control areas of cached views (WP3)" | `reuse_paint` replayed a cached view without its `window_control_hitboxes`: the title bar (a cached island) lost its caption and buttons on every frame that reused it, so a press on maximize answered HTCLIENT. Found by the CI check |
+| `Tresnanda/zed` | "Windows: give GPUI the release of a caption press (WP3)" | Caption and border presses no element takes run `DefWindowProc` (move/size loop, double-click maximize) in the handler and then dispatch the release the loop consumed, so GPUI's press state is balanced |
+| `Tresnanda/gpuix` | "Windows and Linux: app-drawn title bar, window state, key interception (WP3)" | `windowControl` caption buttons, per-OS drag regions, `getWindowChrome` / `setWindowChromeCallback`, `getWindowBounds`, `startWindowResize`, `showWindowMenu`, `setTitlebarDoubleClick`, window options `windowDecorations`, `x`, `y`, `maximized`, `display`; the key interceptors off macOS; the editor's `secondary` shortcuts |
+| `Tresnanda/gpuix` | "Window chrome: send the state with each change, bounds included (WP3)" | The callback carries the state, so following the window costs no waited bridge call |
+
+App side:
+
+- **Title bar** (`nav/TitleBar.tsx`, `nav/WindowControls.tsx`): `useWindowControlsLayout` gives the leading chrome its
+  start (82 px after the traffic lights on macOS, 12 px elsewhere, after left-side Linux buttons) and the trailing
+  toggles their end. Windows: 46 px caption buttons the bar's height, Fluent glyphs, neutral kit hover/press fills,
+  close #C42B1C with a white glyph, dimmed glyphs while inactive; no `onClick` (Windows acts on its hit test). Linux:
+  24 px round buttons with a faint fill (Adwaita), in `buttonLayout` order and side, minus what `controls` lacks;
+  5 px resize bands and 12 px corners (`ResizeEdges`) unless tiled or maximized.
+- **Shortcuts** (`platform/keys.ts`): one `isPrimary`; the conflict review is in its header and in `nav/keys.ts`: a
+  focused terminal off macOS gets Ctrl+key and Alt+key (its copy/paste/find move to Ctrl+Shift+C/V/F); back/forward
+  Alt+←/→, open parent Alt+↑, spaces Alt+1–9, focus group Ctrl+Alt+arrows; Emacs ⌃A/⌃E/⌃N/⌃P macOS-only.
+- **Window state** (`shell/windowChrome.ts`, `platform/systemPrefs.ts`): theme and reduced motion at launch and live,
+  the frame saved and restored per display, the minimum size (900×600) on every OS, the close guard through
+  `WM_CLOSE` / `closeWindow`.
+
+The check is `scripts/window-chrome-check.ts` (`window-chrome` in `run-platform-checks.ts`): on Windows it drives the
+caption with real input (`native/win-input.ts`), because synthesized automation events never reach the Windows hit
+test; on Linux the workflow runs it a second time under xfwm4's compositor (client-side decorations need a compositing
+manager with `_GTK_FRAME_EXTENTS`) with `xdotool`. Results: see [WP3 CI](#wp3-ci).
+
+#### WP3 CI
+
+Throwaway `spike/wp3-1` (WP3 commits on `feat/gpuix-platforms` plus a push trigger), 2026-10-26; artifacts in
+`.kybern-artifacts/wp3/` of the main checkout. The final run, [40276978896](https://github.com/Tresnanda/kybern/actions/runs/40276978896),
+passed on every job with every check:
+
+| Job | window-chrome | Rest |
+| --- | --- | --- |
+| Windows (WARP, real input) | pass: 46×46 buttons flush top-right; red close hover; `WM_NCHITTEST` answers caption / minimize / maximize / close / client (a control in the bar); maximize and restore by the button (restore glyph while maximized); double click maximizes and restores; a drag moves the window by exactly the drag; a control in the bar keeps its click before and after a window drag; real Ctrl+K; minimize; close ends the app | all pass; `nowebview`'s Ctrl+2/3/1 step reports its `shortcut` gap closed |
+| Linux X11 (Xvfb, no window manager) | pass: server-side fallback, no buttons drawn, 12 px leading edge, shortcuts | all pass |
+| Linux X11 + xfwm4 compositor (`xdotool`) | pass: client-side decorations, GNOME buttons; maximize/restore, double click, drag, right-edge resize, minimize, close | — |
+| Linux Wayland (headless Weston) | not run (no input, no capture) | frame-wake and smoke pass |
+
+The earlier runs on the way found the three zed commits above: the cached title bar's lost caption areas (maximize
+did nothing), the stale hit test, and the press GPUI never saw released. macOS on the final pin (`update.sh`, then
+`run-platform-checks.ts --checks window-chrome,focus,clip,smoke,frame-wake` on this Mac): all pass, traffic-light room
+unchanged (82 px), ⌘K / not ⌃K; the app's typecheck is clean and its 976 unit tests pass.
+
+Not covered by CI (needs the real PC or desktops): Windows 11 Snap Layouts flyout and Aero snap on real DWM (the runner
+is Server 2022), mixed-DPI caption hit tests, the system menu on right click, GNOME Wayland and KDE (portal
+`color-scheme` / `gtk-decoration-layout` live updates), `enable-animations` and Windows Animation effects toggled
+while running, and the restored frame across monitors.
 
 ### Where the forks help
 

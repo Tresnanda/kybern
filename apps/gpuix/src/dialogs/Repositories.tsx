@@ -38,6 +38,7 @@ import { getClient, useApp } from '../state.ts'
 import { FONT_MONO } from '../theme.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { openQuietly, osLabels, revealQuietly } from '../platform/os.ts'
+import { isPrimary } from '../platform/keys.ts'
 
 const UNDO_MS = 8000
 
@@ -327,7 +328,7 @@ function AddRepositories({ project, onDone }: { project: Project; onDone: () => 
   }
 
   return (
-    <div onKeyDown={(e) => { if (e.key === 'enter' && e.modifiers?.cmd) void submit() }} style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingLeft: 20, paddingRight: 20, paddingTop: 20, paddingBottom: 16 }}>
+    <div onKeyDown={(e) => { if (e.key === 'enter' && isPrimary(e.modifiers)) void submit() }} style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingLeft: 20, paddingRight: 20, paddingTop: 20, paddingBottom: 16 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <Label color={t.text} size={17} lineHeight={22} weight={600}>{GROUP_COPY.addRepositoriesTitle(project.name)}</Label>
         <Label color={t.textSecondary} size={13} lineHeight={19}>{GROUP_COPY.addRepositoriesBody(folder)}</Label>

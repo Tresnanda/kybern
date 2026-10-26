@@ -21,6 +21,7 @@ import { startAppUpdateChecks } from './platform/update.ts'
 import { installFrameSource } from './native/frame.ts'
 import { handbackOnFocus, installFocusHandback } from './native/focusHandback.ts'
 import { hasSavedFrame, installWindowFrame, startWindowShell } from './shell/window.ts'
+import { savedFrameOptions, startWindowChrome } from './shell/windowChrome.ts'
 import { startEnvironmentWindow } from './windows/window.ts'
 import { installRuntimeSafetyNet } from './shell/errors.ts'
 import { startMemoryLog } from './perf/memoryLog.ts'
@@ -61,6 +62,8 @@ function Fonts({ children }: { children: ReactNode }) {
     setReady(true)
     startPerfProbe(renderer)
     startWindowShell(renderer)
+    // Windows and Linux: the title bar's window state, the OS theme and motion, the saved frame (`shell/windowChrome.ts`).
+    startWindowChrome(renderer)
     // One window per environment across processes; the title names the environment (`windows/`).
     startEnvironmentWindow(renderer)
     // Debug: minimize after launch to check that hidden windows stop their loops.
@@ -139,6 +142,11 @@ render(
     ...(process.env.KYBERN_PERF_PROBE === '1' ? { debugFrameOverlay: 'minimal' as const } : {}),
     minWidth: 900,
     minHeight: 600,
+    // Windows and Linux reopen the saved frame here (macOS restores AppKit's frame after the window opens).
+    ...(process.env.KYBERN_WINDOW_SIZE ? {} : savedFrameOptions({ width: 900, height: 600 })),
+    // Linux: Kybern draws the title bar, its buttons and the resize edges (`nav/WindowControls.tsx`). X11 without a
+    // compositing manager falls back to the window manager's frame.
+    ...(process.platform === 'linux' && process.env.KYBERN_WINDOW_DECORATIONS !== 'server' ? { windowDecorations: 'client' } : {}),
     // An agent checking its own work must not take the keyboard from the user.
     focus: process.env.GPUIX_BACKGROUND !== '1',
     // A saved frame is restored before the window is shown (`shell/window.ts`).

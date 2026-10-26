@@ -30,7 +30,7 @@ on:
   workflow_dispatch:
     inputs:
       checks:
-        description: 'Checks to run: all, or a comma list of focus, clip, rounded, backdrop, markdown-document, text, smoke, nowebview, webview (Windows), frame-wake, notify'
+        description: 'Checks to run: all, or a comma list of focus, clip, rounded, backdrop, markdown-document, text, smoke, nowebview, webview (Windows), window-chrome, frame-wake, notify'
         required: false
         type: string
         default: all
@@ -114,6 +114,9 @@ jobs:
             libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev libssl-dev libzstd-dev \
             libvulkan1 mesa-vulkan-drivers vulkan-tools xvfb xauth x11-utils imagemagick fonts-dejavu-core \
             dbus python3-gi gir1.2-glib-2.0 fonts-noto-color-emoji fonts-noto-cjk
+      - name: Install a compositing window manager and real X input (WP3 window-chrome check)
+        if: matrix.display == 'xvfb'
+        run: sudo apt-get install -y --no-install-recommends xfwm4 xdotool dbus-x11
       - name: Install Weston (headless Wayland compositor)
         if: matrix.display == 'wayland'
         run: sudo apt-get install -y --no-install-recommends weston
@@ -171,6 +174,24 @@ jobs:
           WAYLAND_DISPLAY=wayland-missing xvfb-run -a -s '-screen 0 1440x900x24 -extension Composite' \
             bun scripts/run-platform-checks.ts --kybernd "$GITHUB_WORKSPACE/target/debug/kybernd" \
             --out gpuix-checks-stale-wayland --checks frame-wake
+      # WP3: client-side decorations need a compositing manager that supports _GTK_FRAME_EXTENTS (GPUI falls back to the
+      # window manager's frame otherwise), so this run keeps Xvfb's Composite extension and starts xfwm4 with its
+      # compositor; xdotool gives the check real X input (the drawn buttons, the drag, the resize edge).
+      - name: Window chrome under a compositing window manager (Linux, Xvfb + xfwm4)
+        if: ${{ !cancelled() && steps.addon.outcome == 'success' && matrix.display == 'xvfb' }}
+        working-directory: apps/gpuix
+        run: |
+          cat > "$RUNNER_TEMP/wm-checks.sh" <<'SCRIPT'
+          set -eu
+          dbus-launch --exit-with-session xfwm4 --compositor=on --replace > "$PWD/xfwm4.log" 2>&1 &
+          # GPUI picks client-side decorations at startup only when the window manager lists _GTK_FRAME_EXTENTS and a
+          # compositing manager runs; xfwm4 starts its compositor a moment after it takes the screen.
+          for i in $(seq 100); do xprop -root _NET_SUPPORTED 2>/dev/null | grep -q _GTK_FRAME_EXTENTS && break; sleep 0.2; done
+          xprop -root _NET_SUPPORTED | grep -q _GTK_FRAME_EXTENTS || { echo "xfwm4 does not list _GTK_FRAME_EXTENTS"; cat "$PWD/xfwm4.log"; }
+          sleep 5
+          KYBERN_EXPECT_DECORATIONS=client bun scripts/run-platform-checks.ts --kybernd "$KYBERND" --out gpuix-checks-wm --checks window-chrome
+          SCRIPT
+          KYBERND="$GITHUB_WORKSPACE/target/debug/kybernd" xvfb-run -a -s '-screen 0 1440x900x24' bash "$RUNNER_TEMP/wm-checks.sh"
       - name: Frame wake and the app smoke (Linux, headless Weston without a seat)
         if: ${{ !cancelled() && steps.addon.outcome == 'success' && matrix.display == 'wayland' }}
         working-directory: apps/gpuix
@@ -212,6 +233,8 @@ jobs:
           path: |
             apps/gpuix/gpuix-checks
             apps/gpuix/gpuix-checks-stale-wayland
+            apps/gpuix/gpuix-checks-wm
+            apps/gpuix/xfwm4.log
             apps/gpuix/weston.log
           if-no-files-found: warn
           retention-days: 14

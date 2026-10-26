@@ -22,6 +22,7 @@ import { keyboardAnswer } from './Panel.tsx'
 import { actOnRequest, refreshProgress, useRequestProgress } from './progress.ts'
 import { CodeText, PhaseIn, TimeLeft } from './summoned.tsx'
 import { someoneIsTyping } from './ui.ts'
+import { isPrimary } from '../platform/keys.ts'
 
 /** Which body the card shows for the daemon's phase. */
 export function loginView(phase: string | undefined): 'ask' | 'wait' | 'paste' | 'done' {
@@ -143,7 +144,7 @@ function LoginWaiting({ approvalId, threadId, input, badge, error, act }: { appr
   return (
     <CardShell testId="login-panel" cmdKeys={['c']} onKey={(e) => {
       if (e.key === 'escape') { void cancel(true); return true }
-      if (e.key === 'c' && e.modifiers?.cmd && progress?.user_code) { copyText(progress.user_code); return true }
+      if (e.key === 'c' && isPrimary(e.modifiers) && progress?.user_code) { copyText(progress.user_code); return true }
       return false
     }}>
       <RequestHeader glyph={T.terminal} tileMark={<WaitingMark cli={input.cli} />} title={loginTitle(input)} chip={{ label: input.cli, mono: true }} badge={badge} error={failure || error || undefined} />

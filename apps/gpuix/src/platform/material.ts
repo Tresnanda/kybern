@@ -28,17 +28,27 @@ import { useSyncExternalStore } from 'react'
 import { BACKDROP_BLUR } from '../native/local-build.ts'
 import { cls, getObjc, sel } from '../native/objc.ts'
 import { onOsDisplayChange, readOsDisplay } from './osDisplay.ts'
-import { setReducedMotion } from './reducedMotion.ts'
+import { REDUCED_MOTION, setReducedMotion } from './reducedMotion.ts'
 import { OPAQUE_WINDOW } from './translucency.ts'
 
 export interface AccessibilityDisplay { reduceTransparency: boolean; increaseContrast: boolean; reduceMotion: boolean }
 
 const pinned = (name: string) => process.env[name] ? process.env[name] === '1' : null
 
+/** Windows and Linux: the system's reduced-motion switch (`shell/windowChrome.ts`); its launch value is `reducedMotion.ts`'s. */
+let platformMotion: boolean | null = process.platform === 'darwin' ? null : REDUCED_MOTION
+export function setPlatformReducedMotion(value: boolean | null) {
+  if (value === null || value === platformMotion) return
+  platformMotion = value
+  refreshAccessibilityDisplay()
+}
+
 function readNative(): AccessibilityDisplay | null {
+  // Off macOS: transparency and contrast from `osDisplay.ts` (WP9), reduced motion from the window shell (WP3).
   if (process.platform !== 'darwin') {
     const os = readOsDisplay()
-    return os && { ...os, reduceMotion: false }
+    if (!os && platformMotion === null) return null
+    return { reduceTransparency: os?.reduceTransparency ?? false, increaseContrast: os?.increaseContrast ?? false, reduceMotion: platformMotion ?? false }
   }
   try {
     const o = getObjc()

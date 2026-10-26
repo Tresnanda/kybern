@@ -18,6 +18,7 @@ import { glyph, ICONS } from '../icons.tsx'
 import { NOTE_CATEGORIES } from '../../../../packages/kybern-client/src/notesHistory.ts'
 import { getClient } from '../state.ts'
 import { Label, useTheme } from '../ui.tsx'
+import { isPrimary } from '../platform/keys.ts'
 
 const MAGIC = glyph(AiMagicIcon)
 const categoryLabel = (value: string | null | undefined) => NOTE_CATEGORIES.find((c) => c.value === value)?.label ?? ''
@@ -40,7 +41,7 @@ export function CoordinatorCard({ approval, count }: { approval: ApprovalRequest
   }
   const accept = () => respond(brief ? { decision: 'submit', response: { text } } : changes ? { decision: 'submit', response: { accepted: changes.map(c => c.path).filter(path => accepted.has(path)) } } : { decision: 'allow_once' })
   useEffect(() => addWindowKeyHandler(e => {
-    if (!brief || busy || !text.trim() || e.key !== 'enter' || !e.modifiers?.cmd) return false
+    if (!brief || busy || !text.trim() || e.key !== 'enter' || !isPrimary(e.modifiers)) return false
     keyboardAnswer(); void accept(); return true
   }), [brief, busy, text])
   const copy = git && gitCardCopy(git)

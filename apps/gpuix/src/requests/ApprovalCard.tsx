@@ -8,6 +8,7 @@ import { cancelTurn, chooseRow, handleCardKey, sendDecline } from './actions.ts'
 import { CancelLink, CardShell, GLYPHS, HintText, Hints, Kbd, NoteField, OptionList, OptionRow, RequestHeader, WellFor } from './Card.tsx'
 import { approvalCard, forwardsDeclineReason } from './model.ts'
 import { forgetCardUi, patchCardUi, useCardUi } from './ui.ts'
+import { isPrimary } from '../platform/keys.ts'
 
 /** The thread's folder as the chip shows it: relative to the home folder, tail only when long. */
 export function folderLabel(cwd: string | undefined): string | undefined {
@@ -33,7 +34,7 @@ export function ApprovalCard({ threadId, approval, count }: { threadId: ThreadId
   const toggle = () => patchCardUi(approval.id, { expanded: !ui.expanded })
   const back = () => patchCardUi(approval.id, { note: false })
   return (
-    <CardShell testId="approval-panel" onKey={(e) => (e.modifiers?.cmd && e.key === 'e' ? (toggle(), true) : handleCardKey(approval, threadId, e.key ?? ''))}>
+    <CardShell testId="approval-panel" onKey={(e) => (isPrimary(e.modifiers) && e.key === 'e' ? (toggle(), true) : handleCardKey(approval, threadId, e.key ?? ''))}>
       <RequestHeader glyph={GLYPHS[card.glyph]} title={card.title} chip={chip} chipGlyph={card.chip ? undefined : ICONS.folder} badge={count > 1 ? `1 of ${count}` : undefined} meta={card.meta} />
       <WellFor well={card.well} expanded={ui.expanded} onToggle={toggle} />
       <OptionList label={card.title}>

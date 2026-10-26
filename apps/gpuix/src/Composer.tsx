@@ -55,6 +55,7 @@ import { FONT_UI } from './theme.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from './ui.tsx'
 import { GlassEdge } from './kit/GlassEdge.tsx'
 import { frostBackdrop, frostFill, raisedFill, useGlass } from './platform/glass.ts'
+import { isPrimary, shortcutLabel } from './platform/keys.ts'
 import { addWindowKeyHandler } from './nav/keys.ts'
 import { keyboardAnswer } from './requests/Panel.tsx'
 import { isUserInput, connectorApproval } from '../../../packages/kybern-client/src/userInput.ts'
@@ -1000,7 +1001,7 @@ export function ComposerView(input: ComposerViewProps) {
               }}
               onKeyDown={(e) => {
                 readSelection()
-                if (e.modifiers?.cmd && e.key === 'v' && !props.readOnly) {
+                if (isPrimary(e.modifiers) && e.key === 'v' && !props.readOnly) {
                   try {
                     const payload = clipboardAttachments(renderer)
                     if (payload.paths.length || payload.image) {
@@ -1020,15 +1021,15 @@ export function ComposerView(input: ComposerViewProps) {
                 // A caught key: ↵ goes to the name form (the message is not sent: a key must not go out by habit), ⌘↵ keeps it
                 // as text and sends, Esc keeps it as text.
                 const caught = secretCatchRef.current
-                if (caught && e.key === 'enter' && e.modifiers?.cmd) { e.preventDefault(); keepSecret(true); return }
+                if (caught && e.key === 'enter' && isPrimary(e.modifiers)) { e.preventDefault(); keepSecret(true); return }
                 if (caught?.phase === 'detected' && e.key === 'enter' && !e.modifiers?.shift && !e.modifiers?.alt && !e.modifiers?.ctrl) {
                   e.preventDefault()
                   if (secretWorkspace) setSecretCatch({ ...caught, phase: 'name' })
                   return
                 }
                 if (caught && e.key === 'escape') { e.preventDefault(); keepSecret(false); return }
-                // ⌘↵ steers even when a completion menu is open.
-                if (e.key === 'enter' && e.modifiers?.cmd && !e.modifiers.shift) {
+                // ⌘↵ (Ctrl+Enter off macOS) steers even when a completion menu is open.
+                if (e.key === 'enter' && isPrimary(e.modifiers) && !e.modifiers?.shift) {
                   e.preventDefault()
                   void submit(running ? 'steer' : promptMode)
                   return
@@ -1276,7 +1277,7 @@ function RunningControls({
             <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
               <Label color={t.text}>{`Steer now${steering ? ' ✓' : ''}`}</Label>
               <Label color={t.textSecondary} size={12}>
-                Guide the current turn immediately · ⌘+Enter
+                {`Guide the current turn immediately · ${shortcutLabel('⌘+Enter')}`}
               </Label>
             </div>
           </PickerItem>

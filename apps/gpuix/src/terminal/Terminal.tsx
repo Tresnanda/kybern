@@ -23,7 +23,8 @@ import { VT, cellWidth, type Line, type Pen } from './vt.ts'
 import { glyphRects, isCustomGlyph } from './glyphs.ts'
 import { allRange, lineRange, selectedText, selectionByIndex, selectionColumns, wordRange, type TerminalSelection } from './selection.ts'
 import { observeElementBounds } from '../native/layout.ts'
-import { terminalKey, terminalPaste, terminalMouse, terminalViewportKey, type TerminalMouseEvent } from './keys.ts'
+import { terminalCommand, terminalKey, terminalPaste, terminalMouse, terminalViewportKey, type TerminalMouseEvent } from './keys.ts'
+import { SHORTCUT } from '../platform/keys.ts'
 import { Utf8ToUtf32 } from './utf8.ts'
 import { fitTerminal, PANE_BOTTOM, PANE_X, XTERM_X, XTERM_Y } from './fit.ts'
 import { blend, indexedColor, parseCss, terminalColors, terminalPalette, type TerminalPalette } from './palette.ts'
@@ -367,7 +368,10 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
         const action = terminalViewportKey(e)
         if (action === 'selectall') { setSelection(allRange(model.lines(), model.cols)); return }
         if (action === 'pageup' || action === 'pagedown') { follow.current = false; const at = Math.max(0, Math.min(lines.length - 1, (range.start + (action === 'pageup' ? -model.rows : model.rows)))); if (list.current) renderer?.scrollToItem?.(list.current.id, at); return }
-        if (e.modifiers?.cmd) { if (e.key === 'c') copy(); else if (e.key === 'v') paste(); else if (e.key === 'f') setSearch(''); else if (e.key === 'end') { follow.current = true; update(v => v + 1) }; return }
+        const command = terminalCommand(e)
+        if (command === 'copy') copy(); else if (command === 'paste') paste(); else if (command === 'find') setSearch(''); else if (command === 'latest') { follow.current = true; update(v => v + 1) }
+        // ⌘ never reaches the shell (off macOS that is the Windows / Super key).
+        if (command || e.modifiers?.cmd) return
         const text = terminalKey(e, model.applicationCursor)
         if (text !== null) { e.preventDefault() /* Tab belongs to the shell, not window focus navigation */; follow.current = true; setSelection(null); setRestart(n => n + 1); send(text) }
       }}
@@ -377,10 +381,10 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
       </virtual-list>}
     </div>
     {menuAt && <ContextMenu at={menuAt} onClose={() => setMenuAt(null)} testId="terminal-menu">
-      <MenuItem id="find" testId="terminal-find" label="Find" shortcut="⌘F" onSelect={() => setSearch('')} />
-      <MenuItem id="copy" testId="terminal-copy" label="Copy" shortcut="⌘C" onSelect={copy} />
-      <MenuItem id="paste" label="Paste" shortcut="⌘V" disabled={exit !== null} onSelect={paste} />
-      <MenuItem id="latest" testId="terminal-bottom" label="Scroll to latest" shortcut="⌘End" onSelect={() => { follow.current = true; update(v => v + 1) }} />
+      <MenuItem id="find" testId="terminal-find" label="Find" shortcut={SHORTCUT.terminalFind} onSelect={() => setSearch('')} />
+      <MenuItem id="copy" testId="terminal-copy" label="Copy" shortcut={SHORTCUT.terminalCopy} onSelect={copy} />
+      <MenuItem id="paste" label="Paste" shortcut={SHORTCUT.terminalPaste} disabled={exit !== null} onSelect={paste} />
+      <MenuItem id="latest" testId="terminal-bottom" label="Scroll to latest" shortcut={SHORTCUT.terminalLatest} onSelect={() => { follow.current = true; update(v => v + 1) }} />
     </ContextMenu>}
   </>
 }

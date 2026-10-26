@@ -27,6 +27,7 @@ import { useResource } from './resource.ts'
 import { defaultEditor, installedEditors, setDefaultEditor } from '../dock/editors.ts'
 import { setWrapLines, useWrapLines } from '../dock/filePrefs.ts'
 import { osLabels } from '../platform/os.ts'
+import { shortcutLabel } from '../platform/keys.ts'
 
 export function General() {
   const { settings: s, saving } = useSettings()
@@ -58,7 +59,7 @@ function FilesSection() {
   const [editor, setEditor] = useState(() => defaultEditor()?.id ?? '')
   const wrap = useWrapLines()
   return <Section title="Files">
-    <Row title="Open files in" description={editors.length ? 'The editor File actions › Open in and ⌘⇧O use. Picking another editor there makes it the default.' : 'No code editor was found in Applications. Install one to open files from their tabs.'}>
+    <Row title="Open files in" description={editors.length ? `The editor File actions › Open in and ${shortcutLabel('⌘⇧O')} use. Picking another editor there makes it the default.` : 'No code editor was found in Applications. Install one to open files from their tabs.'}>
       {editors.length > 0 && <Select label="Open files in" testId="settings-file-editor" value={editor} onChange={(value) => { setDefaultEditor(value); setEditor(value) }} options={editors.map((candidate) => ({ value: candidate.id, label: candidate.name }))} />}
     </Row>
     <Row title="Wrap lines" description="Long lines in file tabs wrap at the tab's width. Off, they scroll sideways."><Switch aria-label="Wrap lines" testId="settings-file-wrap" checked={wrap} onCheckedChange={setWrapLines} /></Row>

@@ -4,6 +4,7 @@ import type { Project, Space } from '../../../../packages/kybern-client/src/type
 import { getNav, setNav } from '../nav/store.ts'
 import { set } from '../state.ts'
 import { noteTerminalFocus } from '../terminal/focus.ts'
+import { setKeyPlatform } from '../platform/keys.ts'
 import { spaceForDigit, spaceKey } from './keys.ts'
 import { startSpaces } from './current.ts'
 import { setSpacesState } from './store.ts'
@@ -65,5 +66,22 @@ describe('spaceKey', () => {
     expect(spaceKey(press('1'))).toBe(false)
     setSpacesState({ supported: false, spaces: [] })
     expect(spaceKey(press('2'))).toBe(false)
+  })
+})
+
+describe('spaceKey off macOS', () => {
+  // Ctrl+1–9 pick tabs there, so spaces take Alt+1–9.
+  test('Alt+2 picks the second space; Ctrl+2 is left to the tabs', () => {
+    const restore = setKeyPlatform('win32')
+    try {
+      expect(spaceKey(press('2', { ctrl: true }))).toBe(false)
+      expect(spaceKey(press('2', { alt: true }))).toBe(true)
+      expect(getNav().spaceId).toBe('s2')
+      // AltGr arrives as Ctrl+Alt.
+      expect(spaceKey(press('3', { ctrl: true, alt: true }))).toBe(false)
+      noteTerminalFocus(true)
+      expect(spaceKey(press('3', { alt: true }))).toBe(false)
+      noteTerminalFocus(false)
+    } finally { restore() }
   })
 })

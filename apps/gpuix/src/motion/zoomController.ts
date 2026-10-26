@@ -2,6 +2,7 @@
 // render (image, viewport, where the viewport sits in the window, the device scale); the surface and the HUD subscribe to its
 // snapshot, so a wheel event re-renders those two and nothing else (`ZoomSurface.tsx`). Geometry is `zoom.ts`.
 import { clampView, fitView, isActual, isFit, limits, panBy, percent, resolveView, stepZoom, toggleZoom, wheelFactor, zoomAt, type Limits, type Point, type Size, type View, type ZoomState } from './zoom.ts'
+import { isOtherCommand, isPrimary } from '../platform/keys.ts'
 
 export interface ZoomConfig {
   /** The image's pixel size; null when its header could not be read (nothing zooms). */
@@ -206,10 +207,10 @@ export class ZoomController {
     return 'image'
   }
 
-  /** ⌘+ ⌘= ⌘− ⌘0. True when handled. */
+  /** ⌘+ ⌘= ⌘− ⌘0 (Ctrl off macOS). True when handled. */
   key(event: KeyInput): boolean {
     const m = event.modifiers
-    if (!m?.cmd || m.ctrl || m.alt || !this.current()) return false
+    if (!isPrimary(m) || isOtherCommand(m) || m?.alt || !this.current()) return false
     switch (event.key) {
       case '=': case '+': this.step(1); return true
       case '-': case '_': this.step(-1); return true

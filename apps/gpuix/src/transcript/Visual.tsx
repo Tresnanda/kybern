@@ -50,6 +50,7 @@ import { AnswerBar, AnswerReceipt, registerAnswerReveal, setAnswerOnScreen, useV
 import { FONT_MONO } from '../theme.ts'
 import { OpenInBrowserButton, VisualStill } from './VisualStill.tsx'
 import { visualMode } from './visualFallback.ts'
+import { isPrimary } from '../platform/keys.ts'
 
 /** With no embedded web view a visual stays a picture: no live page, no tab, and its controls open in the browser (`visualFallback.ts`). */
 const LIVE = visualMode(webHost.available) === 'live'
@@ -229,7 +230,7 @@ export const VisualCard = memo(function VisualCard({ visual, threadId, answer }:
   }))
 
   // Esc while GPUI holds the keyboard (after a press on the caption): back to the picture.
-  useEffect(() => inline ? addWindowKeyHandler(e => { if (e.key === 'escape' && !e.modifiers?.cmd) { exit.current(); return true } }) : undefined, [inline])
+  useEffect(() => inline ? addWindowKeyHandler(e => { if (e.key === 'escape' && !isPrimary(e.modifiers)) { exit.current(); return true } }) : undefined, [inline])
   // Leaving the chat (a tab, Settings, another page) freezes it too; a tab that takes the document is not leaving.
   useEffect(() => { if (!shown && inline) deactivate() }, [shown, inline])
   // The figure's box: its width picks the picture; half out of view or under the composer, a live document freezes.
@@ -302,7 +303,7 @@ export const VisualCard = memo(function VisualCard({ visual, threadId, answer }:
     </div>
     <div ref={figure} testId="visual-figure" role={LIVE ? 'button' : 'img'} tabIndex={LIVE ? 0 : -1} aria-label={visual.title || 'Interactive visual'}
       onFocus={() => setFocus(true)} onBlur={() => setFocus(false)}
-      onKeyDown={e => { if (e.key === 'enter' && e.modifiers?.cmd && e.modifiers?.shift) openFullScreen(); else if (e.key === 'enter' && e.modifiers?.cmd) openTab(); else if (e.key === 'enter' || e.key === 'space') activate(null) }}
+      onKeyDown={e => { if (e.key === 'enter' && isPrimary(e.modifiers) && e.modifiers?.shift) openFullScreen(); else if (e.key === 'enter' && isPrimary(e.modifiers)) openTab(); else if (e.key === 'enter' || e.key === 'space') activate(null) }}
       onMouseMove={LIVE && picture && !inline ? e => setHit(controlAt(pageAt(e), picture.controls)) : undefined}
       onClick={failed || !LIVE ? undefined : e => { const point = pageAt(e); activate(picture && controlAt(point, picture.controls) ? point : null) }}
       style={{ position: 'relative', display: 'flex', flexDirection: 'column', height, overflow: 'hidden', cursor: failed || !LIVE ? 'default' : 'pointer', opacity: inTab ? 0.38 : 1,

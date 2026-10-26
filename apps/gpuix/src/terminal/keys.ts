@@ -1,11 +1,22 @@
 import type { EventPayload } from '@gpuix/react'
+import { isMacKeys, isPrimaryChord } from '../platform/keys.ts'
 const KEY_MODIFIERS = (m: { shift?: boolean; alt?: boolean; ctrl?: boolean; cmd?: boolean } | undefined) => (m?.shift ? 1 : 0) | (m?.alt ? 2 : 0) | (m?.ctrl ? 4 : 0) | (m?.cmd ? 8 : 0)
-/** Keys whose Shift+PageUp/PageDown scroll the viewport instead of reaching the program, and Cmd+A. */
+/** Keys whose Shift+PageUp/PageDown scroll the viewport instead of reaching the program, and Cmd+A (Ctrl+Shift+A off macOS). */
 export function terminalViewportKey(event: Pick<EventPayload, 'key' | 'modifiers'>): 'pageup' | 'pagedown' | 'selectall' | null {
   const key = event.key ?? '', m = event.modifiers
   if ((key === 'pageup' || key === 'pagedown') && m?.shift) return key
-  if (key === 'a' && m?.cmd && !m.alt && !m.ctrl && !m.shift) return 'selectall'
+  if (key === 'a' && (isMacKeys() ? m?.cmd && !m.alt && !m.ctrl && !m.shift : isPrimaryChord(m, { shift: true }))) return 'selectall'
   return null
+}
+
+/**
+ * The terminal's own commands: ⌘C ⌘V ⌘F ⌘End on macOS. Elsewhere Ctrl+C, Ctrl+V and Ctrl+F belong to the shell
+ * (`terminalKey` sends their control bytes), so these take Shift, as in Windows Terminal and GNOME Terminal.
+ */
+export function terminalCommand(event: Pick<EventPayload, 'key' | 'modifiers'>): 'copy' | 'paste' | 'find' | 'latest' | null {
+  const key = event.key ?? '', m = event.modifiers
+  if (!(isMacKeys() ? m?.cmd : isPrimaryChord(m, { shift: true }))) return null
+  return key === 'c' ? 'copy' : key === 'v' ? 'paste' : key === 'f' ? 'find' : key === 'end' ? 'latest' : null
 }
 /**
  * The bytes xterm.js 6.0.0 sends for a key press on macOS (src/common/input/Keyboard.ts with

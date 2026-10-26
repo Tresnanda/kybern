@@ -18,7 +18,8 @@
  * structure (bounds, painted text, same-renderer A/B equality) rather than golden hashes.
  */
 import { execFileSync } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { deflateSync } from 'node:zlib'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import assert from 'node:assert/strict'
@@ -75,8 +76,8 @@ export function launch(entry: string, env: Record<string, string> = {}, observe?
 export const GAPS = {
   /** `scroll_hooks.py` injects the wheel phase through a macOS-only call (WP1 unifies it). */
   wheel: 'wheel input: scroll phase injection is macOS-only until WP1 unifies it',
-  /** `cmd` maps to the Super/Windows key off macOS until WP3's `isPrimary(mods)` helper lands. */
-  shortcut: '⌘ shortcuts: cmd is Super off macOS until WP3 adds isPrimary(mods)',
+  /** Off macOS the shortcut key is Ctrl since WP3 (`isPrimary`); a pass here reports the gap closed, then the marker goes. */
+  shortcut: 'Ctrl shortcuts off macOS: WP3 (isPrimary) not yet confirmed on this platform',
   /** Menlo, the code face the labs name, is macOS-only; positions derived from its advances move (WP8). */
   font: 'Menlo glyph advances: off macOS the face falls back, so positions computed from its metrics move',
 } as const
@@ -233,6 +234,27 @@ export function assertPainted(png: Png, scale: number, rect: Rect, label: string
   const common = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0].split(',').map(Number) ?? [0, 0, 0]
   const differing = pixels.filter(p => !near(p, common)).length
   assert.ok(differing >= min, `${label}: expected painted content, found ${differing} differing samples in ${Math.round(rect.width)}x${Math.round(rect.height)} at ${Math.round(rect.x)},${Math.round(rect.y)}`)
+}
+
+const CRC = new Uint32Array(256).map((_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0 })
+const crc32 = (bytes: Uint8Array) => { let c = 0xffffffff; for (const b of bytes) c = CRC[(c ^ b) & 255]! ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0 }
+const pngChunk = (kind: string, data: Uint8Array) => {
+  const out = Buffer.alloc(12 + data.length)
+  out.writeUInt32BE(data.length, 0); out.write(kind, 4, 'ascii'); Buffer.from(data).copy(out, 8)
+  out.writeUInt32BE(crc32(out.subarray(4, 8 + data.length)), 8 + data.length)
+  return out
+}
+/** Write the logical rectangle `rect` of a capture as its own PNG (a title bar, a control), at the capture's scale. */
+export function writeCrop(png: Png, scale: number, rect: Rect, file: string): string {
+  const x0 = Math.max(0, Math.floor(rect.x * scale)), y0 = Math.max(0, Math.floor(rect.y * scale))
+  const width = Math.max(1, Math.min(png.width - x0, Math.round(rect.width * scale))), height = Math.max(1, Math.min(png.height - y0, Math.round(rect.height * scale)))
+  const raw = Buffer.alloc(height * (width * 3 + 1))
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) raw.set(png.at(x0 + x, y0 + y), y * (width * 3 + 1) + 1 + x * 3)
+  const header = Buffer.alloc(13)
+  header.writeUInt32BE(width, 0); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 2
+  mkdirSync(path.dirname(file), { recursive: true })
+  writeFileSync(file, Buffer.concat([PNG_SIGNATURE, pngChunk('IHDR', header), pngChunk('IDAT', deflateSync(raw)), pngChunk('IEND', new Uint8Array())]))
+  return file
 }
 
 /** The two rectangles differ somewhere (a click, a hover or a theme really changed what is drawn). */

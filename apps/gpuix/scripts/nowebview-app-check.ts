@@ -16,6 +16,8 @@ import path from 'node:path'
 import { DATA_DIR, SCRATCH, connect, startDaemon, stopPid } from '../visual/fixture.ts'
 import { GAPS, capture, launch, outputDir, platform, step } from '../native/check-harness.ts'
 import { BUNDLE_PAGE, LAYOUT_PAGE, LAYOUT_SCHEMA } from '../src/transcript/visual.pages.ts'
+// The shortcut key: ⌘ on macOS, Ctrl elsewhere (WP3, `src/platform/keys.ts`).
+const PRIMARY = process.platform === 'darwin' ? 'cmd' : 'ctrl'
 
 const variant = (process.argv[2] ?? 'dark') as 'dark' | 'light'
 const mac = process.argv[3] === 'macos'
@@ -122,7 +124,7 @@ try {
     await until(async () => (await app.getByTestId('visual-ring-live').count()) > 0, 'a click makes it live (its ring)', 20000)
     await shot('mac-live')
     await app.getByTestId('app-ready').press('escape'); await Bun.sleep(500)
-    await app.getByTestId('app-ready').press('cmd-2'); await until(async () => (await app.getByTestId('preview-slot-dock').count()) > 0, 'the embedded slot')
+    await app.getByTestId('app-ready').press(`${PRIMARY}-2`); await until(async () => (await app.getByTestId('preview-slot-dock').count()) > 0, 'the embedded slot')
     assert.equal(await app.getByTestId('preview-open-again').count(), 0)
     assert.equal(openedLines().length, 0)
     console.log('PASS macos unchanged: embedded preview slot, live visual, send button, drawn diagram, Open in a tab')
@@ -189,7 +191,7 @@ try {
 
   await step('dock and artifact tab (⌘2 / ⌘3 / ⌘1)', async () => {
     // The dock: the preview tab says it is in the browser, with Open again and Copy link; no device or float controls.
-    await app.getByTestId('app-ready').press('cmd-2'); await Bun.sleep(700)
+    await app.getByTestId('app-ready').press(`${PRIMARY}-2`); await Bun.sleep(700)
     await until(async () => (await app.getByTestId('preview-state').count()) > 0, 'the browser-only state')
     assert.equal(await app.getByTestId('preview-open-again').count(), 1); assert.equal(await app.getByTestId('preview-copy-link').count(), 1)
     assert.equal(await app.getByTestId('preview-slot-dock').count(), 0, 'no embedded slot')
@@ -200,7 +202,7 @@ try {
     await until(() => openedLines().length > again, 'Open again opens the browser')
 
     // An HTML artifact (a tab): the frame becomes a state with Open in browser, and Source still shows the file.
-    await app.getByTestId('app-ready').press('cmd-3'); await Bun.sleep(900)
+    await app.getByTestId('app-ready').press(`${PRIMARY}-3`); await Bun.sleep(900)
     await until(async () => (await app.getByTestId('artifact-browser').count()) > 0, 'the artifact state')
     assert.equal(await app.getByTestId('artifact-frame').count(), 0)
     await shot('5-artifact-idle')
@@ -210,7 +212,7 @@ try {
     assert.match(openedLines().at(-1)!, /\/artifact-preview\/[0-9a-f-]+$/)
     await Bun.sleep(500)
     await shot('6-artifact-opened')
-    await app.getByTestId('app-ready').press('cmd-1'); await Bun.sleep(400)
+    await app.getByTestId('app-ready').press(`${PRIMARY}-1`); await Bun.sleep(400)
   }, { gap: GAPS.shortcut })
   console.log(`PASS ${variant}: preview, visual, question, viewer, Mermaid with no web view; opened: ${openedLines().length}`)
 } catch (error) { console.log(f.diagnostics()); throw error } finally { await f.close(); server.stop(true); client.close?.() }

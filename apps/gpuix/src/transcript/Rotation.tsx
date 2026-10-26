@@ -18,6 +18,7 @@ import { clockTime } from './clock.ts'
 import { cachedMarkdownTheme, Chevron, muted, Para } from './kit.tsx'
 import { Shimmer, SwapOnChange, useFresh } from './motion.tsx'
 import { useRowState } from './store.ts'
+import { isPrimary } from '../platform/keys.ts'
 
 const LABEL = { size: 12, lineHeight: 16 }
 /** The card's section type (the mockup's `.sec-b`): 13px on a 19.5px line. */
@@ -125,7 +126,7 @@ function HandoffCard({ block, threadId, latest, onSave }: { block: RotationBlock
   useEffect(() => {
     if (!editing) return
     return addWindowKeyHandler((e) => {
-      if (e.key !== 'enter' || !e.modifiers?.cmd) return false
+      if (e.key !== 'enter' || !isPrimary(e.modifiers)) return false
       void save()
       return true
     })

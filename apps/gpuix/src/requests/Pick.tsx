@@ -37,6 +37,7 @@ import { agentFor } from './choices.tsx'
 import { paneGlyph } from './glyphs.ts'
 import { AppWell } from './Permission.tsx'
 import { PhaseIn } from './summoned.tsx'
+import { isPrimary } from '../platform/keys.ts'
 
 const quote = (text: string) => `“${text}”`
 const DECLINE = 'Decline'
@@ -372,7 +373,7 @@ function ImagePick({ approval, input, badge }: { approval: ApprovalRequest; inpu
 function PasteListener({ onPaste }: { onPaste: () => boolean }) {
   const latest = useRef(onPaste)
   latest.current = onPaste
-  useEffect(() => addWindowKeyHandler(e => e.key === 'v' && !!e.modifiers?.cmd && !e.modifiers.alt && !e.modifiers.shift ? latest.current() : false), [])
+  useEffect(() => addWindowKeyHandler(e => e.key === 'v' && isPrimary(e.modifiers) && !e.modifiers?.alt && !e.modifiers?.shift ? latest.current() : false), [])
   return null
 }
 

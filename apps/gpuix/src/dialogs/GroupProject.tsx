@@ -21,6 +21,7 @@ import { getClient, selectDraft } from '../state.ts'
 import { setNav } from '../nav/store.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { showDialog } from './store.ts'
+import { isPrimary } from '../platform/keys.ts'
 
 /** What the sheet shows before (or instead of) a live scan: fixtures pass one in. */
 export interface GroupSheetSeed {
@@ -127,7 +128,7 @@ function GroupSheet({ path, close, seed }: { path: string; close: () => void; se
 
   return (
     <div
-      onKeyDown={(e) => { if (e.key === 'enter' && e.modifiers?.cmd) void submit() }}
+      onKeyDown={(e) => { if (e.key === 'enter' && isPrimary(e.modifiers)) void submit() }}
       style={{ display: 'flex', flexDirection: 'column', gap: 16, paddingLeft: 20, paddingRight: 20, paddingTop: 20, paddingBottom: 16 }}
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -147,7 +148,7 @@ function GroupSheet({ path, close, seed }: { path: string; close: () => void; se
       </Field>
 
       <Field label={GROUP_COPY.name}>
-        <TextField testId="group-name" label={GROUP_COPY.name} value={name} onChange={(value) => { nameEdited.current = true; setName(value) }} onSubmit={(e) => { if (e.modifiers?.cmd) void submit() }} width="100%" />
+        <TextField testId="group-name" label={GROUP_COPY.name} value={name} onChange={(value) => { nameEdited.current = true; setName(value) }} onSubmit={(e) => { if (isPrimary(e.modifiers)) void submit() }} width="100%" />
       </Field>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

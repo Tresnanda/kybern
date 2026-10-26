@@ -16,6 +16,7 @@ import { load, save } from '../shell/persist.ts'
 import { toast } from '../shell/toasts.tsx'
 import { Label, useTheme } from '../ui.tsx'
 import { createNote, currentNoteHome, getNotes, newNote, openNote, openQuickNote, recordNote, rpc, setNotes, useNotes, useNotesFeed, type Capture } from './store.ts'
+import { isOtherCommand, isPrimary } from '../platform/keys.ts'
 
 /** Mounted with the palette; the editor and picker themselves unmount when closed. */
 export function NotesOverlays() {
@@ -23,8 +24,8 @@ export function NotesOverlays() {
   const quick = useNotes((s) => s.quick)
   const capture = useNotes((s) => s.capture)
   useEffect(() => addWindowKeyHandler((e) => {
-    if (!e.modifiers?.cmd || e.modifiers.ctrl || e.modifiers.alt || e.key !== 'n') return
-    if (e.modifiers.shift) { setNav({ keyboardNav: true, paletteOpen: false }); openQuickNote(); return true }
+    if (!isPrimary(e.modifiers) || isOtherCommand(e.modifiers) || e.modifiers?.alt || e.key !== 'n') return
+    if (e.modifiers?.shift) { setNav({ keyboardNav: true, paletteOpen: false }); openQuickNote(); return true }
     if (getNav().page === 'notes' && !getNav().settingsOpen && !getNotes().quick && !getNotes().capture) { setNav({ keyboardNav: true, paletteOpen: false }); void newNote(); return true }
   }), [])
   return <>{quick && <QuickNote />}{capture && <SaveToNote capture={capture} />}</>
@@ -60,7 +61,7 @@ function QuickNote() {
   const discard = () => { save(QUICK_KEY, undefined); setNotes({ quick: false }) }
   // `.quick-note` (notes.css): 576px card, 16/20/14 padding, scope row, 18.3px title, 16.15/25.85 body, 28px foot.
   return <Dialog testId="quick-note" instant={getNav().keyboardNav} width={576} pinTop={169} radius={18} dim={0.6} onClose={() => void finish()}>
-    <div onKeyDown={(e) => { if (e.modifiers?.cmd && e.key === 'enter') void finish() }} style={{ display: 'flex', flexDirection: 'column', paddingTop: 16, paddingLeft: 20, paddingRight: 20, paddingBottom: 14 }}>
+    <div onKeyDown={(e) => { if (isPrimary(e.modifiers) && e.key === 'enter') void finish() }} style={{ display: 'flex', flexDirection: 'column', paddingTop: 16, paddingLeft: 20, paddingRight: 20, paddingBottom: 14 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 19.5, marginBottom: 10 }}>
         <Label color={k.fg3} size={NOTES_META} lineHeight={19.5}>New note in</Label>
         <Menu testId="quick-note-scope" align="start" sideOffset={6} trigger={(open) => <PickerChip quiet size="sm" open={open} lead={<ProjectDot projectId={draft.project || null} />}>{scope}</PickerChip>}>
@@ -72,7 +73,7 @@ function QuickNote() {
         <div style={{ display: 'flex', flexDirection: 'column', maxHeight: 310, overflow: 'scroll' }}>
           <RichEditor ref={body} testId="quick-note-body" aria-label="Note" placeholder="Write something. Type / for formatting" value={initialBody} epoch={0} variant="compact" size={16.1538} lineHeight={25.846} minHeight={77.5} images={quickImages}
             onChange={(markdown) => update({ body: markdown })} interceptKeys={['enter']}
-            onKeyDown={(e) => { if (e.requestId != null && e.key === 'enter' && e.modifiers?.cmd) { e.preventDefault(); update({ body: body.current?.read() ?? draft.body }); void finish() } }} />
+            onKeyDown={(e) => { if (e.requestId != null && e.key === 'enter' && isPrimary(e.modifiers)) { e.preventDefault(); update({ body: body.current?.read() ?? draft.body }); void finish() } }} />
         </div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, height: 28 }}>

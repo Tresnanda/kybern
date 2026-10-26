@@ -32,6 +32,7 @@ import { Menu, MenuItem } from '../nav/overlay.tsx'
 import { FONT_MONO } from '../theme.ts'
 import { supersededBlocks, type SupersededBlock } from './superseded.ts'
 import { openQuietly } from '../platform/os.ts'
+import { isPrimary } from '../platform/keys.ts'
 
 /** The text a reader counts: no link targets, list numbers, fences or heading marks. */
 function plainText(body: string): string {
@@ -85,7 +86,7 @@ export function NoteEditor({ id, compact = false, width, onClose }: { id: string
   const editing = !!state?.focused
   useEffect(() => addWindowKeyHandler((e) => {
     if (getNav().paletteOpen || getNav().settingsOpen || getNotes().quick || getNotes().capture) return
-    if (e.modifiers?.cmd && e.key === 's') { void session.flush(); return true }
+    if (isPrimary(e.modifiers) && e.key === 's') { void session.flush(); return true }
     if (!compact && width === undefined && e.key === 'escape' && !editing) { gallery(); return true }
   }), [session, editing, compact, width])
   const finish = () => { renderer?.blur?.(); void session.flush() }

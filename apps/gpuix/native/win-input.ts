@@ -1,7 +1,7 @@
-// Windows-only test helpers for the embedded web view (`webview-win-check.ts`): real OS input through user32 (the
+// Windows-only test helpers for the embedded web view (`webview-win-check.ts`) and the title bar (`scripts/window-chrome-check.ts`): real OS input through user32 (the
 // automation client's events go to GPUI directly and would skip the host's window filter) and captures of the
 // composed window, which include the WebView2 visuals that GPUI's own `screenshot` never sees.
-import { dlopen, FFIType, ptr } from 'bun:ffi'
+import { dlopen, FFIType, JSCallback, ptr } from 'bun:ffi'
 import { writeFileSync } from 'node:fs'
 import { deflateSync } from 'node:zlib'
 
@@ -16,6 +16,16 @@ const user32 = dlopen('user32.dll', {
   ReleaseDC: { args: [FFIType.u64, FFIType.u64], returns: FFIType.i32 },
   PrintWindow: { args: [FFIType.u64, FFIType.u64, FFIType.u32], returns: FFIType.i32 },
   GetForegroundWindow: { args: [], returns: FFIType.u64 },
+  // Window state for the title-bar check (`scripts/window-chrome-check.ts`, WP3).
+  EnumWindows: { args: [FFIType.ptr, FFIType.i64], returns: FFIType.i32 },
+  GetWindowThreadProcessId: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.u32 },
+  IsWindowVisible: { args: [FFIType.u64], returns: FFIType.i32 },
+  IsZoomed: { args: [FFIType.u64], returns: FFIType.i32 },
+  IsIconic: { args: [FFIType.u64], returns: FFIType.i32 },
+  GetWindowRect: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
+  ShowWindow: { args: [FFIType.u64, FFIType.i32], returns: FFIType.i32 },
+  IsWindow: { args: [FFIType.u64], returns: FFIType.i32 },
+  SendMessageW: { args: [FFIType.u64, FFIType.u32, FFIType.u64, FFIType.i64], returns: FFIType.i64 },
 }).symbols
 const gdi32 = dlopen('gdi32.dll', {
   CreateCompatibleDC: { args: [FFIType.u64], returns: FFIType.u64 },
@@ -75,6 +85,56 @@ export async function clickWith(window: ReturnType<typeof windowOf>, x: number, 
   for (const m of [...modifiers].reverse()) user32.keybd_event(m, 0, KEY_UP, 0n)
   await Bun.sleep(150)
 }
+/**
+ * Press at one window point, move in steps to another and release, in screen pixels fixed at the start: a real drag that
+ * moves the window itself (Windows' caption takes it over), so the points must not follow the window as `drag` does.
+ */
+export async function dragWindow(window: ReturnType<typeof windowOf>, from: readonly [number, number], to: readonly [number, number], steps = 12) {
+  const [sx, sy] = window.screen(from[0], from[1]), [ex, ey] = window.screen(to[0], to[1])
+  user32.SetCursorPos(sx, sy); user32.mouse_event(MOVE, 0, 0, 0, 0n); await Bun.sleep(80)
+  user32.mouse_event(LEFT_DOWN, 0, 0, 0, 0n); await Bun.sleep(80)
+  for (let n = 1; n <= steps; n++) {
+    user32.SetCursorPos(Math.round(sx + ((ex - sx) * n) / steps), Math.round(sy + ((ey - sy) * n) / steps)); user32.mouse_event(MOVE, 0, 0, 0, 0n); await Bun.sleep(30)
+  }
+  await Bun.sleep(80); user32.mouse_event(LEFT_UP, 0, 0, 0, 0n); await Bun.sleep(200)
+}
+
+/** The process's largest visible top-level window (its GPUI window), or 0. */
+export function findWindow(pid: number): number {
+  let best = 0, area = 0
+  const owner = new Uint32Array(1), rect = new Int32Array(4)
+  const callback = new JSCallback((hwnd: bigint) => {
+    user32.GetWindowThreadProcessId(hwnd, ptr(owner))
+    if (owner[0] === pid && user32.IsWindowVisible(hwnd)) {
+      user32.GetWindowRect(hwnd, ptr(rect))
+      const size = (rect[2]! - rect[0]!) * (rect[3]! - rect[1]!)
+      if (size > area) { area = size; best = Number(hwnd) }
+    }
+    return 1
+  }, { args: [FFIType.u64, FFIType.i64], returns: FFIType.i32 })
+  try { user32.EnumWindows(callback.ptr, 0n) } finally { callback.close() }
+  return best
+}
+
+/** Maximized, minimized and the outer frame in screen pixels; `exists` false once the window is destroyed. */
+export function windowState(hwnd: number) {
+  const rect = new Int32Array(4)
+  user32.GetWindowRect(BigInt(hwnd), ptr(rect))
+  return { exists: !!user32.IsWindow(BigInt(hwnd)), maximized: !!user32.IsZoomed(BigInt(hwnd)), minimized: !!user32.IsIconic(BigInt(hwnd)), x: rect[0]!, y: rect[1]!, width: rect[2]! - rect[0]!, height: rect[3]! - rect[1]! }
+}
+
+const HIT: Record<number, string> = { 0: 'nowhere', 1: 'client', 2: 'caption', 8: 'minimize', 9: 'maximize', 12: 'top', 13: 'top-left', 14: 'top-right', 20: 'close' }
+/** What the window answers `WM_NCHITTEST` with at a window point (`caption`, `maximize`, `client`, …). GPUI answers from
+ *  the hitboxes under the pointer as of its last mouse move, so move there first. */
+export function hitTest(window: ReturnType<typeof windowOf>, x: number, y: number): string {
+  const [sx, sy] = window.screen(x, y)
+  const code = Number(user32.SendMessageW(BigInt(window.hwnd), 0x84, 0n, BigInt(((sy & 0xffff) << 16) | (sx & 0xffff))))
+  return HIT[code] ?? String(code)
+}
+
+/** `ShowWindow(SW_RESTORE)`: bring a minimized window back. */
+export const restoreWindow = (hwnd: number) => user32.ShowWindow(BigInt(hwnd), 9)
+
 export async function move(window: ReturnType<typeof windowOf>, x: number, y: number) {
   const [sx, sy] = window.screen(x, y)
   user32.SetCursorPos(sx, sy); user32.mouse_event(MOVE, 0, 0, 0, 0n); await Bun.sleep(80)
