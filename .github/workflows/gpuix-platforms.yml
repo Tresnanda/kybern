@@ -251,9 +251,9 @@ jobs:
           STRICT: ${{ inputs.strict && '--strict' || '' }}
         run: |
           if [ "$CHECKS" = all ]; then
-            selected=nowebview,webview,webview-app
+            selected=nowebview,webview,webview-app,webview-sandbox
           else
-            selected=$(echo "$CHECKS" | tr ',' '\n' | tr -d ' ' | grep -xE 'nowebview|webview|webview-app' | paste -sd, - || true)
+            selected=$(echo "$CHECKS" | tr ',' '\n' | tr -d ' ' | grep -xE 'nowebview|webview|webview-app|webview-sandbox' | paste -sd, - || true)
           fi
           if [ -z "$selected" ]; then echo "No web view check selected"; exit 0; fi
           xvfb-run -a -s '-screen 0 1440x1300x24' \

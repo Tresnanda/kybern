@@ -16,7 +16,7 @@
 #   PREFIX/lib/*.so.*                            bundled dependencies not guaranteed on every distro, RUNPATH $ORIGIN
 #                                                (bundle-wpe.sh, re-runnable on an installed prefix without rebuilding)
 #   PREFIX/lib/wpe-webkit-2.0/bwrap              Kybern's own bubblewrap, used only when the system's is refused and
-#                                                Kybern's .deb gave this copy an AppArmor profile (KYBERN_WEBKIT_BWRAP)
+#                                                Kybern's .deb gave this copy an AppArmor profile (wpe-sandbox.patch)
 #   PREFIX/include, PREFIX/lib/pkgconfig         for building the companion (libkybern-webview.so)
 #   PREFIX/share/licenses/                       WebKit's licence texts and each bundled library's copyright file
 #   PREFIX/SOURCES.txt                           the exact upstream tarball, its checksum and our patch (LGPL source offer)

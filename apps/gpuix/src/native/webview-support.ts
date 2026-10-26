@@ -25,6 +25,36 @@ export type WindowsHostState = 'ready' | 'runtime' | 'missing'
 /** Linux only: whether `libkybern-webview.so` exists, and its sandbox verdict (null when pages can be sandboxed). */
 export type LinuxWebViewProbe = () => { loaded: false } | { loaded: true; unavailable: string | null }
 
+/** What `linuxSandboxProbe` reads, passed in so tests can stand in for the file system and bwrap. */
+export interface LinuxSandboxSystem {
+  env: Record<string, string | undefined>
+  exists(path: string): boolean
+  /** Whether this bubblewrap can create the sandbox's namespaces (it exists and `bwrap … true` exits 0). */
+  bwrapWorks(path: string): boolean
+}
+
+/**
+ * Linux: the companion exists and WebKit's web-process sandbox can run (the same checks `check_sandbox` in
+ * `webview-linux.c` makes before creating a view, done here so deciding does not load WebKit at startup). Pages never
+ * run unsandboxed: upstream WebKit would run them without a sandbox inside a Snap (`SNAP*`, passed on by a Snap
+ * terminal), Flatpak or a container where bwrap fails, or with WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS, and Kybern's
+ * WebKit aborts there instead; without bwrap or a user namespace for it (Ubuntu 24.04's AppArmor policy can refuse one)
+ * pages open in the browser too (WP4). `library` is `libkybern-webview.so`; Kybern's own bwrap is beside WebKit's helpers.
+ */
+export function linuxSandboxProbe(library: string, system: LinuxSandboxSystem): ReturnType<LinuxWebViewProbe> {
+  if (!system.exists(library)) return { loaded: false }
+  const { env } = system
+  const dangerous = env.WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS
+  if (dangerous !== undefined && dangerous !== '0') return { loaded: true, unavailable: 'WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS is set, and Kybern never runs web pages without their sandbox, so pages open in your browser. Unset it and reopen Kybern.' }
+  if (env.SNAP !== undefined && env.SNAP_NAME !== undefined && env.SNAP_REVISION !== undefined) return { loaded: true, unavailable: 'Kybern was started from inside a Snap (SNAP is set, for example by a Snap terminal), where it cannot sandbox web pages, so pages open in your browser. Start Kybern from your desktop to see them here.' }
+  if (system.exists('/.flatpak-info')) return { loaded: true, unavailable: 'Kybern is running inside Flatpak, where it cannot sandbox web pages, so pages open in your browser.' }
+  if (!system.exists('/usr/bin/xdg-dbus-proxy')) return { loaded: true, unavailable: 'Install xdg-dbus-proxy so Kybern can sandbox web pages, then reopen Kybern.' }
+  const own = `${library.slice(0, library.lastIndexOf('/'))}/wpe/lib/wpe-webkit-2.0/bwrap`
+  if (system.bwrapWorks('/usr/bin/bwrap') || system.bwrapWorks(own)) return { loaded: true, unavailable: null }
+  if (!system.exists('/usr/bin/bwrap')) return { loaded: true, unavailable: 'Install bubblewrap (bwrap) so Kybern can sandbox web pages, then reopen Kybern.' }
+  return { loaded: true, unavailable: 'This system does not let Kybern sandbox web pages (bubblewrap cannot create a user namespace), so pages open in your browser.' }
+}
+
 /** `KYBERN_GPUIX_NO_WEBVIEW=1` forces the capability off on any platform, so the fallbacks can be exercised on a Mac. */
 export function webViewSupport(platform: NodeJS.Platform = process.platform, env: Record<string, string | undefined> = process.env, windowsHost?: () => WindowsHostState, linux?: LinuxWebViewProbe): WebViewSupport {
   if (/^(1|true|yes|on)$/i.test(env.KYBERN_GPUIX_NO_WEBVIEW ?? '')) return { available: false, reason: 'disabled' }

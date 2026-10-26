@@ -698,10 +698,11 @@ xvfb-run -a bun webview-linux-check.ts            # the lab: rounded clip, popup
 ```
 
 On a distro that packages WPE WebKit 2.0 (Debian sid) `build-webview.ts` links the system one instead, for
-development. Pages are never run unsandboxed: without a working bubblewrap the web view is off
-(`webHost.unavailableReason === 'sandbox'`) and every surface falls back to the browser (WP4).
-`KYBERN_WEBVIEW_ALLOW_UNSANDBOXED_FOR_TESTS=1` (with WebKit's own `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1`) exists
-only for containers that cannot create user namespaces. `KYBERN_WEBVIEW_DEBUG=1` logs the companion's frame rate and
+development. Pages are never run unsandboxed: without a working bubblewrap, inside a Snap environment or Flatpak, or
+with `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS` set, the web view is off (`webHost.unavailableReason === 'sandbox'`) and
+every surface falls back to the browser (WP4); Kybern's WebKit aborts rather than start an unsandboxed web process
+(`wpe/wpe-sandbox.patch`). There is no unsandboxed test mode: containers without user namespaces cannot run the web
+view. `bun webview-linux-sandbox-check.ts` checks those refusals. `KYBERN_WEBVIEW_DEBUG=1` logs the companion's frame rate and
 copy cost; `KYBERN_DEBUG_WEBSURFACE=1` the element's uploads.
 
 ## Running the checks on Linux and Windows (WP7)

@@ -146,8 +146,12 @@ static void on_title(WebKitWebView *view, GParamSpec *spec, gpointer data) {
   }
 }
 
+// Kybern's WPE build (wpe-sandbox.patch): selects its own bwrap in-process. Weak, so the spike still links a system WPE.
+extern int webkit_kybern_sandbox_hardened(int use_bundled_bubblewrap) __attribute__((weak));
+
 int main(void) {
   loop = g_main_loop_new(NULL, FALSE);
+  if (getenv("SPIKE_BUNDLED_BWRAP")) check("bundled-bwrap", webkit_kybern_sandbox_hardened && webkit_kybern_sandbox_hardened(1), "webkit_kybern_sandbox_hardened(1)");
   WPEDisplay *display = wpe_display_headless_new();
   GError *error = NULL;
   if (!wpe_display_connect(display, &error)) { check("frame", FALSE, error ? error->message : "display connect failed"); return 1; }

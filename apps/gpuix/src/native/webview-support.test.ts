@@ -1,7 +1,7 @@
 // The web view capability: decided from the platform, `KYBERN_GPUIX_NO_WEBVIEW` and (Windows) the host's runtime probe,
 // passed in so no global is touched.
 import { expect, test } from 'bun:test'
-import { noteWebViewUnavailable, WEB_VIEW_MISSING, webViewMissingText, webViewSupport } from './webview-support.ts'
+import { linuxSandboxProbe, noteWebViewUnavailable, WEB_VIEW_MISSING, webViewMissingText, webViewSupport, type LinuxSandboxSystem } from './webview-support.ts'
 import { fileURLToPath } from 'node:url'
 
 test('macOS always has an embedded web view, Windows when its host finds a WebView2 Runtime', () => {
@@ -27,6 +27,45 @@ test('Linux has one when the companion exists and its pages can be sandboxed (WP
   expect(WEB_VIEW_MISSING).toBe(refused)
   noteWebViewUnavailable('platform')
 })
+// `linuxProbe` in webview.ts, with the file system and bwrap stood in (`check_sandbox` in webview-linux.c mirrors it).
+const LIB = '/opt/kybern/resources/libkybern-webview.so', OWN = '/opt/kybern/resources/wpe/lib/wpe-webkit-2.0/bwrap'
+function linuxSystem({ env = {}, files = [LIB, '/usr/bin/xdg-dbus-proxy', '/usr/bin/bwrap'], working = ['/usr/bin/bwrap'] }: { env?: Record<string, string>; files?: string[]; working?: string[] } = {}) {
+  const ran: string[] = []
+  const system: LinuxSandboxSystem = { env, exists: file => files.includes(file), bwrapWorks: bwrap => { ran.push(bwrap); return working.includes(bwrap) } }
+  return { system, ran }
+}
+const refusal = (probe: ReturnType<typeof linuxSandboxProbe>) => probe.loaded ? probe.unavailable : undefined
+test('Linux probe: no companion, or a working system or Kybern bwrap', () => {
+  expect(linuxSandboxProbe(LIB, linuxSystem({ files: [] }).system)).toEqual({ loaded: false })
+  expect(linuxSandboxProbe(LIB, linuxSystem().system)).toEqual({ loaded: true, unavailable: null })
+  const own = linuxSystem({ working: [OWN] })
+  expect(linuxSandboxProbe(LIB, own.system)).toEqual({ loaded: true, unavailable: null })
+  expect(own.ran).toEqual(['/usr/bin/bwrap', OWN])
+  expect(refusal(linuxSandboxProbe(LIB, linuxSystem({ working: [] }).system))).toMatch(/cannot create a user namespace.*browser/)
+  expect(refusal(linuxSandboxProbe(LIB, linuxSystem({ files: [LIB, '/usr/bin/xdg-dbus-proxy'], working: [] }).system))).toMatch(/^Install bubblewrap/)
+  expect(refusal(linuxSandboxProbe(LIB, linuxSystem({ files: [LIB, '/usr/bin/bwrap'] }).system))).toMatch(/^Install xdg-dbus-proxy/)
+})
+test('Linux probe: where upstream WebKit would drop the sandbox, pages open in the browser and bwrap is never tried', () => {
+  const cases: { env?: Record<string, string>; files?: string[]; expect: RegExp }[] = [
+    { env: { SNAP: '/snap/code/1', SNAP_NAME: 'code', SNAP_REVISION: '1' }, expect: /inside a Snap/ },
+    { env: { WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: '1' }, expect: /WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS/ },
+    { env: { WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: '' }, expect: /WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS/ },
+    { files: [LIB, '/usr/bin/xdg-dbus-proxy', '/usr/bin/bwrap', '/.flatpak-info'], expect: /Flatpak/ },
+  ]
+  for (const c of cases) {
+    const { system, ran } = linuxSystem({ env: c.env, files: c.files })
+    const probe = linuxSandboxProbe(LIB, system)
+    expect(probe.loaded).toBe(true)
+    expect(probe.loaded && probe.unavailable).toMatch(c.expect)
+    expect(ran).toEqual([])
+    expect(webViewSupport('linux', {}, undefined, () => probe).reason).toBe('sandbox')
+  }
+  // Only all three Snap variables mean a Snap (WebKit's own test); `…DANGEROUS=0` is WebKit's "off"; the old test switch is gone.
+  for (const env of <Record<string, string>[]>[{ SNAP: '/x' }, { SNAP: '/x', SNAP_NAME: 'n' }, { WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: '0' }, { KYBERN_WEBVIEW_ALLOW_UNSANDBOXED_FOR_TESTS: '1' }])
+    expect(linuxSandboxProbe(LIB, linuxSystem({ env }).system)).toEqual({ loaded: true, unavailable: null })
+  expect(refusal(linuxSandboxProbe(LIB, linuxSystem({ env: { KYBERN_WEBVIEW_ALLOW_UNSANDBOXED_FOR_TESTS: '1' }, working: [] }).system))).toMatch(/browser/)
+})
+
 test('the fallback copy says what to do for each reason', () => {
   expect(webViewMissingText('runtime')).toMatch(/^Install the Microsoft Edge WebView2 Runtime .*then reopen Kybern/)
   expect(webViewMissingText('missing')).toMatch(/Reinstall Kybern/)
@@ -64,7 +103,7 @@ test('with the web view off every webHost call is a safe no-op and nothing is lo
   const output = await new Response(child.stderr).text()
   expect(await child.exited, output).toBe(0)
 })
-test('Windows preview pages run without allow-modals (no print UI or dialogs); macOS keeps its sandbox', async () => {
+test('Windows and Linux preview pages run without allow-modals (no print UI or page dialogs); macOS keeps its sandbox', async () => {
   const { webDocument } = await import('./webview.ts')
   const sandbox = (html: string) => /sandbox="([^"]*)"/.exec(html)?.[1]
   expect(sandbox(webDocument('http://localhost:3000/', 'server', 'darwin'))).toBe('allow-scripts allow-same-origin allow-forms allow-modals allow-downloads')
@@ -72,4 +111,6 @@ test('Windows preview pages run without allow-modals (no print UI or dialogs); m
   expect(sandbox(webDocument('http://localhost:3000/', 'server', 'win32'))).toBe('allow-scripts allow-same-origin allow-forms allow-downloads')
   expect(sandbox(webDocument('http://127.0.0.1:4199/f', 'file', 'win32'))).toBe('allow-scripts allow-forms')
   expect(sandbox(webDocument('http://127.0.0.1:4199/v', 'visual', 'win32'))).toBe('allow-scripts')
+  expect(sandbox(webDocument('http://localhost:3000/', 'server', 'linux'))).toBe('allow-scripts allow-same-origin allow-forms allow-downloads')
+  expect(sandbox(webDocument('http://127.0.0.1:4199/f', 'file', 'linux'))).toBe('allow-scripts allow-forms')
 })

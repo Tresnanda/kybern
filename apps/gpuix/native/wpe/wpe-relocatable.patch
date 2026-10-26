@@ -1,4 +1,3 @@
-diff -ru a/Source/WebKit/Shared/glib/ProcessExecutablePathGLib.cpp b/Source/WebKit/Shared/glib/ProcessExecutablePathGLib.cpp
 --- a/Source/WebKit/Shared/glib/ProcessExecutablePathGLib.cpp
 +++ b/Source/WebKit/Shared/glib/ProcessExecutablePathGLib.cpp
 @@ -30,6 +30,29 @@
@@ -40,7 +39,6 @@ diff -ru a/Source/WebKit/Shared/glib/ProcessExecutablePathGLib.cpp b/Source/WebK
  }
  
  String executablePathOfWebProcess()
-diff -ru a/Source/WebKit/UIProcess/API/glib/WebKitWebContext.cpp b/Source/WebKit/UIProcess/API/glib/WebKitWebContext.cpp
 --- a/Source/WebKit/UIProcess/API/glib/WebKitWebContext.cpp
 +++ b/Source/WebKit/UIProcess/API/glib/WebKitWebContext.cpp
 @@ -77,6 +77,29 @@
@@ -82,10 +80,9 @@ diff -ru a/Source/WebKit/UIProcess/API/glib/WebKitWebContext.cpp b/Source/WebKit
      return injectedBundlePath;
  }
  
-diff -ru a/Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp b/Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp
 --- a/Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp
 +++ b/Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp
-@@ -30,6 +30,37 @@
+@@ -30,6 +30,29 @@
  #include <wtf/NeverDestroyed.h>
  #include <wtf/UUID.h>
  #include <wtf/UniStdExtras.h>
@@ -112,18 +109,10 @@ diff -ru a/Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp b/Source
 +    return directory;
 +}
 +#endif
-+// Kybern: `KYBERN_WEBKIT_BWRAP` names a bubblewrap to use instead of the system one, set by Kybern's web view companion
-+// only after it checked that binary can create the sandbox (Kybern's .deb installs an AppArmor profile for its own copy
-+// where Ubuntu 23.10+ refuses unprivileged user namespaces to /usr/bin/bwrap).
-+static const char* kybernBwrapExecutable()
-+{
-+    const char* bwrap = g_getenv("KYBERN_WEBKIT_BWRAP");
-+    return bwrap && bwrap[0] == '/' && g_file_test(bwrap, G_FILE_TEST_IS_EXECUTABLE) ? bwrap : BWRAP_EXECUTABLE;
-+}
  #include <wtf/glib/Application.h>
  #include <wtf/glib/GRefPtr.h>
  #include <wtf/glib/GSpanExtras.h>
-@@ -828,7 +859,7 @@
+@@ -828,7 +851,7 @@
          "--ro-bind-try", "/lib", "/lib",
          "--ro-bind-try", "/usr/lib", "/usr/lib",
          "--ro-bind-try", "/usr/local/lib", "/usr/local/lib",
@@ -132,7 +121,7 @@ diff -ru a/Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp b/Source
  #if defined(WEBKIT_SWIFT_STDLIB_LIBRARY_PATH)
          "--ro-bind-try", WEBKIT_SWIFT_STDLIB_LIBRARY_PATH, WEBKIT_SWIFT_STDLIB_LIBRARY_PATH,
  #endif
-@@ -842,7 +873,7 @@
+@@ -842,7 +865,7 @@
          "--ro-bind-try", "/usr/local/lib32", "/usr/local/lib32",
  #endif
  
@@ -141,12 +130,3 @@ diff -ru a/Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp b/Source
      };
  
      if (enableDebugPermissions()) {
-@@ -1000,7 +1031,7 @@
-     g_subprocess_launcher_take_fd(launcher, bwrapFd, bwrapFd);
- 
-     Vector<CString> bwrapArgs = {
--        BWRAP_EXECUTABLE,
-+        kybernBwrapExecutable(),
-         "--args",
-         bwrapFdStr.get(),
-         "--",

@@ -113,6 +113,10 @@ const CHECKS: Record<string, Check> = {
       minutes: 20,
     }] : [],
   },
+  'webview-sandbox': {
+    description: 'WP10 (Linux): with a Snap environment or WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS the web view falls back to the browser and no web process starts (JS probe, companion), WebKit itself aborts rather than run one unsandboxed and ignores the variable (needs native/build/libkybern-webview.so and native/build/wpe)',
+    runs: () => platform === 'linux' ? [{ name: 'webview-sandbox', args: [native('webview-linux-sandbox-check.ts')], minutes: 5 }] : [],
+  },
   notify: {
     description: 'WP5: system notifications through the addon. Linux: a test D-Bus notification server (Notify fields, replace per thread, ActionInvoked reaches the app once, no daemon = unsupported). Windows: the toast API with the AUMID, its registry entry, the posts and the history',
     runs: () => platform === 'macos' ? [] : [{ name: 'notify', args: [native('notify-check.ts')], minutes: 10 }],

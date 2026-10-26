@@ -225,6 +225,25 @@ its companion `libkybern-webview.so`, so the library can be replaced. The comple
 we provide it on a physical medium for no more than the cost of distribution, for three years after the release.
 
 The same folder holds libraries WPE WebKit needs that a distribution may lack, copied from Ubuntu 22.04 packages
-(ICU, libsoup 3, libxml2, libxslt, libwebp, libjpeg-turbo, libwoff2, Little CMS, libepoxy, libseccomp, libpsl,
-nghttp2, HarfBuzz ICU). Each one's licence is its Debian copyright file in `resources/wpe/licenses/`; their sources
-are the Ubuntu 22.04 (jammy) source packages at https://launchpad.net/ubuntu/jammy.
+(ICU, libsoup 3, libxml2, libxslt, libwebp, libjpeg-turbo, Little CMS, libepoxy, libseccomp, libpsl, nghttp2,
+HarfBuzz ICU, libidn2, libunistring, PCRE, libbsd, libmd, and GCC's libatomic, which is GPL-3 with the GCC Runtime
+Library Exception), and `resources/wpe/lib/wpe-webkit-2.0/bwrap`, the bubblewrap
+sandbox from Ubuntu 22.04's `bubblewrap` package. Each one's licence is its Debian copyright file in
+`resources/wpe/licenses/`, and `resources/wpe/SOURCES.txt` names the exact Ubuntu package version each file came
+from; their sources are those versions' Ubuntu 22.04 (jammy) source packages at https://launchpad.net/ubuntu/jammy.
+
+Several of them are under the GNU licences:
+
+- **libsoup 3**: GNU Lesser General Public License, version 2 or later.
+- **libseccomp**: GNU Lesser General Public License, version 2.1.
+- **libidn2**: GNU Lesser General Public License, version 3 or later, or GNU General Public License, version 2 or
+  later, at your choice (the library; Kybern ships no libidn2 tools).
+- **libunistring**: GNU Lesser General Public License, version 3 or later, or GNU General Public License, version 2
+  or later, at your choice.
+- **bubblewrap** (`bwrap`): GNU Lesser General Public License, version 2 or later. It is a separate program that
+  WPE WebKit runs to sandbox its web processes.
+
+The libraries are linked dynamically and sit as separate files, so each can be replaced. For every component in this
+section under a GNU licence (WPE WebKit, libsoup, libseccomp, libidn2, libunistring, bubblewrap), the written offer
+above applies too: on request we provide the complete corresponding source of the exact version we ship (as named in
+`SOURCES.txt`) on a physical medium for no more than the cost of distribution, for three years after the release.

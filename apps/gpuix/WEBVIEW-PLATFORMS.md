@@ -360,13 +360,14 @@ So `webDocument` needs no change on Linux.
   same document-created script as Windows. Shortcuts are intercepted in GPUI before forwarding.
 - **Browser UI that GTK would otherwise provide** (WPE has no toolkit):
   - `<select>` popups (`show-option-menu`): a GPUI menu
-  - `alert`/`confirm`/`prompt` (`script-dialog`): a GPUI dialog
+  - `alert`/`confirm`/`prompt` (`script-dialog`): answered at once, nothing drawn (as macOS without a UI delegate
+    and Windows without `allow-modals`; a Kybern-drawn page dialog was a phishing and reopen-loop surface)
   - context menu: a GPUI menu, or disabled as on macOS visuals
   - file chooser: the XDG portal, already used by WP2
   - tooltips (`mouse-target-changed`)
   - downloads: refused
 
-  Without these, `alert()` blocks the page.
+  Without a `script-dialog` handler, `alert()` would block the page.
 - **Snapshots.** The last buffer is the document as it looks now, at device scale. `snapshot` encodes it as PNG.
   `snapshotRect` crops it after reading the wrapper's iframe box, the same probe as macOS. This is exact and costs
   no extra frame.
@@ -386,8 +387,8 @@ them.
 | `<websurface doc lib slot>` | gpuix fork `packages/native/src/custom_elements/websurface.rs` | A custom element that uploads the dirty rectangle into a `Bgra8Unorm` `wgpu::Texture` on GPUI's device (`Window::gpu_context`) and paints it with `Window::paint_surface`, so the page is in the element tree: popups and dialogs drawn later cover it, ancestors' rounded clips and opacity apply, hit-testing is GPUI's. It forwards input (X keysyms; Ctrl app shortcuts stay with the app), sets the cursor, takes GPUI focus on a press, gives it back when the page leaves Escape unhandled, and runs `present`'s fade and scale. One UI-thread task drains the companion's notifications and re-renders the elements showing that document. Off Linux it is an empty box. |
 | Texture surfaces | zed fork `gpui`, `gpui_wgpu` | `PaintSurface` carries the element opacity; the Linux texture is drawn like a polychrome sprite (instance record with the rounded clip chain, opacity; its texture where the atlas binds; premultiplied texels). Replaces gpui-ce's single uniform buffer, which made every surface in a frame draw with the last one's parameters. |
 | Rounded clip record | zed fork `shaders.wgsl`, `shaders_storage.wgsl`, `shaders.hlsl` | Pre-existing ADE-52 bug found here: gpui's `RoundedClip` is 40 bytes (`kind`, edge fades) but WGSL and HLSL read 36-byte nodes, so every clip chain id ≥ 1 was misread on Linux and Windows (a page in a rounded clip showed as an 80 px strip). Fixed to match `shaders.metal`, edge fades included. |
-| JS host | `src/native/webview.ts`, `webview-support.ts`, `WebSurface.tsx`, `WebPageUi.tsx` | Linux loads the companion when it exists and the sandbox probe passes; `place` also sends the slot and the page's offset in it. `WebSurface` renders `<websurface>` in the preview slots (`dock`/`mini`), visual frames and artifact frames. `WebPageUi` draws `<select>` popups and context menus as Kybern `ContextMenu`s and `alert`/`confirm`/`prompt` as an `AlertDialog`. Nothing changes on macOS. |
-| WPE build | `native/wpe/build-wpe.sh`, `bundle-wpe.sh`, `wpe-version.sh`, `wpe-relocatable.patch`, `wpe-gcc12.patch` | WPE WebKit 2.54.2 (sha256-pinned) on ubuntu-22.04 (glibc 2.35) with gcc-12; only the headless WPEPlatform; no legacy libwpe, GStreamer, WebXR, speech, ATK, docs. CI caches the prefix by the build inputs and re-runs `bundle-wpe.sh` on a hit. |
+| JS host | `src/native/webview.ts`, `webview-support.ts`, `WebSurface.tsx`, `WebPageUi.tsx` | Linux loads the companion when it exists and the sandbox probe passes; `place` also sends the slot and the page's offset in it. `WebSurface` renders `<websurface>` in the preview slots (`dock`/`mini`), visual frames and artifact frames. `WebPageUi` draws `<select>` popups and context menus as Kybern `ContextMenu`s; page `alert`/`confirm`/`prompt` answer at once in the companion and draw nothing. Nothing changes on macOS. |
+| WPE build | `native/wpe/build-wpe.sh`, `bundle-wpe.sh`, `wpe-version.sh`, `wpe-relocatable.patch`, `wpe-sandbox.patch`, `wpe-gcc12.patch` | WPE WebKit 2.54.2 (sha256-pinned) on ubuntu-22.04 (glibc 2.35) with gcc-12; only the headless WPEPlatform; no legacy libwpe, GStreamer, WebXR, speech, ATK, docs. CI caches the prefix by the build inputs and re-runs `bundle-wpe.sh` on a hit. |
 | Packaging | `scripts/package-linux.ts`, `packaging/linux/kybern-gpuix-bwrap.apparmor` | `resources/libkybern-webview.so` (RUNPATH `$ORIGIN/wpe/lib`) and `resources/wpe/{lib,licenses,SOURCES.txt}` in the AppImage, .deb and .rpm when built (`KYBERN_REQUIRE_WEBVIEW=1` makes it mandatory). Recommends bubblewrap and xdg-dbus-proxy. The .deb's postinst installs the AppArmor profile below where AppArmor 4 exists. |
 
 ### WPE build: recipe, size, relocation, licences
@@ -408,14 +409,49 @@ them.
 - **Licences.** WebCore and parts of JavaScriptCore are LGPL-2.1+; the rest BSD-style. The companion links
   `libWPEWebKit-2.0.so.1` dynamically, the library is replaceable, the licence texts and every bundled library's Debian
   copyright file ship in `resources/wpe/licenses`, and `SOURCES.txt` plus `THIRD_PARTY_NOTICES.md` give the exact
-  tarball, checksum and patches (the source offer).
-- **Security updates.** Bump `wpe-version.sh` (version + sha256), rebuild, release. Nothing else pins WebKit.
+  tarball, checksum and patches, and the exact Ubuntu package version of every bundled library and of `bwrap`
+  (`dpkg-query`, written by `bundle-wpe.sh`). The written source offer covers each GNU-licensed component: WebKit,
+  libsoup, libseccomp, libidn2, libunistring and bubblewrap.
+- **Security updates.** Bump `wpe-version.sh` (version + sha256), rebuild, release. Nothing else pins WebKit. The
+  bundled jammy libraries (libsoup, libxml2, libxslt, libwebp, ICU, …) and `bwrap` are copies too: they do not get
+  Ubuntu's security updates on the user's machine. Rebuild the bundle (`bundle-wpe.sh`, a cache hit, minutes) for
+  every release, and at least monthly against the updated jammy archive, and cut a release when a USN touches one of
+  the packages `SOURCES.txt` lists.
 
 ### The web-process sandbox
 
 WebKit runs web processes under bubblewrap with a seccomp filter and `xdg-dbus-proxy`. Kybern never runs pages
 unsandboxed: when the sandbox cannot start, `webHost.available` is false (reason `sandbox`, the companion's sentence)
 and every surface shows WP4's browser fallback.
+
+Upstream WebKit quietly spawns the web process *without* any sandbox (`ProcessLauncherGLib.cpp`) when
+`shouldUseBubblewrap()` is false: inside a Snap (`SNAP`, `SNAP_NAME`, `SNAP_REVISION` set, which a Snap terminal such
+as VS Code's passes to its children), inside Flatpak when `flatpak-spawn` is unusable, in a container
+(`/run/.containerenv`) where its compiled-in `/usr/bin/bwrap` fails, and with `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS`.
+`wpe-sandbox.patch` closes all of them, and the companion and `webview.ts` refuse first so the user sees the browser
+fallback instead of an abort:
+
+| Where upstream drops the sandbox | Kybern's WebKit (`wpe-sandbox.patch`) | Companion `check_sandbox` / `linuxSandboxProbe` |
+| --- | --- | --- |
+| Any unsandboxed web process | `g_error` instead of the plain `g_subprocess_launcher_spawnv` | — |
+| `SNAP*` set | aborts (above) | `sandbox`: "started from inside a Snap" |
+| `/.flatpak-info` | aborts unless `flatpak-spawn --sandbox` works | `sandbox`: "inside Flatpak" |
+| Container where bwrap fails | the container probe runs the bwrap the launcher will run (Kybern's copy when selected), then aborts | `sandbox` (the same bwrap probe fails) |
+| `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS` | ignored | `sandbox`: names the variable (any value but `0`) |
+
+The patch also drops the PulseAudio, sndio and `/dev/video*` binds from the sandbox (this build has no media, audio
+or camera), and replaces the old `KYBERN_WEBKIT_BWRAP` environment variable (any absolute path, inherited by children,
+`setenv` while threads ran) with an in-process switch: the companion calls `webkit_kybern_sandbox_hardened(1)`, which
+can select only `lib/wpe-webkit-2.0/bwrap` beside the loaded `libWPEWebKit`. The symbol is also the companion's proof
+that WebKit carries the patch; a system WebKit without it (Debian sid, development) is used only with the system bwrap.
+`KYBERN_WEBVIEW_ALLOW_UNSANDBOXED_FOR_TESTS` is gone. `native/webview-linux-sandbox-check.ts` (CI) runs the JS probe
+and the companion with a Snap environment and with the dangerous variable and asserts the browser fallback and that no
+web process starts; `ci-sandbox.sh` runs WebKit itself with them (aborts before spawning; variable ignored).
+
+The AppArmor profile for Kybern's bwrap (`packaging/linux/kybern-gpuix-bwrap.apparmor`) follows Ubuntu's
+`bwrap-userns-restrict`: bwrap may use the capabilities of its new user namespace, and everything it executes is
+stacked with `kybern-gpuix-bwrap-child`, which denies every capability. Another local user can run that bwrap, but
+gains no more than an unprivileged, capability-less namespace from it.
 
 Measured on GitHub's runners (VMs, AppArmor active) with Kybern's x86_64 WPE build and the offscreen spike
 (`native/spikes/wp10/wpe-offscreen/ci-sandbox.sh`), which checks that the web process sits in its own PID namespace:
@@ -425,9 +461,9 @@ Measured on GitHub's runners (VMs, AppArmor active) with Kybern's x86_64 WPE bui
 | Ubuntu 22.04, from a folder (the .deb/.rpm layout) | 0 | Sandbox works: frames, transparency, input, web process in its own PID namespace |
 | Ubuntu 22.04, from an AppImage (FUSE mount, and `APPIMAGE_EXTRACT_AND_RUN`) | 0 | Same: works. The relocation patch binds the mount's library folder into the sandbox |
 | Ubuntu 24.04, system `/usr/bin/bwrap` | 1 | Refused: bwrap gets a user namespace but cannot configure its network namespace (`loopback: Failed RTM_NEWADDR: Operation not permitted`); WebKit would abort, so the companion and `webview.ts` report `sandbox` and pages open in the browser |
-| Ubuntu 24.04, Kybern's own bwrap with the .deb's AppArmor profile (`userns,` for that one path) | 1 | Works: frames, transparency and input with the web process in its own PID namespace (first frame about 2 s on a cold runner). The companion and `webview.ts` pick this copy when the system bwrap is refused (`KYBERN_WEBKIT_BWRAP`) |
+| Ubuntu 24.04, Kybern's own bwrap with the .deb's AppArmor profile (`userns` for that one path, children stacked without capabilities) | 1 | Works: frames, transparency and input with the web process in its own PID namespace (first frame about 2 s on a cold runner). The companion and `webview.ts` pick this copy when the system bwrap is refused (`webkit_kybern_sandbox_hardened`) |
 | Ubuntu 24.04, AppImage | 1 | No fix: an AppArmor profile cannot name a per-launch mount path, so the AppImage falls back to the browser there |
-| Docker/OrbStack container, root or default seccomp | — | No user namespace; the web view is off (tests use `KYBERN_WEBVIEW_ALLOW_UNSANDBOXED_FOR_TESTS`, never the app) |
+| Docker/OrbStack container, root or default seccomp | — | No user namespace; the web view is off (there is no unsandboxed test mode; the web view checks run on VMs) |
 | Fedora, other rpm distros | — | Not run. Fedora does not restrict unprivileged user namespaces, so the folder result above should apply |
 
 WPE also loads `libEGL.so.1` through libepoxy even when it renders on the CPU, and aborts without it (seen on the 24.04
@@ -455,7 +491,8 @@ runner, which lacks `libegl1`): the packages now depend on it when they carry th
 | Ctrl shortcuts while the page has focus | Not forwarded to the page; they reach the app as ordinary keys (no `shortcut` event needed) | — |
 | Cursor | CSS cursor names → GPUI cursor styles (`set_cursor_from_bytes`: default arrow) | — |
 | `<select>` | Kybern `ContextMenu` at the select's box; pick or dismiss | lab: pick "Blue" |
-| `alert`/`confirm`/`prompt` | Kybern `AlertDialog` (visual iframes have no `allow-modals`, so only previews get them) | driver |
+| `alert`/`confirm`/`prompt` | Answered at once, nothing drawn, as macOS and Windows; preview iframes have no `allow-modals` | unit test (sandbox string) |
+| Downloads | Refused: `download-started` on the session cancels before a destination is chosen | — |
 | Context menu | Previews: Kybern menu with WebKit's content actions (copy, cut, paste…; navigation, new windows, downloads and inspector removed). Visuals: none, as macOS | driver |
 | Pointer, wheel, keys | Done (X keysyms from GPUI keystrokes) | lab: click draft, typing "hi" |
 | Wayland and X11 | Same code (no window of its own); CI runs both | CI |

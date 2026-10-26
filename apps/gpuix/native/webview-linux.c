@@ -10,11 +10,12 @@
 // default GMainContext and owns every WebKit object (it is WebKit's "main thread"). Commands from JS and input from
 // GPUI are queued to it. Frames are copied under `frames_lock`, which the GPUI thread takes while uploading.
 //
-// Security (same as macOS): the wrapper page is served from `tauri://localhost/embedded/<id>`, only it may be the top
-// level, frames stay on the ticket's origins, no popups, downloads or other schemes, an ephemeral network session,
-// no inspector. The `kybern` bridge is reachable only from the top frame: its handler lives in the isolated world
-// "KybernHost", and a top-frame-only main-world shim gives the wrapper `window.webkit.messageHandlers.kybern`, relaying
-// through a DOM event the child (cross-origin, opaque origin) cannot dispatch on the wrapper's document. Kybern's own
+// Security (same as macOS): the wrapper page is served once from `tauri://localhost/embedded/<id>`, only it may be the
+// top level and it never loads in a frame, frames stay on the ticket's origins, no popups, downloads, page dialogs or
+// other schemes, an ephemeral network session, no inspector. The `kybern` bridge is reachable only from the top frame:
+// its handler lives in the isolated world "KybernHost", and a top-frame-only main-world shim gives the wrapper
+// `window.webkit.messageHandlers.kybern`, relaying through a DOM event the child (cross-origin, opaque origin) cannot
+// dispatch on the wrapper's document. Kybern's own
 // child-frame scripts run in the isolated world "KybernPreview", as with WKContentWorld.
 #define _GNU_SOURCE // dladdr
 #include <wpe/webkit.h>
@@ -113,10 +114,17 @@ typedef struct {
   double frame_x, frame_y, frame_width, frame_height;
   double press_x, press_y; // the last pointer press, where a context menu opens
   WebKitOptionMenu *option_menu;
-  WebKitScriptDialog *script_dialog;
   WebKitContextMenu *context_menu;
   char *cursor;
+  char *nonce;             // known only to Kybern's isolated worlds: the child runs host scripts that carry it
+  gboolean wrapper_served; // the wrapper is served once, to the load `create_host` starts
+  guint32 buttons;         // pointer buttons held in this document
+  char *navigation;        // the child's latest URL, not yet sent (`flush_navigation`)
+  guint navigation_timer;
 } Host;
+
+// Larger frames are refused (16384 device pixels a side is more than any window GPUI opens).
+#define MAX_FRAME_SIDE 16384
 
 typedef struct {
   guint8 *pixels;
@@ -239,10 +247,14 @@ static gboolean kybern_view_render_buffer(WPEView *view, WPEBuffer *buffer, cons
   gsize size = 0;
   const guint8 *source = g_bytes_get_data(bytes, &size);
   int width = wpe_buffer_get_width(buffer), height = wpe_buffer_get_height(buffer);
-  int stride = height ? (int)(size / height) : 0;
-  if (WPE_IS_BUFFER_SHM(buffer)) stride = (int)wpe_buffer_shm_get_stride(WPE_BUFFER_SHM(buffer));
+  gsize stride = width > 0 && height > 0 ? size / (gsize)height : 0;
+  if (WPE_IS_BUFFER_SHM(buffer)) stride = wpe_buffer_shm_get_stride(WPE_BUFFER_SHM(buffer));
   gint64 copy_started = g_get_monotonic_time();
-  if (self->doc && width > 0 && height > 0 && stride >= width * 4) {
+  // The buffer comes from the web process: its size must hold every row it claims (the last one only `width * 4`).
+  gboolean sane = width > 0 && height > 0 && width <= MAX_FRAME_SIDE && height <= MAX_FRAME_SIDE && stride >= (gsize)width * 4 &&
+                  stride <= (gsize)G_MAXINT && size >= stride * (gsize)(height - 1) + (gsize)width * 4;
+  if (!sane) DEBUG("frame refused: %dx%d stride %" G_GSIZE_FORMAT " size %" G_GSIZE_FORMAT, width, height, stride, size);
+  if (self->doc && sane) {
     g_mutex_lock(&frames_lock);
     Frame *frame = g_hash_table_lookup(frames, self->doc);
     if (frame) {
@@ -258,9 +270,9 @@ static gboolean kybern_view_render_buffer(WPEView *view, WPEBuffer *buffer, cons
       int x0 = width, y0 = height, x1 = 0, y1 = 0;
       for (guint i = 0; i < (whole ? 1 : n_damage); i++) {
         int rx0 = 0, ry0 = 0, rx1 = width, ry1 = height;
-        if (!whole) {
-          rx0 = MAX(0, (int)(damage[i].x * scale)); ry0 = MAX(0, (int)(damage[i].y * scale));
-          rx1 = MIN(width, (int)((damage[i].x + damage[i].width) * scale + 1)); ry1 = MIN(height, (int)((damage[i].y + damage[i].height) * scale + 1));
+        if (!whole) { // clamped as doubles: a huge or negative rectangle never overflows the casts
+          rx0 = (int)CLAMP(damage[i].x * scale, 0, width); ry0 = (int)CLAMP(damage[i].y * scale, 0, height);
+          rx1 = (int)CLAMP(((double)damage[i].x + damage[i].width) * scale + 1, 0, width); ry1 = (int)CLAMP(((double)damage[i].y + damage[i].height) * scale + 1, 0, height);
         }
         if (rx1 <= rx0 || ry1 <= ry0) continue;
         for (int y = ry0; y < ry1; y++) memcpy(frame->pixels + (gsize)y * frame->stride + rx0 * 4, source + (gsize)y * stride + rx0 * 4, (gsize)(rx1 - rx0) * 4);
@@ -349,20 +361,28 @@ static const char *BRIDGE_SHIM =
 static const char *BRIDGE_RELAY =
   "document.addEventListener('kybern-host-bridge',e=>{try{const d=JSON.parse(e.detail);if(d&&typeof d==='object'&&!Array.isArray(d))window.webkit.messageHandlers.kybern.postMessage(d)}catch(_){}},true)";
 // Child frame, world "KybernPreview" (webview.m's `frameScript`), plus: run host scripts posted by the wrapper's
-// isolated world (WPE's UI API evaluates only in the main frame), and report an Escape the page left unhandled.
-static const char *FRAME_SCRIPT =
-  "if(window.parent!==window&&window.parent===window.top){const h=window.webkit.messageHandlers.kybernFrame,post=d=>h.postMessage(d);"
-  "const send=()=>{if(location.href!=='about:blank')post({__kybernNavigation:location.href})};addEventListener('DOMContentLoaded',send);addEventListener('popstate',send);addEventListener('hashchange',send);"
-  "addEventListener('message',e=>{const d=e.data;if(e.source!==window.parent||!d||typeof d!=='object'||typeof d.__kybernRun!=='string')return;"
-  "e.stopImmediatePropagation();let r;try{const v=(0,eval)(d.__kybernRun);r={__kybernResult:String(d.rid||''),ok:true,value:v===undefined?null:JSON.parse(JSON.stringify(v)||'null')}}"
-  "catch(x){r={__kybernResult:String(d.rid||''),ok:false,message:String(x&&x.message||x)}}if(d.rid)post(r)},true);"
-  "addEventListener('keydown',e=>{if(e.key==='Escape')setTimeout(()=>{if(!e.defaultPrevented)post({__kybernEscape:true})},0)},false)}";
+// isolated world (WPE's UI API evaluates only in the main frame), and report an Escape the page left unhandled. A host
+// script must come from the wrapper and carry the document's nonce, which only the isolated worlds ever see (it is in
+// this script's source and in `child_run_script`'s, never in the page's world).
+static char *frame_script(const char *nonce) {
+  GString *out = g_string_new("if(window.parent!==window&&window.parent===window.top){const nonce=");
+  json_string(out, nonce);
+  g_string_append(out, ";const h=window.webkit.messageHandlers.kybernFrame,post=d=>h.postMessage(d);"
+    "const send=()=>{if(location.href!=='about:blank')post({__kybernNavigation:location.href})};addEventListener('DOMContentLoaded',send);addEventListener('popstate',send);addEventListener('hashchange',send);"
+    "addEventListener('message',e=>{const d=e.data;if(e.source!==window.parent||!d||typeof d!=='object'||typeof d.__kybernRun!=='string')return;"
+    "e.stopImmediatePropagation();if(d.__kybernNonce!==nonce)return;let r;try{const v=(0,eval)(d.__kybernRun);r={__kybernResult:String(d.rid||''),ok:true,value:v===undefined?null:JSON.parse(JSON.stringify(v)||'null')}}"
+    "catch(x){r={__kybernResult:String(d.rid||''),ok:false,message:String(x&&x.message||x)}}if(d.rid)post(r)},true);"
+    "addEventListener('keydown',e=>{if(e.key==='Escape')setTimeout(()=>{if(!e.defaultPrevented)post({__kybernEscape:true})},0)},false)}");
+  return g_string_free(out, FALSE);
+}
 // The top frame forwards a host script to the child (world "KybernPreview" in the top frame).
-static char *child_run_script(const char *script, const char *rid) {
+static char *child_run_script(Host *host, const char *script, const char *rid) {
   GString *out = g_string_new("(()=>{const f=document.querySelector('iframe');if(!f||!f.contentWindow)return false;f.contentWindow.postMessage({__kybernRun:");
   json_string(out, script);
   g_string_append(out, ",rid:");
   json_string(out, rid ? rid : "");
+  g_string_append(out, ",__kybernNonce:");
+  json_string(out, host->nonce);
   g_string_append(out, "},'*');return true})()");
   return g_string_free(out, FALSE);
 }
@@ -399,7 +419,7 @@ static gboolean on_decide_policy(WebKitWebView *web, WebKitPolicyDecision *decis
     const char *url = webkit_uri_request_get_uri(webkit_response_policy_decision_get_request(response));
     gboolean main = webkit_response_policy_decision_is_main_frame_main_resource(response);
     DEBUG("response policy main=%d %s", main, url);
-    gboolean allowed = !g_strcmp0(url, host->wrapper_url) || g_str_has_prefix(url, "about:") || (!main && allows_url(host, url));
+    gboolean allowed = main ? !g_strcmp0(url, host->wrapper_url) : g_str_has_prefix(url, "about:") || allows_url(host, url);
     if (allowed && !webkit_response_policy_decision_is_mime_type_supported(response)) allowed = FALSE; // downloads
     if (!allowed) emit_url(host, "externalNavigation", url);
     if (allowed) webkit_policy_decision_use(decision); else webkit_policy_decision_ignore(decision);
@@ -423,7 +443,8 @@ static gboolean on_decide_policy(WebKitWebView *web, WebKitPolicyDecision *decis
 }
 
 // A top-level navigation away from the wrapper is caught by the main resource response check above
-// (`is_main_frame_main_resource`): only the wrapper URL may be the main frame's document.
+// (`is_main_frame_main_resource`): only the wrapper URL may be the main frame's document, and only there. The scheme
+// handler also serves it once, to the load `create_host` starts, so no frame can load a second copy.
 
 static void on_tauri_request(WebKitURISchemeRequest *request, gpointer data) {
   (void)data;
@@ -434,12 +455,13 @@ static void on_tauri_request(WebKitURISchemeRequest *request, gpointer data) {
   GHashTableIter iter; gpointer value;
   g_hash_table_iter_init(&iter, hosts);
   while (g_hash_table_iter_next(&iter, NULL, &value)) if (((Host *)value)->web == web) { host = value; break; }
-  if (!host || g_strcmp0(uri, host->wrapper_url) || !host->wrapper_html) {
+  if (!host || g_strcmp0(uri, host->wrapper_url) || !host->wrapper_html || host->wrapper_served) {
     GError *error = g_error_new_literal(G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Not found");
     webkit_uri_scheme_request_finish_error(request, error);
     g_error_free(error);
     return;
   }
+  host->wrapper_served = TRUE;
   gsize length = strlen(host->wrapper_html);
   GInputStream *stream = g_memory_input_stream_new_from_data(g_memdup2(host->wrapper_html, length), (gssize)length, g_free);
   WebKitURISchemeResponse *response = webkit_uri_scheme_response_new(stream, (gint64)length);
@@ -492,6 +514,22 @@ static void on_message(WebKitUserContentManager *manager, JSCValue *value, Host 
   g_free(json);
 }
 
+// The child's URL changes (load, popstate, hashchange) reach JS at once, then at most one per NAVIGATION_INTERVAL_MS
+// (the latest): a page looping on `location.hash` must not fill the event queue every document shares.
+#define NAVIGATION_INTERVAL_MS 100
+static gboolean flush_navigation(gpointer data);
+static void send_navigation(Host *host, char *url) {
+  emit_url(host, "navigation", url);
+  g_free(url);
+  host->navigation_timer = g_timeout_add(NAVIGATION_INTERVAL_MS, flush_navigation, host);
+}
+static gboolean flush_navigation(gpointer data) {
+  Host *host = data;
+  host->navigation_timer = 0;
+  if (host->navigation) send_navigation(host, g_steal_pointer(&host->navigation));
+  return G_SOURCE_REMOVE;
+}
+
 static void on_frame_message(WebKitUserContentManager *manager, JSCValue *value, Host *host) {
   (void)manager;
   if (!jsc_value_is_object(value) || jsc_value_is_array(value)) return;
@@ -500,8 +538,9 @@ static void on_frame_message(WebKitUserContentManager *manager, JSCValue *value,
     host->child_frame = TRUE;
     JSCValue *url = jsc_value_object_get_property(value, "__kybernNavigation");
     char *text = jsc_value_to_string(url);
-    emit_url(host, "navigation", text);
-    g_free(text); g_object_unref(url);
+    g_object_unref(url);
+    if (host->navigation_timer) { g_free(host->navigation); host->navigation = text; }
+    else send_navigation(host, text);
     return;
   }
   if (jsc_value_object_has_property(value, "__kybernResult")) {
@@ -560,7 +599,7 @@ static WebKitWebView *on_create(WebKitWebView *web, WebKitNavigationAction *acti
   return NULL;
 }
 
-// ── Browser UI that a toolkit would draw: Kybern draws it (JS events `optionMenu`, `scriptDialog`, `contextMenu`) ──
+// ── Browser UI that a toolkit would draw: Kybern draws menus (JS events `optionMenu`, `contextMenu`), no dialogs ────
 
 static gboolean on_option_menu(WebKitWebView *web, WebKitOptionMenu *menu, WebKitRectangle *rect, Host *host) {
   (void)web;
@@ -582,18 +621,29 @@ static gboolean on_option_menu(WebKitWebView *web, WebKitOptionMenu *menu, WebKi
   return TRUE;
 }
 
+// `alert`, `confirm`, `prompt` and `beforeunload` answer at once and show nothing, as in a WKWebView without a UI
+// delegate (macOS) and on Windows, whose preview frames have no `allow-modals`: alert returns, confirm false, prompt
+// null, and a page cannot hold its own unload. A page dialog drawn as a Kybern dialog would be a phishing surface (and a
+// loop a page could keep reopening), so none is drawn; the preview frames here have no `allow-modals` either.
 static gboolean on_script_dialog(WebKitWebView *web, WebKitScriptDialog *dialog, Host *host) {
-  (void)web;
-  if (host->script_dialog) { webkit_script_dialog_close(host->script_dialog); webkit_script_dialog_unref(host->script_dialog); }
-  host->script_dialog = webkit_script_dialog_ref(dialog);
-  static const char *kinds[] = { "alert", "confirm", "prompt", "beforeunload" };
-  WebKitScriptDialogType type = webkit_script_dialog_get_dialog_type(dialog);
-  GString *out = event_begin(host, "scriptDialog");
-  g_string_append(out, ",\"kind\":"); json_string(out, kinds[type <= 3 ? type : 0]);
-  g_string_append(out, ",\"message\":"); json_string(out, webkit_script_dialog_get_message(dialog));
-  if (type == WEBKIT_SCRIPT_DIALOG_PROMPT) { g_string_append(out, ",\"text\":"); json_string(out, webkit_script_dialog_prompt_get_default_text(dialog)); }
-  event_end(out);
+  (void)web; (void)host;
+  if (webkit_script_dialog_get_dialog_type(dialog) == WEBKIT_SCRIPT_DIALOG_BEFORE_UNLOAD_CONFIRM) webkit_script_dialog_confirm_set_confirmed(dialog, TRUE);
   return TRUE;
+}
+
+// Only what acts on the page's content: navigation, new windows, downloads and the inspector would act on the wrapper or
+// leave the sandbox, so they are left out (as macOS visuals show no menu at all). Checked again when an item runs.
+static gboolean allowed_context_action(WebKitContextMenuItem *item) {
+  if (webkit_context_menu_item_get_submenu(item) || webkit_context_menu_item_is_separator(item)) return FALSE;
+  switch (webkit_context_menu_item_get_stock_action(item)) {
+    case WEBKIT_CONTEXT_MENU_ACTION_COPY: case WEBKIT_CONTEXT_MENU_ACTION_CUT: case WEBKIT_CONTEXT_MENU_ACTION_PASTE:
+    case WEBKIT_CONTEXT_MENU_ACTION_COPY_LINK_TO_CLIPBOARD: case WEBKIT_CONTEXT_MENU_ACTION_COPY_IMAGE_TO_CLIPBOARD:
+    case WEBKIT_CONTEXT_MENU_ACTION_BOLD: case WEBKIT_CONTEXT_MENU_ACTION_ITALIC: case WEBKIT_CONTEXT_MENU_ACTION_UNDERLINE:
+    case WEBKIT_CONTEXT_MENU_ACTION_MEDIA_PLAY: case WEBKIT_CONTEXT_MENU_ACTION_MEDIA_PAUSE: case WEBKIT_CONTEXT_MENU_ACTION_MEDIA_MUTE:
+      return TRUE;
+    default:
+      return FALSE;
+  }
 }
 
 static gboolean on_context_menu(WebKitWebView *web, WebKitContextMenu *menu, WebKitHitTestResult *hit, Host *host) {
@@ -608,18 +658,7 @@ static gboolean on_context_menu(WebKitWebView *web, WebKitContextMenu *menu, Web
   guint n = webkit_context_menu_get_n_items(menu), shown = 0;
   for (guint i = 0; i < n; i++) {
     WebKitContextMenuItem *item = webkit_context_menu_get_item_at_position(menu, i);
-    if (webkit_context_menu_item_get_submenu(item)) continue;
-    // Only what acts on the page's content: navigation, new windows, downloads and the inspector would act on the
-    // wrapper or leave the sandbox, so they are left out (as macOS visuals show no menu at all).
-    switch (webkit_context_menu_item_get_stock_action(item)) {
-      case WEBKIT_CONTEXT_MENU_ACTION_COPY: case WEBKIT_CONTEXT_MENU_ACTION_CUT: case WEBKIT_CONTEXT_MENU_ACTION_PASTE:
-      case WEBKIT_CONTEXT_MENU_ACTION_COPY_LINK_TO_CLIPBOARD: case WEBKIT_CONTEXT_MENU_ACTION_COPY_IMAGE_TO_CLIPBOARD:
-      case WEBKIT_CONTEXT_MENU_ACTION_BOLD: case WEBKIT_CONTEXT_MENU_ACTION_ITALIC: case WEBKIT_CONTEXT_MENU_ACTION_UNDERLINE:
-      case WEBKIT_CONTEXT_MENU_ACTION_MEDIA_PLAY: case WEBKIT_CONTEXT_MENU_ACTION_MEDIA_PAUSE: case WEBKIT_CONTEXT_MENU_ACTION_MEDIA_MUTE:
-        break;
-      default:
-        if (!webkit_context_menu_item_is_separator(item)) continue;
-    }
+    if (webkit_context_menu_item_get_submenu(item) || (!webkit_context_menu_item_is_separator(item) && !allowed_context_action(item))) continue;
     if (shown++) g_string_append_c(out, ',');
     if (webkit_context_menu_item_is_separator(item)) { g_string_append_printf(out, "{\"index\":%u,\"separator\":true}", i); continue; }
     GAction *action = webkit_context_menu_item_get_gaction(item);
@@ -707,6 +746,30 @@ static gboolean snapshot_to(Host *host, const char *path, double lx, double ly, 
   return ok;
 }
 
+// A snapshot is written only as a `.png` under the temp folder or Kybern's own cache (`gpuixCacheDir`: visual frames
+// go to its image cache), named by a clean absolute path: no `.`/`..` components, and a root matches whole components
+// (`/tmp` does not cover `/tmpx`).
+static gboolean path_under(const char *path, const char *root) {
+  if (!root || !g_path_is_absolute(root)) return FALSE;
+  char *clean = g_canonicalize_filename(root, NULL);
+  size_t n = strlen(clean);
+  gboolean ok = n > 1 && !strncmp(path, clean, n) && path[n] == '/';
+  g_free(clean);
+  return ok;
+}
+static gboolean snapshot_path_allowed(const char *path) {
+  if (!path || !g_path_is_absolute(path) || !g_str_has_suffix(path, ".png")) return FALSE;
+  char *clean = g_canonicalize_filename(path, NULL);
+  gboolean ok = !strcmp(clean, path);
+  g_free(clean);
+  if (!ok) return FALSE;
+  char *cache = g_build_filename(g_get_user_cache_dir(), "kybern-gpuix", NULL);
+  const char *config = g_getenv("KYBERN_CLIENT_CONFIG_DIR");
+  ok = path_under(path, g_get_tmp_dir()) || path_under(path, cache) || (config && path_under(path, config));
+  g_free(cache);
+  return ok;
+}
+
 typedef struct { Host *host; char *rid, *path; double x, y, w, h; } RectJob;
 static void on_rect_probe(GObject *source, GAsyncResult *result, gpointer data) {
   RectJob *job = data;
@@ -745,6 +808,10 @@ static void on_rect_probe(GObject *source, GAsyncResult *result, gpointer data) 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
 static void host_free(Host *host) {
+  if (host->navigation_timer) g_source_remove(host->navigation_timer);
+  // The WPEView can outlive this host (WebKit holds it until the page closes): it must not deliver frames or cursors
+  // to a document created later with the same id.
+  if (host->view && KYBERN_IS_VIEW(host->view)) g_clear_pointer(&KYBERN_VIEW(host->view)->doc, g_free);
   if (host->web) {
     WebKitUserContentManager *manager = webkit_web_view_get_user_content_manager(host->web);
     g_signal_handlers_disconnect_by_data(manager, host);
@@ -755,7 +822,6 @@ static void host_free(Host *host) {
     webkit_web_view_try_close(host->web);
   }
   if (host->option_menu) { webkit_option_menu_close(host->option_menu); g_clear_object(&host->option_menu); }
-  if (host->script_dialog) { webkit_script_dialog_close(host->script_dialog); webkit_script_dialog_unref(host->script_dialog); }
   g_clear_object(&host->context_menu);
   g_clear_object(&host->web);
   g_clear_object(&host->toplevel);
@@ -764,11 +830,27 @@ static void host_free(Host *host) {
   g_mutex_unlock(&frames_lock);
   notify(host->id, NOTIFY_GONE, NULL);
   g_free(host->id); g_free(host->category); g_free(host->wrapper_url); g_free(host->wrapper_html); g_free(host->slot); g_free(host->cursor);
+  g_free(host->nonce); g_free(host->navigation);
   g_strfreev(host->allowed_origins);
   g_free(host);
 }
 
 static void frame_free(Frame *frame) { g_free(frame->pixels); g_free(frame->slot); g_free(frame); }
+
+// Downloads are refused, as on Windows and macOS: an `<a download>` in a server preview would otherwise write into the
+// user's Downloads folder without asking. Cancelled before WebKit picks a destination.
+static gboolean on_download_destination(WebKitDownload *download, char *suggested, gpointer data) {
+  (void)suggested; (void)data;
+  webkit_download_cancel(download);
+  return TRUE;
+}
+static void on_download_started(WebKitNetworkSession *network, WebKitDownload *download, gpointer data) {
+  (void)network; (void)data;
+  WebKitURIRequest *request = webkit_download_get_request(download);
+  DEBUG("download refused %s", request ? webkit_uri_request_get_uri(request) : "");
+  g_signal_connect(download, "decide-destination", G_CALLBACK(on_download_destination), NULL);
+  webkit_download_cancel(download);
+}
 
 static gboolean ensure_engine(void) {
   if (display) return TRUE;
@@ -776,6 +858,7 @@ static gboolean ensure_engine(void) {
   GError *error = NULL;
   if (!wpe_display_connect(display, &error)) { g_clear_error(&error); g_clear_object(&display); return FALSE; }
   session = webkit_network_session_new_ephemeral();
+  g_signal_connect(session, "download-started", G_CALLBACK(on_download_started), NULL);
   return TRUE;
 }
 
@@ -836,15 +919,19 @@ static void create_host(JSCValue *cmd, const char *id) {
   g_signal_connect(manager, "script-message-received::kybernFrame", G_CALLBACK(on_frame_message), host);
   webkit_user_content_manager_register_script_message_handler(manager, "kybern", "KybernHost");
   webkit_user_content_manager_register_script_message_handler(manager, "kybernFrame", "KybernPreview");
-  const char *const *allow_wrapper = NULL; // top frame only; the top frame is always the wrapper (decide-policy)
+  // Top-frame scripts run only in the wrapper's document (the top frame is always the wrapper: decide-policy).
+  static const char *const allow_wrapper[] = { "tauri://localhost/embedded/*", NULL };
+  host->nonce = g_uuid_string_random();
+  char *child_script = frame_script(host->nonce);
   WebKitUserScript *scripts[] = {
     webkit_user_script_new(BRIDGE_SHIM, WEBKIT_USER_CONTENT_INJECT_TOP_FRAME, WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START, allow_wrapper, NULL),
     webkit_user_script_new_for_world(BRIDGE_RELAY, WEBKIT_USER_CONTENT_INJECT_TOP_FRAME, WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START, "KybernHost", allow_wrapper, NULL),
-    webkit_user_script_new_for_world(FRAME_SCRIPT, WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES, WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START, "KybernPreview", NULL, NULL),
+    webkit_user_script_new_for_world(child_script, WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES, WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START, "KybernPreview", NULL, NULL),
     webkit_user_script_new(ESCAPE_SCRIPT_TOP, WEBKIT_USER_CONTENT_INJECT_TOP_FRAME, WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START, allow_wrapper, NULL),
     webkit_user_script_new_for_world(ESCAPE_RELAY_TOP, WEBKIT_USER_CONTENT_INJECT_TOP_FRAME, WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START, "KybernPreview", allow_wrapper, NULL),
   };
   for (guint i = 0; i < G_N_ELEMENTS(scripts); i++) { webkit_user_content_manager_add_script(manager, scripts[i]); webkit_user_script_unref(scripts[i]); }
+  g_free(child_script);
 
   WebKitSettings *settings = webkit_settings_new();
   webkit_settings_set_enable_developer_extras(settings, FALSE);
@@ -854,7 +941,7 @@ static void create_host(JSCValue *cmd, const char *id) {
                                            "user-content-manager", manager, "settings", settings, NULL));
   g_object_unref(settings); g_object_unref(manager);
   host->view = webkit_web_view_get_wpe_view(host->web);
-  KYBERN_VIEW(host->view)->doc = g_strdup(id);
+  if (KYBERN_IS_VIEW(host->view)) KYBERN_VIEW(host->view)->doc = g_strdup(id);
   host->toplevel = wpe_display_create_toplevel(display, 1);
   wpe_view_set_toplevel(host->view, host->toplevel);
   wpe_toplevel_resized(host->toplevel, 1, 1);
@@ -943,7 +1030,7 @@ static void run_command(char *json) {
       GString *literal = g_string_new("["); json_string(literal, url); g_string_append_c(literal, ']');
       if (host->child_frame) {
         char *inner = g_strdup_printf("{const url=(%s)[0];if(location.href===url)location.reload();else location.replace(url)}", literal->str);
-        char *script = child_run_script(inner, NULL);
+        char *script = child_run_script(host, inner, NULL);
         evaluate(host, script, "KybernPreview");
         g_free(script); g_free(inner);
       } else {
@@ -960,7 +1047,7 @@ static void run_command(char *json) {
     if (!g_strcmp0(action, "stop")) webkit_web_view_stop_loading(host->web);
     else if (host->child_frame && action) {
       const char *inner = !strcmp(action, "back") ? "history.back()" : !strcmp(action, "forward") ? "history.forward()" : !strcmp(action, "reload") ? "location.reload()" : NULL;
-      if (inner) { char *script = child_run_script(inner, NULL); evaluate(host, script, "KybernPreview"); g_free(script); }
+      if (inner) { char *script = child_run_script(host, inner, NULL); evaluate(host, script, "KybernPreview"); g_free(script); }
     }
     g_free(action);
   }
@@ -980,11 +1067,11 @@ static void run_command(char *json) {
     char *path = string_member(cmd, "path");
     double token = number_member(cmd, "token", 0);
     int w = 0, h = 0;
-    gboolean ok = path && snapshot_to(host, path, 0, 0, 0, 0, &w, &h);
+    gboolean allowed = snapshot_path_allowed(path), ok = allowed && snapshot_to(host, path, 0, 0, 0, 0, &w, &h);
     GString *out = event_begin(host, "snapshot");
     g_string_append(out, ",\"token\":"); json_number(out, token);
     g_string_append_printf(out, ",\"ok\":%s,\"path\":", ok ? "true" : "false"); json_string(out, ok ? path : "");
-    g_string_append_printf(out, ",\"width\":%d,\"height\":%d,\"message\":", w, h); json_string(out, ok ? "" : "The page has not drawn yet.");
+    g_string_append_printf(out, ",\"width\":%d,\"height\":%d,\"message\":", w, h); json_string(out, ok ? "" : allowed ? "The page has not drawn yet." : "The snapshot path is not allowed.");
     event_end(out);
     g_free(path);
   }
@@ -993,7 +1080,7 @@ static void run_command(char *json) {
     if (!script || !host->child_frame) {
       if (rid) { GString *out = event_begin(host, "frameResult"); g_string_append(out, ",\"rid\":"); json_string(out, rid); g_string_append(out, ",\"ok\":false,\"message\":\"The page has not loaded yet.\""); event_end(out); }
     } else {
-      char *forward = child_run_script(script, rid);
+      char *forward = child_run_script(host, script, rid);
       evaluate(host, forward, "KybernPreview");
       g_free(forward);
     }
@@ -1001,8 +1088,7 @@ static void run_command(char *json) {
   }
   else if (!strcmp(op, "snapshotRect")) {
     char *rid = string_member(cmd, "rid"), *path = string_member(cmd, "path");
-    const char *tmp = g_get_tmp_dir();
-    if (!path || !g_str_has_prefix(path, tmp) || !g_str_has_suffix(path, ".png") || strstr(path, "/../")) {
+    if (!snapshot_path_allowed(path)) {
       GString *out = event_begin(host, "snapshotRect"); g_string_append(out, ",\"rid\":"); json_string(out, rid ? rid : "");
       g_string_append(out, ",\"ok\":false,\"message\":\"The snapshot path is not allowed.\""); event_end(out);
       g_free(rid); g_free(path);
@@ -1023,23 +1109,11 @@ static void run_command(char *json) {
       g_clear_object(&host->option_menu);
     }
   }
-  else if (!strcmp(op, "scriptDialog")) {
-    if (host->script_dialog) {
-      char *text = string_member(cmd, "text");
-      gboolean ok = bool_member(cmd, "ok");
-      WebKitScriptDialogType type = webkit_script_dialog_get_dialog_type(host->script_dialog);
-      if (type == WEBKIT_SCRIPT_DIALOG_CONFIRM || type == WEBKIT_SCRIPT_DIALOG_BEFORE_UNLOAD_CONFIRM) webkit_script_dialog_confirm_set_confirmed(host->script_dialog, ok);
-      if (type == WEBKIT_SCRIPT_DIALOG_PROMPT && ok) webkit_script_dialog_prompt_set_text(host->script_dialog, text ? text : "");
-      webkit_script_dialog_close(host->script_dialog);
-      webkit_script_dialog_unref(host->script_dialog);
-      host->script_dialog = NULL;
-      g_free(text);
-    }
-  }
   else if (!strcmp(op, "contextMenu")) {
     double index = number_member(cmd, "index", -1);
     if (host->context_menu && index >= 0 && index < webkit_context_menu_get_n_items(host->context_menu)) {
-      GAction *action = webkit_context_menu_item_get_gaction(webkit_context_menu_get_item_at_position(host->context_menu, (guint)index));
+      WebKitContextMenuItem *item = webkit_context_menu_get_item_at_position(host->context_menu, (guint)index);
+      GAction *action = allowed_context_action(item) ? webkit_context_menu_item_get_gaction(item) : NULL;
       if (action && g_action_get_enabled(action)) g_action_activate(action, NULL);
     }
     g_clear_object(&host->context_menu);
@@ -1069,7 +1143,6 @@ static gboolean run_input(gpointer data) {
   InputJob *job = data;
   Host *host = g_hash_table_lookup(hosts, job->doc);
   KybernWebInput *in = &job->input;
-  static guint32 buttons;
   if (in->kind == INPUT_OUTSIDE_PRESS) {
     if (host && host->placed && !g_strcmp0(host->category, "visual")) {
       GString *out = event_begin(host, "outsidePress");
@@ -1087,27 +1160,27 @@ static gboolean run_input(gpointer data) {
   switch (in->kind) {
     case INPUT_DOWN:
       if (!host->focused) { host->focused = TRUE; wpe_view_focus_in(host->view); }
-      buttons |= bit;
+      host->buttons |= bit;
       host->press_x = in->x; host->press_y = in->y;
-      event = wpe_event_pointer_button_new(WPE_EVENT_POINTER_DOWN, host->view, WPE_INPUT_SOURCE_MOUSE, time, modifiers_of(in->modifiers, buttons), in->button, in->x, in->y, in->press_count ? in->press_count : 1);
+      event = wpe_event_pointer_button_new(WPE_EVENT_POINTER_DOWN, host->view, WPE_INPUT_SOURCE_MOUSE, time, modifiers_of(in->modifiers, host->buttons), in->button, in->x, in->y, in->press_count ? in->press_count : 1);
       break;
     case INPUT_UP:
-      buttons &= ~bit;
-      event = wpe_event_pointer_button_new(WPE_EVENT_POINTER_UP, host->view, WPE_INPUT_SOURCE_MOUSE, time, modifiers_of(in->modifiers, buttons), in->button, in->x, in->y, 0);
+      host->buttons &= ~bit;
+      event = wpe_event_pointer_button_new(WPE_EVENT_POINTER_UP, host->view, WPE_INPUT_SOURCE_MOUSE, time, modifiers_of(in->modifiers, host->buttons), in->button, in->x, in->y, 0);
       break;
     case INPUT_MOVE:
-      event = wpe_event_pointer_move_new(WPE_EVENT_POINTER_MOVE, host->view, WPE_INPUT_SOURCE_MOUSE, time, modifiers_of(in->modifiers, buttons), in->x, in->y, 0, 0);
+      event = wpe_event_pointer_move_new(WPE_EVENT_POINTER_MOVE, host->view, WPE_INPUT_SOURCE_MOUSE, time, modifiers_of(in->modifiers, host->buttons), in->x, in->y, 0, 0);
       break;
     case INPUT_LEAVE:
-      event = wpe_event_pointer_move_new(WPE_EVENT_POINTER_LEAVE, host->view, WPE_INPUT_SOURCE_MOUSE, time, modifiers_of(in->modifiers, buttons), in->x, in->y, 0, 0);
+      event = wpe_event_pointer_move_new(WPE_EVENT_POINTER_LEAVE, host->view, WPE_INPUT_SOURCE_MOUSE, time, modifiers_of(in->modifiers, host->buttons), in->x, in->y, 0, 0);
       break;
     case INPUT_SCROLL:
-      event = wpe_event_scroll_new(host->view, in->precise ? WPE_INPUT_SOURCE_TOUCHPAD : WPE_INPUT_SOURCE_MOUSE, time, modifiers_of(in->modifiers, buttons), in->dx, in->dy, in->precise, FALSE, in->x, in->y);
+      event = wpe_event_scroll_new(host->view, in->precise ? WPE_INPUT_SOURCE_TOUCHPAD : WPE_INPUT_SOURCE_MOUSE, time, modifiers_of(in->modifiers, host->buttons), in->dx, in->dy, in->precise, FALSE, in->x, in->y);
       break;
     case INPUT_KEY_DOWN:
     case INPUT_KEY_UP:
       if (in->kind == INPUT_KEY_DOWN && !host->focused) { host->focused = TRUE; wpe_view_focus_in(host->view); }
-      event = wpe_event_keyboard_new(in->kind == INPUT_KEY_DOWN ? WPE_EVENT_KEYBOARD_KEY_DOWN : WPE_EVENT_KEYBOARD_KEY_UP, host->view, WPE_INPUT_SOURCE_KEYBOARD, time, modifiers_of(in->modifiers, buttons), in->keycode, in->keyval);
+      event = wpe_event_keyboard_new(in->kind == INPUT_KEY_DOWN ? WPE_EVENT_KEYBOARD_KEY_DOWN : WPE_EVENT_KEYBOARD_KEY_UP, host->view, WPE_INPUT_SOURCE_KEYBOARD, time, modifiers_of(in->modifiers, host->buttons), in->keycode, in->keyval);
       break;
     case INPUT_FOCUS:
       if (!host->focused) { host->focused = TRUE; wpe_view_focus_in(host->view); }
@@ -1167,9 +1240,12 @@ static gboolean queued_command(gpointer data) { run_command(data); return G_SOUR
 // Whether WebKit's web-process sandbox can run here: the system bubblewrap and D-Bus proxy WebKit was built against,
 // and an unprivileged user namespace with its own network for bwrap. Ubuntu 23.10+ refuses that to /usr/bin/bwrap
 // (AppArmor `unprivileged_userns`); Kybern's .deb then gives its own copy (beside the helper processes) a profile that
-// allows it, and WebKit is told to use that copy (KYBERN_WEBKIT_BWRAP, wpe-relocatable.patch). Without either, pages
-// would run unsandboxed, so the web view stays off and every surface shows WP4's browser fallback. Keep the checks in
-// step with `linuxProbe` in webview.ts.
+// allows it, and WebKit is switched to that copy in-process (`webkit_kybern_sandbox_hardened`, wpe-sandbox.patch; never
+// through the environment). Upstream WebKit also skips bubblewrap and runs pages unsandboxed inside a Snap (`SNAP*`,
+// which a Snap terminal passes to its children), inside Flatpak without flatpak-spawn, in a container where bwrap
+// fails, and with WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS; Kybern's WebKit aborts instead, so each of those turns the
+// web view off here and every surface shows WP4's browser fallback. Keep the checks in step with `linuxSandboxProbe`
+// in webview-support.ts.
 static gboolean bwrap_works(const char *bwrap) {
   const char *argv[] = { bwrap, "--unshare-all", "--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "true", NULL };
   int status = 0;
@@ -1179,15 +1255,26 @@ static gboolean bwrap_works(const char *bwrap) {
 }
 
 static char *check_sandbox(void) {
-  if (g_getenv("KYBERN_WEBVIEW_ALLOW_UNSANDBOXED_FOR_TESTS")) return NULL;
+  const char *dangerous = g_getenv("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS");
+  if (dangerous && strcmp(dangerous, "0")) return g_strdup("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS is set, and Kybern never runs web pages without their sandbox, so pages open in your browser. Unset it and reopen Kybern.");
+  if (g_getenv("SNAP") && g_getenv("SNAP_NAME") && g_getenv("SNAP_REVISION"))
+    return g_strdup("Kybern was started from inside a Snap (SNAP is set, for example by a Snap terminal), where it cannot sandbox web pages, so pages open in your browser. Start Kybern from your desktop to see them here.");
+  if (g_file_test("/.flatpak-info", G_FILE_TEST_EXISTS)) return g_strdup("Kybern is running inside Flatpak, where it cannot sandbox web pages, so pages open in your browser.");
   if (!g_file_test("/usr/bin/xdg-dbus-proxy", G_FILE_TEST_IS_EXECUTABLE)) return g_strdup("Install xdg-dbus-proxy so Kybern can sandbox web pages, then reopen Kybern.");
-  if (bwrap_works("/usr/bin/bwrap")) return NULL;
+  // Kybern's own WebKit build exports this; a system WebKit (development on a distro that packages WPE 2.0) does not,
+  // and is used only with the system bwrap, under the same conditions upstream picks bubblewrap for.
+  int (*hardened)(int) = NULL;
   Dl_info info;
-  if (dladdr((void *)webkit_web_view_get_type, &info) && info.dli_fname) {
+  gboolean located = dladdr((void *)webkit_web_view_get_type, &info) && info.dli_fname && info.dli_fname[0] == '/';
+  if (located) {
+    void *webkit = dlopen(info.dli_fname, RTLD_LAZY | RTLD_NOLOAD);
+    if (webkit) { hardened = (int (*)(int))dlsym(webkit, "webkit_kybern_sandbox_hardened"); dlclose(webkit); }
+  }
+  if (bwrap_works("/usr/bin/bwrap") && (!hardened || hardened(0))) return NULL;
+  if (located && hardened) {
     char *dir = g_path_get_dirname(info.dli_fname);
     char *own = g_build_filename(dir, "wpe-webkit-2.0", "bwrap", NULL);
-    gboolean works = bwrap_works(own);
-    if (works) g_setenv("KYBERN_WEBKIT_BWRAP", own, TRUE);
+    gboolean works = bwrap_works(own) && hardened(1);
     g_free(dir); g_free(own);
     if (works) return NULL;
   }

@@ -4,13 +4,13 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import type { LayoutRect, RoundedLayoutClip } from './layout.ts'
 import { spawnSync } from 'node:child_process'
-import { noteWebViewUnavailable, webViewSupport, type LinuxWebViewProbe, type WindowsHostState } from './webview-support.ts'
+import { linuxSandboxProbe, noteWebViewUnavailable, webViewSupport, type LinuxWebViewProbe, type WindowsHostState } from './webview-support.ts'
 
 export type WebEvent = { id: string; generation?: number; type: string; message?: string; url?: string; visible?: boolean; key?: string; modifiers?: { cmd: boolean; ctrl: boolean; alt: boolean; shift: boolean }; data?: Record<string, unknown>
   /** `outsidePress`: window points; `snapshot`: the PNG's pixel size. */
   x?: number; y?: number; width?: number; height?: number; path?: string; ok?: boolean; token?: number
-  /** Linux browser UI Kybern draws (`WebPageUi.tsx`): `optionMenu` and `contextMenu` items, `scriptDialog` kind/text. */
-  items?: WebMenuItem[]; kind?: 'alert' | 'confirm' | 'prompt' | 'beforeunload'; text?: string }
+  /** Linux browser UI Kybern draws (`WebPageUi.tsx`): `optionMenu` and `contextMenu` items. */
+  items?: WebMenuItem[] }
 /** A `<select>` option (`optionMenu`) or a WebKit context menu item (`contextMenu`, with its `index`). */
 export type WebMenuItem = { label?: string; enabled?: boolean; selected?: boolean; group?: boolean; child?: boolean; index?: number; separator?: boolean }
 /** The host library: `native/webview.m` on macOS, `native/webview-win` (WebView2) on Windows, `native/webview-linux.c` (WPE) on Linux. */
@@ -31,24 +31,13 @@ function windowsHost(): WindowsHostState {
 }
 /**
  * Decided once: without a host (Linux, Windows without the WebView2 Runtime, or `KYBERN_GPUIX_NO_WEBVIEW=1`) no library
- * stays loaded and every `webHost` call is a no-op.
+ * stays loaded and every `webHost` call is a no-op. Linux: `linuxSandboxProbe` (pages never run unsandboxed).
  */
-/**
- * Linux: the companion exists and WebKit's web-process sandbox can run (the same check `webview-linux.c` makes before
- * creating a view, done here so deciding does not load WebKit at startup). Pages never run unsandboxed: without bwrap
- * or a user namespace for it (Ubuntu 24.04's AppArmor policy can refuse one) they open in the browser (WP4).
- */
-const linuxProbe: LinuxWebViewProbe = () => {
-  const library = libraryPath()
-  if (!existsSync(library)) return { loaded: false }
-  if (process.env.KYBERN_WEBVIEW_ALLOW_UNSANDBOXED_FOR_TESTS) return { loaded: true, unavailable: null }
-  if (!existsSync('/usr/bin/xdg-dbus-proxy')) return { loaded: true, unavailable: 'Install xdg-dbus-proxy so Kybern can sandbox web pages, then reopen Kybern.' }
-  // The system bwrap, else Kybern's own copy beside WebKit's helpers (the .deb gives it an AppArmor profile on Ubuntu 23.10+).
-  const works = (bwrap: string) => existsSync(bwrap) && spawnSync(bwrap, ['--unshare-all', '--die-with-parent', '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', 'true'], { stdio: 'ignore', timeout: 5000 }).status === 0
-  if (works('/usr/bin/bwrap') || works(path.join(path.dirname(library), 'wpe/lib/wpe-webkit-2.0/bwrap'))) return { loaded: true, unavailable: null }
-  if (!existsSync('/usr/bin/bwrap')) return { loaded: true, unavailable: 'Install bubblewrap (bwrap) so Kybern can sandbox web pages, then reopen Kybern.' }
-  return { loaded: true, unavailable: 'This system does not let Kybern sandbox web pages (bubblewrap cannot create a user namespace), so pages open in your browser.' }
-}
+const linuxProbe: LinuxWebViewProbe = () => linuxSandboxProbe(libraryPath(), {
+  env: process.env,
+  exists: existsSync,
+  bwrapWorks: bwrap => existsSync(bwrap) && spawnSync(bwrap, ['--unshare-all', '--die-with-parent', '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', 'true'], { stdio: 'ignore', timeout: 5000 }).status === 0,
+})
 const SUPPORT = webViewSupport(process.platform, process.env, process.platform === 'win32' ? windowsHost : undefined, process.platform === 'linux' ? linuxProbe : undefined)
 noteWebViewUnavailable(SUPPORT.reason, SUPPORT.message)
 /** Linux draws documents in GPUIX's scene (`<websurface>`, `WebSurface.tsx`); macOS and Windows float native views over the window. */
@@ -116,12 +105,13 @@ function command(fields: Record<string, unknown>) {
 /** Trusted wrapper, opaque sandboxed child. No bearer token or native bridge is
  * exposed to the child. The daemon supplies the child's actual CSP. `send` is WKWebView's message API; on Windows the
  * host defines it in the wrapper over `chrome.webview.postMessage` (`native/webview-win/src/host.rs`).
- * Windows leaves out `allow-modals`: there it is what keeps `print()` from opening WebView2's print UI, and alert, confirm
- * and prompt then return at once, as they do in a WKWebView without a UI delegate. */
+ * Windows and Linux leave out `allow-modals`: on Windows it is what keeps `print()` from opening WebView2's print UI, and
+ * alert, confirm and prompt then return at once, as they do in a WKWebView without a UI delegate; Linux answers them at
+ * once too (`on_script_dialog` in `webview-linux.c`), so no page can open a Kybern dialog. */
 export function webDocument(url: string, kind: 'file' | 'server' | 'visual', platform: NodeJS.Platform = process.platform) {
   const parsed = new URL(url)
   if (!/^https?:$/.test(parsed.protocol) || parsed.username || parsed.password) throw Error('Invalid preview address')
-  const modals = platform === 'win32' ? '' : ' allow-modals'
+  const modals = platform === 'win32' || platform === 'linux' ? '' : ' allow-modals'
   const sandbox = kind === 'visual' ? 'allow-scripts' : kind === 'file' ? `allow-scripts allow-forms${modals}` : `allow-scripts allow-same-origin allow-forms${modals} allow-downloads`
   const value = JSON.stringify(url).replaceAll('<', '\\u003c')
   return `<!doctype html><meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width, initial-scale=1"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}iframe{border:0;position:absolute;transform-origin:0 0;width:100%;height:100%}</style><iframe sandbox="${sandbox}" referrerpolicy="no-referrer"></iframe><script>
@@ -198,8 +188,6 @@ export const webHost = {
   destroy(id: string) { live.delete(id); placed.delete(id); if (bridge) command({ op: 'destroy', id }) },
   /** Linux: answer a page's `<select>` (`optionMenu` event) with an item index, or -1 to dismiss. */
   optionMenu(id: string, index: number) { if (bridge) command({ op: 'optionMenu', id, index }) },
-  /** Linux: close a page's `alert`/`confirm`/`prompt` (`scriptDialog` event); `text` answers a prompt. */
-  scriptDialog(id: string, ok: boolean, text?: string) { if (bridge) command({ op: 'scriptDialog', id, ok, text }) },
   /** Linux: run a context menu item (`contextMenu` event) by its `index`, or -1 to dismiss. */
   contextMenu(id: string, index: number) { if (bridge) command({ op: 'contextMenu', id, index }) },
   /** Ids of the documents that exist now (created, not destroyed). */

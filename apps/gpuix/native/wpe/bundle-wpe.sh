@@ -6,7 +6,8 @@
 #   lack (or ship under another soname) into PREFIX/lib, with RUNPATH $ORIGIN (helpers $ORIGIN/..); strips them;
 # - copies /usr/bin/bwrap to PREFIX/lib/wpe-webkit-2.0/bwrap (Kybern's own copy for an AppArmor profile, see
 #   apps/gpuix/scripts/package-linux.ts) with its licence;
-# - records each bundled library's Debian copyright file in PREFIX/share/licenses and writes PREFIX/SOURCES.txt.
+# - records each bundled library's Debian copyright file in PREFIX/share/licenses and writes PREFIX/SOURCES.txt with
+#   the exact Ubuntu package and version each bundled file came from (the source offer, THIRD_PARTY_NOTICES.md).
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 prefix=$(cd "$1" && pwd)
@@ -40,22 +41,40 @@ find "$prefix" -type f \( -name '*.so*' -o -perm -u+x \) -exec sh -c 'file -b "$
 
 lic=$prefix/share/licenses
 mkdir -p "$lic"
+packages=$(mktemp)
 for f in "$lib"/*.so.* "$pkg/bwrap"; do
   [ -L "$f" ] && continue
   case "$(basename "$f")" in libWPEWebKit-2.0.so*) continue ;; esac
   source=/usr/bin/bwrap
   [ "$f" = "$pkg/bwrap" ] || source=$(ldconfig -p | awk -v n="$(basename "$f")" '$1==n{print $NF; exit}')
-  owner=$(dpkg -S "$source" 2>/dev/null | cut -d: -f1 | head -1) || true
-  [ -n "$owner" ] && [ -f "/usr/share/doc/$owner/copyright" ] && cp "/usr/share/doc/$owner/copyright" "$lic/$owner.copyright"
+  owner=
+  # dpkg records a file under one of its usrmerge aliases (/lib or /usr/lib), and ldconfig may name a symlink.
+  for candidate in "$source" "$(readlink -f "$source")" "/usr$source" "${source#/usr}"; do
+    owner=$(dpkg -S "$candidate" 2>/dev/null | cut -d: -f1 | head -1) || true
+    [ -n "$owner" ] && break
+  done
+  if [ -z "$owner" ]; then
+    echo "bundle-wpe.sh: WARNING no Ubuntu package owns $source ($(basename "$f")); SOURCES.txt says so" >&2
+    printf '  %s: from %s, package unknown\n' "${f#$prefix/}" "$source" >> "$packages"
+    continue
+  fi
+  version=$(dpkg-query -W -f='${Version}' "$owner")
+  source_package=$(dpkg-query -W -f='${source:Package} ${source:Version}' "$owner")
+  printf '  %s: %s %s (source %s)\n' "${f#$prefix/}" "$owner" "$version" "$source_package" >> "$packages"
+  [ -f "/usr/share/doc/$owner/copyright" ] && cp "/usr/share/doc/$owner/copyright" "$lic/$owner.copyright"
 done
 cat > "$prefix/SOURCES.txt" <<SOURCES
 WPE WebKit $WPE_VERSION, built by apps/gpuix/native/wpe/build-wpe.sh in the Kybern repository.
 Source: $WPE_URL
 SHA-256: $WPE_SHA256
 Kybern patches: apps/gpuix/native/wpe/wpe-relocatable.patch (resolves LIBDIR/PKGLIBDIR/PKGLIBEXECDIR beside the
-library; KYBERN_WEBKIT_BWRAP selects Kybern's bubblewrap) and wpe-gcc12.patch (one ANGLE static_assert GCC 12
-evaluates in a discarded branch).
-Bundled libraries and lib/wpe-webkit-2.0/bwrap (bubblewrap) come from Ubuntu 22.04 packages; their sources are at
-https://launchpad.net/ubuntu/jammy (see share/licenses).
+library), wpe-sandbox.patch (never starts a web process without its sandbox, ignores
+WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS, no audio or camera binds, an in-process switch to Kybern's bubblewrap) and
+wpe-gcc12.patch (one ANGLE static_assert GCC 12 evaluates in a discarded branch).
+Bundled libraries and lib/wpe-webkit-2.0/bwrap (bubblewrap) come from these Ubuntu 22.04 packages; their sources are
+the matching source package versions at https://launchpad.net/ubuntu/jammy (licences in share/licenses):
+$(sort "$packages")
 SOURCES
+rm -f "$packages"
+cat "$prefix/SOURCES.txt"
 echo "== bundled: $(du -sh "$prefix" | cut -f1) ($(du -sh "$lib" | cut -f1) in lib)"

@@ -50,15 +50,26 @@ run() {
 }
 run folder "$app/offscreen"
 # Ubuntu 23.10+: the profile Kybern's .deb installs (packaging/linux/kybern-gpuix-bwrap.apparmor) for its own bwrap,
-# and WebKit told to use that copy (KYBERN_WEBKIT_BWRAP, wpe-relocatable.patch).
+# and WebKit switched to that copy in-process (webkit_kybern_sandbox_hardened, wpe-sandbox.patch).
 own=$app/lib/wpe-webkit-2.0/bwrap
 if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ] && [ -x "$own" ] && [ -e /etc/apparmor.d/abi/4.0 ]; then
   echo "== AppArmor profile for $own"
   sed "s#@BWRAP@#$own#" "$here/../../../../packaging/linux/kybern-gpuix-bwrap.apparmor" | sudo tee /etc/apparmor.d/kybern-gpuix-bwrap >/dev/null
   sudo apparmor_parser -r -T -W /etc/apparmor.d/kybern-gpuix-bwrap && echo "profile loaded"
   "$own" --unshare-all --die-with-parent --ro-bind / / --dev /dev --proc /proc true && echo "own bwrap smoke ok" || echo "own bwrap smoke FAILED"
-  run folder-own-bwrap env KYBERN_WEBKIT_BWRAP="$own" WEBKIT_DEBUG=Process,Loading "$app/offscreen"
+  run folder-own-bwrap env SPIKE_BUNDLED_BWRAP=1 WEBKIT_DEBUG=Process,Loading "$app/offscreen"
+  bundled="env SPIKE_BUNDLED_BWRAP=1"
 fi
+# wpe-sandbox.patch: WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS is ignored (the web process is still sandboxed), and
+# where upstream would run the web process unsandboxed (a Snap's environment) Kybern's WebKit aborts before spawning it.
+run dangerous-env-ignored ${bundled:-} WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1 "$app/offscreen"
+echo "== snap-env-refused"
+(cd "$out" && timeout 60 env ${bundled:-} SNAP=/snap/code/200 SNAP_NAME=code SNAP_REVISION=200 "$app/offscreen" > "$out/snap-env-refused.log" 2>&1); code=$?
+grep -E '^CHECK|Kybern' "$out/snap-env-refused.log" | head
+echo "exit $code"
+if [ "$code" = 0 ] || ! grep -q 'refusing to start a WebKit process without its sandbox' "$out/snap-env-refused.log" || grep -q '^CHECK frame' "$out/snap-env-refused.log"; then
+  status=1; echo "FAIL a Snap environment must abort before any web process starts"; tail -25 "$out/snap-env-refused.log"
+else echo "PASS a Snap environment aborts before any web process starts"; fi
 if [ -n "${APPIMAGETOOL:-}" ] && [ -n "${APPIMAGE_RUNTIME:-}" ]; then
   ARCH=x86_64 "$APPIMAGETOOL" --runtime-file "$APPIMAGE_RUNTIME" -n "$app" "$out/wpe-spike.AppImage" > "$out/appimagetool.log" 2>&1 || { tail "$out/appimagetool.log"; status=1; }
   ls -la "$out/wpe-spike.AppImage"

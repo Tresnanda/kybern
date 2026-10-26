@@ -1,0 +1,146 @@
+--- a/Source/WTF/wtf/glib/Sandbox.cpp
++++ b/Source/WTF/wtf/glib/Sandbox.cpp
+@@ -26,6 +26,8 @@
+ #include "config.h"
+ #include <wtf/glib/Sandbox.h>
+ 
++#include <atomic>
++#include <dlfcn.h>
+ #include <gio/gio.h>
+ #include <wtf/FileSystem.h>
+ #include <wtf/NeverDestroyed.h>
+@@ -41,6 +43,36 @@
+ }
+ 
+ #if ENABLE(BUBBLEWRAP_SANDBOX)
++// Kybern: see Sandbox.h. Set once, before WebKit spawns anything; read by the container check and the launcher.
++static std::atomic<bool> kybernBundledBubblewrap { false };
++static const char* kybernBundledBubblewrapPath()
++{
++    static char* path = []() -> char* {
++        Dl_info info;
++        if (!dladdr(reinterpret_cast<void*>(&kybernBundledBubblewrapPath), &info) || !info.dli_fname || info.dli_fname[0] != '/')
++            return nullptr;
++        char* directory = g_path_get_dirname(info.dli_fname);
++        char* bwrap = g_build_filename(directory, "wpe-webkit-2.0", "bwrap", nullptr);
++        g_free(directory);
++        return bwrap;
++    }();
++    return path;
++}
++
++bool kybernSelectBundledBubblewrap()
++{
++    const char* path = kybernBundledBubblewrapPath();
++    if (!path || !g_file_test(path, G_FILE_TEST_IS_EXECUTABLE))
++        return false;
++    kybernBundledBubblewrap = true;
++    return true;
++}
++
++const char* kybernBubblewrapExecutable()
++{
++    return kybernBundledBubblewrap ? kybernBundledBubblewrapPath() : BWRAP_EXECUTABLE;
++}
++
+ bool isInsideUnsupportedContainer()
+ {
+     static bool inContainer = g_file_test("/run/.containerenv", G_FILE_TEST_EXISTS);
+@@ -51,7 +83,7 @@
+     // So this just does a basic test of if `bwrap` runs successfully.
+     if (inContainer && supportedContainer == -1) {
+         const char* bwrapArgs[] = {
+-            BWRAP_EXECUTABLE,
++            kybernBubblewrapExecutable(), // Kybern: the bubblewrap the launcher will run
+             "--ro-bind", "/", "/",
+             "--proc", "/proc",
+             "--dev", "/dev",
+--- a/Source/WTF/wtf/glib/Sandbox.h
++++ b/Source/WTF/wtf/glib/Sandbox.h
+@@ -32,6 +32,11 @@
+ 
+ WTF_EXPORT_PRIVATE const CString& sandboxedUserRuntimeDirectory();
+ 
++// Kybern: the bubblewrap WebKit runs, BWRAP_EXECUTABLE unless Kybern's web view companion selected its own copy
++// (lib/wpe-webkit-2.0/bwrap beside libWPEWebKit, the only other binary that can be chosen) before the first web view.
++WTF_EXPORT_PRIVATE bool kybernSelectBundledBubblewrap();
++WTF_EXPORT_PRIVATE const char* kybernBubblewrapExecutable();
++
+ } // namespace WTF
+ 
+ using WTF::isInsideFlatpak;
+--- a/Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp
++++ b/Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp
+@@ -971,15 +971,13 @@
+         }
+ 
+         bindDBusSession(sandboxArgs, dbusProxy, flatpakInfoFd != -1);
+-        // FIXME: We should move to Pipewire as soon as viable, Pulse doesn't restrict clients atm.
+-        bindPulse(sandboxArgs);
+-        bindSndio(sandboxArgs);
++        // Kybern: no PulseAudio, sndio or /dev/video* in the sandbox: this build has no media, audio or camera.
++        (void)bindPulse;
++        (void)bindSndio;
++        (void)bindV4l;
+         bindFonts(sandboxArgs);
+         bindGStreamerData(sandboxArgs);
+         bindOpenGL(sandboxArgs);
+-
+-        // Although cameras can be managed via the DesktopPortal, we still need v4l2 for video decoding.
+-        bindV4l(sandboxArgs);
+ 
+ #if USE(ATSPI)
+         auto accessibilityBusAddress = launchOptions.extraInitializationData.get("accessibilityBusAddress"_s);
+@@ -1023,7 +1021,7 @@
+     g_subprocess_launcher_take_fd(launcher, bwrapFd, bwrapFd);
+ 
+     Vector<CString> bwrapArgs = {
+-        BWRAP_EXECUTABLE,
++        WTF::kybernBubblewrapExecutable(), // Kybern: the system's, or Kybern's own copy (Sandbox.h)
+         "--args",
+         bwrapFdStr.get(),
+         "--",
+@@ -1042,4 +1040,12 @@
+ 
+ };
+ 
++// Kybern: called by Kybern's web view companion before its first web view. Its presence tells the companion that
++// this WebKit never starts a web process outside its sandbox (ProcessLauncherGLib.cpp, WebProcessPoolGLib.cpp).
++// `useBundledBubblewrap` selects lib/wpe-webkit-2.0/bwrap; returns 0 when that copy is missing.
++extern "C" __attribute__((visibility("default"))) int webkit_kybern_sandbox_hardened(int useBundledBubblewrap)
++{
++    return useBundledBubblewrap ? WTF::kybernSelectBundledBubblewrap() : 1;
++}
++
+ #endif // ENABLE(BUBBLEWRAP_SANDBOX)
+--- a/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
++++ b/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
+@@ -263,6 +263,11 @@
+     else if (sandboxEnabled && shouldUseBubblewrap())
+         process = bubblewrapSpawn(launcher.get(), m_launchOptions, m_dbusProxy, argv, &error.outPtr());
+ #endif // ENABLE(BUBBLEWRAP_SANDBOX)
++    // Kybern: upstream spawns the process without any sandbox here (Snap, Flatpak without flatpak-spawn, a container
++    // where bubblewrap fails, or the sandbox turned off). Kybern shows untrusted pages, so a web process never starts
++    // that way; Kybern's companion checks the same conditions first and opens pages in the browser instead.
++    else if (sandboxEnabled || m_launchOptions.processType == ProcessLauncher::ProcessType::Web)
++        g_error("Kybern: refusing to start a WebKit process without its sandbox.");
+     else
+ #endif // OS(LINUX)
+         process = adoptGRef(g_subprocess_launcher_spawnv(launcher.get(), argv.span().data(), &error.outPtr()));
+--- a/Source/WebKit/UIProcess/glib/WebProcessPoolGLib.cpp
++++ b/Source/WebKit/UIProcess/glib/WebProcessPoolGLib.cpp
+@@ -323,12 +323,8 @@
+     WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+ #endif
+ 
+-    if (!ignoreEnvironmentForTesting) {
+-        if (const auto disableSandbox = CStringView::unsafeFromUTF8(getenv("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS"))) {
+-            if (disableSandbox != "0"_s)
+-                return;
+-        }
+-    }
++    // Kybern: WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS is ignored; Kybern's pages always run in the sandbox.
++    UNUSED_PARAM(ignoreEnvironmentForTesting);
+ 
+     m_sandboxEnabled = true;
+ #if USE(ATSPI)
