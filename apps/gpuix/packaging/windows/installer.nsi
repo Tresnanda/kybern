@@ -418,6 +418,8 @@ Section "Uninstall"
   !include "${GENERATED_DIR}\uninstall-files.nsh"
   ; The embedded web view's WebView2 user data (caches only: every page runs InPrivate). Never the install folder.
   RMDir /r /REBOOTOK "$LOCALAPPDATA\kybern-gpuix\WebView2"
+  ; Its parent too, but only when nothing else is in it (a plain RMDir leaves a folder that is not empty).
+  RMDir "$LOCALAPPDATA\kybern-gpuix"
   Delete "$INSTDIR\*.old"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"

@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { launchFixture } from '../src/requests/harness.ts'
-import { capture, click, clickWith, drag, key, move, wheel, windowOf } from './win-input.ts'
+import { capture, click, clickWith, drag, ensureFront, key, move, wheel, windowOf } from './win-input.ts'
 import { pixels } from './png.ts'
 
 if (process.platform !== 'win32') { console.log('webview-win-check: Windows only'); process.exit(0) }
@@ -59,6 +59,8 @@ try {
   record('create → loaded → page message through the wrapper', true, { ms: Date.now() - started, failed: log.filter(e => e.type === 'failed') })
   const win = windowOf(created.windowNumber)
   await Bun.sleep(800)
+  // On a real desktop the lab starts behind whatever the user has open (CI's runner desktop is empty).
+  await ensureFront(win)
 
   await act('n')
   log = await until('the host → page → host round trip', log => messages(log, 'pong').length > 0)

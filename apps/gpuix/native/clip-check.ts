@@ -2,7 +2,7 @@ import '../src/native/local-build.ts'
 import assert from 'node:assert/strict'
 import { writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { GAPS, capture, launch, outputDir, settled, step, tolerance } from './check-harness.ts'
+import { GAPS, capture, captureSettled, launch, outputDir, settled, step, tolerance } from './check-harness.ts'
 import { acquirePreviewUiLock } from '../scripts/preview-ui-lock.ts'
 import {pngPixels} from './clip-pixels.ts'
 const output=outputDir('clip')
@@ -45,15 +45,12 @@ try {
    }
    writeFileSync(path.join(output,`${prefix}-bounds.json`),JSON.stringify(boxes,null,2))
    await step(`${prefix} horizontal wheel`,async()=>{
+    const b=await a.getByTestId('code-body').bounds(),original=pngPixels(shot),s=original.width/760
+    const moved=(file:string)=>{const scrolled=pngPixels(file);let changed=0;for(let y=b.y+6;y<b.y+22;y++)for(let x=b.x+16;x<b.x+b.width-16;x++)if(String(original.at(x*s,y*s))!==String(scrolled.at(x*s,y*s)))changed++;return changed}
     await a.getByTestId('code-body').wheel(-180,0)
     const horizontal=path.join(output,`${prefix}-horizontal.png`)
-    await capture(f,horizontal)
-    if(!process.env.KYBERN_CLIP_BASELINE){
-     const original=pngPixels(shot),scrolled=pngPixels(horizontal),s=original.width/760,b=await a.getByTestId('code-body').bounds()
-     let changed=0
-     for(let y=b.y+6;y<b.y+22;y++)for(let x=b.x+16;x<b.x+b.width-16;x++)if(String(original.at(x*s,y*s))!==String(scrolled.at(x*s,y*s)))changed++
-     assert.ok(changed>20,'Horizontal wheel must actually move the code glyphs')
-    }
+    await captureSettled(f,horizontal,file=>!!process.env.KYBERN_CLIP_BASELINE||moved(file)>20)
+    if(!process.env.KYBERN_CLIP_BASELINE)assert.ok(moved(horizontal)>20,'Horizontal wheel must actually move the code glyphs')
    },{gap:GAPS.wheel})
    const beforeWrap=await a.getByTestId('code-body').bounds()
    await a.getByTestId('code-wrap').click()

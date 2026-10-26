@@ -922,6 +922,39 @@ CI proves build, load, unit tests and software-rendered on-screen checks
 (lavapipe, WARP). It cannot prove GPU drivers, compositors, DPI, installers or
 energy: the spike's screenshots say nothing about real GPUs.
 
+### Real Windows 11 PC (2026-10-26)
+
+Windows 11 26200, Ryzen 7 5800H, RTX 3060 Laptop + Radeon iGPU (one monitor on each), 2560×1440 + 1920×1080 at
+100 %, WebView2 155. Native MSVC build of everything, real Unicode NSIS installer. The GPU was chosen per run with
+`HKCU\Software\Microsoft\DirectX\UserGpuPreferences` (`GpuPreference=2` NVIDIA, `1` AMD); GPUI logs `Using GPU: …`
+with `RUST_LOG=info`, which confirmed each.
+
+- **Checks:** `run-platform-checks.ts --checks all` passes 12/12 on both GPUs (`webview` 36/36 with real user32 input).
+  The wheel steps of `clip` and `markdown-document` raced the synthesized wheel on real GPUs until they captured with
+  `captureSettled`; every wheel gap now passes on both. Twice the first fixture of a run timed out at startup right
+  after new binaries landed (a cold start); reruns pass. One `markdown-document` run on the iGPU hit a 2 s automation
+  clock timeout during the 700-line code case (1 of 4 runs).
+- **Fixed from this pass:** the title bar did not move the window and nav-rail buttons did not click (`window_drag.rs`,
+  fork `winhw`); bounds queries threw while minimized, which crashed the composer (`answer_after_frame`); agent
+  notifications were never posted (`isWindowFocused` was `true` off macOS); a hidden chat's composer cut a hole in a
+  Browser tab's page; the System theme ignored Windows dark mode; the webview check could click other apps; the
+  uninstaller left an empty `%LOCALAPPDATA%\kybern-gpuix`.
+- **Proven:** D3D11 on both GPUs, including a window rendered on one GPU and shown on the other GPU's monitor;
+  WebView2 visuals (live, drafting, full screen), Mermaid, artifacts, the Browser tab with a dev server found by
+  discovery, menus cut out of pages; install, the in-app update over a running app (signed with `tauri signer`, whose
+  trusted comment is `file:<installer>`; locked files moved aside as `.old`; silent relaunch; the daemon restarted by
+  version), uninstall with nothing left; Start-menu AUMID, `kybern` on Path; toasts posted under the AUMID; the D3D11
+  debug layer (loaded) reported nothing in the backdrop, clip and odd-width frost runs on either GPU; no stale last
+  column at odd widths; Mica/Acrylic with and without the frame extension, maximized, snapped, inactive, Transparency
+  effects off and High Contrast.
+- **Open:** caption buttons (WP3; and with the DWM frame extension DWM paints its own min/max/close glyphs into the
+  top-right corner, visible through a translucent title bar; `KYBERN_DWM_EXTEND_FRAME=0` removes them); a toast click
+  (needs a person: the banner and notification center were unreachable while a Windows Security prompt was open);
+  following a dark/light switch while running; window-state events (`setWindowStateCallback` is a no-op off macOS,
+  so idle memory release and visibility never react, and loops keep running while minimized); the full-screen viewer
+  once drew a live visual at its inline width (not reproduced; `SetBounds` failures are now logged); the update
+  artwork shows moiré (a 2560 px image sampled without mipmaps); DPI other than 100 %, Windows 10, SmartScreen.
+
 ## Ship order
 
 1. **Intel Mac**: shipped in v0.10.3.

@@ -26,6 +26,11 @@ const user32 = dlopen('user32.dll', {
   ShowWindow: { args: [FFIType.u64, FFIType.i32], returns: FFIType.i32 },
   IsWindow: { args: [FFIType.u64], returns: FFIType.i32 },
   SendMessageW: { args: [FFIType.u64, FFIType.u32, FFIType.u64, FFIType.i64], returns: FFIType.i64 },
+  SetForegroundWindow: { args: [FFIType.u64], returns: FFIType.i32 },
+  BringWindowToTop: { args: [FFIType.u64], returns: FFIType.i32 },
+  // POINT by value: x in the low and y in the high 32 bits of one register (x64 calling convention).
+  WindowFromPoint: { args: [FFIType.u64], returns: FFIType.u64 },
+  GetAncestor: { args: [FFIType.u64, FFIType.u32], returns: FFIType.u64 },
 }).symbols
 const gdi32 = dlopen('gdi32.dll', {
   CreateCompatibleDC: { args: [FFIType.u64], returns: FFIType.u64 },
@@ -47,11 +52,38 @@ export function windowOf(hwnd: number) {
   }
   /** Window points (as GPUI and `webHost.place` use them) to screen pixels. */
   const screen = (x: number, y: number) => { const c = client(); return [Math.round(c.x + x * scale), Math.round(c.y + y * scale)] as const }
-  return { hwnd, scale, client, screen, foreground: () => Number(user32.GetForegroundWindow()) === hwnd }
+  const window = { hwnd, scale, client, screen, foreground: () => Number(user32.GetForegroundWindow()) === hwnd }
+  current = window
+  return window
+}
+
+/** The window the last `windowOf` described: `key` sends only while it is in front. */
+let current: ReturnType<typeof windowOf> | null = null
+const VK_MENU = 0x12
+/** The top-level window that owns a screen pixel (WebView2's visuals have no window of their own; a windowed host's child resolves to its root). */
+const ownerAt = (x: number, y: number) => Number(user32.GetAncestor(user32.WindowFromPoint((BigInt(y >>> 0) << 32n) | BigInt(x >>> 0)), 2))
+/**
+ * OS input goes to whatever window is under the cursor or in front, so on a desktop someone uses (a real PC, not a CI
+ * runner) another app could receive the check's clicks and keys. Bring the check's window to the front first — a window
+ * started from a background task is refused the foreground, and a held Alt is the documented way past that lock (the Alt
+ * up then reaches this window) — and refuse to send anything unless it is in front and owns the point.
+ */
+export async function ensureFront(window: ReturnType<typeof windowOf>, x?: number, y?: number) {
+  for (let attempt = 0; attempt < 3 && !window.foreground(); attempt++) {
+    user32.keybd_event(VK_MENU, 0, 0, 0n)
+    user32.SetForegroundWindow(BigInt(window.hwnd)); user32.BringWindowToTop(BigInt(window.hwnd))
+    user32.keybd_event(VK_MENU, 0, KEY_UP, 0n)
+    await Bun.sleep(200)
+  }
+  if (!window.foreground()) throw new Error(`the check window ${window.hwnd} is not in front (foreground: ${Number(user32.GetForegroundWindow())}); refusing to send OS input to another app`)
+  if (x === undefined || y === undefined) return
+  const [sx, sy] = window.screen(x, y), owner = ownerAt(sx, sy)
+  if (owner !== window.hwnd) throw new Error(`window ${owner} covers the check window at (${x}, ${y}); refusing to send OS input to another app`)
 }
 
 const MOVE = 0x0001, LEFT_DOWN = 0x0002, LEFT_UP = 0x0004, WHEEL = 0x0800, KEY_UP = 0x0002
 export async function click(window: ReturnType<typeof windowOf>, x: number, y: number, count = 1) {
+  await ensureFront(window, x, y)
   const [sx, sy] = window.screen(x, y)
   user32.SetCursorPos(sx, sy); user32.mouse_event(MOVE, 0, 0, 0, 0n); await Bun.sleep(60)
   for (let n = 0; n < count; n++) { user32.mouse_event(LEFT_DOWN, 0, 0, 0, 0n); await Bun.sleep(30); user32.mouse_event(LEFT_UP, 0, 0, 0, 0n); await Bun.sleep(60) }
@@ -62,6 +94,7 @@ export async function click(window: ReturnType<typeof windowOf>, x: number, y: n
  */
 export async function drag(window: ReturnType<typeof windowOf>, points: (readonly [number, number])[], steps = 6, held?: () => Promise<void>) {
   const [first, ...rest] = points
+  for (const point of points) await ensureFront(window, ...point)
   const [sx, sy] = window.screen(...first!)
   user32.SetCursorPos(sx, sy); user32.mouse_event(MOVE, 0, 0, 0, 0n); await Bun.sleep(80)
   user32.mouse_event(LEFT_DOWN, 0, 0, 0, 0n); await Bun.sleep(60)
@@ -79,6 +112,7 @@ export async function drag(window: ReturnType<typeof windowOf>, points: (readonl
 }
 /** A click with keys held (`VK_MENU` 0x12 for ⌥-click). */
 export async function clickWith(window: ReturnType<typeof windowOf>, x: number, y: number, modifiers: number[]) {
+  await ensureFront(window, x, y)
   for (const m of modifiers) user32.keybd_event(m, 0, 0, 0n)
   await Bun.sleep(40)
   await click(window, x, y)
@@ -136,6 +170,7 @@ export function hitTest(window: ReturnType<typeof windowOf>, x: number, y: numbe
 export const restoreWindow = (hwnd: number) => user32.ShowWindow(BigInt(hwnd), 9)
 
 export async function move(window: ReturnType<typeof windowOf>, x: number, y: number) {
+  await ensureFront(window, x, y)
   const [sx, sy] = window.screen(x, y)
   user32.SetCursorPos(sx, sy); user32.mouse_event(MOVE, 0, 0, 0, 0n); await Bun.sleep(80)
 }
@@ -144,6 +179,7 @@ export async function wheel(window: ReturnType<typeof windowOf>, x: number, y: n
 }
 /** Virtual keys: VK_ESCAPE 0x1b, VK_CONTROL 0x11, '0'–'9' 0x30–0x39, 'A'–'Z' 0x41–0x5a. */
 export async function key(vk: number, modifiers: number[] = []) {
+  if (current) await ensureFront(current)
   for (const m of modifiers) user32.keybd_event(m, 0, 0, 0n)
   user32.keybd_event(vk, 0, 0, 0n); await Bun.sleep(20); user32.keybd_event(vk, 0, KEY_UP, 0n)
   for (const m of [...modifiers].reverse()) user32.keybd_event(m, 0, KEY_UP, 0n)
@@ -159,6 +195,11 @@ export interface Capture { width: number; height: number; at: (x: number, y: num
  */
 export function capture(window: ReturnType<typeof windowOf>, file: string, how: 'screen' | 'print' = 'print'): Capture {
   const c = window.client(), { width, height } = c
+  // A desktop copy of a covered window would save another app's pixels.
+  if (how === 'screen') for (const [x, y] of [[c.x + 1, c.y + 1], [c.x + width - 2, c.y + height - 2], [c.x + (width >> 1), c.y + (height >> 1)]] as const) {
+    const owner = ownerAt(x, y)
+    if (owner !== window.hwnd) throw new Error(`window ${owner} covers the check window; not copying the desktop`)
+  }
   const screenDc = user32.GetDC(0n), memory = gdi32.CreateCompatibleDC(screenDc), bitmap = gdi32.CreateCompatibleBitmap(screenDc, width, height)
   const old = gdi32.SelectObject(memory, bitmap)
   const ok = how === 'print' ? user32.PrintWindow(BigInt(window.hwnd), memory, 1 | 2) : gdi32.BitBlt(memory, 0, 0, width, height, screenDc, c.x, c.y, 0x00CC0020 | 0x40000000)

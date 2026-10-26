@@ -3,6 +3,7 @@ import { useGpuixRequired, type PublicInstance } from "@gpuix/react"
 import { useEffect, useRef, useState, useSyncExternalStore } from "react"
 import { observeElementBounds, type LayoutRect } from "../native/layout.ts"
 import { webHost } from '../native/webview.ts'
+import { useChatHidden } from '../tabs/hidden.ts'
 
 const measurements = new Map<object, { priority: number; height: number; pane: string }>()
 const cards = new Map<object, LayoutRect>()
@@ -38,17 +39,20 @@ export function useMeasureComposerOverlay(priority = 0) {
   const renderer = useGpuixRequired()
   const owner = useRef({})
   const [node, setNode] = useState<PublicInstance | null>(null)
+  // A chat kept mounted under a document tab is invisible: its card must not cut a hole in that tab's web page.
+  const hidden = useChatHidden()
   useEffect(() => {
     if (!node || pane.frozen) return
     const key = owner.current
     const stop = observeElementBounds(renderer, node.id, event => {
-      if (priority === 0) webHost.occlusion(-node.id, event.clippedRect, 24, 0, 1)
-      if (priority === 0) { if (event.clippedRect) cards.set(key, event.clippedRect); else cards.delete(key) }
+      const shown = hidden ? null : event.clippedRect
+      if (priority === 0) webHost.occlusion(-node.id, shown, 24, 0, 1)
+      if (priority === 0) { if (shown) cards.set(key, shown); else cards.delete(key) }
       if (event.rect) measurements.set(key, { priority, height: event.rect.height, pane: pane.id })
       else measurements.delete(key)
       publish()
     })
     return () => { stop(); if (priority === 0) webHost.occlusion(-node.id, null); cards.delete(key); measurements.delete(key); publish() }
-  }, [renderer, node, priority, pane])
+  }, [renderer, node, priority, pane, hidden])
   return setNode
 }

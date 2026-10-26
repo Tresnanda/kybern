@@ -12,7 +12,7 @@
 // reports a window-state change (`native/windowState.ts`); an addon without
 // that callback polls them every 900 ms. Window size is never polled.
 // Every failure falls back to GPUI's default (the window just keeps its size).
-import { dlopen, FFIType, type Pointer } from 'bun:ffi'
+import { dlopen, FFIType, ptr, type Pointer } from 'bun:ffi'
 import { readFileSync } from 'node:fs'
 import type { NativeRenderer } from '@gpuix/react'
 import { cls, cstr, each, getObjc, nsApp, sel, withPool, type Objc } from '../native/objc.ts'
@@ -166,8 +166,24 @@ export function focusAppWindow(renderer: NativeRenderer) {
   if (!background) (renderer as { activateWindow?: () => void }).activateWindow?.()
 }
 
-/** Whether the app's window is the key (focused) window; true when unknown. */
+const openUser32 = () => dlopen('user32.dll', {
+  GetForegroundWindow: { args: [], returns: FFIType.u64 },
+  GetWindowThreadProcessId: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.u32 },
+}).symbols
+let user32: ReturnType<typeof openUser32> | null | undefined
+/** Windows: each environment window is its own process, so the window is focused when the foreground window is this process's. */
+function windowsFocused(): boolean {
+  if (user32 === undefined) { try { user32 = openUser32() } catch { user32 = null } }
+  if (!user32) return true
+  const pid = new Uint32Array(1)
+  user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), ptr(pid))
+  return pid[0] === process.pid
+}
+
+/** Whether the app's window is the key (focused) window; true when unknown (Linux). Agent toasts post a system
+ *  notification only while it is not, so `true` everywhere would mean none are ever posted. */
 export function isWindowFocused(): boolean {
+  if (process.platform === 'win32') return windowsFocused()
   if (!mac) return true
   try {
     const o = getObjc()

@@ -1647,9 +1647,13 @@ impl Doc {
         };
         let s = self.scale;
         let bounds = ((placement.logical.0 * s).round() as i32, (placement.logical.1 * s).round() as i32);
+        // Remembered only once applied: a failed call must not make every later place with this size a no-op, which
+        // would leave the page drawn at its old size (the full-screen viewer showing only the inline figure's width).
         if bounds != self.bounds {
-            self.bounds = bounds;
-            let _ = unsafe { controller.SetBounds(RECT { left: 0, top: 0, right: bounds.0, bottom: bounds.1 }) };
+            match unsafe { controller.SetBounds(RECT { left: 0, top: 0, right: bounds.0, bottom: bounds.1 }) } {
+                Ok(()) => self.bounds = bounds,
+                Err(error) => eprintln!("[kybern-webview] SetBounds {bounds:?}: {error:?}"),
+            }
         }
     }
 

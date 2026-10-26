@@ -1,6 +1,6 @@
 import '../src/native/local-build.ts'
 import { waitForPainted } from '../src/requests/harness.ts'
-import { GAPS, beforeAddon, capture, launch, outputDir, settled, step } from './check-harness.ts'
+import { GAPS, beforeAddon, capture, captureSettled, launch, outputDir, settled, step } from './check-harness.ts'
 import path from 'node:path'
 import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -100,10 +100,13 @@ if(process.env.MD_API_ONLY!=='1') for(const [name,source] of Object.entries({
    const f=await launch(path.join(import.meta.dir,'markdown-document-lab.tsx'),{KYBERN_APPEARANCE:mode,MD_DOCUMENT:document,MD_DOC_SOURCE:file,MD_WRAP:name==='wrappedcode'?'1':'0',...(document==='0'?{NAPI_RS_NATIVE_LIBRARY_PATH:beforeAddon()}:{})})
    try {
     await f.app.getByTestId('ready').waitFor();await waitForPainted(f.app,name==='wrappedcode'?'item0':name==='convo9a'?'Here is a tour':name==='convo9b'?'Paragraph before':name==='convo9c'?'A table follows':name==='table'?'Name':name==='code'?'item0':name==='list'?'Item':name==='inline'?'inline':(name==='quote'||name==='wrappedquote')?'Quote':name==='semantics'?'Semantics':name==='bidi'?'עברית':name==='cjk'?'漢字':'phrase',60_000)
-    for(const position of ['top','middle']) {
-     if(position==='middle'){await f.app.mouse.wheel({x:300,y:300},0,-3500);await f.app.clock.fastForward(64)}
-     await capture(f,`${out}/interior-${name}-${mode}-${document}-${position}.png`)
-    }
+    const shot=(position:string)=>`${out}/interior-${name}-${mode}-${document}-${position}.png`
+    await capture(f,shot('top'))
+    await f.app.mouse.wheel({x:300,y:300},0,-3500);await f.app.clock.fastForward(64)
+    // Off macOS the wheel lands after the call returns: capture until the view has moved off the top and holds still.
+    const same=(x:ReturnType<typeof pixels>,y:ReturnType<typeof pixels>)=>x.w===y.w&&x.h===y.h&&x.data.equals(y.data)
+    let previous:ReturnType<typeof pixels>|null=null
+    await captureSettled(f,shot('middle'),file=>{const now=pixels(file),moved=!same(now,pixels(shot('top'))),still=!!previous&&same(now,previous);previous=now;return moved&&still})
    } finally {await f.close()}
   }
   for(const position of ['top','middle']) {

@@ -206,6 +206,12 @@ export async function capture(f: Fixture, file: string, options: { webViews?: bo
   return file
 }
 
+/** Capture until `done(file)` holds or `timeoutMs` passes; the last capture stays in `file`. Off macOS a synthesized
+ * wheel or click reaches GPUI on its UI thread after the call returns, so a single capture can race it. */
+export async function captureSettled(f: Fixture, file: string, done: (file: string) => boolean, timeoutMs = 3000): Promise<string> {
+  return settled(() => capture(f, file), done, timeoutMs)
+}
+
 // ---- pixels ----
 
 export type Png = ReturnType<typeof pngPixels>

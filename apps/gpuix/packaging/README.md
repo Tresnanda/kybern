@@ -118,8 +118,8 @@ KYBERN_BIN_DIR=<folder with stub kybernd.exe and kybern.exe> \
   install folder (`kybern stop-daemon`, then ends what is left in that folder; this runs after
   the confirm page, so cancelling it leaves the daemon alone), then removes only the files the
   installer wrote, the shortcuts, the Path entry and the registry keys, the embedded web view's
-  WebView2 data (`%LOCALAPPDATA%\kybern-gpuix\WebView2`, caches only; pages run InPrivate), and
-  the folder itself. The WebView2 Runtime stays (other apps use it). Chats, settings and the
+  WebView2 data (`%LOCALAPPDATA%\kybern-gpuix\WebView2`, caches only; pages run InPrivate, and
+  `kybern-gpuix` itself once empty), and the install folder. The WebView2 Runtime stays (other apps use it). Chats, settings and the
   daemon's data (`~/.kybern`) are never touched.
 
 ### Next to the Tauri Kybern app
