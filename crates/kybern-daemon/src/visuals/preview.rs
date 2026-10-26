@@ -106,12 +106,19 @@ async fn install(cache: &Path, destination: &Path, platform: &str, size: u64, ha
         // Only an exact hash-verified archive reaches the system extractor.
         #[cfg(not(windows))]
         let status = Command::new("unzip").no_window().arg("-q").arg(&archive).arg("-d").arg(&unpack).status().await?;
+        // `-Command` joins every later argument into the script text, so `$args` would be empty: the paths go
+        // through the environment instead.
         #[cfg(windows)]
         let status = Command::new("powershell")
             .no_window()
-            .args(["-NoProfile", "-Command", "Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1]"])
-            .arg(&archive)
-            .arg(&unpack)
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Expand-Archive -LiteralPath $env:KYBERN_PREVIEW_ARCHIVE -DestinationPath $env:KYBERN_PREVIEW_UNPACK",
+            ])
+            .env("KYBERN_PREVIEW_ARCHIVE", &archive)
+            .env("KYBERN_PREVIEW_UNPACK", &unpack)
             .status()
             .await?;
         ensure!(status.success(), "Install an archive extractor and retry preview.");
