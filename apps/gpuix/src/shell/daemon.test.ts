@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test'
-import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, writeFile, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { ChildProcess } from 'node:child_process'
 import type { DaemonInfo } from '../../../../packages/kybern-client/src/types.ts'
-import { createLocalDaemonResolver, daemonNeedsRestart, daemonRpc, mayRestartDaemon, preferredDaemonPort, type DaemonDependencies } from './daemon.ts'
+import { bundledCommand, createLocalDaemonResolver, daemonLaunchEnv, daemonNeedsRestart, daemonPlan, daemonRpc, mayRestartDaemon, preferredDaemonPort, type DaemonDependencies } from './daemon.ts'
 
 const info = { version: '0.9.1', protocol_version: 1, started_at: '2099-01-01T00:00:00Z' } as DaemonInfo
 const fakeChild = () => ({ exitCode: null, signalCode: null }) as ChildProcess
@@ -13,12 +13,80 @@ async function fixture(run: (root: string, binary: string) => Promise<void>) {
   try { const binary = path.join(root, 'kybernd'); await writeFile(binary, 'fixture'); await run(root, binary) }
   finally { await rm(root, { recursive: true, force: true }) }
 }
-test('daemon version, protocol and build time match the Tauri restart policy', () => {
+test('the daemon restarts only for a newer bundled version, an older protocol, or a rebuild of the same version', () => {
   expect(daemonNeedsRestart(info, '0.9.1', 1)).toBe(false)
   expect(daemonNeedsRestart(info, '0.9.2')).toBe(true)
+  expect(daemonNeedsRestart(info, '0.10.0')).toBe(true)
   expect(daemonNeedsRestart({ ...info, protocol_version: 0 }, '0.9.1')).toBe(true)
   expect(daemonNeedsRestart(info, '0.9.1', Date.parse(info.started_at) + 1)).toBe(true)
+  // Never downgrade: a stale deb or an old AppImage next to a newer install shares the data folder.
+  expect(daemonNeedsRestart(info, '0.9.0')).toBe(false)
+  expect(daemonNeedsRestart({ ...info, version: '0.10.0' }, '0.9.9')).toBe(false)
+  // ... even when the older binary was written after the newer daemon started.
+  expect(daemonNeedsRestart({ ...info, version: '0.10.0' }, '0.9.9', Date.parse(info.started_at) + 1)).toBe(false)
 })
+test('daemon plan: older and newer apps, same and other protocols', () => {
+  const running = { ...info, version: '0.10.0' }
+  expect(daemonPlan(running, '0.10.0', 1)).toBe('keep')
+  expect(daemonPlan(running, '0.10.1')).toBe('restart')
+  expect(daemonPlan(running, '0.9.9')).toBe('newer-daemon')
+  expect(daemonPlan(running, '0.10.0-beta.1')).toBe('keep')
+  // The protocol decides first: a newer daemon protocol is never restarted away; an older one is always replaced.
+  expect(daemonPlan({ ...running, protocol_version: 2 }, '0.10.0')).toBe('newer-protocol')
+  expect(daemonPlan({ ...running, protocol_version: 2 }, '0.11.0')).toBe('newer-protocol')
+  expect(daemonPlan({ ...running, protocol_version: 0 }, '0.9.0')).toBe('restart')
+  // A daemon version nothing can order is replaced only when it differs.
+  expect(daemonPlan({ ...info, version: 'weird' }, '0.9.1', 1)).toBe('restart')
+})
+test('an older app keeps a newer daemon running; a newer app replaces an older one', () => fixture(async (root, binary) => {
+  await writeFile(path.join(root, 'daemon.port'), '4321'); await writeFile(path.join(root, 'daemon.token'), 'fixture')
+  const old = { ...info, version: '0.10.0', started_at: '2000-01-01T00:00:00Z' }
+  for (const platformPolicy of [true, false]) {
+    const methods: string[] = []
+    // The binary was written after the running daemon started, which alone would have restarted it.
+    const resolver = createLocalDaemonResolver({ root, binary, version: '0.9.0', allowRestart: platformPolicy }, {
+      rpc: (async (_endpoint, method) => { methods.push(method); return old }) as typeof daemonRpc,
+      launch: async () => { throw Error('must never launch') },
+    })
+    expect((await resolver()).url).toBe('ws://127.0.0.1:4321/ws')
+    expect(methods).toEqual(['daemon.info'])
+  }
+  // A daemon with a newer protocol cannot be talked to: an actionable message, no shutdown.
+  const methods: string[] = []
+  const resolver = createLocalDaemonResolver({ root, binary, version: '0.9.0', allowRestart: true }, {
+    rpc: (async (_endpoint, method) => { methods.push(method); return { ...old, protocol_version: 2 } }) as typeof daemonRpc,
+    launch: async () => { throw Error('must never launch') },
+  })
+  await expect(resolver()).rejects.toThrow('A newer Kybern is running')
+  expect(methods).toEqual(['daemon.info'])
+}))
+test('the daemon gets none of the app’s own paths or mount variables', () => {
+  const app = {
+    KYBERN_GPUIX_RESOURCES: '/tmp/.mount_x/usr/lib/kybern-gpuix/resources', NAPI_RS_NATIVE_LIBRARY_PATH: '/tmp/.mount_x/a.node', KYBERN_GPUIX_VERSION: '0.9.1',
+    KYBERN_GPUIX_NATIVE: 'local', KYBERND: '/h/.local/share/kybern-gpuix/bin/kybernd', KYBERN_GPUIX_PACKAGED_DAEMON: '/h/.local/share/kybern-gpuix/bin/kybernd',
+    APPIMAGE: '/h/Applications/K.AppImage', APPDIR: '/tmp/.mount_x', OWD: '/h', ARGV0: 'K.AppImage',
+    HOME: '/h', PATH: '/usr/bin', KYBERN_DATA_DIR: '/d',
+  }
+  // A stable CLI path (the staged copy) stays for askpass; a path inside the mount goes.
+  expect(daemonLaunchEnv({ ...app, KYBERN_BUNDLED_CLI: '/h/.local/share/kybern-gpuix/bin/kybern' })).toEqual({ HOME: '/h', PATH: '/usr/bin', KYBERN_DATA_DIR: '/d', KYBERN_BUNDLED_CLI: '/h/.local/share/kybern-gpuix/bin/kybern' })
+  expect(daemonLaunchEnv({ ...app, KYBERN_BUNDLED_CLI: '/tmp/.mount_x/usr/lib/kybern-gpuix/kybern' })).toEqual({ HOME: '/h', PATH: '/usr/bin', KYBERN_DATA_DIR: '/d' })
+  expect(daemonLaunchEnv({ HOME: '/h', KYBERN_BUNDLED_CLI: '/Applications/K.app/Contents/MacOS/kybern' })).toEqual({ HOME: '/h', KYBERN_BUNDLED_CLI: '/Applications/K.app/Contents/MacOS/kybern' })
+  expect(app.APPDIR).toBe('/tmp/.mount_x')
+})
+test('an AppImage runs only commands outside its mount', () => fixture(async root => {
+  const mount = path.join(root, 'mount'), app = path.join(mount, 'usr/lib/kybern-gpuix'), stable = path.join(root, 'stable')
+  for (const dir of [app, stable, path.join(root, 'bin')]) await mkdir(dir, { recursive: true })
+  for (const dir of [app, stable, path.join(root, 'bin')]) { await writeFile(path.join(dir, 'kybernd'), 'x'); await writeFile(path.join(dir, 'kybern'), 'x') }
+  const exe = path.join(app, 'kybern-gpuix'), env = { APPIMAGE: path.join(root, 'K.AppImage'), APPDIR: mount, PATH: path.join(root, 'bin') }
+  // Nothing staged: neither the mounted copy beside the executable nor whatever is on PATH is run.
+  expect(bundledCommand('kybernd', env, exe)).toBeUndefined()
+  expect(bundledCommand('kybern', env, exe)).toBeUndefined()
+  expect(bundledCommand('kybernd', { ...env, KYBERND: path.join(stable, 'kybernd') }, exe)).toBe(path.join(stable, 'kybernd'))
+  // An explicit path inside the mount is refused too.
+  expect(bundledCommand('kybernd', { ...env, KYBERND: path.join(app, 'kybernd') }, exe)).toBeUndefined()
+  // Variables inherited from another AppImage do not change how a deb or rpm install finds its daemon.
+  expect(bundledCommand('kybernd', { ...env, APPDIR: path.join(root, 'elsewhere') }, exe)).toBe(path.join(app, 'kybernd'))
+}))
 test('durable desktop port survives daemon discovery removal; malformed ports fail', () => fixture(async root => {
   expect(await preferredDaemonPort(root)).toBe(0)
   await writeFile(path.join(root, 'desktop.port'), '4321')

@@ -98,9 +98,13 @@ curl -fsSL https://github.com/Tresnanda/kybern/releases/latest/download/kybern-g
 
 It installs the `.deb` with apt or the `.rpm` with dnf or zypper (asking for
 your password through sudo), and the AppImage on other distributions or with
-`sh -s -- --appimage`. The AppImage updates itself; deb and rpm installs show
-new releases with the download link and the `sudo apt install` /
-`sudo dnf install` command to run. The Linux beta still lacks some macOS
+`sh -s -- --appimage`. The AppImage updates itself (when its folder is one you
+can write); deb and rpm installs show new releases with the download link and the
+`sudo apt install` / `sudo dnf install` command to run. `sh -s -- --uninstall`
+removes it again and leaves `~/.kybern` alone. It needs **glibc 2.35 or newer**
+(Ubuntu 22.04+, Debian 12+, Fedora 36+, openSUSE Leap 16 or Tumbleweed); RHEL, Rocky and
+Alma 9, Debian 11, Ubuntu 20.04 and openSUSE Leap 15 are not supported yet, and the installer says
+so before it changes anything. The Linux beta still lacks some macOS
 features: no backdrop blur or window material, no embedded previews (they open
 in the browser) or Mermaid rendering, no window buttons in the title bar yet,
 and shortcuts still use the Super key. The full list is in
@@ -135,7 +139,7 @@ this check.
 | macOS, Apple silicon | `kybern-<version>-aarch64-apple-darwin.dmg` |
 | macOS, Intel | `kybern-<version>-x86_64-apple-darwin.dmg` |
 | Linux x86_64 | `kybern-<version>-x86_64-unknown-linux-gnu.AppImage` or `.deb` |
-| Linux x86_64, Kybern GPUIX (beta) | `kybern-gpuix_<version>_x86_64.AppImage`, `.deb` or `.rpm` |
+| Linux x86_64, Kybern GPUIX (beta) | `kybern-gpuix_<version>_x86_64.AppImage`, `.deb` or `.rpm` (glibc 2.35 or newer) |
 | Windows x86_64 | `kybern-<version>-x86_64-pc-windows-msvc-setup.exe` |
 | Windows x86_64, Kybern GPUIX (beta) | `kybern-gpuix_<version>_x64-setup.exe` |
 

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { appImageName } from './linuxPackage.ts'
 import { verifyMinisign } from './minisign.ts'
+import { relaunchEnv } from '../shell/daemon.ts'
 import { assertSignedRelease, assertWindowsInstaller, manualUpdate, PLATFORM_KEY, platformKey, readFeed, removeStaleInstallers, replaceAppImage, replaceBundle, stageWindowsInstaller, windowsInstall, windowsInstallerCommand } from './update.ts'
 import { archive, fakeBundle, testKey } from './verify.feed.ts'
 
@@ -104,8 +105,13 @@ test('the installer starts through Start-Process with an unquoted /D= folder las
   expect(windowsInstallerCommand('C:\\s.exe', 'E:\\', 'C:\\Windows').args.at(-1)).toContain("/D=E:\\'")
 })
 
-/** The first bytes of a type 2 AppImage: an ELF header with `AI\x02` at offset 8. */
-const appImage = (body: string) => Buffer.concat([Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0, 0x41, 0x49, 0x02]), Buffer.from(body)])
+/** The first bytes of a type 2 AppImage: a 64-bit little-endian ELF header for `machine` (62 = x86-64) with `AI\x02` at offset 8. */
+const appImage = (body: string, machine = 62) => {
+  const header = Buffer.alloc(64)
+  header.set([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0, 0x41, 0x49, 0x02])
+  header.writeUInt16LE(machine, 18)
+  return Buffer.concat([header, Buffer.from(body)])
+}
 
 test('replaces a running AppImage in place and refuses other files', async () => {
   root = mkdtempSync(path.join(tmpdir(), 'kybern-update-'))
@@ -113,17 +119,55 @@ test('replaces a running AppImage in place and refuses other files', async () =>
   writeFileSync(image, appImage('0.9.1'))
   chmodSync(image, 0o700)
   const before = statSync(image).ino
-  await replaceAppImage(image, appImage('0.9.2'), 'kybern-gpuix_0.9.2_x86_64.AppImage')
-  expect(readFileSync(image).subarray(11).toString()).toBe('0.9.2')
-  // A new file renamed over the old one: the mounted image keeps running from its own inode.
+  await replaceAppImage(image, appImage('0.9.2'), 'kybern-gpuix_0.9.2_x86_64.AppImage', '0.9.2', 'x64')
+  expect(readFileSync(image).subarray(64).toString()).toBe('0.9.2')
+  // A new file renamed over the old one: the mounted image keeps running from its own inode, with the old file's mode.
   expect(statSync(image).ino).not.toBe(before)
-  expect(statSync(image).mode & 0o777).toBe(0o755)
+  expect(statSync(image).mode & 0o777).toBe(0o700)
   expect(readdirSync(root)).toEqual(['Kybern-GPUIX-x86_64.AppImage'])
-  // The Tauri AppImage carries the same signing key; the signed file name tells them apart.
-  await expect(replaceAppImage(image, appImage('9.9.9'), 'kybern-9.9.9-x86_64-unknown-linux-gnu.AppImage')).rejects.toThrow('not a Kybern GPUIX AppImage')
-  await expect(replaceAppImage(image, Buffer.from('#!/bin/sh\necho hi\n'), 'kybern-gpuix_9.9.9_x86_64.AppImage')).rejects.toThrow('The update is not an AppImage')
-  expect(readFileSync(image).subarray(11).toString()).toBe('0.9.2')
+  // The Tauri AppImage carries the same signing key; the signed file name tells them apart. So does the exact version:
+  // an older GPUIX release's AppImage matches the pattern but not this release.
+  for (const name of ['kybern-9.9.9-x86_64-unknown-linux-gnu.AppImage', 'kybern-gpuix_0.9.1_x86_64.AppImage', 'kybern-gpuix_0.9.2_aarch64.AppImage', 'kybern-gpuix_0.9.2_x86_64.AppImage.exe', 'x/kybern-gpuix_0.9.2_x86_64.AppImage', ''])
+    await expect(replaceAppImage(image, appImage('9.9.9'), name, '0.9.2', 'x64')).rejects.toThrow('not a Kybern GPUIX 0.9.2 AppImage')
+  await expect(replaceAppImage(image, Buffer.from('#!/bin/sh\necho hi\n'), 'kybern-gpuix_9.9.9_x86_64.AppImage', '9.9.9', 'x64')).rejects.toThrow('The update is not an AppImage')
+  expect(readFileSync(image).subarray(64).toString()).toBe('0.9.2')
   expect(readdirSync(root)).toEqual(['Kybern-GPUIX-x86_64.AppImage'])
+})
+
+test('a downloaded AppImage must be an ELF for this machine before it is swapped in', async () => {
+  root = mkdtempSync(path.join(tmpdir(), 'kybern-update-'))
+  const image = path.join(root, 'Kybern.AppImage')
+  writeFileSync(image, appImage('old'))
+  const name = 'kybern-gpuix_0.9.2_x86_64.AppImage'
+  // An AArch64 image, a 32-bit class, a big-endian encoding and a truncated header all carry the AppImage magic.
+  const arm = appImage('arm', 183)
+  const class32 = appImage('32'); class32[4] = 1
+  const big = appImage('big'); big[5] = 2
+  for (const bad of [arm, class32, big, appImage('x').subarray(0, 19)])
+    await expect(replaceAppImage(image, bad, name, '0.9.2', 'x64')).rejects.toThrow('not an AppImage for x86-64')
+  await expect(replaceAppImage(image, appImage('x64'), 'kybern-gpuix_0.9.2_aarch64.AppImage', '0.9.2', 'arm64')).rejects.toThrow('not an AppImage for arm64')
+  await replaceAppImage(image, arm, 'kybern-gpuix_0.9.2_aarch64.AppImage', '0.9.2', 'arm64')
+  expect(readFileSync(image).subarray(64).toString()).toBe('arm')
+  expect(readdirSync(root)).toEqual(['Kybern.AppImage'])
+})
+
+test('a leftover staging file is neither overwritten nor deleted by a failed swap', async () => {
+  root = mkdtempSync(path.join(tmpdir(), 'kybern-update-'))
+  const image = path.join(root, 'Kybern.AppImage')
+  writeFileSync(image, appImage('old'))
+  const leftover = path.join(root, `.Kybern.AppImage.update-${process.pid}`)
+  writeFileSync(leftover, 'someone else’s')
+  await expect(replaceAppImage(image, appImage('new'), 'kybern-gpuix_0.9.2_x86_64.AppImage', '0.9.2', 'x64')).rejects.toThrow()
+  expect(readFileSync(leftover, 'utf8')).toBe('someone else’s')
+  expect(readFileSync(image).subarray(64).toString()).toBe('old')
+})
+
+test('a copy started by the app resolves its own daemon and CLI', () => {
+  const env = { KYBERND: '/home/me/.local/share/kybern-gpuix/bin/kybernd', KYBERN_BUNDLED_CLI: '/x/kybern', KYBERN_GPUIX_PACKAGED_DAEMON: '/x/kybernd', APPIMAGE: '/a.AppImage', APPDIR: '/tmp/.mount_x', ARGV0: 'a', OWD: '/', HOME: '/home/me', KYBERN_DATA_DIR: '/d' }
+  expect(relaunchEnv(env)).toEqual({ APPIMAGE: '/a.AppImage', APPDIR: '/tmp/.mount_x', ARGV0: 'a', OWD: '/', HOME: '/home/me', KYBERN_DATA_DIR: '/d' })
+  // A relaunched image mounts afresh, so its own mount variables go too; the data folder and home stay.
+  expect(relaunchEnv(env, { appImage: true })).toEqual({ HOME: '/home/me', KYBERN_DATA_DIR: '/d' })
+  expect(env.KYBERND).toBeDefined()
 })
 
 test('deb and rpm installs get the package beside the feed’s AppImage and its install command', () => {
@@ -133,7 +177,9 @@ test('deb and rpm installs get the package beside the feed’s AppImage and its 
   expect(manualUpdate(entry, { kind: 'rpm' })?.command).toMatch(/^sudo (dnf|zypper) install .*\.\/kybern-gpuix_0\.9\.2_x86_64\.rpm$/)
   // An unpacked AppImage can only download the new one; a running AppImage and macOS install it themselves.
   expect(manualUpdate(entry, { kind: 'unpacked' })).toEqual({ url: entry.url, file: 'kybern-gpuix_0.9.2_x86_64.AppImage', command: null })
-  expect(manualUpdate(entry, { kind: 'appimage', image: '/x.AppImage' })).toBeNull()
+  expect(manualUpdate(entry, { kind: 'appimage', image: '/x.AppImage' }, () => true)).toBeNull()
+  // A running AppImage in a folder its user cannot write can only download the new one.
+  expect(manualUpdate(entry, { kind: 'appimage', image: '/usr/share/x.AppImage' }, () => false)).toEqual({ url: entry.url, file: 'kybern-gpuix_0.9.2_x86_64.AppImage', command: null })
   expect(manualUpdate(entry, null)).toBeNull()
 })
 

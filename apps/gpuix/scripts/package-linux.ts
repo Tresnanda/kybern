@@ -78,6 +78,9 @@ cpSync(path.join(root, '../../THIRD_PARTY_NOTICES.md'), path.join(resources, 'TH
 cpSync(path.join(root, '../../LICENSE'), path.join(resources, 'LICENSE'))
 
 const executable = path.join(app, PACKAGE)
+// x64 uses Bun's baseline build, which needs no AVX2 (Bun's default x64 build does, and crashes with an illegal instruction
+// on older Intel/AMD CPUs and some virtual machines). The addon is plain x86-64: nothing in its build sets a target CPU.
+const bunTarget = arch === 'x64' ? 'bun-linux-x64-baseline' : 'bun-linux-arm64'
 const buildTemps = new Set(readdirSync(root).filter(name => name.endsWith('.bun-build')))
 const previousCwd = process.cwd()
 process.chdir(root)
@@ -87,7 +90,7 @@ try {
     entrypoints: [path.join(root, 'packaging/entry-linux.ts')], target: 'bun',
     // Production React: the development build records a performance entry per component render and never clears them.
     define: { 'process.env.NODE_ENV': JSON.stringify('production') },
-    compile: { target: `bun-linux-${arch}`, outfile: executable, autoloadDotenv: false, autoloadBunfig: false, autoloadTsconfig: false, autoloadPackageJson: false },
+    compile: { target: bunTarget, outfile: executable, autoloadDotenv: false, autoloadBunfig: false, autoloadTsconfig: false, autoloadPackageJson: false },
     external: ['@gpuix/native-*'],
     plugins: [resourceUrlPlugin(root, { appId: APP_ID })],
   })

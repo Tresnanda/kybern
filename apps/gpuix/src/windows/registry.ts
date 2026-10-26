@@ -27,6 +27,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { configDir } from '../environments/registry.ts'
 import { linuxInstall } from '../platform/linuxPackage.ts'
+import { relaunchEnv } from '../shell/daemon.ts'
 
 export interface WindowClaim { pid: number; environment: string; name?: string; socket: string; pending?: boolean; at: number }
 type Request = { type: 'focus' } | { type: 'ping' } | { type: 'quit' }
@@ -167,8 +168,9 @@ export async function quitOtherWindows(timeoutMs = 10000): Promise<number[]> {
 export function spawnEnvironmentWindow(id: string) {
   const args = process.env.KYBERN_GPUIX_RESOURCES ? [] : [fileURLToPath(new URL('../main.tsx', import.meta.url))]
   const install = linuxInstall()
-  const env: NodeJS.ProcessEnv = { ...process.env, KYBERN_GPUIX_ENVIRONMENT: id, KYBERN_GPUIX_THREAD: '' }
-  if (install?.kind === 'appimage') for (const name of ['APPIMAGE', 'APPDIR', 'ARGV0', 'OWD']) delete env[name]
+  // A packaged Linux window resolves its own daemon and CLI; an AppImage's are staged copies named by this process's
+  // environment, and its mount variables belong to this image's mount.
+  const env: NodeJS.ProcessEnv = { ...(install ? relaunchEnv(process.env, { appImage: install.kind === 'appimage' }) : process.env), KYBERN_GPUIX_ENVIRONMENT: id, KYBERN_GPUIX_THREAD: '' }
   // No `windowsHide`: the child is the GUI app (no console to hide), and Windows would hide its window.
   const child = spawn(install?.kind === 'appimage' ? install.image : process.execPath, args, { detached: true, stdio: 'ignore', env })
   child.unref()

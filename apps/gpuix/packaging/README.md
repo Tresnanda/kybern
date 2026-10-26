@@ -186,13 +186,13 @@ The app is one folder, the same in every format:
 
 | Path | What |
 | --- | --- |
-| `kybern-gpuix` | `bun build --compile --target=bun-linux-x64` (glibc) of `packaging/entry-linux.ts` |
+| `kybern-gpuix` | `bun build --compile --target=bun-linux-x64-baseline` (glibc, no AVX2 needed) of `packaging/entry-linux.ts` |
 | `kybernd`, `kybern` | the daemon and CLI it starts and offers to link |
 | `resources/` | the addon, fonts, provider icons, Mermaid, release artwork, notices, `version`, and `package` (`appimage`, `deb` or `rpm`: how `src/platform/linuxPackage.ts` knows which updater path applies) |
 
 | Asset | Installs | Updates |
 | --- | --- | --- |
-| `kybern-gpuix_<v>_x86_64.AppImage` | wherever the user keeps it (the install script uses `~/Applications`); the folder sits under `usr/lib/kybern-gpuix` in the image, with `AppRun`, the desktop entry and icon at its root | in place: the app downloads the release AppImage, checks its signature, that the signature's trusted comment names this release's `kybern-gpuix_<v>_x86_64.AppImage` and that the version is newer than the running app (the same check as the Windows installer; the Tauri AppImage and older GPUIX releases use the same key), renames it over `$APPIMAGE`, and relaunches it |
+| `kybern-gpuix_<v>_x86_64.AppImage` | wherever the user keeps it (the install script uses `~/Applications`); the folder sits under `usr/lib/kybern-gpuix` in the image, with `AppRun`, the desktop entry and icon at its root | in place: the app downloads the release AppImage, checks its signature, that the signature's trusted comment is exactly this release's `kybern-gpuix_<v>_x86_64.AppImage` and that the version is newer than the running app (the same check as the Windows installer; the Tauri AppImage and older GPUIX releases use the same key), that the bytes are a 64-bit x86-64 type 2 AppImage (ELF header), then writes a new file beside `$APPIMAGE` (same mode), renames it over the old one and relaunches it. If the AppImage's folder is not writable the update is announced with a download link instead |
 | `kybern-gpuix_<v>_x86_64.deb` | `/usr/lib/kybern-gpuix/`, `/usr/bin/kybern-gpuix` (a link), `/usr/share/applications/dev.kybern.gpuix.desktop`, `hicolor` icons at 32, 128, 256 and 512 px | announced only: the app links the `.deb` beside the feed's AppImage and shows `sudo apt install ./kybern-gpuix_<v>_x86_64.deb` with a **Copy command** button (release details and Settings → About) |
 | `kybern-gpuix_<v>_x86_64.rpm` | the same files | announced only, with `sudo dnf install ./…rpm` (`sudo zypper install --allow-unsigned-rpm ./…rpm` where zypper exists) |
 
@@ -216,8 +216,8 @@ libxkbcommon-x11-0 (>= 0.5.0), libxkbcommon0 (>= 0.5.0), libvulkan1`, with
 `Recommends: libwayland-client0, libwayland-egl1, libegl1, mesa-vulkan-drivers,
 xdg-utils`. The rpm lets `rpmbuild` generate `Requires` from the same ELF files
 in soname form (`libxkbcommon-x11.so.0()(64bit)`, `libc.so.6(GLIBC_2.35)(64bit)`
-and so on), which resolves on Fedora, RHEL and openSUSE alike although their
-package names differ, plus `Requires: libvulkan.so.1()(64bit)` and the same
+and so on), which resolves on Fedora and openSUSE alike although their
+package names differ (on RHEL, Rocky and Alma 9 it does not: see the glibc floor below), plus `Requires: libvulkan.so.1()(64bit)` and the same
 weak dependencies in soname form. On Fedora 42 that installs glibc, libgcc,
 libxcb, libxkbcommon, libxkbcommon-x11 and vulkan-loader, and as weak
 dependencies libwayland-client, libwayland-egl, libglvnd-egl,
@@ -228,14 +228,70 @@ post-install step: the Bun executable carries the app after its ELF image, and
 `strip` would cut it off (the executable is byte-identical in the AppImage, deb
 and rpm).
 
+**glibc floor: 2.35.** The packages are built on ubuntu-22.04, so the app needs
+glibc 2.35 or newer: Ubuntu 22.04+, Debian 12+, Fedora 36+, openSUSE Leap 16 or Tumbleweed.
+RHEL, Rocky and Alma 9 (glibc 2.34), Debian 11, Ubuntu 20.04 and openSUSE Leap 15 (2.31) are not
+supported yet; the rpm's `libc.so.6(GLIBC_2.35)(64bit)` requirement fails there
+inside dnf, so `install-linux-gpuix.sh` checks `getconf GNU_LIBC_VERSION` (or
+`ldd --version`) first and stops with an explanation before it downloads or
+installs anything. Bun's baseline x64 build avoids a second floor: the default
+build needs AVX2 and dies with an illegal instruction on older CPUs and some VMs.
+The addon is built without a target CPU, so it is plain x86-64.
+
+**Install script.** `scripts/install-linux-gpuix.sh` (also `--uninstall`,
+`--help`; works under `curl | sh` and is a single function run at the very end,
+so a truncated download runs nothing). It refuses to install the AppImage as
+root (a system-wide install is the deb or rpm; as root it never launches the
+app). The AppImage is downloaded to `$DEST/.<file>.part` and renamed over
+`~/Applications/Kybern-GPUIX-x86_64.AppImage`, so a running image is never
+written to; `apt` gets `--allow-downgrades` (dnf `downgrade`, zypper
+`--oldpackage`) only when `--version` names a release older than the installed
+one. It does not verify the release's `.sig` (minisign): that needs a tool most
+machines lack, and the macOS installer has no such check either; the app does
+verify every update it installs. Without FUSE the menu entry is written as
+`env APPIMAGE_EXTRACT_AND_RUN=1 "<image>"` (the image unpacks to a temporary
+folder for each run, slower but working); with FUSE it is the plain path.
+`--uninstall` removes the package or the AppImage, its menu entry and icon,
+`~/.local/share/kybern-gpuix` and a `~/.local/bin/kybern` link that points into
+those; it never touches `~/.kybern`.
+
+**`kybern` on PATH, beside the Tauri app.** Neither installer script links
+`~/.local/bin/kybern`; only the app's **Settings → About → Terminal command**
+does, on request (`platform/cli.ts`). The rule: it never replaces a file that is
+not a Kybern command or a link to one, so it won't overwrite the Tauri
+AppImage's or deb's `kybern`; a link GPUIX made in `~/.local/bin` comes before
+`/usr/bin` on most PATHs and so shadows the Tauri deb's command (the row says
+"shadowed" and offers to remove the older copy, which deletes only another
+Kybern CLI). Whichever app made its link last is the `kybern` a new terminal
+runs. Both CLIs speak the same daemon protocol, and a daemon is only ever
+replaced by a newer one (below).
+
+**Which daemon runs.** The data folder `~/.kybern` is shared by every Kybern
+install. The shell restarts a running daemon only when the bundled one is
+newer (a higher version, a newer-built binary of the same version, or an older
+protocol); an older app, such as a stale deb or an old AppImage next to an
+update, leaves the newer daemon running and talks to it (`daemonPlan` in
+`shell/daemon.ts`), or, when the daemon's protocol is newer than the app's,
+stops with "A newer Kybern is running… update this copy". As a second guard,
+`kybernd` refuses to open a store whose schema version a newer build created
+(`kybern-store`), so an old binary can never run on a migrated store.
+
 **AppImage specifics.** The image is mounted only while the app runs, but
 `kybernd` outlives the app and a linked `kybern` must survive the next launch's
 new mount path. `entry-linux.ts` therefore copies both to
 `~/.local/share/kybern-gpuix/bin` once per version (renamed into place, so a
-running daemon keeps its file) and runs those; the daemon restart policy treats
-that copy as the packaged daemon (`KYBERN_GPUIX_PACKAGED_DAEMON`). Extra
-environment windows start `$APPIMAGE` again instead of the mounted executable,
-for the same reason. The type2 runtime needs `fusermount3` (or `fusermount`) but
+running daemon keeps its file), or, when that cannot be written, to
+`$XDG_RUNTIME_DIR/kybern-gpuix/bin`, and runs those; the daemon restart policy
+treats that copy as the packaged daemon (`KYBERN_GPUIX_PACKAGED_DAEMON`). The
+daemon and CLI never run from the mount: if neither folder is writable the app
+shows an error instead (`bundledCommand` skips every path inside `$APPDIR`).
+The daemon is started without the app's own variables (`KYBERN_GPUIX_RESOURCES`,
+the addon path, the version, `KYBERND`, `APPIMAGE`, `APPDIR`, `ARGV0`, `OWD`, and
+`KYBERN_BUNDLED_CLI` when it names a path in the mount), so agents it starts see
+none of them; askpass finds `kybern` beside the daemon. Extra environment windows
+and the relaunch after an update start `$APPIMAGE` again instead of the mounted
+executable, for the same reason, without the daemon and CLI variables so the new
+process resolves its own. The type2 runtime needs `fusermount3` (or `fusermount`) but
 no libfuse; without FUSE, `--appimage-extract-and-run` still works. An AppImage
 unpacked with `--appimage-extract` only announces updates.
 

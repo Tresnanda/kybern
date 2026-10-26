@@ -3403,6 +3403,23 @@ mod orchestration_tests {
     }
 
     #[test]
+    fn a_store_migrated_by_a_newer_build_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.sqlite");
+        drop(Store::open(&path).unwrap());
+        let newer = schema::migration_count() as i64 + 1;
+        Connection::open(&path).unwrap().pragma_update(None, "user_version", newer).unwrap();
+        let error = Store::open(&path).err().expect("a newer schema must not open").to_string();
+        assert!(error.contains("newer Kybern") && error.contains("Update Kybern"), "{error}");
+        // Refusing leaves the data as the newer build wrote it.
+        assert_eq!(Connection::open(&path).unwrap().query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), newer);
+        // The current schema, and an older one that migrates forward, still open.
+        let conn = Connection::open_in_memory().unwrap();
+        schema::migrate(&conn).unwrap();
+        schema::migrate(&conn).unwrap();
+    }
+
+    #[test]
     fn migration_18_upgrades_an_existing_database_in_place() {
         let conn = Connection::open_in_memory().unwrap();
         schema::migrate_to(&conn, 17).unwrap();

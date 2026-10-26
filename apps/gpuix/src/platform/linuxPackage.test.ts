@@ -3,7 +3,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { linuxInstall, packageCommand, stageAppImageCommands } from './linuxPackage.ts'
+import { imageDirWritable, linuxInstall, packageCommand, stageAppImageCommands } from './linuxPackage.ts'
 
 let root = ''
 afterEach(() => { if (root) rmSync(root, { recursive: true, force: true }) })
@@ -57,9 +57,29 @@ test('copies kybernd and kybern out of the image once per version', () => {
   stageAppImageCommands(app, '0.16.1', data)
   expect(readFileSync(staged.kybernd, 'utf8')).toBe('daemon 2')
   expect(statSync(staged.kybernd).ino).not.toBe(before)
-  // An unwritable data folder leaves the caller on the image's own copies.
+  // Neither folder writable: null, so the caller shows an error instead of running the mounted copies.
   writeFileSync(path.join(root, 'file'), '')
-  expect(stageAppImageCommands(app, '0.16.1', path.join(root, 'file'))).toBeNull()
+  expect(stageAppImageCommands(app, '0.16.1', path.join(root, 'file'), undefined)).toBeNull()
+  expect(stageAppImageCommands(app, '0.16.1', path.join(root, 'file'), path.join(root, 'file'))).toBeNull()
+})
+
+test('an unwritable data folder stages into the runtime folder instead', () => {
+  const { app } = tree('appimage')
+  writeFileSync(path.join(app, 'kybernd'), 'daemon')
+  writeFileSync(path.join(app, 'kybern'), 'cli')
+  writeFileSync(path.join(root, 'file'), '')
+  const run = path.join(root, 'run')
+  const staged = stageAppImageCommands(app, '0.16.0', path.join(root, 'file'), run)!
+  expect(staged).toEqual({ kybernd: path.join(run, 'kybern-gpuix/bin/kybernd'), kybern: path.join(run, 'kybern-gpuix/bin/kybern') })
+  expect(readFileSync(staged.kybern, 'utf8')).toBe('cli')
+  // Neither copy is ever the mounted file.
+  expect(staged.kybernd.startsWith(app)).toBe(false)
+})
+
+test('a folder the user cannot write blocks in-place updates', () => {
+  tree('appimage')
+  expect(imageDirWritable(path.join(root, 'Kybern.AppImage'))).toBe(true)
+  expect(imageDirWritable(path.join(root, 'missing/Kybern.AppImage'))).toBe(false)
 })
 
 test('names the install command of each package manager', () => {

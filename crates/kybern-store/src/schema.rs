@@ -595,6 +595,14 @@ pub fn migrate(conn: &Connection) -> Result<()> {
 /// Apply migrations up to `target` (a schema version). Tests use it to build an older database.
 pub(crate) fn migrate_to(conn: &Connection, target: usize) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    // A newer Kybern migrated this store. Running older code against it could misread or corrupt rows
+    // (a stale deb or an old AppImage next to a newer install shares `~/.kybern`), so refuse to open it.
+    if version > MIGRATIONS.len() as i64 {
+        anyhow::bail!(
+            "this data folder was upgraded by a newer Kybern (schema {version}, this build knows {}). Update Kybern, or open the folder with the newer version",
+            MIGRATIONS.len()
+        );
+    }
     for (i, sql) in MIGRATIONS.iter().enumerate().take(target).skip(version as usize) {
         conn.execute_batch(sql)?;
         conn.pragma_update(None, "user_version", (i + 1) as i64)?;

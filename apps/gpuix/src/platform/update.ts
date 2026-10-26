@@ -25,28 +25,31 @@
 // `Kybern GPUIX.exe` has no `uninstall.exe` beside it and stays put.
 //
 // Linux (`linux-x86_64-gpuix`, the AppImage): a running AppImage replaces its
-// own file and relaunches it. Its signature must name this release's AppImage,
-// the same check as the Windows installer (`assertSignedRelease`). A deb or rpm install belongs to the package
-// manager, so it only announces the release with the package's download link
-// and install command (`linuxPackage.ts` reads which format this is).
+// own file and relaunches it. Its signature must name exactly this release's
+// AppImage (`kybern-gpuix_<version>_x86_64.AppImage`) and a newer version, the
+// same check as the Windows installer (`assertSignedRelease`), and the download
+// must be an x86-64 type 2 AppImage before it is swapped in. An AppImage whose
+// folder the user cannot write, a deb or rpm install, and an unpacked AppImage
+// only announce the release with a download link (a package's install command
+// too; `linuxPackage.ts` reads which format this is).
 //
 // Tests point the app at a local feed with KYBERN_UPDATE_FEED (loopback only)
 // and KYBERN_UPDATE_PUBKEY; nothing else can change the key.
 import { spawn, execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { chmod, mkdtemp, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, open, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { useSyncExternalStore } from 'react'
 import conf from '../../../desktop/src-tauri/tauri.conf.json'
-import { desktopVersion } from '../shell/daemon.ts'
+import { desktopVersion, relaunchEnv } from '../shell/daemon.ts'
 import { compareVersions } from '../shell/platform.ts'
 import { readPref, writePref } from './prefs.ts'
 import { verifyMinisign } from './minisign.ts'
 import { installerName } from '../../packaging/windows/lib.ts'
 import { quitOtherWindows } from '../windows/registry.ts'
-import { appImageName, linuxInstall, packageCommand } from './linuxPackage.ts'
+import { appImageName, imageDirWritable, linuxInstall, packageCommand } from './linuxPackage.ts'
 
 const run = promisify(execFile)
 
@@ -128,9 +131,12 @@ function feed(): { endpoints: string[]; pubkey: string } {
   return { endpoints: conf.plugins.updater.endpoints, pubkey: conf.plugins.updater.pubkey }
 }
 
-/** True when this build can replace itself: a packaged `.app` on macOS, an installed copy on Windows, a running AppImage. */
+/** True when this build can replace itself: a packaged `.app` on macOS, an installed copy on Windows, a running AppImage in a folder its user can write. */
 export const canSelfUpdate = (): boolean => process.env.KYBERN_DISABLE_UPDATES !== '1' &&
-  (process.platform === 'darwin' ? !!appBundle() : process.platform === 'win32' ? !!windowsInstall() : linuxInstall()?.kind === 'appimage')
+  (process.platform === 'darwin' ? !!appBundle() : process.platform === 'win32' ? !!windowsInstall() : appImageUpdatable())
+function appImageUpdatable(install = linuxInstall(), writable = imageDirWritable) {
+  return install?.kind === 'appimage' && writable(install.image)
+}
 /** True when this build looks for releases: every packaged build. deb and rpm installs only announce them. */
 export const canCheckForUpdates = (): boolean => canSelfUpdate() || (process.env.KYBERN_DISABLE_UPDATES !== '1' && linuxInstall() !== null)
 
@@ -138,9 +144,9 @@ export const canCheckForUpdates = (): boolean => canSelfUpdate() || (process.env
  * What a build that cannot replace itself offers instead. The feed carries only
  * the AppImage; the deb and rpm are its release siblings with the same name stem.
  */
-export function manualUpdate(entry: FeedEntry, install = linuxInstall()): ManualUpdate | null {
-  if (!install || install.kind === 'appimage') return null
-  const kind = install.kind === 'unpacked' ? null : install.kind
+export function manualUpdate(entry: FeedEntry, install = linuxInstall(), writable = imageDirWritable): ManualUpdate | null {
+  if (!install || (install.kind === 'appimage' && writable(install.image))) return null
+  const kind = install.kind === 'unpacked' || install.kind === 'appimage' ? null : install.kind
   const url = kind ? entry.url.replace(/\.AppImage$/, `.${kind}`) : entry.url
   const file = decodeURIComponent(url.slice(url.lastIndexOf('/') + 1))
   return { url, file, command: kind && url !== entry.url ? packageCommand(kind, file) : null }
@@ -259,25 +265,36 @@ export async function replaceBundle(bundle: string, archive: Uint8Array, identif
   }
 }
 
+/** ELF `e_machine` of the architectures the feed carries a GPUIX AppImage for. */
+const ELF_MACHINE: Record<string, number> = { x64: 62, arm64: 183 }
+
 /**
  * Replace the running AppImage `image` with a verified download. The new file
- * is written beside it and renamed over it, so the mounted old image keeps
- * running until the relaunch. `signedName` is the file name the release
- * signature covers: Tauri's AppImage is signed with the same key, so a
- * mislabelled feed entry must not replace Kybern GPUIX with it.
+ * is written beside it (created exclusively, with the old file's mode) and
+ * renamed over it, so the mounted old image keeps running until the relaunch.
+ * `signedName` is the file name the release signature covers and must be exactly
+ * this `version`'s AppImage: Tauri's AppImage and older GPUIX releases are signed
+ * with the same key, so a mislabelled feed entry must not replace Kybern GPUIX
+ * with them. The bytes must be a type 2 AppImage for this machine's architecture.
  */
-export async function replaceAppImage(image: string, data: Uint8Array, signedName: string) {
-  if (!/^kybern-gpuix_[^/]+\.AppImage$/.test(signedName)) throw Error(`The update is ${signedName || 'another file'}, not a Kybern GPUIX AppImage`)
-  // A type 2 AppImage is an ELF runtime with the magic bytes `AI\x02` at offset 8.
+export async function replaceAppImage(image: string, data: Uint8Array, signedName: string, version: string, arch: string = process.arch) {
+  if (signedName !== appImageName(version, arch)) throw Error(`The update is ${signedName || 'another file'}, not a Kybern GPUIX ${version} AppImage`)
+  // A type 2 AppImage is an ELF runtime with the magic bytes `AI\x02` at offset 8. Byte 4 is the class (2 = 64-bit),
+  // byte 5 the data encoding (1 = little endian) and bytes 18–19 `e_machine` (62 = x86-64, 183 = AArch64).
   const elf = data[0] === 0x7f && data[1] === 0x45 && data[2] === 0x4c && data[3] === 0x46
   if (!elf || data[8] !== 0x41 || data[9] !== 0x49 || data[10] !== 0x02) throw Error('The update is not an AppImage')
+  if (data[4] !== 2 || data[5] !== 1 || data.length < 20 || (data[18]! | (data[19]! << 8)) !== ELF_MACHINE[arch]) throw Error(`The update is not an AppImage for ${arch === 'arm64' ? 'arm64' : 'x86-64'}`)
   const next = path.join(path.dirname(image), `.${path.basename(image)}.update-${process.pid}`)
+  let created = false
   try {
-    await writeFile(next, data)
-    await chmod(next, 0o755)
+    const mode = ((await stat(image)).mode & 0o777) | 0o100
+    const handle = await open(next, 'wx', mode)
+    created = true
+    try { await handle.writeFile(data) } finally { await handle.close() }
+    await chmod(next, mode)
     await rename(next, image)
   } catch (error) {
-    await rm(next, { force: true })
+    if (created) await rm(next, { force: true })
     if ((error as NodeJS.ErrnoException).code === 'EACCES' || (error as NodeJS.ErrnoException).code === 'EROFS') throw Error(`Kybern can’t write to ${path.dirname(image)}. Move the AppImage to a folder you own, or download the update from the release page.`)
     throw error
   }
@@ -291,7 +308,7 @@ async function runUpdateInstall(update: Pending) {
       const data = await download(update.entry.url, (progress) => set({ progress }))
       const { trustedComment } = verifyMinisign(data, update.entry.signature, feed().pubkey)
       assertSignedRelease(trustedComment, appImageName(update.version), update.version, desktopVersion())
-      await replaceAppImage(install.image, data, signedFile(trustedComment) ?? '')
+      await replaceAppImage(install.image, data, signedFile(trustedComment) ?? '', update.version)
       return await relaunchAppImage(install.image)
     }
     const windows = process.platform === 'win32'
@@ -376,7 +393,7 @@ async function runWindowsInstaller(installer: Uint8Array, installDir: string) {
   if (stayed.length) console.error('[update] other Kybern GPUIX windows are still open:', stayed.join(', '))
   if (process.env.KYBERN_UPDATE_NO_RELAUNCH === '1') { console.error('[update] staged', file); process.exit(0) }
   const { command, args } = windowsInstallerCommand(file, installDir)
-  await run(command, args, { windowsHide: true, env: process.env })
+  await run(command, args, { windowsHide: true, env: relaunchEnv(process.env) })
   process.exit(0)
 }
 
@@ -389,7 +406,7 @@ async function runWindowsInstaller(installer: Uint8Array, installDir: string) {
 async function relaunch(bundle: string) {
   if (process.env.KYBERN_UPDATE_NO_RELAUNCH === '1') { console.error('[update] installed', bundle); process.exit(0) }
   const { stdout } = await run('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleExecutable', path.join(bundle, 'Contents/Info.plist')])
-  const child = spawn(path.join(bundle, 'Contents/MacOS', stdout.trim()), [], { detached: true, stdio: 'ignore', env: process.env })
+  const child = spawn(path.join(bundle, 'Contents/MacOS', stdout.trim()), [], { detached: true, stdio: 'ignore', env: relaunchEnv(process.env) })
   await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
   child.unref()
   process.exit(0)
@@ -397,12 +414,12 @@ async function relaunch(bundle: string) {
 
 /**
  * Start the replaced AppImage, then quit. It mounts afresh and sets its own
- * APPIMAGE and APPDIR; the rest of the environment is kept, as on macOS.
+ * APPIMAGE and APPDIR; the rest of the environment is kept, as on macOS, except
+ * the daemon and CLI this process resolved, which the new image resolves for itself.
  */
 async function relaunchAppImage(image: string) {
   if (process.env.KYBERN_UPDATE_NO_RELAUNCH === '1') { console.error('[update] installed', image); process.exit(0) }
-  const env = { ...process.env }
-  for (const name of ['APPIMAGE', 'APPDIR', 'ARGV0', 'OWD']) delete env[name]
+  const env = relaunchEnv(process.env)
   const child = spawn(image, [], { detached: true, stdio: 'ignore', env })
   await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
   child.unref()

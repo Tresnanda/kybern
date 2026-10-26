@@ -448,14 +448,21 @@ pinned by checksum), a `.deb` and an `.rpm`, the AppImage signed as
 `linux-x86_64-gpuix`. The updater replaces a running AppImage in place; deb and
 rpm installs announce the release with the package link and install command;
 `scripts/install-linux-gpuix.sh` installs the distribution's package or the
-AppImage. Layout, dependencies and the side-by-side rule with the Tauri package
+AppImage (and `--uninstall`s it). The floor is glibc 2.35 (ubuntu-22.04), so
+RHEL, Rocky and Alma 9, Debian 11 and Ubuntu 20.04 are unsupported for now; the
+installer checks first and says so. The app is Bun's baseline x64 build (no AVX2
+needed). The AppImage updater accepts only the signed file
+`kybern-gpuix_<newer version>_x86_64.AppImage` whose bytes are an x86-64 type 2
+AppImage; a daemon is restarted only for a newer bundled version
+(`shell/daemon.ts` `daemonPlan`), and the store refuses a schema a newer build
+migrated. Layout, dependencies and the side-by-side rule with the Tauri package
 are in `packaging/README.md`. Not proven until CI and real machines run it: the
 lane itself, the release AppImage's self-update and relaunch, and every item
 under [What needs real hardware or CI](#what-needs-real-hardware-or-ci).
 
 | Item | Windows | Linux | Effort |
 | --- | --- | --- | --- |
-| App | `bun build --compile --target=bun-windows-x64`; `Kybern GPUIX.exe` + `gpuix-native.win32-x64-msvc.node` + `kybernd.exe` + `kybern.exe` + `kybern-webview.dll` | `bun-linux-x64` (glibc; baseline build if old CPUs matter); `.node` + daemon + CLI | 2 + 2 |
+| App | `bun build --compile --target=bun-windows-x64`; `Kybern GPUIX.exe` + `gpuix-native.win32-x64-msvc.node` + `kybernd.exe` + `kybern.exe` + `kybern-webview.dll` | `bun-linux-x64-baseline` (glibc; no AVX2 required); `.node` + daemon + CLI | 2 + 2 |
 | Installer | NSIS per-user into `%LOCALAPPDATA%\Programs\Kybern GPUIX`, Start-menu shortcut carrying the AUMID (**done**, ADE-78; WebView2 bootstrapper only when WP10 needs it). Unsigned like Tauri today (SmartScreen warning) until a certificate exists | AppImage (appimagetool, built on ubuntu-22.04 for the same glibc floor as Tauri) + `.deb` with a `.desktop` file and icon | 3 + 3 |
 | Updater (`src/platform/update.ts`) | Keys `windows-x86_64-gpuix`; download the signed installer, run it silently `/S`, relaunch | `linux-x86_64-gpuix`; replace the AppImage in place (`$APPIMAGE`) and relaunch; `.deb` installs only announce | 2 + 2 |
 | `updater-manifest.mjs`, `bundle-gpuix.*` | New asset names and keys | same | 1 |

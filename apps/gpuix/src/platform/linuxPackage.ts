@@ -2,7 +2,7 @@
 // copies of its daemon and CLI. `scripts/package-linux.ts` writes the format
 // into `resources/package` of each tree it packs (`appimage`, `deb`, `rpm`), so
 // the updater never guesses from paths or package databases.
-import { chmodSync, copyFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { accessSync, chmodSync, constants, copyFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 
@@ -18,8 +18,22 @@ const isFile = (file: string) => { try { return statSync(file).isFile() } catch 
 /** The release AppImage's file name; the updater refuses one whose signature names another file. */
 export const appImageName = (version: string, arch: string = process.arch) => `kybern-gpuix_${version}_${arch === 'arm64' ? 'aarch64' : 'x86_64'}.AppImage`
 
-/** Null outside a packaged Linux build (a source run, macOS). */
-export function linuxInstall(env: NodeJS.ProcessEnv = process.env, execPath = process.execPath, platform = process.platform): LinuxInstall | null {
+let current: LinuxInstall | null | undefined
+/**
+ * Null outside a packaged Linux build (a source run, macOS). The answer for this process is read once: the UI asks on every
+ * render, and a package file read inside an AppImage mount is a FUSE round trip.
+ */
+export function linuxInstall(env?: NodeJS.ProcessEnv, execPath?: string, platform?: NodeJS.Platform): LinuxInstall | null {
+  if (env === undefined && execPath === undefined && platform === undefined) return current === undefined ? (current = detectLinuxInstall()) : current
+  return detectLinuxInstall(env, execPath, platform)
+}
+
+/** Whether the updater can rename a new image over `image`: it writes the new file beside it. */
+export function imageDirWritable(image: string): boolean {
+  try { accessSync(path.dirname(image), constants.W_OK); return true } catch { return false }
+}
+
+function detectLinuxInstall(env: NodeJS.ProcessEnv = process.env, execPath = process.execPath, platform = process.platform): LinuxInstall | null {
   if (platform !== 'linux' || !env.KYBERN_GPUIX_RESOURCES) return null
   let format: string
   try { format = readFileSync(path.join(env.KYBERN_GPUIX_RESOURCES, 'package'), 'utf8').trim() } catch { return null }
@@ -33,15 +47,22 @@ export function linuxInstall(env: NodeJS.ProcessEnv = process.env, execPath = pr
 }
 
 /**
- * Copy the image's `kybernd` and `kybern` to `$XDG_DATA_HOME/kybern-gpuix/bin`.
- * An AppImage is mounted only while the app runs, but kybernd outlives the app
- * and a linked `kybern` command must survive the next launch's new mount path.
- * Copies are refreshed by rename when the version stamp changes, so a running
- * daemon keeps its file. Returns null when that folder cannot be written; the
- * caller then runs the copies inside the image.
+ * Copy the image's `kybernd` and `kybern` to `$XDG_DATA_HOME/kybern-gpuix/bin`, or, when that folder cannot be written,
+ * to `$XDG_RUNTIME_DIR/kybern-gpuix/bin` (a per-login tmpfs). An AppImage is mounted only while the app runs, but
+ * kybernd outlives the app and a linked `kybern` command must survive the next launch's new mount path. Copies are
+ * refreshed by rename when the version stamp changes, so a running daemon keeps its file. Returns null when neither
+ * folder can be written; the caller then shows an error, because the daemon must never run from the mount.
  */
-export function stageAppImageCommands(appDir: string, version: string, dataHome = process.env.XDG_DATA_HOME || path.join(homedir(), '.local/share')): { kybernd: string; kybern: string } | null {
-  const dir = path.join(dataHome, 'kybern-gpuix/bin')
+export function stageAppImageCommands(appDir: string, version: string, dataHome = process.env.XDG_DATA_HOME || path.join(homedir(), '.local/share'), runtimeDir = process.env.XDG_RUNTIME_DIR): { kybernd: string; kybern: string } | null {
+  const folders = [path.join(dataHome, 'kybern-gpuix/bin'), ...(runtimeDir ? [path.join(runtimeDir, 'kybern-gpuix/bin')] : [])]
+  for (const dir of folders) {
+    const staged = stageInto(dir, appDir, version)
+    if (staged) return staged
+  }
+  return null
+}
+
+function stageInto(dir: string, appDir: string, version: string): { kybernd: string; kybern: string } | null {
   const names = ['kybernd', 'kybern'] as const
   try {
     const stamp = `${version} ${names.map(name => statSync(path.join(appDir, name)).size).join(' ')}`
