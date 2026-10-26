@@ -1,5 +1,5 @@
 // Window materials off macOS (WP9), for a look on a real desktop: CI captures read GPUI's scene, not what DWM composes
-// behind it. MATERIAL_LAB_BACKGROUND=mica|mica-alt|acrylic|blurred|transparent|opaque (default mica); KYBERN_DWM_EXTEND_FRAME=0
+// behind it. MATERIAL_LAB_BACKGROUND=mica|mica-alt|acrylic|blurred|transparent|opaque (default mica); KYBERN_DWM_EXTEND_FRAME=1
 // is the frame-extension control. A sidebar coat at 90%, a content coat at 60% and a frosted card, as the app paints them.
 import '../src/native/local-build.ts'
 import '../src/native/backdrop.ts'

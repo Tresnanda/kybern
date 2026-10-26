@@ -6,8 +6,9 @@ import { materialFor } from '../theme.ts'
 test('picks the desktop material per OS, build and addon', () => {
   const all = ['mica', 'mica-alt', 'acrylic']
   expect(desktopMaterialFor('darwin', '25.0.0', [])).toBe('vibrancy')
-  // Opt-in until seen on a real desktop (DWM_BY_DEFAULT); the pin turns it on.
-  expect(desktopMaterialFor('win32', '10.0.22631', all)).toBe('none')
+  // On by default (DWM_BY_DEFAULT); off when not, and the pin turns it on either way.
+  expect(desktopMaterialFor('win32', '10.0.22631', all)).toBe('dwm')
+  expect(desktopMaterialFor('win32', '10.0.22631', all, undefined, false)).toBe('none')
   expect(desktopMaterialFor('win32', '10.0.22631', all, 'dwm')).toBe('dwm')
   expect(desktopMaterialFor('win32', '10.0.22631', all, undefined, true)).toBe('dwm')
   expect(desktopMaterialFor('win32', '10.0.22621', all, undefined, true)).toBe('dwm')

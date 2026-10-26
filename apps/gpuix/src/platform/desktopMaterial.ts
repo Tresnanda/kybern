@@ -3,7 +3,7 @@
 //   vibrancy  macOS: the NSVisualEffectView material or the adjustable desktop blur (`shell/windowMaterial.ts`).
 //   dwm       Windows 11 22H2+ (build 22621): DWM system backdrops, Mica or Acrylic (Settings › Appearance; the system
 //             sets their strength), through the addon's `mica` / `acrylic` window backgrounds, tinted in Kybern's theme
-//             (`shell/appearance.ts`). Opt-in for now (`DWM_BY_DEFAULT`).
+//             (`shell/appearance.ts`). On by default (`DWM_BY_DEFAULT`).
 //   none      Linux (no compositor material standard), Windows 10, or an addon without the Windows materials: the window
 //             stays opaque and the theme paints the Solid frame colour under the glass coats (`theme.ts` `materialFor`),
 //             so frosted surfaces still blur what the app draws behind them.
@@ -20,11 +20,11 @@ export const windowsBuild = (value: string) => Number(value.split('.')[2]) || 0
 export const SYSTEM_BACKDROP_BUILD = 22621
 
 /**
- * Mica and Acrylic stay opt-in (`KYBERN_DESKTOP_MATERIAL=dwm`) until they have been seen on a real Windows 11 desktop: CI
- * captures read the scene, not what DWM composes behind it, so neither the tint in Kybern's theme nor the frame extension
- * has been checked (PORTING-PLATFORMS.md, WP9). Until then Windows 11 is opaque like Windows 10.
+ * Mica and Acrylic are on for Windows 11 22H2+: on a real desktop they tint in Kybern's theme, and with the DWM frame left
+ * unextended (the native default; `KYBERN_DWM_EXTEND_FRAME=1` extends it) DWM paints no caption glyphs of its own
+ * (PORTING-PLATFORMS.md, WP9). CI captures cannot show them: they read the scene, not what DWM composes behind it.
  */
-export const DWM_BY_DEFAULT = false
+export const DWM_BY_DEFAULT = true
 
 export function desktopMaterialFor(platform: NodeJS.Platform, osRelease: string, materials: readonly string[], pinned?: string, dwmByDefault = DWM_BY_DEFAULT): DesktopMaterial {
   if (pinned === 'vibrancy' || pinned === 'dwm' || pinned === 'none') return pinned

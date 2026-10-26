@@ -673,10 +673,13 @@ The cost scales with filter area only: each filter copies and blurs its own clip
 are pooled. On the software renderers the three filters add about 80 (Linux) and 125 (Windows) ms of CPU per frame at half
 resolution, against 190 and 340 at full resolution. A first run (40263475348) gave the same pixels and similar costs.
 
-Not yet seen on real hardware: the blur on an NVIDIA/AMD GPU (Direct3D 11 and Vulkan), and Mica/Acrylic on a Windows 11
-desktop (CI captures read the scene, not DWM). Open there: whether a DirectComposition window needs the frame extension for
-the system backdrop (`KYBERN_DWM_EXTEND_FRAME=0` is the control) and whether the extension makes DWM draw its own caption
-buttons; Mica's tint follows the system theme (`DWMWA_USE_IMMERSIVE_DARK_MODE`), not Kybern's.
+Seen on a real Windows 11 desktop (satyamas, RTX 3060 + AMD iGPU, 2026-10-26): the blur on both GPUs, and Mica/Acrylic
+tinted in Kybern's theme through `setWindowAppearance`, not the system's. A DirectComposition window shows the system
+backdrop without the frame extension (identical pixels in the title band, rail and content), and the extension made DWM
+paint its own minimize/maximize/close glyphs over the title bar, so the frame now stays unextended by default
+(`KYBERN_DWM_EXTEND_FRAME=1` extends it) and Mica/Acrylic are on by default (`DWM_BY_DEFAULT`). Transparency effects and a
+contrast theme changed while Kybern runs are followed by polling `osDisplay.ts` on Windows, which raises no window-state
+event for them.
 
 #### WP9 review fixes (forks' `wp9fix` branches)
 
@@ -948,7 +951,7 @@ with `RUST_LOG=info`, which confirmed each.
   column at odd widths; Mica/Acrylic with and without the frame extension, maximized, snapped, inactive, Transparency
   effects off and High Contrast.
 - **Open:** caption buttons (WP3; and with the DWM frame extension DWM paints its own min/max/close glyphs into the
-  top-right corner, visible through a translucent title bar; `KYBERN_DWM_EXTEND_FRAME=0` removes them); a toast click
+  top-right corner, visible through a translucent title bar; fixed: the frame now stays unextended unless `KYBERN_DWM_EXTEND_FRAME=1`); a toast click
   (needs a person: the banner and notification center were unreachable while a Windows Security prompt was open);
   following a dark/light switch while running; window-state events (`setWindowStateCallback` is a no-op off macOS,
   so idle memory release and visibility never react, and loops keep running while minimized); the full-screen viewer

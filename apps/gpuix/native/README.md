@@ -1484,7 +1484,7 @@ the system's for "System". `src/shell/appearance.ts` calls it with the theme var
 system sets their strength). They are opt-in (`KYBERN_DESKTOP_MATERIAL=dwm`, `DWM_BY_DEFAULT`) until seen on a real
 Windows 11 desktop; without them Windows 11 is opaque like Windows 10. Linux has no compositor material standard: the window stays opaque and
 the theme paints the Solid frame colour under the glass coats, so frosted surfaces still blur the app's own content.
-`native/window-material-lab.tsx` (`MATERIAL_LAB_BACKGROUND=mica|acrylic|…`, `KYBERN_DWM_EXTEND_FRAME=0`) is the look on a real
+`native/window-material-lab.tsx` (`MATERIAL_LAB_BACKGROUND=mica|acrylic|…`, `KYBERN_DWM_EXTEND_FRAME=1`) is the look on a real
 Windows desktop; CI captures read GPUI's scene and cannot show what DWM composes behind it.
 
 ## Round 3: scoped leaf paint
