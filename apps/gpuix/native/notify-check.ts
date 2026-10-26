@@ -4,13 +4,17 @@
  *
  * Linux  A session bus with a test notification server (`notify-server.py`, python3-gi) stands in for the desktop's.
  *        The check asserts the `Notify` call's fields (app name, icon, desktop entry, summary, escaped body, the
- *        `default` action, sound), that a second post for the same thread carries `replaces_id`, that another
- *        thread does not, and that `ActionInvoked` reaches the module once per click with the id on screen. A second
- *        run without any server must report `unsupported` and post nothing. The check re-runs itself under
- *        `dbus-run-session` when no private bus is set up.
- * Windows The toast API runs with the installed AppUserModelID: the status resolves, the AppUserModelId registry
- *        entry exists, the posts return, and the toasts show in the action-center history (grouped per thread). A click
- *        needs a person at the shell, so it is checked by hand on a real PC (PORTING-PLATFORMS.md, WP5).
+ *        `default` action, sound), that a second post for the same thread carries `replaces_id` and no sound, that
+ *        another thread does not, that two posts back to back are one notification, that `ActionInvoked` reaches the
+ *        module once per click with the id on screen, that a dismissal closes the server's notification, and that a
+ *        restarted server (ids from 1 again) is never sent a stale `replaces_id`. A server without `body-markup`
+ *        gets the body unescaped. A first run without any server must report `unsupported` and post nothing. The
+ *        check re-runs itself under `dbus-run-session` when no private bus is set up.
+ * Windows The toast API runs with the AppUserModelID of a loose run (`dev.kybern.gpuix.dev`: the installed app's
+ *        id is not touched): the status resolves, the AppUserModelId registry entry exists, the posts return, the
+ *        toasts show in the action-center history (one per thread), a dismissal removes the thread's toast, and a
+ *        post after the action center was cleared (what a user's dismissal leaves) shows again. A click needs a
+ *        person at the shell, so it is checked by hand on a real PC (PORTING-PLATFORMS.md, WP5).
  */
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
@@ -20,6 +24,8 @@ import { launch, outputDir, platform, settled, step, type Fixture } from './chec
 
 const here = import.meta.dir
 const APP_ID = 'dev.kybern.gpuix'
+// A loose run (not beside the installer's uninstall.exe) posts under this id on Windows.
+const WINDOWS_APP_ID = `${APP_ID}.dev`
 
 if (platform === 'macos') {
   console.log('skip  macOS notifies through the UserNotifications companion (packaging/notification-check.ts)')
@@ -81,6 +87,10 @@ async function linux() {
     await step('status granted', async () => {
       assert.equal(await waitText(f, 'status', value => value !== 'pending'), 'host:granted')
       assert.equal(await text(f, 'reason'), '-')
+      assert.equal(await text(f, 'identity'), APP_ID, 'Linux keeps the one id: it names the desktop entry and the icon')
+      // The probe asks the server once for what it can do; a post does not ask again.
+      const asked = await settled(async () => calls().filter(call => call.op === 'GetCapabilities').length, count => count >= 1, 4000)
+      assert.equal(asked, 1, 'the capabilities are asked once, with the status probe')
     })
     await step('Notify fields', async () => {
       await clickPost(f, 'post-t1-a')
@@ -93,6 +103,7 @@ async function linux() {
       assert.ok(first!.actions?.includes('default'), `no default action: ${JSON.stringify(first!.actions)}`)
       assert.equal(first!.hints?.['desktop-entry'], APP_ID)
       assert.equal(first!.hints?.['sound-name'], 'message-new-instant')
+      assert.equal(first!.hints?.['suppress-sound'], undefined)
     })
     await step('replace per thread', async () => {
       await clickPost(f, 'post-t1-b')
@@ -101,6 +112,10 @@ async function linux() {
       assert.equal(list[1]!.summary, 'Fix login')
       assert.equal(list[1]!.replaces_id, list[0]!.id, 'the same thread replaces its notification')
       assert.equal(list[1]!.id, list[0]!.id)
+      // It replaced a notification the user heard seconds ago: no second sound.
+      assert.equal(list[1]!.hints?.['suppress-sound'], true)
+      assert.equal(list[1]!.hints?.['sound-name'], undefined)
+      assert.equal(list[2]!.hints?.['sound-name'], 'message-new-instant', 'another thread is a new notification with its sound')
       assert.equal(list[2]!.summary, 'Parser audit')
       assert.equal(list[2]!.replaces_id, 0, 'another thread gets its own notification')
       assert.notEqual(list[2]!.id, list[0]!.id)
@@ -131,7 +146,61 @@ async function linux() {
       assert.equal(after[5]!.summary, 'Parser audit')
       assert.equal(after[6]!.replaces_id, 0, 'after the server closed it the thread starts a new notification')
     })
-    console.log('ok  Linux: Notify fields, replace per thread, ActionInvoked once per click, unsupported without a daemon')
+    await step('two quick posts are one notification', async () => {
+      const base = notifies().length
+      await clickPost(f, 'post-t3-twice')
+      const list = await waitNotifies(base + 2)
+      assert.equal(list[base]!.summary, 'Docs')
+      assert.equal(list[base]!.replaces_id, 0)
+      assert.equal(list[base + 1]!.replaces_id, list[base]!.id, 'the second post carries the first one\'s id even though it was sent before the reply')
+      assert.equal(list[base + 1]!.id, list[base]!.id)
+    })
+    await step('dismissing a thread closes its notification on the server', async () => {
+      const base = notifies().length
+      await clickPost(f, 'post-t2')
+      const [posted] = (await waitNotifies(base + 1)).slice(-1)
+      await clickPost(f, 'dismiss-t2')
+      const closed = await settled(async () => calls().filter(call => call.op === 'Close'), list => list.length >= 1, 8000)
+      assert.equal(closed.at(-1)!.id, posted!.id, 'CloseNotification names the thread\'s notification')
+      // Nothing to withdraw: no second call.
+      const before = calls().filter(call => call.op === 'Close').length
+      await clickPost(f, 'dismiss-t2')
+      await Bun.sleep(300)
+      assert.equal(calls().filter(call => call.op === 'Close').length, before, 'a thread with nothing on screen closes nothing')
+      await clickPost(f, 'post-t2')
+      const next = await waitNotifies(base + 2)
+      assert.equal(next[base + 1]!.replaces_id, 0, 'after the dismissal the thread starts a new notification')
+      assert.equal(next[base + 1]!.hints?.['sound-name'], 'message-new-instant', 'a new notification after a dismissal has its sound')
+    })
+    await step('a restarted server is never sent a stale replaces_id', async () => {
+      // t2 has a notification on the old server. The new one numbers from 1 again, so replacing id N would replace
+      // whatever another application showed under N.
+      const base = notifies().length
+      const readies = calls().filter(call => call.op === 'ready').length
+      command('restart')
+      await settled(async () => calls().filter(call => call.op === 'ready').length, count => count > readies, 8000)
+      await Bun.sleep(500)
+      await clickPost(f, 'post-t2')
+      const list = await waitNotifies(base + 1)
+      assert.equal(list[base]!.replaces_id, 0, 'the thread\'s old id is forgotten with the old server')
+      assert.equal(list[base]!.id, 1, 'the new server numbered from 1 again')
+      await clickPost(f, 'post-t2')
+      const again = await waitNotifies(base + 2)
+      assert.equal(again[base + 1]!.replaces_id, list[base]!.id, 'replacement works again on the new server')
+    })
+    await f.close()
+    // A server that does not read markup must not be sent entities it would print.
+    command('caps actions body sound')
+    f = await launch(path.join(here, 'notify-lab.tsx'))
+    await step('a server without body-markup gets the body as written', async () => {
+      await f.app.getByTestId('ready').waitFor()
+      assert.equal(await waitText(f, 'status', value => value !== 'pending'), 'host:granted')
+      const base = notifies().length
+      await clickPost(f, 'post-t1-a')
+      const list = await waitNotifies(base + 1)
+      assert.equal(list[base]!.body, 'Needs approval: run <tests> & lint')
+    })
+    console.log('ok  Linux: Notify fields, replace per thread, one notification for quick posts, no second sound, dismiss, server restart, ActionInvoked once per click, markup only where read, unsupported without a daemon')
   } catch (error) { console.error(f.diagnostics()); console.error(readFileSync(log, 'utf8')); throw error } finally {
     await f.close()
     command('quit')
@@ -155,6 +224,7 @@ async function windows() {
     if (status !== 'host:granted') console.log(`addon log: ${f.diagnostics()}`)
     await step('toast API with the AUMID', async () => {
       assert.match(status, /^host:(granted|denied)$/, 'the addon must reach the toast notifier with the AppUserModelID')
+      assert.equal(await text(f, 'identity'), WINDOWS_APP_ID, 'a loose run posts under its own id, not the installed app\'s')
     })
     if (status !== 'host:granted') { console.log('toasts are not available to post on this account; posts are skipped'); return }
     await step('posts return', async () => {
@@ -165,18 +235,41 @@ async function windows() {
     })
     // GPUI registers the AUMID's display name on the first toast, so a run without the installer's shortcut still shows "Kybern".
     await step('AppUserModelId registration', async () => {
-      const result = spawnSync('reg', ['query', `HKCU\\Software\\Classes\\AppUserModelId\\${APP_ID}`, '/v', 'DisplayName'], { encoding: 'utf8' })
+      const result = spawnSync('reg', ['query', `HKCU\\Software\\Classes\\AppUserModelId\\${WINDOWS_APP_ID}`, '/v', 'DisplayName'], { encoding: 'utf8' })
       assert.equal(result.status, 0, `no AppUserModelId registry entry: ${result.stderr}`)
-      assert.match(result.stdout, /DisplayName\s+REG_SZ\s+Kybern/)
+      assert.match(result.stdout, /DisplayName\s+REG_SZ\s+Kybern \(dev\)/)
+      const installed = spawnSync('reg', ['query', `HKCU\\Software\\Classes\\AppUserModelId\\${APP_ID}`], { encoding: 'utf8' })
+      assert.notEqual(installed.status, 0, 'the installed app\'s registry key must not be created by a loose run')
     })
     // The action center keeps what the API accepted (readable on the windows-2022 runner too).
+    const history = (count: string) => settled(async () => powershell(
+      `[void][Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]; ` +
+      `@([Windows.UI.Notifications.ToastNotificationManager]::History.GetHistory('${WINDOWS_APP_ID}')).Count`), value => value.out === count, 6000)
     await step('toasts in the history, one per thread', async () => {
-      const history = await settled(async () => powershell(
-        `[void][Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]; ` +
-        `@([Windows.UI.Notifications.ToastNotificationManager]::History.GetHistory('${APP_ID}')).Count`), value => value.out === '2', 6000)
-      assert.equal(history.out, '2', `history: ${history.out} ${history.err}`)
+      const found = await history('2')
+      assert.equal(found.out, '2', `history: ${found.out} ${found.err}`)
     })
-    console.log('ok  Windows: toast API with the AUMID, registry entry, posts, history')
+    await step('dismissing a thread removes its toast', async () => {
+      await clickPost(f, 'dismiss-t1')
+      const found = await history('1')
+      assert.equal(found.out, '1', `history after the dismissal: ${found.out} ${found.err}`)
+      await clickPost(f, 'dismiss-t1')
+      assert.equal((await history('1')).out, '1', 'a thread with nothing on screen removes nothing')
+    })
+    // A user who cleared the action center (or swiped the toast away) leaves the app holding a toast Windows no longer
+    // has. The next post for that thread used to hide it first, fail, and show nothing.
+    await step('a post after the action center was cleared shows', async () => {
+      const cleared = powershell(
+        `[void][Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]; ` +
+        `[Windows.UI.Notifications.ToastNotificationManager]::History.Clear('${WINDOWS_APP_ID}')`)
+      assert.equal(cleared.code, 0, `could not clear the history: ${cleared.err}`)
+      assert.equal((await history('0')).out, '0')
+      await clickPost(f, 'post-t2')
+      await clickPost(f, 'post-t2')
+      const found = await history('1')
+      assert.equal(found.out, '1', `history after posting to a cleared action center: ${found.out} ${found.err}`)
+    })
+    console.log('ok  Windows: toast API with the dev AUMID, registry entry, posts, history, dismiss, post after a cleared action center')
   } catch (error) { console.error(f.diagnostics()); throw error } finally { await f.close() }
 }
 

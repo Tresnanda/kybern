@@ -2,11 +2,15 @@
 """A minimal org.freedesktop.Notifications server for notify-check.ts (WP5, Linux).
 
 It owns the session bus name, answers Notify with a server-assigned id (the same id when
-`replaces_id` is set, as a real server does), and appends one JSON line per call to --log.
+`replaces_id` is set, as a real server does), and appends one JSON line per call to --log
+(`Notify`, `CloseNotification` as `Close`, `GetCapabilities`, `GetServerInformation`, `control`).
 notify-check.ts drives it through --control, a file it appends commands to:
 
     invoke <id> <action>     emit ActionInvoked(id, action)
     close <id> <reason>      emit NotificationClosed(id, reason)
+    restart                  give up the bus name and take it again a moment later with a new
+                             server's numbering: ids start from 1 again, as after a daemon restart
+    caps <word>...           advertise exactly these capabilities from now on (`caps` alone: none)
     quit
 
 Needs python3-gi (PyGObject) and a session bus (`dbus-run-session`). Nothing else.
@@ -50,7 +54,8 @@ parser.add_argument('--control', required=True)
 args = parser.parse_args()
 
 log = open(args.log, 'a', buffering=1)
-state = {'next_id': 1, 'offset': 0, 'connection': None}
+state = {'next_id': 1, 'offset': 0, 'connection': None, 'registration': None, 'owner': None, 'restarting': False,
+         'caps': ['actions', 'body', 'body-markup', 'sound']}
 
 
 def write(event):
@@ -59,11 +64,17 @@ def write(event):
 
 def on_method_call(connection, sender, path, interface, method, parameters, invocation):
     if method == 'GetCapabilities':
-        invocation.return_value(GLib.Variant('(as)', (['actions', 'body', 'body-markup', 'sound'],)))
+        write({'op': 'GetCapabilities'})
+        invocation.return_value(GLib.Variant('(as)', (state['caps'],)))
     elif method == 'GetServerInformation':
+        write({'op': 'GetServerInformation'})
         invocation.return_value(GLib.Variant('(ssss)', ('kybern-test-server', 'kybern', '1', '1.2')))
     elif method == 'CloseNotification':
+        (notification_id,) = parameters.unpack()
+        write({'op': 'Close', 'id': notification_id})
         invocation.return_value(None)
+        # A real server tells the client it closed the notification at the client's request (reason 3).
+        state['connection'].emit_signal(None, PATH, NAME, 'NotificationClosed', GLib.Variant('(uu)', (notification_id, 3)))
     elif method == 'Notify':
         app_name, replaces_id, app_icon, summary, body, actions, hints, expire = parameters.unpack()
         if replaces_id:
@@ -93,6 +104,13 @@ def poll_control():
             state['connection'].emit_signal(None, PATH, NAME, 'ActionInvoked', GLib.Variant('(us)', (int(parts[1]), parts[2])))
         elif parts[0] == 'close':
             state['connection'].emit_signal(None, PATH, NAME, 'NotificationClosed', GLib.Variant('(uu)', (int(parts[1]), int(parts[2]))))
+        elif parts[0] == 'restart':
+            state['restarting'] = True
+            Gio.bus_unown_name(state['owner'])
+            state['next_id'] = 1
+            GLib.timeout_add(300, own)
+        elif parts[0] == 'caps':
+            state['caps'] = parts[1:]
         elif parts[0] == 'quit':
             loop.quit()
         write({'op': 'control', 'line': line})
@@ -101,20 +119,30 @@ def poll_control():
 
 def on_bus_acquired(connection, name):
     state['connection'] = connection
-    node = Gio.DBusNodeInfo.new_for_xml(XML)
-    connection.register_object(PATH, node.interfaces[0], on_method_call, None, None)
+    if state['registration'] is None:
+        node = Gio.DBusNodeInfo.new_for_xml(XML)
+        state['registration'] = connection.register_object(PATH, node.interfaces[0], on_method_call, None, None)
 
 
 def on_name_acquired(connection, name):
     write({'op': 'ready'})
-    GLib.timeout_add(25, poll_control)
+    if not state.get('polling'):
+        state['polling'] = True
+        GLib.timeout_add(25, poll_control)
 
 
 def on_name_lost(connection, name):
-    write({'op': 'name-lost'})
-    sys.exit(1)
+    # Giving the name up for `restart` also reports it lost; only a refusal to get it at all ends the server.
+    if not state['restarting']:
+        write({'op': 'name-lost'})
+        sys.exit(1)
+
+
+def own():
+    state['restarting'] = False
+    state['owner'] = Gio.bus_own_name(Gio.BusType.SESSION, NAME, Gio.BusNameOwnerFlags.NONE, on_bus_acquired, on_name_acquired, on_name_lost)
 
 
 loop = GLib.MainLoop()
-Gio.bus_own_name(Gio.BusType.SESSION, NAME, Gio.BusNameOwnerFlags.NONE, on_bus_acquired, on_name_acquired, on_name_lost)
+own()
 loop.run()

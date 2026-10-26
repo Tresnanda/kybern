@@ -377,7 +377,12 @@ macOS is described below. Windows and Linux (WP5) post through the addon instead
 `attachNotificationHost(renderer)` (called with `setOsHost` in `main.tsx`) gives `notifications` the renderer's
 `showSystemNotification` and friends. Windows shows toasts under the AppUserModelID above, Linux calls
 `org.freedesktop.Notifications.Notify` with the desktop entry `dev.kybern.gpuix`. Posts carry a `group` (the thread id),
-and a later post in the group replaces the earlier one. See `PORTING-PLATFORMS.md`, "WP5 notifications".
+and a later post in the group replaces the earlier one; `notifications.dismiss(group)` withdraws it (the app does so
+when the approval it announced is answered or the thread is looked at). Only an **installed** Windows copy (the exe
+beside the installer's `uninstall.exe`) posts under `dev.kybern.gpuix`; a portable, dev or CI run posts under
+`dev.kybern.gpuix.dev` (display name "Kybern (dev)"), so it never recreates the installed app's registry key or shares
+its per-app toast setting. `main.tsx` hands the id to the addon (`setEarlyAppIdentity`) before the first window exists,
+in every environment window's process too. See `PORTING-PLATFORMS.md`, "WP5 notifications".
 
 `src/native/notifications.ts` exposes `status()`, `requestPermission()`,
 `post({id,title,body})`, `onClick(callback)` and `reason`. Unbundled calls return

@@ -54,6 +54,13 @@ void kybern_notifications_command(const char *json) {
       if (error) emit(@{@"token":token,@"error":error.localizedDescription}); else status();
     }]; return;
   }
+  if ([cmd[@"op"] isEqual:@"dismiss"]) {
+    NSArray *ids = cmd[@"ids"];
+    [center removeDeliveredNotificationsWithIdentifiers:ids];
+    [center removePendingNotificationRequestsWithIdentifiers:ids];
+    emit(@{@"token":token, @"value":@YES});
+    return;
+  }
   UNMutableNotificationContent *content = [UNMutableNotificationContent new];
   content.title = cmd[@"title"]; content.body = cmd[@"body"]; content.sound = [UNNotificationSound defaultSound];
   UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:cmd[@"id"] content:content trigger:nil];

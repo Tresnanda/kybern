@@ -50,6 +50,7 @@ import { verifyMinisign } from './minisign.ts'
 import { installerName } from '../../packaging/windows/lib.ts'
 import { quitOtherWindows } from '../windows/registry.ts'
 import { appImageName, imageDirWritable, linuxInstall, packageCommand } from './linuxPackage.ts'
+import { installedWindowsFolder } from './windowsInstall.ts'
 
 const run = promisify(execFile)
 
@@ -113,9 +114,7 @@ export function appBundle(execPath = process.execPath): string | null {
 export function windowsInstall(execPath = process.execPath, exists: (file: string) => boolean = existsSync): string | null {
   // Checks against a local feed may name a scratch folder to treat as the install.
   if (process.env.KYBERN_UPDATE_BUNDLE && testFeed()) return process.env.KYBERN_UPDATE_BUNDLE
-  if (path.win32.basename(execPath).toLowerCase() !== 'kybern gpuix.exe') return null
-  const dir = path.win32.dirname(execPath)
-  return exists(path.win32.join(dir, 'uninstall.exe')) ? dir : null
+  return installedWindowsFolder(execPath, exists)
 }
 function testFeed(): URL | null {
   const override = process.env.KYBERN_UPDATE_FEED

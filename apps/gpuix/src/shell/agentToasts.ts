@@ -22,6 +22,7 @@ import { isWindowFocused } from './window.ts'
 import { toast } from './toasts.tsx'
 import { questionLine, waitingLine } from './waitingLine.ts'
 import { agentName } from '../requests/model.ts'
+import { createThreadNotices } from './threadNotices.ts'
 
 const DONE_MS = 6000
 
@@ -40,6 +41,9 @@ function rootOf(threadId: ThreadId): { root: Thread; child: Thread } | null {
   }
   return null
 }
+
+/** A thread this window knows: a top-level one, or a delegated child it follows. */
+const knownThread = (id: string) => getState().threads.some((t) => t.id === id) || !!getNav().children[id]
 
 let started = false
 let owner: ReturnType<typeof getClient> = null
@@ -68,9 +72,16 @@ export function startAgentToasts() {
     if (ids && !ids.size) waiting.delete(threadId)
     if (!waiting.size && watch) { clearInterval(watch); watch = null }
   }
+  /** What each thread's system notification announces, so an answered approval withdraws only its own. */
+  const notices = createThreadNotices()
   // Window focus has no event here, so a short check runs only while a waiting toast is up.
   const clearViewed = () => {
-    for (const [threadId, ids] of [...waiting]) if (isViewing(threadId)) for (const id of [...ids]) { toast.dismiss(id); forget(threadId, id) }
+    for (const [threadId, ids] of [...waiting]) {
+      if (!isViewing(threadId)) continue
+      for (const id of [...ids]) { toast.dismiss(id); forget(threadId, id) }
+      // The card is on screen now; the system notification that asked for it has done its job.
+      if (notices.viewed(threadId)) void notifications.dismiss(threadId)
+    }
   }
   stops.push(subscribeNav(() => { if (waiting.size) clearViewed() }))
   stops.push(subscribe(() => { if (waiting.size) clearViewed() }))
@@ -78,7 +89,8 @@ export function startAgentToasts() {
   const finished = new Map<ThreadId, string>()
   const targets = new Map<string, { environment: string; thread: string }>()
   stops.push(notifications.onClick(id => {
-    const target = targets.get(id)
+    // A click on a post older than the remembered ones reports its group, which is the thread (`group` below).
+    const target = targets.get(id) ?? (knownThread(id) ? { environment: environmentKey(), thread: id } : undefined)
     // The native delegate activates the app/window. Never open a thread on a
     // different daemon after an environment switch.
     if (target?.environment === environmentKey()) openThread(target.thread)
@@ -100,6 +112,8 @@ export function startAgentToasts() {
     if (event.kind === 'approval_resolved') {
       const id = `agent-input:${event.approval_id}`
       forget(event.thread_id, id)
+      // Answered anywhere, so the notification that asked is stale too.
+      if (notices.resolved(event.thread_id, event.approval_id)) void notifications.dismiss(event.thread_id)
       return toast.dismiss(id)
     }
     const kind =
@@ -140,7 +154,11 @@ export function startAgentToasts() {
         : event.kind === 'user_input_requested' ? questionLine(event.approval, agent) : 'Finished working'
       void notifications.requestPermission().then(status => {
         if (status === 'granted' && getClient() === client && enabled && !isWindowFocused()) {
-          return notifications.post({ id, title, body, group: event.thread_id }).then(posted => { if (process.env.KYBERN_DEBUG_NOTIFICATIONS) console.error('[notifications] posted', posted, id, title, body) })
+          const approval = event.kind === 'approval_requested' || event.kind === 'user_input_requested' ? event.approval.id : null
+          return notifications.post({ id, title, body, group: event.thread_id }).then(posted => {
+            if (posted) notices.posted(event.thread_id, approval)
+            if (process.env.KYBERN_DEBUG_NOTIFICATIONS) console.error('[notifications] posted', posted, id, title, body)
+          })
         }
         if (process.env.KYBERN_DEBUG_NOTIFICATIONS) console.error('[notifications] not posted', status)
       }).catch(error => console.error('[notifications]', error))

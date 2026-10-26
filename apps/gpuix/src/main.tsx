@@ -25,7 +25,7 @@ import { startEnvironmentWindow } from './windows/window.ts'
 import { installRuntimeSafetyNet } from './shell/errors.ts'
 import { startMemoryLog } from './perf/memoryLog.ts'
 import { setOsHost } from './platform/os.ts'
-import { attachNotificationHost } from './native/notifications.ts'
+import { attachNotificationHost, setEarlyAppIdentity } from './native/notifications.ts'
 import { installUiFont } from './platform/fonts.ts'
 
 // The terminal draws xterm's weights (300 text, 500 bold); italics are their own family until GPUIX styles take `fontStyle`.
@@ -70,6 +70,9 @@ function Fonts({ children }: { children: ReactNode }) {
 }
 
 startupMark('modules-ready')
+// The notification identity (the Windows AppUserModelID) goes to the addon before any window exists, in this process and in
+// every environment window's, which starts here too: the taskbar groups a window by the id it was created under.
+setEarlyAppIdentity()
 // KYBERN_GPUIX_SMOKE=1 (the installer check, `packaging/windows/verify-install.ps1`): prove that a packaged build
 // loads its native addon with every DLL it needs and imports its whole module graph and resources, then exit before
 // a window, daemon or network connection exists. A failure is written to KYBERN_GPUIX_SMOKE_OUT (a GUI build has no console).
