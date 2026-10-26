@@ -15,18 +15,20 @@ try {
    const a=f.app; await a.getByTestId('ready').waitFor();console.log('fixture ready')
    const boxes:Record<string,unknown>={}
    for(const id of ['quad','svg','image','text','backdrop','cached','virtual','nested','code-body','native-md']) boxes[id]=await a.getByTestId(id).bounds()
+   // The click's handler lands after the automation call off macOS: wait for the label it sets.
+   const hit=(expected:string)=>eventually(()=>a.getByTestId('hit').textContent(),text=>text===expected)
    for(const kind of ['quad','svg','image','backdrop','cached','virtual','nested']) {
     console.log(`hit ${kind}`)
     const b=await a.getByTestId(kind).bounds()
     await a.mouse.click({x:b.x+1,y:b.y+1})
-    if(!process.env.KYBERN_CLIP_BASELINE) assert.equal(await a.getByTestId('hit').textContent(),'behind',`${kind}: clipped corner must not intercept input`)
+    if(!process.env.KYBERN_CLIP_BASELINE) assert.equal(await hit('behind'),'behind',`${kind}: clipped corner must not intercept input`)
     await a.mouse.click({x:b.x+b.width/2,y:b.y+b.height/2})
-    if(!process.env.KYBERN_CLIP_BASELINE) assert.equal(await a.getByTestId('hit').textContent(),kind,`${kind}: visible interior must stay interactive`)
+    if(!process.env.KYBERN_CLIP_BASELINE) assert.equal(await hit(kind),kind,`${kind}: visible interior must stay interactive`)
    }
    await a.getByTestId('replay').click();await a.getByTestId('replay').click()
    await a.getByTestId('paint').click()
    const paintedQuad=await a.getByTestId('quad').bounds();await a.mouse.click({x:paintedQuad.x+1,y:paintedQuad.y+1})
-   if(!process.env.KYBERN_CLIP_BASELINE)assert.equal(await a.getByTestId('hit').textContent(),'behind','Scoped paint must preserve rounded hit masks')
+   if(!process.env.KYBERN_CLIP_BASELINE)assert.equal(await hit('behind'),'behind','Scoped paint must preserve rounded hit masks')
    const prefix=`${theme}-${reduced==='1'?'reduced':'normal'}`
    const shot=path.join(output,`${prefix}.png`)
    await capture(f,shot)
