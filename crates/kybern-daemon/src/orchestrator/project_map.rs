@@ -56,7 +56,6 @@ impl Orchestrator {
 
     /// The map header for the repositories' HEADs as they are now. For the rotation
     /// seed, which is built where a rebuild is affordable.
-    #[allow(dead_code)]
     pub(crate) async fn fresh_map_header(&self, project_id: ProjectId) -> Option<String> {
         self.project_map(project_id).await.ok().and_then(|map| crate::project_map::header_of(&map))
     }

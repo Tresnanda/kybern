@@ -777,7 +777,7 @@ impl Orchestrator {
             }
             None => text.push_str("- Git since the last refresh: no new commits Kybern can see; use kybern_git for history.\n"),
         }
-        if let Some(map) = self.seed_map_header(thread.project_id) {
+        if let Some(map) = self.seed_map_header(thread.project_id).await {
             text.push_str("- Map:\n");
             for line in map.lines() {
                 text.push_str(&format!("  {line}\n"));
@@ -814,9 +814,10 @@ impl Orchestrator {
         delta
     }
 
-    /// The project map header, built (or read from cache) for the seed, fenced as repository data.
-    fn seed_map_header(&self, project_id: ProjectId) -> Option<String> {
-        self.fenced_map_header(project_id)
+    /// The project map header for the HEADs the seed reports, rebuilt when they
+    /// moved since the old session started, fenced as repository data.
+    async fn seed_map_header(&self, project_id: ProjectId) -> Option<String> {
+        self.fresh_map_header(project_id).await.map(|header| super::project_map::fence_map(&header))
     }
 
     fn children_facts(&self, thread: &Thread, since: DateTime<Utc>, carried: &mut RotationCarried) -> Result<String> {

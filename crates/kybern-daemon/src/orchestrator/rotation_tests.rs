@@ -567,6 +567,23 @@ async fn a_commit_made_after_a_refresh_reaches_the_fresh_sessions_first_message(
 }
 
 #[tokio::test]
+async fn the_seed_map_is_as_of_the_heads_at_the_refresh_not_the_old_sessions_start() {
+    let lead = Lead::in_git().await;
+    let child = lead.turn("plan", 10, 1_000_000).await;
+    let started = run_git(&lead.fixture.root, &["rev-parse", "--short=7", "HEAD"]);
+
+    // A child's commit lands while the old session runs; its map header is from before it.
+    std::fs::write(lead.fixture.root.join("src/auth/session.ts"), "export const x = 1\n").unwrap();
+    run_git(&lead.fixture.root, &["commit", "-q", "-am", "Change the session"]);
+    let head = run_git(&lead.fixture.root, &["rev-parse", "--short=7", "HEAD"]);
+    refresh_with_handoff(&lead, &child, 1).await;
+
+    let seed = lead.seed().unwrap().text;
+    assert!(seed.contains(&format!("@{} (", head.trim())), "{seed}");
+    assert!(!seed.contains(&format!("@{} (", started.trim())), "{seed}");
+}
+
+#[tokio::test]
 async fn a_seed_whose_turn_failed_is_sent_again_with_the_next_message() {
     let lead = Lead::new().await;
     let child = lead.turn("plan", 10, 1_000_000).await;
