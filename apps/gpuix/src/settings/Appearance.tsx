@@ -22,6 +22,7 @@ import {
   BLUR_MAX, BLUR_MIN, OPACITY_MIN, SURFACE_DEFAULT, SURFACE_MIN, VIBRANCY_EQUIVALENT_BLUR, advancedDefaults, isAdvancedDefault, isSidebarOnly, type ThemeVariant,
 } from '../platform/translucency.ts'
 import { useBlurUnavailable } from '../shell/windowMaterial.ts'
+import { DESKTOP_MATERIAL } from '../platform/desktopMaterial.ts'
 import { previewWindowMaterial, setAppearance, setWindowMaterial, useAppearance } from './appearance.ts'
 
 const WINDOW_OPTIONS = [{ value: 'solid', label: 'Solid' }, { value: 'translucent', label: 'Translucent' }] as const
@@ -117,7 +118,7 @@ function VariantSection({ variant, active, save }: { variant: ThemeVariant; acti
   const summary = `Sidebar ${m.sidebarOpacity}% · Content ${m.contentOpacity}% · Surface ${m.surfaceOpacity ?? SURFACE_DEFAULT[variant]}% · Blur ${m.blur === null ? 'Auto' : m.blur}`
 
   return <Section title={`${Name} theme`} accessory={accessory}>
-    <Row title="Window" description="Translucent lets your desktop show through Kybern." status={status}>
+    <Row title="Window" description={DESKTOP_MATERIAL === 'none' ? 'Translucent turns the sidebar, menus and composer to glass. On this system the window itself stays solid.' : 'Translucent lets your desktop show through Kybern.'} status={status}>
       <Segmented testId={`settings-window-${variant}`} aria-label={`${Name} theme window material`} options={WINDOW_OPTIONS} value={m.material} onChange={(material) => { setDisclose(true); patch({ material: material as typeof m.material }) }} />
     </Row>
     {translucent && <div key="sidebar" paintTransform={rise}><Row title="Sidebar only" description="Keep the conversation solid. Only the sidebar and window frame are translucent.">
@@ -133,7 +134,7 @@ function VariantSection({ variant, active, save }: { variant: ThemeVariant; acti
     {translucent && open && <div key="surface-opacity" paintTransform={advanced}><Row title="Surface opacity" description="How solid the composer, menus and cards are on glass. Applies once content opacity is below 100%.">
       <Slider testId={`settings-surface-opacity-${variant}`} aria-label={`${Name} theme surface opacity`} ariaValueText={`${surfaceValue} percent`} value={surfaceValue} min={SURFACE_MIN} max={100} valueLabel={`${surfaceValue}%`} onChange={surface.onChange} onCommit={surface.onCommit} />
     </Row></div>}
-    {translucent && open && <div key="blur" paintTransform={advanced}><Row title="Blur" description="How much your desktop is blurred behind the whole window. Auto uses the macOS material.">
+    {translucent && open && DESKTOP_MATERIAL !== 'none' && <div key="blur" paintTransform={advanced}><Row title="Blur" description={DESKTOP_MATERIAL === 'dwm' ? 'Auto uses Mica. Any other value uses Acrylic, which also blurs the windows behind Kybern; Windows sets its strength.' : 'How much your desktop is blurred behind the whole window. Auto uses the macOS material.'}>
       {m.blur !== null && <Button variant="secondary" size="sm" testId={`settings-blur-auto-${variant}`} label={`${Name} theme automatic blur`} onClick={() => patch({ blur: null })}>{active && unavailable ? 'Unavailable, use Auto' : 'Auto'}</Button>}
       <Slider testId={`settings-blur-${variant}`} aria-label={`${Name} theme blur`} ariaValueText={blurValue === null ? 'Automatic' : `${blurValue} points`} value={blurValue ?? VIBRANCY_EQUIVALENT_BLUR} min={BLUR_MIN} max={BLUR_MAX} muted={blurValue === null} valueLabel={blurValue === null ? 'Auto' : String(blurValue)} onChange={blur.onChange} onCommit={blur.onCommit} />
     </Row></div>}

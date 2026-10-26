@@ -24,6 +24,7 @@
 import type { Pointer } from 'bun:ffi'
 import { readFileSync } from 'node:fs'
 import { useSyncExternalStore } from 'react'
+import { BACKDROP_BLUR } from '../native/local-build.ts'
 import { cls, getObjc, sel } from '../native/objc.ts'
 import { setReducedMotion } from './reducedMotion.ts'
 import { OPAQUE_WINDOW } from './translucency.ts'
@@ -74,5 +75,5 @@ export const useAccessibilityDisplay = () => useSyncExternalStore(subscribe, get
 
 /** Capture mode: an opaque window with no native material (`translucency.ts`). */
 export { OPAQUE_WINDOW }
-/** Scene backdrops (blurred popovers, drop labels) are allowed right now. */
-export const backdropAllowed = () => !OPAQUE_WINDOW && !display.reduceTransparency && !display.increaseContrast
+/** Scene backdrops (blurred popovers, drop labels) are allowed right now, and this OS's renderer draws them (`BACKDROP_BLUR`). */
+export const backdropAllowed = () => BACKDROP_BLUR && !OPAQUE_WINDOW && !display.reduceTransparency && !display.increaseContrast

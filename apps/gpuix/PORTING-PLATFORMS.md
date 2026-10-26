@@ -162,7 +162,7 @@ nothing but `platforms_hooks.py`.
 | Patch / feature | Where | Linux | Windows | Notes |
 | --- | --- | --- | --- | --- |
 | Rounded overflow clip (paint + hit test) | `rounded_clip*`, `shaders.metal` | works, verified | works, verified | Ported (`platforms_gpui.py`); hit-test part is in GPUI core |
-| Backdrop blur / saturation | `backdrop_*`, `backdrop.metal` | fallback | fallback | Batch skipped; the translucent material fill shows (clip lab "backdrop" tile). Real blur: WP6 |
+| Backdrop blur / saturation | `backdrop_*`, `backdrop.metal`; WP9 `backdrop.wgsl`, `wgpu_backdrop.rs`, `backdrop.hlsl`, `directx_backdrop.rs` | works (WP9) | works (WP9) | Same kernels, crop, saturation and clip chain as Metal, over a copy of the region behind the filter. `backdrop` check: [WP9 status](#wp9-backdrop-blur-and-window-materials-status). `KYBERN_BACKDROP_FILTER=0` restores the old fallback (the fill alone) |
 | Compositor loops (CA layers) | `compositor_loops_*`, `compositor_covers_gpui.py` | fallback | fallback | Scene loops at the normal frame rate (macOS-only gate added) |
 | Partial-region presentation | `paint_region_*`, `paint_region.metal` | fallback | fallback | Full redraw (it is opt-in even on macOS) |
 | Drawable timing, GPU clip simplification, GPU telemetry | `frame_drawable_gpui.py`, `gpu_clip*`, `gpu_telemetry_gpui.py` | fallback | fallback | Counters report 0; nothing visual |
@@ -184,7 +184,7 @@ nothing but `platforms_hooks.py`.
 | Clipboard image | `clipboard_hooks.py` | works (bridge) | works (bridge) | Not exercised |
 | Window drag regions | `window_drag.rs` | works? | works? | `WindowControlArea::Drag` is cross-platform; unverified (no pointer in CI) |
 | Traffic lights / window controls | `TitleBar.tsx`, `window_platform*` | blocked | blocked | With a transparent title bar Linux X11 shows no close/min/max at all (see screenshot). WP3 |
-| Window material (NSVisualEffectView) | `native/material.ts` | fallback | fallback | Opaque window |
+| Window material (NSVisualEffectView) | `native/material.ts`, WP9 `platform/desktopMaterial.ts` | fallback: opaque window, the glass coats over the Solid frame colour, frosted surfaces still blur | works (WP9) on Windows 11 22H2+: Auto → Mica, a custom blur → Acrylic (DWM); Windows 10 as Linux | No adjustable blur radius off macOS. Not yet seen on a real Windows desktop (CI captures cannot show DWM) |
 | Secure input (Carbon) | `secure_input.rs` | fallback | fallback | No-op |
 | Automation test display | `automation_display.rs` | fallback | fallback | Centered on the primary display. Not needed by the WP7 harness: captures are the addon's screenshot (or the X window, Linux) and input is synthesized in-process, so the window's position never matters |
 | Scroll phase injection | `scroll_hooks.py` | works (WP1) | works (WP1) | `simulateScrollPhase` on every desktop platform and in `TestGpuixRenderer`; compile-checked, on screen in `frame-wake-check`. The WP7 checks still mark every wheel step `GAPS.wheel` until a CI run passes: a pass is reported as a closed gap, then the marker goes |
@@ -530,7 +530,7 @@ agents (one OS-specific lane can split W/L).
 | — | **Linux beta** = WP0–WP5 + WP6(L) + WP7 | | | ≈ 30–41 | 3–4 lanes: ≈ 2.5–3 calendar weeks |
 | — | **Windows beta** adds WP6(W) and Windows-only fixes from WP1/WP3 | | | ≈ +6–10 | ≈ +1–1.5 weeks |
 | WP8 | Text parity (section C): variable `wght` and `kszl` on DirectWrite and cosmic-text, system font choice | zed fork: `gpui_macos/src/font_weight.rs`, the "Per-run text size scale (kszl)" commit, `src/theme.ts` | WP0 | 4–6 | after beta |
-| WP9 | GPU parity: backdrop blur in WGSL and HLSL (scratch copy + two-pass blur), Mica on Windows 11 | zed fork commits on `kybern` (`gpui_wgpu`, `gpui_windows` shaders) | WP0 | 6–8 | after beta |
+| WP9 (code done) | GPU parity: backdrop blur in WGSL and HLSL (scratch copy + two-pass blur), Mica/Acrylic on Windows 11. [Status](#wp9-backdrop-blur-and-window-materials-status) | fork `wp9` commits (`gpui_wgpu`, `gpui_windows`, `gpui::backdrop_kernel`), `native/backdrop-check.ts`, `src/platform/desktopMaterial.ts` | WP0 | 6–8 | after beta |
 | WP10 (W done) | Embedded web view: WebView2 composition host (W, done: `native/webview-win`, fork `wp10-win` commits, CI check `webview`; see `WEBVIEW-PLATFORMS.md`); WebKitGTK/WPE (L, phase 2, 20–24, risky) | `native/webview-*/**` | WP3, WP4 | 20–24 (L) | after beta |
 
 Totals: about 36–51 agent-days to both betas, 28–41 more for full parity
@@ -578,6 +578,46 @@ the Wayland activation token.
 Checks: `bun test src/native/notifications.test.ts` (payload building, the per-OS backend choice and the Linux markup
 escaping, tag/id mapping, status caching, "no daemon", all with an injected platform and fake host); the Rust unit tests
 in `system_notifications.rs` and the zed Linux slot tests; `bun scripts/run-platform-checks.ts --checks notify`.
+
+### WP9 backdrop blur and window materials: status
+
+Fork branches `wp9` (`next` merged in; `native/FORK` pins them until they are merged into `kybern`). Native details:
+[native/README.md](native/README.md#off-macos-wgpu-and-direct3d-11-wp9).
+
+| Part | Linux (wgpu) | Windows (Direct3D 11) | macOS |
+| --- | --- | --- | --- |
+| Scene backdrop filter: copy behind the filter, horizontal pass (half size above 8 px), vertical pass writing `mix(destination, blurred, coverage)` | done, `backdrop` check passes on lavapipe | done, passes on WARP | unchanged Metal path; shares `gpui::backdrop_kernel` (`halfres-check`: half vs exact Gaussian mean 0.5, max 3, as before) |
+| Window material | opaque window; the glass coats over the Solid frame colour (`desktopMaterial.ts` `none`); KDE's blur protocol not used | Windows 11 22H2+: Auto → Mica, custom blur → Acrylic (DWM system backdrop, frame extended, transparent clear); Windows 10: as Linux | vibrancy / adjustable blur, unchanged |
+| App gating | `BACKDROP_BLUR` from `kybernCapabilities().backdrop`; Reduce transparency / Increase contrast still turn scene backdrops off | same | same (`BACKDROP_BLUR` is every patched build) |
+
+`backdrop` check (`native/backdrop-check.ts`, CI run [40265183786](https://github.com/Tresnanda/kybern/actions/runs/40265183786) at the pinned `wp9` heads, every check green on Linux X11, Wayland and Windows), the same lab on each renderer:
+
+| Measure | macOS (Metal, M1) | Linux (lavapipe) | Windows (WARP) |
+| --- | --- | --- | --- |
+| Card row deviation behind the filter (raw stripes 127.5) | 0.5 | 0.5 | 0.5 |
+| Card tint (expected 106, 126, 151) | 105, 125, 150 | 105, 125, 150 | 105, 125, 150 |
+| Menu, blur 40 at saturation 1.5 (expected 181, 26, 181) | 181, 26, 181 | 181, 26, 181 | 181, 26, 181 |
+| Filter off (`KYBERN_BACKDROP_FILTER=0`): card row deviation | — | 95.5 | 95.5 |
+
+Frame cost over the busy scene (34 text rows over stripes, a paint animation keeping GPUI drawing; three filters: a 240×180 card at
+blur 16, a 240×140 rounded-chain filter at blur 16, a 240×260 menu at blur 40). Software renderers draw on the CPU, so these are
+relative only; macOS reports no frame counts (`getBridgeStats` is Linux/Windows) and its GPU cost does not show in CPU time.
+
+| Configuration | Linux frames/s | Linux CPU ms/frame | Windows frames/s | Windows CPU ms/frame |
+| --- | --- | --- | --- | --- |
+| No surfaces | 20.8 | 134 | 24.1 | 118 |
+| Surfaces, filter off (old fallback) | 20.9 | 148 | 23.9 | 123 |
+| Surfaces filtered (default, half resolution) | 13.0 | 229 | 14.5 | 249 |
+| Surfaces filtered, `KYBERN_BACKDROP_HALFRES=0` | 10.4 | 337 | 8.0 | 462 |
+
+The cost scales with filter area only: each filter copies and blurs its own clip plus halo, never the frame, and the scratches
+are pooled. On the software renderers the three filters add about 80 (Linux) and 125 (Windows) ms of CPU per frame at half
+resolution, against 190 and 340 at full resolution. A first run (40263475348) gave the same pixels and similar costs.
+
+Not yet seen on real hardware: the blur on an NVIDIA/AMD GPU (Direct3D 11 and Vulkan), and Mica/Acrylic on a Windows 11
+desktop (CI captures read the scene, not DWM). Open there: whether a DirectComposition window needs the frame extension for
+the system backdrop (`KYBERN_DWM_EXTEND_FRAME=0` is the control) and whether the extension makes DWM draw its own caption
+buttons; Mica's tint follows the system theme (`DWMWA_USE_IMMERSIVE_DARK_MODE`), not Kybern's.
 
 ### WP1 native platform core: status
 

@@ -30,7 +30,7 @@ on:
   workflow_dispatch:
     inputs:
       checks:
-        description: 'Checks to run: all, or a comma list of focus, clip, rounded, markdown-document, smoke, nowebview, webview (Windows), frame-wake, notify'
+        description: 'Checks to run: all, or a comma list of focus, clip, rounded, backdrop, markdown-document, smoke, nowebview, webview (Windows), frame-wake, notify'
         required: false
         type: string
         default: all

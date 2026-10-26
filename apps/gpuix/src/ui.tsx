@@ -12,6 +12,7 @@ import { useSyncWindowAppearance, useSystemVariant } from './shell/appearance.ts
 import { FONT_UI, THEMES, materialFor, themeFor, type Material, type Theme } from './theme.ts'
 import { useAccessibilityDisplay } from './platform/material.ts'
 import { resolveScope } from './platform/translucency.ts'
+import { DESKTOP_MATERIAL } from './platform/desktopMaterial.ts'
 import { useWindowMaterial } from './shell/windowMaterial.ts'
 import { REDUCED_MOTION } from './platform/reducedMotion.ts'
 import { Icon } from './icons.tsx'
@@ -49,7 +50,7 @@ export const ThemeProvider = ({ children }: { children: ReactNode }) => {
   useSyncWindowAppearance(variant)
   useWindowMaterial(variant, material, scope)
   const theme = themeFor(variant, scope, a11y.increaseContrast, a11y.reduceTransparency)
-  const glass = materialFor(variant, scope, material.sidebarOpacity, material.contentOpacity, material.surfaceOpacity)
+  const glass = materialFor(variant, scope, material.sidebarOpacity, material.contentOpacity, material.surfaceOpacity, DESKTOP_MATERIAL)
   installThemeFade(useGpuix()?.renderer)
   return <ThemeContext.Provider value={theme}><MaterialContext.Provider value={glass}>{children}</MaterialContext.Provider></ThemeContext.Provider>
 }

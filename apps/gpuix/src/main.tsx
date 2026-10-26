@@ -16,7 +16,7 @@ import { startPerfProbe } from './perf/probe.ts'
 import { startPickHub } from './pick/hub.ts'
 import { getAccessibilityDisplay } from './platform/material.ts'
 import { resolveScope, type ThemeVariant } from './platform/translucency.ts'
-import { backingFor, installWindowMaterial } from './shell/windowMaterial.ts'
+import { backingFor, installWindowMaterial, nativeBackground } from './shell/windowMaterial.ts'
 import { startAppUpdateChecks } from './platform/update.ts'
 import { installFrameSource } from './native/frame.ts'
 import { handbackOnFocus, installFocusHandback } from './native/focusHandback.ts'
@@ -125,8 +125,9 @@ render(
     height: Number(process.env.KYBERN_WINDOW_SIZE?.split('x')[1]) || 820,
     titlebarTransparent: true,
     // Opaque for Solid, an accessibility override or `KYBERN_OPAQUE`; else the native vibrancy (Blur Auto) or a
-    // transparent window with the adjustable desktop blur behind it (`shell/windowMaterial.ts`).
-    windowBackground: launchBacking.mode,
+    // transparent window with the adjustable desktop blur behind it (`shell/windowMaterial.ts`). Windows 11: Mica or
+    // Acrylic; Linux and Windows 10: opaque.
+    windowBackground: nativeBackground(launchBacking),
     trafficLightX: 16,
     trafficLightY: 16,
     ...(process.env.KYBERN_PERF_PROBE === '1' ? { debugFrameOverlay: 'minimal' as const } : {}),

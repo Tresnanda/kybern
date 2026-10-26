@@ -56,6 +56,10 @@ const CHECKS: Record<string, Check> = {
     description: 'Rounded input backgrounds: painted corners, outset clamps, wrapped fragments, selection overlay',
     runs: () => [{ name: 'rounded', args: [native('rounded-check.ts')], minutes: 15 }],
   },
+  backdrop: {
+    description: 'WP9: the backdrop filter on this renderer (blur, tint, radius and rounded-chain clip, saturation, sharp content; the filter-off fallback off macOS) and its frame cost over a busy scene',
+    runs: () => [{ name: 'backdrop', args: [native('backdrop-check.ts')], minutes: 10 }],
+  },
   'markdown-document': {
     description: 'Markdown document API and parity: document vs original pixels, selection, wrap, grid; a subset of the interior cases off macOS',
     runs: () => [{

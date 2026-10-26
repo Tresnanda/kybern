@@ -1383,7 +1383,7 @@ Offscreen, unmounted and zero-opacity regions add no filter primitive. No contin
 repaint or polling is introduced; a changed frame still recomputes its visible
 filters even when the change was elsewhere in the window.
 
-This is a **macOS-only** native build extension. It samples GPUI's scene, not other
+Linux and Windows draw it too since WP9 (below). It samples GPUI's scene, not other
 windows or the wallpaper under NSVisualEffectView. It does not add subtree blur,
 scale transforms, arbitrary CSS filter strings or general mask-image support.
 The Gaussian/underline rasterization is not pixel-identical to WebKit.
@@ -1407,6 +1407,48 @@ the alpha is blurred with the colour. A Metal function constant (`programmable_b
 GPUs (Intel Macs cannot read the target in a shader) keep the fixed-function blend and the old look.
 `KYBERN_BACKDROP_PROGRAMMABLE=0` forces the old pass. `src/platform/verify.blur.ts` measures it: the "…" menu's window-alpha
 detail over dense text is 0.33 with the old pass and 0.005 with the new one (`perf/translucency-ade58-2026-10-23.md`).
+
+### Off macOS: wgpu and Direct3D 11 (WP9)
+
+The filter draws on Linux (`gpui_wgpu`, `backdrop.wgsl`, `wgpu_backdrop.rs`) and Windows (`gpui_windows`, `backdrop.hlsl`,
+`directx_backdrop.rs`) with the Metal algorithm: the same kernels and crop (`gpui::backdrop_kernel`, which Metal now uses
+too; `packages/native/src/backdrop_kernel.rs` is the same file, compiled standalone by `update.sh`, which checks they match),
+3-sigma halo, half-resolution path above 8 device px (`KYBERN_BACKDROP_HALFRES=0` keeps full size), saturation, own radius,
+rounded clip chain with edge fades, fade-top and opacity. Per filter:
+
+1. copy the target region behind it (clip plus halo, inside the target) into a pooled scratch: a swap chain image cannot be
+   bound as a texture, so this replaces Metal's direct sample of the target, and it is cropped to the filter;
+2. horizontal pass from the copy into a second scratch (`crop / scale`);
+3. vertical pass into the target over the clip, writing `mix(destination, blurred, coverage)` on all four channels with the
+   destination read from the copy, blending off. That is the result of Metal's programmable blending (ADE-58), so a
+   translucent Windows window (Mica) gets a blurred alpha instead of text-shaped holes, without framebuffer fetch.
+
+The scratches follow N1: 64 px buckets, released after 30 frames without a filter, re-created smaller when the last 120
+frames needed under half their area. wgpu writes every filter's two parameter blocks into one uniform buffer per frame
+(dynamic offsets); Direct3D maps one constant buffer per pass. Shaders: wgpu compiles WGSL at runtime (naga-validated in
+`gpui_wgpu`'s tests); `gpui_windows/build.rs` compiles `backdrop.hlsl` with fxc (vs/ps 4.1) like `shaders.hlsl`.
+
+Fallbacks, each leaving the fill above the filter as before: wgpu on WebGL (no storage buffers) or a surface without
+`COPY_SRC`, and `KYBERN_BACKDROP_FILTER=0` on both backends (the A/B control the `backdrop` check uses).
+`kybernCapabilities().backdrop` tells the app the renderer blurs (`BACKDROP_BLUR` in `src/native/local-build.ts`); without it
+frosted surfaces keep their dense fills.
+
+Checks: `cargo test -p gpui_wgpu --lib backdrop` in the zed fork validates the WGSL and renders a striped scene through the
+filter on whatever adapter the machine has (Metal on a Mac, lavapipe in a Linux container); `native/backdrop-check.ts`
+(`run-platform-checks --checks backdrop`) asserts blur, tint, radius and chain clip, saturation, sharp later content and the
+fallback on every OS, and measures frames and CPU per frame over a busy scene (`perf.json`).
+
+### Window materials on Windows (WP9)
+
+`setWindowBackground` and `windowBackground` also take `mica`, `mica-alt` and `acrylic` on Windows. On Windows 11 22H2+
+(build 22621, `DWMWA_SYSTEMBACKDROP_TYPE`) GPUI sets the DWM system backdrop and extends the frame over the client area, so
+the composition swap chain's transparent clear shows it; `blurred` is Acrylic there too, and each mode resets the other
+mechanism (DWMSBT_NONE, accent 0, zero margins). Older Windows ignores the system backdrops and keeps the accent blur for
+`blurred`. The app picks them in `src/platform/desktopMaterial.ts` / `src/shell/windowMaterial.ts`: Blur Auto is Mica, a
+custom blur is Acrylic (the system sets its strength). Linux has no compositor material standard: the window stays opaque and
+the theme paints the Solid frame colour under the glass coats, so frosted surfaces still blur the app's own content.
+`native/window-material-lab.tsx` (`MATERIAL_LAB_BACKGROUND=mica|acrylic|…`, `KYBERN_DWM_EXTEND_FRAME=0`) is the look on a real
+Windows desktop; CI captures read GPUI's scene and cannot show what DWM composes behind it.
 
 ## Round 3: scoped leaf paint
 

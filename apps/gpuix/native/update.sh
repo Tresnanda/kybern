@@ -165,6 +165,12 @@ fi
   native/build/rich-doc-tests$exe
   rustc --edition 2021 --test "$native_src/backdrop_kernel.rs" -o native/build/backdrop-kernel-tests$exe
   native/build/backdrop-kernel-tests$exe
+  # The renderers build zed's copy; the test above compiles the native crate's, which must be the same file.
+  zed_kernel=$app_src/zed/crates/gpui/src/backdrop_kernel.rs
+  if [ -f "$zed_kernel" ] && ! cmp -s "$zed_kernel" "$native_src/backdrop_kernel.rs"; then
+    echo "$native_src/backdrop_kernel.rs differs from $zed_kernel: they must be the same file" >&2
+    exit 1
+  fi
   if [ "$prebuilt" = 1 ]; then
     # It compiles against the cargo dependency rlibs, which a cache hit does not
     # restore; its inputs (FORK and the test itself) are in the cache key, so

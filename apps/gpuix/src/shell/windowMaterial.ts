@@ -12,10 +12,14 @@
 // - Blur 1–64 → 'transparent' plus `CGSSetWindowBackgroundBlurRadius` (`native/windowBlur.ts`). If the private
 //   call is refused the window falls back to the vibrancy material and the Settings button reads
 //   "Unavailable, use Auto". Vibrancy always applies; only a custom blur can be refused.
+// - Windows 11 22H2+ (`platform/desktopMaterial.ts`, WP9): Auto → Mica, a custom blur → Acrylic (DWM; the system sets the
+//   strength, so the radius is not applied), opaque stays opaque. Linux and Windows 10: always opaque; the theme paints the
+//   Solid frame colour under the glass (`theme.ts`).
 import { useEffect, useSyncExternalStore } from 'react'
 import { useGpuix } from '@gpuix/react'
 import { applyDesktopMaterial } from '../native/material.ts'
 import { blurCallAvailable, forgetTransparentFlags, setWindowBlurRadius } from '../native/windowBlur.ts'
+import { DESKTOP_MATERIAL, type DesktopMaterial } from '../platform/desktopMaterial.ts'
 import { OPAQUE_COVERAGE, type ThemeVariant, type VariantMaterial, type WindowScope } from '../platform/translucency.ts'
 import { windowCoverage } from '../theme.ts'
 import { syncWindowAppearance } from './appearance.ts'
@@ -29,6 +33,14 @@ export type Backing = { mode: 'opaque' | 'blurred' | 'transparent'; radius: numb
 export function backingFor(m: Pick<VariantMaterial, 'blur' | 'sidebarOpacity' | 'contentOpacity'>, scope: WindowScope, variant: ThemeVariant): Backing {
   if (scope === 'none' || windowCoverage(variant, scope, m.sidebarOpacity, m.contentOpacity) >= OPAQUE_COVERAGE) return { mode: 'opaque', radius: 0 }
   return m.blur === null ? { mode: 'blurred', radius: 0 } : { mode: 'transparent', radius: m.blur }
+}
+
+/** The addon's window background for `backing` on this OS: macOS takes the backing as it is (`apply` adds the blur). */
+export type NativeBackground = Backing['mode'] | 'mica' | 'acrylic'
+export function nativeBackground(backing: Backing, material: DesktopMaterial = DESKTOP_MATERIAL): NativeBackground {
+  if (material === 'vibrancy') return backing.mode
+  if (material === 'none' || backing.mode === 'opaque') return 'opaque'
+  return backing.mode === 'blurred' ? 'mica' : 'acrylic'
 }
 
 // The source's `lastDesktopWindowMaterial`: the last applied `${mode}:${radius}:${variant}`, so an unchanged render does nothing.
@@ -49,9 +61,9 @@ export const blurUnavailable = () => unavailable
 type Renderer = { setWindowBackground?: (mode: string) => void }
 let warned = false
 /** GPUI's current backing; `main.tsx` creates the window with it, so the first apply only changes what differs. */
-let nativeMode: Backing['mode'] | null = null
+let nativeMode: NativeBackground | null = null
 let knownRenderer: Renderer | undefined
-function setBackground(renderer: Renderer | null | undefined, mode: Backing['mode']) {
+function setBackground(renderer: Renderer | null | undefined, mode: NativeBackground) {
   if (nativeMode === mode) return
   const target = renderer ?? knownRenderer
   if (!target?.setWindowBackground) {
@@ -82,6 +94,10 @@ const vibrancy = (variant: ThemeVariant) => retry(() => applyDesktopMaterial(var
 /** Move the window to `backing`. */
 function apply(renderer: Renderer | null | undefined, backing: Backing, variant: ThemeVariant) {
   clearTimeout(timer)
+  if (DESKTOP_MATERIAL !== 'vibrancy') {
+    setBackground(renderer, nativeBackground(backing))
+    return
+  }
   if (backing.mode === 'opaque') {
     setBackground(renderer, 'opaque')
     if (blurEverApplied) setWindowBlurRadius(0)
@@ -120,6 +136,11 @@ function apply(renderer: Renderer | null | undefined, backing: Backing, variant:
  * so a transparent launch is applied again from the first `useWindowMaterial` effect (the key stays unset).
  */
 export function installWindowMaterial(backing: Backing, variant: ThemeVariant) {
+  if (DESKTOP_MATERIAL !== 'vibrancy') {
+    // Created with `nativeBackground(backing)` (main.tsx), which GPUI applies itself.
+    nativeMode = nativeBackground(backing)
+    return
+  }
   nativeMode = backing.mode === 'transparent' ? null : backing.mode
   if (backing.mode !== 'opaque') apply(null, backing, variant)
 }
