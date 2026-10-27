@@ -28,11 +28,13 @@ interface Flow {
   finished: boolean
   /** The app shell is being mounted under the still-opaque welcome (its first frames hitch where nobody sees them). */
   releasing: boolean
+  /** The shell mounted under the welcome has drawn its first frames: the welcome may dissolve now (`ShellEntrance` sets it). */
+  shellReady: boolean
   handoff: Handoff | null
   /** Opened from the Get-started card's Import: only the Projects scene, no progress, and its Back and Continue return to the app. */
   only: boolean
 }
-const INITIAL: Flow = { open: false, scene: 'hero', dir: 1, introPlayed: false, finished: false, releasing: false, handoff: null, only: false }
+const INITIAL: Flow = { open: false, scene: 'hero', dir: 1, introPlayed: false, finished: false, releasing: false, shellReady: false, handoff: null, only: false }
 export const flow = createStore<Flow>(INITIAL)
 
 const KEY = 'kybern.onboarding.completed'
@@ -90,8 +92,12 @@ export function goFrom(from: SceneId, to: SceneId): boolean {
   return true
 }
 
-/** Mount the shell this long before the welcome dissolves: its first frames (the whole sidebar, the Draft) land under an opaque layer. */
-const RELEASE_MS = 220
+/**
+ * The welcome dissolves once the shell mounted under it has drawn (`shellReady`), not after a fixed head start: mounting it blocks
+ * the JS thread for ~300 ms, which a fixed 220 ms ran into, so the dissolve's first frames and the mount's were one stall.
+ * If no frame is reported (a hidden window, a stock addon) it dissolves after this long anyway.
+ */
+export const RELEASE_MAX_MS = 900
 
 let releaseTimer: ReturnType<typeof setTimeout> | undefined
 let stopReleaseWait: (() => void) | undefined
@@ -100,6 +106,7 @@ let stopReleaseWait: (() => void) | undefined
 export function resetFlow() {
   clearTimeout(releaseTimer)
   stopReleaseWait?.()
+  stopReleaseWait = undefined
   resetCompleted()
   flow.reset(INITIAL)
 }
@@ -108,6 +115,13 @@ export function resetFlow() {
 export function finishFlow(kind: HandoffKind, projectId: string | null) {
   if (flow.get().releasing || flow.get().finished) return
   markCompleted()
-  flow.set({ releasing: true })
-  releaseTimer = setTimeout(() => flow.set({ open: false, finished: true, releasing: false, handoff: { kind, projectId, at: Date.now() } }), RELEASE_MS)
+  flow.set({ releasing: true, shellReady: false })
+  const dissolve = () => {
+    clearTimeout(releaseTimer)
+    stopReleaseWait?.()
+    stopReleaseWait = undefined
+    flow.set({ open: false, finished: true, releasing: false, shellReady: false, handoff: { kind, projectId, at: Date.now() } })
+  }
+  stopReleaseWait = flow.subscribe(() => { if (flow.get().shellReady) dissolve() })
+  releaseTimer = setTimeout(dissolve, RELEASE_MAX_MS)
 }

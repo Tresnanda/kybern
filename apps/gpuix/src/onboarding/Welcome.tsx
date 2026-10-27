@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { EASE } from '../motion/tokens.ts'
 import { Presence, type Exit } from '../motion/Presence.tsx'
 import { Swap } from '../motion/kit.tsx'
-import { ISLAND } from '../MatrixLoader.tsx'
+import { FILL_ISLAND, ISLAND } from '../MatrixLoader.tsx'
 import { TITLEBAR } from '../nav/TitleBar.tsx'
 import { useWindowControlsLayout, WindowControls } from '../nav/WindowControls.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
@@ -88,7 +88,7 @@ function Welcome() {
   const t = useTheme()
   const { trailing } = useWindowControlsLayout()
   return (
-    <div testId="onboarding" onMouseMove={(e) => { litPointer(e.x ?? null, e.y ?? null); magnetPointer(e.x ?? null, e.y ?? null) }} onMouseLeave={() => { litPointer(null, null); magnetPointer(null, null) }} style={{ position: 'relative', width: '100%', height: '100%', backgroundColor: canvasColor(t), overflow: 'hidden' }}>
+    <div {...FILL_ISLAND} testId="onboarding" onMouseMove={(e) => { litPointer(e.x ?? null, e.y ?? null); magnetPointer(e.x ?? null, e.y ?? null) }} onMouseLeave={() => { litPointer(null, null); magnetPointer(null, null) }} style={{ position: 'relative', width: '100%', height: '100%', backgroundColor: canvasColor(t), overflow: 'hidden' }}>
       <Grid />
       {SCENE_ORDER.map((id) => <SceneLayer key={id} id={id} />)}
       <MarkFlight />

@@ -8,6 +8,7 @@ import { patchDraft } from '../composer/store.ts'
 import { PickerChip } from '../kit/PickerChip.tsx'
 import { EASE } from '../motion/tokens.ts'
 import { addWindowKeyHandler } from '../nav/keys.ts'
+import { onFrame } from '../native/frame.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { toast } from '../shell/toasts.tsx'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
@@ -40,6 +41,15 @@ export function ShellEntrance({ children, style }: { children: ReactNode; style?
     return () => clearTimeout(timer)
   }, [live, at])
   const run = live && PATCHED_NATIVE
+  // While the shell is mounted under the welcome, report when it has drawn: two display frames after this commit, the first one
+  // with the whole sidebar and Draft in it, so the welcome starts dissolving into something already on screen.
+  const releasing = useFlow((s) => s.releasing)
+  useEffect(() => {
+    if (!releasing) return
+    let frames = 0
+    const stop = onFrame(() => { if (++frames >= 2) { stop(); flow.set({ shellReady: true }) } })
+    return stop
+  }, [releasing])
   return (
     <div
       paintTransform={run ? (REDUCED_MOTION ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: 0.2, ease: bez(EASE.out) }, generation: at } : { initial: { scale: 1.04, opacity: 0.4 }, animate: { scale: 1, opacity: 1 }, transition: { duration: 0.9, ease: bez(EASE.out) }, generation: at }) : undefined}
