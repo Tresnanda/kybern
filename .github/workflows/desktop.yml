@@ -369,6 +369,7 @@ jobs:
     # `binaries`); see gpuix-wpe.yml.
     if: ${{ github.event_name != 'push' || github.ref_type == 'tag' }}
     uses: ./.github/workflows/gpuix-wpe.yml
+    secrets: inherit
 
   gpuix-linux:
     # Kybern GPUIX for x86_64 Linux (beta): an AppImage (the updater artifact),

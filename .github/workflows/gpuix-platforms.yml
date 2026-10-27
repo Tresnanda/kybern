@@ -91,6 +91,7 @@ jobs:
   wpe:
     name: wpe
     uses: ./.github/workflows/gpuix-wpe.yml
+    secrets: inherit
 
   checks:
     name: ${{ matrix.id }}
