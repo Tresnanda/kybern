@@ -243,7 +243,7 @@ export const WindowMaterialPicker = memo(function WindowMaterialPicker({ column,
     <div style={{ display: 'flex', flexDirection: 'column', width: column }}>
       <CardGroup label="Window material" options={OPTIONS} value={option} card={card} previewHeight={previewHeight} previews={previews} onPick={(v) => pick(v, true)} />
       <div style={{ display: 'flex', width: column, minHeight: 32, marginTop: 10, paddingLeft: 4, paddingRight: 4 }}>
-        <Swap active={option} kind="text" style={{ width: column - 8, alignItems: 'flex-start', justifyContent: 'flex-start' }} innerStyle={{ width: column - 8, alignItems: 'flex-start', justifyContent: 'flex-start' }}>
+        <Swap active={option} kind="text" blur={false} style={{ width: column - 8, alignItems: 'flex-start', justifyContent: 'flex-start' }} innerStyle={{ width: column - 8, alignItems: 'flex-start', justifyContent: 'flex-start' }}>
           <Label color={t.textTertiary} size={12} lineHeight={16} style={{ width: '100%' }}>{MATERIAL_CAPTION[option]}</Label>
         </Swap>
       </div>

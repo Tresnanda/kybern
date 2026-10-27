@@ -11,29 +11,31 @@ import { N } from '../nav/glyphs.ts'
 import { TITLEBAR } from '../nav/TitleBar.tsx'
 import { Label, useTheme } from '../ui.tsx'
 import { Cta, ctaForeground } from './Cta.tsx'
-import { SceneHeading, useScenePrimary } from './sceneKit.tsx'
-import { skippedTitle } from './getStarted.ts'
+import { Later, SceneHeading, useScenePrimary } from './sceneKit.tsx'
+import { skippedTitle } from './skipped.ts'
 import { viewSkipped } from './SkippedDialog.tsx'
 import { ProjectsChips } from './ProjectsChips.tsx'
 import { ProjectsList } from './ProjectsList.tsx'
-import { finishFlow, goFrom, useFlow } from './flow.ts'
+import { finishFlow, goFrom } from './flow.ts'
 import { createPress } from './once.ts'
 import { noun } from './model.ts'
 import { In, Roll, Words } from './motion.tsx'
 import { chipsFor, ctaLabel, failureLine, MODE_CAPTION, MODE_OPTIONS, totalLabel, totals, type CtaLabel } from './projects.ts'
-import { allRows, cancelScan, chooseFolder, getImportSummary, isEmptyScan, rescan, setMode, startImport, startScan, useProjects } from './projectsStore.ts'
+import { allRows, cancelScan, chooseFolder, isEmptyScan, rescan, setMode, startImport, startScan, useProjects } from './projectsStore.ts'
 import type { ImportMode } from './model.ts'
 
 const CAL = 'Cal Sans'
 const LEDE = 17
 const LEDE_LINE = 25
+/** The toolbar's height: the 28 px mode switch, 8 px, the 16 px caption. */
+const TOOLBAR_H = 52
 
 /** "Found [1,662] chats across [4] agents." (rolling numbers), or the line that holds its place while the first agent reads. */
 function Lede({ found, agents, state }: { found: number; agents: number; state: 'looking' | 'found' | 'blank' }) {
   const t = useTheme()
   const word = (text: string) => <Label color={t.textSecondary} size={LEDE} lineHeight={LEDE_LINE} style={{ whiteSpace: 'nowrap' }}>{text}</Label>
   return (
-    <SwapOnChange active={state} kind="text" style={{ height: LEDE_LINE }}>
+    <SwapOnChange active={state} kind="text" blur={false} style={{ height: LEDE_LINE }}>
       {state === 'found' ? (
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 5 }}>
           {word('Found')}
@@ -51,12 +53,12 @@ function Lede({ found, agents, state }: { found: number; agents: number; state: 
 function CtaContent({ label, color }: { label: CtaLabel; color: string }) {
   const text = (value: string) => <Label color={color} size={15} lineHeight={20} weight={600} style={{ whiteSpace: 'nowrap' }}>{value}</Label>
   return (
-    <SwapOnChange active={label.kind === 'import' ? `import:${label.verb}` : label.kind} kind="text">
+    <SwapOnChange active={label.kind === 'import' ? `import:${label.verb}` : label.kind} kind="text" blur={false}>
       {label.kind === 'import' ? (
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4 }}>
           {text(label.verb)}
           <Roll value={label.n} size={15} lineHeight={20} color={color} weight={600} />
-          <SwapOnChange active={label.noun} kind="text">{text(label.noun)}</SwapOnChange>
+          <SwapOnChange active={label.noun} kind="text" blur={false}>{text(label.noun)}</SwapOnChange>
         </div>
       ) : text(label.text)}
     </SwapOnChange>
@@ -76,7 +78,7 @@ function Toolbar({ width }: { width: number }) {
         <Label color={t.textSecondary} size={12} lineHeight={16} weight={600} style={{ whiteSpace: 'nowrap' }}>Chats to bring in</Label>
         <Segmented testId="projects-mode" aria-label="Chats to bring in" tone="neutral" busy={locked} options={MODE_OPTIONS} value={mode} onChange={(value) => setMode(value as ImportMode)} />
         <div style={{ flexGrow: 1 }} />
-        <SwapOnChange active={total.kind} kind="text" style={{ justifyContent: 'flex-end', height: 20 }} innerStyle={{ justifyContent: 'flex-end' }} leavingStyle={{ right: 0, justifyContent: 'flex-end' }}>
+        <SwapOnChange active={total.kind} kind="text" blur={false} style={{ justifyContent: 'flex-end', height: 20 }} innerStyle={{ justifyContent: 'flex-end' }} leavingStyle={{ right: 0, justifyContent: 'flex-end' }}>
           {total.kind === 'chats' ? (
             <div testId="projects-total" style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 4 }}>
               <Roll value={total.chats} size={12.5} lineHeight={20} color={t.text} weight={600} />
@@ -87,7 +89,7 @@ function Toolbar({ width }: { width: number }) {
           ) : <Label color={t.textSecondary} size={12.5} lineHeight={20}>{' '}</Label>}
         </SwapOnChange>
       </div>
-      <SwapOnChange active={mode} kind="text" style={{ justifyContent: 'flex-start', width: '100%', minHeight: 16 }} innerStyle={{ justifyContent: 'flex-start' }}>
+      <SwapOnChange active={mode} kind="text" blur={false} style={{ justifyContent: 'flex-start', width: '100%', minHeight: 16 }} innerStyle={{ justifyContent: 'flex-start' }}>
         <Label color={t.textTertiary} size={12} lineHeight={16} style={{ paddingLeft: 8 }}>{MODE_CAPTION[mode]}</Label>
       </SwapOnChange>
     </div>
@@ -115,8 +117,6 @@ export function ProjectsScene() {
   const progress = useProjects((s) => s.progress)
   const importError = useProjects((s) => s.importError)
   const skipped = useProjects((s) => s.summary.skipped)
-  // Opened from the Get-started card: Back and Continue return to the app instead of walking on to Preferences.
-  const only = useFlow((s) => s.only)
 
   const sceneAt = useRef(Date.now())
   const chips = useMemo(() => chipsFor(providers ?? []), [providers])
@@ -133,7 +133,7 @@ export function ProjectsScene() {
 
   const choose = () => { void chooseFolder(renderer) }
   const freeChat = () => { cancelScan(); finishFlow('free', null) }
-  const leave = () => { if (only) finishFlow('built', getImportSummary().recentProjectId); else goFrom('projects', 'prefs') }
+  const leave = () => { goFrom('projects', 'prefs') }
   // A double click on Import must start the import once and not also walk on to Preferences.
   const press = useRef(createPress(600)).current
   const primary = () => press(() => {
@@ -171,19 +171,23 @@ export function ProjectsScene() {
 
   return (
     <div testId="projects-scene" style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: top, paddingBottom: 28, paddingLeft: 24, paddingRight: 24 }}>
+      {/* The scene's first draw stays small: the lede, chips, toolbar, list and actions mount a frame apart (`Later`), all before
+          any of them is visible. */}
       <SceneHeading id="projects" label="Bring in your past work."><Words lines={[['Bring', 'in', 'your', 'past', 'work.']]} size={headSize} lineHeight={Math.round(headSize * 1.1)} color={t.text} font={CAL} base={0.2} /></SceneHeading>
       <In delay={0.62} y={10} style={{ alignItems: 'center', marginTop: 14 }}>
-        <Lede found={found} agents={agents} state={lede} />
-        <SwapOnChange active={empty || failedView ? 'blank' : 'pick'} kind="text" style={{ height: LEDE_LINE }}>
-          <Label color={t.textSecondary} size={LEDE} lineHeight={LEDE_LINE}>{empty || failedView ? ' ' : 'Pick the projects to bring in.'}</Label>
-        </SwapOnChange>
+        <Later frames={1} placeholder={<div style={{ height: LEDE_LINE * 2 }} />}>
+          <Lede found={found} agents={agents} state={lede} />
+          <SwapOnChange active={empty || failedView ? 'blank' : 'pick'} kind="text" blur={false} style={{ height: LEDE_LINE }}>
+            <Label color={t.textSecondary} size={LEDE} lineHeight={LEDE_LINE}>{empty || failedView ? ' ' : 'Pick the projects to bring in.'}</Label>
+          </SwapOnChange>
+        </Later>
       </In>
 
       {!empty && !failedView && (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: 18, gap: 10 }}>
-          <ProjectsChips data={chips} since={sceneAt.current} />
+          <Later frames={2} placeholder={<div style={{ height: 32 }} />}><ProjectsChips data={chips} since={sceneAt.current} /></Later>
           {failure && status !== 'scanning' && (
-            <In y={6} blur={2} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <In y={6} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
               <Label color={t.textSecondary} size={13} lineHeight={18}>{failure}</Label>
               <Button testId="projects-rescan" variant="ghost" size="sm" onClick={() => rescan()}>Scan again</Button>
             </In>
@@ -192,33 +196,35 @@ export function ProjectsScene() {
       )}
 
       {empty || failedView ? (
-        <In delay={0.8} y={10} blur={0} style={{ width: col, flexGrow: 1, minHeight: 0, justifyContent: 'center' }}>{empty ? emptyBody : failedBody}</In>
+        <In delay={0.8} y={10} style={{ width: col, flexGrow: 1, minHeight: 0, justifyContent: 'center' }}>{empty ? emptyBody : failedBody}</In>
       ) : (
         <>
-          <In delay={0.85} y={10} style={{ width: col, marginTop: 20 }}><Toolbar width={col} /></In>
-          <In delay={0.95} y={10} blur={0} style={{ width: col, flexGrow: 1, minHeight: 0, marginTop: 10 }}><ProjectsList rowWidth={col - 8} /></In>
+          <In delay={0.85} y={10} style={{ width: col, marginTop: 20 }}><Later frames={3} placeholder={<div style={{ height: TOOLBAR_H }} />}><Toolbar width={col} /></Later></In>
+          <In delay={0.95} y={10} style={{ width: col, flexGrow: 1, minHeight: 0, marginTop: 10 }}><Later frames={4}><ProjectsList rowWidth={col - 8} /></Later></In>
         </>
       )}
 
       {importError && <Label color={t.red} size={12} lineHeight={16} style={{ marginTop: 8 }}>{importError}</Label>}
       {skipped > 0 && (
-        <In y={6} blur={2} style={{ width: col, marginTop: 10, paddingLeft: 8, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+        <In y={6} style={{ width: col, marginTop: 10, paddingLeft: 8, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
           <Label color={t.textSecondary} size={13} lineHeight={18} style={{ whiteSpace: 'nowrap' }}>{`${skippedTitle(skipped)}.`}</Label>
           <Button testId="projects-view-skipped" variant="ghost" size="sm" onClick={viewSkipped}>View skipped</Button>
         </In>
       )}
-      <In delay={1.05} y={10} style={{ width: col, marginTop: 14 }}>
+      <In delay={1.05} y={10} style={{ width: col, marginTop: 14, minHeight: 44 }}>
+        <Later frames={5}>
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 2 }}>
-          <Button testId="projects-back" variant="ghost" size="lg" icon={N.arrowLeft} onClick={() => (only ? finishFlow('built', null) : goFrom('projects', 'agents'))}>Back</Button>
+          <Button testId="projects-back" variant="ghost" size="lg" icon={N.arrowLeft} onClick={() => goFrom('projects', 'agents')}>Back</Button>
           {!empty && !failedView && (
             <div style={{ display: 'flex', flexDirection: 'row', gap: 2, opacity: importing ? 0 : 1, ...(importing ? { pointerEvents: 'none' as const } : {}) }}>
               <Button testId="projects-choose-folder" variant="ghost" size="lg" icon={N.folder} disabled={importing} onClick={choose}>Choose a folder</Button>
-              {!only && <Button testId="projects-free-chat" variant="ghost" size="lg" icon={N.newThread} disabled={importing} onClick={freeChat}>Start a free chat</Button>}
+              <Button testId="projects-free-chat" variant="ghost" size="lg" icon={N.newThread} disabled={importing} onClick={freeChat}>Start a free chat</Button>
             </div>
           )}
           <div style={{ flexGrow: 1 }} />
           <Cta testId="projects-primary" onClick={primary} progress={importing ? progress : undefined}><CtaContent label={label} color={ctaForeground(t)} /></Cta>
         </div>
+        </Later>
       </In>
     </div>
   )

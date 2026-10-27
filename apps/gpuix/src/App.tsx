@@ -6,7 +6,7 @@ import { CloseDirtyDialog } from './tabs/CloseDirty.tsx'
 import { WebPageUi } from './native/WebPageUi.tsx'
 import { WorkspaceDialogs } from './dialogs/Dialogs.tsx'
 import { OnboardingLayer, useOnboardingGate } from './onboarding/Welcome.tsx'
-import { HandoffController, ShellEntrance, TypedOverlay } from './onboarding/Handoff.tsx'
+import { HandoffController, useShellReady } from './onboarding/Handoff.tsx'
 import { useFlow } from './onboarding/flow.ts'
 import { EnvironmentDialogs } from './environments/Dialogs.tsx'
 import { useEnvironment } from './shell/environment.ts'
@@ -126,6 +126,7 @@ function Workspace() {
   const onboarding = useOnboardingGate()
   const releasing = useFlow((s) => s.releasing)
   const shell = !onboarding || releasing
+  useShellReady()
   // The slide plays only when the panel opens or closes; a drag or a window resize moves it at once.
   const [seenOpen, setSeenOpen] = useState(panelOpen)
   const [sliding, setSliding] = useState(false)
@@ -168,7 +169,7 @@ function Workspace() {
       style={{ userSelect: 'none', display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: singleFill ? undefined : fills.frame, position: 'relative' }}
     >
       {singleFill && <FrameFill color={fills.frame} />}
-      {shell && <ShellEntrance style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column' }}>
+      {shell && <>
       <TitleBar panelOpen={panelOpen} />
       <div style={{ display: 'flex', position: 'absolute', left: 0, right: 0, bottom: 0, top: TITLEBAR, paddingRight: INSET, paddingBottom: INSET }}>
         <NavRail />
@@ -241,9 +242,8 @@ function Workspace() {
           {panelOpen && <SidebarResizeHandle />}
         </div>
       </div>
-      </ShellEntrance>}
-      <TypedOverlay />
-<OnboardingLayer show={onboarding} />
+      </>}
+      <OnboardingLayer show={onboarding} />
       <HandoffController />
       <Palette />
       <HandoffDialog />
@@ -349,9 +349,7 @@ function HomePage() {
 
 function ConversationPage() {
   const selectedId = useApp((s) => s.selectedId)
-  // The first-run flow ending remounts the Draft, so it rises in under the dissolving welcome.
-  const handoffAt = useFlow((s) => s.handoff?.at ?? 0)
-  if (!selectedId) return <Draft key={handoffAt} />
+  if (!selectedId) return <Draft />
   return <ThreadPage selectedId={selectedId} />
 }
 

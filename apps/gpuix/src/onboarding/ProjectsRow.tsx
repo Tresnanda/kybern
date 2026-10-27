@@ -4,13 +4,13 @@
 // import bar and the pop. The scene's stores own all state, so a row that scrolls out and back keeps its checkmark and its progress.
 import { memo, useRef, useState } from 'react'
 import { Skeleton } from '../kit/Skeleton.tsx'
-import { Swap } from '../motion/kit.tsx'
-import { EASE } from '../motion/tokens.ts'
+import { DISTANCE, DURATION, EASE } from '../motion/tokens.ts'
 import { Tip } from '../nav/overlay.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { ProjectsCheck } from './ProjectsCheck.tsx'
-import { bez, riseTransform, stateTransform, useStable } from './motion.tsx'
+import { bez, riseTransform, stateTransform } from './motion.tsx'
+import { Later } from './sceneKit.tsx'
 import { ageLine, countLine, displayPath, importLine, ROW_H, staggerDelay, type Row } from './projects.ts'
 import { toggleRow, useProjects, type Arrival, type Flip } from './projectsStore.ts'
 
@@ -45,15 +45,13 @@ export const ProjectRow = memo(function ProjectRow({ row, rank, rowWidth, arriva
   if (mount.current === null) mount.current = { arrival: arrival && arrival.until > Date.now() ? arrival : undefined }
   const entered = mount.current.arrival
   const motion = PATCHED_NATIVE && !REDUCED_MOTION
-  const drop = entered ? riseTransform({ delay: entered.order * entered.step, duration: entered.step < 0.05 ? 0.4 : 0.6, y: entered.step < 0.05 ? -10 : -18, scale: entered.step < 0.05 ? undefined : 0.98, blur: entered.step < 0.05 ? 2 : 4, ease: [0.34, 1.1, 0.64, 1] }) : undefined
+  const drop = entered ? riseTransform({ delay: entered.order * entered.step, duration: entered.step < 0.05 ? 0.4 : 0.6, y: entered.step < 0.05 ? -10 : -18, scale: entered.step < 0.05 ? undefined : 0.98, ease: [0.34, 1.1, 0.64, 1] }) : undefined
   const sliding = motion && flip && flip.until > Date.now() ? flip : undefined
   // A new `generation` restarts the slide from its offset: the FLIP of a row that stayed while another dropped in above it.
   const slide = sliding ? { initial: { translateX: 0, translateY: sliding.dy }, animate: { translateX: 0, translateY: 0 }, transition: { duration: 0.55, ease: bez(EASE.out) }, generation: sliding.at } : undefined
 
-  // The count line rewrites top to bottom, 28 ms a row, after a mode change.
-  const shownMode = useStable(mode, REDUCED_MOTION ? 0 : Math.round(staggerDelay(rank) * 1000))
   const line = imp ? importLine(imp) : null
-  const primary = line ? line.text : countLine(row, shownMode)
+  const primary = line ? line.text : countLine(row, mode)
   const primaryKey = line ? `import:${line.kind}` : `count:${primary}`
   const done = line?.kind === 'done'
   const dimmed = locked && !checked
@@ -69,6 +67,8 @@ export const ProjectRow = memo(function ProjectRow({ row, rank, rowWidth, arriva
       paintTranslate={slide}
       style={{ width: '100%', height: ROW_H }}
     >
+      {/* Rows that land together (the first scan result) mount one frame apart: each drops in 35–60 ms after the one above. */}
+      <Later frames={entered ? 1 + entered.order : 0}>
       <div paintTransform={drop} style={{ width: '100%', height: ROW_H }}>
         <div
           testId={`project-row:${root}`}
@@ -111,17 +111,46 @@ export const ProjectRow = memo(function ProjectRow({ row, rank, rowWidth, arriva
             </div>
           )}
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', width: RIGHT_W, flexShrink: 0, pointerEvents: 'none' }}>
-            <Swap active={primaryKey} kind="text" style={{ justifyContent: 'flex-end', width: '100%' }} innerStyle={{ justifyContent: 'flex-end' }} leavingStyle={{ right: 0, justifyContent: 'flex-end' }} still blur={false}>
-              <Label color={line?.kind === 'waiting' ? t.textTertiary : line?.kind === 'failed' ? t.red : t.textSecondary} size={12} lineHeight={16} style={{ whiteSpace: 'nowrap' }}>{primary}</Label>
-            </Swap>
+            {/* After a mode change the count line rewrites top to bottom, 28 ms a row. */}
+            <CountLine active={primaryKey} text={primary} color={line?.kind === 'waiting' ? t.textTertiary : line?.kind === 'failed' ? t.red : t.textSecondary} delay={line ? 0 : staggerDelay(rank)} />
             <Label color={t.textTertiary} size={12} lineHeight={16} style={{ marginTop: 2, whiteSpace: 'nowrap' }}>{ageLine(row, Date.now())}</Label>
           </div>
           {imp && imp.state !== 'queued' && !noBar && <ImportBar fraction={line?.fraction ?? 0} state={imp.state} green={done} />}
         </div>
       </div>
+      </Later>
     </div>
   )
 })
+
+/**
+ * The count line's text swap (the kit `Swap`'s text motion, no blur), staggered by `delay` in paint. A mode change is one commit for
+ * every row: the rows used to wait out their stagger in timers and drop the leaving copy on completion, two commits a row (~45 for a
+ * mode change, each a ~9 ms draw). The leaving copy stays mounted, transparent, until the next change.
+ */
+function CountLine({ active, text, color, delay }: { active: string; text: string; color: string; delay: number }) {
+  const state = useRef<{ active: string; text: string; color: string; gen: number; prev: { text: string; color: string } | null }>({ active, text, color, gen: 0, prev: null })
+  const s = state.current
+  if (s.active !== active) state.current = { active, text, color, gen: s.gen + 1, prev: { text: s.text, color: s.color } }
+  else { s.text = text; s.color = color }
+  const { gen, prev } = state.current
+  const motion = PATCHED_NATIVE && gen > 0
+  const enter = !motion ? undefined : REDUCED_MOTION
+    ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: 0.15, ease: bez(EASE.out) } }
+    : { initial: { opacity: 0, translateY: DISTANCE.micro }, animate: { opacity: 1, translateY: 0 }, transition: { duration: DURATION.fast, delay, ease: bez(EASE.smoothOut) } }
+  const leave = REDUCED_MOTION
+    ? { initial: false as const, animate: { opacity: 0 }, transition: { duration: 0 } }
+    : { initial: { opacity: 1, translateY: 0 }, animate: { opacity: 0, translateY: -DISTANCE.micro }, transition: { duration: DURATION.quick, delay, ease: bez(EASE.inOut) } }
+  const label = (value: string, tint: string) => <Label color={tint} size={12} lineHeight={16} style={{ whiteSpace: 'nowrap' }}>{value}</Label>
+  return (
+    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', width: '100%' }}>
+      <div key={gen} paintTransform={enter} style={{ display: 'flex', justifyContent: 'flex-end' }}>{label(state.current.text, state.current.color)}</div>
+      {prev && PATCHED_NATIVE && (
+        <div key={`out-${gen}`} paintTransform={leave} style={{ position: 'absolute', right: 0, top: 0, display: 'flex', justifyContent: 'flex-end', pointerEvents: 'none' }}>{label(prev.text, prev.color)}</div>
+      )}
+    </div>
+  )
+}
 
 /** The 2 px progress bar along the row's bottom: grows with the project's own progress, turns green, then fades. */
 function ImportBar({ fraction, state, green }: { fraction: number; state: string; green: boolean }) {
@@ -145,7 +174,7 @@ export function SkeletonRow({ index }: { index: number }) {
   const t = useTheme()
   return (
     <div
-      paintTransform={riseTransform({ delay: index * 0.08, y: 8, blur: 2 })}
+      paintTransform={riseTransform({ delay: index * 0.08, y: 8 })}
       style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 14, width: '100%', height: ROW_H, paddingLeft: 14, paddingRight: 16, borderRadius: 16, backgroundColor: t.surface, borderWidth: 1, borderColor: t.cardEdge }}
     >
       <Skeleton width={16} height={16} radius={5} />

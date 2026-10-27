@@ -12,6 +12,7 @@ import { Icon } from '../icons.tsx'
 import { useControls } from '../kit/controls.ts'
 import { withAlpha } from '../kit/Switch.tsx'
 import { Collapse } from '../motion/kit.tsx'
+import { Presence, type Exit } from '../motion/Presence.tsx'
 import { pressTransform } from '../motion/press.ts'
 import { EASE } from '../motion/tokens.ts'
 import { N } from '../nav/glyphs.ts'
@@ -34,6 +35,9 @@ export const WARNING = 'Agents can change any file and reach the internet withou
 /** The product default, which carries the "Default" tag whatever is saved. */
 const DEFAULT_MODE: PermissionMode = 'supervised'
 const HIGHLIGHT = { type: 'tween', duration: 0.3, ease: bez(EASE.out) } as const
+/** The Full access tint fades in and out over 250 ms (Reduce Motion: 150 ms in, `Presence`'s 100 ms out). */
+const TINT_IN = { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: REDUCED_MOTION ? 0.15 : 0.25, ease: bez(EASE.out) } }
+const TINT_OUT: Exit = { to: { opacity: 0 }, duration: 0.25, ease: EASE.out }
 
 // ─── Saving ───────────────────────────────────────────────────────────────
 
@@ -135,10 +139,14 @@ export const PermissionList = memo(function PermissionList({ column }: { column:
               pointerEvents: 'none',
             }}
           />
-          <div
-            paintTransform={PATCHED_NATIVE ? { initial: false, animate: { opacity: full ? 1 : 0 }, transition: { duration: REDUCED_MOTION ? 0.15 : 0.25, ease: bez(EASE.out) }, retain: true } : undefined}
-            style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, borderRadius: 14, backgroundColor: withAlpha(t.fullAccess, t.variant === 'dark' ? 0.16 : 0.1), borderWidth: 1, borderColor: withAlpha(t.fullAccess, 0.35), pointerEvents: 'none', ...(PATCHED_NATIVE ? {} : { opacity: full ? 1 : 0 }) }}
-          />
+          {/* The orange exists only while Full access is picked. Held at a retained opacity of 0 instead, a full draw presented before
+              that opacity was applied again painted it at full strength: the list flashed orange when anything on the scene changed. */}
+          <Presence show={full} enter={TINT_IN} exit={TINT_OUT} style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, pointerEvents: 'none' }}>
+            <div
+              testId="prefs-mode-tint"
+              style={{ flexGrow: 1, borderRadius: 14, backgroundColor: withAlpha(t.fullAccess, t.variant === 'dark' ? 0.16 : 0.1), borderWidth: 1, borderColor: withAlpha(t.fullAccess, 0.35), pointerEvents: 'none' }}
+            />
+          </Presence>
         </PaintTranslate>
         {MODES.map((m, i) => {
           const selected = i === index

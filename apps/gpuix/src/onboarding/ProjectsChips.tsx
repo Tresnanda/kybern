@@ -40,7 +40,7 @@ function Chip({ chip, index, since }: { chip: ChipInfo; index: number; since: nu
       {failed
         ? <Label color={t.textSecondary} size={13} lineHeight={18} style={{ whiteSpace: 'nowrap', pointerEvents: 'none' }}>Couldn’t read</Label>
         : <Roll value={chip.sessions} size={13} lineHeight={18} color={t.textSecondary} weight={500} />}
-      <Swap active={chip.state} kind="icon" still style={{ width: 14, height: 14, flexShrink: 0 }}>
+      <Swap active={chip.state} kind="icon" still blur={false} style={{ width: 14, height: 14, flexShrink: 0 }}>
         {chip.state === 'scanning'
           ? <MatrixLoader variant="orbit" />
           : failed
@@ -51,7 +51,7 @@ function Chip({ chip, index, since }: { chip: ChipInfo; index: number; since: nu
   )
   const wait = useRef<number | null>(null)
   if (wait.current === null) wait.current = lead(since)
-  const risen = riseTransform({ delay: wait.current + index * 0.08, duration: 0.45, y: 10, blur: 3 })
+  const risen = riseTransform({ delay: wait.current + index * 0.08, duration: 0.45, y: 10 })
   return (
     <div paintTransform={risen} style={{ display: 'flex', flexShrink: 0 }}>
       {failed && chip.error ? <Tip label={chip.error} side="bottom">{body}</Tip> : body}
@@ -65,7 +65,7 @@ function MissingChip({ missing, index, since }: { missing: Chips['missing']; ind
   const names = list(missing.map((m) => m.name))
   const wait = useRef<number | null>(null)
   if (wait.current === null) wait.current = lead(since)
-  const risen = riseTransform({ delay: wait.current + index * 0.08, duration: 0.45, y: 10, blur: 3 })
+  const risen = riseTransform({ delay: wait.current + index * 0.08, duration: 0.45, y: 10 })
   return (
     <div paintTransform={risen} style={{ display: 'flex', flexShrink: 0 }}>
       <Tip label={`Not installed: ${names}`} side="bottom">

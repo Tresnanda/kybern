@@ -13,7 +13,7 @@ import { finishFlow, goFrom } from './flow.ts'
 import { windowMaterialAvailable } from './model.ts'
 import { In, Words } from './motion.tsx'
 import { PermissionList } from './PermissionList.tsx'
-import { SceneHeading, useScenePrimary } from './sceneKit.tsx'
+import { Later, SceneHeading, useScenePrimary } from './sceneKit.tsx'
 import { COLUMN_GAP, SIDE_PAD, prefsLayout } from './prefsLayout.ts'
 import { WindowMaterialPicker } from './WindowMaterialPicker.tsx'
 
@@ -51,19 +51,19 @@ export function PreferencesScene() {
             <In delay={0.5} style={{ width: L.left, gap: 22 }}>
               <div style={{ display: 'flex', flexDirection: 'column', width: L.left }}>
                 <Section>Appearance</Section>
-                <AppearancePicker card={L.card} previewWidth={L.preview.width} previewHeight={L.preview.height} />
+                <Later frames={1}><AppearancePicker card={L.card} previewWidth={L.preview.width} previewHeight={L.preview.height} /></Later>
               </div>
               {/* Linux and Windows 10 draw Kybern's window opaque, so there is nothing to choose: the section is not offered. */}
               {windowMaterialAvailable(DESKTOP_MATERIAL) && (
                 <div style={{ display: 'flex', flexDirection: 'column', width: L.left }}>
                   <Section>Window</Section>
-                  <WindowMaterialPicker column={L.left} card={L.card} previewWidth={L.preview.width} previewHeight={L.preview.height} />
+                  <Later frames={2}><WindowMaterialPicker column={L.left} card={L.card} previewWidth={L.preview.width} previewHeight={L.preview.height} /></Later>
                 </div>
               )}
             </In>
             <In delay={0.58} style={{ width: L.right }}>
               <Section>When an agent wants to change something</Section>
-              <PermissionList column={L.right} />
+              <Later frames={3}><PermissionList column={L.right} /></Later>
             </In>
           </div>
           <div style={{ height: 28 }} />
