@@ -261,7 +261,7 @@ native module" in `apps/gpuix/native/README.md` first.
 Daemon, CLI, Tauri desktop and GPUIX share the workspace/Tauri version and
 `vX.Y.Z` release pipeline. The mobile app has its own `expo.version`; EAS manages native build
 numbers remotely. A push to `main` is not a release. The desktop release script
-does not version or build mobile. See the root README's Releasing section.
+does not version or build mobile. See `RELEASING.md`.
 Do not push mobile version tags through the broad daemon release trigger without
 first separating the workflows. Breaking protocol changes require a coordinated
 `PROTOCOL_VERSION` change; additive features may need a newer daemon too.
