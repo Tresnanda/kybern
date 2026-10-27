@@ -1,7 +1,9 @@
-# Kybern on GPUIX (experimental)
+# Kybern GPUIX
 
-The desktop client's look, rendered natively by [GPUIX](https://gpuix.dev)
-(React on Zed's GPUI, painted with Metal) instead of a Tauri web view.
+The Kybern desktop app, rendered natively by [GPUIX](https://gpuix.dev) (React
+on Zed's GPUI): Metal on macOS, Direct3D 11 on Windows and Vulkan on Linux. It
+replaces the Tauri app in `apps/desktop`, which ships until its deprecation
+release.
 
 It connects to the running `kybernd` and reuses the shared
 `packages/kybern-client` transport and transcript projection. Colors come from
@@ -11,7 +13,8 @@ both imported directly so they stay in step with `apps/desktop`.
 ## Try it
 
 ```sh
-cd ~/projects/ade-gpuix/apps/gpuix
+cd apps/gpuix
+native/update.sh                           # build the patched addon pinned in native/FORK
 pnpm dev                                   # your real daemon (~/.kybern): real threads, real sends
 KYBERN_DATA_DIR=/path/to/scratch pnpm dev  # a scratch daemon instead (kybernd --data-dir … --port …)
 ```
@@ -54,20 +57,8 @@ and the thread panel, Home, Tasks, Notes, Pull requests and the palette follow t
 Mission Control's "Switch to Desktop N" shortcuts, the system takes ⌃digits before the app does: turn
 them off or use the tiles. Verify with `KYBERN_DATA_DIR=<…gpuix-scratch…/data> bun src/spaces/verify.ts`.
 
-## What works
+## Status
 
-Rail, thread panel (projects, threads, live status), home screen with the
-landing tray, thread transcript (user bubbles, markdown answers, the "Worked
-for" fold with tool rows, live "Working for" turns), and the composer, which
-sends to the open thread or starts one from home.
-
-## Known gaps
-
-- Cal Sans and JetBrains Mono load through `registerFont` (upstream since 0.11.0;
-  the converted TTFs are in `src/assets/fonts`). On a stock addon without it the
-  wordmark and code fall back to SF Pro semibold and Menlo.
-- No letter-spacing.
-- GPUIX markdown keeps links monochrome (underlined) rather than accent blue,
-  and renders bold at 700 instead of the desktop's 500.
-- Notes, Tasks, Pull requests, Usage and Settings are placeholders; menus,
-  pickers, attachments, approvals and the right dock are not built yet.
+Feature parity across macOS, Windows and Linux shipped in 0.16.0. What is still
+open per platform (known gaps, things not yet checked on real hardware) is in
+`PORTING-PLATFORMS.md`; the native addon and its checks are in `native/README.md`.
