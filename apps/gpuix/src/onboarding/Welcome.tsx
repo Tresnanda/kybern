@@ -44,13 +44,30 @@ export function useOnboardingGate(): boolean {
 /** The layer itself. `App.tsx` mounts it last in the window, under the dialogs and the toaster. */
 export function OnboardingLayer({ show }: { show: boolean }) {
   return (
-    <Presence
-      show={show}
-      exit={{ to: { opacity: 0, scale: 1.015 }, duration: 0.6, ease: EASE.out }}
-      style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0 }}
-    >
+    <IslandPresence show={show} exit={{ to: { opacity: 0, scale: 1.015 }, duration: 0.6, ease: EASE.out }}>
       <Welcome />
-    </Presence>
+    </IslandPresence>
+  )
+}
+
+/**
+ * A window-filling layer that enters and leaves (`Presence`) inside its own cached island, in that order: island outside, transform
+ * scope inside, and no scope at all at rest. An island that replays inside a scope (the layer or a scene held at identity, a scene
+ * mid-entrance) loses the scopes nested in it on an addon without the fork's nested-replay fix, so everything held at a retained
+ * opacity of 0 or mid-rise in it would present at full opacity for that frame: the outgoing and incoming scenes flashing together.
+ */
+function IslandPresence({ show, enter, exit, children }: { show: boolean; enter?: PaintTransformProps; exit: Exit; children: React.ReactNode }) {
+  const [present, setPresent] = useState(show)
+  if (show && !present) setPresent(true)
+  if (!present) return null
+  return (
+    <div style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column', ...(show ? {} : { pointerEvents: 'none' }) }}>
+      <div {...FILL_ISLAND} style={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        <Presence show={show} enter={enter} exit={exit} retainAtRest={false} onGone={() => setPresent(false)} style={{ flexGrow: 1, minHeight: 0 }}>
+          {children}
+        </Presence>
+      </div>
+    </div>
   )
 }
 
@@ -72,17 +89,12 @@ function SceneLayer({ id }: { id: SceneId }) {
   const dir = useFlow((s) => s.dir)
   // The first scene on screen appears without a push; later ones push in the direction the flow moved.
   const first = useRef(id === flow.get().scene && !flow.get().introPlayed && id === 'hero')
+  // Each scene is its own cached island: a commit in one scene lays out that scene alone, and while two are on screen the one that
+  // is leaving only replays its paint (retained exit frames update it in place). Unmounted when its exit ends.
   return (
-    <Presence
-      show={current}
-      enter={sceneEnter(mounted.current.dir, first.current)}
-      exit={sceneExit(dir)}
-      style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0 }}
-    >
-      {/* Each scene is its own cached island: a commit in one scene lays out that scene alone, and while two are on screen the
-          one that is leaving only replays its paint. */}
-      <div {...FILL_ISLAND} style={{ flexGrow: 1, minHeight: 0 }}><View /></div>
-    </Presence>
+    <IslandPresence show={current} enter={sceneEnter(mounted.current.dir, first.current)} exit={sceneExit(dir)}>
+      <View />
+    </IslandPresence>
   )
 }
 
@@ -90,7 +102,7 @@ function Welcome() {
   const t = useTheme()
   const { trailing } = useWindowControlsLayout()
   return (
-    <div {...FILL_ISLAND} testId="onboarding" onMouseMove={(e) => { litPointer(e.x ?? null, e.y ?? null); magnetPointer(e.x ?? null, e.y ?? null) }} onMouseLeave={() => { litPointer(null, null); magnetPointer(null, null) }} style={{ position: 'relative', width: '100%', height: '100%', backgroundColor: canvasColor(t), overflow: 'hidden' }}>
+    <div testId="onboarding" onMouseMove={(e) => { litPointer(e.x ?? null, e.y ?? null); magnetPointer(e.x ?? null, e.y ?? null) }} onMouseLeave={() => { litPointer(null, null); magnetPointer(null, null) }} style={{ position: 'relative', flexGrow: 1, minHeight: 0, backgroundColor: canvasColor(t), overflow: 'hidden' }}>
       <Grid />
       {SCENE_ORDER.map((id) => <SceneLayer key={id} id={id} />)}
       <MarkFlight />

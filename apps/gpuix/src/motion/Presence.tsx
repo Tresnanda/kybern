@@ -44,9 +44,10 @@ export const nextPresenceGeneration = () => ++presenceGeneration
  * wherever it is when it returns; `!show` tweens to `exit.to`. `enter` is the element's entrance (`enterTransform`,
  * `popupTransform`, ...); its `initial` is used only on the render that mounts the element (`fresh`). `generation` must change
  * whenever `show` does (the native side reports completion per generation and, with no `initial`, retargets from the value on
- * screen). Reduce Motion exits by fading out over 100 ms. Returns `undefined` with the stock addon.
+ * screen). Reduce Motion exits by fading out over 100 ms. `retain: false` drops the scope once shown and settled (see
+ * `Presence`'s `retainAtRest`). Returns `undefined` with the stock addon.
  */
-export function presenceTransform({ show, enter, exit, generation, fresh }: { show: boolean; enter?: PaintTransformProps; exit: Exit; generation: number; fresh: boolean }): PaintTransformProps | undefined {
+export function presenceTransform({ show, enter, exit, generation, fresh, retain = true }: { show: boolean; enter?: PaintTransformProps; exit: Exit; generation: number; fresh: boolean; retain?: boolean }): PaintTransformProps | undefined {
   if (!PATCHED_NATIVE) return undefined
   const leave: Exit = REDUCED_MOTION ? { to: { opacity: 0 }, duration: 0.1 } : exit
   return {
@@ -57,7 +58,7 @@ export function presenceTransform({ show, enter, exit, generation, fresh }: { sh
     ...(show && fresh && enter?.keyframes ? { keyframes: enter.keyframes } : {}),
     generation,
     // Shown is the rest (identity): stay retained, so the exit is paint-only from its first frame instead of a render.
-    retain: true,
+    retain,
   }
 }
 
@@ -76,8 +77,12 @@ export function exitsInstantly(exit: Exit): boolean {
  * ```tsx
  * <Presence show={open} enter={popupTransform()} exit={EXIT.menu}><Menu /></Presence>
  * ```
+ *
+ * `retainAtRest={false}`: no transform scope while shown and settled, so the first frame of the exit renders once. Use it
+ * around content with cached islands: an island that replays inside a scope relies on the native addon to keep the scopes
+ * nested in it, and a whole-surface scope held at identity is around every such replay.
  */
-export function Presence({ show, enter, exit, children, onGone, testId, style }: {
+export function Presence({ show, enter, exit, children, onGone, testId, style, retainAtRest = true }: {
   show: boolean
   enter?: PaintTransformProps
   exit: Exit
@@ -85,6 +90,7 @@ export function Presence({ show, enter, exit, children, onGone, testId, style }:
   onGone?: () => void
   testId?: string
   style?: StyleDesc
+  retainAtRest?: boolean
 }) {
   const last = useRef<ReactNode>(null)
   const [present, setPresent] = useState(show)
@@ -122,7 +128,7 @@ export function Presence({ show, enter, exit, children, onGone, testId, style }:
   return (
     <div
       testId={testId}
-      paintTransform={presenceTransform({ show, enter, exit, generation: current, fresh: current === mounted.current })}
+      paintTransform={presenceTransform({ show, enter, exit, generation: current, fresh: current === mounted.current, retain: retainAtRest })}
       onMotionComplete={event => {
         if (show || event.motionGeneration !== current) return
         last.current = null

@@ -5,13 +5,17 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { onFrame } from '../native/frame.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { isWindowVisible } from '../native/visibility.ts'
+import { REDUCED_MOTION } from '../ui.tsx'
 import { addWindowKeyHandler } from '../nav/keys.ts'
 import { isPrimaryChord } from '../platform/keys.ts'
 import { useFlow, type SceneId } from './flow.ts'
 import { skippedOpen } from './SkippedDialog.tsx'
 
-/** Long enough for the arriving scene to be laid out and the old one's focus to have left with it. */
-const FOCUS_DELAY_MS = 90
+/**
+ * After the arriving scene's entrance has settled (620 ms, Reduce Motion 180 ms; `sceneEnter` in `Welcome.tsx`). On macOS
+ * `focusElement` refreshes the whole window, which inside the entrance is one more full draw on top of the scene's own.
+ */
+const FOCUS_DELAY_MS = REDUCED_MOTION ? 240 : 700
 
 /**
  * The scene's heading. It is the focus target of a scene change, not a tab stop (`tabIndex={-1}`), and it declares no focus

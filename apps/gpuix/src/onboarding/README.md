@@ -53,6 +53,7 @@ bun scripts/onboarding-perf.ts <label> [--theme light] [--runs 2] [--islands]   
 BENCH_SCENE=projects bun scripts/onboarding-perf.ts <label>                      # mode switches and Select all only
 BENCH_SCENE=prefs bun scripts/onboarding-perf.ts <label>                         # slider drags
 bun scripts/onboarding-orange-check.ts [--rendered] [--theme light]              # the permission list stays free of orange
+bun scripts/onboarding-present-dump.ts <label> [--strips <dir>]                   # what each step change presented, scanned for flashes
 ```
 
 Each run starts its own scratch daemon and stops every daemon serving its data dir at the end (the window may start one too).
@@ -68,4 +69,11 @@ Each run starts its own scratch daemon and stops every daemon serving its data d
 - **`scrollToItem` and `focusElement` refresh the whole window on macOS** (every island rebuilds): call them only when needed.
 - **Never hide something at rest with a retained opacity of 0.** A full draw can present it before the opacity is re-applied: the
   Full access tint flashed orange that way. Mount it only while it shows (`Presence`).
+- **Islands outside scopes, never inside one.** A cached island that replayed inside a `paintTransform` scope lost the scopes
+  nested in it (fixed in the fork, `KYBERN_NESTED_SCOPE_REPLAY`): every step change presented frames with both scenes at full
+  opacity. `IslandPresence` (`Welcome.tsx`) puts the layer's and each scene's island outside its `Presence`, and drops the scope
+  at rest (`retainAtRest={false}`), so the window and the Welcome layer never replay an island inside a scope. Nested islands
+  inside a scene (the Projects list) still replay inside the scene's 620 ms entrance; only the fork fix covers those.
+- **Focus after the entrance.** The heading takes focus 700 ms after its scene arrives (`sceneKit.tsx`): `focusElement` is a
+  full window refresh on macOS, which inside the entrance was one more full draw.
 - The app's own first draws under the welcome (20–35 ms) happen while the welcome is still opaque; the fade waits for them.

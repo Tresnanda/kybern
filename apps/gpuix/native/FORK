@@ -11,8 +11,10 @@ repo=https://github.com/Tresnanda/gpuix.git
 # Second real-Windows pass: the forks' `winhw2` branches on `next` (window-state events off macOS, the window
 # menu on a right click on the caption, autoFocus inside an autoFocus parent), until merged into `kybern`.
 # gpuix `regressfix2`: that plus addLayoutObserver queued off macOS (no waited call per mounted row).
-commit=a18d072ea7cf097ff752b47020b3c443f8a848b3
+# `onboarding-retained`: that plus nested paintTransform scopes kept when a cached island replays inside a scope,
+# and the KYBERN_PRESENT_DUMP presented-frame dump (macOS), until merged into `kybern`.
+commit=4b842ce7435ee4232500085277531b2c95a4e7a7
 # The zed submodule commit `commit` records; update.sh refuses a checkout that differs.
-zed=9a8ab049501e22e1fa05813cbb775c04e65c40a1
+zed=c37974a06457caf4c3305777dd825bdd3e942089
 # The upstream tag `commit` is based on. It must be `@gpuix/native@<VERSION>`.
 upstream=@gpuix/native@0.11.0

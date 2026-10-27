@@ -1746,6 +1746,22 @@ no React render, Taffy layout, prepaint, island wake or ancestor invalidation.
   pixel, hit testing follows the paint, native press, frames without renders). Strips against the desktop's
   motion CSS in WebKit: `bun scripts/render9-strips.ts` then `bun scripts/render9-strip-metrics.ts <dir>`.
 
+### Nested scopes in a replayed island (onboarding-retained, 2026-10-28)
+
+A cached island that replays inside an active `paintTransform` scope (a scene's entrance, a `Presence` held at identity
+with `retain`) used to keep only the active scopes: `Scene::insert_primitive` mapped each replayed primitive's base through
+the active context, so every scope nested inside the island was dropped for that frame. An element held at opacity 0
+(before its entrance, a `Presence` after its exit) presented at full opacity and a rise jumped to its rest position; the
+onboarding showed both scenes at once on step changes. `Window::prepare_transform_replay` now composes, per recorded
+context, the active scopes with the recorded scopes nested inside the range (their values and masks), and replayed hitboxes
+follow the same context. `KYBERN_NESTED_SCOPE_REPLAY=0` is the A/B control. Check: `bun native/nested-replay-check.ts`
+(and `KYBERN_NESTED_SCOPE_REPLAY=0 bun native/nested-replay-check.ts --control`, which must see the flash).
+
+`KYBERN_PRESENT_DUMP=<dir>` (macOS, `gpui_apple` `metal_renderer.rs`) writes every presented drawable to
+`<dir>/<frame>-<ms>.png` at half size, copied on the frame's own command buffer. It is what reached the screen, which the
+automation screenshot (a fresh render) and `screencapture` without Screen Recording cannot show. Off and inert unless set;
+the passive-region present path (`KYBERN_REGION_LAYERS=1`) is not dumped. `scripts/onboarding-present-dump.ts` uses it.
+
 ## Variable font weights (render9)
 
 `font_weight.rs` / `font_weight_gpui.py` (gpui_macos): a face with a `wght` axis (SF Pro, the system UI font) renders
