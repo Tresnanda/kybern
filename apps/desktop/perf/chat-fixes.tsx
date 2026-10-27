@@ -1,7 +1,6 @@
 import { createRoot } from "react-dom/client"
 import { flushSync } from "react-dom"
 import { Composer } from "../src/views/Composer"
-import App from "../src/App"
 import { Transcript } from "../src/views/Transcript"
 import { EnvironmentSwitcher } from "../src/views/EnvironmentSwitcher"
 import { ResponseImage } from "../src/components/kybern/ResponseImage"
@@ -345,29 +344,9 @@ async function run() {
     }
   }
   delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
-  localStorage.setItem("kybern.sidebar.width", "480")
-  localStorage.setItem("kybern.dock.width", "700")
-  useStore.getState().set({ selected: { kind: "none" }, splitView: null, sidebarOpen: true, rightOpen: true, settingsOpen: false, connection: { state: "open" } })
+  // The Tauri dock's responsive width check is gone: Kybern GPUIX replaces the Tauri app on every platform.
+  useStore.getState().set({ selected: { kind: "none" }, splitView: null, sidebarOpen: true, rightOpen: false, settingsOpen: false, connection: { state: "open" } })
   useEnvironments.setState({ error: null, switching: false })
-  for (const width of [900, 1300]) {
-    flushSync(() => view.render(<ThemeProviderContext value={{ theme: "dark", translucent: false, setTheme: () => {}, setTranslucent: () => {} }}><div style={{ width }}><App /></div></ThemeProviderContext>))
-    // The dock springs between overlay and inline mode; wait for the settled layout instead of a fixed delay.
-    const layout = () => {
-      const chat = document.querySelector<HTMLElement>('[data-workspace-chat]'), dock = document.querySelector<HTMLElement>('[data-workspace-dock]')
-      return { chat, dock, chatWidth: chat?.getBoundingClientRect().width ?? 0, dockWidth: dock?.getBoundingClientRect().width ?? 0 }
-    }
-    const settled = () => { const { chat, dock, chatWidth, dockWidth } = layout(); return chat && dock && chatWidth >= 319 && dockWidth >= 415 && (dock.dataset.overlay === "true") === (width === 900) }
-    await sleep(600)
-    if (!settled()) await waitFor(settled, `${width}: dock layout did not settle ${JSON.stringify({ chat: layout().chatWidth, dock: layout().dockWidth, overlay: layout().dock?.dataset.overlay })}`).catch(() => {})
-    const { chat, dock } = layout() as { chat: HTMLElement; dock: HTMLElement }
-    check(chat?.getBoundingClientRect().width >= 319, `${width}: dock squeezed the chat below minimum width (${JSON.stringify({ chat: layout().chatWidth, dock: layout().dockWidth })})`)
-    check(dock?.getBoundingClientRect().width >= 415, `${width}: dock lost its usable width`)
-    check((dock.dataset.overlay === "true") === (width === 900), `${width}: incorrect responsive dock mode`)
-    check(chat.inert === (width === 900), `${width}: covered chat remains interactive`)
-    if (width === 900) check(dock.contains(document.activeElement), "Opening the overlay did not move focus into the panel")
-  }
-  document.querySelector<HTMLButtonElement>('[aria-label="Collapse panel"]')!.click()
-  await waitFor(() => !document.querySelector('[data-workspace-dock]'), "Responsive dock cannot be closed")
   if (import.meta.env.VITE_CHAT_PREVIEW === "image") {
     theme("dark")
     const image = URL.createObjectURL(await (await fetch("/release-background.png")).blob())
@@ -383,7 +362,7 @@ async function run() {
     document.querySelector<HTMLButtonElement>('[aria-label="Switch environment"]')!.click()
     await sleep(350)
   }
-  return { pass: true, imagePreviews: 6, restoredDraftThumbnails: true, previewRetry: true, previewCleanup: true, generatedImageHydration: true, generatedHydrationCalls, generatedLeaseReleases: generatedReleases, workspaceMinimumWidth: true, newlines: true, chronologicalImages: true, themes: 2, environmentAlignment: true, collapsedHeader: true }
+  return { pass: true, imagePreviews: 6, restoredDraftThumbnails: true, previewRetry: true, previewCleanup: true, generatedImageHydration: true, generatedHydrationCalls, generatedLeaseReleases: generatedReleases, newlines: true, chronologicalImages: true, themes: 2, environmentAlignment: true, collapsedHeader: true }
 }
 const report = (result: unknown) => (window as unknown as { webkit: { messageHandlers: { bench: { postMessage: (value: string) => void } } } }).webkit.messageHandlers.bench.postMessage(JSON.stringify(result))
 run().then(report).catch((error) => report({ pass: false, error: String(error), stack: error.stack }))
