@@ -44,6 +44,7 @@ mod thread_projection;
 mod thumbnail;
 mod usage;
 mod visuals;
+mod windows_path;
 mod ws;
 
 use std::fs::OpenOptions;
@@ -290,11 +291,13 @@ async fn purge_expired_notes(state: state::AppState) {
 /// Agent CLIs usually live in per-user directories that a service manager or a
 /// GUI launcher leaves off PATH. Append the usual ones so `claude`, `codex` and
 /// friends resolve without a binary override, keeping the inherited order first.
+/// On Windows the registry's Path comes next, so an app started with an old or
+/// thin Path still finds what a new terminal finds (`windows_path`).
 fn widen_path() {
     let current = std::env::var_os("PATH").unwrap_or_default();
     let mut entries: Vec<std::path::PathBuf> = std::env::split_paths(&current).collect();
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(std::path::PathBuf::from);
-    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    let mut candidates: Vec<std::path::PathBuf> = windows_path::registry_path();
     if let Some(home) = &home {
         candidates.extend([".local/bin", ".cargo/bin", ".bun/bin"].map(|relative| home.join(relative)));
         let nvm = std::env::var_os("NVM_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| home.join(".nvm"));
@@ -303,9 +306,14 @@ fn widen_path() {
         }
         candidates.extend(nvm_default_bin(&nvm));
     }
-    candidates.extend(["/opt/homebrew/bin", "/usr/local/bin"].map(std::path::PathBuf::from));
+    if cfg!(windows) {
+        candidates.extend(windows_path::tool_dirs(|name| std::env::var_os(name)));
+    } else {
+        candidates.extend(["/opt/homebrew/bin", "/usr/local/bin"].map(std::path::PathBuf::from));
+    }
+    let mut seen: std::collections::HashSet<String> = entries.iter().map(|entry| windows_path::dedupe_key(entry)).collect();
     for candidate in candidates {
-        if candidate.is_dir() && !entries.contains(&candidate) {
+        if candidate.is_dir() && seen.insert(windows_path::dedupe_key(&candidate)) {
             entries.push(candidate);
         }
     }
