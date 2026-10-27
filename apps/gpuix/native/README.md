@@ -1757,6 +1757,16 @@ context, the active scopes with the recorded scopes nested inside the range (the
 follow the same context. `KYBERN_NESTED_SCOPE_REPLAY=0` is the A/B control. Check: `bun native/nested-replay-check.ts`
 (and `KYBERN_NESTED_SCOPE_REPLAY=0 bun native/nested-replay-check.ts --control`, which must see the flash).
 
+A retained `paintTranslate` inside a `paintTransform` scope (`translate_subtrees`, `subtree_geometry.rs`) moved the
+presented primitive but not its transform base, so the next retained transform frame rebuilt it from the stale base and
+the subtree jumped back to its old offset for one frame (the onboarding's project rows sliding during a scene entrance). The
+base now takes the translation, before the transform, and the primitive is re-presented through its scope; hitboxes follow.
+A scope inside the translation still transforms about its untranslated origin (exact for opacity and translation).
+
+Not fixed, by design of the paint-only path: `paintTransform` opacity multiplies each primitive's alpha rather than
+compositing the subtree as a group, so overlapping paint shows through while a scope is below 1 (the onboarding's window
+material previews look translucent during a scene fade). Group opacity would need an offscreen layer per scope.
+
 `KYBERN_PRESENT_DUMP=<dir>` (macOS, `gpui_apple` `metal_renderer.rs`) writes every presented drawable to
 `<dir>/<frame>-<ms>.png` at half size, copied on the frame's own command buffer. It is what reached the screen, which the
 automation screenshot (a fresh render) and `screencapture` without Screen Recording cannot show. Off and inert unless set;

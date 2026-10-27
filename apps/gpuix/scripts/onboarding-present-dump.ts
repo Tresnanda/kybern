@@ -2,13 +2,13 @@
 // Metal renderer) writes each presented drawable to a PNG at half size; the automation screenshot cannot show this (it renders a
 // fresh frame). Then every transition is scanned for flashes: pixels that leave where they were and come back within 1–3 frames
 // (a hidden element or the other scene showing for a frame), which a cross-fade never does.
-//   bun scripts/onboarding-present-dump.ts <label> [--theme dark|light] [--strips <dir>] [--analyze]
+//   bun scripts/onboarding-present-dump.ts <label> [--theme dark|light] [--strips <dir>] [--analyze] [--trace]
 // `--analyze` re-reads a recorded run of that label instead of recording one.
 // Starts its own scratch daemon (BENCH_SCRATCH, BENCH_PORT, default 4391) and stops every daemon serving its data dir at the end.
 // Other KYBERN_* variables pass through (KYBERN_NESTED_SCOPE_REPLAY=0 is the native A/B control).
 import '../src/native/local-build.ts'
 import { spawn, spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pixels } from '../native/png.ts'
@@ -18,6 +18,8 @@ const arg = (name: string, fallback: string) => (process.argv.includes(name) ? p
 const label = process.argv[2] ?? 'run'
 const theme = arg('--theme', 'dark')
 const strips = process.argv.includes('--strips') ? arg('--strips', '') : null
+/** `--trace`: also write `KYBERN_MOTION_TRACE` / `KYBERN_DEBUG_ISLANDS` / frame costs to trace.log (each presented frame logs `present-dump N`). */
+const trace = process.argv.includes('--trace')
 const repo = path.resolve(import.meta.dir, '../../..')
 const dir = path.join(process.env.BENCH_SCRATCH ?? path.join(tmpdir(), 'kybern-onboarding-bench'), `present-${label}-${theme}`)
 const data = path.join(dir, 'data')
@@ -56,7 +58,8 @@ async function record() {
     f = await launchFixture(path.join(import.meta.dir, '..', 'src/main.tsx'), {
       GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: theme, KYBERN_WINDOW_SIZE: '1440x900', KYBERN_ONBOARDING: '1', KYBERN_PRESENT_DUMP: frames,
       KYBERN_DATA_DIR: data, KYBERN_CLIENT_CONFIG_DIR: path.join(dir, 'client'), KYBERN_GPUIX_CREDENTIALS_DIR: path.join(dir, 'credentials'), KYBERN_URL: '', KYBERN_TOKEN: '',
-    })
+      ...(trace ? { KYBERN_MOTION_TRACE: '1', KYBERN_DEBUG_ISLANDS: '1', KYBERN_FRAME_COSTS: '1' } : {}),
+    }, { stderr: (chunk) => { if (trace) appendFileSync(path.join(dir, 'trace.log'), chunk) } })
   } catch (error) {
     daemon.kill(); stopDaemons()
     throw error

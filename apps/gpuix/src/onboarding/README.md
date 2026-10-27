@@ -74,6 +74,8 @@ Each run starts its own scratch daemon and stops every daemon serving its data d
   opacity. `IslandPresence` (`Welcome.tsx`) puts the layer's and each scene's island outside its `Presence`, and drops the scope
   at rest (`retainAtRest={false}`), so the window and the Welcome layer never replay an island inside a scope. Nested islands
   inside a scene (the Projects list) still replay inside the scene's 620 ms entrance; only the fork fix covers those.
+- **Group opacity does not exist.** A fading scope multiplies each primitive's alpha, so an opaque panel over a bright shape lets the
+  shape show through mid-fade (the window material previews). Keep scene fades short or avoid stacked opaque art in them.
 - **Focus after the entrance.** The heading takes focus 700 ms after its scene arrives (`sceneKit.tsx`): `focusElement` is a
   full window refresh on macOS, which inside the entrance was one more full draw.
 - The app's own first draws under the welcome (20–35 ms) happen while the welcome is still opaque; the fade waits for them.

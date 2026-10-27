@@ -13,8 +13,8 @@ repo=https://github.com/Tresnanda/gpuix.git
 # gpuix `regressfix2`: that plus addLayoutObserver queued off macOS (no waited call per mounted row).
 # `onboarding-retained`: that plus nested paintTransform scopes kept when a cached island replays inside a scope,
 # and the KYBERN_PRESENT_DUMP presented-frame dump (macOS), until merged into `kybern`.
-commit=4b842ce7435ee4232500085277531b2c95a4e7a7
+commit=78a22398471de13f4db54d2e0bd0996f84ba8807
 # The zed submodule commit `commit` records; update.sh refuses a checkout that differs.
-zed=c37974a06457caf4c3305777dd825bdd3e942089
+zed=b55b64515ef4ca316bdb74648cac4852e56e80a7
 # The upstream tag `commit` is based on. It must be `@gpuix/native@<VERSION>`.
 upstream=@gpuix/native@0.11.0

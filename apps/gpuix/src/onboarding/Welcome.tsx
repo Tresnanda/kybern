@@ -43,8 +43,11 @@ export function useOnboardingGate(): boolean {
 
 /** The layer itself. `App.tsx` mounts it last in the window, under the dialogs and the toaster. */
 export function OnboardingLayer({ show }: { show: boolean }) {
+  // Retained from the start of the handoff (the welcome still opaque over the app drawing under it), so the fade's first frame is
+  // paint-only instead of a full window render.
+  const releasing = useFlow((s) => s.releasing)
   return (
-    <IslandPresence show={show} exit={{ to: { opacity: 0, scale: 1.015 }, duration: 0.6, ease: EASE.out }}>
+    <IslandPresence show={show} retainAtRest={releasing} exit={{ to: { opacity: 0, scale: 1.015 }, duration: 0.6, ease: EASE.out }}>
       <Welcome />
     </IslandPresence>
   )
@@ -52,18 +55,18 @@ export function OnboardingLayer({ show }: { show: boolean }) {
 
 /**
  * A window-filling layer that enters and leaves (`Presence`) inside its own cached island, in that order: island outside, transform
- * scope inside, and no scope at all at rest. An island that replays inside a scope (the layer or a scene held at identity, a scene
+ * scope inside, and no scope at all at rest (unless `retainAtRest`). An island that replays inside a scope (the layer or a scene held at identity, a scene
  * mid-entrance) loses the scopes nested in it on an addon without the fork's nested-replay fix, so everything held at a retained
  * opacity of 0 or mid-rise in it would present at full opacity for that frame: the outgoing and incoming scenes flashing together.
  */
-function IslandPresence({ show, enter, exit, children }: { show: boolean; enter?: PaintTransformProps; exit: Exit; children: React.ReactNode }) {
+function IslandPresence({ show, enter, exit, retainAtRest = false, children }: { show: boolean; enter?: PaintTransformProps; exit: Exit; retainAtRest?: boolean; children: React.ReactNode }) {
   const [present, setPresent] = useState(show)
   if (show && !present) setPresent(true)
   if (!present) return null
   return (
     <div style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column', ...(show ? {} : { pointerEvents: 'none' }) }}>
       <div {...FILL_ISLAND} style={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        <Presence show={show} enter={enter} exit={exit} retainAtRest={false} onGone={() => setPresent(false)} style={{ flexGrow: 1, minHeight: 0 }}>
+        <Presence show={show} enter={enter} exit={exit} retainAtRest={retainAtRest} onGone={() => setPresent(false)} style={{ flexGrow: 1, minHeight: 0 }}>
           {children}
         </Presence>
       </div>
