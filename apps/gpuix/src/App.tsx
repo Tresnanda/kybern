@@ -5,6 +5,7 @@ import { CloseGuard } from './shell/CloseGuard.tsx'
 import { CloseDirtyDialog } from './tabs/CloseDirty.tsx'
 import { WebPageUi } from './native/WebPageUi.tsx'
 import { WorkspaceDialogs } from './dialogs/Dialogs.tsx'
+import { OnboardingLayer } from './onboarding/Welcome.tsx'
 import { EnvironmentDialogs } from './environments/Dialogs.tsx'
 import { useEnvironment } from './shell/environment.ts'
 // The window shell (`App.tsx`, `views/chrome.tsx`): a 46px title bar and a 52px
@@ -232,6 +233,7 @@ function Workspace() {
           {panelOpen && <SidebarResizeHandle />}
         </div>
       </div>
+      <OnboardingLayer />
       <Palette />
       <HandoffDialog />
       <SessionsDialog />

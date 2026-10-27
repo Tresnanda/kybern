@@ -23,6 +23,7 @@ import { useLoopRunning, useLoopVisibility } from '../native/loop-visibility.ts'
 import { ISLAND, NATIVE_PAINT_ANIMATIONS, useLoaderStep } from '../MatrixLoader.tsx'
 import { connect, getClient, getState, resetClient, selectThread, set, useApp } from '../state.ts'
 import { ink, Label, LOGO_SVG, REDUCED_MOTION, useTheme } from '../ui.tsx'
+import { isCompleted, useFlow } from '../onboarding/flow.ts'
 import { GlassEdge } from '../kit/GlassEdge.tsx'
 import { frostBackdrop, frostFill, useGlass } from '../platform/glass.ts'
 
@@ -145,8 +146,10 @@ export function useWelcome(): WelcomeKind | null {
   const status = useApp((s) => s.status)
   const loaded = useApp((s) => s.listsLoaded)
   const nothing = useApp((s) => s.projects.length === 0 && s.threads.length === 0 && s.selectedId === null)
+  // A first run is the onboarding's (`onboarding/`); once it ended, an empty window is the Draft (a free chat), not this screen.
+  const finished = useFlow((s) => s.finished || s.open) || isCompleted()
   if (!loaded) return status === 'failed' || status === 'closed' ? 'unavailable' : 'connecting'
-  return status === 'open' && nothing ? 'empty' : null
+  return status === 'open' && nothing && !finished ? 'empty' : null
 }
 
 /** The first line of a fresh window: before the daemon answers, and before any project exists. */
