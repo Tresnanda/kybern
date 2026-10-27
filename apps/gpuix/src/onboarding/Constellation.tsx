@@ -238,7 +238,7 @@ export function Constellation({ agents: list, ready, defaultKind, orbit, quick }
         const spot = spotFor(agent.kind, orbit)
         return <Tile key={agent.kind} agent={agent} x={spot.x} y={spot.y} hub={hub} quick={quick} open={open === agent.kind} loopOn={loop.running} onClick={() => { if (justClosed(agent.kind)) return; agents.set({ popover: open === agent.kind ? null : agent.kind }) }} />
       })}
-      {badge && <DefaultBadge x={badge.x + 22} y={badge.y - 46} quick={quick} />}
+      {badge && <DefaultBadge x={badge.x + 22} y={badge.y - 46} />}
     </div>
   )
 }
@@ -261,12 +261,11 @@ function ReadyCount({ ready, color }: { ready: number; color: string }) {
 const RollInline = ({ value, color }: { value: number; color: string }) => <Roll value={value} size={12} lineHeight={16} color={color} weight={500} />
 
 /** One DEFAULT badge that moves between tiles instead of one per tile (SPEC §3c). */
-function DefaultBadge({ x, y, quick }: { x: number; y: number; quick: boolean }) {
+function DefaultBadge({ x, y }: { x: number; y: number }) {
   const t = useTheme()
   const first = useRef(true)
   const appear = first.current
   first.current = false
-  void quick
   return (
     <PaintTranslate
       initial={false}

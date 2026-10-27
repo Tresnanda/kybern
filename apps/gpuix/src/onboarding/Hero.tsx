@@ -13,7 +13,8 @@ import { observeElementBounds } from '../native/layout.ts'
 import { isWindowVisible } from '../native/visibility.ts'
 import { Label, LOGO_SVG, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { Cta } from './Cta.tsx'
-import { flow, next, useFlow } from './flow.ts'
+import { flow, goFrom, useFlow } from './flow.ts'
+import { createPress } from './once.ts'
 import { balance, bez, In, Words } from './motion.tsx'
 import { markRects } from './markFlight.ts'
 
@@ -98,7 +99,9 @@ export function Hero() {
   const current = useFlow((s) => s.scene === 'hero')
   const fast = skipped
   const go = useRef(() => {})
-  go.current = () => { setPressed(true); setTimeout(() => { setPressed(false); flow.set({ introPlayed: true }); next() }, 140) }
+  // Return and a click together, or a double click, press once: the second one is the same intent.
+  const press = useRef(createPress(600)).current
+  go.current = () => { press(() => { setPressed(true); setTimeout(() => { setPressed(false); flow.set({ introPlayed: true }); goFrom('hero', 'agents') }, 140) }) }
 
   useEffect(() => {
     if (!current) return

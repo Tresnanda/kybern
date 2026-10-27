@@ -2,7 +2,6 @@
 // dot grid, a progress label on the right, and one scene at a time. Each scene change pushes the next in and pulls the last out;
 // Back mid-flight reverses from where each is on screen (`Presence`). `finishFlow` dissolves the whole layer into the app.
 import type { PaintTransformProps } from '@gpuix/native/host'
-import { useWindowSize } from '@gpuix/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { EASE } from '../motion/tokens.ts'
 import { Presence, type Exit } from '../motion/Presence.tsx'
@@ -19,6 +18,7 @@ import { Hero } from './Hero.tsx'
 import { PreferencesScene } from './PreferencesScene.tsx'
 import { ProjectsScene } from './ProjectsScene.tsx'
 import { SCENE_ORDER, SCENE_TITLE, flow, noteReturningUser, openFlow, useFlow, wantsOnboarding, type SceneId } from './flow.ts'
+import './lifecycle.ts'
 import { magnetPointer } from './magnet.ts'
 import { flight, markRects } from './markFlight.ts'
 import { bez, FLIGHT } from './motion.tsx'
@@ -157,8 +157,6 @@ function MarkFlight() {
     }, 20)
     return () => clearInterval(wait)
   }, [scene, dir])
-  const size = useWindowSize({ intervalMs: 1000 })
-  void size
   const move = useMemo(() => run ? {
     dx: run.to.x + run.to.width / 2 - (run.from.x + run.from.width / 2),
     dy: run.to.y + run.to.height / 2 - (run.from.y + run.from.height / 2),

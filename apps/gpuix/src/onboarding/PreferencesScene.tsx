@@ -4,11 +4,13 @@
 import { useWindowSize } from '@gpuix/react'
 import { Button } from '../kit/Button.tsx'
 import { TITLEBAR } from '../nav/TitleBar.tsx'
+import { DESKTOP_MATERIAL } from '../platform/desktopMaterial.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { AppearancePicker } from './AppearancePicker.tsx'
 import { Cta } from './Cta.tsx'
 import { getImportSummary } from './projectsStore.ts'
-import { back, finishFlow } from './flow.ts'
+import { finishFlow, goFrom } from './flow.ts'
+import { windowMaterialAvailable } from './model.ts'
 import { In, Words } from './motion.tsx'
 import { PermissionList } from './PermissionList.tsx'
 import { SceneHeading, useScenePrimary } from './sceneKit.tsx'
@@ -51,10 +53,13 @@ export function PreferencesScene() {
                 <Section>Appearance</Section>
                 <AppearancePicker card={L.card} previewWidth={L.preview.width} previewHeight={L.preview.height} />
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', width: L.left }}>
-                <Section>Window</Section>
-                <WindowMaterialPicker column={L.left} card={L.card} previewWidth={L.preview.width} previewHeight={L.preview.height} />
-              </div>
+              {/* Linux and Windows 10 draw Kybern's window opaque, so there is nothing to choose: the section is not offered. */}
+              {windowMaterialAvailable(DESKTOP_MATERIAL) && (
+                <div style={{ display: 'flex', flexDirection: 'column', width: L.left }}>
+                  <Section>Window</Section>
+                  <WindowMaterialPicker column={L.left} card={L.card} previewWidth={L.preview.width} previewHeight={L.preview.height} />
+                </div>
+              )}
             </In>
             <In delay={0.58} style={{ width: L.right }}>
               <Section>When an agent wants to change something</Section>
@@ -63,7 +68,7 @@ export function PreferencesScene() {
           </div>
           <div style={{ height: 28 }} />
           <In delay={0.66} y={10} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: L.width }}>
-            <Button testId="onboarding-prefs-back" variant="ghost" size="lg" icon="arrowLeft" onClick={back}>Back</Button>
+            <Button testId="onboarding-prefs-back" variant="ghost" size="lg" icon="arrowLeft" onClick={() => goFrom('prefs', 'projects')}>Back</Button>
             <Cta testId="onboarding-done" onClick={done}>Start building</Cta>
           </In>
         </div>

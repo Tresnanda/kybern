@@ -44,6 +44,7 @@ export function markCompleted() {
   completedCache = true
   save(KEY, true)
 }
+/** Forget what was read: the next `isCompleted()` reads the mark of whichever environment is active then. */
 export function resetCompleted() { completedCache = null }
 
 export const useFlow = flow.use
@@ -79,16 +80,34 @@ export function go(scene: SceneId) {
   if (state.scene === scene) return
   flow.set({ scene, dir: SCENE_ORDER.indexOf(scene) >= SCENE_ORDER.indexOf(state.scene) ? 1 : -1 })
 }
-export const next = () => { const i = SCENE_ORDER.indexOf(flow.get().scene); const to = SCENE_ORDER[Math.min(SCENE_ORDER.length - 1, i + 1)]; if (to) go(to) }
-export const back = () => { const i = SCENE_ORDER.indexOf(flow.get().scene); const to = SCENE_ORDER[Math.max(0, i - 1)]; if (to) go(to) }
+/**
+ * Move from `from` to `to`, and only while `from` is the scene on screen. A button that is pressed twice (a double click, a key
+ * repeat, a click and ⌘↵ together) moves once, and a late press from a scene that has already gone is ignored.
+ */
+export function goFrom(from: SceneId, to: SceneId): boolean {
+  if (flow.get().scene !== from) return false
+  go(to)
+  return true
+}
 
 /** Mount the shell this long before the welcome dissolves: its first frames (the whole sidebar, the Draft) land under an opaque layer. */
 const RELEASE_MS = 220
+
+let releaseTimer: ReturnType<typeof setTimeout> | undefined
+let stopReleaseWait: (() => void) | undefined
+
+/** A different environment starts over: its own mark, its own first run (called when the active environment changes). */
+export function resetFlow() {
+  clearTimeout(releaseTimer)
+  stopReleaseWait?.()
+  resetCompleted()
+  flow.reset(INITIAL)
+}
 
 /** End the flow: the app is mounted under the welcome, then the welcome dissolves into it. `finished` keeps it from reopening this run. */
 export function finishFlow(kind: HandoffKind, projectId: string | null) {
   if (flow.get().releasing || flow.get().finished) return
   markCompleted()
   flow.set({ releasing: true })
-  setTimeout(() => flow.set({ open: false, finished: true, releasing: false, handoff: { kind, projectId, at: Date.now() } }), RELEASE_MS)
+  releaseTimer = setTimeout(() => flow.set({ open: false, finished: true, releasing: false, handoff: { kind, projectId, at: Date.now() } }), RELEASE_MS)
 }

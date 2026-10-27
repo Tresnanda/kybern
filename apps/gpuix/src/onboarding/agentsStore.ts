@@ -9,10 +9,11 @@ import { showDialog } from '../dialogs/store.ts'
 import { loadProviders } from '../nav/live.ts'
 import { useNav } from '../nav/store.ts'
 import { openExternal } from '../settings/external.ts'
-import { updateSettings } from '../settings/store.ts'
+import { latestSettings, refreshSettings, updateSettings } from '../settings/store.ts'
 import { getClient } from '../state.ts'
 import { refreshAccounts, useAccounts } from '../usage/accounts.ts'
 import { AGENT_NAMES, AGENT_ORDER, agentCommand, applyOverride, deriveAgent, pickDefault, type AgentOverride, type AgentState } from './model.ts'
+import { announce, defaultAgentAnnouncement } from './announce.ts'
 import { createStore } from './store.ts'
 
 export type SheetMode = 'install' | 'login' | 'update'
@@ -76,6 +77,8 @@ export function resetAgents() {
   timers.clear()
   detected = false
   stopCursorPoll()
+  stopWatching()
+  opened = ''
   agents.reset({ userDefault: null, override: {}, revealed: {}, cursor: null, popover: null, sheet: null, pulse: {}, connects: 0 })
 }
 
@@ -130,11 +133,22 @@ export function useAgents() {
 export const useAgentFor = (kind: ProviderKind) => useAgents().list.find((a) => a.kind === kind)!
 
 /** The user picked this agent for new chats ("Start new chats with it"); it stays put from now on. */
-export const setDefaultAgent = (kind: ProviderKind) => agents.set({ userDefault: kind })
+export const setDefaultAgent = (kind: ProviderKind) => { agents.set({ userDefault: kind }); announce(defaultAgentAnnouncement(kind)) }
 
-/** Leaving the step writes the default agent (every ready agent stays usable). */
-export async function saveDefaultAgent(kind: ProviderKind | null) {
-  if (kind) await updateSettings({ default_provider: kind })
+/**
+ * Leaving the step writes the default agent (every ready agent stays usable). `updateSettings` reports a failure through the
+ * settings store instead of throwing, and skips a write while another is saving, so the answer is whether the value stuck.
+ */
+export async function saveDefaultAgent(kind: ProviderKind | null): Promise<boolean> {
+  if (!kind) return true
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (!latestSettings()) await refreshSettings()
+    if (latestSettings()?.default_provider === kind) return true
+    await updateSettings({ default_provider: kind })
+    if (latestSettings()?.default_provider === kind) return true
+    await new Promise((resolve) => setTimeout(resolve, 150))
+  }
+  return false
 }
 
 // ─── Browser sign-in (the existing Add account sheet) ─────────────────────

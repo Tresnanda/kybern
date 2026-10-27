@@ -16,7 +16,8 @@ import { skippedTitle } from './getStarted.ts'
 import { viewSkipped } from './SkippedDialog.tsx'
 import { ProjectsChips } from './ProjectsChips.tsx'
 import { ProjectsList } from './ProjectsList.tsx'
-import { back, finishFlow, next, useFlow } from './flow.ts'
+import { finishFlow, goFrom, useFlow } from './flow.ts'
+import { createPress } from './once.ts'
 import { noun } from './model.ts'
 import { In, Roll, Words } from './motion.tsx'
 import { chipsFor, ctaLabel, failureLine, MODE_CAPTION, MODE_OPTIONS, totalLabel, totals, type CtaLabel } from './projects.ts'
@@ -132,11 +133,13 @@ export function ProjectsScene() {
 
   const choose = () => { void chooseFolder(renderer) }
   const freeChat = () => { cancelScan(); finishFlow('free', null) }
-  const leave = () => { if (only) finishFlow('built', getImportSummary().recentProjectId); else next() }
-  const primary = () => {
+  const leave = () => { if (only) finishFlow('built', getImportSummary().recentProjectId); else goFrom('projects', 'prefs') }
+  // A double click on Import must start the import once and not also walk on to Preferences.
+  const press = useRef(createPress(600)).current
+  const primary = () => press(() => {
     if (!importing && picked > 0) { startImport(); return }
     leave()
-  }
+  })
   useScenePrimary('projects', primary)
 
   const emptyBody = (
@@ -206,7 +209,7 @@ export function ProjectsScene() {
       )}
       <In delay={1.05} y={10} style={{ width: col, marginTop: 14 }}>
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 2 }}>
-          <Button testId="projects-back" variant="ghost" size="lg" icon={N.arrowLeft} onClick={() => (only ? finishFlow('built', null) : back())}>Back</Button>
+          <Button testId="projects-back" variant="ghost" size="lg" icon={N.arrowLeft} onClick={() => (only ? finishFlow('built', null) : goFrom('projects', 'agents'))}>Back</Button>
           {!empty && !failedView && (
             <div style={{ display: 'flex', flexDirection: 'row', gap: 2, opacity: importing ? 0 : 1, ...(importing ? { pointerEvents: 'none' as const } : {}) }}>
               <Button testId="projects-choose-folder" variant="ghost" size="lg" icon={N.folder} disabled={importing} onClick={choose}>Choose a folder</Button>

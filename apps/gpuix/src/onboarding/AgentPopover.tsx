@@ -1,6 +1,7 @@
 // The popover under a tile (SPEC §3f): what this agent needs, in a sentence, and the one or two things to do about it. Frosted,
 // 280 wide, opens from the tile's centre: opacity, scale .94 → 1, 4 px up, a blur clearing, 200 ms; leaves in 130 ms.
-import { useEffect } from 'react'
+import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
+import { useEffect, useState } from 'react'
 import { Button } from '../kit/Button.tsx'
 import { GlassEdge } from '../kit/GlassEdge.tsx'
 import { EXIT, Presence } from '../motion/Presence.tsx'
@@ -62,10 +63,26 @@ function Actions({ agent, isDefault }: { agent: Agent; isDefault: boolean }) {
 export function AgentPopover({ agent, isDefault, x, y, bounds }: { agent: Agent | null; isDefault: boolean; x: number; y: number; bounds: { min: number; max: number } }) {
   const t = useTheme()
   const g = useGlass()
+  const renderer = useGpuixRequired()
+  const [node, setNode] = useState<PublicInstance | null>(null)
+  const kind = agent?.kind ?? null
   useEffect(() => {
     if (!agent) return
     return addWindowKeyHandler((e) => { if (e.key === 'escape') { closePopover(); return true } return false })
   }, [agent])
+  // Focus moves into the popover when it opens and back to what opened it (the tile) when it closes, so a keyboard user does not
+  // lose their place and a screen reader reads the popover's name first.
+  useEffect(() => {
+    if (!kind) return
+    const opener = renderer.getFocusedElementId?.()
+    return () => {
+      queueMicrotask(() => {
+        const now = renderer.getFocusedElementId?.()
+        if (opener != null && now == null) renderer.focusElement?.(opener)
+      })
+    }
+  }, [kind, renderer])
+  useEffect(() => { if (node) renderer.focusElement?.(node.id) }, [node, renderer])
   const left = Math.min(Math.max(x - POPOVER_W / 2, bounds.min), bounds.max - POPOVER_W)
   const origin: [number, number] = [Math.min(1, Math.max(0, (x - left) / POPOVER_W)), 0]
   const enter = PATCHED_NATIVE
@@ -78,7 +95,11 @@ export function AgentPopover({ agent, isDefault, x, y, bounds }: { agent: Agent 
     <Presence show={!!agent} enter={enter} exit={{ ...EXIT.menu, to: REDUCED_MOTION ? { opacity: 0 } : { opacity: 0, scale: 0.96, translateY: 2 }, duration: 0.13 }} style={{ position: 'absolute', left, top: y, width: POPOVER_W }}>
       {agent && body && (
         <div
+          ref={setNode}
           testId="agent-popover"
+          role="dialog"
+          aria-label={body.lead}
+          tabIndex={-1}
           onMouseDownOutside={closePopover}
           backdrop={frostBackdrop(g, 'menus', 18)}
           style={{

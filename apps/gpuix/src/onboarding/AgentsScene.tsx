@@ -13,7 +13,9 @@ import { AgentPopover } from './AgentPopover.tsx'
 import { agents, saveDefaultAgent, startDetection, stopWatching, useAgents, watchLogins } from './agentsStore.ts'
 import { Constellation, orbitFor, spotFor } from './Constellation.tsx'
 import { Cta, ctaForeground } from './Cta.tsx'
-import { back, finishFlow, flow, next, useFlow } from './flow.ts'
+import { toast } from '../shell/toasts.tsx'
+import { finishFlow, flow, goFrom } from './flow.ts'
+import { createPress } from './once.ts'
 import { continueLabel, hostLabel, noun, statusLine } from './model.ts'
 import { In, Roll, Words } from './motion.tsx'
 import { SceneHeading, useScenePrimary } from './sceneKit.tsx'
@@ -49,14 +51,17 @@ export function AgentsScene() {
   const open = view.list.find((a) => a.kind === popover) ?? null
   const spot = open ? spotFor(open.kind, orbit) : null
   const left = (width - orbit.width) / 2
-  const cont = async () => { await saveDefaultAgent(view.default); next() }
+  // Move on first and save in the background: a slow or failed write must neither hold Continue nor let a second press skip a scene.
+  const press = useRef(createPress()).current
+  const cont = () => press(() => {
+    void saveDefaultAgent(view.default).then((saved) => { if (!saved) toast.error('Couldn’t save your default agent.', { description: 'Choose it in Settings › General.' }) })
+    goFrom('agents', 'projects')
+  })
   const rolled = ready > 0
   const sheet = agents.use((s) => s.sheet)
   // ⌘↵ continues, unless a popover or the terminal sheet has the window.
-  useScenePrimary('agents', rolled && !popover && !sheet ? () => void cont() : null)
+  useScenePrimary('agents', rolled && !popover && !sheet ? cont : null)
   const fg = ctaForeground(t, !rolled)
-  const scene = useFlow((s) => s.scene)
-  void scene
   return (
     <div style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', paddingBottom: 12 }}>
       <div ref={orbitBox}>
@@ -66,17 +71,20 @@ export function AgentsScene() {
       <SceneHeading id="agents" label="Your agents, in one place."><Words lines={[['Your', 'agents,', 'in', 'one', 'place.']]} size={headingSize(width)} lineHeight={Math.round(headingSize(width) * 1.1)} color={t.text} font={CAL} base={quick ? 0.1 : 0.5} /></SceneHeading>
       <div style={{ height: 12 }} />
       <In delay={quick ? 0.15 : 0.95} y={8} style={{ alignItems: 'center', width: Math.min(720, width - 48) }}>
-        <div role="status" aria-live="polite" style={{ display: 'flex', justifyContent: 'center', minHeight: 44 }}>
-          <Swap active={line} style={{ alignItems: 'flex-start' }}>
-            <Label color={t.textSecondary} size={15} lineHeight={22} style={{ textAlign: 'center', width: Math.min(720, width - 48) }}>{line}</Label>
-          </Swap>
+        {/* The region's own name is the new line; the Swap inside (the arriving and the leaving copy) is hidden from it, so only the new text is announced. */}
+        <div role="status" aria-live="polite" aria-label={line} style={{ display: 'flex', justifyContent: 'center', minHeight: 44 }}>
+          <div aria-hidden="true" style={{ display: 'flex', justifyContent: 'center' }}>
+            <Swap active={line} style={{ alignItems: 'flex-start' }}>
+              <Label color={t.textSecondary} size={15} lineHeight={22} style={{ textAlign: 'center', width: Math.min(720, width - 48) }}>{line}</Label>
+            </Swap>
+          </div>
         </div>
       </In>
       <div style={{ height: 12 }} />
       <In delay={quick ? 0.2 : 1.05} y={8} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-        <Button testId="agents-back" variant="ghost" icon={N.arrowLeft} onClick={back}>Back</Button>
+        <Button testId="agents-back" variant="ghost" icon={N.arrowLeft} onClick={() => goFrom('agents', 'hero')}>Back</Button>
         <Button testId="agents-later" variant="ghost" onClick={() => finishFlow('later', null)}>Set up later</Button>
-        <Cta testId="agents-continue" disabled={!rolled} onClick={() => void cont()}>
+        <Cta testId="agents-continue" disabled={!rolled} onClick={cont}>
           {rolled
             ? <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 5 }}>
                 <Label color={fg} size={15} lineHeight={20} weight={600} style={{ whiteSpace: 'nowrap' }}>Continue with</Label>
