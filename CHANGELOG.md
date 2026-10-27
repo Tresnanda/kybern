@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.17.0
+
+<!-- kybern-release-title: A welcome that sets up your agents and brings in your past work -->
+<!-- kybern-release-summary: New installs of Kybern GPUIX open on a short welcome that finds your coding agents, imports your past chats by project, and sets your theme, window style and approval mode. -->
+
+- New installs of Kybern GPUIX open on a welcome that finds your coding agents and helps you install or sign in to them. Every signed-in agent works side by side; you pick which one new chats start with.
+- Bring in your past work: Kybern reads your Claude Code, Codex, Cursor, Oh My Pi and pi history, groups it by project, and imports the latest 50 chats, every chat, or just the projects. Imported chats keep their dates, and anything skipped says why.
+- Choose your theme, a window style (Solid, Translucent sidebar or Full translucency) and when agents ask for approval before you start.
+- A Get started card on Home lists what's left: the kybern command, pairing your phone, Computer use, notifications and importing past chats.
+- `kybern sessions scan` and `kybern sessions import` find and import past agent sessions from the command line.
+
 ## 0.16.1
 
 <!-- kybern-release-title: Kybern on Windows finds Codex and your other agents -->
