@@ -9,20 +9,22 @@ import { addWindowKeyHandler } from '../nav/keys.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { frostBackdrop, frostFill, useGlass } from '../platform/glass.ts'
 import { Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
-import { assumeReady, cursorSetup, openPopover, openSheet, recheck, setDefaultAgent, signInWithBrowser, type Agent } from './agentsStore.ts'
+import type { ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
+import { agents, assumeReady, cursorSetup, openPopover, openSheet, recheck, setDefaultAgent, signInWithBrowser, type Agent } from './agentsStore.ts'
 import { POPOVER_DEFAULT } from './model.ts'
 import { bez } from './motion.tsx'
 
 export const POPOVER_W = 280
-/** When the last press outside closed a popover: the click that follows on its own tile must not reopen it. */
-export let closedAt = 0
-export const closePopover = () => { closedAt = Date.now(); openPopover(null) }
+/** When, and for which agent, the last press outside closed a popover: the click that follows on its own tile must not reopen it. */
+let closed = { at: 0, kind: null as ProviderKind | null }
+export const justClosed = (kind: ProviderKind) => closed.kind === kind && Date.now() - closed.at < 250
+export const closePopover = () => { closed = { at: Date.now(), kind: agents.get().popover }; openPopover(null) }
 
 function copy(agent: Agent, isDefault: boolean): { lead: string; sentence: string } {
   const { name } = agent
   switch (agent.state) {
     case 'ready': return isDefault
-      ? { lead: name, sentence: agent.email ? `${POPOVER_DEFAULT} Signed in as ${agent.email}.` : POPOVER_DEFAULT }
+      ? { lead: name, sentence: POPOVER_DEFAULT }
       : { lead: `${name} is ready`, sentence: 'Kybern uses it side by side with your other agents.' }
     case 'signin': return { lead: `Sign in to ${name}`, sentence: 'Kybern uses it as soon as you are signed in.' }
     case 'unknown': return { lead: `${name} is installed`, sentence: 'Kybern can’t tell if you are signed in. Sign in, or check again.' }
@@ -91,6 +93,7 @@ export function AgentPopover({ agent, isDefault, x, y, bounds }: { agent: Agent 
             <Label color={t.text} size={14} lineHeight={19} weight={600} style={{ whiteSpace: 'nowrap' }}>{body.lead}</Label>
           </div>
           {body.sentence && <Label color={t.textSecondary} size={13} lineHeight={19.5} style={{ width: POPOVER_W - 34 }}>{body.sentence}</Label>}
+          {agent.state === 'ready' && agent.email && <Label color={t.textTertiary} size={12} lineHeight={16} truncate style={{ width: POPOVER_W - 34 }}>{`Signed in as ${agent.email}`}</Label>}
           <Actions agent={agent} isDefault={isDefault} />
           {agent.state !== 'installing' && agent.state !== 'checking' && (
             <div style={{ display: 'flex', flexDirection: 'row', justifyContent: 'flex-start' }}>

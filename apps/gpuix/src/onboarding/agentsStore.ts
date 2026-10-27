@@ -217,18 +217,25 @@ export async function openSheet(kind: ProviderKind, mode: SheetMode) {
     const info = await client.call('terminals.create', { cols: 100, rows: 14, cwd: activeEnvironment().local ? homedir() : '/' })
     if (agents.get().sheet?.kind !== kind) { void client.call('terminals.close', { terminal_id: info.id }).catch(() => {}); return }
     agents.set((s) => ({ sheet: s.sheet ? { ...s.sheet, info } : s.sheet }))
-    // Type it the way a person would: the shell echoes each character.
+    // Type it the way a person would, once the shell has drawn its prompt (typed earlier, the tty would echo it twice).
     let i = 0
+    let started = false
     const type = () => {
       const live = agents.get().sheet
-      if (!live?.info || live.info.id !== info.id) return
-      if (i >= command.length) return
+      if (!live?.info || live.info.id !== info.id || i >= command.length) return
       const chunk = command.slice(i, i + 2)
       i += chunk.length
       void client.call('terminals.input', { terminal_id: info.id, data: b64(chunk) }).catch(() => {})
       later(22, type)
     }
-    later(450, type)
+    const start = () => { if (started) return; started = true; off(); type() }
+    let quiet: ReturnType<typeof setTimeout> | undefined
+    const off = client.onNotification('terminal.output', (params) => {
+      if ((params as { terminal_id?: string }).terminal_id !== info.id) return
+      clearTimeout(quiet)
+      quiet = setTimeout(start, 350)
+    })
+    later(3000, start)
   } catch (error) {
     agents.set((s) => ({ sheet: s.sheet ? { ...s.sheet, error: error instanceof Error ? error.message : String(error) } : s.sheet }))
   }

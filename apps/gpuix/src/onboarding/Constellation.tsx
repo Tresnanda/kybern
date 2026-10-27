@@ -14,7 +14,7 @@ import { observeElementBounds } from '../native/layout.ts'
 import { Label, LOGO_SVG, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import type { Theme } from '../theme.ts'
 import { useLoopRunning } from '../native/loop-visibility.ts'
-import { closedAt } from './AgentPopover.tsx'
+import { justClosed } from './AgentPopover.tsx'
 import { agents, type Agent } from './agentsStore.ts'
 import { flight, markRects } from './markFlight.ts'
 import { bez, riseTransform, Roll, SETTLE } from './motion.tsx'
@@ -236,7 +236,7 @@ export function Constellation({ agents: list, ready, defaultKind, orbit, quick }
       </div>
       {list.map((agent) => {
         const spot = spotFor(agent.kind, orbit)
-        return <Tile key={agent.kind} agent={agent} x={spot.x} y={spot.y} hub={hub} quick={quick} open={open === agent.kind} loopOn={loop.running} onClick={() => { if (Date.now() - closedAt < 200) return; agents.set({ popover: open === agent.kind ? null : agent.kind }) }} />
+        return <Tile key={agent.kind} agent={agent} x={spot.x} y={spot.y} hub={hub} quick={quick} open={open === agent.kind} loopOn={loop.running} onClick={() => { if (justClosed(agent.kind)) return; agents.set({ popover: open === agent.kind ? null : agent.kind }) }} />
       })}
       {badge && <DefaultBadge x={badge.x + 22} y={badge.y - 46} quick={quick} />}
     </div>
