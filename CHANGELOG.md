@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.16.1
+
+<!-- kybern-release-title: Kybern on Windows finds Codex and your other agents -->
+<!-- kybern-release-summary: Kybern on Windows now finds agent CLIs installed with npm, Scoop, pnpm, Volta or nvm-windows, even when the app started before you installed them. -->
+
+- On Windows, Kybern now finds Codex, OpenCode, pi and other agents installed with npm, Scoop, pnpm, Volta or nvm-windows, plus Node.js for Cursor. It reads the same Path a new terminal gets, so agents no longer show as "Not installed" when your terminal runs them fine.
+
 ## 0.16.0
 
 <!-- kybern-release-title: Kybern GPUIX on Windows and Linux, and a Coordinator that keeps its facts straight -->
