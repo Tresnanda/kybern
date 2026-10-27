@@ -15,10 +15,11 @@ import { useAgents } from './agentsStore.ts'
 import { LATER_TOAST, needsAfterFlow } from './getStarted.ts'
 import { startGetStarted } from './getStartedStore.ts'
 import { SkippedDialog, viewSkipped } from './SkippedDialog.tsx'
+import { announce, importAnnouncements, START_MARK, useAnnouncement, type ImportMark } from './announce.ts'
 import { flow, useFlow } from './flow.ts'
 import { count, noun } from './model.ts'
 import { bez, In } from './motion.tsx'
-import { getImportSummary, useImportSummary, type ImportSummary } from './projectsStore.ts'
+import { getImportSummary, projectsStore, type ImportSummary } from './projectsStore.ts'
 
 /** How long after the handoff the app still counts as "just handed off" (a Draft mounted in this window plays the entrance). */
 export const FRESH_MS = 3000
@@ -77,17 +78,21 @@ export function HandoffSlide({ index, children }: { index: number; children: Rea
 const FOLDER = ['Explain how this repo is structured', 'Find a bug worth fixing', 'Set up the dev environment', 'Review my latest changes']
 const FREE = ['Explain a concept I’m learning', 'Write a shell script for me', 'Help me read an error message', 'Plan a small project']
 
+/** The handoff whose chips were used. A used chip only hides the row: the handoff itself stays, because the Draft is keyed on it. */
+let usedFor = 0
+
 /** Four chips under the composer that fill it when pressed. Only right after the flow, and gone once one is used. */
 export function HandoffSuggestions({ free, fill }: { free: boolean; fill: (text: string) => void }) {
   const handoff = useFlow((s) => s.handoff)
   const [fresh] = useState(isFresh)
-  if (!handoff || !fresh) return null
+  const [used, setUsed] = useState(() => usedFor === (handoff?.at ?? 0))
+  if (!handoff || !fresh || used) return null
   const list = free ? FREE : FOLDER
   return (
     <div testId="onboarding-suggestions" style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8, paddingTop: 14, maxWidth: 470 }}>
       {list.map((text, i) => (
         <In key={text} delay={0.78 + i * 0.08} y={12} blur={2} duration={0.5}>
-          <PickerChip chevron={false} testId={`suggestion-${i}`} onClick={() => { fill(text); flow.set({ handoff: null }) }}>{text}</PickerChip>
+          <PickerChip chevron={false} testId={`suggestion-${i}`} onClick={() => { usedFor = handoff.at; setUsed(true); fill(text) }}>{text}</PickerChip>
         </In>
       ))}
     </div>
@@ -131,16 +136,36 @@ function sentence(s: ImportSummary) {
   return `${count(s.chats, 'chat')} ${noun(s.chats, 'is', 'are')} in your sidebar.${skipped}`
 }
 
-/** Mounted once in the app: the toast that follows the import and morphs into its summary, the free chat's draft target, the Get-started card's start, and the skipped-chats dialog. */
+/** The import toast for the summary as it is now: progress while it runs, the summary once it ends. Returns whether it is still running. */
+function showImportToast(s: ImportSummary): boolean {
+  if (s.phase === 'running') {
+    toast('Importing your chats', { id: TOAST, description: `${s.doneProjects} of ${count(s.projects, 'project')} done. You can start working now.`, progress: s.totalChats > 0 ? s.chats / s.totalChats : s.projects ? s.doneProjects / s.projects : 0, duration: Infinity })
+    return true
+  }
+  if (s.phase === 'done') {
+    if (s.mode === 'none') toast.success(`Added ${count(s.projects, 'project')}`, { id: TOAST, description: 'To bring in their chats, use Import past chats in the Get-started card on Home.', duration: 7000 })
+    else toast.success(`Imported ${count(s.projects, 'project')}`, { id: TOAST, description: sentence(s), duration: s.skipped ? Infinity : 7000, ...(s.skipped ? { action: { label: 'View skipped', onClick: viewSkipped } } : {}) })
+  }
+  return false
+}
+
+/** The live region: a screen reader hears each announcement once (`announce.ts`). Zero-size and transparent; it takes no room. */
+function Announcer() {
+  const { message } = useAnnouncement((s) => s)
+  return <div testId="onboarding-announcer" role="status" aria-live="polite" aria-label={message} style={{ position: 'absolute', left: 0, top: 0, width: 1, height: 1, opacity: 0, pointerEvents: 'none' }} />
+}
+
+/** Mounted once in the app: the toast that follows the import and morphs into its summary, the free chat's draft target, the Get-started card's start, the skipped-chats dialog, and the announcements. */
 export function HandoffController() {
   const handoff = useFlow((s) => s.handoff)
-  const summary = useImportSummary()
   const at = handoff?.at ?? 0
   const kind = handoff?.kind
   // Read live so the card knows, when the flow ends, whether an agent was ready.
   const ready = useAgents().ready.length > 0
   const readyNow = useRef(ready)
   readyNow.current = ready
+  /** The toast follows the import job on its own once the flow has ended, whatever happens to `handoff` after. */
+  const following = useRef(false)
   useEffect(() => { if (kind === 'free') patchDraft({ projectId: null }) }, [at, kind])
   useEffect(() => {
     // The card starts when a whole run ends; coming back from its Import button changes nothing about it.
@@ -152,13 +177,26 @@ export function HandoffController() {
     if (!at || !kind) return
     if (kind === 'later') { toast(LATER_TOAST.title, { id: TOAST, description: LATER_TOAST.description, duration: 8000 }); return }
     if (kind === 'free') return
-    const s = getImportSummary()
-    if (s.phase === 'running') {
-      toast('Importing your chats', { id: TOAST, description: `${s.doneProjects} of ${count(s.projects, 'project')} done. You can start working now.`, progress: s.totalChats > 0 ? s.chats / s.totalChats : s.projects ? s.doneProjects / s.projects : 0, duration: Infinity })
-    } else if (s.phase === 'done') {
-      if (s.mode === 'none') toast.success(`Added ${count(s.projects, 'project')}`, { id: TOAST, description: 'Import their chats anytime from each project’s menu.', duration: 7000 })
-      else toast.success(`Imported ${count(s.projects, 'project')}`, { id: TOAST, description: sentence(s), duration: s.skipped ? Infinity : 7000, ...(s.skipped ? { action: { label: 'View skipped', onClick: viewSkipped } } : {}) })
-    }
-  }, [at, kind, summary.phase, summary.doneProjects, summary.chats, summary.skipped])
-  return <SkippedDialog />
+    following.current = showImportToast(getImportSummary()) || getImportSummary().phase === 'none'
+  }, [at, kind])
+  useEffect(() => {
+    let last = getImportSummary()
+    return projectsStore.subscribe(() => {
+      const summary = projectsStore.get().summary
+      if (summary === last) return
+      last = summary
+      if (following.current && !showImportToast(summary) && summary.phase === 'done') following.current = false
+    })
+  }, [])
+  // Milestones for a screen reader: the import starting, each project settling, the import ending.
+  useEffect(() => {
+    let mark: ImportMark = START_MARK
+    return projectsStore.subscribe(() => {
+      const s = projectsStore.get()
+      const out = importAnnouncements(mark, { phase: s.summary.phase, plan: s.plan, imports: s.imports, summary: s.summary })
+      mark = out.mark
+      if (out.lines.length > 0) announce(out.lines.join(' '))
+    })
+  }, [])
+  return <><SkippedDialog /><Announcer /></>
 }
