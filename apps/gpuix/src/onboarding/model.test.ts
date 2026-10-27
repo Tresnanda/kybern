@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import type { AccountSummary, ProviderKind, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
-import { BLUR_MAX, normalizeVariantMaterial } from '../platform/translucency.ts'
+import { BLUR_MAX, DEFAULT_VARIANT_MATERIAL, defaultBlur, normalizeVariantMaterial } from '../platform/translucency.ts'
 import { applyMaterialPatch } from './prefsModel.ts'
 import {
   agentCommand, applyOverride, blurPercent, contentSlider, continueLabel, deriveAgent, isReturningUser, limitFor, materialPatch, materialSummary, optionOf, pickDefault, shouldOnboard,
-  statusLine, type AgentState, type GateInput,
+  statusLine, windowMaterialAvailable, type AgentState, type GateInput,
 } from './model.ts'
 
 const gate = (over: Partial<GateInput> = {}): GateInput => ({ listsLoaded: true, connected: true, projects: 0, threads: 0, threadOpen: false, completed: false, forced: false, ...over })
@@ -108,8 +108,24 @@ describe('window material', () => {
   const base = normalizeVariantMaterial({})
   test('the options map to VariantMaterial', () => {
     expect(materialPatch('solid', 'darwin')).toEqual({ material: 'solid' })
-    expect(materialPatch('sidebar', 'darwin')).toEqual({ material: 'translucent', sidebarOpacity: 85, contentOpacity: 100, surfaceOpacity: 60, blur: BLUR_MAX })
+    expect(materialPatch('sidebar', 'darwin')).toEqual({ material: 'translucent', sidebarOpacity: 90, contentOpacity: 100, lastContentOpacity: 90, surfaceOpacity: null, blur: BLUR_MAX })
     expect(materialPatch('full', 'darwin')).toEqual({ material: 'translucent', sidebarOpacity: 85, contentOpacity: 85, surfaceOpacity: 60, blur: BLUR_MAX })
+  })
+  test('Translucent sidebar is exactly the shipped default, so picking it on a fresh install changes nothing', () => {
+    for (const platform of ['darwin', 'win32', 'linux'] as const) {
+      const fresh = { ...DEFAULT_VARIANT_MATERIAL, blur: defaultBlur(platform) }
+      expect(applyMaterialPatch(fresh, materialPatch('sidebar', platform))).toEqual(fresh)
+    }
+    expect(applyMaterialPatch(base, materialPatch('sidebar', process.platform))).toEqual(DEFAULT_VARIANT_MATERIAL)
+  })
+  test('Full translucency and back lands on the default again', () => {
+    const full = applyMaterialPatch(base, materialPatch('full', 'darwin'))
+    expect(applyMaterialPatch(full, materialPatch('sidebar', 'darwin'))).toEqual({ ...DEFAULT_VARIANT_MATERIAL, blur: defaultBlur('darwin') })
+  })
+  test('the Window section is offered only where translucency can work', () => {
+    expect(windowMaterialAvailable('vibrancy')).toBe(true)
+    expect(windowMaterialAvailable('dwm')).toBe(true)
+    expect(windowMaterialAvailable('none')).toBe(false)
   })
   test('on Windows the sidebar keeps Mica and the whole window is Acrylic', () => {
     expect(materialPatch('sidebar', 'win32').blur).toBeNull()
@@ -134,5 +150,10 @@ describe('window material', () => {
     expect(blurPercent(m.blur)).toBe(100)
     expect(materialSummary(m, 60)).toBe('Sidebar 85% · Content 85% · Elements 60% · Blur 100%')
     expect(materialSummary(m, 60, false)).toBe('Sidebar 85% · Content 85% · Elements 60%')
+  })
+  test('a value still at its default reads Default or Auto', () => {
+    const d = applyMaterialPatch(base, materialPatch('sidebar', 'darwin'))
+    expect(materialSummary(d, null)).toBe('Sidebar 90% · Content 100% · Elements Default · Blur 100%')
+    expect(materialSummary({ ...d, blur: null }, null)).toBe('Sidebar 90% · Content 100% · Elements Default · Blur Auto')
   })
 })

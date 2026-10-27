@@ -11,6 +11,7 @@ import { EASE } from '../motion/tokens.ts'
 import { pressTransform } from '../motion/press.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { setAppearance, useAppearance, type Appearance } from '../settings/appearance.ts'
+import { toast } from '../shell/toasts.tsx'
 import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { bez } from './motion.tsx'
 import { arrowTarget, CARD_GAP, CARD_PAD, CARD_RADIUS, cardHeight, cardX, labelLines, LABEL_LINE, PREVIEW_RADIUS, splitStop, SPLIT_ANGLE } from './prefsLayout.ts'
@@ -179,7 +180,7 @@ export const AppearancePicker = memo(function AppearancePicker({ card, previewWi
   const theme = useAppearance().theme
   const edge = t.contrast ? t.borderHeavy : t.border
   const previews = APPEARANCE.map((o) => ({ Preview: AppearanceMini, props: { kind: o.value, width: previewWidth, height: previewHeight, edge } satisfies MiniProps }))
-  // Writes the saved theme; a file that cannot be saved leaves the old one showing, which is the answer.
-  const pick = (value: Appearance) => { try { setAppearance({ theme: value }) } catch { /* Settings reports save errors; here the selection simply does not move. */ } }
+  // Writes the saved theme. A file that cannot be saved leaves the old one showing, and the toast says why nothing moved.
+  const pick = (value: Appearance) => { try { setAppearance({ theme: value }) } catch { toast.error('Couldn’t save the theme.', { description: 'Change it in Settings › Appearance.' }) } }
   return <CardGroup label="Appearance" options={APPEARANCE} value={theme} card={card} previewHeight={previewHeight} previews={previews} onPick={pick} />
 })

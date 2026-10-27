@@ -10,8 +10,9 @@ import { Chevron } from '../motion/Chevron.tsx'
 import { Collapse, Swap } from '../motion/kit.tsx'
 import { DESKTOP_MATERIAL } from '../platform/desktopMaterial.ts'
 import { useAccessibilityDisplay } from '../platform/material.ts'
-import { OPACITY_MIN, SURFACE_DEFAULT, SURFACE_MIN, effectiveSurface, surfaceFloor, type ThemeVariant, type VariantMaterial } from '../platform/translucency.ts'
+import { DEFAULT_VARIANT_MATERIAL, OPACITY_MIN, SURFACE_DEFAULT, SURFACE_MIN, effectiveSurface, surfaceFloor, type ThemeVariant, type VariantMaterial } from '../platform/translucency.ts'
 import { previewWindowMaterial, setWindowMaterial, useAppearance } from '../settings/appearance.ts'
+import { toast } from '../shell/toasts.tsx'
 import { THEMES } from '../theme.ts'
 import { Label, REDUCED_MOTION, ink, useTheme } from '../ui.tsx'
 import { CardGroup, type CardOption } from './AppearancePicker.tsx'
@@ -150,7 +151,8 @@ export const WindowMaterialPicker = memo(function WindowMaterialPicker({ column,
   const showBlur = DESKTOP_MATERIAL === 'vibrancy'
 
   const stopGlide = () => { clearInterval(timers.current.glide); timers.current.glide = undefined; if (phase.current === 'glide') phase.current = 'idle' }
-  const write = (apply: () => void) => { try { apply() } catch { /* The Settings page reports save errors; the sliders keep what is saved. */ } }
+  // A write that fails leaves the saved material showing; say so once (a drag would otherwise toast on every release).
+  const write = (apply: () => void) => { try { apply() } catch { toast.error('Couldn’t save the window style.', { id: 'onboarding-window-style', description: 'Change it in Settings › Appearance.' }) } }
   useEffect(() => () => { clearTimeout(timers.current.preview); clearInterval(timers.current.glide) }, [])
 
   const saved = valuesOf(variant, m)
@@ -218,7 +220,7 @@ export const WindowMaterialPicker = memo(function WindowMaterialPicker({ column,
     const elements = elementsOf(variant, 60)
     return {
       solid: { sidebar: full, content: full, elements: full },
-      sidebar: { sidebar: 85, content: full, elements },
+      sidebar: { sidebar: DEFAULT_VARIANT_MATERIAL.sidebarOpacity, content: full, elements: elementsOf(variant, DEFAULT_VARIANT_MATERIAL.surfaceOpacity) },
       full: { sidebar: 85, content: 85, elements },
     } satisfies Record<MaterialOption, { sidebar: number; content: number; elements: number }>
   }, [variant])
@@ -228,7 +230,10 @@ export const WindowMaterialPicker = memo(function WindowMaterialPicker({ column,
     return { Preview: WindowMini, props: { ...flat, ...alpha } satisfies WindowMiniProps }
   })
 
-  const summary = materialSummary({ sidebarOpacity: shown.sidebar, contentOpacity: shown.content, blur: showBlur ? blurFromPercent(shown.blur) : null }, shown.elements, showBlur)
+  // An Elements or Blur value the user has not moved and the saved material leaves at its default reads as such.
+  const elementsAuto = m.surfaceOpacity === null && live.elements === undefined
+  const blurAuto = m.blur === null && live.blur === undefined
+  const summary = materialSummary({ sidebarOpacity: shown.sidebar, contentOpacity: shown.content, blur: blurAuto ? null : blurFromPercent(shown.blur) }, elementsAuto ? null : shown.elements, showBlur)
   const keys: readonly SliderKey[] = showBlur ? SLIDER_KEYS : SLIDER_KEYS.filter((key) => key !== 'blur')
   const busy = phase.current !== 'idle'
   const minOf = (key: SliderKey) => (key === 'elements' ? floorOf(variant) : key === 'blur' ? 1 : OPACITY_MIN)

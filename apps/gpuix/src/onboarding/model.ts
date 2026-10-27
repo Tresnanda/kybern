@@ -2,7 +2,7 @@
 // import mode asks the daemon for and what a window-material option writes. No GPUIX, no daemon: the scenes read these and
 // `model.test.ts` checks them (`.kybern-artifacts/onboarding-cinematic/SPEC.md` §3d, §4, §5, §12).
 import type { AccountSummary, ProviderKind, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
-import { BLUR_MAX, type VariantMaterial } from '../platform/translucency.ts'
+import { BLUR_MAX, DEFAULT_VARIANT_MATERIAL, defaultBlur, type VariantMaterial } from '../platform/translucency.ts'
 
 // ─── The gate ─────────────────────────────────────────────────────────────
 
@@ -134,11 +134,19 @@ export const MATERIAL_CAPTION: Record<MaterialOption, string> = {
   full: 'Your desktop shows through the whole window. It uses more GPU while agents stream. On Windows, Kybern uses Acrylic.',
 }
 
-/** The values each option writes for the active variant (SPEC §5): 85 / 100 or 85 / 60, blur 100 % = `BLUR_MAX`. On Windows the sidebar keeps Mica (null) and the whole window is Acrylic (a number). */
+/**
+ * The values each option writes for the active variant (SPEC §5). Translucent sidebar is the shipped default itself
+ * (`DEFAULT_VARIANT_MATERIAL`: 90 / 100, Elements at its recipe default, the platform's default blur), so choosing it on a
+ * fresh install changes nothing. Full translucency is 85 / 85 / 60 with blur 100 % = `BLUR_MAX`; on Windows that is Acrylic,
+ * where the sidebar alone keeps Mica (null).
+ */
 export function materialPatch(option: MaterialOption, platform: string = process.platform): Partial<VariantMaterial> {
   if (option === 'solid') return { material: 'solid' }
-  const blur = option === 'sidebar' && platform === 'win32' ? null : BLUR_MAX
-  return { material: 'translucent', sidebarOpacity: 85, contentOpacity: option === 'sidebar' ? 100 : 85, surfaceOpacity: 60, blur }
+  if (option === 'sidebar') {
+    const d = DEFAULT_VARIANT_MATERIAL
+    return { material: 'translucent', sidebarOpacity: d.sidebarOpacity, contentOpacity: 100, lastContentOpacity: d.lastContentOpacity, surfaceOpacity: d.surfaceOpacity, blur: defaultBlur(platform as NodeJS.Platform) }
+  }
+  return { material: 'translucent', sidebarOpacity: 85, contentOpacity: 85, surfaceOpacity: 60, blur: BLUR_MAX }
 }
 
 /** Which option a saved material is. Content at 100 is "Sidebar only", below it the whole window. */
@@ -152,12 +160,16 @@ export function contentSlider(value: number): { option: MaterialOption; patch: P
   return { option: content < 100 ? 'full' : 'sidebar', patch: { material: 'translucent', contentOpacity: content } }
 }
 
-/** "Sidebar 85% · Content 85% · Elements 60% · Blur 100%": the closed Adjust row. `elements` is what is applied (held at the readability floor). */
-export function materialSummary(m: Pick<VariantMaterial, 'sidebarOpacity' | 'contentOpacity' | 'blur'>, elements: number, showBlur = true): string {
-  const blur = m.blur === null ? 100 : Math.round((m.blur / BLUR_MAX) * 100)
-  const parts = [`Sidebar ${m.sidebarOpacity}%`, `Content ${m.contentOpacity}%`, `Elements ${Math.round(elements)}%`]
-  if (showBlur) parts.push(`Blur ${blur}%`)
+/**
+ * "Sidebar 90% · Content 100% · Elements Default · Blur 100%": the closed Adjust row. `elements` is what is applied (held at the
+ * readability floor); a value still at its default reads "Default" (Elements) or "Auto" (Blur) instead of a number it does not own.
+ */
+export function materialSummary(m: Pick<VariantMaterial, 'sidebarOpacity' | 'contentOpacity' | 'blur'>, elements: number | null, showBlur = true): string {
+  const parts = [`Sidebar ${m.sidebarOpacity}%`, `Content ${m.contentOpacity}%`, `Elements ${elements === null ? 'Default' : `${Math.round(elements)}%`}`]
+  if (showBlur) parts.push(`Blur ${m.blur === null ? 'Auto' : `${blurPercent(m.blur)}%`}`)
   return parts.join(' · ')
 }
+/** Whether the Window section can do anything here: Linux and Windows 10 draw Kybern’s window opaque (`DESKTOP_MATERIAL === 'none'`). */
+export const windowMaterialAvailable = (desktopMaterial: 'vibrancy' | 'dwm' | 'none') => desktopMaterial !== 'none'
 export const blurPercent = (blur: number | null) => (blur === null ? 100 : Math.round((blur / BLUR_MAX) * 100))
 export const blurFromPercent = (percent: number) => Math.max(1, Math.round((percent / 100) * BLUR_MAX))

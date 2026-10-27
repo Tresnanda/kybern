@@ -17,6 +17,7 @@ import { EASE } from '../motion/tokens.ts'
 import { N } from '../nav/glyphs.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { latestSettings, refreshSettings, updateSettings, useSettings } from '../settings/store.ts'
+import { toast } from '../shell/toasts.tsx'
 import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { canvasColor } from './Grid.tsx'
 import { bez } from './motion.tsx'
@@ -52,6 +53,7 @@ async function persist(mode: PermissionMode) {
       if (latestSettings()?.default_permission_mode === want) break
       await new Promise((resolve) => setTimeout(resolve, 150))
     }
+    if (target && latestSettings()?.default_permission_mode !== target) toast.error('Couldn’t save the permission mode.', { id: 'onboarding-permission-mode', description: 'Choose it in Settings › General.' })
   } finally { running = false; target = null }
 }
 
