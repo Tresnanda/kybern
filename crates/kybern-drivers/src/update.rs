@@ -159,12 +159,26 @@ mod tests {
         .unwrap();
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
         let env = BTreeMap::new();
-        let command = plan(ProviderKind::Codex, &binary, &env, root.path()).await.unwrap();
-        run(&command, &env, root.path()).await.unwrap();
+        let command = unbusy(|| plan(ProviderKind::Codex, &binary, &env, root.path())).await.unwrap();
+        unbusy(|| run(&command, &env, root.path())).await.unwrap();
         assert_eq!(std::fs::read_to_string(root.path().join("updated")).unwrap(), "done");
-        assert!(plan(ProviderKind::Pi, &binary, &env, root.path()).await.unwrap_err().to_string().contains("--self"));
+        assert!(unbusy(|| plan(ProviderKind::Pi, &binary, &env, root.path())).await.unwrap_err().to_string().contains("--self"));
         std::fs::write(&binary, "#!/bin/sh\necho 'fixture permission denied' >&2\nexit 1\n").unwrap();
-        assert!(run(&command, &env, root.path()).await.unwrap_err().to_string().contains("fixture permission denied"));
+        let error = unbusy(|| run(&command, &env, root.path())).await.unwrap_err();
+        assert!(error.to_string().contains("fixture permission denied"), "{error}");
+    }
+
+    /// Linux refuses to run a file that another test's freshly forked child
+    /// still holds open for writing (ETXTBSY) until that child execs. Retry.
+    #[cfg(unix)]
+    async fn unbusy<T, F: std::future::Future<Output = Result<T>>>(mut call: impl FnMut() -> F) -> Result<T> {
+        for _ in 0..50 {
+            match call().await {
+                Err(error) if error.to_string().contains("Text file busy") => tokio::time::sleep(Duration::from_millis(20)).await,
+                result => return result,
+            }
+        }
+        call().await
     }
 
     #[cfg(unix)]
