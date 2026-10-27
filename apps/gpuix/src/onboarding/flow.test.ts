@@ -28,6 +28,6 @@ describe('resetFlow', () => {
     goFrom('hero', 'agents')
     flow.set({ finished: true, open: false })
     resetFlow()
-    expect(flow.get()).toMatchObject({ open: false, scene: 'hero', finished: false, releasing: false, handoff: null, only: false })
+    expect(flow.get()).toMatchObject({ open: false, scene: 'hero', finished: false, releasing: false, handoff: null })
   })
 })

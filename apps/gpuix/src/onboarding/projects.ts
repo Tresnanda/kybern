@@ -229,7 +229,7 @@ export function totalLabel(t: Totals, mode: ImportMode): TotalLabel {
 export const MODE_CAPTION: Record<ImportMode, string> = {
   latest: `Brings in the ${LATEST_CHATS} most recent chats from each project.`,
   all: 'Brings in every chat. Big projects take a little longer.',
-  none: 'Adds the projects without their chats. You can import chats later.',
+  none: 'Adds the projects without their chats.',
 }
 export const MODE_OPTIONS: readonly { value: ImportMode; label: string }[] = [
   { value: 'latest', label: `Latest ${LATEST_CHATS}` },

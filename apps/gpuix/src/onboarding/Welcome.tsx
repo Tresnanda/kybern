@@ -79,7 +79,9 @@ function SceneLayer({ id }: { id: SceneId }) {
       exit={sceneExit(dir)}
       style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0 }}
     >
-      <View />
+      {/* Each scene is its own cached island: a commit in one scene lays out that scene alone, and while two are on screen the
+          one that is leaving only replays its paint. */}
+      <div {...FILL_ISLAND} style={{ flexGrow: 1, minHeight: 0 }}><View /></div>
     </Presence>
   )
 }
@@ -108,15 +110,14 @@ function Welcome() {
 function Progress() {
   const t = useTheme()
   const scene = useFlow((s) => s.scene)
-  const only = useFlow((s) => s.only)
   const step = scene === 'hero' ? 0 : SCENE_ORDER.indexOf(scene)
-  const label = scene === 'hero' || only ? '' : `${SCENE_TITLE[scene]} · ${step} of 3`
+  const label = scene === 'hero' ? '' : `${SCENE_TITLE[scene]} · ${step} of 3`
   return (
     <div
-      paintTransform={PATCHED_NATIVE ? { initial: false, animate: { opacity: scene === 'hero' || only ? 0 : 1 }, transition: { duration: 0.4, ease: bez(EASE.out) }, retain: true } : undefined}
+      paintTransform={PATCHED_NATIVE ? { initial: false, animate: { opacity: scene === 'hero' ? 0 : 1 }, transition: { duration: 0.4, ease: bez(EASE.out) }, retain: true } : undefined}
       style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 10 }}
     >
-      <Swap active={label} kind="text">
+      <Swap active={label} kind="text" blur={false}>
         <Label color={t.textSecondary} size={12.5} lineHeight={16} weight={500} style={{ whiteSpace: 'nowrap' }}>{label || ' '}</Label>
       </Swap>
       <div style={{ display: 'flex', flexDirection: 'row', gap: 4 }}>

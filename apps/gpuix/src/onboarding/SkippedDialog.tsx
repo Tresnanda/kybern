@@ -6,7 +6,7 @@ import { Button } from '../kit/Button.tsx'
 import { Dialog, DialogHeader } from '../nav/overlay.tsx'
 import { Label, useTheme } from '../ui.tsx'
 import { createStore } from './store.ts'
-import { groupSkipped, skippedTitle, unlistedSkips, type SkippedChat } from './getStarted.ts'
+import { groupSkipped, skippedTitle, unlistedSkips, type SkippedChat } from './skipped.ts'
 import { useImportSummary } from './projectsStore.ts'
 
 const open = createStore({ shown: false })

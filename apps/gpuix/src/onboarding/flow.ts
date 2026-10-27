@@ -28,20 +28,23 @@ interface Flow {
   finished: boolean
   /** The app shell is being mounted under the still-opaque welcome (its first frames hitch where nobody sees them). */
   releasing: boolean
-  /** The shell mounted under the welcome has drawn its first frames: the welcome may dissolve now (`ShellEntrance` sets it). */
+  /** The shell mounted under the welcome has drawn and settled: the welcome may fade out now (`useShellReady` in `Handoff.tsx` sets it). */
   shellReady: boolean
   handoff: Handoff | null
-  /** Opened from the Get-started card's Import: only the Projects scene, no progress, and its Back and Continue return to the app. */
-  only: boolean
 }
-const INITIAL: Flow = { open: false, scene: 'hero', dir: 1, introPlayed: false, finished: false, releasing: false, shellReady: false, handoff: null, only: false }
+const INITIAL: Flow = { open: false, scene: 'hero', dir: 1, introPlayed: false, finished: false, releasing: false, shellReady: false, handoff: null }
 export const flow = createStore<Flow>(INITIAL)
 
 const KEY = 'kybern.onboarding.completed'
 export const FORCED = process.env.KYBERN_ONBOARDING === '1'
 let completedCache: boolean | null = null
 /** `onboarding.completed`: finished or skipped once on this environment. */
-export const isCompleted = () => (completedCache ??= load<boolean>(KEY, false))
+export const isCompleted = () => (completedCache ??= readCompleted())
+function readCompleted() {
+  // A pre-release build kept a Get-started card's state here; the card is gone, so is its key.
+  save('kybern.getstarted', undefined)
+  return load<boolean>(KEY, false)
+}
 export function markCompleted() {
   completedCache = true
   save(KEY, true)
@@ -66,12 +69,6 @@ export function openFlow() {
   if (!flow.get().open) flow.set({ ...INITIAL, open: true, ...(START ? { scene: START, introPlayed: true } : {}) })
 }
 
-/** The Get-started card's Import: the Projects scene alone, over the running app. `finishFlow` returns to it. */
-export function openProjectsOnly() {
-  if (flow.get().open) return
-  flow.set({ ...INITIAL, open: true, scene: 'projects', introPlayed: true, only: true })
-}
-
 /** A window with data and no mark belongs to a returning user: write the mark so an empty library later never brings the flow back. */
 export function noteReturningUser(input: Pick<GateInput, 'projects' | 'threads'>) {
   if (!FORCED && !flow.get().open && isReturningUser({ ...input, completed: isCompleted() })) markCompleted()
@@ -93,9 +90,9 @@ export function goFrom(from: SceneId, to: SceneId): boolean {
 }
 
 /**
- * The welcome dissolves once the shell mounted under it has drawn (`shellReady`), not after a fixed head start: mounting it blocks
- * the JS thread for ~300 ms, which a fixed 220 ms ran into, so the dissolve's first frames and the mount's were one stall.
- * If no frame is reported (a hidden window, a stock addon) it dissolves after this long anyway.
+ * The welcome fades out once the shell mounted under it has drawn and settled (`shellReady`), not after a fixed head start: the
+ * mount and the app's first draws cost 20–35 ms each, and landing in the fade they were its stutter. If no frame is reported (a
+ * hidden window, a stock addon) or the app keeps drawing, it fades after this long anyway.
  */
 export const RELEASE_MAX_MS = 900
 
