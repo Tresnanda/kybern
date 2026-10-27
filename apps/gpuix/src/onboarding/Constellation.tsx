@@ -206,12 +206,12 @@ export function Constellation({ agents: list, ready, defaultKind, orbit, quick }
   return (
     <div ref={loop.ref} testId="agents-orbit" style={{ position: 'relative', width: orbit.width, height: orbit.height, flexShrink: 0 }}>
       {/* The rings each rasterize an orbit-wide SVG, the tiles six marks and their labels: each mounts a frame apart (`Later`). */}
-      <Later frames={3}>
+      <Later frames={4}>
       <div paintTransform={riseTransformRing(0.3, 1.2)} style={ringStyle}>
         <svg source={ellipse(orbit.cx, orbit.cy, orbit.rx, outerRy, pad)} style={{ width: orbit.width + pad * 2, height: orbit.height + pad * 2, color: ringTint, pointerEvents: 'none' }} />
       </div>
       </Later>
-      <Later frames={2}>
+      <Later frames={3}>
       <div paintTransform={riseTransformRing(0.2, 1.2)} style={ringStyle}>
         <svg source={ellipse(orbit.cx, orbit.cy, orbit.rx * 0.56, outerRy * 0.56, pad)} style={{ width: orbit.width + pad * 2, height: orbit.height + pad * 2, color: ringTint, pointerEvents: 'none' }} />
       </div>
@@ -240,7 +240,7 @@ export function Constellation({ agents: list, ready, defaultKind, orbit, quick }
       <div style={{ position: 'absolute', left: hub.x - 60, top: hub.y + 62, width: 120, display: 'flex', flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 4, pointerEvents: 'none' }}>
         <ReadyCount ready={ready} color={t.textSecondary} />
       </div>
-      <Later frames={1}>
+      <Later frames={2}>
       {list.map((agent) => {
         const spot = spotFor(agent.kind, orbit)
         return <Tile key={agent.kind} agent={agent} x={spot.x} y={spot.y} hub={hub} quick={quick} open={open === agent.kind} loopOn={loop.running} onClick={() => { if (justClosed(agent.kind)) return; agents.set({ popover: open === agent.kind ? null : agent.kind }) }} />

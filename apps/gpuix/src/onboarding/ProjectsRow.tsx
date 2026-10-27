@@ -10,6 +10,7 @@ import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { ProjectsCheck } from './ProjectsCheck.tsx'
 import { bez, riseTransform, stateTransform } from './motion.tsx'
+import { Later } from './sceneKit.tsx'
 import { ageLine, countLine, displayPath, importLine, ROW_H, staggerDelay, type Row } from './projects.ts'
 import { toggleRow, useProjects, type Arrival, type Flip } from './projectsStore.ts'
 
@@ -66,6 +67,8 @@ export const ProjectRow = memo(function ProjectRow({ row, rank, rowWidth, arriva
       paintTranslate={slide}
       style={{ width: '100%', height: ROW_H }}
     >
+      {/* Rows that land together (the first scan result) mount one frame apart: each drops in 35–60 ms after the one above. */}
+      <Later frames={entered ? 1 + entered.order : 0}>
       <div paintTransform={drop} style={{ width: '100%', height: ROW_H }}>
         <div
           testId={`project-row:${root}`}
@@ -115,6 +118,7 @@ export const ProjectRow = memo(function ProjectRow({ row, rank, rowWidth, arriva
           {imp && imp.state !== 'queued' && !noBar && <ImportBar fraction={line?.fraction ?? 0} state={imp.state} green={done} />}
         </div>
       </div>
+      </Later>
     </div>
   )
 })

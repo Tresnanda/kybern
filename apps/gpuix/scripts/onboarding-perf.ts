@@ -53,6 +53,7 @@ async function run(n: number) {
   const daemon = await startDaemon(path.join(dir, 'data'))
   const draws: Draw[] = []
   const islandLines: { at: number; line: string }[] = []
+  let fadeAt = 0
   let rest = ''
   const watch = (chunk: string) => {
     const at = performance.now()
@@ -60,6 +61,7 @@ async function run(n: number) {
     for (const line of lines) {
       const m = /^\[kybern-work\] renderMs=([\d.]+) layoutMs=([\d.]+) layoutCalls=(\d+)/.exec(line)
       if (m) draws.push({ at, render: Number(m[1]), layout: Number(m[2]), calls: Number(m[3]) })
+      else if (line.startsWith('[kybern-onboarding] fade')) fadeAt = at
       else if (islands && (line.startsWith('[islands]') || line.startsWith('[mtrace]'))) islandLines.push({ at, line })
     }
   }
@@ -96,6 +98,17 @@ async function run(n: number) {
         await moment('projects: mode → latest', () => click('projects-mode-latest'), 1200)
         await moment('projects: select all / clear', () => click('projects-suggested-all'), 900)
       }
+      stopped = true
+    } else if (process.env.BENCH_SCENE === 'prefs') {
+      if (!await until('prefs-material-full', 60000)) throw new Error('the preferences scene never appeared')
+      await sleep(3000)
+      await click('prefs-material-full'); await sleep(1000)
+      const findSlider = async () => (await a.getByType('div').all()).find((node) => node.testId?.startsWith('prefs-slider-'))?.testId
+      // Adjust may already be open (it remembers); open it if no slider shows.
+      if (!await findSlider()) { await click('prefs-adjust'); await sleep(1000) }
+      const slider = await findSlider()
+      if (!slider) throw new Error('no slider after Adjust')
+      for (let i = 0; i < 3; i++) await moment('prefs: slider drag', () => a.getByTestId(slider).dragBy(i % 2 ? 60 : -60, 0, { steps: 20 } as never), 900)
       stopped = true
     }
     else await fullFlow()
@@ -146,8 +159,6 @@ async function run(n: number) {
     if (await has('prefs-material-full')) {
       await moment('prefs: window material change', () => click('prefs-material-full'), 1000)
       if (await has('prefs-adjust')) await moment('prefs: Adjust opening', () => click('prefs-adjust'), 900)
-      const slider = (await a.getByType('div').all()).find((node) => node.testId?.startsWith('prefs-slider-'))?.testId
-      if (slider) await moment('prefs: slider drag', () => a.getByTestId(slider).dragBy(-60, 0, { steps: 20 } as never), 800)
       await moment('prefs: window material change', () => click('prefs-material-solid'), 1000)
     }
     const modes = (await a.getByType('div').all()).map((node) => node.testId).filter((id): id is string => !!id?.startsWith('prefs-mode-'))
@@ -158,6 +169,9 @@ async function run(n: number) {
     await sleep(600)
     await moment('preferences → app', () => click('onboarding-done'), 3000)
   }
+  // The handoff in two: the app mounting under the still-opaque welcome, and the welcome's visible fade (600 ms) once it starts.
+  const hand = moments.find((m) => m.name === 'preferences → app')
+  if (hand && fadeAt > hand.t0) moments.splice(moments.indexOf(hand), 1, { name: 'preferences → app: under the welcome', t0: hand.t0, t1: fadeAt - 1 }, { name: 'preferences → app: the fade', t0: fadeAt, t1: hand.t1 })
   const rows = moments.map((m) => {
     const in_ = draws.filter((d) => d.at >= m.t0 && d.at <= m.t1 + 30)
     const r = in_.map((d) => d.render)

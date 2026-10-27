@@ -114,6 +114,8 @@ export function finishFlow(kind: HandoffKind, projectId: string | null) {
   markCompleted()
   flow.set({ releasing: true, shellReady: false })
   const dissolve = () => {
+    // Frame-cost runs (`scripts/onboarding-perf.ts`) split the handoff here: before it the welcome is still opaque.
+    if (process.env.KYBERN_FRAME_COSTS) console.error('[kybern-onboarding] fade')
     clearTimeout(releaseTimer)
     stopReleaseWait?.()
     stopReleaseWait = undefined

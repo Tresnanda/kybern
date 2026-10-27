@@ -18,7 +18,7 @@ import { finishFlow, flow, goFrom } from './flow.ts'
 import { createPress } from './once.ts'
 import { continueLabel, hostLabel, noun, statusLine } from './model.ts'
 import { In, Roll, Words } from './motion.tsx'
-import { SceneHeading, useScenePrimary } from './sceneKit.tsx'
+import { Later, SceneHeading, useScenePrimary } from './sceneKit.tsx'
 import { TerminalSheet } from './TerminalSheet.tsx'
 
 const CAL = 'Cal Sans'
@@ -68,20 +68,25 @@ export function AgentsScene() {
         <Constellation agents={view.list} ready={ready} defaultKind={view.default} orbit={orbit} quick={quick} />
       </div>
       <div style={{ height: 14 }} />
-      <SceneHeading id="agents" label="Your agents, in one place."><Words lines={[['Your', 'agents,', 'in', 'one', 'place.']]} size={headingSize(width)} lineHeight={Math.round(headingSize(width) * 1.1)} color={t.text} font={CAL} base={quick ? 0.1 : 0.5} /></SceneHeading>
+      {/* The scene's first draw stays small: the heading, the tiles, each ring and the actions mount a frame or more apart (`Later`),
+          all before any of them is visible. */}
+      <SceneHeading id="agents" label="Your agents, in one place."><Later frames={1} placeholder={<div style={{ height: Math.round(headingSize(width) * 1.1) }} />}><Words lines={[['Your', 'agents,', 'in', 'one', 'place.']]} size={headingSize(width)} lineHeight={Math.round(headingSize(width) * 1.1)} color={t.text} font={CAL} base={quick ? 0.1 : 0.5} /></Later></SceneHeading>
       <div style={{ height: 12 }} />
       <In delay={quick ? 0.15 : 0.95} y={8} style={{ alignItems: 'center', width: Math.min(720, width - 48) }}>
         {/* The region's own name is the new line; the Swap inside (the arriving and the leaving copy) is hidden from it, so only the new text is announced. */}
         <div role="status" aria-live="polite" aria-label={line} style={{ display: 'flex', justifyContent: 'center', minHeight: 44 }}>
-          <div aria-hidden="true" style={{ display: 'flex', justifyContent: 'center' }}>
-            <Swap active={line} blur={false} style={{ alignItems: 'flex-start' }}>
-              <Label color={t.textSecondary} size={15} lineHeight={22} style={{ textAlign: 'center', width: Math.min(720, width - 48) }}>{line}</Label>
-            </Swap>
-          </div>
+          <Later frames={5}>
+            <div aria-hidden="true" style={{ display: 'flex', justifyContent: 'center' }}>
+              <Swap active={line} blur={false} style={{ alignItems: 'flex-start' }}>
+                <Label color={t.textSecondary} size={15} lineHeight={22} style={{ textAlign: 'center', width: Math.min(720, width - 48) }}>{line}</Label>
+              </Swap>
+            </div>
+          </Later>
         </div>
       </In>
       <div style={{ height: 12 }} />
-      <In delay={quick ? 0.2 : 1.05} y={8} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+      <In delay={quick ? 0.2 : 1.05} y={8} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 44 }}>
+        <Later frames={5}>
         <Button testId="agents-back" variant="ghost" icon={N.arrowLeft} onClick={() => goFrom('agents', 'hero')}>Back</Button>
         <Button testId="agents-later" variant="ghost" onClick={() => finishFlow('later', null)}>Set up later</Button>
         <Cta testId="agents-continue" disabled={!rolled} onClick={cont}>
@@ -93,6 +98,7 @@ export function AgentsScene() {
               </div>
             : continueLabel(0)}
         </Cta>
+        </Later>
       </In>
       {/* Above the heading and the actions: a popover from a bottom tile covers them. */}
       <AgentPopover

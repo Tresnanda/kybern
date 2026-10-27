@@ -171,17 +171,21 @@ export function ProjectsScene() {
 
   return (
     <div testId="projects-scene" style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: top, paddingBottom: 28, paddingLeft: 24, paddingRight: 24 }}>
+      {/* The scene's first draw stays small: the lede, chips, toolbar, list and actions mount a frame apart (`Later`), all before
+          any of them is visible. */}
       <SceneHeading id="projects" label="Bring in your past work."><Words lines={[['Bring', 'in', 'your', 'past', 'work.']]} size={headSize} lineHeight={Math.round(headSize * 1.1)} color={t.text} font={CAL} base={0.2} /></SceneHeading>
       <In delay={0.62} y={10} style={{ alignItems: 'center', marginTop: 14 }}>
-        <Lede found={found} agents={agents} state={lede} />
-        <SwapOnChange active={empty || failedView ? 'blank' : 'pick'} kind="text" blur={false} style={{ height: LEDE_LINE }}>
-          <Label color={t.textSecondary} size={LEDE} lineHeight={LEDE_LINE}>{empty || failedView ? ' ' : 'Pick the projects to bring in.'}</Label>
-        </SwapOnChange>
+        <Later frames={1} placeholder={<div style={{ height: LEDE_LINE * 2 }} />}>
+          <Lede found={found} agents={agents} state={lede} />
+          <SwapOnChange active={empty || failedView ? 'blank' : 'pick'} kind="text" blur={false} style={{ height: LEDE_LINE }}>
+            <Label color={t.textSecondary} size={LEDE} lineHeight={LEDE_LINE}>{empty || failedView ? ' ' : 'Pick the projects to bring in.'}</Label>
+          </SwapOnChange>
+        </Later>
       </In>
 
       {!empty && !failedView && (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: 18, gap: 10 }}>
-          <Later frames={1} placeholder={<div style={{ height: 32 }} />}><ProjectsChips data={chips} since={sceneAt.current} /></Later>
+          <Later frames={2} placeholder={<div style={{ height: 32 }} />}><ProjectsChips data={chips} since={sceneAt.current} /></Later>
           {failure && status !== 'scanning' && (
             <In y={6} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
               <Label color={t.textSecondary} size={13} lineHeight={18}>{failure}</Label>
@@ -195,8 +199,8 @@ export function ProjectsScene() {
         <In delay={0.8} y={10} style={{ width: col, flexGrow: 1, minHeight: 0, justifyContent: 'center' }}>{empty ? emptyBody : failedBody}</In>
       ) : (
         <>
-          <In delay={0.85} y={10} style={{ width: col, marginTop: 20 }}><Later frames={2} placeholder={<div style={{ height: TOOLBAR_H }} />}><Toolbar width={col} /></Later></In>
-          <In delay={0.95} y={10} style={{ width: col, flexGrow: 1, minHeight: 0, marginTop: 10 }}><Later frames={3}><ProjectsList rowWidth={col - 8} /></Later></In>
+          <In delay={0.85} y={10} style={{ width: col, marginTop: 20 }}><Later frames={3} placeholder={<div style={{ height: TOOLBAR_H }} />}><Toolbar width={col} /></Later></In>
+          <In delay={0.95} y={10} style={{ width: col, flexGrow: 1, minHeight: 0, marginTop: 10 }}><Later frames={4}><ProjectsList rowWidth={col - 8} /></Later></In>
         </>
       )}
 
@@ -207,7 +211,8 @@ export function ProjectsScene() {
           <Button testId="projects-view-skipped" variant="ghost" size="sm" onClick={viewSkipped}>View skipped</Button>
         </In>
       )}
-      <In delay={1.05} y={10} style={{ width: col, marginTop: 14 }}>
+      <In delay={1.05} y={10} style={{ width: col, marginTop: 14, minHeight: 44 }}>
+        <Later frames={5}>
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 2 }}>
           <Button testId="projects-back" variant="ghost" size="lg" icon={N.arrowLeft} onClick={() => goFrom('projects', 'agents')}>Back</Button>
           {!empty && !failedView && (
@@ -219,6 +224,7 @@ export function ProjectsScene() {
           <div style={{ flexGrow: 1 }} />
           <Cta testId="projects-primary" onClick={primary} progress={importing ? progress : undefined}><CtaContent label={label} color={ctaForeground(t)} /></Cta>
         </div>
+        </Later>
       </In>
     </div>
   )

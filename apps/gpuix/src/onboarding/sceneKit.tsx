@@ -59,7 +59,7 @@ export function useScenePrimary(id: SceneId, run: (() => void) | null) {
  * at once.
  */
 export function Later({ frames = 1, children, placeholder = null }: { frames?: number; children: ReactNode; placeholder?: ReactNode }) {
-  const [ready, setReady] = useState(!PATCHED_NATIVE || !isWindowVisible())
+  const [ready, setReady] = useState(frames <= 0 || !PATCHED_NATIVE || !isWindowVisible())
   useEffect(() => {
     if (ready) return
     let n = 0
