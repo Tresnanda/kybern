@@ -7,7 +7,7 @@
 # Pushing the tag starts .github/workflows/release.yml: dist builds kybernd and
 # kybern once for every target, desktop.yml bundles those binaries into the
 # desktop apps and writes latest.json, and dist creates the GitHub Release with
-# all of it. See the README's Releasing section.
+# all of it. See RELEASING.md.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
