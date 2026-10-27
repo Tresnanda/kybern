@@ -20,14 +20,17 @@ later does not bring the flow back. Finishing or "Set up later" writes the mark.
 | File | What |
 | --- | --- |
 | `model.ts` | Pure rules, tested in `model.test.ts`: the gate, import mode → `limit`, default agent, the agents status line, tile state from the daemon, window-material options. |
-| `flow.ts` | Scene store (`go`, `next`, `back`, `finishFlow`), the completion mark, the developer flags. |
+| `flow.ts` | Scene store (`go`, `goFrom`: a move only from the scene on screen, so a doubled press moves once), `finishFlow` (the shell mounts under the welcome, which dissolves once the shell has drawn), the completion mark, `resetFlow`, the developer flags. |
+| `lifecycle.ts` | Imported by `Welcome.tsx`: a new environment resets the flow, scan and agents (its own first run); ending the flow stops a running scan. |
+| `once.ts` | `createPress`: the guard on a scene's primary against a double click or key repeat. |
+| `announce.ts` | The one live region and what it says: an import starting, each project finishing, the end, the default agent changing (never a tick). |
 | `Welcome.tsx` | The layer mounted last in `App.tsx`: canvas, scene transitions (`Presence`), progress, the shared mark's flight. |
 | `Grid.tsx` | The dot grid (one tinted SVG pattern, `edgeFade` toward the edges) and the camera pan/swell. |
 | `Hero.tsx`, `Cta.tsx` | The first scene; the 44 px primary with press, ripple, shine and arrow nudge. |
 | `AgentsScene.tsx`, `Constellation.tsx`, `AgentPopover.tsx`, `TerminalSheet.tsx`, `agentsStore.ts` | Agent detection (`providers.list`, accounts, `cursor.status`), the six tiles, the popover, the typed-not-run terminal sheet, browser sign-in through `dialogs/Account.tsx`. |
 | `ProjectsScene.tsx`, `projectsStore.ts`, `projects.ts` | `sessions.scan_projects` / `sessions.import_all`, import modes, rows. |
 | `PreferencesScene.tsx`, `AppearancePicker.tsx`, `WindowMaterialPicker.tsx`, `PermissionList.tsx` | Theme, window material (writes through `settings/appearance.ts`), default permission mode. |
-| `Handoff.tsx` | The way out: shell entrance, suggestion chips, typed placeholder, the import toast. |
+| `Handoff.tsx` | The way out: shell entrance, suggestion chips (a used chip only hides the row; the Draft is keyed on the handoff, so nothing remounts), the typed placeholder (`TypedOverlay` draws it above the content card, outside the island: inside it every character re-laid out the card, ~36 ms a draw), the import toast (follows the job until its summary), the announcer. |
 | `getStarted.ts`, `getStartedStore.ts`, `GetStartedCard.tsx` | The Get-started card on Home: which items exist and when each ticks (pure, `getStarted.test.ts`), the persisted state and machine facts (CLI on PATH, paired devices, Computer use, notifications), and the card with its `GlideBox`. Hide and fold change the card's height; everything under it glides by 13/20 of that. |
 | `SkippedDialog.tsx` | "N chats were skipped" (View skipped): from the import toast and the Projects scene. |
 | `sceneKit.tsx`, `magnet.ts` | The scene heading that takes focus on arrival, ⌘↵ / Ctrl+Enter for the scene's primary, and the magnetic primary (a spring loop writing `setSubtreeTranslation`, no React commit per pointer move). |
