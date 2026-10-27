@@ -41,8 +41,7 @@ export function useOnboardingGate(): boolean {
 }
 
 /** The layer itself. `App.tsx` mounts it last in the window, under the dialogs and the toaster. */
-export function OnboardingLayer() {
-  const show = useOnboardingGate()
+export function OnboardingLayer({ show }: { show: boolean }) {
   return (
     <Presence
       show={show}

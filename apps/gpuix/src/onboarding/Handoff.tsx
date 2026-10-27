@@ -51,7 +51,7 @@ export function HandoffSuggestions({ free, fill }: { free: boolean; fill: (text:
   if (!handoff || !fresh) return null
   const list = free ? FREE : FOLDER
   return (
-    <div testId="onboarding-suggestions" style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8, paddingTop: 14, maxWidth: 640 }}>
+    <div testId="onboarding-suggestions" style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8, paddingTop: 14, width: '100%' }}>
       {list.map((text, i) => (
         <In key={text} delay={0.78 + i * 0.08} y={12} blur={2} duration={0.5}>
           <PickerChip chevron={false} testId={`suggestion-${i}`} onClick={() => { fill(text); flow.set({ handoff: null }) }}>{text}</PickerChip>
@@ -85,7 +85,7 @@ export function useTypedPlaceholder(active: boolean): string | undefined {
       }
       if (live) setText(undefined)
     })()
-    return () => { live = false; stop(); timers.forEach(clearTimeout) }
+    return () => { live = false; stop(); timers.forEach(clearTimeout); setText(undefined) }
   }, [active])
   return text
 }

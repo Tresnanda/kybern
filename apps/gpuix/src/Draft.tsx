@@ -88,7 +88,8 @@ export function Draft() {
   // ---- the composer's hooks into the screen ----
   const focusEditor = useRef<() => void>(() => {})
   const fillComposer = useRef<(text: string) => void>(() => {})
-  const typed = useTypedPlaceholder(enter && isFresh())
+  const [justHandedOff] = useState(isFresh)
+  const typed = useTypedPlaceholder(justHandedOff)
   const pickup = useRef<PickUpHandle | null>(null)
   const trayShown = landingTrayShown(projectId, attached)
   const pick = (id: string | null) => {

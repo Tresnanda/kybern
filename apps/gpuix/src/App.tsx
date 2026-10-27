@@ -5,7 +5,7 @@ import { CloseGuard } from './shell/CloseGuard.tsx'
 import { CloseDirtyDialog } from './tabs/CloseDirty.tsx'
 import { WebPageUi } from './native/WebPageUi.tsx'
 import { WorkspaceDialogs } from './dialogs/Dialogs.tsx'
-import { OnboardingLayer } from './onboarding/Welcome.tsx'
+import { OnboardingLayer, useOnboardingGate } from './onboarding/Welcome.tsx'
 import { HandoffController, ShellEntrance } from './onboarding/Handoff.tsx'
 import { useFlow } from './onboarding/flow.ts'
 import { EnvironmentDialogs } from './environments/Dialogs.tsx'
@@ -121,6 +121,11 @@ function Workspace() {
   const sidebarWidth = useSidebarWidth()
   const resizing = useSidebarDragging()
   const welcome = useWelcome()
+  // While the first-run flow is open the shell is not mounted at all: GPUIX lays out every element every frame, and a sidebar
+  // filling with imported chats would cost each frame of the flow. It mounts under the opaque welcome just before it dissolves.
+  const onboarding = useOnboardingGate()
+  const releasing = useFlow((s) => s.releasing)
+  const shell = !onboarding || releasing
   // The slide plays only when the panel opens or closes; a drag or a window resize moves it at once.
   const [seenOpen, setSeenOpen] = useState(panelOpen)
   const [sliding, setSliding] = useState(false)
@@ -163,7 +168,7 @@ function Workspace() {
       style={{ userSelect: 'none', display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: singleFill ? undefined : fills.frame, position: 'relative' }}
     >
       {singleFill && <FrameFill color={fills.frame} />}
-      <ShellEntrance style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column' }}>
+      {shell && <ShellEntrance style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column' }}>
       <TitleBar panelOpen={panelOpen} />
       <div style={{ display: 'flex', position: 'absolute', left: 0, right: 0, bottom: 0, top: TITLEBAR, paddingRight: INSET, paddingBottom: INSET }}>
         <NavRail />
@@ -236,8 +241,8 @@ function Workspace() {
           {panelOpen && <SidebarResizeHandle />}
         </div>
       </div>
-      </ShellEntrance>
-      <OnboardingLayer />
+      </ShellEntrance>}
+      <OnboardingLayer show={onboarding} />
       <HandoffController />
       <Palette />
       <HandoffDialog />

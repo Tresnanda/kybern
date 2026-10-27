@@ -26,9 +26,11 @@ interface Flow {
   introPlayed: boolean
   /** Set when the flow ends: the real app is on screen and this run never opens it again. */
   finished: boolean
+  /** The app shell is being mounted under the still-opaque welcome (its first frames hitch where nobody sees them). */
+  releasing: boolean
   handoff: Handoff | null
 }
-const INITIAL: Flow = { open: false, scene: 'hero', dir: 1, introPlayed: false, finished: false, handoff: null }
+const INITIAL: Flow = { open: false, scene: 'hero', dir: 1, introPlayed: false, finished: false, releasing: false, handoff: null }
 export const flow = createStore<Flow>(INITIAL)
 
 const KEY = 'kybern.onboarding.completed'
@@ -72,8 +74,13 @@ export function go(scene: SceneId) {
 export const next = () => { const i = SCENE_ORDER.indexOf(flow.get().scene); const to = SCENE_ORDER[Math.min(SCENE_ORDER.length - 1, i + 1)]; if (to) go(to) }
 export const back = () => { const i = SCENE_ORDER.indexOf(flow.get().scene); const to = SCENE_ORDER[Math.max(0, i - 1)]; if (to) go(to) }
 
-/** End the flow: the app comes in under it. `finished` keeps it from reopening this run (a forced run included). */
+/** Mount the shell this long before the welcome dissolves: its first frames (the whole sidebar, the Draft) land under an opaque layer. */
+const RELEASE_MS = 220
+
+/** End the flow: the app is mounted under the welcome, then the welcome dissolves into it. `finished` keeps it from reopening this run. */
 export function finishFlow(kind: HandoffKind, projectId: string | null) {
+  if (flow.get().releasing || flow.get().finished) return
   markCompleted()
-  flow.set({ open: false, finished: true, handoff: { kind, projectId, at: Date.now() } })
+  flow.set({ releasing: true })
+  setTimeout(() => flow.set({ open: false, finished: true, releasing: false, handoff: { kind, projectId, at: Date.now() } }), RELEASE_MS)
 }
