@@ -82,7 +82,15 @@ try {
   await watch('theme-dark', () => click('prefs-theme-dark'))
   await watch('material-full', () => click('prefs-material-full'))
   await watch('adjust', () => click('prefs-adjust'))
-  const slider = (await a.getByType('div').all()).find((node) => node.testId?.startsWith('prefs-slider-'))?.testId
+  // Adjust remembers whether it was open, so that press may have closed it: its sliders are then leaving (still listed for their
+  // exit). Look once they are settled, and open it again if none stayed.
+  const findSlider = async () => {
+    await sleep(500)
+    const id = (await a.getByType('div').all()).find((node) => node.testId?.startsWith('prefs-slider-'))?.testId
+    return id && (await a.getByTestId(id).count()) > 0 ? id : undefined
+  }
+  let slider = await findSlider()
+  if (!slider) { await watch('adjust-again', () => click('prefs-adjust')); slider = await findSlider() }
   if (slider) await watch('slider', () => a.getByTestId(slider).dragBy(-80, 0, { steps: 24 } as never), 1200)
   await watch('material-sidebar', () => click('prefs-material-sidebar'))
   await watch('material-solid', () => click('prefs-material-solid'))
