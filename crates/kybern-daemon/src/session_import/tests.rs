@@ -1,5 +1,5 @@
 use super::*;
-use kybern_protocol::{ThreadStatus, methods::SessionsResumeParams};
+use kybern_protocol::{EventPayload, ThreadId, ThreadStatus, methods::SessionsResumeParams};
 
 /// A scratch HOME with Claude and pi history, a few repositories, and a daemon state
 /// whose harness settings point at them. No real harness is started: scans name
@@ -488,6 +488,33 @@ async fn progress_and_the_final_summary_arrive_as_notifications() {
     assert_eq!(ids, expected, "every thread id is announced exactly once");
     assert_eq!(skipped, job.projects[0].skipped);
     assert_eq!(finished.expect("final summary"), job);
+}
+
+#[tokio::test]
+async fn a_bulk_import_announces_each_thread_without_streaming_its_history() {
+    let f = fixture();
+    let repo = f.dir("app", true);
+    for index in 0..3 {
+        f.claude(&format!("h{index}"), &repo, days(index + 1));
+    }
+    let mut live = f.state.events.subscribe();
+    let job = f.import(vec![import_root(&repo)], None).await;
+    let threads = &job.projects[0].imported_thread_ids;
+    assert_eq!(threads.len(), 3);
+    let mut kinds: HashMap<ThreadId, Vec<&'static str>> = HashMap::new();
+    while let Ok(event) = live.try_recv() {
+        let kind = match event.payload {
+            EventPayload::ThreadCreated { .. } => "created",
+            EventPayload::SessionImported { .. } => "imported",
+            _ => "history",
+        };
+        kinds.entry(event.thread_id).or_default().push(kind);
+    }
+    for id in threads {
+        assert_eq!(kinds.get(id).map(Vec::as_slice), Some(&["created", "imported"][..]), "live clients hear only that the thread exists");
+        let stored = f.state.store.events_for_thread(*id).unwrap();
+        assert!(stored.len() > 2, "the history itself is stored for whoever opens the thread");
+    }
 }
 
 // ---- the single-session resume is untouched ----

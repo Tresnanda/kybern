@@ -987,6 +987,7 @@ impl JobRunner {
             history,
             imported_profile: profile,
             updated_at,
+            announce_history: false,
         };
         match self.state.orchestrator.adopt_session_history(adopt, settings).await {
             Ok((thread, true)) => {

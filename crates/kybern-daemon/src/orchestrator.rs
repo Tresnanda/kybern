@@ -67,6 +67,9 @@ pub(crate) struct AdoptSession {
     pub imported_profile: Option<String>,
     /// The thread's `updated_at`: now for a single resume, the session's own last activity for a bulk import.
     pub updated_at: chrono::DateTime<Utc>,
+    /// Stream the whole history to live subscribers (a single resume, which the client opens next). A bulk import
+    /// announces only the thread's creation and import: its history stays in the store for whoever opens it.
+    pub announce_history: bool,
 }
 
 /// A rejected send, before any turn was accepted. Thread messaging may retry
@@ -1490,7 +1493,10 @@ impl Orchestrator {
         }
         let project = self.add_project(session.cwd.clone(), None, None)?;
         let (mut thread, _created) = self
-            .adopt_session_history(AdoptSession { project, instance, history, imported_profile, updated_at: Utc::now() }, &settings)
+            .adopt_session_history(
+                AdoptSession { project, instance, history, imported_profile, updated_at: Utc::now(), announce_history: true },
+                &settings,
+            )
             .await?;
         if thread.status == ThreadStatus::Archived {
             thread.status = ThreadStatus::Idle;
@@ -1504,7 +1510,7 @@ impl Orchestrator {
     /// transaction. `created` is false when the session was already imported (the
     /// existing thread comes back untouched). Starts no turn and sends no prompt.
     pub(crate) async fn adopt_session_history(&self, adopt: AdoptSession, settings: &Settings) -> Result<(Thread, bool)> {
-        let AdoptSession { project, instance, history, imported_profile, updated_at } = adopt;
+        let AdoptSession { project, instance, history, imported_profile, updated_at, announce_history } = adopt;
         let session = history.session;
         // A session in a group folder joins the group like a local chat: every member. Its cwd stays the
         // session's own spelling, which the harness resumes by.
@@ -1553,8 +1559,13 @@ impl Orchestrator {
         if let Some(profile) = imported_profile {
             self.inner.store.meta_set(&format!("omp_profile:{}", thread.id), &profile)?;
         }
-        for event in events {
-            let _ = self.inner.events.send(event);
+        // A bulk import of hundreds of chats would otherwise stream every past turn to every window, mark each
+        // thread unread on its last `turn_completed`, and can overflow the broadcast's byte budget (`events.lagged`).
+        let last = events.len().saturating_sub(1);
+        for (index, event) in events.into_iter().enumerate() {
+            if announce_history || index == 0 || index == last {
+                let _ = self.inner.events.send(event);
+            }
         }
         Ok((thread, true))
     }
