@@ -76,10 +76,8 @@ export function AgentPopover({ agent, isDefault, x, y, bounds }: { agent: Agent 
     if (!kind) return
     const opener = renderer.getFocusedElementId?.()
     return () => {
-      queueMicrotask(() => {
-        const now = renderer.getFocusedElementId?.()
-        if (opener != null && now == null) renderer.focusElement?.(opener)
-      })
+      // Unconditional: a dialog the popover opens (sign-in, the terminal sheet) takes focus after this, so it still wins.
+      if (opener != null) queueMicrotask(() => renderer.focusElement?.(opener))
     }
   }, [kind, renderer])
   useEffect(() => { if (node) renderer.focusElement?.(node.id) }, [node, renderer])
