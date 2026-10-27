@@ -91,7 +91,7 @@ export function Draft() {
   const focusEditor = useRef<() => void>(() => {})
   const fillComposer = useRef<(text: string) => void>(() => {})
   const [justHandedOff] = useState(isFresh)
-  const typed = useTypedPlaceholder(justHandedOff)
+  useTypedPlaceholder(justHandedOff)
   const pickup = useRef<PickUpHandle | null>(null)
   const trayShown = landingTrayShown(projectId, attached)
   const pick = (id: string | null) => {
@@ -177,7 +177,8 @@ export function Draft() {
           tray={trayShown ? tray(false) : undefined}
           extras={{
             task: attached,
-            placeholder: attached ? `Add instructions, or send to start ${attached.key}` : typed,
+            placeholder: attached ? `Add instructions, or send to start ${attached.key}` : undefined,
+            typedPlaceholder: justHandedOff && !attached,
             fillRef: (fill) => { fillComposer.current = fill },
             onEmptyDown: () => pickup.current?.focusFirst() ?? false,
             focusRef: (focus) => { focusEditor.current = focus },

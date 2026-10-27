@@ -6,7 +6,7 @@ import { CloseDirtyDialog } from './tabs/CloseDirty.tsx'
 import { WebPageUi } from './native/WebPageUi.tsx'
 import { WorkspaceDialogs } from './dialogs/Dialogs.tsx'
 import { OnboardingLayer, useOnboardingGate } from './onboarding/Welcome.tsx'
-import { HandoffController, ShellEntrance } from './onboarding/Handoff.tsx'
+import { HandoffController, ShellEntrance, TypedOverlay } from './onboarding/Handoff.tsx'
 import { useFlow } from './onboarding/flow.ts'
 import { EnvironmentDialogs } from './environments/Dialogs.tsx'
 import { useEnvironment } from './shell/environment.ts'
@@ -242,7 +242,8 @@ function Workspace() {
         </div>
       </div>
       </ShellEntrance>}
-      <OnboardingLayer show={onboarding} />
+      <TypedOverlay />
+<OnboardingLayer show={onboarding} />
       <HandoffController />
       <Palette />
       <HandoffDialog />

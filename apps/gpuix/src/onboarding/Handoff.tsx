@@ -10,13 +10,16 @@ import { EASE } from '../motion/tokens.ts'
 import { addWindowKeyHandler } from '../nav/keys.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { toast } from '../shell/toasts.tsx'
-import { REDUCED_MOTION } from '../ui.tsx'
+import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
+import { observeElementBounds, type LayoutRect } from '../native/layout.ts'
+import { Label, REDUCED_MOTION } from '../ui.tsx'
 import { useAgents } from './agentsStore.ts'
 import { LATER_TOAST, needsAfterFlow } from './getStarted.ts'
 import { startGetStarted } from './getStartedStore.ts'
 import { SkippedDialog, viewSkipped } from './SkippedDialog.tsx'
 import { announce, importAnnouncements, START_MARK, useAnnouncement, type ImportMark } from './announce.ts'
 import { flow, useFlow } from './flow.ts'
+import { createStore } from './store.ts'
 import { count, noun } from './model.ts'
 import { bez, In } from './motion.tsx'
 import { getImportSummary, projectsStore, type ImportSummary } from './projectsStore.ts'
@@ -101,12 +104,19 @@ export function HandoffSuggestions({ free, fill }: { free: boolean; fill: (text:
 
 const EXAMPLES = ['Fix the flaky login test', 'Explain how the importer groups chats by repo', 'Add a dark mode toggle to Settings']
 
+/** The text the placeholder shows while it types (`undefined`: the usual one). Only `TypedOverlay` reads it, so a character commits one label, not the Draft. */
+const typed = createStore<{ text: string | undefined }>({ text: undefined })
+const setText = (text: string | undefined) => typed.set({ text })
+
+/** How long after the Draft mounts its entrance is over (the last chip lands at about 1.3 s): typing starts then, not under it. */
+const TYPING_START_MS = 1500
+
 /**
  * The composer's placeholder types a few examples, ~40 ms a character, holds 1.7 s and deletes at 14 ms, then returns to the
- * usual one (`undefined`). Stops at the first key press. Runs only right after the flow, never under Reduce Motion.
+ * usual one (`undefined`). Stops at the first key press. Runs only right after the flow, never under Reduce Motion. The text
+ * goes to `TypedOverlay` through a store; this hook only drives it, and renders nothing itself.
  */
-export function useTypedPlaceholder(active: boolean): string | undefined {
-  const [text, setText] = useState<string | undefined>(undefined)
+export function useTypedPlaceholder(active: boolean): void {
   useEffect(() => {
     if (!active || REDUCED_MOTION) return
     let live = true
@@ -114,7 +124,7 @@ export function useTypedPlaceholder(active: boolean): string | undefined {
     const wait = (ms: number) => new Promise<void>((resolve) => { timers.push(setTimeout(resolve, ms)) })
     const stop = addWindowKeyHandler(() => { live = false; setText(undefined); return false })
     void (async () => {
-      await wait(1100)
+      await wait(TYPING_START_MS)
       for (const example of EXAMPLES) {
         for (let i = 1; i <= example.length && live; i++) { setText(example.slice(0, i)); await wait(40) }
         if (!live) return
@@ -125,7 +135,44 @@ export function useTypedPlaceholder(active: boolean): string | undefined {
     })()
     return () => { live = false; stop(); timers.forEach(clearTimeout); setText(undefined) }
   }, [active])
-  return text
+}
+
+/** Where the composer's placeholder sits in the window, and its colour: what `TypedOverlay` draws over. */
+const anchor = createStore<{ rect: LayoutRect | null; color: string }>({ rect: null, color: '#808080' })
+
+/**
+ * The composer's placeholder while the examples type. The composer sits inside the content card's cached island, and a changed
+ * character anywhere inside it re-renders and re-lays out the whole card (a measured ~36 ms a draw, every 40 ms). So the typed text
+ * is not drawn there: this box only keeps the place and reports it, and `TypedOverlay` draws the characters above the card.
+ * `fallback` is what shows when nothing is typing.
+ */
+export function TypedPlaceholder({ fallback, color }: { fallback: string; color: string }) {
+  const renderer = useGpuixRequired()
+  const box = useRef<PublicInstance | null>(null)
+  const typing = typed.use((s) => s.text !== undefined)
+  useEffect(() => {
+    const node = box.current
+    if (!node) return
+    const stop = observeElementBounds(renderer, { id: node.id }, (event) => anchor.set({ rect: event.rect, color }))
+    return () => { stop(); anchor.set({ rect: null }) }
+  }, [renderer, color])
+  return (
+    <div ref={box} style={{ width: '100%', height: 19.6 }}>
+      {!typing && <Label color={color} lineHeight={19.6} truncate>{fallback}</Label>}
+    </div>
+  )
+}
+
+/** Mounted once at the window's root, outside every island: the typed example, at the placeholder's place, in its colour. */
+export function TypedOverlay() {
+  const text = typed.use((s) => s.text)
+  const { rect, color } = anchor.use((s) => s)
+  if (text === undefined || !rect) return null
+  return (
+    <div testId="onboarding-typed" style={{ position: 'absolute', left: rect.x, top: rect.y, width: rect.width, pointerEvents: 'none' }}>
+      <Label color={color} lineHeight={19.6} truncate>{text}</Label>
+    </div>
+  )
 }
 
 // ─── The toast ────────────────────────────────────────────────────────────
