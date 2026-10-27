@@ -331,6 +331,21 @@ function onJob(job: SessionsImportJob) {
   if (ended) for (const listener of [...finishedListeners]) listener(get().summary)
 }
 
+/**
+ * The reply to `sessions.import_all`. The daemon starts the job before it replies, so `import.finished` can arrive first:
+ * a finished job never goes back to running. A running reply only supplies the job id (progress events carry the rest);
+ * an ended one is applied, which is the same move the notification makes.
+ */
+function onJobReply(job: SessionsImportJob) {
+  const s = get()
+  if (!s.job || s.job.phase === 'done') return
+  if (job.state === 'running') {
+    if (!s.job.id) set({ job: { ...s.job, id: job.job_id } })
+    return
+  }
+  onJob(job)
+}
+
 /** Press Import: one `sessions.import_all` for the checked rows, newest first. The mode, the checkboxes and Select all lock from this moment. */
 export function startImport(): void {
   const s = get()
@@ -344,7 +359,7 @@ export function startImport(): void {
   recompute()
   const scanId = s.scan?.state === 'running' ? null : s.scanId
   client.call('sessions.import_all', { roots: plan.map(toRequestRoot), scan_id: scanId }).then(
-    (job) => onJob(job),
+    (job) => onJobReply(job),
     (error) => {
       // Nothing started: unlock and say so next to the button.
       set({ job: null, plan: [], imports: {}, skips: [], progress: 0, importMode: null, importError: `Couldn’t start the import (${errorText(error).replace(/[.\s]+$/, '')}). Try again.` })

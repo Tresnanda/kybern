@@ -187,6 +187,37 @@ describe('import', () => {
     stop()
   })
 
+  test('a finished event that beats the reply keeps the job done', async () => {
+    let reply: (job: SessionsImportJob) => void = () => {}
+    answers['sessions.import_all'] = () => new Promise<SessionsImportJob>((resolve) => { reply = resolve })
+    await ready()
+    const finished: unknown[] = []
+    const stop = store.onImportFinished((s) => finished.push(s))
+    store.startImport()
+    await flush()
+    emit('sessions.import.progress', event({ root: '/a', state: 'done', total: 5, done: 5, imported: 5, project_id: 'k-a' }))
+    emit('sessions.import.progress', event({ root: '/b', state: 'done', total: 5, done: 5, imported: 5, project_id: 'k-b' }))
+    emit('sessions.import.finished', { job: job({ state: 'done' }) })
+    expect(projectsStore.get().job).toEqual({ id: 'j1', phase: 'done' })
+    expect(finished).toHaveLength(1)
+    // The reply is older than the notification: it describes a job that was still running.
+    reply(job({ state: 'running' }))
+    await flush()
+    expect(projectsStore.get().job).toEqual({ id: 'j1', phase: 'done' })
+    expect(store.getImportSummary().phase).toBe('done')
+    expect(finished).toHaveLength(1)
+    stop()
+  })
+
+  test('a running reply only supplies the job id', async () => {
+    answers['sessions.import_all'] = () => job({ job_id: 'j9' })
+    await ready()
+    store.startImport()
+    await flush()
+    expect(projectsStore.get().job).toEqual({ id: 'j9', phase: 'running' })
+    expect(store.getImportSummary().phase).toBe('running')
+  })
+
   test('events for another job are ignored; a failed call unlocks with a message', async () => {
     answers['sessions.import_all'] = () => job()
     await ready()
