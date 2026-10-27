@@ -11,8 +11,12 @@ import { N } from '../nav/glyphs.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { Spinner } from '../kit/Spinner.tsx'
+import type { Theme } from '../theme.ts'
 import { canvasColor } from './Grid.tsx'
 import { bez } from './motion.tsx'
+
+/** The label colour of a `Cta`, for a label built from nodes (a rolling number inside the words). */
+export const ctaForeground = (t: Theme, off = false) => (off ? t.textTertiary : canvasColor(t))
 
 export interface CtaProps {
   children: ReactNode
@@ -101,7 +105,7 @@ export function Cta({ children, onClick, disabled = false, busy = false, arrow =
       )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, pointerEvents: 'none' }}>
         {busy ? <Spinner size={14} color={fg} /> : lead}
-        <Label color={fg} size={15} lineHeight={20} weight={600} style={{ whiteSpace: 'nowrap' }}>{children}</Label>
+        {typeof children === 'string' ? <Label color={fg} size={15} lineHeight={20} weight={600} style={{ whiteSpace: 'nowrap' }}>{children}</Label> : children}
         {arrow && (
           <PaintTranslate animate={{ translateX: hover && press ? 3 : 0, translateY: 0 }} transition={{ duration: 0.2, ease: bez(EASE.out) }} style={{ display: 'flex' }}>
             <Icon source={N.arrowRight} size={15} color={fg} style={{ pointerEvents: 'none' }} />

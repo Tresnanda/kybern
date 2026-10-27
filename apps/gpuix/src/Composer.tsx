@@ -287,6 +287,8 @@ export interface DraftExtras {
   placeholder?: string
   onEmptyDown?: () => boolean
   focusRef?: (focus: () => void) => void
+  /** Receives a function that fills the composer and focuses it (the first-run suggestion chips). */
+  fillRef?: (fill: (text: string) => void) => void
   /** The send has a thread id: record where the prompt was, before the page switches. */
   onLaunch?: (threadId: string, snapshot: ComposerSnapshot | undefined) => void
   /** The send started the task's run. */
@@ -317,6 +319,7 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
       allowEmptySend={!!extras.task}
       onEmptyDown={extras.onEmptyDown}
       focusRef={extras.focusRef}
+      fillRef={extras.fillRef}
       mode={mode}
       onModeChange={(m) => patchDraft({ mode: m })}
       provider={provider}
@@ -532,6 +535,7 @@ export interface ComposerViewProps {
   onEmptyDown?: () => boolean
   /** Receives a function that focuses the editor (focus comes back from the pick-up). */
   focusRef?: (focus: () => void) => void
+  fillRef?: (fill: (text: string) => void) => void
   /** The placeholder's entrance (the thread composer holds it while a prompt flies off the card). */
   placeholderEnter?: PaintTransformProps
 }
@@ -676,6 +680,7 @@ export function ComposerView(input: ComposerViewProps) {
     if (editor.current) renderer.focusElement?.(editor.current.id)
   }
   useEffect(() => { props.focusRef?.(focusEditor) })
+  useEffect(() => { props.fillRef?.((value) => { setText(value); focusEditor() }) })
 
   const attachmentRefs = useMemo<AttachmentReference[]>(
     () => attachments.map((a) => ({ token: `@${a.label}`, part: { type: 'attachment', asset_id: a.id, name: a.name, media_type: a.media_type, size: a.size } })),

@@ -49,6 +49,8 @@ export interface ToastOptions {
   id?: string
   description?: string
   action?: { label: string; onClick: () => void }
+  /** 0…1: a progress bar under the text. A toast with this id and title updates in place as it advances (no cross-fade per tick). */
+  progress?: number
   /** Milliseconds before it leaves; `Infinity` keeps it until dismissed. Default 4000. */
   duration?: number
 }
@@ -61,6 +63,7 @@ interface Item {
   title: string
   description?: string
   action?: { label: string; onClick: () => void }
+  progress?: number
   duration: number
   /** The card's height in px: measured once painted, estimated before. */
   height: number
@@ -152,10 +155,15 @@ function show(kind: ToastKind, title: string, options: ToastOptions = {}): strin
     title,
     description: options.description,
     action: options.action,
+    progress: options.progress,
     duration,
     remaining: duration,
   }
-  if (existing && existing.kind === kind && existing.title === title && existing.description === options.description && existing.action?.label === options.action?.label) {
+  if (existing && options.progress !== undefined && existing.progress !== undefined && existing.kind === kind && existing.title === title) {
+    // A progress toast moving on: update the card in place.
+    existing.description = options.description
+    existing.progress = options.progress
+  } else if (existing && existing.kind === kind && existing.title === title && existing.description === options.description && existing.action?.label === options.action?.label && existing.progress === options.progress) {
     // The same toast again: the timer starts over and nothing changes on screen.
     clearTimeout(existing.timer)
     Object.assign(existing, fields, { startedAt: null })
@@ -413,6 +421,14 @@ function ToastCard({ item }: { item: Item }) {
           <Label color={t.text} size={13} lineHeight={18}>
             {item.description}
           </Label>
+        )}
+        {item.progress !== undefined && (
+          <div style={{ marginTop: 8, width: '100%', height: 4, borderRadius: 2, overflow: 'hidden', backgroundColor: t.variant === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(13,13,13,0.1)' }}>
+            <div
+              paintTransform={PATCHED_NATIVE ? { initial: false, animate: { scaleX: Math.max(0.001, Math.min(1, item.progress)) }, transition: { duration: 0.4, ease: [...EASE.out] as [number, number, number, number] }, origin: [0, 0.5], retain: true } : undefined}
+              style={{ width: '100%', height: 4, borderRadius: 2, backgroundColor: t.text }}
+            />
+          </div>
         )}
       </div>
       {item.action && (

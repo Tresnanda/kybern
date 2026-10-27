@@ -14,7 +14,7 @@ import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { useApp } from '../state.ts'
 import { Label, LOGO_SVG, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { AgentsScene } from './AgentsScene.tsx'
-import { Grid, canvasColor } from './Grid.tsx'
+import { Grid, canvasColor, litPointer } from './Grid.tsx'
 import { Hero } from './Hero.tsx'
 import { PreferencesScene } from './PreferencesScene.tsx'
 import { ProjectsScene } from './ProjectsScene.tsx'
@@ -88,7 +88,7 @@ function Welcome() {
   const t = useTheme()
   const { trailing } = useWindowControlsLayout()
   return (
-    <div testId="onboarding" style={{ position: 'relative', width: '100%', height: '100%', backgroundColor: canvasColor(t), overflow: 'hidden' }}>
+    <div testId="onboarding" onMouseMove={(e) => litPointer(e.x ?? null, e.y ?? null)} onMouseLeave={() => litPointer(null, null)} style={{ position: 'relative', width: '100%', height: '100%', backgroundColor: canvasColor(t), overflow: 'hidden' }}>
       <Grid />
       {SCENE_ORDER.map((id) => <SceneLayer key={id} id={id} />)}
       <MarkFlight />
@@ -122,7 +122,7 @@ function Progress() {
         {[1, 2, 3].map((n) => (
           <div key={n} style={{ position: 'relative', width: 28, height: 4, borderRadius: 2, backgroundColor: t.variant === 'dark' ? 'rgba(255, 255, 255, 0.14)' : 'rgba(13, 13, 13, 0.1)', overflow: 'hidden' }}>
             <div
-              paintTransform={PATCHED_NATIVE ? { initial: false, animate: { scaleX: step >= n ? 1 : 0 }, transition: { duration: 0.5, ease: bez(EASE.out) }, origin: [0, 0.5], retain: true } : undefined}
+              paintTransform={PATCHED_NATIVE ? { initial: false, animate: { scaleX: step >= n ? 1 : 0.001, opacity: step >= n ? 1 : 0 }, transition: { duration: 0.5, ease: bez(EASE.out) }, origin: [0, 0.5], retain: true } : undefined}
               style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, borderRadius: 2, backgroundColor: t.text, ...(PATCHED_NATIVE ? {} : { opacity: step >= n ? 1 : 0 }) }}
             />
           </div>

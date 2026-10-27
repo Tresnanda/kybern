@@ -6,6 +6,8 @@ import { CloseDirtyDialog } from './tabs/CloseDirty.tsx'
 import { WebPageUi } from './native/WebPageUi.tsx'
 import { WorkspaceDialogs } from './dialogs/Dialogs.tsx'
 import { OnboardingLayer } from './onboarding/Welcome.tsx'
+import { HandoffController, ShellEntrance } from './onboarding/Handoff.tsx'
+import { useFlow } from './onboarding/flow.ts'
 import { EnvironmentDialogs } from './environments/Dialogs.tsx'
 import { useEnvironment } from './shell/environment.ts'
 // The window shell (`App.tsx`, `views/chrome.tsx`): a 46px title bar and a 52px
@@ -161,6 +163,7 @@ function Workspace() {
       style={{ userSelect: 'none', display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: singleFill ? undefined : fills.frame, position: 'relative' }}
     >
       {singleFill && <FrameFill color={fills.frame} />}
+      <ShellEntrance style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column' }}>
       <TitleBar panelOpen={panelOpen} />
       <div style={{ display: 'flex', position: 'absolute', left: 0, right: 0, bottom: 0, top: TITLEBAR, paddingRight: INSET, paddingBottom: INSET }}>
         <NavRail />
@@ -233,7 +236,9 @@ function Workspace() {
           {panelOpen && <SidebarResizeHandle />}
         </div>
       </div>
+      </ShellEntrance>
       <OnboardingLayer />
+      <HandoffController />
       <Palette />
       <HandoffDialog />
       <SessionsDialog />
@@ -338,7 +343,9 @@ function HomePage() {
 
 function ConversationPage() {
   const selectedId = useApp((s) => s.selectedId)
-  if (!selectedId) return <Draft />
+  // The first-run flow ending remounts the Draft, so it rises in under the dissolving welcome.
+  const handoffAt = useFlow((s) => s.handoff?.at ?? 0)
+  if (!selectedId) return <Draft key={handoffAt} />
   return <ThreadPage selectedId={selectedId} />
 }
 

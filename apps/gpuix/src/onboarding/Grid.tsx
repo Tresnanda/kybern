@@ -2,8 +2,8 @@
 // tinted SVG pattern (dots every 24 px) drawn full-bleed and faded toward the window edges with the native `edgeFade`. Every
 // scene change pans it a few px and swells it once (the camera). Optionally a patch of darker dots follows the mouse (`LitGrid`).
 import type { PaintTransformProps } from '@gpuix/native/host'
-import { useWindowSize } from '@gpuix/react'
-import { useMemo, useRef } from 'react'
+import { useGpuixRequired, useWindowSize, type PublicInstance } from '@gpuix/react'
+import { useEffect, useMemo, useRef } from 'react'
 import { EASE } from '../motion/tokens.ts'
 import { EDGE_FADE, PATCHED_NATIVE } from '../native/local-build.ts'
 import { useTheme, REDUCED_MOTION } from '../ui.tsx'
@@ -57,6 +57,7 @@ export function Grid({ visible = true }: { visible?: boolean }) {
         <div paintTransform={cameraPan(scene)} style={{ position: 'absolute', left: -OVERSCAN, top: -OVERSCAN, pointerEvents: 'none' }}>
           <div paintTransform={cameraSwell(swells.current.n, dir)} style={{ pointerEvents: 'none' }}>
             <svg source={source} style={{ width: Math.ceil((w + OVERSCAN * 2) / 96) * 96, height: Math.ceil((h + OVERSCAN * 2) / 96) * 96, color: gridInk(t), pointerEvents: 'none' }} />
+            {LIT && <LitPatch source={source} width={Math.ceil((w + OVERSCAN * 2) / 96) * 96} height={Math.ceil((h + OVERSCAN * 2) / 96) * 96} />}
           </div>
         </div>
       </div>
@@ -68,3 +69,55 @@ export function Grid({ visible = true }: { visible?: boolean }) {
 const stateOpacity = (visible: boolean): PaintTransformProps | undefined => PATCHED_NATIVE
   ? { initial: false, animate: { opacity: visible ? 1 : 0 }, transition: { duration: visible ? 0.3 : 0.6, ease: bez(EASE.out) }, retain: true }
   : undefined
+
+// ─── The lit patch ────────────────────────────────────────────────────────
+
+/** `KYBERN_ONBOARDING_LIT=0` ships the static grid only (SPEC §1: "if it costs more than ~1 ms a frame, drop it"). */
+const LIT = PATCHED_NATIVE && !REDUCED_MOTION && process.env.KYBERN_ONBOARDING_LIT !== '0'
+export const LIT_R = 160
+/** The rings that soften the patch's edge: radius and the share of the lit ink each paints (SPEC §1). */
+const RINGS: readonly (readonly [number, number])[] = [[200, 0.25], [180, 0.5], [160, 1]]
+
+let feed: ((x: number | null, y: number | null) => void) | null = null
+/** The welcome root's pointer: window coordinates, or null when it left the window. Mouse only, no React work. */
+export const litPointer = (x: number | null, y: number | null) => feed?.(x, y)
+
+/**
+ * A circular clipped island that follows the pointer with retained translations; inside it the same grid, counter-translated,
+ * so its dots sit exactly on the base grid's. Three concentric islands give a soft edge. Lives inside the camera, so it keeps
+ * lining up while the grid pans and swells.
+ */
+function LitPatch({ source, width, height }: { source: string; width: number; height: number }) {
+  const t = useTheme()
+  const renderer = useGpuixRequired()
+  const outer = useRef<(PublicInstance | null)[]>([])
+  const inner = useRef<(PublicInstance | null)[]>([])
+  useEffect(() => {
+    const api = renderer as unknown as { setSubtreeTranslation?: (id: number, v: { translateX: number; translateY: number }) => void }
+    if (typeof api.setSubtreeTranslation !== 'function') return
+    const hide = () => RINGS.forEach(([r], i) => { const o = outer.current[i], n = inner.current[i]; if (o && n) { api.setSubtreeTranslation!(o.id, { translateX: -4000, translateY: -4000 }); api.setSubtreeTranslation!(n.id, { translateX: 4000 - r * 2, translateY: 4000 - r * 2 }) } })
+    feed = (x, y) => {
+      if (x === null || y === null) { hide(); return }
+      const gx = x + OVERSCAN, gy = y + OVERSCAN
+      RINGS.forEach(([r], i) => {
+        const o = outer.current[i], n = inner.current[i]
+        if (!o || !n) return
+        api.setSubtreeTranslation!(o.id, { translateX: gx - r, translateY: gy - r })
+        api.setSubtreeTranslation!(n.id, { translateX: -(gx - r), translateY: -(gy - r) })
+      })
+    }
+    hide()
+    return () => { feed = null }
+  }, [renderer])
+  return (
+    <>
+      {RINGS.map(([r, share], i) => (
+        <div key={r} ref={(node) => { outer.current[i] = node }} style={{ position: 'absolute', left: 0, top: 0, width: r * 2, height: r * 2, borderRadius: r, overflow: 'hidden', pointerEvents: 'none' }}>
+          <div ref={(node) => { inner.current[i] = node }} style={{ position: 'absolute', left: 0, top: 0, width, height, pointerEvents: 'none' }}>
+            <svg source={source} style={{ width, height, color: share === 1 ? litInk(t) : litInk(t).replace(/[\d.]+\)$/, `${(t.variant === 'dark' ? 0.34 : 0.32) * share})`), pointerEvents: 'none' }} />
+          </div>
+        </div>
+      ))}
+    </>
+  )
+}

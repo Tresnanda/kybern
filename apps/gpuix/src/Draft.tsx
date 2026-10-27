@@ -21,6 +21,7 @@ import { addWindowKeyHandler } from './nav/keys.ts'
 import { openThread } from './nav/history.ts'
 import { observeElementBounds, type LayoutRect } from './native/layout.ts'
 import { useTasks } from './tasks/store.ts'
+import { HandoffSuggestions, isFresh, useTypedPlaceholder } from './onboarding/Handoff.tsx'
 import { Headline } from './draft/Headline.tsx'
 import { InstructionsOffer } from './draft/InstructionsOffer.tsx'
 import { attachedForProject, continueThreads, MORPH_MAX_IMAGES, MORPH_MAX_LINES, pickupRowsFor, upNextTasks } from './draft/model.ts'
@@ -37,6 +38,8 @@ let mounts = 0
 /** Read once per mount, like the desktop's `useState(() => !isLaunching())`. */
 function shouldEnter(): boolean {
   const launch = mounts++ === 0
+  // Right after the first-run flow the Draft rises even though a key (Return) was just pressed.
+  if (isFresh()) return true
   return !launch && performance.now() - lastKeyAt > 400
 }
 
@@ -84,6 +87,8 @@ export function Draft() {
 
   // ---- the composer's hooks into the screen ----
   const focusEditor = useRef<() => void>(() => {})
+  const fillComposer = useRef<(text: string) => void>(() => {})
+  const typed = useTypedPlaceholder(enter && isFresh())
   const pickup = useRef<PickUpHandle | null>(null)
   const trayShown = landingTrayShown(projectId, attached)
   const pick = (id: string | null) => {
@@ -165,13 +170,15 @@ export function Draft() {
           tray={trayShown ? tray(false) : undefined}
           extras={{
             task: attached,
-            placeholder: attached ? `Add instructions, or send to start ${attached.key}` : undefined,
+            placeholder: attached ? `Add instructions, or send to start ${attached.key}` : typed,
+            fillRef: (fill) => { fillComposer.current = fill },
             onEmptyDown: () => pickup.current?.focusFirst() ?? false,
             focusRef: (focus) => { focusEditor.current = focus },
             onLaunch,
             onTaskSent: () => clearAttachedTask(pane.id),
           }}
         />
+        <HandoffSuggestions free={!projectId} fill={(text) => fillComposer.current(text)} />
       </>}
       pickup={pickupView(false)}
     />

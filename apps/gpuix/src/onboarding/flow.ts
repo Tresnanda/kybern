@@ -53,8 +53,10 @@ export function wantsOnboarding(input: Omit<GateInput, 'completed' | 'forced'>):
 }
 
 /** Called from an effect when the gate first says yes. */
+/** `KYBERN_ONBOARDING_SCENE=agents|projects|prefs`: start on a later scene (screenshots, development). */
+const START = (['agents', 'projects', 'prefs'] as const).find((id) => id === process.env.KYBERN_ONBOARDING_SCENE)
 export function openFlow() {
-  if (!flow.get().open) flow.set({ ...INITIAL, open: true })
+  if (!flow.get().open) flow.set({ ...INITIAL, open: true, ...(START ? { scene: START, introPlayed: true } : {}) })
 }
 
 /** A window with data and no mark belongs to a returning user: write the mark so an empty library later never brings the flow back. */
