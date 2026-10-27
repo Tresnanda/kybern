@@ -47,6 +47,7 @@ import {
 } from '../../../packages/kybern-client/src/types.ts'
 import { Icon } from './icons.tsx'
 import { MatrixLoader } from './MatrixLoader.tsx'
+import { TypedPlaceholder } from './onboarding/Handoff.tsx'
 import { Spinner } from './kit/Spinner.tsx'
 import { upsert as upsertTask } from './tasks/store.ts'
 import { getClient, getState, refreshLists, setThreadOpen, usePaneCompact, focusPane, getFocusedPaneId, usePaneAccess, getPane, selectPaneThread, setPane, set, useApp } from './state.ts'
@@ -285,8 +286,12 @@ export interface DraftExtras {
   /** Sends through `tasks.items.send` (Send to agent) instead of `threads.create`; Send works with nothing typed. */
   task?: TaskItem | null
   placeholder?: string
+  /** The first-run flow's typed examples own the placeholder's text (`onboarding/Handoff.tsx`). */
+  typedPlaceholder?: boolean
   onEmptyDown?: () => boolean
   focusRef?: (focus: () => void) => void
+  /** Receives a function that fills the composer and focuses it (the first-run suggestion chips). */
+  fillRef?: (fill: (text: string) => void) => void
   /** The send has a thread id: record where the prompt was, before the page switches. */
   onLaunch?: (threadId: string, snapshot: ComposerSnapshot | undefined) => void
   /** The send started the task's run. */
@@ -310,6 +315,7 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
     <ComposerView
       key={`${coordinator ? 'coordinator' : 'project'}:${projectId ?? 'free'}`}
       draftKey={`${coordinator ? 'coordinator' : 'project'}:${projectId ?? 'free'}`}
+      typedPlaceholder={extras.typedPlaceholder}
       placeholder={extras.placeholder ?? (coordinator ? 'Describe the outcome, constraints, and what success looks like' : undefined)}
       projectId={projectId ?? undefined}
       above={tray}
@@ -317,6 +323,7 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
       allowEmptySend={!!extras.task}
       onEmptyDown={extras.onEmptyDown}
       focusRef={extras.focusRef}
+      fillRef={extras.fillRef}
       mode={mode}
       onModeChange={(m) => patchDraft({ mode: m })}
       provider={provider}
@@ -496,6 +503,7 @@ export interface ComposerViewProps {
   /** The open thread: its slash commands (`composer/commands.ts`) replace the home screen's. */
   thread?: Thread
   placeholder?: string
+  typedPlaceholder?: boolean
   running?: boolean
   /** `running` only because a send has not been answered yet: Enter still queues behind it, but the button shows that send
    *  in flight, not Stop (there is no turn to stop yet). */
@@ -532,6 +540,7 @@ export interface ComposerViewProps {
   onEmptyDown?: () => boolean
   /** Receives a function that focuses the editor (focus comes back from the pick-up). */
   focusRef?: (focus: () => void) => void
+  fillRef?: (fill: (text: string) => void) => void
   /** The placeholder's entrance (the thread composer holds it while a prompt flies off the card). */
   placeholderEnter?: PaintTransformProps
 }
@@ -676,6 +685,7 @@ export function ComposerView(input: ComposerViewProps) {
     if (editor.current) renderer.focusElement?.(editor.current.id)
   }
   useEffect(() => { props.focusRef?.(focusEditor) })
+  useEffect(() => { props.fillRef?.((value) => { setText(value); focusEditor() }) })
 
   const attachmentRefs = useMemo<AttachmentReference[]>(
     () => attachments.map((a) => ({ token: `@${a.label}`, part: { type: 'attachment', asset_id: a.id, name: a.name, media_type: a.media_type, size: a.size } })),
@@ -960,9 +970,9 @@ export function ComposerView(input: ComposerViewProps) {
             {/* GPUIX paints its own placeholder in a fixed grey; this one is the kit's muted × 40%. */}
             {!text && (
               <div testId="composer-placeholder" paintTransform={props.placeholderEnter} style={{ position: 'absolute', top: 0, left: 0, right: 0, pointerEvents: 'none' }}>
-                <Label color={muted(t, 0.4)} lineHeight={19.6} truncate>
-                  {props.placeholder ?? DEFAULT_PLACEHOLDER}
-                </Label>
+                {props.typedPlaceholder
+                  ? <TypedPlaceholder fallback={props.placeholder ?? DEFAULT_PLACEHOLDER} color={muted(t, 0.4)} />
+                  : <Label color={muted(t, 0.4)} lineHeight={19.6} truncate>{props.placeholder ?? DEFAULT_PLACEHOLDER}</Label>}
               </div>
             )}
             <TokenTextarea

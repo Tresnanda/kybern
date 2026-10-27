@@ -1,6 +1,6 @@
 use super::*;
 
-async fn connect(context: &ProbeContext) -> Result<ReadRpc> {
+pub(super) async fn connect(context: &ProbeContext) -> Result<ReadRpc> {
     let mut cmd = command(ProviderKind::Codex, context)?;
     cmd.arg("app-server");
     let mut rpc = ReadRpc::spawn(cmd)?;
@@ -32,6 +32,10 @@ fn summary(thread: &Value) -> Option<SavedSession> {
 
 pub(super) async fn list(context: &ProbeContext, cursor: Option<&str>, query: &str) -> Result<SessionsListResult> {
     let mut rpc = connect(context).await?;
+    list_with(&mut rpc, context, cursor, query).await
+}
+
+async fn list_with(rpc: &mut ReadRpc, context: &ProbeContext, cursor: Option<&str>, query: &str) -> Result<SessionsListResult> {
     let mut cursor = cursor.map(str::to_string);
     let mut sessions = Vec::new();
     let mut seen = HashSet::new();
@@ -56,6 +60,10 @@ pub(super) async fn list(context: &ProbeContext, cursor: Option<&str>, query: &s
 
 pub(super) async fn read(context: &ProbeContext, id: &str) -> Result<SessionHistory> {
     let mut rpc = connect(context).await?;
+    read_with(&mut rpc, id).await
+}
+
+async fn read_with(rpc: &mut ReadRpc, id: &str) -> Result<SessionHistory> {
     let (value, _) = rpc.call("thread/read", json!({"threadId":id,"includeTurns":false})).await?;
     let session = summary(&value["thread"]).ok_or_else(|| DriverError::Protocol("Choose a top-level saved Codex conversation.".into()))?;
     let mut history = History::default();
@@ -83,6 +91,23 @@ pub(super) async fn read(context: &ProbeContext, id: &str) -> Result<SessionHist
         }
     }
     Ok(history.finish(session))
+}
+
+/// One `codex app-server` for a whole scan or import.
+pub(super) struct Reader {
+    pub(super) rpc: ReadRpc,
+    pub(super) context: ProbeContext,
+}
+
+#[async_trait::async_trait]
+impl SessionReader for Reader {
+    async fn list_page(&mut self, cursor: Option<&str>) -> Result<SessionsListResult> {
+        list_with(&mut self.rpc, &self.context, cursor, "").await
+    }
+    async fn read(&mut self, id: &str) -> Result<SessionHistory> {
+        read_with(&mut self.rpc, id).await
+    }
+    async fn close(self: Box<Self>) {}
 }
 
 pub(super) fn parse_turn(history: &mut History, session: &SavedSession, turn: &Value) {

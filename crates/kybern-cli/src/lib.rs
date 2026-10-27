@@ -201,12 +201,15 @@ enum Cmd {
     },
     /// Stop the turn and apply a pending permission change now.
     ApplyPermissions { thread: ThreadId },
-    /// List saved conversations from an agent harness.
+    /// List saved conversations from an agent harness, or find and import them all (`scan`, `import`).
+    #[command(args_conflicts_with_subcommands = true)]
     Sessions {
+        #[command(subcommand)]
+        cmd: Option<SessionsCmd>,
         #[arg(long)]
         query: Option<String>,
         #[arg(long)]
-        provider: ProviderKind,
+        provider: Option<ProviderKind>,
         #[arg(long)]
         project: Option<String>,
         #[arg(long)]
@@ -548,6 +551,47 @@ enum Cmd {
     },
     /// Call any RPC method with raw JSON params.
     Call { method: String, params: Option<String> },
+}
+
+#[derive(Subcommand)]
+enum SessionsCmd {
+    /// Find saved sessions in every installed harness, grouped by repository.
+    Scan {
+        /// Only these harnesses (repeatable).
+        #[arg(long)]
+        provider: Vec<ProviderKind>,
+        /// Only repositories with enough recent sessions to suggest.
+        #[arg(long)]
+        suggested: bool,
+    },
+    /// Import the saved sessions of one or more repositories into Kybern, without running anything.
+    Import {
+        /// Repository folders, as shown by `kybern sessions scan`.
+        #[arg(required = true)]
+        roots: Vec<String>,
+        /// Only these harnesses (repeatable).
+        #[arg(long)]
+        provider: Vec<ProviderKind>,
+        /// Most recent sessions to import per repository.
+        #[arg(long, default_value_t = 50, conflicts_with = "all")]
+        limit: u32,
+        /// Import every session instead of the most recent ones.
+        #[arg(long)]
+        all: bool,
+        /// Import into this existing project (name, path or id); with one root only.
+        #[arg(long)]
+        project: Option<String>,
+        /// Reuse the session list of a finished scan.
+        #[arg(long)]
+        scan_id: Option<String>,
+        /// Start the job and print its id without waiting.
+        #[arg(long)]
+        detach: bool,
+    },
+    /// Show an import job.
+    Job { job_id: String },
+    /// Stop an import job after the session being read.
+    Cancel { job_id: String },
 }
 
 #[derive(Subcommand)]
@@ -1423,7 +1467,9 @@ pub async fn run() -> Result<()> {
                 serde_json::to_string_pretty(&client.call::<ThreadsPermissionsApply>(ThreadsInterruptParams { thread_id: thread }).await?)?
             );
         }
-        Cmd::Sessions { provider, project, cursor, query } => {
+        Cmd::Sessions { cmd: Some(cmd), .. } => sessions_command(&client, cmd, json).await?,
+        Cmd::Sessions { cmd: None, provider, project, cursor, query } => {
+            let provider = provider.ok_or_else(|| anyhow!("Choose a harness with --provider, or run `kybern sessions scan`."))?;
             let project_id = match project {
                 Some(project) => Some(resolve_project(&client, &project, false).await?),
                 None => None,
@@ -2433,6 +2479,178 @@ async fn resolve_note(client: &Client, key: &str) -> Result<NoteId> {
         (Some(note), None) => Ok(note.id),
         (Some(_), Some(_)) => Err(anyhow!("note id {key} matches several notes; use more of the id")),
         _ => Err(anyhow!("note {key} not found; run `kybern note list` for ids")),
+    }
+}
+
+fn day(at: chrono::DateTime<chrono::Utc>) -> String {
+    at.format("%Y-%m-%d").to_string()
+}
+
+/// Next pushed notification of `method`, decoded; other notifications are dropped.
+async fn next_notification<T: serde::de::DeserializeOwned>(
+    client: &Client,
+    methods: &[&str],
+    wait: std::time::Duration,
+) -> Option<(String, T)> {
+    let mut notifications = client.notifications.lock().await;
+    loop {
+        let note = tokio::time::timeout(wait, notifications.recv()).await.ok()?.ok()?;
+        if methods.contains(&note.method.as_str())
+            && let Ok(value) = serde_json::from_value(note.params)
+        {
+            return Some((note.method, value));
+        }
+    }
+}
+
+async fn sessions_command(client: &Client, cmd: SessionsCmd, json: bool) -> Result<()> {
+    use std::time::Duration;
+    match cmd {
+        SessionsCmd::Scan { provider, suggested } => {
+            let started = client
+                .call::<SessionsScanProjects>(SessionsScanProjectsParams { providers: (!provider.is_empty()).then_some(provider) })
+                .await?;
+            let mut printed: std::collections::HashMap<(ProviderKind, String), ScanProviderState> = Default::default();
+            let mut scan = started;
+            loop {
+                for status in &scan.providers {
+                    let key = (status.provider, status.instance.clone());
+                    if printed.insert(key, status.state) != Some(status.state) && !json && status.state != ScanProviderState::Pending {
+                        let label = if status.instance == "default" {
+                            status.provider.display_name().to_string()
+                        } else {
+                            format!("{} ({})", status.provider.display_name(), status.instance)
+                        };
+                        match &status.error {
+                            Some(error) => eprintln!("{label}: {:?} - {error}", status.state),
+                            None => eprintln!("{label}: {:?}, {} sessions", status.state, status.sessions),
+                        }
+                    }
+                }
+                if scan.state != SessionsJobState::Running {
+                    break;
+                }
+                // A pushed update, or a plain read every few seconds in case one was missed.
+                match next_notification::<SessionsScanChanged>(client, &[SESSIONS_SCAN_CHANGED_NOTIFICATION], Duration::from_secs(3)).await
+                {
+                    Some((_, changed)) if changed.scan.scan_id == scan.scan_id => scan = changed.scan,
+                    Some(_) => {}
+                    None => scan = client.call::<SessionsScanGet>(SessionsScanRef { scan_id: scan.scan_id.clone() }).await?,
+                }
+            }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&scan)?);
+                return Ok(());
+            }
+            println!("scan {}: {} sessions in {} repositories", scan.scan_id, scan.sessions_found, scan.projects.len());
+            for project in scan.projects.iter().filter(|project| !suggested || project.suggested) {
+                let providers = project
+                    .providers
+                    .iter()
+                    .map(|count| format!("{} {}", count.provider.as_str(), count.sessions))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                println!(
+                    "{} {:>4} sessions ({} imported)  {}  {}  [{}]{}",
+                    if project.suggested { "*" } else { " " },
+                    project.session_count,
+                    project.imported_count,
+                    day(project.last_activity),
+                    project.root,
+                    providers,
+                    if project.folder_missing { "  folder missing" } else { "" },
+                );
+            }
+        }
+        SessionsCmd::Import { roots, provider, limit, all, project, scan_id, detach } => {
+            let project_id = match project {
+                Some(_) if roots.len() != 1 => return Err(anyhow!("--project works with exactly one folder.")),
+                Some(project) => Some(resolve_project(client, &project, false).await?),
+                None => None,
+            };
+            let providers = (!provider.is_empty()).then_some(provider);
+            let roots = roots
+                .into_iter()
+                .map(|root| SessionsImportRoot {
+                    root: std::fs::canonicalize(&root).map(|path| path.to_string_lossy().into_owned()).unwrap_or(root),
+                    project_id,
+                    providers: providers.clone(),
+                    limit: (!all).then_some(limit),
+                })
+                .collect();
+            let mut job = client.call::<SessionsImportAll>(SessionsImportAllParams { roots, scan_id }).await?;
+            if detach {
+                println!("{}", job.job_id);
+                return Ok(());
+            }
+            if !json {
+                eprintln!("import job {} (stop it with `kybern sessions cancel {}`)", job.job_id, job.job_id);
+            }
+            let id = job.job_id.clone();
+            while job.state == SessionsJobState::Running {
+                match next_notification::<serde_json::Value>(
+                    client,
+                    &[SESSIONS_IMPORT_PROGRESS_NOTIFICATION, SESSIONS_IMPORT_FINISHED_NOTIFICATION],
+                    Duration::from_secs(3),
+                )
+                .await
+                {
+                    Some((method, params)) if method == SESSIONS_IMPORT_PROGRESS_NOTIFICATION => {
+                        if let Ok(progress) = serde_json::from_value::<SessionsImportProgress>(params)
+                            && progress.job_id == id
+                            && !json
+                        {
+                            eprintln!(
+                                "{}: {}/{}  imported {}, already {}, skipped {}",
+                                progress.root,
+                                progress.done,
+                                progress.total,
+                                progress.imported,
+                                progress.already_imported,
+                                progress.skipped_count
+                            );
+                        }
+                    }
+                    Some(_) => job = client.call::<SessionsImportGet>(SessionsImportRef { job_id: id.clone() }).await?,
+                    None => job = client.call::<SessionsImportGet>(SessionsImportRef { job_id: id.clone() }).await?,
+                }
+            }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&job)?);
+            } else {
+                print_import(&job);
+            }
+        }
+        SessionsCmd::Job { job_id } => {
+            let job = client.call::<SessionsImportGet>(SessionsImportRef { job_id }).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&job)?);
+            } else {
+                print_import(&job);
+            }
+        }
+        SessionsCmd::Cancel { job_id } => {
+            let job = client.call::<SessionsImportCancel>(SessionsImportRef { job_id }).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&job)?);
+            } else {
+                println!("stopping; {} imported so far", job.imported);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn print_import(job: &SessionsImportJob) {
+    println!("{:?}: imported {}, already imported {}, skipped {}", job.state, job.imported, job.already_imported, job.skipped_count);
+    for project in &job.projects {
+        println!("  {}  {}/{} done, {} imported", project.root, project.done, project.total, project.imported);
+        if let Some(error) = &project.error {
+            println!("    {error}");
+        }
+        for skip in &project.skipped {
+            println!("    skipped {} {} ({:?}): {}", skip.provider.as_str(), skip.session_id, skip.reason, skip.detail);
+        }
     }
 }
 

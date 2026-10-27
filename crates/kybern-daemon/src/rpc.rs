@@ -73,6 +73,24 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: SessionsResumeParams = parse(params)?;
             ok(state.orchestrator.resume_external_session(p).await.map_err(bad)?)
         }
+        SessionsScanProjects::NAME => ok(state.session_imports.start_scan(state, parse_or_default(params)?)),
+        SessionsScanGet::NAME => {
+            let p: SessionsScanRef = parse(params)?;
+            ok(state.session_imports.scan_get(&p.scan_id).ok_or_else(|| RpcError::not_found("scan"))?)
+        }
+        SessionsScanCancel::NAME => {
+            let p: SessionsScanRef = parse(params)?;
+            ok(state.session_imports.scan_cancel(&p.scan_id).ok_or_else(|| RpcError::not_found("scan"))?)
+        }
+        SessionsImportAll::NAME => ok(state.session_imports.start_import(state, parse(params)?).map_err(bad)?),
+        SessionsImportGet::NAME => {
+            let p: SessionsImportRef = parse(params)?;
+            ok(state.session_imports.import_get(&p.job_id).ok_or_else(|| RpcError::not_found("import job"))?)
+        }
+        SessionsImportCancel::NAME => {
+            let p: SessionsImportRef = parse(params)?;
+            ok(state.session_imports.import_cancel(&p.job_id).ok_or_else(|| RpcError::not_found("import job"))?)
+        }
         ProvidersList::NAME => {
             let p: ProvidersListParams = parse_or_default(params)?;
             let cwd = p

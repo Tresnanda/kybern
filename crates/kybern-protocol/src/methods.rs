@@ -127,6 +127,257 @@ pub struct SessionsResumeParams {
 }
 method!(SessionsResume, "sessions.resume", Some(Scope::OrchestrationOperate), SessionsResumeParams, Thread);
 
+// ---- first run: find and import past chats ----
+
+/// Pushed to every client that can read orchestration state as a scan finds more
+/// (`SessionsScanChanged`). Each notification carries the whole scan, so a client
+/// that misses one catches up with the next, or reads `sessions.scan_get`.
+pub const SESSIONS_SCAN_CHANGED_NOTIFICATION: &str = "sessions.scan.changed";
+/// Pushed while an import job works: one per project step, batched (`SessionsImportProgress`).
+pub const SESSIONS_IMPORT_PROGRESS_NOTIFICATION: &str = "sessions.import.progress";
+/// Pushed once when an import job ends, with the whole summary (`SessionsImportFinished`).
+pub const SESSIONS_IMPORT_FINISHED_NOTIFICATION: &str = "sessions.import.finished";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionsJobState {
+    Running,
+    Done,
+    Canceled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanProviderState {
+    Pending,
+    Scanning,
+    Done,
+    /// Not installed, or no saved history to read.
+    Unavailable,
+    /// Reading failed or timed out; `error` says what to do next. The scan goes on without it.
+    Failed,
+}
+
+/// One harness account's part of a scan.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ScanProviderStatus {
+    pub provider: ProviderKind,
+    /// `default` or the name of a Kybern account.
+    pub instance: String,
+    pub state: ScanProviderState,
+    /// Sessions found so far (all folders).
+    pub sessions: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ScannedProviderCount {
+    pub provider: ProviderKind,
+    pub sessions: u32,
+    /// Of those, already imported into Kybern.
+    pub imported: u32,
+}
+
+/// Saved sessions grouped by repository: sessions in subfolders and linked git
+/// worktrees join the repository root.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ScannedProject {
+    /// Git root of the sessions' folders, else the folder itself. Canonical when it exists.
+    pub root: String,
+    /// Last path component of `root`.
+    pub name: String,
+    pub is_git: bool,
+    /// `origin` URL from the repository config, when there is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_remote: Option<String>,
+    /// The Kybern project at `root`, if one exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    pub providers: Vec<ScannedProviderCount>,
+    pub session_count: u32,
+    pub imported_count: u32,
+    /// Sessions active in the last 30 days.
+    pub recent_count: u32,
+    pub last_activity: chrono::DateTime<chrono::Utc>,
+    /// Neither `root` nor any parent of it exists on this machine.
+    pub folder_missing: bool,
+    /// A git repository with at least three sessions active in the last 30 days.
+    pub suggested: bool,
+}
+
+/// A scan of every installed harness for saved sessions, newest repository first.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SessionsScan {
+    pub scan_id: String,
+    pub state: SessionsJobState,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub providers: Vec<ScanProviderStatus>,
+    pub projects: Vec<ScannedProject>,
+    /// Sessions found in all folders.
+    pub sessions_found: u32,
+    /// Sessions that record no working folder; they cannot be imported.
+    pub sessions_without_folder: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct SessionsScanProjectsParams {
+    /// Only these harnesses; omitted scans every installed one.
+    #[serde(default)]
+    pub providers: Option<Vec<ProviderKind>>,
+}
+// Starts a scan and returns at once (`state: running`); results arrive as `sessions.scan.changed`.
+method!(SessionsScanProjects, "sessions.scan_projects", Some(Scope::OrchestrationRead), SessionsScanProjectsParams, SessionsScan);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SessionsScanRef {
+    pub scan_id: String,
+}
+method!(SessionsScanGet, "sessions.scan_get", Some(Scope::OrchestrationRead), SessionsScanRef, SessionsScan);
+// Stops the scan; the result is the scan as it stood.
+method!(SessionsScanCancel, "sessions.scan_cancel", Some(Scope::OrchestrationRead), SessionsScanRef, SessionsScan);
+
+/// Params of the `sessions.scan.changed` notification.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SessionsScanChanged {
+    pub scan: SessionsScan,
+}
+
+fn default_import_limit() -> Option<u32> {
+    Some(50)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SessionsImportRoot {
+    /// A `ScannedProject.root`.
+    pub root: String,
+    /// Import into this project instead of creating or finding one for `root`.
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
+    /// Only these harnesses; omitted imports all.
+    #[serde(default)]
+    pub providers: Option<Vec<ProviderKind>>,
+    /// The most recent N sessions under the root (all harnesses together).
+    /// Omitted means 50; `null` means all.
+    #[serde(default = "default_import_limit")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SessionsImportAllParams {
+    pub roots: Vec<SessionsImportRoot>,
+    /// Reuse the session list of this scan instead of listing again.
+    #[serde(default)]
+    pub scan_id: Option<String>,
+}
+// Starts an import job and returns at once; it keeps running without the client.
+// Imports create no turns and send no prompts.
+method!(SessionsImportAll, "sessions.import_all", Some(Scope::OrchestrationOperate), SessionsImportAllParams, SessionsImportJob);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SessionsImportRef {
+    pub job_id: String,
+}
+method!(SessionsImportGet, "sessions.import_get", Some(Scope::OrchestrationRead), SessionsImportRef, SessionsImportJob);
+// Stops after the session being read; the result is the job as it stood.
+method!(SessionsImportCancel, "sessions.import_cancel", Some(Scope::OrchestrationOperate), SessionsImportRef, SessionsImportJob);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportProjectState {
+    Queued,
+    Running,
+    Done,
+    /// The project could not be created or found; no session of it was imported.
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionSkipReason {
+    /// Still being written by its harness.
+    InUse,
+    /// Over the 64 MB history limit.
+    TooLarge,
+    /// The session's folder no longer exists.
+    FolderMissing,
+    ReadFailed,
+    /// The harness could not be started to read the session.
+    HarnessUnavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SessionSkip {
+    pub provider: ProviderKind,
+    /// Native harness session id.
+    pub session_id: String,
+    pub title: String,
+    pub reason: SessionSkipReason,
+    /// One sentence saying what happened and what to do.
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SessionsImportProject {
+    pub root: String,
+    pub state: ImportProjectState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    /// Sessions selected under the root (after the provider filter and limit).
+    pub total: u32,
+    /// Imported, already imported or skipped.
+    pub done: u32,
+    pub imported: u32,
+    pub already_imported: u32,
+    pub skipped_count: u32,
+    /// The newest 200 skips; `skipped_count` is exact.
+    pub skipped: Vec<SessionSkip>,
+    pub imported_thread_ids: Vec<ThreadId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SessionsImportJob {
+    pub job_id: String,
+    pub state: SessionsJobState,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub projects: Vec<SessionsImportProject>,
+    pub imported: u32,
+    pub already_imported: u32,
+    pub skipped_count: u32,
+}
+
+/// Params of the `sessions.import.progress` notification: counts so far for one
+/// project plus what is new since the previous notification of that project.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SessionsImportProgress {
+    pub job_id: String,
+    pub root: String,
+    pub state: ImportProjectState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    pub total: u32,
+    pub done: u32,
+    pub imported: u32,
+    pub already_imported: u32,
+    pub skipped_count: u32,
+    pub new_thread_ids: Vec<ThreadId>,
+    pub new_skipped: Vec<SessionSkip>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Params of the `sessions.import.finished` notification.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SessionsImportFinished {
+    pub job: SessionsImportJob,
+}
+
 // ---- providers ----
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -3703,6 +3954,12 @@ registry!(
     DaemonActivityMethod,
     SessionsList,
     SessionsResume,
+    SessionsScanProjects,
+    SessionsScanGet,
+    SessionsScanCancel,
+    SessionsImportAll,
+    SessionsImportGet,
+    SessionsImportCancel,
     ProvidersList,
     AccountsCreate,
     AccountsSignIn,

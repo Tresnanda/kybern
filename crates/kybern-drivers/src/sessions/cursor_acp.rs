@@ -1,6 +1,6 @@
 use super::*;
 
-async fn connect(context: &ProbeContext) -> Result<ReadRpc> {
+pub(super) async fn connect(context: &ProbeContext) -> Result<ReadRpc> {
     let mut cmd = command(ProviderKind::Cursor, context)?;
     cmd.arg("acp");
     let mut rpc = ReadRpc::spawn(cmd)?;
@@ -42,11 +42,15 @@ async fn page(rpc: &mut ReadRpc, context: &ProbeContext, cursor: Option<&str>) -
 
 pub(super) async fn list(context: &ProbeContext, cursor: Option<&str>, query: &str) -> Result<SessionsListResult> {
     let mut rpc = connect(context).await?;
+    list_with(&mut rpc, context, cursor, query).await
+}
+
+pub(super) async fn list_with(rpc: &mut ReadRpc, context: &ProbeContext, cursor: Option<&str>, query: &str) -> Result<SessionsListResult> {
     let mut cursor = cursor.map(str::to_string);
     let mut sessions = Vec::new();
     let mut seen = HashSet::new();
     loop {
-        let result = page(&mut rpc, context, cursor.as_deref()).await?;
+        let result = page(rpc, context, cursor.as_deref()).await?;
         sessions.extend(result.sessions.into_iter().filter(|s| matches_query(s, query)));
         cursor = result.next_cursor;
         if sessions.len() >= PAGE_SIZE || cursor.is_none() {
@@ -61,16 +65,26 @@ pub(super) async fn list(context: &ProbeContext, cursor: Option<&str>, query: &s
 
 pub(super) async fn read(context: &ProbeContext, id: &str) -> Result<SessionHistory> {
     let mut rpc = connect(context).await?;
-    let mut cursor = None;
-    let mut seen = HashSet::new();
-    let session = loop {
-        let result = page(&mut rpc, context, cursor.as_deref()).await?;
-        if let Some(session) = result.sessions.into_iter().find(|s| s.id == id) {
-            break session;
-        }
-        cursor = result.next_cursor;
-        if cursor.as_ref().is_none_or(|cursor| !seen.insert(cursor.clone())) {
-            return Err(DriverError::Protocol("Cursor chat was not found. Refresh the session list and try again.".into()));
+    read_with(&mut rpc, context, id, None).await
+}
+
+/// `known` is the listing entry for `id`, which saves paging the list to find it.
+pub(super) async fn read_with(rpc: &mut ReadRpc, context: &ProbeContext, id: &str, known: Option<SavedSession>) -> Result<SessionHistory> {
+    let session = match known {
+        Some(session) => session,
+        None => {
+            let mut cursor = None;
+            let mut seen = HashSet::new();
+            loop {
+                let result = page(rpc, context, cursor.as_deref()).await?;
+                if let Some(session) = result.sessions.into_iter().find(|s| s.id == id) {
+                    break session;
+                }
+                cursor = result.next_cursor;
+                if cursor.as_ref().is_none_or(|cursor| !seen.insert(cursor.clone())) {
+                    return Err(DriverError::Protocol("Cursor chat was not found. Refresh the session list and try again.".into()));
+                }
+            }
         }
     };
     rpc.call("authenticate", json!({"methodId":"cursor_login"})).await?;

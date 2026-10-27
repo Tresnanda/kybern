@@ -1,10 +1,10 @@
 use super::*;
 
-fn root(context: &ProbeContext) -> Result<PathBuf> {
+pub(super) fn root(context: &ProbeContext) -> Result<PathBuf> {
     Ok(env(context, "CLAUDE_CONFIG_DIR").map(PathBuf::from).unwrap_or(home(context)?.join(".claude")).join("projects"))
 }
 
-fn summary(path: &Path, records: &[Value]) -> Option<SavedSession> {
+pub(super) fn summary(path: &Path, records: &[Value]) -> Option<SavedSession> {
     let first = records.iter().find(|v| v["cwd"].is_string() && v["sessionId"].is_string() && v["isSidechain"] != true)?;
     let name = records
         .iter()
@@ -37,22 +37,7 @@ pub(super) async fn list(context: &ProbeContext, cursor: Option<&str>, query: &s
     let query = query.to_string();
     tokio::task::spawn_blocking(move || {
         let files = jsonl_files(&root)?;
-        let mut sessions = Vec::new();
-        let mut next_cursor = None;
-        for (index, path) in files.iter().enumerate().skip(start) {
-            if let Ok(records) = metadata_lines(path)
-                && let Some(session) = summary(path, &records)
-                && matches_cwd(&session, &context)
-                && matches_query(&session, &query)
-            {
-                sessions.push(session);
-            }
-            if sessions.len() == PAGE_SIZE {
-                next_cursor = (index + 1 < files.len()).then(|| (index + 1).to_string());
-                break;
-            }
-        }
-        Ok(SessionsListResult { sessions, next_cursor })
+        Ok(file_page(&files, start, &context, &query, summary).0)
     })
     .await
     .map_err(|e| DriverError::Other(e.into()))?
@@ -68,15 +53,19 @@ pub(super) async fn read(context: &ProbeContext, id: &str) -> Result<SessionHist
                 "Session is missing or ambiguous. Open it in Claude Code, then refresh the session list.".into(),
             ));
         }
-        let path = &paths[0];
-        let records = read_lines(path)?;
-        let session = summary(path, &records)
-            .filter(|s| s.id == id)
-            .ok_or_else(|| DriverError::Protocol("Claude session has no working folder. Open it in Claude Code first.".into()))?;
-        Ok(parse(session, records))
+        read_path(&paths[0], &id)
     })
     .await
     .map_err(|e| DriverError::Other(e.into()))?
+}
+
+/// Read the file a listing found for `id`.
+pub(super) fn read_path(path: &Path, id: &str) -> Result<SessionHistory> {
+    let records = read_lines(path)?;
+    let session = summary(path, &records)
+        .filter(|s| s.id == id)
+        .ok_or_else(|| DriverError::Protocol("Claude session has no working folder. Open it in Claude Code first.".into()))?;
+    Ok(parse(session, records))
 }
 
 pub(super) fn parse(session: SavedSession, records: Vec<Value>) -> SessionHistory {

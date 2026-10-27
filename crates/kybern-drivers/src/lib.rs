@@ -533,6 +533,11 @@ pub trait AgentDriver: Send + Sync {
     async fn read_session(&self, _context: &ProbeContext, _id: &str) -> Result<sessions::SessionHistory> {
         Err(DriverError::Unsupported("session history is unavailable for this harness".into()))
     }
+    /// A reader that keeps one helper process (when the harness needs one) across many
+    /// `list_page` and `read` calls. Used by the first-run scan and bulk import.
+    async fn open_session_reader(&self, _context: &ProbeContext) -> Result<Box<dyn sessions::SessionReader>> {
+        Err(DriverError::Unsupported("saved sessions are unavailable for this harness".into()))
+    }
     /// Whether `spawn` with `fork: true` can drop turns from the conversation.
     fn supports_fork(&self) -> bool {
         true

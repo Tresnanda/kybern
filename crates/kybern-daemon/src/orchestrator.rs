@@ -58,6 +58,20 @@ pub struct Orchestrator {
     inner: Arc<Inner>,
 }
 
+/// A native session's history ready to become a Kybern thread (`adopt_session_history`).
+pub(crate) struct AdoptSession {
+    pub project: Project,
+    /// The account the history was discovered in.
+    pub instance: String,
+    pub history: kybern_drivers::sessions::SessionHistory,
+    pub imported_profile: Option<String>,
+    /// The thread's `updated_at`: now for a single resume, the session's own last activity for a bulk import.
+    pub updated_at: chrono::DateTime<Utc>,
+    /// Stream the whole history to live subscribers (a single resume, which the client opens next). A bulk import
+    /// announces only the thread's creation and import: its history stays in the store for whoever opens it.
+    pub announce_history: bool,
+}
+
 /// A rejected send, before any turn was accepted. Thread messaging may retry
 /// this condition; provider/startup failures must still surface for inspection.
 #[derive(Debug)]
@@ -1466,7 +1480,7 @@ impl Orchestrator {
         let imported_profile =
             if params.provider == ProviderKind::Omp { Some(kybern_drivers::omp_profile::resolve(&context.env)?) } else { None };
         let history = driver.read_session(&context, &params.session_id).await?;
-        let session = history.session;
+        let session = &history.session;
         if session.provider != params.provider || session.id != params.session_id {
             return Err(anyhow!("The harness returned a different session. Refresh the session list and try again."));
         }
@@ -1478,6 +1492,26 @@ impl Orchestrator {
             ));
         }
         let project = self.add_project(session.cwd.clone(), None, None)?;
+        let (mut thread, _created) = self
+            .adopt_session_history(
+                AdoptSession { project, instance, history, imported_profile, updated_at: Utc::now(), announce_history: true },
+                &settings,
+            )
+            .await?;
+        if thread.status == ThreadStatus::Archived {
+            thread.status = ThreadStatus::Idle;
+            self.inner.store.thread_upsert(&thread)?;
+            thread = self.update_thread(thread)?;
+        }
+        Ok(thread)
+    }
+
+    /// Turn a native session's history into a Kybern thread of `project`, in one store
+    /// transaction. `created` is false when the session was already imported (the
+    /// existing thread comes back untouched). Starts no turn and sends no prompt.
+    pub(crate) async fn adopt_session_history(&self, adopt: AdoptSession, settings: &Settings) -> Result<(Thread, bool)> {
+        let AdoptSession { project, instance, history, imported_profile, updated_at, announce_history } = adopt;
+        let session = history.session;
         // A session in a group folder joins the group like a local chat: every member. Its cwd stays the
         // session's own spelling, which the harness resumes by.
         let members = if project.kind == ProjectKind::Group {
@@ -1504,7 +1538,7 @@ impl Orchestrator {
             provider_session_id: Some(session.id),
             pinned: false,
             created_at: history.events.first().map_or(now, |event| event.at),
-            updated_at: now,
+            updated_at,
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
@@ -1513,7 +1547,11 @@ impl Orchestrator {
             members,
         };
         let store = self.inner.store.clone();
-        let (mut thread, events) = tokio::task::spawn_blocking(move || store.thread_import(thread, history.events)).await??;
+        let (thread, events) = tokio::task::spawn_blocking(move || store.thread_import(thread, history.events)).await??;
+        if events.is_empty() {
+            // Another import adopted this session first.
+            return Ok((thread, false));
+        }
         // Imported native ids belong to the discovery account, even if global
         // defaults change later or the session cwd uses a different project.
         self.inner.store.meta_set(&format!("account_override:{}", thread.id), &instance)?;
@@ -1521,15 +1559,20 @@ impl Orchestrator {
         if let Some(profile) = imported_profile {
             self.inner.store.meta_set(&format!("omp_profile:{}", thread.id), &profile)?;
         }
-        for event in events {
-            let _ = self.inner.events.send(event);
+        // A bulk import of hundreds of chats would otherwise stream every past turn to every window, mark each
+        // thread unread on its last `turn_completed`, and can overflow the broadcast's byte budget (`events.lagged`).
+        let last = events.len().saturating_sub(1);
+        for (index, event) in events.into_iter().enumerate() {
+            if announce_history || index == 0 || index == last {
+                let _ = self.inner.events.send(event);
+            }
         }
-        if thread.status == ThreadStatus::Archived {
-            thread.status = ThreadStatus::Idle;
-            self.inner.store.thread_upsert(&thread)?;
-            thread = self.update_thread(thread)?;
-        }
-        Ok(thread)
+        Ok((thread, true))
+    }
+
+    /// Hold back harness updates while a helper process of `kind` reads sessions.
+    pub(crate) async fn harness_read_gate(&self, kind: ProviderKind) -> Option<tokio::sync::OwnedRwLockReadGuard<()>> {
+        Some(self.inner.harness_gates.get(&kind)?.clone().read_owned().await)
     }
 
     pub async fn create_thread(&self, params: methods::ThreadsCreateParams) -> Result<Thread> {

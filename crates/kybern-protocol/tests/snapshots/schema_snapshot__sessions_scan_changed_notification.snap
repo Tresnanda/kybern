@@ -1,0 +1,254 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(SessionsScanChanged)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SessionsScanChanged",
+  "description": "Params of the `sessions.scan.changed` notification.",
+  "type": "object",
+  "properties": {
+    "scan": {
+      "$ref": "#/$defs/SessionsScan"
+    }
+  },
+  "required": [
+    "scan"
+  ],
+  "$defs": {
+    "SessionsScan": {
+      "description": "A scan of every installed harness for saved sessions, newest repository first.",
+      "type": "object",
+      "properties": {
+        "scan_id": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/SessionsJobState"
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "providers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScanProviderStatus"
+          }
+        },
+        "projects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScannedProject"
+          }
+        },
+        "sessions_found": {
+          "description": "Sessions found in all folders.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "sessions_without_folder": {
+          "description": "Sessions that record no working folder; they cannot be imported.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "scan_id",
+        "state",
+        "started_at",
+        "providers",
+        "projects",
+        "sessions_found",
+        "sessions_without_folder"
+      ]
+    },
+    "SessionsJobState": {
+      "type": "string",
+      "enum": [
+        "running",
+        "done",
+        "canceled"
+      ]
+    },
+    "ScanProviderStatus": {
+      "description": "One harness account's part of a scan.",
+      "type": "object",
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        "instance": {
+          "description": "`default` or the name of a Kybern account.",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/ScanProviderState"
+        },
+        "sessions": {
+          "description": "Sessions found so far (all folders).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "provider",
+        "instance",
+        "state",
+        "sessions"
+      ]
+    },
+    "ProviderKind": {
+      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "opencode",
+        "pi",
+        "omp",
+        "cursor"
+      ]
+    },
+    "ScanProviderState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "pending",
+            "scanning",
+            "done"
+          ]
+        },
+        {
+          "description": "Not installed, or no saved history to read.",
+          "type": "string",
+          "const": "unavailable"
+        },
+        {
+          "description": "Reading failed or timed out; `error` says what to do next. The scan goes on without it.",
+          "type": "string",
+          "const": "failed"
+        }
+      ]
+    },
+    "ScannedProject": {
+      "description": "Saved sessions grouped by repository: sessions in subfolders and linked git\nworktrees join the repository root.",
+      "type": "object",
+      "properties": {
+        "root": {
+          "description": "Git root of the sessions' folders, else the folder itself. Canonical when it exists.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Last path component of `root`.",
+          "type": "string"
+        },
+        "is_git": {
+          "type": "boolean"
+        },
+        "git_remote": {
+          "description": "`origin` URL from the repository config, when there is one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "project_id": {
+          "description": "The Kybern project at `root`, if one exists.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "providers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScannedProviderCount"
+          }
+        },
+        "session_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "imported_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "recent_count": {
+          "description": "Sessions active in the last 30 days.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "last_activity": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "folder_missing": {
+          "description": "Neither `root` nor any parent of it exists on this machine.",
+          "type": "boolean"
+        },
+        "suggested": {
+          "description": "A git repository with at least three sessions active in the last 30 days.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "root",
+        "name",
+        "is_git",
+        "providers",
+        "session_count",
+        "imported_count",
+        "recent_count",
+        "last_activity",
+        "folder_missing",
+        "suggested"
+      ]
+    },
+    "ScannedProviderCount": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        "sessions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "imported": {
+          "description": "Of those, already imported into Kybern.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "provider",
+        "sessions",
+        "imported"
+      ]
+    }
+  }
+}

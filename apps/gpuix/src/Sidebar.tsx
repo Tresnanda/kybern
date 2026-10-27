@@ -8,6 +8,7 @@
 import { useCallback, useMemo, useState } from 'react'
 import type { PublicInstance } from '@gpuix/react'
 import { SidebarWindow, type SidebarWindowEntry } from './sidebar/Window.tsx'
+import { HandoffSlide, SLIDE } from './onboarding/Handoff.tsx'
 import { Icon } from './icons.tsx'
 import { SpinIcon } from './kit/Spin.tsx'
 import { loadProviders } from './nav/live.ts'
@@ -132,20 +133,22 @@ export function Sidebar() {
       <EnvironmentSwitcher />
       <Rise kind="surface" play={enter} style={{ flexGrow: 1, minHeight: 0 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingLeft: 6, paddingRight: 6, paddingTop: 4, paddingBottom: 6 }}>
-        <PrimaryAction
-          icon={N.newThread}
-          label="New chat"
-          shortcut={['⌘', 'N']}
-          active={freeDraftSelected}
-          draft={!!composerDrafts['free:main']}
-          onClick={() => newThread()}
-          testId="new-chat"
-        />
-        <PrimaryAction icon={N.clock} label="Resume session" onClick={() => openSessions()} testId="resume-session" />
+        <HandoffSlide index={0}>
+          <PrimaryAction
+            icon={N.newThread}
+            label="New chat"
+            shortcut={['⌘', 'N']}
+            active={freeDraftSelected}
+            draft={!!composerDrafts['free:main']}
+            onClick={() => newThread()}
+            testId="new-chat"
+          />
+        </HandoffSlide>
+        <HandoffSlide index={1}><PrimaryAction icon={N.clock} label="Resume session" onClick={() => openSessions()} testId="resume-session" /></HandoffSlide>
       </div>
       <div testId="sidebar-viewport" ref={setBoxNode} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
       <SidebarWindow list={listNode} box={boxNode} setList={setListNode} entries={[
-        ...withGroups(rows, groups).map((item): SidebarWindowEntry => item.kind === 'group' ? {
+        ...withGroups(rows, groups).map((item, position): SidebarWindowEntry => item.kind === 'group' ? {
           key: `group:${item.group.id}`, height: item.group.height, pinned: true,
           render: () => <DisclosureGroup mode={item.group.mode} height={item.group.height} onDone={() => finish(item.group.id)}>
             {/* The block drifts and fades; inside it each row's connectors draw and the rows fade in turn (`../tree`). */}
@@ -159,9 +162,13 @@ export function Sidebar() {
           key: item.row.key, height: rowHeight(item.row),
           // Completion owns a hold/leave lifecycle even outside the mount window.
           pinned: item.row.kind === 'child' && ctx.selectedId !== item.row.thread.id && rowPhase(item.row.thread) !== 'working',
-          render: (firstMount) => risen.has(item.row.key)
-            ? <Rise kind="row" play={firstMount}><TreeMotion.Provider value={firstMount ? ARRIVE : null}>{blockRow(item.row, ctx)}</TreeMotion.Provider></Rise>
-            : blockRow(item.row, ctx),
+          render: (firstMount) => {
+            const row = risen.has(item.row.key)
+              ? <Rise kind="row" play={firstMount}><TreeMotion.Provider value={firstMount ? ARRIVE : null}>{blockRow(item.row, ctx)}</TreeMotion.Provider></Rise>
+              : blockRow(item.row, ctx)
+            // The first rows slide in after the first-run flow (`onboarding/Handoff.tsx`); everywhere else this is a plain wrapper.
+            return position < SLIDE.rows - 2 ? <HandoffSlide index={2 + position}>{row}</HandoffSlide> : row
+          },
         }),
         { key: '__end', height: 6, render: () => <div style={{ height: 6 }} /> },
       ]} />
@@ -281,16 +288,18 @@ function BrandRow() {
       <AppMenu />
       <div style={{ flexGrow: 1 }} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <SidebarIconButton
-          icon={N.search}
-          size="sm"
-          glyph={15}
-          label="Search"
-          tooltip={['Search (⌘K)']}
-          tooltipSide="bottom"
-          onClick={() => setNav({ paletteOpen: true })}
-          testId="sidebar-search"
-        />
+        <HandoffSlide index={1}>
+          <SidebarIconButton
+            icon={N.search}
+            size="sm"
+            glyph={15}
+            label="Search"
+            tooltip={['Search (⌘K)']}
+            tooltipSide="bottom"
+            onClick={() => setNav({ paletteOpen: true })}
+            testId="sidebar-search"
+          />
+        </HandoffSlide>
         <NotificationBell />
       </div>
     </div>
