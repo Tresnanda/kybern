@@ -2,7 +2,7 @@
 // retargets from the on-screen value, and under Reduce Motion becomes a short cross-fade (SPEC §8, §9).
 import type { PaintTransformProps, PaintTransformValue } from '@gpuix/native/host'
 import type { StyleDesc } from '@gpuix/react'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { PaintTranslate } from '../drag/PaintTranslate.tsx'
 import { EASE } from '../motion/tokens.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
@@ -32,8 +32,11 @@ export interface RiseOptions {
   origin?: [number, number]
 }
 
-/** The entrance every `data-in` child of the prototype uses: rise `y` px, clear a blur, fade (SPEC §1). */
-export function riseTransform({ delay = 0, duration = 0.5, y = 14, x = 0, scale, blur = 4, ease = EASE.out, fast = false, origin }: RiseOptions = {}): PaintTransformProps | undefined {
+/**
+ * The entrance every `data-in` child of the prototype uses: rise `y` px and fade (SPEC §1). No blur by default: every settling blur
+ * re-renders the whole window once, and a scene arrives with a dozen of these staggered (see the README's "Frame cost").
+ */
+export function riseTransform({ delay = 0, duration = 0.5, y = 14, x = 0, scale, blur = 0, ease = EASE.out, fast = false, origin }: RiseOptions = {}): PaintTransformProps | undefined {
   if (!PATCHED_NATIVE) return undefined
   if (REDUCED_MOTION || fast) return FADE
   const initial: PaintTransformValue = { opacity: 0 }
@@ -63,7 +66,7 @@ export function stateTransform(to: PaintTransformValue, { duration = 0.3, ease =
   }
 }
 
-/** A word-by-word headline: each word rises, clears a blur and fades, 70 ms apart (SPEC §2). Lines are laid out whole from the first frame. */
+/** A word-by-word headline: each word rises and fades, 70 ms apart (SPEC §2; no blur, see `riseTransform`). Lines are laid out whole from the first frame. */
 export function Words({ lines, size, lineHeight, color, font, base = 0.18, step = 0.07, fast = false, weight, onDone }: {
   lines: readonly (readonly string[])[]
   size: number
@@ -92,7 +95,7 @@ export function Words({ lines, size, lineHeight, color, font, base = 0.18, step 
           {line.map((word) => {
             const i = index++
             return (
-              <div key={`${row}:${word}:${i}`} paintTransform={riseTransform({ delay: base + i * step, duration: 0.65, y: Math.round(size * 0.32), blur: 8, fast })} style={{ display: 'flex' }}>
+              <div key={`${row}:${word}:${i}`} paintTransform={riseTransform({ delay: base + i * step, duration: 0.65, y: Math.round(size * 0.32), fast })} style={{ display: 'flex' }}>
                 <Label color={color} size={size} lineHeight={lineHeight} font={font} weight={weight} style={{ whiteSpace: 'nowrap' }}>{word}</Label>
               </div>
             )
@@ -121,20 +124,36 @@ export function balance(text: string, maxChars: number): string[][] {
 // ─── Rolling numbers ──────────────────────────────────────────────────────
 
 const FORMAT = new Intl.NumberFormat('en')
-/** One column of ten digits behind a clip, moved with a retained translation: the value rolls to its place (SPEC §7). */
+/**
+ * One column of digits behind a clip, moved with a retained translation: the value rolls to its place (SPEC §7). The column holds
+ * only the digits the roll passes through (`lo`…`hi`), not all ten: a lede, the chips and the buttons carry about twenty of these,
+ * and every commit of the scene rebuilds them, so ten labels each made a Projects draw ~4 ms dearer. Looks the same.
+ */
 function Digit({ digit, width, height, size, color, weight, duration }: { digit: number; width: number; height: number; size: number; color: string; weight?: number; duration: number }) {
-  const first = useRef(true)
-  const stay = first.current
-  first.current = false
+  const roll = useRef<{ digit: number; lo: number; hi: number; until: number; gen: number; from: number | null }>({ digit, lo: digit, hi: digit, until: 0, gen: 0, from: null })
+  const r = roll.current
+  if (r.digit !== digit) {
+    const now = Date.now()
+    // Mid-roll the column keeps what it holds, so the roll retargets from where it is; once settled it is cut down to this roll.
+    const lo = now < r.until ? Math.min(r.lo, digit) : Math.min(r.digit, digit)
+    const hi = now < r.until ? Math.max(r.hi, digit) : Math.max(r.digit, digit)
+    // A new top of the column shifts every cell: restart from the old digit's place in the new column.
+    const from = lo !== r.lo ? -(r.digit - lo) * height : null
+    roll.current = { digit, lo, hi, until: now + duration * 1000, gen: r.gen + (from !== null ? 1 : 0), from }
+  }
+  const { lo, hi, gen, from } = roll.current
+  const cells: number[] = []
+  for (let d = lo; d <= hi; d++) cells.push(d)
   return (
     <div cache style={{ width, height, overflow: 'hidden', flexShrink: 0, position: 'relative' }}>
       <PaintTranslate
-        initial={stay ? false : false}
-        animate={{ translateX: 0, translateY: -digit * height }}
+        key={gen}
+        initial={from === null ? false : { translateX: 0, translateY: from }}
+        animate={{ translateX: 0, translateY: -(digit - lo) * height }}
         transition={REDUCED_MOTION || !PATCHED_NATIVE ? { duration: 0 } : { duration, ease: bez(EASE.out) }}
         style={{ display: 'flex', flexDirection: 'column' }}
       >
-        {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((d) => (
+        {cells.map((d) => (
           <div key={d} style={{ display: 'flex', justifyContent: 'center', width, height, flexShrink: 0 }}>
             <Label color={color} size={size} lineHeight={height} weight={weight}>{String(d)}</Label>
           </div>
@@ -161,15 +180,4 @@ export function Roll({ value, size, color, weight, lineHeight = size + 4, durati
       })}
     </div>
   )
-}
-
-/** The previous value of `value`, for copy that swaps when a count crosses a plural boundary. */
-export function useStable<T>(value: T, ms: number): T {
-  const [shown, setShown] = useState(value)
-  useEffect(() => {
-    if (Object.is(shown, value)) return
-    const timer = setTimeout(() => setShown(value), ms)
-    return () => clearTimeout(timer)
-  }, [value, ms, shown])
-  return shown
 }

@@ -336,7 +336,7 @@ let swapGeneration = 3_000_000
 function swapTransforms(kind: 'text' | 'icon' | 'state', generation: number, blur = true): { enter: PaintTransformProps; leave: PaintTransformProps } | undefined {
   if (!PATCHED_NATIVE || REDUCED_MOTION) return undefined
   if (kind === 'icon') {
-    const hidden: PaintTransformValue = { opacity: 0, scale: 0.6, blur: BLUR.small }
+    const hidden: PaintTransformValue = { opacity: 0, scale: 0.6, ...(blur ? { blur: BLUR.small } : {}) }
     const transition = tween(DURATION.fast, EASE.inOut)
     return {
       enter: { initial: hidden, animate: restOf(hidden), transition },
@@ -375,8 +375,8 @@ function swapTransforms(kind: 'text' | 'icon' | 'state', generation: number, blu
  * copy of what was rendered last, unmounted when its exit completes. A change during an exit drops the older copy at once
  * (never more than two). `still` skips the entrance of the first state only (the desktop's "the first paint renders without
  * motion"); callers that keep one `Swap` mounted for the life of a control pass it. Reduce Motion: a 150 ms opacity fade of
- * the incoming state, no copy kept. Stock addon: the new state just replaces the old. `blur={false}` drops the text swap's
- * blur (a blur settle re-renders the window: use it for text that changes often, like a live count).
+ * the incoming state, no copy kept. Stock addon: the new state just replaces the old. `blur={false}` drops the text and icon
+ * swaps' blur (a blur settle re-renders the window: use it for text that changes often, like a live count, or swaps that change together).
  */
 export function Swap({ active, children, style, kind = 'text', still = false, innerStyle, leavingStyle, blur = true }: {
   active: string

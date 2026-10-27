@@ -18,6 +18,7 @@ import { justClosed } from './AgentPopover.tsx'
 import { agents, type Agent } from './agentsStore.ts'
 import { flight, markRects } from './markFlight.ts'
 import { bez, riseTransform, Roll, SETTLE } from './motion.tsx'
+import { Later } from './sceneKit.tsx'
 import { STATE_WORD, type AgentState } from './model.ts'
 
 /** Clockwise from the top left: how the tiles arrive. */
@@ -85,7 +86,7 @@ function Tile({ agent, x, y, hub, quick, open, onClick, loopOn }: {
   const entrance = PATCHED_NATIVE
     ? REDUCED_MOTION
       ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: 0.18, ease: bez(EASE.out) } }
-      : { initial: { opacity: 0, translateX: -0.14 * dx, translateY: -0.14 * dy, scale: 0.94, blur: 4 }, animate: { opacity: 1, translateX: 0, translateY: 0, scale: 1, blur: 0 }, transition: { duration: 0.9, delay, ease: bez(EASE.out) } }
+      : { initial: { opacity: 0, translateX: -0.14 * dx, translateY: -0.14 * dy, scale: 0.94 }, animate: { opacity: 1, translateX: 0, translateY: 0, scale: 1 }, transition: { duration: 0.9, delay, ease: bez(EASE.out) } }
     : undefined
   const swell = pulse > 0 && PATCHED_NATIVE && !REDUCED_MOTION
     ? state === 'update'
@@ -142,7 +143,7 @@ function Tile({ agent, x, y, hub, quick, open, onClick, loopOn }: {
         <div style={{ height: 3 }} />
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6, pointerEvents: 'none' }}>
           <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: dotColor(t, state), flexShrink: 0 }} />
-          <Swap active={state} style={{ justifyContent: 'flex-start' }}>
+          <Swap active={state} blur={false} style={{ justifyContent: 'flex-start' }}>
             <Label color={wordColor(t, state)} size={12} lineHeight={16} style={{ whiteSpace: 'nowrap' }}>{STATE_WORD[state]}</Label>
           </Swap>
         </div>
@@ -204,12 +205,17 @@ export function Constellation({ agents: list, ready, defaultKind, orbit, quick }
   const badge = defaultKind ? spotFor(defaultKind, orbit) : null
   return (
     <div ref={loop.ref} testId="agents-orbit" style={{ position: 'relative', width: orbit.width, height: orbit.height, flexShrink: 0 }}>
+      {/* The rings each rasterize an orbit-wide SVG, the tiles six marks and their labels: each mounts a frame apart (`Later`). */}
+      <Later frames={3}>
       <div paintTransform={riseTransformRing(0.3, 1.2)} style={ringStyle}>
         <svg source={ellipse(orbit.cx, orbit.cy, orbit.rx, outerRy, pad)} style={{ width: orbit.width + pad * 2, height: orbit.height + pad * 2, color: ringTint, pointerEvents: 'none' }} />
       </div>
+      </Later>
+      <Later frames={2}>
       <div paintTransform={riseTransformRing(0.2, 1.2)} style={ringStyle}>
         <svg source={ellipse(orbit.cx, orbit.cy, orbit.rx * 0.56, outerRy * 0.56, pad)} style={{ width: orbit.width + pad * 2, height: orbit.height + pad * 2, color: ringTint, pointerEvents: 'none' }} />
       </div>
+      </Later>
       {list.map((agent) => {
         const spot = spotFor(agent.kind, orbit)
         return <Dots key={agent.kind} x={spot.x} y={spot.y} hub={hub} ready={agent.state === 'ready'} />
@@ -234,11 +240,13 @@ export function Constellation({ agents: list, ready, defaultKind, orbit, quick }
       <div style={{ position: 'absolute', left: hub.x - 60, top: hub.y + 62, width: 120, display: 'flex', flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 4, pointerEvents: 'none' }}>
         <ReadyCount ready={ready} color={t.textSecondary} />
       </div>
+      <Later frames={1}>
       {list.map((agent) => {
         const spot = spotFor(agent.kind, orbit)
         return <Tile key={agent.kind} agent={agent} x={spot.x} y={spot.y} hub={hub} quick={quick} open={open === agent.kind} loopOn={loop.running} onClick={() => { if (justClosed(agent.kind)) return; agents.set({ popover: open === agent.kind ? null : agent.kind }) }} />
       })}
       {badge && <DefaultBadge x={badge.x + 22} y={badge.y - 46} />}
+      </Later>
     </div>
   )
 }
@@ -273,7 +281,7 @@ function DefaultBadge({ x, y }: { x: number; y: number }) {
       transition={REDUCED_MOTION ? { duration: 0 } : { type: 'spring', duration: 0.6, bounce: 0 }}
       style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }}
     >
-      <div paintTransform={appear ? riseTransform({ duration: 0.42, y: 4, scale: 0.85, blur: 4 }) : undefined} style={{ display: 'flex', alignItems: 'center', height: 20, paddingLeft: 8, paddingRight: 8, borderRadius: 10, backgroundColor: t.green }}>
+      <div paintTransform={appear ? riseTransform({ duration: 0.42, y: 4, scale: 0.85 }) : undefined} style={{ display: 'flex', alignItems: 'center', height: 20, paddingLeft: 8, paddingRight: 8, borderRadius: 10, backgroundColor: t.green }}>
         <Label color="#ffffff" size={10.5} lineHeight={14} weight={700} style={{ whiteSpace: 'nowrap' }}>DEFAULT</Label>
       </div>
     </PaintTranslate>

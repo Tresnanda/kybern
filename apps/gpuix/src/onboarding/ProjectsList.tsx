@@ -14,6 +14,8 @@ import { SkeletonRow, ProjectRow } from './ProjectsRow.tsx'
 import { ROW_SLOT, entriesFor, hiddenNote, type Entry, type Row } from './projects.ts'
 import { selectGroup, shapeOf, toggleOthers, useProjects, type Group } from './projectsStore.ts'
 
+const LIST_ISLAND = { cacheLayout: true, cache: 'fill' as const }
+
 function GroupAction({ group, all, disabled }: { group: Group; all: boolean; disabled: boolean }) {
   return (
     <Button testId={`projects-${group}-all`} variant="ghost" size="sm" swap disabled={disabled} onClick={() => selectGroup(group, !all)}>
@@ -105,7 +107,11 @@ export function ProjectsList({ rowWidth }: { rowWidth: number }) {
   useEffect(() => {
     if (first.current === topGen) return
     first.current = topGen
-    if (list) renderer.scrollToItem?.(list.id, 0)
+    if (!list) return
+    // Only when it is not already at the top: on macOS `scrollToItem` refreshes the whole window, which re-renders every island.
+    const top = renderer.getListScrollTop?.(list.id)
+    if (top && top[0] === 0 && Math.abs(top[1] ?? 0) < 0.5) return
+    renderer.scrollToItem?.(list.id, 0)
   }, [topGen, list, renderer])
 
   const range = pixelWindowRange(entries.length, (i) => entries[i]?.height ?? ROW_SLOT, Math.min(anchor, Math.max(0, entries.length - 1)), 0, viewport, 330)
@@ -131,7 +137,10 @@ export function ProjectsList({ rowWidth }: { rowWidth: number }) {
       {...(EDGE_FADE ? { edgeFade: { top: 12, bottom: 36 } } : {})}
       style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, width: '100%', overflow: 'hidden' }}
     >
+      {/* Like the sidebar: the list is one fill island that reuses each unchanged row's layout, so a scene change outside it
+          (a count, the toolbar) does not rebuild the rows, and a row that changes lays out alone. */}
       <virtual-list
+        {...LIST_ISLAND}
         ref={setList}
         testId="projects-list"
         estimatedItemHeight={ROW_SLOT}

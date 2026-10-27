@@ -64,7 +64,7 @@ export function AgentsScene() {
   const fg = ctaForeground(t, !rolled)
   return (
     <div style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', paddingBottom: 12 }}>
-      <div ref={orbitBox}>
+      <div ref={orbitBox} style={{ width: orbit.width, height: orbit.height, flexShrink: 0 }}>
         <Constellation agents={view.list} ready={ready} defaultKind={view.default} orbit={orbit} quick={quick} />
       </div>
       <div style={{ height: 14 }} />
@@ -74,7 +74,7 @@ export function AgentsScene() {
         {/* The region's own name is the new line; the Swap inside (the arriving and the leaving copy) is hidden from it, so only the new text is announced. */}
         <div role="status" aria-live="polite" aria-label={line} style={{ display: 'flex', justifyContent: 'center', minHeight: 44 }}>
           <div aria-hidden="true" style={{ display: 'flex', justifyContent: 'center' }}>
-            <Swap active={line} style={{ alignItems: 'flex-start' }}>
+            <Swap active={line} blur={false} style={{ alignItems: 'flex-start' }}>
               <Label color={t.textSecondary} size={15} lineHeight={22} style={{ textAlign: 'center', width: Math.min(720, width - 48) }}>{line}</Label>
             </Swap>
           </div>
@@ -89,7 +89,7 @@ export function AgentsScene() {
             ? <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 5 }}>
                 <Label color={fg} size={15} lineHeight={20} weight={600} style={{ whiteSpace: 'nowrap' }}>Continue with</Label>
                 <Roll value={ready} size={15} lineHeight={20} color={fg} weight={600} />
-                <Swap active={noun(ready, 'agent')}><Label color={fg} size={15} lineHeight={20} weight={600} style={{ whiteSpace: 'nowrap' }}>{noun(ready, 'agent')}</Label></Swap>
+                <Swap active={noun(ready, 'agent')} blur={false}><Label color={fg} size={15} lineHeight={20} weight={600} style={{ whiteSpace: 'nowrap' }}>{noun(ready, 'agent')}</Label></Swap>
               </div>
             : continueLabel(0)}
         </Cta>
