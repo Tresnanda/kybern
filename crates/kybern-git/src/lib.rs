@@ -1268,7 +1268,10 @@ mod tests {
         // Status that leaves the index alone still sees the change, and a hung git gives up.
         std::fs::write(dir.path().join("a.txt"), "three\n").unwrap();
         assert_eq!(repo.status_porcelain_unlocked(&[], timeout).await.unwrap(), [" M a.txt"]);
-        let error = repo.status_porcelain_unlocked(&[], std::time::Duration::from_nanos(1)).await.unwrap_err();
+        // A file-system monitor hook that sleeps holds `git status`; a timeout of a
+        // few nanoseconds instead raced a fast git on a busy runner.
+        repo.git(&["config", "core.fsmonitor", "sleep 10; :"]).await.unwrap();
+        let error = repo.status_porcelain_unlocked(&[], std::time::Duration::from_millis(300)).await.unwrap_err();
         assert!(error.to_string().contains("timed out"), "{error}");
     }
 
