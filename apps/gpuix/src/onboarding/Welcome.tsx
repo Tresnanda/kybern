@@ -19,6 +19,7 @@ import { Hero } from './Hero.tsx'
 import { PreferencesScene } from './PreferencesScene.tsx'
 import { ProjectsScene } from './ProjectsScene.tsx'
 import { SCENE_ORDER, SCENE_TITLE, flow, noteReturningUser, openFlow, useFlow, wantsOnboarding, type SceneId } from './flow.ts'
+import { magnetPointer } from './magnet.ts'
 import { flight, markRects } from './markFlight.ts'
 import { bez, FLIGHT } from './motion.tsx'
 
@@ -87,7 +88,7 @@ function Welcome() {
   const t = useTheme()
   const { trailing } = useWindowControlsLayout()
   return (
-    <div testId="onboarding" onMouseMove={(e) => litPointer(e.x ?? null, e.y ?? null)} onMouseLeave={() => litPointer(null, null)} style={{ position: 'relative', width: '100%', height: '100%', backgroundColor: canvasColor(t), overflow: 'hidden' }}>
+    <div testId="onboarding" onMouseMove={(e) => { litPointer(e.x ?? null, e.y ?? null); magnetPointer(e.x ?? null, e.y ?? null) }} onMouseLeave={() => { litPointer(null, null); magnetPointer(null, null) }} style={{ position: 'relative', width: '100%', height: '100%', backgroundColor: canvasColor(t), overflow: 'hidden' }}>
       <Grid />
       {SCENE_ORDER.map((id) => <SceneLayer key={id} id={id} />)}
       <MarkFlight />
@@ -107,11 +108,12 @@ function Welcome() {
 function Progress() {
   const t = useTheme()
   const scene = useFlow((s) => s.scene)
+  const only = useFlow((s) => s.only)
   const step = scene === 'hero' ? 0 : SCENE_ORDER.indexOf(scene)
-  const label = scene === 'hero' ? '' : `${SCENE_TITLE[scene]} · ${step} of 3`
+  const label = scene === 'hero' || only ? '' : `${SCENE_TITLE[scene]} · ${step} of 3`
   return (
     <div
-      paintTransform={PATCHED_NATIVE ? { initial: false, animate: { opacity: scene === 'hero' ? 0 : 1 }, transition: { duration: 0.4, ease: bez(EASE.out) }, retain: true } : undefined}
+      paintTransform={PATCHED_NATIVE ? { initial: false, animate: { opacity: scene === 'hero' || only ? 0 : 1 }, transition: { duration: 0.4, ease: bez(EASE.out) }, retain: true } : undefined}
       style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 10 }}
     >
       <Swap active={label} kind="text">

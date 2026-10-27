@@ -2,7 +2,7 @@
 // pointer-down, a ripple of the label colour from the press point (clipped to the pill), a soft shine that crosses once per
 // hover, and an arrow that nudges 3 px. All paint-only; the only React state is hover, which the arrow and shine read.
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
-import { useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { PaintTranslate } from '../drag/PaintTranslate.tsx'
 import { Icon } from '../icons.tsx'
 import { EASE, SCALE } from '../motion/kit.tsx'
@@ -13,6 +13,7 @@ import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { Spinner } from '../kit/Spinner.tsx'
 import type { Theme } from '../theme.ts'
 import { canvasColor } from './Grid.tsx'
+import { magnetSupported, registerMagnet } from './magnet.ts'
 import { bez } from './motion.tsx'
 
 /** The label colour of a `Cta`, for a label built from nodes (a rolling number inside the words). */
@@ -46,9 +47,14 @@ export function Cta({ children, onClick, disabled = false, busy = false, arrow =
   const fg = off ? t.textTertiary : canvasColor(t)
   const press = PATCHED_NATIVE && !off && !REDUCED_MOTION
   const run = () => { if (!off) onClick?.() }
+  // The magnet moves this wrapper, not the pill: the pill keeps its own press and hover transforms.
+  const wrap = useRef<PublicInstance | null>(null)
+  const drift = magnetSupported(renderer, REDUCED_MOTION, PATCHED_NATIVE) && !off
+  useEffect(() => (drift ? registerMagnet(renderer, () => wrap.current) : undefined), [renderer, drift])
   const shine = hover && press
   const sheen = t.variant === 'dark' ? 'rgba(13, 13, 13, 0.1)' : 'rgba(255, 255, 255, 0.2)'
   return (
+    <div ref={wrap} style={{ display: 'flex', flexShrink: 0 }}>
     <div
       ref={root}
       testId={testId}
@@ -112,6 +118,7 @@ export function Cta({ children, onClick, disabled = false, busy = false, arrow =
           </PaintTranslate>
         )}
       </div>
+    </div>
     </div>
   )
 }

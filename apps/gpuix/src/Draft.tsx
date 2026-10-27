@@ -22,6 +22,7 @@ import { openThread } from './nav/history.ts'
 import { observeElementBounds, type LayoutRect } from './native/layout.ts'
 import { useTasks } from './tasks/store.ts'
 import { HandoffSuggestions, isFresh, useTypedPlaceholder } from './onboarding/Handoff.tsx'
+import { GetStartedSlot, GlideBox } from './onboarding/GetStartedCard.tsx'
 import { Headline } from './draft/Headline.tsx'
 import { InstructionsOffer } from './draft/InstructionsOffer.tsx'
 import { attachedForProject, continueThreads, MORPH_MAX_IMAGES, MORPH_MAX_LINES, pickupRowsFor, upNextTasks } from './draft/model.ts'
@@ -74,6 +75,7 @@ export function Draft() {
   // ---- geometry: rows that fit under the card, and whether the column is narrow ----
   const root = useRef<PublicInstance | null>(null)
   const block = useRef<PublicInstance | null>(null)
+  const slot = useRef<PublicInstance | null>(null)
   const [rects, setRects] = useState<{ root: LayoutRect | null; block: LayoutRect | null }>({ root: null, block: null })
   useEffect(() => {
     const stops = (['root', 'block'] as const).flatMap((key) => {
@@ -118,6 +120,8 @@ export function Draft() {
   const onLaunch = (threadId: string, snapshot: ComposerSnapshot | undefined) => {
     const origin = root.current ? renderer.getElementBounds?.(root.current.id) : null
     const blockRect = block.current ? renderer.getElementBounds?.(block.current.id) : null
+    // The Get-started card is not in the frozen copy, which keeps its room so the headline and the composer do not move.
+    const slotHeight = slot.current ? (renderer.getElementBounds?.(slot.current.id)?.height ?? 0) : 0
     const card = snapshot?.card
     if (!origin || !snapshot || !card) return
     const local = (r: LayoutRect): LayoutRect => ({ x: r.x - origin.x, y: r.y - origin.y, width: r.width, height: r.height })
@@ -147,6 +151,7 @@ export function Draft() {
       exit: (paint) => (
         <DraftLayout
           gutter={compact ? 20 : GUTTER}
+          top={slotHeight > 0 ? <div style={{ height: slotHeight, flexShrink: 0 }} /> : undefined}
           headline={headline(true)}
           middle={<div style={{ height: blockRect?.height ?? card.height }} />}
           pickup={pickupView(true, frozen)}
@@ -164,6 +169,7 @@ export function Draft() {
       blockRef={(node) => { block.current = node }}
       gutter={compact ? 20 : GUTTER}
       enter={enter}
+      top={<GetStartedSlot slotRef={(node) => { slot.current = node }} />}
       headline={headline(false)}
       middle={<>
         {!coordinator && <InstructionsOffer project={project} />}
@@ -192,11 +198,13 @@ const sameRect = (a: LayoutRect | null, b: LayoutRect | null) => !!a && !!b && a
  * The screen's geometry, shared by the live screen and the send transition's frozen copy so both lay out identically: a
  * centred column, the block between 7 : 13 spacers, the pick-up hanging from the block's bottom outside the flow.
  */
-function DraftLayout({ rootRef, blockRef, gutter, enter = false, headline, middle, pickup, paint, frozen = false }: {
+function DraftLayout({ rootRef, blockRef, gutter, enter = false, top, headline, middle, pickup, paint, frozen = false }: {
   rootRef?: (node: PublicInstance | null) => void
   blockRef?: (node: PublicInstance | null) => void
   gutter: number
   enter?: boolean
+  /** The Get-started card's room above everything (the frozen copy: a spacer of its height). */
+  top?: ReactNode
   headline: ReactNode
   /** The tray and composer (or, frozen, a spacer of their height). */
   middle: ReactNode
@@ -211,6 +219,9 @@ function DraftLayout({ rootRef, blockRef, gutter, enter = false, headline, middl
       testId={frozen ? 'draft-exit' : 'draft'}
       style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, paddingLeft: gutter, paddingRight: gutter, ...(frozen ? { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, pointerEvents: 'none' } : {}) }}
     >
+      {top}
+      {/* Under the card: when the card changes height the rest glides (`onboarding/GetStartedCard.tsx`). */}
+      <GlideBox still={frozen}>
       <div style={{ flexGrow: 7, flexBasis: 0 }} />
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', flexShrink: 0 }}>
         <Rise kind="stagger" index={0} play={enter} paint={paint?.headline} style={{ alignItems: 'center', width: '100%', maxWidth: COLUMN }}>
@@ -231,6 +242,7 @@ function DraftLayout({ rootRef, blockRef, gutter, enter = false, headline, middl
         </div>
       </div>
       <div style={{ flexGrow: 13, flexBasis: 0 }} />
+      </GlideBox>
     </div>
   )
 }

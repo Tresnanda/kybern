@@ -11,6 +11,7 @@ import { getImportSummary } from './projectsStore.ts'
 import { back, finishFlow } from './flow.ts'
 import { In, Words } from './motion.tsx'
 import { PermissionList } from './PermissionList.tsx'
+import { SceneHeading, useScenePrimary } from './sceneKit.tsx'
 import { COLUMN_GAP, SIDE_PAD, prefsLayout } from './prefsLayout.ts'
 import { WindowMaterialPicker } from './WindowMaterialPicker.tsx'
 
@@ -33,11 +34,12 @@ export function PreferencesScene() {
   const done = () => {
     finishFlow('built', getImportSummary().recentProjectId)
   }
+  useScenePrimary('prefs', done)
   return (
     <div style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0 }}>
       <div testId="onboarding-prefs" style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column', overflowY: 'scroll' }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flexShrink: 0, minHeight: height, paddingTop: TITLEBAR + 8, paddingBottom: 32, paddingLeft: SIDE_PAD, paddingRight: SIDE_PAD }}>
-          <Words lines={[HEADING]} size={heading} lineHeight={Math.round(heading * 1.1)} color={t.text} font={CAL} base={0.1} />
+          <SceneHeading id="prefs" label="Make it yours."><Words lines={[HEADING]} size={heading} lineHeight={Math.round(heading * 1.1)} color={t.text} font={CAL} base={0.1} /></SceneHeading>
           <div style={{ height: 10 }} />
           <In delay={0.42} y={10} style={{ alignItems: 'center' }}>
             <Label color={t.textSecondary} size={16} lineHeight={24} style={{ textAlign: 'center' }}>You can change these anytime in Settings.</Label>

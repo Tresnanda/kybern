@@ -16,6 +16,7 @@ import { Cta, ctaForeground } from './Cta.tsx'
 import { back, finishFlow, flow, next, useFlow } from './flow.ts'
 import { continueLabel, hostLabel, noun, statusLine } from './model.ts'
 import { In, Roll, Words } from './motion.tsx'
+import { SceneHeading, useScenePrimary } from './sceneKit.tsx'
 import { TerminalSheet } from './TerminalSheet.tsx'
 
 const CAL = 'Cal Sans'
@@ -50,6 +51,9 @@ export function AgentsScene() {
   const left = (width - orbit.width) / 2
   const cont = async () => { await saveDefaultAgent(view.default); next() }
   const rolled = ready > 0
+  const sheet = agents.use((s) => s.sheet)
+  // ⌘↵ continues, unless a popover or the terminal sheet has the window.
+  useScenePrimary('agents', rolled && !popover && !sheet ? () => void cont() : null)
   const fg = ctaForeground(t, !rolled)
   const scene = useFlow((s) => s.scene)
   void scene
@@ -59,7 +63,7 @@ export function AgentsScene() {
         <Constellation agents={view.list} ready={ready} defaultKind={view.default} orbit={orbit} quick={quick} />
       </div>
       <div style={{ height: 14 }} />
-      <Words lines={[['Your', 'agents,', 'in', 'one', 'place.']]} size={headingSize(width)} lineHeight={Math.round(headingSize(width) * 1.1)} color={t.text} font={CAL} base={quick ? 0.1 : 0.5} />
+      <SceneHeading id="agents" label="Your agents, in one place."><Words lines={[['Your', 'agents,', 'in', 'one', 'place.']]} size={headingSize(width)} lineHeight={Math.round(headingSize(width) * 1.1)} color={t.text} font={CAL} base={quick ? 0.1 : 0.5} /></SceneHeading>
       <div style={{ height: 12 }} />
       <In delay={quick ? 0.15 : 0.95} y={8} style={{ alignItems: 'center', width: Math.min(720, width - 48) }}>
         <div role="status" aria-live="polite" style={{ display: 'flex', justifyContent: 'center', minHeight: 44 }}>

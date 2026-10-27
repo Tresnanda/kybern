@@ -11,13 +11,16 @@ import { N } from '../nav/glyphs.ts'
 import { TITLEBAR } from '../nav/TitleBar.tsx'
 import { Label, useTheme } from '../ui.tsx'
 import { Cta, ctaForeground } from './Cta.tsx'
+import { SceneHeading, useScenePrimary } from './sceneKit.tsx'
+import { skippedTitle } from './getStarted.ts'
+import { viewSkipped } from './SkippedDialog.tsx'
 import { ProjectsChips } from './ProjectsChips.tsx'
 import { ProjectsList } from './ProjectsList.tsx'
-import { back, finishFlow, next } from './flow.ts'
+import { back, finishFlow, next, useFlow } from './flow.ts'
 import { noun } from './model.ts'
 import { In, Roll, Words } from './motion.tsx'
 import { chipsFor, ctaLabel, failureLine, MODE_CAPTION, MODE_OPTIONS, totalLabel, totals, type CtaLabel } from './projects.ts'
-import { allRows, cancelScan, chooseFolder, isEmptyScan, rescan, setMode, startImport, startScan, useProjects } from './projectsStore.ts'
+import { allRows, cancelScan, chooseFolder, getImportSummary, isEmptyScan, rescan, setMode, startImport, startScan, useProjects } from './projectsStore.ts'
 import type { ImportMode } from './model.ts'
 
 const CAL = 'Cal Sans'
@@ -110,6 +113,9 @@ export function ProjectsScene() {
   const job = useProjects((s) => s.job)
   const progress = useProjects((s) => s.progress)
   const importError = useProjects((s) => s.importError)
+  const skipped = useProjects((s) => s.summary.skipped)
+  // Opened from the Get-started card: Back and Continue return to the app instead of walking on to Preferences.
+  const only = useFlow((s) => s.only)
 
   const sceneAt = useRef(Date.now())
   const chips = useMemo(() => chipsFor(providers ?? []), [providers])
@@ -126,10 +132,12 @@ export function ProjectsScene() {
 
   const choose = () => { void chooseFolder(renderer) }
   const freeChat = () => { cancelScan(); finishFlow('free', null) }
+  const leave = () => { if (only) finishFlow('built', getImportSummary().recentProjectId); else next() }
   const primary = () => {
     if (!importing && picked > 0) { startImport(); return }
-    next()
+    leave()
   }
+  useScenePrimary('projects', primary)
 
   const emptyBody = (
     <Empty testId="projects-empty" style={{ padding: 24 }}>
@@ -160,7 +168,7 @@ export function ProjectsScene() {
 
   return (
     <div testId="projects-scene" style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: top, paddingBottom: 28, paddingLeft: 24, paddingRight: 24 }}>
-      <Words lines={[['Bring', 'in', 'your', 'past', 'work.']]} size={headSize} lineHeight={Math.round(headSize * 1.1)} color={t.text} font={CAL} base={0.2} />
+      <SceneHeading id="projects" label="Bring in your past work."><Words lines={[['Bring', 'in', 'your', 'past', 'work.']]} size={headSize} lineHeight={Math.round(headSize * 1.1)} color={t.text} font={CAL} base={0.2} /></SceneHeading>
       <In delay={0.62} y={10} style={{ alignItems: 'center', marginTop: 14 }}>
         <Lede found={found} agents={agents} state={lede} />
         <SwapOnChange active={empty || failedView ? 'blank' : 'pick'} kind="text" style={{ height: LEDE_LINE }}>
@@ -190,13 +198,19 @@ export function ProjectsScene() {
       )}
 
       {importError && <Label color={t.red} size={12} lineHeight={16} style={{ marginTop: 8 }}>{importError}</Label>}
+      {skipped > 0 && (
+        <In y={6} blur={2} style={{ width: col, marginTop: 10, paddingLeft: 8, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+          <Label color={t.textSecondary} size={13} lineHeight={18} style={{ whiteSpace: 'nowrap' }}>{`${skippedTitle(skipped)}.`}</Label>
+          <Button testId="projects-view-skipped" variant="ghost" size="sm" onClick={viewSkipped}>View skipped</Button>
+        </In>
+      )}
       <In delay={1.05} y={10} style={{ width: col, marginTop: 14 }}>
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 2 }}>
-          <Button testId="projects-back" variant="ghost" size="lg" icon={N.arrowLeft} onClick={() => back()}>Back</Button>
+          <Button testId="projects-back" variant="ghost" size="lg" icon={N.arrowLeft} onClick={() => (only ? finishFlow('built', null) : back())}>Back</Button>
           {!empty && !failedView && (
             <div style={{ display: 'flex', flexDirection: 'row', gap: 2, opacity: importing ? 0 : 1, ...(importing ? { pointerEvents: 'none' as const } : {}) }}>
               <Button testId="projects-choose-folder" variant="ghost" size="lg" icon={N.folder} disabled={importing} onClick={choose}>Choose a folder</Button>
-              <Button testId="projects-free-chat" variant="ghost" size="lg" icon={N.newThread} disabled={importing} onClick={freeChat}>Start a free chat</Button>
+              {!only && <Button testId="projects-free-chat" variant="ghost" size="lg" icon={N.newThread} disabled={importing} onClick={freeChat}>Start a free chat</Button>}
             </div>
           )}
           <div style={{ flexGrow: 1 }} />

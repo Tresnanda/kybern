@@ -29,8 +29,10 @@ interface Flow {
   /** The app shell is being mounted under the still-opaque welcome (its first frames hitch where nobody sees them). */
   releasing: boolean
   handoff: Handoff | null
+  /** Opened from the Get-started card's Import: only the Projects scene, no progress, and its Back and Continue return to the app. */
+  only: boolean
 }
-const INITIAL: Flow = { open: false, scene: 'hero', dir: 1, introPlayed: false, finished: false, releasing: false, handoff: null }
+const INITIAL: Flow = { open: false, scene: 'hero', dir: 1, introPlayed: false, finished: false, releasing: false, handoff: null, only: false }
 export const flow = createStore<Flow>(INITIAL)
 
 const KEY = 'kybern.onboarding.completed'
@@ -59,6 +61,12 @@ export function wantsOnboarding(input: Omit<GateInput, 'completed' | 'forced'>):
 const START = (['agents', 'projects', 'prefs'] as const).find((id) => id === process.env.KYBERN_ONBOARDING_SCENE)
 export function openFlow() {
   if (!flow.get().open) flow.set({ ...INITIAL, open: true, ...(START ? { scene: START, introPlayed: true } : {}) })
+}
+
+/** The Get-started card's Import: the Projects scene alone, over the running app. `finishFlow` returns to it. */
+export function openProjectsOnly() {
+  if (flow.get().open) return
+  flow.set({ ...INITIAL, open: true, scene: 'projects', introPlayed: true, only: true })
 }
 
 /** A window with data and no mark belongs to a returning user: write the mark so an empty library later never brings the flow back. */

@@ -6,6 +6,7 @@ import { Button } from '../kit/Button.tsx'
 import { Kbd } from '../kit/Kbd.tsx'
 import { EASE } from '../motion/tokens.ts'
 import { addWindowKeyHandler } from '../nav/keys.ts'
+import { SceneHeading } from './sceneKit.tsx'
 import { showEnvironmentDialog } from '../environments/Dialogs.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { observeElementBounds } from '../native/layout.ts'
@@ -126,7 +127,7 @@ export function Hero() {
       <div key={fast ? 'fast' : 'full'} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
         <Breath run={settled && current}><AssemblingMark intro fast={fast} color={t.text} /></Breath>
         <div style={{ height: 36 }} />
-        <Words lines={lines} size={headSize} lineHeight={lineHeight} color={t.text} font={CAL} fast={fast} />
+        <SceneHeading id="hero" label={HEADLINE}><Words lines={lines} size={headSize} lineHeight={lineHeight} color={t.text} font={CAL} fast={fast} /></SceneHeading>
         <div style={{ height: 20 }} />
         <In delay={0.74} fast={fast} y={10} style={{ width: subWidth, alignItems: 'center' }}>
           {balance(SUBLINE, Math.max(24, Math.floor(subWidth / 8.2))).map((line, i) => (
