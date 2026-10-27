@@ -59,7 +59,6 @@ try {
     for (let y = box.y; y < box.y + box.height; y += 1) for (let x = box.x; x < box.x + box.width; x += 1) if (orange(p.at(x * scale, (y + top) * scale))) count++
     return count
   }
-  if (process.env.ORANGE_TRACE) console.log(`tint element ${(await a.getByTestId('prefs-mode-tint').element() as { id?: number }).id}`)
   const mark = (label: string) => { if (process.env.ORANGE_TRACE) appendFileSync(path.join(dir, 'trace.log'), `\n[mark] ${label}\n`) }
   const before = await capture('rest')
   console.log(`rest: ${before} orange px`)
@@ -72,6 +71,9 @@ try {
     const end = Date.now() + ms
     while (Date.now() < end) counts.push(await capture(label))
     await done
+    // Outside Full access the orange layer is not mounted at all, so no draw can paint it (PermissionList.tsx).
+    const tints = await a.getByTestId('prefs-mode-tint').count()
+    if (label !== 'full-access' && tints > 0) { console.log(`${label}: the full-access tint is mounted`); failures++ }
     const worst = Math.max(...counts)
     console.log(`${label}: ${counts.length} frames, orange px per frame ${counts.join(',')}`)
     if (worst > 0) failures++
@@ -87,6 +89,7 @@ try {
   await watch(theme === 'dark' ? 'theme-system' : 'theme-system', () => click('prefs-theme-system'))
   // The control: Full access does turn it orange, so the detector sees the colour.
   await watch('full-access', () => click('prefs-mode-full-access'), 700)
+  if (process.env.ORANGE_TRACE) console.log(`tint element ${(await a.getByTestId('prefs-mode-tint').element() as { id?: number }).id}`)
   const control = await capture('full-access-rest')
   console.log(`full access at rest: ${control} orange px`)
   if (!process.env.ORANGE_TRACE_ONLY) assert.ok(control > 200, 'the detector did not see Full access')
