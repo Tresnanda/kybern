@@ -20,33 +20,52 @@ later does not bring the flow back. Finishing or "Set up later" writes the mark.
 | File | What |
 | --- | --- |
 | `model.ts` | Pure rules, tested in `model.test.ts`: the gate, import mode → `limit`, default agent, the agents status line, tile state from the daemon, window-material options. |
-| `flow.ts` | Scene store (`go`, `goFrom`: a move only from the scene on screen, so a doubled press moves once), `finishFlow` (the shell mounts under the welcome, which dissolves once the shell has drawn), the completion mark, `resetFlow`, the developer flags. |
+| `flow.ts` | Scene store (`go`, `goFrom`: a move only from the scene on screen, so a doubled press moves once), `finishFlow` (the shell mounts under the welcome, which fades out once the shell has drawn and settled), the completion mark, `resetFlow`, the developer flags. |
 | `lifecycle.ts` | Imported by `Welcome.tsx`: a new environment resets the flow, scan and agents (its own first run); ending the flow stops a running scan. |
 | `once.ts` | `createPress`: the guard on a scene's primary against a double click or key repeat. |
 | `announce.ts` | The one live region and what it says: an import starting, each project finishing, the end, the default agent changing (never a tick). |
-| `Welcome.tsx` | The layer mounted last in `App.tsx`: canvas, scene transitions (`Presence`), progress, the shared mark's flight. |
+| `Welcome.tsx` | The layer mounted last in `App.tsx`: canvas, scene transitions (`Presence`, each scene its own fill island), progress, the shared mark's flight. |
 | `Grid.tsx` | The dot grid (one tinted SVG pattern, `edgeFade` toward the edges) and the camera pan/swell. |
 | `Hero.tsx`, `Cta.tsx` | The first scene; the 44 px primary with press, ripple, shine and arrow nudge. |
 | `AgentsScene.tsx`, `Constellation.tsx`, `AgentPopover.tsx`, `TerminalSheet.tsx`, `agentsStore.ts` | Agent detection (`providers.list`, accounts, `cursor.status`), the six tiles, the popover, the typed-not-run terminal sheet, browser sign-in through `dialogs/Account.tsx`. |
 | `ProjectsScene.tsx`, `projectsStore.ts`, `projects.ts` | `sessions.scan_projects` / `sessions.import_all`, import modes, rows. |
 | `PreferencesScene.tsx`, `AppearancePicker.tsx`, `WindowMaterialPicker.tsx`, `PermissionList.tsx` | Theme, window material (writes through `settings/appearance.ts`), default permission mode. |
-| `Handoff.tsx` | The way out: shell entrance, suggestion chips (a used chip only hides the row; the Draft is keyed on the handoff, so nothing remounts), the typed placeholder (`TypedOverlay` draws it above the content card, outside the island: inside it every character re-laid out the card, ~36 ms a draw), the import toast (follows the job until its summary), the announcer. |
-| `getStarted.ts`, `getStartedStore.ts`, `GetStartedCard.tsx` | The Get-started card on Home: which items exist and when each ticks (pure, `getStarted.test.ts`), the persisted state and machine facts (CLI on PATH, paired devices, Computer use, notifications), and the card with its `GlideBox`. Hide and fold change the card's height; everything under it glides by 13/20 of that. |
-| `SkippedDialog.tsx` | "N chats were skipped" (View skipped): from the import toast and the Projects scene. |
-| `sceneKit.tsx`, `magnet.ts` | The scene heading that takes focus on arrival, ⌘↵ / Ctrl+Enter for the scene's primary, and the magnetic primary (a spring loop writing `setSubtreeTranslation`, no React commit per pointer move). |
-| `motion.tsx` | Shared helpers: `In` (rise), `Words`, `Roll` (rolling numbers), `stateTransform`. |
+| `Handoff.tsx` | The way out: `useShellReady` (the welcome fades only once the app under it has settled), the import toast (follows the job until its summary), the announcer. No entrance of its own: the app is simply there. |
+| `SkippedDialog.tsx`, `skipped.ts` | "N chats were skipped" (View skipped): from the import toast and the Projects scene; the pure title and grouping in `skipped.ts` (`skipped.test.ts`). |
+| `sceneKit.tsx`, `magnet.ts` | The scene heading that takes focus on arrival, ⌘↵ / Ctrl+Enter for the scene's primary, `Later` (mounts a subtree a few frames after the scene), and the magnetic primary (a spring loop writing `setSubtreeTranslation`, no React commit per pointer move). |
+| `motion.tsx` | Shared helpers: `In` (rise), `Words`, `Roll` (rolling numbers: each column holds only the digits it rolls through), `stateTransform`. |
 
 Scenes mount and unmount on navigation, so everything that must survive lives in module stores.
 
 ## Hooks outside this folder
 
-`App.tsx` (layer, shell entrance, Draft key), `shell/Connection.tsx` (no static empty screen once the flow ended), `Draft.tsx`
-(suggestions, typed placeholder, the card's slot and `GlideBox`), `Composer.tsx` (`fillRef`), `shell/toasts.tsx` (a `progress` bar),
-`Sidebar.tsx` (`HandoffSlide` around the first rows).
+`App.tsx` (the layer, `useShellReady`, the shell mounted only once the flow ends), `shell/Connection.tsx` (no static empty screen
+once the flow ended), `shell/toasts.tsx` (a `progress` bar). Home, the Draft, the composer and the sidebar have no onboarding code:
+after Start building the welcome fades over the app as it is.
 
-## Get-started card
+## Frame cost
 
-Exists after a whole run ends (`needs` is fixed then: an agent item only when none was ready, an import item only when import was
-skipped or "Don't import chats" was chosen) and only on this Mac's own environment. State is `kybern.getstarted` in `gpuix-ui.json`;
-an install that finished before the card existed has none. **Import** reopens the flow on the Projects scene alone (`flow.only`):
-Back and Continue return to the app, and the card is not restarted. Hide is permanent.
+The flow must draw every frame in under 16.7 ms on an M-series Mac, about 8 ms where it can (120 Hz displays). Measure per draw,
+never by the gaps between frame timestamps (they include idle time):
+
+```sh
+bun scripts/onboarding-perf.ts <label> [--theme light] [--runs 2] [--islands]   # every moment: draws, mean/p95/max render ms, layout calls
+BENCH_SCENE=projects bun scripts/onboarding-perf.ts <label>                      # mode switches and Select all only
+BENCH_SCENE=prefs bun scripts/onboarding-perf.ts <label>                         # slider drags
+bun scripts/onboarding-orange-check.ts [--rendered] [--theme light]              # the permission list stays free of orange
+```
+
+Each run starts its own scratch daemon and stops every daemon serving its data dir at the end (the window may start one too).
+`--islands` adds `KYBERN_DEBUG_ISLANDS` and `KYBERN_MOTION_TRACE` lines to the JSON. What the numbers taught (October 2026):
+
+- **One commit, one whole-scene draw.** Each scene is a fill island and the Projects list a `cacheLayout` fill island, so a commit
+  lays out one scene, not the window. Prefer one commit with paint delays over a commit per row or per tick (`CountLine`).
+- **No blur on entrances that come in groups.** Every settling blur re-renders the window once. `riseTransform` and `Words` do not
+  blur; pass `blur={false}` to swaps that change together.
+- **Count elements, not islands.** A rolling digit of ten labels cost the same inline or cached; fewer labels is what helped.
+- **Spread the first draw.** A scene's first draw builds, shapes and rasterizes all of it. `Later` mounts the heavy parts (rings,
+  tiles, rows, lists, pickers) a frame or more later, before any is visible; give it a same-size placeholder.
+- **`scrollToItem` and `focusElement` refresh the whole window on macOS** (every island rebuilds): call them only when needed.
+- **Never hide something at rest with a retained opacity of 0.** A full draw can present it before the opacity is re-applied: the
+  Full access tint flashed orange that way. Mount it only while it shows (`Presence`).
+- The app's own first draws under the welcome (20–35 ms) happen while the welcome is still opaque; the fade waits for them.
