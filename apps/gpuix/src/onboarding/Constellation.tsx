@@ -1,7 +1,6 @@
 // The agents constellation (SPEC §3a–c): the Kybern mark in a hub and six agent tiles in two wings around it, two orbit rings, and
 // dots that light from a tile in toward the hub when that agent is ready. Calm on purpose: tiles settle to their spots, a ready
 // agent swells once, nothing bobs, ripples or sparks. Every tile is absolutely placed, so detection changes cost no layout.
-import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { useEffect, useRef, useState } from 'react'
 import type { ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { PaintTranslate } from '../drag/PaintTranslate.tsx'
@@ -10,13 +9,11 @@ import { Swap } from '../motion/kit.tsx'
 import { pressTransform } from '../motion/press.ts'
 import { EASE } from '../motion/tokens.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
-import { observeElementBounds } from '../native/layout.ts'
 import { Label, LOGO_SVG, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import type { Theme } from '../theme.ts'
 import { useLoopRunning } from '../native/loop-visibility.ts'
 import { justClosed } from './AgentPopover.tsx'
 import { agents, type Agent } from './agentsStore.ts'
-import { flight, markRects } from './markFlight.ts'
 import { bez, riseTransform, Roll, SETTLE } from './motion.tsx'
 import { Later } from './sceneKit.tsx'
 import { STATE_WORD, type AgentState } from './model.ts'
@@ -179,10 +176,7 @@ const ellipse = (cx: number, cy: number, rx: number, ry: number, pad: number) =>
 
 export function Constellation({ agents: list, ready, defaultKind, orbit, quick }: { agents: Agent[]; ready: number; defaultKind: ProviderKind | null; orbit: Orbit; quick: boolean }) {
   const t = useTheme()
-  const renderer = useGpuixRequired()
-  const hubMark = useRef<PublicInstance | null>(null)
   const open = agents.use((s) => s.popover)
-  const flying = flight.use((s) => s.flying)
   const loop = useLoopRunning(true)
   const [connects, setConnects] = useState(0)
   const seen = useRef<number | null>(null)
@@ -190,12 +184,6 @@ export function Constellation({ agents: list, ready, defaultKind, orbit, quick }
     if (seen.current !== null && ready > seen.current) setConnects((n) => n + 1)
     seen.current = ready
   }, [ready])
-  useEffect(() => {
-    const node = hubMark.current
-    if (!node) return
-    return observeElementBounds(renderer, { id: node.id }, (event) => { if (event.rect) markRects.hub = event.rect })
-  }, [renderer])
-  useEffect(() => () => { markRects.hub = null }, [])
 
   const hub = { x: orbit.cx, y: orbit.cy }
   const outerRy = orbit.ry / Math.sqrt(1 - SQUARE * SQUARE)
@@ -224,11 +212,7 @@ export function Constellation({ agents: list, ready, defaultKind, orbit, quick }
         paintTransform={PATCHED_NATIVE ? { initial: REDUCED_MOTION ? { opacity: 0 } : { opacity: 0, scale: 0.9 }, animate: { opacity: 1, scale: 1 }, transition: { duration: 0.7, delay: 0.1, ease: bez(EASE.out) } } : undefined}
         style={{ position: 'absolute', left: hub.x - 56, top: hub.y - 56, width: 112, height: 112, borderRadius: 56, backgroundColor: t.surface, borderWidth: 1, borderColor: t.cardEdge, boxShadow: shadow(t, false), display: 'flex', alignItems: 'center', justifyContent: 'center' }}
       >
-        <div
-          ref={hubMark}
-          paintTransform={PATCHED_NATIVE ? { initial: false, animate: { opacity: flying ? 0 : 1 }, transition: { duration: 0.01 }, retain: true } : undefined}
-          style={{ width: 52, height: 33, display: 'flex' }}
-        >
+        <div style={{ width: 52, height: 33, display: 'flex' }}>
           <div
             paintTransform={connects > 0 && PATCHED_NATIVE && !REDUCED_MOTION ? { initial: { scale: 1 }, keyframes: [{ offset: 0.5, scale: 1.06 }], animate: { scale: 1 }, transition: { duration: 0.56, delay: 0.52, ease: bez(SETTLE) }, generation: connects } : undefined}
             style={{ width: 52, height: 33 }}

@@ -9,9 +9,8 @@ import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { Label, REDUCED_MOTION } from '../ui.tsx'
 
 export const bez = (e: readonly number[]) => [...e] as [number, number, number, number]
-/** The SPEC's `cubic-bezier(.45,0,.2,1)` settle and `.65,0,.25,1` flight. */
+/** The SPEC's `cubic-bezier(.45,0,.2,1)` settle. */
 export const SETTLE = [0.45, 0, 0.2, 1] as const
-export const FLIGHT = [0.65, 0, 0.25, 1] as const
 export const REST: Required<PaintTransformValue> = { opacity: 1, scale: 1, scaleX: 1, scaleY: 1, shadowOpacity: 1, rotate: 0, translateX: 0, translateY: 0, blur: 0 }
 const restOf = (from: PaintTransformValue): PaintTransformValue => Object.fromEntries(Object.keys(from).map((k) => [k, REST[k as keyof typeof REST]]))
 

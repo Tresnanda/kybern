@@ -24,7 +24,7 @@ later does not bring the flow back. Finishing or "Set up later" writes the mark.
 | `lifecycle.ts` | Imported by `Welcome.tsx`: a new environment resets the flow, scan and agents (its own first run); ending the flow stops a running scan. |
 | `once.ts` | `createPress`: the guard on a scene's primary against a double click or key repeat. |
 | `announce.ts` | The one live region and what it says: an import starting, each project finishing, the end, the default agent changing (never a tick). |
-| `Welcome.tsx` | The layer mounted last in `App.tsx`: canvas, scene transitions (`Presence`, each scene its own fill island), progress, the shared mark's flight. |
+| `Welcome.tsx` | The layer mounted last in `App.tsx`: canvas, scene transitions (`Presence`, each scene its own fill island), progress. |
 | `Grid.tsx` | The dot grid (one tinted SVG pattern, `edgeFade` toward the edges) and the camera pan/swell. |
 | `Hero.tsx`, `Cta.tsx` | The first scene; the 44 px primary with press, ripple, shine and arrow nudge. |
 | `AgentsScene.tsx`, `Constellation.tsx`, `AgentPopover.tsx`, `TerminalSheet.tsx`, `agentsStore.ts` | Agent detection (`providers.list`, accounts, `cursor.status`), the six tiles, the popover, the typed-not-run terminal sheet, browser sign-in through `dialogs/Account.tsx`. |
@@ -79,3 +79,22 @@ Each run starts its own scratch daemon and stops every daemon serving its data d
 - **Focus after the entrance.** The heading takes focus 700 ms after its scene arrives (`sceneKit.tsx`): `focusElement` is a
   full window refresh on macOS, which inside the entrance was one more full draw.
 - The app's own first draws under the welcome (20–35 ms) happen while the welcome is still opaque; the fade waits for them.
+
+## No shared mark flight (yet)
+
+The SPEC's hero → agents flight (the hero logo flying into the agents hub, §3e) is not built. Every version painted the flying
+logo under the hub circle, then popped it in front when it landed. Presented-frame dumps (`scripts/onboarding-present-dump.ts`,
+2026-10-28) showed the same result for:
+- a plain overlay after the scene islands
+- a deferred `anchored` layer
+- a later sibling of the hub circle inside the agents scene
+- a child of the hub circle
+
+What fails is a primitive under an active `paintTransform` (the moving logo): it presents beneath an untransformed quad painted
+before it. The hub's static mark, also a child of the circle, paints above it. That is a painter-order bug in the fork's scoped
+paint path, not something the app can order around.
+
+Until it's fixed natively, the hero logo leaves with the hero and the hub's mark fades in with the hub. To bring the flight back,
+fix the fork so retained scopes keep painter order (`native/README.md`, "Retained GPU scope transforms must preserve painter
+order"). Then restore it from git history (`MarkFlight`, `markFlight.ts`) and check it with the dump.
+

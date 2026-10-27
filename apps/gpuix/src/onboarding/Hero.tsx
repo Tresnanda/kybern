@@ -1,6 +1,6 @@
 // The first scene (SPEC §2): the mark assembles from two halves, the headline arrives word by word, then the subline and the
 // actions. Plays once per install; any key except Return and Tab skips it to its end state, Return presses the button.
-import { useGpuixRequired, useWindowSize, type PublicInstance } from '@gpuix/react'
+import { useWindowSize } from '@gpuix/react'
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '../kit/Button.tsx'
 import { Kbd } from '../kit/Kbd.tsx'
@@ -9,14 +9,12 @@ import { addWindowKeyHandler } from '../nav/keys.ts'
 import { SceneHeading } from './sceneKit.tsx'
 import { showEnvironmentDialog } from '../environments/Dialogs.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
-import { observeElementBounds } from '../native/layout.ts'
 import { isWindowVisible } from '../native/visibility.ts'
 import { Label, LOGO_SVG, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { Cta } from './Cta.tsx'
 import { flow, goFrom, useFlow } from './flow.ts'
 import { createPress } from './once.ts'
 import { balance, bez, In, Words } from './motion.tsx'
-import { markRects } from './markFlight.ts'
 
 /** The headline, sized as `clamp(40, 6.4vw, 76)`. */
 export const headlineSize = (width: number) => Math.round(Math.min(76, Math.max(40, width * 0.064)))
@@ -28,13 +26,6 @@ const MARK_W = 72, MARK_H = 45
 /** The Kybern mark in two clipped halves that slide together (SPEC §2.1). `intro` plays the assembly; otherwise it is whole. */
 export function AssemblingMark({ intro, fast, color }: { intro: boolean; fast: boolean; color: string }) {
   const t = useTheme()
-  const renderer = useGpuixRequired()
-  const box = useRef<PublicInstance | null>(null)
-  useEffect(() => {
-    const node = box.current
-    if (!node) return
-    return observeElementBounds(renderer, { id: node.id }, (event) => { if (event.rect) markRects.hero = event.rect })
-  }, [renderer])
   const play = intro && PATCHED_NATIVE && !fast && !REDUCED_MOTION
   const half = (side: -1 | 1) => (
     <div
@@ -57,7 +48,7 @@ export function AssemblingMark({ intro, fast, color }: { intro: boolean; fast: b
     />
   )
   return (
-    <div ref={box} testId="onboarding-mark" style={{ position: 'relative', width: MARK_W, height: MARK_H, flexShrink: 0 }}>
+    <div testId="onboarding-mark" style={{ position: 'relative', width: MARK_W, height: MARK_H, flexShrink: 0 }}>
       {play && [ring(0.65), ring(0.95)]}
       <div
         paintTransform={play ? { initial: { scale: 1 }, keyframes: [{ offset: 0.5, scale: 1 }, { offset: 0.56, scale: 0.94 }], animate: { scale: 1 }, transition: { duration: 1.2, ease: bez(EASE.out) } } : undefined}
