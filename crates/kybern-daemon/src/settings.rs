@@ -41,7 +41,9 @@ impl SettingsStore {
         self.changed.subscribe()
     }
 
-    pub fn set(&self, settings: Settings) -> Result<Settings> {
+    pub fn set(&self, mut settings: Settings) -> Result<Settings> {
+        // A credential a client just typed goes into the secret store; settings keep the reference.
+        crate::secret_store::externalize(&mut settings)?;
         validate_orchestration(&settings.orchestration)?;
         if let Some(omp) = settings.providers.get(&kybern_protocol::ProviderKind::Omp) {
             for profile in omp.env.get("OMP_PROFILE").into_iter().chain(omp.project_profiles.values()) {
@@ -51,6 +53,7 @@ impl SettingsStore {
         crate::provider_accounts::validate(&settings)?;
         write_atomic(&self.path, &settings)?;
         *self.current.write().unwrap() = settings.clone();
+        crate::secret_store::collect_garbage(&settings);
         let _ = self.changed.send(settings.clone());
         Ok(settings)
     }

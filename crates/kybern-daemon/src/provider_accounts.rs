@@ -36,22 +36,19 @@ pub fn resolve(settings: &ProviderSettings, project: Option<&str>, explicit: Opt
         .to_string()
 }
 
+/// The environment a provider process gets. Credential values saved in the secret store
+/// (`kybern-secret:` references, design §9.3) are replaced by their values here, so this is the
+/// result to spawn with, never to save or send to a client.
 pub fn environment(settings: &ProviderSettings, kind: ProviderKind, instance: &str) -> Result<BTreeMap<String, String>> {
-    let mut env = settings.env.clone();
-    if instance == "default" {
-        return Ok(env);
-    }
-    let account = settings
-        .accounts
-        .get(instance)
-        .ok_or_else(|| anyhow!("Account '{instance}' is unavailable. Choose another account in Settings."))?;
-    let dir = PathBuf::from(&account.directory);
-    ensure!(dir.is_absolute(), "Account directory must be absolute.");
-    let path = |child: &str| dir.join(child).to_string_lossy().to_string();
-    // A named native account must not be silently replaced by the regular
-    // process/global provider API key. Empty overrides also suppress inherited
-    // keys for native probes and PTY sign-in without altering the user's shell.
-    let credentials: &[&str] = match kind {
+    let mut env = build_environment(settings, kind, instance)?;
+    crate::secret_store::resolve_env(&mut env);
+    Ok(env)
+}
+
+/// Environment variables that carry a provider's API credentials. A named native account
+/// suppresses them, and the secret store keeps their values out of `settings.json`.
+pub fn credential_keys(kind: ProviderKind) -> &'static [&'static str] {
+    match kind {
         ProviderKind::ClaudeCode => &["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
         ProviderKind::Codex => &["OPENAI_API_KEY", "CODEX_API_KEY"],
         ProviderKind::Cursor => &["CURSOR_API_KEY"],
@@ -69,7 +66,25 @@ pub fn environment(settings: &ProviderSettings, kind: ProviderKind, instance: &s
             "TOGETHER_API_KEY",
             "DEEPSEEK_API_KEY",
         ],
-    };
+    }
+}
+
+fn build_environment(settings: &ProviderSettings, kind: ProviderKind, instance: &str) -> Result<BTreeMap<String, String>> {
+    let mut env = settings.env.clone();
+    if instance == "default" {
+        return Ok(env);
+    }
+    let account = settings
+        .accounts
+        .get(instance)
+        .ok_or_else(|| anyhow!("Account '{instance}' is unavailable. Choose another account in Settings."))?;
+    let dir = PathBuf::from(&account.directory);
+    ensure!(dir.is_absolute(), "Account directory must be absolute.");
+    let path = |child: &str| dir.join(child).to_string_lossy().to_string();
+    // A named native account must not be silently replaced by the regular
+    // process/global provider API key. Empty overrides also suppress inherited
+    // keys for native probes and PTY sign-in without altering the user's shell.
+    let credentials = credential_keys(kind);
     for key in credentials {
         env.insert((*key).into(), String::new());
     }
@@ -117,7 +132,7 @@ pub fn validate(settings: &Settings) -> Result<()> {
             }
         }
         for id in provider.default_account.iter().chain(provider.project_accounts.values()) {
-            environment(provider, *kind, id)?;
+            build_environment(provider, *kind, id)?;
         }
     }
     Ok(())

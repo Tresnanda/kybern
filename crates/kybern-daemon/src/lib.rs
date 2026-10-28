@@ -37,6 +37,9 @@ mod provider_assets;
 mod remote_tests;
 mod requests;
 mod rpc;
+// S3: the encrypted secret store. Its RPC, push transport and outbox hooks arrive with N3/R1.
+#[allow(dead_code)]
+mod secret_store;
 mod secrets;
 mod self_update;
 mod session_import;

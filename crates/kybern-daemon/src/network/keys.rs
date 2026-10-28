@@ -290,14 +290,20 @@ pub fn remove(network_dir: &Path) -> Result<()> {
 /// Write `bytes` as `machine.key` through a private temporary file, so the key is never readable
 /// by another user, not even for a moment, and a crash never leaves half a key.
 fn write_private(network_dir: &Path, bytes: &[u8]) -> Result<()> {
+    write_private_file(network_dir, KEY_FILE, bytes)
+}
+
+/// [`write_private`] for any private file in the network directory (the secret store's `data.key`
+/// uses it): 0600 in a 0700 directory, an owner-only ACL on Windows, atomic by rename.
+pub(crate) fn write_private_file(network_dir: &Path, file_name: &str, bytes: &[u8]) -> Result<()> {
     std::fs::create_dir_all(network_dir).with_context(|| format!("creating {}", network_dir.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(network_dir, std::fs::Permissions::from_mode(0o700))?;
     }
-    let target = key_path(network_dir);
-    let temp = network_dir.join(format!("{KEY_FILE}.tmp"));
+    let target = network_dir.join(file_name);
+    let temp = network_dir.join(format!("{file_name}.tmp"));
     {
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create(true).truncate(true);

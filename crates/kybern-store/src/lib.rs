@@ -8,6 +8,7 @@ mod network;
 mod notes;
 mod projection;
 mod schema;
+mod secrets;
 mod spaces;
 mod subagent_messages;
 mod tasks;
@@ -20,6 +21,7 @@ pub use notes::{
     NOTE_BODY_MAX_BYTES, NOTE_RETENTION_DAYS, NOTE_TITLE_MAX_CHARS, NoteError, NoteTarget, checklist as note_checklist,
     preview as note_preview,
 };
+pub use secrets::{SecretMeta, SecretRow};
 pub use spaces::SpaceError;
 pub use tasks::{
     GLOBAL_TASK_PREFIX, NewTask, TASK_BODY_MAX_BYTES, TASK_RETENTION_DAYS, TASK_TITLE_MAX_CHARS, TaskError, TaskPatch, TaskRunPatch,

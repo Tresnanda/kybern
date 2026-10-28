@@ -614,6 +614,22 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX tokens_device ON tokens(device_id);
     COMMIT;
     ",
+    // Secret store (S3, design §9.3, §4.4 "v35 (M5)"; numbered here in merge order). `secrets` holds
+    // named values encrypted with XChaCha20-Poly1305 under the machine's data key: `ciphertext` is
+    // the AEAD output, `nonce` the 24-byte nonce, `key_version` the data key that sealed it, and
+    // `source` is `local` or `pushed:<machine_id>`. The store only keeps bytes; the daemon encrypts.
+    "
+    BEGIN;
+    CREATE TABLE secrets (
+      name TEXT PRIMARY KEY,
+      ciphertext BLOB NOT NULL,
+      nonce BLOB NOT NULL,
+      key_version INTEGER NOT NULL,
+      source TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    COMMIT;
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {
