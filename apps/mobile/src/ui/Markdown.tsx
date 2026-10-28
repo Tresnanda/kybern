@@ -272,11 +272,20 @@ function imageSource(image: MarkdownImage, threadId?: string) {
 }
 
 /** An image in a reply: shown at the column width with its caption below; a caption card when it can't load. */
+/**
+ * Width/height of each image once loaded, by URI, so a remounted reply draws its
+ * images at their final shape instead of jumping from the placeholder height.
+ */
+const imageAspects = new Map<string, number>();
+/** Taller images than this stop growing and show with side margins instead. */
+const TALLEST_ASPECT = 0.6;
+
 function MarkdownPicture({ image }: { image: MarkdownImage }) {
   const { colors } = useTheme();
   const threadId = useContext(ChatFileContext)?.threadId;
   const source = useMemo(() => imageSource(image, threadId), [image.target, threadId]);
   const [failed, setFailed] = useState(false);
+  const [aspect, setAspect] = useState(() => (source?.uri ? imageAspects.get(source.uri) : undefined));
   const [open, setOpen] = useState(false);
   const label = imagePlaceholderText(image);
   if (!source || failed)
@@ -310,7 +319,17 @@ function MarkdownPicture({ image }: { image: MarkdownImage }) {
           source={source}
           accessibilityIgnoresInvertColors
           onError={() => setFailed(true)}
-          style={{ width: "100%", height: 240, borderRadius: 14, backgroundColor: colors.card }}
+          onLoad={({ nativeEvent: { source: loaded } }) => {
+            if (!source?.uri || !loaded?.width || !loaded?.height) return;
+            const next = Math.max(TALLEST_ASPECT, loaded.width / loaded.height);
+            imageAspects.set(source.uri, next);
+            setAspect(next);
+          }}
+          // Until the size is known the frame is a fixed-height placeholder; then it takes the image's shape.
+          style={[
+            { width: "100%", borderRadius: 14 },
+            aspect ? { aspectRatio: aspect } : { height: 240, backgroundColor: colors.card },
+          ]}
           resizeMode="contain"
         />
       </Tap>

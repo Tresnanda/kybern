@@ -7,7 +7,6 @@ import {
   groupByProject,
   moveInOrder,
   orderProjects,
-  ownerFirstName,
   relativeTime,
   sectionWindow,
   threadAgents,
@@ -106,14 +105,4 @@ test("sections page: ten first, twenty more per tap, never past the total", () =
   assert.deepEqual(sectionWindow(4, 0), { shown: 4, remaining: 0 });
   assert.deepEqual(sectionWindow(0, 2), { shown: 0, remaining: 0 });
   assert.deepEqual(sectionWindow(100, 0, 30), { shown: 30, remaining: 70 });
-});
-
-test("ownerFirstName reads macOS computer names", () => {
-  assert.equal(ownerFirstName("Ada's MacBook Pro"), "Ada");
-  assert.equal(ownerFirstName("Ada’s Mac mini"), "Ada");
-  assert.equal(ownerFirstName("Adas-MacBook-Pro.local"), "Ada");
-  assert.equal(ownerFirstName("Work Mac"), null);
-  assert.equal(ownerFirstName("devbox"), null);
-  assert.equal(ownerFirstName(""), null);
-  assert.equal(ownerFirstName(undefined), null);
 });

@@ -15,7 +15,7 @@ import { ensureThread, refresh, rpc, startNewChat, supportsOptimisticCreate, use
 import { newThreadId } from "../src/state/ids";
 import { groupCreateFields, supportsWorktree } from "../src/state/groups";
 import { useInSpace, useSpaceProjects } from "../src/state/spaces";
-import { ownerFirstName, relativeTime } from "../src/state/threadList";
+import { relativeTime } from "../src/state/threadList";
 import { isGroupProject } from "../../../packages/kybern-client/src/groups";
 import { optimisticThread } from "../../../packages/kybern-client/src/newChat";
 import { isSubagentThread } from "../../../packages/kybern-client/src/subagents";
@@ -140,9 +140,6 @@ function HomeScreen() {
   ]);
   const [prompt, setPrompt] = useState("");
   const connected = app.status === "open";
-  // The daemon reports no user name, only the computer's ("Ada's MacBook"): the first name comes from that.
-  const computer = app.environments.find((e) => e.id === app.activeId)?.name;
-  const name = useMemo(() => ownerFirstName(computer), [computer]);
   // Home works in the active space: a draft project from another space gives way to this one's first.
   const spaceProjects = useSpaceProjects();
   const project =
@@ -316,7 +313,7 @@ function HomeScreen() {
               </View>
             )}
             <T variant="largeTitle" accessibilityRole="header">
-              {connected ? (name ? `What should we work on, ${name}?` : "What should we work on?") : "What are we building?"}
+              {connected ? "What should we work on, Kybern?" : "What are we building?"}
             </T>
             {!connected && (
               <T variant="subhead" tone="secondary" style={{ marginTop: space.sm, maxWidth: 320 }}>
