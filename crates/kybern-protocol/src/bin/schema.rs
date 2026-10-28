@@ -301,6 +301,9 @@ fn main() {
     method::<PeerGitImport>(&mut methods);
     method::<PeerThreadCreate>(&mut methods);
     method::<PeerThreadSend>(&mut methods);
+    method::<ThreadsForkNote>(&mut methods);
+    method::<ThreadsForkToMachine>(&mut methods);
+    method::<PeerFork>(&mut methods);
     method::<PeerToolCall>(&mut methods);
     method::<PeerThreadArchiveInbound>(&mut methods);
 

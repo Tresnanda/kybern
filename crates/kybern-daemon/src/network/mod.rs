@@ -263,6 +263,7 @@ impl Network {
             features::RELAY_V1.to_string(),
             features::DELEGATE_REMOTE_V1.to_string(),
             features::TOOLS_FORWARD_V1.to_string(),
+            features::FORK_V1.to_string(),
         ]
     }
 

@@ -182,7 +182,7 @@ impl Orchestrator {
         }
         // Work another machine started here may not reach a third machine (§6.3: hops == 1).
         anyhow::ensure!(
-            thread.origin.is_none() && thread.inbound.is_none(),
+            !super::fork_machine::second_hop(thread) && thread.inbound.is_none(),
             "Another machine started this thread, so it cannot use tools on a third machine. Use the tools on this machine."
         );
         let members = hub.members();
@@ -296,7 +296,7 @@ impl Orchestrator {
         let members = hub.members();
         anyhow::ensure!(members.len() > 1, "This machine is not in a network with other machines.");
         // A thread another machine started lists the members but asks none of them: that would be a second hop.
-        let ask_others = thread.origin.is_none() && thread.inbound.is_none();
+        let ask_others = !super::fork_machine::second_hop(thread) && thread.inbound.is_none();
         let asked = members.iter().filter(|member| ask_others && !member.is_self && member.status == "online").map(|member| {
             let hub = hub.clone();
             let id = member.id.clone();

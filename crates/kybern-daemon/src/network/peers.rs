@@ -504,7 +504,8 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
         | PeerGitBundle::NAME
         | PeerGitImport::NAME
         | PeerThreadCreate::NAME
-        | PeerThreadSend::NAME => state.orchestrator.peer_dispatch(&link.machine_id, method, params).await,
+        | PeerThreadSend::NAME
+        | PeerFork::NAME => state.orchestrator.peer_dispatch(&link.machine_id, method, params).await,
         // Forwarded agent tools (R2): the tool runs as an inbound thread; its scopes beyond `machine:tools` are checked there.
         PeerToolCall::NAME => {
             let granted = effective_scopes(network, link);

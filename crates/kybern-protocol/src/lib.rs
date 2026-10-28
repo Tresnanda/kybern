@@ -11,6 +11,7 @@
 
 pub mod auth;
 pub mod event;
+pub mod fork;
 pub mod forward;
 pub mod integrations;
 pub mod methods;
@@ -24,6 +25,7 @@ pub mod user_input;
 
 pub use auth::*;
 pub use event::*;
+pub use fork::*;
 pub use forward::*;
 pub use integrations::*;
 pub use model::*;

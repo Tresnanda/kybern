@@ -3773,6 +3773,58 @@ export interface PeerGitImportParams {
   project?: string | null;
 }
 
+// Fork to a machine (F1, design §7.1).
+export interface ThreadsForkNoteResult { note: string }
+export interface ThreadsForkToMachineParams {
+  thread_id: ThreadId;
+  /** The target machine's name or id. */
+  machine: string;
+  /** Picks one of the target's projects when several have this repository. */
+  project?: string | null;
+  /** Also push the fork branch to origin. Off by default: the repository may be public. */
+  push_origin?: boolean;
+  /** The hand-off note the user edited; omit for the generated one. */
+  handoff_note?: string | null;
+  title?: string | null;
+  provider?: ProviderKind | null;
+  model?: string | null;
+  effort?: string | null;
+  permission_mode?: PermissionMode | null;
+  operation_id?: Uuid | null;
+}
+export interface ThreadsForkToMachineResult {
+  operation_id: Uuid;
+  /** The queued outbox item; its `result` is a PeerForkResult once delivered. */
+  item: OutboxItem;
+  target_name: string;
+  branch: string;
+  commit: string;
+  handoff_note: string;
+}
+export interface PeerForkParams {
+  operation_id: Uuid;
+  origin: Origin;
+  source_title: string;
+  handoff_note: string;
+  title?: string | null;
+  repo: RepoIdentity;
+  project?: string | null;
+  branch: string;
+  commit: string;
+  provider: ProviderKind;
+  provider_chosen?: boolean;
+  model?: string | null;
+  effort?: string | null;
+  permission_mode: PermissionMode;
+}
+export interface PeerForkResult {
+  thread_id: ThreadId;
+  machine_id: MachineId;
+  project_name?: string | null;
+  branch: string;
+  provider: ProviderKind;
+}
+
 export interface InboundInfo { machine_id: MachineId; thread_id: ThreadId; title: string }
 export type MoveState = "departing" | "departed" | "arrived";
 export interface MoveInfo {
@@ -4000,6 +4052,9 @@ export interface Methods {
   "peer.git.import": [PeerGitImportParams, { commit: string; imported_ref: string }];
   "peer.thread.create": [ThreadsCreateParams, Thread];
   "peer.thread.send": [ThreadsSendParams, ThreadsSendResult];
+  "threads.fork_note": [{ thread_id: ThreadId }, ThreadsForkNoteResult];
+  "threads.fork_to_machine": [ThreadsForkToMachineParams, ThreadsForkToMachineResult];
+  "peer.fork": [PeerForkParams, PeerForkResult];
   "peer.tool.call": [PeerToolCallParams, PeerToolCallResult];
   "peer.thread.archive_inbound": [PeerThreadArchiveInboundParams, Empty];
 }

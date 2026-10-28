@@ -1192,7 +1192,17 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
         OutboxList::NAME => ok(crate::network::outbox::list(state, parse_or_default(params)?)?),
         OutboxRetry::NAME => ok(crate::network::outbox::retry(state, parse(params)?)?),
         OutboxCancel::NAME => ok(crate::network::outbox::cancel(state, parse(params)?)?),
-        OutboxEnqueue::NAME => ok(crate::network::outbox::enqueue(state, parse(params)?)?),
+        OutboxEnqueue::NAME => {
+            let p: OutboxEnqueueParams = parse(params)?;
+            if p.operation.kind == OutboxKind::Fork {
+                ok(crate::orchestrator::fork_machine::serve_fork_enqueue(state, p).await?)
+            } else {
+                ok(crate::network::outbox::enqueue(state, p)?)
+            }
+        }
+        // Fork to a machine (F1): the hand-off note to edit, and the fork itself.
+        ThreadsForkNote::NAME => ok(state.orchestrator.fork_note(parse(params)?).await?),
+        ThreadsForkToMachine::NAME => ok(crate::orchestrator::fork_machine::serve_fork_to_machine(state, params).await?),
         // The machine network (N4). The logic is in `network/`; these arms parse and answer.
         NetworkStatusMethod::NAME => ok(network_status(state).await?),
         NetworkSetEnabled::NAME => {

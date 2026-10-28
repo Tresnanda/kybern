@@ -308,6 +308,7 @@ async fn deliver(state: &AppState, item: &OutboxItem) -> Delivery {
         OutboxKind::Delegate => state.orchestrator.remote_deliver_delegate(item).await,
         OutboxKind::ThreadCreate => state.orchestrator.remote_deliver_call(item, PeerThreadCreate::NAME).await,
         OutboxKind::ThreadSend => state.orchestrator.remote_deliver_call(item, PeerThreadSend::NAME).await,
+        OutboxKind::Fork => state.orchestrator.remote_deliver_fork(item).await,
         other => Delivery::Failed(format!("This version of Kybern cannot deliver {} items yet.", other.as_str())),
     }
 }

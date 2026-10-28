@@ -1,6 +1,7 @@
 mod accounts;
 mod coordinator;
 mod credentials;
+mod fork;
 mod machines;
 mod outbox;
 mod render;
@@ -256,6 +257,8 @@ enum Cmd {
         #[command(subcommand)]
         cmd: machines::MachinesCmd,
     },
+    /// Give another machine a copy of a thread's work: a hand-off note, its branch and your uncommitted changes.
+    Fork(fork::ForkArgs),
     /// Work waiting for machines that are offline.
     Outbox {
         #[command(subcommand)]
@@ -1730,6 +1733,7 @@ pub async fn run() -> Result<()> {
         },
         Cmd::Spaces { cmd } => spaces::run(&client, cmd, json).await?,
         Cmd::Machines { cmd } => machines::run(&client, cmd, json).await?,
+        Cmd::Fork(args) => fork::run(&client, args, json).await?,
         Cmd::Outbox { cmd } => outbox::run(&client, cmd, json).await?,
         Cmd::Threads { project, archived } => {
             let project_id = match project {

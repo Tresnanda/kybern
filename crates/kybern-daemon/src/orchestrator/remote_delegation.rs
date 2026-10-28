@@ -28,7 +28,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use kybern_git::Repo;
 use kybern_protocol::methods::{
-    Method, PeerDelegate, PeerDelegationCancel, PeerDelegationGet, PeerGitBundle, PeerGitImport, PeerThreadCreate, PeerThreadSend,
+    Method, PeerDelegate, PeerDelegationCancel, PeerDelegationGet, PeerFork, PeerGitBundle, PeerGitImport, PeerThreadCreate, PeerThreadSend,
 };
 use kybern_protocol::*;
 use serde_json::{Value, json};
@@ -195,7 +195,7 @@ impl Orchestrator {
         let task = request.task.trim().to_owned();
         ensure!(!task.is_empty(), "task is required: write the full brief for the agent");
         ensure!(
-            parent.origin.is_none(),
+            !super::fork_machine::second_hop(parent),
             "Another machine started this thread, so it cannot hand work on to a third machine. Delegate on this machine instead."
         );
         ensure!(
@@ -719,7 +719,7 @@ impl Orchestrator {
                 Ok(None) => return Err(Delivery::Failed("There was nothing to send, yet the target lacks the commit.".into())),
                 Err(error) => return Err(Delivery::Failed(format!("{error:#}"))),
             };
-            let result = self.stream_bundle(hub, item, params, &commit, &bundle).await;
+            let result = self.stream_bundle(hub, item, &params.repo, params.project.as_deref(), &commit, &bundle).await;
             let _ = std::fs::remove_file(&staged);
             match result {
                 Ok(()) => return Ok(()),
@@ -735,11 +735,12 @@ impl Orchestrator {
         }
     }
 
-    async fn stream_bundle(
+    pub(super) async fn stream_bundle(
         &self,
         hub: &dyn RemoteHub,
         item: &OutboxItem,
-        params: &PeerDelegateParams,
+        repo: &RepoIdentity,
+        project: Option<&str>,
         commit: &str,
         bundle: &git_transfer::BundleFile,
     ) -> Result<(), CallFailure> {
@@ -768,8 +769,8 @@ impl Orchestrator {
             total: bundle.size,
             sha256: bundle.sha256.clone(),
             commit: commit.to_string(),
-            repo: params.repo.clone(),
-            project: params.project.clone(),
+            repo: repo.clone(),
+            project: project.map(str::to_string),
         };
         hub.call(&item.target, PeerGitImport::NAME, serde_json::to_value(import).unwrap_or(Value::Null)).await?;
         Ok(())
@@ -777,6 +778,10 @@ impl Orchestrator {
 
     /// The outbox item reached a final state (or was queued again): bring the remote child in line.
     pub fn remote_outbox_changed(&self, item: &OutboxItem) {
+        if item.kind == OutboxKind::Fork {
+            self.fork_outbox_changed(item);
+            return;
+        }
         if item.kind != OutboxKind::Delegate {
             return;
         }
@@ -1066,6 +1071,7 @@ impl Orchestrator {
             PeerGitImport::NAME => to_value(self.accept_bundle_import(from_value(params)?).await),
             PeerThreadCreate::NAME => to_value(self.create_thread(from_value(params)?).await.map_err(thread_error)),
             PeerThreadSend::NAME => to_value(self.send_client_message(from_value(params)?).await.map_err(thread_error)),
+            PeerFork::NAME => to_value(self.accept_fork(from, from_value(params)?).await),
             _ => Err(RpcError::method_not_found(method)),
         }
     }
@@ -1377,16 +1383,16 @@ enum Follow {
 }
 
 /// A thread that was busy is worth another try; anything else the target refused is final.
-fn thread_error(error: anyhow::Error) -> RpcError {
+pub(super) fn thread_error(error: anyhow::Error) -> RpcError {
     let message = format!("{error:#}");
     if message.contains("busy") { RpcError::new(codes::THREAD_BUSY, message) } else { RpcError::invalid_params(message) }
 }
 
-fn internal(error: impl std::fmt::Display) -> RpcError {
+pub(super) fn internal(error: impl std::fmt::Display) -> RpcError {
     RpcError::internal(error)
 }
 
-fn from_value<T: serde::de::DeserializeOwned>(params: Value) -> Result<T, RpcError> {
+pub(super) fn from_value<T: serde::de::DeserializeOwned>(params: Value) -> Result<T, RpcError> {
     serde_json::from_value(if params.is_null() { json!({}) } else { params }).map_err(RpcError::invalid_params)
 }
 
@@ -1395,7 +1401,7 @@ fn to_value<T: serde::Serialize>(result: Result<T, RpcError>) -> Result<Value, R
 }
 
 /// A remote error as a delivery outcome: busy or broken peers are retried, refusals are final.
-fn remote_error_delivery(error: &RpcError) -> Delivery {
+pub(super) fn remote_error_delivery(error: &RpcError) -> Delivery {
     match error.code {
         codes::INTERNAL_ERROR | codes::THREAD_BUSY | codes::NOT_AVAILABLE => Delivery::Retry(error.message.clone()),
         _ => Delivery::Failed(error.message.clone()),

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::Scope;
 use crate::event::ThreadEvent;
+use crate::fork::*;
 use crate::forward::*;
 use crate::model::*;
 use crate::network::*;
@@ -4161,6 +4162,16 @@ method!(PeerGitImport, "peer.git.import", Some(Scope::MachineDelegate), PeerGitI
 method!(PeerThreadCreate, "peer.thread.create", Some(Scope::MachineDelegate), ThreadsCreateParams, Thread);
 method!(PeerThreadSend, "peer.thread.send", Some(Scope::MachineDelegate), ThreadsSendParams, ThreadsSendResult);
 // Forwarded agent tools (M2, R2; payloads in forward.rs). Files and terminals also need their own scope on the target.
+// Fork to a machine (M3, F1; payloads in fork.rs).
+method!(ThreadsForkNote, "threads.fork_note", Some(Scope::OrchestrationRead), ThreadsForkNoteParams, ThreadsForkNoteResult);
+method!(
+    ThreadsForkToMachine,
+    "threads.fork_to_machine",
+    Some(Scope::OrchestrationOperate),
+    ThreadsForkToMachineParams,
+    ThreadsForkToMachineResult
+);
+method!(PeerFork, "peer.fork", Some(Scope::MachineDelegate), PeerForkParams, PeerForkResult);
 method!(PeerToolCall, "peer.tool.call", Some(Scope::MachineTools), PeerToolCallParams, PeerToolCallResult);
 method!(PeerThreadArchiveInbound, "peer.thread.archive_inbound", Some(Scope::MachineTools), PeerThreadArchiveInboundParams, Empty);
 
@@ -4392,6 +4403,9 @@ registry!(
     PeerGitImport,
     PeerThreadCreate,
     PeerThreadSend,
+    ThreadsForkNote,
+    ThreadsForkToMachine,
+    PeerFork,
     PeerToolCall,
     PeerThreadArchiveInbound,
 );

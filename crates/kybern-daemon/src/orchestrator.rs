@@ -28,6 +28,7 @@ mod askpass;
 mod change_report;
 mod child_questions;
 mod delegation;
+pub(crate) mod fork_machine;
 pub(crate) mod group_git;
 mod group_pr;
 mod groups;
@@ -3662,7 +3663,7 @@ impl Orchestrator {
     /// machine started never can: it would be a second hop.
     #[inline(never)]
     fn offer_machine_tools(&self, thread: &Thread, tools: &mut Vec<kybern_drivers::NativeToolDefinition>) {
-        if thread.origin.is_none() && self.remote_hub().is_some_and(|hub| !hub.targets().is_empty()) {
+        if !fork_machine::second_hop(thread) && self.remote_hub().is_some_and(|hub| !hub.targets().is_empty()) {
             crate::network::forward::offer_machine_args(tools);
             tools.push(crate::network::forward::machines_tool_definition());
         }
@@ -8548,6 +8549,7 @@ for line in sys.stdin:
     include!("orchestrator/delegation_tests.rs");
     include!("orchestrator/remote_delegation_tests.rs");
     include!("orchestrator/inbound_tests.rs");
+    include!("orchestrator/fork_tests.rs");
     include!("orchestrator/child_questions_tests.rs");
     include!("orchestrator/secret_tests.rs");
     include!("orchestrator/request_tests.rs");
