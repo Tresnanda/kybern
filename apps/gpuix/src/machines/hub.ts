@@ -4,8 +4,9 @@
 //
 // - The daemon connection `state.ts` opens (the active environment) is the
 //   "primary" machine, the one the user is at. It joins the set once the daemon
-//   has answered and its machine id is known, through `ForwardedClient`, so its
-//   socket, status details and reconnects stay exactly as they were.
+//   has answered and its machine id is known, as a connection the set adopts but
+//   does not own, so its socket, status details and reconnects stay exactly as
+//   they were and the set never reads lists the app already has.
 // - Saved environments are loaded as machine records (`records.ts`) but are NOT
 //   connected: with one environment in use the app opens the same single socket
 //   it always did.
@@ -14,8 +15,8 @@
 //
 // TODO(N6 steps 3-5): thread-scoped code asks `clientForThread`/`clientForProject`
 // instead of `getClient()`, the sidebar reads `useMachineView()`, the set calls
-// `ensureAll()` and opens the primary socket itself, and the environment switch
-// and per-environment windows go away.
+// `ensureAll()` and opens the primary socket itself (the adopted connection goes
+// away), and the environment switch and per-environment windows go away.
 import { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 import { normalizeDaemonUrl } from '../../../../packages/kybern-client/src/address.ts'
 import { MachineCache } from '../../../../packages/kybern-client/src/machineCache.ts'
@@ -31,8 +32,7 @@ import {
   type MachineTransport,
   type MergedView,
 } from '../../../../packages/kybern-client/src/machines.ts'
-import type { MachineId, Project, Thread } from '../../../../packages/kybern-client/src/types.ts'
-import { ForwardedClient, type ListSource } from './forwarded.ts'
+import type { MachineId, Project, Thread, ThreadActivitySummary } from '../../../../packages/kybern-client/src/types.ts'
 import { verifyMachineProof } from './proof.ts'
 import { createGpuixSocket } from './socket.ts'
 import { isLegacyMachineId } from './records.ts'
@@ -59,11 +59,14 @@ interface Primary {
   client: KybernClient
   profile: PrimaryProfile
   machineId?: MachineId
+  /** The set has this client as the machine's connection. */
+  adopted?: boolean
+  /** The set got the first lists of this connection (later ones wait until something reads them). */
+  listed?: boolean
 }
 
-interface PrimaryLists { owner: KybernClient; projects: Project[]; threads: Thread[]; ingested: boolean }
+interface PrimaryLists { owner: KybernClient; projects: Project[]; threads: Thread[]; activity?: ThreadActivitySummary[]; ingested: boolean }
 
-const PRIMARY_TOKEN = 'adopted'
 const LIVE = new Set(['online', 'relaying', 'needs-update'])
 
 export class MachineHub {
@@ -71,8 +74,7 @@ export class MachineHub {
   private readonly options: MachineHubOptions
   private primary: Primary | null = null
   private lists: PrimaryLists | null = null
-  private readonly waiters = new Set<() => void>()
-  /** Every machine id that has been the primary in this run: only the primary's own socket may carry it. */
+  /** Every machine id that has been the primary in this run: the app's own socket carries it, the set never dials it. */
   private readonly adopted = new Set<MachineId>()
   private readonly watched = new Set<MachineId>()
   private readonly refreshes = new Map<MachineId, boolean>()
@@ -120,21 +122,27 @@ export class MachineHub {
     if (primary.machineId === machineId && this.set.connection(machineId)?.status !== 'paused') return
     primary.machineId = machineId
     this.adopted.add(machineId)
-    await this.set.addMachine({
+    await this.set.load()
+    // The saved record of this profile had a stand-in id until the daemon answered: it becomes the daemon's id.
+    for (const other of this.set.connections()) {
+      const record = other.record
+      if (record.legacyProfileId !== primary.profile.id || record.machineId === machineId || !isLegacyMachineId(record.machineId)) continue
+      if (this.set.connection(machineId)) await this.set.removeMachine(record.machineId)
+      else await this.set.rekeyMachine(record.machineId, machineId)
+    }
+    if (this.primary?.client !== client || this.disposed) return
+    // The set never dials this machine and never reads its lists: the app's socket is the connection and `ingestPrimary` hands over the lists.
+    await this.set.adoptConnection({
       machineId,
       name: primary.profile.name,
-      // The set never dials this route: the forwarded client is the connection.
-      routes: [{ kind: 'direct_advertised', url: 'http://127.0.0.1' }],
       member: false,
       paused: false,
       legacyProfileId: primary.profile.id,
-    })
+    }, client, { autoRefresh: false })
     if (this.primary?.client !== client) return
-    // The saved record of this profile had a stand-in id until the daemon answered.
-    for (const other of this.set.connections()) {
-      const record = other.record
-      if (record.legacyProfileId === primary.profile.id && record.machineId !== machineId && isLegacyMachineId(record.machineId)) await this.set.removeMachine(record.machineId)
-    }
+    primary.adopted = true
+    // The set starts with the lists the app already read, as it did when it read them through the app's client.
+    this.ingestNow(primary)
     this.set.setLocalMachine(machineId)
     this.watchOthers()
     this.scheduleFlush()
@@ -147,16 +155,15 @@ export class MachineHub {
     this.primary = null
     this.lists = null
     this.cancelFlush()
-    for (const wake of [...this.waiters]) wake()
     // Paused, so the set does not retry a socket that only the app can open.
     if (primary.machineId) void this.set.setPaused(primary.machineId, true)
   }
 
   /** The lists `state.ts` just read from the primary daemon (all threads, children and archived included). */
-  ingestPrimary(client: KybernClient, projects: Project[], threads: Thread[]) {
+  ingestPrimary(client: KybernClient, projects: Project[], threads: Thread[], activity?: ThreadActivitySummary[]) {
     if (this.primary?.client !== client) return
-    this.lists = { owner: client, projects, threads, ingested: false }
-    for (const wake of [...this.waiters]) wake()
+    this.lists = { owner: client, projects, threads, ...(activity ? { activity } : {}), ingested: false }
+    if (this.primary.adopted && !this.primary.listed) this.ingestNow(this.primary)
     this.scheduleFlush()
   }
 
@@ -208,7 +215,6 @@ export class MachineHub {
   dispose() {
     this.disposed = true
     this.cancelFlush()
-    for (const wake of [...this.waiters]) wake()
     this.set.dispose()
     this.listeners.clear()
   }
@@ -225,7 +231,6 @@ export class MachineHub {
     const profileOf = (machineId: MachineId) => this.set.connection(machineId)?.record.legacyProfileId
     return {
       get: async (machineId) => {
-        if (this.adopted.has(machineId)) return PRIMARY_TOKEN
         const profile = profileOf(machineId)
         if (!profile || !this.options.readCredential) return undefined
         try { return await this.options.readCredential(profile) } catch { return undefined }
@@ -238,33 +243,12 @@ export class MachineHub {
 
   private createClient(args: Parameters<MachineTransport['createClient']>[0]) {
     const { record, route, token } = args
-    const primary = this.primary
-    if (this.adopted.has(record.machineId)) {
-      if (primary?.machineId !== record.machineId) throw new Error('Reconnecting')
-      return new ForwardedClient(primary.client, this.listSource(primary))
-    }
     if (this.options.transport?.createClient) return this.options.transport.createClient(args)
     const legacy = isLegacyMachineId(record.machineId)
     return new KybernClient(
       { url: normalizeDaemonUrl(route.url), token, ...(legacy ? {} : { environmentId: record.machineId }) },
       { createSocket: createGpuixSocket, ...(legacy ? {} : { expectedEnvironmentId: record.machineId }) },
     )
-  }
-
-  private listSource(primary: Primary): ListSource {
-    return {
-      read: (signal) => new Promise((resolve, reject) => {
-        const settle = () => {
-          if (signal.aborted || this.primary !== primary) { cleanup(); reject(new Error('Closed')); return true }
-          if (this.lists?.owner === primary.client) { cleanup(); resolve(this.lists); return true }
-          return false
-        }
-        const cleanup = () => { this.waiters.delete(settle); signal.removeEventListener('abort', settle) }
-        if (settle()) return
-        this.waiters.add(settle)
-        signal.addEventListener('abort', settle)
-      }),
-    }
   }
 
   private onSetChange(event: MachineSetEvent) {
@@ -282,7 +266,7 @@ export class MachineHub {
       if (this.watched.has(id) || this.adopted.has(id) || (connection.record.legacyProfileId && isLegacyMachineId(id))) continue
       this.watched.add(id)
       const handle = this.set.handleFor(id)
-      const refresh = () => void this.refreshMachine(id)
+      const refresh = () => void this.refreshMachine(id).catch(() => {})
       handle.onNotification('projects.changed', refresh)
       handle.onNotification('threads.changed', refresh)
     }
@@ -324,10 +308,15 @@ export class MachineHub {
     const setTimer = this.options.setTimer ?? ((fn, ms) => setTimeout(fn, ms))
     this.flushTimer = setTimer(() => {
       this.flushTimer = undefined
-      const lists = this.lists, primary = this.primary
-      if (!lists || lists.ingested || !primary?.machineId || primary.client !== lists.owner) return
-      lists.ingested = true
-      this.set.ingest(primary.machineId, { projects: lists.projects, threads: lists.threads })
+      if (this.primary) this.ingestNow(this.primary)
     }, this.options.ingestDelayMs ?? 300)
+  }
+
+  private ingestNow(primary: Primary) {
+    const lists = this.lists
+    if (!lists || lists.ingested || !primary.machineId || primary.client !== lists.owner) return
+    lists.ingested = true
+    primary.listed = true
+    this.set.ingest(primary.machineId, { projects: lists.projects, threads: lists.threads, ...(lists.activity ? { activity: lists.activity } : {}) })
   }
 }

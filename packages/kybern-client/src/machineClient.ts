@@ -58,12 +58,22 @@ export class MachineClientProxy extends KybernClient {
   /** Notification methods already hooked on the attached connection. */
   private readonly hooked = new Set<string>();
   private readonly routedIsCached: () => boolean;
-  readonly machineId: string;
+  private id: string;
 
   constructor(machineId: string, isCached: () => boolean = () => false) {
     super({ url: "", token: "", environmentId: machineId });
-    this.machineId = machineId;
+    this.id = machineId;
     this.routedIsCached = isCached;
+  }
+
+  get machineId(): string {
+    return this.id;
+  }
+
+  /** The machine was re-keyed (a stand-in id became the real one). Subscriptions and handlers stay. */
+  rename(machineId: string): void {
+    this.id = machineId;
+    this.endpoint.environmentId = machineId;
   }
 
   override get status(): ConnectionStatus {

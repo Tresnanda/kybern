@@ -365,7 +365,7 @@ async function loadLists() {
     .filter((th) => !isChildThread(th) && th.status !== 'archived')
     .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updated_at.localeCompare(a.updated_at))
   set({ projects: p.projects, threads: withNewChats(listedThreads), listsLoaded: true })
-  machineHub().ingestPrimary(owner, p.projects, t.threads)
+  machineHub().ingestPrimary(owner, p.projects, t.threads, t.activity)
   if (initial) {
     // Preserve the usual Git self-heal without putting one subprocess per
     // project on the first sidebar paint's critical path. Notifications may
@@ -376,7 +376,7 @@ async function loadLists() {
         const before = p.projects[index]!
         return project.id !== before.id || project.updated_at !== before.updated_at || project.is_git !== before.is_git
       })
-      if (changed) { set({ projects: result.projects }); machineHub().ingestPrimary(owner, result.projects, t.threads) }
+      if (changed) { set({ projects: result.projects }); machineHub().ingestPrimary(owner, result.projects, t.threads, t.activity) }
     }, () => {})
   }
   for (const [paneId, pane] of panes) if (pane.selectedId && !pane.open.loaded && !sessions.has(pane.selectedId)) void selectPaneThread(paneId, pane.selectedId).catch(error => console.error('[pane] Unable to load thread:', error))

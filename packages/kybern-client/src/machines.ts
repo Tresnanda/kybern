@@ -41,6 +41,7 @@ import {
   type Project,
   type Route,
   type Thread,
+  type ThreadActivitySummary,
 } from "./types.ts";
 
 export { OfflineError } from "./machineClient.ts";
@@ -189,6 +190,16 @@ export type MachineSetEvent = {
   machineId?: MachineId;
 };
 
+/** A machine did not send its lists in time. Its cached lists are untouched. */
+export class RefreshTimeoutError extends Error {
+  readonly machineId: string;
+  constructor(machineId: string, machine: string) {
+    super(`${machine} did not send its lists in time. Try again`);
+    this.name = "RefreshTimeoutError";
+    this.machineId = machineId;
+  }
+}
+
 export class UnknownMachineError extends Error {
   readonly machineId: string;
   constructor(machineId: string) {
@@ -243,6 +254,8 @@ export interface MachineSetOptions {
   connectTimeoutMs?: number;
   /** Better routes are probed this often (default 5 min). */
   probeIntervalMs?: number;
+  /** How long reading one machine's lists may take before `refresh` gives up on it (default 30 s). */
+  refreshTimeoutMs?: number;
   /** Newest threads kept in memory per machine (default 2000). */
   maxThreadsPerMachine?: number;
   /** Machines kept (default 32). */
@@ -257,6 +270,24 @@ interface Opened {
   inner: MachineClient;
   route: Route;
   latencyMs?: number;
+  /** The set closes `inner` when it replaces or drops it (default). An app's own connection is not owned. */
+  owned?: boolean;
+}
+
+/** How an app-owned connection joins the set (`adoptConnection`). */
+export interface AdoptOptions {
+  /** The set closes the client when it replaces or drops it. Default false: the app opened it and closes it. */
+  owned?: boolean;
+  /** The route the client is on, for display. Default: the record's first route, else the client's own address. */
+  route?: Route;
+  /** Lists the app already has; the machine starts with them and they are cached. */
+  lists?: { projects?: readonly Project[]; threads?: readonly Thread[]; activity?: readonly ThreadActivitySummary[] };
+  /**
+   * Read the machine's lists when the connection opens or reopens, and in `refresh()` without an id
+   * (default true). Turn it off when the app reads them itself and hands them over with `ingest`; an
+   * explicit `refresh(machineId)` still reads.
+   */
+  autoRefresh?: boolean;
 }
 
 interface Slot {
@@ -279,8 +310,25 @@ interface Slot {
   failures: number;
   retryTimer?: unknown;
   graceTimer?: unknown;
-  lists?: { projects: Project[]; threads: MachineThread[] };
+  lists?: { projects: Project[]; threads: MachineThread[]; activity?: ThreadActivitySummary[] };
   view?: MachineConnection;
+  /** The set closes `inner` when it lets go of it. False for a connection the app owns. */
+  owned: boolean;
+  /** The app opened this machine's connection: the set never dials, retries or fails it over. */
+  external: boolean;
+  /** Read the lists on connect and in a whole-set `refresh()`. */
+  autoRefresh: boolean;
+}
+
+/** The `http(s)` base of a daemon address, for showing the route of a connection the app opened. */
+function httpUrlOf(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.protocol = parsed.protocol === "wss:" || parsed.protocol === "https:" ? "https:" : "http:";
+    return parsed.href.replace(/\/ws\/?$/, "").replace(/\/+$/, "");
+  } catch {
+    return "http://localhost";
+  }
 }
 
 function errorMessage(code: MachineErrorCode, machine: string): string {
@@ -467,6 +515,90 @@ export class MachineSet {
     return this.viewOf(slot);
   }
 
+  /**
+   * Add a machine whose connection the app already holds (its primary socket) and make it the machine's
+   * connection. The set uses it as is: it never dials, retries or fails it over, and unless `owned` it never
+   * closes it. Adopting a machine that is already listed merges the record and replaces its connection;
+   * adopt again when the app opens a new client.
+   */
+  async adoptConnection(
+    input: Pick<MachineRecord, "machineId" | "name"> & Partial<Omit<MachineRecord, "machineId" | "name">>,
+    client: MachineClient,
+    options: AdoptOptions = {},
+  ): Promise<MachineConnection> {
+    await this.load();
+    if (this.disposed) throw new Error("The machine set was closed");
+    let slot = this.slots.get(input.machineId);
+    if (slot) {
+      Object.assign(slot.record, input, { routes: input.routes ?? slot.record.routes });
+    } else {
+      if (this.slots.size >= (this.options.maxMachines ?? 32)) throw new Error("Remove a machine before adding another");
+      slot = this.createSlot({ routes: [], member: false, ...input });
+    }
+    slot.record.paused = false;
+    slot.gen++;
+    slot.attempt = undefined;
+    slot.external = true;
+    slot.autoRefresh = options.autoRefresh ?? true;
+    this.persist();
+    this.adopt(slot, {
+      inner: client,
+      route: options.route ?? slot.record.routes[0] ?? { kind: "direct_advertised", url: httpUrlOf(client.endpoint.url) },
+      owned: options.owned ?? false,
+    });
+    if (options.lists) this.ingest(input.machineId, options.lists);
+    return this.viewOf(slot);
+  }
+
+  /**
+   * A machine has a new id (a stand-in became the daemon's real one). Its record, cached lists, connection and
+   * token move to `newId` in one step with one change event, and it keeps its place in the order. Rejects
+   * when `oldId` is unknown or `newId` is already listed; nothing changes then.
+   */
+  async rekeyMachine(oldId: MachineId, newId: MachineId): Promise<MachineConnection> {
+    await this.load();
+    const slot = this.slots.get(oldId);
+    if (!slot) throw new UnknownMachineError(oldId);
+    if (oldId === newId) return this.viewOf(slot);
+    const taken = () => new Error(`${newId} is already in your list. Remove it first`);
+    if (this.slots.has(newId)) throw taken();
+    // The token goes first: if it cannot be saved under the new id nothing else has moved.
+    let token: string | null | undefined;
+    try {
+      token = await this.options.credentials.get(oldId);
+    } catch {
+      token = undefined;
+    }
+    if (token) await this.options.credentials.set(newId, token);
+    if (this.slots.get(oldId) !== slot || this.slots.has(newId)) {
+      if (token && !this.slots.has(newId)) await Promise.resolve(this.options.credentials.delete(newId)).catch(() => {});
+      if (this.slots.get(oldId) !== slot) throw new UnknownMachineError(oldId);
+      throw taken();
+    }
+    // From here on nothing awaits, so no reader sees the machine half moved.
+    const entries = [...this.slots.entries()].map(([id, other]): [MachineId, Slot] => [other === slot ? newId : id, other]);
+    this.slots.clear();
+    for (const [id, other] of entries) this.slots.set(id, other);
+    slot.record.machineId = newId;
+    slot.proxy.rename(newId);
+    const snapshot = this.cache.get(oldId);
+    if (snapshot) {
+      this.cache.delete(oldId);
+      this.cache.put(newId, { projects: snapshot.projects, threads: snapshot.threads }, snapshot.savedAt);
+    }
+    if (this.localId === oldId) this.localId = newId;
+    this.persist();
+    this.touch(slot, "records");
+    if (token) {
+      try {
+        await this.options.credentials.delete(oldId);
+      } catch {
+        // The old id has no record any more; its token is never used.
+      }
+    }
+    return this.viewOf(slot);
+  }
+
   /** Forget a machine: close it and delete its token, cached lists and record. */
   async removeMachine(machineId: MachineId): Promise<void> {
     const slot = this.slots.get(machineId);
@@ -490,7 +622,11 @@ export class MachineSet {
     slot.record.paused = paused;
     this.persist();
     if (paused) this.goOffline(slot, "paused");
-    else await this.connectSlot(slot);
+    else if (slot.external) {
+      // Only the app can reopen its own connection: it adopts a new client when it has one.
+      slot.status = "offline";
+      this.touch(slot, "status");
+    } else await this.connectSlot(slot);
     this.touch(slot, "records");
   }
 
@@ -526,7 +662,10 @@ export class MachineSet {
   // ---- lists ----
 
   /** Replace what is known of a machine's lists with a read the app made itself, and cache it. */
-  ingest(machineId: MachineId, lists: { projects?: readonly Project[]; threads?: readonly Thread[] }): void {
+  ingest(
+    machineId: MachineId,
+    lists: { projects?: readonly Project[]; threads?: readonly Thread[]; activity?: readonly ThreadActivitySummary[] },
+  ): void {
     const slot = this.slots.get(machineId);
     if (!slot) return;
     // Bounded in memory: the newest threads only, however many a machine has.
@@ -537,17 +676,33 @@ export class MachineSet {
         ? [...lists.threads].sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at)).slice(0, max)
         : [...lists.threads]
       : (slot.lists?.threads ?? []);
-    slot.lists = { projects, threads };
+    // The activity belongs to the threads it was read with: replaced with them, kept when only projects change.
+    const activity = lists.threads ? lists.activity : slot.lists?.activity;
+    slot.lists = { projects, threads, ...(activity ? { activity: [...activity] } : {}) };
     if (LIVE.has(slot.status)) this.cache.put(machineId, { projects, threads }, this.clock.now());
     this.touch(slot, "lists");
   }
 
-  /** Read projects and threads from every machine that is online (or one machine) and replace its lists and cached copy. */
+  /** What `threads.list` reported as live activity for a machine, as of its last read. */
+  activityOf(machineId: MachineId): readonly ThreadActivitySummary[] | undefined {
+    return this.slots.get(machineId)?.lists?.activity;
+  }
+
+  /**
+   * Read projects and threads from every machine that is online (or one machine) and replace its lists and
+   * cached copy. Reading one machine rejects with `RefreshTimeoutError` when its lists do not arrive in time,
+   * leaving what it had; reading all of them never rejects.
+   */
   async refresh(machineId?: MachineId): Promise<void> {
     const targets = [...this.slots.values()].filter(
-      (slot) => (!machineId || slot.record.machineId === machineId) && slot.inner && LIVE.has(slot.status),
+      (slot) => (machineId ? slot.record.machineId === machineId : slot.autoRefresh) && slot.inner && LIVE.has(slot.status),
     );
-    await mapLimit(targets, 4, (slot) => this.refreshSlot(slot));
+    if (machineId) await Promise.all(targets.map((slot) => this.refreshSlot(slot)));
+    else await mapLimit(targets, 4, (slot) => this.refreshSlot(slot).catch(() => {}));
+  }
+
+  private refreshQuietly(machineId: MachineId): void {
+    this.refresh(machineId).catch(() => {});
   }
 
   /** One read per machine at a time; a second caller waits for the first. */
@@ -556,15 +711,32 @@ export class MachineSet {
     const inner = slot.inner;
     if (!inner) return Promise.resolve();
     const run = (async () => {
+      let timer: unknown;
+      let timedOut = false;
       try {
-        const [projects, threads] = await Promise.all([inner.call("projects.list", {}), inner.call("threads.list", {})]);
+        const reads = Promise.all([inner.call("projects.list", {}), inner.call("threads.list", {})]);
+        reads.catch(() => {});
+        const timeout = new Promise<never>((_, reject) => {
+          timer = this.clock.setTimeout(() => {
+            timedOut = true;
+            reject(new RefreshTimeoutError(slot.record.machineId, slot.record.name));
+          }, this.options.refreshTimeoutMs ?? 30_000);
+        });
+        const [projects, threads] = await Promise.race([reads, timeout]);
         if (slot.inner !== inner) return;
-        this.ingest(slot.record.machineId, { projects: projects.projects, threads: threads.threads });
-      } catch {
+        this.ingest(slot.record.machineId, {
+          projects: projects.projects,
+          threads: threads.threads,
+          activity: threads.activity,
+        });
+      } catch (error) {
         if (slot.inner === inner && !slot.error) {
           slot.error = { code: "refresh_failed", message: errorMessage("refresh_failed", slot.record.name) };
           this.touch(slot, "status");
         }
+        if (timedOut && slot.inner === inner) throw error;
+      } finally {
+        this.clock.clearTimeout(timer);
       }
     })().finally(() => {
       if (slot.refreshing === run) slot.refreshing = undefined;
@@ -631,7 +803,8 @@ export class MachineSet {
 
   // ---- loading and persistence ----
 
-  private load(): Promise<void> {
+  /** Load the saved machines and their cached lists (once). Every other call that needs them does this itself. */
+  load(): Promise<void> {
     this.loaded ??= (async () => {
       let records: MachineRecord[] = [];
       try {
@@ -682,6 +855,9 @@ export class MachineSet {
       status: record.paused ? "paused" : "offline",
       gen: 0,
       failures: 0,
+      owned: true,
+      external: false,
+      autoRefresh: true,
     };
     // Members tell clients when the network changes. The proxy keeps these handlers across route changes.
     slot.proxy.onNotification("network.changed", () => this.scheduleSync());
@@ -697,7 +873,7 @@ export class MachineSet {
     slot.offInner?.();
     slot.offInner = undefined;
     slot.proxy.attach(undefined);
-    slot.inner?.close("Machine removed");
+    if (slot.owned) slot.inner?.close("Machine removed");
     slot.inner = undefined;
   }
 
@@ -787,6 +963,7 @@ export class MachineSet {
       this.goOffline(slot, "paused");
       return Promise.resolve();
     }
+    if (slot.external) return Promise.resolve();
     if (slot.attempt) return slot.attempt;
     this.clock.clearTimeout(slot.retryTimer);
     const gen = ++slot.gen;
@@ -981,7 +1158,10 @@ export class MachineSet {
   /** Make `opened` the machine's connection. The one it replaces is closed after subscriptions have moved. */
   private adopt(slot: Slot, opened: Opened) {
     const previous = slot.inner;
+    const previousOwned = slot.owned;
     const wasLive = LIVE.has(slot.status);
+    // A connection the app owns may not be open yet: it is listed offline until it opens.
+    const live = opened.owned !== false || opened.inner.status === "open";
     slot.offInner?.();
     this.clock.clearTimeout(slot.graceTimer);
     this.clock.clearTimeout(slot.retryTimer);
@@ -991,13 +1171,14 @@ export class MachineSet {
     slot.error = undefined;
     slot.failures = 0;
     slot.lastSeenAt = this.clock.now();
-    slot.status = this.liveStatus(slot);
+    slot.owned = opened.owned !== false;
+    slot.status = live ? this.liveStatus(slot) : "offline";
     slot.offInner = opened.inner.onStatus((status) => this.onInnerStatus(slot, opened.inner, status));
     slot.proxy.attach(opened.inner);
-    previous?.close("Moved to another route");
+    if (previous && previous !== opened.inner && previousOwned) previous.close("Moved to another route");
     this.touch(slot, "status");
     // What the cache holds for this machine is replaced with a fresh read.
-    if (!wasLive) void this.refresh(slot.record.machineId);
+    if (!wasLive && live && slot.autoRefresh) this.refreshQuietly(slot.record.machineId);
     if (slot.record.member && !wasLive) this.scheduleSync();
   }
 
@@ -1015,7 +1196,7 @@ export class MachineSet {
       slot.error = undefined;
       slot.status = this.liveStatus(slot);
       this.touch(slot, "status");
-      void this.refresh(slot.record.machineId);
+      if (slot.autoRefresh) this.refreshQuietly(slot.record.machineId);
     } else if (status === "reconnecting" || status === "connecting") {
       if (LIVE.has(slot.status)) {
         slot.status = "offline";
@@ -1023,6 +1204,7 @@ export class MachineSet {
         this.touch(slot, "status");
       }
       this.clock.clearTimeout(slot.graceTimer);
+      if (slot.external) return;
       // The client keeps trying its own route; after the grace period try the others.
       slot.graceTimer = this.clock.setTimeout(() => {
         if (slot.inner === inner && slot.status !== "paused") void this.failover(slot);
@@ -1033,7 +1215,7 @@ export class MachineSet {
         slot.status = "offline";
         this.touch(slot, "status");
       }
-      void this.failover(slot);
+      if (!slot.external) void this.failover(slot);
     }
   }
 
@@ -1054,11 +1236,11 @@ export class MachineSet {
     slot.inner = undefined;
     slot.route = undefined;
     slot.proxy.attach(undefined);
-    inner?.close("Machine unreachable");
+    if (slot.owned) inner?.close("Machine unreachable");
     slot.status = slot.record.paused ? "paused" : status;
     slot.error = slot.record.paused ? undefined : error;
     this.touch(slot, "status");
-    if (slot.record.paused || this.disposed) return;
+    if (slot.record.paused || slot.external || this.disposed) return;
     const delay = FAILURE_DELAYS_MS[Math.min(slot.failures++, FAILURE_DELAYS_MS.length - 1)]!;
     slot.retryTimer = this.clock.setTimeout(() => void this.connectSlot(slot), delay);
   }
@@ -1081,7 +1263,7 @@ export class MachineSet {
 
   /** Probe the routes ranked ahead of the one in use and move to the first that verifies, keeping subscriptions. */
   private async probeBetter(slot: Slot): Promise<void> {
-    if (slot.attempt || slot.probing || !slot.route || !slot.inner || !LIVE.has(slot.status)) return;
+    if (slot.external || slot.attempt || slot.probing || !slot.route || !slot.inner || !LIVE.has(slot.status)) return;
     slot.probing = true;
     const gen = slot.gen;
     const current = slot.inner;

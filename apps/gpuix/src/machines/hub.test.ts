@@ -236,3 +236,25 @@ test('the primary is never dialed by the set, and a stand-in profile record does
   expect(created.filter(id => id === 'mac-1')).toEqual([])
   expect(hub.connections().filter(c => c.record.legacyProfileId === 'local').map(c => c.record.machineId)).toEqual(['mac-1'])
 })
+
+test('a saved environment’s stand-in record keeps its routes and place when its daemon answers as the primary', async () => {
+  const { hub } = makeHub([saved('box', { ssh: { target: 'me@box', remote_port: 4173, local_port: 5555 } })])
+  await openPrimary(hub, new FakeDaemon('box-1'), { id: 'box', name: 'box' })
+  expect(hub.connections().map(c => [c.record.machineId, c.record.legacyProfileId, c.status])).toEqual([['box-1', 'box', 'needs-update'], [`${LEGACY_PREFIX}local`, 'local', 'offline']])
+  expect(hub.set.connection('box-1')?.record.routes).toEqual([{ kind: 'ssh', url: 'http://127.0.0.1:5555' }])
+  expect(hub.localMachineId).toBe('box-1')
+})
+
+test('the activity the app read with the primary’s threads reaches the set with the lists', async () => {
+  const { hub } = makeHub()
+  const daemon = new FakeDaemon('mac-1')
+  hub.beginPrimary(daemon.asClient(), { id: 'local', name: 'This Mac' })
+  daemon.setStatus('open')
+  const adopted = hub.primaryOpened(daemon.asClient())
+  const activity = [{ thread_id: 't1', line: 'Using Bash' }] as never
+  hub.ingestPrimary(daemon.asClient(), [], [thread('t1', 'p1', '2026-10-02T00:00:00Z')], activity)
+  await adopted
+  await settle()
+  expect(hub.set.activityOf('mac-1')).toEqual(activity)
+  expect(daemon.calls).toEqual([])
+})
