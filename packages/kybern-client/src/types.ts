@@ -2859,11 +2859,18 @@ export interface PullRequest {
   review_decision?: string;
   /** MERGEABLE | CONFLICTING | UNKNOWN */
   mergeable?: string;
+  /** CLEAN | BLOCKED | BEHIND | DIRTY | UNSTABLE | DRAFT | HAS_HOOKS | UNKNOWN. Lists carry it, so rows group without a detail fetch. */
+  merge_state_status?: string;
+  /** Set while GitHub auto-merge is armed. */
+  auto_merge?: PrAutoMerge;
   labels?: PrLabel[];
   checks_summary?: PrChecksSummary;
   /** Group projects: the member repository (path relative to the group folder). Absent for single projects. */
   repo?: string;
 }
+/** `merge_method`: squash | merge | rebase. */
+export interface PrAutoMerge { enabled_by?: string; merge_method: string }
+export interface PrPerson { login: string; avatar_url?: string; is_bot?: boolean }
 export interface PrLabel { name: string; color: string }
 export interface PrChecksSummary { total: number; passed: number; failed: number; pending: number; skipped: number }
 
@@ -2984,7 +2991,21 @@ export interface PrListRepo {
 
 /** `repo`: the member of a group project (a `PullRequest.repo`); a group project requires it. */
 export interface PrDetailParams { project_id: ProjectId; number: number; repo?: string }
-export interface PrCheck { name: string; status: string; conclusion: string; url: string }
+export interface PrCheck {
+  name: string
+  /** QUEUED | IN_PROGRESS | COMPLETED (check runs); empty for a commit status. */
+  status: string
+  /** GitHub's own conclusion, never folded: SUCCESS | FAILURE | CANCELLED | TIMED_OUT | ACTION_REQUIRED | SKIPPED | NEUTRAL | STALE | STARTUP_FAILURE, or a commit status's state. */
+  conclusion: string
+  url: string
+  /** The branch rules require it. Absent when GitHub did not say (then treat as unknown, not optional). */
+  is_required?: boolean
+  workflow_name?: string
+  /** RFC 3339. */
+  started_at?: string
+  /** RFC 3339; absent while running. */
+  completed_at?: string
+}
 export interface PrDetailResult { pull_request: PullRequest; body: string; head_sha: string; reviewers: string[]; checks: PrCheck[]; changed_files: number
   /** CLEAN | BLOCKED | BEHIND | DIRTY | UNSTABLE | DRAFT | HAS_HOOKS | UNKNOWN */
   merge_state_status?: string
@@ -2994,17 +3015,104 @@ export interface PrDetailResult { pull_request: PullRequest; body: string; head_
   merged_at?: DateTime
   merged_by?: string
   closed_at?: DateTime
+  assignees?: PrPerson[]
+  /** What the signed-in GitHub account may do here. Absent when GitHub did not answer: show no bypass or branch-update actions. */
+  viewer?: PrViewer
+  /** Commits the base has that the head lacks; read only while `merge_state_status` is BEHIND. */
+  behind_by?: number
+  /** `checks` stopped at 500 entries. */
+  checks_truncated?: boolean
+  timeline_counts?: PrTimelineCounts
 }
+export interface PrViewer {
+  /** Write access or above. */
+  can_merge: boolean
+  /** May bypass branch protection ("Merge anyway"). */
+  can_merge_as_admin: boolean
+  can_update_branch: boolean
+  can_enable_auto_merge: boolean
+  can_disable_auto_merge: boolean
+  /** May take a draft out of draft. */
+  can_mark_ready: boolean
+  /** Allowed merge methods in the order squash, merge, rebase. */
+  merge_methods: MergeMethod[]
+}
+export type MergeMethod = "squash" | "merge" | "rebase";
+export interface PrTimelineCounts { comments: number; reviews: number; commits: number }
 /** APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | REQUESTED */
 export interface PrReviewer { login: string; avatar_url?: string; is_bot?: boolean; state: string }
-export type PrPageKind = "files" | "comments" | "reviews" | "review_comments" | "checks";
-export interface PrPageParams { project_id: ProjectId; number: number; kind: PrPageKind; page?: number; repo?: string }
-export interface PrFile { path: string; old_path: string | null; status: string; additions: number; deletions: number; patch: string; patch_truncated: boolean }
+export type PrPageKind = "files" | "comments" | "reviews" | "review_comments" | "checks" | "timeline";
+/** `cursor`: `timeline` only, the previous page's `next_cursor`; omit for the first page. */
+export interface PrPageParams { project_id: ProjectId; number: number; kind: PrPageKind; page?: number; repo?: string; cursor?: string }
+/** `sha` is the file's blob at the head: it changes when the file does ("changed since viewed"). */
+export interface PrFile { path: string; old_path: string | null; status: string; additions: number; deletions: number; patch: string; patch_truncated: boolean; sha?: string }
 export interface PrReviewEntry { id: number; author: string; body: string; state: string; path: string | null; line: number | null; side: string | null; url: string; updated_at: string; avatar_url?: string; author_is_bot?: boolean }
-export interface PrPageResult { checks?: PrCheck[]; files: PrFile[]; entries: PrReviewEntry[]; page: number; has_more: boolean }
-export type PrActionKind = "comment" | "approve" | "request_changes" | "checkout" | "merge" | "close";
+export interface PrPageResult {
+  checks?: PrCheck[]
+  files: PrFile[]
+  entries: PrReviewEntry[]
+  page: number
+  has_more: boolean
+  /** `timeline` only, oldest first. */
+  timeline?: PrTimelineEvent[]
+  /** `timeline` only: pass as `cursor` for the following page; present while `has_more`. */
+  next_cursor?: string
+}
+export type PrTimelineKind =
+  | "comment"
+  | "review"
+  | "commit"
+  | "force_push"
+  | "review_requested"
+  | "ready_for_review"
+  | "converted_to_draft"
+  | "merged"
+  | "closed"
+  | "reopened";
+export interface PrTimelineInline { path: string; line?: number; body: string; url: string }
+export interface PrTimelineEvent {
+  /** GitHub's node id: the row key. */
+  id: string
+  kind: PrTimelineKind
+  /** RFC 3339. */
+  created_at: string
+  /** Empty when the account is gone. */
+  author: string
+  avatar_url?: string
+  author_is_bot?: boolean
+  /** Comment or review text, or a commit's first line. */
+  body?: string
+  /** `review`: APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | PENDING. */
+  state?: string
+  url?: string
+  /** `commit`: the commit. `force_push`: the new head. */
+  sha?: string
+  /** `force_push`: the replaced head. */
+  before_sha?: string
+  /** `review_requested`: the user or team asked. */
+  target?: string
+  /** `review`: its first 20 inline comments. */
+  inline_comments?: PrTimelineInline[]
+  inline_count?: number
+}
+export type PrActionKind =
+  | "comment"
+  | "approve"
+  | "request_changes"
+  | "checkout"
+  | "merge"
+  | "close"
+  | "enable_auto_merge"
+  | "disable_auto_merge"
+  | "update_branch"
+  | "mark_ready";
 export interface PrInlineComment { path: string; line: number; side: string; body: string }
-export interface PrActionParams { project_id: ProjectId; number: number; action: PrActionKind; body?: string; inline_comments?: PrInlineComment[]; head_sha?: string; thread_id?: ThreadId; for_repair?: boolean; repo?: string }
+export interface PrActionParams { project_id: ProjectId; number: number; action: PrActionKind; body?: string; inline_comments?: PrInlineComment[]; head_sha?: string; thread_id?: ThreadId; for_repair?: boolean; repo?: string
+  /** `merge` and `enable_auto_merge`: squash (default) | merge | rebase. */
+  merge_method?: MergeMethod
+  /** `merge`: bypass branch protection ("Merge anyway"); GitHub refuses unless the account may. */
+  admin?: boolean
+}
 export interface WorktreeInspectParams { thread_id: ThreadId }
 export interface WorktreeInspectResult { path: string; branch: string; exists: boolean; clean: boolean; merged: boolean; ignored_files: number; blockers: string[]; eligible: boolean }
 export interface WorktreeRemoveParams { thread_id: ThreadId; force?: boolean; delete_branch?: boolean }

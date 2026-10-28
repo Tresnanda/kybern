@@ -960,6 +960,36 @@ enum TokensCmd {
     Revoke { id: String },
 }
 
+/// Run a pull request action that needs the current head: read it, then act on exactly that head.
+async fn pr_simple_action(
+    client: &Client,
+    project: &str,
+    number: u64,
+    repo: Option<String>,
+    action: PrActionKind,
+    merge_method: Option<String>,
+    admin: bool,
+) -> Result<()> {
+    let project_id = resolve_project(client, project, false).await?;
+    let detail = client.call::<PrDetail>(PrDetailParams { project_id, number, repo: repo.clone() }).await?;
+    client
+        .call::<PrAction>(PrActionParams {
+            project_id,
+            number,
+            action,
+            body: String::new(),
+            inline_comments: Vec::new(),
+            head_sha: detail.head_sha,
+            thread_id: None,
+            for_repair: false,
+            repo,
+            merge_method,
+            admin,
+        })
+        .await?;
+    Ok(())
+}
+
 #[derive(Subcommand)]
 enum PrCmd {
     /// Read pull request description, checks and requested reviewers.
@@ -977,6 +1007,43 @@ enum PrCmd {
         kind: String,
         #[arg(long, default_value = "1")]
         page: u32,
+        /// Member repository of a group project.
+        #[arg(long)]
+        repo: Option<String>,
+        /// `timeline` only: the next_cursor of the previous page.
+        #[arg(long)]
+        cursor: Option<String>,
+    },
+    /// Merge a pull request (squash unless --method says otherwise). --auto turns on
+    /// GitHub auto-merge, --cancel-auto turns it off, --admin bypasses branch protection.
+    Merge {
+        project: String,
+        number: u64,
+        /// squash, merge or rebase.
+        #[arg(long)]
+        method: Option<String>,
+        #[arg(long, conflicts_with_all = ["auto", "cancel_auto"])]
+        admin: bool,
+        #[arg(long, conflicts_with = "cancel_auto")]
+        auto: bool,
+        #[arg(long)]
+        cancel_auto: bool,
+        /// Member repository of a group project.
+        #[arg(long)]
+        repo: Option<String>,
+    },
+    /// Merge the base branch into the pull request's branch.
+    UpdateBranch {
+        project: String,
+        number: u64,
+        /// Member repository of a group project.
+        #[arg(long)]
+        repo: Option<String>,
+    },
+    /// Take a draft pull request out of draft.
+    Ready {
+        project: String,
+        number: u64,
         /// Member repository of a group project.
         #[arg(long)]
         repo: Option<String>,
@@ -2377,11 +2444,25 @@ pub async fn run() -> Result<()> {
                 let result = client.call::<PrDetail>(PrDetailParams { project_id, number, repo }).await?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }
-            PrCmd::Page { project, number, kind, page, repo } => {
+            PrCmd::Page { project, number, kind, page, repo, cursor } => {
                 let project_id = resolve_project(&client, &project, false).await?;
                 let kind = serde_json::from_value(serde_json::Value::String(kind))?;
-                let result = client.call::<PrPage>(PrPageParams { project_id, number, kind, page, repo }).await?;
+                let result = client.call::<PrPage>(PrPageParams { project_id, number, kind, page, repo, cursor }).await?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            PrCmd::Merge { project, number, method, admin, auto, cancel_auto, repo } => {
+                let action = match (cancel_auto, auto) {
+                    (true, _) => PrActionKind::DisableAutoMerge,
+                    (_, true) => PrActionKind::EnableAutoMerge,
+                    _ => PrActionKind::Merge,
+                };
+                pr_simple_action(&client, &project, number, repo, action, method, admin).await?;
+            }
+            PrCmd::UpdateBranch { project, number, repo } => {
+                pr_simple_action(&client, &project, number, repo, PrActionKind::UpdateBranch, None, false).await?;
+            }
+            PrCmd::Ready { project, number, repo } => {
+                pr_simple_action(&client, &project, number, repo, PrActionKind::MarkReady, None, false).await?;
             }
             PrCmd::Action { file } => {
                 let source = if file == "-" {

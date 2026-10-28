@@ -148,6 +148,24 @@ expression: schema_for!(GitStatus)
             "null"
           ]
         },
+        "merge_state_status": {
+          "description": "CLEAN | BLOCKED | BEHIND | DIRTY | UNSTABLE | DRAFT | HAS_HOOKS | UNKNOWN.\nLists carry it so rows group by readiness without a detail fetch per row.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "auto_merge": {
+          "description": "Auto-merge is armed on this pull request.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PrAutoMerge"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "labels": {
           "type": "array",
           "items": {
@@ -182,6 +200,25 @@ expression: schema_for!(GitStatus)
         "is_draft",
         "author",
         "updated_at"
+      ]
+    },
+    "PrAutoMerge": {
+      "description": "GitHub auto-merge: the pull request merges itself once its requirements pass.",
+      "type": "object",
+      "properties": {
+        "enabled_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "merge_method": {
+          "description": "squash | merge | rebase",
+          "type": "string"
+        }
+      },
+      "required": [
+        "merge_method"
       ]
     },
     "PrLabel": {
