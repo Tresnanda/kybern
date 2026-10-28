@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { filterFiles, flattenList, flattenTree, MAX_PRS, prKey, prune, setClosed, visibleFiles, type FileMeta, type FolderStore } from './model.ts'
 
-const file = (path: string, over: Partial<FileMeta> = {}): FileMeta => ({ path, old_path: null, status: 'modified', additions: 1, deletions: 1, sha: `sha-${path}`, page: 1, patch_truncated: false, ...over })
+const file = (path: string, over: Partial<FileMeta> = {}): FileMeta => ({ path, old_path: null, status: 'modified', additions: 1, deletions: 1, page: 1, patch_truncated: false, ...over })
 const names = (rows: ReturnType<typeof flattenTree>) => rows.map(r => `${' '.repeat(r.depth)}${r.kind === 'dir' ? `${r.name}/${r.open ? '' : ' (closed)'}` : r.name}`)
 
 describe('file tree', () => {

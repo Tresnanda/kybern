@@ -7,7 +7,7 @@ import { PROTOCOL_VERSION } from '../../../../packages/kybern-client/src/types.t
 import { stateDetail, type PrState } from './verify.states.ts'
 import type { PrDetailResult, PrFile, PrReviewEntry, PrTimelineEvent, PullRequest, UsageRow } from '../../../../packages/kybern-client/src/types.ts'
 
-export function actionFixture(options: { long?: boolean; /** Extra running checks beyond the one in the base fixture. */ running?: number; /** A group project of three repositories (ADE-79): api and docs both have #108, web fails, infra is skipped. */ group?: boolean; /** ADE-85 list and Timeline: a group project of three repositories with pull requests in every readiness group, and a timeline history. */ readiness?: boolean; /** 65 distinct files in folders, with blob shas and short patches (30 a page), for the Changes tab. */ changes?: boolean; /** A verdict state of the detail page (`verify.states.ts`). */ state?: PrState } = {}) {
+export function actionFixture(options: { long?: boolean; /** Extra running checks beyond the one in the base fixture. */ running?: number; /** A group project of three repositories (ADE-79): api and docs both have #108, web fails, infra is skipped. */ group?: boolean; /** ADE-85 list and Timeline: a group project of three repositories with pull requests in every readiness group, and a timeline history. */ readiness?: boolean; /** 65 distinct files in folders, with short patches (30 a page), for the Changes tab. */ changes?: boolean; /** A verdict state of the detail page (`verify.states.ts`). */ state?: PrState } = {}) {
   const scratch = mkdtempSync(path.join(tmpdir(), 'gpuix-scratch-pages-'))
   const now = new Date().toISOString()
   const members = (options.readiness ? READINESS_REPOS : ['api', 'web', 'docs', 'infra']).map(path => ({ path, name: path, status: 'ok' as const }))
@@ -18,12 +18,11 @@ export function actionFixture(options: { long?: boolean; /** Extra running check
   const pr: PullRequest = { number: 108, title: 'Preserve reading position while streaming', url: 'https://example.com/pull/108', state: 'OPEN', head: 'fix/reading-position', base: 'main', is_draft: false, author: 'reviewer', updated_at: now, created_at: now, additions: 240, deletions: 28, mergeable: 'MERGEABLE', review_decision: 'APPROVED', checks_summary: { total: 3, passed: 2, failed: 0, pending: 1, skipped: 0 }, labels: [{ name: 'performance', color: '4285f4' }] }
   const detail: PrDetailResult = { pull_request: pr, body: '## Summary\n\nPreserve the reader’s position while a turn streams.\n\n- Stable rows keep their identity.\n- A bounded native list keeps old messages reachable.\n- Keyboard navigation remains immediate.\n\n### Verification\n\nChecked selection, wrapping, and follow behavior.', head_sha: '1234567890abcdef', reviewers: ['teammate'], checks: [{ name: 'Typecheck', status: 'COMPLETED', conclusion: 'SUCCESS', url: '' }, { name: 'Tests', status: 'COMPLETED', conclusion: 'SUCCESS', url: '' }, { name: 'Native visual verification', status: 'IN_PROGRESS', conclusion: '', url: '' }, ...Array.from({ length: options.running ?? 0 }, (_, i) => ({ name: `Running job ${i + 2}`, status: 'IN_PROGRESS', conclusion: '', url: '' }))], changed_files: 65, merge_state_status: 'CLEAN', reviews: [{ login: 'teammate', state: 'APPROVED' }], comment_count: 45, ...(options.readiness ? { timeline_counts: TIMELINE_COUNTS } : {}) }
   const files: PrFile[] = Array.from({ length: 30 }, (_, i) => ({ path: `src/components/Transcript${i}.tsx`, old_path: null, status: 'modified', additions: 1200, deletions: 1200, patch_truncated: false, patch: `@@ -1,1200 +1,1200 @@\n${Array.from({ length: 1200 }, (_, j) => `-const row${j} = renderOld(${j});\n+const row${j} = renderStable(${j});`).join('\n')}` }))
-  // `changes`: distinct paths across the three pages, so the tree, Viewed marks and paging can be checked.
+  // `changes`: distinct paths across the three pages, so the tree and paging can be checked.
   const folders = ['docs/platform-kb', 'docs/superpowers/specs', 'src/components/creator/instagram', 'src/components/landing', 'src/components/legal', 'src/lib', 'supabase/migrations', '.vitest/json']
-  const shaSalt = new Map<string, number>()
-  const changedFile = (i: number): PrFile & { sha: string } => {
+  const changedFile = (i: number): PrFile => {
     const path = i === 5 ? 'docs/superpowers/specs/2026-10-24-expired-login-redirect-and-a-very-long-specification-name.md' : `${folders[i % folders.length]}/${['Ig', 'Nav', 'Cookie', 'legalVersions', 'output', 'get-new-fans', 'privacy'][i % 7]}${i}${['.tsx', '.ts', '.md', '.json', '.sql'][i % 5]}`
-    return { path, old_path: null, status: 'modified', additions: 1 + (i * 7) % 40, deletions: (i * 3) % 12, sha: `blob${i}-${shaSalt.get(path) ?? 0}`, patch_truncated: false, patch: `@@ -1,3 +1,4 @@\n const a${i} = 1\n-const b${i} = renderOld(${i})\n+const b${i} = renderStable(${i})\n+const c${i} = 3\n export {}` }
+    return { path, old_path: null, status: 'modified', additions: 1 + (i * 7) % 40, deletions: (i * 3) % 12, patch_truncated: false, patch: `@@ -1,3 +1,4 @@\n const a${i} = 1\n-const b${i} = renderOld(${i})\n+const b${i} = renderStable(${i})\n+const c${i} = 3\n export {}` }
   }
   const entries: PrReviewEntry[] = Array.from({ length: 30 }, (_, i) => ({ id: i + 1, author: i % 2 ? 'teammate' : 'reviewer', body: `### Finding ${i + 1}\n\nKeep this row stable while streaming.\n\n\`row.id\` should survive a refresh.\n\n- Preserve focus\n- Preserve selection\n- Recheck wrapping`, state: i % 2 ? 'COMMENTED' : 'APPROVED', path: i % 3 ? null : 'src/components/Transcript.tsx', line: i % 3 ? null : i + 1, side: 'RIGHT', url: '', updated_at: now }))
   const usage = (key: string, n: number): UsageRow => ({ key, turns: n, usage: { input_tokens: n * 2400, output_tokens: n * 1200, cache_read_tokens: n * 8000, cache_write_tokens: n * 300 }, cost_usd: n * .52 })
@@ -105,7 +104,7 @@ export function actionFixture(options: { long?: boolean; /** Extra running check
   ].map(file => ({ file, before: existsSync(file) ? readFileSync(file) : null }))
   return {
     env: { KYBERN_URL: url, KYBERN_TOKEN: 'local-fixture', GPUIX_BACKGROUND: '1', KYBERN_DATA_DIR: scratch, KYBERN_CLIENT_CONFIG_DIR: scratch, KYBERN_GPUIX_CREDENTIALS_DIR: scratch },
-    calls, params, actions, /** Changes a file's blob sha, as a push to the pull request would. */ bumpSha: (path: string) => { shaSalt.set(path, (shaSalt.get(path) ?? 0) + 1) }, fail: (value:boolean)=>{failAction=value}, empty:(value:boolean)=>{empty=value},
+    calls, params, actions, fail: (value:boolean)=>{failAction=value}, empty:(value:boolean)=>{empty=value},
     problem: (kind: typeof problem) => { problem = kind },
     close: () => {
       server.stop(true)

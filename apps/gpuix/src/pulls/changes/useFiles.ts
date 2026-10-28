@@ -14,15 +14,12 @@ const REMEMBERED_LISTS = 8
 /** A burst ends before pages 51, 101, …: the list waits there for "Load more files". */
 const atBurstEnd = (page: number) => page > 1 && (page - 1) % PAGES_PER_BURST === 0
 
-/** Older daemons send no `sha`; the field is optional on purpose (lane L1 adds it). */
-type WireFile = PrFile & { sha?: string | null }
-
-export const toMeta = (f: WireFile, page: number): FileMeta => ({ path: f.path, old_path: f.old_path, status: f.status, additions: f.additions, deletions: f.deletions, sha: f.sha ?? null, page, patch_truncated: f.patch_truncated })
+export const toMeta = (f: PrFile, page: number): FileMeta => ({ path: f.path, old_path: f.old_path, status: f.status, additions: f.additions, deletions: f.deletions, page, patch_truncated: f.patch_truncated })
 
 interface List { files: FileMeta[]; /** The next page to fetch; null once the last one arrived. */ resume: number | null; error?: string }
 /** Lists of the last few pull requests (metadata only), so returning to the tab shows rows at once. */
 const lists = new Map<string, List>()
-const pages = new Map<string, WireFile[]>()
+const pages = new Map<string, PrFile[]>()
 const remember = <V,>(map: Map<string, V>, key: string, value: V, max: number) => { map.delete(key); map.set(key, value); while (map.size > max) map.delete(map.keys().next().value as string) }
 
 async function fetchPage(projectId: string, number: number, repo: string | undefined, page: number) {
@@ -49,7 +46,7 @@ export function useChangedFiles(projectId: string, number: number, repo: string 
           return
         }
         if (canceled) return
-        const raw = data.files as WireFile[]
+        const raw = data.files as PrFile[]
         remember(pages, `${key}:${page}`, raw, CACHED_PAGES)
         // A path appears once: a page that shifted between requests must not repeat a row.
         const seen = new Set(files.map(f => f.path))
@@ -89,7 +86,7 @@ export function usePatch(projectId: string, number: number, repo: string | undef
     let canceled = false
     void fetchPage(projectId, number, repo, file.page).then(data => {
       if (canceled) return
-      const raw = data.files as WireFile[]
+      const raw = data.files as PrFile[]
       remember(pages, `${key}:${file.page}`, raw, CACHED_PAGES)
       setFound({ want, file: raw.find(f => f.path === file.path) })
     }, () => { if (!canceled) setFound({ want, file: undefined }) })

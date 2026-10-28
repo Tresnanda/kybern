@@ -1,14 +1,13 @@
 // Pure model of the Changes tab: the file tree, its flat alternative, and the folders the reader closed.
 // No React and no native imports, so the unit tests run anywhere.
 
-/** What the file list needs of a changed file. `sha` is the file's blob id at the head (absent from older daemons). */
+/** What the file list needs of a changed file. */
 export interface FileMeta {
   path: string
   old_path: string | null
   status: string
   additions: number
   deletions: number
-  sha: string | null
   /** The 1-based page of `github.pr.page` the file's patch is on. */
   page: number
   patch_truncated: boolean

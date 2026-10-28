@@ -2647,8 +2647,7 @@ pub struct PrFile {
     pub deletions: u32,
     pub patch: String,
     pub patch_truncated: bool,
-    /// Blob sha of the file at the head. It changes when the file does, so a client can
-    /// tell that a file changed since it was marked viewed.
+    /// Blob sha of the file at the head; it changes when the file does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha: Option<String>,
 }

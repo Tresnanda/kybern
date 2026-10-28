@@ -3044,7 +3044,7 @@ export interface PrReviewer { login: string; avatar_url?: string; is_bot?: boole
 export type PrPageKind = "files" | "comments" | "reviews" | "review_comments" | "checks" | "timeline";
 /** `cursor`: `timeline` only, the previous page's `next_cursor`; omit for the first page. */
 export interface PrPageParams { project_id: ProjectId; number: number; kind: PrPageKind; page?: number; repo?: string; cursor?: string }
-/** `sha` is the file's blob at the head: it changes when the file does ("changed since viewed"). */
+/** `sha` is the file's blob at the head: it changes when the file does. */
 export interface PrFile { path: string; old_path: string | null; status: string; additions: number; deletions: number; patch: string; patch_truncated: boolean; sha?: string }
 export interface PrReviewEntry { id: number; author: string; body: string; state: string; path: string | null; line: number | null; side: string | null; url: string; updated_at: string; avatar_url?: string; author_is_bot?: boolean }
 export interface PrPageResult {
