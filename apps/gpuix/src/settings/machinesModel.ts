@@ -122,6 +122,7 @@ const OUTBOX_KIND: Record<OutboxKind, string> = {
   settings_patch: 'Settings change',
   secrets_put: 'Provider keys',
   fork: 'Fork of a thread',
+  move: 'Move of a thread',
 }
 
 export interface OutboxRowModel {

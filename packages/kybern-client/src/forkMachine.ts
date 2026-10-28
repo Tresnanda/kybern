@@ -32,7 +32,7 @@ export function parseThreadLink(href: string): ThreadLink | null {
 
 // ---- notices ----
 
-export type ForkNoticeKind = "fork" | "fork_queued" | "fork_failed";
+export type ForkNoticeKind = "fork" | "fork_queued" | "fork_failed" | "move" | "move_queued" | "move_failed" | "move_released";
 
 /** The `data` of a `provider_notice` the daemon wrote about a fork, in the words the transcript row needs. */
 export interface ForkNotice {
@@ -49,7 +49,7 @@ const isRecord = (value: unknown): value is Record<string, JsonValue> => typeof 
 export function forkNotice(data: JsonValue | null | undefined): ForkNotice | null {
   if (!isRecord(data)) return null;
   const kind = data.kind;
-  if (kind !== "fork" && kind !== "fork_queued" && kind !== "fork_failed") return null;
+  if (kind !== "fork" && kind !== "fork_queued" && kind !== "fork_failed" && kind !== "move" && kind !== "move_queued" && kind !== "move_failed" && kind !== "move_released") return null;
   const machineId = typeof data.machine_id === "string" ? data.machine_id : "";
   if (!machineId) return null;
   const threadId = typeof data.thread_id === "string" && data.thread_id ? data.thread_id : undefined;
@@ -58,17 +58,17 @@ export function forkNotice(data: JsonValue | null | undefined): ForkNotice | nul
     machineId,
     machineName: typeof data.machine_name === "string" && data.machine_name ? data.machine_name : "another machine",
     // "Open" needs a thread: a fork that did not arrive has none.
-    ...(kind === "fork" && threadId ? { threadId } : {}),
+    ...((kind === "fork" || kind === "move") && threadId ? { threadId } : {}),
     ...(typeof data.branch === "string" ? { branch: data.branch } : {}),
   };
 }
 
 /** The label of the "Open" link on a fork notice, or null when there is nothing to open. */
 export function forkNoticeAction(notice: ForkNotice): { label: string; href: string } | null {
-  return notice.kind === "fork" && notice.threadId ? { label: "Open", href: threadLinkHref(notice.machineId, notice.threadId) } : null;
+  return (notice.kind === "fork" || notice.kind === "move") && notice.threadId ? { label: "Open", href: threadLinkHref(notice.machineId, notice.threadId) } : null;
 }
 
-/** The row's words: the daemon writes "Forked to satyamas · open", and the row draws its own "Open" beside them. */
+/** The row's words: the daemon writes "Forked to satyamas · open" (or "Continued on satyamas · open"), and the row draws its own "Open" beside them. */
 export function forkNoticeText(notice: ForkNotice, text: string): string {
   return forkNoticeAction(notice) ? text.replace(/\s*·\s*open\s*$/i, "") : text;
 }

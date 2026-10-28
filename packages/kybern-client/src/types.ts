@@ -344,6 +344,8 @@ export interface Thread {
    * tool row ("Ran on satyamas") and from Settings → Machines.
    */
   inbound?: InboundInfo | null;
+  /** Set while "Continue on…" moves this thread (`departing`: it takes no messages) and after it moved (`departed`: read-only, with a link). */
+  moved?: MoveInfo | null;
 }
 
 export type DelegationRole = "implementation" | "research" | "review" | "design" | "test" | "general";
@@ -1168,7 +1170,31 @@ export type TranscriptEntry =
       from?: HarnessRef | null;
       to?: HarnessRef | null;
       at: DateTime;
+    }
+  | {
+      /** What a thread moved here with "Continue on…" said and did on its first machine. */
+      role: "history";
+      turn_id: TurnId;
+      seq: EventSeq;
+      from_machine: MachineId;
+      from_machine_name: string;
+      from_thread: ThreadId;
+      from_title: string;
+      items: HistoryItem[];
+      /** Older items left out to fit the size cap. */
+      omitted?: number;
+      at: DateTime;
     };
+
+export type HistoryRole = "user" | "assistant" | "tool" | "notice";
+/** One entry of the conversation a moved thread brings along. */
+export interface HistoryItem {
+  role: HistoryRole;
+  text: string;
+  at?: DateTime | null;
+  /** The tool's name, for `tool` items. */
+  tool?: string | null;
+}
 
 export interface Checkpoint {
   thread_id: ThreadId;
@@ -1366,7 +1392,8 @@ export type EventPayload =
       /** The refresh failed before the old session was released: it carries on with its context. */
       session_kept?: boolean;
     }
-  | { kind: "handoff_edited"; rotation_id: string; text: string };
+  | { kind: "handoff_edited"; rotation_id: string; text: string }
+  | { kind: "history_imported"; from_machine: MachineId; from_machine_name: string; from_thread: ThreadId; from_title: string; items: HistoryItem[]; omitted?: number };
 
 export interface SavedSession {
   provider: ProviderKind;
@@ -3831,7 +3858,8 @@ export type OutboxKind =
   | "files_push"
   | "settings_patch"
   | "secrets_put"
-  | "fork";
+  | "fork"
+  | "move";
 export type OutboxState = "queued" | "sending" | "delivered" | "failed" | "expired" | "cancelled";
 
 /** One queued piece of work for another machine. */
@@ -4021,13 +4049,47 @@ export interface PeerForkResult {
 
 export interface InboundInfo { machine_id: MachineId; thread_id: ThreadId; title: string }
 export type MoveState = "departing" | "departed" | "arrived";
+/** A thread moved with "Continue on…" (design §7.2). */
 export interface MoveInfo {
   state: MoveState;
   peer: MachineId;
+  /** The target's name when the move started, for the banner while it is offline. */
+  peer_name?: string;
+  /** The thread that continues the work, once the target confirmed. */
   peer_thread_id?: ThreadId | null;
+  /** While `departing`: when the lease ends unless it is renewed. */
   lease_until?: DateTime | null;
   operation_id: Uuid;
+  branch?: string | null;
+  commit?: string | null;
+  /** The commit went out and no answer came back: the target may or may not have the thread. */
+  uncertain?: boolean;
 }
+
+// Continue on another machine (F2, design §7.2).
+export interface ThreadsMoveToMachineParams {
+  thread_id: ThreadId;
+  /** The target machine's name or id. */
+  machine: string;
+  project?: string | null;
+  handoff_note?: string | null;
+  title?: string | null;
+  provider?: ProviderKind | null;
+  model?: string | null;
+  effort?: string | null;
+  permission_mode?: PermissionMode | null;
+  operation_id?: Uuid | null;
+}
+export interface ThreadsMoveToMachineResult {
+  operation_id: Uuid;
+  /** The queued outbox item; Retry and Keep here are `outbox.retry` and `outbox.cancel` on it. */
+  item: OutboxItem;
+  target_name: string;
+  handoff_note: string;
+}
+export type MoveAbandonOutcome = "released" | "completed" | "nothing";
+export interface ThreadsMoveAbandonParams { thread_id: ThreadId; force?: boolean }
+export interface ThreadsMoveAbandonResult { outcome: MoveAbandonOutcome }
 
 export interface Methods {
   "queue.add": [QueuedMessage, Record<string, never>];
@@ -4254,6 +4316,8 @@ export interface Methods {
   "threads.fork_note": [{ thread_id: ThreadId }, ThreadsForkNoteResult];
   "threads.fork_to_machine": [ThreadsForkToMachineParams, ThreadsForkToMachineResult];
   "peer.fork": [PeerForkParams, PeerForkResult];
+  "threads.move_to_machine": [ThreadsMoveToMachineParams, ThreadsMoveToMachineResult];
+  "threads.move_abandon": [ThreadsMoveAbandonParams, ThreadsMoveAbandonResult];
   "peer.tool.call": [PeerToolCallParams, PeerToolCallResult];
   "peer.thread.archive_inbound": [PeerThreadArchiveInboundParams, Empty];
   "settings.network_view": [Empty, SettingsNetworkView];

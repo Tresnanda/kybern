@@ -403,6 +403,7 @@ export const ThreadHeader = memo(function ThreadHeader({ leafId: given, size = '
           {thread.worktree && !thread.subagent && <MenuItem id="cleanup" testId="header-worktree-cleanup" icon={N.worktree} label="Remove worktree…" onSelect={() => showDialog({ kind: 'worktree', threadId: thread.id })} />}
           {thread.coordinator_project_id && !thread.subagent && <><MenuSeparator /><RefreshContextItem thread={thread} /></>}
           {!thread.subagent && forkTargetsOf(thread as StateThread).length > 0 && <MenuItem id="fork-machine" testId="header-fork-machine" icon={N.laptop} label="Fork to another machine…" onSelect={() => showDialog({ kind: 'fork', threadId: thread.id, ...((thread as StateThread).machineId ? { machineId: (thread as StateThread).machineId! } : {}) })} />}
+          {!thread.subagent && !thread.moved && forkTargetsOf(thread as StateThread).length > 0 && <MenuItem id="move-machine" testId="header-move-machine" icon={N.laptop} label="Continue on another machine…" onSelect={() => showDialog({ kind: 'move', threadId: thread.id, ...((thread as StateThread).machineId ? { machineId: (thread as StateThread).machineId! } : {}) })} />}
           {/* A subagent thread is read-only: it cannot be renamed, pinned or archived. */}
           {!thread.subagent && (
             <>

@@ -696,6 +696,7 @@ export const ThreadRow = memo(function ThreadRow({
           />
           <MenuItem id="handoff" icon={N.handoff} label="Hand off to another agent" onSelect={() => setNav({ handoff: { threadId: thread.id, target: null } })} />
           {forkTargetsOf(remote).length > 0 && <MenuItem id="fork-machine" icon={N.laptop} label="Fork to another machine…" onSelect={() => showDialog({ kind: 'fork', threadId: thread.id, ...(remote.machineId ? { machineId: remote.machineId } : {}) })} />}
+          {!thread.moved && forkTargetsOf(remote).length > 0 && <MenuItem id="move-machine" icon={N.laptop} label="Continue on another machine…" onSelect={() => showDialog({ kind: 'move', threadId: thread.id, ...(remote.machineId ? { machineId: remote.machineId } : {}) })} />}
           <MenuSeparator />
           <MenuItem id="right" icon={N.splitRight} label="Open to the right" disabled={!canOpenInSplit(thread.id, 'horizontal')} onSelect={() => { openThreadInSplit(thread.id, 'horizontal') }} />
           <MenuItem id="below" icon={N.splitDown} label="Open below" disabled={!canOpenInSplit(thread.id, 'vertical')} onSelect={() => { openThreadInSplit(thread.id, 'vertical') }} />

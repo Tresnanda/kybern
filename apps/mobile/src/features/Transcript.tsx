@@ -40,6 +40,7 @@ import { ApprovalPanel } from "./Approvals";
 import { CoordinatorCardLine, RotationRow, SystemRowLine } from "./CoordinatorCards";
 import { EditedFilesCard, confirmRewind } from "./EditedFiles";
 import { Lightbox } from "./Lightbox";
+import { HistoryRow } from "./HistoryRow";
 import { LongPressArea } from "./LongPressArea";
 import { MessagePart } from "./MessagePart";
 import { RequestRecordLine, SettledLine } from "./RequestCards";
@@ -456,6 +457,8 @@ export const TranscriptBlock = memo(function TranscriptBlock({
       return <OutsideChangeRow block={block} threadId={threadId} />;
     case "rotation":
       return <RotationRow block={block} threadId={threadId} />;
+    case "history":
+      return <HistoryRow block={block} />;
     case "reverted":
       return <SettledLine icon="arrow.uturn.backward" text={`Rewound to checkpoint ${block.commit.slice(0, 7)}`} />;
     case "visual":

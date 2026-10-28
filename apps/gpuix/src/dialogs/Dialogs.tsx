@@ -14,6 +14,7 @@ export function WorkspaceDialogs() {
   if (dialog?.kind === 'repositories') return <Repositories key={dialog.projectId} projectId={dialog.projectId} close={close} />
   if (dialog?.kind === 'worktree') return <WorktreeCleanup key={dialog.threadId} threadId={dialog.threadId} close={close} />
   if (dialog?.kind === 'fork') return <ForkSheet key={`${dialog.machineId ?? ''}:${dialog.threadId}`} threadId={dialog.threadId} {...(dialog.machineId ? { machineId: dialog.machineId } : {})} close={close} />
+  if (dialog?.kind === 'move') return <ForkSheet key={`move:${dialog.machineId ?? ''}:${dialog.threadId}`} mode="move" threadId={dialog.threadId} {...(dialog.machineId ? { machineId: dialog.machineId } : {})} close={close} />
   if (dialog?.kind === 'account') return <Account key={`${dialog.provider ?? ''}:${dialog.instance ?? ''}`} close={close} provider={dialog.provider} instance={dialog.instance} />
   return null
 }

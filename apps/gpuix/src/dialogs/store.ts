@@ -10,6 +10,8 @@ type Dialog =
   | { kind: 'worktree'; threadId: string }
   /** Fork a thread to another machine (`fork/ForkSheet.tsx`); `machineId` names the thread's machine when it is not this one. */
   | { kind: 'fork'; threadId: string; machineId?: string }
+  /** Continue a thread on another machine (the same sheet, `mode="move"`): the thread moves and this one becomes read-only. */
+  | { kind: 'move'; threadId: string; machineId?: string }
   | { kind: 'account'; provider?: ProviderKind; instance?: string }
 let dialog: Dialog | null = null
 const listeners = new Set<() => void>()

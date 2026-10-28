@@ -25,6 +25,7 @@ import { AgentsCapsule, openAgents, useAgents } from "../../src/features/AgentsS
 import { agentsCapsuleLabel } from "../../src/state/agents";
 import { HeldBubbles, useHeldMessages, useSenderName } from "../../src/features/HeldMessages";
 import { ChildThreadBar } from "../../src/features/ChildThreadBar";
+import { MoveBanner } from "../../src/features/MoveBanner";
 import { QueuedCapsule } from "../../src/features/QueuedPrompts";
 import { useLayout } from "../../src/state/layout";
 import {
@@ -639,6 +640,7 @@ function ThreadScreenBody() {
           >
             <View style={{ paddingHorizontal: side, gap: space.sm }}>
               <ChildThreadBar thread={thread} />
+              <MoveBanner thread={thread} />
               {(capsule || queued.length > 0) && (
                 <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
                   {capsule && (
@@ -661,10 +663,13 @@ function ThreadScreenBody() {
                 app.status !== "open" ||
                 !snapshot.loaded ||
                 thread?.status === "archived" ||
+                !!thread?.moved ||
                 (subagent && !subagentWorking)
               }
               placeholder={
-                subagent
+                thread?.moved
+                  ? "This thread is moving or has moved to another machine"
+                  : subagent
                   ? subagentWorking
                     ? "Message this subagent…"
                     : "This subagent has finished"

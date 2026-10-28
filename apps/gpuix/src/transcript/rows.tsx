@@ -14,6 +14,7 @@ import { recordText, requestRecord } from '../../../../packages/kybern-client/sr
 import { RequestRecordRow } from './RequestRecord.tsx'
 import { SignInChip } from './SignInChip.tsx'
 import { ForkOpen } from './ForkNotice.tsx'
+import { HistoryRow } from './HistoryBlock.tsx'
 import { forkNotice, forkNoticeText } from '../../../../packages/kybern-client/src/forkMachine.ts'
 import type { LoginRecipe } from '../../../../packages/kybern-client/src/loginRecipes.ts'
 // Work rows inside a turn (`views/Transcript.tsx` WorkRows → ToolRow/WorkRow):
@@ -417,6 +418,8 @@ export const WorkRow = memo(function WorkRow({
         </div>
       )
     }
+    case 'history':
+      return <HistoryRow block={block} />
     case 'user':
       // A message sent mid-turn sits between work rows with a bubble's breathing room.
       return <MidTurnMessage parts={block.message.parts} at={block.at} />
