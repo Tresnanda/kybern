@@ -49,6 +49,7 @@ impl Endpoint {
         if url.is_some() && token.is_none() {
             return Err(anyhow!("An explicit environment address requires --token or KYBERN_TOKEN; pair a device on that environment"));
         }
+        let explicit_dir = data_dir.is_some();
         let root = Self::data_dir(data_dir);
         let token = match token {
             Some(t) => t,
@@ -63,11 +64,17 @@ impl Endpoint {
         let url = match url {
             Some(u) => u,
             None => {
-                let port = root
+                let recorded = root
                     .as_ref()
                     .and_then(|r| std::fs::read_to_string(r.join("daemon.port")).ok())
-                    .and_then(|p| p.trim().parse::<u16>().ok())
-                    .unwrap_or(DEFAULT_PORT);
+                    .and_then(|p| p.trim().parse::<u16>().ok());
+                // A data directory the caller named is that daemon or none: without its port file (it
+                // stopped, e.g. for `kybern machines rejoin`) the default port may be another daemon.
+                let port = match recorded {
+                    Some(port) => port,
+                    None if explicit_dir => return Err(anyhow!(stopped_message(root.as_deref()))),
+                    None => DEFAULT_PORT,
+                };
                 let bound = root
                     .as_ref()
                     .and_then(|root| std::fs::read_to_string(root.join("daemon.listen")).ok())
@@ -78,6 +85,12 @@ impl Endpoint {
         };
         Ok(Self { url: address::normalize(&url)?, token })
     }
+}
+
+/// What to tell someone whose `--data-dir` names a daemon that is not running.
+pub fn stopped_message(data_dir: Option<&std::path::Path>) -> String {
+    let at = data_dir.map(|dir| format!(" at {}", dir.display())).unwrap_or_default();
+    format!("the daemon{at} is not running (it stops for `kybern machines rejoin`); start it again, then retry")
 }
 
 fn local_listener_url(bound: Option<std::net::SocketAddr>, port: u16) -> String {
@@ -178,5 +191,30 @@ mod listener_tests {
         assert_eq!(local_listener_url(Some("[::]:4173".parse().unwrap()), 4173), "ws://[::1]:4173/ws");
         assert_eq!(local_listener_url(Some("0.0.0.0:4173".parse().unwrap()), 4173), "ws://127.0.0.1:4173/ws");
         assert_eq!(local_listener_url(None, 4199), "ws://127.0.0.1:4199/ws");
+    }
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::Endpoint;
+
+    fn data_dir(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("kybern-client-{label}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_named_data_dir_without_a_port_file_never_falls_back_to_the_default_port() {
+        let dir = data_dir("stopped");
+        std::fs::write(dir.join("daemon.token"), "token\n").unwrap();
+        let error = Endpoint::resolve(None, None, Some(dir.clone())).unwrap_err().to_string();
+        assert!(error.contains("is not running") && error.contains(&dir.display().to_string()), "{error}");
+        std::fs::write(dir.join("daemon.port"), "4555\n").unwrap();
+        assert_eq!(Endpoint::resolve(None, None, Some(dir.clone())).unwrap().url, "ws://127.0.0.1:4555/ws");
+        // An explicit URL is used as given.
+        let explicit = Endpoint::resolve(Some("ws://127.0.0.1:4600/ws".into()), Some("t".into()), Some(dir.clone())).unwrap();
+        assert_eq!(explicit.url, "ws://127.0.0.1:4600/ws");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

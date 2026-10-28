@@ -1386,7 +1386,14 @@ pub async fn run() -> Result<()> {
         std::process::exit(code);
     }
     let ep = Endpoint::resolve(cli.url.clone(), cli.token.clone(), cli.data_dir.clone())?;
-    let client = Client::connect(&ep).await?;
+    let explicit = cli.url.is_some() || cli.data_dir.is_some() || std::env::var_os("KYBERN_URL").is_some();
+    let client = Client::connect(&ep).await.map_err(|error| {
+        if explicit {
+            error.context(format!("the daemon at {} did not answer; if it stopped for `kybern machines rejoin`, start it again", ep.url))
+        } else {
+            error
+        }
+    })?;
     let json = cli.json;
 
     match cli.cmd {

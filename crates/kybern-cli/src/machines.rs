@@ -556,7 +556,7 @@ pub async fn run(client: &Client, cmd: MachinesCmd, json: bool) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&after)?);
             } else {
                 println!(
-                    "This machine has a new identity and the daemon is restarting. Add it from another machine, or run kybern machines code here."
+                    "This machine has a new identity and its daemon is stopping so the identity takes effect. A desktop app or a service restarts it; a daemon started by hand needs to be started again (kybernd). Then add this machine from another one, or run kybern machines code here."
                 );
             }
         }
