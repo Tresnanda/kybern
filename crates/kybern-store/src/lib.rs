@@ -3,6 +3,7 @@
 //! The store is synchronous; the daemon wraps calls in `spawn_blocking` when
 //! they may take more than a few milliseconds (replays, projections).
 
+mod broker;
 mod groups;
 mod network;
 mod notes;
@@ -16,6 +17,7 @@ mod tasks;
 mod thread_history;
 mod transcript_page;
 mod visuals;
+pub use broker::{LoanRole, LoanRow};
 pub use groups::{GROUP_FOLDER_MEMBER, folder_name, member_display_names};
 pub use network::NetworkOpRecord;
 pub use notes::{

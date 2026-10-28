@@ -283,13 +283,32 @@ fn summarize(
         can_sign_out: named
             && matches!(status, AccountStatus::SignedIn | AccountStatus::NeedsSignIn)
             && matches!(kind, ProviderKind::ClaudeCode | ProviderKind::Codex | ProviderKind::Cursor),
+        broker: None,
     }
+}
+
+/// An account that signs in through the login broker is signed in as far as this machine is concerned
+/// while the broker answers; the harness' own probe (an empty folder) says nothing about it.
+fn through_broker(state: &AppState, summary: &mut AccountSummary) {
+    let Some(view) =
+        state.orchestrator.login_broker().and_then(|broker| broker.account_view(summary.provider.kind, &summary.provider.instance))
+    else {
+        return;
+    };
+    summary.status = match view.state {
+        BrokerLoginState::Borrowing | BrokerLoginState::Lending => AccountStatus::SignedIn,
+        _ => AccountStatus::NeedsSignIn,
+    };
+    summary.can_sign_out = false;
+    summary.broker = Some(view);
 }
 
 async fn summary_for(state: &AppState, kind: ProviderKind, instance: &str, refresh: bool) -> AccountSummary {
     let provider_instance = ProviderInstance { kind, instance: instance.to_string() };
     let probed = state.account_identities.probe(state, &provider_instance, refresh).await;
-    summarize(state, &state.settings.get(), kind, instance, probed)
+    let mut summary = summarize(state, &state.settings.get(), kind, instance, probed);
+    through_broker(state, &mut summary);
+    summary
 }
 
 /// Every account with its identity and sign-in state. Identity probes are

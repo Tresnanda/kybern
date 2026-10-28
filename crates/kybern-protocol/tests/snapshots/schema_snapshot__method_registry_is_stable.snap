@@ -227,3 +227,14 @@ expression: names
 - peer.settings.get
 - peer.settings.patch
 - peer.federated.read
+- peer.login.borrow
+- peer.login.push
+- peer.login.release
+- peer.login.status
+- peer.login.release_all
+- peer.login.usage
+- peer.secrets.put
+- login.broker.status
+- login.broker.bind
+- login.broker.set
+- secrets.push

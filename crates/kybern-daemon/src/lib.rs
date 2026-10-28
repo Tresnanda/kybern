@@ -255,6 +255,8 @@ async fn serve() -> Result<()> {
     let repo_identity_worker = tokio::spawn(network::repo_identity::run(state.clone()));
     // "Keep all machines on the same version": follows the newest version another member runs.
     let follow_updates_worker = tokio::spawn(network::updates::run(state.clone()));
+    // The login broker's watch (rotation, refresh ahead of expiry) and every member's catch-up after a move.
+    let login_broker_worker = tokio::spawn(network::broker::run(state.clone()));
 
     if args.pair {
         let endpoints = crate::access::endpoints(&state).await;
@@ -283,6 +285,7 @@ async fn serve() -> Result<()> {
     outbox_worker.abort();
     repo_identity_worker.abort();
     follow_updates_worker.abort();
+    login_broker_worker.abort();
     let _ = maintenance_worker.await;
     let _ = update_worker.await;
     let _ = self_update_worker.await;

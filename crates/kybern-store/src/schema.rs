@@ -677,6 +677,29 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX remote_children_active ON remote_children(status) WHERE status IN ('pending','running');
     COMMIT;
     ",
+    // Login broker loans (S4, design §9.4; numbered here in merge order). One row per loan, on both ends:
+    // the broker's `lender` rows say whom to push a rotated token to; a borrower's `borrower` rows say which
+    // broker it must release from and re-borrow from when the register moves. **No token is ever stored**:
+    // the broker re-reads its credential, a borrower borrows again after a restart.
+    "
+    BEGIN;
+    CREATE TABLE broker_loans (
+      loan_id TEXT PRIMARY KEY,
+      role TEXT NOT NULL CHECK (role IN ('lender','borrower')),
+      peer TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      account TEXT NOT NULL,
+      local_instance TEXT,
+      generation INTEGER NOT NULL DEFAULT 0,
+      expires_at TEXT,
+      last_pushed_at TEXT,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      released_at TEXT
+    );
+    CREATE INDEX broker_loans_open ON broker_loans(role, provider) WHERE released_at IS NULL;
+    COMMIT;
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

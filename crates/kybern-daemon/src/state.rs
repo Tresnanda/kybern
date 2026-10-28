@@ -135,11 +135,15 @@ impl AppState {
         let network = Arc::new(crate::network::Network::new(&paths.root, &store, &environment_id, tailscale, timing));
         let shutdown = CancellationToken::new();
         let hub = crate::network::outbox::NetworkHub::new(network.clone(), shutdown.clone());
+        // The login broker (S4) calls other machines through the same hub.
+        let login_broker = crate::network::broker::LoginBroker::new(hub.clone(), network.clone(), store.clone());
         let orchestrator = Orchestrator::new(store.clone(), drivers.clone(), events.clone(), paths.clone(), settings.clone())
             .with_terminal_manager(terminals.clone())
             .with_previews(previews.clone())
             .with_native_tools(native_tools.clone())
-            .with_remote_hub(hub);
+            .with_remote_hub(hub)
+            .with_login_broker(login_broker.clone());
+        orchestrator.usage().set_bound_reader(login_broker);
         let provider_catalogs = orchestrator.provider_catalog_cache();
         network.set_enabled(settings.get().network.enabled);
         let revoked_tokens = broadcast::channel(128).0;

@@ -203,8 +203,24 @@ impl AgentDriver for ClaudeDriver {
         // still turn them off.
         cmd.env("CLAUDE_CODE_ARTIFACT", "1");
         cmd.env("CLAUDE_CODE_ARTIFACT_AUTO_OPEN", "0");
-        for (k, v) in &config.env {
+        for (k, v) in config.env.iter().filter(|(k, _)| k.as_str() != crate::login_lend::BORROW_ENV) {
             cmd.env(k, v);
+        }
+        // A login another machine lent (design §9.4): the access token rides in this process' environment
+        // only. A named account blanks `CLAUDE_CODE_OAUTH_TOKEN`, so this comes after the loop.
+        let lent = crate::login_lend::source_of(&config.env);
+        let hotswap = lent.is_some() && config.env.get(crate::login_lend::CLAUDE_HOTSWAP_ENV).is_some_and(|value| value == "1");
+        if let Some(source) = &lent {
+            let login = source.current().await.map_err(DriverError::Protocol)?;
+            let env = crate::login_lend::claude_env(&login)
+                .ok_or_else(|| DriverError::Protocol("The broker lent a login Claude Code cannot use.".into()))?;
+            for (k, v) in env {
+                cmd.env(k, v);
+            }
+            if hotswap {
+                // Optional and undocumented: Claude asks the host for a new token on a 401 instead of failing the turn.
+                cmd.env("CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH", "1").env("CLAUDE_CODE_ENTRYPOINT", "claude-vscode");
+            }
         }
         tracing::info!(bin = %bin.display(), cwd = %config.cwd.display(), session_id, "spawning claude");
 
@@ -240,6 +256,13 @@ impl AgentDriver for ClaudeDriver {
             _native_mcp_config: native_mcp_config,
         });
 
+        if lent.is_some() {
+            let mut state = session.state.lock().await;
+            state.lent_login = true;
+            if hotswap {
+                state.login_source = lent.clone();
+            }
+        }
         // Initialize is optional; we send it for the command and model catalogs and to be a well-behaved client.
         session.send_control_nowait("initialize", json!({ "supportedDialogKinds": ["resume_return"], "hooks": {"PreToolUse": [{"matcher": null, "hookCallbackIds": [CHILD_MESSAGE_HOOK]}]} })).await?;
 
@@ -783,6 +806,11 @@ fn resolved_model_id(selector: &str, target: &str) -> String {
 
 #[derive(Default)]
 struct TurnState {
+    /// The lent login to answer `oauth_token_refresh` from, only when the optional hot swap is on.
+    login_source: Option<Arc<dyn crate::login_lend::LoginSource>>,
+    /// This process runs on a login another machine lent, so a turn that ends on a rejected token is a
+    /// failure the daemon can recover from (it borrows again, resumes and sends the message once more).
+    lent_login: bool,
     last_context: Option<(String, u64)>,
     /// Accumulated final text per API message id, so multi-block messages coalesce.
     text: HashMap<String, String>,
@@ -1161,6 +1189,21 @@ impl ClaudeSession {
         let req = &v["request"];
         let subtype = req.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
         match subtype {
+            // The hot swap: a 401 with no refresh token of its own. Answer from a fresh borrow, and the same turn continues.
+            "oauth_token_refresh" => {
+                let source = self.state.lock().await.login_source.clone();
+                let answer = match source {
+                    Some(source) => match source.renew(crate::login_lend::RenewReason::Unauthorized).await {
+                        Ok(login) => match crate::login_lend::claude_env(&login) {
+                            Some(env) => Ok(json!({ "accessToken": env[0].1 })),
+                            None => Err("The broker lent a login Claude Code cannot use.".to_string()),
+                        },
+                        Err(reason) => Err(reason),
+                    },
+                    None => Err("This session has no lent login to renew.".to_string()),
+                };
+                let _ = self.respond_control(&request_id, answer).await;
+            }
             "can_use_tool" => {
                 let tool_name = req.get("tool_name").and_then(|s| s.as_str()).unwrap_or("tool").to_string();
                 let input = req.get("input").cloned().unwrap_or(Value::Null);
@@ -1590,7 +1633,16 @@ impl ClaudeSession {
             .and_then(|e| e.as_array())
             .map(|a| a.iter().filter_map(|e| e.as_str()).collect::<Vec<_>>().join("; "))
             .unwrap_or_default();
+        // Claude reports a rejected token as a result with `is_error` (subtype "success") whose text says why.
+        let rejected_login = v.get("is_error").and_then(Value::as_bool) == Some(true)
+            && self.state.lock().await.lent_login
+            && v.get("result")
+                .and_then(Value::as_str)
+                .is_some_and(|text| crate::login_lend::is_login_failure(ProviderKind::ClaudeCode, text));
         let ev = match subtype {
+            _ if rejected_login => {
+                DriverEvent::TurnFailed { error: v.get("result").and_then(Value::as_str).unwrap_or_default().to_string() }
+            }
             "success" => DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, usage, cost_usd, duration_ms, anchors },
             "error_max_turns" => DriverEvent::TurnCompleted { stop_reason: StopReason::MaxTurns, usage, cost_usd, duration_ms, anchors },
             _ if terminal == "aborted_streaming" || terminal == "aborted" => {

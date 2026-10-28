@@ -13,6 +13,7 @@
 //! removal side effects and the `network.*` handlers (N4) use [`Network::membership`],
 //! [`Network::publish_ops`], [`peers::Peers`] and [`Network::found`].
 
+pub mod broker;
 pub mod client_grant;
 pub mod clipboard_filter;
 pub mod dial_out;
@@ -37,6 +38,8 @@ pub mod tailscale;
 pub mod updates;
 pub mod well_known;
 
+#[cfg(all(test, unix))]
+mod broker_tests;
 #[cfg(test)]
 mod gap_tests;
 #[cfg(test)]
@@ -283,6 +286,8 @@ impl Network {
             features::FORK_V1.to_string(),
             features::SETTINGS_FANOUT_V1.to_string(),
             features::NOTES_FEDERATED_V1.to_string(),
+            features::SECRETS_STORE_V1.to_string(),
+            features::LOGIN_BROKER_V1.to_string(),
             features::UPDATE_V1.to_string(),
         ]
     }

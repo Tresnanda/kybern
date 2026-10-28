@@ -313,6 +313,17 @@ fn main() {
     method::<PeerSettingsGet>(&mut methods);
     method::<PeerSettingsPatch>(&mut methods);
     method::<PeerFederatedRead>(&mut methods);
+    method::<PeerLoginBorrow>(&mut methods);
+    method::<PeerLoginPush>(&mut methods);
+    method::<PeerLoginRelease>(&mut methods);
+    method::<PeerLoginStatusMethod>(&mut methods);
+    method::<PeerLoginReleaseAll>(&mut methods);
+    method::<PeerLoginUsage>(&mut methods);
+    method::<PeerSecretsPut>(&mut methods);
+    method::<LoginBrokerStatusMethod>(&mut methods);
+    method::<LoginBrokerBind>(&mut methods);
+    method::<LoginBrokerSet>(&mut methods);
+    method::<SecretsPush>(&mut methods);
 
     let doc = json!({
         "protocol_version": PROTOCOL_VERSION,

@@ -13,6 +13,7 @@ use crate::auth::Scope;
 use crate::event::ThreadEvent;
 use crate::fork::*;
 use crate::forward::*;
+use crate::login_broker::*;
 use crate::model::*;
 use crate::network::*;
 use crate::outbox::*;
@@ -468,6 +469,9 @@ pub struct AccountSummary {
     pub managed: bool,
     #[serde(default)]
     pub can_sign_out: bool,
+    /// Set when this account signs in through the login broker (design §9.4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub broker: Option<AccountBroker>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -4185,6 +4189,20 @@ method!(SettingsShare, "settings.share", Some(Scope::OrchestrationOperate), Sett
 method!(PeerSettingsGet, "peer.settings.get", Some(Scope::MachineSettings), Empty, PeerSettingsGetResult);
 method!(PeerSettingsPatch, "peer.settings.patch", Some(Scope::MachineSettings), SettingsPatch, PeerSettingsPatchResult);
 method!(PeerFederatedRead, "peer.federated.read", Some(Scope::MachineTools), PeerFederatedReadParams, PeerFederatedReadResult);
+// The login broker and pushed keys (S4; payloads in login_broker.rs). The `machine:logins` calls are served only
+// by the machine the `broker` register names (borrow, usage, release_all) or sent only by it (push); `machine:secrets`
+// carries a key sealed to the target.
+method!(PeerLoginBorrow, "peer.login.borrow", Some(Scope::MachineLogins), PeerLoginBorrowParams, PeerLoginBorrowResult);
+method!(PeerLoginPush, "peer.login.push", Some(Scope::MachineLogins), PeerLoginPushParams, Empty);
+method!(PeerLoginRelease, "peer.login.release", Some(Scope::MachineLogins), PeerLoginReleaseParams, Empty);
+method!(PeerLoginStatusMethod, "peer.login.status", Some(Scope::MachineLogins), Empty, PeerLoginStatus);
+method!(PeerLoginReleaseAll, "peer.login.release_all", Some(Scope::MachineLogins), PeerLoginReleaseAllParams, PeerLoginReleaseAllResult);
+method!(PeerLoginUsage, "peer.login.usage", Some(Scope::MachineLogins), PeerLoginUsageParams, UsageLimitsResult);
+method!(PeerSecretsPut, "peer.secrets.put", Some(Scope::MachineSecrets), PeerSecretsPutParams, Empty);
+method!(LoginBrokerStatusMethod, "login.broker.status", Some(Scope::OrchestrationRead), Empty, LoginBrokerStatus);
+method!(LoginBrokerBind, "login.broker.bind", Some(Scope::AccessWrite), LoginBrokerBindParams, LoginBrokerStatus);
+method!(LoginBrokerSet, "login.broker.set", Some(Scope::NetworkAdmin), LoginBrokerSetParams, LoginBrokerSetResult);
+method!(SecretsPush, "secrets.push", Some(Scope::AccessWrite), SecretsPushParams, SecretsPushResult);
 // Forwarded agent tools (M2, R2; payloads in forward.rs). Files and terminals also need their own scope on the target.
 // Fork to a machine (M3, F1; payloads in fork.rs).
 method!(ThreadsForkNote, "threads.fork_note", Some(Scope::OrchestrationRead), ThreadsForkNoteParams, ThreadsForkNoteResult);
@@ -4439,6 +4457,17 @@ registry!(
     PeerSettingsGet,
     PeerSettingsPatch,
     PeerFederatedRead,
+    PeerLoginBorrow,
+    PeerLoginPush,
+    PeerLoginRelease,
+    PeerLoginStatusMethod,
+    PeerLoginReleaseAll,
+    PeerLoginUsage,
+    PeerSecretsPut,
+    LoginBrokerStatusMethod,
+    LoginBrokerBind,
+    LoginBrokerSet,
+    SecretsPush,
 );
 
 pub fn scope_for(method: &str) -> Option<Option<Scope>> {

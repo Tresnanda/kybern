@@ -37,6 +37,7 @@ pub(crate) mod inbound;
 mod lead;
 mod lead_git;
 mod lead_proposals;
+mod login_borrow;
 mod login_request;
 mod messaging;
 mod note_claims;
@@ -3525,6 +3526,8 @@ impl Orchestrator {
         let mut provider_settings =
             crate::settings::provider_settings(&self.inner.settings.get(), thread.provider.kind, Some(&project.path));
         provider_settings.env = self.account_environment(thread)?;
+        // An account that signs in through the login broker (S4) borrows its login for this session.
+        let borrowed_handle = self.borrowed_login(thread, &mut provider_settings.env).await?;
         let mut profile_binding = None;
         if thread.provider.kind == ProviderKind::Omp && thread.provider.instance == "default" {
             // A resumed chat must keep the profile that owns its native session,
@@ -3615,7 +3618,12 @@ impl Orchestrator {
             env: provider_settings.env.into_iter().collect(),
             native_tool_bridge,
         };
-        let SpawnedSession { session, events } = match driver.spawn(config).await {
+        let spawned = driver.spawn(config).await;
+        // The drivers resolved the lent login's handle while spawning; nothing needs it afterwards.
+        if let Some(handle) = &borrowed_handle {
+            kybern_drivers::login_lend::unregister(handle);
+        }
+        let SpawnedSession { session, events } = match spawned {
             Ok(spawned) => spawned,
             Err(error) => {
                 if let Some(gateway) = &self.inner.native_tools {
@@ -4698,6 +4706,12 @@ impl Orchestrator {
             }
             DriverEvent::TurnFailed { error } => {
                 let Some(turn) = turn_guard.as_mut() else { return Ok(()) };
+                // A login another machine lent was rejected (the broker rotated it): borrow again, resume and
+                // send the message once more instead of failing the turn.
+                if turn.internal.is_none() && !retiring && self.recover_rejected_login(thread_id, live, turn.id, &error).await {
+                    *turn_guard = None;
+                    return Ok(());
+                }
                 turn.completed = true;
                 let turn_id = turn.id;
                 *turn_guard = None;

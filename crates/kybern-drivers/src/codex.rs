@@ -453,7 +453,7 @@ impl AgentDriver for CodexDriver {
         let bin = resolve(ProviderKind::Codex, config.binary.as_ref())?;
         let mut cmd = Command::new(&bin).no_window();
         cmd.current_dir(&config.cwd).arg("app-server");
-        for (k, v) in &config.env {
+        for (k, v) in config.env.iter().filter(|(k, _)| k.as_str() != crate::login_lend::BORROW_ENV) {
             cmd.env(k, v);
         }
         tracing::info!(bin = %bin.display(), cwd = %config.cwd.display(), "spawning codex app-server");
@@ -502,6 +502,30 @@ impl AgentDriver for CodexDriver {
             )
             .await?;
         session.child.write(&json!({ "method": "initialized" })).await?;
+        // A login another machine lent (design §9.4): the app-server holds the token in memory and
+        // asks us for a new one when it gets a 401. Nothing is written to `auth.json`.
+        if let Some(source) = crate::login_lend::source_of(&config.env) {
+            // Registered first: the app-server may ask for a new token while it is still logging in.
+            lent_logins().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(session.lent_key(), source.clone());
+            let lent = match source.current().await {
+                Ok(login) => {
+                    crate::login_lend::codex_external_auth(&login).ok_or_else(|| "The broker lent a login Codex cannot use.".to_string())
+                }
+                Err(reason) => Err(reason),
+            };
+            let started = match lent {
+                Ok(mut auth) => {
+                    auth["type"] = Value::String("chatgptAuthTokens".into());
+                    session.call("account/login/start", auth).await.map_err(|error| format!("Codex did not accept the lent login: {error}"))
+                }
+                Err(reason) => Err(reason),
+            };
+            if let Err(reason) = started {
+                lent_logins().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&session.lent_key());
+                session.child.close().await;
+                return Err(DriverError::Protocol(reason));
+            }
+        }
 
         let (approval, sandbox) = policy_for(config.permission_mode);
         let mut params = json!({ "cwd": config.cwd, "approvalPolicy": approval, "sandbox": sandbox });
@@ -637,6 +661,20 @@ struct CodexSession {
     turn_usage: Mutex<Option<Usage>>,
     bridge: Option<NativeToolBridge>,
     closed: AtomicBool,
+}
+
+/// Sessions that run on a login another machine lent, by the address of their child process handle.
+/// Kept beside the session instead of in it so the session keeps one shape.
+fn lent_logins() -> &'static std::sync::Mutex<HashMap<usize, Arc<dyn crate::login_lend::LoginSource>>> {
+    static LENT: std::sync::OnceLock<std::sync::Mutex<HashMap<usize, Arc<dyn crate::login_lend::LoginSource>>>> =
+        std::sync::OnceLock::new();
+    LENT.get_or_init(Default::default)
+}
+
+impl CodexSession {
+    fn lent_key(&self) -> usize {
+        Arc::as_ptr(&self.child) as usize
+    }
 }
 
 struct PendingAppTool {
@@ -820,6 +858,7 @@ impl CodexSession {
         }
         let code = self.child.wait().await;
         self.closed.store(true, Ordering::Relaxed);
+        lent_logins().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&self.lent_key());
         for (_, tx) in self.pending.lock().await.drain() {
             let _ = tx.send(Err("process exited".into()));
         }
@@ -854,6 +893,18 @@ impl CodexSession {
     async fn handle_server_request(&self, id: Value, method: &str, params: &Value) {
         let item_id = params.get("itemId").and_then(|i| i.as_str()).map(str::to_string);
         match method {
+            // The app-server got a 401 on a lent login: borrow again and hand it the new token.
+            "account/chatgptAuthTokens/refresh" => {
+                let source = lent_logins().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&self.lent_key()).cloned();
+                let renewed = match source {
+                    Some(source) => source.renew(crate::login_lend::RenewReason::Unauthorized).await,
+                    None => Err("This Codex session has no lent login to renew.".to_string()),
+                };
+                let answer = renewed.and_then(|login| {
+                    crate::login_lend::codex_external_auth(&login).ok_or_else(|| "The broker lent a login Codex cannot use.".to_string())
+                });
+                let _ = self.respond(&id, answer).await;
+            }
             "item/tool/call" => {
                 let name = params.get("tool").and_then(Value::as_str).unwrap_or("").to_string();
                 let allowed = self.bridge.as_ref().is_some_and(|bridge| bridge.has_tool(&name));

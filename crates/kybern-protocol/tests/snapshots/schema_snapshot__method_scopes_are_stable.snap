@@ -452,3 +452,25 @@ expression: scopes
   - "machine:settings"
 - - peer.federated.read
   - "machine:tools"
+- - peer.login.borrow
+  - "machine:logins"
+- - peer.login.push
+  - "machine:logins"
+- - peer.login.release
+  - "machine:logins"
+- - peer.login.status
+  - "machine:logins"
+- - peer.login.release_all
+  - "machine:logins"
+- - peer.login.usage
+  - "machine:logins"
+- - peer.secrets.put
+  - "machine:secrets"
+- - login.broker.status
+  - "orchestration:read"
+- - login.broker.bind
+  - "access:write"
+- - login.broker.set
+  - "network:admin"
+- - secrets.push
+  - "access:write"

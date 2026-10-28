@@ -522,6 +522,18 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
         PeerSettingsPatch::NAME => ok(crate::settings_share::apply_patch(state, parse(params)?)),
         // Federated notes and tasks (S2): read-only, so `machine:tools` is all it needs.
         PeerFederatedRead::NAME => ok(super::federated::serve_read(state, parse(params)?).await?),
+        // The login broker (S4) and keys pushed by another member. `machine:logins` is checked by the caller; the broker
+        // checks for itself that this machine is the one the register names.
+        PeerLoginBorrow::NAME
+        | PeerLoginPush::NAME
+        | PeerLoginRelease::NAME
+        | PeerLoginStatusMethod::NAME
+        | PeerLoginReleaseAll::NAME
+        | PeerLoginUsage::NAME => serve_login(state, link, method, params).await,
+        PeerSecretsPut::NAME => {
+            super::broker::serve_secrets_put(state, &link.machine_id, parse(params)?)?;
+            ok(Empty {})
+        }
         PeerUpdateStart::NAME => {
             let request: PeerUpdateStartParams = parse(params)?;
             tracing::info!(target: SESSION_TARGET, machine = %link.machine_id, "a member asked this machine to update");
@@ -535,6 +547,31 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
             ok(Empty {})
         }
         _ => Err(RpcError::method_not_found(method)),
+    }
+}
+
+/// The `peer.login.*` methods. Only the machine the register names serves a borrow, a usage read or a
+/// release-all; only the broker may push a rotated credential, so a push from any other member is refused.
+async fn serve_login(state: &AppState, link: &Arc<PeerLink>, method: &str, params: Value) -> Result<Value, RpcError> {
+    let broker =
+        state.orchestrator.login_broker().cloned().ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, "no login broker on this machine"))?;
+    match method {
+        PeerLoginBorrow::NAME => ok(broker.serve_borrow(state, &link.machine_id, parse(params)?).await?),
+        PeerLoginRelease::NAME => {
+            broker.serve_release(&link.machine_id, parse(params)?)?;
+            ok(Empty {})
+        }
+        PeerLoginStatusMethod::NAME => ok(broker.serve_status(state).await),
+        PeerLoginUsage::NAME => ok(broker.serve_usage(state, parse(params)?).await?),
+        PeerLoginReleaseAll::NAME => {
+            // Honoured only once this machine is no longer the broker (checked there), so a member cannot sign out a working one.
+            ok(broker.serve_release_all(state, parse(params)?).await)
+        }
+        _ => {
+            let (kind, instance) = broker.apply_push(link, parse(params)?)?;
+            state.orchestrator.login_rotated(kind, &instance).await;
+            ok(Empty {})
+        }
     }
 }
 

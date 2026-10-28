@@ -310,6 +310,7 @@ async fn deliver(state: &AppState, item: &OutboxItem) -> Delivery {
         OutboxKind::ThreadSend => state.orchestrator.remote_deliver_call(item, PeerThreadSend::NAME).await,
         OutboxKind::Fork => state.orchestrator.remote_deliver_fork(item).await,
         OutboxKind::SettingsPatch => crate::settings_share::deliver(state, item).await,
+        OutboxKind::SecretsPut => super::broker::deliver_secrets_put(state, item).await,
         other => Delivery::Failed(format!("This version of Kybern cannot deliver {} items yet.", other.as_str())),
     }
 }
@@ -436,6 +437,10 @@ pub fn enqueue(state: &AppState, params: OutboxEnqueueParams) -> Result<OutboxIt
         OutboxKind::SettingsPatch => {
             let patch: SettingsPatch = serde_json::from_value(payload.clone()).map_err(RpcError::invalid_params)?;
             crate::settings_share::check_patch(&patch)?;
+        }
+        OutboxKind::SecretsPut => {
+            // Only the sealed blob is queued; the value is never in the outbox in the clear.
+            serde_json::from_value::<PeerSecretsPutParams>(payload.clone()).map_err(RpcError::invalid_params)?;
         }
         other => {
             return Err(RpcError::new(

@@ -130,6 +130,8 @@ pub trait RemoteHub: Send + Sync {
 #[derive(Default)]
 pub(super) struct RemoteState {
     pub(super) hub: Option<Arc<dyn RemoteHub>>,
+    /// The login broker (S4): borrowed logins for sessions of accounts bound to it.
+    pub(super) login: Option<Arc<crate::network::broker::LoginBroker>>,
     /// Tasks that have a follower running.
     followers: Mutex<HashSet<Uuid>>,
     /// Serializes read-modify-write of `remote_children`.

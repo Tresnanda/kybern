@@ -34,7 +34,7 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
             $last(state, ctx, method, &mut slot).await
         }};
     }
-    try_parts!(dispatch_part_1, dispatch_part_2, dispatch_part_3, dispatch_part_4, dispatch_part_5, dispatch_part_6, dispatch_part_7, dispatch_part_8, dispatch_part_9, dispatch_part_10, dispatch_part_11, dispatch_part_12, dispatch_part_13, dispatch_part_14, dispatch_part_15; dispatch_part_16)
+    try_parts!(dispatch_part_1, dispatch_part_2, dispatch_part_3, dispatch_part_4, dispatch_part_5, dispatch_part_6, dispatch_part_7, dispatch_part_8, dispatch_part_9, dispatch_part_10, dispatch_part_11, dispatch_part_12, dispatch_part_13, dispatch_part_14, dispatch_part_15, dispatch_part_16; dispatch_part_17)
 }
 
 async fn dispatch_part_1(state: &AppState, ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
@@ -1414,6 +1414,36 @@ async fn dispatch_part_16(state: &AppState, ctx: &ConnectionCtx, method: &str, s
         | PeerRelayData::NAME
         | PeerRelayClose::NAME
         | PeerUpdateStart::NAME => Err(RpcError::new(codes::NOT_AVAILABLE, format!("{method} is only available between machines."))),
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+/// The login broker and pushed keys (S4). The logic is in `network/broker.rs`; these arms parse and answer.
+async fn dispatch_part_17(state: &AppState, _ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    let broker = || {
+        state
+            .orchestrator
+            .login_broker()
+            .cloned()
+            .ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, "The machine network is unavailable on this machine."))
+    };
+    match method {
+        LoginBrokerStatusMethod::NAME => ok(broker()?.status(state).await),
+        LoginBrokerBind::NAME => ok(broker()?.bind(state, parse(params)?).await?),
+        LoginBrokerSet::NAME => ok(crate::network::broker::set_broker(state, parse(params)?).await?),
+        SecretsPush::NAME => ok(crate::network::broker::push_secret(state, parse(params)?).await?),
+        // Daemon-to-daemon methods are answered on a session (`network::peers::dispatch`), never here.
+        PeerLoginBorrow::NAME
+        | PeerLoginPush::NAME
+        | PeerLoginRelease::NAME
+        | PeerLoginStatusMethod::NAME
+        | PeerLoginReleaseAll::NAME
+        | PeerLoginUsage::NAME
+        | PeerSecretsPut::NAME => Err(RpcError::new(codes::NOT_AVAILABLE, format!("{method} is only available between machines."))),
         _ => Err(RpcError::method_not_found(method)),
     }
 }

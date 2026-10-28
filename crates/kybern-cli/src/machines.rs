@@ -81,6 +81,87 @@ pub enum MachinesCmd {
     },
     /// This machine's CPU, memory, graphics, harnesses and repositories.
     Info,
+    /// The login broker: the machine that holds the real sign-ins the others use.
+    Broker {
+        #[command(subcommand)]
+        cmd: BrokerCmd,
+    },
+    /// Use a stored key on other machines: it is sealed to each one and never travels in the clear.
+    PushKey {
+        /// The key's name in the secret store, such as provider.cursor.CURSOR_API_KEY.
+        name: String,
+        /// Only these machines (repeatable). Without it, every other machine.
+        #[arg(long = "machine")]
+        machines: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum BrokerCmd {
+    /// Show who the broker is and where each agent's sign-in comes from on this machine.
+    Status,
+    /// Make a machine the login broker (`none` clears it). It must already be signed in.
+    Set {
+        /// A machine's name or id, or `none`.
+        machine: String,
+        /// Leave the old broker signed in after the others moved to the new one.
+        #[arg(long)]
+        keep_old_signed_in: bool,
+    },
+    /// Make an account on this machine sign in through the broker.
+    Use {
+        /// The agent: claude-code, codex or omp.
+        agent: String,
+        /// The account on this machine (a named one, not the CLI account).
+        account: String,
+        /// The broker's account to borrow; the broker's CLI account when left out.
+        #[arg(long)]
+        from: Option<String>,
+    },
+    /// Make an account sign in on this machine again, instead of through the broker.
+    Release { agent: String, account: String },
+}
+
+fn parse_agent(value: &str) -> Result<ProviderKind> {
+    serde_json::from_value(serde_json::Value::String(value.to_lowercase()))
+        .map_err(|_| anyhow!("Agents the login broker lends are claude-code, codex and omp."))
+}
+
+fn render_broker(status: &LoginBrokerStatus) {
+    match &status.broker {
+        Some(broker) => println!(
+            "Login broker: {}{}",
+            broker.name.as_deref().unwrap_or(&broker.machine_id),
+            if status.is_broker {
+                " (this machine)"
+            } else if broker.reachable {
+                ""
+            } else {
+                " (offline)"
+            }
+        ),
+        None => println!("Login broker: none"),
+    }
+    for provider in &status.providers {
+        let state = match provider.state {
+            BrokerLoginState::Lending => "lending",
+            BrokerLoginState::Borrowing => "signs in through the broker",
+            BrokerLoginState::BrokerOffline => "broker offline",
+            BrokerLoginState::BrokerNotSignedIn => "not signed in on the broker",
+            BrokerLoginState::BrokerUnsupported => "broker needs a newer Kybern",
+            BrokerLoginState::NotUsed => "own sign-in",
+        };
+        println!("  {:<12} {state}", format!("{:?}", provider.provider).to_lowercase());
+        if let Some(message) = &provider.message {
+            println!("               {message}");
+        }
+        for account in &provider.lendable {
+            println!("               can lend: {} ({})", account.name, account.account);
+        }
+    }
+    for loan in &status.loans {
+        println!("  lent {:?} to {}", loan.provider, short(&loan.machine_id));
+    }
 }
 
 /// The part of an id that tells machines apart: ids are UUIDv7, whose first characters are a clock.
@@ -383,6 +464,65 @@ pub async fn run(client: &Client, cmd: MachinesCmd, json: bool) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&after)?)
             } else {
                 println!("Keeping all machines on the same version is {}.", if after.follow_updates { "on" } else { "off" })
+            }
+        }
+        MachinesCmd::Broker { cmd } => match cmd {
+            BrokerCmd::Status => {
+                let status = client.call::<LoginBrokerStatusMethod>(Empty {}).await?;
+                if json { println!("{}", serde_json::to_string_pretty(&status)?) } else { render_broker(&status) }
+            }
+            BrokerCmd::Set { machine, keep_old_signed_in } => {
+                let machine_id = if machine.eq_ignore_ascii_case("none") {
+                    None
+                } else {
+                    Some(resolve_machine(&status(client).await?.members, &machine)?.machine_id.clone())
+                };
+                let result = client.call::<LoginBrokerSet>(LoginBrokerSetParams { machine_id, sign_out_old: !keep_old_signed_in }).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&result)?)
+                } else {
+                    render_broker(&result.status);
+                    println!("{} machine(s) use the new broker; {} offline.", result.rebound.len(), result.offline.len());
+                    if let Some(note) = &result.note {
+                        println!("{note}");
+                    }
+                }
+            }
+            BrokerCmd::Use { agent, account, from } => {
+                let provider = parse_agent(&agent)?;
+                let status = client
+                    .call::<LoginBrokerBind>(LoginBrokerBindParams {
+                        provider,
+                        instance: account,
+                        broker_account: Some(from.unwrap_or_else(|| "default".into())),
+                    })
+                    .await?;
+                if json { println!("{}", serde_json::to_string_pretty(&status)?) } else { render_broker(&status) }
+            }
+            BrokerCmd::Release { agent, account } => {
+                let status = client
+                    .call::<LoginBrokerBind>(LoginBrokerBindParams {
+                        provider: parse_agent(&agent)?,
+                        instance: account,
+                        broker_account: None,
+                    })
+                    .await?;
+                if json { println!("{}", serde_json::to_string_pretty(&status)?) } else { render_broker(&status) }
+            }
+        },
+        MachinesCmd::PushKey { name, machines } => {
+            let result = client.call::<SecretsPush>(SecretsPushParams { name, machines }).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                for machine in &result.machines {
+                    let state = match machine.state {
+                        SecretsPushState::Delivered => "stored",
+                        SecretsPushState::Queued => "waiting for the machine to come back",
+                        SecretsPushState::Refused => "refused",
+                    };
+                    println!("{:<20} {state}{}", machine.name, machine.detail.as_deref().map(|d| format!(": {d}")).unwrap_or_default());
+                }
             }
         }
         MachinesCmd::Info => {

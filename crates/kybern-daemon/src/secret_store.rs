@@ -575,6 +575,13 @@ fn write_private_beside(path: &Path, bytes: &[u8]) -> Result<()> {
 /// in one process see the last one installed; they hold no references, so they are unaffected.
 static CURRENT: RwLock<Option<SecretStore>> = RwLock::new(None);
 
+/// This daemon's secret store, for pushing a key to another machine and taking one pushed to this one.
+/// Opened over the daemon's own database and data key, not the process-wide handle, which several
+/// daemons in one test process would share.
+pub fn store_of(state: &crate::state::AppState) -> Result<SecretStore> {
+    SecretStore::open(state.store.clone(), &state.paths.root.join(keys::NETWORK_DIR))
+}
+
 fn current() -> Option<SecretStore> {
     CURRENT.read().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
 }
