@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
-import { getClient } from '../state.ts'
+import { threadClient, useApp } from '../state.ts'
 import { activeEnvironment, onEnvironmentChange, useEnvironment } from '../shell/environment.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { ResponseImage } from '../transcript/images.tsx'
@@ -16,13 +16,13 @@ export function primeAttachmentImage(assetId: string, source: string) {
   if (!cache.has(key)) cache.set(key, { source, bytes: 0 })
 }
 export function AttachmentImage({ assetId, name }: { assetId: string; name: string }) {
-  const t = useTheme(), environment = useEnvironment()
+  const t = useTheme(), environment = useEnvironment(), threadId = useApp(s => s.selectedId), machineId = useApp(s => s.selectedMachineId)
   const key = `${environment.revision}:${assetId}`
   const [image, setImage] = useState<{ key: string; source?: string; failed?: boolean }>(() => ({ key, source: cache.get(key)?.source }))
   useEffect(() => {
     const cached = cache.get(key)
     if (cached) { setImage({ key, source: cached.source }); return }
-    const owner = getClient(), abort = new AbortController()
+    const owner = threadClient(threadId, machineId), abort = new AbortController()
     setImage({ key })
     if (!owner) return
     void (async () => {
@@ -31,7 +31,7 @@ export function AttachmentImage({ assetId, name }: { assetId: string; name: stri
       const media = response.headers.get('content-type')?.split(';')[0]
       if (!media?.startsWith('image/')) throw Error('Image unavailable')
       const data = await response.arrayBuffer()
-      if (abort.signal.aborted || getClient() !== owner) return
+      if (abort.signal.aborted || threadClient(threadId, machineId) !== owner) return
       const source = `data:${media};base64,${Buffer.from(data).toString('base64')}`
       if (data.byteLength <= 16 * 1024 * 1024) {
         const prior = cache.get(key)

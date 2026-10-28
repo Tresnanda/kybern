@@ -24,7 +24,7 @@ import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { Menu, MenuItem, MenuLabel, MenuSeparator, MenuSub } from '../nav/overlay.tsx'
 import { activeEnvironment } from '../shell/environment.ts'
-import { getClient } from '../state.ts'
+import { projectClient } from '../state.ts'
 import { FONT_MONO } from '../theme.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { G } from './glyphs.ts'
@@ -110,7 +110,7 @@ function BranchList({ project, repo, selected, onPick }: { project: Project; rep
   const t = useTheme()
   const [branches, setBranches] = useState<GitBranchesResult | null>(null)
   useEffect(() => {
-    const client = getClient()
+    const client = projectClient(project.id)
     if (!client) return
     let live = true
     client.call('git.branches', { project_id: project.id, repo }).then((result) => { if (live) setBranches(result) }, () => { if (live) setBranches({ current: null, branches: [] }) })

@@ -15,7 +15,7 @@ import type { NewChatCreate } from '../../../../packages/kybern-client/src/newCh
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { useRef, useSyncExternalStore } from 'react'
-import { getClient, getState, refreshLists, selectPaneThread, getFocusedPaneId, getPane, getPaneState, setPane, usePaneAccess, useApp } from '../state.ts'
+import { localClient, threadClient, projectClient, getState, refreshLists, selectPaneThread, getFocusedPaneId, getPane, getPaneState, setPane, usePaneAccess, useApp } from '../state.ts'
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import type { MentionPart } from '../../../../packages/kybern-client/src/userInput.ts'
 import type {
@@ -134,11 +134,11 @@ export function useComposer<T>(select: (d: ComposerData) => T): T {
   )
 }
 
-function rpc() {
-  const client = getClient()
+function need(client: ReturnType<typeof localClient>) {
   if (!client) throw new Error('Start kybernd, then reopen this window')
   return client
 }
+function rpc(threadId?: ThreadId) { return need(threadId ? threadClient(threadId) : localClient()) }
 
 /** `errorText` from `state/rpc.ts`: the daemon's message, or the thrown text. */
 export function errorText(e: unknown): string {
@@ -153,13 +153,13 @@ let loadedFor: unknown = null
 
 /** Load what the composer reads, once per connection. */
 export function ensureLoaded() {
-  const client = getClient()
+  const client = localClient()
   if (!client || client === loadedFor || getState().status !== 'open') return
   loadedFor = client
   client.onNotification('settings.changed', (params) => {
-    if (getClient() !== client) return
+    if (localClient() !== client) return
     const settings = (params as { settings?: Settings } | null)?.settings
-    if (settings && client === getClient()) patch({ settings })
+    if (settings && client === localClient()) patch({ settings })
     void loadProviders(false).catch(() => {})
   })
   // Like the desktop's provider cache: paint the last catalog at once, since
@@ -167,35 +167,35 @@ export function ensureLoaded() {
   const cached = readProviderCache(client.endpoint.url)
   if (cached && !data.providers.length) patch({ providers: cached })
   void loadProviders(false).catch(() => {})
-  void client.call('settings.get', {}).then((settings) => { if (getClient() === client) patch({ settings }) }).catch(() => {})
+  void client.call('settings.get', {}).then((settings) => { if (localClient() === client) patch({ settings }) }).catch(() => {})
   void readAccounts(client)
-    .then((r) => { if (getClient() === client) patch({ accounts: r.accounts }) })
+    .then((r) => { if (localClient() === client) patch({ accounts: r.accounts }) })
     .catch(() => {})
 }
 
 /** Read the account list again (an account was added, changed or removed elsewhere, e.g. Settings). */
 export function refreshComposerAccounts(accounts?: AccountSummary[]) {
-  const client = getClient()
+  const client = localClient()
   if (!client) return Promise.resolve()
   if (accounts) { patch({ accounts }); return Promise.resolve() }
-  return readAccounts(client).then((r) => { if (getClient() === client) patch({ accounts: r.accounts }) }).catch(() => {})
+  return readAccounts(client).then((r) => { if (localClient() === client) patch({ accounts: r.accounts }) }).catch(() => {})
 }
 
 let providerLoad: Promise<ProviderStatus[]> | null = null
 export function loadProviders(force: boolean, projectId?: ProjectId): Promise<ProviderStatus[]> {
   if (providerLoad && !force) return providerLoad
   patch({ providersLoading: true })
-  const client = rpc()
+  const owner = () => projectId ? projectClient(projectId) : localClient(), client = need(owner())
   const request = client
     .call('providers.list', { ...(projectId ? { project_id: projectId } : {}), ...(force ? { force_refresh: true } : {}) })
     .then((r) => {
-      if (getClient() !== client) return r.providers
+      if (owner() !== client) return r.providers
       patch({ providers: r.providers })
       if (!projectId) writeProviderCache(client.endpoint.url, r.providers)
       return r.providers
     })
     .finally(() => {
-      if (getClient() !== client) return
+      if (owner() !== client) return
       if (providerLoad === request) providerLoad = null
       patch({ providersLoading: false })
     })
@@ -229,12 +229,12 @@ const targetSeq = new Map<string, number>()
 export async function loadTarget(threadId: ThreadId) {
   // A new chat the daemon has not made yet has no target; its composer loads it once the thread exists.
   if (newChats.uncreated(threadId)) return
-  const client = rpc()
+  const client = rpc(threadId)
   const seq = (targetSeq.get(threadId) ?? 0) + 1
   targetSeq.set(threadId, seq)
   try {
     const state = await client.call('threads.target.get', { thread_id: threadId })
-    if (getClient() === client && seq === targetSeq.get(threadId)) patch({ target: { threadId, state } })
+    if (threadClient(threadId) === client && seq === targetSeq.get(threadId)) patch({ target: { threadId, state } })
   } catch {
     // An old daemon has no target API; the thread's own fields stand in.
   }
@@ -244,27 +244,27 @@ const catalogSeq = new Map<string, number>()
 /** `refreshAccountCatalog` in `views/Thread.tsx`. */
 export async function loadCatalog(threadId: ThreadId, provider: ProviderInstance, projectId: ProjectId, force: boolean) {
   const key = `${threadId}:${provider.kind}:${provider.instance}`
-  const client = rpc()
+  const client = rpc(threadId)
   const seq = (catalogSeq.get(threadId) ?? 0) + 1
   catalogSeq.set(threadId, seq)
   catalogLoads.set(threadId, key)
   patch({ catalogLoading: key })
   try {
     const status = await client.call('providers.accounts.catalog', { provider, project_id: projectId, force_refresh: force })
-    if (getClient() === client && seq === catalogSeq.get(threadId)) { catalogs.set(threadId, { key, status }); if (catalogs.size > 100) catalogs.delete(catalogs.keys().next().value!); patch({ catalog: { key, status } }) }
+    if (threadClient(threadId) === client && seq === catalogSeq.get(threadId)) { catalogs.set(threadId, { key, status }); if (catalogs.size > 100) catalogs.delete(catalogs.keys().next().value!); patch({ catalog: { key, status } }) }
     return status
   } finally {
-    if (getClient() === client && seq === catalogSeq.get(threadId)) { catalogLoads.delete(threadId); patch({ catalogLoading: null }) }
+    if (threadClient(threadId) === client && seq === catalogSeq.get(threadId)) { catalogLoads.delete(threadId); patch({ catalogLoading: null }) }
   }
 }
 
 /** `changePermission`: `threads.update`, then the target again. */
 export async function setThreadMode(threadId: ThreadId, mode: PermissionMode) {
-  const client = rpc()
+  const client = rpc(threadId)
   await client.call('threads.update', { thread_id: threadId, permission_mode: mode })
-  if (getClient() !== client) return
+  if (threadClient(threadId) !== client) return
   await refreshLists()
-  if (getClient() === client) await loadTarget(threadId)
+  if (threadClient(threadId) === client) await loadTarget(threadId)
 }
 
 /** `chooseTarget` with the thread's target and a new model/effort. */
@@ -273,13 +273,13 @@ export async function setThreadModel(threadId: ThreadId, model: string | undefin
   const thread = getState().threads.find((t) => t.id === threadId) ?? getState().open.thread
   const provider = current?.target.provider ?? thread?.provider
   if (!provider) return
-  const client = rpc()
+  const client = rpc(threadId)
   const state = await client.call('threads.target.set', {
     thread_id: threadId,
     target: { provider, model, effort },
     inherit_account: !current?.account_override,
   })
-  if (getClient() === client) patch({ target: { threadId, state } })
+  if (threadClient(threadId) === client) patch({ target: { threadId, state } })
 }
 
 // ---- sending ----
@@ -288,10 +288,10 @@ export async function setThreadModel(threadId: ThreadId, model: string | undefin
 const queueing = new Set<string>()
 
 export async function loadQueue(threadId: ThreadId) {
-  const client = rpc()
+  const client = rpc(threadId)
   try {
     const r = await client.call('queue.list', { thread_id: threadId })
-    if (getClient() !== client) return
+    if (threadClient(threadId) !== client) return
     // Follow-ups still on their way to `queue.add` keep their place: a reload must not blink them out.
     patch((d) => {
       const listed = r.messages.filter((m) => m.thread_id === threadId)
@@ -308,7 +308,7 @@ export async function loadQueue(threadId: ThreadId) {
  * once and rejects (the composer gets the text back) when `queue.add` fails. */
 export async function sendToThread(threadId: ThreadId, message: UserMessage, delivery: 'send' | 'queue' | 'steer') {
   if (delivery === 'queue') {
-    const client = rpc(), item: QueuedMessage = { id: crypto.randomUUID(), thread_id: threadId, message }
+    const client = rpc(threadId), item: QueuedMessage = { id: crypto.randomUUID(), thread_id: threadId, message }
     queueing.add(item.id)
     patch((d) => ({ queued: { ...d.queued, [threadId]: [...(d.queued[threadId] ?? []), item] } }))
     try {
@@ -318,7 +318,7 @@ export async function sendToThread(threadId: ThreadId, message: UserMessage, del
       patch((d) => ({ queued: { ...d.queued, [threadId]: (d.queued[threadId] ?? []).filter((m) => m.id !== item.id) } }))
       throw e
     } finally { queueing.delete(item.id) }
-    if (getClient() === client) await loadQueue(threadId)
+    if (threadClient(threadId) === client) await loadQueue(threadId)
     return
   }
   const send: PendingSend = { id: crypto.randomUUID(), threadId, message, at: new Date().toISOString(), delivery, state: 'sending' }
@@ -346,8 +346,8 @@ async function deliverPending(send: PendingSend) {
       const done = await newChats.retry(send.threadId, chat.messageId === send.id ? undefined : { message: send.message, messageId: send.id })
       if (done?.state === 'failed') throw new Error(done.error)
       if (done?.adoptedId) return adoptNewChat(getFocusedPaneId(), send.threadId, done.adoptedId, send.id)
-    } else if (send.delivery === 'send') await rpc().call('threads.send', { thread_id: send.threadId, message: send.message, message_id: send.id })
-    else await rpc().call('threads.steer', { thread_id: send.threadId, id: send.id, message: send.message })
+    } else if (send.delivery === 'send') await rpc(send.threadId).call('threads.send', { thread_id: send.threadId, message: send.message, message_id: send.id })
+    else await rpc(send.threadId).call('threads.steer', { thread_id: send.threadId, id: send.id, message: send.message })
     updatePending(send.threadId, send.id, { state: 'accepted' })
   } catch (e) {
     updatePending(send.threadId, send.id, { state: 'failed', error: errorText(e) })
@@ -420,9 +420,9 @@ export function insertChipIntoComposer(draftKey: string, part: MentionPart): boo
 }
 
 export async function removeQueued(threadId: ThreadId, id: string) {
-  const client = rpc()
+  const client = rpc(threadId)
   await client.call('queue.remove', { thread_id: threadId, id })
-  if (getClient() === client) await loadQueue(threadId)
+  if (threadClient(threadId) === client) await loadQueue(threadId)
 }
 
 /** A queued follow-up sent into the running turn now. It leaves the queue first, so the turn's end cannot deliver it too;
@@ -434,7 +434,7 @@ export async function steerQueued(threadId: ThreadId, item: QueuedMessage) {
 }
 
 export async function interruptThread(threadId: ThreadId) {
-  await rpc().call('threads.interrupt', { thread_id: threadId })
+  await rpc(threadId).call('threads.interrupt', { thread_id: threadId })
 }
 
 /** A new chat from the home screen, optimistic (`composer/newChats.ts`): the thread gets its id here, its row and page show
@@ -459,7 +459,7 @@ export function launchNewChat(opts: {
     if (chat.state === 'failed') updatePending(opts.threadId, send.id, { state: 'failed', error: chat.error })
     else if (chat.messageId === send.id) updatePending(opts.threadId, send.id, { state: 'accepted' })
     // The list catches up behind the page; nothing waits for it.
-    if (getClient() === client) void refreshLists()
+    if (localClient() === client) void refreshLists()
   }))
   void selectPaneThread(paneId, opts.threadId)
   return opts.threadId
@@ -468,30 +468,31 @@ export function launchNewChat(opts: {
 /** The daemon made the thread under its own id (one that ignores ours): its copy replaces the optimistic one, and a page
  *  still showing ours follows it. */
 function adoptNewChat(paneId: string, from: ThreadId, to: ThreadId, sendId: string) {
-  const client = getClient()
+  // A new chat is made on the machine the user is at.
+  const client = localClient()
   removePending(from, sendId)
   newChats.forget(from)
   void refreshLists().then(() => {
-    if (getClient() === client && getPane(paneId)?.selectedId === from) void selectPaneThread(paneId, to)
+    if (localClient() === client && getPane(paneId)?.selectedId === from) void selectPaneThread(paneId, to)
   })
 }
 
 export async function loadBranches(projectId: ProjectId) {
-  const client = rpc()
+  const client = need(projectClient(projectId))
   try {
     const result = await client.call('git.branches', { project_id: projectId })
-    if (getClient() !== client) return
+    if (projectClient(projectId) !== client) return
     patch({ branches: { projectId, result } })
   } catch {
-    if (getClient() !== client) return
+    if (projectClient(projectId) !== client) return
     patch({ branches: { projectId, result: { current: null, branches: [] } } })
   }
 }
 
 // ---- attachments ----
 
-function assetsEndpoint(): { base: string; token: string } {
-  const { url, token } = rpc().endpoint
+function assetsEndpoint(threadId?: ThreadId): { base: string; token: string } {
+  const { url, token } = rpc(threadId).endpoint
   return { base: httpBase(url), token }
 }
 
@@ -503,15 +504,15 @@ export interface UploadedAsset {
 }
 
 /** `uploadFile`: POST the bytes to the daemon's `/assets`. */
-export async function uploadPath(path: string): Promise<UploadedAsset> {
+export async function uploadPath(path: string, threadId?: ThreadId): Promise<UploadedAsset> {
   const file = Bun.file(path)
   const name = path.split('/').pop() ?? 'file'
-  return uploadBytes(name, file.type || 'application/octet-stream', await file.arrayBuffer())
+  return uploadBytes(name, file.type || 'application/octet-stream', await file.arrayBuffer(), threadId)
 }
 
 /** Clipboard images use the same upload contract as files, without a temporary file. */
-export async function uploadBytes(name: string, mediaType: string, bytes: ArrayBuffer | Uint8Array): Promise<UploadedAsset> {
-  const { base, token } = assetsEndpoint()
+export async function uploadBytes(name: string, mediaType: string, bytes: ArrayBuffer | Uint8Array, threadId?: ThreadId): Promise<UploadedAsset> {
+  const { base, token } = assetsEndpoint(threadId)
   const response = await fetch(`${base}/assets`, {
     method: 'POST',
     headers: {

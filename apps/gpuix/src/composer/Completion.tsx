@@ -52,7 +52,7 @@ import { isFreeChatProject, type ContentPart, type NoteId, type NoteSummary, typ
 import { Icon } from '../icons.tsx'
 import { useControls } from '../kit/controls.ts'
 import { removalEdit, standingTokens, type Range } from './attached.ts'
-import { getClient, useApp } from '../state.ts'
+import { getState, localClient, ownProjectId, projectClient, threadClient, useApp } from '../state.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { useNativeWindowSize } from '../native/layout-hooks.ts'
 import { G } from './glyphs.ts'
@@ -217,16 +217,17 @@ export function useCompletion({
     if (term === null) return
     let live = true
     const id = setTimeout(() => {
-      const client = getClient()
+      const own = currentThreadId ? getState().threads.find((t) => t.id === currentThreadId) : undefined
+      const client = currentThreadId ? threadClient(currentThreadId, own?.machineId) : projectClient(projectId), ownProject = own && projectId ? ownProjectId(own) : projectId
       if (!client) return
       if (projectId)
         void client
-          .call('files.search', { project_id: projectId, query: term, limit: 12 })
+          .call('files.search', { project_id: ownProject ?? projectId, query: term, limit: 12 })
           .then((r) => live && setFiles({ query: term, files: r.files }))
           .catch(() => live && setFiles({ query: term, files: [] }))
       if (!term) { setFound({ query: '', threads: [] }); setNoteHits({ query: '', hits: NO_HITS }); return }
       void client
-        .call('threads.search', { project_id: projectId ?? null, all_projects: true, query: term, limit: 12 })
+        .call('threads.search', { project_id: ownProject ?? null, all_projects: true, query: term, limit: 12 })
         .then((r) => live && setFound({ query: term, threads: r.threads }))
         .catch(() => live && setFound({ query: term, threads: [] }))
       // Titles and previews match locally at once; the daemon adds body matches.
@@ -244,12 +245,13 @@ export function useCompletion({
   const catalogKey = projectId && provider ? `${projectId}:${provider.kind}:${provider.instance}` : ''
   const needsSkills = !!skill || !!slash || !!mention
   const mentionsOpen = !!mention
-  useEffect(() => { if (mentionsOpen && getClient()) { void refreshNotes(); void refreshTasks() } }, [mentionsOpen])
+  useEffect(() => { if (mentionsOpen && localClient()) { void refreshNotes(); void refreshTasks() } }, [mentionsOpen])
   useEffect(() => {
     if (!needsSkills || !projectId || !provider) return
     let live = true
-    void getClient()
-      ?.call('skills.list', { project_id: projectId, provider: provider.kind, instance: provider.instance })
+    const own = currentThreadId ? getState().threads.find((t) => t.id === currentThreadId) : undefined
+    void (currentThreadId ? threadClient(currentThreadId, own?.machineId) : projectClient(projectId))
+      ?.call('skills.list', { project_id: own ? ownProjectId(own) : projectId, provider: provider.kind, instance: provider.instance })
       .then((r) => live && setCatalog({ key: catalogKey, skills: r.skills }))
       .catch(() => live && setCatalog({ key: catalogKey, skills: [] }))
     return () => {

@@ -49,7 +49,7 @@ import { Icon } from './icons.tsx'
 import { MatrixLoader } from './MatrixLoader.tsx'
 import { Spinner } from './kit/Spinner.tsx'
 import { upsert as upsertTask } from './tasks/store.ts'
-import { getClient, getState, refreshLists, setThreadOpen, usePaneCompact, focusPane, getFocusedPaneId, usePaneAccess, getPane, selectPaneThread, setPane, set, useApp } from './state.ts'
+import { localClient, threadClient, ownProjectId, type StateThread, getState, refreshLists, setThreadOpen, usePaneCompact, focusPane, getFocusedPaneId, usePaneAccess, getPane, selectPaneThread, setPane, set, useApp } from './state.ts'
 import { useCurrentSpaceId } from './spaces/current.ts'
 import { FONT_UI } from './theme.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from './ui.tsx'
@@ -139,7 +139,7 @@ export function Composer({ thread, tray, placeholderEnter }: { thread: Thread | 
 
 // ---- wiring: an open thread ----
 
-function ThreadComposer({ thread, placeholderEnter }: { thread: Thread; placeholderEnter?: PaintTransformProps }) {
+function ThreadComposer({ thread, placeholderEnter }: { thread: StateThread; placeholderEnter?: PaintTransformProps }) {
   const pane = usePaneAccess()
   const threadId = thread.id
   // A send the daemon has not answered yet already counts as the running turn: the next Enter queues behind it.
@@ -160,7 +160,7 @@ function ThreadComposer({ thread, placeholderEnter }: { thread: Thread; placehol
   const provider = target?.target.provider ?? thread.provider
   const catalogKey = `${threadId}:${provider.kind}:${provider.instance}`
   useEffect(() => {
-    if (!pane.frozen) void loadCatalog(threadId, provider, thread.project_id, false).catch(() => {})
+    if (!pane.frozen) void loadCatalog(threadId, provider, ownProjectId(thread), false).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [catalogKey, thread.project_id, pane.frozen])
   const composerProviders = useMemo(
@@ -173,7 +173,7 @@ function ThreadComposer({ thread, placeholderEnter }: { thread: Thread; placehol
   const handoffSelected =
     !!target && (targetChanged || (target.target.model ?? null) !== (thread.model ?? null) || (target.target.effort ?? null) !== (thread.effort ?? null))
   const chooseTarget = async (next: ProviderInstance, model?: string, effort?: string, inherit = !target?.account_override) => {
-    const state = await getClient()!.call('threads.target.set', { thread_id: threadId, target: { provider: next, model, effort }, inherit_account: inherit })
+    const state = await threadClient(threadId, thread.machineId)!.call('threads.target.set', { thread_id: threadId, target: { provider: next, model, effort }, inherit_account: inherit })
     patch({ target: { threadId, state } })
   }
 
@@ -185,7 +185,7 @@ function ThreadComposer({ thread, placeholderEnter }: { thread: Thread; placehol
     const permission = modes.includes(thread.permission_mode) ? thread.permission_mode : modes.includes('supervised') ? 'supervised' : modes[0]
     if (!permission) throw new Error('This harness does not expose a supported permission mode.')
     const owner = activeEnvironment()
-    const switched = await getClient()!.call('coordinator.switch_harness', { project_id: thread.coordinator_project_id!, provider: next, model, effort, permission_mode: permission })
+    const switched = await threadClient(threadId, thread.machineId)!.call('coordinator.switch_harness', { project_id: thread.coordinator_project_id!, provider: next, model, effort, permission_mode: permission })
     if (owner !== activeEnvironment()) return
     const state = pane.get()
     set({ threads: state.threads.map(t => t.id === switched.id ? switched : t) })
@@ -232,7 +232,7 @@ function ThreadComposer({ thread, placeholderEnter }: { thread: Thread; placehol
       onModelChange={coordinator ? running ? undefined : (model, effort) => switchHarness(provider, model, effort) : (model, effort) => setThreadModel(threadId, model, effort)}
       onProviderChange={coordinator ? running ? undefined : (next, choice) => switchHarness(next, choice?.model, choice?.effort) : (next, choice) => chooseTarget(next, choice?.model, choice?.effort, !choice?.pinAccount)}
       catalogLoading={catalogLoading === catalogKey}
-      onReloadModels={(force) => loadCatalog(threadId, provider, thread.project_id, force).then(() => {})}
+      onReloadModels={(force) => loadCatalog(threadId, provider, ownProjectId(thread), force).then(() => {})}
       placeholderEnter={placeholderEnter}
     />
   )
@@ -343,13 +343,13 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
       sendDisabledReason={!provider ? 'Choose an available agent before sending.' : coordinator && !projectId ? 'Choose a project for the Coordinator.' : undefined}
       onSend={async (message, _delivery, snapshot) => {
         if (!provider) return
-        const client = getClient()
+        const client = localClient() // a new chat is made on the machine the user is at
         if (!client) throw new Error('Reconnect and try again.')
         // Enter starts the chat on this frame (`composer/newChats.ts`): the thread id is ours, the page switches and the
         // prompt flies into its bubble while the daemon makes the thread behind it.
         const threadId = uuidv7()
         const owner = activeEnvironment()
-        const live = () => getClient() === client && owner === activeEnvironment()
+        const live = () => localClient() === client && owner === activeEnvironment()
         // A daemon before 0.15.0 ignores the client's ids and names the thread itself: it gets the awaited create.
         const optimistic = optimisticCreates(getNav().version)
         const ids = (messageId: string) => (optimistic ? { thread_id: threadId, message_id: messageId } : {})
@@ -851,7 +851,7 @@ export function ComposerView(input: ComposerViewProps) {
     setError(null)
     const name = image.name ?? 'pasted-image.png'
     try {
-      const info = await uploadBytes(name, image.mediaType, image.data)
+      const info = await uploadBytes(name, image.mediaType, image.data, props.currentThreadId)
       // Native images accept data URIs, so previews need no temporary file.
       const path = `data:${image.mediaType};base64,${Buffer.from(image.data).toString('base64')}`
       setAttachments((list) => list.some((a) => a.hash === hash) ? list : [...list, { ...info, path, hash, label: nextAttachmentLabel(info.media_type, list.map((a) => a.label)) }])
@@ -870,7 +870,7 @@ export function ComposerView(input: ComposerViewProps) {
     setUploading((n) => n + fresh.length)
     for (const path of fresh) {
       try {
-        const info = await uploadPath(path)
+        const info = await uploadPath(path, props.currentThreadId)
         // Checked again as it lands: another add may have raced it between this upload and the next render.
         setAttachments((list) => newFiles(list, [path]).fresh.length ? [...list, { ...info, path, label: nextAttachmentLabel(info.media_type, list.map((a) => a.label)) }] : list)
       } catch (e) {

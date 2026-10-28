@@ -14,7 +14,7 @@ const client = {
   },
 }
 const real = await import('../state.ts')
-mock.module('../state.ts', () => ({ ...real, getClient: () => client }))
+mock.module('../state.ts', () => ({ ...real, getClient: () => client, localClient: () => client, threadClient: () => client, projectClient: () => client }))
 const { sendToThread } = await import('./store.ts')
 const message = (text: string) => ({ parts: [{ type: 'text' as const, text }] })
 const tick = () => new Promise(resolve => setTimeout(resolve, 10))
