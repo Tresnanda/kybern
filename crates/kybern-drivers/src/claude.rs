@@ -2565,22 +2565,33 @@ mod tests {
             let binary = root.path().join("claude-fixture");
             std::fs::write(&binary, "#!/usr/bin/env python3\nimport json,pathlib,sys\ntmp=pathlib.Path('argv.tmp')\ntmp.write_text(json.dumps(sys.argv[1:]))\ntmp.rename('argv.json')\nfor line in sys.stdin: pass\n").unwrap();
             std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
-            let spawned = super::ClaudeDriver::default()
-                .spawn(SessionConfig {
-                    cwd: root.path().into(),
-                    model: None,
-                    effort: None,
-                    permission_mode: mode,
-                    native_tool_bridge: None,
-                    resume_session_id: resume.map(str::to_string),
-                    resume_lacks_instructions: false,
-                    fork,
-                    rewind: None,
-                    binary: Some(binary),
-                    env: Default::default(),
-                })
-                .await
-                .unwrap();
+            // Another test thread may fork while this fixture's write handle is still open in it, and
+            // Linux then refuses to exec the file ("Text file busy"); that clears once the fork execs.
+            let mut attempts = 0;
+            let spawned = loop {
+                let result = super::ClaudeDriver::default()
+                    .spawn(SessionConfig {
+                        cwd: root.path().into(),
+                        model: None,
+                        effort: None,
+                        permission_mode: mode,
+                        native_tool_bridge: None,
+                        resume_session_id: resume.map(str::to_string),
+                        resume_lacks_instructions: false,
+                        fork,
+                        rewind: None,
+                        binary: Some(binary.clone()),
+                        env: Default::default(),
+                    })
+                    .await;
+                match result {
+                    Err(crate::DriverError::Io(error)) if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 50 => {
+                        attempts += 1;
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    }
+                    other => break other.unwrap(),
+                }
+            };
             let argv_path = root.path().join("argv.json");
             tokio::time::timeout(std::time::Duration::from_secs(3), async {
                 while !argv_path.exists() {
