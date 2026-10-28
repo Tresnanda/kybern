@@ -480,7 +480,10 @@ mod tests {
         assert!(store.outbox_wake_move(thread).unwrap());
         assert_eq!(store.outbox_get(waiting.id).unwrap().unwrap().next_attempt_at, None, "due now");
         assert!(store.outbox_get(other.id).unwrap().unwrap().next_attempt_at.is_some(), "another thread's move keeps its backoff");
-        assert!(store.outbox_get(failing.id).unwrap().unwrap().next_attempt_at.is_some(), "a move that failed for another reason keeps its backoff");
+        assert!(
+            store.outbox_get(failing.id).unwrap().unwrap().next_attempt_at.is_some(),
+            "a move that failed for another reason keeps its backoff"
+        );
         assert!(!store.outbox_wake_move(thread).unwrap(), "already due");
     }
 
