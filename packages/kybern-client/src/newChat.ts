@@ -8,7 +8,8 @@
 // shared by the GPUIX and mobile clients.
 
 import { partToken } from "./composerTokens.ts";
-import type { MessageId, PermissionMode, ProjectId, ProviderInstance, Thread, ThreadId, UserMessage } from "./types.ts";
+import { queuedPhase } from "./pendingSends.ts";
+import type { MachineId, MessageId, OutboxItem, PermissionMode, ProjectId, ProviderInstance, Thread, ThreadId, UserMessage } from "./types.ts";
 
 /** The quiet status line under the first message while the daemon makes a worktree. */
 export const PREPARING_WORKTREE = "Preparing worktree…";
@@ -125,8 +126,14 @@ export function mergeIntoCurrent(current: readonly Thread[], local: readonly Thr
   return mergeOptimisticThreads(current.filter((thread) => !seen.has(thread)), local);
 }
 
-/** Where a new chat's create stands: in flight, done (the daemon has the thread), or failed. */
-export type NewChatState = "creating" | "created" | "failed";
+/** Where a new chat's create stands: in flight, queued for a machine that is away, done (the daemon has the thread), or failed. */
+export type NewChatState = "creating" | "waiting" | "created" | "failed";
+
+/** What a create answers when the machine is away and the work went into the outbox instead: the chat waits for it. */
+export interface QueuedCreate {
+  queued: { outboxId: string };
+}
+export const isQueuedCreate = (value: unknown): value is QueuedCreate => !!value && typeof value === "object" && "queued" in value;
 
 /** One new chat whose thread the client named. `create` is the call that makes it; a retry calls it
  *  again with the same ids, which the daemon answers idempotently. */
@@ -137,6 +144,12 @@ export interface NewChat {
   /** The daemon makes a git worktree first: clients say "Preparing worktree…" until the turn runs. */
   worktree: boolean;
   thread: Thread;
+  /** The machine the thread is made on, when it is not the one the user is at. */
+  machineId?: MachineId;
+  /** That machine's name, for "Waiting for satyamas". */
+  machineName?: string;
+  /** The outbox item holding the create while the machine is away. */
+  outboxId?: string;
   state: NewChatState;
   error?: string;
   /** The daemon made the thread under another id (it ignored ours): clients move to this one. */
@@ -144,12 +157,12 @@ export interface NewChat {
 }
 
 /** The thread id a create answered with: a `Thread`, its id, or nothing (the client's id stands). */
-export function createdThreadId(result: Thread | ThreadId | void | null | undefined): ThreadId | undefined {
-  if (!result) return undefined;
+export function createdThreadId(result: Thread | ThreadId | QueuedCreate | void | null | undefined): ThreadId | undefined {
+  if (!result || isQueuedCreate(result)) return undefined;
   return typeof result === "string" ? result : result.id;
 }
 
-export type NewChatCreate = (message: UserMessage, messageId: MessageId) => Promise<Thread | ThreadId | void>;
+export type NewChatCreate = (message: UserMessage, messageId: MessageId) => Promise<Thread | ThreadId | QueuedCreate | void>;
 
 /**
  * The client's new chats, keyed by thread id. `start` begins a create and `retry` repeats a failed
@@ -184,8 +197,9 @@ export function createNewChats(
       if (next.adoptedId) options.onAdopt?.(threadId, next.adoptedId, next);
       return next;
     };
-    const promise = new Promise<Thread | ThreadId | void>((resolve) => resolve(chat.create(chat.message, chat.messageId))).then(
+    const promise = new Promise<Thread | ThreadId | QueuedCreate | void>((resolve) => resolve(chat.create(chat.message, chat.messageId))).then(
       (result) => {
+        if (isQueuedCreate(result)) return settle({ state: "waiting", error: undefined, outboxId: result.queued.outboxId });
         const id = createdThreadId(result);
         return settle({ state: "created", error: undefined, ...(id && id !== threadId ? { adoptedId: id } : {}) });
       },
@@ -216,9 +230,16 @@ export function createNewChats(
       emit();
       return run(input.threadId);
     },
+    /** A chat that is still waiting in the outbox from before this window started (read from `outbox.list`). */
+    restore(input: Omit<NewChat, "state" | "error">, create: NewChatCreate) {
+      if (chats.has(input.threadId)) return;
+      chats.set(input.threadId, { ...input, state: "waiting", create });
+      emit();
+    },
     /** Repeat the create with the same thread id. An edited message comes with its own message id. */
     retry(threadId: ThreadId, edit?: { message: UserMessage; messageId: MessageId }): Promise<NewChat> | null {
       const chat = chats.get(threadId);
+      if (chat?.state === "waiting") return Promise.resolve(chat);
       if (!chat || chat.state === "creating") return chat?.run ?? null;
       chats.set(threadId, {
         ...chat,
@@ -229,6 +250,24 @@ export function createNewChats(
       });
       emit();
       return run(threadId);
+    },
+    /** An outbox item changed: the chat it holds waits on, was taken by its machine (the thread exists there now), or failed.
+     *  Returns the chat when this changed it. */
+    outbox(item: Pick<OutboxItem, "id" | "state" | "attempts" | "last_error">): NewChat | undefined {
+      for (const [id, chat] of chats) {
+        if (chat.outboxId !== item.id || chat.state === "creating") continue;
+        const phase = queuedPhase(item, chat.machineName ?? "that machine");
+        const patch: Partial<NewChat> | null =
+          phase.phase === "delivered" ? (chat.state === "created" ? null : { state: "created", error: undefined })
+          : phase.phase === "failed" ? (chat.state === "failed" && chat.error === phase.error ? null : { state: "failed", error: phase.error, thread: { ...chat.thread, status: "failed" } })
+          : chat.state === "waiting" ? null : { state: "waiting", error: undefined, thread: { ...chat.thread, status: "running" } };
+        if (!patch) return undefined;
+        const next = { ...chat, ...patch };
+        chats.set(id, next);
+        emit();
+        return next;
+      }
+      return undefined;
     },
     /** The daemon lists the thread now: its own copy takes over. That includes a create that failed here
      *  after it reached the daemon (a dropped connection): the thread exists, so it loads like any other. */

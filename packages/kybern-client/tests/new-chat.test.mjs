@@ -124,3 +124,39 @@ test("merging into the current list keeps live changes and the daemon's copy of 
   assert.equal(settled.threads.find((t) => t.id === "new"), server, "the daemon's copy wins");
   assert.deepEqual(settled.listed, ["new"]);
 });
+
+test("a create the outbox holds waits; the machine taking it creates the chat, a failure fails it, a Retry queues again", async () => {
+  const chats = createNewChats();
+  let queued = 0;
+  const create = async () => ({ queued: { outboxId: `item${++queued}` } });
+  const waiting = await chats.start({ threadId: "t1", messageId: "m1", message: text("hi"), worktree: false, thread: thread("t1"), machineId: "sat", machineName: "satyamas" }, create);
+  assert.equal(waiting.state, "waiting");
+  assert.equal(waiting.outboxId, "item1");
+  assert.equal(chats.uncreated("t1"), true);
+  // Typing again while it waits must not queue a second create.
+  assert.equal((await chats.retry("t1")).state, "waiting");
+  assert.equal(queued, 1);
+  // Attempts on the same item keep it waiting without a change.
+  assert.equal(chats.outbox({ id: "item1", state: "sending", attempts: 2, last_error: null }), undefined);
+  // An unrelated item changes nothing.
+  assert.equal(chats.outbox({ id: "other", state: "delivered", attempts: 1, last_error: null }), undefined);
+  const failed = chats.outbox({ id: "item1", state: "expired", attempts: 9, last_error: null });
+  assert.equal(failed.state, "failed");
+  assert.match(failed.error, /satyamas did not come back/);
+  assert.equal(failed.thread.status, "failed");
+  const again = await chats.retry("t1");
+  assert.equal(again.state, "waiting");
+  assert.equal(again.outboxId, "item2");
+  assert.equal(chats.get("t1").thread.status, "running");
+  const done = chats.outbox({ id: "item2", state: "delivered", attempts: 1, last_error: null });
+  assert.equal(done.state, "created");
+  assert.equal(chats.uncreated("t1"), false);
+  assert.equal(chats.outbox({ id: "item2", state: "delivered", attempts: 1, last_error: null }), undefined);
+});
+
+test("an item that failed and is queued again by Retry in Settings puts the chat back to waiting", async () => {
+  const chats = createNewChats();
+  await chats.start({ threadId: "t1", messageId: "m1", message: text("hi"), worktree: false, thread: thread("t1"), machineName: "satyamas" }, async () => ({ queued: { outboxId: "item1" } }));
+  assert.equal(chats.outbox({ id: "item1", state: "failed", attempts: 3, last_error: "No checkout of this repository." }).error, "No checkout of this repository.");
+  assert.equal(chats.outbox({ id: "item1", state: "queued", attempts: 0, last_error: null }).state, "waiting");
+});
