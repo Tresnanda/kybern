@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { afterReviewSubmission, assertReviewDraftHead, bindReviewDraft, readReviewDraft, repairReviewPrompt, type ReviewDraft } from '@/state/prReviewModel'
-import type { PrActionKind, PrDetailResult, PrPageKind, PrPageResult } from '../../../../packages/kybern-client/src/types.ts'
+import type { MergeMethod, PrActionKind, PrDetailResult, PrPageKind, PrPageResult } from '../../../../packages/kybern-client/src/types.ts'
 import { load, save as persist } from './persist.ts'
 import { getData } from '../composer/store.ts'
 import { openThread } from '../nav/history.ts'
@@ -38,7 +38,8 @@ export function useReview(projectId: string, number: number, repo?: string) {
     }, e => { if (!canceled) { setError(String(e)); setLoading(false) } })
     return () => { canceled = true }
   }, [projectId, number, repo, revision, connection])
-  const submit = async (action: PrActionKind, confirmedHead?: string, threadId?: string): Promise<boolean> => {
+  /** `options`: `merge` and `enable_auto_merge` take a method; `merge` may be an admin merge ("Merge anyway"). */
+  const submit = async (action: PrActionKind, confirmedHead?: string, threadId?: string, options: { merge_method?: MergeMethod; admin?: boolean } = {}): Promise<boolean> => {
     if (!detail || submitting.current || !getClient()) return false
     const submitted = draftRef.current
     const review = ['comment', 'approve', 'request_changes'].includes(action)
@@ -46,25 +47,27 @@ export function useReview(projectId: string, number: number, repo?: string) {
       if (confirmedHead && confirmedHead !== detail.head_sha) throw new Error('The pull request changed while this confirmation was open. Cancel, review the current changes and open the action again.')
       if (review) assertReviewDraftHead(submitted, detail.head_sha)
       submitting.current = true; setBusy(true); setActionError(null)
-      await getClient()!.call('github.pr.action', { project_id: projectId, number, action, head_sha: detail.head_sha, body: submitted.body, inline_comments: review ? submitted.inline : [], ...(threadId ? { thread_id: threadId } : {}), ...member })
+      await getClient()!.call('github.pr.action', { project_id: projectId, number, action, head_sha: detail.head_sha, body: submitted.body, inline_comments: review ? submitted.inline : [], ...(threadId ? { thread_id: threadId } : {}), ...options, ...member })
       if (review) save(afterReviewSubmission(draftRef.current, submitted))
       if (alive.current) refresh(n => n + 1)
       return true
     } catch (e) { if (alive.current) setActionError(String(e)); return false }
     finally { submitting.current = false; if (alive.current) setBusy(false) }
   }
-  const repair = async (linkedId?: string): Promise<boolean> => {
+  /** `prompt`: an agent button's own text (fix a check, address feedback, resolve conflicts): it ignores the review draft and leaves it as it was. */
+  const agentThread = useRef<string | undefined>(undefined)
+  const repair = async (linkedId?: string, prompt?: string): Promise<boolean> => {
     const settings = getData().settings
     const client = getClient()
     if (!detail || !settings || !client || submitting.current) return false
     try {
       // Refused before a thread exists, so a member pull request leaves no orphan chat.
       if (repo) throw new Error("A pull request of a group project can't be checked out into a chat yet. Open that repository as its own project.")
-      assertReviewDraftHead(draftRef.current, detail.head_sha)
+      if (!prompt) assertReviewDraftHead(draftRef.current, detail.head_sha)
       const submitted = draftRef.current
-      const prompt = repairReviewPrompt(number, detail.pull_request.title, detail.pull_request.url, detail.head_sha, submitted)
+      const text = prompt ?? repairReviewPrompt(number, detail.pull_request.title, detail.pull_request.url, detail.head_sha, submitted)
       submitting.current = true; setBusy(true); setActionError(null)
-      let target = submitted.threadId === 'new' ? undefined : submitted.threadId ?? linkedId
+      let target = prompt ? linkedId ?? agentThread.current : submitted.threadId === 'new' ? undefined : submitted.threadId ?? linkedId
       if (!target) {
         const created = await client.call('threads.create', {
           project_id: projectId,
@@ -74,10 +77,11 @@ export function useReview(projectId: string, number: number, repo?: string) {
         })
         target = created.id
         // Preserve the created identity before checkout: retry reuses it.
-        save({ ...draftRef.current, threadId: target })
+        if (prompt) agentThread.current = target
+        else save({ ...draftRef.current, threadId: target })
       }
       await client.call('github.pr.action', { project_id: projectId, number, action: 'checkout', thread_id: target, head_sha: detail.head_sha, for_repair: true, ...member })
-      await client.call('threads.send', { thread_id: target, message: { parts: [{ type: 'text', text: prompt }] } })
+      await client.call('threads.send', { thread_id: target, message: { parts: [{ type: 'text', text }] } })
       await refreshLists()
       openThread(target)
       return true

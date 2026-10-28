@@ -60,6 +60,20 @@ selection elsewhere.
 
 Known gaps: a disabled `TextField` shows the ink edge only (the spec's 45° hatch needs a repeating pattern the renderer lacks).
 
+## Status, people and inspector pieces (ADE-85, the pull request sidebar)
+
+- `tone.ts`: `Tone` (`success` | `info` | `warning` | `danger` | `neutral`) and `toneColor(theme, tone)`: green, blue, amber, red and a quiet ink. Verdicts,
+  chips and check glyphs read the same mapping.
+- `Avatar` (`login`, `url?`, `size` 16): GitHub's picture when there is one, else the first letter on a hue taken from the login. The picture is fetched once
+  per url into the image cache (`transcript/imageFiles.ts`) and painted from that file; only `https` urls, and GitHub's CDN is asked for twice the slot.
+  A failed fetch keeps the letter for the session. 1 px white edge at 10%.
+- `StatusChip` (`tone`, `icon?`, `dot?`, children): the tone at ~11% behind a 14 px glyph (or a 7 px label dot) and the label in normal ink; 22 high, radius 6.
+- `Card` (`tone?`): radius 13, padding 14, 10 between parts. A tone tints it (7% fill, 17% edge); without one it is the neutral card (`cardEdge`).
+- `InspectorGroup` / `InspectorRow` / `SectionHeader`: hairline-separated groups of a 76 px label column and its values, as `tasks/TaskDetail.tsx` does inline.
+- `AgentAction` (children, `onClick`): the quiet "Fix with agent" / "Address feedback" action: accent tint 16% (24% hover), 22 high, radius 7, a sparkle.
+  It sits where the problem is, so a card with three still has one primary.
+- `SplitButton` gained `icon` (a leading 16 px glyph source) and `block` (full width: the label part grows and centres).
+
 ## Verifying (the gallery)
 
 `src/kit/gallery/` renders a named *section* of the kit with GPUIX; states (`visual/kit/steps/*.ts`) say how to drive

@@ -23,10 +23,14 @@ export interface SplitButtonProps {
   testId?: string
   menuTestId?: string
   menuLabel?: string
+  /** A leading 16 px glyph source (`pulls/detail/glyphs.ts`). */
+  icon?: string
+  /** Full width: the label part grows and centres, the menu part keeps its 24 px. */
+  block?: boolean
   style?: StyleDesc
 }
 
-export function SplitButton({ children, variant = 'primary', size = 'md', onClick, disabled = false, keepMenu = false, menu, menuAlign = 'end', testId, menuTestId, menuLabel = 'More actions', style }: SplitButtonProps) {
+export function SplitButton({ children, variant = 'primary', size = 'md', onClick, disabled = false, keepMenu = false, menu, menuAlign = 'end', testId, menuTestId, menuLabel = 'More actions', icon, block = false, style }: SplitButtonProps) {
   const c = useControls()
   const g = CONTROL[size]
   const v = variant === 'primary' ? c.primary : c.secondary
@@ -39,12 +43,13 @@ export function SplitButton({ children, variant = 'primary', size = 'md', onClic
   const mbg = menuOff ? c.disabled.bg : v.bg
   const part: StyleDesc = { display: 'flex', alignItems: 'center', justifyContent: 'center', height: g.height, backgroundColor: bg, cursor: disabled ? 'default' : 'pointer' }
   return (
-    <div style={{ display: 'flex', alignItems: 'center', flexShrink: 0, ...style }}>
+    <div style={{ display: 'flex', alignItems: 'center', flexShrink: 0, ...(block ? { width: '100%' } : {}), ...style }}>
       <div
         testId={testId} role="button" aria-label={children} aria-disabled={disabled || undefined} tabIndex={disabled ? -1 : 0}
         onClick={disabled ? undefined : onClick} onKeyDown={(e) => { if (!disabled && (e.key === 'enter' || e.key === 'space')) onClick() }}
-        style={{ ...part, paddingLeft: g.padX, paddingRight: g.padX - 2, borderTopLeftRadius: r, borderBottomLeftRadius: r, ...(disabled ? {} : { hover: { backgroundColor: v.hover }, active: { backgroundColor: v.press }, focusVisible: { outlineWidth: 2, outlineColor: c.focus, outlineOffset: 0 } }) }}
+        style={{ ...part, gap: g.gap, paddingLeft: g.padX, paddingRight: g.padX - 2, ...(block ? { flexGrow: 1, minWidth: 0 } : {}), borderTopLeftRadius: r, borderBottomLeftRadius: r, ...(disabled ? {} : { hover: { backgroundColor: v.hover }, active: { backgroundColor: v.press }, focusVisible: { outlineWidth: 2, outlineColor: c.focus, outlineOffset: 0 } }) }}
       >
+        {icon && <Icon source={icon} size={16} color={fg} style={{ pointerEvents: 'none' }} />}
         <Label color={fg} size={g.font} lineHeight={g.line} weight={weight} style={{ whiteSpace: 'nowrap', pointerEvents: 'none' }}>{children}</Label>
       </div>
       {/* The seam keeps the fill continuous; the line is 22% of the label colour. */}
