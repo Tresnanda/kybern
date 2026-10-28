@@ -19,7 +19,6 @@
 /.claude/
 /.github/
 /.cargo/
-/apps/desktop/
 /apps/gpuix/
 **/node_modules/
 /apps/mobile/.expo/

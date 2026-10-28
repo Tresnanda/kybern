@@ -26,14 +26,12 @@ jobs:
     # Pull requests run only the jobs their files can affect. main runs every
     # job on every push (releases require all of them), so there every output
     # is true. The paths are the inputs of each job, not of the product:
-    #   rust     the Cargo workspace, which includes apps/desktop/src-tauri, and
-    #            the transcript fixtures its tests embed
-    #   desktop  the Tauri frontend, the shared TypeScript client, the scripts,
-    #            workflows and dist config its regression tests read, and the
-    #            fixtures and daemon visuals script its unit tests load
-    #   webkit   what the Tauri WebKit fixtures build and run against
-    #   gpuix    the GPUIX app, plus apps/desktop (it imports the Tauri sources
-    #            through `@/`, their node_modules, tauri.conf.json and assets)
+    #   rust     the Cargo workspace and the transcript fixtures its tests embed
+    #   release  the scripts, workflows, dist config and Cursor SDK host the
+    #            release and tooling regression tests read
+    #   gpuix    the GPUIX app, the shared TypeScript client (its tests run
+    #            here), the branded background GPUIX bundles, and the fixtures
+    #            and daemon visuals script the client tests load
     name: changes
     runs-on: ubuntu-24.04
     permissions:
@@ -42,8 +40,7 @@ jobs:
       pull-requests: read
     outputs:
       rust: ${{ steps.paths.outputs.rust }}
-      desktop: ${{ steps.paths.outputs.desktop }}
-      webkit: ${{ steps.paths.outputs.webkit }}
+      release: ${{ steps.paths.outputs.release }}
       gpuix: ${{ steps.paths.outputs.gpuix }}
     steps:
       - id: paths
@@ -62,10 +59,9 @@ jobs:
           output() { if matches "$2"; then echo "$1=true"; else echo "$1=false"; fi >> "$GITHUB_OUTPUT"; }
           # Editing this workflow or its setup action runs everything.
           self='^\.github/(workflows/ci\.yml|actions/setup-pnpm-apps/)'
-          output rust "$self|^(crates/|apps/desktop/src-tauri/|fixtures/|Cargo\.(toml|lock)$|rust(-toolchain|fmt)\.toml$|\.cargo/)"
-          output desktop "$self|^(apps/desktop/|packages/|scripts/|fixtures/|\.github/|dist-workspace\.toml$|Cargo\.toml$|crates/kybern/dist\.toml$|crates/kybern-drivers/src/cursor/sdk/|crates/kybern-daemon/src/visuals/)"
-          output webkit "$self|^(apps/desktop/|packages/|crates/|fixtures/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|\.cargo/)"
-          output gpuix "$self|^(apps/gpuix/|apps/desktop/|packages/)"
+          output rust "$self|^(crates/|fixtures/|Cargo\.(toml|lock)$|rust(-toolchain|fmt)\.toml$|\.cargo/)"
+          output release "$self|^(scripts/|\.github/|dist-workspace\.toml$|Cargo\.toml$|crates/kybern/dist\.toml$|crates/kybern-drivers/src/cursor/sdk/)"
+          output gpuix "$self|^(apps/gpuix/|packages/|assets/release-background\.png$|fixtures/|crates/kybern-daemon/src/visuals/)"
 
   fmt:
     name: rustfmt
@@ -98,18 +94,16 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # Pull requests restore main's cache; only main writes it, which
-          # keeps the repository's cache storage under its limit. The WebKit
-          # job restores the macOS one (same key, so the cache
-          # main already holds).
+          # keeps the repository's cache storage under its limit.
           shared-key: check
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Linux desktop and credential-store dependencies
+      - name: Linux credential-store dependencies
         if: runner.os == 'Linux'
         # Usually under a minute; a stalled mirror once held this step for 18 minutes.
         timeout-minutes: 6
         run: |
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
-          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y libdbus-1-dev
       - name: clippy
         run: >
           cargo clippy --workspace --all-targets
@@ -117,24 +111,18 @@ jobs:
       - name: test
         run: cargo test --workspace
 
-  desktop:
-    # Platform-independent checks run once, on Linux. The macOS-only WebKit
-    # fixtures are the `webkit` job.
-    name: desktop (typecheck + lint + test + build)
+  release:
+    name: release checks
     needs: changes
-    if: needs.changes.outputs.desktop == 'true'
+    if: needs.changes.outputs.release == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ./.github/actions/setup-pnpm-apps
-      - name: typecheck
-        working-directory: apps/desktop
-        run: pnpm typecheck
-      - name: test
-        working-directory: apps/desktop
-        run: pnpm test
-      - name: Release gate regression tests
-        run: node --test scripts/check-release-ci.test.mjs scripts/verify-macos-signing.test.mjs
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Release gate and updater manifest regression tests
+        run: node --test scripts/check-release-ci.test.mjs scripts/updater-manifest.test.mjs
       - name: release.yml matches dist's output
         run: |
           version=$(sed -n 's/^cargo-dist-version = "\(.*\)"$/\1/p' dist-workspace.toml)
@@ -142,17 +130,11 @@ jobs:
           node scripts/check-release-workflow.mjs
       - name: Cursor SDK host lifecycle
         run: node --test crates/kybern-drivers/src/cursor/sdk/host.test.mjs
-      - name: lint
-        working-directory: apps/desktop
-        run: pnpm lint
-      - name: build
-        working-directory: apps/desktop
-        run: pnpm build
 
   gpuix:
     # GPUIX has no native runner here (its window checks need a display), but
-    # its types and unit tests do not. It imports the Tauri sources through
-    # `@/`, so their dependencies are installed too.
+    # its types and unit tests do not. The shared TypeScript client's tests run
+    # here too.
     name: gpuix (typecheck + test)
     needs: changes
     if: needs.changes.outputs.gpuix == 'true'
@@ -160,8 +142,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-pnpm-apps
-        with:
-          gpuix: 'true'
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.3
@@ -176,196 +156,8 @@ jobs:
       - name: test
         working-directory: apps/gpuix
         run: bun test
-
-  webkit:
-    # The Tauri frontend in system WebKit (check-rendering.mjs). Each fixture
-    # takes 5 to 20 seconds, almost all of it the page itself running, so the
-    # time is spent on a runner's clock and CI is shortest when the fixtures are
-    # spread over runners. They are independent, hence four shards of roughly
-    # equal length. Within a shard the invocations share one Vite build per
-    # distinct build environment and one compiled Swift runner through
-    # KYBERN_RENDER_CACHE_DIR.
-    name: native WebKit (${{ matrix.shard }})
-    needs: changes
-    if: needs.changes.outputs.webkit == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [interactive, features, rendering-1, rendering-2]
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ./.github/actions/setup-pnpm-apps
-      - name: Share builds between fixtures
-        shell: bash
-        run: |
-          mkdir -p "$RUNNER_TEMP/render-cache"
-          echo "KYBERN_RENDER_CACHE_DIR=$RUNNER_TEMP/render-cache" >> "$GITHUB_ENV"
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        if: matrix.shard == 'interactive'
-        with:
-          toolchain: "1.99.1"
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: matrix.shard == 'interactive'
-        with:
-          # The debug dependencies `check (macos-15)` builds for the tests;
-          # only that job saves them.
-          shared-key: check
-          save-if: false
-      - name: Build visual fixture binaries
-        if: matrix.shard == 'interactive'
-        env:
-          CARGO_TARGET_DIR: ${{ github.workspace }}/target
-        run: cargo build -p kybern
-      - name: Native WebKit durable interactive visuals
-        if: matrix.shard == 'interactive'
-        timeout-minutes: 10
-        working-directory: apps/desktop
-        shell: bash
-        env:
-          KYBERN_PERF_FOREGROUND: '1'
-          KYBERN_PERF_KEEP_ACTIVE: '1'
-          KYBERN_PERF_WIDTH: '1100'
-          KYBERN_PERF_DAEMON_BINARY: ${{ github.workspace }}/target/debug/kybernd
-          KYBERN_PERF_CLI_BINARY: ${{ github.workspace }}/target/debug/kybern
-          KYBERN_PERF_SHOTS_DIR: ${{ runner.temp }}/native-visuals/screenshots
-        run: |
-          mkdir -p "$KYBERN_PERF_SHOTS_DIR"
-          # The fixture requires document.hidden=false and reports a failure
-          # when the runner cannot provide a visible foreground WebKit window.
-          node scripts/check-rendering.mjs visuals | tee "$RUNNER_TEMP/native-visuals/visuals.log"
-      - name: Upload native visual diagnostics
-        if: matrix.shard == 'interactive' && !cancelled()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: native-visuals-macos-15
-          path: ${{ runner.temp }}/native-visuals
-          if-no-files-found: ignore
-      - name: Native WebKit accounts, native subagents, and pull request review
-        if: matrix.shard == 'features' && !cancelled()
-        timeout-minutes: 30
-        working-directory: apps/desktop
-        shell: bash
-        env:
-          KYBERN_PERF_FOREGROUND: '1'
-          KYBERN_PERF_KEEP_ACTIVE: '1'
-          KYBERN_PERF_SHOTS_DIR: ${{ runner.temp }}/native-feature-ui/screenshots
-        run: |
-          mkdir -p "$KYBERN_PERF_SHOTS_DIR"
-          for fixture in accounts native-subagents pr-review; do
-            for theme in light dark; do
-              for width in 1100 480; do
-                log="$RUNNER_TEMP/native-feature-ui/$fixture-$theme-$width.log"
-                echo "::group::Native WebKit $fixture ($theme, ${width}px)"
-                KYBERN_FIXTURE_THEME="$theme" KYBERN_ORCH_THEME="$theme" KYBERN_PERF_WIDTH="$width" \
-                  node scripts/check-rendering.mjs "$fixture" | tee "$log"
-                node --input-type=module - "$fixture" "$theme" "$width" "$log" <<'NODE'
-          import { readFileSync } from 'node:fs';
-          const [fixture, theme, width, log] = process.argv.slice(2);
-          const reports = readFileSync(log, 'utf8').split('\n').flatMap(line => {
-            try { return [JSON.parse(line)]; } catch { return []; }
-          });
-          const result = reports.findLast(report => typeof report.pass === 'boolean');
-          if (!result?.pass || result.theme !== theme || (result.width !== undefined && result.width !== Number(width))) {
-            throw new Error(`Native acceptance failed or did not report the requested ${fixture}/${theme}/${width} matrix: ${JSON.stringify(result)}`);
-          }
-          // The accounts fixture permits an assisted hidden-window diagnostic
-          // locally. It is not visible UI acceptance and must fail this CI job.
-          if (fixture === 'accounts' && (result.keyboardFocusAssisted !== false || result.limits?.length)) {
-            throw new Error(`Native foreground acceptance unavailable: ${JSON.stringify(result)}`);
-          }
-          NODE
-                echo "::endgroup::"
-              done
-            done
-          done
-      - name: Upload native feature UI diagnostics
-        if: matrix.shard == 'features' && !cancelled()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: native-feature-ui-macos-15
-          path: ${{ runner.temp }}/native-feature-ui
-          if-no-files-found: ignore
-      - name: Build the production frontend for the window material check
-        if: matrix.shard == 'rendering-1'
-        working-directory: apps/desktop
-        run: pnpm exec vite build
-      - name: Native WebKit theme provider lifecycle
-        if: matrix.shard == 'rendering-1' && !cancelled()
-        working-directory: apps/desktop
-        run: node scripts/check-rendering.mjs theme-provider
-      - name: Native WebKit window materials
-        if: matrix.shard == 'rendering-1' && !cancelled()
-        working-directory: apps/desktop
-        run: node --experimental-strip-types scripts/check-window-material.mjs
-      - name: Native WebKit rendering
-        if: matrix.shard == 'rendering-1' && !cancelled()
-        working-directory: apps/desktop
-        run: node scripts/check-rendering.mjs
-      - name: Native WebKit context menus
-        if: matrix.shard == 'rendering-1' && !cancelled()
-        working-directory: apps/desktop
-        run: node scripts/check-rendering.mjs materials
-      - name: Native WebKit large transcript scaling
-        if: matrix.shard == 'rendering-1' && !cancelled()
-        working-directory: apps/desktop
-        run: node scripts/check-rendering.mjs scaling
-      - name: Native WebKit virtual transcript interactions
-        if: matrix.shard == 'rendering-1' && !cancelled()
-        working-directory: apps/desktop
-        run: node scripts/check-rendering.mjs interaction
-      - name: Native WebKit history retention
-        if: matrix.shard == 'rendering-2' && !cancelled()
-        working-directory: apps/desktop
-        run: |
-          node scripts/check-rendering.mjs history-retention
-          for offset in 100 200 400 1000 100 200 400 1000; do
-            VITE_HISTORY_READING_OFFSET=$offset KYBERN_PERF_WIDTH=480 node scripts/check-rendering.mjs history-retention
-          done
-      - name: Native WebKit deferred tool output
-        if: matrix.shard == 'rendering-1' && !cancelled()
-        working-directory: apps/desktop
-        run: node scripts/check-rendering.mjs tool-memory
-      - name: Native WebKit usage environment isolation
-        if: matrix.shard == 'rendering-1' && !cancelled()
-        working-directory: apps/desktop
-        run: node scripts/check-rendering.mjs usage
-      - name: Native WebKit terminal graphics lifecycle
-        if: matrix.shard == 'rendering-1' && !cancelled()
-        working-directory: apps/desktop
-        run: node scripts/check-rendering.mjs terminal-memory
-      - name: Native WebKit Markdown memory
-        if: matrix.shard == 'rendering-1' && !cancelled()
-        working-directory: apps/desktop
-        run: node scripts/check-rendering.mjs markdown-memory
-      - name: Native WebKit worker lifecycle
-        if: matrix.shard == 'rendering-2' && !cancelled()
-        working-directory: apps/desktop
-        run: node scripts/check-rendering.mjs worker-lifecycle
-      - name: Native WebKit icon lifecycle
-        if: matrix.shard == 'rendering-2' && !cancelled()
-        working-directory: apps/desktop
-        run: node scripts/check-rendering.mjs icon-swap
-      - name: Native WebKit question forms
-        if: matrix.shard == 'rendering-2' && !cancelled()
-        working-directory: apps/desktop
-        run: node scripts/check-rendering.mjs questions
-      - name: Native WebKit artifact previews
-        if: matrix.shard == 'rendering-2' && !cancelled()
-        working-directory: apps/desktop
-        run: node scripts/check-rendering.mjs artifacts
-      - name: Native WebKit background continuation
-        if: matrix.shard == 'rendering-2' && !cancelled()
-        working-directory: apps/desktop
-        run: node scripts/check-rendering.mjs continuation
-      - name: Native WebKit session picker
-        if: matrix.shard == 'rendering-2' && !cancelled()
-        working-directory: apps/desktop
-        run: node scripts/check-rendering.mjs sessions
-      - name: Native WebKit chat and environment controls
-        if: matrix.shard == 'rendering-2' && !cancelled()
-        working-directory: apps/desktop
-        run: node scripts/check-rendering.mjs chat-fixes
+      - name: shared client tests
+        run: node --experimental-strip-types --test packages/kybern-client/tests/*.test.mjs
 
   ci:
     # One check that is red when any job failed or was cancelled, and green when
@@ -373,7 +165,7 @@ jobs:
     # rule needs only this name.
     name: CI
     if: always()
-    needs: [changes, fmt, check, desktop, gpuix, webkit]
+    needs: [changes, fmt, check, release, gpuix]
     runs-on: ubuntu-24.04
     steps:
       - env:

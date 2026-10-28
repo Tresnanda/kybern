@@ -1920,7 +1920,7 @@ mod rotation_tests {
         assert_eq!(project_provider_usage(&events).context.map(|context| context.used_tokens), Some(400));
     }
 
-    /// Row signatures shared with `apps/desktop/transcript.test.mjs`: the reload projector and the
+    /// Row signatures shared with `packages/kybern-client/tests/transcript.test.mjs`: the reload projector and the
     /// live reducer must read each captured rotation the same way.
     #[test]
     fn rotation_fixtures_project_to_the_shared_signatures() {

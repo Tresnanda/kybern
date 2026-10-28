@@ -9,7 +9,6 @@ members = [
   "crates/kybern-client",
   "crates/kybern-cli",
   "crates/kybern",
-  "apps/desktop/src-tauri",
 ]
 # The GPUIX native checkout the GPUIX client builds from (apps/gpuix/native).
 exclude = ["apps/gpuix/native/upstream"]
@@ -69,8 +68,9 @@ strip = true
 [profile.dist]
 inherits = "release"
 
-# Proc-macro dylibs are loaded by later Cargo invocations in the desktop
-# sidecar build. Stripping them on macOS makes those cached dylibs unloadable;
-# shipped binaries still use the release profile's strip setting above.
+# Proc-macro dylibs are loaded by later Cargo invocations that reuse a release
+# target directory. Stripping them on macOS makes those cached dylibs
+# unloadable; shipped binaries still use the release profile's strip setting
+# above.
 [profile.release.build-override]
 strip = false

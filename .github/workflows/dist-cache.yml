@@ -25,7 +25,6 @@ on:
       - 'rust-toolchain.toml'
       - '.cargo/**'
       - 'crates/**'
-      - 'apps/desktop/src-tauri/**'
       - 'dist-workspace.toml'
       - '.github/dist-build-setup.yml'
       - '.github/workflows/dist-cache.yml'

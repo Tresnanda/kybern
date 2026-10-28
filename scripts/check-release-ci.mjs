@@ -6,7 +6,7 @@ import { resolve } from 'node:path'
 // their files cannot affect, but main runs all of them, so a skipped job on the
 // release commit means the gate cannot be trusted. The `changes` and `CI`
 // bookkeeping jobs are not listed; the run's own conclusion already covers them.
-export const requiredJobs = ['rustfmt', 'clippy + test (ubuntu-24.04)', 'clippy + test (macos-15)', 'desktop (typecheck + lint + test + build)', 'gpuix (typecheck + test)', 'native WebKit (interactive)', 'native WebKit (features)', 'native WebKit (rendering-1)', 'native WebKit (rendering-2)']
+export const requiredJobs = ['rustfmt', 'clippy + test (ubuntu-24.04)', 'clippy + test (macos-15)', 'release checks', 'gpuix (typecheck + test)']
 
 export function assessCI(runs, sha) {
   // PR checks may test a merge ref. Only the main push for this exact commit qualifies.

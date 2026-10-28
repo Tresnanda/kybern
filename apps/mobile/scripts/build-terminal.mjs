@@ -1,10 +1,12 @@
-// Rebuild the offline terminal after updating desktop's pinned xterm packages.
+// Rebuild the offline terminal after updating the pinned xterm packages.
+// XTERM_PACKAGES is a folder with @xterm/xterm and @xterm/addon-fit installed.
 import { createRequire } from "node:module";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const require = createRequire(resolve(root, "../desktop/package.json"));
+if (!process.env.XTERM_PACKAGES) throw new Error("Set XTERM_PACKAGES to a folder with @xterm/xterm and @xterm/addon-fit installed.");
+const require = createRequire(resolve(process.env.XTERM_PACKAGES, "package.json"));
 const xterm = dirname(dirname(require.resolve("@xterm/xterm")));
 const fit = require.resolve("@xterm/addon-fit");
 const script = (path) =>

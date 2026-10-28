@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Package Kybern GPUIX (apps/gpuix) as a Windows x64 per-user installer and sign
 # it for the updater: dist/kybern-gpuix_<version>_x64-setup.exe plus its minisign
-# .sig, signed with the same key as the Tauri desktop app. Runs in Git Bash on a
+# .sig, signed with the updater key. Runs in Git Bash on a
 # Windows host (the CI job is `gpuix-windows` in desktop.yml).
 #
 # Usage: scripts/bundle-gpuix-windows.sh
@@ -13,7 +13,7 @@
 # Requires: the patched native addon (apps/gpuix/native/update.sh on Windows with
 # KYBERN_GPUIX_TARGET=x86_64-pc-windows-msvc), release builds of kybernd and kybern,
 # bun, NSIS (`makensis` on PATH), Visual Studio's C++ redistributable folder, and
-# `pnpm install` in apps/desktop (the Tauri signer).
+# `pnpm install` in apps/gpuix (the Tauri CLI's updater signer).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -50,6 +50,6 @@ if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
   exit 1
 fi
 SIGN_FILE="$(winpath "$DIST")/$NAME"
-(cd apps/desktop && node node_modules/@tauri-apps/cli/tauri.js signer sign "$SIGN_FILE")
+(cd apps/gpuix && node node_modules/@tauri-apps/cli/tauri.js signer sign "$SIGN_FILE")
 (cd apps/gpuix && bun scripts/verify-archive.ts "$SIGN_FILE")
 echo "done: $DIST/$NAME"
