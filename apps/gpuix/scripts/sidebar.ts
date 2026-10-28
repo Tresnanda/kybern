@@ -110,12 +110,6 @@ await step('filter-menu', async () => {
   await shot('filter-menu')
 })
 
-await step('environment', async () => {
-  await app.getByTestId('environment-switcher').click()
-  await sleep(250)
-  await shot('environment-menu')
-})
-
 await step('search-tooltip', async () => {
   await app.getByTestId('sidebar-search').hover()
   await sleep(900)

@@ -1,14 +1,14 @@
-import { afterAll, beforeAll, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 const config = mkdtempSync(path.join(tmpdir(), 'gpuix-windows-'))
 process.env.KYBERN_CLIENT_CONFIG_DIR = config
-const { openWindowFor, windowClaims } = await import('./registry.ts')
+const { askWindow, quitOtherWindows, socketPath, windowClaims } = await import('./registry.ts')
 const hosts: ReturnType<typeof Bun.spawn>[] = []
-async function host(environment: string) {
-  const child = Bun.spawn(['bun', path.join(import.meta.dir, 'host.fixture.ts'), environment], { env: { ...process.env, KYBERN_CLIENT_CONFIG_DIR: config }, stdin: 'pipe', stdout: 'pipe' })
+async function host(name: string) {
+  const child = Bun.spawn(['bun', path.join(import.meta.dir, 'host.fixture.ts'), name], { env: { ...process.env, KYBERN_CLIENT_CONFIG_DIR: config }, stdin: 'pipe', stdout: 'pipe' })
   hosts.push(child)
   const reader = child.stdout.getReader(), lines: string[] = []
   const next = async () => { for (;;) { const { value } = await reader.read(); const text = new TextDecoder().decode(value); lines.push(...text.split('\n').filter(Boolean)); if (lines.length) return lines.shift()! } }
@@ -16,52 +16,33 @@ async function host(environment: string) {
   for (let i = 0; i < 100 && !windowClaims().some(c => c.pid === child.pid); i++) await Bun.sleep(20)
   return { child, next }
 }
-beforeAll(() => {})
 afterAll(() => { for (const child of hosts) child.kill(); rmSync(config, { recursive: true, force: true }) })
 
-test('focuses the window that already shows the environment instead of opening another', async () => {
-  const a = await host('env-a')
-  let opened = 0
-  const result = await openWindowFor('env-a', () => { opened++; return 1 })
-  expect(result).toEqual({ action: 'focused', pid: a.child.pid })
+test('a window claims itself and comes to the front when asked', async () => {
+  const a = await host('window-a')
+  const claim = windowClaims().find(c => c.pid === a.child.pid)!
+  expect(claim.name).toBe('window-a')
+  expect('environment' in claim).toBe(false)
+  const reply = await askWindow(claim, { type: 'focus' })
+  expect(reply).toMatchObject({ ok: true, pid: a.child.pid, focused: 1 })
   expect(await a.next()).toBe('focus')
-  expect(opened).toBe(0)
 })
-test('opens a window when none shows it, and a second request waits for that window', async () => {
-  let spawned: Awaited<ReturnType<typeof host>> | undefined
-  const open = (id: string) => { void host(id).then(h => { spawned = h }); return -1 }
-  // The pending claim holds a pid; use a real one that is starting.
-  const late = Bun.spawn(['bun', path.join(import.meta.dir, 'host.fixture.ts'), 'env-b'], { env: { ...process.env, KYBERN_CLIENT_CONFIG_DIR: config }, stdin: 'pipe', stdout: 'pipe' }); hosts.push(late)
-  const first = await openWindowFor('env-b', () => late.pid)
-  expect(first).toEqual({ action: 'opened', pid: late.pid })
-  const second = await openWindowFor('env-b', open)
-  expect(second).toEqual({ action: 'focused', pid: late.pid })
-  expect(spawned).toBeUndefined()
-})
-test('drops claims of windows that exited and of windows that switched away', async () => {
-  const c = await host('env-c')
-  c.child.stdin!.write('env-d\n'); expect(await c.next()).toBe('switched')
-  let opened = 0
-  expect((await openWindowFor('env-c', () => { opened++; return process.pid })).action).toBe('opened')
-  expect(opened).toBe(1)
-  const gone = await host('env-e'); gone.child.kill(); await gone.child.exited
+test('drops the claims of windows that exited', async () => {
+  const gone = await host('window-gone'); gone.child.kill(); await gone.child.exited
   expect(windowClaims().some(claim => claim.pid === gone.child.pid)).toBe(false)
 })
 test('asks other windows to quit and reports the ones that stay', async () => {
-  const { quitOtherWindows } = await import('./registry.ts')
-  const a = await host('env-q1'), b = await host('env-q2')
+  const a = await host('window-q1'), b = await host('window-q2')
   expect(await quitOtherWindows(5000)).toEqual([])
   await a.child.exited; await b.child.exited
   expect(windowClaims().some(claim => [a.child.pid, b.child.pid].includes(claim.pid))).toBe(false)
   // A process that claims a window but never answers is reported, not waited for forever.
-  const { writeFileSync, mkdirSync } = await import('node:fs')
   const stuck = Bun.spawn(['bun', '-e', 'setInterval(() => {}, 1000)'])
   hosts.push(stuck)
   mkdirSync(path.join(config, 'gpuix-windows'), { recursive: true })
-  writeFileSync(path.join(config, 'gpuix-windows', `${stuck.pid}.json`), JSON.stringify({ pid: stuck.pid, environment: 'env-s', socket: path.join(config, 'none.sock'), at: Date.now() }))
+  writeFileSync(path.join(config, 'gpuix-windows', `${stuck.pid}.json`), JSON.stringify({ pid: stuck.pid, socket: path.join(config, 'none.sock'), at: Date.now() }))
   expect(await quitOtherWindows(300)).toEqual([stuck.pid])
 })
-test('Windows windows listen on a named pipe', async () => {
-  const { socketPath } = await import('./registry.ts')
+test('Windows windows listen on a named pipe', () => {
   expect(socketPath(42, 'win32')).toMatch(/^\\\\\.\\pipe\\kybern-gpuix-[0-9a-f]{12}-42$/)
 })

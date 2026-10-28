@@ -305,7 +305,7 @@ async function extra(theme: string, reduced: string, dir: string) {
       // The environment dialog: SSH ↔ address tab pill and the Advanced triangle
       mkdirSync(`${SCRATCH}/client`, { recursive: true })
       writeFileSync(`${SCRATCH}/client/environments.json`, JSON.stringify({ selected_id: 'local', environments: [] }))
-      await click('environment-switcher'); await sleep(500); await click('environment-add'); await waitFor(a, 'environment-machine')
+      await click('rail-settings'); await sleep(500); await click('settings-tab-machines'); await sleep(300); await click('machines-add-ssh'); await waitFor(a, 'environment-machine')
       await a.mouse.move({ x: 1275, y: 815 }); await sleep(300)
       const adv = await waitFor(a, 'environment-advanced'), tab = await waitFor(a, 'environment-tab-address')
       crops.advanced = { x: adv.x - 90, y: adv.y - 40, w: 320, h: 110 }; crops.envdlg = { x: tab.x - 300, y: tab.y - 50, w: 600, h: 100 }

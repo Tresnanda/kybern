@@ -1,4 +1,4 @@
-import { activeEnvironment, environmentEndpoint, onEnvironmentChange, registerEnvironmentConnection } from './shell/environment.ts'
+import { activeEnvironment, environmentEndpoint } from './shell/environment.ts'
 import { machineHub } from './machines/index.ts'
 import { ListMerger, byPinnedThenNewest, type StateThread } from './machines/merged.ts'
 import { scopedKey } from '../../../packages/kybern-client/src/machineMerge.ts'
@@ -670,6 +670,3 @@ export function toggleProject(id: string) {
 export function toggleSidebar() {
   set({ sidebarOpen: !state.sidebarOpen })
 }
-
-registerEnvironmentConnection({ close: resetClient, connect })
-onEnvironmentChange(() => { panes.clear(); focusedPaneId = DEFAULT_PANE; createPane(DEFAULT_PANE); clearTimeout(retryTimer); refreshing = null; refreshAgain = false; set({ status: 'connecting', statusDetail: null, projects: [], threads: [], selectedId: null, draft: {}, open: emptyThreadState(), collapsed: {}, listsLoaded: false }) }, -60)

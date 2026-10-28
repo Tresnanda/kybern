@@ -11,6 +11,7 @@ import { toast } from '../shell/toasts.tsx'
 import { footerText } from '../machines/format.ts'
 import { machineHub, useMachines } from '../machines/index.ts'
 import { addFound, doctor, joinByCode, loadMachineInfo, mergeFound, pauseMachine, removeFromNetwork, renameMachine, setNetworkEnabled, showCode, updateAllMachines, useNetwork } from '../machines/network.ts'
+import { showEnvironmentDialog } from '../environments/Dialogs.tsx'
 import { stopSshTunnel } from '../environments/ssh.ts'
 import { MachineBadge } from '../sidebar/MachineBadge.tsx'
 import { StatusDot } from '../sidebar/MachineFilter.tsx'
@@ -136,6 +137,7 @@ function AddByCode({ busy }: { busy: boolean }) {
         <Button testId="machines-add" variant="primary" disabled={!ready} busy={busy} onClick={() => void add()}>Add</Button>
       </div>
     </Row>
+    <Row title="Add over SSH or an address" description="For a machine that is not on your Tailscale network, or one that runs an older Kybern. Kybern can install and start the daemon there over SSH."><Button testId="machines-add-ssh" onClick={() => showEnvironmentDialog({ kind: 'add' })}>Add a machine</Button></Row>
     <Row title="Show a code for this machine" description="Another machine of yours enters it to add this one."><Button testId="machines-show-code" onClick={() => void show()}>Show a code</Button></Row>
     {shown && <Row title="" description={<div testId="machines-shown-code" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Label color={t.text} size={22} lineHeight={28} weight={600} font={FONT_MONO}>{shown.code}</Label><Hint>{shown.endpoints.length ? `Address: ${shown.endpoints.join(' · ')}` : 'No reachable address yet.'} The code works for ten minutes.</Hint></div>} />}
     {error && <Row title="" description={<ErrorText testId="machines-error">{error}</ErrorText>} />}

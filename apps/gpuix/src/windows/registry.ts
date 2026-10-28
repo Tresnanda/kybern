@@ -1,38 +1,25 @@
-// One window per environment (desktop `environment_open_window`, issue #108 §27.8).
+// The window registry: the app's windows are separate processes (the renderer keeps its window, scroll/list handles and
+// key routing in thread-locals, and every app store is module state), and they act as one app through the machine set:
+// each window shows the machines of the same network, so a window no longer belongs to an environment.
 //
-// GPUIX opens one native window per process: the renderer keeps its window,
-// scroll/list handles and key routing in thread-locals, and every app store
-// (`state.ts`, `shell/environment.ts`, transcripts, navigation) is module
-// state, which is what one Tauri webview's JS realm is. So a window is a
-// process, and this registry makes the processes act as one app:
-//
-// - every window claims `<client config>/gpuix-windows/<pid>.json` with the
-//   environment it shows and a Unix socket, rewritten when it switches;
-// - "Open in a new window" focuses the window that already shows that
-//   environment (asking it over its socket), and only spawns a process when
-//   none does. The spawned pid is claimed before the child is up, so a second
-//   click waits for that window instead of opening another;
+// - every window claims `<client config>/gpuix-windows/<pid>.json` with a Unix socket;
+// - another window can be asked to come to the front (`focus`);
 // - claims of processes that are gone are dropped when read;
-// - the updater asks every other window to quit before it runs the installer
-//   (`quitOtherWindows`), because each process keeps the install's files locked.
+// - the updater asks every other window to quit before it runs the installer (`quitOtherWindows`), because each
+//   process keeps the install's files locked.
 //
-// The directory follows `KYBERN_CLIENT_CONFIG_DIR`, so checks never see the
-// user's windows. No timers: the socket only wakes on a request.
-import { spawn } from 'node:child_process'
+// The directory follows `KYBERN_CLIENT_CONFIG_DIR`, so checks never see the user's windows. No timers: the socket
+// only wakes on a request.
 import { createHash } from 'node:crypto'
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { connect, createServer, type Server } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { configDir } from '../environments/registry.ts'
-import { linuxInstall } from '../platform/linuxPackage.ts'
-import { relaunchEnv } from '../shell/daemon.ts'
 
-export interface WindowClaim { pid: number; environment: string; name?: string; socket: string; pending?: boolean; at: number }
+export interface WindowClaim { pid: number; name?: string; socket: string; at: number }
 type Request = { type: 'focus' } | { type: 'ping' } | { type: 'quit' }
-export interface WindowReply { ok: boolean; pid: number; environment: string; focused: number }
-export type OpenResult = { action: 'self' | 'focused' | 'opened'; pid: number }
+export interface WindowReply { ok: boolean; pid: number; focused: number }
 
 const dir = () => path.join(configDir(), 'gpuix-windows')
 const claimFile = (pid: number) => path.join(dir(), `${pid}.json`)
@@ -91,18 +78,7 @@ export function askWindow(claim: Pick<WindowClaim, 'socket'>, request: Request, 
   })
 }
 
-/** A spawned window answers once its socket is up; wait while its process lives. */
-async function askStarting(claim: WindowClaim, request: Request, timeoutMs: number) {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline && alive(claim.pid)) {
-    const reply = await askWindow(claim, request, 1000)
-    if (reply) return reply
-    await new Promise(resolve => setTimeout(resolve, 100))
-  }
-  return null
-}
-
-interface Host { environment: () => { id: string; name: string }; focus: () => void; /** Leave the app; the process exit flushes persisted state. */ quit?: () => void }
+interface Host { name: () => string; focus: () => void; /** Leave the app; the process exit flushes persisted state. */ quit?: () => void }
 let host: Host | null = null
 let server: Server | null = null
 let focusCount = 0
@@ -125,7 +101,7 @@ export function startWindowRegistry(next: Host) {
       let request: Request | null = null
       try { request = JSON.parse(buffer.slice(0, line)) as Request } catch { /* answered as not ok */ }
       if (request?.type === 'focus') { focusCount++; host!.focus() }
-      const reply: WindowReply = { ok: !!request, pid: process.pid, environment: host!.environment().id, focused: focusCount }
+      const reply: WindowReply = { ok: !!request, pid: process.pid, focused: focusCount }
       // Answer first so the asker sees the request was taken, then leave.
       connection.end(`${JSON.stringify(reply)}\n`, () => { if (request?.type === 'quit') (host!.quit ?? (() => process.exit(0)))() })
     })
@@ -136,16 +112,15 @@ export function startWindowRegistry(next: Host) {
   process.once('exit', () => { dropClaim(process.pid); rmSync(socket, { force: true }) })
 }
 
-/** Rewrite this window's claim (after launch and on every environment switch). */
+/** Write this window's claim (after launch). */
 export function publishWindow() {
   if (!host || !server?.listening) return
-  const { id, name } = host.environment()
-  writeClaim({ pid: process.pid, environment: id, name, socket: socketPath(process.pid), at: Date.now() })
+  writeClaim({ pid: process.pid, name: host.name(), socket: socketPath(process.pid), at: Date.now() })
 }
 
 /**
  * Ask every other window process to quit and wait for them to exit. The Windows updater calls this before
- * it starts the installer: each environment window is its own process and keeps the install's executables
+ * it starts the installer: each window is its own process and keeps the install's executables
  * and DLLs open. Returns the pids still running when the wait ends (the installer then moves their files
  * aside as `.old`, and those windows keep running the old version until they are closed).
  */
@@ -159,45 +134,4 @@ export async function quitOtherWindows(timeoutMs = 10000): Promise<number[]> {
     running = running.filter(claim => alive(claim.pid))
   }
   return running.map(claim => claim.pid)
-}
-
-/**
- * The process that becomes a window pinned to `id`: the same entry point, environment fixed by `KYBERN_GPUIX_ENVIRONMENT`.
- * An AppImage starts the image itself: this process's mount goes away when it quits, and the new window would lose its files.
- */
-export function spawnEnvironmentWindow(id: string) {
-  const args = process.env.KYBERN_GPUIX_RESOURCES ? [] : [fileURLToPath(new URL('../main.tsx', import.meta.url))]
-  const install = linuxInstall()
-  // A packaged Linux window resolves its own daemon and CLI; an AppImage's are staged copies named by this process's
-  // environment, and its mount variables belong to this image's mount.
-  const env: NodeJS.ProcessEnv = { ...(install ? relaunchEnv(process.env, { appImage: install.kind === 'appimage' }) : process.env), KYBERN_GPUIX_ENVIRONMENT: id, KYBERN_GPUIX_THREAD: '' }
-  // No `windowsHide`: the child is the GUI app (no console to hide), and Windows would hide its window.
-  const child = spawn(install?.kind === 'appimage' ? install.image : process.execPath, args, { detached: true, stdio: 'ignore', env })
-  child.unref()
-  if (!child.pid) throw Error('Unable to open window. Reopen Kybern and try again.')
-  return child.pid
-}
-
-let queue: Promise<unknown> = Promise.resolve()
-/**
- * Show `id` in its own window: this one if it already shows it, the window that does, or a new one.
- * Calls are serialized, so a double click opens one window.
- */
-export function openWindowFor(id: string, open = spawnEnvironmentWindow): Promise<OpenResult> {
-  const run = async (): Promise<OpenResult> => {
-    if (host?.environment().id === id) { host.focus(); return { action: 'self', pid: process.pid } }
-    for (const claim of windowClaims()) {
-      if (claim.environment !== id || claim.pid === process.pid) continue
-      const reply = claim.pending ? await askStarting(claim, { type: 'focus' }, 15000) : await askWindow(claim, { type: 'focus' })
-      // It may have switched to another environment since it claimed this one.
-      if (reply?.ok && reply.environment === id) return { action: 'focused', pid: claim.pid }
-      if (!reply && !claim.pending) { dropClaim(claim.pid) }
-    }
-    const pid = open(id)
-    writeClaim({ pid, environment: id, socket: socketPath(pid), pending: true, at: Date.now() })
-    return { action: 'opened', pid }
-  }
-  const next = queue.then(run, run)
-  queue = next.catch(() => {})
-  return next
 }

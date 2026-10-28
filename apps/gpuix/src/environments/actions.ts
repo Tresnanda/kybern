@@ -1,14 +1,8 @@
-import { ensureSshTunnel, stopSshTunnel, stopSshTunnels, bootstrapSsh, runSsh, type BootstrapInput, type BootstrapProgress, type SavedSsh } from './ssh.ts'
-import { openWindowFor } from '../windows/registry.ts'
+import { ensureSshTunnel, stopSshTunnel, bootstrapSsh, runSsh, type BootstrapInput, type BootstrapProgress, type SavedSsh } from './ssh.ts'
 import { KybernClient, type Endpoint } from '../../../../packages/kybern-client/src/client.ts'
 import { httpBase, normalizeDaemonUrl, parsePairingInvitation } from '../../../../packages/kybern-client/src/address.ts'
-import { activeEnvironment, switchEnvironment } from '../shell/environment.ts'
-import { readCredential, writeCredential, removeCredential } from './credentials.ts'
-import { rmSync } from 'node:fs'
-import { prefsFileFor } from '../nav/live.ts'
-import { savedEnvironmentStateFile } from '../shell/persist.ts'
+import { machineHub } from '../machines/index.ts'
 import { desktopVersion } from '../shell/daemon.ts'
-import { localDataDir, profileById, profileEndpoint, readRegistry, writeRegistry, type EnvironmentProfile } from './registry.ts'
 
 /** Verify protocol and environment identity with the same transport as the workspace. */
 export async function verifyEndpoint(endpoint: Endpoint) {
@@ -26,98 +20,49 @@ export async function verifyEndpoint(endpoint: Endpoint) {
   } finally { client.close() }
 }
 
-let selectionAttempt = 0
-export async function connectEnvironment(id: string) {
-  const attempt = ++selectionAttempt
-  const profile = profileById(id)
-  if (profile.ssh) {
-    let port: number
-    try { port = await ensureSshTunnel(id, profile.ssh) } catch (error) { if (attempt !== selectionAttempt) return; throw error }
-    if (attempt !== selectionAttempt) return
-    profile.url = `ws://127.0.0.1:${port}/ws`
-    profile.ssh.local_port = port
-  }
-  const endpoint = profile.id === 'local' && !process.env.KYBERN_URL ? null : await profileEndpoint(profile)
-  const registry = readRegistry()
-  writeRegistry({ ...registry, selected_id: id, environments: registry.environments.map(saved => saved.id === profile.id ? profile : saved) })
-  stopSshTunnels(id)
-  switchEnvironment({ id, name: profile.name, local: profile.local, endpoint, dataDir: localDataDir })
-}
+/** A machine added by address, pairing code, invitation or SSH setup: where it lives and what the machine set calls it. */
+export interface SavedMachine { machineId: string; name: string }
 
-export async function saveEnvironment(input: { id?: string; name: string; address: string; code?: string; token?: string; ssh?: SavedSsh; expectedIdentity?: string }) {
+/**
+ * Add a machine to this device's list (design §5.2): it joins the machine set, which connects it and merges its
+ * threads into the sidebar. The device token is kept under `machine:<id>` before any socket opens, so a pairing code that
+ * was used once is never lost to a network failure.
+ */
+export async function saveMachine(input: { id?: string; name: string; address: string; code?: string; token?: string; ssh?: SavedSsh; expectedIdentity?: string }): Promise<SavedMachine> {
   const name = input.name.trim()
-  if (!name || name.length > 80) throw Error('Enter an environment name of 1–80 characters')
-  const registry = readRegistry()
-  const existing = registry.environments.find((p) => p.id === input.id)
+  if (!name || name.length > 80) throw Error('Enter a machine name of 1–80 characters')
   const invitation = parsePairingInvitation(input.address)
   const url = normalizeDaemonUrl(invitation?.url ?? input.address)
   const code = (invitation?.code ?? input.code ?? '').trim()
   let token = input.token?.trim() ?? ''
-  let expected = invitation?.environmentId ?? input.expectedIdentity ?? existing?.environment_id ?? undefined
-  const id = input.id ?? crypto.randomUUID()
-  if (id === 'local') throw Error('The local environment is managed by Kybern')
+  let expected = invitation?.environmentId ?? input.expectedIdentity ?? undefined
   if (code && token) throw Error('Use a pairing code or a device token, not both')
   if (code && !/^\d{6}$/.test(code)) throw Error('Enter the six-digit pairing code')
-  if (expected && registry.environments.some((p) => p.id !== id && p.environment_id === expected)) throw Error('This environment is already saved. Select it from the environment menu.')
-  let paired = false
+  const hub = machineHub()
+  const duplicate = (id: string | undefined) => !!id && !!hub.set.connection(id)
+  if (duplicate(expected)) throw Error('This machine is already in your list.')
   if (code) {
     const response = await fetch(`${httpBase(url)}/pair`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, device_name: `Kybern desktop · ${name}` }), redirect: 'error', signal: AbortSignal.timeout(15000) })
     if (!response.ok) throw Error(`Pairing failed (${response.status}). Create a new invitation on that machine.`)
     const result = await response.json() as { token: string; environment_id: string }
     if (!result.token || !result.environment_id) throw Error('The pairing response was incomplete. Create a new invitation.')
-    if (expected && expected !== result.environment_id) throw Error('This invitation belongs to a different environment. Add it separately.')
-    token = result.token; expected = result.environment_id; paired = true
+    if (expected && expected !== result.environment_id) throw Error('This invitation belongs to a different machine. Add it separately.')
+    token = result.token; expected = result.environment_id
+    if (duplicate(expected)) throw Error('This machine is already in your list.')
   }
-  if (!token && existing) token = await readCredential(existing.id)
   if (!token) throw Error('Enter a pairing code from the other machine')
-  if (expected && registry.environments.some((p) => p.id !== id && p.environment_id === expected)) throw Error('This environment is already saved. Select it from the environment menu.')
-  const profile: EnvironmentProfile = { id, name, url, environment_id: expected, local: false, ssh: input.ssh ?? existing?.ssh }
-  const persist = async (next: EnvironmentProfile) => {
-    const latest = readRegistry()
-    await writeCredential(id, token)
-    writeRegistry({ ...latest, environments: [...latest.environments.filter((p) => p.id !== id), next] })
+  // A token given without a code is checked first: the machine's own id is what the list is keyed by.
+  if (!expected) {
+    const info = await verifyEndpoint({ url, token })
+    expected = info.machine_id || info.environment_id
+    if (duplicate(expected)) throw Error('This machine is already in your list.')
   }
-  // The pairing code is single use. Keep its credential before opening a socket
-  // so a network failure still leaves a recoverable saved connection.
-  if (paired) await persist(profile)
-  try {
-    const info = await verifyEndpoint({ url, token, environmentId: expected })
-    if (registry.environments.some((p) => p.id !== id && p.environment_id === info.environment_id)) throw Error('This environment is already saved. Select it from the environment menu.')
-    profile.environment_id = info.environment_id; profile.hostname = info.hostname
-    await persist(profile)
-  } catch (e) {
-    if (paired) throw Error(`Paired and saved. Reconnect from the environment menu when the machine is reachable. ${e instanceof Error ? e.message : String(e)}`)
-    throw e
-  }
-  return profile
-}
-
-export async function forgetEnvironment(id: string) {
-  if (id === 'local') throw Error('The local environment cannot be removed')
-  const registry = readRegistry()
-  const previous = await readCredential(id).catch(() => null)
-  stopSshTunnel(id)
-  await removeCredential(id)
-  try { writeRegistry({ selected_id: registry.selected_id === id ? 'local' : registry.selected_id, environments: registry.environments.filter((p) => p.id !== id) }) }
-  catch (e) { if (previous) await writeCredential(id, previous); throw e }
-  // The desktop drops the environment's stored workspace with it (`forgetEnvironmentStore`).
-  if (activeEnvironment().id !== id) for (const file of [savedEnvironmentStateFile(localDataDir, id), prefsFileFor(id)]) rmSync(file, { force: true })
-  if (activeEnvironment().id === id) { const files = [savedEnvironmentStateFile(localDataDir, id), prefsFileFor(id)]; connectEnvironment('local'); for (const file of files) rmSync(file, { force: true }) }
-}
-
-/**
- * "Open in a new window": focus the window that already shows this environment, or open one
- * (`windows/registry.ts` explains why each window is its own process). Errors become a toast like the desktop's.
- */
-export async function openEnvironmentWindow(id: string) {
-  try {
-    profileById(id)
-    return await openWindowFor(id)
-  } catch (error) {
-    const { toast } = await import('../shell/toasts.tsx')
-    toast.error(error instanceof Error ? error.message : String(error))
-    return null
-  }
+  const route = input.ssh ? { kind: 'ssh' as const, url: `http://127.0.0.1:${input.ssh.local_port}` } : { kind: 'direct_advertised' as const, url: httpBase(url) }
+  // The profile id names the SSH tunnel and a saved token of the old kind; an SSH machine keeps one so its tunnel can be reopened.
+  const legacyProfileId = input.ssh ? (input.id ?? crypto.randomUUID()) : undefined
+  // `member: false`: a daemon added by hand is not in the network (design §4.3); the network offers to add it from Settings → Machines.
+  await hub.set.addMachine({ machineId: expected, name, routes: [route], member: false, ...(legacyProfileId ? { legacyProfileId } : {}), ...(input.ssh ? { ssh: input.ssh } : {}) } as Parameters<typeof hub.set.addMachine>[0], token)
+  return { machineId: expected, name }
 }
 
 /** Native-independent SSH lifecycle; the same endpoint/pairing checks as address connections. */
@@ -140,7 +85,7 @@ export async function setupSshEnvironment(input: BootstrapInput, report: (progre
     shutdown: (port, token) => withClient(port, token, client => client.call('daemon.shutdown', {})).then(() => {}),
     pair: async (port, token, next, ssh, identity) => {
       const invitation = await withClient(port, token, client => client.call('access.pairing.create', { label: `Kybern desktop · ${next.name}` }))
-      return saveEnvironment({ id: next.id, name: next.name, address: `ws://127.0.0.1:${port}/ws`, code: invitation.code, expectedIdentity: identity, ssh })
+      return saveMachine({ id: next.id, name: next.name, address: `ws://127.0.0.1:${port}/ws`, code: invitation.code, expectedIdentity: identity, ssh })
     },
   })
 }

@@ -6,7 +6,7 @@ import type { KybernClient } from '../../../../packages/kybern-client/src/client
 import { MachineCache } from '../../../../packages/kybern-client/src/machineCache.ts'
 import { machineGlyph, showMachineGlyph, type MachineGlyph } from '../../../../packages/kybern-client/src/machineMerge.ts'
 import type { MachineConnectionStatus, MergedView } from '../../../../packages/kybern-client/src/machines.ts'
-import { configDir, localProfile, readRegistry } from '../environments/registry.ts'
+import { configDir, localProfile, readLegacyRegistry } from '../environments/registry.ts'
 import { readCredential, removeCredential, writeCredential } from '../environments/credentials.ts'
 import { ensureSshTunnel } from '../environments/ssh.ts'
 import { MachineHub } from './hub.ts'
@@ -19,7 +19,7 @@ export function machineHub(): MachineHub {
   // Read once, when the set loads: `machines.json`, made from `environments.json` the first time.
   const loaded = () => migrateEnvironments({
     dir,
-    registry: () => { try { return readRegistry() } catch { return null } },
+    registry: () => { try { return readLegacyRegistry() } catch { return null } },
     local: localProfile,
     read: readCredential, write: writeCredential, remove: removeCredential,
   }).then((result) => result.records)

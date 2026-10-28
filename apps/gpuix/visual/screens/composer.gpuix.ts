@@ -8,15 +8,15 @@ export async function pointer(app: Parameters<Step>[0], id: string) {
   await app.mouse.click(await target.center())
 }
 const environment = (kind: string, ready: string): Step => async app => {
-  await pointer(app, 'environment-switcher')
-  await pointer(app, `environment-${kind}`)
+  await pointer(app, 'rail-settings')
+  await pointer(app, 'settings-tab-machines')
+  await pointer(app, kind === 'add' ? 'machines-add-ssh' : `paired-devices-open`)
   await app.getByTestId(ready).waitFor({ timeoutMs: 15000 })
   await park(app)
 }
 export const screens: Record<string, Step> = {
   'environment-add-ssh': environment('add', 'environment-machine'),
   'environment-add-address': async (app, fx) => { await screens['environment-add-ssh']!(app, fx); await app.getByText('Address or invitation', { exact: true }).click(); await app.getByTestId('environment-address').waitFor(); await park(app) },
-  'environment-manage': environment('manage', 'environment-manage-list'),
   'environment-pair-empty': environment('pair', 'pairing-create'),
   'environment-pair-invitation': async (app, fx) => { await screens['environment-pair-empty']!(app, fx); await pointer(app, 'pairing-create'); await app.getByTestId('pairing-address').waitFor(); await app.getByTestId('pairing-address').fill('http://192.0.2.10:4219'); await app.getByTestId('pairing-qr').waitFor(); await park(app) },
 }
