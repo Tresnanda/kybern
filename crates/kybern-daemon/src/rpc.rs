@@ -11,7 +11,13 @@ use serde_json::Value;
 use crate::state::AppState;
 use crate::ws::ConnectionCtx;
 
+/// Every RPC method's handler. The match below is one large future (each arm's await state is
+/// laid out inline), so it lives on the heap: callers and tests keep a small stack frame.
 pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, params: Value) -> Result<Value, RpcError> {
+    Box::pin(dispatch_method(state, ctx, method, params)).await
+}
+
+async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, params: Value) -> Result<Value, RpcError> {
     match method {
         DaemonInfoMethod::NAME => {
             let info = DaemonInfo {
