@@ -306,6 +306,11 @@ fn main() {
     method::<PeerFork>(&mut methods);
     method::<PeerToolCall>(&mut methods);
     method::<PeerThreadArchiveInbound>(&mut methods);
+    method::<SettingsNetworkViewMethod>(&mut methods);
+    method::<SettingsShare>(&mut methods);
+    method::<PeerSettingsGet>(&mut methods);
+    method::<PeerSettingsPatch>(&mut methods);
+    method::<PeerFederatedRead>(&mut methods);
 
     let doc = json!({
         "protocol_version": PROTOCOL_VERSION,

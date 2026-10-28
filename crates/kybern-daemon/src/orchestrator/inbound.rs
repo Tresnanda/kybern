@@ -128,7 +128,7 @@ fn tool_error(error: impl std::fmt::Display) -> RpcError {
 }
 
 impl Orchestrator {
-    fn forward_hub(&self) -> Result<&Arc<dyn RemoteHub>> {
+    pub(super) fn forward_hub(&self) -> Result<&Arc<dyn RemoteHub>> {
         self.remote_hub().ok_or_else(|| anyhow!("This daemon cannot reach other machines."))
     }
 
@@ -226,7 +226,7 @@ impl Orchestrator {
         }
     }
 
-    async fn tool_call_params(
+    pub(super) async fn tool_call_params(
         &self,
         thread: &Thread,
         hub: &Arc<dyn RemoteHub>,
@@ -263,7 +263,7 @@ impl Orchestrator {
     }
 
     /// Remember that this thread forwarded calls to `machine`, so archiving it tells that machine.
-    fn remember_forwarded(&self, thread_id: ThreadId, machine: &str) {
+    pub(super) fn remember_forwarded(&self, thread_id: ThreadId, machine: &str) {
         let key = forwarded_key(thread_id);
         let Ok(current) = self.inner.store.meta_get(&key) else { return };
         let mut machines: Vec<String> = current.map(|text| text.split(',').map(str::to_owned).collect()).unwrap_or_default();

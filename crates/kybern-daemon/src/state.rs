@@ -125,6 +125,7 @@ impl AppState {
         // Secret store (S3): move plaintext provider keys out of settings.json before it is read.
         crate::secret_store::start(&paths.root, &paths.settings, &store);
         let settings = SettingsStore::load(&paths.settings)?;
+        settings.attach_stamps(store.clone());
         let harness_updates = crate::harness_updates::HarnessUpdates::new(&store)?;
         let daemon_updates = crate::self_update::DaemonUpdates::new(&store)?;
         let terminals = TerminalManager::default();

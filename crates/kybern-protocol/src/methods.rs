@@ -16,6 +16,7 @@ use crate::forward::*;
 use crate::model::*;
 use crate::network::*;
 use crate::outbox::*;
+use crate::shared_state::*;
 use crate::thread_read::*;
 
 /// Static description of a method, used for auth checks and docs.
@@ -3561,8 +3562,11 @@ pub struct NotesListResult {
     /// it are `undated`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_since: Option<chrono::DateTime<chrono::Utc>>,
+    /// Which machine each note came from, and which machines were left out. Only with `machine`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub federation: Option<Federation>,
 }
-method!(NotesList, "notes.list", Some(Scope::OrchestrationRead), Empty, NotesListResult);
+method!(NotesList, "notes.list", Some(Scope::OrchestrationRead), NotesListParams, NotesListResult);
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct NotesGetParams {
@@ -3654,6 +3658,9 @@ pub struct NotesSearchParams {
     /// Defaults to 50, at most 200.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+    /// `"all"` searches every online machine; a name or id searches that machine. Absent: this one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct NoteSearchHit {
@@ -3664,6 +3671,9 @@ pub struct NoteSearchHit {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct NotesSearchResult {
     pub results: Vec<NoteSearchHit>,
+    /// Which machine each hit came from, and which machines were left out. Only with `machine`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub federation: Option<Federation>,
 }
 method!(NotesSearch, "notes.search", Some(Scope::OrchestrationRead), NotesSearchParams, NotesSearchResult);
 
@@ -3869,8 +3879,11 @@ pub struct TaskItem {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct TaskItemsListResult {
     pub tasks: Vec<TaskItem>,
+    /// Which machine each task came from, and which machines were left out. Only with `machine`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub federation: Option<Federation>,
 }
-method!(TaskItemsList, "tasks.items.list", Some(Scope::OrchestrationRead), Empty, TaskItemsListResult);
+method!(TaskItemsList, "tasks.items.list", Some(Scope::OrchestrationRead), TaskItemsListParams, TaskItemsListResult);
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct TaskItemsGetParams {
@@ -4161,6 +4174,12 @@ method!(PeerGitImport, "peer.git.import", Some(Scope::MachineDelegate), PeerGitI
 // `threads.send`, which already take a client-chosen `thread_id` and `message_id`, so a repeat is the first.
 method!(PeerThreadCreate, "peer.thread.create", Some(Scope::MachineDelegate), ThreadsCreateParams, Thread);
 method!(PeerThreadSend, "peer.thread.send", Some(Scope::MachineDelegate), ThreadsSendParams, ThreadsSendResult);
+// Shared state (M5; payloads in shared_state.rs). `peer.settings.*` need `machine:settings` on the target.
+method!(SettingsNetworkViewMethod, "settings.network_view", Some(Scope::OrchestrationRead), Empty, SettingsNetworkView);
+method!(SettingsShare, "settings.share", Some(Scope::OrchestrationOperate), SettingsShareParams, SettingsShareResult);
+method!(PeerSettingsGet, "peer.settings.get", Some(Scope::MachineSettings), Empty, PeerSettingsGetResult);
+method!(PeerSettingsPatch, "peer.settings.patch", Some(Scope::MachineSettings), SettingsPatch, PeerSettingsPatchResult);
+method!(PeerFederatedRead, "peer.federated.read", Some(Scope::MachineTools), PeerFederatedReadParams, PeerFederatedReadResult);
 // Forwarded agent tools (M2, R2; payloads in forward.rs). Files and terminals also need their own scope on the target.
 // Fork to a machine (M3, F1; payloads in fork.rs).
 method!(ThreadsForkNote, "threads.fork_note", Some(Scope::OrchestrationRead), ThreadsForkNoteParams, ThreadsForkNoteResult);
@@ -4408,6 +4427,11 @@ registry!(
     PeerFork,
     PeerToolCall,
     PeerThreadArchiveInbound,
+    SettingsNetworkViewMethod,
+    SettingsShare,
+    PeerSettingsGet,
+    PeerSettingsPatch,
+    PeerFederatedRead,
 );
 
 pub fn scope_for(method: &str) -> Option<Option<Scope>> {

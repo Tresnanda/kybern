@@ -438,3 +438,13 @@ expression: scopes
   - "machine:tools"
 - - peer.thread.archive_inbound
   - "machine:tools"
+- - settings.network_view
+  - "orchestration:read"
+- - settings.share
+  - "orchestration:operate"
+- - peer.settings.get
+  - "machine:settings"
+- - peer.settings.patch
+  - "machine:settings"
+- - peer.federated.read
+  - "machine:tools"

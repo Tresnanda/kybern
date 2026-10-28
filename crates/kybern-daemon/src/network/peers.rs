@@ -517,6 +517,11 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
             state.orchestrator.archive_inbound_threads(&link.machine_id, archive.thread_id).await?;
             ok(Empty {})
         }
+        // Shared settings (S1): the shared fields only; the target refuses any path that is not shared.
+        PeerSettingsGet::NAME => ok(crate::settings_share::peer_get(state)),
+        PeerSettingsPatch::NAME => ok(crate::settings_share::apply_patch(state, parse(params)?)),
+        // Federated notes and tasks (S2): read-only, so `machine:tools` is all it needs.
+        PeerFederatedRead::NAME => ok(super::federated::serve_read(state, parse(params)?).await?),
         PeerClientTokenMint::NAME => ok(super::client_grant::mint_for_peer(state, link, parse(params)?)?),
         PeerDeviceRevoke::NAME => {
             let revoke: PeerDeviceRevokeParams = parse(params)?;

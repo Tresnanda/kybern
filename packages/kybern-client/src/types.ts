@@ -2115,6 +2115,8 @@ export interface NotesListResult {
   notes: NoteSummary[];
   /** When categories were introduced. Uncategorized project notes created before it are `undated`. */
   history_since?: string | null;
+  /** Which machine each note came from and which were left out. Only when `machine` was given (S2). */
+  federation?: Federation | null;
 }
 
 /** Stale notes a project needs before the Coordinator offers to tidy them. */
@@ -3624,6 +3626,112 @@ export interface Origin {
   hops?: MachineId[];
 }
 
+// ---- shared state across machines (S1 settings fan-out, S2 federated notes and tasks; design §9) ----
+
+/** Ordered by `(at, lamport, machine_id)`: a later clock wins, the counter and then the machine id break ties. */
+export interface SettingsStamp {
+  at: string;
+  lamport: number;
+  machine_id: MachineId;
+}
+/** A field-level change to the shared settings; `null` clears an optional field. */
+export interface SettingsPatch {
+  stamp: SettingsStamp;
+  fields: Record<string, unknown>;
+}
+export interface PeerSettingsPatchResult {
+  applied: string[];
+  stale: string[];
+  unchanged: string[];
+  refused: Record<string, string>;
+}
+export interface PeerSettingsGetResult {
+  values: Record<string, unknown>;
+  stamps: Record<string, SettingsStamp>;
+}
+export type SettingsMachineState = "reported" | "offline" | "unsupported" | "unreachable";
+export interface SettingsMachineView {
+  id: MachineId;
+  name: string;
+  is_self: boolean;
+  state: SettingsMachineState;
+}
+export interface SettingsFieldValue {
+  machine_id: MachineId;
+  /** Absent when the machine did not report (offline, too old, no answer). */
+  value?: unknown;
+}
+export interface SettingsFieldView {
+  /** `default_provider`, `orchestration`, `providers.codex.model`, … */
+  path: string;
+  /** One entry per machine in `SettingsNetworkView.machines`, in the same order. */
+  values: SettingsFieldValue[];
+  /** The machines that reported do not all hold the same value: show **Mixed**. */
+  mixed: boolean;
+  /** Machines with a queued change for this field. */
+  pending: MachineId[];
+}
+/** `settings.network_view`. */
+export interface SettingsNetworkView {
+  machines: SettingsMachineView[];
+  fields: SettingsFieldView[];
+}
+export interface SettingsShareParams {
+  /** Field path to its new value. Only shared fields. */
+  fields: Record<string, unknown>;
+  /** Machine ids or names; every other member when absent. */
+  machines?: string[] | null;
+}
+export interface SettingsShareTarget {
+  machine_id: MachineId;
+  name: string;
+  state: "queued" | "unsupported";
+  outbox_id?: Uuid | null;
+}
+export interface SettingsShareResult {
+  stamp: SettingsStamp;
+  here: PeerSettingsPatchResult;
+  machines: SettingsShareTarget[];
+}
+
+/** The `machine` argument that reads every online machine. */
+export const MACHINE_ALL = "all";
+export interface NotesListParams {
+  /** `"all"`, or one machine's name or id. Absent: this machine only. */
+  machine?: string | null;
+}
+export interface TaskItemsListParams {
+  machine?: string | null;
+}
+/** The ids one machine contributed to a merged result, in the order it returned them. */
+export interface FederationSection {
+  machine_id: MachineId;
+  machine_name: string;
+  is_self: boolean;
+  ids: Uuid[];
+}
+export type SkipReason = "offline" | "paused" | "unsupported" | "refused" | "timed_out" | "failed";
+export interface FederationSkipped {
+  machine_id: MachineId;
+  machine_name: string;
+  reason: SkipReason;
+}
+export interface Federation {
+  sections: FederationSection[];
+  skipped: FederationSkipped[];
+  /** "satyamas offline; its notes are not included." */
+  footer?: string | null;
+}
+export type PeerFederatedReadParams =
+  | { read: "notes_list" }
+  | { read: "notes_search"; query: string; limit?: number | null }
+  | { read: "task_items_list" };
+export interface PeerFederatedReadResult {
+  notes_list?: NotesListResult | null;
+  notes_search?: { results: { id: NoteId; snippet: string }[] } | null;
+  task_items?: { tasks: TaskItem[] } | null;
+}
+
 // ---- remote delegation and the outbox (R1; design §6.2, §6.4) ----
 
 export const OUTBOX_CHANGED_NOTIFICATION = "outbox.changed";
@@ -3844,7 +3952,7 @@ export interface Methods {
   "threads.steer": [QueuedMessage, ThreadsSendResult];
   "threads.notes.get": [{ thread_id: ThreadId }, ThreadNotes];
   "threads.notes.set": [{ thread_id: ThreadId; text: string; expected_revision: number }, ThreadNotes];
-  "notes.list": [Empty, NotesListResult];
+  "notes.list": [NotesListParams, NotesListResult];
   "notes.get": [{ id?: NoteId | null; thread_id?: ThreadId | null }, { note?: Note | null }];
   "notes.create": [NotesCreateParams, Note];
   "notes.update": [NotesUpdateParams, Note];
@@ -3853,11 +3961,14 @@ export interface Methods {
   "notes.delete": [{ id: NoteId }, NoteSummary];
   "notes.restore": [{ id: NoteId }, NoteSummary];
   "notes.purge": [{ id: NoteId }, Empty];
-  "notes.search": [{ query: string; limit?: number | null }, { results: { id: NoteId; snippet: string }[] }];
+  "notes.search": [
+    { query: string; limit?: number | null; machine?: string | null },
+    { results: { id: NoteId; snippet: string }[]; federation?: Federation | null },
+  ];
   "notes.tidy_offer": [{ project_id: ProjectId }, TidyOffer];
   "notes.tidy_snooze": [{ project_id: ProjectId }, TidyOffer];
   "notes.tidy_start": [{ project_id: ProjectId }, { thread_id: ThreadId; notes: number }];
-  "tasks.items.list": [Empty, { tasks: TaskItem[] }];
+  "tasks.items.list": [TaskItemsListParams, { tasks: TaskItem[]; federation?: Federation | null }];
   "tasks.items.get": [{ id?: TaskItemId | null; key?: string | null }, { task?: TaskItem | null }];
   "tasks.items.create": [TaskItemsCreateParams, TaskItem];
   "tasks.items.update": [TaskItemsUpdateParams, TaskItem];
@@ -4057,6 +4168,11 @@ export interface Methods {
   "peer.fork": [PeerForkParams, PeerForkResult];
   "peer.tool.call": [PeerToolCallParams, PeerToolCallResult];
   "peer.thread.archive_inbound": [PeerThreadArchiveInboundParams, Empty];
+  "settings.network_view": [Empty, SettingsNetworkView];
+  "settings.share": [SettingsShareParams, SettingsShareResult];
+  "peer.settings.get": [Empty, PeerSettingsGetResult];
+  "peer.settings.patch": [SettingsPatch, PeerSettingsPatchResult];
+  "peer.federated.read": [PeerFederatedReadParams, PeerFederatedReadResult];
 }
 
 export type MethodName = keyof Methods;

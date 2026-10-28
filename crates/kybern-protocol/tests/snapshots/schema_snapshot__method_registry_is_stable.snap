@@ -220,3 +220,8 @@ expression: names
 - peer.fork
 - peer.tool.call
 - peer.thread.archive_inbound
+- settings.network_view
+- settings.share
+- peer.settings.get
+- peer.settings.patch
+- peer.federated.read

@@ -29,6 +29,7 @@ mod change_report;
 mod child_questions;
 mod delegation;
 pub(crate) mod fork_machine;
+mod federated_tools;
 pub(crate) mod group_git;
 mod group_pr;
 mod groups;
@@ -218,6 +219,10 @@ impl Orchestrator {
                 .ok_or_else(|| anyhow!("native tool request has no active owning turn"))?;
             let operation_id =
                 crate::app_tools::prepare_native_operation(thread_id, session_instance_id, turn_id, call_id, name, &mut arguments)?;
+            // `machine: "all"` reads every machine's notes and tasks (design §9.2).
+            if crate::network::federated::wants_all(&arguments) {
+                return self.federated_tool_call(thread_id, session_instance_id, name, arguments).await;
+            }
             // `machine` runs the tool on another machine of the network (forwarded tools, design §6.3).
             if inbound::named_machine(&arguments).is_some() {
                 match self.forward_named_call(thread_id, session_instance_id, turn_id, call_id, name, arguments, operation_id).await? {
@@ -8550,6 +8555,7 @@ for line in sys.stdin:
     include!("orchestrator/remote_delegation_tests.rs");
     include!("orchestrator/inbound_tests.rs");
     include!("orchestrator/fork_tests.rs");
+    include!("orchestrator/federated_tools_tests.rs");
     include!("orchestrator/child_questions_tests.rs");
     include!("orchestrator/secret_tests.rs");
     include!("orchestrator/request_tests.rs");

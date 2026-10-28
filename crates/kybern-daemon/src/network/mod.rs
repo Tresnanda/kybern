@@ -16,6 +16,7 @@
 pub mod client_grant;
 pub mod clipboard_filter;
 pub mod doctor;
+pub mod federated;
 pub mod forward;
 pub mod git_transfer;
 pub mod join;
@@ -36,6 +37,8 @@ pub mod well_known;
 pub(crate) mod harness;
 #[cfg(test)]
 mod join_tests;
+#[cfg(test)]
+mod shared_state_tests;
 #[cfg(test)]
 mod tests;
 
@@ -264,6 +267,8 @@ impl Network {
             features::DELEGATE_REMOTE_V1.to_string(),
             features::TOOLS_FORWARD_V1.to_string(),
             features::FORK_V1.to_string(),
+            features::SETTINGS_FANOUT_V1.to_string(),
+            features::NOTES_FEDERATED_V1.to_string(),
         ]
     }
 

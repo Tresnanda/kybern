@@ -2572,7 +2572,7 @@ async fn resolve_note(client: &Client, key: &str) -> Result<NoteId> {
     if let Ok(id) = key.parse::<NoteId>() {
         return Ok(id);
     }
-    let notes = client.call::<NotesList>(Empty {}).await?.notes;
+    let notes = client.call::<NotesList>(NotesListParams::default()).await?.notes;
     let mut matches = notes.iter().filter(|note| !key.is_empty() && note.id.to_string().starts_with(key));
     match (matches.next(), matches.next()) {
         (Some(note), None) => Ok(note.id),
@@ -2756,7 +2756,7 @@ fn print_import(job: &SessionsImportJob) {
 async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
     match cmd {
         NoteCmd::List { deleted } => {
-            let mut result = client.call::<NotesList>(Empty {}).await?;
+            let mut result = client.call::<NotesList>(NotesListParams::default()).await?;
             result.notes.retain(|note| note.deleted_at.is_some() == deleted);
             if json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
@@ -2879,7 +2879,7 @@ async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
             if query.trim().is_empty() {
                 return Err(anyhow!("type something to search for, like `kybern note search release plan`"));
             }
-            let result = client.call::<NotesSearch>(NotesSearchParams { query, limit: None }).await?;
+            let result = client.call::<NotesSearch>(NotesSearchParams { query, limit: None, machine: None }).await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else if result.results.is_empty() {
@@ -2926,7 +2926,7 @@ async fn task_command(client: &Client, cmd: TaskCmd, json: bool) -> Result<()> {
                 Some(project) => Some(resolve_project(client, project, false).await?),
                 None => None,
             };
-            let mut tasks = client.call::<TaskItemsList>(Empty {}).await?.tasks;
+            let mut tasks = client.call::<TaskItemsList>(TaskItemsListParams::default()).await?.tasks;
             tasks.retain(|task| {
                 project_id.is_none_or(|id| task.project_id == Some(id))
                     && match status {
@@ -2935,7 +2935,7 @@ async fn task_command(client: &Client, cmd: TaskCmd, json: bool) -> Result<()> {
                     }
             });
             if json {
-                println!("{}", serde_json::to_string_pretty(&TaskItemsListResult { tasks })?);
+                println!("{}", serde_json::to_string_pretty(&TaskItemsListResult { tasks, federation: None })?);
             } else if tasks.is_empty() {
                 println!("No tasks. Create one with `kybern task new \"Fix the login redirect\"`.");
             } else {

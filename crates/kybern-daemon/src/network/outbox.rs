@@ -309,6 +309,7 @@ async fn deliver(state: &AppState, item: &OutboxItem) -> Delivery {
         OutboxKind::ThreadCreate => state.orchestrator.remote_deliver_call(item, PeerThreadCreate::NAME).await,
         OutboxKind::ThreadSend => state.orchestrator.remote_deliver_call(item, PeerThreadSend::NAME).await,
         OutboxKind::Fork => state.orchestrator.remote_deliver_fork(item).await,
+        OutboxKind::SettingsPatch => crate::settings_share::deliver(state, item).await,
         other => Delivery::Failed(format!("This version of Kybern cannot deliver {} items yet.", other.as_str())),
     }
 }
@@ -431,6 +432,10 @@ pub fn enqueue(state: &AppState, params: OutboxEnqueueParams) -> Result<OutboxIt
             let mut send: ThreadsSendParams = serde_json::from_value(payload).map_err(RpcError::invalid_params)?;
             send.message_id.get_or_insert_with(|| derive(operation_id, 0x23));
             payload = serde_json::to_value(send).map_err(RpcError::internal)?;
+        }
+        OutboxKind::SettingsPatch => {
+            let patch: SettingsPatch = serde_json::from_value(payload.clone()).map_err(RpcError::invalid_params)?;
+            crate::settings_share::check_patch(&patch)?;
         }
         other => {
             return Err(RpcError::new(

@@ -44,6 +44,7 @@ mod secrets;
 mod self_update;
 mod session_import;
 mod settings;
+mod settings_share;
 mod skills;
 mod state;
 mod terminal;

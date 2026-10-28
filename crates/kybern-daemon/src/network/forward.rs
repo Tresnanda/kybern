@@ -185,6 +185,7 @@ pub fn capability_view(allowed: &BTreeMap<String, bool>) -> BTreeMap<String, boo
 // ---- tool definitions ----
 
 const MACHINE_ARG_HELP: &str = "Run this tool on another machine of your network (name or id from kybern_machines). Omit to run it here. Fails at once when that machine is offline.";
+const MACHINE_ALL_ARG_HELP: &str = "Run this tool on another machine of your network (name or id from kybern_machines), or pass \"all\" to read this machine and every online machine at once: each row says which machine holds it, and machines that are offline are named in `footer`. Omit to run it here.";
 const PROJECT_ARG_HELP: &str =
     "With machine: that machine's project (name, id or path from kybern_machines). Defaults to its checkout of this thread's repository.";
 
@@ -196,7 +197,8 @@ pub fn offer_machine_args(tools: &mut [NativeToolDefinition]) {
             continue;
         }
         let Some(properties) = tool.input_schema.get_mut("properties").and_then(Value::as_object_mut) else { continue };
-        properties.entry(MACHINE_ARG).or_insert_with(|| json!({"type": ["string", "null"], "description": MACHINE_ARG_HELP}));
+        let help = if super::federated::is_federated_read(&tool.name) { MACHINE_ALL_ARG_HELP } else { MACHINE_ARG_HELP };
+        properties.entry(MACHINE_ARG).or_insert_with(|| json!({"type": ["string", "null"], "description": help}));
         if project_bound(&tool.name) {
             properties.entry(PROJECT_ARG).or_insert_with(|| json!({"type": ["string", "null"], "description": PROJECT_ARG_HELP}));
         }

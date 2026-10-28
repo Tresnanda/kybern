@@ -20,6 +20,7 @@ pub mod network;
 pub mod outbox;
 pub mod process;
 pub mod rpc;
+pub mod shared_state;
 pub mod thread_read;
 pub mod user_input;
 
@@ -32,6 +33,7 @@ pub use model::*;
 pub use network::*;
 pub use outbox::*;
 pub use rpc::*;
+pub use shared_state::*;
 pub use thread_read::*;
 pub use user_input::*;
 

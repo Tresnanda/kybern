@@ -534,7 +534,8 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
             .await
             .map_err(internal)?
             .map_err(note_err)?;
-            ok(NotesListResult { notes, history_since })
+            let p: NotesListParams = parse_or_default(params)?;
+            ok(crate::network::federated::notes_list(state, p.machine, NotesListResult { notes, history_since, federation: None }).await?)
         }
         NotesGet::NAME => {
             let (orchestrator, params) = (state.orchestrator.clone(), parse_or_default(params)?);
@@ -556,17 +557,26 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
         }
         NotesSearch::NAME => {
             let p: NotesSearchParams = parse(params)?;
+            let (p_machine, p_query, p_limit) = (p.machine.clone(), p.query.clone(), p.limit);
             let orchestrator = state.orchestrator.clone();
             let results = tokio::task::spawn_blocking(move || orchestrator.notes_search(&p.query, p.limit))
                 .await
                 .map_err(internal)?
                 .map_err(note_err)?;
-            ok(NotesSearchResult { results })
+            ok(crate::network::federated::notes_search(
+                state,
+                p_machine,
+                &p_query,
+                p_limit,
+                NotesSearchResult { results, federation: None },
+            )
+            .await?)
         }
         TaskItemsList::NAME => {
+            let p: TaskItemsListParams = parse_or_default(params)?;
             let orchestrator = state.orchestrator.clone();
             let tasks = tokio::task::spawn_blocking(move || orchestrator.task_items_list()).await.map_err(internal)?.map_err(task_err)?;
-            ok(TaskItemsListResult { tasks })
+            ok(crate::network::federated::task_items_list(state, p.machine, TaskItemsListResult { tasks, federation: None }).await?)
         }
         TaskItemsGet::NAME => {
             ok(TaskItemsGetResult { task: state.orchestrator.task_item_get(parse_or_default(params)?).map_err(task_err)? })
@@ -805,6 +815,8 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
             state.orchestrator.usage().settings_changed();
             ok(updated)
         }
+        SettingsNetworkViewMethod::NAME => ok(crate::settings_share::network_view(state).await),
+        SettingsShare::NAME => ok(crate::settings_share::share(state, parse(params)?).await?),
         UsageSummary::NAME => {
             let p: UsageSummaryParams = parse_or_default(params)?;
             let rows = state.store.usage_summary(p.since, p.group_by).map_err(internal)?;
