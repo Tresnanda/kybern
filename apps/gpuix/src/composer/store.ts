@@ -477,7 +477,9 @@ function adoptNewChat(paneId: string, from: ThreadId, to: ThreadId, sendId: stri
 }
 
 export async function loadBranches(projectId: ProjectId) {
-  const client = need(projectClient(projectId))
+  // A project only an offline machine has: the branch chip waits with no branches instead of failing.
+  const client = (() => { try { return need(projectClient(projectId)) } catch { return null } })()
+  if (!client) { patch({ branches: { projectId, result: { current: null, branches: [] } } }); return }
   try {
     const result = await client.call('git.branches', { project_id: projectId })
     if (projectClient(projectId) !== client) return
