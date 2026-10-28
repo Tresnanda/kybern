@@ -1,6 +1,7 @@
 mod accounts;
 mod coordinator;
 mod credentials;
+mod machines;
 mod outbox;
 mod render;
 mod requests;
@@ -249,6 +250,11 @@ enum Cmd {
     Spaces {
         #[command(subcommand)]
         cmd: spaces::SpacesCmd,
+    },
+    /// Your network of machines: list, add, remove, and check them.
+    Machines {
+        #[command(subcommand)]
+        cmd: machines::MachinesCmd,
     },
     /// Work waiting for machines that are offline.
     Outbox {
@@ -1723,6 +1729,7 @@ pub async fn run() -> Result<()> {
             }
         },
         Cmd::Spaces { cmd } => spaces::run(&client, cmd, json).await?,
+        Cmd::Machines { cmd } => machines::run(&client, cmd, json).await?,
         Cmd::Outbox { cmd } => outbox::run(&client, cmd, json).await?,
         Cmd::Threads { project, archived } => {
             let project_id = match project {
