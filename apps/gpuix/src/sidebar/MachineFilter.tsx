@@ -8,6 +8,8 @@ import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { Menu, MenuItem, MenuLabel, MenuSeparator, muted } from '../nav/overlay.tsx'
 import { setNav, useNav } from '../nav/store.ts'
+import { localProfile } from '../environments/registry.ts'
+import { useApp } from '../state.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { accent } from './rows.tsx'
 import { MachineBadge } from './MachineBadge.tsx'
@@ -29,7 +31,8 @@ export function MachineFilter() {
   const machines = useMachines()
   const filter = useNav((s) => s.machineFilter)
   const [open, setOpen] = useState(false)
-  if (machines.length < 2) return null
+  // One machine: the row looks as the environment row always did (this computer, a status dot, a chevron) and opens Settings → Machines, where the others are added.
+  if (machines.length < 2) return <SingleMachine />
   const chosen = activeMachineFilter(machines, filter)
   const offline = machines.filter((machine) => machine.offline).length
   const tone: Tone = chosen ? statusTone(chosen.status) : offline ? 'warn' : 'good'
@@ -77,4 +80,16 @@ export function filterByMachine<P extends { id: string }, T extends { machineId?
     projects: projects.filter((project) => isFree(project.id) || (machinesOf(project.id).length ? machinesOf(project.id).includes(machineId) : machineId === local)),
     threads: threads.filter((thread) => owner(thread) === machineId),
   }
+}
+
+function SingleMachine() {
+  const t = useTheme()
+  const status = useApp((s) => s.status)
+  const open = () => void import('../settings/SettingsScreen.tsx').then((m) => m.openSettingsTab('machines'))
+  return <div style={{ display: 'flex', paddingLeft: 8, paddingRight: 8, paddingBottom: 6 }}>
+    <div testId="machine-single" role="button" tabIndex={0} aria-label="Machines" onClick={open} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') open() }} style={{ display: 'flex', alignItems: 'center', gap: 8, flexGrow: 1, minWidth: 0, minHeight: 32, paddingLeft: 8, paddingRight: 8, paddingTop: 4, paddingBottom: 4, borderRadius: 10, cursor: 'pointer', hover: { backgroundColor: accent(t) } }}>
+      <Icon source={N.laptop} size={14} color={t.text} /><Label color={t.text} truncate style={{ flexGrow: 1, pointerEvents: 'none' }}>{localProfile.name}</Label>
+      <div style={{ pointerEvents: 'none', width: 6, height: 6, borderRadius: 3, backgroundColor: status === 'open' ? '#00bc7d' : status === 'failed' ? t.red : muted(t, 0.4), flexShrink: 0 }} /><Icon source={N.chevronDown} size={12} color={muted(t, 1)} />
+    </div>
+  </div>
 }
