@@ -229,12 +229,12 @@ impl Store {
         })
     }
 
-    /// Make the queued move of `thread_id` due now: its turn ended, which is what the move waited for.
+    /// Make the queued move of `thread_id` due now if it was waiting for the thread ("Waiting for …"): its turn ended.
     pub fn outbox_wake_move(&self, thread_id: Uuid) -> Result<bool> {
         self.with(|c| {
             Ok(c.execute(
                 "UPDATE outbox SET next_attempt_at = NULL
-                 WHERE kind = 'move' AND state = 'queued' AND next_attempt_at IS NOT NULL
+                 WHERE kind = 'move' AND state = 'queued' AND next_attempt_at IS NOT NULL AND last_error LIKE 'Waiting for%'
                    AND json_extract(payload, '$.source_thread_id') = ?1",
                 [thread_id.to_string()],
             )? > 0)
@@ -461,17 +461,26 @@ mod tests {
         waiting.kind = OutboxKind::Move;
         waiting.payload = json!({ "source_thread_id": thread });
         waiting.next_attempt_at = Some(now + Duration::minutes(5));
+        waiting.last_error = Some("Waiting for the running turn to finish.".into());
         store.outbox_insert(&waiting).unwrap();
         let mut other = item(Uuid::now_v7(), "m2", now);
         other.kind = OutboxKind::Move;
         other.payload = json!({ "source_thread_id": Uuid::now_v7() });
         other.next_attempt_at = Some(now + Duration::minutes(5));
+        other.last_error = Some("Waiting for the running turn to finish.".into());
         store.outbox_insert(&other).unwrap();
+        let mut failing = item(Uuid::now_v7(), "m2", now);
+        failing.kind = OutboxKind::Move;
+        failing.payload = json!({ "source_thread_id": thread });
+        failing.next_attempt_at = Some(now + Duration::minutes(5));
+        failing.last_error = Some("the session closed".into());
+        store.outbox_insert(&failing).unwrap();
 
         assert!(!store.outbox_wake_move(Uuid::now_v7()).unwrap(), "nothing waits for an unrelated thread");
         assert!(store.outbox_wake_move(thread).unwrap());
         assert_eq!(store.outbox_get(waiting.id).unwrap().unwrap().next_attempt_at, None, "due now");
         assert!(store.outbox_get(other.id).unwrap().unwrap().next_attempt_at.is_some(), "another thread's move keeps its backoff");
+        assert!(store.outbox_get(failing.id).unwrap().unwrap().next_attempt_at.is_some(), "a move that failed for another reason keeps its backoff");
         assert!(!store.outbox_wake_move(thread).unwrap(), "already due");
     }
 
