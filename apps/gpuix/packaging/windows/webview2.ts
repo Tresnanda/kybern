@@ -16,7 +16,7 @@ export const WEBVIEW2_BOOTSTRAPPER_URL = 'https://go.microsoft.com/fwlink/p/?Lin
  * checked. When Microsoft replaces it the download stops matching and the build fails: check the new file's signature on
  * Windows (`bun packaging/windows/webview2.ts --accept`, which prints its SHA-256 and size), then update these.
  */
-export const WEBVIEW2_BOOTSTRAPPER = { sha256: 'ca4c9016c70e2184c5e231662e0e98abf4826647180ef3faab32fcb1ca2ec15e', size: 1_888_472 }
+export const WEBVIEW2_BOOTSTRAPPER = { sha256: '13f6d9cdc8c3e7186e4b180db7f48e199ee97d631480e8391fb3106f338fb21a', size: 1_889_488 }
 
 /** Its Authenticode signer: Microsoft Corporation, issued by a Microsoft Code Signing PCA. */
 export const WEBVIEW2_SIGNER = {
