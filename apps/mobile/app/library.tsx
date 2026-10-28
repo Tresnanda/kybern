@@ -8,7 +8,9 @@ import { SpaceSwitcher, useSpaceMenuItems } from "../src/features/Spaces";
 import { useLayout } from "../src/state/layout";
 import { attentionSignals, dismissAttention, useListState } from "../src/state/listState";
 import { PROVIDER_DISPLAY_NAME, type Thread } from "../src/state/protocol";
-import { errorText, refresh, threadHasActivity, useApp } from "../src/state/runtime";
+import { errorText, refreshAll, threadHasActivity, useApp } from "../src/state/runtime";
+import { useLists } from "../src/state/useLists";
+import { useMachineMenuItems } from "../src/features/MachineFilter";
 import { currentSpaceId, useSpaces } from "../src/state/spaces";
 import {
   DEFAULT_FILTER,
@@ -66,6 +68,8 @@ const ShowMoreRow = memo(function ShowMoreRow({ remaining, onPress }: { remainin
 
 export default function Library() {
   const app = useApp();
+  const lists = useLists();
+  const machineMenu = useMachineMenuItems();
   const list = useListState();
   const spaces = useSpaces();
   const spaceId = currentSpaceId(spaces);
@@ -92,10 +96,10 @@ export default function Library() {
     if (regular) router.replace("/");
   }, [regular]);
 
-  const isWorking = useCallback((t: Thread) => threadHasActivity(t, app.activity), [app.activity]);
+  const isWorking = useCallback((t: Thread) => threadHasActivity(t, lists.activity), [lists.activity]);
   const top = useMemo(
-    () => filterThreads({ threads: app.threads, projects: app.projects, spaceId, filter, isWorking }),
-    [app.threads, app.projects, spaceId, filter, isWorking],
+    () => filterThreads({ threads: lists.threads, projects: lists.projects, spaceId, filter, isWorking }),
+    [lists.threads, lists.projects, spaceId, filter, isWorking],
   );
   const children = useMemo(() => Object.values(list.children), [list.children]);
   // Pinned first, then one foldable section per project in the user's project
@@ -110,7 +114,7 @@ export default function Library() {
     const pinned = filtering ? [] : top.filter((t) => t.pinned);
     const out: Item[] = pinned.length ? [{ kind: "header", key: "h:pinned", title: "Pinned" }, ...rowItems(pinned)] : [];
     const rest = pinned.length ? top.filter((t) => !t.pinned) : top;
-    for (const group of groupByProject(rest, app.projects, list.projectOrder)) {
+    for (const group of groupByProject(rest, lists.projects, list.projectOrder)) {
       const open = filtering || !folded[group.projectId];
       out.push({
         kind: "header",
@@ -133,11 +137,11 @@ export default function Library() {
       }
     }
     return out;
-  }, [top, children, expanded, filter, folded, pages, app.projects, list.projectOrder]);
+  }, [top, children, expanded, filter, folded, pages, lists.projects, list.projectOrder]);
 
   const spaceThreads = useMemo(
-    () => filterThreads({ threads: app.threads, projects: app.projects, spaceId, filter: DEFAULT_FILTER, isWorking }),
-    [app.threads, app.projects, spaceId, isWorking],
+    () => filterThreads({ threads: lists.threads, projects: lists.projects, spaceId, filter: DEFAULT_FILTER, isWorking }),
+    [lists.threads, lists.projects, spaceId, isWorking],
   );
   const attention = useMemo(() => attentionItems(spaceThreads, attentionSignals(list)), [spaceThreads, list]);
   const agents = useMemo(() => threadAgents(spaceThreads, filter.agent), [spaceThreads, filter.agent]);
@@ -146,11 +150,13 @@ export default function Library() {
   const ctx = useMemo<ThreadRowContext>(
     () => ({
       variant: "list",
-      projectName: (id) => app.projects.find((p) => p.id === id)?.name ?? "Free chat",
+      projectName: (id) => lists.projects.find((p) => p.id === id)?.name ?? "Free chat",
+      machine: lists.machineOfThread,
+      activity: lists.activity,
       onToggleChildren: (id, open) => setExpanded((value) => ({ ...value, [id]: open })),
       onError: setError,
     }),
-    [app.projects],
+    [lists],
   );
 
   const offset = useSharedValue(0);
@@ -165,7 +171,7 @@ export default function Library() {
     refreshingRef.current = true;
     setRefreshing(true);
     try {
-      await refresh();
+      await refreshAll();
       setError("");
     } catch (e) {
       setError(errorText(e));
@@ -176,6 +182,7 @@ export default function Library() {
   }, []);
 
   const menu: MenuItem[] = [
+    ...machineMenu,
     ...spaceMenu,
     {
       title: "Agent",

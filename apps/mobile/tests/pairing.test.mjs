@@ -3,18 +3,14 @@ import { existsSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { nativeModuleSource } from "./native-mocks.mjs";
 import { createNativeSocket } from "../src/state/nativeSocket.ts";
 
-const saved = new Map();
-globalThis.__pairingTestStore = saved;
+const saved = globalThis.__secure;
+globalThis.reconnectSubscribe = (_subscribe, getSnapshot) => getSnapshot();
 registerHooks({
   resolve(specifier, context, next) {
-    const source =
-      specifier === "react-native"
-        ? 'export const Platform = { OS: "android" }; export const AppState = { addEventListener() {} };'
-        : specifier === "expo-secure-store"
-          ? 'export const WHEN_UNLOCKED_THIS_DEVICE_ONLY = "device-only"; export async function setItemAsync(key, value) { globalThis.__pairingTestStore.set(key, value); } export async function getItemAsync(key) { return globalThis.__pairingTestStore.get(key); }'
-          : null;
+    const source = nativeModuleSource(specifier);
     if (source)
       return {
         shortCircuit: true,
@@ -88,12 +84,15 @@ test("redeemed pairing survives a failed socket handshake and reconnect reuses t
   );
   const failed = assert.rejects(
     pairing,
-    /Pairing was saved.*Settings → Computers/,
+    /Pairing was saved.*Settings → Machines/,
   );
   await new Promise(setImmediate);
-  const stored = JSON.parse([...saved.values()][0]);
-  assert.equal(stored.environments[0].token, "paired-token");
-  assert.equal(stored.environments[0].environmentId, "paired-mac");
+  // The token is saved on its own, before any socket, and the record holds no credential.
+  assert.equal(saved.get("kybern.ink.token.paired-mac"), "paired-token");
+  const records = JSON.parse(saved.get("kybern.ink.machines")).records;
+  assert.deepEqual(records.map((r) => [r.machineId, r.routes[0].url]), [["paired-mac", "http://100.64.0.2:4173"]]);
+  assert.ok(!saved.get("kybern.ink.machines").includes("paired-token"));
+  assert.equal(saved.get("kybern.ink.active"), "paired-mac");
   assert.equal(sockets[0].options.headers.origin, "tauri://localhost");
   t.mock.timers.tick(16001);
   await failed;
@@ -104,6 +103,7 @@ test("redeemed pairing survives a failed socket handshake and reconnect reuses t
   );
   assert.equal(sockets.at(-1).options.headers.origin, "tauri://localhost");
   runtime.connect(null);
+  runtime.resetMachineHub();
 });
 
 test("an invitation identity mismatch is rejected before saving credentials or opening a socket", async (t) => {
@@ -124,4 +124,32 @@ test("an invitation identity mismatch is rejected before saving credentials or o
   );
   assert.equal(saved.size, 0);
   assert.equal(sockets.length, 0);
+});
+
+test("pairing a second computer adds a machine; the computer the phone is at stays where it is", async (t) => {
+  saved.clear();
+  sockets.length = 0;
+  mockNativeSocket(t);
+  t.after(() => { runtime.connect(null); runtime.resetMachineHub(); });
+  // The phone is at the first computer, saved the way the app saves it.
+  saved.set("kybern.ink.machines", JSON.stringify({ version: 1, records: [{ machineId: "first-mac", name: "First", routes: [{ kind: "direct_advertised", url: "http://100.64.0.2:4173" }], member: false }] }));
+  saved.set("kybern.ink.token.first-mac", "first-token");
+  saved.set("kybern.ink.active", "first-mac");
+  await runtime.boot();
+  t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ token: "second-token", environment_id: "second-mac" })));
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const active = runtime.getState().activeId;
+  assert.equal(active, "first-mac");
+  const pairing = runtime.pairEnvironment("ws://100.64.0.3:4173/ws", "123456", "Second", "second-mac");
+  const failed = assert.rejects(pairing, /Pairing was saved/);
+  await new Promise(setImmediate);
+  await new Promise(setImmediate);
+  assert.equal(saved.get("kybern.ink.token.second-mac"), "second-token");
+  assert.equal(saved.get("kybern.ink.active"), active ?? "first-mac", "the active computer did not change");
+  assert.equal(runtime.getState().activeId, active);
+  t.mock.timers.tick(16001);
+  await failed;
+  const dialled = sockets.filter((s) => s.url.includes("100.64.0.3"));
+  assert.ok(dialled.some((s) => s.options.headers.Authorization === "Bearer second-token"), "the set connected the new machine with its token");
+  assert.deepEqual(runtime.machineHub().connections().map((c) => c.record.machineId).sort(), ["first-mac", "second-mac"]);
 });

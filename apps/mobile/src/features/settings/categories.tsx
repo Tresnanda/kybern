@@ -4,7 +4,8 @@ import { router } from "expo-router";
 import type { ReactNode } from "react";
 import { useAccounts } from "../../state/accounts";
 import { count } from "../../state/format";
-import { activeEnvironment, useApp } from "../../state/runtime";
+import { machinesSummary } from "../../machines/labels";
+import { activeEnvironment, useApp, useMachineView } from "../../state/runtime";
 import { useSettings } from "../../state/settings";
 import type { IconName } from "../../ui/primitives";
 import { textScaleLabel } from "../../ui/textScale";
@@ -14,7 +15,7 @@ import { AccountsSettings } from "./Accounts";
 import { AgentsSettings } from "./Agents";
 import { APPEARANCE_LABELS, AppearanceSettings } from "./Appearance";
 import { AppUpdatesSettings, appVersion } from "./AppUpdates";
-import { ComputersSettings } from "./Computers";
+import { MachinesSettings } from "./Machines";
 import { ComputerUseSettingsPage } from "./ComputerUse";
 import { DelegationSettings } from "./Delegation";
 import { GeneralSettings } from "./General";
@@ -40,7 +41,7 @@ export type Category = { id: CategoryId; title: string; icon: IconName; subtitle
 
 export const TITLES: Record<CategoryId, string> = {
   appearance: "Appearance",
-  computers: "Computers",
+  computers: "Machines",
   updates: "App updates",
   general: "General",
   agents: "Agents",
@@ -65,6 +66,7 @@ export function useCategories(): { phone: Category[]; computer: Category[]; comp
   const { settings } = useSettings();
   const { accounts, loaded } = useAccounts();
   const environment = activeEnvironment();
+  const machines = useMachineView().machines;
   const open = app.status === "open";
   const connection = !environment ? "Not connected" : open ? "Connected" : app.status === "connecting" ? "Connecting" : "Offline";
   const phone: Category[] = [
@@ -73,7 +75,7 @@ export function useCategories(): { phone: Category[]; computer: Category[]; comp
       id: "computers",
       title: TITLES.computers,
       icon: "laptopcomputer",
-      subtitle: environment ? `${environment.name} · ${connection}` : "Not connected",
+      subtitle: machines.length > 1 ? machinesSummary(machines.map((m) => m.status)) : environment ? `${environment.name} · ${connection}` : "Not connected",
     },
     { id: "updates", title: TITLES.updates, icon: "arrow.clockwise", subtitle: "Check for updates to Kybern on this phone" },
   ];
@@ -108,7 +110,7 @@ export function SettingsBody({ category }: { category: CategoryId }): ReactNode 
     case "appearance":
       return <AppearanceSettings />;
     case "computers":
-      return <ComputersSettings />;
+      return <MachinesSettings />;
     case "updates":
       return <AppUpdatesSettings />;
     case "general":

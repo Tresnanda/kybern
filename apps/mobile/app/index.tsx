@@ -6,12 +6,15 @@ import { KeyboardStickyView } from "react-native-keyboard-controller";
 import Animated, { FadeIn, ReduceMotion } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Composer } from "../src/features/Composer";
-import { ComputerSwitcher } from "../src/features/ComputerSwitcher";
+import { MachineTitle } from "../src/features/MachineFilter";
+import { MachineGlyph } from "../src/features/MachineGlyph";
 import { SpaceSwitcher } from "../src/features/Spaces";
 import { setDraft, useDraft } from "../src/state/draft";
 import { plural } from "../src/state/format";
 import { isFreeChatProject, type Thread, type UserMessage } from "../src/state/protocol";
-import { ensureThread, refresh, rpc, startNewChat, supportsOptimisticCreate, useApp } from "../src/state/runtime";
+import { ensureThread, refresh, rpc, startNewChat, supportsOptimisticCreate, useApp, useMachineView } from "../src/state/runtime";
+import { MenuButton } from "../src/ui/ActionMenu";
+import { useLists } from "../src/state/useLists";
 import { newThreadId } from "../src/state/ids";
 import { groupCreateFields, supportsWorktree } from "../src/state/groups";
 import { useInSpace, useSpaceProjects } from "../src/state/spaces";
@@ -105,6 +108,7 @@ function FooterChip({
 
 function HomeScreen() {
   const app = useApp();
+  const lists = useLists();
   const draft = useDraft();
   const { colors } = useTheme();
   const { width } = useWindowDimensions();
@@ -147,9 +151,20 @@ function HomeScreen() {
     spaceProjects.find((p) => !isFreeChatProject(p.id)) ??
     spaceProjects[0];
   const workspaceLabel = draft.worktree ? "Worktree" : "This checkout";
-  const recent = useMemo(() => continueThreads(app.threads, project?.id), [app.threads, project?.id]);
-  const active = app.threads.filter((t) =>
-    threadHasActivity(t, app.activity),
+  // The same project on other machines: a new thread can start on any of them that is online.
+  const machines = useMachineView();
+  const [machineId, setMachineId] = useState<string>();
+  const here = machines.machines.find((m) => m.isLocal)?.machineId;
+  const logical = project && machines.machines.length > 1
+    ? machines.projects.find((p) => p.instances.some((i) => i.machineId === here && i.project.id === project.id))
+    : undefined;
+  const targets = logical?.instances.filter((i) => !i.offline) ?? [];
+  const target = targets.find((i) => i.machineId === machineId) ?? targets.find((i) => i.machineId === here);
+  const remote = target && target.machineId !== here ? target : undefined;
+  const targetName = machines.machines.find((m) => m.machineId === target?.machineId)?.name;
+  const recent = useMemo(() => continueThreads(lists.threads, project?.id), [lists.threads, project?.id]);
+  const active = lists.threads.filter((t) =>
+    threadHasActivity(t, lists.activity),
   ).length;
   useEffect(() => {
     if (project && project.id !== draft.projectId)
@@ -177,22 +192,24 @@ function HomeScreen() {
   async function send(message: UserMessage) {
     if (!project) throw new Error("Add a project before starting a thread.");
     const provider = { kind: draft.provider, instance: draft.instance };
-    const worktree = draft.worktree && supportsWorktree(project);
+    // The checkout on the chosen machine; the machine that owns the project instance gets the request.
+    const chosen = remote?.project ?? project;
+    const worktree = draft.worktree && supportsWorktree(chosen);
     const params = {
-      project_id: project.id,
+      project_id: chosen.id,
       provider,
       permission_mode: draft.permission,
       use_worktree: worktree,
       ...(draft.model ? { model: draft.model } : {}),
       ...(draft.effort ? { effort: draft.effort } : {}),
       // A group names a base branch per repository instead.
-      ...(draft.baseBranch && !isGroupProject(project) ? { base_branch: draft.baseBranch } : {}),
-      ...groupCreateFields(project, draft, worktree),
+      ...(draft.baseBranch && !isGroupProject(chosen) ? { base_branch: draft.baseBranch } : {}),
+      ...groupCreateFields(chosen, draft, worktree),
     };
-    if (!supportsOptimisticCreate()) {
-      // An older daemon names the thread itself: wait for it, then open that thread.
+    if (remote || !supportsOptimisticCreate()) {
+      // Another machine (or an older daemon) names the thread itself: wait for it, read that machine's list, then open the thread.
       const thread = await rpc("threads.create", { ...params, message });
-      void refresh();
+      await refresh(remote?.machineId).catch(() => {});
       await ensureThread(thread.id).catch(() => {});
       return { threadId: thread.id };
     }
@@ -266,7 +283,7 @@ function HomeScreen() {
             />
           </View>
           <View style={{ flexShrink: 1, alignItems: "center" }}>
-            <ComputerSwitcher />
+            <MachineTitle />
           </View>
           <View style={{ flex: 1, minWidth: HEADER_SIDE, flexDirection: "row", justifyContent: "flex-end", gap: space.sm }}>
             <IconButton
@@ -347,10 +364,13 @@ function HomeScreen() {
                   first
                 />
                 {recent.map((thread, index) => {
-                  const working = threadHasActivity(thread, app.activity);
+                  const working = threadHasActivity(thread, lists.activity);
+                  const home = lists.machineOfThread(thread.id);
                   return (
                     <ListRow
                       key={thread.id}
+                      dimmed={home?.offline}
+                      trailing={home?.showGlyph ? <MachineGlyph glyph={home.glyph} /> : undefined}
                       title={thread.title || "Untitled thread"}
                       meta={
                         thread.status === "awaiting-approval"
@@ -413,6 +433,29 @@ function HomeScreen() {
                   chevron={!!project}
                   onPress={() => router.push(connected ? "/project-picker" : "/connect")}
                 />
+                {connected && targets.length > 1 && targetName ? (
+                  <MenuButton
+                    label={`Start on ${targetName}. Choose a machine`}
+                    radius={radius.full}
+                    items={targets.map((instance) => {
+                      const machine = machines.machines.find((m) => m.machineId === instance.machineId);
+                      return {
+                        title: machine?.name ?? "Machine",
+                        subtitle: machine?.isLocal ? "This phone is here" : undefined,
+                        checked: instance.machineId === target?.machineId,
+                        onPress: () => setMachineId(instance.machineId),
+                      };
+                    })}
+                  >
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6, minHeight: 36, paddingHorizontal: space.sm }}>
+                      <Icon name="laptopcomputer" size={15} color={colors.secondary} />
+                      <T variant="footnote" tone="secondary" numberOfLines={1} style={{ flexShrink: 1 }}>
+                        {targetName}
+                      </T>
+                      <Icon name="chevron.down" size={9} color={colors.muted} />
+                    </View>
+                  </MenuButton>
+                ) : null}
                 {connected && supportsWorktree(project) && (
                   <FooterChip
                     icon="arrow.triangle.branch"

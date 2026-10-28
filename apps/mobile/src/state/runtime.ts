@@ -11,9 +11,20 @@ import * as SecureStore from "expo-secure-store";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { AppState, Platform } from "react-native";
 import { createNativeSocket } from "./nativeSocket";
+import { getRandomValues } from "expo-crypto";
+import { MachineCache } from "../../../../packages/kybern-client/src/machineCache";
 import { MachineHub } from "../machines/hub";
-import { MERGED_LISTS_ENABLED } from "../machines/flag";
-import { recordsFromComputers } from "../machines/records";
+import { machineCacheFile } from "../machines/cacheFile";
+import { computerOfRecord, routeUrl } from "../machines/records";
+import {
+  deviceId as loadDeviceId,
+  loadMachines,
+  machineCredentials,
+  machineStore,
+  saveActive,
+  type KeyValue,
+} from "../machines/storage";
+import { buildLists, singleMachineLists, type ListsView } from "./machineLists";
 import type { MachineId } from "./protocol";
 import { setDraft } from "./draft";
 import { applyIndexEvent } from "./indexProjection";
@@ -181,6 +192,8 @@ export function startNewChat(chat: Omit<NewChat, "state" | "error">, create: New
 function publish(patch: Partial<State>) {
   state = { ...state, ...patch };
   listeners.forEach((fn) => fn());
+  // The machine set merges the computer's lists with the other machines' (a no-op for one machine).
+  if (client && ("threads" in patch || "projects" in patch || "activity" in patch)) hub?.primaryListsChanged(client);
 }
 function publishThread(id: string, value: ThreadState) {
   snapshots.set(id, value);
@@ -249,21 +262,50 @@ export function useThreadValue<T>(
   }, [id, state.status]);
   return snapshot;
 }
-// ---- the machine set (design §5.3): a hub around the one connection above ----
+// ---- the machine set (design §5.3): every machine the phone knows, the one it is at being the primary connection ----
 
+const secureKv: KeyValue = {
+  get: async (key) => (Platform.OS === "web" ? null : SecureStore.getItemAsync(key)),
+  set: async (key, value) => {
+    if (Platform.OS !== "web")
+      await SecureStore.setItemAsync(key, value, { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY });
+  },
+  delete: async (key) => {
+    if (Platform.OS !== "web") await SecureStore.deleteItemAsync(key);
+  },
+};
+const randomId = () => {
+  const bytes = new Uint8Array(16);
+  getRandomValues(bytes);
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+};
+/** This phone's id for `network.client_grant`, read at boot. */
+let phoneDeviceId = "kybern-mobile";
 let hub: MachineHub | undefined;
+let cacheFile: ReturnType<typeof machineCacheFile> | undefined;
 /**
- * The phone's machine hub, made on first use from the saved computers. The
- * active connection is its primary machine; the other saved computers are
- * records only until merged lists are enabled (`machines/flag.ts`).
+ * The phone's machine hub, made on first use. The active connection is its
+ * primary machine; every other saved machine is the set's own connection.
  */
 export function machineHub(): MachineHub {
-  hub ??= new MachineHub({
-    records: () => recordsFromComputers(state.environments),
-    readCredential: (id) => state.environments.find((e) => e.id === id)?.token,
-    mergedLists: () => MERGED_LISTS_ENABLED,
-    socket: Platform.OS === "web" ? undefined : createNativeSocket,
-  });
+  if (!hub) {
+    cacheFile = machineCacheFile();
+    hub = new MachineHub({
+      store: machineStore(secureKv),
+      credentials: machineCredentials(secureKv),
+      cache: new MachineCache(cacheFile),
+      deviceId: phoneDeviceId,
+      socket: Platform.OS === "web" ? undefined : createNativeSocket,
+      onRekey: (oldId, newId) => {
+        // The daemon answered with its real id: the saved computer follows it.
+        publish({
+          environments: state.environments.map((e) => (e.id === oldId ? { ...e, id: newId, environmentId: newId } : e)),
+          activeId: state.activeId === oldId ? newId : state.activeId,
+        });
+        void saveActive(secureKv, state.activeId).catch(() => {});
+      },
+    });
+  }
   return hub;
 }
 /** Tests: forget the hub so the next use builds a fresh one. */
@@ -271,26 +313,31 @@ export function resetMachineHub() {
   hub?.dispose();
   hub = undefined;
 }
-/** The merged projects and threads of every machine. Nothing renders from it until N7 part 2. */
+/** The merged projects and threads of every machine. */
 export function useMachineView() {
   const h = machineHub();
   return useSyncExternalStore(h.subscribe.bind(h), () => h.view());
 }
+/** Lists across machines as the screens read them; one machine gives the computer's own lists untouched. */
+export function listsOf(view: ReturnType<MachineHub["view"]>, machine: MachineId | null): ListsView {
+  const local = { projects: state.projects, threads: state.threads, activity: state.activity };
+  return view.machines.length <= 1 ? singleMachineLists(local) : buildLists(view, local, machine, (id) => hub?.set.activityOf(id));
+}
 
 /**
  * Call the daemon of the computer the user is at, or, with `machineId`, the
- * machine that owns the thread or project.
- * TODO(N7 part 2): default to `machineHub().machineOfThread(threadId)` for
- * thread-scoped methods so callers stop passing the id themselves.
+ * machine that owns the thread or project. Without an id the thread or project
+ * in `params` picks the machine, so callers need not pass it.
  */
 export function rpc<M extends MethodName>(
   method: M,
   params: ParamsOf<M>,
   machineId?: MachineId,
 ): Promise<ResultOf<M>> {
-  if (machineId && hub && machineId !== hub.primaryMachineId) {
+  const target = machineId ?? hub?.routeFor(params);
+  if (target && hub && target !== hub.primaryMachineId) {
     try {
-      return hub.clientFor(machineId).call(method, params);
+      return hub.clientFor(target).call(method, params);
     } catch (e) {
       return Promise.reject(e);
     }
@@ -316,6 +363,8 @@ export function supportsGroupProjects() {
 }
 export function errorText(e: unknown) {
   const message = e instanceof Error ? e.message : String(e);
+  if (e instanceof Error && e.name === "OfflineError")
+    return "That machine is offline. Open it again when it is back; threads you already loaded stay readable.";
   if (
     /network request failed|fetch failed|app transport security/i.test(message)
   )
@@ -327,40 +376,20 @@ export function errorText(e: unknown) {
 export function clearError() {
   publish({ error: null });
 }
-async function persist(
-  environments = state.environments,
-  activeId = state.activeId,
-) {
-  if (Platform.OS !== "web")
-    await SecureStore.setItemAsync(
-      KEY,
-      JSON.stringify({ environments, activeId }),
-      { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY },
-    );
-}
 let booted = false;
 export async function boot() {
   if (booted) return;
   booted = true;
   try {
-    const raw =
-      Platform.OS === "web" ? null : await SecureStore.getItemAsync(KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as {
-        environments: Environment[];
-        activeId: string | null;
-      };
-      if (Array.isArray(parsed.environments))
-        publish({
-          environments: parsed.environments.filter(
-            (e) =>
-              typeof e.id === "string" &&
-              typeof e.token === "string" &&
-              typeof e.url === "string",
-          ),
-          activeId: parsed.activeId,
-        });
+    phoneDeviceId = await loadDeviceId(secureKv, randomId);
+    const saved = await loadMachines(secureKv);
+    const credentials = machineCredentials(secureKv);
+    const environments: Environment[] = [];
+    for (const record of saved.records) {
+      const computer = computerOfRecord(record, await credentials.get(record.machineId));
+      if (computer) environments.push(computer);
     }
+    publish({ environments, activeId: environments.some((e) => e.id === saved.activeId) ? saved.activeId : null });
     publish({ ready: true });
     if (state.activeId) connect(state.activeId);
   } catch {
@@ -370,10 +399,13 @@ export async function boot() {
     });
   }
   AppState.addEventListener("change", (next) => {
-    if (next === "active") void client?.checkConnection();
+    if (next === "active") {
+      void client?.checkConnection();
+      void hub?.foreground().catch(() => {});
+    } else cacheFile?.flush();
   });
 }
-export async function addEnvironment(endpoint: Endpoint, name: string) {
+async function openCandidate(endpoint: Endpoint) {
   // Verify identity and credential before saving or replacing the active connection.
   const candidate = new KybernClient(
     { ...endpoint, url: normalizeDaemonUrl(endpoint.url) },
@@ -381,7 +413,7 @@ export async function addEnvironment(endpoint: Endpoint, name: string) {
       createSocket: Platform.OS === "web" ? undefined : createNativeSocket,
     },
   );
-  const info = await new Promise<NonNullable<KybernClient["info"]>>(
+  return new Promise<NonNullable<KybernClient["info"]>>(
     (resolve, reject) => {
       const timer = setTimeout(() => {
         candidate.close();
@@ -404,6 +436,14 @@ export async function addEnvironment(endpoint: Endpoint, name: string) {
       candidate.connect();
     },
   ).finally(() => candidate.close());
+}
+/**
+ * Add a computer from its address and an access token. The first computer (or
+ * the one the phone is at) becomes the connection the phone works through; any
+ * other joins the set as one more machine and is connected by it.
+ */
+export async function addEnvironment(endpoint: Endpoint, name: string) {
+  const info = await openCandidate(endpoint);
   const environment: Environment = {
     ...endpoint,
     url: normalizeDaemonUrl(endpoint.url),
@@ -411,17 +451,26 @@ export async function addEnvironment(endpoint: Endpoint, name: string) {
     id: info.environment_id,
     name: name.trim() || info.hostname,
   };
-  await saveEnvironment(environment);
-  connect(environment.id);
+  const primary = !state.activeId || state.activeId === environment.id;
+  await saveEnvironment(environment, primary);
+  if (primary) connect(environment.id);
 }
-async function saveEnvironment(environment: Environment) {
+async function saveEnvironment(environment: Environment, primary: boolean) {
   const environments = [
     ...state.environments.filter((e) => e.id !== environment.id),
     environment,
   ];
-  await persist(environments);
+  const record = {
+    machineId: environment.id,
+    name: environment.name,
+    routes: [{ kind: "direct_advertised" as const, url: routeUrl(environment.url) }],
+  };
+  // Credentials are saved before anything connects.
+  if (primary) {
+    await machineHub().saveComputer(record, environment.token);
+    await saveActive(secureKv, environment.id);
+  } else await machineHub().addMachine(record, environment.token);
   publish({ environments });
-  void hub?.syncRecords().catch(() => {});
 }
 export async function pairEnvironment(
   url: string,
@@ -459,28 +508,37 @@ export async function pairEnvironment(
     environmentId: result.environment_id,
   };
   // Redemption consumes the one-time code. Keep the issued credential even if
-  // the following socket handshake fails, so Settings can retry it safely.
-  await saveEnvironment({
-    ...endpoint,
-    id: result.environment_id,
-    name: name.trim() || new URL(address).hostname,
-  });
+  // the following socket handshake fails, so Settings can retry it safely. One
+  // pairing is enough for the whole network: the set asks this machine for a
+  // token for every other member (`network.client_grant`) once it is connected.
+  await saveEnvironment(
+    {
+      ...endpoint,
+      id: result.environment_id,
+      name: name.trim() || new URL(address).hostname,
+    },
+    !state.activeId || state.activeId === result.environment_id,
+  );
   try {
     await addEnvironment(endpoint, name);
   } catch {
     throw new Error(
-      "Pairing was saved, but the live connection could not open. Open Settings → Computers to reconnect without another code.",
+      "Pairing was saved, but the live connection could not open. Open Settings → Machines to reconnect without another code.",
     );
   }
 }
-export async function removeEnvironment(id: string) {
+/** Forget a machine on this phone: its token, cached lists and record. The computer itself is untouched. */
+export async function removeMachine(id: string) {
   const environments = state.environments.filter((e) => e.id !== id);
-  const active =
-    state.activeId === id ? (environments[0]?.id ?? null) : state.activeId;
-  await persist(environments, active);
+  const wasActive = state.activeId === id;
+  const next = wasActive ? (environments[0]?.id ?? null) : state.activeId;
+  if (wasActive) connect(null);
   publish({ environments });
-  if (state.activeId === id) connect(active);
-  void hub?.syncRecords().catch(() => {});
+  await machineHub().removeMachine(id);
+  if (wasActive) {
+    await saveActive(secureKv, next);
+    connect(next);
+  }
 }
 export function connect(id: string | null) {
   generation++;
@@ -494,6 +552,7 @@ export function connect(id: string | null) {
   refreshPromise = null;
   providerRefreshPromise = null;
   hub?.releasePrimary();
+  resetRemoteEvents();
   client?.close();
   client = null;
   snapshots.cancelReplay();
@@ -520,7 +579,7 @@ export function connect(id: string | null) {
     queue: [],
     activity: [],
   });
-  void persist().catch((e) => publish({ error: errorText(e) }));
+  void saveActive(secureKv, id).catch((e) => publish({ error: errorText(e) }));
   const env = state.environments.find((e) => e.id === id);
   if (!env) return;
   const thisGeneration = generation;
@@ -529,7 +588,9 @@ export function connect(id: string | null) {
     createSocket: Platform.OS === "web" ? undefined : createNativeSocket,
   });
   client = next;
-  machineHub().beginPrimary(next, { id: env.id, name: env.name });
+  const machines = machineHub();
+  void machines.beginPrimary(next, { machineId: env.id, name: env.name, url: env.url }).catch(() => {});
+  machines.setPrimaryLists(next, () => ({ projects: state.projects, threads: state.threads, activity: state.activity }));
   attachNotes(next, () => generation === thisGeneration);
   attachTasks(next, () => generation === thisGeneration);
   attachRequestProgress(next, () => generation === thisGeneration);
@@ -659,7 +720,12 @@ export function connect(id: string | null) {
   );
   next.connect();
 }
-export async function refresh() {
+/**
+ * Read the computer's lists again. With a machine id (a string: callers also
+ * pass promise results here) read that other machine instead.
+ */
+export async function refresh(machineId?: unknown) {
+  if (typeof machineId === "string" && hub && machineId !== hub.primaryMachineId) return hub.refreshMachine(machineId);
   if (!subscriptionReady) return;
   if (refreshPromise) return refreshPromise;
   const epoch = generation;
@@ -696,8 +762,6 @@ export async function refresh() {
       };
       for (const event of events) next = applyIndexEvent(next, event);
       publish(next);
-      // The set merges these lists with other machines' (a no-op while merged lists are off).
-      if (client) hub?.ingestPrimary(client, projects.projects, threads.threads);
     }
   })().finally(() => {
     if (epoch === generation) {
@@ -713,8 +777,58 @@ function withNewChats(listed: Thread[]): Thread[] {
   if (merged.listed.length) queueMicrotask(() => newChats.listed(merged.listed));
   return merged.threads;
 }
+/** Pull to refresh: the computer's lists and every other machine's. */
+export async function refreshAll() {
+  await Promise.all([refresh(), hub?.refreshOthers().catch(() => {})]);
+}
+// ---- threads on other machines ----
+
+/** Event subscriptions to machines other than the primary, made when one of their threads opens. */
+const remoteEvents = new Map<MachineId, { unsubscribe(): void }>();
+function resetRemoteEvents() {
+  remoteEvents.forEach((subscription) => subscription.unsubscribe());
+  remoteEvents.clear();
+}
+/** The machine a listed thread lives on, when it is not the one the phone is at. */
+function remoteOwner(threadId: string): MachineId | undefined {
+  const owner = hub?.routeFor({ thread_id: threadId });
+  return owner && owner !== hub?.primaryMachineId ? owner : undefined;
+}
+function ensureRemoteEvents(machineId: MachineId) {
+  if (!hub || remoteEvents.has(machineId)) return;
+  const thisGeneration = generation;
+  const reloadOpen = () => {
+    for (const id of threadListeners.keys())
+      if (id && remoteOwner(id) === machineId) void loadThread(id).catch(() => {});
+  };
+  remoteEvents.set(
+    machineId,
+    hub.set.handleFor(machineId).subscribeEvents(
+      {},
+      (event) => {
+        if (generation !== thisGeneration) return;
+        hydrating.get(event.thread_id)?.push(event);
+        historyLoads.get(event.thread_id)?.events.push(event);
+        const snapshot = snapshots.get(event.thread_id);
+        if (snapshot?.loaded) publishThread(event.thread_id, applyEvent(snapshot, event));
+        if (event.kind === "workspace_reverted") {
+          snapshots.invalidate(event.thread_id);
+          if (threadListeners.has(event.thread_id)) void loadThread(event.thread_id).catch(() => {});
+        }
+      },
+      undefined,
+      // Events between the transcript read and the subscription acknowledging are replayed by reading again.
+      () => {
+        if (generation === thisGeneration) reloadOpen();
+      },
+    ),
+  );
+}
+
 export async function loadThread(id: string) {
-  if (!id || !subscriptionReady) return;
+  const owner = id ? remoteOwner(id) : undefined;
+  if (owner) ensureRemoteEvents(owner);
+  if (!id || (!subscriptionReady && !owner)) return;
   if (loads.has(id)) return loads.get(id)!;
   historyLoads.delete(id);
   const epoch = generation;
@@ -813,9 +927,10 @@ export async function mutate<M extends MethodName>(
   params: ParamsOf<M>,
   machineId?: MachineId,
 ) {
-  const result = await rpc(method, params, machineId);
-  // TODO(N7 part 2): refresh the machine that was written to, not only the active one.
-  await refresh();
+  const target = machineId ?? hub?.routeFor(params);
+  const result = await rpc(method, params, target);
+  // The machine that was written to reads its lists again, not only the computer the phone is at.
+  await refresh(target);
   return result;
 }
 export function assetUrl(id: string) {
@@ -829,7 +944,7 @@ export function taskActive(task: RuntimeTask) {
 /** Foreground completion does not mean provider-owned background work stopped. */
 export function threadHasActivity(
   thread: Thread,
-  activity: ThreadActivitySummary[],
+  activity: readonly ThreadActivitySummary[],
 ) {
   return (
     thread.status === "running" ||

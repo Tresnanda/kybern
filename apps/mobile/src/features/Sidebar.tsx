@@ -8,6 +8,7 @@ import { useLayout } from "../state/layout";
 import { attentionSignals, dismissAttention, useListState } from "../state/listState";
 import { PROVIDER_DISPLAY_NAME, type Thread } from "../state/protocol";
 import { threadHasActivity, useApp } from "../state/runtime";
+import { useLists } from "../state/useLists";
 import { currentSpaceId, useSpaces } from "../state/spaces";
 import { useTasks } from "../state/tasks";
 import { activitySummary } from "../state/tasksModel";
@@ -32,7 +33,7 @@ import { SearchField } from "../ui/Search";
 import { Segmented } from "../ui/Segmented";
 import { SpaceTile } from "../ui/SpaceTile";
 import { radius, space, useTheme } from "../ui/theme";
-import { useComputerMenuItems } from "./ComputerSwitcher";
+import { useMachineMenuItems } from "./MachineFilter";
 import { useSpaceMenuItems } from "./Spaces";
 import { ThreadListRow, type ThreadRowContext } from "./ThreadRows";
 
@@ -56,7 +57,7 @@ function SidebarMaterial() {
 function SidebarTitle() {
   const { colors } = useTheme();
   const s = useSpaces();
-  const computers = useComputerMenuItems();
+  const computers = useMachineMenuItems();
   const spaces = useSpaceMenuItems();
   const items = [...computers, ...spaces];
   const active = s.spaces.find((x) => x.id === currentSpaceId(s));
@@ -73,7 +74,7 @@ function SidebarTitle() {
   return (
     <MenuButton
       items={items}
-      label={active ? `Space: ${active.name}. Switch computer or space` : "Switch computer or space"}
+      label={active ? `Space: ${active.name}. Filter by machine or switch space` : "Filter by machine or switch space"}
       radius={radius.md}
       style={{ flexShrink: 1 }}
     >
@@ -86,6 +87,7 @@ function SidebarTitle() {
 // the collapse/resize animation; this always fills its column.
 export function Sidebar() {
   const app = useApp();
+  const lists = useLists();
   const list = useListState();
   const spaces = useSpaces();
   const spaceId = currentSpaceId(spaces);
@@ -101,16 +103,16 @@ export function Sidebar() {
   const [showAll, setShowAll] = useState<Record<string, boolean>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
-  const isWorking = useCallback((t: Thread) => threadHasActivity(t, app.activity), [app.activity]);
+  const isWorking = useCallback((t: Thread) => threadHasActivity(t, lists.activity), [lists.activity]);
   const top = useMemo(
-    () => filterThreads({ threads: app.threads, projects: app.projects, spaceId, filter, isWorking }),
-    [app.threads, app.projects, spaceId, filter, isWorking],
+    () => filterThreads({ threads: lists.threads, projects: lists.projects, spaceId, filter, isWorking }),
+    [lists.threads, lists.projects, spaceId, filter, isWorking],
   );
-  const groups = useMemo(() => groupByProject(top, app.projects, list.projectOrder), [top, app.projects, list.projectOrder]);
+  const groups = useMemo(() => groupByProject(top, lists.projects, list.projectOrder), [top, lists.projects, list.projectOrder]);
   const children = useMemo(() => Object.values(list.children), [list.children]);
   const live = useMemo(
-    () => filterThreads({ threads: app.threads, projects: app.projects, spaceId, filter: DEFAULT_FILTER, isWorking }),
-    [app.threads, app.projects, spaceId, isWorking],
+    () => filterThreads({ threads: lists.threads, projects: lists.projects, spaceId, filter: DEFAULT_FILTER, isWorking }),
+    [lists.threads, lists.projects, spaceId, isWorking],
   );
   const attention = useMemo(() => attentionItems(live, attentionSignals(list)), [live, list]);
   const agents = useMemo(() => threadAgents(live, filter.agent), [live, filter.agent]);
@@ -121,10 +123,12 @@ export function Sidebar() {
     () => ({
       variant: "sidebar",
       activeId,
-      projectName: (id) => app.projects.find((p) => p.id === id)?.name ?? "Free chat",
+      projectName: (id) => lists.projects.find((p) => p.id === id)?.name ?? "Free chat",
+      machine: lists.machineOfThread,
+      activity: lists.activity,
       onToggleChildren: (id, open) => setExpanded((value) => ({ ...value, [id]: open })),
     }),
-    [activeId, app.projects],
+    [activeId, lists],
   );
 
   const menu: MenuItem[] = [

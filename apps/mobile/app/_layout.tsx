@@ -303,6 +303,7 @@ function Navigation() {
         />
         <Stack.Screen name="settings-detail" options={{ title: "Settings" }} />
         <Stack.Screen name="settings" options={{ title: "Settings" }} />
+        <Stack.Screen name="machines" options={{ title: "Machines" }} />
         <Stack.Screen name="settings-agent" options={{ title: "Agent" }} />
         <Stack.Screen name="settings-role" options={{ title: "Model", ...sheet }} />
         <Stack.Screen name="computer-note" options={{ title: "App note" }} />
