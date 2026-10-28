@@ -20,6 +20,7 @@ import { isWindowVisible } from '../native/visibility.ts'
 import { getClient, getState, subscribe } from '../state.ts'
 import { isWindowFocused } from './window.ts'
 import { toast } from './toasts.tsx'
+import { startReceivedNotices } from '../machines/utilities.ts'
 import { questionLine, waitingLine } from './waitingLine.ts'
 import { agentName } from '../requests/model.ts'
 import { createThreadNotices } from './threadNotices.ts'
@@ -58,6 +59,8 @@ export function startAgentToasts() {
   owner = client
   started = true
   const startedAt = Date.now()
+  // Files that arrive from another machine (U1): a notice with Show in folder.
+  try { stops.push(startReceivedNotices()) } catch { /* the machine hub is not ready: no notices */ }
   const announced = new Map<ThreadId, number>()
   /** Waiting toasts on screen, by thread. */
   const waiting = new Map<ThreadId, Set<string>>()

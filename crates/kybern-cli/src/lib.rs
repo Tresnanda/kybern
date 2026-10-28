@@ -7,6 +7,7 @@ mod outbox;
 mod render;
 mod requests;
 mod spaces;
+mod utilities;
 
 use std::path::PathBuf;
 
@@ -479,11 +480,20 @@ enum Cmd {
     Git { thread: String },
     /// List a project's local branches, most recently committed first.
     Branches { project: String },
-    /// Find files in a project by fuzzy path match
+    /// Find files in a project by fuzzy path match, or send some to another machine.
+    #[command(args_conflicts_with_subcommands = true)]
     Files {
-        project: String,
+        #[command(subcommand)]
+        cmd: Option<utilities::FilesCmd>,
+        /// A project id.
+        project: Option<String>,
         #[arg(default_value = "")]
         query: String,
+    },
+    /// Forward ports of your other machines to this one.
+    Ports {
+        #[command(subcommand)]
+        cmd: utilities::PortsCmd,
     },
     /// Manage provider-owned plugins and connectors.
     Integrations {
@@ -2261,7 +2271,10 @@ pub async fn run() -> Result<()> {
                 println!("revoked");
             }
         },
-        Cmd::Files { project, query } => {
+        Cmd::Ports { cmd } => utilities::run_ports(&client, cmd, json).await?,
+        Cmd::Files { cmd: Some(cmd), .. } => utilities::run_files(&client, cmd, json).await?,
+        Cmd::Files { cmd: None, project, query } => {
+            let project = project.ok_or_else(|| anyhow!("Name a project: kybern files <project> [query], or kybern files send --help"))?;
             let r = client.call::<FilesSearch>(FilesSearchParams { project_id: project.parse()?, query, limit: 30 }).await?;
             for f in &r.files {
                 println!("{f}");

@@ -3751,6 +3751,73 @@ export interface PeerFederatedReadResult {
   task_items?: { tasks: TaskItem[] } | null;
 }
 
+// ---- machine utilities: sending files, forwarding ports (M4 / U1, U3; design §8.1, §8.3) ----
+
+/** A send is at most this many bytes, all files together. */
+export const MAX_PUSH_BYTES = 2 * 1024 * 1024 * 1024;
+export const FILES_PROGRESS_NOTIFICATION = "files.progress";
+export const FILES_RECEIVED_NOTIFICATION = "files.received";
+export const PORTS_CHANGED_NOTIFICATION = "ports.changed";
+
+/** Where a send lands on the other machine. */
+export type PushDest = { kind: "downloads" } | { kind: "project"; project: string; subdir?: string | null };
+
+export interface FilesSendParams {
+  project_id: ProjectId;
+  /** The file or folder, relative to the project root. */
+  path: string;
+  /** The target machine, by id or name. */
+  machine: string;
+  dest?: PushDest | null;
+}
+export interface FilesSendResult {
+  item: OutboxItem;
+  files: number;
+  bytes: number;
+  /** Entries left out of a folder: symlinks, .git, credential folders and env files. */
+  skipped: number;
+}
+export interface FilesProgress { item_id: Uuid; sent: number; total: number }
+export interface FilesReceived {
+  transfer_id: Uuid;
+  from_machine: MachineId;
+  from_name: string;
+  name: string;
+  files: number;
+  bytes: number;
+  dest_path: string;
+  at: DateTime;
+}
+export interface PushEntry { path: string; size: number; sha256: string }
+export interface PeerFilesBeginParams { transfer_id: Uuid; name: string; is_folder: boolean; dest: PushDest; entries: PushEntry[] }
+export interface PeerFilesBeginResult { offsets: number[]; complete?: boolean; dest_path?: string | null }
+export interface PeerFilesChunkParams { transfer_id: Uuid; index: number; offset: number; data: string }
+export interface PeerFilesFinishResult { dest_path: string; files: number; bytes: number }
+
+export interface PortsForwardParams { machine: string; remote_port: number; local_port?: number | null }
+export interface PortForward {
+  id: Uuid;
+  machine_id: MachineId;
+  machine_name: string;
+  remote_port: number;
+  local_port: number;
+  connections: number;
+  created_at: DateTime;
+}
+export interface PortsListResult { forwards: PortForward[] }
+export interface PeerPortsOpenParams { stream_id: number; port: number }
+
+// ---- the clipboard between machines (M4 / U2; design §8.2) ----
+
+/** The longest text one clipboard send or paste carries. */
+export const MAX_CLIPBOARD_BYTES = 1024 * 1024;
+export type ClipboardStore = "system" | "buffer";
+export interface ClipboardSetParams { machine?: string | null; text: string }
+export interface ClipboardSetResult { stored: ClipboardStore; bytes: number }
+export interface ClipboardGetParams { machine?: string | null }
+export interface ClipboardGetResult { text: string; source: ClipboardStore }
+export interface ClipboardStatus { backend: ClipboardStore; auto: boolean; skipped: number }
+
 // ---- remote delegation and the outbox (R1; design §6.2, §6.4) ----
 
 export const OUTBOX_CHANGED_NOTIFICATION = "outbox.changed";
@@ -4205,6 +4272,23 @@ export interface Methods {
   "login.broker.bind": [LoginBrokerBindParams, LoginBrokerStatus];
   "login.broker.set": [LoginBrokerSetParams, LoginBrokerSetResult];
   "secrets.push": [SecretsPushParams, SecretsPushResult];
+  "files.send": [FilesSendParams, FilesSendResult];
+  "peer.files.begin": [PeerFilesBeginParams, PeerFilesBeginResult];
+  "peer.files.chunk": [PeerFilesChunkParams, { offset: number }];
+  "peer.files.finish": [{ transfer_id: Uuid }, PeerFilesFinishResult];
+  "peer.files.abort": [{ transfer_id: Uuid }, Empty];
+  "ports.forward": [PortsForwardParams, PortForward];
+  "ports.list": [Empty, PortsListResult];
+  "ports.stop": [{ id: Uuid }, PortsListResult];
+  "clipboard.set": [ClipboardSetParams, ClipboardSetResult];
+  "clipboard.get": [ClipboardGetParams, ClipboardGetResult];
+  "clipboard.status": [Empty, ClipboardStatus];
+  "peer.clipboard.set": [{ text: string }, ClipboardSetResult];
+  "peer.clipboard.get": [Empty, ClipboardGetResult];
+  "peer.clipboard.auto": [{ sealed: string }, Empty];
+  "peer.ports.open": [PeerPortsOpenParams, Empty];
+  "peer.ports.data": [PeerRelayDataParams, Empty];
+  "peer.ports.close": [PeerRelayCloseParams, Empty];
 }
 
 // ---- the login broker and pushed keys (ADE-86 S4; design §9.3 and §9.4) ----

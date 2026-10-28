@@ -16,7 +16,10 @@ import type { FileEntry, FilesReadResult } from '../../../../packages/kybern-cli
 import { ISLAND } from '../MatrixLoader.tsx'
 import { errorText } from '../nav/actions.ts'
 import { N } from '../nav/glyphs.ts'
-import { Menu, MenuCheckboxItem, MenuItem, MenuLabel, MenuSeparator } from '../nav/overlay.tsx'
+import { ContextMenu, Menu, MenuCheckboxItem, MenuItem, MenuLabel, MenuSeparator, MenuSub } from '../nav/overlay.tsx'
+import { sendTargets } from '../../../../packages/kybern-client/src/machineUtilities.ts'
+import { useMachines } from '../machines/index.ts'
+import { sendPath } from '../machines/utilities.ts'
 import { IconButton } from '../kit/IconButton.tsx'
 import { SearchField } from '../kit/SearchField.tsx'
 import { Button } from '../kit/Button.tsx'
@@ -53,6 +56,7 @@ export function Explorer({ projectId, thread, width }: { projectId: string; thre
   const [results, setResults] = useState<string[] | null>(null)
   const selectionRequest = useExplorerSelection(), threadId = useApp(s => s.selectedId)
   const reveal = useRef<string | null>(null)
+  const [menu, setMenu] = useState<{ row: TreeRow; at: { x: number; y: number } } | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
   const requested = useRef(new Set<string>())
@@ -176,9 +180,13 @@ export function Explorer({ projectId, thread, width }: { projectId: string; thre
       <TreeHost ref={treeList} testId="dock-file-tree" {...(virtualTree ? { ...EXPLORER_SCROLL_LAYOUT, estimatedItemHeight: TREE_ROW_HEIGHT, overdraw: 0, onVisibleRange: (event: { startIndex?: number; endIndex?: number }) => {
         setTreeWindow(previous => treeWindowRange(rows.length, event.startIndex ?? 0, event.endIndex ?? 0, previous))
       } } : {})} style={{ display: 'flex', flexDirection: 'column', width: '100%', flexGrow: 1, minHeight: 0, overflowY: virtualTree ? undefined : 'scroll', overflowX: 'hidden' }}>
-        <MotionFileTreeRows rows={rows} open={expanded} loading={loadingDirs} selected={selected} focus={focus} virtual={virtualTree} window={virtualTree ? treeWindow : undefined} search={results !== null} activate={activateRow} />
+        <MotionFileTreeRows rows={rows} open={expanded} loading={loadingDirs} selected={selected} focus={focus} virtual={virtualTree} window={virtualTree ? treeWindow : undefined} search={results !== null} activate={activateRow} context={(row, at) => { if (row.kind === 'file' || row.kind === 'directory') setMenu({ row, at }) }} />
       </TreeHost>
       </div>
+      {menu && <ContextMenu at={menu.at} onClose={() => setMenu(null)} testId="dock-file-menu">
+        <SendToMenu thread={thread} path={menu.row.path} />
+        <MenuItem id="relative" label="Copy relative path" onSelect={() => copyText(menu.row.path)} />
+      </ContextMenu>}
     </div>
   </div>
 }
@@ -288,7 +296,7 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
           <MenuSeparator />
         </>}
         <MenuItem id="reveal" label={osLabels().reveal} icon={N.folder} disabled={!absolutePath || !activeEnvironment().local} onSelect={() => { if (absolutePath && activeEnvironment().local) revealQuietly(absolutePath) }} />
-        <MenuSeparator />
+        <SendToMenu thread={projectId && !path.startsWith('/') ? thread : undefined} path={path} separated />
         <MenuItem id="relative" label="Copy relative path" onSelect={() => copyText(path)} />
         <MenuItem id="absolute" label="Copy absolute path" disabled={!absolutePath} onSelect={() => { if (absolutePath) copyText(absolutePath) }} />
         <MenuItem id="contents" label="Copy contents" disabled={!file || file.binary} onSelect={() => { const text = key ? getBuffer(key)?.text : undefined; if (text != null) copyText(text); else if (file && !file.binary) copyText(file.content) }} />
@@ -309,6 +317,19 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
     </>}</Rise> : !error && <LoadingLines testId="dock-file-loading" />}
   </>
 })
+
+/** "Send to…" (U1): the other machines, an offline one still selectable. Nothing renders with a single machine. */
+function SendToMenu({ thread, path, separated = false }: { thread?: { id: string; project_id: string; ownProjectId?: string }; path: string; separated?: boolean }) {
+  const targets = sendTargets(useMachines())
+  if (!thread || !targets.length) return null
+  const client = threadClient(thread.id)
+  return <>
+    {separated && <MenuSeparator />}
+    <MenuSub id="send" label="Send to…" icon={N.arrowRight} testId="file-send-to" width={232}>
+      {targets.map((target) => <MenuItem key={target.machineId} id={`send-${target.machineId}`} testId={`file-send-${target.machineId}`} label={target.name} detail={target.online ? undefined : 'Offline · sends when it returns'} onSelect={() => { if (client) void sendPath(client, ownProjectId(thread), path, target) }} />)}
+    </MenuSub>
+  </>
+}
 
 /** Why a file opened read-only. */
 function ReadOnlyNote({ size }: { size: number }) {
