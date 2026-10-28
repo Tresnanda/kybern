@@ -23,6 +23,7 @@ import { Checkbox } from '../kit/Checkbox.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
 import { TextField } from '../kit/Field.tsx'
 import { Switch } from '../kit/Switch.tsx'
+import { readClipboardAuto, setClipboardAuto } from '../machines/clipboard.ts'
 import { Row, Section } from './controls.tsx'
 import { buildCards, outboxRows, updateResultRows, updateSummary, type MachineCardModel } from './machinesModel.ts'
 
@@ -44,6 +45,7 @@ export function Machines() {
       {cards.map((card) => <MachineCardRow key={card.machineId} card={card} busy={net.busy === card.machineId} onRemove={() => setRemoving(card)} />)}
       {machines.length < 2 && <Row title="" description={<Hint>This is your only machine. Machines on your Tailscale network show up below, and you can add one with a code.</Hint>} />}
     </Section>
+    {!net.unavailable && machines.length > 1 && <ClipboardAuto machineId={machines.find((machine) => machine.isLocal)?.machineId} />}
     {net.unavailable && <Section title="Your network"><Row title="Update this machine's daemon" description="It is older than your network features, so other machines can't be found from here yet. Update Kybern, then come back." /></Section>}
     {!net.unavailable && <TailnetSection found={found} tailscale={status?.tailscale} busy={net.busy} />}
     {!net.unavailable && <AddByCode busy={net.busy === 'join'} />}
@@ -56,6 +58,21 @@ export function Machines() {
     {net.error && !net.unavailable && <Section title="Something went wrong"><Row title="" description={<ErrorText>{net.error}</ErrorText>} /></Section>}
     {removing && <RemoveDialog card={removing} others={cards.filter((card) => card.machineId !== removing.machineId && card.member)} onClose={() => setRemoving(null)} />}
   </>
+}
+
+/** Off by default and only for this machine: another machine's copies appear here only when both turned it on. */
+function ClipboardAuto({ machineId }: { machineId: string | undefined }) {
+  const [on, setOn] = useState<boolean | null>(null)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { void readClipboardAuto().then(setOn, () => setOn(false)) }, [])
+  if (!machineId) return null
+  const change = (next: boolean) => {
+    setBusy(true)
+    void setClipboardAuto(machineId, next).then(() => setOn(next), (e) => toast.error('Unable to change the clipboard setting', { description: errorText(e) })).finally(() => setBusy(false))
+  }
+  return <Section title="This machine">
+    <Row title="Share clipboard automatically" description="Copies you make here appear on your other machines that also turned this on. Anything that looks like a password or a key is never shared."><Switch aria-label="Share clipboard automatically" testId="machines-clipboard-auto" checked={!!on} disabled={on === null || busy} onCheckedChange={change} /></Row>
+  </Section>
 }
 
 async function runDoctor() {

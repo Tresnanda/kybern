@@ -3,9 +3,12 @@ import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useGpuix, type PublicInstance, type EventPayload } from '@gpuix/react'
 import type { TerminalInfo, TerminalOutputNotification, TerminalExitedNotification, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
 import { localClient, threadClient, useApp } from '../state.ts'
-import { clientFor } from '../machines/index.ts'
+import { clientFor, glyphOfMachine, useMachines } from '../machines/index.ts'
+import { readClipboardFrom } from '../machines/clipboard.ts'
+import { MachineBadge } from '../sidebar/MachineBadge.tsx'
+import { clipboardSources, type SendTarget } from '../../../../packages/kybern-client/src/machineUtilities.ts'
 import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
-import { ContextMenu, Menu, MenuItem, MenuLabel, MenuSeparator } from '../nav/overlay.tsx'
+import { ContextMenu, Menu, MenuItem, MenuLabel, MenuSeparator, MenuSub } from '../nav/overlay.tsx'
 import { SidebarIconButton } from '../sidebar/rows.tsx'
 import { Button } from '../kit/Button.tsx'
 import { TextField } from '../kit/Field.tsx'
@@ -322,6 +325,8 @@ export function Screen({ info, threadId, machineId, width, onTitle, onExit }: { 
     },
     (error) => setError(String(error instanceof Error ? error.message : error)),
   )
+  const machines = useMachines()
+  const pasteFrom = (source: SendTarget) => void readClipboardFrom(source).then((text) => { if (text !== null) { follow.current = true; send(terminalPaste(text.replace(/\r?\n/g, '\r'), model.bracketedPaste)) } })
   const copy = () => { const text = selectedText(model.lines(), selection, model.cols); if (text) copyText(text) }
   const cursorLine = (model.alternate || model.mouseTracking ? 0 : model.history.length) + model.y
   const reportMouse = (line: Line, column: number, event: EventPayload, kind: TerminalMouseEvent['kind']) => {
@@ -388,6 +393,9 @@ export function Screen({ info, threadId, machineId, width, onTitle, onExit }: { 
       <MenuItem id="find" testId="terminal-find" label="Find" shortcut={SHORTCUT.terminalFind} onSelect={() => setSearch('')} />
       <MenuItem id="copy" testId="terminal-copy" label="Copy" shortcut={SHORTCUT.terminalCopy} onSelect={copy} />
       <MenuItem id="paste" label="Paste" shortcut={SHORTCUT.terminalPaste} disabled={exit !== null} onSelect={paste} />
+      {clipboardSources(machines).length > 0 && <MenuSub id="paste-from" label="Paste from…" testId="terminal-paste-from" width={216} disabled={exit !== null}>
+        {clipboardSources(machines).map((source) => <MenuItem key={source.machineId} id={`paste-from-${source.machineId}`} testId={`terminal-paste-from-${source.machineId}`} iconNode={<MachineBadge glyph={glyphOfMachine(source.machineId)} size={16} />} label={source.name} disabled={exit !== null} onSelect={() => pasteFrom(source)} />)}
+      </MenuSub>}
       <MenuItem id="latest" testId="terminal-bottom" label="Scroll to latest" shortcut={SHORTCUT.terminalLatest} onSelect={() => { follow.current = true; update(v => v + 1) }} />
     </ContextMenu>}
   </>

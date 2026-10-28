@@ -11,7 +11,8 @@ import type {
   PortForward,
   PushDest,
 } from "./types.ts";
-import { MAX_PUSH_BYTES } from "./types.ts";
+import { MAX_CLIPBOARD_BYTES, MAX_PUSH_BYTES } from "./types.ts";
+import type { ClipboardSetResult } from "./types.ts";
 
 /** `1.5 MiB`, `812 KiB`, `3 B`. */
 export function formatBytes(bytes: number): string {
@@ -158,3 +159,25 @@ export function terminalMachines(
 
 /** A remote terminal's tab tooltip. */
 export const terminalTooltip = (machineName: string, title?: string): string => (title ? `${title} · on ${machineName}` : `Terminal on ${machineName}`);
+
+/** The machines "Paste from…" can read: every other machine that answers now. */
+export function clipboardSources(machines: readonly Pick<MachineSummary, "machineId" | "name" | "status" | "isLocal">[]): SendTarget[] {
+  return sendTargets(machines).filter((target) => target.online);
+}
+
+/** Whether this text is over what one clipboard send or paste carries (counted in UTF-8 bytes). */
+export function clipboardTooLarge(text: string): boolean {
+  if (text.length > MAX_CLIPBOARD_BYTES) return true;
+  return new TextEncoder().encode(text).length > MAX_CLIPBOARD_BYTES;
+}
+
+/** The toast after "Send clipboard to…". A machine with no desktop session keeps the text in a buffer for ten minutes. */
+export function clipboardSentNotice(machineName: string, result: Pick<ClipboardSetResult, "stored" | "bytes">): { title: string; description: string } {
+  return {
+    title: `Sent clipboard to ${machineName}`,
+    description:
+      result.stored === "buffer"
+        ? `${machineName} has no desktop session, so the text waits in Kybern for 10 minutes. Paste it there with Paste from.`
+        : formatBytes(result.bytes),
+  };
+}

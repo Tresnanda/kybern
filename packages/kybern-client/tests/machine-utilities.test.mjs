@@ -80,3 +80,19 @@ test("terminals open on reachable machines other than the thread's own", async (
   assert.equal(terminalTooltip("vps"), "Terminal on vps");
   assert.equal(terminalTooltip("vps", "api"), "api · on vps");
 });
+
+test("the clipboard goes to and from machines that answer", async () => {
+  const { clipboardSources, clipboardTooLarge, clipboardSentNotice } = await import("../src/machineUtilities.ts");
+  const machines = [
+    { machineId: "a", name: "Mac", status: "online", isLocal: true },
+    { machineId: "b", name: "vps", status: "relaying", isLocal: false },
+    { machineId: "c", name: "pc", status: "offline", isLocal: false },
+  ];
+  assert.deepEqual(clipboardSources(machines).map((m) => m.machineId), ["b"]);
+  assert.equal(clipboardTooLarge("a".repeat(1024 * 1024)), false);
+  assert.equal(clipboardTooLarge("a".repeat(1024 * 1024 + 1)), true);
+  // Multi-byte text is counted in bytes, not characters.
+  assert.equal(clipboardTooLarge("é".repeat(600 * 1024)), true);
+  assert.equal(clipboardSentNotice("vps", { stored: "system", bytes: 2048 }).description, "2 KiB");
+  assert.match(clipboardSentNotice("vps", { stored: "buffer", bytes: 5 }).description, /10 minutes/);
+});

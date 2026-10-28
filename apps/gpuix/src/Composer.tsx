@@ -73,7 +73,11 @@ import { useControls } from './kit/controls.ts'
 import { IconButton } from './kit/IconButton.tsx'
 import { PickerChip } from './kit/PickerChip.tsx'
 import { G } from './composer/glyphs.ts'
-import { muted, PickerItem, PickerMenu } from './composer/Menu.tsx'
+import { muted, PickerItem, PickerLabel, PickerMenu } from './composer/Menu.tsx'
+import { clipboardSources, sendTargets } from '../../../packages/kybern-client/src/machineUtilities.ts'
+import { glyphOfMachine, useMachines } from './machines/index.ts'
+import { readClipboardFrom, sendClipboardTo } from './machines/clipboard.ts'
+import { MachineBadge } from './sidebar/MachineBadge.tsx'
 import { useCompletion } from './composer/Completion.tsx'
 import { findSecret, scanInsert, type SecretMatch } from './composer/secretCatcher.ts'
 import { isSummonedCard } from './shell/waitingLine.ts'
@@ -620,6 +624,7 @@ export function ComposerView(input: ComposerViewProps) {
   const [error, setError] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<string | null>(null)
   const pastePending = useRef(false)
+  const machines = useMachines()
   // The pasted-secret catcher (`composer/SecretCatch.tsx`): while it holds a key, nothing is saved as a draft or sent.
   const [secretCatch, setSecretCatch] = useState<{ match: SecretMatch; phase: 'detected' | 'name' } | null>(null)
   const secretCatchRef = useRef(secretCatch)
@@ -1117,6 +1122,20 @@ export function ComposerView(input: ComposerViewProps) {
                 <Icon source={G.paperclip} size={16} color={t.text} style={{ opacity: 0.8 }} />
                 <Label color={t.text}>Add files</Label>
               </PickerItem>
+              {sendTargets(machines).length > 0 && <>
+                <PickerLabel>Send clipboard to…</PickerLabel>
+                {sendTargets(machines).map((target) => <PickerItem key={target.machineId} id={`clipboard-send-${target.machineId}`} testId={`clipboard-send-${target.machineId}`} onSelect={() => void sendClipboardTo(target)}>
+                  <MachineBadge glyph={glyphOfMachine(target.machineId)} size={16} />
+                  <Label color={t.text}>{target.name}</Label>
+                </PickerItem>)}
+              </>}
+              {clipboardSources(machines).length > 0 && <>
+                <PickerLabel>Paste from…</PickerLabel>
+                {clipboardSources(machines).map((source) => <PickerItem key={source.machineId} id={`clipboard-paste-${source.machineId}`} testId={`clipboard-paste-${source.machineId}`} disabled={props.readOnly} onSelect={() => void readClipboardFrom(source).then((text) => { if (text !== null && edit(selection.start, selection.end, text)) setFeedback('Pasted text') })}>
+                  <MachineBadge glyph={glyphOfMachine(source.machineId)} size={16} />
+                  <Label color={t.text}>{source.name}</Label>
+                </PickerItem>)}
+              </>}
             </PickerMenu>
             <PermissionPicker locked={props.lockMode} mode={mode} kind={provider?.kind} status={status} onChange={props.onModeChange} />
           </div>
