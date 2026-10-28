@@ -325,12 +325,19 @@ async fn an_offline_target_keeps_the_child_pending_and_runs_it_when_the_machine_
     let listed = crate::network::outbox::list(&p.a.state, OutboxListParams { target: Some(p.b.id()), state: Some(OutboxState::Queued) }).unwrap();
     assert_eq!(listed.items.len(), 1);
 
+    // Clients hear about the item as it goes: sending, then delivered.
+    let mut notifications = p.a.state.network.subscribe_outbox();
     p.b_online().await;
     let child = eventually(|| async { p.child_on_b(task_id) }).await;
     assert_eq!(child.origin.unwrap().machine_id, p.a.id());
     eventually(|| async { (p.row(task_id).state == RemoteChildState::Running).then_some(()) }).await;
     assert_eq!(p.outbox()[0].state, OutboxState::Delivered);
     assert_eq!(p.children_on_b(), 1);
+    let mut states = Vec::new();
+    while let Ok(item) = notifications.try_recv() {
+        states.push(item.state);
+    }
+    assert!(states.contains(&OutboxState::Sending) && states.contains(&OutboxState::Delivered), "{states:?}");
 
     p.end_parent_turn().await;
     p.agent("Run the slow suite").await.finish("Suite passed.").await;
@@ -640,4 +647,74 @@ async fn the_target_finds_its_checkout_by_repository_and_says_so_when_it_cannot(
     let chosen = call(make(repo, Some("repo-b-again".into()))).await.unwrap();
     let child = p.b.state.store.thread_get(chosen["thread_id"].as_str().unwrap().parse().unwrap()).unwrap().unwrap();
     assert_eq!(child.cwd, second.to_string_lossy());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_send_queued_for_an_offline_machine_arrives_when_it_returns_exactly_once() {
+    let Some(p) = Pair::new().await else { return };
+    p.b_offline().await;
+    let project = p.b.state.store.projects_list().unwrap().remove(0);
+    let enqueue = |kind: OutboxKind, payload: serde_json::Value, operation_id: Option<Uuid>| {
+        crate::network::outbox::enqueue(&p.a.state, OutboxEnqueueParams { target: p.b.id(), operation: OutboxOp { kind, payload, operation_id } })
+    };
+    let operation = Uuid::now_v7();
+    let create = json!({
+        "project_id": project.id,
+        "provider": {"kind": "claude-code", "instance": "default"},
+        "title": "Offline send",
+        "message": UserMessage::text("Queued while you were away"),
+    });
+    let item = enqueue(OutboxKind::ThreadCreate, create.clone(), Some(operation)).unwrap();
+    assert_eq!((item.state, item.kind), (OutboxState::Queued, OutboxKind::ThreadCreate));
+    assert_eq!(enqueue(OutboxKind::ThreadCreate, create, Some(operation)).unwrap().id, item.id, "a repeated enqueue is the first item");
+    assert!(item.payload["thread_id"].is_string() && item.payload["message_id"].is_string(), "the ids that make a repeat harmless are fixed up front");
+    assert_eq!(p.outbox().len(), 1);
+    let thread_id: Uuid = item.payload["thread_id"].as_str().unwrap().parse().unwrap();
+
+    p.b_online().await;
+    eventually(|| async { (p.outbox()[0].state == OutboxState::Delivered).then_some(()) }).await;
+    let created = p.b.state.store.thread_get(thread_id).unwrap().expect("the thread exists on b");
+    assert_eq!((created.title.as_str(), created.origin.is_none()), ("Offline send", true), "the user started it, so it has no origin");
+    let agent = p.agent("Queued while you were away").await;
+    // Delivered again (as after a crash between the answer and the bookkeeping), it is the same thread and message.
+    let again = p.b.state.orchestrator.peer_dispatch(&p.a.id(), "peer.thread.create", item.payload.clone()).await.unwrap();
+    assert_eq!(again["id"], json!(thread_id));
+    assert_eq!(p.b.state.store.threads_list(None, true).unwrap().len(), 1);
+    assert_eq!(p.spawned.lock().unwrap().len(), 1);
+
+    // A follow-up for the same thread goes the same way.
+    agent.finish("Done.").await;
+    eventually(|| async { (p.b.state.store.thread_get(thread_id).unwrap().unwrap().status == ThreadStatus::Idle).then_some(()) }).await;
+    p.b_offline().await;
+    let send = enqueue(OutboxKind::ThreadSend, json!({"thread_id": thread_id, "message": UserMessage::text("And one more thing")}), None).unwrap();
+    p.b_online().await;
+    eventually(|| async { (p.a.state.store.outbox_get(send.id).unwrap().unwrap().state == OutboxState::Delivered).then_some(()) }).await;
+    eventually(|| async { agent.transcript().await.contains("And one more thing").then_some(()) }).await;
+
+    // What this version cannot deliver is refused up front rather than queued to fail.
+    let error = enqueue(OutboxKind::FilesPush, json!({}), None).unwrap_err();
+    assert_eq!(error.code, codes::NOT_AVAILABLE);
+    let error = enqueue(OutboxKind::Delegate, json!({}), None).unwrap_err();
+    assert_eq!(error.code, codes::INVALID_PARAMS);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stopping_the_parent_stops_its_remote_children_too() {
+    let Some(p) = Pair::new().await else { return };
+    let running = task_id_of(&p.delegate(json!({"task": "Running on b"})).await);
+    let agent = p.agent("Running on b").await;
+    p.b_offline().await;
+    let waiting = task_id_of(&p.delegate(json!({"task": "Queued for b"})).await);
+
+    p.fixture.orchestrator.delegation_stop(p.parent.id, false).await.ok();
+    assert_eq!(p.row(running).state, RemoteChildState::Cancelled);
+    assert_eq!(p.row(waiting).state, RemoteChildState::Cancelled);
+    assert!(p.row(running).stop_requested, "b has to be told");
+    assert!(!p.row(waiting).stop_requested, "b never had the queued one");
+    p.b_online().await;
+    eventually(|| async { (!p.row(running).stop_requested).then_some(()) }).await;
+    assert_eq!(p.child_on_b(running).unwrap().delegation.unwrap().status, DelegationStatus::Cancelled);
+    eventually(|| async { (agent.interrupts.load(Ordering::SeqCst) >= 1).then_some(()) }).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(p.children_on_b(), 1, "the queued one never started");
 }

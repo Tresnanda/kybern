@@ -424,3 +424,7 @@ expression: scopes
   - "machine:delegate"
 - - peer.git.import
   - "machine:delegate"
+- - peer.thread.create
+  - "machine:delegate"
+- - peer.thread.send
+  - "machine:delegate"

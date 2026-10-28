@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
+use kybern_protocol::methods::{Method, PeerThreadCreate, PeerThreadSend, ThreadsCreateParams, ThreadsSendParams};
 use kybern_protocol::*;
 use serde_json::Value;
 use tokio::sync::{Notify, broadcast};
@@ -266,6 +267,8 @@ async fn pass(state: &AppState, hub: &Arc<dyn RemoteHub>, in_flight: &InFlight) 
 async fn deliver(state: &AppState, item: &OutboxItem) -> Delivery {
     match item.kind {
         OutboxKind::Delegate => state.orchestrator.remote_deliver_delegate(item).await,
+        OutboxKind::ThreadCreate => state.orchestrator.remote_deliver_call(item, PeerThreadCreate::NAME).await,
+        OutboxKind::ThreadSend => state.orchestrator.remote_deliver_call(item, PeerThreadSend::NAME).await,
         other => Delivery::Failed(format!("This version of Kybern cannot deliver {} items yet.", other.as_str())),
     }
 }
@@ -369,17 +372,39 @@ pub fn enqueue(state: &AppState, params: OutboxEnqueueParams) -> Result<OutboxIt
     if hub.target(&params.target).is_none() {
         return Err(RpcError::new(codes::NOT_FOUND, "that machine is not in your network"));
     }
-    if params.operation.kind == OutboxKind::Delegate {
-        return Err(RpcError::invalid_params("delegations are queued by agents with kybern_agent_delegate"));
-    }
     let now = Utc::now();
     let operation_id = params.operation.operation_id.unwrap_or_else(Uuid::now_v7);
+    // The target deduplicates on the ids a request carries, so they are fixed now, from the operation:
+    // a delivery that is repeated finds the thread and the message it already made.
+    let mut payload = params.operation.payload.clone();
+    match params.operation.kind {
+        OutboxKind::Delegate => return Err(RpcError::invalid_params("delegations are queued by agents with kybern_agent_delegate")),
+        OutboxKind::ThreadCreate => {
+            let mut create: ThreadsCreateParams = serde_json::from_value(payload).map_err(RpcError::invalid_params)?;
+            create.thread_id.get_or_insert_with(|| derive(operation_id, 0x21));
+            if create.message.is_some() {
+                create.message_id.get_or_insert_with(|| derive(operation_id, 0x22));
+            }
+            payload = serde_json::to_value(create).map_err(RpcError::internal)?;
+        }
+        OutboxKind::ThreadSend => {
+            let mut send: ThreadsSendParams = serde_json::from_value(payload).map_err(RpcError::invalid_params)?;
+            send.message_id.get_or_insert_with(|| derive(operation_id, 0x23));
+            payload = serde_json::to_value(send).map_err(RpcError::internal)?;
+        }
+        other => {
+            return Err(RpcError::new(
+                codes::NOT_AVAILABLE,
+                format!("Queuing {} for an offline machine is not available in this version yet.", other.as_str()),
+            ));
+        }
+    }
     let item = OutboxItem {
         id: Uuid::now_v7(),
         operation_id,
         target: params.target,
         kind: params.operation.kind,
-        payload: params.operation.payload,
+        payload,
         origin: None,
         state: OutboxState::Queued,
         attempts: 0,
@@ -394,6 +419,13 @@ pub fn enqueue(state: &AppState, params: OutboxEnqueueParams) -> Result<OutboxIt
     announce(state, &item);
     kick(state);
     Ok(item)
+}
+
+/// A stable id for one part of an operation (the thread, the message), the way local delegation derives its own.
+fn derive(operation_id: Uuid, tag: u8) -> Uuid {
+    let mut bytes = *operation_id.as_bytes();
+    bytes[0] ^= tag;
+    Uuid::from_bytes(bytes)
 }
 
 fn kick(state: &AppState) {

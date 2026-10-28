@@ -213,3 +213,5 @@ expression: names
 - peer.delegation.cancel
 - peer.git.bundle
 - peer.git.import
+- peer.thread.create
+- peer.thread.send

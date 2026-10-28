@@ -3965,6 +3965,8 @@ export interface Methods {
   "peer.delegation.cancel": [{ task_id: Uuid }, PeerDelegationView];
   "peer.git.bundle": [PeerGitBundleParams, { received: number }];
   "peer.git.import": [PeerGitImportParams, { commit: string; imported_ref: string }];
+  "peer.thread.create": [ThreadsCreateParams, Thread];
+  "peer.thread.send": [ThreadsSendParams, ThreadsSendResult];
 }
 
 export type MethodName = keyof Methods;

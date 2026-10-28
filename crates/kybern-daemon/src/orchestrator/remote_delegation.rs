@@ -27,7 +27,9 @@ use anyhow::{Result, anyhow, ensure};
 use async_trait::async_trait;
 use chrono::Utc;
 use kybern_git::Repo;
-use kybern_protocol::methods::{Method, PeerDelegate, PeerDelegationCancel, PeerDelegationGet, PeerGitBundle, PeerGitImport};
+use kybern_protocol::methods::{
+    Method, PeerDelegate, PeerDelegationCancel, PeerDelegationGet, PeerGitBundle, PeerGitImport, PeerThreadCreate, PeerThreadSend,
+};
 use kybern_protocol::*;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -616,6 +618,21 @@ impl Orchestrator {
 
     // ---- the outbox worker's side ----
 
+    /// Deliver a queued item that is one plain request to the target (`peer.thread.create`,
+    /// `peer.thread.send`): the request is idempotent by the ids it carries.
+    pub async fn remote_deliver_call(&self, item: &OutboxItem, method: &str) -> Delivery {
+        let hub = match self.hub() {
+            Ok(hub) => hub.clone(),
+            Err(error) => return Delivery::Failed(error.to_string()),
+        };
+        match hub.call(&item.target, method, item.payload.clone()).await {
+            Ok(value) => Delivery::Delivered(value),
+            Err(CallFailure::Offline(reason)) => Delivery::Retry(reason),
+            Err(CallFailure::Gone(reason)) => Delivery::Failed(reason),
+            Err(CallFailure::Remote(error)) => remote_error_delivery(&error),
+        }
+    }
+
     /// Deliver a queued `delegate` item: `peer.delegate`, sending the base commit first if the target asks.
     pub async fn remote_deliver_delegate(&self, item: &OutboxItem) -> Delivery {
         let hub = match self.hub() {
@@ -1026,6 +1043,8 @@ impl Orchestrator {
             PeerDelegationCancel::NAME => to_value(self.serve_delegation_cancel(from, from_value(params)?).await),
             PeerGitBundle::NAME => to_value(self.accept_bundle_chunk(from_value(params)?)),
             PeerGitImport::NAME => to_value(self.accept_bundle_import(from_value(params)?).await),
+            PeerThreadCreate::NAME => to_value(self.create_thread(from_value(params)?).await.map_err(thread_error)),
+            PeerThreadSend::NAME => to_value(self.send_client_message(from_value(params)?).await.map_err(thread_error)),
             _ => Err(RpcError::method_not_found(method)),
         }
     }
@@ -1333,6 +1352,12 @@ enum Follow {
     Done,
     Retry(String),
     Unreachable(String),
+}
+
+/// A thread that was busy is worth another try; anything else the target refused is final.
+fn thread_error(error: anyhow::Error) -> RpcError {
+    let message = format!("{error:#}");
+    if message.contains("busy") { RpcError::new(codes::THREAD_BUSY, message) } else { RpcError::invalid_params(message) }
 }
 
 fn internal(error: impl std::fmt::Display) -> RpcError {

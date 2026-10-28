@@ -470,9 +470,13 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
         PeerRelayData::NAME => super::relay::handle_data(link, parse(params)?).await,
         PeerRelayClose::NAME => super::relay::handle_close(link, parse(params)?),
         // Remote delegation (R1): the child, its state, a stop, and the commits a worktree starts from.
-        PeerDelegate::NAME | PeerDelegationGet::NAME | PeerDelegationCancel::NAME | PeerGitBundle::NAME | PeerGitImport::NAME => {
-            state.orchestrator.peer_dispatch(&link.machine_id, method, params).await
-        }
+        PeerDelegate::NAME
+        | PeerDelegationGet::NAME
+        | PeerDelegationCancel::NAME
+        | PeerGitBundle::NAME
+        | PeerGitImport::NAME
+        | PeerThreadCreate::NAME
+        | PeerThreadSend::NAME => state.orchestrator.peer_dispatch(&link.machine_id, method, params).await,
         // The device-token mint and revoke fan-out are N4's.
         PeerClientTokenMint::NAME | PeerDeviceRevoke::NAME => {
             Err(RpcError::new(codes::NOT_AVAILABLE, format!("{method} is not available yet in this build.")))

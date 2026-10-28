@@ -4152,6 +4152,10 @@ method!(PeerDelegationGet, "peer.delegation.get", Some(Scope::MachineDelegate), 
 method!(PeerDelegationCancel, "peer.delegation.cancel", Some(Scope::MachineDelegate), PeerDelegationCancelParams, PeerDelegationView);
 method!(PeerGitBundle, "peer.git.bundle", Some(Scope::MachineDelegate), PeerGitBundleParams, PeerGitBundleResult);
 method!(PeerGitImport, "peer.git.import", Some(Scope::MachineDelegate), PeerGitImportParams, PeerGitImportResult);
+// Outbox delivery of a composer's new thread and message: the same parameters as `threads.create` and
+// `threads.send`, which already take a client-chosen `thread_id` and `message_id`, so a repeat is the first.
+method!(PeerThreadCreate, "peer.thread.create", Some(Scope::MachineDelegate), ThreadsCreateParams, Thread);
+method!(PeerThreadSend, "peer.thread.send", Some(Scope::MachineDelegate), ThreadsSendParams, ThreadsSendResult);
 
 /// Registry used by the daemon's auth check and the schema dump.
 pub struct MethodInfo {
@@ -4379,6 +4383,8 @@ registry!(
     PeerDelegationCancel,
     PeerGitBundle,
     PeerGitImport,
+    PeerThreadCreate,
+    PeerThreadSend,
 );
 
 pub fn scope_for(method: &str) -> Option<Option<Scope>> {

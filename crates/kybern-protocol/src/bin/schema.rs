@@ -299,6 +299,8 @@ fn main() {
     method::<PeerDelegationCancel>(&mut methods);
     method::<PeerGitBundle>(&mut methods);
     method::<PeerGitImport>(&mut methods);
+    method::<PeerThreadCreate>(&mut methods);
+    method::<PeerThreadSend>(&mut methods);
 
     let doc = json!({
         "protocol_version": PROTOCOL_VERSION,
