@@ -48,7 +48,7 @@ import {
   maxScale,
   radius,
   space,
-  type,
+  useType,
   useTheme,
 } from "../src/ui/theme";
 
@@ -75,6 +75,7 @@ function QuickAdd({
   onAdd: (title: string) => Promise<unknown>;
 }) {
   const { colors } = useTheme();
+  const type = useType();
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const submit = () => {

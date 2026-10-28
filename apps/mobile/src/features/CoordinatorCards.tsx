@@ -25,7 +25,7 @@ import { settingValueLabel } from "../../../../packages/kybern-client/src/coordi
 import type { ApprovalDecision, ApprovalRequest, BriefProposalInput, LeadGitCardInput, SettingsProposalInput } from "../state/protocol";
 import { errorText, loadThread, refresh, rpc, useApp } from "../state/runtime";
 import { Button, ErrorBanner, Icon, T, Tap, styles, type IconName } from "../ui/primitives";
-import { MONO, radius, space, type as typography, useTheme } from "../ui/theme";
+import { MONO, radius, space, useType, useTheme } from "../ui/theme";
 
 /** Text with branch names set as code. */
 function CardText({ parts, tone = "secondary", variant = "footnote" }: { parts: readonly CardTextPart[]; tone?: "secondary" | "ink"; variant?: "footnote" | "label" }) {
@@ -93,6 +93,7 @@ function Actions({ children }: { children: React.ReactNode }) {
 
 export function BriefProposalCard({ approval, input }: { approval: ApprovalRequest; input: BriefProposalInput }) {
   const { colors } = useTheme();
+  const typography = useType();
   const [text, setText] = useState(input.text);
   const { busy, error, respond } = useRespond(approval);
   const empty = !text.trim();

@@ -59,7 +59,7 @@ import {
   T,
   Tap,
 } from "../ui/primitives";
-import { gutter, radius, type, useTheme } from "../ui/theme";
+import { gutter, radius, useTextScale, useTheme, useType } from "../ui/theme";
 import { MenuPanel, type MenuItem } from "../ui/ActionMenu";
 import { measureTrigger } from "../ui/measure";
 import { PROVIDER_DISPLAY_NAME } from "../state/protocol";
@@ -134,6 +134,8 @@ export const Composer = memo(function Composer({
   placeholder?: string;
 }) {
   const { colors } = useTheme();
+  const type = useType();
+  const { textScale } = useTextScale();
   const { width: windowWidth, fontScale } = useWindowDimensions();
   const reduced = useReducedMotion();
   const sendTransition = useSendTransition();
@@ -266,7 +268,7 @@ export const Composer = memo(function Composer({
   // Android keeps a native editor; styling uses a separate paint layer.
   // Paint its inline styling in a scroll-synchronized, noninteractive layer.
   const highlightedText = (
-    <Text key={fontScale} style={type.body}>
+    <Text key={`${fontScale}:${textScale}`} style={type.body}>
       {segments.map((segment, index) => (
         <Text
           key={index}

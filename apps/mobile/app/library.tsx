@@ -1,7 +1,7 @@
 import { attentionItems } from "../../../packages/kybern-client/src/threadAttention";
 import Animated, { useAnimatedScrollHandler, useSharedValue } from "react-native-reanimated";
 import { router } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, RefreshControl, View } from "react-native";
 import { ThreadListRow, type ThreadRowContext } from "../src/features/ThreadRows";
 import { SpaceSwitcher, useSpaceMenuItems } from "../src/features/Spaces";
@@ -14,8 +14,11 @@ import {
   DEFAULT_FILTER,
   emptyText,
   filterThreads,
+  FILTERED_FIRST_PAGE,
   groupByProject,
   isFiltering,
+  SECTION_PAGE,
+  sectionWindow,
   threadAgents,
   threadRows,
   THREAD_SCOPES,
@@ -23,7 +26,7 @@ import {
   type ThreadRow,
 } from "../src/state/threadList";
 import { HeaderActions } from "../src/ui/ActionMenu";
-import { ListSeparator, SectionHeader } from "../src/ui/List";
+import { ListRow, ListSeparator, SectionHeader } from "../src/ui/List";
 import type { MenuItem } from "../src/ui/menuModel";
 import { Button, Empty, ErrorBanner } from "../src/ui/primitives";
 import { PullRefresh } from "../src/ui/PullRefresh";
@@ -33,10 +36,33 @@ import { CONTENT_MAX_WIDTH, space, useTheme } from "../src/ui/theme";
 
 type Item =
   | { kind: "header"; key: string; title: string; count?: number; projectId?: string; open?: boolean }
-  | { kind: "row"; key: string; row: ThreadRow };
+  | { kind: "row"; key: string; row: ThreadRow }
+  | { kind: "more"; key: string; projectId: string; remaining: number };
 
 /** Which project groups the reader folded, kept while the app runs. */
 const foldedProjects: Record<string, boolean> = {};
+/** How many "Show more" pages each project section revealed, kept the same way. */
+const shownPages: Record<string, number> = {};
+
+/** Hairline between two thread rows; the list gives the neighbours, no lookup needed. */
+function Separator({ leadingItem, trailingItem }: { leadingItem?: Item; trailingItem?: Item }) {
+  return leadingItem?.kind === "row" && trailingItem?.kind === "row" ? <ListSeparator leading /> : null;
+}
+
+/** "Show more" under a project's threads: the next page, or what is left. */
+const ShowMoreRow = memo(function ShowMoreRow({ remaining, onPress }: { remaining: number; onPress: () => void }) {
+  const next = Math.min(remaining, SECTION_PAGE);
+  return (
+    <ListRow
+      title={`Show ${next} more`}
+      subtitle={remaining > next ? `${remaining} hidden` : undefined}
+      subtitleLines={1}
+      leading="chevron.down"
+      label={`Show ${next} more threads`}
+      onPress={onPress}
+    />
+  );
+});
 
 export default function Library() {
   const app = useApp();
@@ -52,6 +78,11 @@ export default function Library() {
   const fold = useCallback((projectId: string, value: boolean) => {
     foldedProjects[projectId] = value;
     setFolded((old) => ({ ...old, [projectId]: value }));
+  }, []);
+  const [pages, setPages] = useState<Record<string, number>>(() => ({ ...shownPages }));
+  const showMore = useCallback((projectId: string) => {
+    shownPages[projectId] = (shownPages[projectId] ?? 0) + 1;
+    setPages((old) => ({ ...old, [projectId]: shownPages[projectId] }));
   }, []);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -89,10 +120,20 @@ export default function Library() {
         projectId: group.projectId,
         open,
       });
-      if (open) out.push(...rowItems(group.threads));
+      if (open) {
+        // Ten per section, then pages; a search still reaches every match.
+        const { shown, remaining } = sectionWindow(
+          group.threads.length,
+          pages[group.projectId] ?? 0,
+          filtering ? FILTERED_FIRST_PAGE : undefined,
+        );
+        out.push(...rowItems(group.threads.slice(0, shown)));
+        if (remaining > 0)
+          out.push({ kind: "more", key: `m:${group.projectId}`, projectId: group.projectId, remaining });
+      }
     }
     return out;
-  }, [top, children, expanded, filter, folded, app.projects, list.projectOrder]);
+  }, [top, children, expanded, filter, folded, pages, app.projects, list.projectOrder]);
 
   const spaceThreads = useMemo(
     () => filterThreads({ threads: app.threads, projects: app.projects, spaceId, filter: DEFAULT_FILTER, isWorking }),
@@ -246,13 +287,14 @@ export default function Library() {
               <ErrorBanner error={error} onRetry={() => void reload()} />
             </View>
           }
-          ItemSeparatorComponent={({ leadingItem }: { leadingItem?: Item }) => {
-            const index = leadingItem ? items.indexOf(leadingItem) : -1;
-            const next = items[index + 1];
-            return leadingItem?.kind === "row" && next?.kind === "row" ? <ListSeparator leading /> : null;
-          }}
+          ItemSeparatorComponent={Separator}
+          initialNumToRender={14}
+          maxToRenderPerBatch={10}
+          windowSize={7}
           renderItem={({ item, index }) =>
-            item.kind === "header" ? (
+            item.kind === "more" ? (
+              <ShowMoreRow remaining={item.remaining} onPress={() => showMore(item.projectId)} />
+            ) : item.kind === "header" ? (
               <View style={{ paddingHorizontal: space.lg }}>
                 <SectionHeader
                   title={item.title}

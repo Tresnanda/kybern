@@ -28,6 +28,7 @@ import { useTheme } from "./theme";
 import { SHEET } from "../components/liquid/motion";
 import { haptics } from "./haptics";
 import { SheetGrabber } from "./Sheet";
+import { boundRemoval } from "./sheetRemoval";
 
 type ScreenLayoutProps = Parameters<
   NonNullable<ComponentProps<typeof Stack>["screenLayout"]>
@@ -140,7 +141,11 @@ export function AndroidSheet({ children, ...props }: ScreenLayoutProps) {
   >(null);
   usePreventRemove(!allowRemove, ({ data }) => {
     if (pending.current) return;
-    pending.current = data.action;
+    pending.current = boundRemoval(
+      data.action,
+      props.route.key,
+      props.navigation.getState().key,
+    );
     setOpen(false);
   });
   const closed = useCallback(() => setAllowRemove(true), []);

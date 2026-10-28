@@ -85,7 +85,25 @@ function open(thread: Thread, variant: ThreadRowContext["variant"]) {
 }
 
 /** A row of `threadRows()`: a top-level thread or a nested child, then its disclosure. */
-export const ThreadListRow = memo(function ThreadListRow({
+export const ThreadListRow = memo(ThreadListRowView, sameRow);
+
+/**
+ * `threadRows()` makes fresh row objects on every recompute, so a plain memo never
+ * hit and a fold or "Show more" re-rendered every visible row. Compare what the
+ * row shows instead.
+ */
+function sameRow(a: { row: ThreadRow; ctx: ThreadRowContext }, b: { row: ThreadRow; ctx: ThreadRowContext }) {
+  return (
+    a.ctx === b.ctx &&
+    a.row.thread === b.row.thread &&
+    a.row.depth === b.row.depth &&
+    a.row.childCount === b.row.childCount &&
+    a.row.open === b.row.open &&
+    a.row.child === b.row.child
+  );
+}
+
+function ThreadListRowView({
   row,
   ctx,
 }: {
@@ -206,4 +224,4 @@ export const ThreadListRow = memo(function ThreadListRow({
       ) : null}
     </View>
   );
-});
+}

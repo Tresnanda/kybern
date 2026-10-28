@@ -82,10 +82,38 @@ forms and MCP elicitations, Pi dialogs, plan approval (ExitPlanMode) and
 `kybern_request_secret` still wait for your reply.
 
 Switching an idle conversation to Full access resumes Claude Code and Oh My Pi
-with the new launch mode; Codex, Pi and Cursor switch in place. An OpenCode
-session keeps its launch rules, so Kybern allows whatever it still asks. During
+with the new launch mode; Codex, Pi, Cursor and OpenCode 2 switch in place. An
+OpenCode 1 session keeps its launch rules, so Kybern allows whatever it still
+asks. During
 a running turn the switch applies when the turn ends. Until then, Kybern allows
 the command that is waiting and every later permission request.
+
+## OpenCode versions
+
+Kybern drives OpenCode 1.10 or later and OpenCode 2.2 or later; it reads
+`opencode --version` and speaks each version's own server API. OpenCode 2.0
+and 2.1 predate the server API Kybern uses, and a future OpenCode 3 is not
+supported yet; the provider list says so instead of failing when a chat
+starts. Run `opencode upgrade` to update.
+
+Each Kybern mode becomes an ordered permission list on the session (the last
+matching rule wins):
+
+| Mode | OpenCode 1 rules | OpenCode 2 rules |
+| --- | --- | --- |
+| Supervised | ask `*`; allow read, glob, grep, list, todowrite, question, skill, task, lsp | ask `*`; allow read, glob, grep, list, question, skill, subagent |
+| Accept edits | allow `*`; ask bash, webfetch, websearch, external_directory, doom_loop | allow `*`; ask shell, webfetch, websearch, external_directory |
+| Auto | allow `*`; ask external_directory, doom_loop | allow `*`; ask external_directory |
+| Full access | allow `*` | allow `*` |
+
+OpenCode 2 renamed `bash` to `shell` and `task` to `subagent`, and has no
+`doom_loop` or `lsp` permission. It allows paths outside the project by
+default, so Kybern adds the `external_directory` ask rule to keep OpenCode 1
+behaviour. OpenCode 2 applies a new mode to the running session. The Kybern
+guide and a Coordinator's role reach OpenCode 2 as a session instruction entry
+instead of a system prompt sent with every message, and its questions arrive as
+forms, which Kybern shows as the usual question card. Effort controls are not
+offered for either version.
 
 ## Cursor SDK
 

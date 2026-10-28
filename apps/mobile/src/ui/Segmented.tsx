@@ -111,6 +111,9 @@ export function Segmented<V extends string>({
                 variant={compact ? "footnote" : "subhead"}
                 tone={selected ? "ink" : "secondary"}
                 numberOfLines={1}
+                // At the larger text sizes a label shrinks to its segment rather than truncating.
+                adjustsFontSizeToFit
+                minimumFontScale={0.7}
                 style={selected ? { fontWeight: "600" } : undefined}
               >
                 {option.label}

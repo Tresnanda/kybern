@@ -4,7 +4,7 @@ import { Stack } from "expo-router";
 import { useRef } from "react";
 import { Platform, TextInput, View } from "react-native";
 import { Icon, Tap } from "./primitives";
-import { maxScale, radius, space, type as typography, useTheme } from "./theme";
+import { maxScale, radius, space, useType, useTheme } from "./theme";
 
 /** An in-content search field: magnifier, text, clear button. */
 export function SearchField({
@@ -24,6 +24,7 @@ export function SearchField({
   fill?: string;
 }) {
   const { colors } = useTheme();
+  const typography = useType();
   const input = useRef<TextInput>(null);
   return (
     <View

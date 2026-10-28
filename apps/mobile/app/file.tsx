@@ -19,7 +19,7 @@ import { Segmented } from "../src/ui/Segmented";
 import { showToast } from "../src/ui/Toast";
 import { haptics } from "../src/ui/haptics";
 import { Button, Empty, ErrorBanner, T } from "../src/ui/primitives";
-import { MONO, gutter, space, type as typography, useTheme } from "../src/ui/theme";
+import { MONO, gutter, space, useTextScale, useTheme, useType } from "../src/ui/theme";
 import { Working } from "../src/ui/Working";
 
 /** Largest file the phone reads, and so the largest it can edit whole. */
@@ -41,6 +41,8 @@ export default function FileScreen() {
   const [saving, setSaving] = useState(false);
   const scroll = useRef<ScrollView>(null);
   const { fontScale, width } = useWindowDimensions();
+  const typography = useType();
+  const { textScale } = useTextScale();
   const insets = useSafeAreaInsets();
   const thread = scope === "thread" && !!threadId;
   const fileContext = useMemo(() => threadId ? { threadId, projectId, basePath: path, scope: scope === "thread" ? "thread" as const : "project" as const } : null, [threadId, projectId, path, scope]);
@@ -236,7 +238,7 @@ export default function FileScreen() {
               ref={scroll}
               onContentSizeChange={() => {
                 const target = Number(line);
-                if (file && raw && Number.isSafeInteger(target) && target > 0) scroll.current?.scrollTo({ y: Math.max(0, (target - 1) * 21 * fontScale), animated: false });
+                if (file && raw && Number.isSafeInteger(target) && target > 0) scroll.current?.scrollTo({ y: Math.max(0, (target - 1) * 21 * fontScale * textScale), animated: false });
               }}
               style={{ flex: 1 }}
               contentContainerStyle={{ paddingBottom: space.xl }}

@@ -76,7 +76,7 @@ pub async fn reader(kind: ProviderKind, context: &ProbeContext) -> Result<Box<dy
         ProviderKind::ClaudeCode => Box::new(FileReader::new(kind, claude::root(context)?, context)),
         ProviderKind::Pi | ProviderKind::Omp => Box::new(FileReader::new(kind, pi::root(kind, context)?, context)),
         ProviderKind::Codex => Box::new(codex::Reader { rpc: codex::connect(context).await?, context: context.clone() }),
-        ProviderKind::Opencode => Box::new(opencode::Reader { server: opencode::Server::start(context).await?, context: context.clone() }),
+        ProviderKind::Opencode => Box::new(opencode::Reader::start(context).await?),
         ProviderKind::Cursor => Box::new(cursor::Reader::new(context)),
     })
 }

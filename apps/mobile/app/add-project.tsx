@@ -19,7 +19,7 @@ import { homeOf, shortPath } from "../src/state/projectList";
 import { InsetGroup, ListRow, SectionFooter, SectionHeader } from "../src/ui/List";
 import { Button, Empty, ErrorBanner, Field, Icon, Page, T, Tap, styles } from "../src/ui/primitives";
 import { Segmented } from "../src/ui/Segmented";
-import { MONO, radius, space, type as typography, useTheme } from "../src/ui/theme";
+import { MONO, radius, space, useTheme, useType } from "../src/ui/theme";
 
 type Kind = "single" | "group";
 
@@ -189,6 +189,7 @@ function SingleForm({ header }: { header: React.ReactNode }) {
  */
 function GroupForm({ header, existing }: { header?: React.ReactNode; existing?: { id: string; name: string; path: string; members?: { path: string }[] } }) {
   const { colors } = useTheme();
+  const typography = useType();
   const insets = useSafeAreaInsets();
   const [folder, setFolder] = useState(existing?.path ?? "");
   const [scan, setScan] = useState<ProjectsScanReposResult>();

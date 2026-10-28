@@ -14,7 +14,7 @@ import { CONTENT_MAX_WIDTH, gutter, space, useTheme } from "../src/ui/theme";
 // Pair this phone with Kybern on a computer: scan the invitation's QR code, or
 // type its address and six-digit code. An access token is the fallback.
 export default function Connect() {
-  const { invitation } = useLocalSearchParams<{ invitation?: string }>();
+  const { invitation, autoconnect } = useLocalSearchParams<{ invitation?: string; autoconnect?: string }>();
   const { colors } = useTheme();
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -34,8 +34,15 @@ export default function Connect() {
       setCode(parsed.code);
       setExpected(parsed.environmentId);
       setAdvanced(false);
+      if (__DEV__ && autoconnect === "1") {
+        setBusy(true);
+        pairEnvironment(parsed.url, parsed.code, "", parsed.environmentId)
+          .then(() => router.dismissTo("/"))
+          .catch((e) => setError(errorText(e)))
+          .finally(() => setBusy(false));
+      }
     } else setError("This invitation is incomplete. Create a new one in Kybern on your computer.");
-  }, [invitation]);
+  }, [invitation, autoconnect]);
 
   const ready = !!address.trim() && (advanced ? !!token.trim() : /^\d{6}$/.test(code.trim()));
   async function submit() {

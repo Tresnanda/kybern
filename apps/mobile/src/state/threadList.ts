@@ -180,6 +180,22 @@ export function groupByProject(
   return groups;
 }
 
+/** Threads a project section shows before "Show more". */
+export const SECTION_FIRST_PAGE = 10;
+/** Threads each "Show more" tap adds. */
+export const SECTION_PAGE = 20;
+/** The most rows a filtered section mounts at once (matches still show, in pages). */
+export const FILTERED_FIRST_PAGE = 30;
+
+/**
+ * How many of a section's threads show: the first page, plus one page per
+ * "Show more" tap (`pages`), never more than exist. The rest is `remaining`.
+ */
+export function sectionWindow(total: number, pages: number, first = SECTION_FIRST_PAGE) {
+  const shown = Math.min(total, first + Math.max(0, pages) * SECTION_PAGE);
+  return { shown, remaining: total - shown };
+}
+
 /** What an empty filtered list says. */
 export function emptyText(filter: ThreadFilter, agentName?: string): { title: string; detail: string } {
   const agent = agentName ? `${agentName} ` : "";

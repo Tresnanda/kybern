@@ -33,9 +33,11 @@ import {
   space,
   type ColorToken,
   type TypeRole,
-  type as typography,
+  useTextScale,
   useTheme,
+  useType,
 } from "./theme";
+import { scaleMetrics } from "./textScale";
 
 export type Tone = Extract<
   ColorToken,
@@ -51,7 +53,11 @@ export type Tone = Extract<
   | "onAccent"
 >;
 
-/** Text in one of the type roles. Scales with Dynamic Type up to the role's ceiling. */
+/**
+ * Text in one of the type roles, at the reader's text size. Scales with Dynamic
+ * Type up to the role's ceiling. A `fontSize`/`lineHeight` in `style` is written
+ * at the default size and scales with the role.
+ */
 export function T({
   variant = "body",
   tone = "ink",
@@ -59,11 +65,17 @@ export function T({
   ...props
 }: TextProps & { variant?: TypeRole; tone?: Tone }) {
   const { colors } = useTheme();
+  const { textScale } = useTextScale();
+  const typography = useType();
   return (
     <Text
       maxFontSizeMultiplier={maxScale(variant)}
       {...props}
-      style={[typography[variant], { color: colors[tone] }, style]}
+      style={[
+        typography[variant],
+        { color: colors[tone] },
+        textScale === 1 || !style ? style : scaleMetrics(StyleSheet.flatten(style), textScale),
+      ]}
     />
   );
 }
@@ -349,6 +361,8 @@ export function Field({
   variant?: "default" | "code";
 }) {
   const { colors } = useTheme();
+  const typography = useType();
+  const { textScale } = useTextScale();
   const code = variant === "code";
   return (
     <View style={{ gap: space.sm }}>
@@ -369,12 +383,16 @@ export function Field({
         selectionColor={colors.accent}
         style={[
           typography.body,
-          code && {
-            fontFamily: MONO,
-            fontSize: 28,
-            lineHeight: 34,
-            fontVariant: ["tabular-nums"],
-          },
+          code &&
+            scaleMetrics(
+              {
+                fontFamily: MONO,
+                fontSize: 28,
+                lineHeight: 34,
+                fontVariant: ["tabular-nums" as const],
+              },
+              textScale,
+            ),
           {
             color: colors.ink,
             backgroundColor: colors.surface,

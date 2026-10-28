@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { ScrollView, Text } from "react-native";
 import { codeTokens } from "./codeTokens";
-import { type as typography, useTheme } from "./theme";
+import { useType, useTheme } from "./theme";
 export function SourceCode({
   text,
   language,
@@ -10,6 +10,7 @@ export function SourceCode({
   language: string;
 }) {
   const { colors, dark } = useTheme();
+  const typography = useType();
   const tokens = useMemo(() => codeTokens(text, language), [text, language]);
   const palette = {
     plain: colors.ink,

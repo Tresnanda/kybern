@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.18.0
+
+<!-- kybern-release-title: OpenCode 2 support -->
+<!-- kybern-release-summary: Kybern now drives OpenCode 2 alongside OpenCode 1, including permission prompts, compaction, fork and resume, and importing your past OpenCode sessions. -->
+
+- Kybern works with OpenCode 2. It detects the installed version and keeps OpenCode 1 working; on OpenCode 2 you can also change a running session's permission mode and steer a running turn. Versions it can't drive yet show a reason in the agent list instead of failing when a chat starts.
+- Import past OpenCode 2 sessions from onboarding or `kybern sessions import`.
+- The GPUIX welcome changes steps without flashing and opens straight into the app.
+
 ## 0.17.0
 
 <!-- kybern-release-title: A welcome that sets up your agents and brings in your past work -->
