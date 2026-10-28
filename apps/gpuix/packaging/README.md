@@ -17,8 +17,8 @@ No packages are installed, no native addon is rebuilt, and only ad-hoc signing
 is used. No signing identity/key lookup, installation, PATH change or Login Item.
 
 Output: `dist/Kybern GPUIX.app`, already covered by this app's `dist/` ignore rule.
-Bundle ID `dev.kybern.gpuix` is distinct from `dev.kybern.desktop`.
-The icon is copied from `apps/desktop/src-tauri/icons/icon.icns` at build time.
+Bundle ID `dev.kybern.gpuix` is distinct from the retired Tauri app's `dev.kybern.desktop`.
+The icons are in `packaging/icons/` (copied at build time).
 No entitlements are needed for this local, non-sandboxed, non-hardened ad-hoc app.
 This is a local development bundle, not notarized distribution packaging.
 
@@ -33,7 +33,7 @@ runs, but several macOS features fall back or are missing until the work package
 
 CI builds it in the `gpuix-windows` job of `desktop.yml` on
 `windows-2022` (a job of its own, so its failure cannot skip the manifest, which publishes
-the macOS and Tauri assets with or without the Windows entry) (the addon through `.github/actions/gpuix-addon`, the binaries from
+the macOS assets with or without the Windows entry) (the addon through `.github/actions/gpuix-addon`, the binaries from
 dist's Windows zip). By hand, in Git Bash on Windows with Bun, NSIS (`makensis` on
 PATH), the patched addon and release `kybernd.exe` / `kybern.exe`:
 
@@ -199,7 +199,7 @@ moves the packages to the repository's `dist/` and signs the AppImage. Requires
 Bun, the patched addon (`native/build/gpuix-native.linux-x64-gnu.node`, from
 `native/update.sh` on Linux), `kybernd` and `kybern` for that arch in
 `KYBERN_BIN_DIR` (releases use dist's static musl builds), `pnpm install` in
-`apps/desktop`, `dpkg-deb` and `dpkg-shlibdeps` (dpkg-dev), `rpmbuild` (rpm),
+`apps/gpuix`, `dpkg-deb` and `dpkg-shlibdeps` (dpkg-dev), `rpmbuild` (rpm),
 and for the AppImage `APPIMAGETOOL` (appimagetool 1.9.1) plus `APPIMAGE_RUNTIME`
 (the type2-runtime it embeds; `desktop.yml` pins both by checksum).
 

@@ -1,7 +1,9 @@
 # Porting GPUIX to Intel Mac, Windows and Linux
 
 Issue #113: retire the Tauri app (`apps/desktop`) once Kybern GPUIX runs
-everywhere Tauri ships. This document says what is macOS-only today, how each
+everywhere Tauri ships. **Done after 0.18.0**: the Tauri app was removed from
+the repository without a final deprecation release (see "Tauri retirement"
+at the end). This document says what is macOS-only today, how each
 piece moves to Windows and Linux (or degrades gracefully), the work packages
 that can run in parallel, what needs real hardware, and the ship order.
 The inventory was written against `feat/gpuix-intel` (GPUIX 0.10.0, Kybern
@@ -1059,12 +1061,23 @@ Fixed in this pass:
    Windows hardware pass.
 6. **Parity**: WP8 text, WP9 backdrop blur and Mica, WP10 embedded web view;
    visual pairs and perf through WP7's harness.
-7. **Tauri deprecation release** (below), once 4 and 5 have each had a release
-   with no blocking regressions.
+7. **Tauri retirement** (below): done after 0.18.0.
 
-## Tauri deprecation end state
+## Tauri retirement
 
-The final Tauri release (call it vT):
+What happened (2026-10-28): the website and installers already pointed only to
+GPUIX, so the planned final Tauri release was skipped and `apps/desktop` was
+removed outright. The code GPUIX still imported moved to `apps/gpuix/src/shared`,
+its icons to `apps/gpuix/packaging/icons`, the branded background to
+`assets/release-background.png` and the performance guide to
+`apps/gpuix/perf/tauri`. CI lost the Tauri desktop and native WebKit jobs,
+`desktop.yml` builds only GPUIX, and `latest.json` carries only the `-gpuix`
+keys. Tauri installs stop updating at 0.18.0: a later manifest has a newer
+`version` but no plain `darwin-aarch64`-style entry, so Tauri's updater fails
+the check (target not found). Automatic checks fail quietly; a manual check
+shows "Unable to check for updates". Nothing is reinstalled.
+
+The plan this replaced, kept for reference. The final Tauri release (call it vT):
 
 - **Every launch shows the popup:** "Kybern Desktop is no longer updated. Move to
   Kybern GPUIX". It offers one-click Install and open (`install_gpuix`, extended

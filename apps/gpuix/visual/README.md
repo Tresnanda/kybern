@@ -1,5 +1,10 @@
 # Visual pair tool
 
+> Retired with the Tauri app (after 0.18.0): `scripts/visual-pair.ts` and the
+> `*.tauri.mjs` screens are gone. The GPUIX halves (`screens.gpuix.ts`,
+> `screens/*.gpuix.ts`, the fixtures and Swift helpers) remain for GPUIX-only
+> captures; the rest of this page describes the pair workflow as it was.
+
 Renders the same screen in the Tauri desktop UI and in GPUIX, at the same
 logical window size, and writes a side-by-side image and a difference heatmap.
 

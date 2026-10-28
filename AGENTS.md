@@ -2,9 +2,8 @@
 
 Rust workspace: a daemon (`kybernd`) that drives coding agents, the Kybern
 GPUIX desktop client (React on GPUI through Bun, on macOS, Windows and Linux),
-a CLI, and an Expo mobile client. The Tauri desktop app in `apps/desktop` is
-being retired: it ships until its deprecation release (issue #113), gets fixes
-only, and new desktop work goes to `apps/gpuix`. Read `docs/architecture.md`
+a CLI, and an Expo mobile client. The Tauri desktop app that preceded GPUIX
+was removed after 0.18.0 (issue #113). Read `docs/architecture.md`
 for how the pieces fit and `docs/design.md` for the desktop design rules
 before touching UI.
 
@@ -18,13 +17,12 @@ before touching UI.
 | `crates/kybern-drivers` | One module per agent: `claude`, `codex`, `opencode`, `pi` (also omp), `cursor`. All implement `AgentDriver` + `AgentSession` from `lib.rs`. `sessions/` reads saved native sessions without running anything; `SessionReader` (`AgentDriver::open_session_reader`) keeps one helper process (Codex app-server, `opencode serve`, Cursor sidecar) open across many list/read calls for scans and bulk imports. |
 | `crates/kybern` | The shipped package: `kybernd` and `kybern` binaries as thin wrappers over the two library crates below. |
 | `crates/kybern-daemon` | `lib.rs` (axum), `ws.rs` (auth, subscriptions), `rpc.rs` (dispatch), `orchestrator.rs` (threads, turns, approvals, checkpoints; `orchestrator/agent_items.rs` is the agents' Notes and Tasks tools: agents fully edit only what they created, never close tasks, ask `kybern_notes_tasks` consent outside Full access/Auto, and file at most 10 tasks a turn; `orchestrator/lead.rs` makes a project's Coordinator an Orchestrator V2 lead thread: lead instructions, read-only tool restrictions, brief and notes index, harness switch; `orchestrator/secret_request.rs` and `secrets.rs` are the `kybern_request_secret` tool and the redacted write of its answer to a git-ignored env file; `secrets.target` and `secrets.store` reuse the file rules for a key pasted into the composer, refuse tracked files and can add the file to `.gitignore`), `pick.rs` and `orchestrator/pick_request.rs` (`kybern_request_pick`: a card asking the user to point at a Preview or visual element, file, folder, image or window; the answer is re-bounded into plain fields), `chips.rs` (`kybern://secret/…` and `kybern://anchor/…` composer chips expand in the provider's copy only), `terminal.rs`, `files.rs`, `github.rs`, `http.rs`, `access.rs`, `settings.rs`, `cursor_setup.rs` (Cursor SDK install and browser sign-in for clients), `session_import.rs` (first-run `sessions.scan_projects` / `sessions.import_all`: scans every harness account concurrently, groups sessions by git root, imports under that root's project with the session's own `updated_at`; one `SessionReader` per harness account per job, jobs outlive the client and count as daemon activity; notifications `sessions.scan.changed`, `sessions.import.progress`, `sessions.import.finished`), `usage.rs` (account plan limits: one cache fed by turn-free live reads and turn reports, pushed as `usage.limits.changed`), `computer/` (computer use), `agent_guide.rs` (the "Working in Kybern" guide every session receives, rendered from its tools and byte-stable for prompt caching; wording changes bump `GUIDE_VERSION` and the golden file; the `tell_agents_about_kybern` setting turns it off). |
-| `crates/kybern-daemon/src/previews/` | In-app browser preview. `tickets.rs` (in-memory, sliding 30 min, 12 h cap, 64 max, revoked with the thread/device), `files.rs` (`/preview-files/{ticket}/{*path}`: canonical root, no dotfiles or symlink escapes, nosniff, sandbox CSP without allow-same-origin, `bridge.js` injected into HTML), `mod.rs` (`previews.open`: classification, roots, persisted folder grants that can never cover `/`, home, system folders; `is_local_or_private_host`), `probe.rs`, `discovery.rs` (lsof, /proc or common ports, 2 s shared cache), `proxy.rs` (`/preview-proxy/{ticket}` with WebSocket, loopback and private addresses only; strips X-Frame-Options and `frame-ancestors`, forwards the app's own cookies). The desktop `preview_relay.rs` gives relayed pages their own loopback origin. |
-| `crates/kybern-client` | Async JSON-RPC client shared by the CLI and the Tauri shell. |
+| `crates/kybern-daemon/src/previews/` | In-app browser preview. `tickets.rs` (in-memory, sliding 30 min, 12 h cap, 64 max, revoked with the thread/device), `files.rs` (`/preview-files/{ticket}/{*path}`: canonical root, no dotfiles or symlink escapes, nosniff, sandbox CSP without allow-same-origin, `bridge.js` injected into HTML), `mod.rs` (`previews.open`: classification, roots, persisted folder grants that can never cover `/`, home, system folders; `is_local_or_private_host`), `probe.rs`, `discovery.rs` (lsof, /proc or common ports, 2 s shared cache), `proxy.rs` (`/preview-proxy/{ticket}` with WebSocket, loopback and private addresses only; strips X-Frame-Options and `frame-ancestors`, forwards the app's own cookies). GPUIX's `src/preview/relay.ts` gives relayed pages their own loopback origin. |
+| `crates/kybern-client` | Async JSON-RPC client used by the CLI and the daemon. |
 | `crates/kybern-cli` | The `kybern` CLI (`lib.rs`). Also the integration harness. |
 | `apps/gpuix` | Kybern GPUIX, the desktop app (see below). Ships for macOS, Windows (NSIS) and Linux (AppImage, .deb, .rpm) from the same release as the daemon. |
-| `apps/desktop` | Tauri desktop app, being retired (fixes only). `src-tauri` is the Tauri 2 shell (crate `kybern-desktop`: resolves or spawns `kybernd`, exposes `endpoint`/`data_dir_path`; `cli.rs` puts the bundled `kybern` CLI on PATH per platform). `src/` is the React app (see below). GPUIX imports its theme math, formatting, icons and transcript navigation from `apps/desktop/src/lib`, so check GPUIX before changing or deleting anything there. |
 | `apps/mobile` | Expo SDK 57 Android/iOS companion (pnpm 11, exact pins). Expo Router, Ink theme, streamed conversations, approvals, files, terminals, and tasks. See `apps/mobile/README.md`. |
-| `packages/kybern-client` | Shared TypeScript transport, address/pairing helpers, wire types, transcript projection, and composer/provider-input helpers. GPUIX, the Tauri forwarding modules and mobile import these sources. |
+| `packages/kybern-client` | Shared TypeScript transport, address/pairing helpers, wire types, transcript projection, and composer/provider-input helpers. GPUIX and mobile import these sources; its tests (`tests/`) run in CI's `gpuix` job. |
 
 The old GPUI client is on the `gpui` branch. Do not port its views back.
 
@@ -32,20 +30,12 @@ The old GPUI client is on the `gpui` branch. Do not port its views back.
 
 | Path | What |
 | --- | --- |
-| `src/` | The app: `main.tsx` (boot), `App.tsx`, `state.ts`, one folder per surface (`transcript/`, `composer/`, `sidebar/`, `nav/`, `dock/`, `notes/`, `tasks/`, `pulls/`, `settings/`, `split/`, `tabs/`, `terminal/`, …). `kit/` holds the UI primitives (read `kit/README.md`), `icons.tsx` the icon set. |
+| `src/` | The app: `main.tsx` (boot), `App.tsx`, `state.ts`, `shared/` (theme math, formatting, accounts, notes/tasks models and transcript helpers that came from the Tauri app; imported as `@/…` or by relative path, tests in `shared/tests`), one folder per surface (`transcript/`, `composer/`, `sidebar/`, `nav/`, `dock/`, `notes/`, `tasks/`, `pulls/`, `settings/`, `split/`, `tabs/`, `terminal/`, …). `kit/` holds the UI primitives (read `kit/README.md`), `icons.tsx` the icon set. |
 | `src/platform/`, `src/shell/`, `src/native/` | Per-OS services and window shell: shortcut keys (`platform/keys.ts`: ⌘ on macOS, Ctrl elsewhere), fonts, OS display settings, window chrome, notifications, updates, and wrappers over the addon. |
 | `native/` | The patched GPUIX addon. `FORK` pins the forks, `update.sh` builds it into `native/build`, and `README.md` (long; search it) documents islands, cached views, input and every native change. `*-check.ts` / `*-lab.tsx` are the on-screen checks; `check-harness.ts` runs them. `wpe/` builds the Linux web view's WebKit; `webview-*` are the per-OS web view hosts. |
 | `packaging/`, `scripts/package-*.ts` | Per-OS packages, installers and their checks (`packaging/README.md`). |
 | `scripts/run-platform-checks.ts` | The Linux/Windows check runner the `GPUIX platforms` workflow calls. |
-| `PORTING-PLATFORMS.md`, `WEBVIEW-PLATFORMS.md` | The Windows/Linux port: status per work package, known gaps, CI and hardware findings, and the Tauri deprecation plan. |
-
-### Tauri desktop app (`apps/desktop/src`)
-
-`protocol/` (the JSON-RPC client; `types.ts` re-exports the shared wire types), `state/` (zustand store, RPC, transcript folding), `views/`
-(one file per surface), `components/kit/` and `lib/kit/` (primitives, icons,
-theme math), `styles/kit.css`. Preview iframes are owned by one
-`PreviewSurfaceLayer`: never move an iframe in the DOM or use
-`visibility: hidden`.
+| `PORTING-PLATFORMS.md`, `WEBVIEW-PLATFORMS.md` | The Windows/Linux port: status per work package, known gaps, CI and hardware findings, and the record of the Tauri retirement. |
 
 ## Build and run
 
@@ -59,14 +49,10 @@ pnpm install --frozen-lockfile
 native/update.sh                      # build the patched addon pinned in native/FORK (minutes)
 KYBERN_DATA_DIR=/tmp/kyb pnpm dev     # GPUIX against the scratch daemon; omit for ~/.kybern
 pnpm screenshot out.png               # background launch and a PNG of the window
-
-cd apps/desktop                        # Tauri, for fixes only
-pnpm install --frozen-lockfile
-KYBERN_DATA_DIR=/tmp/kyb KYBERN_NO_ACTIVATE=1 pnpm tauri dev
 ```
 
 In a separate checkout or worktree, explicitly set `CARGO_TARGET_DIR` to that
-checkout's own `target` directory for Cargo and Tauri commands. An inherited
+checkout's own `target` directory for Cargo commands. An inherited
 value can point at the running app's checkout and overwrite its daemon even
 when the sources and test data are isolated.
 
@@ -76,15 +62,11 @@ spawns `kybernd` from its own directory or `PATH` when none is reachable.
 `KYBERN_NO_ACTIVATE=1` keeps the window from stealing focus.
 
 Without `native/build`, GPUIX falls back to the stock npm addon and loses the
-patched features; `KYBERN_GPUIX_NATIVE=npm` forces that. The Tauri package
-scripts build and stage `kybernd` as a Tauri sidecar; use
-`pnpm tauri ...` rather than calling the Tauri CLI directly. Daemons outlive
+patched features; `KYBERN_GPUIX_NATIVE=npm` forces that. Daemons outlive
 desktop windows. For an app-managed local endpoint, the desktop restarts a
 daemon whose version is incompatible or whose binary is older than the staged
 binary. Explicit `KYBERN_URL` endpoints remain externally managed and are never
-stopped by the app. `pnpm build` only builds the web frontend; use the Tauri
-wrapper when daemon or driver changes must be included: `pnpm tauri dev` or
-`pnpm tauri build`.
+stopped by the app.
 
 ### Disk usage and cleanup
 
@@ -201,7 +183,7 @@ native module" in `apps/gpuix/native/README.md` first.
   Keep the shared TypeScript client and Rust wire types synchronized.
 - Preserve settled transcript identities, bounded history, paced streaming,
   exact final text, and readable formatting. Mobile performance notes live in
-  `apps/mobile/perf/`; desktop WebKit fixtures do not exercise React Native.
+  `apps/mobile/perf/`; desktop checks do not exercise React Native.
 - Use `pnpm start:go --lan` for SDK 57-compatible Expo Go, or `pnpm start --lan`
   for an installed development build. `pnpm ios` / `pnpm android` compile the
   native app. The `preview` EAS profile produces an APK without Metro.
@@ -258,7 +240,7 @@ native module" in `apps/gpuix/native/README.md` first.
 
 ## Release versions
 
-Daemon, CLI, Tauri desktop and GPUIX share the workspace/Tauri version and
+Daemon, CLI and GPUIX share the workspace version and
 `vX.Y.Z` release pipeline. The mobile app has its own `expo.version`; EAS manages native build
 numbers remotely. A push to `main` is not a release. The desktop release script
 does not version or build mobile. See `RELEASING.md`.
@@ -286,7 +268,7 @@ cargo test -p kybern-drivers --test live_drivers          # runs real agent CLIs
 cargo fmt --all --check && cargo clippy --workspace -- -D warnings
 
 cd apps/gpuix && pnpm typecheck && bun test --path-ignore-patterns 'native/upstream/**'
-cd apps/desktop && pnpm typecheck && pnpm lint && pnpm build
+node --experimental-strip-types --test packages/kybern-client/tests/*.test.mjs
 
 cd apps/mobile
 pnpm typecheck && pnpm test
@@ -296,8 +278,8 @@ pnpm exec expo export --platform all
 
 Protocol changes break `crates/kybern-protocol/tests/snapshots`. That is the
 point: review the diff, then `INSTA_UPDATE=always cargo test -p kybern-protocol`.
-CI runs fmt, clippy, the Rust tests, the GPUIX tests and the Tauri checks on
-ubuntu and macos (see Cross-platform checks for the GPUIX on-screen checks).
+CI runs fmt, clippy and the Rust tests on ubuntu and macos, and the GPUIX,
+shared-client and release checks on ubuntu (see Cross-platform checks for the GPUIX on-screen checks).
 A test that fails at random on CI gets fixed or removed, not rerun until green.
 Mobile checks and EAS builds are currently manual; run the mobile checks for
 mobile or shared-client changes. Native configuration changes need a new build.
@@ -338,8 +320,7 @@ replay events received during hydration; preserve row identity and reading posit
   read-only thread page in the clients.
 - Events are append-only. New behavior means a new `EventPayload` variant plus
   handling in `store/projection.rs` and the shared transcript projection in
-  `packages/kybern-client` (which GPUIX and mobile use; Tauri's
-  `apps/desktop/src/state/transcript.ts` too while it ships). Clients ignore
+  `packages/kybern-client` (which GPUIX and mobile use). Clients ignore
   unknown kinds.
 - Thread anchors for rewind are recorded on `TurnCompleted` (`TurnAnchors`).
 - `serde_json` has `preserve_order` on for deterministic schemas. Keep it.
@@ -351,7 +332,7 @@ GPUIX (`apps/gpuix`):
 
 - Reuse `src/kit` (read `kit/README.md`) and the shared surfaces before writing
   new styles. Colors and materials come from `src/theme.ts`, which builds on
-  the Tauri theme math. Keep the look the user approved: change only what was
+  the theme math in `src/shared/lib/kit/theme`. Keep the look the user approved: change only what was
   asked.
 - Shortcuts go through `src/platform/keys.ts` (`isPrimary`, `SHORTCUT`), and
   labels are written in macOS glyphs, which the kit converts to "Ctrl+…" off
@@ -360,18 +341,6 @@ GPUIX (`apps/gpuix`):
 - Read `apps/gpuix/native/README.md` (islands, cached views, wrapper layout
   cost) before changing transcript rows, lists or anything per frame.
 
-Tauri (`apps/desktop`, fixes only):
-
-- Before styling anything new, find the matching kit component or class
-  constant and reuse it; class strings in `views/` are shared on purpose. Do not reintroduce generic shadcn styling.
-- Icons come from `lib/kit/icons.tsx` (Central, Tabler, react-icons).
-  Phosphor and lucide are not used.
-- Base UI menus: `MenuGroupLabel` must sit inside a `MenuGroup`; picker popups
-  are `ComposerPickerMenuPopup`; dialogs use `components/kit/dialog`.
-- Transcript, composer and the home screen share `CHAT_COLUMN_GUTTER` from
-  `views/chatLayout.ts` so their columns line up edge to edge.
-- Panes that stay mounted while hidden switch with `opacity-0` +
-  `pointer-events-none`, never `visibility: hidden` (xterm mis-measures).
 - Dependencies are exact-pinned; `.npmrc` sets `save-exact` and
   `ignore-scripts`. Check socket.dev before adding a package.
 
@@ -380,9 +349,11 @@ Tauri (`apps/desktop`, fixes only):
 Responsiveness and visual quality are joint acceptance criteria. Preserve the
 kit's hierarchy, materials, typography, and useful motion while reducing work.
 Before changing transcripts, Markdown, state subscriptions, navigation rails,
-window materials, or animations, read [the performance guide](apps/desktop/perf/README.md)
-and the report for the affected path. Earlier reports describe historical
-baselines; the guide identifies which follow-up work has already shipped.
+window materials, or animations, read `apps/gpuix/native/README.md` and the
+GPUIX reports in `apps/gpuix/perf/` for the affected path. The retired Tauri
+app's measured WebKit regressions and fixes are kept in
+[its performance guide](apps/gpuix/perf/tauri/README.md); its principles still
+apply, its WebKit specifics do not.
 
 - Keep settled turn objects, row keys, Markdown component types, and highlighted
   DOM stable. A streaming update should invalidate the affected content only.
@@ -401,13 +372,9 @@ baselines; the guide identifies which follow-up work has already shipped.
   wrappers compatible with translucency, avoid duplicate pane tints, and verify
   light/dark, opaque, reduced-transparency, and increased-contrast states.
 - Measure the failing workload before and after; verify appearance alongside
-  timing. Run the relevant native WebKit fixtures under the production CSP,
-  plus the normal checks. A readable fallback, empty list, lost content, or
+  timing. Run the relevant GPUIX on-screen checks plus the normal checks. A readable fallback, empty list, lost content, or
   removed visual effect does not count as an optimization.
 
-The v0.1.9 → v0.2.0 M1 synthetic comparison reduced streaming frame-interval
-p95 from 105 ms to 18–19 ms and mounted history messages from 802 to 8. These
-are regression evidence, not a universal frame-rate or battery guarantee.
 Report CPU, commit time, frame intervals, input probes, and energy separately;
 include the workload, runtime, hardware, and limitations with measurements.
 
@@ -418,14 +385,6 @@ and `apps/gpuix/scripts` drive a real window through `check-harness.ts`, and
 `pnpm screenshot` captures one. Use a scratch daemon, keep one window per
 worktree, and screenshot only the app window. A locked or sleeping Mac screen
 stops frames: wheel scrolls never land and captures fail.
-
-For Tauri there is no GUI test harness. Launch the app against a scratch daemon, drive
-state from the CLI (`kybern send <thread> --detach ...`, `kybern approvals allow`,
-`kybern terminal send ...`) or with `cliclick`/`osascript`, and screenshot only
-the app window by id (`screencapture -l <id>`), never the full screen. See
-`docs/design.md` for what "right" looks like. Run one Kybern UI at a time: close
-the packaged app before launching `pnpm tauri dev`, and target the dev process's
-window id rather than opening the installed app by bundle name.
 
 ## Delegated agents and branches
 
@@ -463,7 +422,7 @@ catalogs, safe to delete).
 ### Branded image backgrounds
 
 For Kybern promotional images, screenshot presentations, and illustrated feature
-cards, reuse `apps/desktop/public/release-background.png` as the background.
+cards, reuse `assets/release-background.png` as the background.
 It is the same artwork as `/Users/mymac/Downloads/Frame 7 (1).png`, already used
 by the update notice. Prefer the repository asset so visuals remain reproducible
 and consistent with the website. Keep functional UI previews and content readable.

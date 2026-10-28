@@ -14,11 +14,10 @@ repository read [AGENTS.md](AGENTS.md).
 | `crates/kybern` | The shipped package: builds the `kybernd` and `kybern` binaries from the two crates below. |
 | `crates/kybern-daemon` | `kybernd`. Owns provider processes, threads, approvals, terminals and project files; serves clients on a loopback port with bearer tokens. |
 | `crates/kybern-cli` | `kybern`. Command-line client and the integration harness for every driver. |
-| `crates/kybern-client` | Shared WebSocket client used by the CLI and the Tauri shell. |
+| `crates/kybern-client` | Shared WebSocket client used by the CLI and the daemon. |
 | `apps/gpuix` | Kybern GPUIX, the desktop app: React on GPUI through Bun, for macOS, Windows and Linux. See [its README](apps/gpuix/README.md). |
-| `apps/desktop` | The older Tauri desktop app (fixes only until it is retired): Tauri 2 shell (`src-tauri`, crate `kybern-desktop`) around a React 19 + Tailwind 4 web app. Bundles and spawns `kybernd` if none is running. |
 | `apps/mobile` | Expo SDK 57 companion for Android and iOS: pairing, streamed conversations, approvals, files, diffs, terminals, tasks, and settings. |
-| `packages/kybern-client` | TypeScript transport, protocol types, transcript projection, and composer helpers shared by GPUIX, the Tauri app and mobile. |
+| `packages/kybern-client` | TypeScript transport, protocol types, transcript projection, and composer helpers shared by GPUIX and mobile. |
 
 The previous GPUI desktop client lives on the `gpui` branch and is no longer
 built from `main`.
@@ -37,78 +36,27 @@ pnpm dev                            # runs against ~/.kybern; set KYBERN_DATA_DI
 ```
 
 Packaging GPUIX for each platform is described in
-[apps/gpuix/packaging/README.md](apps/gpuix/packaging/README.md). The rest of
-this section covers the older Tauri app.
-
-```sh
-cargo build --release -p kybern   # target/release/{kybernd,kybern}
-
-cd apps/desktop
-pnpm install --frozen-lockfile
-pnpm tauri build                                        # builds and bundles kybernd automatically
-```
-
-The `pnpm tauri` wrapper builds the daemon for the same profile and target,
-stages the target-triple sidecar expected by Tauri, and then runs the Tauri
-CLI. The standalone daemon and CLI builds remain available for headless and
-remote use.
+[apps/gpuix/packaging/README.md](apps/gpuix/packaging/README.md). The
+standalone daemon and CLI builds (`cargo build --release -p kybern`) remain
+available for headless and remote use.
 
 To connect to another machine, use the desktop environment menu. Each machine
 keeps its own projects and running work.
 
-For development, run the web app with hot reload inside the Tauri window:
-
-```sh
-cd apps/desktop && pnpm tauri dev
-```
-
 The desktop app reuses an authenticated, protocol-compatible daemon selected
-by `KYBERN_DATA_DIR`. If none is available it starts the bundled daemon on an
+by `KYBERN_DATA_DIR`. If none is available it starts its bundled daemon on an
 unused port once, saves it in `desktop.port` for future restarts and updates,
 publishes the live endpoint in `daemon.port`, and leaves the daemon running
-for CLI and mobile clients when the window closes.
+for CLI and mobile clients when the window closes. For app-managed local
+endpoints, reopening the app replaces a daemon when the bundled binary is newer
+or incompatible. A daemon selected with `KYBERN_URL` is externally managed and
+is never stopped automatically.
 
-For app-managed local endpoints, reopening the desktop automatically replaces a
-daemon when the staged binary is newer or incompatible. A daemon selected with
-`KYBERN_URL` is externally managed and is never stopped automatically. Note that
-`pnpm build` builds only the React frontend; use the Tauri wrapper to build and
-stage daemon or driver changes as well: `pnpm tauri dev` or `pnpm tauri build`.
-
-### macOS app bundle
-
-`scripts/bundle-macos.sh` runs the self-contained `pnpm tauri build`, verifies
-the bundled daemon, preserves certificate signing when configured (otherwise
-signs ad hoc), and writes
-`dist/kybern-<version>-<arch>-apple-darwin.dmg`:
-
-```sh
-scripts/bundle-macos.sh              # SKIP_BUILD=1 reuses the last complete app
-```
-
-It needs Xcode command line tools (`codesign`, `hdiutil`), Node 22 and pnpm.
-
-Ad-hoc signing needs no paid Apple account, but its designated requirement is
-the hash of one build. macOS privacy grants such as Screen Recording can become
-stale after an update, even while System Settings still shows the app as allowed.
-Re-authorizing the updated app may be necessary. Kybern does not reset TCC or
-change privacy settings automatically.
-
-For a stable distributed identity, configure a **Developer ID Application**
-certificate from a paid Apple Developer membership. A free Apple account or an
-Apple Development certificate is not a Developer ID distribution identity.
-Local builds can set `APPLE_SIGNING_IDENTITY` to an installed certificate.
-CI accepts optional repository secrets `APPLE_CERTIFICATE` (base64-encoded p12),
-`APPLE_CERTIFICATE_PASSWORD`, and `APPLE_SIGNING_IDENTITY`; Tauri imports and
-signs the app and sidecar. `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password),
-and `APPLE_TEAM_ID` additionally enable notarization. Never commit certificate
-private keys or passwords. Without these secrets, the existing ad-hoc release
-path remains available.
-
-Packaging verifies app/sidecar signatures and preserves Tauri's certificate
-instead of replacing it with ad-hoc signing. Keep the bundle ID and signing team
-stable across releases. Moving an existing ad-hoc installation to a certificate
-identity may require one new authorization; this does not retroactively repair
-old grants. See [Apple's code identity explanation](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements).
+The macOS app is signed ad hoc. Ad-hoc signing needs no paid Apple account, but
+its designated requirement is the hash of one build. macOS privacy grants such
+as Screen Recording can become stale after an update, even while System
+Settings still shows the app as allowed. Re-authorizing the updated app may be
+necessary. Kybern does not reset TCC or change privacy settings automatically.
 
 
 ## Mobile app
