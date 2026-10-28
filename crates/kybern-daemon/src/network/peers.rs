@@ -360,6 +360,11 @@ impl Peers {
         self.lock().next_attempt.values().filter(|at| **at > now).map(|at| *at - now).min()
     }
 
+    /// Let the next discovery pass look at every node again, answered or not.
+    pub(super) fn forget_probes(&self) {
+        self.lock().probed.clear();
+    }
+
     fn reset_backoff(&self) {
         let mut inner = self.lock();
         inner.next_attempt.clear();
@@ -401,7 +406,7 @@ impl Network {
         }
         if outcome.self_removed {
             tracing::warn!(target: TARGET, "this machine was removed from its network");
-            self.peers.close_all();
+            self.forget_network_state();
         }
         if outcome.changed() {
             self.peers.gossip(outcome.accepted.clone(), from);
@@ -417,6 +422,8 @@ impl Network {
         if !revoked.is_empty() {
             tracing::info!(target: SESSION_TARGET, machine = machine_id, grants = revoked.len(), "revoked the grants of a removed machine");
         }
+        // The client tokens it asked this machine to mint die with it (§2.5).
+        self.revoke_tokens_issued_via(machine_id);
     }
 
     /// The presence this machine pushes (§4.1): version and features now; harnesses, load and
@@ -477,9 +484,12 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
         | PeerGitImport::NAME
         | PeerThreadCreate::NAME
         | PeerThreadSend::NAME => state.orchestrator.peer_dispatch(&link.machine_id, method, params).await,
-        // The device-token mint and revoke fan-out are N4's.
-        PeerClientTokenMint::NAME | PeerDeviceRevoke::NAME => {
-            Err(RpcError::new(codes::NOT_AVAILABLE, format!("{method} is not available yet in this build.")))
+        PeerClientTokenMint::NAME => ok(super::client_grant::mint_for_peer(state, link, parse(params)?)?),
+        PeerDeviceRevoke::NAME => {
+            let revoke: PeerDeviceRevokeParams = parse(params)?;
+            let count = super::client_grant::revoke_device_local(state, &revoke.device_id);
+            tracing::info!(target: SESSION_TARGET, machine = %link.machine_id, count, "revoked a device on a member's request");
+            ok(Empty {})
         }
         _ => Err(RpcError::method_not_found(method)),
     }
@@ -846,6 +856,7 @@ pub async fn pass(state: &AppState) -> Option<Duration> {
     }
 
     discover(state, &status).await;
+    super::join::auto_join(state, &status).await;
     network.peers.soonest_retry()
 }
 
@@ -866,15 +877,20 @@ async fn discover(state: &AppState, status: &TsStatus) {
     let ttl = network.timing.found_ttl;
     let candidates: Vec<TsNode> = {
         let mut inner = network.peers.lock();
-        // Members and tombstoned nodes are never "found"; nodes that left the tailnet are dropped.
+        // Members are never "found"; nodes that left the tailnet are dropped. A node whose machine
+        // was removed is found again (a rejoined machine has a new key); only a click adds it (§2.6).
         let known: Vec<String> = projection.members().filter_map(|(_, entry)| entry.descriptor.ts_node_id.clone()).collect();
         inner.found.retain(|node_id, _| !known.contains(node_id) && status.peer(node_id).is_some_and(|peer| peer.online));
-        inner.probed.retain(|_, at| at.elapsed() < ttl);
+        // A node that answered is not probed again for `ttl`; one that did not (Kybern may simply not be
+        // running there yet) is looked at again on the next tick.
+        let unanswered_ttl = ttl.min(network.timing.tick_watching);
+        let answered: Vec<String> = inner.found.keys().cloned().collect();
+        inner.probed.retain(|node_id, at| at.elapsed() < if answered.contains(node_id) { ttl } else { unanswered_ttl });
         status
             .peers
             .iter()
             .filter(|peer| peer.online && peer.ip().is_some() && !peer.node_id.is_empty())
-            .filter(|peer| !known.contains(&peer.node_id) && !projection.is_node_tombstoned(&peer.node_id))
+            .filter(|peer| !known.contains(&peer.node_id))
             .filter(|peer| !inner.probed.contains_key(&peer.node_id))
             .cloned()
             .collect()

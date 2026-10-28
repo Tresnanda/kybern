@@ -17,7 +17,8 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
 use ed25519_dalek::{Signature, VerifyingKey};
 use kybern_client::{Client, Endpoint};
-use kybern_protocol::methods::DaemonInfoMethod;
+use kybern_protocol::NetworkClientGrantParams;
+use kybern_protocol::methods::{DaemonInfoMethod, Empty, NetworkClientGrant, NetworkStatusMethod};
 use serde_json::{Value, json};
 
 /// Second octet of this test run's loopback block; tests in one process never share one.
@@ -268,4 +269,116 @@ async fn a_second_daemon_on_the_same_computer_says_why_it_is_not_on_the_network(
     // The first one is unharmed and still answers as itself; the second keeps running without a listener.
     let answer = well_known(&format!("http://127.{block}.0.2:4173")).await;
     assert_eq!(answer["machine_id"], first_id);
+}
+
+/// The `kybern` command-line binary of this build, built like [`kybernd`].
+fn kybern_cli() -> PathBuf {
+    static BUILT: std::sync::Once = std::sync::Once::new();
+    let exe = std::env::current_exe().unwrap();
+    let dir = exe.parent().unwrap().parent().unwrap();
+    let path = dir.join(if cfg!(windows) { "kybern.exe" } else { "kybern" });
+    BUILT.call_once(|| {
+        if !path.exists() {
+            let status = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+                .args(["build", "-p", "kybern", "--bin", "kybern"])
+                .status()
+                .expect("cargo build -p kybern");
+            assert!(status.success(), "could not build kybern");
+        }
+    });
+    path
+}
+
+/// Run `kybern --data-dir <dir> machines <args>` and return (success, stdout).
+fn machines_cli(dir: &Path, args: &[&str]) -> (bool, String) {
+    let output = Command::new(kybern_cli())
+        .arg("--data-dir")
+        .arg(dir)
+        .arg("machines")
+        .args(args)
+        .env_remove("KYBERN_URL")
+        .env_remove("KYBERN_TOKEN")
+        .output()
+        .unwrap();
+    (output.status.success(), format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr)))
+}
+
+#[tokio::test]
+async fn two_started_daemons_of_one_user_join_and_the_cli_lists_checks_and_removes_them() {
+    let block = block();
+    if !aliases_available(block) {
+        eprintln!("skipped: no 127.{block}.0.2 loopback alias");
+        return;
+    }
+    let scratch = Scratch::new("join");
+    let path_a = scratch.0.join("a.json");
+    let path_b = scratch.0.join("b.json");
+    fixture(block, &[("a", 2), ("b", 3)], "a", &path_a);
+    fixture(block, &[("a", 2), ("b", 3)], "b", &path_b);
+    let mut a = Daemon::start(&scratch, "a", &path_a, None);
+    let client_a = a.client().await;
+    a.wait_for_log("listening: machine network").await;
+    // The second daemon starts later; the first has to notice it without a long wait.
+    let mut b = Daemon::start(&scratch, "b", &path_b, None);
+    let client_b = b.client().await;
+    b.wait_for_log("listening: machine network").await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let on_a = client_a.call::<NetworkStatusMethod>(Empty {}).await.unwrap();
+        let on_b = client_b.call::<NetworkStatusMethod>(Empty {}).await.unwrap();
+        if on_a.members.len() == 2
+            && on_b.members.len() == 2
+            && on_a.members.iter().all(|card| card.status == kybern_protocol::MachineStatus::Online)
+        {
+            assert_eq!(on_a.network_id, on_b.network_id);
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the two daemons never joined:\na: {}\nb: {}",
+            std::fs::read_to_string(&a.log).unwrap_or_default(),
+            std::fs::read_to_string(&b.log).unwrap_or_default()
+        );
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    // The command line shows the same, and its doctor finds nothing broken.
+    let (ok, list) = machines_cli(&a.dir, &["list"]);
+    assert!(ok, "{list}");
+    assert!(list.contains("2 machines"), "{list}");
+    let (ok, doctor) = machines_cli(&a.dir, &["doctor"]);
+    assert!(ok, "the doctor reports no failure:\n{doctor}");
+    assert!(doctor.contains("Tailscale is running") && doctor.contains("connected for"), "{doctor}");
+    let (ok, status) = machines_cli(&a.dir, &["status"]);
+    assert!(ok && status.contains("Tailscale:"), "{status}");
+
+    // One pairing, a token for the other machine: it connects to b directly.
+    let id_b = client_b.call::<DaemonInfoMethod>(Default::default()).await.unwrap().environment_id;
+    let grant = client_a
+        .call::<NetworkClientGrant>(NetworkClientGrantParams { machine_id: id_b.clone(), device_id: "app-1".into() })
+        .await
+        .unwrap();
+    let port_b = std::fs::read_to_string(b.dir.join("daemon.port")).unwrap();
+    let direct = Client::connect(&Endpoint { url: format!("ws://127.0.0.1:{}/ws", port_b.trim()), token: grant.token }).await.unwrap();
+    assert_eq!(direct.call::<DaemonInfoMethod>(Default::default()).await.unwrap().environment_id, id_b);
+
+    // Removal from the command line reaches the other daemon.
+    let (ok, removed) = machines_cli(&a.dir, &["remove", &id_b, "--yes"]);
+    assert!(ok, "{removed}");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let on_b = client_b.call::<NetworkStatusMethod>(Empty {}).await.unwrap();
+        if on_b.removed {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "b never learned it was removed:\n{}",
+            std::fs::read_to_string(&b.log).unwrap_or_default()
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let after = client_a.call::<NetworkStatusMethod>(Empty {}).await.unwrap();
+    assert_eq!(after.members.len(), 1);
 }

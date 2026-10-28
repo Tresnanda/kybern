@@ -13,27 +13,35 @@
 //! removal side effects and the `network.*` handlers (N4) use [`Network::membership`],
 //! [`Network::publish_ops`], [`peers::Peers`] and [`Network::found`].
 
+pub mod client_grant;
 pub mod clipboard_filter;
+pub mod doctor;
 pub mod git_transfer;
+pub mod join;
 pub mod keys;
+pub mod manage;
 pub mod membership;
 pub mod ops;
 pub mod outbox;
 pub mod peers;
 pub mod relay;
+pub mod removal;
 pub mod session;
+pub mod status;
 pub mod tailscale;
 pub mod well_known;
 
 #[cfg(test)]
 pub(crate) mod harness;
 #[cfg(test)]
+mod join_tests;
+#[cfg(test)]
 mod tests;
 
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use kybern_protocol::{OpEnvelope, Scope, features};
@@ -55,6 +63,8 @@ pub fn routes() -> axum::Router<crate::state::AppState> {
     axum::Router::new()
         .route(well_known::PATH, get(well_known::serve))
         .route(session::SESSION_PATH, post(session::serve))
+        .route(join::OFFER_PATH, post(join::serve_offer))
+        .route(join::MERGE_PATH, post(join::serve_merge))
         .route("/relay/{machine_id}/ws", get(relay::serve_ws))
         .route("/relay/{machine_id}/http/{*path}", any(relay::serve_http))
 }
@@ -86,6 +96,9 @@ pub struct Timing {
     pub relay_idle: Duration,
     /// The window of a handshake request's `at`, and of a well-known proof.
     pub clock_window: Duration,
+    /// Join machines of the same Tailscale user on discovery (§2.4a). Always on in a daemon; a test
+    /// that builds its network by hand turns it off.
+    pub auto_join: bool,
 }
 
 impl Default for Timing {
@@ -103,6 +116,7 @@ impl Default for Timing {
             found_ttl: Duration::from_secs(10 * 60),
             relay_idle: Duration::from_secs(30),
             clock_window: Duration::from_secs(60),
+            auto_join: true,
         }
     }
 }
@@ -123,6 +137,7 @@ impl Timing {
             found_ttl: Duration::from_millis(300),
             relay_idle: Duration::from_secs(30),
             clock_window: Duration::from_secs(60),
+            auto_join: true,
         }
     }
 }
@@ -159,9 +174,15 @@ pub struct Network {
     /// The client every dial and probe uses. Under the fake it is bound to this node's loopback
     /// address, so the peer's `whois` can name the caller.
     pub http: reqwest::Client,
+    /// Retry bookkeeping for the joining pass (N4).
+    pub join: join::JoinState,
+    store: Store,
+    /// The daemon's token-revocation channel, so tokens revoked by a removal close their sockets.
+    revoked: OnceLock<broadcast::Sender<uuid::Uuid>>,
     listen: Mutex<ListenInfo>,
     self_ts: Mutex<Option<(Instant, SelfTs)>>,
     watching: Mutex<Option<Instant>>,
+    nudged: Mutex<Option<Instant>>,
     wake: Notify,
     changed: broadcast::Sender<()>,
     /// Outbox items as they change, forwarded to clients as `outbox.changed`.
@@ -188,6 +209,9 @@ impl Network {
             membership,
             unavailable,
             http: http.build().unwrap_or_default(),
+            join: Default::default(),
+            store: store.clone(),
+            revoked: OnceLock::new(),
             tailscale,
             timing,
             grants: Default::default(),
@@ -198,10 +222,23 @@ impl Network {
             listen: Default::default(),
             self_ts: Default::default(),
             watching: Default::default(),
+            nudged: Default::default(),
             wake: Notify::new(),
             changed: broadcast::channel(16).0,
             outbox_changed: broadcast::channel(64).0,
             enabled: AtomicBool::new(true),
+        }
+    }
+
+    /// Connect the daemon's token-revocation channel (`AppState` calls this once).
+    pub fn attach_revocations(&self, sender: broadcast::Sender<uuid::Uuid>) {
+        let _ = self.revoked.set(sender);
+    }
+
+    /// Tell the connection layer a token was revoked, so its sockets close at once.
+    pub(crate) fn announce_revoked(&self, id: uuid::Uuid) {
+        if let Some(sender) = self.revoked.get() {
+            let _ = sender.send(id);
         }
     }
 
@@ -261,6 +298,21 @@ impl Network {
 
     pub(crate) fn notify_changed(&self) {
         let _ = self.changed.send(());
+    }
+
+    /// Someone on the tailnet asked this machine who it is. If it is a Kybern machine that has just
+    /// started, it wants to be found: look at the tailnet again now, at most every few seconds. This
+    /// is how a machine that starts after its smaller-id peer gets noticed without waiting a tick.
+    pub fn nudge_discovery(&self) {
+        let every = Duration::from_secs(10).min(self.timing.tick_watching);
+        let mut last = self.lock(&self.nudged);
+        if last.is_some_and(|at| at.elapsed() < every) {
+            return;
+        }
+        *last = Some(Instant::now());
+        drop(last);
+        self.peers.forget_probes();
+        self.wake();
     }
 
     /// A client shows Settings → Machines or the Found list: discovery ticks every 60 s for a

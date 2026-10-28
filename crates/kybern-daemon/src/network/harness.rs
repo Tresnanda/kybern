@@ -80,6 +80,9 @@ pub struct Cluster {
     pub dir: TempDir,
     block: u32,
     fixture: FakeFixture,
+    /// Whether daemons join same-user machines on their own. Off unless a test asks, so a test that
+    /// forms its network with [`Cluster::form`] is not raced by discovery.
+    auto_join: bool,
 }
 
 impl Cluster {
@@ -106,10 +109,20 @@ impl Cluster {
                 online: true,
             })
             .collect();
-        let cluster =
-            Self { dir: TempDir::new("cluster"), block, fixture: FakeFixture { self_name: String::new(), tailnet: TAILNET.into(), nodes } };
+        let cluster = Self {
+            dir: TempDir::new("cluster"),
+            block,
+            fixture: FakeFixture { self_name: String::new(), tailnet: TAILNET.into(), nodes },
+            auto_join: false,
+        };
         cluster.save();
         Some(cluster)
+    }
+
+    /// Let the daemons join each other on discovery (N4's joining flows).
+    pub fn auto_join(mut self, on: bool) -> Self {
+        self.auto_join = on;
+        self
     }
 
     fn fixture_path(&self, name: &str) -> PathBuf {
@@ -157,7 +170,7 @@ impl Cluster {
         std::fs::create_dir_all(&root).unwrap();
         let paths = crate::config::Paths::resolve(Some(root.clone())).unwrap();
         let tailscale = Arc::new(Fake::new(self.fixture_path(name)));
-        let state = AppState::initialize_with_drivers(&paths, tailscale, Timing::fast(), drivers).unwrap();
+        let state = AppState::initialize_with_drivers(&paths, tailscale, Timing { auto_join: self.auto_join, ..Timing::fast() }, drivers).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let primary = listener.local_addr().unwrap();
         *state.listen_addr.write().unwrap() = Some(primary);
@@ -184,7 +197,9 @@ impl Cluster {
     /// by a signed operation and handed the whole set. Every node is woken.
     pub async fn form(&self, founder: &Node, others: &[&Node], via: JoinVia) {
         let info = founder.state.network.self_info().await;
-        founder.membership().genesis(OWNER, TAILNET, &info).unwrap();
+        if !founder.membership().has_network() {
+            founder.membership().genesis(OWNER, TAILNET, &info).unwrap();
+        }
         for other in others {
             self.enroll(founder, other, via).await;
         }
@@ -193,10 +208,15 @@ impl Cluster {
 
     /// Add `other` to the network `by` belongs to, and give it the set.
     pub async fn enroll(&self, by: &Node, other: &Node, via: JoinVia) {
+        if by.membership().is_member(&other.id()) {
+            return;
+        }
         let info = other.state.network.self_info().await;
         let descriptor = other.membership().self_descriptor(&info);
-        by.membership().add(descriptor, via).unwrap();
+        let op = by.membership().add(descriptor, via).unwrap();
         other.membership().join(by.membership().all_ops()).unwrap();
+        // The members that are already linked to `by` hear of it, as they do from a real join.
+        by.state.network.publish_ops(vec![op]);
         other.state.network.wake();
     }
 }

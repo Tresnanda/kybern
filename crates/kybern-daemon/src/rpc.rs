@@ -827,9 +827,14 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             if p.token_id == ctx.principal.token_id {
                 return Err(RpcError::invalid_params("a token cannot revoke itself"));
             }
+            let device = state.store.token_device(p.token_id).map_err(internal)?;
             state.store.token_revoke(p.token_id).map_err(internal)?;
             let _ = state.revoked_tokens.send(p.token_id);
             state.previews.revoke_principal(p.token_id);
+            // A device is revoked on every machine, not only the one it was revoked on (§3.4).
+            if let Some(device) = device {
+                crate::network::client_grant::revoke_device_everywhere(state, &device).await;
+            }
             ok(Empty {})
         }
         FilesSearch::NAME => {
@@ -1178,38 +1183,127 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         OutboxRetry::NAME => ok(crate::network::outbox::retry(state, parse(params)?)?),
         OutboxCancel::NAME => ok(crate::network::outbox::cancel(state, parse(params)?)?),
         OutboxEnqueue::NAME => ok(crate::network::outbox::enqueue(state, parse(params)?)?),
-        // N1: every M1 `network.*`, `machines.*` and `peer.*` method is in the protocol and the
-        // registry; its handler lands with the package that owns it (N2-N4), in that package's module.
-        NetworkStatusMethod::NAME
-        | NetworkSetEnabled::NAME
-        | NetworkAdd::NAME
-        | NetworkCodeCreate::NAME
-        | NetworkJoin::NAME
-        | NetworkRemove::NAME
-        | NetworkPause::NAME
-        | NetworkRename::NAME
-        | NetworkMerge::NAME
-        | NetworkRejoin::NAME
-        | NetworkClientGrant::NAME
-        | NetworkRoutes::NAME
-        | NetworkAllowSet::NAME
-        | NetworkUpdateAll::NAME
-        | NetworkDoctor::NAME
-        | MachinesInfo::NAME
-        | PeerOpsSync::NAME
+        // The machine network (N4). The logic is in `network/`; these arms parse and answer.
+        NetworkStatusMethod::NAME => ok(network_status(state).await?),
+        NetworkSetEnabled::NAME => {
+            let p: NetworkSetEnabledParams = parse(params)?;
+            crate::network::manage::set_enabled(state, p.enabled).await.map_err(JoinError::into_rpc)?;
+            ok(network_status(state).await?)
+        }
+        NetworkAdd::NAME => {
+            let p: NetworkFoundParams = parse(params)?;
+            ok(crate::network::join::add_found(state, &p.found_id).await.map_err(JoinError::into_rpc)?)
+        }
+        NetworkCodeCreate::NAME => ok(crate::network::join::create_code(state).await.map_err(JoinError::into_rpc)?),
+        NetworkJoin::NAME => {
+            let p: NetworkJoinParams = parse(params)?;
+            ok(crate::network::join::join_by_code(state, &p.code, &p.address, p.migrate).await.map_err(JoinError::into_rpc)?)
+        }
+        NetworkRemove::NAME => {
+            let p: NetworkRemoveParams = parse(params)?;
+            crate::network::removal::remove(state, &p.machine_id, p.stolen, &p.also_remove).await.map_err(JoinError::into_rpc)?;
+            ok(network_status(state).await?)
+        }
+        NetworkPause::NAME => {
+            let p: NetworkPauseParams = parse(params)?;
+            ok(crate::network::manage::pause(state, &p.machine_id, p.paused).await.map_err(JoinError::into_rpc)?)
+        }
+        NetworkRename::NAME => {
+            let p: NetworkRenameParams = parse(params)?;
+            ok(crate::network::manage::rename(state, &p.machine_id, &p.name).await.map_err(JoinError::into_rpc)?)
+        }
+        NetworkMerge::NAME => {
+            let p: NetworkFoundParams = parse(params)?;
+            crate::network::join::merge(state, &p.found_id).await.map_err(JoinError::into_rpc)?;
+            ok(network_status(state).await?)
+        }
+        NetworkRejoin::NAME => {
+            crate::network::manage::rejoin(state).await.map_err(JoinError::into_rpc)?;
+            ok(network_status(state).await?)
+        }
+        NetworkClientGrant::NAME => {
+            let p: NetworkClientGrantParams = parse(params)?;
+            ok(crate::network::client_grant::grant(state, &ctx.principal, p).await?)
+        }
+        NetworkRoutes::NAME => {
+            let p: NetworkRoutesParams = parse(params)?;
+            ok(NetworkRoutesResult { routes: crate::network::client_grant::routes(state, &p.machine_id).await })
+        }
+        NetworkAllowSet::NAME => {
+            let p: NetworkAllowSetParams = parse(params)?;
+            ok(crate::network::manage::allow(state, &p.machine_id, &p.capability, p.allowed).await.map_err(JoinError::into_rpc)?)
+        }
+        NetworkUpdateAll::NAME => ok(network_update_all(state).await),
+        NetworkDoctor::NAME => {
+            let p: NetworkDoctorParams = parse_or_default(params)?;
+            ok(crate::network::doctor::report(state, p.machine_id.as_deref()).await)
+        }
+        MachinesInfo::NAME => ok(machines_info(state)),
+        // Daemon-to-daemon methods are answered on a session (`network::peers::dispatch`), never here.
+        PeerOpsSync::NAME
         | PeerOpsPush::NAME
         | PeerPresenceMethod::NAME
         | PeerClientTokenMint::NAME
         | PeerDeviceRevoke::NAME
         | PeerRelayOpen::NAME
         | PeerRelayData::NAME
-        | PeerRelayClose::NAME => Err(RpcError::new(codes::NOT_AVAILABLE, format!("{method} is not available yet in this build."))),
+        | PeerRelayClose::NAME => Err(RpcError::new(codes::NOT_AVAILABLE, format!("{method} is only available between machines."))),
         _ => Err(RpcError::method_not_found(method)),
     }
 }
 
 fn ok<T: Serialize>(v: T) -> Result<Value, RpcError> {
     serde_json::to_value(v).map_err(internal)
+}
+
+use crate::network::join::JoinError;
+
+async fn network_status(state: &AppState) -> Result<NetworkStatus, RpcError> {
+    crate::network::status::network_status(state)
+        .await
+        .ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, "The machine network is unavailable on this machine."))
+}
+
+/// `network.update_all`: this machine starts its own update. Updating another machine needs a
+/// method it does not have in this release, so each of them is listed as skipped, with the reason.
+async fn network_update_all(state: &AppState) -> NetworkUpdateAllResult {
+    let mut result = NetworkUpdateAllResult { started: Vec::new(), skipped: Vec::new() };
+    let Some(membership) = state.network.membership() else { return result };
+    let me = membership.machine_id();
+    for (id, _) in membership.projection().members() {
+        if *id == me {
+            if state.desktop_managed.load(std::sync::atomic::Ordering::SeqCst) {
+                result.skipped.push(NetworkUpdateSkipped { machine_id: id.clone(), reason: "Updates with the app".into() });
+            } else {
+                state.daemon_updates.request(&state.store);
+                tokio::spawn(crate::self_update::tick(state.clone()));
+                result.started.push(id.clone());
+            }
+        } else {
+            result.skipped.push(NetworkUpdateSkipped {
+                machine_id: id.clone(),
+                reason: "Update it from its own Kybern; remote updates arrive in a later release".into(),
+            });
+        }
+    }
+    result
+}
+
+/// `machines.info`: what this machine says about itself for the Machines page.
+fn machines_info(state: &AppState) -> MachineInfo {
+    let cores = std::thread::available_parallelism().map(|cores| cores.get() as u32).unwrap_or(1);
+    let projects = state
+        .store
+        .projects_list()
+        .map(|projects| projects.into_iter().filter_map(|project| project.repo).filter(|repo| !repo.is_empty()).collect())
+        .unwrap_or_default();
+    MachineInfo {
+        cpu: Some(CpuInfo { model: std::env::consts::ARCH.to_string(), logical_cores: cores }),
+        gpu: Vec::new(),
+        mem: None,
+        harnesses: Vec::new(),
+        projects,
+    }
 }
 
 fn parse<T: DeserializeOwned>(v: Value) -> Result<T, RpcError> {
