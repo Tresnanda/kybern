@@ -106,7 +106,7 @@ async fn the_narrowing_table_holds_end_to_end_for_every_mode_and_tool_class() {
         // Operate: a card below Auto.
         let class = ToolClass::Operate;
         assert_eq!(crate::network::forward::decide(mode, class), ask_unless(PermissionMode::Auto));
-        let shown = matrix_cell(&p, mode, "kybern_preview_open", json!({"target": "http://localhost:5173"}), ask_unless(PermissionMode::Auto)).await;
+        let shown = matrix_cell(&p, mode, "kybern_preview_open", json!({"target": "https://example.com/forwarded"}), ask_unless(PermissionMode::Auto)).await;
         assert!(shown.is_ok(), "preview at {mode:?}: {shown:?}");
         // Note writes: the notes-and-tasks consent, below Auto.
         let title = format!("From a at {mode:?}");
@@ -376,7 +376,7 @@ async fn a_repeated_operation_runs_once_and_a_decline_reaches_the_agent() {
 
     // A declined card is an error the agent can read, and nothing happened.
     p.set_mode(PermissionMode::Supervised);
-    let call = p.on_b("kybern_preview_open", json!({"target": "http://localhost:3000"}));
+    let call = p.on_b("kybern_preview_open", json!({"target": "https://example.com/declined"}));
     let decline = async {
         let card = eventually(|| async { p.pending_on_b().into_iter().next() }).await;
         assert!(card.summary.starts_with(&format!("From {} · Parent on a", crate::rpc::hostname())), "{}", card.summary);
@@ -442,4 +442,41 @@ fn a_calls_operation_id_is_stable_across_a_transport_retry() {
     assert_eq!(id("c1", "kybern_read_file"), id("c1", "kybern_read_file"));
     assert_ne!(id("c1", "kybern_read_file"), id("c2", "kybern_read_file"));
     assert_ne!(id("c1", "kybern_read_file"), id("c1", "kybern_list_files"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_dev_server_on_the_other_machine_is_previewed_from_here_through_a_forwarded_port() {
+    let Some(p) = Pair::new().await else { return };
+    let dev = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dev_port = dev.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = dev.accept().await else { return };
+            tokio::spawn(async move {
+                use tokio::io::AsyncWriteExt;
+                let _ = socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").await;
+            });
+        }
+    });
+    // Below Auto the forward would need an approval the calling side cannot show, so it says what to do instead.
+    p.set_mode(PermissionMode::Supervised);
+    let asked = p.on_b("kybern_preview_open", json!({"target": format!("http://localhost:{dev_port}/app")})).await;
+    assert!(asked.unwrap_err().to_string().contains("needs your approval"));
+    assert!(p.a.state.network.ports.views().is_empty());
+
+    p.set_mode(PermissionMode::Auto);
+    let shown = p.on_b("kybern_preview_open", json!({"target": format!("http://localhost:{dev_port}/app?x=1")})).await.unwrap();
+    let forwards = p.a.state.network.ports.views();
+    assert_eq!(forwards.len(), 1, "{shown}");
+    assert_eq!((forwards[0].remote_port, forwards[0].machine_id.as_str()), (dev_port, p.b.id().as_str()));
+    // The page the tool shows is the forwarded port on this machine, and it answers with b's dev server.
+    assert_eq!(shown["target"], format!("http://localhost:{}/app?x=1", forwards[0].local_port), "{shown}");
+    let body = reqwest::get(format!("http://127.0.0.1:{}/", forwards[0].local_port)).await.unwrap().text().await.unwrap();
+    assert_eq!(body, "ok");
+    assert!(shown.get("ran_on").is_none(), "the tool ran here");
+    assert!(p.inbound_on_b().is_empty(), "nothing ran on b");
+    // A file of b is still b's to show: the tool runs there.
+    let elsewhere = p.on_b("kybern_preview_open", json!({"target": "mockups/missing.html"})).await;
+    assert!(elsewhere.is_err(), "{elsewhere:?}");
+    assert_eq!(p.inbound_on_b().len(), 1);
 }

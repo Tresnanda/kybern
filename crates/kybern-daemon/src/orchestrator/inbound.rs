@@ -103,14 +103,11 @@ async fn preview_on_machine(
     target: &RemoteTarget,
     cap: PermissionMode,
     mut arguments: Value,
-) -> Result<Forwarded> {
-    // A forward lets this machine's processes reach a port of the other machine, so the table's "ask" for
-    // operate tools holds here too. The calling side has no card for it, so it declines and says what to do.
-    anyhow::ensure!(
-        forward::decide(cap, ToolClass::Operate) == Decision::Run,
-        "Showing a page from {} needs your approval at this permission level. Open it yourself from the Preview panel (Ports menu), or switch this thread to Auto or Full access.",
-        target.name
-    );
+) -> Result<Option<Forwarded>> {
+    let address = arguments.get("target").and_then(Value::as_str).unwrap_or_default().to_string();
+    // Only a dev server on that machine's localhost is shown from here. A file of that machine, or an address outside
+    // it, goes to the machine as any operate tool does: its tool runs there and asks there.
+    let Ok((port, path)) = crate::network::ports::parse_server_target(&address) else { return Ok(None) };
     if let Some(features) = &target.features {
         anyhow::ensure!(
             features.iter().any(|feature| feature == features::PORTS_V1),
@@ -118,8 +115,13 @@ async fn preview_on_machine(
             target.name
         );
     }
-    let address = arguments.get("target").and_then(Value::as_str).unwrap_or_default().to_string();
-    let (port, path) = crate::network::ports::parse_server_target(&address).map_err(|reason| anyhow!(reason))?;
+    // A forward lets this machine's processes reach a port of the other machine, so the table's "ask" for
+    // operate tools holds here too. The calling side has no card for it, so it declines and says what to do.
+    anyhow::ensure!(
+        forward::decide(cap, ToolClass::Operate) == Decision::Run,
+        "Showing a page from {} needs your approval at this permission level. Open it yourself from the Preview panel (Ports menu), or switch this thread to Auto or Full access.",
+        target.name
+    );
     let local = hub.forward_port(&target.id, port).await.map_err(|reason| anyhow!("{}: {reason}", target.name))?;
     if let Some(object) = arguments.as_object_mut() {
         object.remove(forward::MACHINE_ARG);
@@ -130,7 +132,7 @@ async fn preview_on_machine(
             object.insert("title".into(), json!(format!("localhost:{port} on {}", target.name)));
         }
     }
-    Ok(Forwarded::Local(arguments))
+    Ok(Some(Forwarded::Local(arguments)))
 }
 
 /// What the calling side decided about a tool call that may name a machine.
@@ -232,8 +234,10 @@ impl Orchestrator {
         if !target.online {
             anyhow::bail!("{}", offline_message(&target.name, view.and_then(|member| member.last_seen)));
         }
-        if name == "kybern_preview_open" {
-            return preview_on_machine(&hub, &target, thread.permission_mode, arguments).await;
+        if name == "kybern_preview_open"
+            && let Some(local) = preview_on_machine(&hub, &target, thread.permission_mode, arguments.clone()).await?
+        {
+            return Ok(local);
         }
         if let Some(features) = &target.features {
             anyhow::ensure!(
