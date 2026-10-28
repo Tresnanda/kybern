@@ -438,7 +438,8 @@ const sameProjects = (current: readonly Project[], local: readonly Project[]) =>
 /** The local lists plus what the other machines list. With one machine this is the local lists, untouched. */
 function composeLists(localProjects: readonly Project[], localThreads: readonly StateThread[]): { projects: Project[]; threads: StateThread[] } {
   const hub = machineHub()
-  if (hub.machineCount <= 1) {
+  // Until the daemon answered and the machine is known, nothing can be told apart from another machine's: the local lists stand alone.
+  if (hub.machineCount <= 1 || !hub.localMachineId) {
     if (foreignIds.size) { foreignIds = new Set(); machinesOf = new Map() }
     return { projects: localProjects as Project[], threads: localThreads as StateThread[] }
   }

@@ -130,13 +130,12 @@ function AddByCode({ busy }: { busy: boolean }) {
     try { const result = await showCode(); setShown({ code: result.code, endpoints: result.endpoints }) } catch (e) { setError(errorText(e)) }
   }
   return <Section title="Add by code">
-    <Row title="Add a machine" description="On the other machine, choose Show a code for this machine (or run kybern machines code), then enter the code and its address here.">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <TextField testId="machines-code" label="Code" width={96} mono value={code} onChange={setCode} placeholder="123456" onSubmit={() => void add()} />
-        <TextField testId="machines-address" label="Address" width={188} value={address} onChange={setAddress} placeholder="https://machine.ts.net" onSubmit={() => void add()} />
-        <Button testId="machines-add" variant="primary" disabled={!ready} busy={busy} onClick={() => void add()}>Add</Button>
-      </div>
-    </Row>
+    <Row title="Add a machine" description="On the other machine, choose Show a code for this machine (or run kybern machines code), then enter the code and its address here." />
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 18, paddingRight: 18, paddingTop: 12, paddingBottom: 14 }}>
+      <TextField testId="machines-code" label="Code" width={110} mono value={code} onChange={setCode} placeholder="123456" onSubmit={() => void add()} />
+      <TextField testId="machines-address" label="Address" width="100%" shell={{ flexGrow: 1 }} value={address} onChange={setAddress} placeholder="https://machine.ts.net" onSubmit={() => void add()} />
+      <Button testId="machines-add" variant="primary" disabled={!ready} busy={busy} onClick={() => void add()}>Add</Button>
+    </div>
     <Row title="Add over SSH or an address" description="For a machine that is not on your Tailscale network, or one that runs an older Kybern. Kybern can install and start the daemon there over SSH."><Button testId="machines-add-ssh" onClick={() => showEnvironmentDialog({ kind: 'add' })}>Add a machine</Button></Row>
     <Row title="Show a code for this machine" description="Another machine of yours enters it to add this one."><Button testId="machines-show-code" onClick={() => void show()}>Show a code</Button></Row>
     {shown && <Row title="" description={<div testId="machines-shown-code" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Label color={t.text} size={22} lineHeight={28} weight={600} font={FONT_MONO}>{shown.code}</Label><Hint>{shown.endpoints.length ? `Address: ${shown.endpoints.join(' · ')}` : 'No reachable address yet.'} The code works for ten minutes.</Hint></div>} />}
