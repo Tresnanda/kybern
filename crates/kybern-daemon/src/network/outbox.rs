@@ -55,7 +55,9 @@ impl NetworkHub {
         Some(RemoteTarget {
             id: id.to_string(),
             name: entry.descriptor.name.clone(),
-            online: status.online,
+            // Online only with a session to deliver on: the peer status can still read online for a
+            // moment after the link closed, and an attempt then would claim the item for nothing.
+            online: status.online && self.network.peers.link(id).is_some(),
             paused: entry.paused,
             features: status.presence.map(|presence| presence.features),
         })
