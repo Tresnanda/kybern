@@ -10,14 +10,12 @@ import { ComputerSwitcher } from "../src/features/ComputerSwitcher";
 import { SpaceSwitcher } from "../src/features/Spaces";
 import { setDraft, useDraft } from "../src/state/draft";
 import { plural } from "../src/state/format";
-import { isFreeChatProject, type TaskItem, type Thread, type UserMessage } from "../src/state/protocol";
+import { isFreeChatProject, type Thread, type UserMessage } from "../src/state/protocol";
 import { ensureThread, refresh, rpc, startNewChat, supportsOptimisticCreate, useApp } from "../src/state/runtime";
 import { newThreadId } from "../src/state/ids";
 import { groupCreateFields, supportsWorktree } from "../src/state/groups";
 import { useInSpace, useSpaceProjects } from "../src/state/spaces";
-import { sendTask, useTasks } from "../src/state/tasks";
-import { PRIORITY_LABEL, taskTitle, upNextTasks } from "../src/state/tasksModel";
-import { relativeTime } from "../src/state/threadList";
+import { ownerFirstName, relativeTime } from "../src/state/threadList";
 import { isGroupProject } from "../../../packages/kybern-client/src/groups";
 import { optimisticThread } from "../../../packages/kybern-client/src/newChat";
 import { isSubagentThread } from "../../../packages/kybern-client/src/subagents";
@@ -25,7 +23,6 @@ import { useLayout } from "../src/state/layout";
 import { ChromeBar, ChromeProvider, useChromeInsets } from "../src/ui/ChromeBar";
 import { ListRow, SectionHeader } from "../src/ui/List";
 import { Button, Icon, IconButton, T, Tap, type IconName } from "../src/ui/primitives";
-import { PriorityGlyph } from "../src/ui/TaskGlyphs";
 import { CONTENT_MAX_WIDTH, gutter, radius, space, useTheme } from "../src/ui/theme";
 import { useSendTransition } from "../src/components/liquid/SendTransition";
 import { DRAFT_SEND_THREAD, outgoingBlock } from "../src/state/sendTransition";
@@ -34,7 +31,7 @@ import { UserMessageBubble } from "../src/features/UserMessageBubble";
 /** Each header side fits two 44 pt buttons, so the title stays centred. */
 const HEADER_SIDE = 96;
 
-/** Rows per pick-up group: Continue and Up next. */
+/** Rows in Continue. */
 const PICKUP_ROWS = 3;
 
 const SUGGESTIONS: readonly { icon: IconName; title: string; prompt: string }[] = [
@@ -106,39 +103,9 @@ function FooterChip({
   );
 }
 
-/** The task a new chat will start, shown above the composer with a way to take it off. */
-function AttachedTask({ task, onRemove }: { task: TaskItem; onRemove: () => void }) {
-  const { colors } = useTheme();
-  return (
-    <View
-      accessible
-      accessibilityLabel={`Sending starts ${task.key}, ${taskTitle(task)}`}
-      style={{
-        flexDirection: "row",
-        alignItems: "center",
-        gap: space.sm,
-        marginHorizontal: space.lg,
-        paddingStart: space.md,
-        borderRadius: radius.md,
-        backgroundColor: colors.accentSoft,
-      }}
-    >
-      <Icon name="checklist" size={15} color={colors.accent} />
-      <T variant="footnote" tone="accent" numberOfLines={1} style={{ flex: 1 }}>
-        <T variant="footnote" tone="accent" style={{ fontWeight: "600" }}>
-          {task.key}
-        </T>
-        {`  ${taskTitle(task)}`}
-      </T>
-      <IconButton name="xmark" size={14} color={colors.accent} label={`Remove ${task.key}`} onPress={onRemove} />
-    </View>
-  );
-}
-
 function HomeScreen() {
   const app = useApp();
   const draft = useDraft();
-  const { tasks } = useTasks();
   const { colors } = useTheme();
   const { width } = useWindowDimensions();
   const { regular, sidebarOpen, toggleSidebar } = useLayout();
@@ -172,8 +139,10 @@ function HomeScreen() {
     sendMotion.flight?.id,
   ]);
   const [prompt, setPrompt] = useState("");
-  const [attachedId, setAttachedId] = useState<string | null>(null);
   const connected = app.status === "open";
+  // The daemon reports no user name, only the computer's ("Ada's MacBook"): the first name comes from that.
+  const computer = app.environments.find((e) => e.id === app.activeId)?.name;
+  const name = useMemo(() => ownerFirstName(computer), [computer]);
   // Home works in the active space: a draft project from another space gives way to this one's first.
   const spaceProjects = useSpaceProjects();
   const project =
@@ -182,12 +151,6 @@ function HomeScreen() {
     spaceProjects[0];
   const workspaceLabel = draft.worktree ? "Worktree" : "This checkout";
   const recent = useMemo(() => continueThreads(app.threads, project?.id), [app.threads, project?.id]);
-  const upNext = useMemo(() => upNextTasks(tasks, project?.id ?? null, PICKUP_ROWS), [tasks, project?.id]);
-  // A task from another project falls off when the project changes.
-  const attached = tasks.find((t) => t.id === attachedId && t.project_id === project?.id) ?? null;
-  useEffect(() => {
-    if (attachedId && !attached) setAttachedId(null);
-  }, [attachedId, attached]);
   const active = app.threads.filter((t) =>
     threadHasActivity(t, app.activity),
   ).length;
@@ -218,7 +181,6 @@ function HomeScreen() {
     if (!project) throw new Error("Add a project before starting a thread.");
     const provider = { kind: draft.provider, instance: draft.instance };
     const worktree = draft.worktree && supportsWorktree(project);
-    if (attached) return startTask(attached, message, provider, worktree);
     const params = {
       project_id: project.id,
       provider,
@@ -261,71 +223,7 @@ function HomeScreen() {
     );
     return { threadId, messageId };
   }
-  /**
-   * Up next: the message starts the attached task's next run (`tasks.items.send`).
-   * The task leads the message as its mention, as the daemon would add it, so the
-   * first bubble shows it at once.
-   */
-  async function startTask(
-    task: TaskItem,
-    message: UserMessage,
-    provider: { kind: typeof draft.provider; instance: string },
-    worktree: boolean,
-  ) {
-    const pending = task.pending_followup?.trim();
-    const sent: UserMessage = {
-      ...message,
-      parts: [
-        { type: "mention", name: task.key, path: `kybern://task/${task.id}`, display_name: `${task.key} ${task.title}` },
-        ...(pending ? [{ type: "text" as const, text: pending }] : []),
-        ...message.parts,
-      ],
-    };
-    const params = {
-      id: task.id,
-      provider,
-      model: draft.model || null,
-      effort: draft.effort || null,
-      permission_mode: draft.permission,
-      use_worktree: worktree,
-      base_branch: worktree && project && !isGroupProject(project) ? (draft.baseBranch ?? null) : null,
-      project_id: project!.id,
-      note_ids: [...new Set([...task.note_ids, ...(task.source_note_id ? [task.source_note_id] : [])])],
-    };
-    setAttachedId(null);
-    if (!supportsOptimisticCreate()) {
-      const result = await sendTask({ ...params, message: sent });
-      void refresh();
-      await ensureThread(result.thread_id).catch(() => {});
-      return { threadId: result.thread_id };
-    }
-    const threadId = newThreadId();
-    const messageId = newThreadId();
-    startNewChat(
-      {
-        threadId,
-        messageId,
-        message: sent,
-        worktree,
-        thread: optimisticThread({
-          id: threadId,
-          projectId: project!.id,
-          provider,
-          model: draft.model || null,
-          effort: draft.effort || null,
-          permissionMode: draft.permission,
-          message: sent,
-          title: task.title,
-        }),
-      },
-      (first, id) =>
-        sendTask({ ...params, message: first, thread_id: threadId, message_id: id }).then(
-          (result) => result.thread_id,
-        ),
-    );
-    return { threadId, messageId };
-  }
-  const pickup = connected && !outgoing && (recent.length > 0 || upNext.length > 0);
+  const pickup = connected && !outgoing && recent.length > 0;
   const open = (thread: Thread) =>
     router.push({ pathname: "/thread/[id]", params: { id: thread.id } });
   return (
@@ -411,20 +309,20 @@ function HomeScreen() {
             entering={FadeIn.duration(280).reduceMotion(ReduceMotion.System)}
             style={{ flexGrow: 1, justifyContent: "center", paddingHorizontal: gutter(width), paddingBottom: space.xl }}
           >
-            {/* The space Home works in; switching refills Continue, Up next and the project chip. */}
+            {/* The space Home works in; switching refills Continue and the project chip. */}
             {connected && (
               <View style={{ alignSelf: "flex-start", marginBottom: space.md }}>
                 <SpaceSwitcher compact />
               </View>
             )}
-            <T variant="largeTitle" accessibilityRole="header">What are we building?</T>
-            <T variant="subhead" tone="secondary" style={{ marginTop: space.sm, maxWidth: 320 }}>
-              {!connected
-                ? "Work with your coding agents from anywhere."
-                : upNext.length
-                  ? "Start a thread, or pick a task to send."
-                  : "Start a thread in this project."}
+            <T variant="largeTitle" accessibilityRole="header">
+              {connected ? (name ? `What should we work on, ${name}?` : "What should we work on?") : "What are we building?"}
             </T>
+            {!connected && (
+              <T variant="subhead" tone="secondary" style={{ marginTop: space.sm, maxWidth: 320 }}>
+                Work with your coding agents from anywhere.
+              </T>
+            )}
             {!connected && (
               <View style={{ marginTop: space.xl, alignSelf: "flex-start" }}>
                 <Button
@@ -469,35 +367,6 @@ function HomeScreen() {
                     />
                   );
                 })}
-              </>
-            )}
-            {upNext.length > 0 && (
-              <>
-                <SectionHeader
-                  title="Up next"
-                  action={{ title: "Tasks", label: "Open tasks", onPress: () => router.push("/todo") }}
-                  inset
-                  first={!recent.length}
-                />
-                {upNext.map((task, index) => (
-                  <ListRow
-                    key={task.id}
-                    title={taskTitle(task)}
-                    leading={<PriorityGlyph priority={task.priority} size={16} />}
-                    meta={task.key}
-                    checked={task.id === attached?.id}
-                    label={[
-                      task.key,
-                      taskTitle(task),
-                      task.priority ? `${PRIORITY_LABEL[task.priority]} priority` : "",
-                      task.id === attached?.id ? "attached, sending starts it" : "attach to the message",
-                    ]
-                      .filter(Boolean)
-                      .join(", ")}
-                    separator={index < upNext.length - 1}
-                    onPress={() => setAttachedId(task.id === attached?.id ? null : task.id)}
-                  />
-                ))}
               </>
             )}
           </View>
@@ -571,7 +440,6 @@ function HomeScreen() {
                 </Tap>
               )}
             </View>
-            {attached && <AttachedTask task={attached} onRemove={() => setAttachedId(null)} />}
             <Composer
               onSend={send}
               disabled={!connected || !project}

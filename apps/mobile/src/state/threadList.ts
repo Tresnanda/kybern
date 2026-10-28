@@ -180,6 +180,22 @@ export function groupByProject(
   return groups;
 }
 
+/** Threads a project section shows before "Show more". */
+export const SECTION_FIRST_PAGE = 10;
+/** Threads each "Show more" tap adds. */
+export const SECTION_PAGE = 20;
+/** The most rows a filtered section mounts at once (matches still show, in pages). */
+export const FILTERED_FIRST_PAGE = 30;
+
+/**
+ * How many of a section's threads show: the first page, plus one page per
+ * "Show more" tap (`pages`), never more than exist. The rest is `remaining`.
+ */
+export function sectionWindow(total: number, pages: number, first = SECTION_FIRST_PAGE) {
+  const shown = Math.min(total, first + Math.max(0, pages) * SECTION_PAGE);
+  return { shown, remaining: total - shown };
+}
+
 /** What an empty filtered list says. */
 export function emptyText(filter: ThreadFilter, agentName?: string): { title: string; detail: string } {
   const agent = agentName ? `${agentName} ` : "";
@@ -200,4 +216,19 @@ export function relativeTime(at: string, now = Date.now()) {
   if (minutes < 1440) return `${Math.floor(minutes / 60)}h`;
   if (minutes < 10080) return `${Math.floor(minutes / 1440)}d`;
   return `${Math.floor(minutes / 10080)}w`;
+}
+
+/**
+ * The owner's first name from the computer's name ("Ada's MacBook",
+ * "Adas-MacBook-Pro.local"), which is all a daemon reports about its owner.
+ * Names that do not follow macOS's "<Name>'s <device>" pattern give null.
+ */
+export function ownerFirstName(computer: string | undefined | null): string | null {
+  const name = (computer ?? "").trim().replace(/\.local$/i, "");
+  const device = "(?:mac|macbook|imac|mac-?mini|mac-?studio|mac-?pro|pc|laptop|desktop|computer)";
+  const match =
+    name.match(new RegExp(`^(\\p{L}[\\p{L}\\p{M}]*)['’]s?[\\s-]+${device}\\b`, "iu")) ??
+    name.match(new RegExp(`^(\\p{L}[\\p{L}\\p{M}]*?)s[\\s-]+${device}\\b`, "iu"));
+  const first = match?.[1];
+  return first && first.length > 1 ? first[0].toUpperCase() + first.slice(1) : null;
 }

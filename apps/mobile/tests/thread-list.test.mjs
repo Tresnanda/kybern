@@ -7,7 +7,9 @@ import {
   groupByProject,
   moveInOrder,
   orderProjects,
+  ownerFirstName,
   relativeTime,
+  sectionWindow,
   threadAgents,
   threadRows,
 } from "../src/state/threadList.ts";
@@ -94,4 +96,24 @@ test("agents, empty copy and relative time", () => {
   assert.equal(relativeTime(at(0.5), now), "Now");
   assert.equal(relativeTime(at(90), now), "1h");
   assert.equal(relativeTime(at(60 * 24 * 15), now), "2w");
+});
+
+test("sections page: ten first, twenty more per tap, never past the total", () => {
+  assert.deepEqual(sectionWindow(91, 0), { shown: 10, remaining: 81 });
+  assert.deepEqual(sectionWindow(91, 1), { shown: 30, remaining: 61 });
+  assert.deepEqual(sectionWindow(91, 4), { shown: 90, remaining: 1 });
+  assert.deepEqual(sectionWindow(91, 5), { shown: 91, remaining: 0 });
+  assert.deepEqual(sectionWindow(4, 0), { shown: 4, remaining: 0 });
+  assert.deepEqual(sectionWindow(0, 2), { shown: 0, remaining: 0 });
+  assert.deepEqual(sectionWindow(100, 0, 30), { shown: 30, remaining: 70 });
+});
+
+test("ownerFirstName reads macOS computer names", () => {
+  assert.equal(ownerFirstName("Ada's MacBook Pro"), "Ada");
+  assert.equal(ownerFirstName("Ada’s Mac mini"), "Ada");
+  assert.equal(ownerFirstName("Adas-MacBook-Pro.local"), "Ada");
+  assert.equal(ownerFirstName("Work Mac"), null);
+  assert.equal(ownerFirstName("devbox"), null);
+  assert.equal(ownerFirstName(""), null);
+  assert.equal(ownerFirstName(undefined), null);
 });
