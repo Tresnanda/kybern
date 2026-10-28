@@ -86,4 +86,5 @@ test('the outbox lists only work that has not arrived, with the actions that mak
   expect(rows[1]).toEqual({ id: '3', title: 'Fork of a thread', detail: 'Did not reach satyamas: No matching project', canRetry: true, canCancel: true })
   expect(rows[2]!.detail).toBe('Not delivered to satyamas in time')
   expect(rows[3]).toMatchObject({ detail: 'Sending to satyamas', canCancel: false })
+  expect(outboxRows([item({ id: '7', kind: 'move' })], names)[0]).toMatchObject({ title: 'Move of a thread', detail: 'Waiting for satyamas' })
 })
