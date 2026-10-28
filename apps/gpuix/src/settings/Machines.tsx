@@ -3,14 +3,14 @@
 // code; Update all machines. Everything goes through the `network.*` RPCs of the machine the user is at, which any member
 // answers for the rest. Words come from `machinesModel.ts`.
 import { useEffect, useMemo, useState } from 'react'
-import type { FoundMachine } from '../../../../packages/kybern-client/src/types.ts'
+import type { FoundMachine, NetworkUpdateAllResult, OutboxItem } from '../../../../packages/kybern-client/src/types.ts'
 import { Dialog } from '../nav/overlay.tsx'
 import { N } from '../nav/glyphs.ts'
 import { errorText } from '../nav/actions.ts'
 import { toast } from '../shell/toasts.tsx'
 import { footerText } from '../machines/format.ts'
 import { machineHub, useMachines } from '../machines/index.ts'
-import { addFound, doctor, joinByCode, loadMachineInfo, mergeFound, pauseMachine, removeFromNetwork, renameMachine, setNetworkEnabled, showCode, updateAllMachines, useNetwork } from '../machines/network.ts'
+import { addFound, doctor, joinByCode, cancelOutbox, loadMachineInfo, mergeFound, pauseMachine, removeFromNetwork, renameMachine, retryOutbox, setFollowUpdates, setNetworkEnabled, showCode, updateAllMachines, useNetwork } from '../machines/network.ts'
 import { showEnvironmentDialog } from '../environments/Dialogs.tsx'
 import { stopSshTunnel } from '../environments/ssh.ts'
 import { MachineBadge } from '../sidebar/MachineBadge.tsx'
@@ -24,7 +24,7 @@ import { IconButton } from '../kit/IconButton.tsx'
 import { TextField } from '../kit/Field.tsx'
 import { Switch } from '../kit/Switch.tsx'
 import { Row, Section } from './controls.tsx'
-import { buildCards, type MachineCardModel } from './machinesModel.ts'
+import { buildCards, outboxRows, updateResultRows, updateSummary, type MachineCardModel } from './machinesModel.ts'
 
 export function Machines() {
   const t = useTheme()
@@ -47,7 +47,8 @@ export function Machines() {
     {net.unavailable && <Section title="Your network"><Row title="Update this machine's daemon" description="It is older than your network features, so other machines can't be found from here yet. Update Kybern, then come back." /></Section>}
     {!net.unavailable && <TailnetSection found={found} tailscale={status?.tailscale} busy={net.busy} />}
     {!net.unavailable && <AddByCode busy={net.busy === 'join'} />}
-    {!net.unavailable && <Updates busy={net.busy === 'update'} machines={cards} />}
+    {!net.unavailable && <Outbox items={net.outbox} machines={cards} />}
+    {!net.unavailable && <Updates busy={net.busy === 'update'} following={status ? !!status.follow_updates : undefined} machines={cards} result={net.updated} />}
     {!net.unavailable && status && <Section title="Your network">
       <Row title="Let your machines find each other" description="Machines signed in to the same Tailscale account join without a code. Turn this off to leave the network and keep your machines separate."><Switch aria-label="Use your network" testId="machines-enabled" checked={status.enabled} disabled={net.busy === 'enabled'} onCheckedChange={(enabled) => void setNetworkEnabled(enabled).catch((e) => toast.error('Unable to change the network', { description: errorText(e) }))} /></Row>
       <Row title="Check the network" description="Looks at Tailscale, the pairing and each machine, and says what to fix."><Button testId="machines-doctor" busy={net.busy === 'doctor'} onClick={() => void runDoctor()}>Run check</Button></Row>
@@ -143,21 +144,42 @@ function AddByCode({ busy }: { busy: boolean }) {
   </Section>
 }
 
-function Updates({ busy, machines }: { busy: boolean; machines: MachineCardModel[] }) {
-  const [result, setResult] = useState('')
+function Updates({ busy, following, machines, result }: { busy: boolean; following: boolean | undefined; machines: MachineCardModel[]; result: NetworkUpdateAllResult | null }) {
+  const t = useTheme()
+  const net = useNetwork()
+  const [error, setError] = useState('')
   const behind = machines.filter((card) => card.behind).length
+  const names = new Map(machines.map((card) => [card.machineId, card.name]))
+  const rows = result ? updateResultRows(result, names) : []
   const run = async () => {
-    setResult('')
-    try {
-      const done = await updateAllMachines()
-      const names = new Map(machines.map((card) => [card.machineId, card.name]))
-      const skipped = done.skipped.map((item) => `${names.get(item.machine_id) ?? 'A machine'}: ${item.reason}`)
-      setResult([done.started.length ? `Started on ${done.started.map((id) => names.get(id) ?? 'a machine').join(', ')}.` : 'Nothing was started.', ...skipped].join(' '))
-    } catch (e) { setResult(errorText(e)) }
+    setError('')
+    try { await updateAllMachines() } catch (e) { setError(errorText(e)) }
   }
   return <Section title="Updates">
-    <Row title="Update all machines" description={result || (behind ? `${behind} ${behind === 1 ? 'machine is' : 'machines are'} behind. Other machines only list why they were skipped for now: starting an update on them from here isn't available yet.` : 'Updates the daemon on this computer. Other machines update from their own app until your network can start updates for them.')}><Button testId="machines-update-all" busy={busy} onClick={() => void run()}>Update all machines</Button></Row>
-    <Row title="Keep all machines on the same version" description="A machine would update itself when another one is newer. Not available in this version of the daemon yet."><Switch aria-label="Keep all machines on the same version" testId="machines-follow-updates" checked={false} disabled /></Row>
+    <Row title="Update all machines" description={error || (result ? updateSummary(result) : behind ? `${behind} ${behind === 1 ? 'machine is' : 'machines are'} behind. Each one updates itself when it is idle.` : 'Starts an update on every machine that is behind.')}><Button testId="machines-update-all" busy={busy} onClick={() => void run()}>Update all machines</Button></Row>
+    {rows.length > 0 && <div testId="machines-update-results" style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 18, paddingRight: 18, paddingTop: 12, paddingBottom: 14 }}>
+      {rows.map((row) => <div key={row.machineId} testId={`update-result-${row.machineId}`} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <StatusDot tone={row.started ? 'good' : 'idle'} />
+        <Label color={t.text} size={13} lineHeight={20} weight={500}>{row.name}</Label>
+        <Label color={t.textSecondary} size={13} lineHeight={20} truncate style={{ flexGrow: 1 }}>{row.text}</Label>
+      </div>)}
+    </div>}
+    <Row title="Keep all machines on the same version" description="A machine updates itself, once it is idle, when another one runs a newer version. A machine managed by the desktop app is left out."><Switch aria-label="Keep all machines on the same version" testId="machines-follow-updates" checked={!!following} disabled={following === undefined || net.busy === 'follow'} onCheckedChange={(enabled) => void setFollowUpdates(enabled).catch((e) => toast.error('Unable to change the setting', { description: errorText(e) }))} /></Row>
+  </Section>
+}
+
+/** Work waiting for a machine that is away, or stuck: Retry sends it again, Cancel drops it (design §6.4). */
+function Outbox({ items, machines }: { items: OutboxItem[]; machines: MachineCardModel[] }) {
+  const t = useTheme()
+  const net = useNetwork()
+  const rows = outboxRows(items, new Map(machines.map((card) => [card.machineId, card.name])))
+  if (rows.length === 0) return null
+  const fail = (title: string) => (e: unknown) => toast.error(title, { description: errorText(e) })
+  return <Section title="Outbox" accessory={<Label color={t.textSecondary} size={13} lineHeight={19.5}>{`${rows.length} waiting`}</Label>}>
+    {rows.map((row) => <Row key={row.id} title={row.title} description={row.detail}>
+      {row.canRetry && <Button testId={`outbox-retry-${row.id}`} size="sm" busy={net.busy === `outbox:${row.id}`} onClick={() => void retryOutbox(row.id).catch(fail('Unable to retry'))}>Retry</Button>}
+      {row.canCancel && <Button testId={`outbox-cancel-${row.id}`} size="sm" variant="secondary" disabled={net.busy === `outbox:${row.id}`} onClick={() => void cancelOutbox(row.id).catch(fail('Unable to cancel'))}>Cancel</Button>}
+    </Row>)}
   </Section>
 }
 

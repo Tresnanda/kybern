@@ -8,6 +8,8 @@ type Dialog =
   /** The members of a group project (sidebar menu, palette, badge card). */
   | { kind: 'repositories'; projectId: string }
   | { kind: 'worktree'; threadId: string }
+  /** Fork a thread to another machine (`fork/ForkSheet.tsx`); `machineId` names the thread's machine when it is not this one. */
+  | { kind: 'fork'; threadId: string; machineId?: string }
   | { kind: 'account'; provider?: ProviderKind; instance?: string }
 let dialog: Dialog | null = null
 const listeners = new Set<() => void>()

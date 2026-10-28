@@ -106,3 +106,49 @@ test("a merged list groups by the machine that holds each item, in section order
   assert.equal(plain.length, 1);
   assert.equal(plain[0].items.length, 3);
 });
+
+// ---- which edits are shared ----
+
+import { SHARED_SETTINGS, changedSharedFields, describeSharedValue, sharedValue, useOnAllLabel } from "../src/sharedState.ts";
+
+const baseSettings = () => ({
+  default_provider: "claude-code",
+  default_permission_mode: "supervised",
+  worktrees_default: true,
+  generate_titles: true,
+  providers: { codex: { env: {}, model: "gpt-x" }, "claude-code": { env: {} } },
+  notifications: false,
+  auto_update_harnesses: true,
+  auto_update_daemon: false,
+  background: { session_idle_minutes: 30 },
+  access: { tailscale: false },
+  orchestration: { max_active_children: 4, lead_max_children: 6, max_depth: 2 },
+  tell_agents_about_kybern: true,
+});
+
+test("a shared edit is found by path; per-machine edits are not", () => {
+  const before = baseSettings();
+  const after = { ...before, notifications: true, background: { session_idle_minutes: 5 }, providers: { ...before.providers, codex: { env: { K: "v" }, model: "gpt-y" } } };
+  assert.deepEqual(changedSharedFields(before, after), { notifications: true, "providers.codex.model": "gpt-y" });
+  assert.deepEqual(changedSharedFields(before, { ...before, access: { tailscale: true } }), {}, "access stays on this machine");
+  assert.deepEqual(changedSharedFields(before, { ...before, providers: { codex: { env: { A: "1" }, model: "gpt-x" } } }), {}, "provider env is per machine");
+});
+
+test("clearing an optional field is shared as null", () => {
+  const before = { ...baseSettings(), title_provider: "codex" };
+  assert.deepEqual(changedSharedFields(before, { ...before, title_provider: null }), { title_provider: null });
+  assert.deepEqual(changedSharedFields(baseSettings(), { ...baseSettings(), title_provider: null }), {}, "unset and null are the same");
+  assert.equal(sharedValue(baseSettings(), "providers.claude-code.model"), null);
+  assert.ok(SHARED_SETTINGS.includes("orchestration") && !SHARED_SETTINGS.includes("access"));
+});
+
+test("values read in words in the popover", () => {
+  assert.equal(describeSharedValue("notifications", true), "On");
+  assert.equal(describeSharedValue("notifications", false), "Off");
+  assert.equal(describeSharedValue("title_provider", null), "Not set");
+  assert.equal(describeSharedValue("default_provider", "codex", { codex: "Codex" }), "Codex");
+  assert.equal(describeSharedValue("ask_deadlines", { enabled: true, max_seconds: 600 }), "On, up to 10 min");
+  assert.equal(describeSharedValue("orchestration", { max_active_children: 4, lead_max_children: 6, max_depth: 2 }), "4 agents per thread, 6 per Coordinator, depth 2");
+  assert.equal(useOnAllLabel("notifications", true), "Turn on for all machines");
+  assert.equal(useOnAllLabel("default_provider", "codex", { codex: "Codex" }), "Use Codex on all machines");
+});

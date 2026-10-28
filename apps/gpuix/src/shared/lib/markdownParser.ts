@@ -64,7 +64,7 @@ function sanitize(node: MarkdownTreeNode, topLevel = false): MarkdownTreeNode {
     for (const [key, tags] of Object.entries(urlAttributes)) {
       if (Object.hasOwn(node.properties, key) && (tags === null || tags.includes(node.tagName))) {
         const url = String(node.properties[key] || "")
-        node.properties[key] = key === "src" ? (imageSource(url) ? url : "") : key === "href" && ["file", "kybern"].includes(chatLink(url).kind) ? url : defaultUrlTransform(url)
+        node.properties[key] = key === "src" ? (imageSource(url) ? url : "") : key === "href" && ["file", "kybern", "thread"].includes(chatLink(url).kind) ? url : defaultUrlTransform(url)
       }
     }
     node.children = node.children.map((child) => sanitize(child)) as typeof node.children

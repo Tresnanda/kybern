@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { MachineCard } from '../../../../packages/kybern-client/src/types.ts'
 import type { MachineRow } from '../machines/index.ts'
-import { buildCards, hardwareText, harnessText, isBehind, osName } from './machinesModel.ts'
+import { buildCards, hardwareText, harnessText, isBehind, osName, outboxRows, updateResultRows, updateSummary } from './machinesModel.ts'
 
 const row = (over: Partial<MachineRow> & { machineId: string; name: string }): MachineRow => ({ status: 'online', offline: false, isLocal: false, glyph: { letter: over.name[0]!, hue: 10 }, showGlyph: true, member: true, paused: false, ...over })
 const member = (over: Partial<MachineCard> & { machine_id: string; name: string }): MachineCard => ({ os: 'linux', status: 'online', ...over })
@@ -56,4 +56,34 @@ test('a card: status, facts, harnesses, relay name, and whether it is behind', (
 test('a saved machine that is not in the network cannot be paused or renamed', () => {
   const [card] = buildCards({ rows: [row({ machineId: 'old', name: 'Old box', member: false })], members: [], infos: {} })
   expect([card!.canPause, card!.canRename, card!.member]).toEqual([false, false, false])
+})
+
+test('harness versions show beside the name', () => {
+  expect(harnessText({ kind: 'claude-code', available: true, signed_in: true, version: '2.1.4' })).toBe('Claude Code 2.1.4 signed in')
+  expect(harnessText({ kind: 'codex', available: true, signed_in: false, version: '0.60.0' })).toBe('Codex 0.60.0 not signed in')
+  expect(harnessText({ kind: 'cursor', available: false, version: '1.0' })).toBe('Cursor not installed')
+})
+
+test('update results list every machine with its reason', () => {
+  const names = new Map([['b', 'satyamas'], ['c', 'vps']])
+  const result = { started: ['b'], skipped: [{ machine_id: 'c', reason: 'Offline' }, { machine_id: 'x', reason: 'Already up to date' }] }
+  expect(updateResultRows(result, names)).toEqual([
+    { machineId: 'b', name: 'satyamas', started: true, text: 'Update started' },
+    { machineId: 'c', name: 'vps', started: false, text: 'Offline' },
+    { machineId: 'x', name: 'A machine', started: false, text: 'Already up to date' },
+  ])
+  expect(updateSummary(result)).toBe('Started 1 update, 2 skipped.')
+  expect(updateSummary({ started: [], skipped: [{ machine_id: 'c', reason: 'Offline' }] })).toBe('Nothing was updated.')
+  expect(updateSummary({ started: [], skipped: [] })).toBe('No other machines to update.')
+})
+
+test('the outbox lists only work that has not arrived, with the actions that make sense', () => {
+  const names = new Map([['b', 'satyamas']])
+  const item = (over: Record<string, unknown>) => ({ id: 'i', operation_id: 'o', target: 'b', kind: 'thread_send', payload: {}, state: 'queued', attempts: 0, created_at: '', expires_at: '', updated_at: '', ...over }) as never
+  const rows = outboxRows([item({ id: '1' }), item({ id: '2', state: 'delivered' }), item({ id: '3', state: 'failed', kind: 'fork', last_error: 'No matching project', attempts: 2 }), item({ id: '4', state: 'expired', kind: 'settings_patch' }), item({ id: '5', state: 'sending' }), item({ id: '6', state: 'cancelled' })], names)
+  expect(rows.map((row) => row.id)).toEqual(['1', '3', '4', '5'])
+  expect(rows[0]).toEqual({ id: '1', title: 'Message', detail: 'Waiting for satyamas', canRetry: false, canCancel: true })
+  expect(rows[1]).toEqual({ id: '3', title: 'Fork of a thread', detail: 'Did not reach satyamas: No matching project', canRetry: true, canCancel: true })
+  expect(rows[2]!.detail).toBe('Not delivered to satyamas in time')
+  expect(rows[3]).toMatchObject({ detail: 'Sending to satyamas', canCancel: false })
 })

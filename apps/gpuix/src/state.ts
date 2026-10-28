@@ -22,7 +22,7 @@ import {
   seedFromGet,
   type ThreadState,
 } from '../../../packages/kybern-client/src/transcript.ts'
-import { isChildThread } from '../../../packages/kybern-client/src/subagents.ts'
+import { isChildThread, isInboundThread } from '../../../packages/kybern-client/src/subagents.ts'
 import type { MachineId, MethodName, ParamsOf, Project, ResultOf, Thread, ThreadActivitySummary, ThreadEvent, ThreadId } from '../../../packages/kybern-client/src/types.ts'
 import { mergeIntoCurrent } from '../../../packages/kybern-client/src/newChat.ts'
 import { newChats } from './composer/newChats.ts'
@@ -513,7 +513,7 @@ async function loadLists() {
   if (owner !== client) return
   startupMark('lists-ready', { projects: p.projects.length, threads: t.threads.length })
   listedThreads = t.threads
-    .filter((th) => !isChildThread(th) && th.status !== 'archived')
+    .filter((th) => !isChildThread(th) && !isInboundThread(th) && th.status !== 'archived')
     .sort(byPinnedThenNewest)
   // The set learns this machine's lists first, so a project the user has here is not listed again for another machine's checkout.
   machineHub().ingestPrimary(owner, p.projects, t.threads, t.activity)

@@ -13,7 +13,7 @@
 //
 // Remapped objects are memoized per source object, so a refresh that changed one
 // machine leaves every other row the same object.
-import { isChildThread } from '../../../../packages/kybern-client/src/subagents.ts'
+import { isChildThread, isInboundThread } from '../../../../packages/kybern-client/src/subagents.ts'
 import type { MachineThread, MergedThread } from '../../../../packages/kybern-client/src/machineMerge.ts'
 import type { MergedView } from '../../../../packages/kybern-client/src/machines.ts'
 import { FREE_CHAT_PROJECT_ID, isFreeChatProject, type MachineId, type Project, type Thread } from '../../../../packages/kybern-client/src/types.ts'
@@ -81,7 +81,8 @@ export class ListMerger {
     for (const merged of view.threads.all) {
       if (merged.machineId === local) continue
       const thread = merged.thread as MachineThread
-      if (isChildThread(thread) || thread.status === 'archived') continue
+      // The hidden threads that record another machine's tool calls are never listed, even from a cached copy of an older list.
+      if (isChildThread(thread) || isInboundThread(thread) || thread.status === 'archived') continue
       threads.push(this.remap(merged, shown.get(merged.projectKey) ?? thread.project_id))
     }
     return { projects, threads, machinesOf }

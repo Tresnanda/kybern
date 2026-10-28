@@ -13,6 +13,8 @@ import { coordinatorCardLine, cardPartsText } from '../../../../packages/kybern-
 import { recordText, requestRecord } from '../../../../packages/kybern-client/src/requestCards.ts'
 import { RequestRecordRow } from './RequestRecord.tsx'
 import { SignInChip } from './SignInChip.tsx'
+import { ForkOpen } from './ForkNotice.tsx'
+import { forkNotice, forkNoticeText } from '../../../../packages/kybern-client/src/forkMachine.ts'
 import type { LoginRecipe } from '../../../../packages/kybern-client/src/loginRecipes.ts'
 // Work rows inside a turn (`views/Transcript.tsx` WorkRows → ToolRow/WorkRow):
 // tool calls with their expandable result, the work between two pieces of
@@ -400,16 +402,21 @@ export const WorkRow = memo(function WorkRow({
         </div>
       )
     }
-    case 'notice':
+    case 'notice': {
+      // A fork notice ("Forked to satyamas") offers the new thread beside its words.
+      const fork = block.data ? forkNotice(block.data) : null
+      const open = fork?.threadId ? fork : null
       return (
         <div paintTransform={tree.rise} style={{ position: 'relative', display: 'flex', alignItems: 'flex-start', gap: 8, paddingTop: 4, paddingBottom: 4, minWidth: 0 }}>
           <RowIcon box={20} size={16} source={T.alert} color={block.level === 'error' ? t.red : muted(t)} />
           <Para color={block.level === 'error' ? t.red : muted(t)} lineHeight={ROW_LINE} selectable style={{ flexGrow: 1 }}>
-            {block.text}
+            {fork ? forkNoticeText(fork, block.text) : block.text}
           </Para>
+          {open && <div style={{ display: 'flex', alignItems: 'center', height: ROW_LINE }}><ForkOpen machineId={open.machineId} threadId={open.threadId!} machineName={open.machineName} /></div>}
           {tree.lines}
         </div>
       )
+    }
     case 'user':
       // A message sent mid-turn sits between work rows with a bubble's breathing room.
       return <MidTurnMessage parts={block.message.parts} at={block.at} />

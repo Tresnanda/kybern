@@ -39,6 +39,8 @@ import { DEFAULT_FILTER, getNav, setNav, useNav } from '../nav/store.ts'
 import { callThread, getState, toggleProject as toggleProjectState, type StateThread } from '../state.ts'
 import { glyphOfMachine } from '../machines/index.ts'
 import { MachineBadge } from './MachineBadge.tsx'
+import { forkTargetsOf } from '../fork/targets.ts'
+import { originLabel } from '../../../../packages/kybern-client/src/forkMachine.ts'
 import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
 import { raisedFill, useGlass } from '../platform/glass.ts'
 import type { Theme } from '../theme.ts'
@@ -546,6 +548,8 @@ export const ThreadRow = memo(function ThreadRow({
   // A thread another machine owns: its glyph, and greyed while that machine is offline (design §5.2). The machine the user is at has neither.
   const remote = thread as StateThread
   const machineGlyph = remote.machineId ? glyphOfMachine(remote.machineId) : undefined
+  // A thread another machine started by a fork or a delegation says where it came from.
+  const fromLabel = originLabel(thread)
   const splitRoot = useSplitRoot(), focusedPane = useFocusedPane()
   const inSplit = collectThreadPanes(splitRoot).some((pane) => pane.threadId === thread.id)
   const { renderer } = useGpuix()
@@ -615,6 +619,7 @@ export const ThreadRow = memo(function ThreadRow({
                 <MarqueeLabel hover={hover} text={thread.coordinator_project_id ? 'Open coordinator' : thread.title || 'Untitled'} color={selected ? t.text : resting(t)} />
               </TitleSwap>
             )}
+            {fromLabel && !renaming && <div testId={`origin-${thread.id}`} style={{ display: 'flex', flexShrink: 0 }}><Label color={muted(t, 0.6)} size={10} weight={500}>{fromLabel}</Label></div>}
             {hasDraft && !renaming && <DraftMarker />}
             {badge && (
               <Label color={amberText(t)} size={10} weight={500} style={{ flexShrink: 0 }} paintAnimation={pendingPop ? popAnimation() : undefined}>
@@ -690,6 +695,7 @@ export const ThreadRow = memo(function ThreadRow({
             onSelect={() => void updateThread(thread.id, { pinned: !thread.pinned })}
           />
           <MenuItem id="handoff" icon={N.handoff} label="Hand off to another agent" onSelect={() => setNav({ handoff: { threadId: thread.id, target: null } })} />
+          {forkTargetsOf(remote).length > 0 && <MenuItem id="fork-machine" icon={N.laptop} label="Fork to another machine…" onSelect={() => showDialog({ kind: 'fork', threadId: thread.id, ...(remote.machineId ? { machineId: remote.machineId } : {}) })} />}
           <MenuSeparator />
           <MenuItem id="right" icon={N.splitRight} label="Open to the right" disabled={!canOpenInSplit(thread.id, 'horizontal')} onSelect={() => { openThreadInSplit(thread.id, 'horizontal') }} />
           <MenuItem id="below" icon={N.splitDown} label="Open below" disabled={!canOpenInSplit(thread.id, 'vertical')} onSelect={() => { openThreadInSplit(thread.id, 'vertical') }} />

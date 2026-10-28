@@ -1,6 +1,6 @@
 // What a machine card says (Settings → Machines, design §5.2), from the machine set's row, the member card the network
 // reported and the machine's own `machines.info`. Pure, so the words are tested without a window.
-import type { HarnessSummary, MachineCard, MachineInfo } from '../../../../packages/kybern-client/src/types.ts'
+import type { HarnessSummary, MachineCard, MachineId, MachineInfo, NetworkUpdateAllResult, OutboxItem, OutboxKind } from '../../../../packages/kybern-client/src/types.ts'
 import type { MachineRow } from '../machines/index.ts'
 import { statusText, statusTone, type Tone } from '../machines/format.ts'
 import { PROVIDER_LABEL } from '../shared/lib/format.ts'
@@ -29,8 +29,9 @@ export const osName = (os: string | undefined | null) => (os ? OS_NAME[os.toLowe
 export function harnessText(harness: HarnessSummary): string {
   const name = PROVIDER_LABEL[harness.kind] ?? harness.kind
   if (!harness.available) return `${name} not installed`
-  if (harness.signed_in === false) return `${name} not signed in`
-  return harness.signed_in ? `${name} signed in` : name
+  const named = harness.version ? `${name} ${harness.version}` : name
+  if (harness.signed_in === false) return `${named} not signed in`
+  return harness.signed_in ? `${named} signed in` : named
 }
 
 const gib = (bytes: number) => `${Math.round(bytes / 2 ** 30)} GB`
@@ -83,4 +84,65 @@ export function buildCards(input: {
       canRename: row.member,
     }
   })
+}
+
+// ---- "Update all machines": what happened on each machine ----
+
+export interface UpdateResultRow {
+  machineId: MachineId
+  name: string
+  started: boolean
+  /** "Update started" or the reason it was skipped, in the daemon's words. */
+  text: string
+}
+
+/** One row per machine the daemon answered for: those it started first, then those it skipped, each with its reason. */
+export function updateResultRows(result: NetworkUpdateAllResult, names: ReadonlyMap<MachineId, string>): UpdateResultRow[] {
+  const name = (id: MachineId) => names.get(id) ?? 'A machine'
+  return [
+    ...result.started.map((machineId) => ({ machineId, name: name(machineId), started: true, text: 'Update started' })),
+    ...result.skipped.map((item) => ({ machineId: item.machine_id, name: name(item.machine_id), started: false, text: item.reason })),
+  ]
+}
+
+/** The line above the rows. */
+export function updateSummary(result: NetworkUpdateAllResult): string {
+  const started = result.started.length
+  if (started === 0) return result.skipped.length ? 'Nothing was updated.' : 'No other machines to update.'
+  return `Started ${started === 1 ? '1 update' : `${started} updates`}${result.skipped.length ? `, ${result.skipped.length} skipped` : ''}.`
+}
+
+// ---- the outbox ----
+
+const OUTBOX_KIND: Record<OutboxKind, string> = {
+  thread_create: 'New thread',
+  thread_send: 'Message',
+  delegate: 'Delegated task',
+  files_push: 'Files',
+  settings_patch: 'Settings change',
+  secrets_put: 'Provider keys',
+  fork: 'Fork of a thread',
+}
+
+export interface OutboxRowModel {
+  id: string
+  title: string
+  detail: string
+  canRetry: boolean
+  canCancel: boolean
+}
+
+/** Work still on its way to a machine: waiting, being sent, or stuck. Delivered and cancelled items are history. */
+export function outboxRows(items: readonly OutboxItem[], names: ReadonlyMap<MachineId, string>): OutboxRowModel[] {
+  return items
+    .filter((item) => item.state === 'queued' || item.state === 'sending' || item.state === 'failed' || item.state === 'expired')
+    .map((item) => {
+      const target = names.get(item.target) ?? 'another machine'
+      const detail =
+        item.state === 'queued' ? `Waiting for ${target}${item.attempts ? ` · tried ${item.attempts} ${item.attempts === 1 ? 'time' : 'times'}` : ''}`
+        : item.state === 'sending' ? `Sending to ${target}`
+        : item.state === 'expired' ? `Not delivered to ${target} in time`
+        : `Did not reach ${target}${item.last_error ? `: ${item.last_error}` : ''}`
+      return { id: item.id, title: OUTBOX_KIND[item.kind] ?? item.kind, detail, canRetry: item.state === 'failed' || item.state === 'expired', canCancel: item.state !== 'sending' }
+    })
 }

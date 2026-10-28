@@ -7,6 +7,8 @@ import { NoteEditorBar } from '../notes/EditorBar.tsx'
 import { NotesHeaderActions, NotesHeaderTitle } from '../notes/Header.tsx'
 import { useNotes } from '../notes/store.ts'
 import { showDialog } from '../dialogs/store.ts'
+import { forkTargetsOf } from '../fork/targets.ts'
+import type { StateThread } from '../machines/merged.ts'
 import { ThreadContextChips } from '../coordinator/Header.tsx'
 import { latestRotation, refreshContext } from '../coordinator/rotation.ts'
 import { formatTokens, ROTATION_COPY } from '../../../../packages/kybern-client/src/rotation.ts'
@@ -400,6 +402,7 @@ export const ThreadHeader = memo(function ThreadHeader({ leafId: given, size = '
           )}
           {thread.worktree && !thread.subagent && <MenuItem id="cleanup" testId="header-worktree-cleanup" icon={N.worktree} label="Remove worktree…" onSelect={() => showDialog({ kind: 'worktree', threadId: thread.id })} />}
           {thread.coordinator_project_id && !thread.subagent && <><MenuSeparator /><RefreshContextItem thread={thread} /></>}
+          {!thread.subagent && forkTargetsOf(thread as StateThread).length > 0 && <MenuItem id="fork-machine" testId="header-fork-machine" icon={N.laptop} label="Fork to another machine…" onSelect={() => showDialog({ kind: 'fork', threadId: thread.id, ...((thread as StateThread).machineId ? { machineId: (thread as StateThread).machineId! } : {}) })} />}
           {/* A subagent thread is read-only: it cannot be renamed, pinned or archived. */}
           {!thread.subagent && (
             <>

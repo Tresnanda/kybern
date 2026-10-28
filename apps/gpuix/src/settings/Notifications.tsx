@@ -25,7 +25,7 @@ export function Notifications() {
   }
   const description = permission === 'granted' ? 'System alerts appear when Kybern is in the background.' : permission === 'denied' ? 'Allow Kybern notifications in system settings, then try again.' : permission === 'unsupported' ? "System notifications aren't available in this environment. In-app alerts still work." : 'Enable access to receive alerts outside Kybern.'
   return <>
-    <Section title="Agent activity"><Row title="Show agent notifications" description="When work finishes, fails, or needs your input."><Switch aria-label="Show agent notifications" testId="settings-notifications" checked={settings?.notifications ?? false} disabled={saving} onCheckedChange={(notifications) => void updateSettings({ notifications })} /></Row></Section>
+    <Section title="Agent activity"><Row title="Show agent notifications" description="When work finishes, fails, or needs your input." shared="notifications"><Switch aria-label="Show agent notifications" testId="settings-notifications" checked={settings?.notifications ?? false} disabled={saving} onCheckedChange={(notifications) => void updateSettings({ notifications })} /></Row></Section>
     <Section title="System notifications"><Row title="Notification access" description={description}><Button testId="settings-notification-access" disabled={busy || permission === 'unsupported'} onClick={() => void test()}>{permission === 'granted' ? 'Send test notification' : 'Enable notifications'}</Button></Row></Section>
   </>
 }

@@ -1,5 +1,6 @@
 import { useEffect, useSyncExternalStore } from 'react'
 import type {
+  Federation,
   TaskItem,
   TaskItemsChangedNotification,
   TaskItemsCreateParams,
@@ -11,9 +12,14 @@ import { getClient, getState, useApp } from '../state.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { load, save } from '../shell/persist.ts'
 import { toast } from '../shell/toasts.tsx'
+import { machineHub } from '../machines/index.ts'
+import { MACHINE_ALL, ownerClient, recordFederation } from '../machines/federated.ts'
 
 const PREFS = 'kybern.tasks.prefs:local'
 interface State {
+  /** "All machines": tasks of every machine in the list; the footer names the ones left out. */
+  allMachines: boolean
+  federation: Federation | null
   tasks: Record<string, TaskItem>
   loaded: boolean
   error: string | null
@@ -28,6 +34,8 @@ interface State {
   menu: 'status' | 'priority' | null
 }
 const initialState = (): State => ({
+  allMachines: load('kybern.tasks.allMachines', false),
+  federation: null,
   tasks: {},
   loaded: false,
   error: null,
@@ -121,11 +129,13 @@ export async function refreshTasks() {
   pending = queue
   setTasks({ error: null })
   try {
-    const result = await client.call('tasks.items.list', {})
+    const all = state.allMachines && machineHub().machineCount > 1
+    const result = await client.call('tasks.items.list', all ? { machine: MACHINE_ALL } : {})
     if (token !== generation) return
+    recordFederation('tasks', all ? result.federation : null)
     let map = Object.fromEntries(result.tasks.map((task) => [task.id, task]))
     for (const event of queue) map = change(map, event)
-    setTasks({ tasks: map, loaded: true })
+    setTasks({ tasks: map, loaded: true, federation: all ? (result.federation ?? null) : null })
   } catch (error) {
     if (token === generation) {
       let map = state.tasks
@@ -155,6 +165,12 @@ export function useTasksFeed() {
     }
   }, [status])
 }
+/** Show the tasks of every machine, or only this one's. */
+export function setAllMachines(on: boolean) {
+  save('kybern.tasks.allMachines', on)
+  setTasks({ allMachines: on, openId: null, selected: new Set() })
+  void refreshTasks()
+}
 export async function createTask(params: TaskItemsCreateParams) {
   const client = getClient()
   if (!client) throw new Error('Reconnect to add a task.')
@@ -165,7 +181,8 @@ export async function createTask(params: TaskItemsCreateParams) {
 }
 export async function updateTask(id: string, patch: Omit<TaskItemsUpdateParams, 'id'>) {
   try {
-    const client = getClient()
+    // A task of another machine is written where it lives.
+    const client = ownerClient('tasks', id, getClient)
     if (!client) throw new Error('Reconnect and try again.')
     const owner = activeEnvironment()
     const task = await client.call('tasks.items.update', { id, ...patch })
@@ -182,12 +199,14 @@ export function updateMany(ids: string[], patch: Omit<TaskItemsUpdateParams, 'id
 }
 export async function deleteTasks(ids: string[]) {
   const deleted: string[] = []
-  // One client for the whole batch: a switch midway must not send these ids to another environment.
-  const client = getClient()
+  // One owner per task for the whole batch: a switch midway must not send these ids to another environment.
   const owner = activeEnvironment()
+  const clients = new Map(ids.map((id) => [id, ownerClient('tasks', id, getClient)] as const))
+  const client = getClient()
   for (const id of ids) {
     if (owner !== activeEnvironment()) return
     try {
+      const client = clients.get(id)
       if (!client) throw new Error('Reconnect and try again.')
       await client.call('tasks.items.delete', { id })
       if (owner !== activeEnvironment()) return
@@ -210,8 +229,9 @@ export async function deleteTasks(ids: string[]) {
           void Promise.allSettled(
             deleted.map(async (id) => {
               try {
-                if (owner !== activeEnvironment() || !client) return
-                const task = await client.call('tasks.items.restore', { id })
+                const target = clients.get(id) ?? client
+                if (owner !== activeEnvironment() || !target) return
+                const task = await target.call('tasks.items.restore', { id })
                 if (owner === activeEnvironment()) upsert(task)
               } catch (error) {
                 toast.error('Unable to restore task', { description: String(error) })

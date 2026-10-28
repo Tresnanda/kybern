@@ -10,6 +10,7 @@
 // complete. Each machine is the only writer of its own notes and tasks.
 import type {
   Federation,
+  Settings,
   FederationSection,
   MachineId,
   SettingsFieldView,
@@ -99,6 +100,76 @@ export function pendingMachineNames(view: SettingsNetworkView, path: string): st
   const field = fieldOf(view, path);
   if (!field) return [];
   return view.machines.filter((machine) => field.pending.includes(machine.id)).map((machine) => machine.name);
+}
+
+// ---- settings: which edits are shared ----
+
+/** The settings fields that belong to the whole network (design §9.1); the daemon's `settings_share.rs` is the source of truth. */
+export const SHARED_SETTINGS = [
+  "default_provider",
+  "default_permission_mode",
+  "worktrees_default",
+  "automatic_worktree_cleanup",
+  "generate_titles",
+  "title_provider",
+  "notifications",
+  "auto_update_harnesses",
+  "auto_update_daemon",
+  "orchestration",
+  "tell_agents_about_kybern",
+  "ask_deadlines",
+] as const;
+
+/** A shared field's value in a settings document: the daemon reports an unset optional field as `null`. */
+export function sharedValue(settings: Settings, path: string): unknown {
+  if (path.startsWith("providers.") && path.endsWith(".model")) {
+    const kind = path.slice("providers.".length, -".model".length) as keyof Settings["providers"];
+    return settings.providers[kind]?.model ?? null;
+  }
+  return (settings as unknown as Record<string, unknown>)[path] ?? null;
+}
+
+/**
+ * The shared fields an edit changed, as `settings.share` takes them. A per-machine edit (binaries, env, accounts,
+ * access…) yields none, so it stays on this machine; a shared edit is applied here and sent to the others.
+ */
+export function changedSharedFields(before: Settings, after: Settings): Record<string, unknown> {
+  const paths: string[] = [...SHARED_SETTINGS];
+  for (const kind of new Set([...Object.keys(before.providers), ...Object.keys(after.providers)])) paths.push(`providers.${kind}.model`);
+  const changed: Record<string, unknown> = {};
+  for (const path of paths) {
+    const next = sharedValue(after, path);
+    if (JSON.stringify(sharedValue(before, path)) !== JSON.stringify(next)) changed[path] = next;
+  }
+  return changed;
+}
+
+/** What the popover calls a value: a switch is On or Off, a choice uses `labels`, an unset field says so. */
+export function describeSharedValue(path: string, value: unknown, labels: Record<string, string> = {}): string {
+  if (value === null || value === undefined) return "Not set";
+  if (typeof value === "boolean") return value ? "On" : "Off";
+  if (typeof value === "number") return String(value);
+  if (typeof value === "string") return labels[value] ?? (value || "Default");
+  if (path === "ask_deadlines" && typeof value === "object") {
+    const deadlines = value as { enabled?: boolean; max_seconds?: number };
+    return deadlines.enabled ? `On, up to ${Math.round((deadlines.max_seconds ?? 0) / 60)} min` : "Off";
+  }
+  if (path === "orchestration" && typeof value === "object") {
+    const orchestration = value as { max_active_children?: number; lead_max_children?: number; max_depth?: number };
+    const parts = [
+      orchestration.max_active_children !== undefined ? `${orchestration.max_active_children} agents per thread` : null,
+      orchestration.lead_max_children !== undefined ? `${orchestration.lead_max_children} per Coordinator` : null,
+      orchestration.max_depth !== undefined ? `depth ${orchestration.max_depth}` : null,
+    ].filter((part): part is string => part !== null);
+    return parts.length ? parts.join(", ") : "Custom";
+  }
+  return "Custom";
+}
+
+/** The sentence a button reads: "Use On on all machines" is clumsy, so a switch says "Turn on". */
+export function useOnAllLabel(path: string, value: unknown, labels: Record<string, string> = {}): string {
+  if (typeof value === "boolean") return value ? "Turn on for all machines" : "Turn off for all machines";
+  return `Use ${describeSharedValue(path, value, labels)} on all machines`;
 }
 
 // ---- notes and tasks: sections and the footer ----

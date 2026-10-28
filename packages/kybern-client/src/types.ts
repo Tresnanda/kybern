@@ -1131,6 +1131,8 @@ export type TranscriptEntry =
       level: NoticeLevel;
       text: string;
       at: DateTime;
+      /** What the provider notice carried (a fork notice names its machine and thread). */
+      data?: JsonValue | null;
     }
   | {
       role: "reverted";

@@ -22,7 +22,7 @@ import { chipifyKybernRefs } from './refs.ts'
 import { useFileRefs } from './fileRefs.ts'
 import { useNotes, openNote } from '../notes/store.ts'
 import { useTasks, openTask } from '../tasks/store.ts'
-import { goPage } from '../nav/history.ts'
+import { goPage, openThread } from '../nav/history.ts'
 import type { NoteSummary, TaskItem } from '../../../../packages/kybern-client/src/types.ts'
 import type { MarkdownStream } from '../native/markdown.ts'
 import { StreamMarkdown } from './StreamMarkdown.tsx'
@@ -292,6 +292,9 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
           const file = await client.call('threads.files.read', { thread_id: threadId, path })
           setPreview({ title: link.line ? `${path}:${link.line}` : path, text: file.content, code: true, line: link.line, markdown: MARKDOWN_FILE.test(path) })
         }
+      } else if (link.kind === 'thread') {
+        // A thread of another machine (`kybern://thread/<machine>/<thread>`), e.g. the fork this thread started.
+        openThread(link.threadId, link.machineId)
       } else if (link.kind === 'kybern') {
         if (link.target === 'note') { if (!openTabFromPane(pane.id, { kind: 'note', id: link.id })) openNote(link.id) }
         else if (!openTabFromPane(pane.id, { kind: 'task', id: link.id })) { goPage('tasks'); openTask(link.id) }
