@@ -66,14 +66,12 @@ try {
   await click('pr-tab-timeline')
   await sleep(300)
   await screenshot('timeline')
-  await click('pr-source-review_comments')
+  await click('pr-timeline-filter-reviews')
   await sleep(700)
-  // Pagination follows the entries, matching the desktop timeline.
-  await app.mouse.wheel({ x: 1100, y: 600 }, 0, -20000)
-  await sleep(500)
-  await app.getByTestId('pr-page-next').press('enter')
+  // The next cursor page loads from the end of the history.
+  await app.getByTestId('pr-timeline-more').press('enter')
   await sleep(700)
-  assert.match(await app.getByTestId('pr-timeline').textContent(), /Page 2/)
+  assert.match(await app.getByTestId('pr-timeline').textContent(), /approved these changes/)
   await click('pr-send')
   await screenshot('send')
   await app.getByTestId('pr-send-popover').press('escape')

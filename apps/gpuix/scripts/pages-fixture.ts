@@ -1,4 +1,5 @@
 /** Deterministic, in-memory RPC fixture. No GitHub or real daemon writes. */
+import { timelinePage } from '../src/pulls/verify.fixture.ts'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, unlinkSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
@@ -45,7 +46,8 @@ export function pagesFixture() {
             else result = { pull_requests: Array.from({ length: 30 }, (_, i) => ({ ...pr, number: 108 + i, title: i ? `Review change ${i}` : pr.title })) }
             break
           case 'github.pr.detail': result = { ...detail, pull_request: { ...pr, number: Number(message.params.number) } }; break
-          case 'github.pr.page': result = { files: message.params.kind === 'files' ? files : [], entries: message.params.kind === 'files' ? [] : entries, page: message.params.page ?? 1, has_more: (Number(message.params.page) || 1) < 3 }; break
+          case 'github.pr.page': if (message.params.kind === 'timeline') { result = timelinePage(new Date().toISOString(), typeof message.params.cursor === 'string' ? message.params.cursor : undefined); break }
+            result = { files: message.params.kind === 'files' ? files : [], entries: message.params.kind === 'files' ? [] : entries, page: message.params.page ?? 1, has_more: (Number(message.params.page) || 1) < 3 }; break
           default: if (!['events.unsubscribe', 'ping'].includes(message.method)) error = `Fixture rejects ${message.method}`
         }
         ws.send(JSON.stringify(error ? { jsonrpc: '2.0', id: message.id, error: { code: -32000, message: error } } : { jsonrpc: '2.0', id: message.id, result }))

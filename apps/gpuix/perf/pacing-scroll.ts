@@ -43,7 +43,7 @@ try {
   const results: unknown[] = []
   for (const scene of ['list', 'summary', 'changes', 'timeline']) {
     if (scene === 'summary') { await app.getByTestId('pr-row-108').click(); await app.getByTestId('pr-summary').waitFor() }
-    if (scene === 'changes' || scene === 'timeline') { await app.getByTestId(`pr-tab-${scene}`).click(); await app.getByTestId(scene === 'changes' ? 'pr-native-diff' : 'pr-select-1').waitFor() }
+    if (scene === 'changes' || scene === 'timeline') { await app.getByTestId(`pr-tab-${scene}`).click(); await app.getByTestId(scene === 'changes' ? 'pr-native-diff' : 'pr-select-r1').waitFor() }
     // Native virtual-list itself has no automation hitbox; use the surrounding
     // PR page, whose geometry is recorded, or the native diff viewport.
     const target = app.getByTestId(scene === 'changes' ? 'pr-native-diff' : 'page-pulls')
