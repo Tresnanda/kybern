@@ -5,7 +5,7 @@ import { PickerChip } from '../../kit/PickerChip.tsx'
 import { Label, useTheme } from '../../ui.tsx'
 import { row } from '../../usage/controls.tsx'
 import type { Project } from '../../../../../packages/kybern-client/src/types.ts'
-import { isGroup, listableMembers, toggleRepo, pickProject, type Scope } from './model.ts'
+import { isGroup, listableMembers, repoHue, toggleRepo, pickProject, type Scope } from './model.ts'
 import { repoDot } from './parts.tsx'
 
 /** The 16 px lead of a menu row: a check when it is chosen, so single and multiple choices line up. */
@@ -37,7 +37,7 @@ export function ProjectFilter({ projects, scope, remembered, onChange, counts }:
       {groups.flatMap(g => [
         <MenuItem key={g.id} id={g.id} testId={`pr-filter-${g.id}`} iconNode={<Lead on={scope.project === g.id && scope.repos.length === 0} />} label={g.name} {...(count(g.id) !== undefined ? { detail: String(count(g.id)) } : {})} onSelect={() => onChange(pickProject(g, remembered[g.id]))} />,
         ...listableMembers(g).map(m => <MenuItem key={`${g.id}/${m.path}`} id={`${g.id}/${m.path}`} testId={`pr-filter-${g.id}-${m.path}`} keepOpen
-          iconNode={<div style={{ ...row, gap: 6, paddingLeft: 14 }}><Lead on={scope.project === g.id && scope.repos.includes(m.path)}><div style={{ width: 6, height: 6, borderRadius: 3, flexShrink: 0, backgroundColor: repoDot(t, `${g.id}/${m.path}`) }} /></Lead></div>}
+          iconNode={<div style={{ ...row, gap: 6, paddingLeft: 14 }}><Lead on={scope.project === g.id && scope.repos.includes(m.path)}><div style={{ width: 6, height: 6, borderRadius: 3, flexShrink: 0, backgroundColor: repoDot(t, repoHue(`${g.id}/${m.path}`)) }} /></Lead></div>}
           label={m.name} {...(count(`${g.id}/${m.path}`) !== undefined ? { detail: String(count(`${g.id}/${m.path}`)) } : {})} onSelect={() => onChange(toggleRepo(scope, g, m.path))} />),
       ])}
     </>}

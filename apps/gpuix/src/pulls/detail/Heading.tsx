@@ -5,24 +5,14 @@ import { N } from '../../nav/glyphs.ts'
 import { Avatar } from '../../kit/Avatar.tsx'
 import { SwapOnChange } from '../../motion/kit.tsx'
 import { popTransform, useCountPop } from '../../kit/Pop.tsx'
-import { cachedProjectHue } from '../../../../../packages/kybern-client/src/projectColors.ts'
 import type { PrDetailResult } from '../../../../../packages/kybern-client/src/types.ts'
-import { useApp } from '../../state.ts'
 import { FONT_MONO } from '../../theme.ts'
 import { alpha } from '../../transcript/kit.tsx'
 import { Label, ink, useTheme } from '../../ui.tsx'
 import { column, row } from '../../usage/controls.tsx'
 import { agoPhrase } from '@/views/pullRequests/prFormat'
+import { RepoBadge } from '../list/parts.tsx'
 import { wantsToMerge } from './model.ts'
-
-/** The repository as a chip: a dot in the project's hue and its name (the list rows will carry the same). */
-function RepoTag({ projectId, name }: { projectId: string; name: string }) {
-  const t = useTheme()
-  const projects = useApp(s => s.projects)
-  const hue = cachedProjectHue(projectId, projects)
-  const dark = t.variant === 'dark'
-  return <div testId="pr-repo" style={{ ...row, gap: 5, height: 20, paddingLeft: 5, paddingRight: 6, borderRadius: 5, backgroundColor: ink(t, dark ? 0.06 : 0.05), flexShrink: 1 }}><div style={{ width: 6, height: 6, borderRadius: 3, flexShrink: 0, backgroundColor: `oklch(${dark ? 0.74 : 0.62} ${dark ? 0.11 : 0.13} ${hue})` }} /><Label color={t.textSecondary} size={11.5} lineHeight={16} weight={500} truncate>{name}</Label></div>
-}
 
 /** The state pill. When the state changes after the pull request opened (a merge), the label swaps and the pill pops (`t-pop`, once). */
 export function StatePill({ pr }: { pr: PrDetailResult['pull_request'] }) {
@@ -41,13 +31,13 @@ function Branch({ name }: { name: string }) {
   return <div style={{ ...row, height: 20, paddingLeft: 6, paddingRight: 6, borderRadius: 5, backgroundColor: ink(t, t.variant === 'dark' ? 0.06 : 0.05), flexShrink: 1 }}><Label color={t.text} size={12} lineHeight={16} font={FONT_MONO} truncate>{name}</Label></div>
 }
 
-export function Heading({ detail, projectId, repoName, compact }: { detail: PrDetailResult; projectId: string; repoName: string; compact: boolean }) {
+export function Heading({ detail, projectId, repo, repoName, compact }: { detail: PrDetailResult; projectId: string; /** A group member's path. */ repo?: string; repoName: string; compact: boolean }) {
   const t = useTheme()
   const p = detail.pull_request
   return (
     <div testId="pr-heading" style={{ ...column, gap: 10 }}>
       <div style={{ ...row, gap: 8 }}>
-        <RepoTag projectId={projectId} name={repoName} />
+        <RepoBadge testId="pr-repo" name={repoName} projectId={projectId} {...(repo ? { repo } : {})} maxWidth={240} />
         <Label color={t.textSecondary} size={12.5} lineHeight={18}>{`#${p.number}`}</Label>
         <Label color={t.textTertiary} size={12.5} lineHeight={18}>·</Label>
         <StatePill pr={p} />

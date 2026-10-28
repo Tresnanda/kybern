@@ -19,13 +19,13 @@ export const SIDEBAR_BREAKPOINT = 832
  */
 const READING_WIDTH = 680
 
-export function Summary({ detail, projectId, repoName, width, side }: { detail: PrDetailResult; projectId: string; repoName: string; width: number; side: ReactNode }) {
+export function Summary({ detail, projectId, repo, repoName, width, side }: { detail: PrDetailResult; projectId: string; repo?: string; repoName: string; width: number; side: ReactNode }) {
   const t = useTheme()
   const compact = width < SIDEBAR_BREAKPOINT
   const theme = useMemo(() => { const base = markdownTheme(t); return { ...base, markdown: { ...base.markdown, codeWrap: true } } }, [t])
   const body = detail.body.replace(/<!--[\s\S]*?-->/g, '').trim()
   const description = <div testId="pr-body" style={{ ...column, maxWidth: READING_WIDTH, marginTop: 24, paddingTop: 22, borderTopWidth: 1, borderColor: t.surfaceDivider }}><DocumentMarkdown source={body || 'No description provided.'} theme={theme} style={{ color: t.text, fontSize: 14, userSelect: 'text' }} onLinkClick={e => e.value && openUrl(e.value)} /></div>
-  const heading = <Heading detail={detail} projectId={projectId} repoName={repoName} compact={compact} />
+  const heading = <Heading detail={detail} projectId={projectId} {...(repo ? { repo } : {})} repoName={repoName} compact={compact} />
   if (compact) {
     return <virtual-list {...PR_SCROLL_LAYOUT} testId="pr-summary" style={{ flexGrow: 1, minHeight: 0 }} estimatedItemHeight={400}><div key="summary" style={{ ...column, gap: 18, padding: 16, paddingTop: 12, paddingBottom: 64 }}>{side}<div style={column}>{heading}{description}</div></div></virtual-list>
   }

@@ -122,7 +122,7 @@ export function Detail({ project, number, repo, onBack, width, onChanged, showBa
     </div>
     {error && <div style={{ padding: 24 }}><Problem error={error} refresh={review.refresh} /></div>}
     {!detail && !error && <div style={{ padding: 24 }}><PrLoading label="Loading pull request…" /></div>}
-    {detail && <Rise key={tab} kind="pane" play={paneIn} style={{ flexGrow: 1, minHeight: 0 }}>{tab === 'summary' ? <Summary detail={detail} projectId={project.id} repoName={memberName ?? project.name} width={width} side={side} /> : tab === 'changes' ? <Changes projectId={project.id} number={number} repo={repo} review={review} compact={width < 700} /> : <Timeline projectId={project.id} number={number} repo={repo} review={review} onSend={() => { setSendOpen(true); setReviewOpen(false) }} />}</Rise>}
+    {detail && <Rise key={tab} kind="pane" play={paneIn} style={{ flexGrow: 1, minHeight: 0 }}>{tab === 'summary' ? <Summary detail={detail} projectId={project.id} {...(repo ? { repo } : {})} repoName={memberName ?? project.name} width={width} side={side} /> : tab === 'changes' ? <Changes projectId={project.id} number={number} repo={repo} review={review} compact={width < 700} /> : <Timeline projectId={project.id} number={number} repo={repo} review={review} onSend={() => { setSendOpen(true); setReviewOpen(false) }} />}</Rise>}
     {confirmation && detail && <ConfirmDialog confirmation={confirmation} number={number} base={pr?.base} linkedTitle={linked?.title} review={review} close={() => setConfirmation(null)} onDone={(request) => { if (request.kind === 'merge') flashMerged(); setConfirmation(null); onChanged() }} linkedId={linked?.id} />}
   </div>
 }

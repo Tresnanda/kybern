@@ -9,6 +9,8 @@ import { Label, useTheme } from '../../ui.tsx'
 import { row } from '../../usage/controls.tsx'
 import type { Theme } from '../../theme.ts'
 import type { RowReason } from '../../../../../packages/kybern-client/src/pullRequests.ts'
+import { cachedProjectHue } from '../../../../../packages/kybern-client/src/projectColors.ts'
+import { useApp } from '../../state.ts'
 import { repoHue } from './model.ts'
 
 const REASON_ICONS = {
@@ -53,17 +55,24 @@ export function toneColor(t: Theme, tone: RowReason['tone']): string {
   }
 }
 
-/** The dot colour of a repository, from its name: soft in both themes, like the project dot. */
-export function repoDot(t: Theme, key: string): string {
+/** The dot colour for a hue: soft in both themes, like the project dot. */
+export function repoDot(t: Theme, hue: number): string {
   const dark = t.variant === 'dark'
-  return `oklch(${dark ? 0.74 : 0.62} ${dark ? 0.11 : 0.13} ${repoHue(key)})`
+  return `oklch(${dark ? 0.74 : 0.62} ${dark ? 0.11 : 0.13} ${hue})`
 }
 
-/** A repository or project name with its hue dot: 18 high, radius 5, ink fill (the mockup's `.repo`). */
-export function RepoBadge({ name, hueKey, maxWidth = 120, testId }: { name: string; hueKey: string; maxWidth?: number; testId?: string }) {
+/** A pull request's repository hue: the project's own colour, or for a group member one taken from its path (the filter menu's dot). */
+export function useRepoHue(projectId: string, repo: string | undefined): number {
+  const projects = useApp(s => s.projects)
+  return repo ? repoHue(`${projectId}/${repo}`) : cachedProjectHue(projectId, projects)
+}
+
+/** A repository or project name with its hue dot: 18 high, radius 5, ink fill (the mockup's `.repo`). The list rows and the Summary heading share it. */
+export function RepoBadge({ name, projectId, repo, maxWidth = 120, testId }: { name: string; projectId: string; repo?: string; maxWidth?: number; testId?: string }) {
   const t = useTheme()
+  const hue = useRepoHue(projectId, repo)
   return <div testId={testId} style={{ ...row, gap: 5, height: 18, paddingLeft: 5, paddingRight: 6, borderRadius: RADIUS.xs, backgroundColor: t.variant === 'dark' ? 'rgba(252, 252, 252, 0.06)' : 'rgba(13, 13, 13, 0.06)', flexShrink: 1, maxWidth }}>
-    <div style={{ width: 6, height: 6, borderRadius: 3, flexShrink: 0, backgroundColor: repoDot(t, hueKey) }} />
+    <div style={{ width: 6, height: 6, borderRadius: 3, flexShrink: 0, backgroundColor: repoDot(t, hue) }} />
     <Label color={t.textSecondary} size={11.5} lineHeight={16} weight={500} truncate>{name}</Label>
   </div>
 }

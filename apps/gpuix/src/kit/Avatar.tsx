@@ -8,16 +8,19 @@ import { storeImageBytes } from '../transcript/imageFiles.ts'
 import { Label, useTheme } from '../ui.tsx'
 
 const files = new Map<string, Promise<string | null>>()
+/** Distinct avatar urls remembered; past this the oldest is forgotten (its image file stays in the shared cache). */
+const MAX_FILES = 300
 /** The cached file for an avatar url; null when it could not be fetched (never retried this session). */
 function avatarFile(url: string): Promise<string | null> {
   let pending = files.get(url)
   if (!pending) {
-    pending = fetch(url).then(async response => {
+    pending = fetch(url, { signal: AbortSignal.timeout(8000) }).then(async response => {
       const media = (response.headers.get('content-type') ?? '').split(';')[0].trim()
       if (!response.ok || !media.startsWith('image/')) return null
       return storeImageBytes(new Uint8Array(await response.arrayBuffer()), media)
     }).catch(() => null)
     files.set(url, pending)
+    if (files.size > MAX_FILES) files.delete(files.keys().next().value!)
   }
   return pending
 }

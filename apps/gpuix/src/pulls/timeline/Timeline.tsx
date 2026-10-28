@@ -22,7 +22,7 @@ import { column, row } from '../../usage/controls.tsx'
 import { PR_SCROLL_LAYOUT } from '../scroll-layout.ts'
 import { openUrl, PrLoading, Problem } from '../PrStates.tsx'
 import type { Review } from '../useReview.ts'
-import { Avatar } from './Avatar.tsx'
+import { Avatar } from '../../kit/Avatar.tsx'
 import { findingFor, filterCounts, reviewFindings, reviewVerb, shortSha, timelineItems, TIMELINE_FILTERS, type Finding, type TimelineFilter, type TimelineItem } from './model.ts'
 import { useTimeline } from './useTimeline.ts'
 

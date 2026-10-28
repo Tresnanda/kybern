@@ -28,7 +28,7 @@ export const PrListRow = memo(function PrListRow({ item: { pr, project }, select
           <Label color={t.textTertiary} size={12} lineHeight={18} style={{ flexShrink: 0 }}>{`#${pr.number}`}</Label>
         </div>
         <div style={{ ...row, gap: 6 }}>
-          <RepoBadge testId="pr-badge-repo" name={badge} hueKey={`${project.id}/${pr.repo ?? ''}`} />
+          <RepoBadge testId="pr-badge-repo" name={badge} projectId={project.id} {...(pr.repo ? { repo: pr.repo } : {})} />
           <Reason testId="pr-badge-reason" reason={reason} />
           <DiffStat additions={pr.additions} deletions={pr.deletions} />
         </div>
