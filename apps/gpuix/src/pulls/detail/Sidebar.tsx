@@ -23,6 +23,9 @@ import { G } from './glyphs.ts'
 import { barSegments, checksSummaryLine, foldChecks, foldedWords, groupSubtitle, labelColor, REVIEWER_WORDS, reviewerRows, type ActionRequest, type ReviewerState } from './model.ts'
 import { useFlash } from './useFlash.ts'
 
+/** Auto-merge's method in words, not GitHub's enum. */
+const AUTO_METHOD: Record<string, string> = { squash: 'Squash', merge: 'Merge commit', rebase: 'Rebase' }
+
 const BUCKET_TONE = { failed: 'danger', pending: 'warning', passed: 'success', skipped: 'neutral' } as const satisfies Record<string, Tone>
 
 /** One check's mark. Running is a still amber arc on a faint ring: only the verdict card's glyph spins (a native spinner is ~12% CPU each). */
@@ -118,7 +121,7 @@ function Details({ detail, onTimeline }: { detail: PrDetailResult; onTimeline: (
     </InspectorGroup>
     <InspectorGroup>
       <InspectorRow label="Auto-merge" testId="pr-auto-merge">
-        {auto ? <StatusChip tone="info" icon={G.auto}>{`On · ${auto.merge_method}${auto.enabled_by ? ` · ${auto.enabled_by}` : ''}`}</StatusChip> : <Label color={t.textSecondary} size={13} lineHeight={20}>Off</Label>}
+        {auto ? <StatusChip tone="info" icon={G.auto}>{`On · ${AUTO_METHOD[auto.merge_method] ?? 'Squash'}${auto.enabled_by ? ` · ${auto.enabled_by}` : ''}`}</StatusChip> : <Label color={t.textSecondary} size={13} lineHeight={20}>Off</Label>}
       </InspectorRow>
       <InspectorRow label="Head" testId="pr-head">
         <Label color={t.text} size={12} lineHeight={20} font={FONT_MONO}>{detail.head_sha.slice(0, 7)}</Label>

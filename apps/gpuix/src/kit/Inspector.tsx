@@ -17,7 +17,7 @@ export function SectionHeader({ title, trailing }: { title: string; trailing?: s
 export function InspectorRow({ label, children, testId, onClick }: { label: string; children: ReactNode; testId?: string; onClick?: () => void }) {
   const t = useTheme()
   return (
-    <div testId={testId} onClick={onClick} role={onClick ? 'button' : undefined} style={{ display: 'flex', alignItems: 'flex-start', minHeight: 32, paddingTop: 5, paddingBottom: 5, minWidth: 0, ...(onClick ? { cursor: 'pointer' } : {}) }}>
+    <div testId={testId} onClick={onClick} role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined} onKeyDown={onClick ? e => { if (e.key === 'enter' || e.key === 'space') onClick() } : undefined} style={{ display: 'flex', alignItems: 'flex-start', minHeight: 32, paddingTop: 5, paddingBottom: 5, minWidth: 0, ...(onClick ? { cursor: 'pointer' } : {}) }}>
       <div style={{ width: 76, flexShrink: 0, paddingTop: 2 }}><Label color={t.textSecondary} size={12} lineHeight={18}>{label}</Label></div>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, minWidth: 0, flexGrow: 1, flexShrink: 1, minHeight: 22 }}>{children}</div>
     </div>
