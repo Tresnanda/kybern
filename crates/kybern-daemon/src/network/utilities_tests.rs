@@ -307,12 +307,11 @@ async fn a_folder_sent_to_an_offline_machine_waits_in_the_outbox_and_lands_when_
     assert_eq!((sent.files, sent.bytes), (3, body.len() as u64 + 5), "the folder's files, minus .git and .env");
     assert_eq!(sent.item.kind, OutboxKind::FilesPush);
     assert!(sent.skipped >= 2);
-    // Held back, not delivered: the attempt that found b away leaves the item queued with the reason.
-    eventually("the item waits for b", WAIT, || {
-        let item = a.state.store.outbox_get(sent.item.id).unwrap().unwrap();
-        item.state == OutboxState::Queued && item.last_error.is_some()
-    })
-    .await;
+    // Held back, not delivered: a machine that is away is not attempted, and the item stays queued.
+    let state_of = || a.state.store.outbox_get(sent.item.id).unwrap().unwrap().state;
+    eventually("the item waits for b", WAIT, || state_of() == OutboxState::Queued).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(state_of(), OutboxState::Queued, "nothing is delivered to an offline machine");
 
     // b comes back (same data directory): the item is delivered on its own.
     drop(b);
