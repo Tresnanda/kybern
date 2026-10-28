@@ -1,8 +1,8 @@
 /** Pull request detail states for the in-memory fixture (`actionFixture({ state })`): one per verdict, with the rich data the page shows. */
 import type { PrCheck, PrDetailResult, PrViewer } from '../../../../packages/kybern-client/src/types.ts'
 
-export type PrState = 'running' | 'ready' | 'blocked' | 'behind' | 'failing' | 'conflicts' | 'auto' | 'draft' | 'merged'
-export const PR_STATES: PrState[] = ['running', 'ready', 'blocked', 'behind', 'failing', 'conflicts', 'auto', 'draft', 'merged']
+export type PrState = 'running' | 'optional' | 'ready' | 'blocked' | 'behind' | 'failing' | 'conflicts' | 'auto' | 'draft' | 'merged'
+export const PR_STATES: PrState[] = ['running', 'optional', 'ready', 'blocked', 'behind', 'failing', 'conflicts', 'auto', 'draft', 'merged']
 
 const BODY = `### Summary
 
@@ -50,13 +50,16 @@ export function stateDetail(state: PrState, base: PrDetailResult): PrDetailResul
   const sum = (checks: PrCheck[]) => ({ total: checks.length, passed: checks.filter(c => c.conclusion === 'SUCCESS').length, failed: checks.filter(c => c.conclusion === 'FAILURE').length, pending: checks.filter(c => c.status !== 'COMPLETED').length, skipped: checks.filter(c => c.conclusion === 'SKIPPED').length })
   const make = (checks: PrCheck[], over: Partial<PrDetailResult>, prOver: Record<string, unknown> = {}): PrDetailResult => ({ ...common, checks, ...over, pull_request: { ...pr, checks_summary: sum(checks), ...prOver } })
   switch (state) {
-    case 'running': return make(runningChecks(), {})
+    // Required checks running: GitHub reports BLOCKED and auto-merge can wait for them.
+    case 'running': return make(runningChecks(), { merge_state_status: 'BLOCKED' })
+    // Nothing running is required: GitHub reports UNSTABLE and could merge now, so there is no auto-merge.
+    case 'optional': return make(runningChecks().map(c => ({ ...c, is_required: false })), {})
     case 'ready': return make(passedChecks(), { merge_state_status: 'CLEAN', reviews: [{ ...people.kevin, state: 'APPROVED' }], reviewers: [], comment_count: 4 }, { review_decision: 'APPROVED', mergeable: 'MERGEABLE' })
     case 'blocked': return make(passedChecks(), { merge_state_status: 'BLOCKED', viewer: { ...viewer, can_merge_as_admin: true }, reviews: [{ ...people.kevin, state: 'REQUESTED' }] }, { review_decision: 'REVIEW_REQUIRED' })
     case 'behind': return make(passedChecks(), { merge_state_status: 'BEHIND', behind_by: 3, reviews: [{ ...people.kevin, state: 'APPROVED' }], reviewers: [] }, { review_decision: 'APPROVED' })
     case 'failing': return make([run('Tests (shard 1/4)', 'CI', true), run('Tests (shard 2/4)', 'CI', true), run('Tests (shard 3/4)', 'CI', true, { conclusion: 'FAILURE' }), run('Tests (shard 4/4)', 'CI', true), run('Lint', 'CI', false), skipped('Deploy web')], { merge_state_status: 'BEHIND', behind_by: 3, reviews: [{ ...people.kevin, state: 'CHANGES_REQUESTED' }], reviewers: [], comment_count: 6 }, { review_decision: 'CHANGES_REQUESTED' })
     case 'conflicts': return make(passedChecks(), { merge_state_status: 'DIRTY', reviews: [{ ...people.kevin, state: 'APPROVED' }], reviewers: [] }, { mergeable: 'CONFLICTING', review_decision: 'APPROVED' })
-    case 'auto': return make(runningChecks(), {}, { auto_merge: { enabled_by: 'Tresnanda', merge_method: 'squash' } })
+    case 'auto': return make(runningChecks(), { merge_state_status: 'BLOCKED' }, { auto_merge: { enabled_by: 'Tresnanda', merge_method: 'squash' } })
     case 'draft': return make([], { merge_state_status: 'DRAFT', reviews: [], reviewers: [] }, { is_draft: true })
     case 'merged': return make(passedChecks(), { merged_at: ago(3 * MIN), merged_by: 'kevin', merge_state_status: 'UNKNOWN', reviews: [{ ...people.kevin, state: 'APPROVED' }], reviewers: [] }, { state: 'MERGED', review_decision: 'APPROVED' })
   }

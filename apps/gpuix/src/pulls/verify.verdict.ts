@@ -33,6 +33,15 @@ await scene('running', async (a, fx) => {
   assert.equal(last(fx)?.action, 'enable_auto_merge'); assert.equal(last(fx)?.merge_method, 'squash'); assert.equal(last(fx)?.head_sha, 'e9e5375b1c0d2a3f')
   assert.equal(await a.getByTestId('pr-confirm-submit').count(), 0, 'arming auto-merge asks nothing')
 })
+await scene('optional', async (a, fx) => {
+  // Nothing running is required: no auto-merge (gh would merge at once); "Merge anyway" asks first and is no admin merge.
+  assert.doesNotMatch(await painted(a), /Merge when ready/)
+  await click(a, 'pr-verdict-menu'); await click(a, 'pr-menu-merge-squash'); await a.getByTestId('pr-confirm-submit').waitFor()
+  assert.equal(fx.actions.length, 0, 'merge waits for the dialog')
+  assert.match(await painted(a), /Some checks on #108 failed or are still running/)
+  await click(a, 'pr-confirm-submit')
+  assert.equal(last(fx)?.action, 'merge'); assert.notEqual(last(fx)?.admin, true)
+})
 await scene('auto', async (a, fx) => { await click(a, 'pr-verdict-primary'); assert.equal(last(fx)?.action, 'disable_auto_merge') })
 await scene('behind', async (a, fx) => { await click(a, 'pr-verdict-primary'); assert.equal(last(fx)?.action, 'update_branch') })
 await scene('draft', async (a, fx) => { await click(a, 'pr-verdict-primary'); assert.equal(last(fx)?.action, 'mark_ready') })

@@ -579,6 +579,15 @@ fn merge_method(method: Option<&str>) -> Result<&'static str> {
     }
 }
 
+/// Auto-merge waits only for what the branch rules require. When GitHub could merge now, `gh` would merge straight away.
+fn ensure_auto_merge_waits(merge_state_status: &str) -> Result<()> {
+    ensure!(
+        !matches!(merge_state_status, "CLEAN" | "HAS_HOOKS" | "UNSTABLE"),
+        "GitHub can merge this pull request now, so auto-merge has nothing to wait for. Refresh it, then merge it or wait for the checks to finish."
+    );
+    Ok(())
+}
+
 pub(crate) fn validate_checkout_head(expected: &str, current: &str) -> Result<()> {
     ensure!(!expected.is_empty(), "Refresh this pull request before checkout or repair.");
     ensure!(expected == current, "The pull request changed. Refresh it and check the selected findings before checkout or repair.");
@@ -618,6 +627,10 @@ pub async fn action(cwd: &Path, p: &PrActionParams) -> Result<()> {
         PrActionKind::EnableAutoMerge => {
             ensure!(!p.head_sha.is_empty(), "Refresh this pull request before turning on auto-merge.");
             let method = merge_method(p.merge_method.as_deref())?;
+            // `gh pr merge --auto` merges at once when GitHub could merge now (CLEAN, HAS_HOOKS, UNSTABLE), checks
+            // still running or not: turning on auto-merge must never be an unconfirmed merge.
+            let state = run(cwd, "gh", &["pr", "view", &p.number.to_string(), "--json", "mergeStateStatus"]).await?;
+            ensure_auto_merge_waits(&text(&serde_json::from_str::<Value>(&state)?, "mergeStateStatus"))?;
             run(cwd, "gh", &["pr", "merge", &p.number.to_string(), "--auto", &format!("--{method}"), "--match-head-commit", &p.head_sha])
                 .await?;
         }
@@ -807,6 +820,16 @@ mod tests {
     #[test]
     fn refs_in_compare_urls_are_encoded() {
         assert_eq!(encode_ref("feat/a b#1?x"), "feat/a%20b%231%3Fx");
+    }
+
+    #[test]
+    fn auto_merge_is_refused_when_github_would_merge_at_once() {
+        for state in ["CLEAN", "HAS_HOOKS", "UNSTABLE"] {
+            assert!(ensure_auto_merge_waits(state).unwrap_err().to_string().contains("nothing to wait for"), "{state}");
+        }
+        for state in ["BLOCKED", "BEHIND", "UNKNOWN", ""] {
+            assert!(ensure_auto_merge_waits(state).is_ok(), "{state}");
+        }
     }
 
     #[test]

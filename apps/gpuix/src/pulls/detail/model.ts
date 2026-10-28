@@ -6,7 +6,8 @@ import type { MergeMethod, PrActionKind, PrChecksSummary, PrDetailResult, PrRevi
 
 /** What a verdict button asks for. `agent` has no GitHub call: it opens a conversation. */
 export type ActionRequest =
-  | { kind: 'merge'; method?: MergeMethod; admin?: boolean }
+  /** `admin` bypasses the branch rules; `anyway` merges past checks that failed or still run but are not required. */
+  | { kind: 'merge'; method?: MergeMethod; admin?: boolean; anyway?: boolean }
   | { kind: 'enable_auto_merge'; method?: MergeMethod }
   | { kind: 'disable_auto_merge' }
   | { kind: 'update_branch' }
@@ -33,7 +34,7 @@ export function requestForPrimary(primary: PrPrimaryAction): ActionRequest | nul
 
 export function requestForMenu(item: PrMenuAction): ActionRequest {
   switch (item.kind) {
-    case 'merge': return { kind: 'merge', method: item.method }
+    case 'merge': return { kind: 'merge', method: item.method, ...(item.destructive ? { anyway: true } : {}) }
     case 'merge_admin': return { kind: 'merge', method: item.method, admin: true }
     case 'auto_merge': return { kind: 'enable_auto_merge', method: item.method }
     case 'cancel_auto_merge': return { kind: 'disable_auto_merge' }

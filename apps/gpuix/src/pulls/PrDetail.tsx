@@ -132,14 +132,16 @@ function ConfirmDialog({ confirmation, number, base, linkedTitle, linkedId, revi
   const t = useTheme()
   const r = confirmation.request
   const admin = r.kind === 'merge' && r.admin
-  const title = r.kind === 'merge' ? admin ? 'Merge anyway?' : 'Merge pull request?' : r.kind === 'close' ? 'Close pull request?' : 'Check out pull request?'
+  const anyway = admin || (r.kind === 'merge' && !!r.anyway)
+  const title = r.kind === 'merge' ? anyway ? 'Merge anyway?' : 'Merge pull request?' : r.kind === 'close' ? 'Close pull request?' : 'Check out pull request?'
   const description = r.kind === 'merge'
-    ? admin ? `#${number} doesn't meet the branch rules yet. Merging it as an administrator skips them and cannot be undone. ${METHOD_WORDS[r.method ?? 'squash']} at the reviewed head into ${base}.` : `${METHOD_WORDS[r.method ?? 'squash']} #${number} at the reviewed head into ${base}. The branch stays available.`
+    ? admin ? `#${number} doesn't meet the branch rules yet. Merging it as an administrator skips them and cannot be undone. ${METHOD_WORDS[r.method ?? 'squash']} at the reviewed head into ${base}.`
+      : anyway ? `Some checks on #${number} failed or are still running. The branch rules don't require them, but a merge cannot be undone. ${METHOD_WORDS[r.method ?? 'squash']} at the reviewed head into ${base}.` : `${METHOD_WORDS[r.method ?? 'squash']} #${number} at the reviewed head into ${base}. The branch stays available.`
     : r.kind === 'close' ? `Close #${number} on GitHub. Its branch and your drafts remain available.`
     : `Check out #${number} in ${linkedTitle ?? 'the linked conversation'}. Running work, dirty files and open terminals block checkout.`
-  const label = r.kind === 'merge' ? admin ? 'Merge anyway' : 'Merge pull request' : r.kind === 'close' ? 'Close pull request' : 'Check out pull request'
+  const label = r.kind === 'merge' ? anyway ? 'Merge anyway' : 'Merge pull request' : r.kind === 'close' ? 'Close pull request' : 'Check out pull request'
   const submit = () => { void review.submit(r.kind, confirmation.head, r.kind === 'checkout' ? linkedId : undefined, r.kind === 'merge' ? { merge_method: r.method, ...(r.admin ? { admin: true } : {}) } : {}).then(ok => { if (ok) onDone(r) }) }
-  return <Dialog instant={getNav().keyboardNav} testId="pr-confirm" onClose={() => { if (!review.busy) close() }}><DialogHeader title={title} description={description} onClose={() => { if (!review.busy) close() }} />{review.actionError && <div style={{ padding: 16 }}><Label color={t.red}>{`${actionFailure(review.actionError)} Your draft is kept.`}</Label></div>}<div style={{ ...row, justifyContent: 'flex-end', gap: 8, padding: 16 }}><Button size="lg" disabled={review.busy} onClick={close}>Cancel</Button><Button size="lg" variant={admin || r.kind === 'close' ? 'destructive' : 'primary'} testId="pr-confirm-submit" disabled={review.busy} onClick={submit}>{review.busy ? 'Working…' : label}</Button></div></Dialog>
+  return <Dialog instant={getNav().keyboardNav} testId="pr-confirm" onClose={() => { if (!review.busy) close() }}><DialogHeader title={title} description={description} onClose={() => { if (!review.busy) close() }} />{review.actionError && <div style={{ padding: 16 }}><Label color={t.red}>{`${actionFailure(review.actionError)} Your draft is kept.`}</Label></div>}<div style={{ ...row, justifyContent: 'flex-end', gap: 8, padding: 16 }}><Button size="lg" disabled={review.busy} onClick={close}>Cancel</Button><Button size="lg" variant={anyway || r.kind === 'close' ? 'destructive' : 'primary'} testId="pr-confirm-submit" disabled={review.busy} onClick={submit}>{review.busy ? 'Working…' : label}</Button></div></Dialog>
 }
 
 function ReviewPopover({ review, close, onChanged }: { review: Review; close: () => void; onChanged: () => void }) {

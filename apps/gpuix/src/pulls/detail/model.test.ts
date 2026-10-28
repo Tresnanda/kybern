@@ -22,10 +22,17 @@ describe('verdict actions', () => {
     expect(requestForPrimary(a.primary)).toEqual({ kind: 'merge', method: 'squash' })
     expect(needsConfirmation(requestForPrimary(a.primary)!)).toBe(true)
   })
-  test('running checks arm auto-merge without a dialog', () => {
-    const a = assessPullRequest({ pull_request: pr, merge_state_status: 'UNSTABLE', checks: [check('A', 'IN_PROGRESS', '')], viewer }, NOW)
+  test('required running checks arm auto-merge without a dialog', () => {
+    const a = assessPullRequest({ pull_request: pr, merge_state_status: 'BLOCKED', checks: [check('A', 'IN_PROGRESS', '')], viewer }, NOW)
     expect(requestForPrimary(a.primary)).toEqual({ kind: 'enable_auto_merge', method: 'squash' })
     expect(needsConfirmation(requestForPrimary(a.primary)!)).toBe(false)
+  })
+  test('checks that are not required can be merged past, after a confirmation that says so', () => {
+    const a = assessPullRequest({ pull_request: pr, merge_state_status: 'UNSTABLE', checks: [check('A', 'IN_PROGRESS', '')], viewer }, NOW)
+    expect(requestForPrimary(a.primary)).toBeNull()
+    const anyway = requestForMenu(a.menu.find(m => m.label === 'Merge anyway')!)
+    expect(anyway).toEqual({ kind: 'merge', method: 'squash', anyway: true })
+    expect(needsConfirmation(anyway)).toBe(true)
   })
   test('conflicts go to an agent; none has no request', () => {
     const a = assessPullRequest({ pull_request: { ...pr, mergeable: 'CONFLICTING' }, merge_state_status: 'DIRTY', viewer }, NOW)

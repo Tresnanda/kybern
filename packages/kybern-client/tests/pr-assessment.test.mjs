@@ -99,9 +99,9 @@ test("HAS_HOOKS counts as clean", () => {
 
 // ---- waiting ----
 
-test("UNSTABLE with only pending checks is waiting, never failing", () => {
+test("BLOCKED on running checks is waiting, never failing, and offers auto-merge", () => {
   const a = assess({
-    merge_state_status: "UNSTABLE",
+    merge_state_status: "BLOCKED",
     checks: [run(), ...Array.from({ length: 5 }, (_, i) => run({ name: `skip${i}`, conclusion: "SKIPPED" })), ...Array.from({ length: 6 }, (_, i) => running(`job${i}`))],
   });
   assert.equal(a.tone, "waiting");
@@ -121,6 +121,20 @@ test("BLOCKED on required pending checks is waiting too", () => {
   assert.equal(a.next, "turn on auto-merge so it squashes when the check passes");
 });
 
+test("UNSTABLE with running checks never offers auto-merge: gh would merge at once", () => {
+  const a = assess({ merge_state_status: "UNSTABLE", checks: [run(), running("a"), running("b")] });
+  assert.equal(a.tone, "waiting");
+  assert.equal(a.title, "Waiting on 2 checks");
+  assert.deepEqual(a.primary, { kind: "none", label: "Waiting on checks" });
+  assert.equal(a.menu.some((m) => m.kind === "auto_merge"), false);
+  assert.deepEqual(a.menu.find((m) => m.label === "Merge anyway"), { kind: "merge", label: "Merge anyway", method: "squash", destructive: true });
+  assert.equal(a.next, "wait for the checks to finish, or merge anyway from the menu");
+  // Without merge rights there is nothing to offer.
+  const reader = assess({ merge_state_status: "UNSTABLE", checks: [running()], viewer: viewer({ can_merge: false }) });
+  assert.equal(reader.next, null);
+  assert.deepEqual(reader.menu.map((m) => m.kind), ["close"]);
+});
+
 test("waiting estimates the time left from the shards that finished", () => {
   const a = assess({
     merge_state_status: "UNSTABLE",
@@ -137,7 +151,7 @@ test("waiting estimates the time left from the shards that finished", () => {
 });
 
 test("auto-merge cannot be offered when the viewer may not turn it on", () => {
-  const a = assess({ merge_state_status: "UNSTABLE", checks: [running()], viewer: viewer({ can_enable_auto_merge: false }) });
+  const a = assess({ merge_state_status: "BLOCKED", checks: [running()], viewer: viewer({ can_enable_auto_merge: false }) });
   assert.equal(a.tone, "waiting");
   assert.equal(a.primary.kind, "none");
   assert.equal(a.next, null);
@@ -145,7 +159,7 @@ test("auto-merge cannot be offered when the viewer may not turn it on", () => {
 });
 
 test("other merge methods are offered for auto-merge", () => {
-  const a = assess({ merge_state_status: "UNSTABLE", checks: [running()] });
+  const a = assess({ merge_state_status: "BLOCKED", checks: [running()] });
   assert.deepEqual(a.menu.filter((m) => m.kind === "auto_merge").map((m) => [m.method, m.label]), [
     ["merge", "Merge when ready (create merge commit)"],
     ["rebase", "Merge when ready (rebase and merge)"],
@@ -182,9 +196,14 @@ test("failing checks are blockers; a failing check never reads as waiting", () =
   assert.equal(a.severity, "danger");
   assert.equal(a.title, "2 checks failed");
   assert.deepEqual(a.blockers.map((b) => [b.kind, b.label]), [["checks_failed", "2 checks failed"]]);
-  assert.equal(a.detail, "1 passed · 1 still running. Resolve this before it can merge.");
+  assert.equal(a.detail, "1 passed · 1 still running. None of this is required by the branch rules, so it can still merge.");
   assert.equal(a.primary.kind, "none");
   assert.equal(a.next, "fix the failing checks, or ask an agent to");
+  // GitHub allows the merge (UNSTABLE): it is in the menu, confirmed, with no admin bypass.
+  assert.deepEqual(a.menu.map((m) => [m.kind, m.label]), [["merge", "Merge anyway"], ["close", "Close pull request"]]);
+  const required = assess({ merge_state_status: "BLOCKED", checks: [failed("a", { is_required: true })] });
+  assert.equal(required.detail, "Resolve this before it can merge.");
+  assert.equal(required.menu.some((m) => m.kind === "merge"), false);
 });
 
 test("cancelled and timed-out checks block too", () => {

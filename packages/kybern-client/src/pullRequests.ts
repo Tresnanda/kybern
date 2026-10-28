@@ -313,6 +313,8 @@ export type AssessInput = Pick<PrDetailResult, "pull_request"> &
   Partial<Pick<PrDetailResult, "checks" | "merge_state_status" | "reviews" | "viewer" | "behind_by" | "merged_by">>;
 
 const KNOWN_STATES = ["CLEAN", "BLOCKED", "BEHIND", "DIRTY", "UNSTABLE", "DRAFT", "HAS_HOOKS"];
+/** GitHub could merge now: nothing it requires is missing. `gh pr merge --auto` merges at once in these states, so auto-merge is never offered. */
+const MERGEABLE_NOW = ["CLEAN", "HAS_HOOKS", "UNSTABLE"];
 const METHOD_ORDER: MergeMethod[] = ["squash", "merge", "rebase"];
 const METHOD_LABEL: Record<MergeMethod, string> = {
   squash: "Squash and merge",
@@ -507,15 +509,25 @@ export function assessPullRequest(input: AssessInput, now: number = Date.now()):
   const unstableUnexplained = mss === "UNSTABLE" && facts.failed + facts.pending === 0;
   const unsettled = !known || unstableUnexplained;
   const left = leftPhrase(estimateLeftMs(input.checks ?? [], now));
+  // UNSTABLE: what fails or runs is not required, so GitHub lets anyone who may merge do it now; no admin bypass is needed.
+  const mergeableNow = MERGEABLE_NOW.includes(mss);
+  const canMerge = viewer ? viewer.can_merge : true;
   const adminMenu: PrMenuAction[] =
-    viewer?.can_merge_as_admin && !conflicts ? [{ kind: "merge_admin", label: "Merge anyway", method: preferred, destructive: true }] : [];
+    mergeableNow && canMerge
+      ? [{ kind: "merge", label: "Merge anyway", method: preferred, destructive: true }]
+      : viewer?.can_merge_as_admin && !conflicts
+        ? [{ kind: "merge_admin", label: "Merge anyway", method: preferred, destructive: true }]
+        : [];
 
   // ---- blocked ----
   if (blockers.length > 0) {
     const single = blockers.length === 1 ? blockers[0] : null;
     const title = single ? blockerTitle(single, base) : `${blockers.length} blockers`;
     const progress = [...passedSkipped(facts), ...(facts.pendingBlocking ? [`${facts.pendingBlocking} still running`] : []), ...optionalNotes(facts)];
-    const detail = `${progress.length > 0 ? `${progress.join(" · ")}. ` : ""}${blockers.length === 1 ? "Resolve this" : "Resolve these"} before it can merge.`;
+    const ask = mergeableNow
+      ? "None of this is required by the branch rules, so it can still merge."
+      : `${blockers.length === 1 ? "Resolve this" : "Resolve these"} before it can merge.`;
+    const detail = `${progress.length > 0 ? `${progress.join(" · ")}. ` : ""}${ask}`;
     const severity: VerdictSeverity = blockers.some((b) => b.severity === "danger") ? "danger" : "warning";
     const menu: PrMenuAction[] = [];
     let primary: PrPrimaryAction;
@@ -582,7 +594,8 @@ export function assessPullRequest(input: AssessInput, now: number = Date.now()):
 
   // ---- waiting on checks ----
   if (facts.pendingBlocking > 0) {
-    const canArm = viewer ? viewer.can_enable_auto_merge : true;
+    // Auto-merge waits only for required checks; with none required (UNSTABLE) GitHub would merge at once.
+    const canArm = (viewer ? viewer.can_enable_auto_merge : true) && !mergeableNow;
     const parts = [...passedSkipped(facts), ...(left ? [left] : []), ...optionalNotes(facts)];
     return {
       tone: "waiting",
@@ -590,7 +603,11 @@ export function assessPullRequest(input: AssessInput, now: number = Date.now()):
       title: `Waiting on ${plural(facts.pendingBlocking, "check")}`,
       detail: `${parts.length > 0 ? `${parts.join(" · ")}. ` : ""}Nothing else blocks the merge.`,
       blockers: [],
-      next: canArm ? `turn on auto-merge so it ${METHOD_NEXT[preferred]} when ${facts.pendingBlocking === 1 ? "the check passes" : "the checks pass"}` : null,
+      next: canArm
+        ? `turn on auto-merge so it ${METHOD_NEXT[preferred]} when ${facts.pendingBlocking === 1 ? "the check passes" : "the checks pass"}`
+        : mergeableNow && canMerge
+          ? "wait for the checks to finish, or merge anyway from the menu"
+          : null,
       primary: canArm ? { kind: "auto_merge", label: "Merge when ready", method: preferred } : NONE("Waiting on checks"),
       menu: [
         ...(canArm ? methods.slice(1).map((m): PrMenuAction => ({ kind: "auto_merge", label: `Merge when ready (${METHOD_LABEL[m].toLowerCase()})`, method: m })) : []),
@@ -611,7 +628,6 @@ export function assessPullRequest(input: AssessInput, now: number = Date.now()):
           ? "The check passed."
           : `All ${facts.total} checks passed.`
         : `${parts.join(" · ")}.`;
-  const canMerge = viewer ? viewer.can_merge : true;
   return {
     tone: "ready",
     severity: "success",
