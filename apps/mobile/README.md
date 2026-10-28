@@ -50,6 +50,16 @@ cargo build -p kybern-daemon -p kybern-cli
 ./target/debug/kybern --data-dir /tmp/kybern-mobile-dev pair --address http://127.0.0.1:4199
 ```
 
+To pair a real device you cannot tap (for example an iPad driven over
+`xcrun devicectl`), open the invitation in Expo Go with `autoconnect=1`; in
+development builds it pairs without the Connect tap:
+
+```sh
+xcrun devicectl device process launch --device <udid> --terminate-existing \
+  --payload-url "exp://<lan-ip>:<metro-port>/--/pair?<invitation query>&autoconnect=1" host.exp.Exponent
+xcrun devicectl device capture screenshot --device <udid> --destination shot.png
+```
+
 ## Workflows
 
 - Start, search, pin, archive, and resume conversations across saved computers.
