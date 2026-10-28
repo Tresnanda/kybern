@@ -36,7 +36,8 @@ expression: schema_for!(OutboxOp)
         "files_push",
         "settings_patch",
         "secrets_put",
-        "fork"
+        "fork",
+        "move"
       ]
     }
   }

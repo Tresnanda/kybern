@@ -471,6 +471,7 @@ fn outbox_states_and_kinds_use_the_names_the_tables_check() {
         OutboxKind::SettingsPatch,
         OutboxKind::SecretsPut,
         OutboxKind::Fork,
+        OutboxKind::Move,
     ] {
         assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
     }

@@ -15,6 +15,7 @@ use crate::fork::*;
 use crate::forward::*;
 use crate::login_broker::*;
 use crate::model::*;
+use crate::move_thread::*;
 use crate::network::*;
 use crate::outbox::*;
 use crate::shared_state::*;
@@ -4215,6 +4216,19 @@ method!(
     ThreadsForkToMachineResult
 );
 method!(PeerFork, "peer.fork", Some(Scope::MachineDelegate), PeerForkParams, PeerForkResult);
+// Continue on another machine (M3, F2; payloads in move_thread.rs).
+method!(
+    ThreadsMoveToMachine,
+    "threads.move_to_machine",
+    Some(Scope::OrchestrationOperate),
+    ThreadsMoveToMachineParams,
+    ThreadsMoveToMachineResult
+);
+method!(ThreadsMoveAbandon, "threads.move_abandon", Some(Scope::OrchestrationOperate), ThreadsMoveAbandonParams, ThreadsMoveAbandonResult);
+method!(PeerMovePrepare, "peer.move.prepare", Some(Scope::MachineDelegate), PeerMovePrepareParams, PeerMovePrepareResult);
+method!(PeerMoveCommit, "peer.move.commit", Some(Scope::MachineDelegate), PeerMoveCommitParams, PeerMoveCommitResult);
+method!(PeerMoveGet, "peer.move.get", Some(Scope::MachineDelegate), PeerMoveRefParams, PeerMoveStatus);
+method!(PeerMoveAbort, "peer.move.abort", Some(Scope::MachineDelegate), PeerMoveRefParams, PeerMoveStatus);
 method!(PeerToolCall, "peer.tool.call", Some(Scope::MachineTools), PeerToolCallParams, PeerToolCallResult);
 method!(PeerThreadArchiveInbound, "peer.thread.archive_inbound", Some(Scope::MachineTools), PeerThreadArchiveInboundParams, Empty);
 
@@ -4471,6 +4485,12 @@ registry!(
     ThreadsForkNote,
     ThreadsForkToMachine,
     PeerFork,
+    ThreadsMoveToMachine,
+    ThreadsMoveAbandon,
+    PeerMovePrepare,
+    PeerMoveCommit,
+    PeerMoveGet,
+    PeerMoveAbort,
     PeerToolCall,
     PeerThreadArchiveInbound,
     SettingsNetworkViewMethod,

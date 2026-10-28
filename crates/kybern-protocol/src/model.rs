@@ -9,7 +9,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::event::NoticeLevel;
-use crate::network::{InboundInfo, NetworkSettings, Origin, RepoIdentity};
+use crate::network::{InboundInfo, MoveInfo, NetworkSettings, Origin, RepoIdentity};
 
 pub type ProjectId = Uuid;
 /// Daemon-owned neutral workspace used by chats that are not attached to a
@@ -533,6 +533,11 @@ pub struct Thread {
     /// keep such threads out of lists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inbound: Option<Box<InboundInfo>>,
+    /// Set while "Continue on…" is moving this thread to another machine (`departing`: it refuses sends
+    /// until the target confirms) and after it moved (`departed`: read-only, with a link to the thread
+    /// that continues the work). Only the daemon writes it, and a stale copy of the thread never changes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moved: Option<MoveInfo>,
 }
 
 /// What the delegating agent asked this child to be.
@@ -2547,6 +2552,24 @@ pub enum TranscriptEntry {
         to: Option<HarnessRef>,
         at: DateTime<Utc>,
     },
+    /// What a thread moved here with "Continue on…" said and did on its first machine.
+    History {
+        turn_id: TurnId,
+        #[serde(default)]
+        seq: EventSeq,
+        from_machine: crate::MachineId,
+        from_machine_name: String,
+        from_thread: ThreadId,
+        from_title: String,
+        items: Vec<crate::HistoryItem>,
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        omitted: u32,
+        at: DateTime<Utc>,
+    },
+}
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
 }
 
 /// Per-provider configuration in settings.json.

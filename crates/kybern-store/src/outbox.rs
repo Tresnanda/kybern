@@ -229,6 +229,18 @@ impl Store {
         })
     }
 
+    /// Make the queued move of `thread_id` due now: its turn ended, which is what the move waited for.
+    pub fn outbox_wake_move(&self, thread_id: Uuid) -> Result<bool> {
+        self.with(|c| {
+            Ok(c.execute(
+                "UPDATE outbox SET next_attempt_at = NULL
+                 WHERE kind = 'move' AND state = 'queued' AND next_attempt_at IS NOT NULL
+                   AND json_extract(payload, '$.source_thread_id') = ?1",
+                [thread_id.to_string()],
+            )? > 0)
+        })
+    }
+
     /// After a restart a delivery that was in flight is queued again; the target deduplicates it.
     pub fn outbox_requeue_sending(&self) -> Result<usize> {
         self.with(|c| Ok(c.execute("UPDATE outbox SET state = 'queued', next_attempt_at = NULL WHERE state = 'sending'", [])?))
@@ -438,6 +450,29 @@ mod tests {
             expires_at: at + Duration::days(7),
             updated_at: at,
         }
+    }
+
+    #[test]
+    fn a_waiting_move_is_woken_when_its_thread_goes_idle() {
+        let store = store();
+        let thread = Uuid::now_v7();
+        let now = Utc::now();
+        let mut waiting = item(Uuid::now_v7(), "m2", now);
+        waiting.kind = OutboxKind::Move;
+        waiting.payload = json!({ "source_thread_id": thread });
+        waiting.next_attempt_at = Some(now + Duration::minutes(5));
+        store.outbox_insert(&waiting).unwrap();
+        let mut other = item(Uuid::now_v7(), "m2", now);
+        other.kind = OutboxKind::Move;
+        other.payload = json!({ "source_thread_id": Uuid::now_v7() });
+        other.next_attempt_at = Some(now + Duration::minutes(5));
+        store.outbox_insert(&other).unwrap();
+
+        assert!(!store.outbox_wake_move(Uuid::now_v7()).unwrap(), "nothing waits for an unrelated thread");
+        assert!(store.outbox_wake_move(thread).unwrap());
+        assert_eq!(store.outbox_get(waiting.id).unwrap().unwrap().next_attempt_at, None, "due now");
+        assert!(store.outbox_get(other.id).unwrap().unwrap().next_attempt_at.is_some(), "another thread's move keeps its backoff");
+        assert!(!store.outbox_wake_move(thread).unwrap(), "already due");
     }
 
     fn child(parent: ThreadId, state: RemoteChildState) -> RemoteChild {

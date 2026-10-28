@@ -705,7 +705,7 @@ pub struct PeerRelayCloseParams {
 // ---- origins (§4.4) ----
 //
 // N1: the types exist now so later packages share them. `Thread.origin`, `Thread.inbound` and
-// `Thread.moved` come with their columns in v33 (R1) and v34 (F2).
+// `Thread.moved` come with their columns in v34 (R1) and v35 (F2).
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -748,16 +748,31 @@ pub enum MoveState {
     Arrived,
 }
 
-/// A thread moved with "Continue on…".
+/// A thread moved with "Continue on…" (design §7.2). `departing` holds the lease: the thread refuses
+/// sends until the target confirms (`departed`, read-only with a link to `peer_thread_id`) or the move
+/// is aborted (the field goes away). The daemon sets it; a stale copy of the thread never changes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct MoveInfo {
     pub state: MoveState,
     pub peer: MachineId,
+    /// The target's name when the move started, for the banner while it is offline.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub peer_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peer_thread_id: Option<ThreadId>,
+    /// While `departing`: when the lease ends unless it is renewed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease_until: Option<DateTime<Utc>>,
     pub operation_id: uuid::Uuid,
+    /// The branch and snapshot commit the move carries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+    /// The commit request went out and no answer came back, so the target may or may not have the
+    /// thread. The lease no longer expires; Retry asks the target, Abandon gives up.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub uncertain: bool,
 }
 
 // ---- settings ----

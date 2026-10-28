@@ -306,6 +306,12 @@ fn main() {
     method::<ThreadsForkNote>(&mut methods);
     method::<ThreadsForkToMachine>(&mut methods);
     method::<PeerFork>(&mut methods);
+    method::<ThreadsMoveToMachine>(&mut methods);
+    method::<ThreadsMoveAbandon>(&mut methods);
+    method::<PeerMovePrepare>(&mut methods);
+    method::<PeerMoveCommit>(&mut methods);
+    method::<PeerMoveGet>(&mut methods);
+    method::<PeerMoveAbort>(&mut methods);
     method::<PeerToolCall>(&mut methods);
     method::<FilesSend>(&mut methods);
     method::<PeerFilesBegin>(&mut methods);

@@ -1159,6 +1159,49 @@ expression: schema_for!(ThreadEvent)
         "rotation_id",
         "text"
       ]
+    },
+    {
+      "description": "A thread moved here with \"Continue on…\" brought the conversation it had on another machine\n(design §7.2): the visible messages and tool call summaries, no large outputs. Clients show it\nas a collapsed \"Earlier on <machine>\" block before the first turn.",
+      "type": "object",
+      "properties": {
+        "from_machine": {
+          "type": "string"
+        },
+        "from_machine_name": {
+          "type": "string"
+        },
+        "from_thread": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "from_title": {
+          "type": "string"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HistoryItem"
+          }
+        },
+        "omitted": {
+          "description": "Older items left out to fit the size cap.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "kind": {
+          "type": "string",
+          "const": "history_imported"
+        }
+      },
+      "required": [
+        "kind",
+        "from_machine",
+        "from_machine_name",
+        "from_thread",
+        "from_title",
+        "items"
+      ]
     }
   ],
   "$defs": {
@@ -1295,6 +1338,17 @@ expression: schema_for!(ThreadEvent)
           "anyOf": [
             {
               "$ref": "#/$defs/InboundInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "moved": {
+          "description": "Set while \"Continue on…\" is moving this thread to another machine (`departing`: it refuses sends\nuntil the target confirms) and after it moved (`departed`: read-only, with a link to the thread\nthat continues the work). Only the daemon writes it, and a stale copy of the thread never changes it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MoveInfo"
             },
             {
               "type": "null"
@@ -2098,6 +2152,71 @@ expression: schema_for!(ThreadEvent)
         "machine_id",
         "thread_id",
         "title"
+      ]
+    },
+    "MoveInfo": {
+      "description": "A thread moved with \"Continue on…\" (design §7.2). `departing` holds the lease: the thread refuses\nsends until the target confirms (`departed`, read-only with a link to `peer_thread_id`) or the move\nis aborted (the field goes away). The daemon sets it; a stale copy of the thread never changes it.",
+      "type": "object",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/MoveState"
+        },
+        "peer": {
+          "type": "string"
+        },
+        "peer_name": {
+          "description": "The target's name when the move started, for the banner while it is offline.",
+          "type": "string"
+        },
+        "peer_thread_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "lease_until": {
+          "description": "While `departing`: when the lease ends unless it is renewed.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "operation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "branch": {
+          "description": "The branch and snapshot commit the move carries.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uncertain": {
+          "description": "The commit request went out and no answer came back, so the target may or may not have the\nthread. The lease no longer expires; Retry asks the target, Abandon gives up.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "state",
+        "peer",
+        "operation_id"
+      ]
+    },
+    "MoveState": {
+      "type": "string",
+      "enum": [
+        "departing",
+        "departed",
+        "arrived"
       ]
     },
     "QueuedMessage": {
@@ -3743,6 +3862,57 @@ expression: schema_for!(ThreadEvent)
       },
       "required": [
         "kind"
+      ]
+    },
+    "HistoryItem": {
+      "description": "One entry of the conversation a moved thread brings along.",
+      "type": "object",
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/HistoryRole"
+        },
+        "text": {
+          "type": "string"
+        },
+        "at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "tool": {
+          "description": "The tool's name, for `tool` items.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "role",
+        "text"
+      ]
+    },
+    "HistoryRole": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "user",
+            "assistant"
+          ]
+        },
+        {
+          "description": "A tool call, as a one-line summary without its output.",
+          "type": "string",
+          "const": "tool"
+        },
+        {
+          "description": "A notice the thread showed (compaction, a fork or move link).",
+          "type": "string",
+          "const": "notice"
+        }
       ]
     }
   }

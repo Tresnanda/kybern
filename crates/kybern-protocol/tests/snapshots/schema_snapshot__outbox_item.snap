@@ -98,7 +98,8 @@ expression: schema_for!(OutboxItem)
         "files_push",
         "settings_patch",
         "secrets_put",
-        "fork"
+        "fork",
+        "move"
       ]
     },
     "Origin": {

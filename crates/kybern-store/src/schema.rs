@@ -700,6 +700,16 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX broker_loans_open ON broker_loans(role, provider) WHERE released_at IS NULL;
     COMMIT;
     ",
+    // Continue on another machine (F2, design §7.2, §4.4 "v34 (M3)"; numbered here in merge order).
+    // `threads.moved` is JSON `MoveInfo`: the lease while the thread departs and, once the target
+    // confirmed, the link to the thread that continues the work. Only the move code writes it
+    // (`thread_set_moved`); a thread upsert never touches it.
+    "
+    BEGIN;
+    ALTER TABLE threads ADD COLUMN moved TEXT;
+    CREATE INDEX threads_moving ON threads(id) WHERE moved IS NOT NULL;
+    COMMIT;
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

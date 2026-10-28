@@ -438,6 +438,18 @@ expression: scopes
   - "orchestration:operate"
 - - peer.fork
   - "machine:delegate"
+- - threads.move_to_machine
+  - "orchestration:operate"
+- - threads.move_abandon
+  - "orchestration:operate"
+- - peer.move.prepare
+  - "machine:delegate"
+- - peer.move.commit
+  - "machine:delegate"
+- - peer.move.get
+  - "machine:delegate"
+- - peer.move.abort
+  - "machine:delegate"
 - - peer.tool.call
   - "machine:tools"
 - - peer.thread.archive_inbound

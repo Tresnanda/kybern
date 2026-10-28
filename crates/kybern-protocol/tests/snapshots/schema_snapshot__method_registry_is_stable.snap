@@ -220,6 +220,12 @@ expression: names
 - threads.fork_note
 - threads.fork_to_machine
 - peer.fork
+- threads.move_to_machine
+- threads.move_abandon
+- peer.move.prepare
+- peer.move.commit
+- peer.move.get
+- peer.move.abort
 - peer.tool.call
 - peer.thread.archive_inbound
 - settings.network_view

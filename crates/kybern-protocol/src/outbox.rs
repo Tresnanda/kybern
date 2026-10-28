@@ -36,6 +36,7 @@ pub enum OutboxKind {
     SettingsPatch,
     SecretsPut,
     Fork,
+    Move,
 }
 
 impl OutboxKind {
@@ -48,6 +49,7 @@ impl OutboxKind {
             OutboxKind::SettingsPatch => "settings_patch",
             OutboxKind::SecretsPut => "secrets_put",
             OutboxKind::Fork => "fork",
+            OutboxKind::Move => "move",
         }
     }
 }

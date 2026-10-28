@@ -1172,6 +1172,7 @@ mod tests {
             coordinator_project_id: None,
             origin: None,
             inbound: None,
+            moved: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),

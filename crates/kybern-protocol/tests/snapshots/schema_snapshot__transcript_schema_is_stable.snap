@@ -592,6 +592,63 @@ expression: schema_for!(TranscriptEntry)
         "used_tokens",
         "at"
       ]
+    },
+    {
+      "description": "What a thread moved here with \"Continue on…\" said and did on its first machine.",
+      "type": "object",
+      "properties": {
+        "turn_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
+        "from_machine": {
+          "type": "string"
+        },
+        "from_machine_name": {
+          "type": "string"
+        },
+        "from_thread": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "from_title": {
+          "type": "string"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HistoryItem"
+          }
+        },
+        "omitted": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "role": {
+          "type": "string",
+          "const": "history"
+        }
+      },
+      "required": [
+        "role",
+        "turn_id",
+        "from_machine",
+        "from_machine_name",
+        "from_thread",
+        "from_title",
+        "items",
+        "at"
+      ]
     }
   ],
   "$defs": {
@@ -1940,6 +1997,57 @@ expression: schema_for!(TranscriptEntry)
       },
       "required": [
         "kind"
+      ]
+    },
+    "HistoryItem": {
+      "description": "One entry of the conversation a moved thread brings along.",
+      "type": "object",
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/HistoryRole"
+        },
+        "text": {
+          "type": "string"
+        },
+        "at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "tool": {
+          "description": "The tool's name, for `tool` items.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "role",
+        "text"
+      ]
+    },
+    "HistoryRole": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "user",
+            "assistant"
+          ]
+        },
+        {
+          "description": "A tool call, as a one-line summary without its output.",
+          "type": "string",
+          "const": "tool"
+        },
+        {
+          "description": "A notice the thread showed (compaction, a fork or move link).",
+          "type": "string",
+          "const": "notice"
+        }
       ]
     }
   }
