@@ -202,6 +202,93 @@ impl Store {
         })
     }
 
+    /// Revoke every token another machine asked this one to issue for a client (`issued_via`).
+    /// Returns the ids that were still active. A removed machine's tokens die with it (§2.5).
+    pub fn tokens_revoke_issued_via(&self, machine_id: &str) -> Result<Vec<Uuid>> {
+        self.with(|c| {
+            let tx = c.unchecked_transaction()?;
+            let ids = {
+                let mut st = tx.prepare("SELECT id FROM tokens WHERE issued_via = ?1 AND revoked = 0 ORDER BY created_at, id")?;
+                let rows = st.query_map([machine_id], |r| r.get::<_, String>(0))?;
+                rows.map(|id| Ok(id?.parse()?)).collect::<Result<Vec<Uuid>>>()?
+            };
+            tx.execute("UPDATE tokens SET revoked = 1 WHERE issued_via = ?1 AND revoked = 0", [machine_id])?;
+            tx.commit()?;
+            Ok(ids)
+        })
+    }
+
+    /// Revoke every token any machine asked this one to issue. A machine that left its network
+    /// forgets the clients it served for the network's members (§2.5).
+    pub fn tokens_revoke_all_issued_via(&self) -> Result<Vec<Uuid>> {
+        self.with(|c| {
+            let tx = c.unchecked_transaction()?;
+            let ids = {
+                let mut st = tx.prepare("SELECT id FROM tokens WHERE issued_via IS NOT NULL AND revoked = 0 ORDER BY created_at, id")?;
+                let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+                rows.map(|id| Ok(id?.parse()?)).collect::<Result<Vec<Uuid>>>()?
+            };
+            tx.execute("UPDATE tokens SET revoked = 1 WHERE issued_via IS NOT NULL AND revoked = 0", [])?;
+            tx.commit()?;
+            Ok(ids)
+        })
+    }
+
+    /// Revoke the tokens one machine issued to one device, so a client that asks again gets a
+    /// single fresh token. Returns the ids that were still active.
+    pub fn tokens_revoke_device_via(&self, device_id: &str, issued_via: &str) -> Result<Vec<Uuid>> {
+        self.with(|c| {
+            let tx = c.unchecked_transaction()?;
+            let ids = {
+                let mut st =
+                    tx.prepare("SELECT id FROM tokens WHERE device_id = ?1 AND issued_via = ?2 AND revoked = 0 ORDER BY created_at, id")?;
+                let rows = st.query_map(params![device_id, issued_via], |r| r.get::<_, String>(0))?;
+                rows.map(|id| Ok(id?.parse()?)).collect::<Result<Vec<Uuid>>>()?
+            };
+            tx.execute(
+                "UPDATE tokens SET revoked = 1 WHERE device_id = ?1 AND issued_via = ?2 AND revoked = 0",
+                params![device_id, issued_via],
+            )?;
+            tx.commit()?;
+            Ok(ids)
+        })
+    }
+
+    /// The device a token was issued to, if it has one.
+    pub fn token_device(&self, token_id: Uuid) -> Result<Option<String>> {
+        self.with(|c| {
+            Ok(c.query_row("SELECT device_id FROM tokens WHERE id = ?1", [token_id.to_string()], |r| r.get::<_, Option<String>>(0))
+                .optional()?
+                .flatten())
+        })
+    }
+
+    /// Give every active token that lacks `scope` that scope, for the tokens `keep` accepts (by
+    /// label). Used when an upgrade adds a scope that paired clients should already hold. Returns
+    /// how many tokens changed.
+    pub fn tokens_add_scope(&self, scope: kybern_protocol::Scope, keep: impl Fn(&str) -> bool) -> Result<usize> {
+        self.with(|c| {
+            let tx = c.unchecked_transaction()?;
+            let rows: Vec<(String, String, String)> = {
+                let mut st = tx.prepare("SELECT id, label, scopes FROM tokens WHERE revoked = 0")?;
+                let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+                rows.collect::<Result<_, _>>()?
+            };
+            let mut changed = 0;
+            for (id, label, scopes) in rows {
+                let mut parsed: Vec<kybern_protocol::Scope> = serde_json::from_str(&scopes)?;
+                if parsed.contains(&scope) || !keep(&label) {
+                    continue;
+                }
+                parsed.push(scope);
+                tx.execute("UPDATE tokens SET scopes = ?2 WHERE id = ?1", params![id, serde_json::to_string(&parsed)?])?;
+                changed += 1;
+            }
+            tx.commit()?;
+            Ok(changed)
+        })
+    }
+
     /// The ids of the tokens issued to a device, revoked or not.
     pub fn tokens_for_device(&self, device_id: &str) -> Result<Vec<Uuid>> {
         self.with(|c| {
@@ -382,6 +469,41 @@ mod tests {
         assert!(store.project_set_repo_identity(project.id, None).unwrap());
         assert_eq!(store.project_get(project.id).unwrap().unwrap().repo, None);
         assert!(!store.project_set_repo_identity(Uuid::now_v7(), Some(&identity)).unwrap());
+    }
+
+    #[test]
+    fn tokens_issued_through_a_machine_die_with_it_and_scopes_can_be_added() {
+        let store = Store::open_in_memory().unwrap();
+        let (a, b, c, d) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+        for (id, label) in [(a, "Phone (via m1)"), (b, "Phone (via m1)"), (c, "Phone (via m2)"), (d, "Desktop")] {
+            store.token_insert(id, &format!("hash-{id}"), label, &Scope::CLIENT).unwrap();
+        }
+        store.token_set_device(a, "dev-1", Some("m1")).unwrap();
+        store.token_set_device(b, "dev-2", Some("m1")).unwrap();
+        store.token_set_device(c, "dev-1", Some("m2")).unwrap();
+        assert_eq!(store.token_device(a).unwrap().as_deref(), Some("dev-1"));
+        assert_eq!(store.token_device(d).unwrap(), None);
+
+        // A client that asks again gets one fresh token: the older one from the same machine goes.
+        assert_eq!(store.tokens_revoke_device_via("dev-1", "m1").unwrap(), vec![a]);
+        assert!(store.token_is_active(c).unwrap(), "another machine's token for the device stays");
+        assert!(store.tokens_revoke_device_via("dev-1", "m1").unwrap().is_empty());
+
+        assert_eq!(store.tokens_revoke_issued_via("m1").unwrap(), vec![b]);
+        assert!(!store.token_is_active(b).unwrap() && store.token_is_active(c).unwrap() && store.token_is_active(d).unwrap());
+
+        let changed = store.tokens_add_scope(Scope::NetworkAdmin, |label| label != "Desktop").unwrap();
+        assert_eq!(changed, 1, "only the active token that matches and lacks the scope changes");
+        assert_eq!(store.tokens_add_scope(Scope::NetworkAdmin, |_| true).unwrap(), 1, "the one left out is changed now");
+        assert_eq!(store.tokens_add_scope(Scope::NetworkAdmin, |_| true).unwrap(), 0, "and it is idempotent");
+        let admin =
+            store.tokens_list().unwrap().into_iter().filter(|token| !token.revoked && token.scopes.contains(&Scope::NetworkAdmin)).count();
+        assert_eq!(admin, 2);
+
+        // A machine that left its network drops everything other machines issued for it.
+        assert_eq!(store.tokens_revoke_all_issued_via().unwrap(), vec![c]);
+        assert!(store.tokens_revoke_all_issued_via().unwrap().is_empty());
+        assert!(store.token_is_active(d).unwrap());
     }
 
     #[test]

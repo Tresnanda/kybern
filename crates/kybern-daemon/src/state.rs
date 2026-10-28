@@ -138,6 +138,10 @@ impl AppState {
             .with_remote_hub(hub);
         let provider_catalogs = orchestrator.provider_catalog_cache();
         network.set_enabled(settings.get().network.enabled);
+        let revoked_tokens = broadcast::channel(128).0;
+        network.attach_revocations(revoked_tokens.clone());
+        // Clients paired before the network existed hold the network scopes too (N4).
+        crate::access::upgrade_paired_tokens(&store);
         Ok(Self {
             inner: Arc::new(Inner {
                 paths: paths.clone(),
@@ -162,7 +166,7 @@ impl AppState {
                 restart_pending: std::sync::atomic::AtomicBool::new(false),
                 pairing: Pairing::default(),
                 tickets: crate::access::Tickets::default(),
-                revoked_tokens: broadcast::channel(128).0,
+                revoked_tokens,
                 listen_addr: std::sync::RwLock::new(None),
                 exposure: Default::default(),
                 network,

@@ -414,6 +414,10 @@ pub struct NetworkCodeCreateResult {
 pub struct NetworkJoinParams {
     pub code: String,
     pub address: String,
+    /// The joining machine is an environment a client already holds a token for (§2.4d): the
+    /// `add` operation is recorded `via: migrate` instead of `via: code`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub migrate: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
