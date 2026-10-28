@@ -38,6 +38,7 @@ import { IconButton } from '../kit/IconButton.tsx'
 import { S } from './glyphs.ts'
 import { openSettingsTab } from './SettingsScreen.tsx'
 import { useSettings } from './store.ts'
+import { LoginBrokerSection } from './LoginBroker.tsx'
 
 /** Skeleton rows fade in after 150 ms (the fade's own `delay`, no timer), so a fast answer never flashes them. */
 const SKELETON_DELAY = PATCHED_NATIVE ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { delay: 0.15, duration: DURATION.quick, ease: [0.23, 1, 0.32, 1] as [number, number, number, number] } } : undefined
@@ -87,6 +88,7 @@ export function Accounts() {
   const missing = providers.filter((p) => !p.available)
   return <>
     {legacy && <PageBlock><Note>{`Update Kybern on ${host} to sign in from the browser.`}</Note></PageBlock>}
+    {!legacy && <LoginBrokerSection />}
     {installed.map((provider) => <AgentSection key={provider.kind} provider={provider} accounts={accounts.filter((a) => a.provider.kind === provider.kind)} readOnly={legacy} onRemove={setRemoving} onAssign={setAssigning} />)}
     {!(loaded && providersLoaded) && installed.length === 0 && <PageBlock><div testId="accounts-loading" role="status" paintTransform={SKELETON_DELAY} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>{[0, 1].map((i) => <Skeleton key={i} height={56} radius={12} />)}</div></PageBlock>}
     {missing.length > 0 && <PageBlock><div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', paddingBottom: 30 }}><Note>{`${listAgents(missing)} ${missing.length === 1 ? 'isn’t' : 'aren’t'} installed. Set them up in `}</Note><TextLink testId="accounts-agent-providers" onClick={() => openSettingsTab('agents')}>Agent providers</TextLink><Note>.</Note></div></PageBlock>}
@@ -133,7 +135,8 @@ function AccountRow({ account, first, readOnly, onRemove, onAssign }: { account:
   const email = account.identity?.email
   const plan = account.identity?.plan
   const projectCount = account.projects.length
-  const detail = [email ?? 'Email unavailable', plan, projectCount > 0 ? (projectCount === 1 ? '1 project' : `${projectCount} projects`) : null, cli ? 'Same as your terminal' : null].filter(Boolean).join(' · ')
+  const through = account.broker ? (account.broker.state === 'borrowing' ? `Signs in through ${account.broker.machine_name}` : account.broker.message ?? `Signs in through ${account.broker.machine_name}`) : null
+  const detail = [through ?? email ?? 'Email unavailable', through ? null : plan, projectCount > 0 ? (projectCount === 1 ? '1 project' : `${projectCount} projects`) : null, cli ? 'Same as your terminal' : null].filter(Boolean).join(' · ')
   return <div testId={`account-row-${kind}-${instance}`} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 12, minHeight: 56, paddingLeft: 18, paddingRight: 18, paddingTop: 12, paddingBottom: 12, borderTopWidth: first ? 0 : 1, borderColor: t.v('--app-settings-card-border') }}>
     {flash && <FlashOverlay />}
     <AccountAvatar kind={kind} color={account.color} instance={instance} size={32} />

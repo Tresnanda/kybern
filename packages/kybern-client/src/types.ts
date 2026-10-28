@@ -2841,6 +2841,8 @@ export interface AccountSummary {
   directory?: string;
   managed: boolean;
   can_sign_out: boolean;
+  /** Set when this account signs in through the login broker (design §9.4). */
+  broker?: AccountBroker;
 }
 export type AccountLoginMode = "browser" | "paste" | "device_code" | "terminal";
 export type AccountLoginPhase = "starting" | "waiting" | "verifying" | "signed_in" | "failed" | "canceled";
@@ -4192,6 +4194,121 @@ export interface Methods {
   "peer.settings.get": [Empty, PeerSettingsGetResult];
   "peer.settings.patch": [SettingsPatch, PeerSettingsPatchResult];
   "peer.federated.read": [PeerFederatedReadParams, PeerFederatedReadResult];
+  "peer.login.borrow": [PeerLoginBorrowParams, PeerLoginBorrowResult];
+  "peer.login.push": [PeerLoginPushParams, Empty];
+  "peer.login.release": [{ loan_id: string }, Empty];
+  "peer.login.status": [Empty, PeerLoginStatus];
+  "peer.login.release_all": [{ sign_out?: boolean }, { released: number; signed_out: ProviderKind[] }];
+  "peer.login.usage": [{ provider: ProviderKind; account?: string }, UsageLimitsResult];
+  "peer.secrets.put": [{ name: string; sealed: string }, Empty];
+  "login.broker.status": [Empty, LoginBrokerStatus];
+  "login.broker.bind": [LoginBrokerBindParams, LoginBrokerStatus];
+  "login.broker.set": [LoginBrokerSetParams, LoginBrokerSetResult];
+  "secrets.push": [SecretsPushParams, SecretsPushResult];
+}
+
+// ---- the login broker and pushed keys (ADE-86 S4; design §9.3 and §9.4) ----
+
+/** Where one harness' sign-in comes from on this machine. */
+export type BrokerLoginState = "lending" | "borrowing" | "broker_offline" | "broker_not_signed_in" | "broker_unsupported" | "not_used";
+export interface AccountBroker {
+  machine_id: MachineId;
+  /** "VPS": the name clients put in "Signs in through VPS". */
+  machine_name: string;
+  broker_account: string;
+  state: BrokerLoginState;
+  message?: string;
+}
+export interface LendableAccount {
+  provider: ProviderKind;
+  account: string;
+  name: string;
+  email?: string;
+  plan?: string;
+}
+export interface BrokerProviderStatus {
+  provider: ProviderKind;
+  state: BrokerLoginState;
+  /** The local account that signs in through the broker. */
+  local_account?: string;
+  broker_account?: string;
+  lendable: LendableAccount[];
+  /** The sentence to show ("Claude signs in through the VPS, which is offline · Sign in here instead"). */
+  message?: string;
+  sessions: number;
+}
+export interface BrokerLoanView {
+  loan_id: string;
+  machine_id: MachineId;
+  provider: ProviderKind;
+  account: string;
+  created_at: DateTime;
+  last_pushed_at?: DateTime;
+  last_error?: string;
+}
+export interface LoginBrokerStatus {
+  broker?: BrokerInfo;
+  is_broker: boolean;
+  providers: BrokerProviderStatus[];
+  loans: BrokerLoanView[];
+}
+export interface LoginBrokerBindParams {
+  provider: ProviderKind;
+  instance: string;
+  /** The broker's account to lend; absent unbinds. */
+  broker_account?: string | null;
+}
+export interface LoginBrokerSetParams {
+  /** The new broker; absent clears it. */
+  machine_id?: MachineId | null;
+  /** After the members re-borrowed, ask the old broker to sign out. Default true. */
+  sign_out_old?: boolean;
+}
+export interface LoginBrokerSetResult {
+  status: LoginBrokerStatus;
+  rebound: MachineId[];
+  offline: MachineId[];
+  old_signed_out: ProviderKind[];
+  note?: string;
+}
+export interface PeerLoginBorrowParams {
+  provider: ProviderKind;
+  account?: string;
+  loan_id?: string | null;
+}
+export interface PeerLoginBorrowResult {
+  loan_id: string;
+  sealed: string;
+  expires_at?: DateTime;
+  email?: string;
+  plan?: string;
+}
+export interface PeerLoginPushParams {
+  loan_id: string;
+  provider: ProviderKind;
+  sealed: string;
+  expires_at?: DateTime;
+}
+export interface PeerLoginStatus {
+  broker?: MachineId;
+  is_broker: boolean;
+  lendable: LendableAccount[];
+  borrowed_from: MachineId[];
+}
+export interface SecretsPushParams {
+  name: string;
+  /** Members to push to; empty or absent means every other member. */
+  machines?: MachineId[];
+}
+export type SecretsPushState = "delivered" | "queued" | "refused";
+export interface SecretsPushMachine {
+  machine_id: MachineId;
+  name: string;
+  state: SecretsPushState;
+  detail?: string;
+}
+export interface SecretsPushResult {
+  machines: SecretsPushMachine[];
 }
 
 export type MethodName = keyof Methods;
