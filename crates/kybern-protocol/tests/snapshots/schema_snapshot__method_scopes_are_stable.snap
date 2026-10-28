@@ -490,6 +490,18 @@ expression: scopes
   - "orchestration:read"
 - - ports.stop
   - "orchestration:operate"
+- - clipboard.set
+  - "orchestration:operate"
+- - clipboard.get
+  - "orchestration:operate"
+- - clipboard.status
+  - "orchestration:read"
+- - peer.clipboard.set
+  - "machine:clipboard"
+- - peer.clipboard.get
+  - "machine:clipboard"
+- - peer.clipboard.auto
+  - "machine:clipboard_auto"
 - - peer.ports.open
   - "machine:ports"
 - - peer.ports.data

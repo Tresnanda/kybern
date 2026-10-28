@@ -213,3 +213,72 @@ pub struct PeerPortsOpenParams {
     pub stream_id: u64,
     pub port: u16,
 }
+
+// ---- clipboard (M4 / U2, design §8.2) ----
+
+/// The longest text one clipboard send or paste carries.
+pub const MAX_CLIPBOARD_BYTES: usize = 1024 * 1024;
+/// How long a machine with no desktop session keeps a sent text in its Kybern clipboard buffer.
+pub const CLIPBOARD_BUFFER_MINUTES: i64 = 10;
+
+/// Where a clipboard text lives on a machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ClipboardStore {
+    /// The operating system's clipboard.
+    System,
+    /// Kybern's own buffer, for a machine with no desktop session (a server) or when the system clipboard cannot be reached.
+    Buffer,
+}
+
+/// `clipboard.set`: put a text on the clipboard of this machine, or of another machine of the network.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ClipboardSetParams {
+    /// The target machine, by id or name; this machine when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ClipboardSetResult {
+    pub stored: ClipboardStore,
+    pub bytes: u64,
+}
+
+/// `clipboard.get`: read the clipboard of this machine, or of another machine of the network.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ClipboardGetParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ClipboardGetResult {
+    pub text: String,
+    pub source: ClipboardStore,
+}
+
+/// `peer.clipboard.set`: the text a member sends on behalf of its client.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerClipboardSetParams {
+    pub text: String,
+}
+
+/// `peer.clipboard.auto`: a change of the universal clipboard, sealed to the receiver's sealing key.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerClipboardAutoParams {
+    /// Standard base64 of the sealed text.
+    pub sealed: String,
+}
+
+/// `clipboard.status`: what this machine's clipboard can do, and how many changes the universal clipboard skipped.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ClipboardStatus {
+    /// Where an explicit send lands on this machine.
+    pub backend: ClipboardStore,
+    /// "Share clipboard automatically" is on for this machine.
+    pub auto: bool,
+    /// Changes the universal clipboard did not share because they looked secret; counts only, never content.
+    pub skipped: u64,
+}

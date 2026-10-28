@@ -434,7 +434,9 @@ async fn pump(
     };
     let mut remote_open = true;
     while remote_open {
+        // Bytes already received are written before an end or a cancel is honoured.
         let chunk = tokio::select! {
+            biased;
             chunk = incoming.recv() => chunk,
             _ = stream.cancel.cancelled() => None,
             _ = link.closed() => None,

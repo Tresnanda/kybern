@@ -516,6 +516,13 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
         PeerFilesBegin::NAME | PeerFilesChunk::NAME | PeerFilesFinish::NAME | PeerFilesAbort::NAME => {
             super::files_push::serve(state, link, method, params).await
         }
+        // The clipboard (U2): an explicit text, a read, and a change of the universal clipboard.
+        PeerClipboardSet::NAME => ok(super::clipboard::peer_set(state, parse(params)?).await?),
+        PeerClipboardGet::NAME => ok(super::clipboard::peer_get(state).await?),
+        PeerClipboardAuto::NAME => {
+            super::clipboard::peer_auto(state, link, parse(params)?).await?;
+            ok(Empty {})
+        }
         PeerPortsOpen::NAME => super::ports::handle_open(state, link, parse(params)?).await,
         PeerPortsData::NAME => super::relay::handle_data(link, parse(params)?).await,
         PeerPortsClose::NAME => super::relay::handle_close(link, parse(params)?),
@@ -589,7 +596,11 @@ pub fn effective_scopes(network: &Network, link: &PeerLink) -> Vec<Scope> {
     let policy = network.policy_scopes(&link.machine_id);
     match link.direction {
         Direction::Dialed => policy,
-        Direction::Accepted => link.scopes.iter().copied().filter(|scope| policy.contains(scope)).collect(),
+        // The universal clipboard is governed by this machine's own opt-in alone, so one made after the session opened
+        // applies at once, as every other register does.
+        Direction::Accepted => {
+            policy.iter().copied().filter(|scope| *scope == Scope::MachineClipboardAuto || link.scopes.contains(scope)).collect()
+        }
     }
 }
 
@@ -746,7 +757,7 @@ async fn dial(state: &AppState, member: &str, node: &TsNode) -> Result<(), Strin
     let projection = membership.projection();
     let entry = projection.entry(member).filter(|entry| entry.removed.is_none()).ok_or("not a member")?;
     let ip = node.ip().ok_or("the node has no tailnet address")?;
-    let wanted: Vec<Scope> = Scope::MACHINE_DEFAULT.to_vec();
+    let wanted: Vec<Scope> = Scope::MACHINE.to_vec();
     let mut last = String::from("no listener answered");
     for port in candidate_ports(entry.descriptor.port) {
         let target =
@@ -839,7 +850,7 @@ pub(super) fn run_dialed<S>(
                 _ = tokio::time::sleep(renew_state.network.timing.renew_after) => {}
             }
             let Some(membership) = renew_state.network.membership() else { break };
-            let wanted = Scope::MACHINE_DEFAULT.to_vec();
+            let wanted = Scope::MACHINE.to_vec();
             if let Err(error) = session::open(&renew_state.network, membership, &renew_target, &wanted, Some(&grant_id)).await {
                 tracing::warn!(target: SESSION_TARGET, machine = %renew_link.machine_id, %error, "could not renew the session; reconnecting");
                 renew_link.close();

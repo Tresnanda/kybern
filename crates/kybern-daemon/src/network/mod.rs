@@ -15,6 +15,7 @@
 
 pub mod broker;
 pub mod client_grant;
+pub mod clipboard;
 pub mod clipboard_filter;
 pub mod dial_out;
 pub mod doctor;
@@ -204,6 +205,8 @@ pub struct Network {
     pub files: files_push::Incoming,
     /// Ports this machine forwards from other machines (M4, U3).
     pub ports: ports::Forwards,
+    /// This machine's clipboard, explicit sends and the universal clipboard (M4, U2).
+    pub clipboard: clipboard::Clipboard,
     /// The client every dial and probe uses. Under the fake it is bound to this node's loopback
     /// address, so the peer's `whois` can name the caller.
     pub http: reqwest::Client,
@@ -256,6 +259,7 @@ impl Network {
             relays: Default::default(),
             files: Default::default(),
             ports: Default::default(),
+            clipboard: Default::default(),
             listen: Default::default(),
             self_ts: Default::default(),
             watching: Default::default(),
@@ -308,6 +312,7 @@ impl Network {
             features::UPDATE_V1.to_string(),
             features::FILES_PUSH_V1.to_string(),
             features::PORTS_V1.to_string(),
+            features::CLIPBOARD_V1.to_string(),
         ]
     }
 

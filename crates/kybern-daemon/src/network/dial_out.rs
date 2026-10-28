@@ -97,7 +97,7 @@ pub async fn dial(state: &AppState, member: &str, url: &str) -> Result<(), Strin
     let projection = membership.projection();
     let entry = projection.entry(member).filter(|entry| entry.removed.is_none()).ok_or("not a member")?;
     let target = Target::at_url(member.to_string(), entry.descriptor.signing_key.clone(), url.to_string());
-    let wanted: Vec<Scope> = Scope::MACHINE_DEFAULT.to_vec();
+    let wanted: Vec<Scope> = Scope::MACHINE.to_vec();
     let established = session::open(network, membership, &target, &wanted, None).await.map_err(|error| error.to_string())?;
     let socket = connect_socket(network, &target, &established.token).await?;
     run_dialed(state.clone(), target, established, socket);

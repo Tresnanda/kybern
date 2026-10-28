@@ -307,9 +307,12 @@ async fn a_folder_sent_to_an_offline_machine_waits_in_the_outbox_and_lands_when_
     assert_eq!((sent.files, sent.bytes), (3, body.len() as u64 + 5), "the folder's files, minus .git and .env");
     assert_eq!(sent.item.kind, OutboxKind::FilesPush);
     assert!(sent.skipped >= 2);
-    tokio::time::sleep(Duration::from_millis(400)).await;
-    let queued = a.state.store.outbox_get(sent.item.id).unwrap().unwrap();
-    assert_eq!(queued.state, OutboxState::Queued, "nothing is delivered to an offline machine");
+    // Held back, not delivered: the attempt that found b away leaves the item queued with the reason.
+    eventually("the item waits for b", WAIT, || {
+        let item = a.state.store.outbox_get(sent.item.id).unwrap().unwrap();
+        item.state == OutboxState::Queued && item.last_error.is_some()
+    })
+    .await;
 
     // b comes back (same data directory): the item is delivered on its own.
     drop(b);
@@ -663,5 +666,97 @@ async fn terminal_tools_on_another_machine_need_the_terminals_capability() {
     assert!(call("kybern_threads_search", json!({})).await.is_ok());
 }
 
-#[allow(dead_code)]
-fn _keep(_: Arc<()>) {}
+// ---- U2: clipboard ----
+
+/// The opt-in registers a member published are known to the others.
+async fn opt_in(node: &Node, capability: &str, on: bool) {
+    let op = node.membership().set(&format!("allow.{}.{capability}", node.id()), json!(on)).unwrap();
+    node.state.network.publish_ops(vec![op]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_clipboard_is_sent_and_pasted_between_machines_and_a_server_keeps_it_in_a_buffer() {
+    let Some((_cluster, a, b)) = pair().await else { return };
+    a.state.network.clipboard.use_memory();
+    b.state.network.clipboard.use_buffer_only();
+    let client = admin(&a).await;
+    // Send to b (a machine with no desktop): it keeps the text in its Kybern buffer.
+    let sent = client.call::<ClipboardSet>(ClipboardSetParams { machine: Some(b.id()), text: "from the mac".into() }).await.unwrap();
+    assert_eq!((sent.stored, sent.bytes), (ClipboardStore::Buffer, 12));
+    // Paste from b: the buffer answers, and so does b's own client.
+    let pasted = client.call::<ClipboardGet>(ClipboardGetParams { machine: Some(b.id()) }).await.unwrap();
+    assert_eq!((pasted.text.as_str(), pasted.source), ("from the mac", ClipboardStore::Buffer));
+    let own = admin(&b).await.call::<ClipboardGet>(ClipboardGetParams::default()).await.unwrap();
+    assert_eq!(own.text, "from the mac");
+    // Without a machine it is this one: a's clipboard.
+    client.call::<ClipboardSet>(ClipboardSetParams { machine: None, text: "local".into() }).await.unwrap();
+    let local = client.call::<ClipboardGet>(ClipboardGetParams::default()).await.unwrap();
+    assert_eq!((local.text.as_str(), local.source), ("local", ClipboardStore::System));
+    // A megabyte and a byte is too much, and a machine that turned Clipboard off refuses.
+    let big = client.call::<ClipboardSet>(ClipboardSetParams { machine: Some(b.id()), text: "x".repeat(MAX_CLIPBOARD_BYTES + 1) }).await;
+    assert!(big.is_err());
+    b.membership().set(&format!("allow.{}.clipboard", b.id()), json!(false)).unwrap();
+    let refused = client.call::<ClipboardGet>(ClipboardGetParams { machine: Some(b.id()) }).await.unwrap_err();
+    assert!(refused.to_string().contains("Clipboard"), "{refused}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_universal_clipboard_is_off_until_both_machines_opt_in_and_it_never_shares_a_secret() {
+    use super::clipboard::tick;
+    use super::clipboard_filter::Markers;
+    let Some((_cluster, a, b)) = pair().await else { return };
+    a.state.network.clipboard.use_memory();
+    b.state.network.clipboard.use_memory();
+    let status = |node: &Node| crate::network::clipboard::status(&node.state);
+    assert!(!status(&a).auto && !status(&b).auto, "off by default");
+
+    // Off: nothing is shared, and nothing is even read.
+    a.state.network.clipboard.set("copied on a").await.unwrap();
+    a.state.network.clipboard.use_memory();
+    tick(&a.state).await;
+    assert!(b.state.network.clipboard.memory_for_test().as_deref().unwrap_or("").is_empty(), "nothing arrived");
+
+    // Only a opted in: still nothing, since no member has.
+    opt_in(&a, "clipboard_auto", true).await;
+    eventually("a is opted in", WAIT, || status(&a).auto).await;
+    tick(&a.state).await;
+    assert!(b.state.network.clipboard.memory_for_test().as_deref().unwrap_or("").is_empty());
+
+    // Both opted in: a change reaches b, sealed, and b does not send it back.
+    opt_in(&b, "clipboard_auto", true).await;
+    eventually("a sees b opted in", WAIT, || a.membership().projection().allowed(&b.id()).get("clipboard_auto") == Some(&true)).await;
+    eventually("b sees a opted in", WAIT, || b.membership().projection().allowed(&a.id()).get("clipboard_auto") == Some(&true)).await;
+    a.state.network.clipboard.set("a sentence copied on a").await.unwrap();
+    // `set` marks it as applied; a real copy is a change the watcher has not seen.
+    *a.state.network.clipboard.memory_for_test() = Some("a sentence copied on a".into());
+    a.state.network.clipboard.forget_applied();
+    tick(&a.state).await;
+    eventually("b has the text", WAIT, || b.state.network.clipboard.memory_for_test().as_deref() == Some("a sentence copied on a")).await;
+    tick(&b.state).await;
+    assert_eq!(a.state.network.clipboard.memory_for_test().as_deref(), Some("a sentence copied on a"), "no echo");
+    assert_eq!(a.state.network.clipboard.skips.total(), 0);
+
+    // A secret is skipped by shape, by entropy and by the source's own marker; the skips are counted.
+    for secret in [
+        "ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+        "Zx9Qm4Vb7Lp2Rt8Ys6Nc3Hd5Jf1Kg0W",
+        "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
+    ] {
+        *a.state.network.clipboard.memory_for_test() = Some(secret.into());
+        tick(&a.state).await;
+    }
+    *a.state.network.clipboard.memory_for_test() = Some("an ordinary sentence from a password manager".into());
+    a.state.network.clipboard.set_memory_markers(Markers { concealed: true, transient: false });
+    tick(&a.state).await;
+    assert_eq!(a.state.network.clipboard.skips.total(), 4);
+    assert_eq!(status(&a).skipped, 4);
+    assert_eq!(b.state.network.clipboard.memory_for_test().as_deref(), Some("a sentence copied on a"), "nothing secret crossed");
+
+    // Opting out stops it at once.
+    a.state.network.clipboard.set_memory_markers(Markers::default());
+    *a.state.network.clipboard.memory_for_test() = Some("another ordinary sentence".into());
+    opt_in(&b, "clipboard_auto", false).await;
+    eventually("a sees b opted out", WAIT, || a.membership().projection().allowed(&b.id()).get("clipboard_auto") == Some(&false)).await;
+    tick(&a.state).await;
+    assert_eq!(b.state.network.clipboard.memory_for_test().as_deref(), Some("a sentence copied on a"));
+}

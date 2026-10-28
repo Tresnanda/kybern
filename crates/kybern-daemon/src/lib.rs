@@ -257,6 +257,8 @@ async fn serve() -> Result<()> {
     let follow_updates_worker = tokio::spawn(network::updates::run(state.clone()));
     // The login broker's watch (rotation, refresh ahead of expiry) and every member's catch-up after a move.
     let login_broker_worker = tokio::spawn(network::broker::run(state.clone()));
+    // The universal clipboard: idle unless this machine's owner turned on "Share clipboard automatically".
+    let clipboard_worker = tokio::spawn(network::clipboard::run(state.clone()));
 
     if args.pair {
         let endpoints = crate::access::endpoints(&state).await;
@@ -286,6 +288,7 @@ async fn serve() -> Result<()> {
     repo_identity_worker.abort();
     follow_updates_worker.abort();
     login_broker_worker.abort();
+    clipboard_worker.abort();
     let _ = maintenance_worker.await;
     let _ = update_worker.await;
     let _ = self_update_worker.await;

@@ -1337,6 +1337,9 @@ async fn dispatch_part_utilities(
     let params = slot.take().unwrap_or_default();
     match method {
         FilesSend::NAME => ok(crate::network::files_push::send(state, parse(params)?)?),
+        ClipboardSet::NAME => ok(crate::network::clipboard::handle_set(state, parse(params)?).await?),
+        ClipboardGet::NAME => ok(crate::network::clipboard::handle_get(state, parse_or_default(params)?).await?),
+        ClipboardStatusMethod::NAME => ok(crate::network::clipboard::status(state)),
         PortsForward::NAME => ok(crate::network::ports::forward(state, parse(params)?).await?),
         PortsList::NAME => ok(crate::network::ports::list(state)),
         PortsStop::NAME => {

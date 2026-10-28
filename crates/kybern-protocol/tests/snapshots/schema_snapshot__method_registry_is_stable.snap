@@ -246,6 +246,12 @@ expression: names
 - ports.forward
 - ports.list
 - ports.stop
+- clipboard.set
+- clipboard.get
+- clipboard.status
+- peer.clipboard.set
+- peer.clipboard.get
+- peer.clipboard.auto
 - peer.ports.open
 - peer.ports.data
 - peer.ports.close

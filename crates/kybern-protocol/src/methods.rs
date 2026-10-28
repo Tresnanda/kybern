@@ -4227,6 +4227,12 @@ method!(PeerFilesAbort, "peer.files.abort", Some(Scope::MachineFiles), PeerFiles
 method!(PortsForward, "ports.forward", Some(Scope::OrchestrationOperate), PortsForwardParams, PortForward);
 method!(PortsList, "ports.list", Some(Scope::OrchestrationRead), Empty, PortsListResult);
 method!(PortsStop, "ports.stop", Some(Scope::OrchestrationOperate), PortsStopParams, PortsListResult);
+method!(ClipboardSet, "clipboard.set", Some(Scope::OrchestrationOperate), ClipboardSetParams, ClipboardSetResult);
+method!(ClipboardGet, "clipboard.get", Some(Scope::OrchestrationOperate), ClipboardGetParams, ClipboardGetResult);
+method!(ClipboardStatusMethod, "clipboard.status", Some(Scope::OrchestrationRead), Empty, ClipboardStatus);
+method!(PeerClipboardSet, "peer.clipboard.set", Some(Scope::MachineClipboard), PeerClipboardSetParams, ClipboardSetResult);
+method!(PeerClipboardGet, "peer.clipboard.get", Some(Scope::MachineClipboard), Empty, ClipboardGetResult);
+method!(PeerClipboardAuto, "peer.clipboard.auto", Some(Scope::MachineClipboardAuto), PeerClipboardAutoParams, Empty);
 method!(PeerPortsOpen, "peer.ports.open", Some(Scope::MachinePorts), PeerPortsOpenParams, Empty);
 // Data and close frames only reach a stream that an authorized open created, so `machine:peer` is enough.
 method!(PeerPortsData, "peer.ports.data", Some(Scope::MachinePeer), PeerRelayDataParams, Empty);
@@ -4491,6 +4497,12 @@ registry!(
     PortsForward,
     PortsList,
     PortsStop,
+    ClipboardSet,
+    ClipboardGet,
+    ClipboardStatusMethod,
+    PeerClipboardSet,
+    PeerClipboardGet,
+    PeerClipboardAuto,
     PeerPortsOpen,
     PeerPortsData,
     PeerPortsClose,
