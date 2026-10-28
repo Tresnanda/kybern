@@ -267,6 +267,8 @@ impl Orchestrator {
                 anyhow::bail!("{reason}. Tool calls do not queue: use kybern_agent_delegate with machine to queue work there.")
             }
             Err(CallFailure::Gone(reason)) => anyhow::bail!("{reason}"),
+            // The target's refusals already name it ("satyamas does not allow …"); don't say it twice.
+            Err(CallFailure::Remote(error)) if error.message.starts_with(&target.name) => anyhow::bail!("{}", error.message),
             Err(CallFailure::Remote(error)) => anyhow::bail!("{}: {}", target.name, error.message),
         }
     }
