@@ -23,6 +23,9 @@ mod integrations;
 mod lead_git;
 mod maintenance;
 mod native_tools_mcp;
+// Wired into the daemon by the peer manager (N3) and the network RPC handlers (N4).
+#[allow(dead_code)]
+mod network;
 mod orchestrator;
 mod pick;
 mod power;
