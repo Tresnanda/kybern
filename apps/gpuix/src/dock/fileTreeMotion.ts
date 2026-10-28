@@ -1,5 +1,5 @@
 import type { MotionStyle, MotionTransition } from '@gpuix/react'
-import { EASE_OUT, SPRING_LAYOUT, SPRING_SWAP } from '../../../desktop/src/lib/beui/ease.ts'
+import { EASE_OUT, SPRING_LAYOUT, SPRING_SWAP } from '../shared/lib/beui/ease.ts'
 
 export const TREE_ROW_HEIGHT = 29
 export const TREE_WINDOW_THRESHOLD = 100

@@ -9,7 +9,7 @@ import { ImageViewer } from '../src/motion/ImageMorph.tsx'
 // consumes Tab itself (the terminal, an editor action) and an open image preview, which
 // traps Tab with focusNextWithin and must stop the window default doing it a second time.
 const t = THEMES.dark
-const image = new URL('../../desktop/src-tauri/icons/128x128@2x.png', import.meta.url).pathname
+const image = new URL('../packaging/icons/128x128@2x.png', import.meta.url).pathname
 
 function Lab() {
   const renderer = useGpuixRequired()

@@ -10,7 +10,7 @@
 //
 // Rules follow the desktop editor (TipTap 3 + @tiptap/markdown): `- ` bullets,
 // `- [ ] ` checklists, `  \n` hard breaks, `&nbsp;` for a second empty paragraph.
-import { parseMarkdownDocument } from '../../../desktop/src/lib/markdownParser.ts'
+import { parseMarkdownDocument } from '../shared/lib/markdownParser.ts'
 import { toMarkdown } from 'mdast-util-to-markdown'
 import { gfmToMarkdown } from 'mdast-util-gfm'
 

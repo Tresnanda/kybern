@@ -8,7 +8,7 @@ import { launchFixture } from '../requests/harness.ts'
 async function until(check: () => Promise<boolean>, what: string) { for (let i = 0; i < 200; i++) { try { if (await check()) return } catch {} await Bun.sleep(50) } throw Error(`Timed out: ${what}`) }
 const out = process.env.KYBERN_VERIFY_OUTPUT ?? '/Users/mymac/projects/ade/previews/motion/gpuixfix/restore'
 mkdirSync(out, { recursive: true })
-const image = new URL('../../../desktop/src-tauri/icons/128x128@2x.png', import.meta.url).pathname
+const image = new URL('../../packaging/icons/128x128@2x.png', import.meta.url).pathname
 for (const variant of process.env.RESTORE_THEMES?.split(',') ?? ['dark', 'light']) {
   const scratch = mkdtempSync(tmpdir() + '/gpuix-restore-')
   const f = await launchFixture(import.meta.dir + '/conversation.fixture.tsx', { GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: variant, KYBERN_DATA_DIR: scratch, KYBERN_CLIENT_CONFIG_DIR: scratch, KYBERN_GPUIX_CREDENTIALS_DIR: scratch, KYBERN_GPUIX_ENVIRONMENT: 'local', KYBERN_URL: '', KYBERN_TOKEN: '', KYBERN_GPUIX_ATTACH: image })

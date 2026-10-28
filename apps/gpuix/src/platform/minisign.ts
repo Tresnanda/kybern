@@ -10,7 +10,7 @@ const lines = (file: string) => decode(file).toString('utf8').split('\n').map(li
 
 export interface PublicKey { keyId: Buffer; key: ReturnType<typeof createPublicKey> }
 
-/** The base64 public key from `tauri.conf.json` (`plugins.updater.pubkey`). */
+/** The base64 public key from `updater.json` (`pubkey`). */
 export function parsePublicKey(pubkey: string): PublicKey {
   const raw = decode(lines(pubkey).find(line => line && !line.startsWith('untrusted comment:')) ?? '')
   if (raw.length !== 42 || raw.toString('latin1', 0, 2) !== 'Ed') throw Error('The update public key is invalid')

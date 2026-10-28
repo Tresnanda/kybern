@@ -3,7 +3,7 @@
 // Each segment is 15 ticks: three reasoning deltas, its end, two narration deltas, the message, four tools started and
 // finished; every seventh tool fails. The narration keeps the "Streaming paragraph" text the stream scenarios wait for.
 
-const FILES = ['src/transcript/Turn.tsx', 'src/requests/Requests.tsx', 'apps/desktop/src/lib/workChunks.ts', 'styles/system.css', 'crates/kybern-store/src/projection.rs', 'README.md']
+const FILES = ['src/transcript/Turn.tsx', 'src/requests/Requests.tsx', 'src/shared/lib/workChunks.ts', 'styles/system.css', 'crates/kybern-store/src/projection.rs', 'README.md']
 const COMMANDS = ['bun test src/transcript', 'pnpm typecheck', 'cargo test -p kybern-store', 'git status --short']
 const QUERIES = ['chunkWork', 'useFresh', 'TreeGroup', 'summarizeToolCalls']
 

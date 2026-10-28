@@ -14,8 +14,8 @@ const ready = JSON.parse(readFileSync(path.join(SCRATCH, 'ready.json'), 'utf8'))
 const tag = arg('--tag', 'shot'), attach = Number(arg('--attach', '0'))
 const themes = arg('--theme', 'both') === 'both' ? ['dark', 'light'] : [arg('--theme', 'dark')]
 const out = arg('--out', '/Users/mymac/projects/ade/previews/composer-tray')
-const IMAGE = path.resolve(import.meta.dir, '../../desktop/public/release-background.png')
-const SECOND = path.resolve(import.meta.dir, '../../desktop/src-tauri/icons/128x128@2x.png')
+const IMAGE = path.resolve(import.meta.dir, '../../../assets/release-background.png')
+const SECOND = path.resolve(import.meta.dir, '../packaging/icons/128x128@2x.png')
 mkdirSync(out, { recursive: true })
 for (const theme of themes) {
   const client = path.join(SCRATCH, `client-${theme}`)

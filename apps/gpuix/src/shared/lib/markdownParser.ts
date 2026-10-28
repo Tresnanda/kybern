@@ -1,0 +1,128 @@
+import { unified } from "unified"
+import remarkParse from "remark-parse"
+import remarkGfm from "remark-gfm"
+import remarkRehype from "remark-rehype"
+import { urlAttributes } from "html-url-attributes"
+import { defaultUrlTransform } from "react-markdown"
+import { imageSource } from "../../../../../packages/kybern-client/src/responseImages.ts"
+import { chatLink, kybernRef, splitKybernRefs, type KybernRef } from "../../../../../packages/kybern-client/src/chatLinks.ts"
+
+// The same GFM, HTML-as-text and URL policy as our ReactMarkdown renderer.
+const processor = unified().use(remarkParse).use(remarkGfm).use(remarkRehype, { allowDangerousHtml: true })
+type MarkdownTree = ReturnType<typeof processor.parse>
+/** Source-positioned CommonMark/GFM tree for native editing. Unlike the
+ * rendered tree below, this retains every original node and source range. */
+export function parseMarkdownDocument(source: string): MarkdownTree {
+  return processor.parse(source)
+}
+export type MarkdownTreeNode = ReturnType<typeof processor.runSync>["children"][number]
+export interface MarkdownBlock { key: string; node: MarkdownTreeNode }
+export interface ParsedMarkdown { source: string; blocks: MarkdownBlock[] }
+
+/** Exact comparison of the parser's JSON-shaped trees, including positions and
+ * link properties. Avoid retaining a serialized copy of every tree in both the
+ * worker and the renderer. No hashes/collisions can hide a content change. */
+export function sameMarkdownNode(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false
+  if (Array.isArray(a)) return Array.isArray(b) && a.length === b.length && a.every((value, index) => sameMarkdownNode(value, b[index]))
+  if (Array.isArray(b)) return false
+  const left = a as Record<string, unknown>, right = b as Record<string, unknown>
+  const keys = Object.keys(left)
+  return keys.length === Object.keys(right).length && keys.every(key => Object.hasOwn(right, key) && sameMarkdownNode(left[key], right[key]))
+}
+
+function refLink(ref: KybernRef, label: string): MarkdownTreeNode {
+  return { type: "element", tagName: "a", properties: { href: `kybern://${ref.target}/${ref.id}` }, children: [{ type: "text", value: label }] }
+}
+
+/** A bare `kybern://note|task/<id>` and an inline-code span holding only one become links,
+ * so the renderer draws every form of a reference as the same chip. Links, code blocks and
+ * code spans with other text keep their source. */
+function linkifyRefs(child: MarkdownTreeNode): MarkdownTreeNode[] {
+  if (child.type === "text") {
+    if (!child.value.includes("kybern://")) return [child]
+    return splitKybernRefs(child.value).map((part) => ("ref" in part ? refLink(part.ref, part.text) : { type: "text", value: part.text }))
+  }
+  if (child.type === "element" && child.tagName === "code" && child.children.length === 1 && child.children[0]!.type === "text") {
+    const value = child.children[0]!.value.trim()
+    const ref = value.startsWith("kybern://") ? kybernRef(value) : null
+    if (ref) return [refLink(ref, value)]
+  }
+  return [child]
+}
+
+function sanitize(node: MarkdownTreeNode, topLevel = false): MarkdownTreeNode {
+  // Top-level positions drive incremental boundaries and stable block keys.
+  // MarkdownCode receives the pre node, while inline/fenced code nodes may be
+  // nested, so retain both code container positions as renderer state keys.
+  const preservePosition = topLevel || (node.type === "element" && (node.tagName === "pre" || node.tagName === "code"))
+  if (node.type === "raw") return preservePosition
+    ? { type: "text", value: node.value, position: node.position }
+    : { type: "text", value: node.value }
+  if (node.type === "element") {
+    for (const [key, tags] of Object.entries(urlAttributes)) {
+      if (Object.hasOwn(node.properties, key) && (tags === null || tags.includes(node.tagName))) {
+        const url = String(node.properties[key] || "")
+        node.properties[key] = key === "src" ? (imageSource(url) ? url : "") : key === "href" && ["file", "kybern"].includes(chatLink(url).kind) ? url : defaultUrlTransform(url)
+      }
+    }
+    node.children = node.children.map((child) => sanitize(child)) as typeof node.children
+    if (node.tagName !== "a" && node.tagName !== "pre" && node.tagName !== "code") node.children = node.children.flatMap(linkifyRefs) as typeof node.children
+  }
+  if (!preservePosition) delete node.position
+  return node
+}
+
+function shiftPositions(node: MarkdownTree | MarkdownTree["children"][number], offset: number, lines: number) {
+  if (node.position) for (const point of [node.position.start, node.position.end]) {
+    if (point.offset !== undefined) point.offset += offset
+    point.line += lines
+  }
+  if ("children" in node) for (const child of node.children) shiftPositions(child as MarkdownTree["children"][number], offset, lines)
+}
+
+/** Appends reparse the last complete top-level construct (including whole lists,
+ * tables and fences). Definitions can change any earlier link/footnote, so any
+ * possible definition conservatively selects the full-document path. */
+export function createMarkdownParser() {
+  let previous: ParsedMarkdown | undefined
+  // Incremental reparsing only needs the start of the previous final
+  // top-level construct. Retaining the complete mdast root here duplicates
+  // the HAST tree held by `previous`, which is especially costly for long code
+  // blocks and tables.
+  let lastPosition: { offset?: number; line: number } | undefined
+  return {
+    parse(source: string): ParsedMarkdown {
+      if (previous?.source === source) return previous
+      let prefix: MarkdownBlock[] = []
+      let nextTree: MarkdownTree
+      const offset = lastPosition?.offset
+      if (previous && lastPosition && offset !== undefined && source.startsWith(previous.source) && !source.includes("]:")) {
+        const boundary = Math.max(source.lastIndexOf("\n", offset - 1), source.lastIndexOf("\r", offset - 1)) + 1
+        nextTree = processor.parse(source.slice(boundary))
+        shiftPositions(nextTree, boundary, lastPosition.line - 1)
+        // Whitespace between blocks belongs to the boundary, not the prefix.
+        const first = previous.blocks.findIndex((block) => block.node.position !== undefined && (block.node.position.start.offset ?? 0) >= boundary)
+        prefix = first < 0 ? previous.blocks : previous.blocks.slice(0, first)
+        while (prefix.at(-1)?.node.type === "text" && !(prefix.at(-1)!.node.position)) prefix = prefix.slice(0, -1)
+      } else {
+        nextTree = processor.parse(source)
+      }
+      const nodes = processor.runSync(nextTree).children.map((node) => sanitize(node, true))
+      const last = nextTree.children.at(-1)
+      lastPosition = last?.position ? { offset: last.position.start.offset, line: last.position.start.line } : undefined
+      if (prefix.length && nodes.length) nodes.unshift({ type: "text", value: "\n" })
+      let previousKey = prefix.at(-1)?.key ?? "start"
+      const old = new Map(previous?.blocks.map((block) => [block.key, block]))
+      const blocks = nodes.map((node) => {
+        const key = node.position ? `${node.position.start.offset}:${node.type === "element" ? node.tagName : node.type}` : `${previousKey}:gap`
+        previousKey = key
+        const existing = old.get(key)
+        return existing && sameMarkdownNode(existing.node, node) ? existing : { key, node }
+      })
+      previous = { source, blocks: [...prefix, ...blocks] }
+      return previous
+    },
+  }
+}

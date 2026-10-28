@@ -22,8 +22,8 @@ import {
   supportsPasteCode,
   type AccountColor,
   type SheetStep,
-} from '../../../desktop/src/lib/accounts.ts'
-import { PROVIDER_NAMES } from '../../../desktop/src/lib/providerUsage.ts'
+} from '../shared/lib/accounts.ts'
+import { PROVIDER_NAMES } from '../shared/lib/providerUsage.ts'
 import type { AccountLoginMode, ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { MatrixLoader } from '../MatrixLoader.tsx'

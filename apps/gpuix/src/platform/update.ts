@@ -1,16 +1,16 @@
-// App self-update, the desktop's `lib/appUpdate.ts` flow on GPUIX: the same
-// release feed and public key as the Tauri updater (`tauri.conf.json`
-// `plugins.updater`), checked 15 s after launch and every 6 h, announced once
-// per version, installed on request with download progress, then relaunched.
+// App self-update from the release feed and minisign public key in
+// `updater.json` (the ones the retired Tauri updater used): checked 15 s after
+// launch and every 6 h, announced once per version, installed on request with
+// download progress, then relaunched.
 // The packaged daemon is restarted by the shell on the next launch because its
 // version no longer matches (`shell/daemon.ts`).
 //
-// What Tauri's updater does natively is done here: fetch `latest.json`, pick
+// What Tauri's updater did natively is done here: fetch `latest.json`, pick
 // this build's platform entry, download it, verify the minisign signature
 // (`minisign.ts`), unpack the `.app.tar.gz` and swap the bundle in place.
 // GPUIX ships as its own bundle (`dev.kybern.gpuix`), so its feed entry is
-// `darwin-aarch64-gpuix` (Tauri's `{target}-{bundle}` key form); the desktop's
-// `darwin-aarch64` artifact is a different app and is never installed here.
+// `darwin-aarch64-gpuix` (Tauri's `{target}-{bundle}` key form). Only the
+// `-gpuix` keys are read; plain keys from older feeds are ignored.
 //
 // Windows (beta) is a per-user NSIS install (`packaging/windows/installer.nsi`),
 // feed key `windows-x86_64-gpuix`. The signed asset is the installer itself: it
@@ -42,7 +42,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { useSyncExternalStore } from 'react'
-import conf from '../../../desktop/src-tauri/tauri.conf.json'
+import updater from './updater.json'
 import { desktopVersion, relaunchEnv } from '../shell/daemon.ts'
 import { compareVersions } from '../shell/platform.ts'
 import { readPref, writePref } from './prefs.ts'
@@ -126,8 +126,8 @@ function testFeed(): URL | null {
 
 function feed(): { endpoints: string[]; pubkey: string } {
   const local = testFeed()
-  if (local) return { endpoints: [local.href], pubkey: process.env.KYBERN_UPDATE_PUBKEY ?? conf.plugins.updater.pubkey }
-  return { endpoints: conf.plugins.updater.endpoints, pubkey: conf.plugins.updater.pubkey }
+  if (local) return { endpoints: [local.href], pubkey: process.env.KYBERN_UPDATE_PUBKEY ?? updater.pubkey }
+  return { endpoints: updater.endpoints, pubkey: updater.pubkey }
 }
 
 /** True when this build can replace itself: a packaged `.app` on macOS, an installed copy on Windows, a running AppImage in a folder its user can write. */

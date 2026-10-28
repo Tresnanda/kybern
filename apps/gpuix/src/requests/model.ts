@@ -2,7 +2,7 @@
 // card for every approval kind so the key map, the rows on screen and the RPC the row sends can never drift apart: digits
 // follow the visible order and Decline is always the last number.
 import { toolLine } from '../../../../packages/kybern-client/src/toolActivity.ts'
-import { basename } from '../../../desktop/src/lib/format.ts'
+import { basename } from '../shared/lib/format.ts'
 import { computerConsent, connectorApproval, connectorApprovalResponse, notesTasksConsent, record, string, array, type ConnectorApproval, type NotesTasksConsent } from '../../../../packages/kybern-client/src/userInput.ts'
 import type { ApprovalDecision, ApprovalRequest, JsonValue } from '../../../../packages/kybern-client/src/types.ts'
 

@@ -14,7 +14,7 @@
     ],
     "paths": {
       "@/*": [
-        "./../desktop/src/*"
+        "./src/shared/*"
       ]
     }
   },

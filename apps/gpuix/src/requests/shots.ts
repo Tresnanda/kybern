@@ -16,7 +16,7 @@ for (const theme of themes) {
   const fixture = await launchFixture(path.join(import.meta.dir, 'parity.fixture.tsx'), {
     GPUIX_BACKGROUND: '1', KYBERN_APPEARANCE: theme.endsWith('light') ? 'light' : 'dark', KYBERN_DATA_DIR: scratch, KYBERN_CLIENT_CONFIG_DIR: scratch, KYBERN_GPUIX_CREDENTIALS_DIR: scratch,
     KYBERN_URL: '', KYBERN_TOKEN: '', KYBERN_GPUIX_ENVIRONMENT: 'local', KYBERN_REDUCED_MOTION: '1',
-    ...(glass ? { FIXTURE_WALLPAPER: path.resolve(import.meta.dir, '../../../desktop/public/release-background.png'), KYBERN_WINDOW_MATERIAL: 'window', KYBERN_WINDOW_OPACITY: '83', KYBERN_WINDOW_CONTENT_OPACITY: '83' } : { KYBERN_OPAQUE: '1' }),
+    ...(glass ? { FIXTURE_WALLPAPER: path.resolve(import.meta.dir, '../../../../assets/release-background.png'), KYBERN_WINDOW_MATERIAL: 'window', KYBERN_WINDOW_OPACITY: '83', KYBERN_WINDOW_CONTENT_OPACITY: '83' } : { KYBERN_OPAQUE: '1' }),
   })
   const app = fixture.app
   try {

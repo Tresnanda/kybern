@@ -175,7 +175,7 @@ async function morph(look: Look, name: string, prompt: string, image?: string, e
 await morph('dark', 'morph-two-lines', 'Make the lightbox zoom follow trackpad pinch on Safari, and keep the image sharp while it scales. Check the gallery grid too, and the thumbnails on the detail page.')
 await morph('dark', 'morph-reduced', 'Make the lightbox zoom follow trackpad pinch on Safari, and keep the image sharp while it scales.', undefined, { KYBERN_REDUCED_MOTION: '1' })
 const image = path.join(SCRATCH, 'morph-image.png')
-Bun.spawnSync(['cp', path.join(ROOT, '../desktop/public/release-background.png'), image])
+Bun.spawnSync(['cp', path.join(ROOT, '../../assets/release-background.png'), image])
 await morph('dark', 'morph-image', 'Use this as the gallery header background.', image)
 
 // ---- Up next → Send with nothing typed: the task's run starts through tasks.items.send and the thread opens ----

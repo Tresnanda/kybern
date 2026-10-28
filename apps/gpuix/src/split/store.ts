@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import { canSplitPane, collectThreadPanes, findParentSplit, findThreadPane, removeThreadPane, replacePaneThread, setSplitNodeRatio, splitThreadPane, type Pane, type SplitDirection, type SplitSide } from '../../../desktop/src/state/splitView.ts'
+import { canSplitPane, collectThreadPanes, findParentSplit, findThreadPane, removeThreadPane, replacePaneThread, setSplitNodeRatio, splitThreadPane, type Pane, type SplitDirection, type SplitSide } from '../shared/state/splitView.ts'
 import { createPane, closePaneState, DEFAULT_PANE, focusPane, getFocusedPaneId, getState, getPane, selectPaneThread, setPane, subscribe } from '../state.ts'
 import { load, save } from '../shell/persist.ts'
 import { onEnvironmentChange, onEnvironmentLeaving } from '../shell/environment.ts'

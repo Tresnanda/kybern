@@ -1,6 +1,6 @@
 import { Icon } from '../icons.tsx'
 import { G } from '../composer/glyphs.ts'
-import { accountNeedsSignIn } from '../../../desktop/src/lib/accountUi.ts'
+import { accountNeedsSignIn } from '../shared/lib/accountUi.ts'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { observeElementBounds } from '../native/layout.ts'
 import { type ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'

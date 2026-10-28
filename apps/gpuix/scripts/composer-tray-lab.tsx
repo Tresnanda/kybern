@@ -13,8 +13,8 @@ import { ComposerTray, trayVisible } from '../src/requests/ComposerTray.tsx'
 import { PanelEnter, PanelPresence } from '../src/requests/Panel.tsx'
 
 let commits = 0
-const IMAGE = new URL('../../desktop/public/release-background.png', import.meta.url).pathname
-const SECOND = new URL('../../desktop/src-tauri/icons/128x128@2x.png', import.meta.url).pathname
+const IMAGE = new URL('../../../assets/release-background.png', import.meta.url).pathname
+const SECOND = new URL('../packaging/icons/128x128@2x.png', import.meta.url).pathname
 const ago = (s: number) => new Date(Date.now() - s * 1000).toISOString()
 const sub = (id: string, title: string, type: string, status: string, started: number, ended: number | null, detail?: string): Thread => ({
   id, title, project_id: 'p', provider: { kind: 'claude-code', instance: 'default' }, status: 'idle', permission_mode: 'supervised', cwd: '/tmp', created_at: ago(400), updated_at: ago(1), pinned: false, last_seq: 0, parent_thread_id: 'parent', model: 'claude-haiku-5-5',

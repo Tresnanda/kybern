@@ -7,7 +7,7 @@
 // run do the same 65 ms apart while their connectors draw (`TreeGroup arrive`). History never animates; the key is
 // the first block's, so a growing run never remounts. No height reveal: GPUIX has no analytic row heights.
 import { memo, useMemo, useState } from 'react'
-import { getFileIconName } from '../../../desktop/src/lib/kit/fileIcons.ts'
+import { getFileIconName } from '../shared/lib/kit/fileIcons.ts'
 import { toolLineCounts, toolTarget, type ToolTarget } from '../../../../packages/kybern-client/src/toolActivity.ts'
 import type { Block } from '../../../../packages/kybern-client/src/transcript.ts'
 import type { ThreadId } from '../../../../packages/kybern-client/src/types.ts'

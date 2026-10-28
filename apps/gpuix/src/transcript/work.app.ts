@@ -85,7 +85,7 @@ const server = Bun.serve({ idleTimeout: 60, port: 0, hostname: '127.0.0.1', asyn
       return Response.json({ tick, blocks: state.getState().open.blocks.length, transcript: inside, hostElements: host, components })
     }
     if (body.action === 'last-run') {
-      const chunks = await import('../../../desktop/src/lib/workChunks.ts') as { chunkRuns?: (blocks: unknown[], tasks: Map<string, unknown>) => { kind: string; blocks: { id: string }[] }[] }
+      const chunks = await import('../shared/lib/workChunks.ts') as { chunkRuns?: (blocks: unknown[], tasks: Map<string, unknown>) => { kind: string; blocks: { id: string }[] }[] }
       const { buildWorkHierarchy, groupTurns } = await import('../../../../packages/kybern-client/src/transcript.ts')
       const group = groupTurns(state.getState().open.blocks).find((g) => g.turnId === live)
       const run = group && chunks.chunkRuns ? chunks.chunkRuns(buildWorkHierarchy(group.work).roots, new Map()).filter((c) => c.kind === 'run').at(-1) : undefined

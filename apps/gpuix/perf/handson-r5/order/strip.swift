@@ -7,7 +7,7 @@ let width:CGFloat=480,header:CGFloat=32
 let height=width*images[0].size.height/images[0].size.width
 let canvas=NSImage(size:NSSize(width:width*CGFloat(images.count),height:height+header))
 canvas.lockFocus()
-if let background=NSImage(contentsOfFile:"/Users/mymac/projects/ade/apps/desktop/public/release-background.png") {
+if let background=NSImage(contentsOfFile:"/Users/mymac/projects/ade/assets/release-background.png") {
     background.draw(in:NSRect(origin:.zero,size:canvas.size))
 } else { NSColor.darkGray.setFill();NSRect(origin:.zero,size:canvas.size).fill() }
 for (index,image) in images.enumerated() {

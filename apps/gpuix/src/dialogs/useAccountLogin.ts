@@ -2,7 +2,7 @@
 // starts it, follows it (the daemon's change notification, plus a poll every second while it is
 // live, whichever arrives first), opens the browser, takes a pasted code and cancels or finishes it.
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { acceptLoginUpdate } from '../../../desktop/src/lib/accounts.ts'
+import { acceptLoginUpdate } from '../shared/lib/accounts.ts'
 import { ACCOUNTS_LOGIN_CHANGED_NOTIFICATION, type AccountLogin, type AccountLoginStartParams, type ProviderInstance, type TerminalInfo } from '../../../../packages/kybern-client/src/types.ts'
 import { errorText } from '../nav/actions.ts'
 import { openExternal } from '../settings/external.ts'

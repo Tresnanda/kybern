@@ -23,7 +23,7 @@ const dir = path.join(tmpdir(), `kybern-gpuix-mermaid-${process.pid}`)
 function bundlePath(): string | null {
   const candidates = [
     process.env.KYBERN_GPUIX_RESOURCES && path.join(process.env.KYBERN_GPUIX_RESOURCES, 'mermaid.min.js'),
-    fileURLToPath(new URL('../../../desktop/node_modules/mermaid/dist/mermaid.min.js', import.meta.url)),
+    fileURLToPath(new URL('../../node_modules/mermaid/dist/mermaid.min.js', import.meta.url)),
   ]
   return candidates.find((file): file is string => !!file && existsSync(file)) ?? null
 }

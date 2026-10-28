@@ -7,6 +7,7 @@ import { readCredential, writeCredential, removeCredential } from './credentials
 import { rmSync } from 'node:fs'
 import { prefsFileFor } from '../nav/live.ts'
 import { savedEnvironmentStateFile } from '../shell/persist.ts'
+import { desktopVersion } from '../shell/daemon.ts'
 import { localDataDir, profileById, profileEndpoint, readRegistry, writeRegistry, type EnvironmentProfile } from './registry.ts'
 
 /** Verify protocol and environment identity with the same transport as the workspace. */
@@ -132,7 +133,7 @@ export async function setupSshEnvironment(input: BootstrapInput, report: (progre
       return await action(client)
     } finally { client.close() }
   }
-  const version = (await import('../../../desktop/src-tauri/tauri.conf.json')).default.version
+  const version = desktopVersion()
   return bootstrapSsh(input, report, {
     version, signal, run: plan => runSsh(plan, signal), tunnel: ensureSshTunnel, stop: stopSshTunnel,
     info: (port, token) => verifyEndpoint({ url: `ws://127.0.0.1:${port}/ws`, token }),

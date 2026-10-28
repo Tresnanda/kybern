@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { DEFAULT_THEME_STATE, buildThemeCssVariables } from '../../../desktop/src/lib/kit/theme/theme.logic.ts'
+import { DEFAULT_THEME_STATE, buildThemeCssVariables } from '../shared/lib/kit/theme/theme.logic.ts'
 import { THEMES, derivedThemeCount, materialFor, stack, themeFor, windowCoverage } from '../theme.ts'
 import {
   DEFAULT_VARIANT_MATERIAL, OPACITY_MIN, defaultBlur, OPACITY_VARS, SIDEBAR_ONLY_PANEL_GLASS, SURFACE_DEFAULT, SURFACE_MIN, advancedDefaults, coatFloor, effectiveOpacity, effectiveSurface,

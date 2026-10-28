@@ -1,7 +1,7 @@
 // The release job signs `Kybern GPUIX.app.tar.gz` with `tauri signer sign`;
 // this signs a scratch file with the real Tauri CLI and a throwaway key, then
-// checks `minisign.ts` accepts the result. Skipped where the desktop
-// dependencies are not installed.
+// checks `minisign.ts` accepts the result. Skipped where the dependencies are
+// not installed.
 import { afterEach, expect, test } from 'bun:test'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { verifyMinisign } from './minisign.ts'
 
-const cli = path.resolve(import.meta.dir, '../../../desktop/node_modules/@tauri-apps/cli/tauri.js')
+const cli = path.resolve(import.meta.dir, '../../node_modules/@tauri-apps/cli/tauri.js')
 let dir = ''
 afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }) })
 

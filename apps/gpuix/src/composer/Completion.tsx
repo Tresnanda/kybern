@@ -25,7 +25,7 @@ import {
   rankMentionTasks,
   type MentionFilter,
   type MentionKind,
-} from '../../../desktop/src/views/composerMentions.ts'
+} from '../shared/views/composerMentions.ts'
 import { noteScopeLabel, noteTitle } from '@/state/notesModel'
 import { keyMatchesQuery, PRIORITY_LABEL, STATUS_LABEL } from '@/state/tasksModel'
 import { COMPUTER_MENTION_PATH, noteMentionPart, taskMentionPart } from '../../../../packages/kybern-client/src/userInput.ts'
@@ -34,7 +34,7 @@ import { isMacKeys } from '../platform/keys.ts'
 import { MentionChips } from './MentionChips.tsx'
 import { tokenIcon } from './token-icons.ts'
 import type { TokenReference } from './token-text.ts'
-import { getAttachmentIconName, getFileIconName } from '../../../desktop/src/lib/kit/fileIcons.ts'
+import { getAttachmentIconName, getFileIconName } from '../shared/lib/kit/fileIcons.ts'
 import { menuFileIcons } from '../native/diff-file-icons.ts'
 import { fileIconColors } from '../native/file-icon-colors.ts'
 import { PriorityGlyph, StatusGlyph } from '../tasks/Glyphs.tsx'

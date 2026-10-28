@@ -17,8 +17,8 @@ const reduceds = arg('--reduced', 'both') === 'both' ? ['0', '1'] : [arg('--redu
 const timing = process.argv.includes('--timing')
 const out = arg('--out', '/Users/mymac/projects/ade/previews/polish1/morph')
 const addon = path.resolve(arg('--addon', path.resolve(import.meta.dir, '../native/build')), 'gpuix-native.darwin-arm64.node')
-const IMAGE = path.resolve(import.meta.dir, '../../desktop/public/release-background.png')
-const SECOND = path.resolve(import.meta.dir, '../../desktop/src-tauri/icons/128x128@2x.png')
+const IMAGE = path.resolve(import.meta.dir, '../../../assets/release-background.png')
+const SECOND = path.resolve(import.meta.dir, '../packaging/icons/128x128@2x.png')
 const grid = path.join(import.meta.dir, 'render9-grid.swift')
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 const OPEN = [0, 50, 100, 150, 200, 250, 300, 350, 450, 600]

@@ -50,7 +50,7 @@ function Fixture() {
     </div>
     {keys ? <text testId="send-events" style={{ color: t.text }}>{JSON.stringify(events)}</text> : <Transcript />}
     {keys && <div style={{ flexGrow: 1 }} />}
-    {!keys && <ResponseImage source={new URL('../../../desktop/public/release-background.png', import.meta.url).pathname} thumbnail />}
+    {!keys && <ResponseImage source={new URL('../../../../assets/release-background.png', import.meta.url).pathname} thumbnail />}
     <div style={{ display: 'flex', justifyContent: 'center', padding: 24 }}>
       <ComposerView draftKey="fixture" currentThreadId="fixture-current" provider={{ kind: 'claude-code', instance: 'default' }} providers={[provider]} accounts={[]} model={process.env.KYBERN_PARITY_MODE === 'narrow' ? 'Claude Haiku 5.5 long model name' : 'Claude Haiku 5.5'} effort="high" mode="supervised" onModeChange={() => {}} catalogLoading={false} onReloadModels={async () => {}} running={running} canSteer onSend={async (message, delivery) => { setEvents(value => [...value, { message, delivery }]) }} />
     </div>
