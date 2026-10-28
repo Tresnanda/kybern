@@ -217,6 +217,11 @@ export class MachineHub {
     if (primary.machineId) void this.set.setPaused(primary.machineId, true)
   }
 
+  /** The primary's lists reach the set now, not after the delay (`state.ts` is about to read the merged view). */
+  ingestPrimaryNow() {
+    if (this.primary) this.ingestNow(this.primary)
+  }
+
   /** The lists `state.ts` just read from the primary daemon (all threads, children and archived included). */
   ingestPrimary(client: KybernClient, projects: Project[], threads: Thread[], activity?: ThreadActivitySummary[]) {
     if (this.primary?.client !== client) return
