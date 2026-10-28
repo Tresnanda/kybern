@@ -16,7 +16,7 @@ import { newThread } from './nav/history.ts'
 import { ContextMenu, Menu, MenuItem, MenuLabel, MenuSeparator, muted } from './nav/overlay.tsx'
 import { Kbd } from './kit/Kbd.tsx'
 import { getNav, setNav, useNav } from './nav/store.ts'
-import { EnvironmentSwitcher } from './sidebar/EnvironmentSwitcher.tsx'
+import { filterByMachine, MachineFilter, MachinesFooter } from './sidebar/MachineFilter.tsx'
 import { buildRows, type Row } from './sidebar/model.ts'
 import { attentionItems, type AttentionKind } from '../../../packages/kybern-client/src/threadAttention.ts'
 import { BlockRow, inProjectBlock, setReorderContext } from './sidebar/reorder.tsx'
@@ -43,7 +43,8 @@ import {
   ThreadRow,
   useAddProject,
 } from './sidebar/rows.tsx'
-import { getState, useApp } from './state.ts'
+import { getState, machinesOfProject, useApp } from './state.ts'
+import { machineHub, useMachines } from './machines/index.ts'
 import { useCurrentSpace, useCurrentSpaceId } from './spaces/current.ts'
 import { inSpace } from '../../../packages/kybern-client/src/spaces.ts'
 import { useSpaces } from './spaces/store.ts'
@@ -56,8 +57,13 @@ const LAUNCH_MS = 3000
 const surfaceEnters = () => performance.now() > LAUNCH_MS && !getNav().keyboardNav && !getNav().panelInstant
 
 export function Sidebar() {
-  const projects = useApp((s) => s.projects)
-  const threads = useApp((s) => s.threads)
+  const allProjects = useApp((s) => s.projects)
+  const allThreads = useApp((s) => s.threads)
+  const chosen = useNav((s) => s.machineFilter)
+  const machines = useMachines()
+  // The "All machines" filter: one machine's threads, and the projects with a checkout there. A machine that is gone counts as all; with no filter these are the app's own arrays.
+  const machineFilter = chosen && machines.some((machine) => machine.machineId === chosen) ? chosen : null
+  const { projects, threads } = useMemo(() => filterByMachine(allProjects, allThreads, machineFilter, machineHub().localMachineId, machinesOfProject, isFreeChatProject), [allProjects, allThreads, machineFilter])
   const selectedId = useApp((s) => s.selectedId)
   const draft = useApp((s) => s.draft)
   const page = useNav((s) => s.page)
@@ -129,7 +135,7 @@ export function Sidebar() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
       <BrandRow />
-      <EnvironmentSwitcher />
+      <MachineFilter />
       <Rise kind="surface" play={enter} style={{ flexGrow: 1, minHeight: 0 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingLeft: 6, paddingRight: 6, paddingTop: 4, paddingBottom: 6 }}>
         <PrimaryAction
@@ -167,6 +173,7 @@ export function Sidebar() {
       ]} />
       </div>
       </Rise>
+      <MachinesFooter />
     </div>
   )
 }

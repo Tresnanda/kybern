@@ -3,13 +3,14 @@
 // subscription confirms them.
 import { seedFromGet } from '../../../../packages/kybern-client/src/transcript.ts'
 import type { ProviderInstance, SavedSession, Thread, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
-import { getClient, getState, refreshLists, selectDraft, selectThread, set } from '../state.ts'
+import { getState, projectClient, refreshLists, selectDraft, selectThread, set, threadClient } from '../state.ts'
 import { markArchived } from './live.ts'
 import { getNav, setNav } from './store.ts'
 import { addProjectToCurrentSpace } from '../spaces/add.ts'
 
-function rpc() {
-  const client = getClient()
+/** The client of the machine that owns a thread (or a project); the machine the user is at when neither is given. */
+function rpc(owner: { thread?: ThreadId; project?: string } = {}) {
+  const client = owner.project ? projectClient(owner.project) : threadClient(owner.thread)
   if (!client) throw new Error('Not connected to kybernd')
   return client
 }
@@ -25,14 +26,14 @@ function replaceThread(thread: Thread) {
 
 /** Rename or pin (`updateThread`). */
 export async function updateThread(threadId: ThreadId, patch: { title?: string; pinned?: boolean }) {
-  const thread = await rpc().call('threads.update', { thread_id: threadId, ...patch })
+  const thread = await rpc({ thread: threadId }).call('threads.update', { thread_id: threadId, ...patch })
   replaceThread(thread)
   // Pinned threads sort first; keep the list in the desktop's order.
   set({ threads: [...getState().threads].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updated_at.localeCompare(a.updated_at)) })
 }
 
 export async function archiveThread(threadId: ThreadId) {
-  await rpc().call('threads.archive', { thread_id: threadId })
+  await rpc({ thread: threadId }).call('threads.archive', { thread_id: threadId })
   markArchived(threadId)
   set({ threads: getState().threads.filter((t) => t.id !== threadId) })
   if (getNav().children[threadId]) {
@@ -45,7 +46,7 @@ export async function archiveThread(threadId: ThreadId) {
 
 /** Start a new thread with another agent, seeded with the conversation so far (`handOff`). */
 export async function handOff(threadId: ThreadId, provider: ProviderInstance, model?: string): Promise<ThreadId> {
-  const client = rpc()
+  const client = rpc({ thread: threadId })
   const thread = getState().threads.find((t) => t.id === threadId) ?? getNav().children[threadId]
   if (!thread) throw new Error('Thread not found')
   const open = getState().selectedId === threadId && getState().open.loaded ? getState().open : null
@@ -120,7 +121,7 @@ export async function renameProject(projectId: string, name: string) {
   const patch = (value: string) => set({ projects: getState().projects.map((p) => (p.id === projectId ? { ...p, name: value } : p)) })
   patch(name)
   try {
-    const project = await rpc().call('projects.update', { project_id: projectId, name })
+    const project = await rpc({ project: projectId }).call('projects.update', { project_id: projectId, name })
     set({ projects: getState().projects.map((p) => (p.id === projectId ? project : p)) })
   } catch (error) {
     patch(before.name)
@@ -129,6 +130,6 @@ export async function renameProject(projectId: string, name: string) {
 }
 
 export async function removeProject(projectId: string) {
-  await rpc().call('projects.remove', { project_id: projectId })
+  await rpc({ project: projectId }).call('projects.remove', { project_id: projectId })
   await refreshLists()
 }

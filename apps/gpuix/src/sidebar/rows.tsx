@@ -36,7 +36,9 @@ import { N } from '../nav/glyphs.ts'
 import { newThread, openThread } from '../nav/history.ts'
 import { ContextMenu, Menu, MenuItem, MenuLabel, MenuSeparator, muted, Tip } from '../nav/overlay.tsx'
 import { DEFAULT_FILTER, getNav, setNav, useNav } from '../nav/store.ts'
-import { getClient, getState, toggleProject as toggleProjectState } from '../state.ts'
+import { callThread, getState, toggleProject as toggleProjectState, type StateThread } from '../state.ts'
+import { glyphOfMachine } from '../machines/index.ts'
+import { MachineBadge } from './MachineBadge.tsx'
 import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
 import { raisedFill, useGlass } from '../platform/glass.ts'
 import type { Theme } from '../theme.ts'
@@ -541,6 +543,9 @@ export const ThreadRow = memo(function ThreadRow({
   const [renaming, setRenaming] = useState(false)
   useSidebarRowLease(renaming)
   const [title, setTitle] = useState(thread.title)
+  // A thread another machine owns: its glyph, and greyed while that machine is offline (design §5.2). The machine the user is at has neither.
+  const remote = thread as StateThread
+  const machineGlyph = remote.machineId ? glyphOfMachine(remote.machineId) : undefined
   const splitRoot = useSplitRoot(), focusedPane = useFocusedPane()
   const inSplit = collectThreadPanes(splitRoot).some((pane) => pane.threadId === thread.id)
   const { renderer } = useGpuix()
@@ -581,6 +586,7 @@ export const ThreadRow = memo(function ThreadRow({
             cursor: 'pointer',
             userSelect: 'none',
             ...(selected ? { backgroundColor: accentActive(t) } : reveal ? { backgroundColor: accent(t) } : {}),
+            ...(remote.offline ? { opacity: 0.5 } : {}),
             ...pressRow(t, selected ? accentActive(t) : accent(t)),
           }}
         >
@@ -617,6 +623,7 @@ export const ThreadRow = memo(function ThreadRow({
             )}
           </div>
           {thread.worktree && <Icon source={N.worktree} size={12} color={muted(t, 0.55)} />}
+          {machineGlyph && <MachineBadge glyph={machineGlyph} testId={`machine-${thread.id}`} />}
           {/* The trailing padding, less the row's 8px gap. */}
           <PadTween width={(reveal ? ACTIONS_PAD : hasGlyph || thread.pinned ? 28 : 8) - 8} />
         </div>
@@ -836,10 +843,10 @@ export const ChildRow = memo(function ChildRow({
           <MenuItem id="open" label="Open" onSelect={() => openThread(thread.id)} />
           <MenuItem id="parent" icon={N.backToParent} label="Open parent" onSelect={() => thread.parent_thread_id && openThread(thread.parent_thread_id)} />
           {working && !delegated && thread.subagent?.capabilities?.stop !== false && (
-            <MenuItem id="stop" icon={N.stop} label="Stop" onSelect={() => void getClient()?.call('tasks.stop', { thread_id: thread.id }).catch(() => {})} />
+            <MenuItem id="stop" icon={N.stop} label="Stop" onSelect={() => void callThread(thread.id, 'tasks.stop', { thread_id: thread.id }).catch(() => {})} />
           )}
           {canStopDelegation(thread) && (
-            <MenuItem id="stop-delegated" icon={N.stop} label="Stop" onSelect={() => void getClient()?.call('threads.interrupt', { thread_id: thread.id }).catch(() => {})} />
+            <MenuItem id="stop-delegated" icon={N.stop} label="Stop" onSelect={() => void callThread(thread.id, 'threads.interrupt', { thread_id: thread.id }).catch(() => {})} />
           )}
           {delegated && <MenuItem id="archive" icon={N.archive} label="Archive" onSelect={() => void archiveThread(thread.id)} />}
         </ContextMenu>

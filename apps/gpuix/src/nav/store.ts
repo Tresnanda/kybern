@@ -76,6 +76,8 @@ export interface NavState {
   attentionDismissals: Record<ThreadId, number>
   /** The reader's project order; projects it does not name follow alphabetically. */
   projectOrder: string[]
+  /** The sidebar lists one machine's threads when set (the "All machines" filter); null lists them all. Per window. */
+  machineFilter: string | null
   /** Composer drafts by desktop key: `thread:<id>`, `project:<id>:…`, `free:main`. */
   composerDrafts: Record<string, true>
   version: string | null
@@ -110,6 +112,7 @@ const initialNav: NavState = {
   attentionFilter: false,
   attentionDismissals: {},
   projectOrder: [],
+  machineFilter: null,
   composerDrafts: {},
   version: null,
   spaceId: null,

@@ -30,7 +30,7 @@ import type { Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { Button } from '../kit/Button.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
-import { getClient, getState, set, useApp, usePaneAccess, focusPane, getFocusedPaneId } from '../state.ts'
+import { callThread, getState, set, useApp, usePaneAccess, focusPane, getFocusedPaneId } from '../state.ts'
 import { ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { archiveThread, errorText, updateThread } from './actions.ts'
 import { N } from './glyphs.ts'
@@ -394,7 +394,7 @@ export const ThreadHeader = memo(function ThreadHeader({ leafId: given, size = '
               <MenuSeparator />
               <MenuItem id="parent" icon={N.backToParent} label="Open parent" shortcut={SHORTCUT.openParent} onSelect={() => thread.parent_thread_id && openThread(thread.parent_thread_id)} />
               {subagentPhase(thread.subagent.status) === 'working' && thread.subagent.capabilities?.stop !== false && (
-                <MenuItem id="stop" icon={N.stop} label="Stop" onSelect={() => void getClient()?.call('tasks.stop', { thread_id: thread.id }).catch(() => {})} />
+                <MenuItem id="stop" icon={N.stop} label="Stop" onSelect={() => void callThread(thread.id, 'tasks.stop', { thread_id: thread.id }).catch(() => {})} />
               )}
             </>
           )}

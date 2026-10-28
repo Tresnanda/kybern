@@ -109,6 +109,11 @@ export function useMachines(): MachineRow[] {
   return useMemo(() => machineRows(h), [h, version])
 }
 
+/** A machine's glyph by id; named from its record. */
+export function glyphOfMachine(machineId: string): MachineGlyph {
+  return machineGlyph({ machineId, name: machineHub().set.connection(machineId)?.record.name })
+}
+
 export const clientFor = (machineId: string): KybernClient => machineHub().clientFor(machineId)
 export const clientForThread = (threadId: string, machineId?: string): KybernClient => machineHub().clientForThread(threadId, machineId)
 export const clientForProject = (projectId: string, machineId?: string): KybernClient => machineHub().clientForProject(projectId, machineId)

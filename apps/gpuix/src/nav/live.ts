@@ -229,6 +229,7 @@ const prefsFile = () => prefsFileFor(environmentKey())
 interface Prefs {
   collapsed?: Record<string, boolean>
   projectOrder?: string[]
+  machineFilter?: string | null
   filter?: NavState['filter']
   sidebarOpen?: boolean
   unread?: NavState['unread']
@@ -253,6 +254,7 @@ function persistPrefs() {
   const prefs: Prefs = {
     collapsed: getState().collapsed,
     projectOrder: getNav().projectOrder,
+    machineFilter: getNav().machineFilter,
     filter: getNav().filter,
     sidebarOpen: getState().sidebarOpen,
     unread: getNav().unread,
@@ -301,7 +303,7 @@ export function startLive() {
   const prefs = readPrefs()
   lastPrefs = JSON.stringify(prefs)
   set({ collapsed: prefs.collapsed ?? {}, ...(prefs.sidebarOpen === undefined ? {} : { sidebarOpen: prefs.sidebarOpen }) })
-  setNav({ projectOrder: prefs.projectOrder ?? [], filter: prefs.filter ?? DEFAULT_FILTER, unread: prefs.unread ?? {}, attentionDismissals: prefs.attentionDismissals ?? {}, spaceId: prefs.spaceId ?? null, spaceViews: prefs.spaceViews ?? {} })
+  setNav({ projectOrder: prefs.projectOrder ?? [], machineFilter: prefs.machineFilter ?? null, filter: prefs.filter ?? DEFAULT_FILTER, unread: prefs.unread ?? {}, attentionDismissals: prefs.attentionDismissals ?? {}, spaceId: prefs.spaceId ?? null, spaceViews: prefs.spaceViews ?? {} })
   stops.push(subscribe(persistPrefs), subscribeNav(persistPrefs))
 
   const events = client.subscribeEvents({ include_tool_output: false }, (event) => { if (getClient() === client) onEvent(event) })
