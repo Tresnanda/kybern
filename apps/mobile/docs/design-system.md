@@ -18,6 +18,13 @@ in Expo Go (or `kybern://dev-kit` in a dev build). Release builds redirect home.
 for `body`, `prose`, `callout`; 160 % for everything else. Text inputs always
 set `letterSpacing: 0`.
 
+The reader's in-app text size (Settings → Appearance, 85–135 %, stored on the
+device) multiplies the table below; the system font scale applies on top. `T`
+scales its role and any `fontSize`/`lineHeight` in its `style`. Anything else
+that sets type (a `TextInput`, a raw `Text`) reads `useType()` for the scaled
+roles or `scaleFont`/`scaleLine` from `ui/textScale.ts` with `useTextScale()`.
+Icons, hit targets and bar heights do not scale.
+
 | Role | Size/line | Weight | iOS style | Android M3 | Use |
 |---|---|---|---|---|---|
 | `largeTitle` | 34/41 | 700 | Large Title | headlineMedium | Home hero; native large titles do this for lists |

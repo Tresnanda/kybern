@@ -18,7 +18,8 @@ import {
   tableColumnWidths,
   type MarkdownImage,
 } from "./markdownModel";
-import { MONO, radius, useTheme } from "./theme";
+import { MONO, radius, useTextScale, useTheme } from "./theme";
+import { scaleFont, scaleLine } from "./textScale";
 import { MermaidBlock } from "./Mermaid";
 import { taskLinkId } from "../state/tasksModel";
 import { TaskRef } from "./TaskRef";
@@ -56,6 +57,7 @@ function RefText({ text, checklist }: { text: string; checklist?: boolean }) {
 }
 function Inline({ text, checklist }: { text: string; checklist?: boolean }) {
   const { colors } = useTheme();
+  const { textScale } = useTextScale();
   const fileContext = useContext(ChatFileContext);
   return (
     <>
@@ -88,7 +90,7 @@ function Inline({ text, checklist }: { text: string; checklist?: boolean }) {
                 style={{
                   fontFamily: MONO,
                   // 0.88 em of the 17 pt reading text, on the code fill; nested text cannot pad, so thin spaces do.
-                  fontSize: 15,
+                  fontSize: scaleFont(15, textScale),
                   backgroundColor: colors.code,
                   color: colors.ink,
                 }}
@@ -151,6 +153,7 @@ export const Code = memo(function Code({
   diff?: boolean;
 }) {
   const { colors } = useTheme();
+  const { textScale } = useTextScale();
   return (
     <View
       style={{
@@ -178,8 +181,8 @@ export const Code = memo(function Code({
           selectable
           style={{
             fontFamily: MONO,
-            fontSize: 13,
-            lineHeight: 21,
+            fontSize: scaleFont(13, textScale),
+            lineHeight: scaleLine(21, textScale),
             color: colors.ink,
           }}
         >

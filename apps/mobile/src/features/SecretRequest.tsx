@@ -17,7 +17,7 @@ import {
 import type { ApprovalDecision, ApprovalRequest, SecretRequestInput } from "../state/protocol";
 import { errorText, loadThread, refresh, rpc } from "../state/runtime";
 import { Button, ErrorBanner, Icon, T, Tap, styles } from "../ui/primitives";
-import { MONO, radius, space, type as typography, useTheme } from "../ui/theme";
+import { MONO, radius, space, useType, useTheme } from "../ui/theme";
 
 /** Text with the file and key set as code. */
 function SecretText({ parts, tone = "secondary" }: { parts: readonly SecretTextPart[]; tone?: "secondary" | "ink" }) {
@@ -39,6 +39,7 @@ function SecretText({ parts, tone = "secondary" }: { parts: readonly SecretTextP
 
 export function SecretRequestCard({ approval, input }: { approval: ApprovalRequest; input: SecretRequestInput }) {
   const { colors } = useTheme();
+  const typography = useType();
   const field = useRef<TextInput>(null);
   const [value, setValue] = useState("");
   const [shown, setShown] = useState(false);

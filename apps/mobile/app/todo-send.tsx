@@ -36,7 +36,7 @@ import {
   maxScale,
   radius,
   space,
-  type,
+  useType,
   useTheme,
 } from "../src/ui/theme";
 import { findModel } from "../../../packages/kybern-client/src/models";
@@ -49,6 +49,7 @@ export default function SendTask() {
   const { tasks: all, loaded } = useTasks();
   const { notes } = useNotes();
   const { colors } = useTheme();
+  const type = useType();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const ids = useMemo(

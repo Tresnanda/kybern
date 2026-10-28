@@ -6,7 +6,7 @@ import { saveStatusText } from "../state/notesModel";
 import type { useNoteSession } from "../state/useNoteSession";
 import { Markdown } from "../ui/Markdown";
 import { Button, ErrorBanner, T } from "../ui/primitives";
-import { radius, space, type, useTheme } from "../ui/theme";
+import { radius, space, useType, useTheme } from "../ui/theme";
 import { attempt } from "./noteActions";
 
 type Session = ReturnType<typeof useNoteSession>;
@@ -123,6 +123,7 @@ export function NoteView({
   saveFailedText?: string;
 }) {
   const { colors } = useTheme();
+  const type = useType();
   const body = useRef<TextInput>(null);
   const editable = s.connected && s.loaded && !s.deleted;
   const readOnlyTitle = s.note?.scope === "thread";

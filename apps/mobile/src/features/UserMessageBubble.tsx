@@ -19,7 +19,7 @@ import {
   type SendRect,
 } from "../state/sendTransition";
 import type { Block } from "../state/transcript";
-import { useTheme } from "../ui/theme";
+import { useTextScale, useTheme } from "../ui/theme";
 import { Button, T, Tap } from "../ui/primitives";
 import { ContextMenu, type MenuItem } from "../ui/ActionMenu";
 import { showToast } from "../ui/Toast";
@@ -63,6 +63,7 @@ export function UserMessageBubble({
 }) {
   const { colors } = useTheme();
   const { height, width, fontScale } = useWindowDimensions();
+  const { textScale } = useTextScale();
   const [viewing, setViewing] = useState<number | null>(null);
   const textSurface = useRef<View>(null);
   const { flight, outgoing, land } = useSendTransition();
@@ -214,7 +215,7 @@ export function UserMessageBubble({
                 }}
               >
                 {inline ? (
-                  <T key={fontScale} selectable>
+                  <T key={`${fontScale}:${textScale}`} selectable>
                     {inlineTextRuns(entries.map(({ part }) => part)).map(
                       (run, index) => (
                         <Text

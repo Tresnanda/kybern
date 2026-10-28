@@ -58,7 +58,7 @@ import {
   maxScale,
   radius,
   space,
-  type,
+  useType,
   useTheme,
 } from "../src/ui/theme";
 
@@ -83,6 +83,7 @@ function useAgentName() {
 function Followup({ task, run }: { task: TaskItem; run: TaskRun }) {
   const app = useApp();
   const { colors } = useTheme();
+  const type = useType();
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const thread = app.threads.find((t) => t.id === run.thread_id);
@@ -222,6 +223,7 @@ function TaskPage() {
   const task = useTask(id);
   const { notes } = useNotes();
   const { colors } = useTheme();
+  const type = useType();
   const { width } = useWindowDimensions();
   const chrome = useChromeInsets();
   const insets = useSafeAreaInsets();

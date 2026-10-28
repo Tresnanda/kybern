@@ -3,6 +3,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useMemo,
   useState,
   type PropsWithChildren,
 } from "react";
@@ -11,6 +12,12 @@ import {
   Platform,
   useColorScheme,
 } from "react-native";
+import {
+  DEFAULT_TEXT_SCALE,
+  parseTextScale,
+  scaleTypeTable,
+  type TextScale,
+} from "./textScale";
 
 // Ink palette. `background` is a plain page, `grouped` a settings-style page
 // behind `surface` groups, `raised` a control fill (fields, chips, pressed rows).
@@ -119,11 +126,50 @@ export function ThemeProvider({ children }: PropsWithChildren) {
         setAppearance,
       }}
     >
-      {children}
+      <TextScaleProvider>{children}</TextScaleProvider>
     </ThemeContext.Provider>
   );
 }
 export const useTheme = () => useContext(ThemeContext);
+
+// The reader's text size, on this device only (never synced to a computer).
+// Its own context, so changing it re-renders text and not every colour reader.
+const TEXT_SCALE_KEY = "kybern.ink.textSize";
+const TextScaleContext = createContext({
+  textScale: DEFAULT_TEXT_SCALE as TextScale,
+  setTextScale: (_: TextScale) => {},
+});
+function TextScaleProvider({ children }: PropsWithChildren) {
+  const [textScale, updateTextScale] = useState<TextScale>(DEFAULT_TEXT_SCALE);
+  useEffect(() => {
+    if (Platform.OS !== "web")
+      void SecureStore.getItemAsync(TEXT_SCALE_KEY)
+        .then((value) => updateTextScale(parseTextScale(value)))
+        .catch(() => {});
+  }, []);
+  const value = useMemo(
+    () => ({
+      textScale,
+      setTextScale: (next: TextScale) => {
+        updateTextScale(next);
+        if (Platform.OS !== "web")
+          void SecureStore.setItemAsync(TEXT_SCALE_KEY, String(next)).catch(
+            () => {},
+          );
+      },
+    }),
+    [textScale],
+  );
+  return (
+    <TextScaleContext.Provider value={value}>
+      {children}
+    </TextScaleContext.Provider>
+  );
+}
+/** The in-app text size multiplier (1 by default). The system font scale applies on top. */
+export const useTextScale = () => useContext(TextScaleContext);
+/** The type scale at the reader's text size; the same objects for every caller at one size. */
+export const useType = () => scaleTypeTable(type, useContext(TextScaleContext).textScale);
 
 /**
  * Spacing. Within a group items sit `sm` apart; groups sit `2xl` apart (at least

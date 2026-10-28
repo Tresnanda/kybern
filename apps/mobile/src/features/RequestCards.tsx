@@ -42,7 +42,7 @@ import { errorText, getState, loadThread, refresh, rpc } from "../state/runtime"
 import { actOnRequest, refreshRequestProgress, useRequestProgress } from "../state/requestProgress";
 import { Button, ErrorBanner, Icon, T, Tap, type IconName } from "../ui/primitives";
 import { haptics } from "../ui/haptics";
-import { MONO, radius, space, type as typography, useTheme } from "../ui/theme";
+import { MONO, radius, space, useType, useTheme } from "../ui/theme";
 
 /** The harness's short name in card copy ("Decline and tell Claude …"). */
 const AGENT_NAMES: Record<string, string> = { "claude-code": "Claude", codex: "Codex", opencode: "OpenCode", pi: "Pi", omp: "Pi", cursor: "Cursor" };
@@ -230,6 +230,7 @@ function useDecline(approval: ApprovalRequest) {
 
 export function LoginRequestCard({ approval, input }: { approval: ApprovalRequest; input: LoginRequestInput }) {
   const { colors } = useTheme();
+  const typography = useType();
   const progress = useRequestProgress(approval.id);
   const phase = progress?.phase;
   const view = phase === "waiting" || phase === "verifying" ? "wait" : phase === "paste_code" ? "paste" : phase === "done" ? "done" : "ask";
@@ -386,6 +387,7 @@ export function LoginRequestCard({ approval, input }: { approval: ApprovalReques
 
 export function PromptRequestCard({ approval, input }: { approval: ApprovalRequest; input: PromptRequestInput }) {
   const { colors } = useTheme();
+  const typography = useType();
   const field = useRef<TextInput>(null);
   const [value, setValue] = useState("");
   const [shown, setShown] = useState(false);

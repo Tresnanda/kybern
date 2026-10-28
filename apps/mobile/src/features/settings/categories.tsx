@@ -7,7 +7,8 @@ import { count } from "../../state/format";
 import { activeEnvironment, useApp } from "../../state/runtime";
 import { useSettings } from "../../state/settings";
 import type { IconName } from "../../ui/primitives";
-import { useTheme } from "../../ui/theme";
+import { textScaleLabel } from "../../ui/textScale";
+import { useTextScale, useTheme } from "../../ui/theme";
 import { AccessSettings } from "./Access";
 import { AccountsSettings } from "./Accounts";
 import { AgentsSettings } from "./Agents";
@@ -60,13 +61,14 @@ export const categoryOf = (value: string | undefined): CategoryId =>
 export function useCategories(): { phone: Category[]; computer: Category[]; computerName: string } {
   const app = useApp();
   const { appearance } = useTheme();
+  const { textScale } = useTextScale();
   const { settings } = useSettings();
   const { accounts, loaded } = useAccounts();
   const environment = activeEnvironment();
   const open = app.status === "open";
   const connection = !environment ? "Not connected" : open ? "Connected" : app.status === "connecting" ? "Connecting" : "Offline";
   const phone: Category[] = [
-    { id: "appearance", title: TITLES.appearance, icon: "circle.lefthalf.filled", subtitle: APPEARANCE_LABELS[appearance] },
+    { id: "appearance", title: TITLES.appearance, icon: "circle.lefthalf.filled", subtitle: textScale === 1 ? APPEARANCE_LABELS[appearance] : `${APPEARANCE_LABELS[appearance]} · Text ${textScaleLabel(textScale)}` },
     {
       id: "computers",
       title: TITLES.computers,
