@@ -316,6 +316,9 @@ impl Node {
 
     /// Stop the daemon the way a crash does: its sockets close and nothing answers.
     pub fn stop(&mut self) {
+        // The network off first: aborting the serve task does not end connections it already
+        // accepted, so a stopped node could still take a new session and look online again.
+        self.state.network.set_enabled(false);
         self.state.shutdown.cancel();
         self.state.network.peers.close_all();
         self.server.abort();
