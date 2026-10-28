@@ -308,20 +308,20 @@ function HomeScreen() {
           >
             {/* The space Home works in, always shown so New space and Manage spaces stay one tap away; switching refills Continue and the project chip. */}
             {connected && (
-              <View style={{ alignSelf: "flex-start", marginBottom: space.md }}>
+              <View style={{ alignSelf: "center", marginBottom: space.md }}>
                 <SpaceSwitcher compact always />
               </View>
             )}
-            <T variant="largeTitle" accessibilityRole="header">
-              {connected ? "What should we work on, Kybern?" : "What are we building?"}
+            <T variant="largeTitle" accessibilityRole="header" style={{ textAlign: "center" }}>
+              What are we building?
             </T>
             {!connected && (
-              <T variant="subhead" tone="secondary" style={{ marginTop: space.sm, maxWidth: 320 }}>
+              <T variant="subhead" tone="secondary" style={{ marginTop: space.sm, maxWidth: 320, alignSelf: "center", textAlign: "center" }}>
                 Work with your coding agents from anywhere.
               </T>
             )}
             {!connected && (
-              <View style={{ marginTop: space.xl, alignSelf: "flex-start" }}>
+              <View style={{ marginTop: space.xl, alignSelf: "center" }}>
                 <Button
                   onPress={() =>
                     app.activeId
