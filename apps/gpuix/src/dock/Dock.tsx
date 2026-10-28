@@ -10,7 +10,7 @@ import { errorText } from '../nav/actions.ts'
 import { popAnimation } from '../kit/Pop.tsx'
 import { motion, useGpuix, type PublicInstance } from '@gpuix/react'
 import { useSidebarWidth, useWindowWidth } from '../shell/layout.ts'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { DOCK_ICONS } from './icons.ts'
 import { Icon } from '../icons.tsx'
@@ -40,6 +40,7 @@ import { pressTransform } from '../motion/press.ts'
 import { DURATION, EASE, enterTransform } from '../motion/kit.tsx'
 import { nextPresenceGeneration, presenceTransform } from '../motion/Presence.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
+import { TerminalOnMenu } from '../machines/TerminalOnMenu.tsx'
 import { leftSource } from '../drag/leave.ts'
 import { beginTabDrag, isDraggingTab, consumeTabDrag, endTabPending, setTabContext, TabSlot, trackTabDrag } from './reorder.tsx'
 import { chooseTab, closeTab, dockGeometry, finishDockDrag, moveDockDrag, setDock, startDockDrag, useDock, useDockDrag, type DockTab } from './store.ts'
@@ -253,7 +254,7 @@ function TabStrip({ threadId, width: _width, coordinator, activeTasks, stats }: 
       {threadId && <>
         <MenuSeparator />
         <MenuLabel>Open beside the chat</MenuLabel>
-        {VIEWERS.map((viewer) => <MenuItem key={viewer.id} id={`tab-${viewer.id}`} icon={viewer.icon} label={viewer.label} testId={`dock-open-${viewer.id}`} onSelect={() => void Promise.resolve().then(() => viewer.open(threadId)).catch((error) => toast.error(viewer.id === 'terminal' ? 'Unable to open a terminal' : `Unable to open ${viewer.label}`, { description: errorText(error) }))} />)}
+        {VIEWERS.map((viewer) => <Fragment key={viewer.id}><MenuItem id={`tab-${viewer.id}`} icon={viewer.icon} label={viewer.label} testId={`dock-open-${viewer.id}`} onSelect={() => void Promise.resolve().then(() => viewer.open(threadId)).catch((error) => toast.error(viewer.id === 'terminal' ? 'Unable to open a terminal' : `Unable to open ${viewer.label}`, { description: errorText(error) }))} />{viewer.id === 'terminal' && <TerminalOnMenu threadId={threadId} />}</Fragment>)}
       </>}
     </Menu>
     <Tip label="Collapse panel (⌘J)" side="top" size={28}><KitIconButton icon={N.panelRight} label="Collapse panel" onClick={() => setDock(threadId, { open: false, instant: false })} testId="dock-collapse" /></Tip>

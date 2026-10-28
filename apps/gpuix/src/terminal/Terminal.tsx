@@ -3,6 +3,7 @@ import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useGpuix, type PublicInstance, type EventPayload } from '@gpuix/react'
 import type { TerminalInfo, TerminalOutputNotification, TerminalExitedNotification, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
 import { localClient, threadClient, useApp } from '../state.ts'
+import { clientFor } from '../machines/index.ts'
 import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
 import { ContextMenu, Menu, MenuItem, MenuLabel, MenuSeparator } from '../nav/overlay.tsx'
 import { SidebarIconButton } from '../sidebar/rows.tsx'
@@ -206,12 +207,13 @@ const TerminalLine = memo(function TerminalLine({ line, model, palette, surface,
 })
 
 /** Also embedded by the Add account sheet's sign-in terminal, which keeps its tab when the program ends. */
-export function Screen({ info, threadId, width, onTitle, onExit }: { info: TerminalInfo; threadId?: string; width: number; onTitle?: (title: string) => void; onExit?: () => void }) {
+export function Screen({ info, threadId, machineId, width, onTitle, onExit }: { info: TerminalInfo; threadId?: string; /** A terminal on another machine: its calls and notifications go to that machine's client. */ machineId?: string; width: number; onTitle?: (title: string) => void; onExit?: () => void }) {
   const t = useTheme()
+  const clientOf = () => { try { return machineId ? clientFor(machineId) : threadClient(threadId) } catch { return null } }
   const palette = terminalPalette(t.variant)
   const { renderer } = useGpuix()
   const host = useRef<PublicInstance | null>(null), list = useRef<PublicInstance | null>(null)
-  const model = useMemo(() => new VT(info.cols, info.rows, 5000, 1_000_000, response => { void threadClient(threadId)?.call('terminals.input', { terminal_id: info.id, data: Buffer.from(response).toString('base64') }).catch(() => {}) }), [info.id])
+  const model = useMemo(() => new VT(info.cols, info.rows, 5000, 1_000_000, response => { void clientOf()?.call('terminals.input', { terminal_id: info.id, data: Buffer.from(response).toString('base64') }).catch(() => {}) }), [info.id])
   model.colors = terminalColors(t.variant, t.surface)
   model.blinkOption = true // the desktop terminal sets `cursorBlink: true`
   const [version, update] = useState(0)
@@ -259,19 +261,20 @@ export function Screen({ info, threadId, width, onTitle, onExit }: { info: Termi
     }
     setMatch(-1)
   }
-  const send = (text: string, encoding: 'utf8' | 'latin1' = 'utf8') => { if (text) void threadClient(threadId)!.call('terminals.input', { terminal_id: info.id, data: Buffer.from(text, encoding).toString('base64') }).catch(e => setError(String(e))) }
+  const send = (text: string, encoding: 'utf8' | 'latin1' = 'utf8') => { if (text) void clientOf()?.call('terminals.input', { terminal_id: info.id, data: Buffer.from(text, encoding).toString('base64') }).catch(e => setError(String(e))) }
   const fit = () => {
     const bounds = host.current && renderer?.getElementBounds?.(host.current.id)
     if (!bounds) return
     const { cols, rows } = fitTerminal(bounds.width, bounds.height, CELL, ROW)
     if (cols === model.cols && rows === model.rows) return
     model.resize(cols, rows); update(v => v + 1)
-    void threadClient(threadId)!.call('terminals.resize', { terminal_id: info.id, cols: model.cols, rows: model.rows }).catch(e => setError(String(e)))
+    void clientOf()?.call('terminals.resize', { terminal_id: info.id, cols: model.cols, rows: model.rows }).catch(e => setError(String(e)))
   }
   useEffect(() => {
     let live = true, timer: ReturnType<typeof setTimeout> | undefined, syncGuard: ReturnType<typeof setTimeout> | undefined, closing: ReturnType<typeof setTimeout> | undefined
     const decoder = new Utf8ToUtf32()
-    const client = threadClient(threadId)!
+    const client = clientOf()
+    if (!client) { setError('This machine is not reachable. Reopen the terminal when it is back.'); return }
     model.titleChanged = title => { const short = shortTitle(title); if (short) titleRef.current?.(short) }
     const changed = () => {
       // Synchronized output (DECSET 2026) holds the picture until the program finishes its update, for at most a second.

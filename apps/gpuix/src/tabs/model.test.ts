@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { CHAT, chatGroup, closeIn, cycleIn, moveBetween, normalizeFilePath, normalizeTab, numberIn, openIn, readGroup, readMemory, release, remember, reorderIn, retarget, tabKey, unionOf, writeMemory, type Groups, type Memory, type Tab } from './model.ts'
+import { CHAT, CHAT_TAB, chatGroup, closeIn, cycleIn, moveBetween, normalizeFilePath, normalizeTab, numberIn, openIn, readGroup, readMemory, release, remember, reorderIn, retarget, tabKey, unionOf, writeMemory, type Groups, type Memory, type Tab } from './model.ts'
 
 const file = (path: string, line?: number): Tab => ({ kind: 'file', path, root: 'project', ...(line ? { line } : {}) })
 const keys = (g: { tabs: Tab[] }) => g.tabs.map(tabKey)
@@ -143,4 +143,11 @@ test('one file is one tab however its path is spelled', () => {
   expect(normalizeTab({ kind: 'file', path: '/Users/me/work/repo/src/a.ts', root: 'project' }, cwd)).toMatchObject({ path: '/Users/me/work/repo/src/a.ts' })
   const diff: Tab = { kind: 'diff', path: './src/a.ts' }
   expect(normalizeTab(diff, cwd)).toBe(diff)
+})
+
+test('a terminal on another machine keeps its machine through storage', () => {
+  const remote: Tab = { kind: 'terminal', id: 't1', machineId: 'm-vps' }
+  const group = readGroup({ tabs: [CHAT_TAB, remote, { kind: 'terminal', id: 't2', machineId: 5 }], active: 'terminal:t1' })
+  expect(group?.tabs).toEqual([CHAT_TAB, remote])
+  expect(group?.active).toBe('terminal:t1')
 })

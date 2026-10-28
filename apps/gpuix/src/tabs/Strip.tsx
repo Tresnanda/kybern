@@ -24,6 +24,10 @@ import { ink, ProviderMark, useTheme } from '../ui.tsx'
 import { CHAT, tabKey, type Tab } from './model.ts'
 import { closeTabAction, fileTabBuffer, keepTab, openTab, selectTab } from './open.ts'
 import { useDirtyKeys } from '../dock/fileBuffers.ts'
+import { TerminalOnMenu } from '../machines/TerminalOnMenu.tsx'
+import { MachineBadge } from '../sidebar/MachineBadge.tsx'
+import { glyphOfMachine, machineHub } from '../machines/index.ts'
+import { terminalTooltip } from '../../../../packages/kybern-client/src/machineUtilities.ts'
 import { beginTabsDrag, endTabsPress, releaseStrip, stripRegistry, trackTabsPress, unregisterTab, useTabsDrop } from './drag.tsx'
 
 const ICONS = { browser: glyph(BrowserIcon), diagram: glyph(FlowchartIcon), image: glyph(Image01Icon) }
@@ -56,7 +60,8 @@ export function useTabItems(threadId: string | null, tabs: Tab[], preview: strin
       case 'chat': return { ...common, pinned: true, label: thread?.title || 'Untitled', mark: thread?.provider.kind, testId: 'tab-chat', dirty: tabs.length > 1 && thread?.status === 'awaiting-approval', tooltip: thread?.status === 'awaiting-approval' ? `${thread.title || 'Untitled'} · waiting for approval` : undefined }
       case 'file': { const unsaved = dirty.has(fileTabBuffer(threadId, tab) ?? ''); return { ...common, label: base(tab.path), icon: T.file, dirty: unsaved, tooltip: `${tab.line ? `${tab.path}:${tab.line}` : tab.path}${unsaved ? ' · unsaved' : ''}` } }
       case 'diff': return tab.path ? { ...common, label: base(tab.path), icon: DOCK_ICONS.changes, tooltip: `Changes in ${tab.path}` } : { ...common, label: 'Changes', icon: DOCK_ICONS.changes }
-      case 'terminal': return tab.cli ? { ...common, label: tab.title || 'Terminal', mark: tab.cli } : { ...common, label: tab.title || 'Terminal', icon: DOCK_ICONS.terminal }
+      case 'terminal': if (tab.machineId) return { ...common, label: tab.title || 'Terminal', iconNode: <MachineBadge glyph={glyphOfMachine(tab.machineId)} size={14} />, tooltip: terminalTooltip(machineHub().set.connection(tab.machineId)?.record.name ?? 'another machine', tab.title) }
+        return tab.cli ? { ...common, label: tab.title || 'Terminal', mark: tab.cli } : { ...common, label: tab.title || 'Terminal', icon: DOCK_ICONS.terminal }
       case 'preview': return { ...common, label: page || 'Browser', icon: ICONS.browser, tooltip: page ? `Browser · ${page}` : 'Browser' }
       case 'review': return { ...common, label: 'Review', icon: N.pullRequest }
       case 'pr': return { ...common, label: `#${tab.number}${tab.title ? ` ${tab.title}` : ''}`, icon: N.pullRequest }
@@ -138,6 +143,7 @@ function AddMenu({ leafId, threadId, size }: { leafId: string; threadId: string;
       </div>
     )}>
       <MenuItem id="terminal" testId="tabs-add-terminal" icon={DOCK_ICONS.terminal} label="New terminal" onSelect={() => void terminal()} />
+      <TerminalOnMenu threadId={threadId} leaf={leafId} />
       {clis.length > 0 && <MenuSubList>{clis.map((p) => <MenuItem key={p.kind} id={`cli-${p.kind}`} iconNode={<ProviderMark kind={p.kind} size={14} />} label={p.display_name} onSelect={() => void terminal([p.binary_path!], p.kind)} />)}</MenuSubList>}
       <MenuSeparator />
       <MenuItem id="preview" testId="tabs-add-preview" icon={ICONS.browser} label="Browser" shortcut="⌘L" onSelect={() => openTab(threadId, { kind: 'preview' }, { leaf: leafId })} />

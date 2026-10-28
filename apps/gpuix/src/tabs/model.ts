@@ -11,7 +11,8 @@ export type Tab =
   | { kind: 'file'; path: string; root: 'project' | 'thread'; line?: number }
   /** One file's diff, or the whole change set without `path`. */
   | { kind: 'diff'; path?: string }
-  | { kind: 'terminal'; id: string; title?: string; cli?: string }
+  /** `machineId`: a terminal on another machine of the network (absent: the thread's own machine). */
+  | { kind: 'terminal'; id: string; title?: string; cli?: string; machineId?: string }
   | { kind: 'preview' }
   | { kind: 'review' }
   | { kind: 'pr'; projectId: string; number: number; title?: string }
@@ -271,7 +272,7 @@ const KINDS: Record<TabKind, (t: Record<string, unknown>) => boolean> = {
   review: () => true,
   file: (t) => typeof t.path === 'string' && (t.root === 'project' || t.root === 'thread') && (t.line === undefined || Number.isInteger(t.line)),
   diff: (t) => t.path === undefined || typeof t.path === 'string',
-  terminal: (t) => typeof t.id === 'string',
+  terminal: (t) => typeof t.id === 'string' && (t.machineId === undefined || typeof t.machineId === 'string'),
   pr: (t) => typeof t.projectId === 'string' && Number.isInteger(t.number),
   note: (t) => typeof t.id === 'string',
   task: (t) => typeof t.id === 'string',
