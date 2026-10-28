@@ -11,6 +11,7 @@
 //! let membership = network::start(&paths.root, &store, &environment_id)?;
 //! ```
 
+pub mod clipboard_filter;
 pub mod keys;
 pub mod membership;
 pub mod ops;
