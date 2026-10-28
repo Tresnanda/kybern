@@ -30,7 +30,7 @@ import {
   type MachineTransport,
   type MergedView,
 } from '../../../../packages/kybern-client/src/machines.ts'
-import { NETWORK_FEATURES, type MachineId, type Project, type Thread, type ThreadActivitySummary } from '../../../../packages/kybern-client/src/types.ts'
+import { NETWORK_FEATURES, type MachineId, type NetworkStatus, type Project, type Thread, type ThreadActivitySummary } from '../../../../packages/kybern-client/src/types.ts'
 import { verifyMachineProof } from './proof.ts'
 import { createGpuixSocket } from './socket.ts'
 import { isLegacyMachineId } from './records.ts'
@@ -52,6 +52,8 @@ export interface MachineHubOptions {
   prepare?: (record: MachineRecord) => void | Promise<void>
   /** A saved profile's token was replaced by `machine:<id>`: drop the old one. */
   forgetProfile?: (profileId: string) => void | Promise<void>
+  /** The network status of the daemon the app is at, once read (the one-time notice). */
+  onNetwork?: (status: NetworkStatus) => void
   /** This device's id for `network.client_grant`. */
   deviceId?: string
   /** Replaces the sockets of non-primary machines (tests). */
@@ -180,6 +182,7 @@ export class MachineHub {
     if (client.info?.features && !client.info.features.includes(NETWORK_FEATURES.network)) return false
     try {
       const status = await client.call('network.status', {})
+      try { this.options.onNetwork?.(status) } catch { /* a notice never touches the connection */ }
       return !!status.enabled
     } catch {
       return false
