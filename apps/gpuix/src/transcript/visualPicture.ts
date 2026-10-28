@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react'
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import type { HtmlSnapshotResult, JsonValue, VisualControl } from '../../../../packages/kybern-client/src/types.ts'
 import type { VisualTheme } from '../../../../packages/kybern-client/src/visuals.ts'
-import { getClient } from '../state.ts'
+import { threadClient } from '../state.ts'
 import { onEnvironmentChange, useEnvironment } from '../shell/environment.ts'
 import { storeImageBytes } from './imageFiles.ts'
 
@@ -26,7 +26,7 @@ const loading = new Map<string, Promise<Picture>>()
 onEnvironmentChange(() => { cache.clear(); loading.clear() })
 
 async function fetchPng(threadId: string, visualId: string, file: string): Promise<string> {
-  const client = getClient()
+  const client = threadClient(threadId)
   if (!client) throw Error('Kybern is not connected.')
   const response = await fetch(`${httpBase(client.endpoint.url)}/threads/${encodeURIComponent(threadId)}/visuals/${encodeURIComponent(visualId)}/snapshot/${file}`, { headers: { authorization: `Bearer ${client.endpoint.token}` } })
   if (!response.ok) throw Error(`The picture did not load (${response.status}).`)
@@ -43,7 +43,8 @@ export function loadPicture(threadId: string, visualId: string, width: number, t
   if (hit) return Promise.resolve(hit)
   const running = loading.get(key)
   if (running) return running
-  const client = getClient()
+  let client: ReturnType<typeof threadClient>
+  try { client = threadClient(threadId) } catch (e) { return Promise.reject(e) }
   if (!client) return Promise.reject(Error('Kybern is not connected.'))
   const request = client.call('threads.visuals.snapshot', { thread_id: threadId, visual_id: visualId, width, theme: theme as unknown as JsonValue, lock })
     .then(async (result: HtmlSnapshotResult) => {

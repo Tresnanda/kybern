@@ -8,7 +8,7 @@ import { useGpuix, type PublicInstance } from '@gpuix/react'
 import { chatLink } from '../../../../packages/kybern-client/src/chatLinks.ts'
 import { fileRefCandidates, linkifyFileRefs } from '../../../../packages/kybern-client/src/fileRefs.ts'
 import { TOOL_RESULT_CHAR_LIMIT, TOOL_RESULT_LINE_LIMIT } from '../shared/lib/toolResultText.ts'
-import { getClient, usePaneAccess } from '../state.ts'
+import { threadClient, usePaneAccess } from '../state.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { FONT_MONO } from '../theme.ts'
 import { Dialog, DialogHeader } from '../nav/overlay.tsx'
@@ -265,7 +265,7 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
   const [image, setImage] = useState<string | null>(null)
   const open = async (href: string) => {
     const link = chatLink(href)
-    const client = getClient()
+    const client = threadClient(threadId, pane.get().selectedMachineId)
     if (!client) return
     // An image link (or an inline image native Markdown paints as a link) opens the image, wherever its folder is.
     if (localImageLink(href) || (link.kind === 'file' && /\.(?:png|jpe?g|gif|webp|avif)$/i.test(link.path))) { setImage(href); return }

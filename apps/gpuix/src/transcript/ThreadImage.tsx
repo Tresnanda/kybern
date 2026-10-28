@@ -8,7 +8,7 @@ import path from 'node:path'
 import { useEffect, useState } from 'react'
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import { imageSource } from '../../../../packages/kybern-client/src/responseImages.ts'
-import { getClient, useApp } from '../state.ts'
+import { threadClient, useApp } from '../state.ts'
 import { onEnvironmentChange, useEnvironment } from '../shell/environment.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { Rise } from '../motion/kit.tsx'
@@ -52,7 +52,7 @@ export function imageFailure(status: number, text: string): Failure {
 const reference = (source: string) => source.replace(/^<(.*)>$/, '$1')
 
 async function load(threadId: string, source: string, signal: AbortSignal): Promise<Loaded> {
-  const owner = getClient()
+  const owner = threadClient(threadId)
   if (!owner) throw imageFailure(0, '')
   const response = await fetch(`${httpBase(owner.endpoint.url)}/threads/${encodeURIComponent(threadId)}/image?path=${encodeURIComponent(reference(source))}`, { headers: { authorization: `Bearer ${owner.endpoint.token}` }, signal })
   if (!response.ok) throw imageFailure(response.status, await response.text().catch(() => ''))

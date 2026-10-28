@@ -15,7 +15,7 @@ import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import { ChartHistogramIcon, FullScreenIcon, RefreshIcon, SquareArrowExpand01Icon, ChevronUpIcon } from '@hugeicons/core-free-icons'
 import type { HtmlVisual, JsonValue, VisualAnswerRecord } from '../../../../packages/kybern-client/src/types.ts'
 import { visualFrameHeight, VISUAL_COLUMN_WIDTH, type VisualTheme } from '../../../../packages/kybern-client/src/visuals.ts'
-import { usePaneAccess, useApp, getClient } from '../state.ts'
+import { usePaneAccess, useApp, callThread } from '../state.ts'
 import { openTabFromPane } from '../tabs/open.ts'
 import { useChatHidden } from '../tabs/hidden.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
@@ -281,7 +281,7 @@ export const VisualCard = memo(function VisualCard({ visual, threadId, answer }:
   const pictureBytes = async () => { if (!picture) throw Error('The picture is not ready yet.'); return new Uint8Array(await readFile(frozen?.path ?? picture.path)) }
   const copyPicture = () => void pictureBytes().then(bytes => { copyImage(renderer, bytes); toast.success('Image copied') }).catch(() => toast.error('Unable to copy image', { description: 'Use Save image instead, or reload the visual.' }))
   const savePicture = () => void pictureBytes().then(bytes => saveImageFile(renderer, bytes, `${visual.title || 'Visual'}.png`)).catch(() => toast.error('Unable to save image', { description: 'Reload the visual, then try again.' }))
-  const copySource = () => void getClient()?.call('threads.visuals.read', { thread_id: threadId, visual_id: visual.id }).then(r => { copyText(r.html); toast.success('HTML source copied') }).catch(() => toast.error('Unable to copy the source', { description: 'Check the connection and try again.' }))
+  const copySource = () => void callThread(threadId, 'threads.visuals.read', { thread_id: threadId, visual_id: visual.id }).then(r => { copyText(r.html); toast.success('HTML source copied') }).catch(() => toast.error('Unable to copy the source', { description: 'Check the connection and try again.' }))
   const reload = () => { setFrozen(null); retryPicture(); if (inline) { setCovered(false); reloadDoc(id) } }
 
   const ring = live && !returning

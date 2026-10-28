@@ -6,7 +6,7 @@
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import { visualHeight, visualLink, visualThemeFragment, type VisualTheme } from '../../../../packages/kybern-client/src/visuals.ts'
 import { activeEnvironment, onEnvironmentChange } from '../shell/environment.ts'
-import { getClient } from '../state.ts'
+import { threadClient } from '../state.ts'
 import { launchBrowser } from '../preview/browser.ts'
 import { webHost, type WebEvent } from '../native/webview.ts'
 import { VISUAL_NO_WEB_VIEW } from './visualFallback.ts'
@@ -105,7 +105,8 @@ function destroy(doc: Doc) {
   clearTimeout(doc.warm)
   docs.delete(doc.id)
   webHost.destroy(doc.id)
-  const client = getClient()
+  let client: ReturnType<typeof threadClient> = null
+  try { client = threadClient(doc.threadId) } catch { /* that machine is offline: its ticket expires on its own */ }
   if (doc.ticket && client) void client.call('threads.visuals.revoke', { thread_id: doc.threadId, ticket: doc.ticket }).catch(() => {})
   changed()
 }
@@ -146,10 +147,12 @@ export function claimDoc(threadId: string, visualId: string, owner: DocOwner, th
   doc = { id, threadId, visualId, generation: 0, ready: false, error: '', owner, usedAt: Date.now(), listeners: new Set(), theme }
   docs.set(id, doc)
   changed()
-  const created = doc, client = getClient(), environment = activeEnvironment()
+  const created = doc, environment = activeEnvironment()
+  let client: ReturnType<typeof threadClient> = null
+  try { client = threadClient(threadId) } catch (e) { created.error = String((e as Error)?.message ?? e) } // that machine is offline
   // No embedded web view: nothing can show a live page, and a frame ticket minted for it would never be served.
   if (!webHost.available) { created.error = VISUAL_NO_WEB_VIEW; changed(); return id }
-  if (!client) { created.error = 'Kybern is not connected. Reconnect, then reload the visual.'; changed(); return id }
+  if (!client) { created.error ||= 'Kybern is not connected. Reconnect, then reload the visual.'; changed(); return id }
   void client.call('threads.visuals.frame', { thread_id: threadId, visual_id: visualId }).then(result => {
     if (docs.get(id) !== created || environment !== activeEnvironment()) { void client.call('threads.visuals.revoke', { thread_id: threadId, ticket: result.ticket }).catch(() => {}); return }
     created.ticket = result.ticket
@@ -211,7 +214,7 @@ onEnvironmentChange(() => { for (const doc of [...docs.values()]) destroy(doc) }
  * only), so a question is answered in Kybern.
  */
 export async function openVisualInBrowser(threadId: string, visualId: string, theme: VisualTheme): Promise<void> {
-  const client = getClient()
+  const client = threadClient(threadId)
   if (!client) throw Error('Kybern is not connected. Reconnect, then open the visual again.')
   const { ticket } = await client.call('threads.visuals.frame', { thread_id: threadId, visual_id: visualId })
   try { await launchBrowser(`${httpBase(client.endpoint.url)}/visual-frame/${encodeURIComponent(ticket)}` + visualThemeFragment(theme)) }
