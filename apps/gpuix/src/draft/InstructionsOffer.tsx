@@ -27,7 +27,7 @@ import { EXIT, Presence } from '../motion/Presence.tsx'
 import { errorText } from '../nav/actions.ts'
 import { N } from '../nav/glyphs.ts'
 import { activeEnvironment } from '../shell/environment.ts'
-import { getClient } from '../state.ts'
+import { projectClient } from '../state.ts'
 import { FONT_MONO } from '../theme.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { openQuietly } from '../platform/os.ts'
@@ -101,12 +101,12 @@ function OfferCard({ project, missing, done, onCreated, onHide }: {
   }, [done])
 
   const create = async () => {
-    const client = getClient()
+    const client = projectClient(project.id)
     if (!client || busy) return
     setBusy(true); setError('')
     try {
       const result = await client.call('projects.instructions.create', { project_id: project.id })
-      if (getClient() !== client) return
+      if (projectClient(project.id) !== client) return
       onCreated(result.created)
       void loadMemberStatus(project.id, true)
     } catch (e) { setError(errorText(e)) } finally { setBusy(false) }

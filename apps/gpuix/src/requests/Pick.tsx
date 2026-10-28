@@ -20,7 +20,7 @@ import { Button } from '../kit/Button.tsx'
 import { SearchField } from '../kit/SearchField.tsx'
 import { Spinner } from '../kit/Spinner.tsx'
 import { errorText } from '../nav/actions.ts'
-import { getClient, useApp } from '../state.ts'
+import { callThread, ownProjectId, useApp } from '../state.ts'
 import { FONT_MONO } from '../theme.ts'
 import { respondApproval } from '../transcript/store.ts'
 import { Label } from '../ui.tsx'
@@ -172,7 +172,7 @@ function PathPick({ approval, input, badge }: { approval: ApprovalRequest; input
   const k = useCardTokens()
   const renderer = useGpuixRequired()
   const thread = useApp(s => s.threads.find(candidate => candidate.id === approval.thread_id))
-  const projectId = thread?.project_id
+  const projectId = thread && ownProjectId(thread)
   const folder = input.kind === 'folder'
   const [listings, setListings] = useState<Record<string, FileEntry[] | 'loading' | 'error'>>({})
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -187,7 +187,7 @@ function PathPick({ approval, input, badge }: { approval: ApprovalRequest; input
     if (!projectId || asked.current.has(dir)) return
     asked.current.add(dir)
     setListings(previous => ({ ...previous, [dir]: 'loading' }))
-    getClient()?.call('files.list', { project_id: projectId, path: dir }).then(
+    callThread(approval.thread_id, 'files.list', { project_id: projectId, path: dir }, thread?.machineId).then(
       result => setListings(previous => ({ ...previous, [dir]: result.entries })),
       () => setListings(previous => ({ ...previous, [dir]: 'error' })),
     )
@@ -197,7 +197,7 @@ function PathPick({ approval, input, badge }: { approval: ApprovalRequest; input
     const term = query.trim()
     if (!term || !projectId || folder) { setHits(null); return }
     let current = true
-    const timer = setTimeout(() => { getClient()?.call('files.search', { project_id: projectId, query: term, limit: 60 }).then(result => { if (current) setHits(result.files) }, () => { if (current) setHits([]) }) }, 150)
+    const timer = setTimeout(() => { callThread(approval.thread_id, 'files.search', { project_id: projectId, query: term, limit: 60 }, thread?.machineId).then(result => { if (current) setHits(result.files) }, () => { if (current) setHits([]) }) }, 150)
     return () => { current = false; clearTimeout(timer) }
   }, [query, projectId, folder])
 

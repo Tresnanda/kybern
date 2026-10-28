@@ -1,7 +1,7 @@
 import { useEffect, useSyncExternalStore } from 'react'
 import { EMPTY_MESSAGE_INDEX, mergeMessages, resolveMessage, setThreadIndex, type ThreadMessageIndex } from '../../../../packages/kybern-client/src/messageStates.ts'
 import { activeEnvironment, onEnvironmentChange } from '../shell/environment.ts'
-import { getClient } from '../state.ts'
+import { threadClient } from '../state.ts'
 import { onLiveEvent } from '../nav/live.ts'
 let indexes: Record<string, ThreadMessageIndex> = {}
 const loads = new Map<string, Promise<void>>()
@@ -28,7 +28,8 @@ export function useMessages(threadId: string) {
   const index = useSyncExternalStore(listener => { listeners.add(listener); return () => { listeners.delete(listener) } }, () => indexes[threadId] ?? EMPTY_MESSAGE_INDEX)
   useEffect(() => {
     const owner = activeEnvironment()
-    const client = getClient()
+    let client: ReturnType<typeof threadClient>
+    try { client = threadClient(threadId) } catch { return } // that machine is offline
     if (!client || loads.has(threadId)) return
     // Refresh on remount/reconnect; mergeMessages preserves newer live events.
     if (!indexes[threadId]) put(threadId, EMPTY_MESSAGE_INDEX)
