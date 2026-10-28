@@ -309,10 +309,10 @@ function HomeScreen() {
             entering={FadeIn.duration(280).reduceMotion(ReduceMotion.System)}
             style={{ flexGrow: 1, justifyContent: "center", paddingHorizontal: gutter(width), paddingBottom: space.xl }}
           >
-            {/* The space Home works in; switching refills Continue and the project chip. */}
+            {/* The space Home works in, always shown so New space and Manage spaces stay one tap away; switching refills Continue and the project chip. */}
             {connected && (
               <View style={{ alignSelf: "flex-start", marginBottom: space.md }}>
-                <SpaceSwitcher compact />
+                <SpaceSwitcher compact always />
               </View>
             )}
             <T variant="largeTitle" accessibilityRole="header">
