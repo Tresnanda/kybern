@@ -31,7 +31,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
-use super::remote_delegation::{CallFailure, MemberView, RemoteHub};
+use super::remote_delegation::{CallFailure, MemberView, RemoteHub, RemoteTarget};
 use super::{ActiveTurn, LiveSession, Orchestrator, SessionActivityTime};
 use crate::network::forward::{self, Decision, MACHINES_TOOL, ToolClass};
 
@@ -93,6 +93,44 @@ impl AgentSession for InertSession {
     async fn close(&self) -> kybern_drivers::Result<()> {
         Ok(())
     }
+}
+
+/// `kybern_preview_open` with a machine (M4 / U3): forward the dev server's port to this machine and show
+/// it from here, as an ordinary local page. The page, its assets and its hot-reload socket are plain TCP
+/// to the browser, so nothing in the page changes.
+async fn preview_on_machine(
+    hub: &Arc<dyn RemoteHub>,
+    target: &RemoteTarget,
+    cap: PermissionMode,
+    mut arguments: Value,
+) -> Result<Forwarded> {
+    // A forward lets this machine's processes reach a port of the other machine, so the table's "ask" for
+    // operate tools holds here too. The calling side has no card for it, so it declines and says what to do.
+    anyhow::ensure!(
+        forward::decide(cap, ToolClass::Operate) == Decision::Run,
+        "Showing a page from {} needs your approval at this permission level. Open it yourself from the Preview panel (Ports menu), or switch this thread to Auto or Full access.",
+        target.name
+    );
+    if let Some(features) = &target.features {
+        anyhow::ensure!(
+            features.iter().any(|feature| feature == features::PORTS_V1),
+            "{} needs a newer Kybern to forward ports. Update it from Settings → Machines.",
+            target.name
+        );
+    }
+    let address = arguments.get("target").and_then(Value::as_str).unwrap_or_default().to_string();
+    let (port, path) = crate::network::ports::parse_server_target(&address).map_err(|reason| anyhow!(reason))?;
+    let local = hub.forward_port(&target.id, port).await.map_err(|reason| anyhow!("{}: {reason}", target.name))?;
+    if let Some(object) = arguments.as_object_mut() {
+        object.remove(forward::MACHINE_ARG);
+        object.remove(forward::PROJECT_ARG);
+        object.insert("target".into(), json!(format!("http://localhost:{local}{path}")));
+        let titled = object.get("title").and_then(Value::as_str).is_some_and(|title| !title.trim().is_empty());
+        if !titled {
+            object.insert("title".into(), json!(format!("localhost:{port} on {}", target.name)));
+        }
+    }
+    Ok(Forwarded::Local(arguments))
 }
 
 /// What the calling side decided about a tool call that may name a machine.
@@ -193,6 +231,9 @@ impl Orchestrator {
         }
         if !target.online {
             anyhow::bail!("{}", offline_message(&target.name, view.and_then(|member| member.last_seen)));
+        }
+        if name == "kybern_preview_open" {
+            return preview_on_machine(&hub, &target, thread.permission_mode, arguments).await;
         }
         if let Some(features) = &target.features {
             anyhow::ensure!(

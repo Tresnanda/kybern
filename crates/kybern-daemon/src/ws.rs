@@ -454,6 +454,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let mut session_imports = ctx.principal.has(Scope::OrchestrationRead).then(|| state.session_imports.subscribe());
     let mut projects = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_projects());
     let mut outbox = ctx.principal.has(Scope::OrchestrationRead).then(|| state.network.subscribe_outbox());
+    let mut utility = ctx.principal.has(Scope::OrchestrationRead).then(|| state.network.subscribe_utility());
     let mut workspace_progress = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_workspace_progress());
     let mut spaces = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_spaces());
     let mut preview_requests = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_preview_requests());
@@ -557,6 +558,19 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                     // A missed item shows the next time the list is read.
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(_) => outbox = None,
+                }
+            }
+            event = async {
+                match utility.as_mut() {
+                    Some(utility) => utility.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match event {
+                    Ok((method, params)) => { let _ = ctx.out.notify(method, params).await; }
+                    // Progress repeats and lists carry everything; a missed one is covered by the next.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => utility = None,
                 }
             }
             progress = async {

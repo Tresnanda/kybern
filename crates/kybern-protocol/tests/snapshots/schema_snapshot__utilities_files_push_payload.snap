@@ -1,0 +1,75 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(FilesPushPayload)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FilesPushPayload",
+  "description": "What the outbox keeps of a send (its payload).",
+  "type": "object",
+  "properties": {
+    "source": {
+      "description": "The absolute, canonical path of the file or folder on the sending machine.",
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "is_folder": {
+      "type": "boolean"
+    },
+    "dest": {
+      "$ref": "#/$defs/PushDest"
+    }
+  },
+  "required": [
+    "source",
+    "name",
+    "is_folder",
+    "dest"
+  ],
+  "$defs": {
+    "PushDest": {
+      "description": "Where the files land on the target.",
+      "oneOf": [
+        {
+          "description": "`~/Downloads/Kybern/<from machine>/`, the default.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "downloads"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "A project of the target, named by id, name or path, with an optional folder inside it.",
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string"
+            },
+            "subdir": {
+              "description": "Relative to the project's root, `/`-separated, without `..`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "project"
+            }
+          },
+          "required": [
+            "kind",
+            "project"
+          ]
+        }
+      ]
+    }
+  }
+}

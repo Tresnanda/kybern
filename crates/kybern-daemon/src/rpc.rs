@@ -34,7 +34,7 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
             $last(state, ctx, method, &mut slot).await
         }};
     }
-    try_parts!(dispatch_part_1, dispatch_part_2, dispatch_part_3, dispatch_part_4, dispatch_part_5, dispatch_part_6, dispatch_part_7, dispatch_part_8, dispatch_part_9, dispatch_part_10, dispatch_part_11, dispatch_part_12, dispatch_part_13, dispatch_part_14, dispatch_part_15, dispatch_part_16; dispatch_part_17)
+    try_parts!(dispatch_part_1, dispatch_part_2, dispatch_part_3, dispatch_part_4, dispatch_part_5, dispatch_part_6, dispatch_part_7, dispatch_part_8, dispatch_part_9, dispatch_part_10, dispatch_part_11, dispatch_part_12, dispatch_part_13, dispatch_part_14, dispatch_part_15, dispatch_part_utilities, dispatch_part_16; dispatch_part_17)
 }
 
 async fn dispatch_part_1(state: &AppState, ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
@@ -1318,6 +1318,30 @@ async fn dispatch_part_15(state: &AppState, ctx: &ConnectionCtx, method: &str, s
             let has_more = events.len() > limit as usize;
             events.truncate(limit as usize);
             ok(EventsRangeResult { events, has_more })
+        }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+/// The machine utilities (M4): sending files, forwarding ports. Its own slice so a lane that adds methods
+/// elsewhere does not touch it.
+async fn dispatch_part_utilities(
+    state: &AppState,
+    _ctx: &ConnectionCtx,
+    method: &str,
+    slot: &mut Option<Value>,
+) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
+        FilesSend::NAME => ok(crate::network::files_push::send(state, parse(params)?)?),
+        PortsForward::NAME => ok(crate::network::ports::forward(state, parse(params)?).await?),
+        PortsList::NAME => ok(crate::network::ports::list(state)),
+        PortsStop::NAME => {
+            let p: PortsStopParams = parse(params)?;
+            ok(crate::network::ports::stop(state, p.id)?)
         }
         _ => {
             *slot = Some(params);

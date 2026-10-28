@@ -340,6 +340,19 @@ fn network_schemas_are_stable() {
     insta::assert_json_snapshot!("network_doctor_report", schema_for!(DoctorReport));
 }
 
+#[test]
+fn machine_utility_schemas_are_stable() {
+    insta::assert_json_snapshot!("utilities_files_send_params", schema_for!(FilesSendParams));
+    insta::assert_json_snapshot!("utilities_files_push_payload", schema_for!(FilesPushPayload));
+    insta::assert_json_snapshot!("utilities_peer_files_begin_params", schema_for!(PeerFilesBeginParams));
+    insta::assert_json_snapshot!("utilities_peer_files_begin_result", schema_for!(PeerFilesBeginResult));
+    insta::assert_json_snapshot!("utilities_peer_files_chunk_params", schema_for!(PeerFilesChunkParams));
+    insta::assert_json_snapshot!("utilities_files_progress", schema_for!(FilesProgress));
+    insta::assert_json_snapshot!("utilities_files_received", schema_for!(FilesReceived));
+    insta::assert_json_snapshot!("utilities_port_forward", schema_for!(PortForward));
+    insta::assert_json_snapshot!("utilities_peer_ports_open_params", schema_for!(PeerPortsOpenParams));
+}
+
 fn machine(id: &str) -> MachineDescriptor {
     MachineDescriptor {
         machine_id: id.into(),

@@ -19,6 +19,7 @@ pub mod clipboard_filter;
 pub mod dial_out;
 pub mod doctor;
 pub mod federated;
+pub mod files_push;
 pub mod forward;
 pub mod git_transfer;
 pub mod join;
@@ -29,6 +30,7 @@ pub mod membership;
 pub mod ops;
 pub mod outbox;
 pub mod peers;
+pub mod ports;
 pub mod relay;
 pub mod removal;
 pub mod repo_identity;
@@ -50,6 +52,8 @@ mod join_tests;
 mod shared_state_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod utilities_tests;
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -107,6 +111,8 @@ pub struct Timing {
     pub found_ttl: Duration,
     /// A relayed stream with no traffic for this long is closed, the main `/ws` stream excepted.
     pub relay_idle: Duration,
+    /// A port forward with no connection for this long closes (§8.3).
+    pub ports_idle: Duration,
     /// The window of a handshake request's `at`, and of a well-known proof.
     pub clock_window: Duration,
     /// Join machines of the same Tailscale user on discovery (§2.4a). Always on in a daemon; a test
@@ -132,6 +138,7 @@ impl Default for Timing {
             renew_after: Duration::from_secs(30 * 60),
             found_ttl: Duration::from_secs(10 * 60),
             relay_idle: Duration::from_secs(30),
+            ports_idle: Duration::from_secs(kybern_protocol::PORT_FORWARD_IDLE_SECS),
             clock_window: Duration::from_secs(60),
             auto_join: true,
             // Two discovery ticks at the idle pace, so a machine that is merely slow to notice us
@@ -156,6 +163,7 @@ impl Timing {
             renew_after: Duration::from_secs(30 * 60),
             found_ttl: Duration::from_millis(300),
             relay_idle: Duration::from_secs(30),
+            ports_idle: Duration::from_millis(900),
             clock_window: Duration::from_secs(60),
             auto_join: true,
             lone_wait: Duration::from_secs(3),
@@ -192,6 +200,10 @@ pub struct Network {
     pub limiter: well_known::RateLimiter,
     pub peers: peers::Peers,
     pub relays: relay::RelayHub,
+    /// Sends this machine is receiving (M4, U1).
+    pub files: files_push::Incoming,
+    /// Ports this machine forwards from other machines (M4, U3).
+    pub ports: ports::Forwards,
     /// The client every dial and probe uses. Under the fake it is bound to this node's loopback
     /// address, so the peer's `whois` can name the caller.
     pub http: reqwest::Client,
@@ -208,6 +220,8 @@ pub struct Network {
     changed: broadcast::Sender<()>,
     /// Outbox items as they change, forwarded to clients as `outbox.changed`.
     outbox_changed: broadcast::Sender<kybern_protocol::OutboxItem>,
+    /// Notifications of the machine utilities (file progress, received files, port forwards) for clients.
+    utility_events: broadcast::Sender<(&'static str, serde_json::Value)>,
     enabled: AtomicBool,
 }
 
@@ -240,6 +254,8 @@ impl Network {
             limiter: Default::default(),
             peers: Default::default(),
             relays: Default::default(),
+            files: Default::default(),
+            ports: Default::default(),
             listen: Default::default(),
             self_ts: Default::default(),
             watching: Default::default(),
@@ -247,6 +263,7 @@ impl Network {
             wake: Notify::new(),
             changed: broadcast::channel(16).0,
             outbox_changed: broadcast::channel(64).0,
+            utility_events: broadcast::channel(64).0,
             enabled: AtomicBool::new(true),
         }
     }
@@ -289,6 +306,8 @@ impl Network {
             features::SECRETS_STORE_V1.to_string(),
             features::LOGIN_BROKER_V1.to_string(),
             features::UPDATE_V1.to_string(),
+            features::FILES_PUSH_V1.to_string(),
+            features::PORTS_V1.to_string(),
         ]
     }
 
@@ -322,6 +341,15 @@ impl Network {
     /// Outbox items as they change.
     pub fn subscribe_outbox(&self) -> broadcast::Receiver<kybern_protocol::OutboxItem> {
         self.outbox_changed.subscribe()
+    }
+
+    /// Notifications of the machine utilities, forwarded to clients that may read orchestration state.
+    pub fn subscribe_utility(&self) -> broadcast::Receiver<(&'static str, serde_json::Value)> {
+        self.utility_events.subscribe()
+    }
+
+    pub(crate) fn notify_utility(&self, method: &'static str, params: serde_json::Value) {
+        let _ = self.utility_events.send((method, params));
     }
 
     pub(crate) fn notify_outbox(&self, item: kybern_protocol::OutboxItem) {

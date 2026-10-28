@@ -238,3 +238,14 @@ expression: names
 - login.broker.bind
 - login.broker.set
 - secrets.push
+- files.send
+- peer.files.begin
+- peer.files.chunk
+- peer.files.finish
+- peer.files.abort
+- ports.forward
+- ports.list
+- ports.stop
+- peer.ports.open
+- peer.ports.data
+- peer.ports.close

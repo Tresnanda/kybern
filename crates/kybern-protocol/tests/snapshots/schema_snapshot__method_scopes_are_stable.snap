@@ -474,3 +474,25 @@ expression: scopes
   - "network:admin"
 - - secrets.push
   - "access:write"
+- - files.send
+  - "orchestration:operate"
+- - peer.files.begin
+  - "machine:files"
+- - peer.files.chunk
+  - "machine:files"
+- - peer.files.finish
+  - "machine:files"
+- - peer.files.abort
+  - "machine:files"
+- - ports.forward
+  - "orchestration:operate"
+- - ports.list
+  - "orchestration:read"
+- - ports.stop
+  - "orchestration:operate"
+- - peer.ports.open
+  - "machine:ports"
+- - peer.ports.data
+  - "machine:peer"
+- - peer.ports.close
+  - "machine:peer"

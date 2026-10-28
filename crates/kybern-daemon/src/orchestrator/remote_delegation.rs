@@ -124,6 +124,10 @@ pub trait RemoteHub: Send + Sync {
     async fn kicked(&self);
     /// Cancelled when the daemon shuts down.
     fn shutdown(&self) -> CancellationToken;
+    /// Forward a loopback port of a member to a loopback port here (M4 / U3) and say which port it is.
+    async fn forward_port(&self, _target: &str, _remote_port: u16) -> Result<u16, String> {
+        Err("This daemon cannot forward ports.".into())
+    }
 }
 
 /// Orchestrator-side state of remote delegation.

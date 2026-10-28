@@ -1,0 +1,108 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(PeerFilesBeginParams)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PeerFilesBeginParams",
+  "description": "`peer.files.begin`: announce a send, or pick one up again after a disconnect.",
+  "type": "object",
+  "properties": {
+    "transfer_id": {
+      "description": "The outbox item's operation id: a repeat finds the bytes already staged.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "name": {
+      "description": "The file or folder name that lands in the destination.",
+      "type": "string"
+    },
+    "is_folder": {
+      "type": "boolean"
+    },
+    "dest": {
+      "$ref": "#/$defs/PushDest"
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PushEntry"
+      }
+    }
+  },
+  "required": [
+    "transfer_id",
+    "name",
+    "is_folder",
+    "dest",
+    "entries"
+  ],
+  "$defs": {
+    "PushDest": {
+      "description": "Where the files land on the target.",
+      "oneOf": [
+        {
+          "description": "`~/Downloads/Kybern/<from machine>/`, the default.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "downloads"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "A project of the target, named by id, name or path, with an optional folder inside it.",
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string"
+            },
+            "subdir": {
+              "description": "Relative to the project's root, `/`-separated, without `..`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "project"
+            }
+          },
+          "required": [
+            "kind",
+            "project"
+          ]
+        }
+      ]
+    },
+    "PushEntry": {
+      "description": "One file of a send.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Relative to the send's root, `/`-separated.",
+          "type": "string"
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sha256": {
+          "description": "Lowercase hex SHA-256 of the whole file.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "size",
+        "sha256"
+      ]
+    }
+  }
+}

@@ -1,0 +1,83 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(FilesSendParams)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FilesSendParams",
+  "description": "`files.send`: queue a file or folder of a project of this machine for another machine.",
+  "type": "object",
+  "properties": {
+    "project_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "path": {
+      "description": "The file or folder, relative to the project root.",
+      "type": "string"
+    },
+    "machine": {
+      "description": "The target machine, by id or name.",
+      "type": "string"
+    },
+    "dest": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PushDest"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "project_id",
+    "path",
+    "machine"
+  ],
+  "$defs": {
+    "PushDest": {
+      "description": "Where the files land on the target.",
+      "oneOf": [
+        {
+          "description": "`~/Downloads/Kybern/<from machine>/`, the default.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "downloads"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "A project of the target, named by id, name or path, with an optional folder inside it.",
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string"
+            },
+            "subdir": {
+              "description": "Relative to the project's root, `/`-separated, without `..`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "project"
+            }
+          },
+          "required": [
+            "kind",
+            "project"
+          ]
+        }
+      ]
+    }
+  }
+}

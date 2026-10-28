@@ -24,6 +24,7 @@ pub mod rpc;
 pub mod shared_state;
 pub mod thread_read;
 pub mod user_input;
+pub mod utilities;
 
 pub use auth::*;
 pub use event::*;
@@ -38,6 +39,7 @@ pub use rpc::*;
 pub use shared_state::*;
 pub use thread_read::*;
 pub use user_input::*;
+pub use utilities::*;
 
 /// Bumped on breaking wire changes.
 pub const PROTOCOL_VERSION: u32 = 1;

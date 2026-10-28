@@ -535,8 +535,8 @@ pub async fn open(
         let host = reqwest::Url::parse(url).ok().and_then(|url| url.host_str().map(str::to_owned)).unwrap_or_default();
         // The proxy only ever reaches loopback on the daemon host.
         if is_loopback_host(&host) {
-            // Never a proxy into the daemon's own HTTP API.
-            if *port == state.port.load(std::sync::atomic::Ordering::Relaxed) {
+            // Never a proxy into the daemon's own HTTP API, on any listener it holds.
+            if crate::network::ports::own_ports(state).contains(port) {
                 return Err(PreviewError::invalid_address());
             }
             if proxy::listener_addr(*port).await.is_none() {

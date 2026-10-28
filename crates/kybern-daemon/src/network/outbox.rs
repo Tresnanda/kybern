@@ -184,6 +184,14 @@ impl RemoteHub for NetworkHub {
     fn shutdown(&self) -> CancellationToken {
         self.shutdown.clone()
     }
+
+    async fn forward_port(&self, target: &str, remote_port: u16) -> Result<u16, String> {
+        let info = self.target_of(target).ok_or_else(|| "That machine is not in your network any more.".to_string())?;
+        super::ports::forward_to(&self.network, &self.shutdown, target, &info.name, remote_port, None)
+            .await
+            .map(|forward| forward.local_port)
+            .map_err(|error| error.message)
+    }
 }
 
 /// The session broke or never answered, as opposed to the peer saying no.
@@ -311,6 +319,7 @@ async fn deliver(state: &AppState, item: &OutboxItem) -> Delivery {
         OutboxKind::Fork => state.orchestrator.remote_deliver_fork(item).await,
         OutboxKind::SettingsPatch => crate::settings_share::deliver(state, item).await,
         OutboxKind::SecretsPut => super::broker::deliver_secrets_put(state, item).await,
+        OutboxKind::FilesPush => super::files_push::deliver(state, item).await,
         other => Delivery::Failed(format!("This version of Kybern cannot deliver {} items yet.", other.as_str())),
     }
 }
@@ -414,7 +423,6 @@ pub fn enqueue(state: &AppState, params: OutboxEnqueueParams) -> Result<OutboxIt
     if hub.target(&params.target).is_none() {
         return Err(RpcError::new(codes::NOT_FOUND, "that machine is not in your network"));
     }
-    let now = Utc::now();
     let operation_id = params.operation.operation_id.unwrap_or_else(Uuid::now_v7);
     // The target deduplicates on the ids a request carries, so they are fixed now, from the operation:
     // a delivery that is repeated finds the thread and the message it already made.
@@ -449,11 +457,17 @@ pub fn enqueue(state: &AppState, params: OutboxEnqueueParams) -> Result<OutboxIt
             ));
         }
     }
+    queue(state, &params.target, params.operation.kind, operation_id, payload)
+}
+
+/// Insert a queued item for `target` and wake the worker. The callers have checked the payload.
+pub(super) fn queue(state: &AppState, target: &str, kind: OutboxKind, operation_id: Uuid, payload: Value) -> Result<OutboxItem, RpcError> {
+    let now = Utc::now();
     let item = OutboxItem {
         id: Uuid::now_v7(),
         operation_id,
-        target: params.target,
-        kind: params.operation.kind,
+        target: target.to_string(),
+        kind,
         payload,
         origin: None,
         state: OutboxState::Queued,

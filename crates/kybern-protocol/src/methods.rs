@@ -19,6 +19,7 @@ use crate::network::*;
 use crate::outbox::*;
 use crate::shared_state::*;
 use crate::thread_read::*;
+use crate::utilities::*;
 
 /// Static description of a method, used for auth checks and docs.
 pub trait Method {
@@ -4217,6 +4218,20 @@ method!(PeerFork, "peer.fork", Some(Scope::MachineDelegate), PeerForkParams, Pee
 method!(PeerToolCall, "peer.tool.call", Some(Scope::MachineTools), PeerToolCallParams, PeerToolCallResult);
 method!(PeerThreadArchiveInbound, "peer.thread.archive_inbound", Some(Scope::MachineTools), PeerThreadArchiveInboundParams, Empty);
 
+// Machine utilities (M4, U1 files and U3 ports; payloads in utilities.rs).
+method!(FilesSend, "files.send", Some(Scope::OrchestrationOperate), FilesSendParams, FilesSendResult);
+method!(PeerFilesBegin, "peer.files.begin", Some(Scope::MachineFiles), PeerFilesBeginParams, PeerFilesBeginResult);
+method!(PeerFilesChunk, "peer.files.chunk", Some(Scope::MachineFiles), PeerFilesChunkParams, PeerFilesChunkResult);
+method!(PeerFilesFinish, "peer.files.finish", Some(Scope::MachineFiles), PeerFilesTransferParams, PeerFilesFinishResult);
+method!(PeerFilesAbort, "peer.files.abort", Some(Scope::MachineFiles), PeerFilesTransferParams, Empty);
+method!(PortsForward, "ports.forward", Some(Scope::OrchestrationOperate), PortsForwardParams, PortForward);
+method!(PortsList, "ports.list", Some(Scope::OrchestrationRead), Empty, PortsListResult);
+method!(PortsStop, "ports.stop", Some(Scope::OrchestrationOperate), PortsStopParams, PortsListResult);
+method!(PeerPortsOpen, "peer.ports.open", Some(Scope::MachinePorts), PeerPortsOpenParams, Empty);
+// Data and close frames only reach a stream that an authorized open created, so `machine:peer` is enough.
+method!(PeerPortsData, "peer.ports.data", Some(Scope::MachinePeer), PeerRelayDataParams, Empty);
+method!(PeerPortsClose, "peer.ports.close", Some(Scope::MachinePeer), PeerRelayCloseParams, Empty);
+
 /// Registry used by the daemon's auth check and the schema dump.
 pub struct MethodInfo {
     pub name: &'static str,
@@ -4468,6 +4483,17 @@ registry!(
     LoginBrokerBind,
     LoginBrokerSet,
     SecretsPush,
+    FilesSend,
+    PeerFilesBegin,
+    PeerFilesChunk,
+    PeerFilesFinish,
+    PeerFilesAbort,
+    PortsForward,
+    PortsList,
+    PortsStop,
+    PeerPortsOpen,
+    PeerPortsData,
+    PeerPortsClose,
 );
 
 pub fn scope_for(method: &str) -> Option<Option<Scope>> {

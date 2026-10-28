@@ -512,6 +512,13 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
             let result = state.orchestrator.serve_tool_call(&link.machine_id, &granted, parse(params)?).await?;
             ok(result)
         }
+        // Files pushed to this machine (U1) and ports forwarded from it (U3).
+        PeerFilesBegin::NAME | PeerFilesChunk::NAME | PeerFilesFinish::NAME | PeerFilesAbort::NAME => {
+            super::files_push::serve(state, link, method, params).await
+        }
+        PeerPortsOpen::NAME => super::ports::handle_open(state, link, parse(params)?).await,
+        PeerPortsData::NAME => super::relay::handle_data(link, parse(params)?).await,
+        PeerPortsClose::NAME => super::relay::handle_close(link, parse(params)?),
         PeerThreadArchiveInbound::NAME => {
             let archive: PeerThreadArchiveInboundParams = parse(params)?;
             state.orchestrator.archive_inbound_threads(&link.machine_id, archive.thread_id).await?;
@@ -601,7 +608,7 @@ pub async fn inbound(state: &AppState, link: &Arc<PeerLink>, text: &str) {
     let params = value.get("params").cloned().unwrap_or(Value::Null);
     // Relay data is hot and ordered: it is handled inline. Other requests run on their own task,
     // bounded per link.
-    let ordered = method == PeerRelayData::NAME || method == PeerRelayClose::NAME;
+    let ordered = [PeerRelayData::NAME, PeerRelayClose::NAME, PeerPortsData::NAME, PeerPortsClose::NAME].contains(&method.as_str());
     let state = state.clone();
     let link = link.clone();
     let busy_link = link.clone();

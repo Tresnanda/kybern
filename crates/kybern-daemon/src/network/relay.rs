@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, Request, State};
+use axum::extract::{FromRequestParts, Path, Request, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
@@ -66,7 +66,7 @@ pub enum Chunk {
 
 /// Bytes a sender may still put on a stream. A message larger than the window is allowed once the
 /// balance is positive and leaves it in debt, so a WebSocket message is never split.
-struct Credit {
+pub(super) struct Credit {
     balance: AtomicI64,
     changed: Notify,
 }
@@ -76,12 +76,12 @@ impl Credit {
         Self { balance: AtomicI64::new(WINDOW), changed: Notify::new() }
     }
 
-    fn add(&self, bytes: i64) {
+    pub(super) fn add(&self, bytes: i64) {
         self.balance.fetch_add(bytes, Ordering::SeqCst);
         self.changed.notify_waiters();
     }
 
-    async fn take(&self, bytes: usize, cancel: &CancellationToken) -> bool {
+    pub(super) async fn take(&self, bytes: usize, cancel: &CancellationToken) -> bool {
         loop {
             let notified = self.changed.notified();
             tokio::pin!(notified);
@@ -103,13 +103,13 @@ impl Credit {
 pub struct Stream {
     pub id: u64,
     incoming: mpsc::Sender<Chunk>,
-    credit: Credit,
-    cancel: CancellationToken,
+    pub(super) credit: Credit,
+    pub(super) cancel: CancellationToken,
     activity: Mutex<Instant>,
 }
 
 impl Stream {
-    fn touch(&self) {
+    pub(super) fn touch(&self) {
         *self.activity.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Instant::now();
     }
 
@@ -135,7 +135,7 @@ impl LinkRelays {
     }
 
     /// A new stream with a fresh id, and the receiver for the frames the other side sends it.
-    fn create(&self, id: Option<u64>) -> Option<(Arc<Stream>, mpsc::Receiver<Chunk>)> {
+    pub(super) fn create(&self, id: Option<u64>) -> Option<(Arc<Stream>, mpsc::Receiver<Chunk>)> {
         let id = id.unwrap_or_else(|| self.next.fetch_add(2, Ordering::Relaxed));
         let (tx, rx) = mpsc::channel(256);
         let stream = Arc::new(Stream {
@@ -157,7 +157,7 @@ impl LinkRelays {
         self.lock().get(&id).cloned()
     }
 
-    fn remove(&self, id: u64) {
+    pub(super) fn remove(&self, id: u64) {
         if let Some(stream) = self.lock().remove(&id) {
             stream.cancel.cancel();
         }
@@ -397,6 +397,25 @@ fn open_error(error: RpcError) -> Response {
     refuse(status, error.message)
 }
 
+/// A carrier for the WebSocket subprotocols a client offered; `sec-websocket-*` headers are per hop, so
+/// they travel under this name and B offers them to the server it connects to.
+const PROTOCOLS_HEADER: &str = "x-kybern-ws-protocols";
+
+fn requested_protocols(headers: &HeaderMap) -> Vec<String> {
+    headers
+        .get_all("sec-websocket-protocol")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(|protocol| protocol.trim().to_string())
+        .filter(|protocol| !protocol.is_empty())
+        .collect()
+}
+
+fn is_websocket_upgrade(headers: &HeaderMap) -> bool {
+    headers.get(header::UPGRADE).and_then(|value| value.to_str().ok()).is_some_and(|value| value.eq_ignore_ascii_case("websocket"))
+}
+
 /// `GET /relay/{machine_id}/ws`.
 pub async fn serve_ws(
     State(state): State<AppState>,
@@ -405,11 +424,21 @@ pub async fn serve_ws(
     raw_query: axum::extract::RawQuery,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let principal = match caller(&state, &headers) {
+    let path = match raw_query.0 {
+        Some(query) => format!("/ws?{query}"),
+        None => "/ws".to_string(),
+    };
+    relay_ws(&state, &target, &headers, path, ws).await
+}
+
+/// Open a relayed WebSocket to `path` on `target`: `/ws` for a client's connection, or any path of the
+/// target for a page that opens a socket through `/relay/{machine_id}/http/…` (a preview's HMR).
+async fn relay_ws(state: &AppState, target: &str, headers: &HeaderMap, path: String, ws: WebSocketUpgrade) -> Response {
+    let principal = match caller(state, headers) {
         Ok(principal) => principal,
         Err(response) => return response,
     };
-    let link = match route(&state, &target) {
+    let link = match route(state, target) {
         Ok(link) => link,
         Err(response) => return response,
     };
@@ -417,12 +446,12 @@ pub async fn serve_ws(
         return refuse(StatusCode::TOO_MANY_REQUESTS, "too many relayed connections");
     };
     let Some((stream, incoming)) = link.relays.create(None) else { return refuse(StatusCode::INTERNAL_SERVER_ERROR, "stream id clash") };
-    let path = match raw_query.0 {
-        Some(query) => format!("/ws?{query}"),
-        None => "/ws".to_string(),
-    };
-    let open =
-        PeerRelayOpenParams { stream_id: stream.id, kind: RelayStreamKind::Ws, path, method: None, headers: forwarded_headers(&headers) };
+    let protocols = requested_protocols(headers);
+    let mut forwarded = forwarded_headers(headers);
+    if !protocols.is_empty() {
+        forwarded.push((PROTOCOLS_HEADER.to_string(), protocols.join(", ")));
+    }
+    let open = PeerRelayOpenParams { stream_id: stream.id, kind: RelayStreamKind::Ws, path, method: None, headers: forwarded };
     let opened = tokio::time::timeout(OPEN_TIMEOUT, link.call::<PeerRelayOpen>(open)).await;
     match opened {
         Ok(Ok(_)) => {}
@@ -436,7 +465,7 @@ pub async fn serve_ws(
         }
     }
     tracing::debug!(target: TARGET, machine = %target, stream = stream.id, "relaying a WebSocket");
-    ws.on_upgrade(move |socket| async move {
+    ws.protocols(protocols).on_upgrade(move |socket| async move {
         pump_client_ws(link, stream, incoming, socket).await;
         drop(slot);
     })
@@ -481,7 +510,23 @@ async fn pump_client_ws(link: Arc<PeerLink>, stream: Arc<Stream>, mut incoming: 
 
 /// `ANY /relay/{machine_id}/http/{*path}`.
 pub async fn serve_http(State(state): State<AppState>, Path((target, path)): Path<(String, String)>, request: Request) -> Response {
-    let (parts, body) = request.into_parts();
+    let (mut parts, body) = request.into_parts();
+    // A page loaded through the relay opens its WebSockets (a dev server's hot reload) the same way.
+    if is_websocket_upgrade(&parts.headers) {
+        let path = format!("/{path}");
+        if path_refused(&path) {
+            return refuse(StatusCode::FORBIDDEN, "the relay does not carry this path");
+        }
+        let target_path = match parts.uri.query() {
+            Some(query) => format!("{path}?{query}"),
+            None => path,
+        };
+        let ws = match WebSocketUpgrade::from_request_parts(&mut parts, &state).await {
+            Ok(ws) => ws,
+            Err(rejection) => return rejection.into_response(),
+        };
+        return relay_ws(&state, &target, &parts.headers, target_path, ws).await;
+    }
     let principal = match caller(&state, &parts.headers) {
         Ok(principal) => principal,
         Err(response) => return response,
@@ -660,6 +705,12 @@ async fn open_local_ws(
     let url = format!("ws://{addr}{}", params.path);
     let mut request = url.into_client_request().map_err(RpcError::internal)?;
     for (name, value) in &params.headers {
+        if name == PROTOCOLS_HEADER {
+            if let Ok(value) = TValue::from_str(value) {
+                request.headers_mut().insert("sec-websocket-protocol", value);
+            }
+            continue;
+        }
         if matches!(name.as_str(), "host" | "content-type" | "accept-encoding") || hop_by_hop(name) {
             continue;
         }

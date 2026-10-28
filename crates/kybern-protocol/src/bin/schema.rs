@@ -307,6 +307,17 @@ fn main() {
     method::<ThreadsForkToMachine>(&mut methods);
     method::<PeerFork>(&mut methods);
     method::<PeerToolCall>(&mut methods);
+    method::<FilesSend>(&mut methods);
+    method::<PeerFilesBegin>(&mut methods);
+    method::<PeerFilesChunk>(&mut methods);
+    method::<PeerFilesFinish>(&mut methods);
+    method::<PeerFilesAbort>(&mut methods);
+    method::<PortsForward>(&mut methods);
+    method::<PortsList>(&mut methods);
+    method::<PortsStop>(&mut methods);
+    method::<PeerPortsOpen>(&mut methods);
+    method::<PeerPortsData>(&mut methods);
+    method::<PeerPortsClose>(&mut methods);
     method::<PeerThreadArchiveInbound>(&mut methods);
     method::<SettingsNetworkViewMethod>(&mut methods);
     method::<SettingsShare>(&mut methods);
