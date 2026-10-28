@@ -529,9 +529,8 @@ mod tests {
     fn every_settings_and_provider_field_has_a_classification() {
         // The build already fails when a field is missing from the tables. This also checks the tables
         // against what the types actually serialize, and that no table names a field twice.
-        let mut settings = Settings::default();
-        settings.title_provider = Some(ProviderKind::Codex);
-        settings.preview_allowed_folders = vec!["/tmp".into()];
+        let settings =
+            Settings { title_provider: Some(ProviderKind::Codex), preview_allowed_folders: vec!["/tmp".into()], ..Settings::default() };
         let mut provider = ProviderSettings::default();
         provider.accounts.insert("work".into(), ProviderAccount::default());
         provider.default_account = Some("work".into());

@@ -100,7 +100,7 @@ struct Asking {
 fn who_to_ask(hub: &dyn RemoteHub, wanted: &Wanted) -> Result<Asking, RpcError> {
     let members = hub.members();
     let mut others: Vec<MemberView> = members.into_iter().filter(|member| !member.is_self).collect();
-    others.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    others.sort_by_key(|member| member.name.to_lowercase());
     let chosen: Vec<MemberView> = match wanted {
         Wanted::All => others,
         Wanted::One(query) => {
