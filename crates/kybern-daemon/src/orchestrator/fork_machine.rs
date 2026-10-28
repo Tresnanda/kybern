@@ -24,7 +24,7 @@ use std::time::Duration;
 use anyhow::Result;
 use chrono::Utc;
 use kybern_git::Repo;
-use kybern_protocol::methods::{Method, PeerFork};
+use kybern_protocol::methods::{Method, PeerFork, TaskStatus};
 use kybern_protocol::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -530,6 +530,10 @@ impl Orchestrator {
         {
             return Err(RpcError::invalid_params("branch must be a kybern/fork-… branch name"));
         }
+        // The commit goes to git as an argument: only a full hash may.
+        if !matches!(params.commit.len(), 40 | 64) || !params.commit.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(RpcError::invalid_params("commit must be a full commit hash"));
+        }
         if params.handoff_note.len() > NOTE_CAP {
             return Err(RpcError::invalid_params("The hand-off note is too long."));
         }
@@ -547,78 +551,95 @@ impl Orchestrator {
         let thread_id = derived_operation_id(operation, 0x46);
         let message_id = derived_operation_id(operation, 0x47);
         let message = UserMessage::text(fork_message(&params, &from_name, from, origin.thread_id));
+        // The lock hands back an anyhow result; the fork's own refusals ride inside it.
         self.with_client_thread_id(thread_id, async {
-            if let Some(existing) = self.inner.store.thread_get(thread_id).map_err(internal)? {
-                if !existing.origin.as_ref().is_some_and(|known| known.machine_id == from && known.kind == OriginKind::Fork) {
-                    return Err(conflict("operation_id already belongs to another thread."));
-                }
-                // An earlier try may have died before the message went in; it is answered from its receipt if it did.
-                self.fork_send_note(thread_id, message_id, message).await?;
-                return Ok(fork_result(&hub, &existing, &params, None));
-            }
-            let hub_name = hub.self_name();
-            let project = self.match_project(&params.repo, params.project.as_deref(), &hub_name).await?;
-            let (kind, model, effort) = self.fork_provider(&project, &params, &hub_name).await?;
-            let repo = Repo::new(&project.path);
-            if !git_transfer::has_commit(&repo, &params.commit).await {
-                return Err(RpcError::new(codes::CONFLICT, format!("{hub_name} does not have commit {} yet.", params.commit))
-                    .with_data(json!({ "needs": FORK_NEEDS_BUNDLE, "project_id": project.id })));
-            }
-            let dir = self.worktree_dir(&project, &thread_id.to_string());
-            if !dir.join(".git").exists() {
-                if let Some(parent_dir) = dir.parent() {
-                    std::fs::create_dir_all(parent_dir).map_err(internal)?;
-                }
-                if let Err(error) = repo.worktree_add(&dir, &params.branch, Some(&params.commit)).await {
-                    // The branch is already here (pushed to origin and fetched, or left by a try that died): use it if it is the fork.
-                    let known = repo.rev_parse(&format!("refs/heads/{}", params.branch)).await.ok();
-                    if known.as_deref() != Some(params.commit.as_str()) {
-                        return Err(conflict(format!("Could not create the fork's worktree on {}: {error:#}", params.branch)));
-                    }
-                    repo.worktree_add_existing(&dir, &params.branch).await.map_err(internal)?;
-                }
-            }
-            git_transfer::forget(Some(&repo), &self.inner.paths.root, params.operation_id).await;
-            let path = dir.to_string_lossy().into_owned();
-            let now = Utc::now();
-            let provider = ProviderInstance::default_for(kind);
-            let thread = Thread {
-                id: thread_id,
-                project_id: project.id,
-                title: params.title.clone().unwrap_or_else(|| params.source_title.clone()),
-                provider,
-                model,
-                effort,
-                permission_mode: narrower(params.permission_mode, origin.permission_cap),
-                status: ThreadStatus::Idle,
-                worktree: Some(WorktreeInfo { path: path.clone(), branch: params.branch.clone() }),
-                cwd: path,
-                provider_session_id: None,
-                pinned: false,
-                created_at: now,
-                updated_at: now,
-                last_seq: 0,
-                parent_thread_id: None,
-                coordinator_project_id: None,
-                origin: Some(origin),
-                inbound: None,
-                subagent: None,
-                delegation: None,
-                members: Vec::new(),
-            };
-            self.inner.store.thread_upsert(&thread).map_err(internal)?;
-            let event = self.emit(thread.id, None, EventPayload::ThreadCreated { thread: thread.clone() }).map_err(internal)?;
-            let thread = Thread { last_seq: event.seq, ..thread };
-            self.inner.store.thread_upsert(&thread).map_err(internal)?;
-            if let Err(error) = self.fork_send_note(thread.id, message_id, message).await {
-                // The thread exists; a repeat of this call sends the note again.
-                tracing::warn!(thread_id = %thread.id, error = %error.message, "a forked thread could not start");
-                return Err(error);
-            }
-            let created = self.inner.store.thread_get(thread.id).map_err(internal)?.unwrap_or(thread);
-            Ok(fork_result(&hub, &created, &params, Some(project.name)))
+            Ok::<_, anyhow::Error>(self.open_fork(&hub, from, &params, origin, thread_id, message_id, message).await)
         })
         .await
+        .map_err(internal)?
+    }
+
+    /// Create the forked thread, or find the one an earlier call made. Runs with the thread id held.
+    #[allow(clippy::too_many_arguments)]
+    async fn open_fork(
+        &self,
+        hub: &std::sync::Arc<dyn RemoteHub>,
+        from: &str,
+        params: &PeerForkParams,
+        origin: Origin,
+        thread_id: ThreadId,
+        message_id: MessageId,
+        message: UserMessage,
+    ) -> Result<PeerForkResult, RpcError> {
+        if let Some(existing) = self.inner.store.thread_get(thread_id).map_err(internal)? {
+            if !existing.origin.as_ref().is_some_and(|known| known.machine_id == from && known.kind == OriginKind::Fork) {
+                return Err(conflict("operation_id already belongs to another thread."));
+            }
+            // An earlier try may have died before the message went in; it is answered from its receipt if it did.
+            self.fork_send_note(thread_id, message_id, message).await?;
+            return Ok(fork_result(hub, &existing, params, None));
+        }
+        let hub_name = hub.self_name();
+        let project = self.match_project(&params.repo, params.project.as_deref(), &hub_name).await?;
+        let (kind, model, effort) = self.fork_provider(&project, params, &hub_name).await?;
+        let repo = Repo::new(&project.path);
+        if !git_transfer::has_commit(&repo, &params.commit).await {
+            return Err(RpcError::new(codes::CONFLICT, format!("{hub_name} does not have commit {} yet.", params.commit))
+                .with_data(json!({ "needs": FORK_NEEDS_BUNDLE, "project_id": project.id })));
+        }
+        let dir = self.worktree_dir(&project, &thread_id.to_string());
+        if !dir.join(".git").exists() {
+            if let Some(parent_dir) = dir.parent() {
+                std::fs::create_dir_all(parent_dir).map_err(internal)?;
+            }
+            if let Err(error) = repo.worktree_add(&dir, &params.branch, Some(&params.commit)).await {
+                // The branch is already here (pushed to origin and fetched, or left by a try that died): use it if it is the fork.
+                let known = repo.rev_parse(&format!("refs/heads/{}", params.branch)).await.ok();
+                if known.as_deref() != Some(params.commit.as_str()) {
+                    return Err(conflict(format!("Could not create the fork's worktree on {}: {error:#}", params.branch)));
+                }
+                repo.worktree_add_existing(&dir, &params.branch).await.map_err(internal)?;
+            }
+        }
+        git_transfer::forget(Some(&repo), &self.inner.paths.root, params.operation_id).await;
+        let path = dir.to_string_lossy().into_owned();
+        let now = Utc::now();
+        let provider = ProviderInstance::default_for(kind);
+        let thread = Thread {
+            id: thread_id,
+            project_id: project.id,
+            title: params.title.clone().unwrap_or_else(|| params.source_title.clone()),
+            provider,
+            model,
+            effort,
+            permission_mode: narrower(params.permission_mode, origin.permission_cap),
+            status: ThreadStatus::Idle,
+            worktree: Some(WorktreeInfo { path: path.clone(), branch: params.branch.clone() }),
+            cwd: path,
+            provider_session_id: None,
+            pinned: false,
+            created_at: now,
+            updated_at: now,
+            last_seq: 0,
+            parent_thread_id: None,
+            coordinator_project_id: None,
+            origin: Some(origin),
+            inbound: None,
+            subagent: None,
+            delegation: None,
+            members: Vec::new(),
+        };
+        self.inner.store.thread_upsert(&thread).map_err(internal)?;
+        let event = self.emit(thread.id, None, EventPayload::ThreadCreated { thread: thread.clone() }).map_err(internal)?;
+        let thread = Thread { last_seq: event.seq, ..thread };
+        self.inner.store.thread_upsert(&thread).map_err(internal)?;
+        if let Err(error) = self.fork_send_note(thread.id, message_id, message).await {
+            // The thread exists; a repeat of this call sends the note again.
+            tracing::warn!(thread_id = %thread.id, error = %error.message, "a forked thread could not start");
+            return Err(error);
+        }
+        let created = self.inner.store.thread_get(thread.id).map_err(internal)?.unwrap_or(thread);
+        Ok::<PeerForkResult, RpcError>(fork_result(hub, &created, params, Some(project.name)))
     }
 
     async fn fork_send_note(&self, thread_id: ThreadId, message_id: MessageId, message: UserMessage) -> Result<(), RpcError> {

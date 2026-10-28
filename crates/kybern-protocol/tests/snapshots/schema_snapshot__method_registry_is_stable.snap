@@ -215,5 +215,8 @@ expression: names
 - peer.git.import
 - peer.thread.create
 - peer.thread.send
+- threads.fork_note
+- threads.fork_to_machine
+- peer.fork
 - peer.tool.call
 - peer.thread.archive_inbound

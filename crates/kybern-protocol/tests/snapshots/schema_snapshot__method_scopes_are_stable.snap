@@ -428,6 +428,12 @@ expression: scopes
   - "machine:delegate"
 - - peer.thread.send
   - "machine:delegate"
+- - threads.fork_note
+  - "orchestration:read"
+- - threads.fork_to_machine
+  - "orchestration:operate"
+- - peer.fork
+  - "machine:delegate"
 - - peer.tool.call
   - "machine:tools"
 - - peer.thread.archive_inbound
