@@ -320,7 +320,6 @@ async fn deliver(state: &AppState, item: &OutboxItem) -> Delivery {
         OutboxKind::SettingsPatch => crate::settings_share::deliver(state, item).await,
         OutboxKind::SecretsPut => super::broker::deliver_secrets_put(state, item).await,
         OutboxKind::FilesPush => super::files_push::deliver(state, item).await,
-        other => Delivery::Failed(format!("This version of Kybern cannot deliver {} items yet.", other.as_str())),
     }
 }
 
