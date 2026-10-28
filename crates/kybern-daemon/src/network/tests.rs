@@ -359,12 +359,18 @@ async fn impostor(
         let host = headers.get("host").and_then(|h| h.to_str().ok()).unwrap_or_default().to_string();
         let at = well_known::now_rfc3339();
         let proof = B64.encode(me.keys.sign(&well_known::proof_message(&nonce, &me.claims, &at, &host)));
-        axum::Json(json!({
-            "machine_id": me.claims, "name": "impostor", "os": "linux", "arch": "x86_64", "version": "0", "network_protocol": 1,
-            "features": [], "signing_key": me.claimed_key.clone().unwrap_or_else(|| me.keys.signing_public_b64()),
-            "sealing_key": me.keys.sealing_public_b64(), "network_id": null, "ts_name": null, "at": at, "proof": proof
-        }))
-        .into_response()
+        // `Connection: close`: an aborted impostor's kept-alive socket would otherwise answer the
+        // next probe in its place (aborting `serve` does not end its open connections).
+        let close = [(axum::http::header::CONNECTION, "close")];
+        (
+            close,
+            axum::Json(json!({
+                "machine_id": me.claims, "name": "impostor", "os": "linux", "arch": "x86_64", "version": "0", "network_protocol": 1,
+                "features": [], "signing_key": me.claimed_key.clone().unwrap_or_else(|| me.keys.signing_public_b64()),
+                "sealing_key": me.keys.sealing_public_b64(), "network_id": null, "ts_name": null, "at": at, "proof": proof
+            })),
+        )
+            .into_response()
     }
     let seen = Arc::new(Mutex::new(Vec::new()));
     let me = Impostor { seen: seen.clone(), keys: Arc::new(MachineKeys::generate()), claims: claims.to_string(), claimed_key };
