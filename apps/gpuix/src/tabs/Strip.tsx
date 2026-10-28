@@ -15,7 +15,7 @@ import { N } from '../nav/glyphs.ts'
 import { T } from '../transcript/glyphs.ts'
 import { Menu, MenuItem, MenuLabel, MenuSeparator } from '../nav/overlay.tsx'
 import { useNav } from '../nav/store.ts'
-import { useApp, getClient, getThreadOpen } from '../state.ts'
+import { useApp, getThreadOpen, threadClient } from '../state.ts'
 import { useNotes } from '../notes/store.ts'
 import { useTasks } from '../tasks/store.ts'
 import { usePreview } from '../preview/store.ts'
@@ -125,7 +125,7 @@ function AddMenu({ leafId, threadId, size }: { leafId: string; threadId: string;
   const box = size === 'md' ? 24 : 20
   const terminal = async (command?: string[], cli?: string) => {
     try {
-      const info = await getClient()!.call('terminals.create', { thread_id: threadId, cols: 100, rows: 24, ...(command ? { command } : {}) })
+      const info = await threadClient(threadId)!.call('terminals.create', { thread_id: threadId, cols: 100, rows: 24, ...(command ? { command } : {}) })
       openTab(threadId, { kind: 'terminal', id: info.id, title: cli ? providers.find((p) => p.kind === cli)?.display_name : undefined, ...(cli ? { cli } : {}) }, { leaf: leafId })
     } catch (error) { toast.error('Unable to open a terminal', { description: errorText(error) }) }
   }

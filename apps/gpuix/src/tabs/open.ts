@@ -1,7 +1,7 @@
 // Opening, closing and moving in-thread tabs (ADE-54). Every opener in the app goes through `openTab`: it finds the group that
 // should hold the tab (the one that already has it, else the focused group of that thread, else the thread's first group),
 // and a thread with no group on screen just remembers the tab for when it is shown.
-import { getClient, getFocusedPaneId, focusPane, getPaneState, getState, getThreadOpen, selectThread, setPaneAlias } from '../state.ts'
+import { callThread, getFocusedPaneId, focusPane, getPaneState, getState, getThreadOpen, selectThread, setPaneAlias } from '../state.ts'
 import { bufferKey, getBuffer } from '../dock/fileBuffers.ts'
 import { requestCloseDirty } from './closeDirtyRequest.ts'
 import { closePane, closeTab, collectThreadPanes, getGroup, getGroups, groupsOfThread, moveTabToGroup, reopenClosedTab, splitTab, updateGroup, updateMemory, getSplitRoot, splitFocusedPane, type SplitDirection } from '../split/store.ts'
@@ -95,7 +95,7 @@ export function closeTabAction(leafId: string, key: string) {
   const group = getGroup(leafId)
   const tab = group.tabs.find((t) => tabKey(t) === key)
   if (!tab || tab.kind === 'chat') return
-  if (tab.kind === 'terminal') void getClient()?.call('terminals.close', { terminal_id: tab.id }).catch(() => {})
+  if (tab.kind === 'terminal') void callThread(group.threadId, 'terminals.close', { terminal_id: tab.id }).catch(() => {})
   const buffer = fileTabBuffer(group.threadId, tab)
   if (buffer && getBuffer(buffer)?.dirty && tab.kind === 'file') {
     requestCloseDirty({ leafId, key, buffer, name: tab.path.split('/').pop() || tab.path })

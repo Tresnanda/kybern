@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react'
 import { classifyPreviewInput, PREVIEW_REJECTED_MESSAGE } from '../../../../packages/kybern-client/src/previewTarget.ts'
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import type { PreviewOpenResult, PreviewTargetInfo, PreviewProbeResult } from '../../../../packages/kybern-client/src/types.ts'
-import { getClient, getState } from '../state.ts'
+import { getState, threadClient } from '../state.ts'
 import { launchBrowser } from './browser.ts'
 import { openTab } from '../tabs/open.ts'
 import { onEnvironmentLeaving } from '../shell/environment.ts'
@@ -62,7 +62,7 @@ export async function openPreview(id: string, raw: string, allowFolder = false, 
   setPreview(id, { busy: !options.retry, attemptedAddress: address, loading: !options.retry, error: null, permission: undefined, load: options.retry && before.load.phase === 'waiting' ? before.load : { phase: 'resolving' } })
   let pendingEntry: Entry | undefined
   try {
-    const client = getClient()!
+    const client = threadClient(id)!
     let load: PreviewLoad = { phase: target.kind === 'external' || target.kind === 'search' ? 'external' : 'ready' }
     let title: string | undefined
     if (target.kind === 'server' && !(proxy && activeEnvironment().local)) {

@@ -7,7 +7,7 @@ import { activeEnvironment } from '../shell/environment.ts'
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { VIEWPORT_PRESETS, isViewportSizeValid, parseViewportField } from '../../../../packages/kybern-client/src/previewViewport.ts'
 import type { PreviewOpenRequestedNotification, PreviewServer } from '../../../../packages/kybern-client/src/types.ts'
-import { getClient, useApp } from '../state.ts'
+import { localClient, threadClient, useApp } from '../state.ts'
 import { setNav, useNav } from '../nav/store.ts'
 import { addWindowKeyHandler, onWindowKeyDown } from '../nav/keys.ts'
 import { webHost } from '../native/webview.ts'
@@ -71,7 +71,7 @@ export function PreviewPane({ threadId }: { threadId: string }) {
   useEffect(() => {
     if (entry || !visible) return
     let live = true
-    const scan = async () => { setSearching(true); try { const result = await getClient()!.call('previews.servers.list', { thread_id: threadId }); if (live) setServers(result.servers) } catch { /* Keep the last successful list. */ } finally { if (live) setSearching(false) } }
+    const scan = async () => { setSearching(true); try { const result = await threadClient(threadId)!.call('previews.servers.list', { thread_id: threadId }); if (live) setServers(result.servers) } catch { /* Keep the last successful list. */ } finally { if (live) setSearching(false) } }
     void scan(); const timer = setInterval(() => { void scan() }, 3000)
     return () => { live = false; clearInterval(timer) }
   }, [threadId, !!entry, visible])
@@ -134,8 +134,12 @@ export function PreviewIntegration({ insetBottom = 0 }: { insetBottom?: number }
   }), [id, page, settings])
   useEffect(() => {
     if (!connected) return
-    return getClient()!.onNotification('previews.open_requested', payload => { const request = payload as PreviewOpenRequestedNotification; showPreview(request.thread_id, true); void openPreview(request.thread_id, request.target) })
-  }, [connected])
+    // Requests come from the machine the user is at and from the selected thread's machine.
+    const clients = new Set([localClient()!])
+    try { clients.add(threadClient(id)!) } catch { /* that machine is offline */ }
+    const offs = [...clients].map(client => client.onNotification('previews.open_requested', payload => { const request = payload as PreviewOpenRequestedNotification; showPreview(request.thread_id, true); void openPreview(request.thread_id, request.target) }))
+    return () => { for (const off of offs) off() }
+  }, [connected, id])
   useEffect(() => addWindowKeyHandler(e => { if (id && page === 'home' && !settings && isPrimaryChord(e.modifiers, { alt: true, shift: 'any' }) && !(!isMacKeys() && isAltGrText(e)) && e.key === 'p') { if (!webHost.available) { showPreview(id); return true } setNav({ keyboardNav: true }); const s = previewState(id); if (s.entries.length) { setPreview(id, { floating: !s.floating }); if (s.floating) showPreview(id) } else showPreview(id); return true } }), [id, page, settings])
   // One native document per thread: the threads whose browser tab is active in some group, the selected one, and the floating one.
   const groups = useGroups()

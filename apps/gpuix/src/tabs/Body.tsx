@@ -7,7 +7,7 @@ import { useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import type { TerminalInfo, Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { subagentThreadPhase } from '../../../../packages/kybern-client/src/subagents.ts'
-import { closePaneState, createPane, getClient, PaneProvider, selectPaneThread, useApp } from '../state.ts'
+import { closePaneState, createPane, PaneProvider, selectPaneThread, threadClient, useApp } from '../state.ts'
 import { getGroup, updateGroup, useGroup } from '../split/store.ts'
 import { observeElementBounds } from '../native/layout.ts'
 import { ErrorBoundary } from '../shell/ErrorBoundary.tsx'
@@ -90,7 +90,7 @@ function TabBody({ leafId, threadId, tab, children }: { leafId: string; threadId
   switch (tab.kind) {
     case 'chat': return children
     // Switching tabs is instant (spec §1.5): no pane entrance on the content.
-    case 'file': return <FileViewer key={tabKey(tab)} {...(tab.root === 'project' ? { projectId: thread?.project_id } : { threadId })} path={tab.path} line={tab.line} instant />
+    case 'file': return <FileViewer key={tabKey(tab)} {...(tab.root === 'project' ? { projectId: thread?.project_id, threadId } : { threadId })} path={tab.path} line={tab.line} instant />
     case 'diff': return thread ? <DiffPane key={tab.path ?? '*'} thread={thread} mode="all" path={tab.path} /> : <LoadingLines />
     case 'terminal': return <TerminalTab leafId={leafId} threadId={threadId} tab={tab} />
     case 'preview': return <PreviewPane threadId={threadId} />
@@ -124,11 +124,11 @@ function TerminalTab({ leafId, threadId, tab }: { leafId: string; threadId: stri
     if (!connected) return
     let live = true
     setInfo(null)
-    void getClient()!.call('terminals.list', { thread_id: threadId }).then((result) => { if (live) setInfo(result.terminals.find((t) => t.id === tab.id) ?? 'missing') }, () => { if (live) setInfo('missing') })
+    void threadClient(threadId)!.call('terminals.list', { thread_id: threadId }).then((result) => { if (live) setInfo(result.terminals.find((t) => t.id === tab.id) ?? 'missing') }, () => { if (live) setInfo('missing') })
     return () => { live = false }
   }, [threadId, tab.id, connected])
   const restart = async () => {
-    const created = await getClient()!.call('terminals.create', { thread_id: threadId, cols: 100, rows: 24 })
+    const created = await threadClient(threadId)!.call('terminals.create', { thread_id: threadId, cols: 100, rows: 24 })
     updateGroup(leafId, (g) => ({ ...g, tabs: g.tabs.map((t) => tabKey(t) === key ? { kind: 'terminal', id: created.id } : t), active: `terminal:${created.id}` }))
   }
   if (info === null) return <LoadingLines testId="terminal-tab-loading" />
@@ -143,7 +143,7 @@ function TerminalTab({ leafId, threadId, tab }: { leafId: string; threadId: stri
     </Empty>
   )
   return <div testId="terminal-tab" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0, overflow: 'hidden' }}>
-    <Screen key={info.id} info={info} width={800}
+    <Screen key={info.id} info={info} threadId={threadId} width={800}
       onTitle={(title) => { if (title !== tab.title && !tab.cli) updateGroup(leafId, (g) => ({ ...g, tabs: g.tabs.map((t) => tabKey(t) === key ? { ...tab, title } : t) })) }}
       onExit={() => closeTabAction(leafId, key)} />
   </div>
