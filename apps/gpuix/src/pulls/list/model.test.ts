@@ -23,11 +23,12 @@ describe('groupRows', () => {
     expect(groups.map(g => g.rows.map(r => r.pr.number))).toEqual([[4, 5], [3], [2], [1]])
     expect(groupRows(rows(single, { number: 9 })).map(g => g.group)).not.toContain('draft')
   })
-  test('keeps the given order inside a group and puts merged and closed last without a label', () => {
+  test('keeps the given order inside a group and puts merged and closed last under their own heading', () => {
     const groups = groupRows(rows(single, { number: 1, state: 'MERGED' }, { number: 2, is_draft: true }, { number: 3, is_draft: true }, { number: 4, state: 'CLOSED' }))
     expect(groups.map(g => g.group)).toEqual(['draft', null])
     expect(groups[0]!.rows.map(r => r.pr.number)).toEqual([2, 3])
-    expect(groups[1]).toMatchObject({ label: '' })
+    expect(groups[1]).toMatchObject({ label: 'Merged and closed' })
+    expect(groupRows(rows(single, { number: 7, state: 'MERGED' }))[0]).toMatchObject({ group: null, label: '' })
     expect(groups[1]!.rows.map(r => r.pr.number)).toEqual([1, 4])
   })
   test('an empty list has no groups', () => expect(groupRows([])).toEqual([]))

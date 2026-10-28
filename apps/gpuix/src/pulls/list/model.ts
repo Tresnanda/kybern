@@ -46,7 +46,8 @@ export function groupRows(rows: readonly Row[]): ListGroup[] {
     else by.set(key, [row])
   }
   const groups: ListGroup[] = READINESS_GROUPS.flatMap(g => by.has(g.value) ? [{ group: g.value, label: g.label, rows: by.get(g.value)! }] : [])
-  if (by.has(null)) groups.push({ group: null, label: '', rows: by.get(null)! })
+  // Merged and closed rows (the All filter) follow the open groups under their own heading.
+  if (by.has(null)) groups.push({ group: null, label: groups.length ? 'Merged and closed' : '', rows: by.get(null)! })
   return groups
 }
 

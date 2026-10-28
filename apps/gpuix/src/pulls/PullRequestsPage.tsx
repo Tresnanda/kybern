@@ -30,8 +30,8 @@ import { SwapOnChange } from '../motion/kit.tsx'
 import { isPrimaryNotAltGr } from '../platform/keys.ts'
 
 interface Loaded { rows: PullRequest[]; errors: string[] }
-type Filter = 'open' | 'merged' | 'closed'
-const FILTERS = [['open', 'Open'], ['merged', 'Merged'], ['closed', 'Closed']] as const
+type Filter = 'open' | 'merged' | 'closed' | 'all'
+const FILTERS = [['open', 'Open'], ['merged', 'Merged'], ['closed', 'Closed'], ['all', 'All']] as const
 const cache = new Map<string, { until: number; rows: PullRequest[]; errors: string[] }>()
 let lastSelection: { project: Project; number: number; repo?: string } | null = null
 /** A group project's members can repeat a pull request number. */
@@ -129,7 +129,7 @@ export function PullRequestsPage() {
     if (isPrimaryNotAltGr(e.modifiers) && e.key === 'f') { if (!wide) back(); renderer?.focusElement?.(search.current?.id ?? 0); return true }
   }), [renderer, wide])
   const keyFor = (r: Row) => refOf(r.project.id, r.pr.number, r.pr.repo)
-  const stateWord = `${filter} `
+  const stateWord = filter === 'all' ? '' : `${filter} `
   // A gh problem replaces the list only when nothing listed: one member repository
   // signed out of an organization must not hide the others' pull requests.
   const failure = data?.rows.length ? undefined : data?.errors.find(e => ['gh-missing', 'gh-auth'].includes(classifyPrError(e)))
@@ -148,7 +148,7 @@ export function PullRequestsPage() {
           {data.errors.length > 0 && <div key="errors" style={{ padding: 12 }}><Problem error={data.errors.join('\n')} partial={data.rows.length > 0} refresh={() => refresh(n => n + 1)} /></div>}
           {flat.length === 0 && <div key="empty" style={{ ...column, gap: 10, padding: 24, paddingTop: 64 }}><Label color={t.text} size={16} weight={500}>{!targets.length ? 'No GitHub projects' : query.trim() ? `No results for “${query.trim()}”` : `No ${stateWord}pull requests`}</Label><Label color={t.textSecondary} size={13}>{!targets.length ? 'Add a project with a GitHub remote to review its pull requests here.' : query.trim() ? '' : `Pull requests from ${scope.project ? targets[0]?.name : 'your GitHub projects'} appear here.`}</Label>{query.trim() && <Button size="sm" style={{ alignSelf: 'flex-start' }} onClick={() => setQuery('')}>Clear search</Button>}</div>}
           {groups.flatMap(group => [
-            ...(group.group ? [<div key={`group-${group.group}`} testId={`pr-group-${group.group}`} style={{ ...row, gap: 6, height: 30, paddingLeft: 16, paddingRight: 8, paddingTop: 8 }}><Label color={t.textSecondary} size={12} lineHeight={16} weight={500}>{group.label}</Label><Label color={t.textTertiary} size={12} lineHeight={16}>{String(group.rows.length)}</Label></div>] : []),
+            ...(group.label ? [<div key={`group-${group.group ?? 'done'}`} testId={`pr-group-${group.group ?? 'done'}`} style={{ ...row, gap: 6, height: 30, paddingLeft: 16, paddingRight: 8, paddingTop: 8 }}><Label color={t.textSecondary} size={12} lineHeight={16} weight={500}>{group.label}</Label><Label color={t.textTertiary} size={12} lineHeight={16}>{String(group.rows.length)}</Label></div>] : []),
             ...group.rows.map(r => <PrListRow key={keyFor(r)} item={r} selected={!!selection && refOf(selection.project.id, selection.number, selection.repo) === keyFor(r)} focused={focus === keyFor(r)} onOpen={() => open(r)} onFocus={() => setFocus(keyFor(r))} onKey={key => {
               const at = flat.findIndex(x => keyFor(x) === keyFor(r))
               const next = key === 'down' ? Math.min(flat.length - 1, at + 1) : key === 'up' ? Math.max(0, at - 1) : key === 'home' ? 0 : key === 'end' ? flat.length - 1 : -1
