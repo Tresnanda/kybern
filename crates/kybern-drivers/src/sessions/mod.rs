@@ -57,6 +57,142 @@ pub async fn read(kind: ProviderKind, context: &ProbeContext, id: &str) -> Resul
     }
 }
 
+/// One harness's saved sessions, read through a single helper process (Codex
+/// app-server, `opencode serve`, the Cursor sidecar or `cursor-agent acp`) kept
+/// for many calls, instead of one process per `list` or `read`. File-based
+/// harnesses start no process; they remember the file list and where each id lives.
+/// Dropping the reader (or `close`) ends the helper.
+#[async_trait::async_trait]
+pub trait SessionReader: Send {
+    /// One native page of sessions in every folder (`context.cwd` still filters),
+    /// newest first. `None` starts at the beginning.
+    async fn list_page(&mut self, cursor: Option<&str>) -> Result<SessionsListResult>;
+    async fn read(&mut self, id: &str) -> Result<SessionHistory>;
+    async fn close(self: Box<Self>);
+}
+
+pub async fn reader(kind: ProviderKind, context: &ProbeContext) -> Result<Box<dyn SessionReader>> {
+    Ok(match kind {
+        ProviderKind::ClaudeCode => Box::new(FileReader::new(kind, claude::root(context)?, context)),
+        ProviderKind::Pi | ProviderKind::Omp => Box::new(FileReader::new(kind, pi::root(kind, context)?, context)),
+        ProviderKind::Codex => Box::new(codex::Reader { rpc: codex::connect(context).await?, context: context.clone() }),
+        ProviderKind::Opencode => Box::new(opencode::Reader::start(context).await?),
+        ProviderKind::Cursor => Box::new(cursor::Reader::new(context)),
+    })
+}
+
+/// Claude, pi and OMP: sessions are JSONL files under one root.
+struct FileReader {
+    kind: ProviderKind,
+    root: PathBuf,
+    context: ProbeContext,
+    files: Option<Arc<Vec<PathBuf>>>,
+    paths: HashMap<String, PathBuf>,
+}
+
+impl FileReader {
+    fn new(kind: ProviderKind, root: PathBuf, context: &ProbeContext) -> Self {
+        Self { kind, root, context: context.clone(), files: None, paths: HashMap::new() }
+    }
+}
+
+#[async_trait::async_trait]
+impl SessionReader for FileReader {
+    async fn list_page(&mut self, cursor: Option<&str>) -> Result<SessionsListResult> {
+        let start = offset(cursor)?;
+        let files = match &self.files {
+            Some(files) => files.clone(),
+            None => {
+                let root = self.root.clone();
+                let files =
+                    Arc::new(tokio::task::spawn_blocking(move || jsonl_files(&root)).await.map_err(|e| DriverError::Other(e.into()))??);
+                self.files = Some(files.clone());
+                files
+            }
+        };
+        let (kind, context) = (self.kind, self.context.clone());
+        let (result, found) = tokio::task::spawn_blocking(move || {
+            file_page(&files, start, &context, "", |path, records| match kind {
+                ProviderKind::ClaudeCode => claude::summary(path, records),
+                _ => pi::summary(kind, path, records),
+            })
+        })
+        .await
+        .map_err(|e| DriverError::Other(e.into()))?;
+        self.paths.extend(found);
+        Ok(result)
+    }
+
+    async fn read(&mut self, id: &str) -> Result<SessionHistory> {
+        let Some(path) = self.paths.get(id).cloned() else {
+            // Not listed through this reader: resolve by id the slow way.
+            return read(self.kind, &self.context, id).await;
+        };
+        let (kind, id) = (self.kind, id.to_string());
+        tokio::task::spawn_blocking(move || match kind {
+            ProviderKind::ClaudeCode => claude::read_path(&path, &id),
+            _ => pi::read_path(kind, &path, &id),
+        })
+        .await
+        .map_err(|e| DriverError::Other(e.into()))?
+    }
+
+    async fn close(self: Box<Self>) {}
+}
+
+/// One page of a JSONL harness: summaries for files from `start`, stopping at
+/// `PAGE_SIZE` matches. Also returns where each listed session lives.
+fn file_page(
+    files: &[PathBuf],
+    start: usize,
+    context: &ProbeContext,
+    query: &str,
+    summarize: impl Fn(&Path, &[Value]) -> Option<SavedSession>,
+) -> (SessionsListResult, Vec<(String, PathBuf)>) {
+    let mut sessions = Vec::new();
+    let mut found = Vec::new();
+    let mut next_cursor = None;
+    for (index, path) in files.iter().enumerate().skip(start) {
+        if let Ok(records) = metadata_lines(path)
+            && let Some(session) = summarize(path, &records)
+            && matches_cwd(&session, context)
+            && matches_query(&session, query)
+        {
+            found.push((session.id.clone(), path.clone()));
+            sessions.push(session);
+        }
+        if sessions.len() == PAGE_SIZE {
+            next_cursor = (index + 1 < files.len()).then(|| (index + 1).to_string());
+            break;
+        }
+    }
+    (SessionsListResult { sessions, next_cursor }, found)
+}
+
+/// Why `read` refused a session, from the wording the readers use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadFailure {
+    /// Its harness is still writing it.
+    InUse,
+    /// Over the 64 MB history limit.
+    TooLarge,
+    Other,
+}
+
+const STILL_WRITING: &str = "Session is still being written.";
+const TOO_LARGE: &str = "64 MB";
+
+pub fn classify_read_error(error: &DriverError) -> ReadFailure {
+    let text = error.to_string();
+    if text.contains(STILL_WRITING) || text.contains("Session changed while reading.") {
+        ReadFailure::InUse
+    } else if text.contains(TOO_LARGE) {
+        ReadFailure::TooLarge
+    } else {
+        ReadFailure::Other
+    }
+}
+
 /// Read retained explicit OMP blocks without starting the harness or importing history.
 pub async fn recover_omp_message(context: &ProbeContext, session_id: &str, text: &str) -> Result<NativeOmpMessage> {
     if session_id.is_empty() || session_id.len() > 4096 || text.len() > 1024 * 1024 {
@@ -199,7 +335,7 @@ fn read_lines(path: &Path) -> Result<Vec<Value>> {
         match serde_json::from_str(line) {
             Ok(record) => records.push(record),
             Err(_) if !text.ends_with('\n') && text.ends_with(line) => {
-                return Err(DriverError::Protocol("Session is still being written. Stop the original session and try again.".into()));
+                return Err(DriverError::Protocol(format!("{STILL_WRITING} Stop the original session and try again.")));
             }
             Err(e) => {
                 return Err(DriverError::Protocol(format!(

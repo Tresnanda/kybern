@@ -12,6 +12,18 @@ expression: scopes
   - "orchestration:read"
 - - sessions.resume
   - "orchestration:operate"
+- - sessions.scan_projects
+  - "orchestration:read"
+- - sessions.scan_get
+  - "orchestration:read"
+- - sessions.scan_cancel
+  - "orchestration:read"
+- - sessions.import_all
+  - "orchestration:operate"
+- - sessions.import_get
+  - "orchestration:read"
+- - sessions.import_cancel
+  - "orchestration:operate"
 - - providers.list
   - "orchestration:read"
 - - providers.accounts.create

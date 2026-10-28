@@ -1,0 +1,84 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(SessionsImportAllParams)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SessionsImportAllParams",
+  "type": "object",
+  "properties": {
+    "roots": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SessionsImportRoot"
+      }
+    },
+    "scan_id": {
+      "description": "Reuse the session list of this scan instead of listing again.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "roots"
+  ],
+  "$defs": {
+    "SessionsImportRoot": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "description": "A `ScannedProject.root`.",
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Import into this project instead of creating or finding one for `root`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid",
+          "default": null
+        },
+        "providers": {
+          "description": "Only these harnesses; omitted imports all.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ProviderKind"
+          },
+          "default": null
+        },
+        "limit": {
+          "description": "The most recent N sessions under the root (all harnesses together).\nOmitted means 50; `null` means all.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "default": 50
+        }
+      },
+      "required": [
+        "root"
+      ]
+    },
+    "ProviderKind": {
+      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "opencode",
+        "pi",
+        "omp",
+        "cursor"
+      ]
+    }
+  }
+}

@@ -7,6 +7,12 @@ expression: names
 - daemon.activity
 - sessions.list
 - sessions.resume
+- sessions.scan_projects
+- sessions.scan_get
+- sessions.scan_cancel
+- sessions.import_all
+- sessions.import_get
+- sessions.import_cancel
 - providers.list
 - providers.accounts.create
 - providers.accounts.sign_in

@@ -124,6 +124,10 @@ impl AgentDriver for CursorDriver {
         crate::sessions::read(self.kind(), context, id).await
     }
 
+    async fn open_session_reader(&self, context: &ProbeContext) -> Result<Box<dyn crate::sessions::SessionReader>> {
+        crate::sessions::reader(self.kind(), context).await
+    }
+
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession> {
         if config.resume_session_id.as_ref().is_some_and(|id| !id.starts_with(SDK_SESSION_PREFIX)) {
             return acp::CursorAcpDriver.spawn(config).await;

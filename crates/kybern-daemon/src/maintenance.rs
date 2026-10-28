@@ -122,7 +122,9 @@ pub async fn sweep(state: &AppState, policy: &BackgroundSettings, allow_idle_exi
     state.orchestrator.cleanup_eligible_worktrees().await;
 
     let activity = activity(state).await?;
-    let updating = state.harness_updates.list().iter().any(|record| matches!(record.status, HarnessUpdateStatus::Updating));
+    // A first-run scan or import keeps the daemon up even with no client connected.
+    let updating = state.harness_updates.list().iter().any(|record| matches!(record.status, HarnessUpdateStatus::Updating))
+        || state.session_imports.running() > 0;
     let now = Utc::now();
     let latest_event = state.store.events_latest_at()?;
     let idle_since = {

@@ -66,6 +66,9 @@ fn main() {
     add::<Space>(&mut types, "Space");
     add::<SpacesChangedNotification>(&mut types, "SpacesChangedNotification");
     add::<ThreadsWorkspaceProgress>(&mut types, "ThreadsWorkspaceProgress");
+    add::<SessionsScanChanged>(&mut types, "SessionsScanChanged");
+    add::<SessionsImportProgress>(&mut types, "SessionsImportProgress");
+    add::<SessionsImportFinished>(&mut types, "SessionsImportFinished");
 
     let mut methods = Vec::new();
     method::<DaemonInfoMethod>(&mut methods);
@@ -73,6 +76,12 @@ fn main() {
     method::<DaemonActivityMethod>(&mut methods);
     method::<SessionsList>(&mut methods);
     method::<SessionsResume>(&mut methods);
+    method::<SessionsScanProjects>(&mut methods);
+    method::<SessionsScanGet>(&mut methods);
+    method::<SessionsScanCancel>(&mut methods);
+    method::<SessionsImportAll>(&mut methods);
+    method::<SessionsImportGet>(&mut methods);
+    method::<SessionsImportCancel>(&mut methods);
     method::<ProvidersList>(&mut methods);
     method::<AccountsCreate>(&mut methods);
     method::<AccountsSignIn>(&mut methods);

@@ -2,7 +2,7 @@ use super::*;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader as AsyncBufReader};
 
-struct Server {
+pub(super) struct Server {
     _child: tokio::process::Child,
     _tree: crate::process_tree::ProcessTree,
     _stdout: tokio::io::Lines<AsyncBufReader<tokio::process::ChildStdout>>,
@@ -12,7 +12,7 @@ struct Server {
 }
 
 impl Server {
-    async fn start(context: &ProbeContext) -> Result<Self> {
+    pub(super) async fn start(context: &ProbeContext) -> Result<Self> {
         let mut cmd = command(ProviderKind::Opencode, context)?;
         let password = Uuid::new_v4().to_string();
         cmd.args(["serve", "--port", "0", "--hostname", "127.0.0.1"])
@@ -99,6 +99,10 @@ pub(super) async fn list(context: &ProbeContext, cursor: Option<&str>, search: &
         return v2_list(&server, context, cursor, search).await;
     }
     let server = Server::start(context).await?;
+    list_with(&server, context, cursor, search).await
+}
+
+async fn list_with(server: &Server, context: &ProbeContext, cursor: Option<&str>, search: &str) -> Result<SessionsListResult> {
     let mut cursor = cursor.map(str::to_string);
     let mut sessions = Vec::new();
     let mut seen = HashSet::new();
@@ -124,18 +128,63 @@ pub(super) async fn list(context: &ProbeContext, cursor: Option<&str>, search: &
 }
 
 pub(super) async fn read(context: &ProbeContext, id: &str) -> Result<SessionHistory> {
-    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
-        return Err(DriverError::Protocol("Choose a valid OpenCode session.".into()));
-    }
+    check_id(id)?;
     if let Some(server) = v2_server(context).await? {
         return v2_read(&server, id).await;
     }
     let server = Server::start(context).await?;
+    read_with(&server, id).await
+}
+
+fn check_id(id: &str) -> Result<()> {
+    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err(DriverError::Protocol("Choose a valid OpenCode session.".into()));
+    }
+    Ok(())
+}
+
+async fn read_with(server: &Server, id: &str) -> Result<SessionHistory> {
+    check_id(id)?;
     let info = server.get(&format!("/session/{id}"), &[]).await?;
     let session =
         summary(&info).ok_or_else(|| DriverError::Protocol("Choose a top-level OpenCode session with a working folder.".into()))?;
     let messages = server.get(&format!("/session/{id}/message"), &[("directory", session.cwd.clone())]).await?;
     Ok(parse(session, messages))
+}
+
+/// One `opencode serve` for a whole scan or import, speaking the installed version's API.
+pub(super) enum Reader {
+    V1 { server: Server, context: ProbeContext },
+    V2 { server: crate::opencode::V2Server, context: ProbeContext },
+}
+
+impl Reader {
+    pub(super) async fn start(context: &ProbeContext) -> Result<Self> {
+        Ok(match v2_server(context).await? {
+            Some(server) => Self::V2 { server, context: context.clone() },
+            None => Self::V1 { server: Server::start(context).await?, context: context.clone() },
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl SessionReader for Reader {
+    async fn list_page(&mut self, cursor: Option<&str>) -> Result<SessionsListResult> {
+        match self {
+            Self::V1 { server, context } => list_with(server, context, cursor, "").await,
+            Self::V2 { server, context } => v2_list(server, context, cursor, "").await,
+        }
+    }
+    async fn read(&mut self, id: &str) -> Result<SessionHistory> {
+        match self {
+            Self::V1 { server, .. } => read_with(server, id).await,
+            Self::V2 { server, .. } => {
+                check_id(id)?;
+                v2_read(server, id).await
+            }
+        }
+    }
+    async fn close(self: Box<Self>) {}
 }
 
 pub(super) fn parse(mut session: SavedSession, messages: Value) -> SessionHistory {

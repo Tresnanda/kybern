@@ -1361,6 +1361,131 @@ export interface SessionsListResult {
   next_cursor: string | null;
 }
 
+// ---- first run: find and import past chats ----
+
+/** Pushed as a scan finds more; each carries the whole scan (`SessionsScanChanged`). */
+export const SESSIONS_SCAN_CHANGED_NOTIFICATION = "sessions.scan.changed";
+/** Pushed while an import job works, one per project step (`SessionsImportProgress`). */
+export const SESSIONS_IMPORT_PROGRESS_NOTIFICATION = "sessions.import.progress";
+/** Pushed once when an import job ends (`SessionsImportFinished`). */
+export const SESSIONS_IMPORT_FINISHED_NOTIFICATION = "sessions.import.finished";
+
+export type SessionsJobState = "running" | "done" | "canceled";
+/** `unavailable`: not installed. `failed`: reading failed or timed out; the scan goes on without it. */
+export type ScanProviderState = "pending" | "scanning" | "done" | "unavailable" | "failed";
+
+export interface ScanProviderStatus {
+  provider: ProviderKind;
+  /** `default` or the name of a Kybern account. */
+  instance: string;
+  state: ScanProviderState;
+  /** Sessions found so far (all folders). */
+  sessions: number;
+  error?: string | null;
+}
+export interface ScannedProviderCount {
+  provider: ProviderKind;
+  sessions: number;
+  /** Of those, already imported into Kybern. */
+  imported: number;
+}
+/** Saved sessions grouped by repository; sessions in subfolders and linked worktrees join the root. */
+export interface ScannedProject {
+  root: string;
+  name: string;
+  is_git: boolean;
+  git_remote?: string | null;
+  /** The Kybern project at `root`, if one exists. */
+  project_id?: ProjectId | null;
+  providers: ScannedProviderCount[];
+  session_count: number;
+  imported_count: number;
+  /** Sessions active in the last 30 days. */
+  recent_count: number;
+  last_activity: string;
+  folder_missing: boolean;
+  /** A git repository with at least three sessions active in the last 30 days. */
+  suggested: boolean;
+}
+export interface SessionsScan {
+  scan_id: string;
+  state: SessionsJobState;
+  started_at: string;
+  finished_at?: string | null;
+  providers: ScanProviderStatus[];
+  /** Newest activity first. */
+  projects: ScannedProject[];
+  sessions_found: number;
+  /** Sessions that record no working folder; they cannot be imported. */
+  sessions_without_folder: number;
+}
+export interface SessionsScanChanged {
+  scan: SessionsScan;
+}
+
+export interface SessionsImportRoot {
+  root: string;
+  /** Import into this project instead of creating or finding one for `root`. */
+  project_id?: ProjectId | null;
+  /** Only these harnesses; omitted imports all. */
+  providers?: ProviderKind[] | null;
+  /** The most recent N sessions under the root. Omitted means 50; `null` means all. */
+  limit?: number | null;
+}
+export type ImportProjectState = "queued" | "running" | "done" | "failed";
+export type SessionSkipReason = "in_use" | "too_large" | "folder_missing" | "read_failed" | "harness_unavailable";
+export interface SessionSkip {
+  provider: ProviderKind;
+  session_id: string;
+  title: string;
+  reason: SessionSkipReason;
+  /** One sentence saying what happened and what to do. */
+  detail: string;
+}
+export interface SessionsImportProject {
+  root: string;
+  state: ImportProjectState;
+  project_id?: ProjectId | null;
+  total: number;
+  /** Imported, already imported or skipped. */
+  done: number;
+  imported: number;
+  already_imported: number;
+  skipped_count: number;
+  /** The newest 200 skips; `skipped_count` is exact. */
+  skipped: SessionSkip[];
+  imported_thread_ids: ThreadId[];
+  error?: string | null;
+}
+export interface SessionsImportJob {
+  job_id: string;
+  state: SessionsJobState;
+  started_at: string;
+  finished_at?: string | null;
+  projects: SessionsImportProject[];
+  imported: number;
+  already_imported: number;
+  skipped_count: number;
+}
+/** Counts so far for one project plus what is new since that project's previous notification. */
+export interface SessionsImportProgress {
+  job_id: string;
+  root: string;
+  state: ImportProjectState;
+  project_id?: ProjectId | null;
+  total: number;
+  done: number;
+  imported: number;
+  already_imported: number;
+  skipped_count: number;
+  new_thread_ids: ThreadId[];
+  new_skipped: SessionSkip[];
+  error?: string | null;
+}
+export interface SessionsImportFinished {
+  job: SessionsImportJob;
+}
+
 export type EventKind = EventPayload["kind"];
 
 /** `EventPayload` is `#[serde(flatten)]`ed into the event. */
@@ -3087,6 +3212,12 @@ export interface Methods {
   "daemon.activity": [Empty, DaemonActivity];
   "sessions.list": [{ provider: ProviderKind; query?: string; project_id?: ProjectId | null; cursor?: string | null }, SessionsListResult];
   "sessions.resume": [{ provider: ProviderKind; session_id: string; project_id?: ProjectId | null }, Thread];
+  "sessions.scan_projects": [{ providers?: ProviderKind[] | null }, SessionsScan];
+  "sessions.scan_get": [{ scan_id: string }, SessionsScan];
+  "sessions.scan_cancel": [{ scan_id: string }, SessionsScan];
+  "sessions.import_all": [{ roots: SessionsImportRoot[]; scan_id?: string | null }, SessionsImportJob];
+  "sessions.import_get": [{ job_id: string }, SessionsImportJob];
+  "sessions.import_cancel": [{ job_id: string }, SessionsImportJob];
   "providers.accounts.create": [{ kind: ProviderKind; name: string; directory?: string | null }, ProviderInstance];
   "providers.accounts.sign_in": [ProviderInstance, TerminalInfo];
   "providers.accounts.usage": [ProviderInstance, ProviderUsage];

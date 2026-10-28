@@ -259,6 +259,10 @@ impl AgentDriver for OpencodeDriver {
         crate::sessions::read(self.kind(), context, id).await
     }
 
+    async fn open_session_reader(&self, context: &ProbeContext) -> Result<Box<dyn crate::sessions::SessionReader>> {
+        crate::sessions::reader(self.kind(), context).await
+    }
+
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession> {
         let bin = resolve(ProviderKind::Opencode, config.binary.as_ref())?;
         if api_of(&bin).await.map_err(DriverError::Unsupported)? == Api::V2 {

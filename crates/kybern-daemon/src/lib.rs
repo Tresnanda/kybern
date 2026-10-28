@@ -36,6 +36,7 @@ mod requests;
 mod rpc;
 mod secrets;
 mod self_update;
+mod session_import;
 mod settings;
 mod skills;
 mod state;

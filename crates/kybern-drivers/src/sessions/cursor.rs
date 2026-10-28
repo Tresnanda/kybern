@@ -29,6 +29,12 @@ pub(super) async fn list(context: &ProbeContext, cursor: Option<&str>, query: &s
         return Ok(result);
     }
     let (connection, _events) = Connection::spawn(context)?;
+    let result = sdk_list_with(&connection, context, cursor, query).await?;
+    connection.close().await?;
+    Ok(result)
+}
+
+async fn sdk_list_with(connection: &Connection, context: &ProbeContext, cursor: Option<&str>, query: &str) -> Result<SessionsListResult> {
     let mut cursor = match cursor {
         Some(value) => Some(
             value
@@ -58,7 +64,6 @@ pub(super) async fn list(context: &ProbeContext, cursor: Option<&str>, query: &s
             return Err(DriverError::Protocol("Cursor SDK repeated a session page. Refresh and try again.".into()));
         }
     }
-    connection.close().await?;
     let legacy_available = crate::binary::resolve(ProviderKind::Cursor, context.binary.as_ref()).is_ok();
     Ok(SessionsListResult { sessions, next_cursor: cursor.map(|s| format!("sdk:{s}")).or_else(|| legacy_available.then(|| "acp:".into())) })
 }
@@ -68,13 +73,81 @@ pub(super) async fn read(context: &ProbeContext, id: &str) -> Result<SessionHist
         return super::cursor_acp::read(context, id).await;
     }
     let (connection, _events) = Connection::spawn(context)?;
-    let value = connection.call("read", json!({"agentId":sdk_id(id)?, "cwd":context.cwd})).await?;
+    let result = sdk_read_with(&connection, context, id).await;
     connection.close().await?;
+    result
+}
+
+async fn sdk_read_with(connection: &Connection, context: &ProbeContext, id: &str) -> Result<SessionHistory> {
+    let value = connection.call("read", json!({"agentId":sdk_id(id)?, "cwd":context.cwd})).await?;
     let session = summary(&value["info"]).ok_or_else(|| DriverError::Protocol("Cursor SDK returned an invalid saved agent".into()))?;
     if session.id != id || !matches_cwd(&session, context) {
         return Err(DriverError::Protocol("This Cursor agent does not belong to the selected workspace.".into()));
     }
     parse_sdk(session, &value["messages"])
+}
+
+/// One Cursor SDK sidecar and (if the legacy CLI is listed too) one `cursor-agent acp`
+/// for a whole scan or import, each started on first use.
+pub(super) struct Reader {
+    context: ProbeContext,
+    sdk: Option<(Connection, tokio::sync::mpsc::Receiver<crate::DriverEvent>)>,
+    acp: Option<ReadRpc>,
+    acp_sessions: HashMap<String, SavedSession>,
+}
+
+impl Reader {
+    pub(super) fn new(context: &ProbeContext) -> Self {
+        Self { context: context.clone(), sdk: None, acp: None, acp_sessions: HashMap::new() }
+    }
+
+    fn sdk(&mut self) -> Result<&Connection> {
+        if self.sdk.is_none() {
+            self.sdk = Some(Connection::spawn(&self.context)?);
+        }
+        Ok(&self.sdk.as_ref().expect("started above").0)
+    }
+
+    async fn acp(&mut self) -> Result<&mut ReadRpc> {
+        if self.acp.is_none() {
+            self.acp = Some(super::cursor_acp::connect(&self.context).await?);
+        }
+        Ok(self.acp.as_mut().expect("started above"))
+    }
+}
+
+#[async_trait::async_trait]
+impl SessionReader for Reader {
+    async fn list_page(&mut self, cursor: Option<&str>) -> Result<SessionsListResult> {
+        if let Some(rest) = cursor.and_then(|s| s.strip_prefix("acp:")) {
+            let context = self.context.clone();
+            let rpc = self.acp().await?;
+            let mut result = super::cursor_acp::list_with(rpc, &context, (!rest.is_empty()).then_some(rest), "").await?;
+            self.acp_sessions.extend(result.sessions.iter().map(|s| (s.id.clone(), s.clone())));
+            result.next_cursor = result.next_cursor.map(|s| format!("acp:{s}"));
+            return Ok(result);
+        }
+        let context = self.context.clone();
+        let connection = self.sdk()?;
+        sdk_list_with(connection, &context, cursor, "").await
+    }
+
+    async fn read(&mut self, id: &str) -> Result<SessionHistory> {
+        let context = self.context.clone();
+        if id.starts_with(SDK_SESSION_PREFIX) {
+            let connection = self.sdk()?;
+            return sdk_read_with(connection, &context, id).await;
+        }
+        let known = self.acp_sessions.get(id).cloned();
+        let rpc = self.acp().await?;
+        super::cursor_acp::read_with(rpc, &context, id, known).await
+    }
+
+    async fn close(mut self: Box<Self>) {
+        if let Some((connection, _events)) = self.sdk.take() {
+            let _ = connection.close().await;
+        }
+    }
 }
 
 fn parse_sdk(session: SavedSession, messages: &Value) -> Result<SessionHistory> {
