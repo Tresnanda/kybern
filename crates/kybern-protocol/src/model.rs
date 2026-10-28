@@ -2499,6 +2499,9 @@ pub enum TranscriptEntry {
         level: NoticeLevel,
         text: String,
         at: DateTime<Utc>,
+        /// What the provider notice carried (a fork notice names its machine and thread). Absent for plain notices.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        data: Option<Value>,
     },
     Reverted {
         turn_id: TurnId,

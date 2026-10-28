@@ -406,6 +406,9 @@ expression: schema_for!(TranscriptEntry)
           "type": "string",
           "format": "date-time"
         },
+        "data": {
+          "description": "What the provider notice carried (a fork notice names its machine and thread). Absent for plain notices."
+        },
         "role": {
           "type": "string",
           "const": "notice"

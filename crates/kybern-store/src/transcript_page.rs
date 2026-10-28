@@ -166,6 +166,7 @@ mod tests {
                 level: NoticeLevel::Info,
                 text: format!("entry {seq}"),
                 at: Utc::now(),
+                data: None,
             })
             .collect()
     }
@@ -283,6 +284,7 @@ mod tests {
                 level: NoticeLevel::Info,
                 text: format!("turn {turn} row {seq}"),
                 at: Utc::now(),
+                data: None,
             })
             .collect()
     }
