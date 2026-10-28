@@ -1,11 +1,23 @@
 import * as Clipboard from "expo-clipboard";
-import { createContext, memo, useContext, useMemo, type ReactNode } from "react";
+import { createContext, memo, useContext, useMemo, useState, type ReactNode } from "react";
 import { router } from "expo-router";
 import { chatLink, kybernRef, splitKybernRefs, type KybernRef } from "../../../../packages/kybern-client/src/chatLinks";
 import { ChatFileContext } from "../state/chatFileContext";
 import { Alert } from "./Alert";
 import { Image, Linking, ScrollView, Text, View } from "react-native";
-import { Icon, IconButton, T, styles } from "./primitives";
+import { httpBase } from "../state/protocol";
+import { activeEnvironment } from "../state/runtime";
+import { Lightbox } from "../features/Lightbox";
+import { Icon, IconButton, T, Tap, styles } from "./primitives";
+import {
+  imagePlaceholderText,
+  isRemoteImage,
+  localImagePath,
+  splitImages,
+  tableCells,
+  tableColumnWidths,
+  type MarkdownImage,
+} from "./markdownModel";
 import { MONO, radius, useTheme } from "./theme";
 import { MermaidBlock } from "./Mermaid";
 import { taskLinkId } from "../state/tasksModel";
@@ -244,6 +256,70 @@ export const Markdown = memo(function Markdown({
     </ChatRefs>
   );
 });
+function imageSource(image: MarkdownImage, threadId?: string) {
+  if (isRemoteImage(image.target)) return { uri: image.target };
+  const path = localImagePath(image.target);
+  const env = activeEnvironment();
+  if (!path || !env || !threadId) return undefined;
+  // The daemon resolves the path against the thread's folder and refuses protected ones.
+  return {
+    uri: `${httpBase(env.url)}/threads/${encodeURIComponent(threadId)}/image?path=${encodeURIComponent(path)}`,
+    headers: { authorization: `Bearer ${env.token}` },
+  };
+}
+
+/** An image in a reply: shown at the column width with its caption below; a caption card when it can't load. */
+function MarkdownPicture({ image }: { image: MarkdownImage }) {
+  const { colors } = useTheme();
+  const threadId = useContext(ChatFileContext)?.threadId;
+  const source = useMemo(() => imageSource(image, threadId), [image.target, threadId]);
+  const [failed, setFailed] = useState(false);
+  const [open, setOpen] = useState(false);
+  const label = imagePlaceholderText(image);
+  if (!source || failed)
+    return (
+      <View
+        accessible
+        accessibilityLabel={`Image unavailable: ${label}`}
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 10,
+          padding: 12,
+          borderRadius: radius.md,
+          borderCurve: "continuous",
+          backgroundColor: colors.card,
+        }}
+      >
+        <Icon name="photo" size={20} color={colors.secondary} />
+        <View style={{ flex: 1 }}>
+          <T variant="footnote">{label}</T>
+          <T variant="footnote" tone="secondary">
+            Image unavailable
+          </T>
+        </View>
+      </View>
+    );
+  return (
+    <View style={{ gap: 6 }}>
+      <Tap label={`${label}. Open full screen`} onPress={() => setOpen(true)} feedback="none">
+        <Image
+          source={source}
+          accessibilityIgnoresInvertColors
+          onError={() => setFailed(true)}
+          style={{ width: "100%", height: 240, borderRadius: 14, backgroundColor: colors.card }}
+          resizeMode="contain"
+        />
+      </Tap>
+      {!!image.alt && (
+        <T variant="footnote" tone="secondary">
+          {image.alt}
+        </T>
+      )}
+      {open && <Lightbox source={source} label={label} onClose={() => setOpen(false)} />}
+    </View>
+  );
+}
 // Completed paragraphs retain native text, selection and table scroll state while
 // the current paragraph grows. Only its changed string crosses this memo boundary.
 const MarkdownParagraph = memo(function MarkdownParagraph({
@@ -252,20 +328,16 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
   para: string;
 }) {
   const { colors } = useTheme();
-  const picture = /^!\[([^\]]*)\]\((https?:\/\/[^)]+)\)$/.exec(para);
-  if (picture)
+  const pictures = splitImages(para);
+  if (pictures.length)
     return (
-      <View style={{ gap: 6 }}>
-        <Image
-          source={{ uri: picture[2] }}
-          accessibilityLabel={picture[1] || "Image from response"}
-          style={{ width: "100%", height: 240, borderRadius: 14 }}
-          resizeMode="contain"
-        />
-        {!!picture[1] && (
-          <T variant="footnote" tone="secondary">
-            {picture[1]}
-          </T>
+      <View style={{ gap: 10 }}>
+        {pictures.map((part, i) =>
+          "image" in part ? (
+            <MarkdownPicture key={i} image={part.image} />
+          ) : (
+            <MarkdownParagraph key={i} para={part.text} />
+          ),
         )}
       </View>
     );
@@ -275,17 +347,21 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
     /^\s*\|?\s*:?-{3,}/.test(lines[1]!) &&
     lines[0]!.includes("|")
   ) {
-    const cells = (line: string) =>
-      line
-        .trim()
-        .replace(/^\||\|$/g, "")
-        .split("|")
-        .map((cell) => cell.trim());
-    const rows = [cells(lines[0]!), ...lines.slice(2).map(cells)];
+    const rows = [tableCells(lines[0]!), ...lines.slice(2).map(tableCells)];
+    const widths = tableColumnWidths(rows);
     return (
-      <ScrollView horizontal style={{ marginVertical: 8 }}>
+      // The scroll view owns horizontal drags that start on the table, and the content width is set
+      // outright so it is never clamped to the column. Vertical drags still reach the transcript.
+      <ScrollView
+        horizontal
+        nestedScrollEnabled
+        directionalLockEnabled
+        showsHorizontalScrollIndicator={false}
+        style={{ marginVertical: 8, flexGrow: 0 }}
+      >
         <View
           style={{
+            width: widths.reduce((sum, w) => sum + w, 0) + 2,
             borderWidth: 1,
             borderColor: colors.line,
             borderRadius: 12,
@@ -302,10 +378,10 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
                 borderBottomColor: colors.line,
               }}
             >
-              {row.map((cell, c) => (
-                <View key={c} style={{ width: 180, padding: 12 }}>
+              {widths.map((width, c) => (
+                <View key={c} style={{ width, padding: 12 }}>
                   <T selectable variant={r === 0 ? "label" : "footnote"}>
-                    <Inline text={cell} />
+                    <Inline text={row[c] ?? ""} />
                   </T>
                 </View>
               ))}
