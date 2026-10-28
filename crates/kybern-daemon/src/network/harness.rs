@@ -170,7 +170,8 @@ impl Cluster {
         std::fs::create_dir_all(&root).unwrap();
         let paths = crate::config::Paths::resolve(Some(root.clone())).unwrap();
         let tailscale = Arc::new(Fake::new(self.fixture_path(name)));
-        let state = AppState::initialize_with_drivers(&paths, tailscale, Timing { auto_join: self.auto_join, ..Timing::fast() }, drivers).unwrap();
+        let state =
+            AppState::initialize_with_drivers(&paths, tailscale, Timing { auto_join: self.auto_join, ..Timing::fast() }, drivers).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let primary = listener.local_addr().unwrap();
         *state.listen_addr.write().unwrap() = Some(primary);
