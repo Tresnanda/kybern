@@ -21,7 +21,8 @@ export function useRuntimeTasks(threadId: string) {
   const [loaded, setLoaded] = useState(false)
   const [reload, setReload] = useState(0)
   useEffect(() => {
-    const client = threadClient(threadId)
+    // A thread of a machine that is away has no live tasks to read.
+    const client = (() => { try { return threadClient(threadId) } catch { return null } })()
     if (!client) return
     let current = true
     const updates = new Map<string, RuntimeTask>()

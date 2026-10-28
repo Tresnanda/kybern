@@ -8,7 +8,8 @@ export { useComposerOverlayHeight, useMeasureComposerOverlay } from './composer/
 import { useMeasureComposerOverlay } from './composer/height.ts'
 import { coordinatorOpenParams, openingMessageText } from '../../../packages/kybern-client/src/coordinator.ts'
 import { createdThreadId, optimisticThread, uuidv7, type NewChatCreate } from '../../../packages/kybern-client/src/newChat.ts'
-import { newChats, optimisticCreates } from './composer/newChats.ts'
+import { newChats, optimisticCreates, useNewChat } from './composer/newChats.ts'
+import { machineName } from './composer/outbox.ts'
 import { getNav } from './nav/store.ts'
 import { removePending } from './composer/pending.ts'
 import { goPage, openThread } from './nav/history.ts'
@@ -35,6 +36,7 @@ import {
   FREE_CHAT_PROJECT_ID,
   isFreeChatProject,
   type ContentPart,
+  type MachineId,
   type PermissionMode,
   type ProjectId,
   type ProviderInstance,
@@ -82,6 +84,8 @@ import { useThreadCommands } from './composer/commands.ts'
 import { tokenIcon } from './composer/token-icons.ts'
 import { accountLead, ModelPicker, ModelTriggerLabel } from './composer/ModelPicker.tsx'
 import { PermissionPicker } from './composer/PermissionPicker.tsx'
+import { MachinePicker } from './composer/MachinePicker.tsx'
+import { chooseMachine, useMachineLists, useMachineTarget } from './composer/machineTarget.ts'
 import { Leave, Pop, SwapOnChange, useLeavingList } from './composer/motion.tsx'
 import { Rise } from './motion/kit.tsx'
 import { useNativeWindowSize } from './native/layout-hooks.ts'
@@ -103,7 +107,9 @@ import {
   rememberSentDraft,
   getData,
   interruptThread,
+  createOnMachine,
   loadCatalog,
+  loadMachineLists,
   loadProviders,
   loadQueue,
   loadTarget,
@@ -145,8 +151,10 @@ function ThreadComposer({ thread, placeholderEnter }: { thread: StateThread; pla
   const starting = usePendingSends(threadId).some((p) => p.delivery === 'send' && p.state === 'sending')
   const running = thread.status === 'running' || thread.status === 'awaiting-approval' || starting
   const target = useComposer((d) => (d.target?.threadId === threadId ? d.target.state : null))
-  const providers = useComposer((d) => d.providers)
-  const accounts = useComposer((d) => d.accounts)
+  // The agents and accounts of the machine that owns the thread (the machine you are at, unless the thread is another's).
+  const { providers, accounts } = useMachineLists(thread.machineId)
+  // A new chat still waiting in the outbox has no thread to send into yet.
+  const waitingChat = useNewChat(threadId)?.state === 'waiting'
   const catalog = useComposer((d) => d.catalog)
   const catalogLoading = useComposer((d) => d.catalogLoading)
   const approval = useApp((s) => (s.open.thread?.id === threadId ? s.open.pendingApprovals[0] : null))
@@ -218,6 +226,8 @@ function ThreadComposer({ thread, placeholderEnter }: { thread: StateThread; pla
         const waiting = pendingVisualAnswer(threadId)
         return (waiting && replyToVisual(waiting, message)) || sendToThread(threadId, message, delivery)
       }}
+      sendDisabled={waitingChat}
+      sendDisabledReason={waitingChat ? `Waiting for ${machineName(thread.machineId)}. You can send again once it has the chat.` : undefined}
       canSteer={handoffSelected || canSteer(thread.provider)}
       mode={mode}
       onModeChange={(m) => void setThreadMode(threadId, m).catch((e) => console.error('Unable to change mode:', errorText(e)))}
@@ -240,10 +250,8 @@ function ThreadComposer({ thread, placeholderEnter }: { thread: StateThread; pla
 // ---- wiring: the home screen ----
 
 /** The draft's agent, as `views/Draft.tsx:55-66` picks it. */
-export function useDraftTarget() {
+export function useDraftTarget(stayLocal = false) {
   const draft = useComposer((d) => d.draft)
-  const settings = useComposer((d) => d.settings)
-  const providers = useComposer((d) => d.providers)
   const projects = useApp((s) => s.projects)
   // The most recently active thread's project, or the first project.
   const spaceId = useCurrentSpaceId()
@@ -255,7 +263,13 @@ export function useDraftTarget() {
   })
   const entry = useApp(s => s.draft)
   const projectId = entry.projectId ? entry.projectId : draft.projectId === undefined ? recentProject ?? null : draft.projectId
-  const project = projectId ? projects.find((p) => p.id === projectId) : undefined
+  const listed = projectId ? projects.find((p) => p.id === projectId) : undefined
+  // Where the chat runs (`composer/machineTarget.ts`): with one machine this is the machine you are at, at no cost. A project that
+  // only another machine has runs there. A Coordinator or a task's run stays on the machine you are at.
+  const machine = useMachineTarget(projectId ?? null, !stayLocal && !(listed && isGroupProject(listed)))
+  const { providers, settings, accounts, loading: listsLoading, loaded: listsLoaded } = useMachineLists(machine.machineId)
+  // The checkout the lists follow: the chosen machine's own (its path keys that machine's project accounts).
+  const project = machine.remote && machine.chosen?.project ? machine.chosen.project : listed
   const available = useMemo(() => providers.filter((p) => p.available), [providers])
   const provider = useMemo<ProviderInstance | null>(() => {
     const stored = draft.provider
@@ -275,7 +289,7 @@ export function useDraftTarget() {
   const status = provider ? available.find((p) => p.kind === provider.kind) : undefined
   const mode: PermissionMode = status && !status.supported_permission_modes.includes(preferred) ? status.supported_permission_modes[0] ?? preferred : preferred
   const useWorktree = !projectId ? false : draft.worktree ?? project?.worktrees_default ?? settings?.worktrees_default ?? false
-  return { draft, projectId, project, provider, pinAccount, mode, status, useWorktree, choice: provider ? draft.models[provider.kind] : undefined }
+  return { draft, projectId, project, listed, machine, providers, accounts, listsLoading, listsLoaded, provider, pinAccount, mode, status, useWorktree, choice: provider ? draft.models[provider.kind] : undefined }
 }
 
 /** What the new chat screen (`Draft.tsx`) adds to the draft composer: an attached Up next task, the pick-up's keyboard entry
@@ -299,11 +313,8 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
   useEffect(() => {
     if (status === 'open') ensureLoaded()
   }, [status])
-  const providers = useComposer((d) => d.providers)
-  const loading = useComposer((d) => d.providersLoading)
-  const accounts = useComposer((d) => d.accounts)
-  const { projectId, project, provider, pinAccount, mode, useWorktree, choice, draft } = useDraftTarget()
   const coordinator = useApp(s => s.draft.purpose === 'coordinator')
+  const { projectId, project, machine, providers, accounts, listsLoading: loading, provider, pinAccount, mode, useWorktree, choice, draft } = useDraftTarget(coordinator || !!extras.task)
 
   return (
     <ComposerView
@@ -337,20 +348,26 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
         })
       }}
       catalogLoading={loading}
-      onReloadModels={(force) => loadProviders(force, projectId ?? undefined).then(() => {})}
+      onReloadModels={(force) => machine.machineId ? loadMachineLists(machine.machineId, force, machine.chosen?.projectId) : loadProviders(force, projectId ?? undefined).then(() => {})}
+      machinePicker={machine.show ? <MachinePicker target={machine} /> : undefined}
+      uploadMachine={machine.remote && machine.reachable ? machine.machineId : undefined}
       sendDisabled={!provider || (coordinator && !projectId)}
-      sendDisabledReason={!provider ? 'Choose an available agent before sending.' : coordinator && !projectId ? 'Choose a project for the Coordinator.' : undefined}
+      sendDisabledReason={!provider ? machine.remote && !machine.reachable ? `${machine.chosen?.name} is offline and its agents have not been seen yet.` : 'Choose an available agent before sending.' : coordinator && !projectId ? 'Choose a project for the Coordinator.' : undefined}
       onSend={async (message, _delivery, snapshot) => {
         if (!provider) return
-        const client = localClient() // a new chat is made on the machine the user is at
+        // A new chat is made on the machine the user is at, or on the one the machine chip names (`composer/machineTarget.ts`).
+        const target = machine.remote && !coordinator && !extras.task ? machine.chosen : undefined
+        const client = localClient()
         if (!client) throw new Error('Reconnect and try again.')
+        if (machine.show && machine.chosen) chooseMachine(machine.key, machine.chosen.machineId, pane.id)
         // Enter starts the chat on this frame (`composer/newChats.ts`): the thread id is ours, the page switches and the
         // prompt flies into its bubble while the daemon makes the thread behind it.
         const threadId = uuidv7()
         const owner = activeEnvironment()
         const live = () => localClient() === client && owner === activeEnvironment()
         // A daemon before 0.15.0 ignores the client's ids and names the thread itself: it gets the awaited create.
-        const optimistic = optimisticCreates(getNav().version)
+        // Another machine honours the ids too (every machine in a network is new enough to be in it).
+        const optimistic = target ? true : optimisticCreates(getNav().version)
         const ids = (messageId: string) => (optimistic ? { thread_id: threadId, message_id: messageId } : {})
         const launch = async (thread: Thread, worktree: boolean, create: NewChatCreate, sent: UserMessage = message) => {
           const draftKey = `${pane.id}:${coordinator ? 'coordinator' : 'project'}:${projectId ?? 'free'}`
@@ -366,7 +383,7 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
           // The prompt now belongs to the thread: drop the saved draft before the page switches, so no composer reloads it.
           drafts.drop(draftKey)
           extras.onLaunch?.(threadId, snapshot)
-          launchNewChat({ paneId: pane.id, threadId, thread, message: sent, worktree, create })
+          launchNewChat({ paneId: pane.id, threadId, thread, message: sent, worktree, create, ...(target ? { machine: { id: target.machineId, name: target.name } } : {}) })
         }
         const account = pinAccount ? provider : { ...provider, instance: 'default' }
         const base = { id: threadId, provider: account, model: choice?.model, effort: choice?.effort, permissionMode: mode, message }
@@ -433,6 +450,28 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
           return
         }
         const freeChat = !projectId
+        if (target) {
+          // The chat is made on another machine; if that machine is away the create waits in the outbox ("Waiting for satyamas").
+          const thread: StateThread = {
+            ...optimisticThread({ ...base, projectId: projectId ?? FREE_CHAT_PROJECT_ID }),
+            machineId: target.machineId,
+            ...(target.projectId ? { ownProjectId: target.projectId } : {}),
+            ...(target.state === 'online' ? {} : { offline: true }),
+          }
+          await launch(thread, useWorktree && !freeChat, (first, messageId) => createOnMachine(target, {
+            ...(target.projectId ? { project_id: target.projectId } : {}),
+            provider: account,
+            pin_account: pinAccount,
+            permission_mode: mode,
+            model: choice?.model,
+            effort: choice?.effort,
+            use_worktree: useWorktree && !freeChat,
+            message: first,
+            thread_id: threadId,
+            message_id: messageId,
+          }))
+          return
+        }
         await launch(optimisticThread({ ...base, projectId: projectId ?? FREE_CHAT_PROJECT_ID }), useWorktree && !freeChat, async (first, messageId) => {
           return await client.call('threads.create', {
             ...(projectId ? { project_id: projectId } : {}),
@@ -531,6 +570,10 @@ export interface ComposerViewProps {
   focusRef?: (focus: () => void) => void
   /** The placeholder's entrance (the thread composer holds it while a prompt flies off the card). */
   placeholderEnter?: PaintTransformProps
+  /** The machine chip of a new chat (`composer/MachinePicker.tsx`), before the agent and model chips. */
+  machinePicker?: ReactNode
+  /** Attachments upload to this machine's assets (a new chat that runs there); unset is the machine the user is at. */
+  uploadMachine?: MachineId
 }
 
 /** Where the prompt was when Send was pressed (window coordinates; `ComposerViewProps.launch`). */
@@ -848,7 +891,7 @@ export function ComposerView(input: ComposerViewProps) {
     setError(null)
     const name = image.name ?? 'pasted-image.png'
     try {
-      const info = await uploadBytes(name, image.mediaType, image.data, props.currentThreadId)
+      const info = await uploadBytes(name, image.mediaType, image.data, props.currentThreadId, props.uploadMachine)
       // Native images accept data URIs, so previews need no temporary file.
       const path = `data:${image.mediaType};base64,${Buffer.from(image.data).toString('base64')}`
       setAttachments((list) => list.some((a) => a.hash === hash) ? list : [...list, { ...info, path, hash, label: nextAttachmentLabel(info.media_type, list.map((a) => a.label)) }])
@@ -867,7 +910,7 @@ export function ComposerView(input: ComposerViewProps) {
     setUploading((n) => n + fresh.length)
     for (const path of fresh) {
       try {
-        const info = await uploadPath(path, props.currentThreadId)
+        const info = await uploadPath(path, props.currentThreadId, props.uploadMachine)
         // Checked again as it lands: another add may have raced it between this upload and the next render.
         setAttachments((list) => newFiles(list, [path]).fresh.length ? [...list, { ...info, path, label: nextAttachmentLabel(info.media_type, list.map((a) => a.label)) }] : list)
       } catch (e) {
@@ -1078,6 +1121,7 @@ export function ComposerView(input: ComposerViewProps) {
             <PermissionPicker locked={props.lockMode} mode={mode} kind={provider?.kind} status={status} onChange={props.onModeChange} />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4, flexGrow: 1, minWidth: 0 }}>
+            {props.machinePicker}
             {provider && props.currentThreadId && <StatusGlyph provider={provider} running={running} />}
             {provider && (
               <ModelPicker

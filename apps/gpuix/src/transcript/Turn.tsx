@@ -28,6 +28,8 @@ import { chunkRuns, isAgentLaunchBlock, isDelegationLaunchBlock, isOrchestration
 import { buildWorkHierarchy, shouldRevealLiveText, type Block, type TurnGroup } from '../../../../packages/kybern-client/src/transcript.ts'
 import type { ContentPart, Diff, RuntimeTask, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { removePending, usePendingSend } from '../composer/pending.ts'
+import { machineName } from '../composer/outbox.ts'
+import { waitingLabel } from '../../../../packages/kybern-client/src/pendingSends.ts'
 import { useNewChat } from '../composer/newChats.ts'
 import { PREPARING_WORKTREE } from '../../../../packages/kybern-client/src/newChat.ts'
 import { restoreToComposer, retryPending } from '../composer/store.ts'
@@ -116,6 +118,8 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
   const preparing = !!chat && chat.worktree && chat.state === 'creating' && chat.messageId === group.user?.id
   // A group's worktrees are made one repository at a time: "Preparing worktrees… 2 of 3" (`threads.workspace_progress`).
   const progress = useWorkspaceProgress(preparing ? threadId : null)
+  // A send queued for a machine that is away: "Waiting for satyamas" until it takes it (`composer/outbox.ts`).
+  const waiting = send?.state === 'waiting' ? waitingLabel(chat?.machineName ?? machineName(send.machineId)) : null
   // A long live turn can start before the loaded page, so its user message (and
   // with it `running`) is missing; the thread's status still says it is live.
   const running = !failed && (group.running || (threadRunning && isLast && !group.end))
@@ -184,6 +188,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
         <div ref={userRef} testId={`turn-user:${group.user.id}`} style={{ paddingBottom: running ? 20 : 16 }}>
           <UserBubble parts={group.user.message.parts} at={group.user.at} id={group.user.id} clampLines={subagent ? 6 : undefined} />
           {failed && <SendFailed threadId={threadId} id={send.id} error={send.error} parts={group.user.message.parts} />}
+          {waiting && !running && <div testId={`send-waiting:${send!.id}`} style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: 6 }}><Label color={muted(t)} size={12} lineHeight={16}>{waiting}</Label></div>}
         </div>
       )}
 
@@ -199,7 +204,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
           {/* `thinkingRow`: `t-row-enter` each time it mounts. */}
           {!hasLiveWork && !endsInRun && (
             <Rise kind="row" style={{ marginTop: 6 }}>
-              <Shimmer text={preparing ? (progress ? workspaceProgressLabel(progress) : PREPARING_WORKTREE) : 'Thinking'} color={muted(t)} lineHeight={TEXT.lineHeight} />
+              <Shimmer text={waiting ?? (preparing ? (progress ? workspaceProgressLabel(progress) : PREPARING_WORKTREE) : 'Thinking')} color={muted(t)} lineHeight={TEXT.lineHeight} />
             </Rise>
           )}
         </div>

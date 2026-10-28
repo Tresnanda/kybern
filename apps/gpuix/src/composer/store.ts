@@ -3,7 +3,10 @@ import {readAccounts} from '../requests/accounts.ts'
 import { load, save } from '../shell/persist.ts'
 import { addPending, pendingFor, removePending, updatePending, type PendingSend } from './pending.ts'
 import { newChats } from './newChats.ts'
-import type { NewChatCreate } from '../../../../packages/kybern-client/src/newChat.ts'
+import { queueSend, watchOutbox } from './outbox.ts'
+import type { NewChatCreate, QueuedCreate } from '../../../../packages/kybern-client/src/newChat.ts'
+import { queuedCreate, type MachineChoice } from '../../../../packages/kybern-client/src/machineTarget.ts'
+import { OfflineError } from '../../../../packages/kybern-client/src/machines.ts'
 // Composer data and actions: the agent catalog, settings and accounts, the open
 // thread's next-message target, queued follow-ups, and the home screen's draft
 // choices. Every RPC here is the one the desktop uses (`state/rpc.ts`,
@@ -14,7 +17,8 @@ import type { NewChatCreate } from '../../../../packages/kybern-client/src/newCh
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { useRef, useSyncExternalStore } from 'react'
-import { localClient, threadClient, projectClient, getState, refreshLists, selectPaneThread, getFocusedPaneId, getPane, getPaneState, setPane, usePaneAccess, useApp } from '../state.ts'
+import { clientFor } from '../machines/index.ts'
+import { localClient, threadClient, projectClient, machineOfThreadId, getState, refreshLists, selectPaneThread, getFocusedPaneId, getPane, getPaneState, setPane, usePaneAccess, useApp } from '../state.ts'
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import type { MentionPart } from '../../../../packages/kybern-client/src/userInput.ts'
 import type {
@@ -28,7 +32,9 @@ import type {
   QueuedMessage,
   Settings,
   Thread,
+  MachineId,
   ThreadId,
+  ThreadsCreateParams,
   ThreadTargetState,
   UserMessage,
   ContentPart,
@@ -48,6 +54,19 @@ export interface DraftChoices {
   baseBranch: string | null
   /** Group projects: the members and per-member branches of the new chat (`groups/tray.ts`), for one project. */
   group?: GroupChoice | null
+  /** The machine a new chat starts on, by logical project (`composer/machineTarget.ts`): the pick, and the last machine used.
+   *  A missing entry follows the default (the machine you are at). */
+  machines?: Record<string, MachineId>
+}
+
+/** What the composer reads from another machine: its agents, accounts and settings (the local ones are `ComposerData`'s own). */
+export interface RemoteLists {
+  providers: ProviderStatus[]
+  accounts: AccountSummary[]
+  settings: Settings | null
+  loading: boolean
+  /** The machine answered once; until then the lists are empty, not "no agents". */
+  loaded: boolean
 }
 
 export interface ComposerData {
@@ -64,6 +83,7 @@ export interface ComposerData {
   draft: DraftChoices
   favorites: FavoriteModel[]
   recents: Record<string, string[]>
+  remote: Record<MachineId, RemoteLists>
 }
 
 const initialData: ComposerData = {
@@ -79,6 +99,7 @@ const initialData: ComposerData = {
   draft: { mode: null, provider: null, models: {}, projectId: undefined, worktree: null, baseBranch: null, group: null },
   favorites: [],
   recents: {},
+  remote: {},
 }
 let data: ComposerData = { ...initialData, ...load<Partial<Pick<ComposerData, 'draft' | 'favorites' | 'recents'>>>('kybern.composer.choices', {}) }
 const targets = new Map<string, NonNullable<ComposerData['target']>>()
@@ -155,6 +176,8 @@ export function ensureLoaded() {
   const client = localClient()
   if (!client || client === loadedFor || getState().status !== 'open') return
   loadedFor = client
+  // Sends waiting in this machine's outbox for a machine that is away (`composer/outbox.ts`).
+  watchOutbox(client, () => localClient() === client)
   client.onNotification('settings.changed', (params) => {
     if (localClient() !== client) return
     const settings = (params as { settings?: Settings } | null)?.settings
@@ -222,6 +245,28 @@ function writeProviderCache(url: string, providers: ProviderStatus[]) {
   }
 }
 
+/** A machine's agents, accounts and settings, for a composer that starts a chat there or shows a thread it owns. One load per
+ *  machine at a time; `force` probes the agent CLIs again. A machine that cannot be reached keeps what it last answered. */
+const remoteLoads = new Map<MachineId, Promise<void>>()
+export function loadMachineLists(machineId: MachineId, force = false, projectId?: ProjectId): Promise<void> {
+  const running = remoteLoads.get(machineId)
+  if (running && !force) return running
+  const empty: RemoteLists = { providers: [], accounts: [], settings: null, loading: false, loaded: false }
+  const set = (next: Partial<RemoteLists>) => patch((d) => ({ remote: { ...d.remote, [machineId]: { ...empty, ...d.remote[machineId], ...next } } }))
+  let owner: ReturnType<typeof clientFor>
+  try { owner = clientFor(machineId) } catch { set({ loading: false }); return Promise.resolve() }
+  set({ loading: true })
+  const load = Promise.all([
+    owner.call('providers.list', { ...(projectId ? { project_id: projectId } : {}), ...(force ? { force_refresh: true } : {}) }),
+    readAccounts(owner),
+    owner.call('settings.get', {}),
+  ]).then(([providers, accounts, settings]) => set({ providers: providers.providers, accounts: accounts.accounts, settings, loading: false, loaded: true }))
+    .catch(() => set({ loading: false }))
+    .finally(() => { if (remoteLoads.get(machineId) === load) remoteLoads.delete(machineId) })
+  remoteLoads.set(machineId, load)
+  return load
+}
+
 // ---- the open thread's next-message target ----
 
 const targetSeq = new Map<string, number>()
@@ -287,7 +332,10 @@ export async function setThreadModel(threadId: ThreadId, model: string | undefin
 const queueing = new Set<string>()
 
 export async function loadQueue(threadId: ThreadId) {
-  const client = rpc(threadId)
+  // A chat waiting in the outbox, or a thread on a machine that is away, has no queue to read.
+  if (newChats.uncreated(threadId)) return
+  let client: ReturnType<typeof rpc>
+  try { client = rpc(threadId) } catch { return }
   try {
     const r = await client.call('queue.list', { thread_id: threadId })
     if (threadClient(threadId) !== client) return
@@ -345,10 +393,16 @@ async function deliverPending(send: PendingSend) {
       const done = await newChats.retry(send.threadId, chat.messageId === send.id ? undefined : { message: send.message, messageId: send.id })
       if (done?.state === 'failed') throw new Error(done.error)
       if (done?.adoptedId) return adoptNewChat(getFocusedPaneId(), send.threadId, done.adoptedId, send.id)
+      if (done?.state === 'waiting') return updatePending(send.threadId, send.id, { state: 'waiting', ...(done.machineId ? { machineId: done.machineId } : {}) })
     } else if (send.delivery === 'send') await rpc(send.threadId).call('threads.send', { thread_id: send.threadId, message: send.message, message_id: send.id })
     else await rpc(send.threadId).call('threads.steer', { thread_id: send.threadId, id: send.id, message: send.message })
     updatePending(send.threadId, send.id, { state: 'accepted' })
   } catch (e) {
+    // The thread's machine is away: the message waits in the outbox and goes when the machine returns.
+    const machine = send.delivery === 'send' && e instanceof OfflineError ? machineOfThreadId(send.threadId) : undefined
+    if (machine) {
+      try { return await queueSend(machine, { thread_id: send.threadId, message: send.message, message_id: send.id }) } catch (queueError) { e = queueError }
+    }
     updatePending(send.threadId, send.id, { state: 'failed', error: errorText(e) })
   }
 }
@@ -447,21 +501,36 @@ export function launchNewChat(opts: {
   worktree: boolean
   /** Makes the thread with `thread_id` = `threadId` and delivers `message` with `message_id` = `messageId`. */
   create: NewChatCreate
+  /** The chat is made on another machine (`thread.machineId`); its name says who a waiting send waits for. */
+  machine?: { id: MachineId; name: string }
 }): ThreadId {
   const paneId = opts.paneId ?? getFocusedPaneId()
   const client = rpc()
   const send: PendingSend = { id: crypto.randomUUID(), threadId: opts.threadId, message: opts.message, at: new Date().toISOString(), delivery: 'send', state: 'sending' }
   addPending(send)
-  const started = newChats.start({ threadId: opts.threadId, messageId: send.id, message: opts.message, worktree: opts.worktree, thread: opts.thread }, opts.create)
+  const started = newChats.start({ threadId: opts.threadId, messageId: send.id, message: opts.message, worktree: opts.worktree, thread: opts.thread, ...(opts.machine ? { machineId: opts.machine.id, machineName: opts.machine.name } : {}) }, opts.create)
   track(opts.threadId, started.then((chat) => {
     if (chat.adoptedId) return adoptNewChat(paneId, opts.threadId, chat.adoptedId, send.id)
     if (chat.state === 'failed') updatePending(opts.threadId, send.id, { state: 'failed', error: chat.error })
+    // Queued for a machine that is away: the bubble stays, with no timeout, until the machine takes it (`watchOutbox`).
+    else if (chat.state === 'waiting') updatePending(opts.threadId, send.id, { state: 'waiting', ...(chat.machineId ? { machineId: chat.machineId } : {}) })
     else if (chat.messageId === send.id) updatePending(opts.threadId, send.id, { state: 'accepted' })
     // The list catches up behind the page; nothing waits for it.
     if (localClient() === client) void refreshLists()
   }))
   void selectPaneThread(paneId, opts.threadId)
   return opts.threadId
+}
+
+/** `threads.create` on another machine's client. A machine that is away (or goes away while the call is out) gets the create
+ *  through the outbox of the machine the user is at instead, with the same thread and message ids, so the machine that takes it
+ *  later answers a repeat from the first delivery. */
+export async function createOnMachine(target: Pick<MachineChoice, 'machineId' | 'state'>, params: ThreadsCreateParams & { thread_id: ThreadId }): Promise<Thread | QueuedCreate> {
+  if (target.state === 'online') {
+    try { return await clientFor(target.machineId).call('threads.create', params) } catch (error) { if (!(error instanceof OfflineError)) throw error }
+  }
+  const item = await need(localClient()).call('outbox.enqueue', { target: target.machineId, operation: queuedCreate(params) })
+  return { queued: { outboxId: item.id } }
 }
 
 /** The daemon made the thread under its own id (one that ignores ours): its copy replaces the optimistic one, and a page
@@ -492,8 +561,8 @@ export async function loadBranches(projectId: ProjectId) {
 
 // ---- attachments ----
 
-function assetsEndpoint(threadId?: ThreadId): { base: string; token: string } {
-  const { url, token } = rpc(threadId).endpoint
+function assetsEndpoint(threadId?: ThreadId, machineId?: MachineId): { base: string; token: string } {
+  const { url, token } = (machineId ? clientFor(machineId) : rpc(threadId)).endpoint
   return { base: httpBase(url), token }
 }
 
@@ -505,15 +574,15 @@ export interface UploadedAsset {
 }
 
 /** `uploadFile`: POST the bytes to the daemon's `/assets`. */
-export async function uploadPath(path: string, threadId?: ThreadId): Promise<UploadedAsset> {
+export async function uploadPath(path: string, threadId?: ThreadId, machineId?: MachineId): Promise<UploadedAsset> {
   const file = Bun.file(path)
   const name = path.split('/').pop() ?? 'file'
-  return uploadBytes(name, file.type || 'application/octet-stream', await file.arrayBuffer(), threadId)
+  return uploadBytes(name, file.type || 'application/octet-stream', await file.arrayBuffer(), threadId, machineId)
 }
 
 /** Clipboard images use the same upload contract as files, without a temporary file. */
-export async function uploadBytes(name: string, mediaType: string, bytes: ArrayBuffer | Uint8Array, threadId?: ThreadId): Promise<UploadedAsset> {
-  const { base, token } = assetsEndpoint(threadId)
+export async function uploadBytes(name: string, mediaType: string, bytes: ArrayBuffer | Uint8Array, threadId?: ThreadId, machineId?: MachineId): Promise<UploadedAsset> {
+  const { base, token } = assetsEndpoint(threadId, machineId)
   const response = await fetch(`${base}/assets`, {
     method: 'POST',
     headers: {

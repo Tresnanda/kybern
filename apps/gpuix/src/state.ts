@@ -414,7 +414,7 @@ newChats.subscribe(() => {
     if (!id || sessions.has(sessionKey(id)) || chat?.adoptedId) continue
     // Created, or listed by the daemon after a create that failed here (a dropped reply): the daemon's thread loads.
     const loads = chat ? chat.state === 'created' : !!pane.open.thread && optimisticThreads.has(pane.open.thread)
-    if (loads) void selectPaneThread(paneId, id, true).catch(error => console.error('[pane] Unable to load thread:', error))
+    if (loads) void selectPaneThread(paneId, id, true, chat?.machineId).catch(error => console.error('[pane] Unable to load thread:', error))
     else if (chat && pane.open.thread?.status !== chat.thread.status) setPane(paneId, { open: { ...pane.open, thread: chat.thread } })
   }
 })
@@ -466,8 +466,10 @@ function refreshMerged() {
   if (!state.listsLoaded) return
   const local = state.threads.filter(th => !th.machineId)
   const composed = composeLists(state.projects.filter(p => !foreignIds.has(p.id)), local)
-  if (composed.projects.length !== state.projects.length || composed.projects.some((p, i) => p !== state.projects[i]) || composed.threads.length !== state.threads.length || composed.threads.some((th, i) => th !== state.threads[i])) {
-    set({ projects: composed.projects, threads: composed.threads })
+  // New chats for another machine are in neither list yet; they stay until that machine lists them.
+  const threads = withNewChats(composed.threads)
+  if (composed.projects.length !== state.projects.length || composed.projects.some((p, i) => p !== state.projects[i]) || threads.length !== state.threads.length || threads.some((th, i) => th !== state.threads[i])) {
+    set({ projects: composed.projects, threads })
   }
   // A pane restored on a thread another machine owns could not open until that machine's lists arrived.
   for (const [paneId, pane] of panes) if (pane.selectedId && !pane.open.loaded && !sessions.has(paneSessionKey(pane))) {
@@ -562,7 +564,8 @@ export async function selectPaneThread(paneId: string, id: ThreadId | null, keep
   // transcript loads when the create answers (`newChats.subscribe` above).
   const uncreated = id && !existing && newChats.uncreated(id) ? newChats.get(id)!.thread : null
   if (uncreated) {
-    setPane(paneId, { selectedId: id, machineId: undefined, open: { ...emptyThreadState(), thread: uncreated, loaded: true }, generation })
+    // A chat started for another machine opens on that machine's id (its composer and sends resolve the owner from it).
+    setPane(paneId, { selectedId: id, machineId: newChats.get(id)!.machineId, open: { ...emptyThreadState(), thread: uncreated, loaded: true }, generation })
     releaseUnused()
     return
   }
