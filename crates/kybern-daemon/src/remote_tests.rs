@@ -12,18 +12,31 @@ struct Host {
     state: crate::state::AppState,
     url: String,
     root: PathBuf,
-    server: tokio::task::JoinHandle<()>,
+    /// The server side runs on the stack the daemon's own runtime gives its threads: an
+    /// unoptimized build's RPC frames do not fit the 2 MiB of a test thread, and a test must not
+    /// depend on how close to the edge the dispatch happens to be.
+    server: Option<tokio::runtime::Runtime>,
 }
 impl Host {
     async fn start() -> Self {
         let root = std::env::temp_dir().join(format!("kybern-remote-test-{}", Uuid::now_v7()));
         let paths = crate::config::Paths::resolve(Some(root.clone())).unwrap();
         let state = crate::state::AppState::initialize(&paths).unwrap();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let app = Router::new().merge(crate::http::routes()).route("/ws", get(crate::ws::upgrade)).with_state(state.clone());
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        Self { state, url, root, server }
+        let server = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .thread_stack_size(crate::RUNTIME_THREAD_STACK)
+            .build()
+            .unwrap();
+        server.spawn(async move {
+            let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+            axum::serve(listener, app).await.unwrap()
+        });
+        Self { state, url, root, server: Some(server) }
     }
     async fn client(&self) -> Client {
         Client::connect(&Endpoint { url: format!("{}/ws", self.url.replace("http:", "ws:")), token: self.state.bootstrap_token.clone() })
@@ -63,9 +76,22 @@ impl Host {
 }
 impl Drop for Host {
     fn drop(&mut self) {
-        self.server.abort();
+        if let Some(server) = self.server.take() {
+            server.shutdown_background();
+        }
         let _ = std::fs::remove_dir_all(&self.root);
     }
+}
+
+#[tokio::test]
+async fn a_device_token_that_starts_like_a_machine_grant_still_connects() {
+    let host = Host::start().await;
+    // One device token in 4096 begins `kyb_m_`, the machine-grant prefix.
+    let token = format!("kyb_m_{}", "q".repeat(37));
+    host.state.store.token_insert(Uuid::now_v7(), &crate::auth::hash(&token), "lookalike", &Scope::ALL).unwrap();
+    let endpoint = Endpoint { url: format!("{}/ws", host.url.replace("http:", "ws:")), token };
+    let client = Client::connect(&endpoint).await.unwrap();
+    client.call::<ThreadsList>(ThreadsListParams::default()).await.unwrap();
 }
 
 #[tokio::test]

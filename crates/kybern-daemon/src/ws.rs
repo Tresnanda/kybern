@@ -49,11 +49,12 @@ pub async fn upgrade(
         .and_then(|v| v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer ")))
         .map(str::to_string);
     // A session grant from another machine (design §3.3). It is accepted from the header only, from
-    // the address it was issued to, and only while that machine is a member.
-    if let Some(grant) = header_token.as_deref().filter(|token| token.starts_with(GRANT_PREFIX)) {
-        let Some(grant) = state.network.grants.lookup(grant) else {
-            return (StatusCode::UNAUTHORIZED, "invalid token").into_response();
-        };
+    // the address it was issued to, and only while that machine is a member. Device tokens are
+    // `kyb_` plus random base64url, so about one in 4096 of them also starts with the grant prefix:
+    // a token that is not a live grant is still tried as a device token.
+    let grant =
+        header_token.as_deref().filter(|token| token.starts_with(GRANT_PREFIX)).and_then(|token| state.network.grants.lookup(token));
+    if let Some(grant) = grant {
         let from_origin = peer.is_some_and(|peer| peer.ip() == grant.origin_ip);
         let member = state.network.membership().is_some_and(|membership| membership.is_member(&grant.machine_id));
         if !from_origin || !member || !state.network.is_enabled() {

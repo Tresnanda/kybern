@@ -624,10 +624,25 @@ async fn after_open(state: &AppState, link: &Arc<PeerLink>, dialer: bool) {
     let _ = link.notify(PeerPresenceMethod::NAME, serde_json::to_value(network.presence()).unwrap_or(Value::Null)).await;
 }
 
+/// A removal can land while a session is being opened, after `drop_machine` closed the links that
+/// existed. Looked at once the link is registered, so either the removal finds the link or the
+/// link finds the removal: a removed machine never keeps a session.
+fn removed_while_opening(state: &AppState, link: &Arc<PeerLink>) -> bool {
+    if !state.network.membership().is_some_and(|membership| !membership.is_member(&link.machine_id)) {
+        return false;
+    }
+    state.network.drop_machine(&link.machine_id);
+    link.close();
+    true
+}
+
 /// A session the other machine opened to us: register it and send our side of the opening.
 /// Called by the WebSocket layer once the grant has authenticated the upgrade.
 pub fn accept(state: &AppState, link: Arc<PeerLink>) {
     state.network.peers.register(link.clone());
+    if removed_while_opening(state, &link) {
+        return;
+    }
     state.network.notify_changed();
     tracing::info!(target: SESSION_TARGET, machine = %link.machine_id, "accepted a session");
     let state = state.clone();
@@ -813,6 +828,9 @@ pub(super) fn run_dialed<S>(
     });
 
     state.network.peers.register(link.clone());
+    if removed_while_opening(&state, &link) {
+        return;
+    }
     state.network.notify_changed();
     tracing::info!(target: SESSION_TARGET, machine = %link.machine_id, "opened a session");
     tokio::spawn(async move { after_open(&state, &link, true).await });

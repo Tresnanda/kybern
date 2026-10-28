@@ -469,11 +469,15 @@ async fn a_removed_machine_loses_its_session_and_cannot_open_another() {
     let removal = c.membership().remove(&b.id(), RemoveReason::User).unwrap();
     c.state.network.publish_ops(vec![removal]);
     c.state.network.drop_machine(&b.id());
-    eventually("a closes b's session", WAIT, || a.state.network.peers.link(&b.id()).is_none()).await;
+    // The links can go before the removal reaches a (b closes its own on learning of it), so wait
+    // for the removal itself, then for what it takes with it.
+    eventually("the removal reaches a", WAIT, || !a.membership().is_member(&b.id())).await;
+    eventually("a closes b's session and drops its grants", WAIT, || {
+        a.state.network.peers.link(&b.id()).is_none() && a.state.network.grants.held().iter().all(|grant| grant.machine_id != b.id())
+    })
+    .await;
     eventually("c closes b's session", WAIT, || c.state.network.peers.link(&b.id()).is_none()).await;
-    assert!(!a.membership().is_member(&b.id()), "the removal reached a");
-    // No grant a issued to b is left, and a new request is refused.
-    assert!(a.state.network.grants.held().iter().all(|grant| grant.machine_id != b.id()));
+    // A new request from b is refused.
     listen(&a).await;
     let request = signed_request(&b, &a, &[Scope::MachinePeer]);
     assert_eq!(post_session(&b, &a, &request).await.status(), 403);

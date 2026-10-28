@@ -138,12 +138,13 @@ fn desktop_listen_port(requested: u16, desktop_managed: bool, root: &std::path::
     }
 }
 
-/// Stack for each runtime thread. Unoptimized builds give every arm of the
-/// `rpc::dispatch` match its own stack slots: its poll frame alone is about
-/// 1.4 MB on macOS and larger with MSVC, so a preview snapshot on top of it
-/// overflowed Tokio's 2 MiB default and aborted the daemon on Windows. This
-/// is address space; pages are committed only as they are touched.
-const RUNTIME_THREAD_STACK: usize = 8 * 1024 * 1024;
+/// Stack for each runtime thread. Unoptimized builds give every arm of an
+/// `rpc` dispatch match its own stack slots (the whole match was a poll frame of
+/// about 1.4 MB on macOS and larger with MSVC, now split into parts), so a
+/// preview snapshot on top of it overflowed Tokio's 2 MiB default and aborted
+/// the daemon on Windows. This is address space; pages are committed only as
+/// they are touched.
+pub(crate) const RUNTIME_THREAD_STACK: usize = 8 * 1024 * 1024;
 
 fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_multi_thread().enable_all().thread_stack_size(RUNTIME_THREAD_STACK).build()

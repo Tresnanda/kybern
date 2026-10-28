@@ -17,7 +17,28 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
     Box::pin(dispatch_method(state, ctx, method, params)).await
 }
 
+/// Every RPC method's handler, in slices. One match over every method is one frame of well over
+/// a megabyte in an unoptimized build (nothing is shared between arms), and a test thread has
+/// two. Each part answers the methods it knows, and leaves the params in `slot` for the next part
+/// when the method is not its own; the last part reports an unknown method.
 async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, params: Value) -> Result<Value, RpcError> {
+    let mut slot = Some(params);
+    macro_rules! try_parts {
+        ($($part:ident),+ ; $last:ident) => {{
+            $(
+                let result = $part(state, ctx, method, &mut slot).await;
+                if slot.is_none() {
+                    return result;
+                }
+            )+
+            $last(state, ctx, method, &mut slot).await
+        }};
+    }
+    try_parts!(dispatch_part_1, dispatch_part_2, dispatch_part_3, dispatch_part_4, dispatch_part_5, dispatch_part_6, dispatch_part_7, dispatch_part_8, dispatch_part_9, dispatch_part_10, dispatch_part_11, dispatch_part_12, dispatch_part_13, dispatch_part_14, dispatch_part_15; dispatch_part_16)
+}
+
+async fn dispatch_part_1(state: &AppState, ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
     match method {
         DaemonInfoMethod::NAME => {
             let info = DaemonInfo {
@@ -96,6 +117,16 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
             let p: SessionsImportRef = parse(params)?;
             ok(state.session_imports.import_get(&p.job_id).ok_or_else(|| RpcError::not_found("import job"))?)
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_2(state: &AppState, ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         SessionsImportCancel::NAME => {
             let p: SessionsImportRef = parse(params)?;
             ok(state.session_imports.import_cancel(&p.job_id).ok_or_else(|| RpcError::not_found("import job"))?)
@@ -131,6 +162,16 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
             let p: AccountLoginInputParams = parse(params)?;
             ok(state.account_logins.input(&p.id, p.code).await.map_err(bad)?)
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_3(state: &AppState, _ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         AccountsLoginCancel::NAME => {
             let p: AccountLoginIdParams = parse(params)?;
             ok(state.account_logins.cancel(state, &p.id).await.map_err(bad)?)
@@ -207,6 +248,16 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
             let p: ProjectsInstructionsCreateParams = parse(params)?;
             ok(state.orchestrator.create_group_instructions(p.project_id)?)
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_4(state: &AppState, _ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         ProjectsUpdate::NAME => {
             let p: ProjectsUpdateParams = parse(params)?;
             if let Some(space_id) = p.space_id {
@@ -270,6 +321,16 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
             state.orchestrator.remove_project(p.project_id).map_err(note_err)?;
             ok(Empty {})
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_5(state: &AppState, _ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         ThreadsList::NAME => {
             let p: ThreadsListParams = parse_or_default(params)?;
             let mut threads = state.store.threads_list(p.project_id, p.include_archived).map_err(internal)?;
@@ -370,6 +431,16 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
                 .collect();
             ok(ThreadsReadResult { thread: page.thread, messages, next_before_seq: page.next_before_seq, through_seq: page.through_seq })
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_6(state: &AppState, _ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         ThreadsCreate::NAME => {
             let p: ThreadsCreateParams = parse(params)?;
             ok(state.orchestrator.create_thread(p).await.map_err(bad)?)
@@ -453,6 +524,16 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
                 stream_omitted: result.stream_omitted,
             })
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_7(state: &AppState, _ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         ThreadsUpdate::NAME => {
             let p: ThreadsUpdateParams = parse(params)?;
             let thread = state.orchestrator.update_session_fields(p).await.map_err(provider_err)?;
@@ -530,6 +611,16 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
             )
             .await?)
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_8(state: &AppState, ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         TaskItemsList::NAME => {
             let p: TaskItemsListParams = parse_or_default(params)?;
             let orchestrator = state.orchestrator.clone();
@@ -613,6 +704,16 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
             let params: NotesTidyParams = parse(params)?;
             ok(tokio::task::spawn_blocking(move || orchestrator.notes_tidy_offer(params)).await.map_err(internal)?.map_err(bad)?)
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_9(state: &AppState, _ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         NotesTidySnooze::NAME => {
             let orchestrator = state.orchestrator.clone();
             let params: NotesTidyParams = parse(params)?;
@@ -693,6 +794,16 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
             let t = state.terminals.create(p.terminal_id, p.thread_id, cwd, p.cols, p.rows, p.command).map_err(internal)?;
             ok(t.info())
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_10(state: &AppState, ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         TerminalsList::NAME => {
             let p: TerminalsListParams = parse_or_default(params)?;
             ok(TerminalsListResult { terminals: state.terminals.list(p.thread_id) })
@@ -767,6 +878,16 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
                 .await
                 .map_err(bad)?)
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_11(state: &AppState, ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         SettingsUpdate::NAME => {
             let p: SettingsUpdateParams = parse(params)?;
             let updated = state.settings.set(p.settings).map_err(internal)?;
@@ -846,6 +967,16 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
                 .await
                 .map_err(write_error)?)
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_12(state: &AppState, ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         ThreadFileRead::NAME => {
             let p: ThreadFileReadParams = parse(params)?;
             let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
@@ -923,6 +1054,16 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
             crate::visuals::revoke(parse(params)?);
             ok(Empty {})
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_13(state: &AppState, _ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         PreviewProbe::NAME => {
             let p: PreviewProbeParams = parse(params)?;
             match crate::previews::probe::probe(&p.url).await {
@@ -1005,6 +1146,16 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
             }
             ok(crate::github::status(std::path::Path::new(&t.cwd)).await.map_err(internal)?)
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_14(state: &AppState, _ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         GitBranches::NAME => {
             let p: GitBranchesParams = parse(params)?;
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
@@ -1082,6 +1233,16 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
                 repos: Vec::new(),
             })
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_15(state: &AppState, ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         PrDetail::NAME => {
             let p: PrDetailParams = parse(params)?;
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
@@ -1158,6 +1319,16 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
             events.truncate(limit as usize);
             ok(EventsRangeResult { events, has_more })
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_16(state: &AppState, ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         // Remote delegation's outbox (R1).
         OutboxList::NAME => ok(crate::network::outbox::list(state, parse_or_default(params)?)?),
         OutboxRetry::NAME => ok(crate::network::outbox::retry(state, parse(params)?)?),
