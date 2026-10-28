@@ -17,7 +17,7 @@ if (!SCRATCH.includes('gpuix-scratch')) throw new Error('TRAY_SCRATCH must be un
 const DATA = path.join(SCRATCH, 'data'), READY = path.join(SCRATCH, 'ready.json')
 const PORT = Number(process.env.TRAY_DAEMON_PORT ?? 4370), PROXY_PORT = Number(process.env.TRAY_PROXY_PORT ?? 4371)
 export const PARENT_TITLE = 'GPUIX phase 2: perf and motion sweep'
-const IMAGE = path.resolve(import.meta.dir, '../../desktop/public/release-background.png')
+const IMAGE = path.resolve(import.meta.dir, '../../../assets/release-background.png')
 
 if (process.argv.includes('--fresh')) rmSync(SCRATCH, { recursive: true, force: true })
 mkdirSync(DATA, { recursive: true })

@@ -6,7 +6,7 @@ import { revealBoundary } from './reveal.ts'
 // Simple native glyph tint avoids React and layout work on every pulse frame.
 // Reduce Motion holds the plain muted label.
 import { useEffect, useReducer, useRef, useState } from 'react'
-import { smoothAdvance, type SmoothState } from '../../../desktop/src/lib/smoothStream.ts'
+import { smoothAdvance, type SmoothState } from '../shared/lib/smoothStream.ts'
 import type { StyleDesc } from '@gpuix/react'
 import { useLoaderTime, easeInOut, NATIVE_PAINT_ANIMATIONS, NATIVE_TEXT_PAINT } from '../MatrixLoader.tsx'
 import { REDUCED_MOTION, Label } from '../ui.tsx'

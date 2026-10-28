@@ -44,17 +44,17 @@ writeFileSync(path.join(resources, 'version'), version)
 cpSync(path.join(root, 'packaging/Info.plist'), path.join(app, 'Contents/Info.plist'))
 execFileSync('/usr/libexec/PlistBuddy', ['-c', `Set :CFBundleShortVersionString ${version}`, path.join(app, 'Contents/Info.plist')])
 if (test) for (const set of ['CFBundleIdentifier dev.kybern.gpuix.test', `CFBundleName ${name}`, `CFBundleDisplayName ${name}`]) execFileSync('/usr/libexec/PlistBuddy', ['-c', `Set :${set}`, path.join(app, 'Contents/Info.plist')])
-cpSync(path.join(root, '../desktop/src-tauri/icons/icon.icns'), path.join(resources, 'icon.icns'))
+cpSync(path.join(root, 'packaging/icons/icon.icns'), path.join(resources, 'icon.icns'))
 // The Icon Composer icon (`CFBundleIconName`): dark, clear and tinted appearances; `icon.icns` is the light fallback.
-cpSync(path.join(root, '../desktop/src-tauri/icons/Assets.car'), path.join(resources, 'Assets.car'))
+cpSync(path.join(root, 'packaging/icons/Assets.car'), path.join(resources, 'Assets.car'))
 cpSync(addon, path.join(resources, path.basename(addon)))
 cpSync(path.join(root, 'native/build/kybern-webview.dylib'), path.join(resources, 'kybern-webview.dylib'))
 // Mermaid for transcript diagrams (`src/transcript/mermaid.ts` runs it in a hidden WKWebView).
-cpSync(path.join(root, '../desktop/node_modules/mermaid/dist/mermaid.min.js'), path.join(resources, 'mermaid.min.js'))
+cpSync(path.join(root, 'node_modules/mermaid/dist/mermaid.min.js'), path.join(resources, 'mermaid.min.js'))
 cpSync(path.join(root, 'src/assets/fonts'), path.join(resources, 'src/assets/fonts'), {recursive:true})
 cpSync(path.join(root, 'src/assets/providers'), path.join(resources, 'src/assets/providers'), {recursive:true})
 // The release announcement's artwork (`platform/UpdateSurface.tsx`).
-cpSync(path.join(root, '../desktop/public/release-background.png'), path.join(resources, 'release-background.png'))
+cpSync(path.join(root, '../../assets/release-background.png'), path.join(resources, 'release-background.png'))
 // The ported window-translucency code carries its MIT notice (`THIRD_PARTY_NOTICES.md`).
 cpSync(path.join(root, '../../THIRD_PARTY_NOTICES.md'), path.join(resources, 'THIRD_PARTY_NOTICES.md'))
 const previousCwd = process.cwd()

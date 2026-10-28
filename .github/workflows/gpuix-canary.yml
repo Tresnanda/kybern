@@ -105,8 +105,6 @@ jobs:
           bun-version: 1.4.3
           no-cache: true
       - uses: ./.github/actions/setup-pnpm-apps
-        with:
-          gpuix: 'true'
       - name: Rebase the fork commits onto the new release
         env:
           LATEST: ${{ needs.check.outputs.latest }}

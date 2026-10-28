@@ -1,8 +1,8 @@
 # `src/kit/` — shared GPUIX primitives
 
-Primitives other lanes (settings, composer, transcript, dialogs, platform) build on. Each one mirrors a desktop
-`apps/desktop/src/components/kit/*` component: geometry, copy, states and motion come from the desktop source and are
-checked against it, in images, with `scripts/kit9-pair.ts` (see "Verifying").
+Primitives other lanes (settings, composer, transcript, dialogs, platform) build on. Each one was ported from the
+retired Tauri app's `components/kit/*` (removed after 0.18.0; read it in git history before that release): geometry,
+copy, states and motion came from that source and were checked against it in images. They are now the reference.
 
 ## Conventions
 
@@ -62,14 +62,10 @@ Known gaps: a disabled `TextField` shows the ink edge only (the spec's 45° hatc
 
 ## Verifying (the gallery)
 
-`visual/kit/` renders a named *section* of the desktop's own kit components (Vite + WebKit, no daemon);
-`src/kit/gallery/` renders the same section with GPUIX. States (`visual/kit/steps/*.ts`) say how to drive each side.
+`src/kit/gallery/` renders a named *section* of the kit with GPUIX; states (`visual/kit/steps/*.ts`) say how to drive
+it. (The Tauri side of these image pairs was removed with the Tauri app.)
 
-```sh
-bun scripts/kit9-pair.ts <state ...> --theme both [--reduced]     # -> previews/gpuix/phase2/kit9/kit/kit-<state>-<theme>-{tauri,gpuix,pair,diff}.png
-```
-
-Motion: desktop strips with `document.getAnimations()` paused at offsets (see `scripts/kit9-notelift-tauri.mjs`), GPUIX strips with
+Motion: GPUIX strips with
 `clock.pause()` + `clock.set(at + ms)` + `screenshot` (`scripts/kit9-notelift.ts`); `startGallery` in `scripts/kit9-lib.ts`
 opens a section window. Frame cadence: `KYBERN_FRAME_TIMES=1` (`app.frameTimes()`), window kept visible with
 `opts.visible`. Native paint animations (spinner) run on the real clock: freeze with `KYBERN_PAINT_PHASE_MS`.

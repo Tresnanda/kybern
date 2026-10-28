@@ -28,4 +28,4 @@ row's place between the two is checked as well.
 `coordinator-rotation.expected.json` holds the row signatures both consumers
 must produce: `rotation_fixtures_project_to_the_shared_signatures` in
 `crates/kybern-store/src/projection.rs` and the rotation test in
-`apps/desktop/transcript.test.mjs` (which also runs the mobile reducer).
+`packages/kybern-client/tests/transcript.test.mjs` (which also runs the mobile reducer).

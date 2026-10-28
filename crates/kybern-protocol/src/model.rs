@@ -2957,7 +2957,7 @@ pub enum SessionReleaseReason {
 impl SessionReleaseReason {
     /// Transcript copy for the releases that can surprise. Idle and update
     /// releases are the expected end of a quiet thread and get no row.
-    /// Mirrored in `apps/desktop/src/state/transcript.ts` for live events.
+    /// Mirrored in `packages/kybern-client/src/transcript.ts` for live events.
     pub fn notice_text(self) -> Option<&'static str> {
         match self {
             Self::Manual => Some("Agent released. Your next message resumes the saved conversation."),

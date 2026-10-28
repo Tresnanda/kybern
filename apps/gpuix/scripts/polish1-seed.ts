@@ -14,8 +14,8 @@ import { KybernClient } from '../../../packages/kybern-client/src/client.ts'
 const SCRATCH = process.env.TRAY_SCRATCH ?? '/Users/mymac/projects/ade-gpuix-scratch/polish1'
 if (!SCRATCH.includes('gpuix-scratch')) throw new Error('TRAY_SCRATCH must be under gpuix-scratch')
 const DATA = path.join(SCRATCH, 'data')
-const IMAGE = path.resolve(import.meta.dir, '../../desktop/public/release-background.png')
-const SQUARE = path.resolve(import.meta.dir, '../../desktop/src-tauri/icons/128x128@2x.png')
+const IMAGE = path.resolve(import.meta.dir, '../../../assets/release-background.png')
+const SQUARE = path.resolve(import.meta.dir, '../packaging/icons/128x128@2x.png')
 export const TITLES = {
   short: 'Shadow short',
   long: 'Shadow long',

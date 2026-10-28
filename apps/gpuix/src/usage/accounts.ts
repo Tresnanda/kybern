@@ -8,8 +8,8 @@ import {readAccounts} from '../requests/accounts.ts'
 // rail usage card, the Add account sheet) and after every change; an idle window never
 // polls, because a list asks the daemon to probe each account's identity.
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
-import { accountFor, defaultAccountFor, isCliInstance, legacyAccounts } from '../../../desktop/src/lib/accounts.ts'
-import { PROVIDER_NAMES } from '../../../desktop/src/lib/providerUsage.ts'
+import { accountFor, defaultAccountFor, isCliInstance, legacyAccounts } from '../shared/lib/accounts.ts'
+import { PROVIDER_NAMES } from '../shared/lib/providerUsage.ts'
 import { USAGE_LIMITS_CHANGED_NOTIFICATION, type AccountSummary, type ProviderInstance, type ProviderKind, type ProviderLimits, type ProviderSettings, type UsageLimitsParams, type UsageLimitsResult } from '../../../../packages/kybern-client/src/types.ts'
 import { errorText } from '../nav/actions.ts'
 import { useNav } from '../nav/store.ts'

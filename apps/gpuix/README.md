@@ -2,13 +2,13 @@
 
 The Kybern desktop app, rendered natively by [GPUIX](https://gpuix.dev) (React
 on Zed's GPUI): Metal on macOS, Direct3D 11 on Windows and Vulkan on Linux. It
-replaces the Tauri app in `apps/desktop`, which ships until its deprecation
-release.
+replaced the Tauri app, which was removed after 0.18.0 (#113).
 
 It connects to the running `kybernd` and reuses the shared
 `packages/kybern-client` transport and transcript projection. Colors come from
-the desktop's own `buildThemeCssVariables`, and tool rows from its `toolLine`,
-both imported directly so they stay in step with `apps/desktop`.
+`buildThemeCssVariables` in `src/shared/lib/kit/theme` and tool rows from the
+shared client's `toolLine`. `src/shared/` holds the logic that came over from
+the Tauri app (`@/…` in imports).
 
 ## Try it
 

@@ -1,5 +1,5 @@
 // The glyph each inline token kind leads with (`InlineTokenIcon`), shared by sent messages and the composer.
-import { getFileIconName } from '../../../desktop/src/lib/kit/fileIcons.ts'
+import { getFileIconName } from '../shared/lib/kit/fileIcons.ts'
 import type { InlineTokenKind } from '@/lib/inlineTokenLabel'
 import { diffFileIcons } from '../native/diff-file-icons.ts'
 import { T } from '../transcript/glyphs.ts'

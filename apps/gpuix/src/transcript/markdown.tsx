@@ -7,7 +7,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode
 import { useGpuix, type PublicInstance } from '@gpuix/react'
 import { chatLink } from '../../../../packages/kybern-client/src/chatLinks.ts'
 import { fileRefCandidates, linkifyFileRefs } from '../../../../packages/kybern-client/src/fileRefs.ts'
-import { TOOL_RESULT_CHAR_LIMIT, TOOL_RESULT_LINE_LIMIT } from '../../../desktop/src/lib/toolResultText.ts'
+import { TOOL_RESULT_CHAR_LIMIT, TOOL_RESULT_LINE_LIMIT } from '../shared/lib/toolResultText.ts'
 import { getClient, usePaneAccess } from '../state.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { FONT_MONO } from '../theme.ts'

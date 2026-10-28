@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install Kybern GPUIX (the GPUI desktop client) on macOS next to the Tauri app.
+# Install Kybern GPUIX, the Kybern desktop app, on macOS.
 #
 #   curl -fsSL https://github.com/Tresnanda/kybern/releases/latest/download/kybern-gpuix-mac-install.sh | sh
 #

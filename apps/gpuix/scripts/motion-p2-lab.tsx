@@ -24,7 +24,7 @@ import { LiveControls, Ripple } from '../src/live/ComputerLiveView.tsx'
 import { G } from '../src/composer/glyphs.ts'
 
 let commits = 0
-const IMAGE = new URL('../../desktop/public/release-background.png', import.meta.url).pathname
+const IMAGE = new URL('../../../assets/release-background.png', import.meta.url).pathname
 const at = (x: number, y: number, w: number, h: number) => ({ position: 'absolute', left: x, top: y, width: w, height: h, display: 'flex' }) as const
 const attachment = (n: number) => ({ id: `a${n}`, name: `shot-${n}.png`, media_type: 'image/png', size: 1024, label: `image${n}`, path: IMAGE })
 const queued = (n: number) => ({ id: `q${n}`, message: { parts: [{ type: 'text' as const, text: `Follow-up number ${n}: check the failing migration` }] } })

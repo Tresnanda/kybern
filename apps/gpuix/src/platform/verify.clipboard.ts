@@ -18,7 +18,7 @@ try {
   await app.getByTestId('state-copied').waitFor({ timeoutMs: 5000 })
   const read = swift('read')
   console.log(read)
-  const expected = statSync(path.join(import.meta.dir, '../../../desktop/public/release-background.png')).size
+  const expected = statSync(path.join(import.meta.dir, '../../../../assets/release-background.png')).size
   assert.ok(read.includes(`png bytes: ${expected}`), `pasteboard PNG is the copied image (${expected} bytes)`)
   console.log('ok  copy image put the PNG on the system pasteboard')
 } finally {

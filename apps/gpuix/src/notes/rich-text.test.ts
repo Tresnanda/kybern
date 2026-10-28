@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { parseRichText, replaceRichText, RichHistory, richInputRule, richTableCellRange, serializeRichText, textEdit, toggleRichMark, updateRichText } from './rich-text.ts'
 import { editTokenText, tokenDisplayOffset, tokenSourceOffset, tokenText } from '../composer/token-text.ts'
-import { createMarkdownParser, parseMarkdownDocument } from '../../../desktop/src/lib/markdownParser.ts'
+import { createMarkdownParser, parseMarkdownDocument } from '../shared/lib/markdownParser.ts'
 
 const semantic = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(semantic)

@@ -5,8 +5,8 @@
 #        scripts/release.sh <version> --no-push   stop after the local commit and tag
 #
 # Pushing the tag starts .github/workflows/release.yml: dist builds kybernd and
-# kybern once for every target, desktop.yml bundles those binaries into the
-# desktop apps and writes latest.json, and dist creates the GitHub Release with
+# kybern once for every target, desktop.yml bundles those binaries into
+# Kybern GPUIX and writes latest.json, and dist creates the GitHub Release with
 # all of it. See RELEASING.md.
 set -euo pipefail
 
@@ -43,10 +43,10 @@ fi
 CURRENT="$(grep -m1 '^version = ' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
 echo "==> $CURRENT -> $VERSION"
 
-# Cargo.toml [workspace.package] (every crate inherits it), the Tauri bundle
-# version (what the updater compares against latest.json), and package.json.
+# Cargo.toml [workspace.package]: every crate inherits it, and GPUIX's packaging
+# reads it (the version its updater compares against latest.json).
 VERSION="$VERSION" python3 - <<'PY'
-import json, os, re
+import os, re
 version = os.environ["VERSION"]
 
 path = "Cargo.toml"
@@ -54,17 +54,10 @@ text = open(path).read()
 text, n = re.subn(r'^version = "[^"]+"', f'version = "{version}"', text, count=1, flags=re.M)
 assert n == 1, "workspace version not found in Cargo.toml"
 open(path, "w").write(text)
-
-for path in ("apps/desktop/src-tauri/tauri.conf.json", "apps/desktop/package.json"):
-    data = json.load(open(path))
-    data["version"] = version
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
 PY
 cargo update --workspace --offline >/dev/null 2>&1 || cargo update --workspace >/dev/null
 
-git add Cargo.toml Cargo.lock apps/desktop/src-tauri/tauri.conf.json apps/desktop/package.json
+git add Cargo.toml Cargo.lock
 git commit -q -m "release: $TAG"
 git tag -a "$TAG" -m "kybern $TAG"
 echo "==> committed and tagged $TAG"

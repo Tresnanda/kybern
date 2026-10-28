@@ -14,8 +14,8 @@ for (const variant of [process.argv[2] ?? 'baseline']) {
   }
   writeFileSync(path.join(resources, 'version'), '0.9.1')
   for (const name of ['fonts', 'providers']) cpSync(path.join(root, 'src/assets', name), path.join(resources, 'src/assets', name), { recursive: true })
-  cpSync(path.join(root, '../desktop/public/release-background.png'), path.join(resources, 'release-background.png'))
-  cpSync(path.join(root, '../desktop/node_modules/mermaid/dist/mermaid.min.js'), path.join(resources, 'mermaid.min.js'))
+  cpSync(path.join(root, '../../assets/release-background.png'), path.join(resources, 'release-background.png'))
+  cpSync(path.join(root, 'node_modules/mermaid/dist/mermaid.min.js'), path.join(resources, 'mermaid.min.js'))
   const temporary = new Set(readdirSync(process.cwd()).filter(name => name.endsWith('.bun-build')))
   const result = await Bun.build({ entrypoints: [path.join(root, 'packaging/entry.ts')], target: 'bun', compile: { outfile: path.join(macos, 'Kybern GPUIX'), autoloadDotenv: false, autoloadBunfig: false, autoloadTsconfig: false, autoloadPackageJson: false }, external: ['@gpuix/native-*'], plugins: [{name:'sidebar-control', setup(build) {
     build.onLoad({filter:/\.[cm]?[jt]sx?$/}, args => {

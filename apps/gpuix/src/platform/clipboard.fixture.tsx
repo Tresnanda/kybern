@@ -8,7 +8,7 @@ import { render, useGpuixRequired } from '@gpuix/react'
 import { useState } from 'react'
 import { copyImage } from './files.ts'
 
-const PNG = readFileSync(new URL('../../../desktop/public/release-background.png', import.meta.url))
+const PNG = readFileSync(new URL('../../../../assets/release-background.png', import.meta.url))
 function Lab() {
   const renderer = useGpuixRequired()
   const [state, setState] = useState('ready')

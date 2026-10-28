@@ -40,7 +40,7 @@ const OFF_MAC_ARTWORK = { card: 'release-artwork-card.jpg', dialog: 'release-art
 const artwork = (compact: boolean) => process.platform !== 'darwin' ? fileURLToPath(new URL(`../assets/${OFF_MAC_ARTWORK[compact ? 'card' : 'dialog']}`, import.meta.url)) : ARTWORK
 const ARTWORK = (() => {
   const packaged = process.env.KYBERN_GPUIX_RESOURCES && path.join(process.env.KYBERN_GPUIX_RESOURCES, 'release-background.png')
-  return packaged && existsSync(packaged) ? packaged : fileURLToPath(new URL('../../../desktop/public/release-background.png', import.meta.url))
+  return packaged && existsSync(packaged) ? packaged : fileURLToPath(new URL('../../../../assets/release-background.png', import.meta.url))
 })()
 
 /** `--toast-open` 350 ms / `--toast-close` 250 ms, `--toast-ease`, 16px rise, scale `--scale-medium` and a 2px blur (motion.css:68-96). */

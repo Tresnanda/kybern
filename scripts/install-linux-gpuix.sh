@@ -1,6 +1,5 @@
 #!/bin/sh
-# Install Kybern GPUIX (the GPUI desktop client, beta on Linux) on x86_64 Linux
-# next to the Tauri app.
+# Install Kybern GPUIX, the Kybern desktop app (beta on Linux), on x86_64 Linux.
 #
 #   curl -fsSL https://github.com/Tresnanda/kybern/releases/latest/download/kybern-gpuix-linux-install.sh | sh
 #
@@ -115,7 +114,7 @@ uninstall() {
     if [ -d "$DATA/kybern-gpuix" ]; then rm -rf "$DATA/kybern-gpuix"; echo "==> removed $DATA/kybern-gpuix"; removed=1; fi
   fi
   [ "$removed" = 1 ] || echo "==> nothing to remove: Kybern GPUIX is not installed"
-  echo "==> your Kybern data in ~/.kybern was left alone (the Tauri app uses it too)"
+  echo "==> your Kybern data in ~/.kybern was left alone"
 }
 
 main() {

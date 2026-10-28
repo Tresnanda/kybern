@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Package Kybern GPUIX (apps/gpuix) as a macOS app and write the updater
 # tarball that latest.json points at: dist/kybern-gpuix_<version>_<arch>.app.tar.gz
-# (arch aarch64 or x86_64) plus its minisign .sig, signed with the same key as
-# the Tauri desktop app.
+# (arch aarch64 or x86_64) plus its minisign .sig, signed with the updater key
+# (the one the retired Tauri app used).
 #
 # Usage: scripts/bundle-gpuix.sh
 #   KYBERN_GPUIX_TARGET         aarch64-apple-darwin (default on Apple Silicon) or
@@ -16,7 +16,8 @@
 #
 # Requires: the patched native addon for that target (apps/gpuix/native/update.sh
 # with the same KYBERN_GPUIX_TARGET), release builds of kybern and kybernd for
-# it, bun, and `pnpm install` in apps/desktop (mermaid and the Tauri signer).
+# it, bun, and `pnpm install` in apps/gpuix (mermaid and the Tauri CLI's
+# updater signer).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -60,6 +61,6 @@ if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
   echo "TAURI_SIGNING_PRIVATE_KEY is not set" >&2
   exit 1
 fi
-(cd apps/desktop && node node_modules/@tauri-apps/cli/tauri.js signer sign "$TARBALL")
+(cd apps/gpuix && node node_modules/@tauri-apps/cli/tauri.js signer sign "$TARBALL")
 (cd apps/gpuix && bun scripts/verify-archive.ts "$TARBALL")
 echo "done: $TARBALL"

@@ -146,10 +146,9 @@ covered in the [guide](GUIDE.md#connect-to-another-machine-over-tailscale).
 
 ## Kybern Desktop (the older app)
 
-Before 0.16.0, Kybern's desktop app was built with Tauri. It still ships and
-still updates, but it only gets fixes now and will be retired; Kybern GPUIX
-(above) is the app to install. Both can be installed side by side, and they
-share your data in `~/.kybern`.
+Before 0.16.0, Kybern's desktop app was built with Tauri. It is retired: 0.18.0
+was its last update. Install Kybern GPUIX (above) instead; it uses the same data
+in `~/.kybern`, so your projects and chats carry over.
 
 ## Building from source
 

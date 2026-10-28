@@ -150,8 +150,6 @@ jobs:
         with:
           python-version: '3.12'
       - uses: ./.github/actions/setup-pnpm-apps
-        with:
-          gpuix: 'true'
       - name: Build the scratch daemon
         run: cargo build -p kybern
       # Before the addon: update.sh builds the web view companion against it.

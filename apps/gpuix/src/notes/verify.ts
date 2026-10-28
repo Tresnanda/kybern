@@ -60,7 +60,7 @@ try {
   }
   const linked = await client.call('tasks.items.create', { scope: 'global', title: 'Check image and task references', status: 'todo' })
   taskIds.push(linked.id)
-  const upload = await fetch(`http://127.0.0.1:${port}/assets`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'image/png', 'x-kybern-filename': 'reference.png' }, body: await Bun.file('../desktop/public/release-background.png').arrayBuffer() })
+  const upload = await fetch(`http://127.0.0.1:${port}/assets`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'image/png', 'x-kybern-filename': 'reference.png' }, body: await Bun.file('../../assets/release-background.png').arrayBuffer() })
   assert.equal(upload.ok, true)
   const asset = await upload.json() as { id: string }
   const media = await client.call('notes.create', { scope: 'global', title: 'Inline reference verification', body: `![Reference artwork](kybern://asset/${asset.id})\n\n[${linked.key}](kybern://task/${linked.id})\n` })

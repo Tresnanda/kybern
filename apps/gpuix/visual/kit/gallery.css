@@ -1,4 +1,0 @@
-/* The desktop's stylesheet, with Tailwind told to scan the desktop sources (its default base is this folder). */
-@import "../../../desktop/src/index.css";
-@source "../../../desktop/src";
-@source ".";

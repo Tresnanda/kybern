@@ -2,9 +2,9 @@
 // radio list with each account's tightest limit, "Needs sign-in" rows with their Sign in action,
 // and the "Default changed" note. `NavRail.tsx` mounts it between the card header and the limits.
 import { useEffect, useRef, useState } from 'react'
-import { accountsOfKind, limitsForAccount } from '../../../desktop/src/lib/accountUi.ts'
-import { CLI_INSTANCE, isCliInstance } from '../../../desktop/src/lib/accounts.ts'
-import { bindingLimit, PROVIDER_NAMES } from '../../../desktop/src/lib/providerUsage.ts'
+import { accountsOfKind, limitsForAccount } from '../shared/lib/accountUi.ts'
+import { CLI_INSTANCE, isCliInstance } from '../shared/lib/accounts.ts'
+import { bindingLimit, PROVIDER_NAMES } from '../shared/lib/providerUsage.ts'
 import type { AccountSummary, ProviderKind, ProviderLimits } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { Button } from '../kit/Button.tsx'

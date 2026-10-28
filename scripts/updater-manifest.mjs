@@ -1,22 +1,21 @@
 #!/usr/bin/env node
-// Merge the per-platform dist/updater-*.json fragments written by
-// scripts/desktop-artifacts.mjs into dist/latest.json, the static manifest the
-// desktop updater plugin polls (see plugins.updater.endpoints in tauri.conf.json).
+// Write dist/latest.json, the static manifest the Kybern GPUIX updater polls
+// (the endpoint in apps/gpuix/src/platform/updater.json).
 //
 // Usage: node scripts/updater-manifest.mjs [--tag vX.Y.Z] [--repo owner/name]
 //        [--notes-file path/to/release-notes.md] [--dist dir]
 //
-// When dist/ also holds scripts/bundle-gpuix.sh's kybern-gpuix_<version>_<arch>
-// .app.tar.gz and its .sig (arch aarch64 or x86_64), the manifest gets a
-// `darwin-<arch>-gpuix` entry for the separate Kybern GPUIX app (its updater
-// reads only its own arch's key). The Windows build is
+// scripts/bundle-gpuix.sh's kybern-gpuix_<version>_<arch>.app.tar.gz and its
+// .sig (arch aarch64 or x86_64) become a `darwin-<arch>-gpuix` entry (the
+// updater reads only its own platform's key). The Windows build is
 // kybern-gpuix_<version>_x64-setup.exe (scripts/bundle-gpuix-windows.sh) plus its
 // .sig, which become `windows-x86_64-gpuix`. scripts/bundle-gpuix-linux.sh's
 // kybern-gpuix_<version>_x86_64.AppImage and its .sig become
 // `linux-x86_64-gpuix`; the .deb and .rpm beside it are not feed entries (those
-// installs only announce a release). A GPUIX asset that is missing (its job
-// failed) or unsigned is skipped; the other entries are still written.
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
+// installs only announce a release). An asset that is missing (its job failed)
+// or unsigned is skipped; the other entries are still written. The plain
+// `darwin-aarch64`-style keys of the retired Tauri app are no longer written.
+import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -40,15 +39,6 @@ const notesFile = args["notes-file"]
 const releaseNotes = notesFile && existsSync(notesFile) ? readFileSync(notesFile, "utf8").trim() : ""
 
 const platforms = {}
-for (const file of readdirSync(dist).filter((name) => /^updater-.*\.json$/.test(name)).sort()) {
-  const fragment = JSON.parse(readFileSync(join(dist, file), "utf8"))
-  platforms[fragment.platform] = { signature: fragment.signature, url: fragment.url }
-}
-if (Object.keys(platforms).length === 0) {
-  console.error("no dist/updater-*.json fragments; run scripts/desktop-artifacts.mjs for each target first")
-  process.exit(1)
-}
-
 const gpuixAssets = [
   ...["aarch64", "x86_64"].map((arch) => [`darwin-${arch}-gpuix`, `kybern-gpuix_${version}_${arch}.app.tar.gz`]),
   ["windows-x86_64-gpuix", `kybern-gpuix_${version}_x64-setup.exe`],
@@ -61,6 +51,11 @@ for (const [platform, gpuixAsset] of gpuixAssets) {
       url: `https://github.com/${repo}/releases/download/${tag}/${gpuixAsset}`,
     }
   }
+}
+
+if (Object.keys(platforms).length === 0) {
+  console.error(`no signed kybern-gpuix_${version}_* assets in ${dist}; run the scripts/bundle-gpuix*.sh scripts first`)
+  process.exit(1)
 }
 
 const manifest = {

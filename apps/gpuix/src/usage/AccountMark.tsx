@@ -1,9 +1,9 @@
 // Marks that tell one account of an agent apart from another (`components/kybern/accounts/AccountMark.tsx`):
 // the colour dot, the agent mark with its dot, the avatar tile, the usage ring and the limit meter.
 // The CLI account and any account without a known colour never show a dot.
-import { isAccountColor, isCliInstance, type AccountColor } from '../../../desktop/src/lib/accounts.ts'
-import type { LimitPace } from '../../../desktop/src/lib/providerUsage.ts'
-import { limitTone } from '../../../desktop/src/lib/providerUsage.ts'
+import { isAccountColor, isCliInstance, type AccountColor } from '../shared/lib/accounts.ts'
+import type { LimitPace } from '../shared/lib/providerUsage.ts'
+import { limitTone } from '../shared/lib/providerUsage.ts'
 import type { ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
 import { useState } from 'react'
 import { MeterFill } from '../motion/Meter.tsx'

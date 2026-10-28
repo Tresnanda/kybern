@@ -3,13 +3,7 @@ description: >-
   Node 22 with Corepack, the pnpm content-addressed store restored from the
   newest cache (saved only from main, so pull request and tag runs restore
   without growing the repository's cache storage), and a frozen install of
-  apps/desktop and, optionally, apps/gpuix.
-
-inputs:
-  gpuix:
-    description: Also install apps/gpuix.
-    required: false
-    default: 'false'
+  apps/gpuix.
 
 runs:
   using: composite
@@ -25,14 +19,14 @@ runs:
         # Keep the pnpm that Corepack downloads, so most runs never ask the npm registry for it.
         echo "COREPACK_HOME=$RUNNER_TEMP/corepack" >> "$GITHUB_ENV"
         echo "COREPACK_ENABLE_DOWNLOAD_PROMPT=0" >> "$GITHUB_ENV"
-        echo "key=corepack-${{ runner.os }}-${{ runner.arch }}-$(node -p "require('./apps/desktop/package.json').packageManager")" >> "$GITHUB_OUTPUT"
+        echo "key=corepack-${{ runner.os }}-${{ runner.arch }}-$(node -p "require('./apps/gpuix/package.json').packageManager")" >> "$GITHUB_OUTPUT"
     - id: corepack-cache
       uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
         path: ${{ runner.temp }}/corepack
         key: ${{ steps.corepack.outputs.key }}
     - id: store
-      working-directory: apps/desktop
+      working-directory: apps/gpuix
       shell: bash
       run: |
         # Corepack downloads pnpm from the npm registry here, which can answer 503.
@@ -46,7 +40,7 @@ runs:
       uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
         path: ${{ steps.store.outputs.path }}
-        key: pnpm-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/desktop/pnpm-lock.yaml', 'apps/gpuix/pnpm-lock.yaml') }}
+        key: pnpm-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/gpuix/pnpm-lock.yaml') }}
         restore-keys: pnpm-store-${{ runner.os }}-${{ runner.arch }}-
     - name: Save the Corepack download
       if: github.ref == 'refs/heads/main' && steps.corepack-cache.outputs.cache-hit != 'true'
@@ -54,20 +48,15 @@ runs:
       with:
         path: ${{ runner.temp }}/corepack
         key: ${{ steps.corepack.outputs.key }}
-    - name: Install apps/desktop dependencies
-      working-directory: apps/desktop
-      shell: bash
-      run: pnpm install --frozen-lockfile
     - name: Install apps/gpuix dependencies
-      if: inputs.gpuix == 'true'
       working-directory: apps/gpuix
       shell: bash
       run: pnpm install --frozen-lockfile
     # The store was restored from the newest entry, so it still holds packages
-    # older lockfiles needed; keep only what these installs use.
+    # older lockfiles needed; keep only what this install uses.
     - name: Prune the pnpm store
       if: github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true'
-      working-directory: apps/desktop
+      working-directory: apps/gpuix
       shell: bash
       run: pnpm store prune
     - name: Save the pnpm store
@@ -75,4 +64,4 @@ runs:
       uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
         path: ${{ steps.store.outputs.path }}
-        key: pnpm-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/desktop/pnpm-lock.yaml', 'apps/gpuix/pnpm-lock.yaml') }}
+        key: pnpm-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/gpuix/pnpm-lock.yaml') }}

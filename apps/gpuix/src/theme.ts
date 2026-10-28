@@ -7,7 +7,7 @@ import {
   DEFAULT_THEME_STATE,
   buildThemeCssVariables,
   type ThemeVariant,
-} from '../../desktop/src/lib/kit/theme/theme.logic.ts'
+} from './shared/lib/kit/theme/theme.logic.ts'
 import type { DesktopMaterial } from './platform/desktopMaterial.ts'
 import { SINGLE_FILL, effectiveSurface, glassRecipe, materialCoverage, materialVars, opacityVarsFor, surfaceScale, type WindowScope } from './platform/translucency.ts'
 import { FONTS } from './platform/fonts.ts'

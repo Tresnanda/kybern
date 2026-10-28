@@ -89,12 +89,12 @@ if (webView) {
   console.warn('Packaging without the embedded web view (no native/build/libkybern-webview.so or WPE): previews open in the browser')
 }
 // Mermaid ships for parity with macOS; off macOS it needs the web view that WP4/WP10 brings (diagrams show as text).
-cpSync(path.join(root, '../desktop/node_modules/mermaid/dist/mermaid.min.js'), path.join(resources, 'mermaid.min.js'))
+cpSync(path.join(root, 'node_modules/mermaid/dist/mermaid.min.js'), path.join(resources, 'mermaid.min.js'))
 cpSync(path.join(root, 'src/assets/fonts'), path.join(resources, 'src/assets/fonts'), { recursive: true })
 cpSync(path.join(root, 'src/assets/providers'), path.join(resources, 'src/assets/providers'), { recursive: true })
 cpSync(path.join(root, 'src/assets/release-artwork.jpg'), path.join(resources, 'src/assets/release-artwork.jpg'))
 cpSync(path.join(root, 'src/assets/release-artwork-card.jpg'), path.join(resources, 'src/assets/release-artwork-card.jpg'))
-cpSync(path.join(root, '../desktop/public/release-background.png'), path.join(resources, 'release-background.png'))
+cpSync(path.join(root, '../../assets/release-background.png'), path.join(resources, 'release-background.png'))
 cpSync(path.join(root, '../../THIRD_PARTY_NOTICES.md'), path.join(resources, 'THIRD_PARTY_NOTICES.md'))
 cpSync(path.join(root, '../../LICENSE'), path.join(resources, 'LICENSE'))
 
@@ -148,7 +148,7 @@ const RUNTIME_RECOMMENDS = {
   rpm: ['libwayland-client.so.0()(64bit)', 'libwayland-egl.so.1()(64bit)', 'libEGL.so.1()(64bit)', 'mesa-vulkan-drivers', 'xdg-utils', ...(webView ? ['bubblewrap', 'xdg-dbus-proxy'] : [])],
 }
 const icons = { 32: '32x32.png', 128: '128x128.png', 256: '128x128@2x.png', 512: 'icon.png' } as const
-const iconSource = (file: string) => path.join(root, '../desktop/src-tauri/icons', file)
+const iconSource = (file: string) => path.join(root, 'packaging/icons', file)
 
 /** The FHS tree the deb and rpm install: the app folder, its launcher link, the desktop entry and icons. */
 function systemTree(format: 'deb' | 'rpm') {

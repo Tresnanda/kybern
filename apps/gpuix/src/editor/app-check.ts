@@ -33,7 +33,7 @@ const title = `Editor app check ${Date.now()}`
 const note = await client.call('notes.create', { scope: 'global', project_id: null, title, body: `# Plan\n\n- [ ] Write the release notes\n- [ ] Review [${task.key}](kybern://task/${task.id})\n\nDrop an image below.\n` })
 // The branded release artwork as the dropped file.
 const png = path.join(root, 'moodboard.png')
-copyFileSync(path.resolve(import.meta.dir, '../../../desktop/public/release-background.png'), png)
+copyFileSync(path.resolve(import.meta.dir, '../../../../assets/release-background.png'), png)
 
 const f = await launchFixture(path.resolve(import.meta.dir, '../main.tsx'), { GPUIX_BACKGROUND: '1', KYBERN_OPAQUE: '1', KYBERN_APPEARANCE: appearance, KYBERN_DATA_DIR: data, KYBERN_CLIENT_CONFIG_DIR: path.join(root, 'app-client'), KYBERN_GPUIX_CREDENTIALS_DIR: path.join(root, 'app-credentials'), KYBERN_URL: '' })
 const a = f.app

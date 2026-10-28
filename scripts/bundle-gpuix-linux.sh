@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Package Kybern GPUIX (apps/gpuix) for Linux and sign its updater artifact:
 # dist/kybern-gpuix_<version>_<arch>.AppImage plus its minisign .sig (what
-# latest.json's linux-<arch>-gpuix entry points at, signed with the same key as
-# the Tauri desktop app), and the .deb and .rpm beside it (arch x86_64, or
+# latest.json's linux-<arch>-gpuix entry points at, signed with the updater key), and the .deb and .rpm beside it (arch x86_64, or
 # aarch64 for local container checks).
 #
 # Usage: scripts/bundle-gpuix-linux.sh
@@ -19,7 +18,8 @@
 # Requires: the patched native addon for that target (apps/gpuix/native/update.sh
 # with the same KYBERN_GPUIX_TARGET), bun, dpkg-deb and dpkg-shlibdeps (dpkg-dev),
 # rpmbuild (rpm), desktop-file-validate (desktop-file-utils, optional) and
-# `pnpm install` in apps/desktop (mermaid and the Tauri signer).
+# `pnpm install` in apps/gpuix (mermaid and the Tauri CLI's
+# updater signer).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -68,6 +68,6 @@ if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
   exit 1
 fi
 # Only the AppImage updates itself; deb and rpm installs are announced, not replaced.
-(cd apps/desktop && node node_modules/@tauri-apps/cli/tauri.js signer sign "$APPIMAGE")
+(cd apps/gpuix && node node_modules/@tauri-apps/cli/tauri.js signer sign "$APPIMAGE")
 (cd apps/gpuix && bun scripts/verify-archive.ts "$APPIMAGE")
 echo "done: $APPIMAGE"

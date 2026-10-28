@@ -1,27 +1,28 @@
 # Releasing
 
 A push to `main` updates the source and runs CI; it does not publish a new
-installed-app version. Relevant `main` changes also warm the desktop build
-cache that release builds restore. Publishing is a separate action.
+installed-app version. Relevant `main` changes also warm the build caches
+that release builds restore. Publishing is a separate action.
 
 | Release unit | Version and delivery |
 | --- | --- |
-| Daemon, CLI, and desktop | Share the Rust workspace/Tauri version. `scripts/release.sh X.Y.Z` updates these versions and pushes `vX.Y.Z`. The release workflow builds `kybernd` and `kybern` once per target; the desktop bundles, which include the daemon and CLI, reuse those binaries, and the whole GitHub Release is published at once. The `gpuix` job of `desktop.yml` also builds Kybern GPUIX (`apps/gpuix`) for Apple Silicon and Intel Macs from the same dist binaries and attaches `kybern-gpuix_<version>_<aarch64|x86_64>.app.tar.gz` plus their signatures; `latest.json` carries them as `darwin-aarch64-gpuix` and `darwin-x86_64-gpuix`. The separate `gpuix-windows` job (beta) builds the Windows x64 installer `kybern-gpuix_<version>_x64-setup.exe` (`scripts/bundle-gpuix-windows.sh`) and its signature, published as `windows-x86_64-gpuix`; the manifest job runs whether that job succeeds or fails, so a Windows failure only leaves that entry out. The separate `gpuix-linux` job (beta) builds the Linux x86_64 packages on `ubuntu-22.04` from dist's static musl binaries: `kybern-gpuix_<version>_x86_64.AppImage` (signed; `latest.json` key `linux-x86_64-gpuix`), `.deb` and `.rpm`; like Windows, a Linux failure only leaves that entry out. |
+| Daemon, CLI, and desktop | Share the Rust workspace version, which GPUIX's packaging reads. `scripts/release.sh X.Y.Z` updates it and pushes `vX.Y.Z`. The release workflow builds `kybernd` and `kybern` once per target; the desktop bundles, which include the daemon and CLI, reuse those binaries, and the whole GitHub Release is published at once. The `gpuix` job of `desktop.yml` builds Kybern GPUIX (`apps/gpuix`) for Apple Silicon and Intel Macs from the same dist binaries and attaches `kybern-gpuix_<version>_<aarch64|x86_64>.app.tar.gz` plus their signatures; `latest.json` carries them as `darwin-aarch64-gpuix` and `darwin-x86_64-gpuix`. The separate `gpuix-windows` job (beta) builds the Windows x64 installer `kybern-gpuix_<version>_x64-setup.exe` (`scripts/bundle-gpuix-windows.sh`) and its signature, published as `windows-x86_64-gpuix`; the manifest job runs whether that job succeeds or fails, so a Windows failure only leaves that entry out. The separate `gpuix-linux` job (beta) builds the Linux x86_64 packages on `ubuntu-22.04` from dist's static musl binaries: `kybern-gpuix_<version>_x86_64.AppImage` (signed; `latest.json` key `linux-x86_64-gpuix`), `.deb` and `.rpm`; like Windows, a Linux failure only leaves that entry out. |
 | Android and iOS mobile app | Use `expo.version` in `apps/mobile/app.json`, independent of the desktop release number. EAS builds use the selected commit and profile. Android `versionCode` and iOS `buildNumber` identify individual binaries; EAS manages these remotely. Preview and production builds increment them automatically. |
 | Wire protocol | `PROTOCOL_VERSION` is a compatibility contract, not an app release number. Bump it for breaking wire changes and update both clients and the daemon together. Additive features may still require a newer daemon even when the protocol number is unchanged. |
 
 The tag-triggered release workflow requires successful main CI for the exact
-tagged commit, including all nine jobs `scripts/check-release-ci.mjs` lists
-(`requiredJobs`: rustfmt, clippy + test on Linux and macOS, desktop, gpuix, and
-the four native WebKit shards). It waits for an in-progress run and blocks
+tagged commit, including all five jobs `scripts/check-release-ci.mjs` lists
+(`requiredJobs`: rustfmt, clippy + test on Linux and macOS, release checks, and
+gpuix). It waits for an in-progress run and blocks
 publication on failures, skipped jobs, missing results, or timeout. Publication
-also requires every platform bundle to succeed. Only the publishing `host` job
+also requires both macOS GPUIX bundles to succeed (the Linux and Windows
+bundles are betas whose failure only leaves their `latest.json` entry out). Only the publishing `host` job
 waits for that gate; the daemon archives and desktop bundles build while CI
 finishes. Renaming or adding a job in `ci.yml` means updating `requiredJobs`
 and its test in the same change.
 
 Pull requests run only the CI jobs their files can affect (the `changes` job in
-`ci.yml` lists the paths): a GPUIX-only change skips the Rust and WebKit jobs,
+`ci.yml` lists the paths): a GPUIX-only change skips the Rust jobs,
 and a push to `main` always runs everything. A new push to a pull request cancels
 its running checks; `main` runs are never cancelled. The `CI` job is red if any
 job failed and green when the skipped ones were not needed, so it is the one
@@ -32,7 +33,15 @@ cache saved under a tag cannot be restored by the next tag, and the repository's
 cache storage is limited): `dist-cache.yml` builds the dist archives on a
 `main` push that changes their dependencies, `gpuix-addon.yml` builds the
 patched GPUIX native addon (both also run weekly, because GitHub deletes a
-cache after seven days without use), and `desktop.yml` warms the Tauri build.
+cache after seven days without use).
+
+`latest.json` lists only the `-gpuix` keys (`darwin-aarch64-gpuix`,
+`darwin-x86_64-gpuix`, `windows-x86_64-gpuix`, `linux-x86_64-gpuix`). The plain
+`darwin-aarch64`-style keys belonged to the retired Tauri app; releases after
+0.18.0 no longer publish them, so Tauri installs stop updating at 0.18.0. The
+updater signing secret keeps its `TAURI_SIGNING_PRIVATE_KEY` name, and the
+`@tauri-apps/cli` dev dependency of `apps/gpuix` still signs the artifacts
+(`signer sign`).
 
 Before running `scripts/release.sh X.Y.Z`, add a matching `## X.Y.Z` entry near
 the top of `CHANGELOG.md` with concise, user-visible bullets. Cargo-dist copies

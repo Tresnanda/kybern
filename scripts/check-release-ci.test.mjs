@@ -123,7 +123,7 @@ test('the Windows GPUIX beta is its own job: its failure cannot skip the manifes
   assert.doesNotMatch(windows.slice(0, upload), /continue-on-error/)
   // The manifest needs the macOS job to succeed and takes the Linux and Windows jobs either way.
   const manifest = workflow.split('\n  manifest:\n')[1]
-  assert.match(manifest, /needs: \[bundle, gpuix, gpuix-linux, gpuix-windows\]/)
+  assert.match(manifest, /needs: \[gpuix, gpuix-linux, gpuix-windows\]/)
   assert.match(manifest, /needs\.gpuix\.result == 'success'/)
   assert.match(manifest, /\(needs\.gpuix-windows\.result == 'success' \|\| needs\.gpuix-windows\.result == 'failure'\)/)
 })

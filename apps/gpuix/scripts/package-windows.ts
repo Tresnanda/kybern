@@ -40,7 +40,7 @@ const payload = path.join(out, 'payload')
 const addon = path.resolve(flag('--addon') ?? path.join(root, 'native/build/gpuix-native.win32-x64-msvc.node'))
 const binDir = process.env.KYBERN_BIN_DIR ? path.resolve(process.env.KYBERN_BIN_DIR) : path.resolve(root, '../../target/release')
 const binaries = ['kybernd.exe', 'kybern.exe'].map(name => ({ name, source: path.join(binDir, name) }))
-const icon = path.join(root, '../desktop/src-tauri/icons/icon.ico')
+const icon = path.join(root, 'packaging/icons/icon.ico')
 const webview = has('--no-webview') ? undefined : path.resolve(flag('--webview') ?? path.join(root, 'native/build/kybern-webview.dll'))
 
 if (!existsSync(addon)) throw Error(`Build the patched native addon for Windows first (native/update.sh on Windows): ${addon}`)
@@ -58,7 +58,7 @@ cpSync(addon, path.join(payload, 'gpuix-native.win32-x64-msvc.node'))
 // The embedded web view (`src/native/webview.ts` loads it from KYBERN_GPUIX_RESOURCES, this folder).
 if (webview) cpSync(webview, path.join(payload, 'kybern-webview.dll'))
 // Mermaid for transcript diagrams (`src/transcript/mermaid.ts` runs it in a hidden web view document).
-if (webview) cpSync(path.join(root, '../desktop/node_modules/mermaid/dist/mermaid.min.js'), path.join(payload, 'mermaid.min.js'))
+if (webview) cpSync(path.join(root, 'node_modules/mermaid/dist/mermaid.min.js'), path.join(payload, 'mermaid.min.js'))
 writeFileSync(path.join(payload, 'version'), version)
 cpSync(icon, path.join(payload, 'icon.ico'))
 cpSync(path.join(root, 'src/assets/fonts'), path.join(payload, 'src/assets/fonts'), { recursive: true })
@@ -66,7 +66,7 @@ cpSync(path.join(root, 'src/assets/providers'), path.join(payload, 'src/assets/p
 cpSync(path.join(root, 'src/assets/release-artwork.jpg'), path.join(payload, 'src/assets/release-artwork.jpg'))
 cpSync(path.join(root, 'src/assets/release-artwork-card.jpg'), path.join(payload, 'src/assets/release-artwork-card.jpg'))
 // The release announcement's artwork (`platform/UpdateSurface.tsx`).
-cpSync(path.join(root, '../desktop/public/release-background.png'), path.join(payload, 'release-background.png'))
+cpSync(path.join(root, '../../assets/release-background.png'), path.join(payload, 'release-background.png'))
 cpSync(path.join(root, '../../THIRD_PARTY_NOTICES.md'), path.join(payload, 'THIRD_PARTY_NOTICES.md'))
 // The installer's helpers: the Path edit, the AppUserModelID shortcut and the process stop.
 cpSync(path.join(root, 'packaging/windows/path.ps1'), path.join(payload, 'tools/path.ps1'))

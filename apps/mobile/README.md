@@ -181,10 +181,10 @@ folded, while streamed UI notifications are coalesced to 32 ms.
 
 The terminal embeds xterm 6.0.0 and addon-fit 0.11.0 with no CDN access. Its WebView
 receives terminal bytes, never connection tokens. To rebuild the vendored bundle,
-install desktop dependencies first, then run:
+install the two pinned packages into a scratch folder, then run:
 
 ```sh
-node apps/mobile/scripts/build-terminal.mjs
+XTERM_PACKAGES=/path/to/scratch node apps/mobile/scripts/build-terminal.mjs
 ```
 
 `plugins/withSceneLifecycle.js` supplies the UIScene lifecycle needed by the iOS 27
@@ -199,9 +199,9 @@ pnpm typecheck
 pnpm test
 pnpm exec expo-doctor
 pnpm export
-# Shared transcript and provider-input coverage:
-cd ../desktop
-node --experimental-strip-types --test transcript.test.mjs userInput.test.mjs
+# Shared transcript coverage (mobile's projection included):
+cd ../..
+node --experimental-strip-types --test packages/kybern-client/tests/transcript.test.mjs
 ```
 
 The native app has been exercised on an iPhone 17 Pro simulator with iOS 27 against
@@ -325,9 +325,8 @@ The simulator can verify QR image decoding; a physical device is required to
 verify live camera capture.
 
 The Kybern logo and app icon reuse the desktop artwork. Harness artwork is
-stored in `src/generated/provider-marks.json` from the desktop icon set.
-Regenerate it with `node scripts/build-brand-marks.cjs` after installing both
-clients’ dependencies.
+stored in `src/generated/provider-marks.json`, rendered once from the retired
+Tauri app's icon set; edit that file directly to change a mark.
 The default dark surfaces match desktop Ink (`#181818`) with neutral grays;
 blue links, green additions, and red removals retain semantic meaning.
 
@@ -391,7 +390,7 @@ live events too. Updated daemons signal when reconnect replay is complete, so th
 app can validate cached content without fetching it again. Older daemons, missing
 cache entries, and changed history fall back to snapshot requests. Switching
 computers or restarting the app clears this session cache. See
-[remote connection verification](../desktop/perf/remote-connections-2026-09-10.md).
+[remote connection verification](../gpuix/perf/tauri/remote-connections-2026-09-10.md).
 
 During a running turn, consecutive successful completed tools fold into an
 expandable work row. Narration, active tools, errors, approvals, and agent launches
@@ -440,7 +439,8 @@ its own responsive inset while an open shell retains the full canvas. Latest sit
 at the trailing edge of the Files, Terminal, and Tasks & agents row.
 
 Native sockets send the device credential in an authorization header and explicitly
-use the existing trusted Kybern app origin (`tauri://localhost`). Android otherwise
+use the existing trusted Kybern app origin (`tauri://localhost`, kept from the
+retired Tauri app because daemons trust it). Android otherwise
 synthesizes the server's HTTP origin, which the daemon's browser-origin allowlist
 rejects after successful pairing. Browser clients retain the single-use ticket
 flow. This transport fix is JavaScript-only and works with existing Mac daemons.
