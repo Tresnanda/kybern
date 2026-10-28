@@ -7,7 +7,9 @@ import { useCallback, useSyncExternalStore } from "react";
 import { createPendingStore, settledPending, withPending, type PendingSend } from "../../../../packages/kybern-client/src/pendingSends";
 import type { Block } from "./transcript";
 import type { UserMessage } from "./protocol";
-import { errorText, loadThread, rpc } from "./runtime";
+import { OfflineError } from "../../../../packages/kybern-client/src/machines";
+import { queueSend } from "./outbox";
+import { errorText, loadThread, machineHub, rpc } from "./runtime";
 
 export const pendingSends = createPendingStore();
 export { withPending, settledPending };
@@ -36,6 +38,17 @@ export async function sendWithPending(threadId: string, message: UserMessage, ex
     void loadThread(threadId).catch(() => {});
     return receipt;
   } catch (e) {
+    // The thread's machine is away: the message waits in the outbox and goes when the machine returns.
+    const machine = e instanceof OfflineError ? machineHub().machineOfThread(threadId) : undefined;
+    if (machine) {
+      if (!existing) pendingSends.add({ id, threadId, message, at: new Date().toISOString(), delivery: "send", state: "sending" });
+      try {
+        await queueSend(machine, { thread_id: threadId, message, message_id: id });
+        return null;
+      } catch (queueError) {
+        e = queueError;
+      }
+    }
     const error = errorText(e) || "Check the connection and try again.";
     if (existing) pendingSends.update(threadId, id, { state: "failed", error });
     else pendingSends.add({ id, threadId, message, at: new Date().toISOString(), delivery: "send", state: "failed", error });

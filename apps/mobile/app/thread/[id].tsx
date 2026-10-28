@@ -60,6 +60,7 @@ import {
 } from "../../src/ui/primitives";
 import { CONTENT_MAX_WIDTH, gutter, radius, space, useTheme } from "../../src/ui/theme";
 import { PREPARING_WORKTREE } from "../../../../packages/kybern-client/src/newChat";
+import { waitingLabel } from "../../../../packages/kybern-client/src/pendingSends";
 import { Working } from "../../src/ui/Working";
 import { useSendTransition } from "../../src/components/liquid/SendTransition";
 import { createOutgoingProjection } from "../../src/state/sendTransition";
@@ -405,6 +406,8 @@ function ThreadScreenBody() {
           if (done?.state === "failed") throw new Error(done.error);
           return { threadId: id, messageId };
         }
+        // Queued for a machine that is away: there is no thread to send into until it takes the chat.
+        if (newChats.get(id)!.state === "waiting") throw new Error(`${waitingLabel(newChats.get(id)!.machineName ?? "that machine")}. You can send again once it has the chat.`);
         const done = await newChats.retry(id);
         if (done?.state === "failed") throw new Error(done.error);
       }
@@ -591,7 +594,9 @@ function ThreadScreenBody() {
                   <View style={{ paddingVertical: 15 }}>
                     <Working
                       label={
-                        chat?.worktree && chat.state === "creating"
+                        chat?.state === "waiting"
+                          ? waitingLabel(chat.machineName ?? "that machine")
+                          : chat?.worktree && chat.state === "creating"
                           ? PREPARING_WORKTREE
                           : snapshot.pendingApprovals.length || thread?.status === "awaiting-approval"
                             ? "Waiting for your approval"

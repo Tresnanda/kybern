@@ -2,6 +2,7 @@ import { EARLIER_HISTORY_ENTRIES } from "../../../../packages/kybern-client/src/
 import {
   clientThreadIds,
   createdThreadId,
+  isQueuedCreate,
   createNewChats,
   mergeOptimisticThreads,
   type NewChat,
@@ -183,6 +184,8 @@ export function startNewChat(chat: Omit<NewChat, "state" | "error">, create: New
   });
   void newChats.start(chat, async (message, messageId) => {
     const result = await create(message, messageId);
+    // Queued for a machine that is away: it waits in the outbox, and `state/outbox.ts` loads the thread once the machine has it.
+    if (isQueuedCreate(result)) return result;
     // The daemon has the thread now (under its own id when it ignored ours): its transcript and list entry take over.
     void refresh();
     void loadThread(createdThreadId(result) ?? chat.threadId).catch(() => {});

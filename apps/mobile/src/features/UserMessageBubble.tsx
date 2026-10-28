@@ -30,6 +30,8 @@ import { errorText, getState } from "../state/runtime";
 import { Lightbox } from "./Lightbox";
 import { LongPressArea } from "./LongPressArea";
 import { editPending, retryPending, usePendingSend } from "../state/pendingSends";
+import { machineName } from "../state/outbox";
+import { waitingLabel } from "../../../../packages/kybern-client/src/pendingSends";
 import { MessagePart, imageSource } from "./MessagePart";
 
 /** The message as text: its words and mentions, in order. */
@@ -261,6 +263,11 @@ export function UserMessageBubble({
               </Button>
             </View>
           </View>
+        )}
+        {failed?.state === "waiting" && (
+          <T variant="caption" tone="muted" accessibilityLiveRegion="polite" style={{ alignSelf: "flex-end", marginTop: -space.xs }}>
+            {waitingLabel(machineName(failed.machineId))}
+          </T>
         )}
         {failed?.state === "sending" && (
           <T variant="caption" tone="muted" accessibilityLiveRegion="polite" style={{ alignSelf: "flex-end", marginTop: -space.xs }}>

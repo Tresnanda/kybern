@@ -7,14 +7,17 @@ import Animated, { FadeIn, ReduceMotion } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Composer } from "../src/features/Composer";
 import { MachineTitle } from "../src/features/MachineFilter";
+import { MachineChip } from "../src/features/MachineChip";
 import { MachineGlyph } from "../src/features/MachineGlyph";
 import { SpaceSwitcher } from "../src/features/Spaces";
 import { setDraft, useDraft } from "../src/state/draft";
 import { plural } from "../src/state/format";
 import { isFreeChatProject, type Thread, type UserMessage } from "../src/state/protocol";
-import { ensureThread, refresh, rpc, startNewChat, supportsOptimisticCreate, useApp, useMachineView } from "../src/state/runtime";
-import { MenuButton } from "../src/ui/ActionMenu";
+import { ensureThread, refresh, rpc, startNewChat, supportsOptimisticCreate, useApp } from "../src/state/runtime";
 import { useLists } from "../src/state/useLists";
+import { useMachineTarget, pickMachine } from "../src/state/machineTarget";
+import { useProviders } from "../src/state/machineProviders";
+import { queueNewChat } from "../src/state/outbox";
 import { newThreadId } from "../src/state/ids";
 import { groupCreateFields, supportsWorktree } from "../src/state/groups";
 import { useInSpace, useSpaceProjects } from "../src/state/spaces";
@@ -151,17 +154,11 @@ function HomeScreen() {
     spaceProjects.find((p) => !isFreeChatProject(p.id)) ??
     spaceProjects[0];
   const workspaceLabel = draft.worktree ? "Worktree" : "This checkout";
-  // The same project on other machines: a new thread can start on any of them that is online.
-  const machines = useMachineView();
-  const [machineId, setMachineId] = useState<string>();
-  const here = machines.machines.find((m) => m.isLocal)?.machineId;
-  const logical = project && machines.machines.length > 1
-    ? machines.projects.find((p) => p.instances.some((i) => i.machineId === here && i.project.id === project.id))
-    : undefined;
-  const targets = logical?.instances.filter((i) => !i.offline) ?? [];
-  const target = targets.find((i) => i.machineId === machineId) ?? targets.find((i) => i.machineId === here);
-  const remote = target && target.machineId !== here ? target : undefined;
-  const targetName = machines.machines.find((m) => m.machineId === target?.machineId)?.name;
+  // Where the thread runs (`state/machineTarget.ts`): the last machine used for the project, else the one the phone is at.
+  const target = useMachineTarget(project);
+  const chosenMachine = target.remote ? target.chosen : undefined;
+  // The agents follow the machine: another machine's come from that machine.
+  const providers = useProviders(chosenMachine ? { machineId: chosenMachine.machineId, reachable: target.reachable } : undefined);
   const recent = useMemo(() => continueThreads(lists.threads, project?.id), [lists.threads, project?.id]);
   const active = lists.threads.filter((t) =>
     threadHasActivity(t, lists.activity),
@@ -170,10 +167,10 @@ function HomeScreen() {
     if (project && project.id !== draft.projectId)
       setDraft({ projectId: project.id });
     if (
-      app.providers.length &&
-      !app.providers.some((p) => p.kind === draft.provider && p.available)
+      providers.length &&
+      !providers.some((p) => p.kind === draft.provider && p.available)
     ) {
-      const first = app.providers.find((p) => p.available);
+      const first = providers.find((p) => p.available);
       if (first)
         setDraft({
           provider: first.kind,
@@ -184,16 +181,16 @@ function HomeScreen() {
             ? draft.permission : first.supported_permission_modes[0] ?? "supervised",
         });
     }
-    const selected = app.providers.find((p) => p.kind === draft.provider && p.available);
+    const selected = providers.find((p) => p.kind === draft.provider && p.available);
     if (selected && !selected.supported_permission_modes.includes(draft.permission)) {
       setDraft({ permission: selected.supported_permission_modes[0] ?? "supervised" });
     }
-  }, [project?.id, app.providers, draft.projectId, draft.provider, draft.permission]);
+  }, [project?.id, providers, draft.projectId, draft.provider, draft.permission]);
   async function send(message: UserMessage) {
     if (!project) throw new Error("Add a project before starting a thread.");
     const provider = { kind: draft.provider, instance: draft.instance };
     // The checkout on the chosen machine; the machine that owns the project instance gets the request.
-    const chosen = remote?.project ?? project;
+    const chosen = chosenMachine?.project ?? project;
     const worktree = draft.worktree && supportsWorktree(chosen);
     const params = {
       project_id: chosen.id,
@@ -206,10 +203,29 @@ function HomeScreen() {
       ...(draft.baseBranch && !isGroupProject(chosen) ? { base_branch: draft.baseBranch } : {}),
       ...groupCreateFields(chosen, draft, worktree),
     };
-    if (remote || !supportsOptimisticCreate()) {
+    if (target.show && target.chosen) pickMachine(target.key, target.chosen.machineId);
+    if (chosenMachine && !target.reachable) {
+      // The machine is away: the thread is ours, shown at once, and its create waits in the outbox ("Waiting for satyamas").
+      const threadId = newThreadId();
+      const messageId = newThreadId();
+      startNewChat(
+        {
+          threadId,
+          messageId,
+          message,
+          worktree,
+          machineId: chosenMachine.machineId,
+          machineName: chosenMachine.name,
+          thread: optimisticThread({ id: threadId, projectId: project.id, provider, model: draft.model || null, effort: draft.effort || null, permissionMode: draft.permission, message }),
+        },
+        (first, id) => queueNewChat(chosenMachine.machineId, { ...params, message: first, thread_id: threadId, message_id: id }),
+      );
+      return { threadId, messageId };
+    }
+    if (chosenMachine || !supportsOptimisticCreate()) {
       // Another machine (or an older daemon) names the thread itself: wait for it, read that machine's list, then open the thread.
       const thread = await rpc("threads.create", { ...params, message });
-      await refresh(remote?.machineId).catch(() => {});
+      await refresh(chosenMachine?.machineId).catch(() => {});
       await ensureThread(thread.id).catch(() => {});
       return { threadId: thread.id };
     }
@@ -433,29 +449,7 @@ function HomeScreen() {
                   chevron={!!project}
                   onPress={() => router.push(connected ? "/project-picker" : "/connect")}
                 />
-                {connected && targets.length > 1 && targetName ? (
-                  <MenuButton
-                    label={`Start on ${targetName}. Choose a machine`}
-                    radius={radius.full}
-                    items={targets.map((instance) => {
-                      const machine = machines.machines.find((m) => m.machineId === instance.machineId);
-                      return {
-                        title: machine?.name ?? "Machine",
-                        subtitle: machine?.isLocal ? "This phone is here" : undefined,
-                        checked: instance.machineId === target?.machineId,
-                        onPress: () => setMachineId(instance.machineId),
-                      };
-                    })}
-                  >
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6, minHeight: 36, paddingHorizontal: space.sm }}>
-                      <Icon name="laptopcomputer" size={15} color={colors.secondary} />
-                      <T variant="footnote" tone="secondary" numberOfLines={1} style={{ flexShrink: 1 }}>
-                        {targetName}
-                      </T>
-                      <Icon name="chevron.down" size={9} color={colors.muted} />
-                    </View>
-                  </MenuButton>
-                ) : null}
+                {connected ? <MachineChip target={target} /> : null}
                 {connected && supportsWorktree(project) && (
                   <FooterChip
                     icon="arrow.triangle.branch"
