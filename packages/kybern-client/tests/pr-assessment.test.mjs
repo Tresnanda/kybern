@@ -463,7 +463,7 @@ test("a finished sharded job runs from the first start to the last end, and name
   );
   assert.equal(groups.length, 1);
   assert.equal(groups[0].bucket, "failed");
-  assert.equal(groups[0].detail, "shards 2/2 done · 1 failed");
+  assert.equal(groups[0].detail, "1 of 2 shards failed");
   assert.equal(groups[0].elapsedMs, 300_000);
   assert.equal(groups[0].url, "https://example.test/fail");
 });

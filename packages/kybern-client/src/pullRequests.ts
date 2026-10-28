@@ -186,7 +186,7 @@ export interface CheckGroup {
   required: boolean;
   checks: PrCheck[];
   counts: PrChecksSummary;
-  /** "shards 1/4 done · 1 failed" for a sharded job; the word ("Running", "Cancelled") for a lone check that is not green; "" otherwise. */
+  /** "shards 1/4 done · 1 failed" for a running sharded job, "1 of 4 shards failed" once it is done; the word ("Running", "Cancelled") for a lone check that is not green; "" otherwise. */
   detail: string;
   /** Wall-clock from the first shard's start to the last one's end (to now while running). */
   elapsedMs: number | null;
@@ -229,8 +229,10 @@ export function groupChecks(checks: readonly PrCheck[], now: number = Date.now()
     const done = counts.total - counts.pending;
     let detail = "";
     if (sharded) {
-      detail = `shards ${done}/${counts.total} done`;
-      if (counts.failed) detail += ` · ${counts.failed} failed`;
+      // A finished job only says what failed: "shards 4/4 done · 1 failed" wrapped mid-phrase in the 296 px sidebar.
+      if (counts.pending === 0 && counts.failed) detail = `${counts.failed} of ${counts.total} shards failed`;
+      else if (counts.pending === 0) detail = `${counts.total} shards`;
+      else detail = `shards ${done}/${counts.total} done${counts.failed ? ` · ${counts.failed} failed` : ""}`;
     } else if (bucket !== "passed") {
       detail = checkWord(members[0]);
     }
