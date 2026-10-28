@@ -5,6 +5,11 @@
 //! cwd is the project directory, and closing the session kills it. Sessions
 //! are persisted by OpenCode on disk, so resuming is just prompting the same
 //! `ses_*` id from a fresh server.
+//!
+//! OpenCode 2 replaced the server API; `v2` speaks it. The installed version
+//! picks the implementation at probe and spawn time.
+
+mod v2;
 
 use kybern_protocol::process::NoWindow;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -20,13 +25,17 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, mpsc};
 
-use crate::binary::{at_least, resolve, version_of};
+pub(crate) use v2::Server as V2Server;
+
+use crate::binary::{at_least, parse_semver, resolve, version_of};
 use crate::{
     AgentDriver, AgentSession, DriverError, DriverEvent, DriverRuntimeTask, DriverRuntimeTaskUpdate, NativeToolBridge, ProbeContext,
     Result, SessionConfig, SpawnedSession, summarize_tool_call,
 };
 
 const MIN_VERSION: (u64, u64, u64) = (1, 10, 0);
+/// The v2 API Kybern was built against; earlier 2.x builds predate it.
+const MIN_V2_VERSION: (u64, u64, u64) = (2, 2, 0);
 const MAX_SKILL_DISCOVERY_BYTES: usize = 8 * 1024 * 1024;
 const MODEL_DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
@@ -72,6 +81,57 @@ async fn opencode_models(bin: &std::path::Path, context: &ProbeContext) -> Vec<P
     models
 }
 
+/// Which server API an installed OpenCode speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Api {
+    V1,
+    V2,
+}
+
+/// The API for a parsed version, or why Kybern cannot drive it.
+fn api_for(version: (u64, u64, u64)) -> std::result::Result<Api, String> {
+    let shown = format!("{}.{}.{}", version.0, version.1, version.2);
+    match version {
+        (major, ..) if major >= 3 => Err(format!(
+            "OpenCode {shown} is newer than this Kybern supports. Update Kybern, or install OpenCode 2 with `opencode upgrade {}.{}.{}`",
+            MIN_V2_VERSION.0, MIN_V2_VERSION.1, MIN_V2_VERSION.2
+        )),
+        (2, ..) if version < MIN_V2_VERSION => Err(format!(
+            "OpenCode {shown} has an early 2.x server API. Update with `opencode upgrade` (Kybern needs {}.{}.{} or later)",
+            MIN_V2_VERSION.0, MIN_V2_VERSION.1, MIN_V2_VERSION.2
+        )),
+        (2, ..) => Ok(Api::V2),
+        _ if version < MIN_VERSION => {
+            Err(format!("OpenCode {shown} is older than the required {}.{}.{}", MIN_VERSION.0, MIN_VERSION.1, MIN_VERSION.2))
+        }
+        _ => Ok(Api::V1),
+    }
+}
+
+/// Binary path -> (modification time, parsed version).
+type VersionCache = HashMap<PathBuf, (Option<std::time::SystemTime>, Option<(u64, u64, u64)>)>;
+
+/// The API of `bin`, cached by path and modification time. An unreadable
+/// version keeps the v1 path, as before v2 support.
+pub(crate) async fn api_of(bin: &Path) -> std::result::Result<Api, String> {
+    static CACHE: std::sync::Mutex<Option<VersionCache>> = std::sync::Mutex::new(None);
+    let modified = std::fs::metadata(bin).and_then(|meta| meta.modified()).ok();
+    let cached = CACHE.lock().unwrap().as_ref().and_then(|cache| cache.get(bin).cloned());
+    let version = match cached {
+        Some((stamp, version)) if stamp == modified && modified.is_some() => version,
+        _ => {
+            let version = version_of(bin, &["--version"]).await.and_then(|line| parse_semver(&line));
+            CACHE.lock().unwrap().get_or_insert_with(HashMap::new).insert(bin.to_path_buf(), (modified, version));
+            version
+        }
+    };
+    match version {
+        // Spawning never rejected an old 1.x build; only 2.x and later are gated here.
+        Some(version) if version.0 >= 2 => api_for(version),
+        _ => Ok(Api::V1),
+    }
+}
+
 impl OpencodeDriver {
     async fn probe_inner(&self, context: &ProbeContext) -> ProviderStatus {
         let mut status = ProviderStatus {
@@ -99,12 +159,14 @@ impl OpencodeDriver {
         status.binary_path = Some(bin.display().to_string());
         match version_of(&bin, &["--version"]).await {
             Some(v) => {
-                let ok = at_least(&v, MIN_VERSION);
+                let support = match parse_semver(&v) {
+                    Some(version) => api_for(version).map(|_| ()),
+                    None if at_least(&v, MIN_VERSION) => Ok(()),
+                    None => Err(format!("OpenCode {v} is older than the required {}.{}.{}", MIN_VERSION.0, MIN_VERSION.1, MIN_VERSION.2)),
+                };
+                let ok = support.is_ok();
                 status.available = ok;
-                if !ok {
-                    status.unavailable_reason =
-                        Some(format!("OpenCode {v} is older than the required {}.{}.{}", MIN_VERSION.0, MIN_VERSION.1, MIN_VERSION.2));
-                }
+                status.unavailable_reason = support.err();
                 status.version = Some(v);
                 if ok {
                     status.models = opencode_models(&bin, context).await;
@@ -121,6 +183,11 @@ impl OpencodeDriver {
 /// which a filesystem walk cannot reconstruct reliably.
 pub async fn discover_skills(cwd: &Path, binary: Option<&PathBuf>, env: &BTreeMap<String, String>) -> Option<Vec<SkillInfo>> {
     let bin = resolve(ProviderKind::Opencode, binary).ok()?;
+    match api_of(&bin).await {
+        Ok(Api::V2) => return v2::discover_skills(&bin, cwd, env).await,
+        Err(_) => return None,
+        Ok(Api::V1) => {}
+    }
     let mut command = Command::new(bin).no_window();
     command.current_dir(cwd).args(["debug", "skill"]).stdin(Stdio::null()).stderr(Stdio::null());
     for (key, value) in env {
@@ -193,12 +260,15 @@ impl AgentDriver for OpencodeDriver {
     }
 
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession> {
+        let bin = resolve(ProviderKind::Opencode, config.binary.as_ref())?;
+        if api_of(&bin).await.map_err(DriverError::Unsupported)? == Api::V2 {
+            return v2::spawn(&bin, config).await;
+        }
         let native_config = config
             .native_tool_bridge
             .as_ref()
             .map(|bridge| opencode_config_content(config.env.get("OPENCODE_CONFIG_CONTENT"), bridge))
             .transpose()?;
-        let bin = resolve(ProviderKind::Opencode, config.binary.as_ref())?;
         let mut cmd = Command::new(&bin).no_window();
         cmd.current_dir(&config.cwd)
             .args(["serve", "--port", "0", "--hostname", "127.0.0.1"])
@@ -363,6 +433,30 @@ fn split_model(s: &str) -> Option<(String, String)> {
 }
 
 fn opencode_config_content(base: Option<&String>, bridge: &NativeToolBridge) -> Result<String> {
+    let mut config = mcp_config(base, bridge)?;
+    let config_object = config.as_object_mut().expect("mcp_config returns an object");
+    if bridge.restrictions.require_enforcement {
+        let tools = config_object.entry("tools").or_insert_with(|| json!({}));
+        let Some(tool_permissions) = tools.as_object_mut() else {
+            return Err(DriverError::Unsupported("OpenCode inline config has a non-object tools section".into()));
+        };
+        // OpenCode registers remote MCP tools with the server name as a prefix.
+        // The gateway's tools/list response applies the exact bridge allow/deny
+        // set, so this wildcard only admits that already-filtered server.
+        tool_permissions.insert("*".into(), json!(false));
+        tool_permissions.insert(format!("{}_*", bridge.server_name), json!(true));
+        if bridge.restrictions.allow_read_only_builtins {
+            for tool in OPENCODE_READ_ONLY_TOOLS {
+                tool_permissions.insert((*tool).into(), json!(true));
+            }
+        }
+    }
+    serde_json::to_string(&config).map_err(|error| DriverError::Other(error.into()))
+}
+
+/// The inline config with the Kybern MCP server added. Both APIs read this
+/// v1 `mcp` shape.
+fn mcp_config(base: Option<&String>, bridge: &NativeToolBridge) -> Result<Value> {
     bridge.validate()?;
     let endpoint =
         bridge.endpoint.as_deref().ok_or_else(|| DriverError::Unsupported("OpenCode Kybern tools require a daemon MCP endpoint".into()))?;
@@ -392,23 +486,7 @@ fn opencode_config_content(base: Option<&String>, bridge: &NativeToolBridge) -> 
             "headers": { "Authorization": format!("Bearer {authorization}") },
         }),
     );
-    if bridge.restrictions.require_enforcement {
-        let tools = config_object.entry("tools").or_insert_with(|| json!({}));
-        let Some(tool_permissions) = tools.as_object_mut() else {
-            return Err(DriverError::Unsupported("OpenCode inline config has a non-object tools section".into()));
-        };
-        // OpenCode registers remote MCP tools with the server name as a prefix.
-        // The gateway's tools/list response applies the exact bridge allow/deny
-        // set, so this wildcard only admits that already-filtered server.
-        tool_permissions.insert("*".into(), json!(false));
-        tool_permissions.insert(format!("{}_*", bridge.server_name), json!(true));
-        if bridge.restrictions.allow_read_only_builtins {
-            for tool in OPENCODE_READ_ONLY_TOOLS {
-                tool_permissions.insert((*tool).into(), json!(true));
-            }
-        }
-    }
-    serde_json::to_string(&config).map_err(|error| DriverError::Other(error.into()))
+    Ok(config)
 }
 
 /// Built-in tools a project Coordinator keeps: reading, searching and web lookups,
@@ -1934,6 +2012,17 @@ mod tests {
     use serde_json::{Value, json};
     use std::path::Path;
     use std::time::Duration;
+
+    #[test]
+    fn versions_pick_the_api_or_explain_why_not() {
+        use super::{Api, api_for};
+        assert_eq!(api_for((1, 19, 4)), Ok(Api::V1));
+        assert_eq!(api_for((2, 2, 0)), Ok(Api::V2));
+        assert_eq!(api_for((2, 9, 1)), Ok(Api::V2));
+        assert!(api_for((1, 9, 0)).unwrap_err().contains("older than the required 1.10.0"));
+        assert!(api_for((2, 1, 2)).unwrap_err().contains("early 2.x server API"));
+        assert!(api_for((3, 0, 0)).unwrap_err().contains("newer than this Kybern supports"));
+    }
 
     #[test]
     fn model_discovery_budget_covers_a_cold_provider_refresh() {

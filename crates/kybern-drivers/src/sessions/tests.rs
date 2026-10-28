@@ -134,6 +134,33 @@ fn opencode_import_keeps_message_parts_and_model() {
 }
 
 #[test]
+fn opencode_v2_import_keeps_typed_messages_and_model() {
+    let history = opencode::parse_v2(
+        session(ProviderKind::Opencode),
+        vec![
+            json!({"type":"user","id":"msg_1","time":{"created":1793155003387_i64},"text":"Read the file"}),
+            json!({"type":"assistant","model":{"providerID":"provider","id":"model"},"content":[
+                {"type":"reasoning","text":"thinking"},
+                {"type":"tool","id":"t","name":"read","state":{"status":"completed","input":{"path":"file.txt"},"content":[{"type":"text","text":"contents"}]}},
+                {"type":"tool","id":"u","name":"shell","state":{"status":"error","input":{"command":"x"},"error":{"type":"aborted","message":"interrupted"}}},
+                {"type":"text","text":"Here are the contents."}
+            ]}),
+            json!({"type":"idle","outcome":"succeeded"}),
+        ],
+    );
+    assert_eq!(users(&history), ["Read the file"]);
+    assert_eq!(answers(&history), ["Here are the contents."]);
+    assert_eq!(history.session.model.as_deref(), Some("provider/model"));
+    assert!(history.events.iter().any(|e| matches!(&e.payload, EventPayload::ToolCallCompleted { output, .. } if output == "contents")));
+    assert!(
+        history
+            .events
+            .iter()
+            .any(|e| matches!(&e.payload, EventPayload::ToolCallCompleted { output, is_error: true, .. } if output == "interrupted"))
+    );
+}
+
+#[test]
 fn cursor_replay_coalesces_chunks_and_finishes_tools() {
     let updates = vec![
         json!({"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Check "}}),
