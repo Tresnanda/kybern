@@ -1,4 +1,6 @@
-import { environmentEndpoint, onEnvironmentChange, registerEnvironmentConnection } from './shell/environment.ts'
+import { activeEnvironment, environmentEndpoint, onEnvironmentChange, registerEnvironmentConnection } from './shell/environment.ts'
+import { machineHub } from './machines/index.ts'
+import { createGpuixSocket } from './machines/socket.ts'
 import { startupMark } from './perf/startup.ts'
 import { addMemoryContext, memoryStep } from './perf/memoryLog.ts'
 import { HistoryPrefetch } from './shell/historyPrefetch.ts'
@@ -147,8 +149,14 @@ export function subscribe(listener: () => void): () => void {
 
 
 let client: KybernClient | null = null
-/** The daemon connection, once `connect()` has run. */
+/**
+ * The daemon connection, once `connect()` has run: the machine the user is at.
+ * TODO(N6 step 3): thread- and project-scoped code asks `clientForThread` /
+ * `clientForProject` (machines/) for the machine that owns the thread; this stays
+ * for machine-wide surfaces of the local machine.
+ */
 export const getClient = () => client
+export { clientFor, clientForProject, clientForThread, useMachineView } from './machines/index.ts'
 type Session = { open: ThreadState; history: HistoryPrefetch; historyTimer?: ReturnType<typeof setTimeout>; stop?: () => void; ready?: Promise<void> }
 const sessions = new Map<ThreadId, Session>()
 /** Prepare one immutable older page after the newest content has painted.
@@ -218,6 +226,7 @@ export function resetClient() {
   mirrorFocus(); emit()
   const previous = client
   client = null
+  machineHub().releasePrimary()
   clearTimeout(retryTimer); refreshing = null; refreshAgain = false
   lastActivity = undefined
   previous?.close()
@@ -240,13 +249,9 @@ export async function connect() {
   }
   // Native sockets authenticate the upgrade with a header and use the trusted
   // app origin, like the mobile client's `createNativeSocket`.
-  client = new KybernClient(ep, {
-    createSocket: (url, token) =>
-      new WebSocket(url, {
-        headers: { origin: 'tauri://localhost', Authorization: `Bearer ${token}` },
-      } as unknown as string[]),
-  })
+  client = new KybernClient(ep, { createSocket: createGpuixSocket })
   const owner = client
+  machineHub().beginPrimary(owner, { id: activeEnvironment().id, name: activeEnvironment().name })
   client.onStatus((status, detail) => {
     if (owner !== client) return
     set({ status, statusDetail: detail ?? null })
@@ -256,6 +261,8 @@ export async function connect() {
       // concurrently. Git probes refresh after the index is already usable.
       void refreshLists()
       reloadOpenTranscripts()
+      // Joins the machine set under the daemon's id; a failure there never touches this connection.
+      void machineHub().primaryOpened(owner).catch(() => {})
     }
   })
   client.onNotification('projects.changed', () => void refreshLists())
@@ -358,6 +365,7 @@ async function loadLists() {
     .filter((th) => !isChildThread(th) && th.status !== 'archived')
     .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updated_at.localeCompare(a.updated_at))
   set({ projects: p.projects, threads: withNewChats(listedThreads), listsLoaded: true })
+  machineHub().ingestPrimary(owner, p.projects, t.threads)
   if (initial) {
     // Preserve the usual Git self-heal without putting one subprocess per
     // project on the first sidebar paint's critical path. Notifications may
@@ -368,7 +376,7 @@ async function loadLists() {
         const before = p.projects[index]!
         return project.id !== before.id || project.updated_at !== before.updated_at || project.is_git !== before.is_git
       })
-      if (changed) set({ projects: result.projects })
+      if (changed) { set({ projects: result.projects }); machineHub().ingestPrimary(owner, result.projects, t.threads) }
     }, () => {})
   }
   for (const [paneId, pane] of panes) if (pane.selectedId && !pane.open.loaded && !sessions.has(pane.selectedId)) void selectPaneThread(paneId, pane.selectedId).catch(error => console.error('[pane] Unable to load thread:', error))
