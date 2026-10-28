@@ -406,3 +406,21 @@ expression: scopes
   - "machine:relay"
 - - peer.relay.close
   - "machine:relay"
+- - outbox.list
+  - "orchestration:read"
+- - outbox.retry
+  - "orchestration:operate"
+- - outbox.cancel
+  - "orchestration:operate"
+- - outbox.enqueue
+  - "orchestration:operate"
+- - peer.delegate
+  - "machine:delegate"
+- - peer.delegation.get
+  - "machine:delegate"
+- - peer.delegation.cancel
+  - "machine:delegate"
+- - peer.git.bundle
+  - "machine:delegate"
+- - peer.git.import
+  - "machine:delegate"

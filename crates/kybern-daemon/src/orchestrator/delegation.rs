@@ -198,6 +198,12 @@ struct DelegateArgs {
     mode: Option<DelegateMode>,
     #[serde(default)]
     timeout_ms: Option<u64>,
+    /// Run the child on another machine of the network (a name or id from `kybern_agent_capabilities`).
+    #[serde(default)]
+    machine: Option<String>,
+    /// With `machine`: which of that machine's checkouts to use when it has several of the repository.
+    #[serde(default)]
+    project: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -264,7 +270,7 @@ pub(super) fn resolve_child_permission(
     Ok(requested)
 }
 
-fn truncate_with_marker(text: &str, max_bytes: usize) -> String {
+pub(super) fn truncate_with_marker(text: &str, max_bytes: usize) -> String {
     let mut text = text.to_owned();
     if text.len() > max_bytes {
         truncate_utf8(&mut text, max_bytes);
@@ -298,7 +304,7 @@ pub(super) fn cap_batch(items: &mut [AgentResultItem]) {
     }
 }
 
-fn child_title(title: Option<&str>, task: &str) -> String {
+pub(super) fn child_title(title: Option<&str>, task: &str) -> String {
     let source = title
         .map(str::trim)
         .filter(|title| !title.is_empty())
@@ -312,7 +318,7 @@ fn child_title(title: Option<&str>, task: &str) -> String {
     short
 }
 
-fn validate_owns(owns: &[String]) -> Result<()> {
+pub(super) fn validate_owns(owns: &[String]) -> Result<()> {
     ensure!(owns.len() <= MAX_OWNS, "owns takes at most {MAX_OWNS} globs. Group paths with ** instead.");
     for glob in owns {
         ensure!(
@@ -329,7 +335,7 @@ fn validate_owns(owns: &[String]) -> Result<()> {
 }
 
 /// The first user message of a delegated child (contract section 2.2, step 6).
-fn delegation_brief(
+pub(super) fn delegation_brief(
     role: DelegationRole,
     parent_title: &str,
     workspace: DelegationWorkspace,
@@ -457,7 +463,7 @@ impl Orchestrator {
     }
 
     /// The lock that serializes `parent`'s limit check with its inserts.
-    fn delegation_create_lock(&self, parent: ThreadId) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    pub(super) fn delegation_create_lock(&self, parent: ThreadId) -> std::sync::Arc<tokio::sync::Mutex<()>> {
         let mut locks = self.inner.delegation.create.lock().unwrap_or_else(|error| error.into_inner());
         if locks.len() > 64 {
             locks.retain(|_, lock| std::sync::Arc::strong_count(lock) > 1);
@@ -485,6 +491,9 @@ impl Orchestrator {
             "kybern_agent_wait" => self.agent_wait(thread, crate::app_tools::parse(arguments)?).await,
             "kybern_agent_cancel" => {
                 let args: CancelArgs = crate::app_tools::parse(arguments)?;
+                if let Some(remote) = self.inner.store.remote_child_get(args.task_id)? {
+                    return self.remote_cancel(thread, turn_id, live, remote).await;
+                }
                 let child = self
                     .inner
                     .store
@@ -516,7 +525,7 @@ impl Orchestrator {
 
     /// Active children one thread may have, and how deep delegation may go. A
     /// project's Coordinator has its own child limit.
-    fn orchestration_limits(&self, delegating: &Thread) -> (u32, u32) {
+    pub(super) fn orchestration_limits(&self, delegating: &Thread) -> (u32, u32) {
         let settings = self.inner.settings.get().orchestration;
         let children = if delegating.coordinator_project_id.is_some() {
             let project = self.inner.store.project_get(delegating.project_id).ok().flatten();
@@ -626,7 +635,7 @@ impl Orchestrator {
         }
         let (max_children, max_depth) = self.orchestration_limits(caller);
         let depth = caller.delegation.as_ref().map_or(0, |info| u32::from(info.depth));
-        let active = self.inner.store.delegation_active_count(caller.id)?;
+        let active = self.inner.store.delegation_active_count(caller.id)? + self.inner.store.remote_children_active_count(caller.id)?;
         let coordinator_defaults = if caller.coordinator_project_id.is_some() {
             let project = self.inner.store.project_get(caller.project_id)?;
             let effective = settings.orchestration.effective_for(project.as_ref().and_then(|project| project.coordinator.as_ref()));
@@ -661,6 +670,27 @@ impl Orchestrator {
         if let Some(defaults) = coordinator_defaults {
             capabilities["coordinator"] = defaults;
         }
+        // Other machines of the network that can run delegated agents (`machine` on kybern_agent_delegate).
+        if let Some(hub) = self.remote_hub() {
+            let machines: Vec<Value> = hub
+                .targets()
+                .into_iter()
+                .map(|target| {
+                    let supports =
+                        target.features.as_ref().is_none_or(|features| features.iter().any(|f| f == features::DELEGATE_REMOTE_V1));
+                    json!({
+                        "id": target.id,
+                        "name": target.name,
+                        "status": if target.paused { "paused" } else if target.online { "online" } else { "offline" },
+                        "can_delegate": supports,
+                        "note": if target.online { None } else { Some("Offline: a task queues and starts when the machine returns.") },
+                    })
+                })
+                .collect();
+            if !machines.is_empty() {
+                capabilities["machines"] = json!(machines);
+            }
+        }
         Ok(capabilities)
     }
 
@@ -674,6 +704,26 @@ impl Orchestrator {
         if let Some(existing) = self.inner.store.delegation_find_by_operation(operation_id)? {
             return self.delegate_response(existing, parent.id, mode, timeout).await;
         }
+        if let Some(machine) = args.machine.as_deref().map(str::trim).filter(|machine| !machine.is_empty()) {
+            let request = super::remote_delegation::RemoteRequest {
+                operation_id,
+                machine: machine.to_owned(),
+                project: args.project.clone(),
+                task: args.task.clone(),
+                title: args.title.clone(),
+                role: args.role.unwrap_or_default(),
+                provider: args.provider,
+                model: args.model.clone(),
+                effort: args.effort.clone(),
+                permission_mode: args.permission_mode,
+                workspace: args.workspace.unwrap_or_default(),
+                owns: args.owns.clone().unwrap_or_default(),
+                wait: mode == DelegateMode::Wait,
+                timeout,
+            };
+            return self.remote_delegate(parent, turn_id, live, request).await;
+        }
+        ensure!(args.project.is_none(), "project only applies with machine.");
         let task = args.task.trim().to_owned();
         ensure!(!task.is_empty(), "task is required: write the full brief for the agent");
         let project = self.inner.store.project_get(parent.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
@@ -903,6 +953,8 @@ impl Orchestrator {
             last_seq: 0,
             parent_thread_id: Some(parent.id),
             coordinator_project_id: None,
+            // Work another machine started stays that machine's, however deep it delegates here.
+            origin: parent.origin.clone(),
             subagent: None,
             delegation: Some(info),
             members,
@@ -985,7 +1037,7 @@ impl Orchestrator {
         let mut questions = Vec::new();
         if mode == DelegateMode::Wait && thread.delegation.as_ref().is_some_and(|info| info.status == DelegationStatus::Running) {
             let task_id = thread.delegation.as_ref().map(|info| info.task_id).expect("checked above");
-            let (mut threads, waited_out, asked) = self.wait_for_delegations(&[task_id], timeout).await?;
+            let (mut threads, _, waited_out, asked) = self.wait_for_delegations(&[task_id], timeout).await?;
             timed_out = waited_out;
             questions = asked;
             if let Some(updated) = threads.pop() {
@@ -1035,8 +1087,22 @@ impl Orchestrator {
     // ---- kybern_agent_status / kybern_agent_wait ----
 
     fn agent_status(&self, caller: &Thread, args: StatusArgs) -> Result<Value> {
-        let threads = self.agent_threads(caller, args.task_ids.as_deref())?;
-        Ok(json!({ "agents": threads.iter().map(|thread| delegation_view(thread, STATUS_RESULT_CAP)).collect::<Vec<_>>() }))
+        let (remote, local) = match &args.task_ids {
+            Some(ids) => {
+                let (remote, local) = self.remote_partition(ids)?;
+                let remote = remote.into_iter().map(|child| self.remote_owned_by(caller, child)).collect::<Result<Vec<_>>>()?;
+                (remote, Some(local))
+            }
+            None => (self.remote_children_of_caller(caller)?, None),
+        };
+        let threads = match &local {
+            Some(ids) if ids.is_empty() => Vec::new(),
+            Some(ids) => self.agent_threads(caller, Some(ids))?,
+            None => self.agent_threads(caller, None)?,
+        };
+        let mut agents: Vec<Value> = threads.iter().map(|thread| delegation_view(thread, STATUS_RESULT_CAP)).collect();
+        agents.extend(remote.iter().take(STATUS_LIMIT).map(|child| self.remote_view(child, STATUS_RESULT_CAP)));
+        Ok(json!({ "agents": agents }))
     }
 
     /// The caller's delegations: the listed ones, else its direct children newest first.
@@ -1069,24 +1135,42 @@ impl Orchestrator {
         let timeout = Duration::from_millis(args.timeout_ms.unwrap_or(WAIT_DEFAULT_MS).clamp(1, WAIT_MAX_MS));
         let task_ids: Vec<Uuid> = match args.task_ids {
             Some(ids) => {
-                self.agent_threads(caller, Some(&ids))?;
+                let (remote, local) = self.remote_partition(&ids)?;
+                for child in remote {
+                    self.remote_owned_by(caller, child)?;
+                }
+                if !local.is_empty() {
+                    self.agent_threads(caller, Some(&local))?;
+                }
                 ids
             }
-            None => self
-                .inner
-                .store
-                .delegation_children(caller.id)?
-                .into_iter()
-                .filter_map(|child| child.delegation.filter(|info| info.status == DelegationStatus::Running).map(|info| info.task_id))
-                .collect(),
+            None => {
+                let mut running: Vec<Uuid> = self
+                    .inner
+                    .store
+                    .delegation_children(caller.id)?
+                    .into_iter()
+                    .filter_map(|child| child.delegation.filter(|info| info.status == DelegationStatus::Running).map(|info| info.task_id))
+                    .collect();
+                running.extend(
+                    self.remote_children_of_caller(caller)?
+                        .into_iter()
+                        .filter(|child| !child.state.is_terminal())
+                        .map(|child| child.task_id),
+                );
+                running
+            }
         };
         if task_ids.is_empty() {
             return Ok(json!({ "agents": [], "wait_timed_out": false, "note": "None of your agents is running." }));
         }
-        let (threads, timed_out, questions) = self.wait_for_delegations(&task_ids, timeout).await?;
+        let (threads, remote, timed_out, questions) = self.wait_for_delegations(&task_ids, timeout).await?;
         self.mark_inline_delivered(&threads.iter().collect::<Vec<_>>());
+        self.mark_task_delivered(&remote.iter().collect::<Vec<_>>());
+        let mut agents: Vec<Value> = threads.iter().map(|thread| delegation_view(thread, RESULT_CAP)).collect();
+        agents.extend(remote.iter().map(|child| self.remote_view(child, RESULT_CAP)));
         let mut response = json!({
-            "agents": threads.iter().map(|thread| delegation_view(thread, RESULT_CAP)).collect::<Vec<_>>(),
+            "agents": agents,
             "wait_timed_out": timed_out,
         });
         if !questions.is_empty() {
@@ -1102,38 +1186,66 @@ impl Orchestrator {
     /// Block until every listed delegation leaves `running`, one of them (or an agent below it)
     /// waits on a question the caller may answer, or the timeout. Returns the threads, whether
     /// the wait timed out, and the waiting questions.
-    async fn wait_for_delegations(&self, task_ids: &[Uuid], timeout: Duration) -> Result<(Vec<Thread>, bool, Vec<Value>)> {
+    pub(super) async fn wait_for_delegations(
+        &self,
+        task_ids: &[Uuid],
+        timeout: Duration,
+    ) -> Result<(Vec<Thread>, Vec<RemoteChild>, bool, Vec<Value>)> {
         let deadline = tokio::time::Instant::now() + timeout;
+        let (remote_known, local_ids) = self.remote_partition(task_ids)?;
+        let remote_ids: Vec<Uuid> = remote_known.iter().map(|child| child.task_id).collect();
+        let read = |this: &Self| -> Result<(Vec<Thread>, Vec<RemoteChild>)> {
+            let threads = local_ids
+                .iter()
+                .map(|task_id| {
+                    this.inner.store.delegation_find_by_task(*task_id)?.ok_or_else(|| anyhow!("delegation {task_id} no longer exists"))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let remote = remote_ids
+                .iter()
+                .map(|task_id| this.inner.store.remote_child_get(*task_id)?.ok_or_else(|| anyhow!("delegation {task_id} no longer exists")))
+                .collect::<Result<Vec<_>>>()?;
+            Ok((threads, remote))
+        };
         loop {
             let notified = self.inner.delegation.changed.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            let threads = task_ids
-                .iter()
-                .map(|task_id| {
-                    self.inner.store.delegation_find_by_task(*task_id)?.ok_or_else(|| anyhow!("delegation {task_id} no longer exists"))
-                })
-                .collect::<Result<Vec<_>>>()?;
+            let (threads, remote) = read(self)?;
             let running =
-                threads.iter().any(|thread| thread.delegation.as_ref().is_some_and(|info| info.status == DelegationStatus::Running));
+                threads.iter().any(|thread| thread.delegation.as_ref().is_some_and(|info| info.status == DelegationStatus::Running))
+                    || remote.iter().any(|child| !child.state.is_terminal());
             if !running {
-                return Ok((threads, false, Vec::new()));
+                return Ok((threads, remote, false, Vec::new()));
             }
             let questions = self.waiting_questions(&threads);
             if !questions.is_empty() {
-                return Ok((threads, false, questions));
+                return Ok((threads, remote, false, questions));
             }
             if tokio::time::timeout_at(deadline, notified).await.is_err() {
-                // Query once more so a result persisted at the boundary is not reported as a timeout.
-                let threads = task_ids
-                    .iter()
-                    .filter_map(|task_id| self.inner.store.delegation_find_by_task(*task_id).ok().flatten())
-                    .collect::<Vec<_>>();
+                // Read once more so a result persisted at the boundary is not reported as a timeout.
+                let (threads, remote) = read(self).unwrap_or_default();
                 let still_running =
-                    threads.iter().any(|thread| thread.delegation.as_ref().is_some_and(|info| info.status == DelegationStatus::Running));
-                return Ok((threads, still_running, Vec::new()));
+                    threads.iter().any(|thread| thread.delegation.as_ref().is_some_and(|info| info.status == DelegationStatus::Running))
+                        || remote.iter().any(|child| !child.state.is_terminal());
+                return Ok((threads, remote, still_running, Vec::new()));
             }
         }
+    }
+
+    /// Remember that these remote children's outcomes were returned to a blocked call.
+    pub(super) fn mark_task_delivered(&self, children: &[&RemoteChild]) {
+        let mut delivered = self.inner.delegation.inline_delivered.lock().unwrap_or_else(|error| error.into_inner());
+        if delivered.len() > 1024 {
+            delivered.clear();
+        }
+        let mut settled = Vec::new();
+        for child in children.iter().filter(|child| child.state.is_terminal()) {
+            delivered.insert(child.task_id);
+            settled.push(child.task_id);
+        }
+        drop(delivered);
+        self.delegation_mark_notified(&settled);
     }
 
     /// Remember outcomes a blocked call returned so the batch does not repeat them.
@@ -1425,7 +1537,10 @@ impl Orchestrator {
     /// does not send them again.
     fn delegation_mark_notified(&self, task_ids: &[Uuid]) {
         for task_id in task_ids {
-            let Ok(Some(thread)) = self.inner.store.delegation_find_by_task(*task_id) else { continue };
+            let Ok(Some(thread)) = self.inner.store.delegation_find_by_task(*task_id) else {
+                self.remote_mark_notified(*task_id);
+                continue;
+            };
             if thread.delegation.as_ref().is_some_and(|info| info.parent_notified || info.status == DelegationStatus::Running) {
                 continue;
             }
@@ -1531,6 +1646,8 @@ impl Orchestrator {
     /// child created while the others were stopping is stopped too. Failures on
     /// individual children are logged, never raised.
     pub(super) async fn delegation_stop_descendants(&self, root: ThreadId) {
+        // Agents running on other machines stop too; the target is told as soon as it is reachable.
+        self.remote_stop_tree(root, false);
         for _ in 0..STOP_PASSES {
             let cancelled = match self.delegation_cancel_pass(root) {
                 Ok(cancelled) => cancelled,

@@ -204,3 +204,12 @@ expression: names
 - peer.relay.open
 - peer.relay.data
 - peer.relay.close
+- outbox.list
+- outbox.retry
+- outbox.cancel
+- outbox.enqueue
+- peer.delegate
+- peer.delegation.get
+- peer.delegation.cancel
+- peer.git.bundle
+- peer.git.import

@@ -821,6 +821,7 @@ mod tests {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
+            origin: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),

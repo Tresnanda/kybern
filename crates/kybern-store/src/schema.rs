@@ -630,6 +630,53 @@ const MIGRATIONS: &[&str] = &[
     );
     COMMIT;
     ",
+    // Remote delegation and the outbox (R1, design §4.4 "v33 (M2)"; numbered here in merge order).
+    // `outbox` is the visible queue of work for machines that are offline; a delivery repeats under
+    // its `operation_id`, which the target deduplicates. `threads.origin` records which machine
+    // started a thread (JSON `Origin`, written once); `threads.inbound` is the column for inbound
+    // audit threads. `remote_children` is the delegating machine's row for a child that runs
+    // elsewhere, written before anything is sent.
+    "
+    BEGIN;
+    CREATE TABLE outbox (
+      id TEXT PRIMARY KEY,
+      operation_id TEXT NOT NULL UNIQUE,
+      target TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      origin TEXT,
+      state TEXT NOT NULL CHECK (state IN ('queued','sending','delivered','failed','expired','cancelled')),
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_attempt_at TEXT,
+      last_error TEXT,
+      result TEXT,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX outbox_due ON outbox(state, next_attempt_at);
+    ALTER TABLE threads ADD COLUMN origin TEXT;
+    ALTER TABLE threads ADD COLUMN inbound TEXT;
+    CREATE TABLE remote_children (
+      task_id TEXT PRIMARY KEY,
+      operation_id TEXT NOT NULL UNIQUE,
+      parent_thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+      target TEXT NOT NULL,
+      remote_thread_id TEXT,
+      status TEXT NOT NULL,
+      stop_requested INTEGER NOT NULL DEFAULT 0,
+      last_seq INTEGER NOT NULL DEFAULT 0,
+      title TEXT NOT NULL DEFAULT '',
+      provider TEXT,
+      model TEXT,
+      info TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX remote_children_parent ON remote_children(parent_thread_id);
+    CREATE INDEX remote_children_active ON remote_children(status) WHERE status IN ('pending','running');
+    COMMIT;
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

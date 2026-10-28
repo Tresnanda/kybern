@@ -23,6 +23,7 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::routing::get;
+use kybern_drivers::registry::DriverRegistry;
 use kybern_protocol::{JoinVia, Scope};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
@@ -147,11 +148,16 @@ impl Cluster {
     /// Start `name`'s daemon: its own data directory, an in-process server on a loopback primary
     /// address, and (with `worker`) the peer manager that opens the network listener and dials.
     pub async fn start(&self, name: &str, worker: bool) -> Node {
+        self.start_with(name, worker, DriverRegistry::default()).await
+    }
+
+    /// [`Cluster::start`] with the harness drivers the node's agents run on.
+    pub async fn start_with(&self, name: &str, worker: bool, drivers: DriverRegistry) -> Node {
         let root = self.dir.path().join(format!("data-{name}"));
         std::fs::create_dir_all(&root).unwrap();
         let paths = crate::config::Paths::resolve(Some(root.clone())).unwrap();
         let tailscale = Arc::new(Fake::new(self.fixture_path(name)));
-        let state = AppState::initialize_with(&paths, tailscale, Timing::fast()).unwrap();
+        let state = AppState::initialize_with_drivers(&paths, tailscale, Timing::fast(), drivers).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let primary = listener.local_addr().unwrap();
         *state.listen_addr.write().unwrap() = Some(primary);
@@ -166,8 +172,12 @@ impl Cluster {
         let server = tokio::spawn(async move {
             let _ = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await;
         });
+        let outbox = worker.then(|| {
+            state.orchestrator.remote_start();
+            tokio::spawn(super::outbox::run(state.clone()))
+        });
         let worker = worker.then(|| tokio::spawn(peers::run(state.clone())));
-        Node { name: name.to_string(), state, primary, listen_ip: self.listen_ip(name), root, server, worker }
+        Node { name: name.to_string(), state, primary, listen_ip: self.listen_ip(name), root, server, worker, outbox }
     }
 
     /// Found the network on `founder` and add `others` to it, the way N4's flows will: each is added
@@ -201,6 +211,7 @@ pub struct Node {
     pub root: PathBuf,
     server: JoinHandle<()>,
     worker: Option<JoinHandle<()>>,
+    outbox: Option<JoinHandle<()>>,
 }
 
 impl Node {
@@ -252,6 +263,9 @@ impl Node {
         self.server.abort();
         if let Some(worker) = self.worker.take() {
             worker.abort();
+        }
+        if let Some(outbox) = self.outbox.take() {
+            outbox.abort();
         }
     }
 }

@@ -1,0 +1,199 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(PeerDelegationView)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PeerDelegationView",
+  "description": "The child as B knows it: the mirror A keeps in `remote_children.info`.",
+  "type": "object",
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "thread_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "title": {
+      "type": "string"
+    },
+    "provider": {
+      "$ref": "#/$defs/ProviderKind"
+    },
+    "model": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "role": {
+      "$ref": "#/$defs/DelegationRole"
+    },
+    "workspace": {
+      "$ref": "#/$defs/DelegationWorkspace"
+    },
+    "status": {
+      "$ref": "#/$defs/DelegationStatus"
+    },
+    "result": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "error": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "files_touched": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "base_commit": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "branch": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "head_commit": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "diffstat": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DiffStat"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "last_seq": {
+      "description": "Sequence of the child thread's last event.",
+      "type": "integer",
+      "format": "int64"
+    }
+  },
+  "required": [
+    "task_id",
+    "thread_id",
+    "title",
+    "provider",
+    "role",
+    "workspace",
+    "status",
+    "started_at",
+    "last_seq"
+  ],
+  "$defs": {
+    "ProviderKind": {
+      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "opencode",
+        "pi",
+        "omp",
+        "cursor"
+      ]
+    },
+    "DelegationRole": {
+      "description": "What the delegating agent asked this child to be.",
+      "type": "string",
+      "enum": [
+        "implementation",
+        "research",
+        "review",
+        "design",
+        "test",
+        "general"
+      ]
+    },
+    "DelegationWorkspace": {
+      "description": "Where a delegated child works.",
+      "oneOf": [
+        {
+          "description": "The parent's checkout and branch.",
+          "type": "string",
+          "const": "shared"
+        },
+        {
+          "description": "Its own git worktree on `kybern/<child-id>`, seeded from the parent's\ncurrent uncommitted state.",
+          "type": "string",
+          "const": "worktree"
+        }
+      ]
+    },
+    "DelegationStatus": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "running",
+            "completed",
+            "failed",
+            "cancelled"
+          ]
+        },
+        {
+          "description": "Cut off by a daemon restart.",
+          "type": "string",
+          "const": "interrupted"
+        }
+      ]
+    },
+    "DiffStat": {
+      "description": "Files and lines changed between two commits.",
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "additions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "deletions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "files",
+        "additions",
+        "deletions"
+      ]
+    }
+  }
+}

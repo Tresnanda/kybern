@@ -1,6 +1,7 @@
 mod accounts;
 mod coordinator;
 mod credentials;
+mod outbox;
 mod render;
 mod requests;
 mod spaces;
@@ -248,6 +249,11 @@ enum Cmd {
     Spaces {
         #[command(subcommand)]
         cmd: spaces::SpacesCmd,
+    },
+    /// Work waiting for machines that are offline.
+    Outbox {
+        #[command(subcommand)]
+        cmd: outbox::OutboxCmd,
     },
     /// List threads.
     Threads {
@@ -1717,6 +1723,7 @@ pub async fn run() -> Result<()> {
             }
         },
         Cmd::Spaces { cmd } => spaces::run(&client, cmd, json).await?,
+        Cmd::Outbox { cmd } => outbox::run(&client, cmd, json).await?,
         Cmd::Threads { project, archived } => {
             let project_id = match project {
                 Some(p) => Some(resolve_project(&client, &p, false).await?),

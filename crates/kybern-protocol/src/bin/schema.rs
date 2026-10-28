@@ -79,6 +79,9 @@ fn main() {
     add::<ProjectRepoIdentity>(&mut types, "ProjectRepoIdentity");
     add::<PeerPresence>(&mut types, "PeerPresence");
     add::<Origin>(&mut types, "Origin");
+    add::<OutboxItem>(&mut types, "OutboxItem");
+    add::<OutboxOp>(&mut types, "OutboxOp");
+    add::<PeerDelegationView>(&mut types, "PeerDelegationView");
     add::<InboundInfo>(&mut types, "InboundInfo");
     add::<MoveInfo>(&mut types, "MoveInfo");
     add::<NetworkSettings>(&mut types, "NetworkSettings");
@@ -287,6 +290,15 @@ fn main() {
     method::<PeerRelayOpen>(&mut methods);
     method::<PeerRelayData>(&mut methods);
     method::<PeerRelayClose>(&mut methods);
+    method::<OutboxList>(&mut methods);
+    method::<OutboxRetry>(&mut methods);
+    method::<OutboxCancel>(&mut methods);
+    method::<OutboxEnqueue>(&mut methods);
+    method::<PeerDelegate>(&mut methods);
+    method::<PeerDelegationGet>(&mut methods);
+    method::<PeerDelegationCancel>(&mut methods);
+    method::<PeerGitBundle>(&mut methods);
+    method::<PeerGitImport>(&mut methods);
 
     let doc = json!({
         "protocol_version": PROTOCOL_VERSION,

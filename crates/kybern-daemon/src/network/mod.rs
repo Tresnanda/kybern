@@ -14,9 +14,11 @@
 //! [`Network::publish_ops`], [`peers::Peers`] and [`Network::found`].
 
 pub mod clipboard_filter;
+pub mod git_transfer;
 pub mod keys;
 pub mod membership;
 pub mod ops;
+pub mod outbox;
 pub mod peers;
 pub mod relay;
 pub mod session;
@@ -162,6 +164,8 @@ pub struct Network {
     watching: Mutex<Option<Instant>>,
     wake: Notify,
     changed: broadcast::Sender<()>,
+    /// Outbox items as they change, forwarded to clients as `outbox.changed`.
+    outbox_changed: broadcast::Sender<kybern_protocol::OutboxItem>,
     enabled: AtomicBool,
 }
 
@@ -196,6 +200,7 @@ impl Network {
             watching: Default::default(),
             wake: Notify::new(),
             changed: broadcast::channel(16).0,
+            outbox_changed: broadcast::channel(64).0,
             enabled: AtomicBool::new(true),
         }
     }
@@ -215,7 +220,7 @@ impl Network {
         if self.membership.is_none() {
             return Vec::new();
         }
-        vec![features::NETWORK_V1.to_string(), features::RELAY_V1.to_string()]
+        vec![features::NETWORK_V1.to_string(), features::RELAY_V1.to_string(), features::DELEGATE_REMOTE_V1.to_string()]
     }
 
     /// `settings.network.enabled`, as the worker last saw it.
@@ -243,6 +248,15 @@ impl Network {
     /// changed.
     pub fn subscribe_changes(&self) -> broadcast::Receiver<()> {
         self.changed.subscribe()
+    }
+
+    /// Outbox items as they change.
+    pub fn subscribe_outbox(&self) -> broadcast::Receiver<kybern_protocol::OutboxItem> {
+        self.outbox_changed.subscribe()
+    }
+
+    pub(crate) fn notify_outbox(&self, item: kybern_protocol::OutboxItem) {
+        let _ = self.outbox_changed.send(item);
     }
 
     pub(crate) fn notify_changed(&self) {

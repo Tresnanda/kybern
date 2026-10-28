@@ -97,6 +97,17 @@ impl AppState {
     /// [`AppState::initialize`] with the Tailscale seam and the network's intervals chosen by the
     /// caller: the multi-daemon harness passes a fixture-driven fake and short intervals.
     pub fn initialize_with(paths: &Paths, tailscale: Arc<dyn crate::network::Tailscale>, timing: crate::network::Timing) -> Result<Self> {
+        Self::initialize_with_drivers(paths, tailscale, timing, DriverRegistry::with_cache_dir(&paths.root.join("cache")))
+    }
+
+    /// [`AppState::initialize_with`] with the harness drivers chosen by the caller (the multi-daemon
+    /// harness registers scripted ones).
+    pub fn initialize_with_drivers(
+        paths: &Paths,
+        tailscale: Arc<dyn crate::network::Tailscale>,
+        timing: crate::network::Timing,
+        drivers: DriverRegistry,
+    ) -> Result<Self> {
         let store = Store::open(&paths.db)?;
         let bootstrap_token = crate::auth::ensure_bootstrap(&store, &paths.token_file)?;
         let environment_id = match store.meta_get("environment_id")? {
@@ -108,7 +119,6 @@ impl AppState {
             }
         };
         let (events, _) = crate::bounded_broadcast::channel(8192, 8 * 1024 * 1024);
-        let drivers = DriverRegistry::with_cache_dir(&paths.root.join("cache"));
         // Secret store (S3): move plaintext provider keys out of settings.json before it is read.
         crate::secret_store::start(&paths.root, &paths.settings, &store);
         let settings = SettingsStore::load(&paths.settings)?;
@@ -117,12 +127,16 @@ impl AppState {
         let terminals = TerminalManager::default();
         let native_tools = crate::native_tools_mcp::NativeToolsGateway::default();
         let previews = Arc::new(crate::previews::tickets::PreviewTickets::new());
+        // The network comes first: remote delegation reaches other machines through it.
+        let network = Arc::new(crate::network::Network::new(&paths.root, &store, &environment_id, tailscale, timing));
+        let shutdown = CancellationToken::new();
+        let hub = crate::network::outbox::NetworkHub::new(network.clone(), shutdown.clone());
         let orchestrator = Orchestrator::new(store.clone(), drivers.clone(), events.clone(), paths.clone(), settings.clone())
             .with_terminal_manager(terminals.clone())
             .with_previews(previews.clone())
-            .with_native_tools(native_tools.clone());
+            .with_native_tools(native_tools.clone())
+            .with_remote_hub(hub);
         let provider_catalogs = orchestrator.provider_catalog_cache();
-        let network = Arc::new(crate::network::Network::new(&paths.root, &store, &environment_id, tailscale, timing));
         network.set_enabled(settings.get().network.enabled);
         Ok(Self {
             inner: Arc::new(Inner {
@@ -157,7 +171,7 @@ impl AppState {
                 bootstrap_token,
                 environment_id,
                 started_at: Utc::now(),
-                shutdown: CancellationToken::new(),
+                shutdown,
                 connections: std::sync::atomic::AtomicUsize::new(0),
                 idle_since: std::sync::RwLock::new(None),
                 on_battery: std::sync::RwLock::new(None),

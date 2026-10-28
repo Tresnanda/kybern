@@ -6,6 +6,7 @@
 mod groups;
 mod network;
 mod notes;
+mod outbox;
 mod projection;
 mod schema;
 mod secrets;
@@ -1842,7 +1843,7 @@ fn stamp_runtime_task_sequence(payload: &mut EventPayload, seq: EventSeq) -> boo
 
 const THREAD_SELECT: &str = "SELECT id, project_id, title, provider_kind, provider_instance, model, effort, permission_mode, status,
     worktree_path, worktree_branch, cwd, provider_session_id, pinned, created_at, updated_at, last_seq,
-    parent_thread_id, coordinator_project_id, subagent, delegation, members FROM threads";
+    parent_thread_id, coordinator_project_id, subagent, delegation, members, origin FROM threads";
 
 const THREAD_MESSAGE_SELECT: &str = "SELECT id, operation_id, from_thread_id, to_thread_id, purpose, reply_to, body, delivery, state,
     held_reason, created_at, updated_at FROM thread_messages";
@@ -1964,6 +1965,7 @@ fn row_to_thread(r: &rusqlite::Row<'_>) -> rusqlite::Result<Thread> {
         subagent: r.get::<_, Option<String>>(19)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
         delegation: r.get::<_, Option<String>>(20)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
         members: r.get::<_, Option<String>>(21)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?.unwrap_or_default(),
+        origin: r.get::<_, Option<String>>(22)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
     })
 }
 
@@ -2160,8 +2162,8 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
     c.execute(
         "INSERT INTO threads(id, project_id, title, provider_kind, provider_instance, model, effort, permission_mode,
                     status, worktree_path, worktree_branch, cwd, provider_session_id, pinned, created_at, updated_at, last_seq,
-                    parent_thread_id, coordinator_project_id, subagent, delegation, members)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
+                    parent_thread_id, coordinator_project_id, subagent, delegation, members, origin)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
                  ON CONFLICT(id) DO UPDATE SET
                     provider_kind = excluded.provider_kind, provider_instance = excluded.provider_instance,
                     title = excluded.title, model = excluded.model, effort = excluded.effort, permission_mode = excluded.permission_mode,
@@ -2172,7 +2174,8 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
                     coordinator_project_id = excluded.coordinator_project_id,
                     subagent = COALESCE(excluded.subagent, threads.subagent),
                     delegation = COALESCE(excluded.delegation, threads.delegation),
-                    members = COALESCE(excluded.members, threads.members)",
+                    members = COALESCE(excluded.members, threads.members),
+                    origin = COALESCE(threads.origin, excluded.origin)",
         params![
             t.id.to_string(),
             t.project_id.to_string(),
@@ -2196,6 +2199,7 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
             t.subagent.as_ref().map(serde_json::to_string).transpose()?,
             t.delegation.as_ref().map(serde_json::to_string).transpose()?,
             (!t.members.is_empty()).then(|| serde_json::to_string(&t.members)).transpose()?,
+            t.origin.as_ref().map(serde_json::to_string).transpose()?,
         ],
     )?;
     Ok(())
@@ -2337,6 +2341,7 @@ mod tests {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
+            origin: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),
@@ -2403,6 +2408,7 @@ mod tests {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
+            origin: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),
@@ -2526,6 +2532,7 @@ mod tests {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
+            origin: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),
@@ -2629,6 +2636,7 @@ mod tests {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
+            origin: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),
@@ -3376,6 +3384,7 @@ mod orchestration_tests {
             last_seq: 0,
             parent_thread_id: parent,
             coordinator_project_id: None,
+            origin: None,
             subagent: None,
             delegation,
             members: Vec::new(),
@@ -3456,6 +3465,34 @@ mod orchestration_tests {
         assert_eq!(conn.query_row("SELECT COUNT(*) FROM projects", [], |r| r.get::<_, i64>(0)).unwrap(), before);
         conn.query_row("SELECT COUNT(delegation) FROM threads", [], |r| r.get::<_, i64>(0)).unwrap();
         conn.query_row("SELECT COUNT(*) FROM thread_messages", [], |r| r.get::<_, i64>(0)).unwrap();
+    }
+
+    #[test]
+    fn a_threads_origin_is_written_once_and_never_changes() {
+        let store = Store::open_in_memory().unwrap();
+        let project = project(&store);
+        let mut thread = thread(&project, None, None);
+        store.thread_upsert(&thread).unwrap();
+        assert_eq!(store.thread_get(thread.id).unwrap().unwrap().origin, None, "work the user started here has none");
+        let origin = |machine: &str| Origin {
+            machine_id: machine.into(),
+            machine_name: machine.into(),
+            thread_id: Some(Uuid::now_v7()),
+            operation_id: Uuid::now_v7(),
+            kind: OriginKind::ToolCall,
+            permission_cap: PermissionMode::Supervised,
+            hops: vec![machine.into()],
+        };
+        let first = origin("mac");
+        thread.origin = Some(first.clone());
+        store.thread_upsert(&thread).unwrap();
+        assert_eq!(store.thread_get(thread.id).unwrap().unwrap().origin, Some(first.clone()));
+        // A later write, from anywhere, cannot replace or clear it.
+        thread.origin = Some(origin("elsewhere"));
+        store.thread_upsert(&thread).unwrap();
+        thread.origin = None;
+        store.thread_upsert(&thread).unwrap();
+        assert_eq!(store.thread_get(thread.id).unwrap().unwrap().origin, Some(first));
     }
 
     #[test]
@@ -3872,6 +3909,7 @@ mod coordinator_upgrade_tests {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: Some(project.id),
+            origin: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),

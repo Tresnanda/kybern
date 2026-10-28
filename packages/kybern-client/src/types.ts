@@ -333,6 +333,11 @@ export interface Thread {
    * `worktree.path` and `cwd` are the container holding one worktree per member.
    */
   members?: ThreadMember[];
+  /**
+   * Set when another machine started this thread (a remote delegation). Only a daemon sets it,
+   * from the live session, and it never changes. Absent for work the user started here.
+   */
+  origin?: Origin | null;
 }
 
 export type DelegationRole = "implementation" | "research" | "review" | "design" | "test" | "general";
@@ -3611,6 +3616,130 @@ export interface Origin {
   hops?: MachineId[];
 }
 
+// ---- remote delegation and the outbox (R1; design §6.2, §6.4) ----
+
+export const OUTBOX_CHANGED_NOTIFICATION = "outbox.changed";
+/** Days an outbox item waits for its machine before it expires (Retry queues it again). */
+export const OUTBOX_EXPIRY_DAYS = 7;
+
+export type OutboxKind =
+  | "thread_create"
+  | "thread_send"
+  | "delegate"
+  | "files_push"
+  | "settings_patch"
+  | "secrets_put"
+  | "fork";
+export type OutboxState = "queued" | "sending" | "delivered" | "failed" | "expired" | "cancelled";
+
+/** One queued piece of work for another machine. */
+export interface OutboxItem {
+  id: Uuid;
+  /** The key the target deduplicates on, so a delivery that is repeated runs once. */
+  operation_id: Uuid;
+  /** The machine the work is for. */
+  target: MachineId;
+  kind: OutboxKind;
+  payload: unknown;
+  /** Who started the work, for agent work. Stamped by the daemon. */
+  origin?: Origin | null;
+  state: OutboxState;
+  attempts: number;
+  next_attempt_at?: DateTime | null;
+  last_error?: string | null;
+  /** What the target answered, once delivered. */
+  result?: unknown;
+  created_at: DateTime;
+  expires_at: DateTime;
+  updated_at: DateTime;
+}
+
+export interface OutboxOp {
+  kind: OutboxKind;
+  payload: unknown;
+  operation_id?: Uuid | null;
+}
+
+/** Where a delegation that runs on another machine stands, on the delegating machine. */
+export type RemoteChildState = "pending" | "running" | "completed" | "failed" | "cancelled" | "unreachable";
+
+export interface RemoteChild {
+  task_id: Uuid;
+  operation_id: Uuid;
+  parent_thread_id: ThreadId;
+  target: MachineId;
+  remote_thread_id?: ThreadId | null;
+  state: RemoteChildState;
+  /** Stop was asked for and the target has not confirmed it yet. */
+  stop_requested?: boolean;
+  last_seq: number;
+  title: string;
+  provider?: ProviderKind | null;
+  model?: string | null;
+  info: DelegationInfo;
+  created_at: DateTime;
+  updated_at: DateTime;
+}
+
+export interface PeerDelegateParams {
+  operation_id: Uuid;
+  task_id: Uuid;
+  origin: Origin;
+  parent_title: string;
+  task: string;
+  title?: string | null;
+  role?: DelegationRole;
+  provider?: ProviderKind | null;
+  model?: string | null;
+  effort?: string | null;
+  permission_mode: PermissionMode;
+  workspace?: DelegationWorkspace;
+  owns?: string[];
+  repo: RepoIdentity;
+  project?: string | null;
+  base_commit?: string | null;
+}
+
+export interface PeerDelegateResult {
+  task_id: Uuid;
+  thread_id: ThreadId;
+  status: DelegationStatus;
+  permission_mode: PermissionMode;
+  project_name?: string | null;
+  branch?: string | null;
+}
+
+export interface PeerDelegationView {
+  task_id: Uuid;
+  thread_id: ThreadId;
+  title: string;
+  provider: ProviderKind;
+  model?: string | null;
+  role: DelegationRole;
+  workspace: DelegationWorkspace;
+  status: DelegationStatus;
+  result?: string | null;
+  error?: string | null;
+  files_touched?: string[];
+  base_commit?: string | null;
+  branch?: string | null;
+  head_commit?: string | null;
+  diffstat?: DiffStat | null;
+  started_at: DateTime;
+  completed_at?: DateTime | null;
+  last_seq: number;
+}
+
+export interface PeerGitBundleParams { operation_id: Uuid; offset: number; total: number; data: string }
+export interface PeerGitImportParams {
+  operation_id: Uuid;
+  total: number;
+  sha256: string;
+  commit: string;
+  repo: RepoIdentity;
+  project?: string | null;
+}
+
 export interface InboundInfo { machine_id: MachineId; thread_id: ThreadId; title: string }
 export type MoveState = "departing" | "departed" | "arrived";
 export interface MoveInfo {
@@ -3827,6 +3956,15 @@ export interface Methods {
   "peer.relay.open": [PeerRelayOpenParams, Empty];
   "peer.relay.data": [PeerRelayDataParams, Empty];
   "peer.relay.close": [PeerRelayCloseParams, Empty];
+  "outbox.list": [{ target?: MachineId | null; state?: OutboxState | null }, { items: OutboxItem[] }];
+  "outbox.retry": [{ id: Uuid }, OutboxItem];
+  "outbox.cancel": [{ id: Uuid }, OutboxItem];
+  "outbox.enqueue": [{ target: MachineId; operation: OutboxOp }, OutboxItem];
+  "peer.delegate": [PeerDelegateParams, PeerDelegateResult];
+  "peer.delegation.get": [{ task_id: Uuid; since_seq?: number | null; wait_ms?: number | null }, PeerDelegationView];
+  "peer.delegation.cancel": [{ task_id: Uuid }, PeerDelegationView];
+  "peer.git.bundle": [PeerGitBundleParams, { received: number }];
+  "peer.git.import": [PeerGitImportParams, { commit: string; imported_ref: string }];
 }
 
 export type MethodName = keyof Methods;

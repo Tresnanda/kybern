@@ -244,6 +244,10 @@ async fn serve() -> Result<()> {
     // Discovery, the network listener and the sessions with other members. It opens the Tailscale
     // listener itself once the network is on and Tailscale is running (design §3.1).
     let network_worker = tokio::spawn(network::peers::run(state.clone()));
+    // Delivery of work queued for machines that were offline, and the followers of agents that run
+    // on other machines (they pick up where a restart left them).
+    let outbox_worker = tokio::spawn(network::outbox::run(state.clone()));
+    state.orchestrator.remote_start();
 
     if args.pair {
         let endpoints = crate::access::endpoints(&state).await;
@@ -269,6 +273,7 @@ async fn serve() -> Result<()> {
     queue_worker.abort();
     notes_worker.abort();
     let _ = network_worker.await;
+    outbox_worker.abort();
     let _ = maintenance_worker.await;
     let _ = update_worker.await;
     let _ = self_update_worker.await;

@@ -452,6 +452,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let mut account_logins = ctx.principal.has(Scope::OrchestrationRead).then(|| state.account_logins.subscribe());
     let mut session_imports = ctx.principal.has(Scope::OrchestrationRead).then(|| state.session_imports.subscribe());
     let mut projects = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_projects());
+    let mut outbox = ctx.principal.has(Scope::OrchestrationRead).then(|| state.network.subscribe_outbox());
     let mut workspace_progress = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_workspace_progress());
     let mut spaces = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_spaces());
     let mut preview_requests = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_preview_requests());
@@ -542,6 +543,19 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                     // Each notification carries the whole list; the next one catches up.
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(_) => projects = None,
+                }
+            }
+            changed = async {
+                match outbox.as_mut() {
+                    Some(outbox) => outbox.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match changed {
+                    Ok(item) => { let _ = ctx.out.notify(kybern_protocol::OUTBOX_CHANGED_NOTIFICATION, item).await; }
+                    // A missed item shows the next time the list is read.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => outbox = None,
                 }
             }
             progress = async {

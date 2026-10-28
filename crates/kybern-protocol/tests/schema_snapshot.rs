@@ -403,7 +403,8 @@ fn every_network_method_has_a_scope_and_peer_methods_need_a_machine_scope() {
         assert!(matches!(method.scope, Some(Scope::NetworkRead | Scope::NetworkAdmin)), "{}", method.name);
     }
     let peers: Vec<_> = METHODS.iter().filter(|m| m.name.starts_with("peer.")).collect();
-    assert_eq!(peers.len(), 8);
+    // Eight from N1; later packages add theirs (R1: delegate, delegation.get/cancel, git.bundle/import).
+    assert!(peers.len() >= 8);
     assert!(peers.iter().all(|m| m.scope.is_some_and(Scope::is_machine)));
     assert_eq!(NetworkStatusMethod::NAME, "network.status");
     assert_eq!(NETWORK_CHANGED_NOTIFICATION, "network.changed");
@@ -422,4 +423,53 @@ fn an_older_daemon_info_and_project_still_parse_and_the_network_defaults_are_on(
     assert_eq!(settings.network, NetworkSettings { enabled: true, port: DEFAULT_PORT });
     assert_eq!(NETWORK_PROTOCOL, 1);
     assert_eq!(features::ALL.len(), 13);
+}
+
+#[test]
+fn outbox_and_remote_delegation_schemas_are_stable() {
+    insta::assert_json_snapshot!("outbox_item", schema_for!(OutboxItem));
+    insta::assert_json_snapshot!("outbox_op", schema_for!(OutboxOp));
+    insta::assert_json_snapshot!("outbox_remote_child", schema_for!(RemoteChild));
+    insta::assert_json_snapshot!("peer_delegate_params", schema_for!(PeerDelegateParams));
+    insta::assert_json_snapshot!("peer_delegate_result", schema_for!(PeerDelegateResult));
+    insta::assert_json_snapshot!("peer_delegation_view", schema_for!(PeerDelegationView));
+    insta::assert_json_snapshot!("peer_git_bundle_params", schema_for!(PeerGitBundleParams));
+    insta::assert_json_snapshot!("peer_git_import_params", schema_for!(PeerGitImportParams));
+}
+
+#[test]
+fn outbox_states_and_kinds_use_the_names_the_tables_check() {
+    for (state, name) in [
+        (OutboxState::Queued, "queued"),
+        (OutboxState::Sending, "sending"),
+        (OutboxState::Delivered, "delivered"),
+        (OutboxState::Failed, "failed"),
+        (OutboxState::Expired, "expired"),
+        (OutboxState::Cancelled, "cancelled"),
+    ] {
+        assert_eq!(serde_json::to_value(state).unwrap(), name);
+        assert_eq!(state.as_str(), name);
+    }
+    for kind in [
+        OutboxKind::ThreadCreate,
+        OutboxKind::ThreadSend,
+        OutboxKind::Delegate,
+        OutboxKind::FilesPush,
+        OutboxKind::SettingsPatch,
+        OutboxKind::SecretsPut,
+        OutboxKind::Fork,
+    ] {
+        assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
+    }
+    assert!(OutboxState::Expired.is_settled() && !OutboxState::Sending.is_settled());
+    assert_eq!(OUTBOX_EXPIRY_DAYS, 7);
+}
+
+#[test]
+fn remote_child_states_map_to_the_status_the_tools_show() {
+    assert_eq!(RemoteChildState::Pending.delegation_status(), DelegationStatus::Running);
+    assert_eq!(RemoteChildState::Unreachable.delegation_status(), DelegationStatus::Failed);
+    assert_eq!(RemoteChildState::Cancelled.delegation_status(), DelegationStatus::Cancelled);
+    assert!(!RemoteChildState::Running.is_terminal() && RemoteChildState::Completed.is_terminal());
+    assert_eq!(serde_json::to_value(RemoteChildState::Unreachable).unwrap(), "unreachable");
 }

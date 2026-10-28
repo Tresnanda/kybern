@@ -43,6 +43,7 @@ mod notes;
 mod omp_recovery;
 mod pick_request;
 mod project_map;
+pub(crate) mod remote_delegation;
 mod request_tools;
 mod rotation;
 mod secret_request;
@@ -543,6 +544,8 @@ struct Inner {
     subagents: std::sync::Mutex<subagents::SubagentRouter>,
     /// Orchestrator V2 delegation engine state (batches, waiters).
     delegation: delegation::DelegationState,
+    /// Remote delegation: the machine hub, followers of children on other machines.
+    remote: remote_delegation::RemoteState,
     /// Orchestrator V2 messaging engine state (blocked askers, owed answers, edit guards).
     messaging: messaging::MessagingState,
     /// Test hooks for the Coordinator's git tool (the `gh` program, git environment).
@@ -921,6 +924,7 @@ impl Orchestrator {
                 agent_item_ops: Mutex::new(()),
                 subagents: std::sync::Mutex::new(Default::default()),
                 delegation: Default::default(),
+                remote: Default::default(),
                 messaging: Default::default(),
                 lead_git: Default::default(),
                 rotation: Default::default(),
@@ -1544,6 +1548,7 @@ impl Orchestrator {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
+            origin: None,
             subagent: None,
             delegation: None,
             members,
@@ -1736,6 +1741,7 @@ impl Orchestrator {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
+            origin: None,
             subagent: None,
             delegation: None,
             members,
@@ -5362,6 +5368,7 @@ mod tests {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
+            origin: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),
@@ -5763,6 +5770,7 @@ mod tests {
                 last_seq: 0,
                 parent_thread_id: None,
                 coordinator_project_id: None,
+                origin: None,
                 subagent: None,
                 delegation: None,
                 members: Vec::new(),
@@ -8485,6 +8493,7 @@ for line in sys.stdin:
     }
 
     include!("orchestrator/delegation_tests.rs");
+    include!("orchestrator/remote_delegation_tests.rs");
     include!("orchestrator/child_questions_tests.rs");
     include!("orchestrator/secret_tests.rs");
     include!("orchestrator/request_tests.rs");

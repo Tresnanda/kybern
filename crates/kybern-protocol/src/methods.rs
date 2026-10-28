@@ -13,6 +13,7 @@ use crate::auth::Scope;
 use crate::event::ThreadEvent;
 use crate::model::*;
 use crate::network::*;
+use crate::outbox::*;
 use crate::thread_read::*;
 
 /// Static description of a method, used for auth checks and docs.
@@ -4141,6 +4142,17 @@ method!(PeerRelayOpen, "peer.relay.open", Some(Scope::MachineRelay), PeerRelayOp
 method!(PeerRelayData, "peer.relay.data", Some(Scope::MachineRelay), PeerRelayDataParams, Empty);
 method!(PeerRelayClose, "peer.relay.close", Some(Scope::MachineRelay), PeerRelayCloseParams, Empty);
 
+// Remote delegation and the outbox (M2, R1; payloads in outbox.rs).
+method!(OutboxList, "outbox.list", Some(Scope::OrchestrationRead), OutboxListParams, OutboxListResult);
+method!(OutboxRetry, "outbox.retry", Some(Scope::OrchestrationOperate), OutboxIdParams, OutboxItem);
+method!(OutboxCancel, "outbox.cancel", Some(Scope::OrchestrationOperate), OutboxIdParams, OutboxItem);
+method!(OutboxEnqueue, "outbox.enqueue", Some(Scope::OrchestrationOperate), OutboxEnqueueParams, OutboxItem);
+method!(PeerDelegate, "peer.delegate", Some(Scope::MachineDelegate), PeerDelegateParams, PeerDelegateResult);
+method!(PeerDelegationGet, "peer.delegation.get", Some(Scope::MachineDelegate), PeerDelegationGetParams, PeerDelegationView);
+method!(PeerDelegationCancel, "peer.delegation.cancel", Some(Scope::MachineDelegate), PeerDelegationCancelParams, PeerDelegationView);
+method!(PeerGitBundle, "peer.git.bundle", Some(Scope::MachineDelegate), PeerGitBundleParams, PeerGitBundleResult);
+method!(PeerGitImport, "peer.git.import", Some(Scope::MachineDelegate), PeerGitImportParams, PeerGitImportResult);
+
 /// Registry used by the daemon's auth check and the schema dump.
 pub struct MethodInfo {
     pub name: &'static str,
@@ -4358,6 +4370,15 @@ registry!(
     PeerRelayOpen,
     PeerRelayData,
     PeerRelayClose,
+    OutboxList,
+    OutboxRetry,
+    OutboxCancel,
+    OutboxEnqueue,
+    PeerDelegate,
+    PeerDelegationGet,
+    PeerDelegationCancel,
+    PeerGitBundle,
+    PeerGitImport,
 );
 
 pub fn scope_for(method: &str) -> Option<Option<Scope>> {

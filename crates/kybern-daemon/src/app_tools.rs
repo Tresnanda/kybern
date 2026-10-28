@@ -415,6 +415,7 @@ fn agent_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
                 "workspace \"shared\" (default) works in your checkout and branch. The agent must not commit, stash, reset, checkout or rebase, and you integrate its edits; list owns globs (such as src/api/**) for the paths it may edit so Kybern warns it when it strays onto a sibling's. ",
                 "Choose workspace \"worktree\" for parallel implementers that edit overlapping code: the agent gets its own git worktree and branch (kybern/<id>) seeded from your current checkout (including uncommitted changes), commits there, and its result carries the branch, base commit, commit and diffstat. If your checkout is clean, merge the branch; otherwise apply only the agent's changes with `git diff <base>..<head> | git apply --3way` so Kybern's snapshot commit never lands in your history. ",
                 "The number of agents running at once and the depth of delegation are limited in Settings. ",
+                "Pass machine to run the agent on another machine of your network (kybern_agent_capabilities lists them): it works in that machine's own checkout of this repository, a worktree starts from your current changes (sent over the network, never pushed), and an offline machine keeps the task waiting until it returns. ",
                 "Prefer your harness's own subagents for quick same-harness work they can run on the model you want; use this tool for other harnesses or models, or work Kybern should track and show to the user."
             ).into(),
             input_schema: object(json!({
@@ -429,7 +430,9 @@ fn agent_tool_definitions() -> Vec<kybern_drivers::NativeToolDefinition> {
                 "workspace": {"enum":["shared","worktree",null],"description":"shared (default) or worktree (git projects only)."},
                 "owns": {"type":["array","null"],"items":{"type":"string"},"description":"Shared workspace only: globs relative to the checkout root this agent owns, such as src/api/**."},
                 "mode": {"enum":["async","wait",null],"description":"async (default) or wait."},
-                "timeout_ms": {"type":["integer","null"],"minimum":1000,"maximum":50000,"description":"wait mode only; default 45000, at most 50000."}
+                "timeout_ms": {"type":["integer","null"],"minimum":1000,"maximum":50000,"description":"wait mode only; default 45000, at most 50000."},
+                "machine": {"type":["string","null"],"description":"Run the agent on another machine of your network: a name or id from kybern_agent_capabilities. Needs a git repository. Omit to run here."},
+                "project": {"type":["string","null"],"description":"With machine: which of that machine's checkouts of this repository to use when it has several (a project name or path)."}
             }), &["task"]),
         },
         NativeToolDefinition {
@@ -710,6 +713,7 @@ mod tests {
                 last_seq: 0,
                 parent_thread_id: None,
                 coordinator_project_id: None,
+                origin: None,
                 subagent: None,
                 delegation: None,
                 members: Vec::new(),

@@ -9,7 +9,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::event::NoticeLevel;
-use crate::network::{NetworkSettings, RepoIdentity};
+use crate::network::{NetworkSettings, Origin, RepoIdentity};
 
 pub type ProjectId = Uuid;
 /// Daemon-owned neutral workspace used by chats that are not attached to a
@@ -524,6 +524,10 @@ pub struct Thread {
     /// that holds one worktree per included member.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub members: Vec<ThreadMember>,
+    /// Set when another machine started this thread (a remote delegation, a forwarded call). Only a
+    /// daemon sets it, from the live session, and it never changes. Absent for work the user started here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
 }
 
 /// What the delegating agent asked this child to be.

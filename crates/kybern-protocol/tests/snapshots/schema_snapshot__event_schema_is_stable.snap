@@ -1278,6 +1278,17 @@ expression: schema_for!(ThreadEvent)
           "items": {
             "$ref": "#/$defs/ThreadMember"
           }
+        },
+        "origin": {
+          "description": "Set when another machine started this thread (a remote delegation, a forwarded call). Only a\ndaemon sets it, from the live session, and it never changes. Absent for work the user started here.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Origin"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -1943,6 +1954,118 @@ expression: schema_for!(ThreadEvent)
         "name",
         "included",
         "source_path"
+      ]
+    },
+    "Origin": {
+      "description": "Where work that another machine started came from. Only a daemon sets it, and it never changes.",
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "machine_name": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "operation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "$ref": "#/$defs/OriginKind"
+        },
+        "permission_cap": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "hops": {
+          "description": "Machine ids, oldest first; at most one in v1.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "machine_id",
+        "machine_name",
+        "operation_id",
+        "kind",
+        "permission_cap"
+      ]
+    },
+    "OriginKind": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "composer"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "delegation"
+            }
+          },
+          "required": [
+            "kind",
+            "task_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "tool_call"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "fork"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "move"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
       ]
     },
     "QueuedMessage": {

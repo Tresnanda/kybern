@@ -1,0 +1,43 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(OutboxOp)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OutboxOp",
+  "description": "Work a client queues for a machine it cannot reach right now.",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "$ref": "#/$defs/OutboxKind"
+    },
+    "payload": true,
+    "operation_id": {
+      "description": "Reuse the same key to make a repeated enqueue return the first item.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    }
+  },
+  "required": [
+    "kind",
+    "payload"
+  ],
+  "$defs": {
+    "OutboxKind": {
+      "description": "What a queued item does when it is delivered (§6.4).",
+      "type": "string",
+      "enum": [
+        "thread_create",
+        "thread_send",
+        "delegate",
+        "files_push",
+        "settings_patch",
+        "secrets_put",
+        "fork"
+      ]
+    }
+  }
+}

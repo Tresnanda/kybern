@@ -257,6 +257,7 @@ impl Orchestrator {
                     last_seq: 0,
                     parent_thread_id: Some(parent),
                     coordinator_project_id: None,
+                    origin: None,
                     subagent: Some(info.clone()),
                     delegation: None,
                     members: Vec::new(),

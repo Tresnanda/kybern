@@ -1173,6 +1173,11 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             events.truncate(limit as usize);
             ok(EventsRangeResult { events, has_more })
         }
+        // Remote delegation's outbox (R1).
+        OutboxList::NAME => ok(crate::network::outbox::list(state, parse_or_default(params)?)?),
+        OutboxRetry::NAME => ok(crate::network::outbox::retry(state, parse(params)?)?),
+        OutboxCancel::NAME => ok(crate::network::outbox::cancel(state, parse(params)?)?),
+        OutboxEnqueue::NAME => ok(crate::network::outbox::enqueue(state, parse(params)?)?),
         // N1: every M1 `network.*`, `machines.*` and `peer.*` method is in the protocol and the
         // registry; its handler lands with the package that owns it (N2-N4), in that package's module.
         NetworkStatusMethod::NAME
