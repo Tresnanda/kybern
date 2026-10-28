@@ -97,6 +97,24 @@ expression: schema_for!(ProjectsChangedNotification)
           "description": "The user hid the \"Add shared instructions\" offer for this group.",
           "type": "boolean"
         },
+        "repo": {
+          "description": "What identifies this repository across machines, refreshed with Git status. Absent until\nthe first refresh and for folders that are not repositories. For a group, the primary member's.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RepoIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "repos": {
+          "description": "A group's members' identities, sorted. Empty for single projects.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RepoIdentity"
+          }
+        },
         "created_at": {
           "type": "string",
           "format": "date-time"
@@ -336,6 +354,26 @@ expression: schema_for!(ProjectsChangedNotification)
           "const": "not_git"
         }
       ]
+    },
+    "RepoIdentity": {
+      "description": "What makes two checkouts the same logical project on different machines.",
+      "type": "object",
+      "properties": {
+        "root_commit": {
+          "description": "The smallest hash in `git rev-list --max-parents=0 HEAD`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remote": {
+          "description": "The `origin` URL normalized to `host/owner/repo`: lowercase, no scheme, user or `.git`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
     }
   }
 }

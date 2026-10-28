@@ -84,6 +84,7 @@ export const codes = {
   PROVIDER_UNAVAILABLE: -32010,
   PROVIDER_ERROR: -32011,
   THREAD_BUSY: -32012,
+  NOT_AVAILABLE: -32013,
 } as const;
 
 // ---- auth ----
@@ -94,7 +95,10 @@ export type Scope =
   | "terminal_operate"
   | "review_write"
   | "access_read"
-  | "access_write";
+  | "access_write"
+  | "network_read"
+  | "network_admin"
+  | MachineScope;
 
 /** Query parameter accepted as a fallback for clients that cannot set headers. */
 export const AUTH_QUERY_PARAM = "token";
@@ -219,6 +223,10 @@ export interface Project {
   worktree_copy?: string[];
   /** The user hid the "Add shared instructions" offer for this group. */
   instructions_offer_dismissed?: boolean;
+  /** What identifies this repository across machines; absent until the first Git refresh. A group's is its primary member's. */
+  repo?: RepoIdentity | null;
+  /** A group's members' identities, sorted. */
+  repos?: RepoIdentity[];
   created_at: DateTime;
   updated_at: DateTime;
 }
@@ -1521,6 +1529,12 @@ export interface DaemonInfo {
   data_dir: string;
   scopes: Scope[];
   started_at: DateTime;
+  /** This machine's id on the network, equal to `environment_id`. Absent from a daemon older than the network. */
+  machine_id?: string;
+  /** Version of the daemon-to-daemon protocol; absent or 0 from a daemon older than the network. */
+  network_protocol?: number;
+  /** Feature names this daemon supports, such as `network.v1`. See `NETWORK_FEATURES`. */
+  features?: string[];
 }
 
 /** What the daemon is holding open right now. */
@@ -2516,6 +2530,8 @@ export interface Settings {
   ask_deadlines?: AskDeadlineSettings;
   /** Folders outside a project the user allowed Preview to serve files from. */
   preview_allowed_folders?: string[];
+  /** Joining and staying joined to the machine network. Absent from a daemon older than the network. */
+  network?: NetworkSettings;
 }
 
 /** Limits for `kybern_agent_delegate`, read each time an agent delegates. */
@@ -3280,6 +3296,327 @@ export interface QueuedMessage {
   message: UserMessage;
 }
 
+// ---- machine network (ADE-86; mirrors crates/kybern-protocol/src/network.rs) ----
+
+export const NETWORK_PROTOCOL = 1;
+export const NETWORK_CHANGED_NOTIFICATION = "network.changed";
+export const NETWORK_MACHINE_CHANGED_NOTIFICATION = "network.machine.changed";
+
+/** Feature names a daemon lists in `DaemonInfo.features` and `peer.presence`. */
+export const NETWORK_FEATURES = {
+  network: "network.v1",
+  relay: "relay.v1",
+  delegateRemote: "delegate.remote.v1",
+  toolsForward: "tools.forward.v1",
+  fork: "fork.v1",
+  move: "move.v1",
+  filesPush: "files.push.v1",
+  clipboard: "clipboard.v1",
+  ports: "ports.v1",
+  settingsFanout: "settings.fanout.v1",
+  notesFederated: "notes.federated.v1",
+  secretsStore: "secrets.store.v1",
+  loginBroker: "login.broker.v1",
+} as const;
+
+/** Scopes only a daemon-to-daemon grant carries, never a device token. */
+export type MachineScope =
+  | "machine_peer"
+  | "machine_relay"
+  | "machine_delegate"
+  | "machine_tools"
+  | "machine_terminals"
+  | "machine_files"
+  | "machine_clipboard"
+  | "machine_clipboard_auto"
+  | "machine_ports"
+  | "machine_settings"
+  | "machine_secrets"
+  | "machine_logins";
+
+/** The `settings.network` section. */
+export interface NetworkSettings {
+  /** "Connect to your other machines". On by default. */
+  enabled: boolean;
+  /** The fixed port the Tailscale listener binds; the daemon tries the next six when it is taken. */
+  port: number;
+}
+
+/** A machine's id: the daemon's `environment_id`. */
+export type MachineId = string;
+
+/** What makes two checkouts the same logical project on different machines. */
+export interface RepoIdentity {
+  /** The smallest hash in `git rev-list --max-parents=0 HEAD`. */
+  root_commit?: string | null;
+  /** The `origin` URL as `host/owner/repo`: lowercase, no scheme, user or `.git`. */
+  remote?: string | null;
+}
+
+/** What `projects.repo_identity` stores: a single project has `repo`; a group also has `repos`. */
+export interface ProjectRepoIdentity {
+  repo?: RepoIdentity | null;
+  repos?: RepoIdentity[];
+}
+
+export interface MachineDescriptor {
+  machine_id: MachineId;
+  name: string;
+  os: string;
+  /** Ed25519 public key, standard base64. */
+  signing_key: string;
+  /** X25519 public key, standard base64. */
+  sealing_key: string;
+  ts_node_id?: string | null;
+  ts_name?: string | null;
+  port?: number | null;
+}
+
+export type JoinVia = "auto" | "found" | "code" | "migrate";
+export type RemoveReason = "user" | "stolen" | "rejoin";
+
+export type OpKind =
+  | { kind: "genesis"; owner_login: string; tailnet: string; machine: MachineDescriptor }
+  | { kind: "add"; machine: MachineDescriptor; via: JoinVia }
+  | { kind: "remove"; machine_id: MachineId; ts_node_id?: string | null; reason: RemoveReason }
+  | { kind: "set"; key: string; value: JsonValue }
+  | { kind: "merge"; other_network_id: string; other_genesis: OpEnvelope }
+  /** A kind this build does not know: kept, verified and gossiped, otherwise ignored. */
+  | { kind: string };
+
+/** The signed JSON body of an operation, parsed. */
+export type OpBody = {
+  v: number;
+  network_id: string;
+  at: DateTime;
+  lamport: number;
+} & OpKind;
+
+/** An operation as stored and sent. `body` is the exact signed JSON text. */
+export interface OpEnvelope {
+  /** `sha256(body)`, lowercase hex. */
+  id: string;
+  body: string;
+  signer: MachineId;
+  /** Ed25519 signature, standard base64. */
+  signature: string;
+}
+
+export type MachineStatus = "online" | "relaying" | "offline" | "paused";
+
+export interface HarnessSummary {
+  kind: ProviderKind;
+  available: boolean;
+  signed_in?: boolean | null;
+  version?: string | null;
+}
+
+/** One member as Settings → Machines shows it. */
+export interface MachineCard {
+  machine_id: MachineId;
+  name: string;
+  os: string;
+  arch?: string | null;
+  ts_name?: string | null;
+  status: MachineStatus;
+  is_self?: boolean;
+  version?: string | null;
+  network_protocol?: number;
+  features?: string[];
+  last_seen_at?: DateTime | null;
+  /** The member relaying to this machine when `status` is `relaying`. */
+  relay_via?: MachineId | null;
+  harnesses?: HarnessSummary[];
+  /** Capability name (`delegate`, `files`, ...) to whether the machine this card is served from may use it. */
+  allow?: Record<string, boolean>;
+  added_by?: MachineId | null;
+  added_via?: JoinVia | null;
+  added_at?: DateTime | null;
+}
+
+/** `add`: one click; `code`: enter the code shown on the machine; `merge`: it is in another network of the owner. */
+export type FoundAction = "add" | "code" | "merge";
+
+export interface FoundMachine {
+  /** Opaque id for `network.add` and `network.merge`. */
+  found_id: string;
+  name: string;
+  machine_id?: MachineId | null;
+  os?: string | null;
+  ts_name?: string | null;
+  version?: string | null;
+  action: FoundAction;
+  other_network_id?: string | null;
+}
+
+export interface TailscaleState {
+  installed: boolean;
+  running: boolean;
+  self_ip?: string | null;
+  self_name?: string | null;
+  tailnet?: string | null;
+  login_name?: string | null;
+  listening_port?: number | null;
+  lock_enabled?: boolean | null;
+  detail?: string | null;
+}
+
+/** Work waiting to reach machines that are offline or paused. */
+export interface OutboxSummary {
+  queued: number;
+  failed: number;
+}
+
+export interface BrokerInfo {
+  machine_id: MachineId;
+  name?: string | null;
+  reachable: boolean;
+}
+
+/** Everything Settings → Machines needs, in one call. */
+export interface NetworkStatus {
+  enabled: boolean;
+  /** Absent on a lone machine. */
+  network_id?: string | null;
+  self_machine: MachineCard;
+  /** Every member, this machine included. */
+  members: MachineCard[];
+  found: FoundMachine[];
+  outbox: OutboxSummary;
+  broker?: BrokerInfo | null;
+  tailscale: TailscaleState;
+  /** SHA-256 of the sorted operation ids. */
+  digest?: string | null;
+  /** This machine was removed from its network and can rejoin. */
+  removed?: boolean;
+}
+
+export type RouteKind = "direct_tailnet" | "direct_advertised" | "ssh" | "relay";
+
+/** One way to reach a machine. Routes are tried in order. */
+export interface Route {
+  kind: RouteKind;
+  /** The base URL (`http`/`https`; the client derives `ws`/`wss`). */
+  url: string;
+  /** The member a `relay` route goes through. */
+  via?: MachineId | null;
+}
+
+export interface NetworkAddResult {
+  machine?: MachineCard | null;
+  /** The target could not verify the clicker; use `network.join` with its code. */
+  needs_code: boolean;
+}
+
+export interface NetworkCodeCreateResult {
+  /** Six digits. */
+  code: string;
+  expires_at: DateTime;
+  endpoints: string[];
+  /** `kybern://join?url=…&code=…&machine=<id>`. */
+  qr: string;
+}
+
+export interface NetworkRemoveParams {
+  machine_id: MachineId;
+  /** "This machine might be lost or stolen". */
+  stolen?: boolean;
+  /** Machines this one added that the user also removes. */
+  also_remove?: MachineId[];
+}
+
+export interface NetworkClientGrantResult {
+  /** A long-lived device token for the machine. */
+  token: string;
+  scopes: Scope[];
+  routes: Route[];
+}
+
+export interface NetworkUpdateAllResult {
+  started: MachineId[];
+  skipped: { machine_id: MachineId; reason: string }[];
+}
+
+export type DoctorStatus = "pass" | "warn" | "fail";
+
+export interface DoctorCheck {
+  /** A stable id such as `tailscale.running`. */
+  id: string;
+  status: DoctorStatus;
+  title: string;
+  next_step?: string | null;
+  /** The peer a per-peer check is about. */
+  machine_id?: MachineId | null;
+}
+
+export interface DoctorReport {
+  checks: DoctorCheck[];
+  generated_at: DateTime;
+}
+
+/** Per-machine data for the Machines page. Each machine serves it about itself. */
+export interface MachineInfo {
+  cpu?: { model: string; logical_cores: number } | null;
+  gpu?: string[];
+  mem?: { total_bytes: number } | null;
+  harnesses?: HarnessSummary[];
+  /** The identity of every project on the machine, for repo mapping. */
+  projects?: RepoIdentity[];
+}
+
+// peer.* : daemon to daemon.
+
+export interface PeerOpsSyncParams { digest: string; ids: string[] }
+export interface PeerOpsSyncResult { digest: string; ids: string[]; ops: OpEnvelope[] }
+export interface PeerPresence {
+  version: string;
+  network_protocol: number;
+  features: string[];
+  harnesses: HarnessSummary[];
+  load?: number | null;
+  battery?: number | null;
+  at: DateTime;
+}
+export type RelayStreamKind = "ws" | "http";
+export interface PeerRelayOpenParams {
+  stream_id: number;
+  kind: RelayStreamKind;
+  path: string;
+  method?: string | null;
+  headers?: [string, string][];
+}
+export interface PeerRelayDataParams { stream_id: number; data: string; credit?: number | null; text?: boolean }
+export interface PeerRelayCloseParams { stream_id: number; reason?: string | null }
+
+export type OriginKind =
+  | { kind: "composer" }
+  | { kind: "delegation"; task_id: string }
+  | { kind: "tool_call" }
+  | { kind: "fork" }
+  | { kind: "move" };
+
+/** Where work that another machine started came from. Only a daemon sets it, and it never changes. */
+export interface Origin {
+  machine_id: MachineId;
+  machine_name: string;
+  thread_id?: ThreadId | null;
+  operation_id: Uuid;
+  kind: OriginKind;
+  permission_cap: PermissionMode;
+  /** Machine ids, oldest first; at most one in v1. */
+  hops?: MachineId[];
+}
+
+export interface InboundInfo { machine_id: MachineId; thread_id: ThreadId; title: string }
+export type MoveState = "departing" | "departed" | "arrived";
+export interface MoveInfo {
+  state: MoveState;
+  peer: MachineId;
+  peer_thread_id?: ThreadId | null;
+  lease_until?: DateTime | null;
+  operation_id: Uuid;
+}
+
 export interface Methods {
   "queue.add": [QueuedMessage, Record<string, never>];
   "queue.update": [QueuedMessage, Record<string, never>];
@@ -3462,6 +3799,30 @@ export interface Methods {
   "github.pr.action": [PrActionParams, Empty];
   "threads.worktree.inspect": [WorktreeInspectParams, WorktreeInspectResult];
   "threads.worktree.remove": [WorktreeRemoveParams, WorktreeInspectResult];
+  "network.status": [Empty, NetworkStatus];
+  "network.set_enabled": [{ enabled: boolean }, NetworkStatus];
+  "network.add": [{ found_id: string }, NetworkAddResult];
+  "network.code.create": [Empty, NetworkCodeCreateResult];
+  "network.join": [{ code: string; address: string }, MachineCard];
+  "network.remove": [NetworkRemoveParams, NetworkStatus];
+  "network.pause": [{ machine_id: MachineId; paused: boolean }, MachineCard];
+  "network.rename": [{ machine_id: MachineId; name: string }, MachineCard];
+  "network.merge": [{ found_id: string }, NetworkStatus];
+  "network.rejoin": [Empty, NetworkStatus];
+  "network.client_grant": [{ machine_id: MachineId; device_id: string }, NetworkClientGrantResult];
+  "network.routes": [{ machine_id: MachineId }, { routes: Route[] }];
+  "network.allow.set": [{ machine_id: MachineId; capability: string; allowed: boolean }, MachineCard];
+  "network.update_all": [Empty, NetworkUpdateAllResult];
+  "network.doctor": [{ machine_id?: MachineId | null }, DoctorReport];
+  "machines.info": [Empty, MachineInfo];
+  "peer.ops.sync": [PeerOpsSyncParams, PeerOpsSyncResult];
+  "peer.ops.push": [{ ops: OpEnvelope[] }, { accepted: number; rejected: number }];
+  "peer.presence": [PeerPresence, Empty];
+  "peer.client_token.mint": [{ device_id: string; label: string }, { sealed_token: string; scopes: Scope[] }];
+  "peer.device.revoke": [{ device_id: string }, Empty];
+  "peer.relay.open": [PeerRelayOpenParams, Empty];
+  "peer.relay.data": [PeerRelayDataParams, Empty];
+  "peer.relay.close": [PeerRelayCloseParams, Empty];
 }
 
 export type MethodName = keyof Methods;

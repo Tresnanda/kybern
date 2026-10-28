@@ -323,3 +323,103 @@ fn group_project_wire_shape_is_stable() {
     assert!(pr.commit_first && !pr.draft && pr.repos.is_none());
     assert_eq!(PrCreateGroup::NAME, "github.pr.create_group");
 }
+
+#[test]
+fn network_schemas_are_stable() {
+    insta::assert_json_snapshot!("network_status", schema_for!(NetworkStatus));
+    insta::assert_json_snapshot!("network_op_body", schema_for!(OpBody));
+    insta::assert_json_snapshot!("network_op_envelope", schema_for!(OpEnvelope));
+    insta::assert_json_snapshot!("network_machine_card", schema_for!(MachineCard));
+    insta::assert_json_snapshot!("network_found_machine", schema_for!(FoundMachine));
+    insta::assert_json_snapshot!("network_route", schema_for!(Route));
+    insta::assert_json_snapshot!("network_peer_presence", schema_for!(PeerPresence));
+    insta::assert_json_snapshot!("network_origin", schema_for!(Origin));
+    insta::assert_json_snapshot!("network_move_info", schema_for!(MoveInfo));
+    insta::assert_json_snapshot!("network_repo_identity", schema_for!(ProjectRepoIdentity));
+    insta::assert_json_snapshot!("network_machine_info", schema_for!(MachineInfo));
+    insta::assert_json_snapshot!("network_doctor_report", schema_for!(DoctorReport));
+}
+
+fn machine(id: &str) -> MachineDescriptor {
+    MachineDescriptor {
+        machine_id: id.into(),
+        name: "satyamas".into(),
+        os: "windows".into(),
+        signing_key: "c2ln".into(),
+        sealing_key: "c2VhbA==".into(),
+        ts_node_id: Some("nABC".into()),
+        ts_name: None,
+        port: None,
+    }
+}
+
+#[test]
+fn an_operation_body_flattens_its_kind_and_keeps_unknown_kinds() {
+    let body = OpBody {
+        v: OP_VERSION,
+        network_id: "net".into(),
+        at: "2026-10-28T10:00:00Z".parse().unwrap(),
+        lamport: 3,
+        op: OpKind::Add { machine: machine("m2"), via: JoinVia::Found },
+    };
+    let json = serde_json::to_value(&body).unwrap();
+    assert_eq!((json["kind"].as_str(), json["via"].as_str(), json["lamport"].as_u64()), (Some("add"), Some("found"), Some(3)));
+    assert_eq!(json["machine"]["machine_id"], "m2");
+    assert!(json["machine"].get("ts_name").is_none(), "absent options are omitted");
+    assert_eq!(serde_json::from_value::<OpBody>(json).unwrap(), body);
+
+    let set = OpBody { op: OpKind::Set { key: "machine.m2.paused".into(), value: serde_json::json!(true) }, ..body.clone() };
+    assert_eq!(serde_json::from_str::<OpBody>(&serde_json::to_string(&set).unwrap()).unwrap(), set);
+    let remove = OpBody { op: OpKind::Remove { machine_id: "m2".into(), ts_node_id: None, reason: RemoveReason::Stolen }, ..body };
+    assert_eq!(serde_json::to_value(&remove).unwrap()["reason"], "stolen");
+
+    // A kind from a newer build parses as Unknown instead of failing, so it can be kept and gossiped.
+    let future =
+        serde_json::json!({"v": 2, "network_id": "net", "at": "2026-10-28T10:00:00Z", "lamport": 9, "kind": "rotate_key", "extra": 1});
+    let parsed: OpBody = serde_json::from_value(future).unwrap();
+    assert_eq!((parsed.op, parsed.lamport), (OpKind::Unknown, 9));
+}
+
+#[test]
+fn machine_scopes_are_kept_out_of_client_tokens() {
+    assert!(Scope::ALL.contains(&Scope::NetworkAdmin) && Scope::ALL.contains(&Scope::NetworkRead));
+    assert!(Scope::CLIENT.contains(&Scope::NetworkRead) && !Scope::CLIENT.contains(&Scope::NetworkAdmin));
+    for scope in Scope::MACHINE {
+        assert!(scope.is_machine() && !Scope::ALL.contains(&scope) && !Scope::CLIENT.contains(&scope), "{scope}");
+        assert!(scope.as_str().starts_with("machine:"));
+    }
+    assert!(!Scope::MACHINE_DEFAULT.contains(&Scope::MachineClipboardAuto));
+    assert_eq!(Scope::MACHINE_DEFAULT.len() + 1, Scope::MACHINE.len());
+    assert_eq!(Scope::from_capability("delegate"), Some(Scope::MachineDelegate));
+    assert_eq!(Scope::from_capability("clipboard_auto"), Some(Scope::MachineClipboardAuto));
+    assert_eq!((Scope::from_capability("peer"), Scope::from_capability("nope")), (None, None));
+    assert_eq!(serde_json::to_value(Scope::MachineClipboardAuto).unwrap(), "machine_clipboard_auto");
+    assert_eq!(serde_json::to_value(Scope::NetworkRead).unwrap(), "network_read");
+}
+
+#[test]
+fn every_network_method_has_a_scope_and_peer_methods_need_a_machine_scope() {
+    for method in METHODS.iter().filter(|m| m.name.starts_with("network.") || m.name.starts_with("machines.")) {
+        assert!(matches!(method.scope, Some(Scope::NetworkRead | Scope::NetworkAdmin)), "{}", method.name);
+    }
+    let peers: Vec<_> = METHODS.iter().filter(|m| m.name.starts_with("peer.")).collect();
+    assert_eq!(peers.len(), 8);
+    assert!(peers.iter().all(|m| m.scope.is_some_and(Scope::is_machine)));
+    assert_eq!(NetworkStatusMethod::NAME, "network.status");
+    assert_eq!(NETWORK_CHANGED_NOTIFICATION, "network.changed");
+    assert_eq!(NETWORK_MACHINE_CHANGED_NOTIFICATION, "network.machine.changed");
+}
+
+#[test]
+fn an_older_daemon_info_and_project_still_parse_and_the_network_defaults_are_on() {
+    let old: DaemonInfo = serde_json::from_value(serde_json::json!({
+        "version": "0.18.0", "protocol_version": 1, "environment_id": "e", "hostname": "h", "os": "macos", "arch": "aarch64",
+        "data_dir": "/d", "scopes": ["orchestration_read"], "started_at": "2026-10-28T10:00:00Z"
+    }))
+    .unwrap();
+    assert_eq!((old.machine_id.as_str(), old.network_protocol, old.features.len()), ("", 0, 0));
+    let settings: Settings = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert_eq!(settings.network, NetworkSettings { enabled: true, port: DEFAULT_PORT });
+    assert_eq!(NETWORK_PROTOCOL, 1);
+    assert_eq!(features::ALL.len(), 13);
+}

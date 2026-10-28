@@ -4,6 +4,7 @@
 //! they may take more than a few milliseconds (replays, projections).
 
 mod groups;
+mod network;
 mod notes;
 mod projection;
 mod schema;
@@ -14,6 +15,7 @@ mod thread_history;
 mod transcript_page;
 mod visuals;
 pub use groups::{GROUP_FOLDER_MEMBER, folder_name, member_display_names};
+pub use network::NetworkOpRecord;
 pub use notes::{
     NOTE_BODY_MAX_BYTES, NOTE_RETENTION_DAYS, NOTE_TITLE_MAX_CHARS, NoteError, NoteTarget, checklist as note_checklist,
     preview as note_preview,
@@ -1876,7 +1878,15 @@ fn coordinator_json(project: &Project) -> rusqlite::Result<Option<String>> {
 }
 
 fn row_to_project(r: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
+    let identity: ProjectRepoIdentity = r
+        .get::<_, Option<String>>(14)?
+        .map(|json| serde_json::from_str(&json))
+        .transpose()
+        .map_err(|error| rusqlite::Error::FromSqlConversionFailure(14, rusqlite::types::Type::Text, Box::new(error)))?
+        .unwrap_or_default();
     Ok(Project {
+        repo: identity.repo,
+        repos: identity.repos,
         id: parse_uuid(r.get::<_, String>(0)?)?,
         name: r.get(1)?,
         path: r.get(2)?,
@@ -1905,7 +1915,7 @@ fn row_to_project(r: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
 }
 
 const PROJECT_SELECT: &str = "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads,
-    coordinator, space_id, kind, instructions_offer_dismissed, worktree_copy FROM projects";
+    coordinator, space_id, kind, instructions_offer_dismissed, worktree_copy, repo_identity FROM projects";
 
 fn with_members(c: &Connection, project: Option<Project>) -> Result<Option<Project>> {
     let Some(project) = project else { return Ok(None) };
@@ -2288,6 +2298,8 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let now = Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: "demo".into(),
             path: "/tmp/demo".into(),
@@ -2352,6 +2364,8 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let now = Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: "Import".into(),
             path: "/tmp/import".into(),
@@ -2430,6 +2444,8 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let now = Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: "demo".into(),
             path: "/tmp/demo".into(),
@@ -2471,6 +2487,8 @@ mod tests {
         let s = Store::open_in_memory().unwrap();
         let now = Utc::now();
         let p = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: "demo".into(),
             path: "/tmp/demo".into(),
@@ -2572,6 +2590,8 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let now = Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: "tools".into(),
             path: format!("/tmp/{}", Uuid::now_v7()),
@@ -3312,6 +3332,8 @@ mod orchestration_tests {
     fn project(store: &Store) -> Project {
         let now = Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: "orchestration".into(),
             path: format!("/tmp/{}", Uuid::now_v7()),
@@ -3811,6 +3833,8 @@ mod coordinator_upgrade_tests {
         let store = Store::open_in_memory().unwrap();
         let now = Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: "demo".into(),
             path: "/tmp/roles".into(),

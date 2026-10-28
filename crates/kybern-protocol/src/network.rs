@@ -1,0 +1,745 @@
+//! Machine network types: membership operations, machines, routes, the status
+//! Settings → Machines reads, and the daemon-to-daemon `peer.*` payloads.
+//!
+//! The methods that use them are in `methods.rs`. Only M1 types live here;
+//! the outbox, remote delegation, forwarded tools and the rest arrive with
+//! their milestones.
+
+use chrono::{DateTime, Utc};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use crate::model::{PermissionMode, ProviderKind, ThreadId};
+
+/// Version of the daemon-to-daemon protocol, echoed as `DaemonInfo.network_protocol`.
+pub const NETWORK_PROTOCOL: u32 = 1;
+
+/// Version written into every membership operation body (`body.v`).
+pub const OP_VERSION: u32 = 1;
+
+/// Domain separator signed in front of an operation body.
+pub const OP_SIGNATURE_DOMAIN: &str = "kybern-network-op-v1\0";
+
+/// Domain separator signed in front of a well-known proof.
+pub const WELL_KNOWN_PROOF_DOMAIN: &str = "kybern-wk-v1\0";
+
+/// Feature names a daemon lists in `DaemonInfo.features` and `peer.presence`.
+pub mod features {
+    pub const NETWORK_V1: &str = "network.v1";
+    pub const RELAY_V1: &str = "relay.v1";
+    pub const DELEGATE_REMOTE_V1: &str = "delegate.remote.v1";
+    pub const TOOLS_FORWARD_V1: &str = "tools.forward.v1";
+    pub const FORK_V1: &str = "fork.v1";
+    pub const MOVE_V1: &str = "move.v1";
+    pub const FILES_PUSH_V1: &str = "files.push.v1";
+    pub const CLIPBOARD_V1: &str = "clipboard.v1";
+    pub const PORTS_V1: &str = "ports.v1";
+    pub const SETTINGS_FANOUT_V1: &str = "settings.fanout.v1";
+    pub const NOTES_FEDERATED_V1: &str = "notes.federated.v1";
+    pub const SECRETS_STORE_V1: &str = "secrets.store.v1";
+    pub const LOGIN_BROKER_V1: &str = "login.broker.v1";
+
+    /// Every feature the network design names, in design order.
+    pub const ALL: [&str; 13] = [
+        NETWORK_V1,
+        RELAY_V1,
+        DELEGATE_REMOTE_V1,
+        TOOLS_FORWARD_V1,
+        FORK_V1,
+        MOVE_V1,
+        FILES_PUSH_V1,
+        CLIPBOARD_V1,
+        PORTS_V1,
+        SETTINGS_FANOUT_V1,
+        NOTES_FEDERATED_V1,
+        SECRETS_STORE_V1,
+        LOGIN_BROKER_V1,
+    ];
+}
+
+/// A machine's id: the daemon's `environment_id`, a UUIDv7 string.
+pub type MachineId = String;
+
+// ---- repository identity ----
+
+/// What makes two checkouts the same logical project on different machines.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+pub struct RepoIdentity {
+    /// The smallest hash in `git rev-list --max-parents=0 HEAD`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_commit: Option<String>,
+    /// The `origin` URL normalized to `host/owner/repo`: lowercase, no scheme, user or `.git`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
+}
+
+impl RepoIdentity {
+    pub fn is_empty(&self) -> bool {
+        self.root_commit.is_none() && self.remote.is_none()
+    }
+}
+
+/// What `projects.repo_identity` stores for a project.
+// N1: the design says a group project has "the sorted list" of its members' identities and
+// §4.4 adds one column, so both shapes are one JSON value. A single project has `repo` and no
+// `repos`; a group has `repos` (sorted) and `repo` for its primary member.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectRepoIdentity {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<RepoIdentity>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repos: Vec<RepoIdentity>,
+}
+
+// ---- membership operations (§2.3) ----
+
+/// A machine as a membership operation describes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct MachineDescriptor {
+    pub machine_id: MachineId,
+    pub name: String,
+    pub os: String,
+    /// Ed25519 public key, standard base64.
+    pub signing_key: String,
+    /// X25519 public key, standard base64.
+    pub sealing_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ts_node_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ts_name: Option<String>,
+    /// The network port this machine listens on (§3.1) when it is not the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+}
+
+/// How a machine was added.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum JoinVia {
+    /// Same Tailscale user, no clicks.
+    Auto,
+    /// "Found on your tailnet · Add".
+    Found,
+    /// Six-digit code or QR.
+    Code,
+    /// A saved environment became a member.
+    Migrate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoveReason {
+    User,
+    Stolen,
+    Rejoin,
+}
+
+/// The kind-specific part of an operation body.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum OpKind {
+    /// Creates the network; the signer is the first member.
+    Genesis { owner_login: String, tailnet: String, machine: MachineDescriptor },
+    /// Adds a member.
+    Add { machine: MachineDescriptor, via: JoinVia },
+    /// Removes a member for good: tombstones the key and the Tailscale node id.
+    Remove {
+        machine_id: MachineId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ts_node_id: Option<String>,
+        reason: RemoveReason,
+    },
+    /// A last-writer register. Keys: `machine.<id>.name`, `machine.<id>.paused`, `broker`,
+    /// `follow_updates`, `allow.<id>.<capability>`.
+    Set { key: String, value: serde_json::Value },
+    /// Joins two networks of the same owner.
+    Merge { other_network_id: String, other_genesis: OpEnvelope },
+    /// A kind this build does not know. It is kept, verified and gossiped, and otherwise ignored.
+    #[serde(other)]
+    Unknown,
+}
+
+/// The signed JSON body of an operation, parsed. The signed bytes are the envelope's `body`
+/// text and are never re-serialized from this.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct OpBody {
+    pub v: u32,
+    pub network_id: String,
+    /// Wall-clock time, for display only.
+    pub at: DateTime<Utc>,
+    /// `max(seen) + 1` when the operation was created; registers resolve by `(lamport, signer)`.
+    pub lamport: u64,
+    #[serde(flatten)]
+    pub op: OpKind,
+}
+
+/// An operation as it is stored and sent.
+// N1: the design says `body` is bytes and `signature` an Ed25519 signature; on the wire `body` is
+// the exact JSON text (so it is the signed bytes) and `signature` is standard base64.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct OpEnvelope {
+    /// `sha256(body)` as lowercase hex; the primary key.
+    pub id: String,
+    pub body: String,
+    pub signer: MachineId,
+    /// `ed25519(signer, OP_SIGNATURE_DOMAIN || body)`, standard base64.
+    pub signature: String,
+}
+
+// ---- machines ----
+
+/// Whether a machine can be reached right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MachineStatus {
+    Online,
+    /// Only a relay route works.
+    Relaying,
+    Offline,
+    /// Paused by the owner: ops still sync, nothing else opens.
+    Paused,
+}
+
+/// A harness on a machine, in the short form the Machines page shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HarnessSummary {
+    pub kind: ProviderKind,
+    pub available: bool,
+    /// Absent when the daemon cannot tell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_in: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+/// One member as Settings → Machines shows it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MachineCard {
+    pub machine_id: MachineId,
+    pub name: String,
+    pub os: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ts_name: Option<String>,
+    pub status: MachineStatus,
+    /// This daemon.
+    #[serde(default)]
+    pub is_self: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub network_protocol: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_at: Option<DateTime<Utc>>,
+    /// The member relaying to this machine when `status` is `relaying`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_via: Option<MachineId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub harnesses: Vec<HarnessSummary>,
+    /// Capabilities this machine lets the machine this card is served from use (`allow.*` registers).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub allow: std::collections::BTreeMap<String, bool>,
+    /// "Added by <machine>": the signer of the machine's `add` operation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub added_by: Option<MachineId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub added_via: Option<JoinVia>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub added_at: Option<DateTime<Utc>>,
+}
+
+/// What to do with a machine found on the tailnet that is not a member.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FoundAction {
+    /// One click joins it.
+    Add,
+    /// The target cannot verify the clicker; the user enters the code shown on it.
+    Code,
+    /// It is in another network of the same owner.
+    Merge,
+}
+
+/// A machine that answered the well-known endpoint but is not a member.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FoundMachine {
+    /// Opaque id for `network.add` and `network.merge`. It is the Tailscale node id.
+    pub found_id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_id: Option<MachineId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ts_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    pub action: FoundAction,
+    /// Set when the machine is in another network of the owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other_network_id: Option<String>,
+}
+
+/// What the daemon knows about Tailscale.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TailscaleState {
+    pub installed: bool,
+    pub running: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub self_ip: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub self_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tailnet: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login_name: Option<String>,
+    /// The network port the Tailscale listener holds, once bound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listening_port: Option<u16>,
+    /// Tailnet lock is on; the doctor recommends it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock_enabled: Option<bool>,
+    /// Why the state is what it is, when it is not running.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+// N1: only the counts of §4.1's `OutboxSummary`; the outbox itself (v33) is M2.
+/// Work waiting to reach machines that are offline or paused.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct OutboxSummary {
+    pub queued: u32,
+    pub failed: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BrokerInfo {
+    pub machine_id: MachineId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub reachable: bool,
+}
+
+/// Everything Settings → Machines needs, in one call.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkStatus {
+    /// The master toggle ("Connect to your other machines").
+    pub enabled: bool,
+    /// Absent on a lone machine: the first membership operation sets it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_id: Option<String>,
+    pub self_machine: MachineCard,
+    /// Every member, this machine included.
+    pub members: Vec<MachineCard>,
+    pub found: Vec<FoundMachine>,
+    pub outbox: OutboxSummary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub broker: Option<BrokerInfo>,
+    pub tailscale: TailscaleState,
+    /// The membership set's digest: the SHA-256 of the sorted operation ids.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
+    /// This machine was removed from its network and can rejoin.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub removed: bool,
+}
+
+// ---- routes (§3.4) ----
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RouteKind {
+    /// `ws://<tailnet ip>:<port>/ws`.
+    DirectTailnet,
+    /// `wss://…` from `--advertise-url` or Tailscale Serve.
+    DirectAdvertised,
+    /// A saved SSH tunnel from the old environment profile.
+    Ssh,
+    /// `<member route>/relay/<machine_id>/ws`.
+    Relay,
+}
+
+/// One way to reach a machine. Routes are tried in order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Route {
+    pub kind: RouteKind,
+    /// The base URL (`http`/`https`; the client derives `ws`/`wss`).
+    pub url: String,
+    /// The member a `relay` route goes through.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<MachineId>,
+}
+
+// ---- method params and results (§4.1) ----
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkSetEnabledParams {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkFoundParams {
+    pub found_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkAddResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<MachineCard>,
+    /// The target could not verify the clicker; use `network.join` with its code.
+    pub needs_code: bool,
+}
+
+/// Run on the joining machine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkCodeCreateResult {
+    /// Six digits.
+    pub code: String,
+    pub expires_at: DateTime<Utc>,
+    /// Addresses the machine can be reached on.
+    pub endpoints: Vec<String>,
+    /// `kybern://join?url=…&code=…&machine=<id>`.
+    pub qr: String,
+}
+
+/// Run on a member with the joining machine's code.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkJoinParams {
+    pub code: String,
+    pub address: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkRemoveParams {
+    pub machine_id: MachineId,
+    /// "This machine might be lost or stolen": writes `reason: stolen`.
+    #[serde(default)]
+    pub stolen: bool,
+    /// Machines this one added that the user also removes.
+    #[serde(default)]
+    pub also_remove: Vec<MachineId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkPauseParams {
+    pub machine_id: MachineId,
+    pub paused: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkRenameParams {
+    pub machine_id: MachineId,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkClientGrantParams {
+    pub machine_id: MachineId,
+    pub device_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkClientGrantResult {
+    /// A long-lived device token for `machine_id`.
+    pub token: String,
+    pub scopes: Vec<crate::Scope>,
+    pub routes: Vec<Route>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkRoutesParams {
+    pub machine_id: MachineId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkRoutesResult {
+    pub routes: Vec<Route>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkAllowSetParams {
+    pub machine_id: MachineId,
+    /// A capability name: see `Scope::capability`.
+    pub capability: String,
+    pub allowed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkUpdateSkipped {
+    pub machine_id: MachineId,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkUpdateAllResult {
+    pub started: Vec<MachineId>,
+    pub skipped: Vec<NetworkUpdateSkipped>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkDoctorParams {
+    /// One peer's checks only; absent runs everything.
+    #[serde(default)]
+    pub machine_id: Option<MachineId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DoctorStatus {
+    Pass,
+    Warn,
+    Fail,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DoctorCheck {
+    /// A stable id such as `tailscale.running` or `peer.key_matches`.
+    pub id: String,
+    pub status: DoctorStatus,
+    pub title: String,
+    /// What to do next, when the check did not pass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_step: Option<String>,
+    /// The peer a per-peer check is about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_id: Option<MachineId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DoctorReport {
+    pub checks: Vec<DoctorCheck>,
+    pub generated_at: DateTime<Utc>,
+}
+
+// ---- machines.info ----
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CpuInfo {
+    pub model: String,
+    pub logical_cores: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct MemoryInfo {
+    pub total_bytes: u64,
+}
+
+/// Per-machine data for the Machines page. Each machine serves it about itself.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct MachineInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu: Option<CpuInfo>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gpu: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mem: Option<MemoryInfo>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub harnesses: Vec<HarnessSummary>,
+    /// The identity of every project on this machine, for repo mapping.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projects: Vec<RepoIdentity>,
+}
+
+// ---- peer.* (daemon to daemon) ----
+
+/// `peer.ops.sync`: both sides send the ids they hold and receive the operations they lack.
+// N1: the design says each side "sends the ids it has and the other pulls what it is missing";
+// one request does both halves, so the answer carries the responder's ids and the operations the
+// caller lacks.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerOpsSyncParams {
+    pub digest: String,
+    pub ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerOpsSyncResult {
+    pub digest: String,
+    pub ids: Vec<String>,
+    /// Operations the caller does not have.
+    pub ops: Vec<OpEnvelope>,
+}
+
+/// `peer.ops.push`: new operations, pushed to every connected member and re-gossiped once.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerOpsPushParams {
+    pub ops: Vec<OpEnvelope>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PeerOpsPushResult {
+    pub accepted: u32,
+    pub rejected: u32,
+}
+
+/// `peer.presence`: pushed on change and with the heartbeat.
+// N1: `load` and `battery` are plain optional numbers; the design lists them without a shape.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PeerPresence {
+    pub version: String,
+    pub network_protocol: u32,
+    #[serde(default)]
+    pub features: Vec<String>,
+    #[serde(default)]
+    pub harnesses: Vec<HarnessSummary>,
+    /// 1-minute load average divided by logical cores.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load: Option<f32>,
+    /// Percent, absent without a battery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battery: Option<f32>,
+    pub at: DateTime<Utc>,
+}
+
+/// `peer.client_token.mint`: B mints a device token for a client of A and returns it sealed to A.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerClientTokenMintParams {
+    pub device_id: String,
+    /// Shown as "<device> (via <A>)".
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerClientTokenMintResult {
+    /// The token sealed to the caller's sealing key, standard base64.
+    pub sealed_token: String,
+    pub scopes: Vec<crate::Scope>,
+}
+
+/// `peer.device.revoke`: revoke a device's token on every member.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerDeviceRevokeParams {
+    pub device_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RelayStreamKind {
+    /// The WebSocket at `/relay/{machine_id}/ws`.
+    Ws,
+    /// A request at `/relay/{machine_id}/http/{*path}`.
+    Http,
+}
+
+// N1: relayed frames are binary on the wire (§3.4). These are the JSON control messages and a
+// text-safe carrier for `data`; N3 may switch `data` to binary frames without a protocol bump.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerRelayOpenParams {
+    pub stream_id: u64,
+    pub kind: RelayStreamKind,
+    /// Path and query on the target, such as `/ws` or `/preview-files/…`.
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    /// Request headers, minus the relay member's own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headers: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerRelayDataParams {
+    pub stream_id: u64,
+    /// Standard base64 of the bytes.
+    pub data: String,
+    /// Bytes the sender will accept next (the 256 KiB credit window).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credit: Option<u32>,
+    /// Marks a text frame on a WebSocket stream.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub text: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerRelayCloseParams {
+    pub stream_id: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+// ---- origins (§4.4) ----
+//
+// N1: the types exist now so later packages share them. `Thread.origin`, `Thread.inbound` and
+// `Thread.moved` come with their columns in v33 (R1) and v34 (F2).
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum OriginKind {
+    Composer,
+    Delegation { task_id: String },
+    ToolCall,
+    Fork,
+    Move,
+}
+
+/// Where work that another machine started came from. Only a daemon sets it, and it never changes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Origin {
+    pub machine_id: MachineId,
+    pub machine_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<ThreadId>,
+    pub operation_id: uuid::Uuid,
+    pub kind: OriginKind,
+    pub permission_cap: PermissionMode,
+    /// Machine ids, oldest first; at most one in v1.
+    #[serde(default)]
+    pub hops: Vec<MachineId>,
+}
+
+/// A hidden, read-only thread on the target that records one origin thread's forwarded tool calls.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct InboundInfo {
+    pub machine_id: MachineId,
+    pub thread_id: ThreadId,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MoveState {
+    Departing,
+    Departed,
+    Arrived,
+}
+
+/// A thread moved with "Continue on…".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct MoveInfo {
+    pub state: MoveState,
+    pub peer: MachineId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_thread_id: Option<ThreadId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease_until: Option<DateTime<Utc>>,
+    pub operation_id: uuid::Uuid,
+}
+
+// ---- settings ----
+
+/// The `settings.network` section.
+// N1: §3.1 names `settings.network.port` and the master toggle but gives no struct. "Network on
+// by default" (§12 Q1) means `enabled` defaults to true.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct NetworkSettings {
+    /// "Connect to your other machines".
+    pub enabled: bool,
+    /// The fixed port the Tailscale listener binds. When taken, the daemon tries the next six.
+    pub port: u16,
+}
+
+impl Default for NetworkSettings {
+    fn default() -> Self {
+        Self { enabled: true, port: crate::DEFAULT_PORT }
+    }
+}
+
+// ---- notifications ----
+
+/// Notification: the whole status changed. Params: [`NetworkStatus`].
+pub const NETWORK_CHANGED_NOTIFICATION: &str = "network.changed";
+/// Notification: one machine changed. Params: [`MachineCard`].
+pub const NETWORK_MACHINE_CHANGED_NOTIFICATION: &str = "network.machine.changed";

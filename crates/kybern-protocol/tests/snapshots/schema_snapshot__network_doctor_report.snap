@@ -1,0 +1,69 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(DoctorReport)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DoctorReport",
+  "type": "object",
+  "properties": {
+    "checks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/DoctorCheck"
+      }
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "checks",
+    "generated_at"
+  ],
+  "$defs": {
+    "DoctorCheck": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "A stable id such as `tailscale.running` or `peer.key_matches`.",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/DoctorStatus"
+        },
+        "title": {
+          "type": "string"
+        },
+        "next_step": {
+          "description": "What to do next, when the check did not pass.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "machine_id": {
+          "description": "The peer a per-peer check is about.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "title"
+      ]
+    },
+    "DoctorStatus": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "warn",
+        "fail"
+      ]
+    }
+  }
+}

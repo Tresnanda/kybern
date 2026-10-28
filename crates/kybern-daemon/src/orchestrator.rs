@@ -1397,6 +1397,8 @@ impl Orchestrator {
         }
         let now = Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: name.unwrap_or_else(|| p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| path.clone())),
             is_git: project_path_is_git(&path),
@@ -1762,6 +1764,8 @@ impl Orchestrator {
         std::fs::create_dir_all(&path)?;
         let now = Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: FREE_CHAT_PROJECT_ID,
             name: "Free chats".into(),
             path: path.to_string_lossy().into_owned(),
@@ -5321,6 +5325,8 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let now = chrono::Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: "fixture".into(),
             path: root.to_string_lossy().into_owned(),
@@ -5706,6 +5712,8 @@ mod tests {
             let store = if on_disk { Store::open(&root.join("state.sqlite")).unwrap() } else { Store::open_in_memory().unwrap() };
             let now = chrono::Utc::now();
             let project = Project {
+                repo: None,
+                repos: Vec::new(),
                 id: Uuid::now_v7(),
                 name: "fixture".into(),
                 path: root.to_string_lossy().into_owned(),

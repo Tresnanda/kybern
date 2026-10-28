@@ -1,0 +1,56 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(Route)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Route",
+  "description": "One way to reach a machine. Routes are tried in order.",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "$ref": "#/$defs/RouteKind"
+    },
+    "url": {
+      "description": "The base URL (`http`/`https`; the client derives `ws`/`wss`).",
+      "type": "string"
+    },
+    "via": {
+      "description": "The member a `relay` route goes through.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "kind",
+    "url"
+  ],
+  "$defs": {
+    "RouteKind": {
+      "oneOf": [
+        {
+          "description": "`ws://<tailnet ip>:<port>/ws`.",
+          "type": "string",
+          "const": "direct_tailnet"
+        },
+        {
+          "description": "`wss://…` from `--advertise-url` or Tailscale Serve.",
+          "type": "string",
+          "const": "direct_advertised"
+        },
+        {
+          "description": "A saved SSH tunnel from the old environment profile.",
+          "type": "string",
+          "const": "ssh"
+        },
+        {
+          "description": "`<member route>/relay/<machine_id>/ws`.",
+          "type": "string",
+          "const": "relay"
+        }
+      ]
+    }
+  }
+}

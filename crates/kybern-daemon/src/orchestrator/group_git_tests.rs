@@ -50,6 +50,8 @@ impl Group {
         }
         let now = chrono::Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: "acme".into(),
             path: folder.to_string_lossy().into_owned(),

@@ -779,6 +779,8 @@ mod tests {
     fn project(store: &Store, name: &str) -> Project {
         let now = Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: name.into(),
             path: format!("/tmp/{}", Uuid::now_v7()),
@@ -869,7 +871,7 @@ mod tests {
     #[test]
     fn category_migration_marks_old_project_notes_undated_and_new_ones_not() {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_to(&conn, crate::schema::migration_count() - 1).unwrap();
+        crate::schema::migrate_to(&conn, 30 /* the schema before v31 */).unwrap();
         conn.execute_batch(
             "INSERT INTO projects(id, name, path, is_git, created_at, updated_at) VALUES ('00000000-0000-0000-0000-0000000000a1', 'kybern', '/k', 0, '2026-09-01T00:00:00+00:00', '2026-09-01T00:00:00+00:00');
              INSERT INTO notes(id, scope, project_id, title, body, pinned, revision, created_at, updated_at)

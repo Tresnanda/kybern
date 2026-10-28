@@ -9,6 +9,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::event::NoticeLevel;
+use crate::network::{NetworkSettings, RepoIdentity};
 
 pub type ProjectId = Uuid;
 /// Daemon-owned neutral workspace used by chats that are not attached to a
@@ -296,6 +297,13 @@ pub struct Project {
     /// The user hid the "Add shared instructions" offer for this group.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub instructions_offer_dismissed: bool,
+    /// What identifies this repository across machines, refreshed with Git status. Absent until
+    /// the first refresh and for folders that are not repositories. For a group, the primary member's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<RepoIdentity>,
+    /// A group's members' identities, sorted. Empty for single projects.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repos: Vec<RepoIdentity>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -2595,6 +2603,8 @@ pub struct Settings {
     /// files from. Canonical absolute paths; a grant covers descendants.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preview_allowed_folders: Vec<String>,
+    /// Joining and staying joined to the machine network.
+    pub network: NetworkSettings,
 }
 
 /// Limits for questions that answer themselves after a deadline. Read each
@@ -2868,6 +2878,7 @@ impl Default for Settings {
             tell_agents_about_kybern: true,
             ask_deadlines: AskDeadlineSettings::default(),
             preview_allowed_folders: Vec::new(),
+            network: NetworkSettings::default(),
         }
     }
 }

@@ -514,6 +514,8 @@ mod tests {
     fn insert_project(store: &Store, id: ProjectId, now: DateTime<Utc>) {
         store
             .project_insert(&Project {
+                repo: None,
+                repos: Vec::new(),
                 id,
                 name: "History fixture".into(),
                 path: format!("/tmp/{id}"),

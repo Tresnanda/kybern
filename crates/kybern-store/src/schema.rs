@@ -586,6 +586,34 @@ const MIGRATIONS: &[&str] = &[
       ON CONFLICT(key) DO NOTHING;
     COMMIT;
     ",
+    // v32: the machine network. Membership operations are an append-only signed set; `network_machines`
+    // caches peer descriptors and presence (rebuilt from the operations and live presence).
+    // `projects.repo_identity` is JSON `ProjectRepoIdentity`; `tokens.device_id` ties a device
+    // token to the client device so revoking the device revokes it on every machine.
+    "
+    BEGIN;
+    CREATE TABLE network_ops (
+      id TEXT PRIMARY KEY,
+      body BLOB NOT NULL,
+      signer TEXT NOT NULL,
+      signature BLOB NOT NULL,
+      kind TEXT NOT NULL,
+      lamport INTEGER NOT NULL,
+      received_at TEXT NOT NULL
+    );
+    CREATE INDEX network_ops_order ON network_ops(lamport, received_at, id);
+    CREATE TABLE network_machines (
+      machine_id TEXT PRIMARY KEY,
+      descriptor TEXT NOT NULL,
+      presence TEXT,
+      last_seen_at TEXT
+    );
+    ALTER TABLE projects ADD COLUMN repo_identity TEXT;
+    ALTER TABLE tokens ADD COLUMN device_id TEXT;
+    ALTER TABLE tokens ADD COLUMN issued_via TEXT;
+    CREATE INDEX tokens_device ON tokens(device_id);
+    COMMIT;
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

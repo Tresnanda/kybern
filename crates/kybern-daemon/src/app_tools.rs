@@ -673,6 +673,8 @@ mod tests {
             let store = Store::open_in_memory().unwrap();
             let now = Utc::now();
             let project = Project {
+                repo: None,
+                repos: Vec::new(),
                 id: Uuid::now_v7(),
                 name: "fixture".into(),
                 path: root.to_string_lossy().into(),

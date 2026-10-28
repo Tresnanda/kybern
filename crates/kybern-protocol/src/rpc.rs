@@ -104,6 +104,8 @@ pub mod codes {
     pub const PROVIDER_UNAVAILABLE: i32 = -32010;
     pub const PROVIDER_ERROR: i32 = -32011;
     pub const THREAD_BUSY: i32 = -32012;
+    /// The method exists in the protocol but this build does not implement it yet.
+    pub const NOT_AVAILABLE: i32 = -32013;
 }
 
 impl RpcError {

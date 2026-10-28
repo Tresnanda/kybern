@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::auth::Scope;
 use crate::event::ThreadEvent;
 use crate::model::*;
+use crate::network::*;
 use crate::thread_read::*;
 
 /// Static description of a method, used for auth checks and docs.
@@ -51,6 +52,15 @@ pub struct DaemonInfo {
     pub data_dir: String,
     pub scopes: Vec<Scope>,
     pub started_at: chrono::DateTime<chrono::Utc>,
+    /// This machine's id on the network; equal to `environment_id`. Empty from a daemon older than the network.
+    #[serde(default)]
+    pub machine_id: String,
+    /// Version of the daemon-to-daemon protocol; 0 from a daemon older than the network.
+    #[serde(default)]
+    pub network_protocol: u32,
+    /// Feature names this daemon supports; see [`crate::features`].
+    #[serde(default)]
+    pub features: Vec<String>,
 }
 method!(DaemonInfoMethod, "daemon.info", None, Empty, DaemonInfo);
 method!(DaemonShutdown, "daemon.shutdown", Some(Scope::AccessWrite), Empty, Empty);
@@ -4102,6 +4112,35 @@ pub struct TaskItemsChangedNotification {
     pub deleted_id: Option<TaskItemId>,
 }
 
+// ---- machine network (M1; payloads in network.rs) ----
+
+method!(NetworkStatusMethod, "network.status", Some(Scope::NetworkRead), Empty, NetworkStatus);
+method!(NetworkSetEnabled, "network.set_enabled", Some(Scope::NetworkAdmin), NetworkSetEnabledParams, NetworkStatus);
+method!(NetworkAdd, "network.add", Some(Scope::NetworkAdmin), NetworkFoundParams, NetworkAddResult);
+method!(NetworkCodeCreate, "network.code.create", Some(Scope::NetworkAdmin), Empty, NetworkCodeCreateResult);
+method!(NetworkJoin, "network.join", Some(Scope::NetworkAdmin), NetworkJoinParams, MachineCard);
+method!(NetworkRemove, "network.remove", Some(Scope::NetworkAdmin), NetworkRemoveParams, NetworkStatus);
+method!(NetworkPause, "network.pause", Some(Scope::NetworkAdmin), NetworkPauseParams, MachineCard);
+method!(NetworkRename, "network.rename", Some(Scope::NetworkAdmin), NetworkRenameParams, MachineCard);
+method!(NetworkMerge, "network.merge", Some(Scope::NetworkAdmin), NetworkFoundParams, NetworkStatus);
+method!(NetworkRejoin, "network.rejoin", Some(Scope::NetworkAdmin), Empty, NetworkStatus);
+method!(NetworkClientGrant, "network.client_grant", Some(Scope::NetworkRead), NetworkClientGrantParams, NetworkClientGrantResult);
+method!(NetworkRoutes, "network.routes", Some(Scope::NetworkRead), NetworkRoutesParams, NetworkRoutesResult);
+method!(NetworkAllowSet, "network.allow.set", Some(Scope::NetworkAdmin), NetworkAllowSetParams, MachineCard);
+method!(NetworkUpdateAll, "network.update_all", Some(Scope::NetworkAdmin), Empty, NetworkUpdateAllResult);
+method!(NetworkDoctor, "network.doctor", Some(Scope::NetworkRead), NetworkDoctorParams, DoctorReport);
+method!(MachinesInfo, "machines.info", Some(Scope::NetworkRead), Empty, MachineInfo);
+
+// Daemon-to-daemon. A device token never carries a machine scope, so these refuse clients.
+method!(PeerOpsSync, "peer.ops.sync", Some(Scope::MachinePeer), PeerOpsSyncParams, PeerOpsSyncResult);
+method!(PeerOpsPush, "peer.ops.push", Some(Scope::MachinePeer), PeerOpsPushParams, PeerOpsPushResult);
+method!(PeerPresenceMethod, "peer.presence", Some(Scope::MachinePeer), PeerPresence, Empty);
+method!(PeerClientTokenMint, "peer.client_token.mint", Some(Scope::MachinePeer), PeerClientTokenMintParams, PeerClientTokenMintResult);
+method!(PeerDeviceRevoke, "peer.device.revoke", Some(Scope::MachinePeer), PeerDeviceRevokeParams, Empty);
+method!(PeerRelayOpen, "peer.relay.open", Some(Scope::MachineRelay), PeerRelayOpenParams, Empty);
+method!(PeerRelayData, "peer.relay.data", Some(Scope::MachineRelay), PeerRelayDataParams, Empty);
+method!(PeerRelayClose, "peer.relay.close", Some(Scope::MachineRelay), PeerRelayCloseParams, Empty);
+
 /// Registry used by the daemon's auth check and the schema dump.
 pub struct MethodInfo {
     pub name: &'static str,
@@ -4295,6 +4334,30 @@ registry!(
     EventsSubscribe,
     EventsUnsubscribe,
     EventsRange,
+    NetworkStatusMethod,
+    NetworkSetEnabled,
+    NetworkAdd,
+    NetworkCodeCreate,
+    NetworkJoin,
+    NetworkRemove,
+    NetworkPause,
+    NetworkRename,
+    NetworkMerge,
+    NetworkRejoin,
+    NetworkClientGrant,
+    NetworkRoutes,
+    NetworkAllowSet,
+    NetworkUpdateAll,
+    NetworkDoctor,
+    MachinesInfo,
+    PeerOpsSync,
+    PeerOpsPush,
+    PeerPresenceMethod,
+    PeerClientTokenMint,
+    PeerDeviceRevoke,
+    PeerRelayOpen,
+    PeerRelayData,
+    PeerRelayClose,
 );
 
 pub fn scope_for(method: &str) -> Option<Option<Scope>> {

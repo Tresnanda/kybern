@@ -410,6 +410,8 @@ impl Orchestrator {
         let now = Utc::now();
         let names = member_display_names(&folder_path, &paths.iter().map(String::as_str).collect::<Vec<_>>());
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| label.clone()),
             is_git: paths.iter().any(|p| p == GROUP_FOLDER_MEMBER),

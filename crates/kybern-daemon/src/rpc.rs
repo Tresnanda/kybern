@@ -24,6 +24,10 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 data_dir: state.paths.root.display().to_string(),
                 scopes: ctx.principal.scopes.clone(),
                 started_at: state.started_at,
+                machine_id: state.environment_id.clone(),
+                network_protocol: NETWORK_PROTOCOL,
+                // N1: features are listed by the package that makes each one work (N3 adds `network.v1`).
+                features: Vec::new(),
             };
             ok(info)
         }
@@ -1170,6 +1174,32 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             events.truncate(limit as usize);
             ok(EventsRangeResult { events, has_more })
         }
+        // N1: every M1 `network.*`, `machines.*` and `peer.*` method is in the protocol and the
+        // registry; its handler lands with the package that owns it (N2-N4), in that package's module.
+        NetworkStatusMethod::NAME
+        | NetworkSetEnabled::NAME
+        | NetworkAdd::NAME
+        | NetworkCodeCreate::NAME
+        | NetworkJoin::NAME
+        | NetworkRemove::NAME
+        | NetworkPause::NAME
+        | NetworkRename::NAME
+        | NetworkMerge::NAME
+        | NetworkRejoin::NAME
+        | NetworkClientGrant::NAME
+        | NetworkRoutes::NAME
+        | NetworkAllowSet::NAME
+        | NetworkUpdateAll::NAME
+        | NetworkDoctor::NAME
+        | MachinesInfo::NAME
+        | PeerOpsSync::NAME
+        | PeerOpsPush::NAME
+        | PeerPresenceMethod::NAME
+        | PeerClientTokenMint::NAME
+        | PeerDeviceRevoke::NAME
+        | PeerRelayOpen::NAME
+        | PeerRelayData::NAME
+        | PeerRelayClose::NAME => Err(RpcError::new(codes::NOT_AVAILABLE, format!("{method} is not available yet in this build."))),
         _ => Err(RpcError::method_not_found(method)),
     }
 }

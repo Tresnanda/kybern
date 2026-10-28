@@ -69,6 +69,19 @@ fn main() {
     add::<SessionsScanChanged>(&mut types, "SessionsScanChanged");
     add::<SessionsImportProgress>(&mut types, "SessionsImportProgress");
     add::<SessionsImportFinished>(&mut types, "SessionsImportFinished");
+    add::<OpEnvelope>(&mut types, "OpEnvelope");
+    add::<OpBody>(&mut types, "OpBody");
+    add::<MachineCard>(&mut types, "MachineCard");
+    add::<NetworkStatus>(&mut types, "NetworkStatus");
+    add::<FoundMachine>(&mut types, "FoundMachine");
+    add::<Route>(&mut types, "Route");
+    add::<RepoIdentity>(&mut types, "RepoIdentity");
+    add::<ProjectRepoIdentity>(&mut types, "ProjectRepoIdentity");
+    add::<PeerPresence>(&mut types, "PeerPresence");
+    add::<Origin>(&mut types, "Origin");
+    add::<InboundInfo>(&mut types, "InboundInfo");
+    add::<MoveInfo>(&mut types, "MoveInfo");
+    add::<NetworkSettings>(&mut types, "NetworkSettings");
 
     let mut methods = Vec::new();
     method::<DaemonInfoMethod>(&mut methods);
@@ -250,6 +263,30 @@ fn main() {
     method::<EventsSubscribe>(&mut methods);
     method::<EventsUnsubscribe>(&mut methods);
     method::<EventsRange>(&mut methods);
+    method::<NetworkStatusMethod>(&mut methods);
+    method::<NetworkSetEnabled>(&mut methods);
+    method::<NetworkAdd>(&mut methods);
+    method::<NetworkCodeCreate>(&mut methods);
+    method::<NetworkJoin>(&mut methods);
+    method::<NetworkRemove>(&mut methods);
+    method::<NetworkPause>(&mut methods);
+    method::<NetworkRename>(&mut methods);
+    method::<NetworkMerge>(&mut methods);
+    method::<NetworkRejoin>(&mut methods);
+    method::<NetworkClientGrant>(&mut methods);
+    method::<NetworkRoutes>(&mut methods);
+    method::<NetworkAllowSet>(&mut methods);
+    method::<NetworkUpdateAll>(&mut methods);
+    method::<NetworkDoctor>(&mut methods);
+    method::<MachinesInfo>(&mut methods);
+    method::<PeerOpsSync>(&mut methods);
+    method::<PeerOpsPush>(&mut methods);
+    method::<PeerPresenceMethod>(&mut methods);
+    method::<PeerClientTokenMint>(&mut methods);
+    method::<PeerDeviceRevoke>(&mut methods);
+    method::<PeerRelayOpen>(&mut methods);
+    method::<PeerRelayData>(&mut methods);
+    method::<PeerRelayClose>(&mut methods);
 
     let doc = json!({
         "protocol_version": PROTOCOL_VERSION,

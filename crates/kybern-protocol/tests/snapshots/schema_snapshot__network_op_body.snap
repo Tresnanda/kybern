@@ -1,0 +1,278 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(OpBody)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpBody",
+  "description": "The signed JSON body of an operation, parsed. The signed bytes are the envelope's `body`\ntext and are never re-serialized from this.",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "network_id": {
+      "type": "string"
+    },
+    "at": {
+      "description": "Wall-clock time, for display only.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "lamport": {
+      "description": "`max(seen) + 1` when the operation was created; registers resolve by `(lamport, signer)`.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "v",
+    "network_id",
+    "at",
+    "lamport"
+  ],
+  "oneOf": [
+    {
+      "description": "Creates the network; the signer is the first member.",
+      "type": "object",
+      "properties": {
+        "owner_login": {
+          "type": "string"
+        },
+        "tailnet": {
+          "type": "string"
+        },
+        "machine": {
+          "$ref": "#/$defs/MachineDescriptor"
+        },
+        "kind": {
+          "type": "string",
+          "const": "genesis"
+        }
+      },
+      "required": [
+        "kind",
+        "owner_login",
+        "tailnet",
+        "machine"
+      ]
+    },
+    {
+      "description": "Adds a member.",
+      "type": "object",
+      "properties": {
+        "machine": {
+          "$ref": "#/$defs/MachineDescriptor"
+        },
+        "via": {
+          "$ref": "#/$defs/JoinVia"
+        },
+        "kind": {
+          "type": "string",
+          "const": "add"
+        }
+      },
+      "required": [
+        "kind",
+        "machine",
+        "via"
+      ]
+    },
+    {
+      "description": "Removes a member for good: tombstones the key and the Tailscale node id.",
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "ts_node_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/RemoveReason"
+        },
+        "kind": {
+          "type": "string",
+          "const": "remove"
+        }
+      },
+      "required": [
+        "kind",
+        "machine_id",
+        "reason"
+      ]
+    },
+    {
+      "description": "A last-writer register. Keys: `machine.<id>.name`, `machine.<id>.paused`, `broker`,\n`follow_updates`, `allow.<id>.<capability>`.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": true,
+        "kind": {
+          "type": "string",
+          "const": "set"
+        }
+      },
+      "required": [
+        "kind",
+        "key",
+        "value"
+      ]
+    },
+    {
+      "description": "Joins two networks of the same owner.",
+      "type": "object",
+      "properties": {
+        "other_network_id": {
+          "type": "string"
+        },
+        "other_genesis": {
+          "$ref": "#/$defs/OpEnvelope"
+        },
+        "kind": {
+          "type": "string",
+          "const": "merge"
+        }
+      },
+      "required": [
+        "kind",
+        "other_network_id",
+        "other_genesis"
+      ]
+    },
+    {
+      "description": "A kind this build does not know. It is kept, verified and gossiped, and otherwise ignored.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "unknown"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    }
+  ],
+  "$defs": {
+    "MachineDescriptor": {
+      "description": "A machine as a membership operation describes it.",
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "os": {
+          "type": "string"
+        },
+        "signing_key": {
+          "description": "Ed25519 public key, standard base64.",
+          "type": "string"
+        },
+        "sealing_key": {
+          "description": "X25519 public key, standard base64.",
+          "type": "string"
+        },
+        "ts_node_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ts_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "port": {
+          "description": "The network port this machine listens on (§3.1) when it is not the default.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      },
+      "required": [
+        "machine_id",
+        "name",
+        "os",
+        "signing_key",
+        "sealing_key"
+      ]
+    },
+    "JoinVia": {
+      "description": "How a machine was added.",
+      "oneOf": [
+        {
+          "description": "Same Tailscale user, no clicks.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "\"Found on your tailnet · Add\".",
+          "type": "string",
+          "const": "found"
+        },
+        {
+          "description": "Six-digit code or QR.",
+          "type": "string",
+          "const": "code"
+        },
+        {
+          "description": "A saved environment became a member.",
+          "type": "string",
+          "const": "migrate"
+        }
+      ]
+    },
+    "RemoveReason": {
+      "type": "string",
+      "enum": [
+        "user",
+        "stolen",
+        "rejoin"
+      ]
+    },
+    "OpEnvelope": {
+      "description": "An operation as it is stored and sent.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "`sha256(body)` as lowercase hex; the primary key.",
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "signer": {
+          "type": "string"
+        },
+        "signature": {
+          "description": "`ed25519(signer, OP_SIGNATURE_DOMAIN || body)`, standard base64.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "body",
+        "signer",
+        "signature"
+      ]
+    }
+  }
+}

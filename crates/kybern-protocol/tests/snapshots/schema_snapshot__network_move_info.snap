@@ -1,0 +1,51 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(MoveInfo)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MoveInfo",
+  "description": "A thread moved with \"Continue on…\".",
+  "type": "object",
+  "properties": {
+    "state": {
+      "$ref": "#/$defs/MoveState"
+    },
+    "peer": {
+      "type": "string"
+    },
+    "peer_thread_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "lease_until": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "operation_id": {
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "required": [
+    "state",
+    "peer",
+    "operation_id"
+  ],
+  "$defs": {
+    "MoveState": {
+      "type": "string",
+      "enum": [
+        "departing",
+        "departed",
+        "arrived"
+      ]
+    }
+  }
+}

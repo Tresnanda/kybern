@@ -162,6 +162,8 @@ mod tests {
     fn group(store: &Store, members: &[&str]) -> Project {
         let now = Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: "acme".into(),
             path: format!("/tmp/{}/acme", Uuid::now_v7()),

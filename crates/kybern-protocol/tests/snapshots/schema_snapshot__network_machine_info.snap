@@ -1,0 +1,144 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(MachineInfo)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MachineInfo",
+  "description": "Per-machine data for the Machines page. Each machine serves it about itself.",
+  "type": "object",
+  "properties": {
+    "cpu": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CpuInfo"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "gpu": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "mem": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MemoryInfo"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "harnesses": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/HarnessSummary"
+      }
+    },
+    "projects": {
+      "description": "The identity of every project on this machine, for repo mapping.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RepoIdentity"
+      }
+    }
+  },
+  "$defs": {
+    "CpuInfo": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "logical_cores": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "model",
+        "logical_cores"
+      ]
+    },
+    "MemoryInfo": {
+      "type": "object",
+      "properties": {
+        "total_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "total_bytes"
+      ]
+    },
+    "HarnessSummary": {
+      "description": "A harness on a machine, in the short form the Machines page shows.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "signed_in": {
+          "description": "Absent when the daemon cannot tell.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "available"
+      ]
+    },
+    "ProviderKind": {
+      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "opencode",
+        "pi",
+        "omp",
+        "cursor"
+      ]
+    },
+    "RepoIdentity": {
+      "description": "What makes two checkouts the same logical project on different machines.",
+      "type": "object",
+      "properties": {
+        "root_commit": {
+          "description": "The smallest hash in `git rev-list --max-parents=0 HEAD`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remote": {
+          "description": "The `origin` URL normalized to `host/owner/repo`: lowercase, no scheme, user or `.git`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

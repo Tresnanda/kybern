@@ -1,0 +1,32 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(OpEnvelope)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpEnvelope",
+  "description": "An operation as it is stored and sent.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "description": "`sha256(body)` as lowercase hex; the primary key.",
+      "type": "string"
+    },
+    "body": {
+      "type": "string"
+    },
+    "signer": {
+      "type": "string"
+    },
+    "signature": {
+      "description": "`ed25519(signer, OP_SIGNATURE_DOMAIN || body)`, standard base64.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "body",
+    "signer",
+    "signature"
+  ]
+}

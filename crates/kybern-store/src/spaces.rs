@@ -177,6 +177,8 @@ mod tests {
     fn project(path: &str, space_id: Option<SpaceId>) -> Project {
         let now = Utc::now();
         Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: path.trim_start_matches('/').into(),
             path: path.into(),

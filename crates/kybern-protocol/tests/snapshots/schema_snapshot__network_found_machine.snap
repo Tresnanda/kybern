@@ -1,0 +1,80 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(FoundMachine)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FoundMachine",
+  "description": "A machine that answered the well-known endpoint but is not a member.",
+  "type": "object",
+  "properties": {
+    "found_id": {
+      "description": "Opaque id for `network.add` and `network.merge`. It is the Tailscale node id.",
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "machine_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "os": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ts_name": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "action": {
+      "$ref": "#/$defs/FoundAction"
+    },
+    "other_network_id": {
+      "description": "Set when the machine is in another network of the owner.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "found_id",
+    "name",
+    "action"
+  ],
+  "$defs": {
+    "FoundAction": {
+      "description": "What to do with a machine found on the tailnet that is not a member.",
+      "oneOf": [
+        {
+          "description": "One click joins it.",
+          "type": "string",
+          "const": "add"
+        },
+        {
+          "description": "The target cannot verify the clicker; the user enters the code shown on it.",
+          "type": "string",
+          "const": "code"
+        },
+        {
+          "description": "It is in another network of the same owner.",
+          "type": "string",
+          "const": "merge"
+        }
+      ]
+    }
+  }
+}
