@@ -5,7 +5,7 @@ import { Icon } from '../icons.tsx'
 import { ISLAND } from '../MatrixLoader.tsx'
 import { errorText } from '../nav/actions.ts'
 import { N } from '../nav/glyphs.ts'
-import { getClient, onOpenEvent, useApp } from '../state.ts'
+import { onOpenEvent, threadClient, useApp } from '../state.ts'
 import { desktopDiffTheme } from '../native/diff.ts'
 import { NativeDiffHeader } from '../native/DiffView.tsx'
 import { Label, useTheme } from '../ui.tsx'
@@ -42,7 +42,7 @@ export function DiffPane({ thread, onStats, mode = 'list', path }: { thread: Thr
   const [loaded, setLoaded] = useState(false)
   const refresh = useCallback(() => setGeneration((n) => n + 1), [])
   useEffect(() => {
-    const client = getClient()
+    const client = threadClient(thread.id)
     if (!client) return
     let current = true
     setError(null)
@@ -67,10 +67,10 @@ export function DiffPane({ thread, onStats, mode = 'list', path }: { thread: Thr
     setBusy(kind); setError(null); setNotice(null)
     try {
       if (kind === 'commit') {
-        const result = await getClient()!.call('git.commit', { thread_id: thread.id })
+        const result = await threadClient(thread.id)!.call('git.commit', { thread_id: thread.id })
         setNotice(`Committed · ${result.message}`)
       } else {
-        const result = await getClient()!.call('github.pr.create', { thread_id: thread.id })
+        const result = await threadClient(thread.id)!.call('github.pr.create', { thread_id: thread.id })
         setNotice(`Pull request opened · #${result.number} ${result.title}`)
       }
       refresh()
@@ -154,7 +154,7 @@ export const FileDiff = memo(function FileDiff({ file, threadId, defaultOpen = f
     if (!open || patch !== null || file.binary) return
     let current = true
     setError(null)
-    void getClient()!.call('threads.diff', { thread_id: threadId, path: file.path, include_patch: true }).then((result) => {
+    void threadClient(threadId)!.call('threads.diff', { thread_id: threadId, path: file.path, include_patch: true }).then((result) => {
       if (current) { setPatch(result.patch); setTruncated(!!result.patch_truncated) }
     }, (e) => { if (current) setError(errorText(e)) })
     return () => { current = false }

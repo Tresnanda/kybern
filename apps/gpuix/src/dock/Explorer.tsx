@@ -20,7 +20,7 @@ import { Menu, MenuCheckboxItem, MenuItem, MenuLabel, MenuSeparator } from '../n
 import { IconButton } from '../kit/IconButton.tsx'
 import { SearchField } from '../kit/SearchField.tsx'
 import { Button } from '../kit/Button.tsx'
-import { getClient, useApp } from '../state.ts'
+import { ownProjectId, threadClient, useApp } from '../state.ts'
 import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { copyText } from '../transcript/store.ts'
 import { FONT_MONO } from '../theme.ts'
@@ -39,7 +39,7 @@ type Listing = FileEntry[] | 'loading' | 'error'
 // Reuse the native row geometry/input path used by the PR viewports. Paint,
 // hit testing and selection are rebuilt at the current scroll offset.
 const EXPLORER_SCROLL_LAYOUT = { cacheLayout: true, cache: 'fill' as const }
-export function Explorer({ projectId, width }: { projectId: string; width: number }) {
+export function Explorer({ projectId, thread, width }: { projectId: string; thread: { id: string; project_id: string; ownProjectId?: string }; width: number }) {
   const t = useTheme()
   const { renderer } = useGpuix()
   const tree = useRef<PublicInstance | null>(null)
@@ -62,12 +62,12 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
     if (!retry && requested.current.has(dir)) return
     requested.current.add(dir)
     setListings((previous) => ({ ...previous, [dir]: 'loading' }))
-    void getClient()!.call('files.list', { project_id: projectId, path: dir }).then((result) => {
+    void threadClient(thread.id)!.call('files.list', { project_id: ownProjectId(thread), path: dir }).then((result) => {
       if (live.current) setListings((previous) => ({ ...previous, [dir]: result.entries }))
     }, (e) => {
       if (live.current) { setError(errorText(e)); setListings((previous) => ({ ...previous, [dir]: 'error' })) }
     })
-  }, [projectId])
+  }, [thread.id, ownProjectId(thread)])
   useEffect(() => { load('') }, [load])
   useEffect(() => {
     if (!selectionRequest || !threadId) return
@@ -81,10 +81,10 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
     let current = true
     if (!query.trim()) { setResults(null); return }
     const timer = setTimeout(() => {
-      void getClient()!.call('files.search', { project_id: projectId, query: query.trim(), limit: 80 }).then((result) => { if (current) setResults(result.files) }, (e) => { if (current) setError(errorText(e)) })
+      void threadClient(thread.id)!.call('files.search', { project_id: ownProjectId(thread), query: query.trim(), limit: 80 }).then((result) => { if (current) setResults(result.files) }, (e) => { if (current) setError(errorText(e)) })
     }, 200)
     return () => { current = false; clearTimeout(timer) }
-  }, [query, projectId])
+  }, [query, thread.id, ownProjectId(thread)])
   const rows = useMemo(() => {
     if (results) return results.map((path, index): TreeRow => ({ key: path, path, name: path, kind: 'file', depth: 0, position: index + 1, setSize: results.length }))
     const out: TreeRow[] = []
@@ -198,7 +198,8 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
   const project = useApp((s) => s.projects.find((p) => p.id === projectId))
   const thread = useApp((s) => threadId ? s.threads.find((th) => th.id === threadId) : undefined)
   const absolutePath = path.startsWith('/') ? path : project ? `${project.path}/${path}` : thread ? `${thread.cwd}/${path}` : null
-  const root = useMemo<FileRoot | null>(() => projectId ? { projectId } : threadId ? { threadId } : null, [projectId, threadId])
+  // A project root is read through the machine of the thread that shows it.
+  const root = useMemo<FileRoot | null>(() => projectId ? { projectId, ...(threadId ? { threadId } : {}) } : threadId ? { threadId } : null, [projectId, threadId])
   const key = root ? bufferKey(root, path) : null
   // A file shown before (`fileCache.ts`) draws at once and is re-read behind it; an unchanged read keeps the same object, so its
   // syntax document is not rebuilt.

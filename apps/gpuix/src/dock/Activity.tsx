@@ -8,7 +8,7 @@ import { FILL_ISLAND } from '../MatrixLoader.tsx'
 import { errorText } from '../nav/actions.ts'
 import { N } from '../nav/glyphs.ts'
 import { useNav } from '../nav/store.ts'
-import { getClient, onOpenEvent } from '../state.ts'
+import { onOpenEvent, threadClient } from '../state.ts'
 import { RuntimeTaskRow } from '../transcript/rows.tsx'
 import { clockDuration, ink, Label, useTheme } from '../ui.tsx'
 import { DockEmpty, ErrorLine, Section } from './parts.tsx'
@@ -21,7 +21,7 @@ export function useRuntimeTasks(threadId: string) {
   const [loaded, setLoaded] = useState(false)
   const [reload, setReload] = useState(0)
   useEffect(() => {
-    const client = getClient()
+    const client = threadClient(threadId)
     if (!client) return
     let current = true
     const updates = new Map<string, RuntimeTask>()
@@ -76,7 +76,7 @@ const Task = memo(function Task({ task, thread }: { task: RuntimeTask; thread?: 
   ].filter(Boolean).join(' · ')
   const run = async (kind: 'stop' | 'background') => {
     setBusy(true); setError(null)
-    try { await getClient()!.call(kind === 'stop' ? 'tasks.stop' : 'tasks.background', { thread_id: task.thread_id, task_id: task.id }) }
+    try { await threadClient(task.thread_id)!.call(kind === 'stop' ? 'tasks.stop' : 'tasks.background', { thread_id: task.thread_id, task_id: task.id }) }
     catch (e) { setError(errorText(e)) } finally { setBusy(false) }
   }
   return <div testId={`dock-task-${task.id}`} style={{ display: 'flex', flexDirection: 'column', paddingLeft: task.parent_id ? 22 : 8, paddingRight: 8, paddingBottom: 10 }}>

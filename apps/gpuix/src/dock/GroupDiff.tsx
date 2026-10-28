@@ -10,7 +10,7 @@ import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { errorText } from '../nav/actions.ts'
 import { toast } from '../shell/toasts.tsx'
-import { getClient } from '../state.ts'
+import { threadClient } from '../state.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { dirtyTotals, prPlan, repoRows, type RepoRow } from '../groups/git.ts'
 import { remoteSlug, remoteWebUrl } from '../groups/model.ts'
@@ -108,17 +108,17 @@ export function GroupEnvironmentRows({ thread, diff, git, row, divider, title, o
   const rows = repoRows(thread.members ?? [], diff, git)
   const plan = prPlan(rows)
   const create = async () => {
-    const client = getClient()
+    const client = threadClient(thread.id)
     if (!client || busy || !plan) return
     setBusy(true)
     try {
       const result = await client.call('github.pr.create_group', { thread_id: thread.id, repos: plan.repos })
-      if (getClient() !== client) return
+      if (threadClient(thread.id) !== client) return
       const first = result.pull_requests[0]?.pull_request
       toast(prResultToast(result.pull_requests.length, result.skipped ?? []), first ? { action: { label: GROUP_COPY.outsideChangeOpen, onClick: () => openWeb(first.url) } } : undefined)
       onChanged()
     } catch (e) {
-      if (getClient() === client) toast.error('Unable to create pull requests', { description: errorText(e) })
+      if (threadClient(thread.id) === client) toast.error('Unable to create pull requests', { description: errorText(e) })
     } finally { setBusy(false) }
   }
   const prs = rows.filter((r) => r.git?.pull_request)

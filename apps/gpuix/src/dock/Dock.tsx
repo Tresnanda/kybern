@@ -23,7 +23,7 @@ import { useNav } from '../nav/store.ts'
 import { IconButton } from '../sidebar/rows.tsx'
 import { IconButton as KitIconButton } from '../kit/IconButton.tsx'
 import { PickerChip } from '../kit/PickerChip.tsx'
-import { getClient, useApp } from '../state.ts'
+import { threadClient, useApp } from '../state.ts'
 import { EASE_OUT, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { Activity, isActiveTask, useRuntimeTasks } from './Activity.tsx'
 import { Agents } from './Agents.tsx'
@@ -58,7 +58,7 @@ const DOCK_EXIT_GUARD_MS = 420
  * panels here (terminal, browser, review) are reached from its + menu and the strip's own + menu.
  */
 const VIEWERS: { id: string; label: string; icon: string; open: (threadId: string) => unknown }[] = [
-  { id: 'terminal', label: 'New terminal', icon: DOCK_ICONS.terminal, open: async (threadId) => { const info = await getClient()!.call('terminals.create', { thread_id: threadId, cols: 100, rows: 24 }); openTab(threadId, { kind: 'terminal', id: info.id }) } },
+  { id: 'terminal', label: 'New terminal', icon: DOCK_ICONS.terminal, open: async (threadId) => { const info = await threadClient(threadId)!.call('terminals.create', { thread_id: threadId, cols: 100, rows: 24 }); openTab(threadId, { kind: 'terminal', id: info.id }) } },
   { id: 'preview', label: 'Browser', icon: DOCK_ICONS.preview, open: (threadId) => openTab(threadId, { kind: 'preview' }) },
   { id: 'review', label: 'Review', icon: N.pullRequest, open: (threadId) => openTab(threadId, { kind: 'review' }) },
 ]
@@ -187,7 +187,7 @@ function ThreadDock({ thread, width }: { thread: Thread; width: number }) {
         : tab === 'tasks' ? <TasksPane thread={thread} />
         : tab === 'activity' ? <Activity {...tasks} />
         : tab === 'changes' ? <DiffPane thread={thread} onStats={onStats} />
-        : tab === 'explorer' ? <Explorer key={thread.project_id} projectId={thread.project_id} width={width} />
+        : tab === 'explorer' ? <Explorer key={thread.project_id} projectId={thread.project_id} thread={thread} width={width} />
         : tab === 'project' && thread.coordinator_project_id ? <ProjectPane thread={thread} />
         : tab === 'map' && thread.coordinator_project_id ? <MapPane thread={thread} /> : null}
       </PaneEnter>}

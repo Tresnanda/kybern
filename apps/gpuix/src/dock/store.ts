@@ -3,7 +3,7 @@ import { onEnvironmentChange, onEnvironmentLeaving } from '../shell/environment.
 // Dock choices belong to the selected thread; closing a tab discards its content.
 // Bounded per-environment layout preferences survive ordinary app exits.
 import { useSyncExternalStore } from 'react'
-import { getClient, getState, subscribe as subscribeApp } from '../state.ts'
+import { getState, localClient, subscribe as subscribeApp, threadClient } from '../state.ts'
 import { openTab } from '../tabs/open.ts'
 
 export type DockTab = 'agents' | 'activity' | 'changes' | 'explorer' | 'project' | 'map' | 'notes' | 'tasks' | 'review' | 'artifacts' | 'terminal' | 'preview'
@@ -40,12 +40,12 @@ const choices = restoreDockChoices(saved)
 const legacy = legacyTerminalThreads(saved)
 if (legacy.length) {
   const off = subscribeApp(() => {
-    const client = getState().status === 'open' ? getClient() : null
+    const client = getState().status === 'open' ? localClient() : null
     // A listener must never throw into the app's emit: anything but a live client (a test stub) waits.
     if (typeof client?.call !== 'function') return
     off()
     save('kybern.dock.choices', [...choices].map(([key, value]) => [key, { ...value, instant: false }]))
-    for (const threadId of legacy) void Promise.resolve().then(() => client.call('terminals.list', { thread_id: threadId })).then(({ terminals }) => {
+    for (const threadId of legacy) void Promise.resolve().then(() => threadClient(threadId)!.call('terminals.list', { thread_id: threadId })).then(({ terminals }) => {
       for (const info of terminals) if (info.alive) openTab(threadId, { kind: 'terminal', id: info.id }, { activate: false, focus: false })
     }, () => {})
   })
