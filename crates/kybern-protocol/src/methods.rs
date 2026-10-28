@@ -2361,6 +2361,13 @@ pub struct PullRequest {
     /// MERGEABLE | CONFLICTING | UNKNOWN
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mergeable: Option<String>,
+    /// CLEAN | BLOCKED | BEHIND | DIRTY | UNSTABLE | DRAFT | HAS_HOOKS | UNKNOWN.
+    /// Lists carry it so rows group by readiness without a detail fetch per row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_state_status: Option<String>,
+    /// Auto-merge is armed on this pull request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_merge: Option<PrAutoMerge>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<PrLabel>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2369,6 +2376,25 @@ pub struct PullRequest {
     /// this pull request belongs to. None for single-repository projects.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
+}
+
+/// GitHub auto-merge: the pull request merges itself once its requirements pass.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrAutoMerge {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled_by: Option<String>,
+    /// squash | merge | rebase
+    pub merge_method: String,
+}
+
+/// A person on a pull request (assignee, or any actor).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrPerson {
+    pub login: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_bot: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -2492,9 +2518,24 @@ pub struct PrDetailParams {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PrCheck {
     pub name: String,
+    /// QUEUED | IN_PROGRESS | COMPLETED (check runs); empty for a commit status.
     pub status: String,
+    /// GitHub's own conclusion, never folded: SUCCESS | FAILURE | CANCELLED | TIMED_OUT |
+    /// ACTION_REQUIRED | SKIPPED | NEUTRAL | STALE | STARTUP_FAILURE, or the state of a commit status.
     pub conclusion: String,
     pub url: String,
+    /// The branch rules require this check. None when GitHub did not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_required: Option<bool>,
+    /// The workflow a check run belongs to (a status or an app check has none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_name: Option<String>,
+    /// RFC 3339.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    /// RFC 3339; absent while the check is running.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PrDetailResult {
@@ -2518,6 +2559,42 @@ pub struct PrDetailResult {
     pub merged_by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub closed_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assignees: Vec<PrPerson>,
+    /// What the signed-in GitHub account may do here. None when GitHub did not answer
+    /// (clients then show no bypass or branch-update actions).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewer: Option<PrViewer>,
+    /// Commits the head is behind the base. Read only while `merge_state_status` is BEHIND.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behind_by: Option<u32>,
+    /// The checks list stopped at 500; `pull_request.checks_summary` covers what was read.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub checks_truncated: bool,
+    /// Entries per timeline filter, for tab and filter counts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline_counts: Option<PrTimelineCounts>,
+}
+/// The signed-in GitHub account's abilities on one pull request.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrViewer {
+    /// Write access or above: may merge when the rules pass.
+    pub can_merge: bool,
+    /// May bypass branch protection and merge now ("Merge anyway").
+    pub can_merge_as_admin: bool,
+    pub can_update_branch: bool,
+    pub can_enable_auto_merge: bool,
+    pub can_disable_auto_merge: bool,
+    /// May edit the pull request, so may take it out of draft.
+    pub can_mark_ready: bool,
+    /// Merge methods the repository allows, in the order squash, merge, rebase.
+    pub merge_methods: Vec<String>,
+}
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
+pub struct PrTimelineCounts {
+    pub comments: u32,
+    pub reviews: u32,
+    pub commits: u32,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PrReviewer {
@@ -2538,6 +2615,10 @@ pub enum PrPageKind {
     Reviews,
     ReviewComments,
     Checks,
+    /// One chronological history, oldest first: comments, reviews (with their inline
+    /// comments), commits, force pushes, review requests, ready/draft, merge and close.
+    /// Paged by `cursor`, not `page`.
+    Timeline,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PrPageParams {
@@ -2550,6 +2631,9 @@ pub struct PrPageParams {
     /// request belongs to. Required for a group project; rejected for a single project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
+    /// `timeline` only: the `next_cursor` of the previous page. Omit for the first page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
 }
 fn default_pr_page() -> u32 {
     1
@@ -2563,6 +2647,9 @@ pub struct PrFile {
     pub deletions: u32,
     pub patch: String,
     pub patch_truncated: bool,
+    /// Blob sha of the file at the head; it changes when the file does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PrReviewEntry {
@@ -2588,6 +2675,72 @@ pub struct PrPageResult {
     pub entries: Vec<PrReviewEntry>,
     pub page: u32,
     pub has_more: bool,
+    /// `timeline` only, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub timeline: Vec<PrTimelineEvent>,
+    /// `timeline` only: pass as `cursor` to read the following page. Present while `has_more`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PrTimelineKind {
+    Comment,
+    Review,
+    Commit,
+    ForcePush,
+    ReviewRequested,
+    ReadyForReview,
+    ConvertedToDraft,
+    Merged,
+    Closed,
+    Reopened,
+}
+/// An inline comment inside a timeline review.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrTimelineInline {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    pub body: String,
+    pub url: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PrTimelineEvent {
+    /// GitHub's node id; stable, so it is the row key.
+    pub id: String,
+    pub kind: PrTimelineKind,
+    /// RFC 3339.
+    pub created_at: String,
+    /// Who did it. Empty when the account was deleted.
+    pub author: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub author_is_bot: bool,
+    /// Comment or review text (bounded), or a commit's first line.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub body: String,
+    /// `review`: APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | PENDING.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// `commit`: the commit. `force_push`: the new head.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha: Option<String>,
+    /// `force_push`: the head it replaced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_sha: Option<String>,
+    /// `review_requested`: the user or team asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// `review`: its inline comments (first 20).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inline_comments: Vec<PrTimelineInline>,
+    /// `review`: how many inline comments it has in all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inline_count: Option<u32>,
 }
 method!(PrPage, "github.pr.page", Some(Scope::OrchestrationRead), PrPageParams, PrPageResult);
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
@@ -2597,8 +2750,16 @@ pub enum PrActionKind {
     Approve,
     RequestChanges,
     Checkout,
+    /// Squash unless `merge_method` says otherwise; `admin` bypasses branch protection.
     Merge,
     Close,
+    /// Arm GitHub auto-merge with `merge_method` (squash by default).
+    EnableAutoMerge,
+    DisableAutoMerge,
+    /// Merge the base branch into the head. Needs `head_sha`.
+    UpdateBranch,
+    /// Take a draft out of draft.
+    MarkReady,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PrInlineComment {
@@ -2630,6 +2791,13 @@ pub struct PrActionParams {
     /// request belongs to. Required for a group project; rejected for a single project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
+    /// `merge` and `enable_auto_merge`: squash (default) | merge | rebase.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_method: Option<String>,
+    /// `merge`: bypass branch protection ("Merge anyway"). GitHub refuses it unless the
+    /// signed-in account may.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub admin: bool,
 }
 method!(PrAction, "github.pr.action", Some(Scope::OrchestrationOperate), PrActionParams, Empty);
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

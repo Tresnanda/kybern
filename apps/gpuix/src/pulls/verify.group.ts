@@ -21,7 +21,7 @@ try {
   await a.getByTestId('pr-row-api-108').waitFor({ timeoutMs: 10000 })
   assert.equal(await a.getByTestId('pr-row-docs-108').count(), 1, 'docs #108 is its own row')
   assert.equal(await a.getByTestId('pr-row-api-109').count(), 1)
-  assert.equal(await a.getByTestId('pr-row-repo').count(), 3, 'every row names its repository')
+  assert.equal(await a.getByTestId('pr-badge-repo').count(), 3, 'every row names its repository')
   const painted = (await a.call('getPaintedText', {})).text.join('\n')
   assert.match(painted, /web: HTTP 401/, 'the failing member is reported')
   assert.doesNotMatch(painted, /infra/, 'a member not on GitHub is skipped quietly')

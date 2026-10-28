@@ -138,6 +138,8 @@ pub(crate) fn parse_pr(v: &Value) -> Option<PullRequest> {
         deletions: None,
         review_decision: None,
         mergeable: None,
+        merge_state_status: None,
+        auto_merge: None,
         labels: Vec::new(),
         checks_summary: None,
         repo: None,
@@ -198,6 +200,16 @@ pub(crate) fn avatar_url(pr_url: &str, login: &str, is_bot: bool) -> Option<Stri
     Some(format!("https://{host}/{login}.png?size=40"))
 }
 
+/// `autoMergeRequest` as `gh --json` returns it; null when auto-merge is off.
+pub(crate) fn parse_auto_merge(v: Option<&Value>) -> Option<PrAutoMerge> {
+    let v = v.filter(|v| v.is_object())?;
+    let method = v.get("mergeMethod").and_then(Value::as_str).filter(|s| !s.is_empty()).unwrap_or("SQUASH");
+    Some(PrAutoMerge {
+        enabled_by: v.pointer("/enabledBy/login").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned),
+        merge_method: method.to_ascii_lowercase(),
+    })
+}
+
 fn parse_time(v: &Value, key: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     v.get(key).and_then(Value::as_str).and_then(|s| s.parse().ok())
 }
@@ -212,6 +224,8 @@ pub(crate) fn parse_pr_extended(v: &Value) -> Option<PullRequest> {
     pr.deletions = v.get("deletions").and_then(Value::as_u64).map(|n| n as u32);
     pr.review_decision = v.get("reviewDecision").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned);
     pr.mergeable = v.get("mergeable").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned);
+    pr.merge_state_status = v.get("mergeStateStatus").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned);
+    pr.auto_merge = parse_auto_merge(v.get("autoMergeRequest"));
     pr.labels = v
         .get("labels")
         .and_then(Value::as_array)
@@ -357,7 +371,7 @@ pub async fn pr_list_with(gh: &str, cwd: &Path, state: &str, limit: u32) -> Resu
             "--limit",
             &limit,
             "--json",
-            "number,title,url,state,headRefName,baseRefName,isDraft,author,updatedAt,createdAt,additions,deletions,reviewDecision,mergeable,labels,statusCheckRollup",
+            "number,title,url,state,headRefName,baseRefName,isDraft,author,updatedAt,createdAt,additions,deletions,reviewDecision,mergeable,mergeStateStatus,autoMergeRequest,labels,statusCheckRollup",
         ],
     )
     .await?;
@@ -394,7 +408,8 @@ mod tests {
     fn list_entry_reduces_rollup_to_a_summary() {
         let v = json!({
             "number": 5, "title": "t", "url": "https://github.com/o/r/pull/5", "author": {"login": "ana", "is_bot": false},
-            "additions": 12, "deletions": 3, "reviewDecision": "APPROVED", "mergeable": "CONFLICTING",
+            "additions": 12, "deletions": 3, "reviewDecision": "APPROVED", "mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY",
+            "autoMergeRequest": {"enabledBy": {"login": "kevin"}, "mergeMethod": "SQUASH"},
             "labels": [{"name": "bug", "color": "d73a4a"}],
             "statusCheckRollup": [
                 {"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"},
@@ -408,8 +423,19 @@ mod tests {
         assert_eq!((s.total, s.passed, s.failed, s.pending, s.skipped), (4, 2, 1, 1, 0));
         assert_eq!(pr.additions, Some(12));
         assert_eq!(pr.mergeable.as_deref(), Some("CONFLICTING"));
+        assert_eq!(pr.merge_state_status.as_deref(), Some("DIRTY"));
+        let auto = pr.auto_merge.unwrap();
+        assert_eq!((auto.enabled_by.as_deref(), auto.merge_method.as_str()), (Some("kevin"), "squash"));
         assert_eq!(pr.labels[0].name, "bug");
         assert_eq!(pr.author_avatar_url.as_deref(), Some("https://github.com/ana.png?size=40"));
+    }
+
+    #[test]
+    fn auto_merge_is_absent_when_null() {
+        assert!(parse_auto_merge(Some(&json!(null))).is_none());
+        assert!(parse_auto_merge(None).is_none());
+        let rebase = parse_auto_merge(Some(&json!({"mergeMethod":"REBASE"}))).unwrap();
+        assert_eq!((rebase.enabled_by, rebase.merge_method.as_str()), (None, "rebase"));
     }
 
     #[test]

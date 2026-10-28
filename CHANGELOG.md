@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.19.0
+
+<!-- kybern-release-title: A clearer pull request page -->
+<!-- kybern-release-summary: Pull requests now show one clear verdict with the next step, a list grouped by what needs you, a full file tree, and one timeline of everything that happened. -->
+
+- Pull requests show one verdict at the top of the sidebar, such as "Ready to merge", "Waiting on 6 checks" or "2 blockers", with the next step and the one button that does it: Squash and merge, Merge when ready (auto-merge), Update branch, Resolve in conversation, or Ready for review. Running checks are no longer reported as failing. Merge when ready only appears while GitHub is waiting on required checks, so it never merges at once, and merging past unfinished or failing checks asks first.
+- The sidebar stays in place while you read. Checks are grouped by workflow with required marks, shard progress and run time, failures first; each failing check and each change request has an agent button. Reviewers and assignees show their GitHub avatars and review state.
+- The pull request list is grouped into Needs attention, Awaiting review, Approved and Drafts, and each row says why. In a group project, the filter lists member repositories, and repository chips switch to one of them.
+- The Changes tab lists every file in a full-height tree (or a flat list) with a filter, loads all pages in the background, and never cuts off line counts.
+- The Timeline tab is one history in time order: comments, reviews with their inline comments, commits and force pushes, with filters.
+- The header keeps Review and a "⋯" menu; the description reads at a comfortable width.
+- New `kybern pr merge` options (`--method`, `--admin`, `--auto`, `--cancel-auto`) and `kybern pr update-branch` / `kybern pr ready`.
+- The retired Tauri desktop app is gone from the repository and the release; Tauri installs stay on 0.18.0, so install Kybern GPUIX to keep updating.
+
 ## 0.18.0
 
 <!-- kybern-release-title: OpenCode 2 support -->

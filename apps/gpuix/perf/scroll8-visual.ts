@@ -12,7 +12,7 @@ try{
   const a=f.app;await a.getByTestId('app-ready').waitFor();await a.getByTestId('rail-pulls').click();await a.getByTestId('pr-row-108').waitFor()
   for(const scene of ['list','summary','changes','timeline']){
    if(scene==='summary'){await a.getByTestId('pr-row-108').click();await a.getByTestId('pr-summary').waitFor()}
-   if(scene==='changes'||scene==='timeline'){await a.getByTestId(`pr-tab-${scene}`).click();await a.getByTestId(scene==='changes'?'pr-native-diff':'pr-select-1').waitFor()}
+   if(scene==='changes'||scene==='timeline'){await a.getByTestId(`pr-tab-${scene}`).click();await a.getByTestId(scene==='changes'?'pr-native-diff':'pr-select-r1').waitFor()}
    await a.clock.pause();await a.clock.fastForward(1000);
    const b=await a.getByTestId('page-pulls').bounds();await a.mouse.move({x:b.x+b.width/2,y:b.y+b.height/2})
    await a.screenshot({path:`${out}/${process.env.SCROLL8_VISUAL_LABEL??'app'}-${theme}-${reduced}-${scene}.png`})

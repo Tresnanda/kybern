@@ -19,11 +19,9 @@ try {
   await app.getByTestId('pr-row-108').click()
   await app.getByTestId('pr-summary').waitFor({ timeoutMs: 10_000 })
   await app.getByTestId('pr-tab-timeline').click()
-  await app.getByTestId('pr-source-review_comments').click()
+  await app.getByTestId('pr-timeline-filter-reviews').click()
   await Bun.sleep(700)
-  await app.mouse.wheel({ x: 1100, y: 600 }, 0, -20000)
-  await Bun.sleep(500)
-  await app.getByTestId('pr-page-next').press('enter')
+  await app.getByTestId('pr-timeline-more').press('enter')
   await Bun.sleep(700)
   for (let i = 0; i < 8; i++) {
     await app.mouse.move({ x: 1200, y: 40 })
