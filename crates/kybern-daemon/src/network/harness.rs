@@ -83,6 +83,8 @@ pub struct Cluster {
     /// Whether daemons join same-user machines on their own. Off unless a test asks, so a test that
     /// forms its network with [`Cluster::form`] is not raced by discovery.
     auto_join: bool,
+    /// The intervals every daemon runs on: [`Timing::fast`] unless a test slows part of it down.
+    timing: Timing,
 }
 
 impl Cluster {
@@ -114,6 +116,7 @@ impl Cluster {
             block,
             fixture: FakeFixture { self_name: String::new(), tailnet: TAILNET.into(), nodes },
             auto_join: false,
+            timing: Timing::fast(),
         };
         cluster.save();
         Some(cluster)
@@ -122,6 +125,12 @@ impl Cluster {
     /// Let the daemons join each other on discovery (N4's joining flows).
     pub fn auto_join(mut self, on: bool) -> Self {
         self.auto_join = on;
+        self
+    }
+
+    /// Change the intervals the daemons run on, for a scenario that must not be rescued by a short tick or backoff.
+    pub fn timing(mut self, change: impl FnOnce(&mut Timing)) -> Self {
+        change(&mut self.timing);
         self
     }
 
@@ -208,7 +217,7 @@ impl Cluster {
         drivers: DriverRegistry,
         auto_join: bool,
     ) -> Node {
-        let state = AppState::initialize_with_drivers(paths, tailscale, Timing { auto_join, ..Timing::fast() }, drivers).unwrap();
+        let state = AppState::initialize_with_drivers(paths, tailscale, Timing { auto_join, ..self.timing.clone() }, drivers).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let primary = listener.local_addr().unwrap();
         *state.listen_addr.write().unwrap() = Some(primary);

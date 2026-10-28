@@ -50,6 +50,8 @@ pub(crate) mod harness;
 #[cfg(test)]
 mod join_tests;
 #[cfg(test)]
+mod recovery_tests;
+#[cfg(test)]
 mod shared_state_tests;
 #[cfg(test)]
 mod tests;
@@ -367,19 +369,51 @@ impl Network {
     }
 
     /// Someone on the tailnet asked this machine who it is. If it is a Kybern machine that has just
-    /// started, it wants to be found: look at the tailnet again now, at most every few seconds. This
-    /// is how a machine that starts after its smaller-id peer gets noticed without waiting a tick.
-    /// `node_id` is the caller's tailnet node when known: only that node is probed again.
+    /// started, it wants to be found: look at the tailnet again now. This is how a machine that starts
+    /// after its peer gets noticed without waiting a tick. `node_id` is the caller's tailnet node when
+    /// known: only that node is probed again, and each node nudges at most every few seconds, so the
+    /// identity checks of members' sessions do not hide the nudge of a new machine. A member that nudges
+    /// is back from a restart: the wait its failed attempts earned is over, and it is dialed now.
     pub fn nudge_discovery(&self, node_id: Option<&str>) {
         let every = Duration::from_secs(10).min(self.timing.tick_watching);
-        let mut last = self.lock(&self.nudged);
-        if last.is_some_and(|at| at.elapsed() < every) {
+        let Some(node_id) = node_id else {
+            let mut last = self.lock(&self.nudged);
+            if last.is_some_and(|at| at.elapsed() < every) {
+                return;
+            }
+            *last = Some(Instant::now());
+            drop(last);
+            self.peers.forget_probes(None);
+            self.wake();
+            return;
+        };
+        if let Some(machine_id) = self.member_at_node(node_id) {
+            if self.peers.nudge_due(&format!("member:{node_id}"), every.min(Duration::from_secs(2))) {
+                self.peers.reset_pair(&machine_id);
+                self.wake();
+            }
             return;
         }
-        *last = Some(Instant::now());
-        drop(last);
-        self.peers.forget_probes(node_id);
-        self.wake();
+        if self.peers.nudge_due(node_id, every) {
+            self.peers.forget_probes(Some(node_id));
+            self.peers.expect_node(node_id);
+            self.wake();
+        }
+    }
+
+    /// The member that runs on a tailnet node.
+    fn member_at_node(&self, node_id: &str) -> Option<String> {
+        let projection = self.membership.as_ref()?.projection();
+        projection.members().find(|(_, entry)| entry.descriptor.ts_node_id.as_deref() == Some(node_id)).map(|(id, _)| id.clone())
+    }
+
+    /// Close the session with a member and revoke the grants it holds; the member reconnects with a new
+    /// grant that reflects this machine's policy now.
+    pub(crate) fn drop_session(&self, machine_id: &str) {
+        self.peers.close(machine_id);
+        for id in self.grants.revoke_machine(machine_id) {
+            self.announce_revoked(id);
+        }
     }
 
     /// A client shows Settings → Machines or the Found list: discovery ticks every 60 s for a

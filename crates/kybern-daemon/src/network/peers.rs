@@ -231,6 +231,14 @@ struct PeersInner {
     probed: HashMap<String, Instant>,
     /// The tailnet's online set when the worker last looked.
     signature: String,
+    /// The capabilities a policy widening already renewed an accepted session for, per machine.
+    widened: HashMap<String, Vec<Scope>>,
+    /// When a node last nudged this machine, so one chatty node cannot wake the worker without end.
+    nudges: HashMap<String, Instant>,
+    /// Nodes that nudged this machine and did not answer yet: when, and how many times they were retried.
+    awaited: HashMap<String, (Instant, u32)>,
+    /// When this machine last nudged a member that dials it.
+    nudged_out: HashMap<String, Instant>,
 }
 
 #[derive(Default)]
@@ -272,9 +280,15 @@ impl Peers {
     pub fn register(&self, link: Arc<PeerLink>) {
         let old = {
             let mut inner = self.lock();
+            let inner = &mut *inner;
             let status = inner.status.entry(link.machine_id.clone()).or_default();
             status.last_seen = Some(Utc::now());
             status.last_error = None;
+            // The machine is here: whatever backoff it earned while it was away is over.
+            if link.direction == Direction::Accepted {
+                status.failures = 0;
+                inner.next_attempt.remove(&link.machine_id);
+            }
             inner.links.insert(link.machine_id.clone(), link)
         };
         if let Some(old) = old {
@@ -384,6 +398,83 @@ impl Peers {
             }
             None => inner.probed.clear(),
         }
+    }
+
+    /// Whether a nudge from `key` is news: one per `every` for each, so a member's session checks
+    /// do not hide the nudge of a new machine.
+    pub(super) fn nudge_due(&self, key: &str, every: Duration) -> bool {
+        let mut inner = self.lock();
+        let now = Instant::now();
+        if inner.nudges.get(key).is_some_and(|at| now.duration_since(*at) < every) {
+            return false;
+        }
+        if inner.nudges.len() >= 256 {
+            inner.nudges.retain(|_, at| now.duration_since(*at) < Duration::from_secs(60));
+        }
+        inner.nudges.insert(key.to_string(), now);
+        true
+    }
+
+    /// A node nudged us and is about to be probed: if it does not answer yet (its listener may still be
+    /// coming up), the probe is tried again a few times.
+    pub(super) fn expect_node(&self, node_id: &str) {
+        self.lock().awaited.insert(node_id.to_string(), (Instant::now(), 0));
+    }
+
+    /// The node answered, or was given up on.
+    fn node_answered(&self, node_id: &str) {
+        self.lock().awaited.remove(node_id);
+    }
+
+    /// The node a nudge announced did not answer: the wait before the next probe, `None` after a few tries.
+    fn retry_awaited(&self, node_id: &str, step: Duration) -> Option<Duration> {
+        let mut inner = self.lock();
+        let (since, tries) = *inner.awaited.get(node_id)?;
+        if since.elapsed() > Duration::from_secs(30) || tries >= 3 {
+            inner.awaited.remove(node_id);
+            return None;
+        }
+        inner.awaited.insert(node_id.to_string(), (since, tries + 1));
+        Some(step.saturating_mul(tries + 1))
+    }
+
+    /// A member is back: its failed attempts no longer count and the next pass dials it.
+    pub(super) fn reset_pair(&self, machine_id: &str) {
+        let mut inner = self.lock();
+        inner.next_attempt.remove(machine_id);
+        if let Some(status) = inner.status.get_mut(machine_id) {
+            status.failures = 0;
+        }
+    }
+
+    /// Whether this machine should nudge a member that dials it: not while it is linked, and once per `every`.
+    fn nudge_out_due(&self, machine_id: &str, every: Duration) -> bool {
+        let mut inner = self.lock();
+        if inner.links.get(machine_id).is_some_and(|link| !link.is_closed()) {
+            return false;
+        }
+        let now = Instant::now();
+        if inner.nudged_out.get(machine_id).is_some_and(|at| now.duration_since(*at) < every) {
+            return false;
+        }
+        inner.nudged_out.insert(machine_id.to_string(), now);
+        true
+    }
+
+    /// Record the capabilities this machine now allows `machine_id` beyond its session's grant. `true`
+    /// when that is news: the session is then reopened, so the grant carries them.
+    fn widening_is_new(&self, machine_id: &str, widened: &[Scope]) -> bool {
+        let mut inner = self.lock();
+        if widened.is_empty() {
+            inner.widened.remove(machine_id);
+            return false;
+        }
+        let seen = inner.widened.entry(machine_id.to_string()).or_default();
+        if widened.iter().all(|scope| seen.contains(scope)) {
+            return false;
+        }
+        *seen = widened.to_vec();
+        true
     }
 
     fn reset_backoff(&self) {
@@ -950,6 +1041,7 @@ pub async fn pass(state: &AppState) -> Option<Duration> {
 
     let me = membership.machine_id();
     if membership.self_is_member() {
+        reopen_widened_sessions(network);
         super::dial_out::publish_url(state).await;
         let projection = membership.projection();
         let own_url = super::dial_out::url_of(&projection, &me);
@@ -965,6 +1057,8 @@ pub async fn pass(state: &AppState) -> Option<Duration> {
                 // The member with the smaller id dials (§3.3).
                 if me.as_str() < id.as_str() {
                     dials.push((id.clone(), node.clone()));
+                } else {
+                    nudge_dialer(state, id, node);
                 }
                 continue;
             }
@@ -1005,6 +1099,44 @@ pub async fn pass(state: &AppState) -> Option<Duration> {
         super::join::auto_join(state, status).await;
     }
     network.peers.soonest_retry()
+}
+
+/// A session this machine accepted carries the capabilities its policy allowed when the grant was
+/// issued. When the policy later widens (a capability turned on, a pause lifted), the session is
+/// reopened: the dialer reconnects at once and its new grant carries them. Narrowing needs nothing,
+/// since [`effective_scopes`] applies the policy at use time.
+fn reopen_widened_sessions(network: &Network) {
+    for link in network.peers.links() {
+        if link.direction != Direction::Accepted {
+            continue;
+        }
+        // The clipboard opt-in is checked against this machine's policy alone, never the grant.
+        let widened: Vec<Scope> = network
+            .policy_scopes(&link.machine_id)
+            .into_iter()
+            .filter(|scope| *scope != Scope::MachineClipboardAuto && !link.scopes.contains(scope))
+            .collect();
+        if !network.peers.widening_is_new(&link.machine_id, &widened) {
+            continue;
+        }
+        tracing::info!(target: SESSION_TARGET, machine = %link.machine_id, "this machine's policy widened; reopening the session");
+        network.drop_session(&link.machine_id);
+    }
+}
+
+/// A member with a larger id dials this machine, not the other way round. On its way back (a restart)
+/// this machine tells it so, instead of waiting for the wait its failed attempts earned: a well-known
+/// check, which the member takes as news (`Network::nudge_discovery`).
+fn nudge_dialer(state: &AppState, member: &str, node: &TsNode) {
+    let network = &state.network;
+    if !network.peers.nudge_out_due(member, Duration::from_secs(10).min(network.timing.tick_watching)) {
+        return;
+    }
+    let state = state.clone();
+    let node = node.clone();
+    tokio::spawn(async move {
+        probe_node(&state, node).await;
+    });
 }
 
 impl Peers {
@@ -1063,11 +1195,26 @@ async fn discover(state: &AppState, status: &TsStatus) {
             inner.probed.insert(peer.node_id.clone(), Instant::now());
         }
     }
+    let candidate_ids: Vec<String> = candidates.iter().map(|node| node.node_id.clone()).collect();
     let found = futures::stream::iter(candidates)
         .map(|node| async move { probe_node(state, node).await })
         .buffer_unordered(MAX_CONCURRENT_PROBES)
         .collect::<Vec<_>>()
         .await;
+    // A node that nudged us and does not answer yet (its listener may still be coming up) is probed again
+    // in a moment, not at the next tick.
+    for node_id in candidate_ids {
+        if found.iter().flatten().any(|entry| entry.node.node_id == node_id) {
+            network.peers.node_answered(&node_id);
+        } else if let Some(wait) = network.peers.retry_awaited(&node_id, network.timing.backoff_min) {
+            let network = state.network.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(wait).await;
+                network.peers.forget_probes(Some(&node_id));
+                network.wake();
+            });
+        }
+    }
     let mut changed = false;
     {
         let mut inner = network.peers.lock();
@@ -1122,6 +1269,53 @@ mod tests {
         assert_eq!(waits, [2, 4, 8, 16, 32, 64, 128, 256, 300, 300]);
         assert_eq!(backoff(&timing, 0).as_secs(), 2);
         assert_eq!(backoff(&timing, u32::MAX).as_secs(), 300);
+    }
+
+    #[test]
+    fn a_nudge_is_news_once_per_node_and_a_members_does_not_hide_a_new_machines() {
+        let peers = Peers::default();
+        let every = Duration::from_secs(10);
+        assert!(peers.nudge_due("member:n1", every));
+        assert!(!peers.nudge_due("member:n1", every), "the same node again within the wait");
+        assert!(peers.nudge_due("n2", every), "another node is news");
+        assert!(peers.nudge_due("n3", Duration::ZERO) && peers.nudge_due("n3", Duration::ZERO));
+    }
+
+    #[test]
+    fn a_nudging_node_that_does_not_answer_is_probed_again_a_few_times() {
+        let peers = Peers::default();
+        let step = Duration::from_secs(2);
+        assert_eq!(peers.retry_awaited("n1", step), None, "a node that never nudged is left to the tick");
+        peers.expect_node("n1");
+        assert_eq!(peers.retry_awaited("n1", step), Some(step));
+        assert_eq!(peers.retry_awaited("n1", step), Some(step * 2));
+        assert_eq!(peers.retry_awaited("n1", step), Some(step * 3));
+        assert_eq!(peers.retry_awaited("n1", step), None, "then it waits for the tick");
+        peers.expect_node("n2");
+        peers.node_answered("n2");
+        assert_eq!(peers.retry_awaited("n2", step), None);
+    }
+
+    #[test]
+    fn a_widening_renews_a_session_once_for_the_same_capabilities() {
+        let peers = Peers::default();
+        assert!(!peers.widening_is_new("m", &[]));
+        assert!(peers.widening_is_new("m", &[Scope::MachineFiles]));
+        assert!(!peers.widening_is_new("m", &[Scope::MachineFiles]), "a dialer that does not ask for it is not redialed in a loop");
+        assert!(peers.widening_is_new("m", &[Scope::MachineFiles, Scope::MachinePorts]));
+        assert!(!peers.widening_is_new("m", &[]), "the grant caught up");
+        assert!(peers.widening_is_new("m", &[Scope::MachineFiles]), "and a later widening is news again");
+    }
+
+    #[test]
+    fn a_member_that_is_back_loses_the_wait_its_failed_attempts_earned() {
+        let peers = Peers::default();
+        let timing = crate::network::Timing::default();
+        peers.fail("m", &timing, "refused".into());
+        peers.fail("m", &timing, "refused".into());
+        assert!(!peers.due("m") && peers.status("m").failures == 2);
+        peers.reset_pair("m");
+        assert!(peers.due("m") && peers.status("m").failures == 0);
     }
 
     #[test]
