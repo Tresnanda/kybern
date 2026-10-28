@@ -31,6 +31,7 @@ mod delegation;
 pub(crate) mod group_git;
 mod group_pr;
 mod groups;
+pub(crate) mod inbound;
 mod lead;
 mod lead_git;
 mod lead_proposals;
@@ -216,6 +217,13 @@ impl Orchestrator {
                 .ok_or_else(|| anyhow!("native tool request has no active owning turn"))?;
             let operation_id =
                 crate::app_tools::prepare_native_operation(thread_id, session_instance_id, turn_id, call_id, name, &mut arguments)?;
+            // `machine` runs the tool on another machine of the network (forwarded tools, design §6.3).
+            if inbound::named_machine(&arguments).is_some() {
+                match self.forward_named_call(thread_id, session_instance_id, turn_id, call_id, name, arguments, operation_id).await? {
+                    inbound::Forwarded::Done(value) => return Ok(value),
+                    inbound::Forwarded::Local(local) => arguments = local,
+                }
+            }
             let mut result = self.execute_native_app_tool(thread_id, session_instance_id, name, arguments).await?;
             if let (Some(id), Some(object)) = (operation_id, result.as_object_mut()) {
                 object.insert("operation_id".into(), serde_json::to_value(id)?);
@@ -260,6 +268,25 @@ impl Orchestrator {
                 .filter(|turn| !turn.completed && turn.internal.is_none())
                 .map(|turn| turn.id)
                 .ok_or_else(|| anyhow!("native tool request has no active owning turn"))?;
+            self.dispatch_native_tool(&thread, turn_id, &live, session_instance_id, name, arguments).await
+        })
+    }
+
+    /// Run one Kybern agent tool for `thread`, whose live session `live` owns the turn `turn_id`. The caller
+    /// has checked that the session is current and that the tool is offered; a forwarded call from another
+    /// machine arrives here too, as the inbound thread (`inbound.rs`).
+    fn dispatch_native_tool<'a>(
+        &'a self,
+        thread: &'a Thread,
+        turn_id: TurnId,
+        live: &'a Arc<LiveSession>,
+        session_instance_id: Uuid,
+        name: &'a str,
+        arguments: serde_json::Value,
+    ) -> futures::future::BoxFuture<'a, Result<serde_json::Value>> {
+        Box::pin(async move {
+            let thread_id = thread.id;
+            let live = live.clone();
             if matches!(name, "kybern_html_preview" | "kybern_html_publish") {
                 anyhow::ensure!(serde_json::to_vec(&arguments)?.len() <= 768 * 1024, "HTML tool arguments exceed 768 KiB.");
                 if name == "kybern_html_preview" {
@@ -303,8 +330,11 @@ impl Orchestrator {
                     serde_json::json!({"visual":visual,"message":"The visual is published inline. Add only what the page does not already explain."}),
                 );
             }
+            if name == crate::network::forward::MACHINES_TOOL {
+                return self.execute_machines(thread).await;
+            }
             if name == crate::previews::agent::TOOL {
-                let roots = crate::previews::thread_roots(&self.inner.store, &thread);
+                let roots = crate::previews::thread_roots(&self.inner.store, thread);
                 let policy = crate::previews::GrantPolicy::new(&self.inner.paths.root);
                 let settings = self.inner.settings.get();
                 let clients = self.inner.preview_requests.receiver_count();
@@ -326,37 +356,37 @@ impl Orchestrator {
                 return self.inner.computer.execute(ctx, name, arguments).await;
             }
             if crate::secrets::is_tool(name) {
-                return self.execute_request_secret(&thread, turn_id, &live, arguments).await;
+                return self.execute_request_secret(thread, turn_id, &live, arguments).await;
             }
             if crate::pick::is_tool(name) {
-                return self.execute_request_pick(&thread, turn_id, &live, arguments).await;
+                return self.execute_request_pick(thread, turn_id, &live, arguments).await;
             }
             if login_request::is_tool(name) {
-                return self.execute_request_login(&thread, turn_id, &live, arguments).await;
+                return self.execute_request_login(thread, turn_id, &live, arguments).await;
             }
             if request_tools::is_tool(name) {
-                return self.execute_request_tool(&thread, turn_id, &live, name, arguments).await;
+                return self.execute_request_tool(thread, turn_id, &live, name, arguments).await;
             }
             if crate::lead_git::is_tool(name) {
-                return self.execute_lead_git(&thread, turn_id, &live, arguments).await;
+                return self.execute_lead_git(thread, turn_id, &live, arguments).await;
             }
             if lead_proposals::is_tool(name) {
-                return self.execute_lead_tool(&thread, turn_id, &live, name, arguments).await;
+                return self.execute_lead_tool(thread, turn_id, &live, name, arguments).await;
             }
             if crate::project_map::is_tool(name) {
-                return self.execute_project_map(&thread, arguments).await;
+                return self.execute_project_map(thread, arguments).await;
             }
             if agent_items::is_tool(name) {
-                return self.execute_notes_tasks_tool(&thread, turn_id, &live, name, arguments).await;
+                return self.execute_notes_tasks_tool(thread, turn_id, &live, name, arguments).await;
             }
             if delegation::is_tool(name) {
-                return self.execute_agent_tool(&thread, turn_id, &live, name, arguments).await;
+                return self.execute_agent_tool(thread, turn_id, &live, name, arguments).await;
             }
             if child_questions::is_tool(name) {
-                return self.execute_child_question_tool(&thread, name, arguments).await;
+                return self.execute_child_question_tool(thread, name, arguments).await;
             }
             if messaging::is_tool(name) {
-                return self.execute_messaging_tool(&thread, turn_id, &live, name, arguments).await;
+                return self.execute_messaging_tool(thread, turn_id, &live, name, arguments).await;
             }
             let mut value = self.inner.app_tools.execute(thread_id, name, arguments).await?;
             if name == "kybern_thread_context" {
@@ -546,6 +576,8 @@ struct Inner {
     delegation: delegation::DelegationState,
     /// Remote delegation: the machine hub, followers of children on other machines.
     remote: remote_delegation::RemoteState,
+    /// Forwarded agent tools served for other machines: their inbound threads' sessions.
+    inbound: inbound::InboundState,
     /// Orchestrator V2 messaging engine state (blocked askers, owed answers, edit guards).
     messaging: messaging::MessagingState,
     /// Test hooks for the Coordinator's git tool (the `gh` program, git environment).
@@ -925,6 +957,7 @@ impl Orchestrator {
                 subagents: std::sync::Mutex::new(Default::default()),
                 delegation: Default::default(),
                 remote: Default::default(),
+                inbound: Default::default(),
                 messaging: Default::default(),
                 lead_git: Default::default(),
                 rotation: Default::default(),
@@ -1549,6 +1582,7 @@ impl Orchestrator {
             parent_thread_id: None,
             coordinator_project_id: None,
             origin: None,
+            inbound: None,
             subagent: None,
             delegation: None,
             members,
@@ -1742,6 +1776,7 @@ impl Orchestrator {
             parent_thread_id: None,
             coordinator_project_id: None,
             origin: None,
+            inbound: None,
             subagent: None,
             delegation: None,
             members,
@@ -1897,6 +1932,8 @@ impl Orchestrator {
             self.emit(thread_id, None, EventPayload::ThreadArchived)?;
             self.subagents_archive_below(thread_id)?;
         }
+        // Machines this thread ran tools on archive their inbound threads for it.
+        self.archive_forwarded(thread_id);
         self.close_retained_sessions(thread_id).await?;
         if let Some(live) = self.inner.sessions.lock().await.remove(&thread_id) {
             live.mark_released();
@@ -1937,6 +1974,9 @@ impl Orchestrator {
             let current = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
             if current.subagent.is_some() {
                 return Err(anyhow!(subagents::READ_ONLY_ERROR));
+            }
+            if current.inbound.is_some() {
+                return Err(anyhow!(inbound::INBOUND_READ_ONLY));
             }
             let selected_target = if queued {
                 self.inner
@@ -3505,6 +3545,7 @@ impl Orchestrator {
                 if thread.coordinator_project_id.is_some() {
                     tools.extend(lead_proposals::tool_definitions());
                 }
+                self.offer_machine_tools(thread, &mut tools);
                 let guide = self.agent_guide(&tools, &restrictions);
                 gateway.register_coordinator(thread.id, session_instance_id, tools, restrictions, coordinator_instructions, guide)
             })
@@ -3615,6 +3656,16 @@ impl Orchestrator {
         let script = crate::askpass::install_script(&self.inner.paths.root, &cli).ok()?;
         let (url, token) = gateway.register_askpass(thread_id, session_instance_id)?;
         Some(crate::askpass::session_env(&script, &url, &token))
+    }
+
+    /// A machine that is in a network with others can run tools there (design §6.3). A thread another
+    /// machine started never can: it would be a second hop.
+    #[inline(never)]
+    fn offer_machine_tools(&self, thread: &Thread, tools: &mut Vec<kybern_drivers::NativeToolDefinition>) {
+        if thread.origin.is_none() && self.remote_hub().is_some_and(|hub| !hub.targets().is_empty()) {
+            crate::network::forward::offer_machine_args(tools);
+            tools.push(crate::network::forward::machines_tool_definition());
+        }
     }
 
     /// Whether a session spawned now would expose the computer-use tools.
@@ -5369,6 +5420,7 @@ mod tests {
             parent_thread_id: None,
             coordinator_project_id: None,
             origin: None,
+            inbound: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),
@@ -5771,6 +5823,7 @@ mod tests {
                 parent_thread_id: None,
                 coordinator_project_id: None,
                 origin: None,
+                inbound: None,
                 subagent: None,
                 delegation: None,
                 members: Vec::new(),
@@ -8494,6 +8547,7 @@ for line in sys.stdin:
 
     include!("orchestrator/delegation_tests.rs");
     include!("orchestrator/remote_delegation_tests.rs");
+    include!("orchestrator/inbound_tests.rs");
     include!("orchestrator/child_questions_tests.rs");
     include!("orchestrator/secret_tests.rs");
     include!("orchestrator/request_tests.rs");

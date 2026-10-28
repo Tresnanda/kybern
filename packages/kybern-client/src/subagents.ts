@@ -1,8 +1,13 @@
-import type { DelegationInfo, RuntimeTaskStatus, SubagentInfo } from "./types.ts";
+import type { DelegationInfo, InboundInfo, RuntimeTaskStatus, SubagentInfo } from "./types.ts";
 
 /** A child thread that mirrors a provider-native subagent. Native input has a dedicated route. */
 export function isSubagentThread(thread: { subagent?: SubagentInfo | null } | null | undefined): boolean {
   return !!thread?.subagent;
+}
+
+/** The hidden thread a machine keeps for another machine's forwarded tool calls: never listed, never written to. */
+export function isInboundThread(thread: { inbound?: InboundInfo | null } | null | undefined): boolean {
+  return !!thread?.inbound;
 }
 
 /** A thread that is reached from its parent rather than listed: a provider subagent or a delegated child. */

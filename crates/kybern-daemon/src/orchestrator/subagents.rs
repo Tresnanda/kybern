@@ -258,6 +258,7 @@ impl Orchestrator {
                     parent_thread_id: Some(parent),
                     coordinator_project_id: None,
                     origin: None,
+                    inbound: None,
                     subagent: Some(info.clone()),
                     delegation: None,
                     members: Vec::new(),

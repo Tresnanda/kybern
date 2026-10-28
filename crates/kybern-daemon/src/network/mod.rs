@@ -16,6 +16,7 @@
 pub mod client_grant;
 pub mod clipboard_filter;
 pub mod doctor;
+pub mod forward;
 pub mod git_transfer;
 pub mod join;
 pub mod keys;
@@ -257,7 +258,12 @@ impl Network {
         if self.membership.is_none() {
             return Vec::new();
         }
-        vec![features::NETWORK_V1.to_string(), features::RELAY_V1.to_string(), features::DELEGATE_REMOTE_V1.to_string()]
+        vec![
+            features::NETWORK_V1.to_string(),
+            features::RELAY_V1.to_string(),
+            features::DELEGATE_REMOTE_V1.to_string(),
+            features::TOOLS_FORWARD_V1.to_string(),
+        ]
     }
 
     /// `settings.network.enabled`, as the worker last saw it.

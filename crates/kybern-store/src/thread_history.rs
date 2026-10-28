@@ -129,7 +129,7 @@ impl Store {
             })?;
             let mut found = Vec::with_capacity(limit as usize + 1);
             while let Some(row) = rows.next()? {
-                found.push(SearchRow { thread: row_to_thread(row)?, rank: row.get(23)?, created_second: row.get(24)? });
+                found.push(SearchRow { thread: row_to_thread(row)?, rank: row.get(24)?, created_second: row.get(25)? });
             }
             let has_more = found.len() > limit as usize;
             found.truncate(limit as usize);
@@ -243,13 +243,13 @@ fn search_sql() -> String {
              CAST(strftime('%s',t.created_at) AS INTEGER) AS created_second
            FROM threads t
            WHERE (:project IS NULL OR t.project_id=:project)
-             AND t.subagent IS NULL
+             AND t.subagent IS NULL AND t.inbound IS NULL
              AND (:include_archived OR t.status!='archived')
              AND (:query='' OR instr(lower(t.title),:query)>0 OR {message_match})
          )
          SELECT id,project_id,title,provider_kind,provider_instance,model,effort,permission_mode,status,
                 worktree_path,worktree_branch,cwd,provider_session_id,pinned,created_at,updated_at,last_seq,
-                parent_thread_id,coordinator_project_id,subagent,delegation,members,origin,preference_rank,created_second
+                parent_thread_id,coordinator_project_id,subagent,delegation,members,origin,inbound,preference_rank,created_second
          FROM candidates
          WHERE (created_second<:snapshot_second OR (created_second=:snapshot_second AND id<=:snapshot_id))
            AND (:cursor_rank IS NULL OR preference_rank>:cursor_rank
@@ -263,7 +263,7 @@ fn search_sql() -> String {
 fn search_snapshot(connection: &Connection, project_id: Option<ProjectId>, include_archived: bool, query: &str) -> Result<(i64, String)> {
     let sql = format!(
         "SELECT CAST(strftime('%s',t.created_at) AS INTEGER),t.id FROM threads t
-         WHERE (:project IS NULL OR t.project_id=:project) AND t.subagent IS NULL AND (:include_archived OR t.status!='archived')
+         WHERE (:project IS NULL OR t.project_id=:project) AND t.subagent IS NULL AND t.inbound IS NULL AND (:include_archived OR t.status!='archived')
            AND (:query='' OR instr(lower(t.title),:query)>0 OR {})
          ORDER BY CAST(strftime('%s',t.created_at) AS INTEGER) DESC,t.id DESC LIMIT 1",
         message_match_sql("t.id")
@@ -555,6 +555,7 @@ mod tests {
             parent_thread_id: None,
             coordinator_project_id: None,
             origin: None,
+            inbound: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),

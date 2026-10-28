@@ -327,6 +327,10 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             } else if !p.include_subagents {
                 threads.retain(|thread| thread.subagent.is_none() && thread.delegation.is_none());
             }
+            // The hidden threads that record other machines' tool calls are opt-in too.
+            if !p.include_inbound {
+                threads.retain(|thread| thread.inbound.is_none());
+            }
             let (own_pending, child_pending) = pending_request_kinds(&state.store).map_err(internal)?;
             let mut activity: Vec<ThreadActivitySummary> = threads
                 .iter()

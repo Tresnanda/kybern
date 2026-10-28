@@ -505,6 +505,17 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
         | PeerGitImport::NAME
         | PeerThreadCreate::NAME
         | PeerThreadSend::NAME => state.orchestrator.peer_dispatch(&link.machine_id, method, params).await,
+        // Forwarded agent tools (R2): the tool runs as an inbound thread; its scopes beyond `machine:tools` are checked there.
+        PeerToolCall::NAME => {
+            let granted = effective_scopes(network, link);
+            let result = state.orchestrator.serve_tool_call(&link.machine_id, &granted, parse(params)?).await?;
+            ok(result)
+        }
+        PeerThreadArchiveInbound::NAME => {
+            let archive: PeerThreadArchiveInboundParams = parse(params)?;
+            state.orchestrator.archive_inbound_threads(&link.machine_id, archive.thread_id).await?;
+            ok(Empty {})
+        }
         PeerClientTokenMint::NAME => ok(super::client_grant::mint_for_peer(state, link, parse(params)?)?),
         PeerDeviceRevoke::NAME => {
             let revoke: PeerDeviceRevokeParams = parse(params)?;

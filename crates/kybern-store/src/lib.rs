@@ -701,6 +701,18 @@ impl Store {
         })
     }
 
+    /// The inbound threads machine `machine_id` keeps for its thread `thread_id` (one per project), oldest first.
+    pub fn inbound_threads(&self, machine_id: &str, thread_id: ThreadId) -> Result<Vec<Thread>> {
+        self.with(|c| {
+            let mut st = c.prepare(&format!(
+                "{THREAD_SELECT} WHERE inbound IS NOT NULL AND json_extract(inbound, '$.machine_id') = ?1
+                 AND json_extract(inbound, '$.thread_id') = ?2 ORDER BY created_at, id"
+            ))?;
+            let rows = st.query_map(params![machine_id, thread_id.to_string()], row_to_thread)?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+    }
+
     /// Delegated children of a thread, oldest first.
     pub fn delegation_children(&self, parent_thread_id: ThreadId) -> Result<Vec<Thread>> {
         self.with(|c| {
@@ -1843,7 +1855,7 @@ fn stamp_runtime_task_sequence(payload: &mut EventPayload, seq: EventSeq) -> boo
 
 const THREAD_SELECT: &str = "SELECT id, project_id, title, provider_kind, provider_instance, model, effort, permission_mode, status,
     worktree_path, worktree_branch, cwd, provider_session_id, pinned, created_at, updated_at, last_seq,
-    parent_thread_id, coordinator_project_id, subagent, delegation, members, origin FROM threads";
+    parent_thread_id, coordinator_project_id, subagent, delegation, members, origin, inbound FROM threads";
 
 const THREAD_MESSAGE_SELECT: &str = "SELECT id, operation_id, from_thread_id, to_thread_id, purpose, reply_to, body, delivery, state,
     held_reason, created_at, updated_at FROM thread_messages";
@@ -1966,6 +1978,7 @@ fn row_to_thread(r: &rusqlite::Row<'_>) -> rusqlite::Result<Thread> {
         delegation: r.get::<_, Option<String>>(20)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
         members: r.get::<_, Option<String>>(21)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?.unwrap_or_default(),
         origin: r.get::<_, Option<String>>(22)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
+        inbound: r.get::<_, Option<String>>(23)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
     })
 }
 
@@ -2162,8 +2175,8 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
     c.execute(
         "INSERT INTO threads(id, project_id, title, provider_kind, provider_instance, model, effort, permission_mode,
                     status, worktree_path, worktree_branch, cwd, provider_session_id, pinned, created_at, updated_at, last_seq,
-                    parent_thread_id, coordinator_project_id, subagent, delegation, members, origin)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
+                    parent_thread_id, coordinator_project_id, subagent, delegation, members, origin, inbound)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
                  ON CONFLICT(id) DO UPDATE SET
                     provider_kind = excluded.provider_kind, provider_instance = excluded.provider_instance,
                     title = excluded.title, model = excluded.model, effort = excluded.effort, permission_mode = excluded.permission_mode,
@@ -2175,7 +2188,8 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
                     subagent = COALESCE(excluded.subagent, threads.subagent),
                     delegation = COALESCE(excluded.delegation, threads.delegation),
                     members = COALESCE(excluded.members, threads.members),
-                    origin = COALESCE(threads.origin, excluded.origin)",
+                    origin = COALESCE(threads.origin, excluded.origin),
+                    inbound = COALESCE(threads.inbound, excluded.inbound)",
         params![
             t.id.to_string(),
             t.project_id.to_string(),
@@ -2200,6 +2214,7 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
             t.delegation.as_ref().map(serde_json::to_string).transpose()?,
             (!t.members.is_empty()).then(|| serde_json::to_string(&t.members)).transpose()?,
             t.origin.as_ref().map(serde_json::to_string).transpose()?,
+            t.inbound.as_ref().map(serde_json::to_string).transpose()?,
         ],
     )?;
     Ok(())
@@ -2342,6 +2357,7 @@ mod tests {
             parent_thread_id: None,
             coordinator_project_id: None,
             origin: None,
+            inbound: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),
@@ -2409,6 +2425,7 @@ mod tests {
             parent_thread_id: None,
             coordinator_project_id: None,
             origin: None,
+            inbound: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),
@@ -2533,6 +2550,7 @@ mod tests {
             parent_thread_id: None,
             coordinator_project_id: None,
             origin: None,
+            inbound: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),
@@ -2637,6 +2655,7 @@ mod tests {
             parent_thread_id: None,
             coordinator_project_id: None,
             origin: None,
+            inbound: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),
@@ -3385,6 +3404,7 @@ mod orchestration_tests {
             parent_thread_id: parent,
             coordinator_project_id: None,
             origin: None,
+            inbound: None,
             subagent: None,
             delegation,
             members: Vec::new(),
@@ -3910,6 +3930,7 @@ mod coordinator_upgrade_tests {
             parent_thread_id: None,
             coordinator_project_id: Some(project.id),
             origin: None,
+            inbound: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),

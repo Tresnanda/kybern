@@ -9,7 +9,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::event::NoticeLevel;
-use crate::network::{NetworkSettings, Origin, RepoIdentity};
+use crate::network::{InboundInfo, NetworkSettings, Origin, RepoIdentity};
 
 pub type ProjectId = Uuid;
 /// Daemon-owned neutral workspace used by chats that are not attached to a
@@ -528,6 +528,11 @@ pub struct Thread {
     /// daemon sets it, from the live session, and it never changes. Absent for work the user started here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<Origin>,
+    /// Set on the hidden, read-only thread a machine keeps for one thread of another machine: it records
+    /// that thread's forwarded tool calls (`peer.tool.call`). Written once and never changes. Clients
+    /// keep such threads out of lists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inbound: Option<Box<InboundInfo>>,
 }
 
 /// What the delegating agent asked this child to be.

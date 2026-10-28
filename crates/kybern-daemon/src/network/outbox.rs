@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::{Network, TARGET};
-use crate::orchestrator::remote_delegation::{CallFailure, Delivery, RemoteHub, RemoteTarget};
+use crate::orchestrator::remote_delegation::{CallFailure, Delivery, MemberView, RemoteHub, RemoteTarget};
 use crate::state::AppState;
 
 /// While items are queued the worker looks again at least this often.
@@ -104,6 +104,45 @@ impl RemoteHub for NetworkHub {
 
     fn target(&self, id: &str) -> Option<RemoteTarget> {
         self.target_of(id)
+    }
+
+    fn members(&self) -> Vec<MemberView> {
+        let Some(membership) = self.network.membership() else { return Vec::new() };
+        let me = membership.machine_id();
+        let projection = membership.projection();
+        projection
+            .members()
+            .filter(|(_, entry)| entry.removed.is_none())
+            .map(|(id, entry)| {
+                let is_self = *id == me;
+                let status = self.network.peers.status(id);
+                let presence = status.presence;
+                MemberView {
+                    id: id.clone(),
+                    name: entry.descriptor.name.clone(),
+                    os: entry.descriptor.os.clone(),
+                    is_self,
+                    status: if entry.paused {
+                        "paused"
+                    } else if is_self || status.online {
+                        "online"
+                    } else {
+                        "offline"
+                    },
+                    last_seen: status.last_seen,
+                    version: is_self
+                        .then(|| env!("CARGO_PKG_VERSION").to_string())
+                        .or_else(|| presence.as_ref().map(|p| p.version.clone())),
+                    features: if is_self {
+                        self.network.features()
+                    } else {
+                        presence.as_ref().map(|p| p.features.clone()).unwrap_or_default()
+                    },
+                    capabilities: super::forward::capability_view(&projection.allowed(id)),
+                    harnesses: presence.map(|p| p.harnesses).unwrap_or_default(),
+                }
+            })
+            .collect()
     }
 
     fn targets(&self) -> Vec<RemoteTarget> {

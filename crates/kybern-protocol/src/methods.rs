@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::Scope;
 use crate::event::ThreadEvent;
+use crate::forward::*;
 use crate::model::*;
 use crate::network::*;
 use crate::outbox::*;
@@ -1078,6 +1079,9 @@ pub struct ThreadsListParams {
     /// Implies `include_subagents`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_thread_id: Option<ThreadId>,
+    /// Also return the hidden threads that record tool calls other machines made here (`Thread::inbound`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub include_inbound: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsListResult {
@@ -4156,6 +4160,9 @@ method!(PeerGitImport, "peer.git.import", Some(Scope::MachineDelegate), PeerGitI
 // `threads.send`, which already take a client-chosen `thread_id` and `message_id`, so a repeat is the first.
 method!(PeerThreadCreate, "peer.thread.create", Some(Scope::MachineDelegate), ThreadsCreateParams, Thread);
 method!(PeerThreadSend, "peer.thread.send", Some(Scope::MachineDelegate), ThreadsSendParams, ThreadsSendResult);
+// Forwarded agent tools (M2, R2; payloads in forward.rs). Files and terminals also need their own scope on the target.
+method!(PeerToolCall, "peer.tool.call", Some(Scope::MachineTools), PeerToolCallParams, PeerToolCallResult);
+method!(PeerThreadArchiveInbound, "peer.thread.archive_inbound", Some(Scope::MachineTools), PeerThreadArchiveInboundParams, Empty);
 
 /// Registry used by the daemon's auth check and the schema dump.
 pub struct MethodInfo {
@@ -4385,6 +4392,8 @@ registry!(
     PeerGitImport,
     PeerThreadCreate,
     PeerThreadSend,
+    PeerToolCall,
+    PeerThreadArchiveInbound,
 );
 
 pub fn scope_for(method: &str) -> Option<Option<Scope>> {

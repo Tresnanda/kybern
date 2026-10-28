@@ -955,6 +955,7 @@ impl Orchestrator {
             coordinator_project_id: None,
             // Work another machine started stays that machine's, however deep it delegates here.
             origin: parent.origin.clone(),
+            inbound: None,
             subagent: None,
             delegation: Some(info),
             members,

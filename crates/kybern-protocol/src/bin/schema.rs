@@ -301,6 +301,8 @@ fn main() {
     method::<PeerGitImport>(&mut methods);
     method::<PeerThreadCreate>(&mut methods);
     method::<PeerThreadSend>(&mut methods);
+    method::<PeerToolCall>(&mut methods);
+    method::<PeerThreadArchiveInbound>(&mut methods);
 
     let doc = json!({
         "protocol_version": PROTOCOL_VERSION,

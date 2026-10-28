@@ -428,3 +428,7 @@ expression: scopes
   - "machine:delegate"
 - - peer.thread.send
   - "machine:delegate"
+- - peer.tool.call
+  - "machine:tools"
+- - peer.thread.archive_inbound
+  - "machine:tools"

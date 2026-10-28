@@ -338,6 +338,12 @@ export interface Thread {
    * from the live session, and it never changes. Absent for work the user started here.
    */
   origin?: Origin | null;
+  /**
+   * Set on the hidden, read-only thread a machine keeps for one thread of another machine: it records
+   * that thread's forwarded tool calls. Never listed (see `isInboundThread`); reached from the calling
+   * tool row ("Ran on satyamas") and from Settings → Machines.
+   */
+  inbound?: InboundInfo | null;
 }
 
 export type DelegationRole = "implementation" | "research" | "review" | "design" | "test" | "general";
@@ -1824,6 +1830,8 @@ export interface ThreadsListParams {
   include_subagents?: boolean;
   /** Only the direct subagent and delegated children of this thread (implies `include_subagents`). */
   parent_thread_id?: ThreadId;
+  /** Also return the hidden threads that record tool calls other machines made here; left out by default. */
+  include_inbound?: boolean;
 }
 
 export interface ThreadMessagesListParams {
@@ -3700,6 +3708,31 @@ export interface PeerDelegateParams {
   base_commit?: string | null;
 }
 
+/** Run one Kybern agent tool for an agent on another machine (forwarded tools, design §6.3). */
+export interface PeerToolCallParams {
+  tool: string;
+  /** The tool's arguments, without `machine` and `project`. */
+  args?: unknown;
+  /** Where the call comes from. The target takes the machine from the session; `hops` must be exactly that machine. */
+  origin: Origin;
+  thread_title?: string;
+  /** The repository the calling thread works in, so the target finds its checkout of it. */
+  repo?: RepoIdentity | null;
+  /** One of the target's projects by name, id or path. */
+  project?: string | null;
+  deadline_ms?: number | null;
+}
+
+export interface PeerToolCallResult {
+  result: unknown;
+  /** The inbound thread that recorded the call. */
+  inbound_thread_id: ThreadId;
+}
+
+export interface PeerThreadArchiveInboundParams {
+  thread_id: ThreadId;
+}
+
 export interface PeerDelegateResult {
   task_id: Uuid;
   thread_id: ThreadId;
@@ -3967,6 +4000,8 @@ export interface Methods {
   "peer.git.import": [PeerGitImportParams, { commit: string; imported_ref: string }];
   "peer.thread.create": [ThreadsCreateParams, Thread];
   "peer.thread.send": [ThreadsSendParams, ThreadsSendResult];
+  "peer.tool.call": [PeerToolCallParams, PeerToolCallResult];
+  "peer.thread.archive_inbound": [PeerThreadArchiveInboundParams, Empty];
 }
 
 export type MethodName = keyof Methods;

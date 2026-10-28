@@ -155,6 +155,7 @@ impl Orchestrator {
         })?;
         ensure!(recipient.id != sender.id, "You cannot message your own thread.");
         ensure!(recipient.subagent.is_none(), super::subagents::READ_ONLY_ERROR);
+        ensure!(recipient.inbound.is_none(), super::inbound::INBOUND_READ_ONLY);
         ensure!(
             recipient.status != ThreadStatus::Archived,
             "That thread is archived. Ask the user to unarchive it, or start a new agent with kybern_agent_delegate."

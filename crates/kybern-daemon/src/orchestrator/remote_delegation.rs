@@ -63,6 +63,23 @@ pub struct RemoteTarget {
     pub features: Option<Vec<String>>,
 }
 
+/// A member of the network as `kybern_machines` shows it (design §6.3). Never carries an address or a key.
+#[derive(Debug, Clone)]
+pub struct MemberView {
+    pub id: String,
+    pub name: String,
+    pub os: String,
+    pub is_self: bool,
+    /// `online`, `offline` or `paused`.
+    pub status: &'static str,
+    pub last_seen: Option<chrono::DateTime<Utc>>,
+    pub version: Option<String>,
+    pub features: Vec<String>,
+    /// What the machine lets the others use (`tools`, `files`, `terminals`, `delegate`, …).
+    pub capabilities: std::collections::BTreeMap<String, bool>,
+    pub harnesses: Vec<HarnessSummary>,
+}
+
 /// Why a call to a machine did not produce an answer.
 #[derive(Debug)]
 pub enum CallFailure {
@@ -93,6 +110,10 @@ pub trait RemoteHub: Send + Sync {
     /// A current member by id; `None` when it was removed or never joined.
     fn target(&self, id: &str) -> Option<RemoteTarget>;
     fn targets(&self) -> Vec<RemoteTarget>;
+    /// Every current member, this machine included, for `kybern_machines`.
+    fn members(&self) -> Vec<MemberView> {
+        Vec::new()
+    }
     /// Call a `peer.*` method on a member over the open session.
     async fn call(&self, target: &str, method: &str, params: Value) -> Result<Value, CallFailure>;
     /// A signal after a session opened or closed and after membership changed.
@@ -1173,6 +1194,7 @@ impl Orchestrator {
             parent_thread_id: None,
             coordinator_project_id: None,
             origin: Some(origin),
+            inbound: None,
             subagent: None,
             delegation: Some(info),
             members: Vec::new(),
@@ -1223,7 +1245,7 @@ impl Orchestrator {
     }
 
     /// The one of this machine's projects that is the repository `repo` (§6.2).
-    async fn match_project(&self, repo: &RepoIdentity, hint: Option<&str>, this_machine: &str) -> Result<Project, RpcError> {
+    pub(super) async fn match_project(&self, repo: &RepoIdentity, hint: Option<&str>, this_machine: &str) -> Result<Project, RpcError> {
         let projects = self.inner.store.projects_list().map_err(internal)?;
         let mut matches = Vec::new();
         for project in projects.into_iter().filter(|project| project.kind.is_single() && project.is_git) {

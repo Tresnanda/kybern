@@ -131,6 +131,17 @@ expression: schema_for!(Thread)
           "type": "null"
         }
       ]
+    },
+    "inbound": {
+      "description": "Set on the hidden, read-only thread a machine keeps for one thread of another machine: it records\nthat thread's forwarded tool calls (`peer.tool.call`). Written once and never changes. Clients\nkeep such threads out of lists.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/InboundInfo"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
@@ -908,6 +919,27 @@ expression: schema_for!(Thread)
             "kind"
           ]
         }
+      ]
+    },
+    "InboundInfo": {
+      "description": "A hidden, read-only thread on the target that records one origin thread's forwarded tool calls.",
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "machine_id",
+        "thread_id",
+        "title"
       ]
     }
   }

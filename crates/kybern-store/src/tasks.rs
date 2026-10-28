@@ -1171,6 +1171,7 @@ mod tests {
             parent_thread_id: None,
             coordinator_project_id: None,
             origin: None,
+            inbound: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),
