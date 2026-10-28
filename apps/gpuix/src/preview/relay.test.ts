@@ -15,6 +15,26 @@ test('relay only accepts the configured daemon ticket endpoint', async () => {
   for (const upstream of ['http://evil/preview-proxy/T1', 'http://127.0.0.1:9/not-a-ticket', 'http://u:p@127.0.0.1:9/preview-proxy/T1', 'http://127.0.0.1:9/preview-proxy/../T1']) await expect(openRelay(upstream, 'http://127.0.0.1:9')).rejects.toThrow('configured daemon')
 })
 
+test('a page on another machine goes through the machine you are paired with, which gets its own credential and never the page', async () => {
+  const head = rewriteRelayHead('GET /src/main.ts HTTP/1.1\r\nHost: 127.0.0.1:5321\r\nX-Kybern-Relay-Auth: Bearer page-made\r\nCookie: a=1\r\n\r\n', '100.64.0.2:4173', '/relay/m-1/http/preview-proxy/T1', 5321, [['x-kybern-relay-auth', 'Bearer device']])
+  expect(head).toStartWith('GET /relay/m-1/http/preview-proxy/T1/src/main.ts HTTP/1.1\r\nHost: 100.64.0.2:4173')
+  expect(head).toContain('x-kybern-relay-auth: Bearer device'); expect(head).not.toContain('page-made'); expect(head).toContain('cookie: a=1')
+  let seen = ''
+  const upstream = createServer(socket => { socket.once('data', data => { seen = data.toString(); socket.end('HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok') }) })
+  await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve))
+  const daemon = `http://127.0.0.1:${(upstream.address() as { port: number }).port}`
+  const relay = await openRelay(`${daemon}/relay/m-1/http/preview-proxy/T1/`, daemon, { relayAuth: 'device' })
+  const port = Number(new URL(relay.url).port), socket = createConnection(port, '127.0.0.1')
+  try {
+    const reply = new Promise<string>((resolve, reject) => { let text = ''; socket.on('error', reject); socket.on('data', data => { text += data.toString() }); socket.on('close', () => resolve(text)) })
+    socket.write(`GET /hmr HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n\r\n`)
+    expect(await reply).toContain('200 OK')
+    expect(seen).toStartWith('GET /relay/m-1/http/preview-proxy/T1/hmr HTTP/1.1'); expect(seen).toContain('x-kybern-relay-auth: Bearer device')
+  } finally { socket.destroy(); relay.close(); await new Promise<void>(resolve => upstream.close(() => resolve())) }
+  // The machine path is only for a ticket route, and a daemon ticket never carries the credential.
+  for (const upstream of ['http://127.0.0.1:9/relay/m-1/http/other', 'http://127.0.0.1:9/relay/m-1/ws', 'http://127.0.0.1:9/relay/../http/preview-proxy/T1']) await expect(openRelay(upstream, 'http://127.0.0.1:9', { relayAuth: 'device' })).rejects.toThrow('configured daemon')
+})
+
 test('relay bounds a complete request head as well as fragmented input', () => {
   expect(() => rewriteRelayHead(`GET / HTTP/1.1\r\nHost: localhost:5321\r\nX-Pad: ${'x'.repeat(65536)}\r\n\r\n`, 'daemon:9', '/preview-proxy/T1', 5321)).toThrow('431')
 })
