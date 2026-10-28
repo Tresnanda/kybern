@@ -470,3 +470,25 @@ async fn abandoning_needs_force_when_the_target_cannot_be_asked() {
     assert_eq!(result.outcome, MoveAbandonOutcome::Released);
     p.send_ok("mine again").await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lease_left_by_a_dead_attempt_is_replaced_by_the_next_attempt() {
+    // The daemon died after taking the lease and before sending the commit: the lease is still on the thread,
+    // nothing is uncertain, and the next attempt starts the move over instead of waiting for the lease to run out.
+    let Some(p) = Pair::new().await else { return };
+    p.make_dirty();
+    p.idle_parent().await;
+    p.b_offline().await;
+    let queued = p.a.state.orchestrator.move_to_machine(p.move_params()).await.unwrap();
+    p.a.state.orchestrator.move_set(p.parent.id, Some(p.lease(queued.operation_id, Some(chrono::Utc::now() + chrono::Duration::minutes(9)), false))).unwrap();
+    assert!(p.a.state.orchestrator.send(p.parent.id, UserMessage::text("while the lease is held")).await.is_err());
+
+    p.b_online().await;
+    let thread = eventually(|| async { p.moves_on_b().into_iter().next() }).await;
+    eventually(|| async { (p.move_item(queued.operation_id).state == OutboxState::Delivered).then_some(()) }).await;
+    let moved = p.parent_now().moved.unwrap();
+    assert_eq!((moved.state, moved.peer_thread_id), (MoveState::Departed, Some(thread.id)));
+    assert_ne!(moved.branch.as_deref(), Some("kybern/move-test"), "the move took a fresh snapshot");
+    assert_eq!(std::fs::read_to_string(std::path::Path::new(&thread.cwd).join("new.txt")).unwrap(), "untracked work\n");
+    assert_eq!(p.moves_on_b().len(), 1);
+}
