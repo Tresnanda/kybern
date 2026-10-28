@@ -38,9 +38,11 @@ pub mod features {
     pub const NOTES_FEDERATED_V1: &str = "notes.federated.v1";
     pub const SECRETS_STORE_V1: &str = "secrets.store.v1";
     pub const LOGIN_BROKER_V1: &str = "login.broker.v1";
+    /// `peer.update.start`: another member can ask this machine to update itself.
+    pub const UPDATE_V1: &str = "update.v1";
 
     /// Every feature the network design names, in design order.
-    pub const ALL: [&str; 13] = [
+    pub const ALL: [&str; 14] = [
         NETWORK_V1,
         RELAY_V1,
         DELEGATE_REMOTE_V1,
@@ -54,6 +56,7 @@ pub mod features {
         NOTES_FEDERATED_V1,
         SECRETS_STORE_V1,
         LOGIN_BROKER_V1,
+        UPDATE_V1,
     ];
 }
 
@@ -349,6 +352,10 @@ pub struct NetworkStatus {
     /// This machine was removed from its network and can rejoin.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub removed: bool,
+    /// "Keep all machines on the same version": the `follow_updates` register. A member that sees a
+    /// newer version on another member updates itself when it is idle.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub follow_updates: bool,
 }
 
 // ---- routes (§3.4) ----
@@ -489,6 +496,30 @@ pub struct NetworkUpdateSkipped {
 pub struct NetworkUpdateAllResult {
     pub started: Vec<MachineId>,
     pub skipped: Vec<NetworkUpdateSkipped>,
+}
+
+/// `network.follow_updates.set`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkFollowUpdatesParams {
+    pub enabled: bool,
+}
+
+/// `peer.update.start`: a member asks this machine to start its own self-update.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PeerUpdateStartParams {
+    /// The version the caller wants this machine to reach. A machine already at or past it answers
+    /// that it is current instead of looking at the release feed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PeerUpdateStartResult {
+    /// The update is under way, or waits for the machine's running work to finish.
+    pub started: bool,
+    /// Why not, in words the Machines page can show ("Updates with the app", "Already up to date").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]

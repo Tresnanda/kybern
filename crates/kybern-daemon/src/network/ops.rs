@@ -728,6 +728,9 @@ pub fn register_is_valid(key: &str, signer: &str) -> bool {
         // `allow.<machine>.<capability>` is that machine's own policy, signed by its own key (§4.1).
         (Some("allow"), Some(owner), Some(capability)) => owner == signer && !capability.is_empty(),
         (Some("allow"), _, _) => false,
+        // `machine.<id>.url` is where that machine says it can be reached from outside the tailnet (§3.5);
+        // only the machine itself can say so. Names and the paused flag may be set by any member.
+        (Some("machine"), Some(owner), Some("url")) => owner == signer,
         _ => true,
     }
 }
@@ -822,6 +825,9 @@ mod tests {
         assert!(register_is_valid("machine.m1.name", "m2"));
         assert!(register_is_valid("broker", "m2"));
         assert!(register_is_valid("something.new", "m2"));
+        assert!(register_is_valid("machine.m1.url", "m1"));
+        assert!(!register_is_valid("machine.m1.url", "m2"), "only a machine says where it can be reached");
+        assert!(register_is_valid("machine.m1.paused", "m2"));
     }
 
     #[test]

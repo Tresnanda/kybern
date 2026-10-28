@@ -1401,7 +1401,11 @@ impl Orchestrator {
         for batch in projects.chunks(8) {
             let probes = batch.iter().map(|project| async { (project.id, Repo::is_repo(std::path::Path::new(&project.path)).await) });
             for (id, is_git) in futures::future::join_all(probes).await {
-                changed |= self.inner.store.project_set_git_status(id, is_git)?;
+                if self.inner.store.project_set_git_status(id, is_git)? {
+                    changed = true;
+                    // A folder that became (or stopped being) a repository has a new identity.
+                    self.spawn_repo_identity(id);
+                }
             }
         }
         if changed {
@@ -1435,6 +1439,7 @@ impl Orchestrator {
                 existing.updated_at = Utc::now();
                 self.inner.store.project_update(&existing)?;
                 self.publish_projects();
+                self.spawn_repo_identity(existing.id);
             }
             return Ok(existing);
         }
@@ -1467,6 +1472,7 @@ impl Orchestrator {
             return Err(error);
         }
         self.publish_projects();
+        self.spawn_repo_identity(project.id);
         // The store assigns the task prefix on insert; return the project as stored.
         Ok(self.inner.store.project_get(project.id)?.unwrap_or(project))
     }
@@ -1491,6 +1497,19 @@ impl Orchestrator {
             }
             Err(error) => tracing::warn!(%error, "could not read projects to announce a change"),
         }
+    }
+
+    /// Read a project's repository identity in the background and announce it when it changed
+    /// (design §4.4). A project that is just being created does not wait for git.
+    pub fn spawn_repo_identity(&self, id: ProjectId) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else { return };
+        let this = self.clone();
+        runtime.spawn(async move {
+            let Ok(Some(project)) = this.inner.store.project_get(id) else { return };
+            if crate::network::repo_identity::refresh(&this.inner.store, &project).await {
+                this.publish_projects();
+            }
+        });
     }
 
     // ---- threads ----
@@ -4951,7 +4970,7 @@ fn clean_title(text: &str) -> String {
 
 /// What `kybern askpass` gets back for a prompt.
 pub(crate) use askpass::PromptReply;
-pub(crate) use groups::pr_repo_dir;
+pub(crate) use groups::{member_dir, pr_repo_dir};
 
 /// The wait budget of the summoned-card tools (sign-in, question, permission, terminal).
 pub(crate) fn request_call_budget(name: &str, arguments: &serde_json::Value) -> Option<Duration> {

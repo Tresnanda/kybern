@@ -282,6 +282,7 @@ fn main() {
     method::<NetworkUpdateAll>(&mut methods);
     method::<NetworkDoctor>(&mut methods);
     method::<MachinesInfo>(&mut methods);
+    method::<NetworkFollowUpdatesSet>(&mut methods);
     method::<PeerOpsSync>(&mut methods);
     method::<PeerOpsPush>(&mut methods);
     method::<PeerPresenceMethod>(&mut methods);
@@ -290,6 +291,7 @@ fn main() {
     method::<PeerRelayOpen>(&mut methods);
     method::<PeerRelayData>(&mut methods);
     method::<PeerRelayClose>(&mut methods);
+    method::<PeerUpdateStart>(&mut methods);
     method::<OutboxList>(&mut methods);
     method::<OutboxRetry>(&mut methods);
     method::<OutboxCancel>(&mut methods);

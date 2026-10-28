@@ -250,6 +250,10 @@ async fn serve() -> Result<()> {
     // on other machines (they pick up where a restart left them).
     let outbox_worker = tokio::spawn(network::outbox::run(state.clone()));
     state.orchestrator.remote_start();
+    // Which repository each project is, for matching checkouts across machines (design §4.4).
+    let repo_identity_worker = tokio::spawn(network::repo_identity::run(state.clone()));
+    // "Keep all machines on the same version": follows the newest version another member runs.
+    let follow_updates_worker = tokio::spawn(network::updates::run(state.clone()));
 
     if args.pair {
         let endpoints = crate::access::endpoints(&state).await;
@@ -276,6 +280,8 @@ async fn serve() -> Result<()> {
     notes_worker.abort();
     let _ = network_worker.await;
     outbox_worker.abort();
+    repo_identity_worker.abort();
+    follow_updates_worker.abort();
     let _ = maintenance_worker.await;
     let _ = update_worker.await;
     let _ = self_update_worker.await;

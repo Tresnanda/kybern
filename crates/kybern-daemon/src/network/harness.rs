@@ -166,12 +166,49 @@ impl Cluster {
 
     /// [`Cluster::start`] with the harness drivers the node's agents run on.
     pub async fn start_with(&self, name: &str, worker: bool, drivers: DriverRegistry) -> Node {
+        self.start_configured(name, worker, drivers, None, self.auto_join).await
+    }
+
+    /// A node with a chosen machine id and its own say over joining on discovery, for a scenario that
+    /// depends on which of two machines has the smaller id.
+    pub async fn start_as(&self, name: &str, machine_id: &str, auto_join: bool) -> Node {
+        self.start_configured(name, true, DriverRegistry::default(), Some(machine_id), auto_join).await
+    }
+
+    /// A node whose tailnet is unreachable: its Tailscale fixture does not exist, so it sees no peers
+    /// and opens no tailnet listener, as a machine off the tailnet does.
+    pub async fn start_off_tailnet(&self, name: &str) -> Node {
         let root = self.dir.path().join(format!("data-{name}"));
         std::fs::create_dir_all(&root).unwrap();
         let paths = crate::config::Paths::resolve(Some(root.clone())).unwrap();
+        let tailscale = Arc::new(Fake::new(self.dir.path().join(format!("no-tailscale-{name}.json"))));
+        self.serve(name, true, &paths, root, tailscale, DriverRegistry::default(), false).await
+    }
+
+    async fn start_configured(&self, name: &str, worker: bool, drivers: DriverRegistry, machine_id: Option<&str>, auto_join: bool) -> Node {
+        let root = self.dir.path().join(format!("data-{name}"));
+        std::fs::create_dir_all(&root).unwrap();
+        let paths = crate::config::Paths::resolve(Some(root.clone())).unwrap();
+        if let Some(machine_id) = machine_id {
+            let store = kybern_store::Store::open(&paths.db).unwrap();
+            store.meta_set("environment_id", machine_id).unwrap();
+        }
         let tailscale = Arc::new(Fake::new(self.fixture_path(name)));
-        let state =
-            AppState::initialize_with_drivers(&paths, tailscale, Timing { auto_join: self.auto_join, ..Timing::fast() }, drivers).unwrap();
+        self.serve(name, worker, &paths, root, tailscale, drivers, auto_join).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn serve(
+        &self,
+        name: &str,
+        worker: bool,
+        paths: &crate::config::Paths,
+        root: PathBuf,
+        tailscale: Arc<Fake>,
+        drivers: DriverRegistry,
+        auto_join: bool,
+    ) -> Node {
+        let state = AppState::initialize_with_drivers(paths, tailscale, Timing { auto_join, ..Timing::fast() }, drivers).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let primary = listener.local_addr().unwrap();
         *state.listen_addr.write().unwrap() = Some(primary);

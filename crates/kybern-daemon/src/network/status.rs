@@ -139,5 +139,6 @@ pub async fn network_status(state: &AppState) -> Option<NetworkStatus> {
         tailscale: tailscale_state(state).await,
         digest: membership.has_network().then(|| membership.digest()),
         removed: membership.self_removed(),
+        follow_updates: projection.follow_updates(),
     })
 }

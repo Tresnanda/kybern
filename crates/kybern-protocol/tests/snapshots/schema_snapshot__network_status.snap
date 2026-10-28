@@ -61,6 +61,10 @@ expression: schema_for!(NetworkStatus)
     "removed": {
       "description": "This machine was removed from its network and can rejoin.",
       "type": "boolean"
+    },
+    "follow_updates": {
+      "description": "\"Keep all machines on the same version\": the `follow_updates` register. A member that sees a\nnewer version on another member updates itself when it is idle.",
+      "type": "boolean"
     }
   },
   "required": [

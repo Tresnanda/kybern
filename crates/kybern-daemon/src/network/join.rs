@@ -152,6 +152,8 @@ impl JoinError {
 #[derive(Default)]
 pub struct JoinState {
     attempts: Mutex<HashMap<String, (Instant, u32)>>,
+    /// When this lone machine began waiting for a smaller-id lone machine to found the network.
+    waiting_since: Mutex<Option<Instant>>,
 }
 
 impl JoinState {
@@ -172,6 +174,18 @@ impl JoinState {
 
     fn forget(&self, node_id: &str) {
         self.lock().remove(node_id);
+    }
+
+    /// Whether this lone machine has waited `limit` for another lone machine to found the network.
+    /// `waiting` says whether it has a reason to wait right now; the clock starts when it first
+    /// does and starts over once it does not.
+    pub(super) fn wait_expired(&self, waiting: bool, limit: Duration) -> bool {
+        let mut since = self.waiting_since.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !waiting {
+            *since = None;
+            return false;
+        }
+        since.get_or_insert_with(Instant::now).elapsed() >= limit
     }
 }
 
@@ -587,11 +601,21 @@ pub async fn auto_join(state: &AppState, status: &TsStatus) {
         // on the tailnet adds it from there, and a lone machine with a smaller id founds before it.
         // That keeps three lone machines from founding two networks (§2.4).
         let owner = me.login.clone().unwrap_or_default();
-        let waits_for_another = found.iter().any(|entry| {
-            entry.whois.as_ref().is_some_and(|whois| whois.is_owner(&owner))
-                && (entry.descriptor.network_id.is_some() || entry.descriptor.machine_id.as_str() < my_id.as_str())
+        let same_owner = |entry: &FoundEntry| entry.whois.as_ref().is_some_and(|whois| whois.is_owner(&owner));
+        // A network of this owner adds this machine from there; that wait has no limit, since the
+        // network is real. A smaller-id lone machine is only a promise to found one.
+        let waits_for_a_network = found.iter().any(|entry| same_owner(entry) && entry.descriptor.network_id.is_some());
+        let waits_for_a_founder = found.iter().any(|entry| {
+            same_owner(entry) && entry.descriptor.network_id.is_none() && entry.descriptor.machine_id.as_str() < my_id.as_str()
         });
-        if waits_for_another {
+        if waits_for_a_network {
+            network.join.wait_expired(false, network.timing.lone_wait);
+            return;
+        }
+        // The smaller machine never founding (its network is off, or it has gone) must not keep this
+        // one lone for good. After the wait this one founds; if both found after all, the two
+        // networks of one owner are offered as a merge (§2.4a).
+        if !network.join.wait_expired(waits_for_a_founder, network.timing.lone_wait) && waits_for_a_founder {
             return;
         }
     }

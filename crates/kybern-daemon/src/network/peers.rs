@@ -522,6 +522,11 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
         PeerSettingsPatch::NAME => ok(crate::settings_share::apply_patch(state, parse(params)?)),
         // Federated notes and tasks (S2): read-only, so `machine:tools` is all it needs.
         PeerFederatedRead::NAME => ok(super::federated::serve_read(state, parse(params)?).await?),
+        PeerUpdateStart::NAME => {
+            let request: PeerUpdateStartParams = parse(params)?;
+            tracing::info!(target: SESSION_TARGET, machine = %link.machine_id, "a member asked this machine to update");
+            ok(super::updates::start_self(state, request.version.as_deref()).await)
+        }
         PeerClientTokenMint::NAME => ok(super::client_grant::mint_for_peer(state, link, parse(params)?)?),
         PeerDeviceRevoke::NAME => {
             let revoke: PeerDeviceRevokeParams = parse(params)?;
@@ -647,7 +652,7 @@ fn candidate_ports(descriptor_port: Option<u16>) -> Vec<u16> {
     }
 }
 
-async fn tcp_connect(network: &Network, addr: SocketAddr) -> std::io::Result<tokio::net::TcpStream> {
+pub(super) async fn tcp_connect(network: &Network, addr: SocketAddr) -> std::io::Result<tokio::net::TcpStream> {
     let socket = if addr.is_ipv4() { tokio::net::TcpSocket::new_v4()? } else { tokio::net::TcpSocket::new_v6()? };
     if let Some(source) = network.tailscale.dial_source()
         && source.is_ipv4() == addr.is_ipv4()
@@ -685,7 +690,8 @@ async fn dial(state: &AppState, member: &str, node: &TsNode) -> Result<(), Strin
     let wanted: Vec<Scope> = Scope::MACHINE_DEFAULT.to_vec();
     let mut last = String::from("no listener answered");
     for port in candidate_ports(entry.descriptor.port) {
-        let target = Target { machine_id: member.to_string(), signing_key: entry.descriptor.signing_key.clone(), ts_ip: ip, port };
+        let target =
+            Target { machine_id: member.to_string(), signing_key: entry.descriptor.signing_key.clone(), ts_ip: ip, port, url: None };
         match session::open(network, membership, &target, &wanted, None).await {
             Ok(established) => {
                 let socket = connect_socket(network, &target, &established.token).await?;
@@ -719,12 +725,14 @@ pub(super) fn spawn_heartbeat(link: Arc<PeerLink>, timing: super::Timing, ping: 
     });
 }
 
-fn run_dialed(
+pub(super) fn run_dialed<S>(
     state: AppState,
     target: Target,
     established: session::Established,
-    socket: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-) {
+    socket: tokio_tungstenite::WebSocketStream<S>,
+) where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     let (mut sink, mut stream) = socket.split();
     let (out_tx, mut out_rx) = mpsc::channel::<String>(256);
     let link = PeerLink::new(
@@ -847,34 +855,48 @@ pub async fn pass(state: &AppState) -> Option<Duration> {
         network.peers.close_all();
         return None;
     }
-    let status = match network.tailscale.status().await {
-        Ok(status) if status.running => status,
-        _ => return None,
-    };
-    let sig = signature(&status);
-    let changed = {
-        let mut inner = network.peers.lock();
-        std::mem::replace(&mut inner.signature, sig.clone()) != sig
-    };
-    if changed {
-        // A tailnet change is the moment an unreachable peer may have become reachable.
-        network.peers.reset_backoff();
-        network.notify_changed();
+    // A machine off the tailnet (or with Tailscale stopped) has no status, but it still dials the
+    // members that publish a URL (§3.5).
+    let status = network.tailscale.status().await.ok().filter(|status| status.running);
+    if let Some(status) = &status {
+        let sig = signature(status);
+        let changed = {
+            let mut inner = network.peers.lock();
+            std::mem::replace(&mut inner.signature, sig.clone()) != sig
+        };
+        if changed {
+            // A tailnet change is the moment an unreachable peer may have become reachable.
+            network.peers.reset_backoff();
+            network.notify_changed();
+        }
     }
 
     let me = membership.machine_id();
     if membership.self_is_member() {
+        super::dial_out::publish_url(state).await;
         let projection = membership.projection();
+        let own_url = super::dial_out::url_of(&projection, &me);
         let mut dials = Vec::new();
+        let mut url_dials = Vec::new();
         for (id, entry) in projection.members() {
-            // The member with the smaller id dials (§3.3); a paused member gets no session.
-            if *id == me || entry.paused || me.as_str() > id.as_str() || network.peers.link(id).is_some() || !network.peers.due(id) {
+            // A paused member gets no session.
+            if *id == me || entry.paused || network.peers.link(id).is_some() || !network.peers.due(id) {
                 continue;
             }
-            let node = entry.descriptor.ts_node_id.as_deref().and_then(|node_id| status.peer(node_id));
-            match node {
-                Some(node) if node.online && node.ip().is_some() => dials.push((id.clone(), node.clone())),
-                _ => network.peers.fail_quiet(id, "not online on the tailnet"),
+            let node = status.as_ref().zip(entry.descriptor.ts_node_id.as_deref()).and_then(|(status, node_id)| status.peer(node_id));
+            if let Some(node) = node.filter(|node| node.online && node.ip().is_some()) {
+                // The member with the smaller id dials (§3.3).
+                if me.as_str() < id.as_str() {
+                    dials.push((id.clone(), node.clone()));
+                }
+                continue;
+            }
+            // Not on the tailnet from here. A member that published a URL can be dialed there; of two
+            // that both can be reached, the smaller id dials, and one that cannot be reached always does.
+            if let Some(url) = super::dial_out::url_of(&projection, id).filter(|_| own_url.is_none() || me.as_str() < id.as_str()) {
+                url_dials.push((id.clone(), url));
+            } else if me.as_str() < id.as_str() {
+                network.peers.fail_quiet(id, "not online on the tailnet");
             }
         }
         let results = futures::stream::iter(dials)
@@ -885,7 +907,15 @@ pub async fn pass(state: &AppState) -> Option<Duration> {
             .buffer_unordered(MAX_CONCURRENT_PROBES)
             .collect::<Vec<_>>()
             .await;
-        for (id, result) in results {
+        let url_results = futures::stream::iter(url_dials)
+            .map(|(id, url)| async move {
+                let result = super::dial_out::dial(state, &id, &url).await;
+                (id, result)
+            })
+            .buffer_unordered(MAX_CONCURRENT_PROBES)
+            .collect::<Vec<_>>()
+            .await;
+        for (id, result) in results.into_iter().chain(url_results) {
             if let Err(error) = result {
                 tracing::debug!(target: SESSION_TARGET, machine = %id, %error, "could not open a session");
                 network.peers.fail(&id, &network.timing, error);
@@ -893,8 +923,10 @@ pub async fn pass(state: &AppState) -> Option<Duration> {
         }
     }
 
-    discover(state, &status).await;
-    super::join::auto_join(state, &status).await;
+    if let Some(status) = &status {
+        discover(state, status).await;
+        super::join::auto_join(state, status).await;
+    }
     network.peers.soonest_retry()
 }
 

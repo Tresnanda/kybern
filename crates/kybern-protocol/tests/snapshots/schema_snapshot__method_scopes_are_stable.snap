@@ -390,6 +390,8 @@ expression: scopes
   - "network:read"
 - - machines.info
   - "network:read"
+- - network.follow_updates.set
+  - "network:admin"
 - - peer.ops.sync
   - "machine:peer"
 - - peer.ops.push
@@ -406,6 +408,8 @@ expression: scopes
   - "machine:relay"
 - - peer.relay.close
   - "machine:relay"
+- - peer.update.start
+  - "machine:settings"
 - - outbox.list
   - "orchestration:read"
 - - outbox.retry

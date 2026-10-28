@@ -55,7 +55,13 @@ async fn listen(node: &Node) {
 }
 
 fn target_for(cluster: &Cluster, node: &Node, port: u16) -> Target {
-    Target { machine_id: node.id(), signing_key: node.membership().keys().signing_public_b64(), ts_ip: cluster.fake(&node.name).ip, port }
+    Target {
+        machine_id: node.id(),
+        signing_key: node.membership().keys().signing_public_b64(),
+        ts_ip: cluster.fake(&node.name).ip,
+        port,
+        url: None,
+    }
 }
 
 // ---- discovery and the listener ----

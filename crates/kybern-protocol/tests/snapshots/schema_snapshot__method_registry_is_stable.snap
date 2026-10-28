@@ -196,6 +196,7 @@ expression: names
 - network.update_all
 - network.doctor
 - machines.info
+- network.follow_updates.set
 - peer.ops.sync
 - peer.ops.push
 - peer.presence
@@ -204,6 +205,7 @@ expression: names
 - peer.relay.open
 - peer.relay.data
 - peer.relay.close
+- peer.update.start
 - outbox.list
 - outbox.retry
 - outbox.cancel

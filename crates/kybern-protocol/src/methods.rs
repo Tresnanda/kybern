@@ -4149,6 +4149,7 @@ method!(NetworkAllowSet, "network.allow.set", Some(Scope::NetworkAdmin), Network
 method!(NetworkUpdateAll, "network.update_all", Some(Scope::NetworkAdmin), Empty, NetworkUpdateAllResult);
 method!(NetworkDoctor, "network.doctor", Some(Scope::NetworkRead), NetworkDoctorParams, DoctorReport);
 method!(MachinesInfo, "machines.info", Some(Scope::NetworkRead), Empty, MachineInfo);
+method!(NetworkFollowUpdatesSet, "network.follow_updates.set", Some(Scope::NetworkAdmin), NetworkFollowUpdatesParams, NetworkStatus);
 
 // Daemon-to-daemon. A device token never carries a machine scope, so these refuse clients.
 method!(PeerOpsSync, "peer.ops.sync", Some(Scope::MachinePeer), PeerOpsSyncParams, PeerOpsSyncResult);
@@ -4159,6 +4160,10 @@ method!(PeerDeviceRevoke, "peer.device.revoke", Some(Scope::MachinePeer), PeerDe
 method!(PeerRelayOpen, "peer.relay.open", Some(Scope::MachineRelay), PeerRelayOpenParams, Empty);
 method!(PeerRelayData, "peer.relay.data", Some(Scope::MachineRelay), PeerRelayDataParams, Empty);
 method!(PeerRelayClose, "peer.relay.close", Some(Scope::MachineRelay), PeerRelayCloseParams, Empty);
+// Asking a member to update itself. `machine:settings` is the narrowest machine scope that a machine's owner
+// can turn off per machine and that is not the always-on operation sync: a machine that does not let others
+// change its settings does not let them restart it into a new version either.
+method!(PeerUpdateStart, "peer.update.start", Some(Scope::MachineSettings), PeerUpdateStartParams, PeerUpdateStartResult);
 
 // Remote delegation and the outbox (M2, R1; payloads in outbox.rs).
 method!(OutboxList, "outbox.list", Some(Scope::OrchestrationRead), OutboxListParams, OutboxListResult);
@@ -4403,6 +4408,7 @@ registry!(
     NetworkUpdateAll,
     NetworkDoctor,
     MachinesInfo,
+    NetworkFollowUpdatesSet,
     PeerOpsSync,
     PeerOpsPush,
     PeerPresenceMethod,
@@ -4411,6 +4417,7 @@ registry!(
     PeerRelayOpen,
     PeerRelayData,
     PeerRelayClose,
+    PeerUpdateStart,
     OutboxList,
     OutboxRetry,
     OutboxCancel,

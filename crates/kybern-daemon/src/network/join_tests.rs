@@ -88,6 +88,37 @@ async fn three_lone_daemons_of_one_user_join_without_a_click_and_found_one_netwo
     assert_eq!(a.membership().network_id(), b.membership().network_id());
 }
 
+#[test]
+fn the_wait_for_a_founder_runs_out_and_starts_over_when_nothing_is_waited_for() {
+    let state = super::join::JoinState::default();
+    let long = Duration::from_secs(3600);
+    assert!(!state.wait_expired(true, long), "the clock starts at the first wait");
+    assert!(state.wait_expired(true, Duration::ZERO), "and runs out once the limit has passed");
+    assert!(!state.wait_expired(false, Duration::ZERO), "nothing to wait for is never an expired wait");
+    assert!(!state.wait_expired(true, long), "a later wait starts a new clock");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lone_machine_founds_after_waiting_for_a_smaller_one_that_never_does() {
+    let Some(cluster) = cluster(&[NodeSpec::owner("a"), NodeSpec::owner("b")]) else { return };
+    // `a` has the smaller id and answers the well-known endpoint, but never joins on its own (its
+    // network is not doing discovery); `b` would wait for it to found the network.
+    let a = cluster.start_as("a", "00000000-0000-7000-8000-000000000001", false).await;
+    let b = cluster.start_as("b", "ffffffff-ffff-7fff-8fff-ffffffffffff", true).await;
+    eventually("b finds a", WAIT, || b.state.network.peers.found().iter().any(|entry| entry.node.name() == "a")).await;
+
+    // It waits at first: a lone machine with a smaller id is expected to found the network.
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert!(!b.membership().has_network() && !a.membership().has_network(), "b waits for the smaller machine within the wait");
+
+    // After the wait it founds, and the smaller one, still lone, accepts the offer.
+    eventually("b founds and adds a", WAIT, || converged(&[&a, &b], 2)).await;
+    assert_eq!(genesis_count(&b), 1);
+    let projection = b.membership().projection();
+    let founder = projection.machines.iter().find(|(_, entry)| entry.added_by.is_none()).map(|(id, _)| id.clone());
+    assert_eq!(founder, Some(b.id()), "the larger machine founded the network once the wait was over");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_tagged_node_is_found_and_joins_with_one_click() {
     let Some(cluster) = cluster(&[NodeSpec::owner("a"), NodeSpec::owner("b"), NodeSpec::tagged("v")]) else { return };

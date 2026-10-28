@@ -3332,6 +3332,7 @@ export const NETWORK_FEATURES = {
   notesFederated: "notes.federated.v1",
   secretsStore: "secrets.store.v1",
   loginBroker: "login.broker.v1",
+  update: "update.v1",
 } as const;
 
 /** Scopes only a daemon-to-daemon grant carries, never a device token. */
@@ -3506,6 +3507,8 @@ export interface NetworkStatus {
   digest?: string | null;
   /** This machine was removed from its network and can rejoin. */
   removed?: boolean;
+  /** "Keep all machines on the same version": a member that sees a newer version updates itself when idle. */
+  follow_updates?: boolean;
 }
 
 export type RouteKind = "direct_tailnet" | "direct_advertised" | "ssh" | "relay";
@@ -3554,6 +3557,18 @@ export interface NetworkClientGrantResult {
 export interface NetworkUpdateAllResult {
   started: MachineId[];
   skipped: { machine_id: MachineId; reason: string }[];
+}
+
+/** `peer.update.start`: a member asks this machine to start its own self-update. */
+export interface PeerUpdateStartParams {
+  /** The version the caller wants this machine to reach. */
+  version?: string | null;
+}
+
+export interface PeerUpdateStartResult {
+  started: boolean;
+  /** Why not, for the Machines page. */
+  reason?: string | null;
 }
 
 export type DoctorStatus = "pass" | "warn" | "fail";
@@ -4144,6 +4159,7 @@ export interface Methods {
   "network.update_all": [Empty, NetworkUpdateAllResult];
   "network.doctor": [{ machine_id?: MachineId | null }, DoctorReport];
   "machines.info": [Empty, MachineInfo];
+  "network.follow_updates.set": [{ enabled: boolean }, NetworkStatus];
   "peer.ops.sync": [PeerOpsSyncParams, PeerOpsSyncResult];
   "peer.ops.push": [{ ops: OpEnvelope[] }, { accepted: number; rejected: number }];
   "peer.presence": [PeerPresence, Empty];
@@ -4152,6 +4168,7 @@ export interface Methods {
   "peer.relay.open": [PeerRelayOpenParams, Empty];
   "peer.relay.data": [PeerRelayDataParams, Empty];
   "peer.relay.close": [PeerRelayCloseParams, Empty];
+  "peer.update.start": [PeerUpdateStartParams, PeerUpdateStartResult];
   "outbox.list": [{ target?: MachineId | null; state?: OutboxState | null }, { items: OutboxItem[] }];
   "outbox.retry": [{ id: Uuid }, OutboxItem];
   "outbox.cancel": [{ id: Uuid }, OutboxItem];

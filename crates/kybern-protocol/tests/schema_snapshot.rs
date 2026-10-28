@@ -422,7 +422,7 @@ fn an_older_daemon_info_and_project_still_parse_and_the_network_defaults_are_on(
     let settings: Settings = serde_json::from_value(serde_json::json!({})).unwrap();
     assert_eq!(settings.network, NetworkSettings { enabled: true, port: DEFAULT_PORT });
     assert_eq!(NETWORK_PROTOCOL, 1);
-    assert_eq!(features::ALL.len(), 13);
+    assert_eq!(features::ALL.len(), 14);
 }
 
 #[test]

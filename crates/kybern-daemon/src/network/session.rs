@@ -292,15 +292,18 @@ async fn handle(
     if !network.replay.insert(&request.nonce_a, window) {
         return Err((StatusCode::UNAUTHORIZED, "this request was already used".into()));
     }
-    // Bound to the address: the tailnet says the source is the node the membership set recorded.
-    let whois = network
-        .tailscale
-        .whois(source)
-        .await
-        .map_err(|error| (StatusCode::FORBIDDEN, format!("the source is not on the tailnet: {error}")))?;
-    let node_ok = entry.descriptor.ts_node_id.as_deref().is_some_and(|node| node == whois.node_id);
-    if !node_ok || projection.is_node_tombstoned(&whois.node_id) {
-        return Err((StatusCode::FORBIDDEN, "the source address is not this machine's tailnet node".into()));
+    // Bound to the address: the tailnet says the source is the node the membership set recorded. A
+    // member that joined from outside the tailnet (a code, §2.4c) has no node to check; it is known by
+    // its signed request alone, and its grant is bound to the address it came from like any other.
+    if let Some(recorded) = entry.descriptor.ts_node_id.as_deref() {
+        let whois = network
+            .tailscale
+            .whois(source)
+            .await
+            .map_err(|error| (StatusCode::FORBIDDEN, format!("the source is not on the tailnet: {error}")))?;
+        if recorded != whois.node_id || projection.is_node_tombstoned(&whois.node_id) {
+            return Err((StatusCode::FORBIDDEN, "the source address is not this machine's tailnet node".into()));
+        }
     }
 
     let ttl = network.timing.grant_ttl;
@@ -352,16 +355,38 @@ pub struct Target {
     /// Its tailnet address.
     pub ts_ip: IpAddr,
     pub port: u16,
+    /// The URL it published in its `machine.<id>.url` register, for a machine reached from outside
+    /// the tailnet (§3.5). When set, `ts_ip` and `port` are not used.
+    pub url: Option<String>,
 }
 
 impl Target {
+    /// A target reached at a published URL rather than a tailnet address.
+    pub fn at_url(machine_id: String, signing_key: String, url: String) -> Self {
+        Self { machine_id, signing_key, ts_ip: IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), port: 0, url: Some(url) }
+    }
+
     /// The address actually connected to (the fake maps it to loopback).
     pub fn base(&self, network: &Network) -> String {
-        base_url(network.tailscale.dial_target(self.ts_ip), self.port)
+        match &self.url {
+            Some(url) => url.trim_end_matches('/').to_string(),
+            None => base_url(network.tailscale.dial_target(self.ts_ip), self.port),
+        }
     }
 
     pub fn ws_url(&self, network: &Network) -> String {
-        format!("{}/ws", self.base(network).replacen("http://", "ws://", 1))
+        format!("{}/ws", self.base(network).replacen("https://", "wss://", 1).replacen("http://", "ws://", 1))
+    }
+}
+
+/// Whether a published URL may carry a session: only `https`, since a session crosses the internet,
+/// and plain loopback under the fake tailnet the tests play.
+pub fn url_allowed(url: &str, fake: bool) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else { return false };
+    match parsed.scheme() {
+        "https" => true,
+        "http" => fake && parsed.host_str().is_some_and(|host| host == "localhost" || host.starts_with("127.")),
+        _ => false,
     }
 }
 
@@ -381,6 +406,8 @@ pub enum SessionError {
     Identity(#[from] ProbeError),
     #[error("{0} is outside the tailnet, so no session is opened over plain HTTP")]
     NotTailnet(IpAddr),
+    #[error("{0} is not an https address, so no session is opened to it")]
+    NotHttps(String),
     #[error("the machine refused the session ({status}): {message}")]
     Refused { status: u16, message: String },
     #[error("the machine answered with a session response that does not verify")]
@@ -402,11 +429,21 @@ pub async fn open(
     scopes: &[Scope],
     renews: Option<&str>,
 ) -> Result<Established, SessionError> {
-    if !plain_http_allowed(target.ts_ip, network.tailscale.is_fake()) {
-        return Err(SessionError::NotTailnet(target.ts_ip));
-    }
-    let base = target.base(network);
-    let dial_ip = network.tailscale.dial_target(target.ts_ip);
+    let (base, timeout) = match &target.url {
+        Some(url) => {
+            if !url_allowed(url, network.tailscale.is_fake()) {
+                return Err(SessionError::NotHttps(url.clone()));
+            }
+            let timeout = if url.contains("127.") || url.contains("localhost") { Duration::from_secs(3) } else { Duration::from_secs(10) };
+            (target.base(network), timeout)
+        }
+        None => {
+            if !plain_http_allowed(target.ts_ip, network.tailscale.is_fake()) {
+                return Err(SessionError::NotTailnet(target.ts_ip));
+            }
+            (target.base(network), probe_timeout(network.tailscale.dial_target(target.ts_ip)))
+        }
+    };
     let expected = Expected { machine_id: &target.machine_id, signing_key: &target.signing_key };
     let nonce_a = well_known::new_nonce();
     // The nonce of the check is the nonce of the request: the proof binds the answer to this attempt.
@@ -414,7 +451,7 @@ pub async fn open(
     let response = network
         .http
         .get(&url)
-        .timeout(probe_timeout(dial_ip))
+        .timeout(timeout)
         .send()
         .await
         .map_err(|error| ProbeError::Unreachable(if error.is_timeout() { "timed out".into() } else { "could not connect".into() }))?;
@@ -438,7 +475,7 @@ pub async fn open(
     let response = network
         .http
         .post(format!("{base}{SESSION_PATH}"))
-        .timeout(probe_timeout(dial_ip))
+        .timeout(timeout)
         .json(&request)
         .send()
         .await

@@ -71,6 +71,16 @@ pub enum MachinesCmd {
     Disable,
     /// This machine was removed: make a new identity so another machine can add it again.
     Rejoin,
+    /// Update every machine in the network to the newest version.
+    Update,
+    /// Keep all machines on the same version: a machine updates itself when another runs a newer one.
+    FollowUpdates {
+        /// `on` or `off`.
+        #[arg(value_parser = ["on", "off"])]
+        state: String,
+    },
+    /// This machine's CPU, memory, graphics, harnesses and repositories.
+    Info,
 }
 
 /// The part of an id that tells machines apart: ids are UUIDv7, whose first characters are a clock.
@@ -348,6 +358,56 @@ pub async fn run(client: &Client, cmd: MachinesCmd, json: bool) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&after)?)
             } else {
                 println!("Connect to your other machines is {}.", if after.enabled { "on" } else { "off" })
+            }
+        }
+        MachinesCmd::Update => {
+            let result = client.call::<NetworkUpdateAll>(Empty {}).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                let members = status(client).await?.members;
+                let name = |id: &str| {
+                    members.iter().find(|card| card.machine_id == id).map_or_else(|| short(id).to_string(), |card| card.name.clone())
+                };
+                for id in &result.started {
+                    println!("{:<20} updating", name(id));
+                }
+                for skipped in &result.skipped {
+                    println!("{:<20} skipped: {}", name(&skipped.machine_id), skipped.reason);
+                }
+            }
+        }
+        MachinesCmd::FollowUpdates { state } => {
+            let after = client.call::<NetworkFollowUpdatesSet>(NetworkFollowUpdatesParams { enabled: state == "on" }).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&after)?)
+            } else {
+                println!("Keeping all machines on the same version is {}.", if after.follow_updates { "on" } else { "off" })
+            }
+        }
+        MachinesCmd::Info => {
+            let info = client.call::<MachinesInfo>(Empty {}).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&info)?);
+            } else {
+                if let Some(cpu) = &info.cpu {
+                    println!("CPU        {} ({} cores)", cpu.model, cpu.logical_cores);
+                }
+                if let Some(mem) = &info.mem {
+                    println!("Memory     {:.1} GiB", mem.total_bytes as f64 / (1024.0 * 1024.0 * 1024.0));
+                }
+                for gpu in &info.gpu {
+                    println!("Graphics   {gpu}");
+                }
+                for harness in &info.harnesses {
+                    let version = harness.version.as_deref().unwrap_or("");
+                    println!(
+                        "{:<10} {}",
+                        format!("{:?}", harness.kind).to_lowercase(),
+                        if harness.available { version } else { "not installed" }
+                    );
+                }
+                println!("{} repositories", info.projects.len());
             }
         }
         MachinesCmd::Rejoin => {

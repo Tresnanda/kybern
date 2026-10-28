@@ -439,6 +439,7 @@ impl Orchestrator {
             return Err(internal(error));
         }
         self.publish_projects();
+        self.spawn_repo_identity(project.id);
         Ok(self.inner.store.project_get(project.id).map_err(internal)?.unwrap_or(project))
     }
 

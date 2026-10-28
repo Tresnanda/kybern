@@ -113,49 +113,7 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
                         .ok_or_else(|| RpcError::not_found("project"))
                 })
                 .transpose()?;
-            let settings = state.settings.get();
-            let cache_key = serde_json::to_string(&(p.project_id, cwd.as_ref(), &settings.providers)).map_err(internal)?;
-            let providers = state
-                .provider_catalogs
-                .get_or_refresh(cache_key, p.force_refresh, || async move {
-                    let probes = ProviderKind::ALL.into_iter().map(|kind| {
-                        let driver = state.drivers.get(kind);
-                        let provider_settings =
-                            crate::settings::provider_settings(&settings, kind, cwd.as_deref().and_then(|p| p.to_str()));
-                        let context = kybern_drivers::ProbeContext {
-                            binary: provider_settings.binary.map(std::path::PathBuf::from),
-                            cwd: cwd.clone(),
-                            env: provider_settings.env,
-                        };
-                        async move {
-                            match driver {
-                                Some(driver) => {
-                                    let mut status = driver.probe_with_context(&context).await;
-                                    status.instances =
-                                        std::iter::once("default".to_string()).chain(provider_settings.accounts.keys().cloned()).collect();
-                                    status
-                                }
-                                None => ProviderStatus {
-                                    kind,
-                                    display_name: kind.display_name().to_string(),
-                                    available: false,
-                                    binary_path: None,
-                                    version: None,
-                                    unavailable_reason: Some("driver not implemented yet".into()),
-                                    supported_permission_modes: vec![],
-                                    supports_fork: false,
-                                    supports_model_switch: false,
-                                    supports_effort_switch: false,
-                                    supported_efforts: vec![],
-                                    models: vec![],
-                                    instances: vec![],
-                                },
-                            }
-                        }
-                    });
-                    futures::future::join_all(probes).await
-                })
-                .await;
+            let providers = crate::network::machine_info::provider_statuses(state, p.project_id, cwd, p.force_refresh).await;
             ok(ProvidersListResult { providers })
         }
         AccountsCreate::NAME => ok(crate::provider_accounts::create(state, parse(params)?).map_err(bad)?),
@@ -1265,12 +1223,16 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
             let p: NetworkAllowSetParams = parse(params)?;
             ok(crate::network::manage::allow(state, &p.machine_id, &p.capability, p.allowed).await.map_err(JoinError::into_rpc)?)
         }
-        NetworkUpdateAll::NAME => ok(network_update_all(state).await),
+        NetworkUpdateAll::NAME => ok(crate::network::updates::update_all(state).await),
+        NetworkFollowUpdatesSet::NAME => {
+            let p: NetworkFollowUpdatesParams = parse(params)?;
+            ok(crate::network::updates::set_follow(state, p.enabled).await.map_err(JoinError::into_rpc)?)
+        }
         NetworkDoctor::NAME => {
             let p: NetworkDoctorParams = parse_or_default(params)?;
             ok(crate::network::doctor::report(state, p.machine_id.as_deref()).await)
         }
-        MachinesInfo::NAME => ok(machines_info(state)),
+        MachinesInfo::NAME => ok(crate::network::machine_info::info(state).await),
         // Daemon-to-daemon methods are answered on a session (`network::peers::dispatch`), never here.
         PeerOpsSync::NAME
         | PeerOpsPush::NAME
@@ -1279,7 +1241,8 @@ async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, pa
         | PeerDeviceRevoke::NAME
         | PeerRelayOpen::NAME
         | PeerRelayData::NAME
-        | PeerRelayClose::NAME => Err(RpcError::new(codes::NOT_AVAILABLE, format!("{method} is only available between machines."))),
+        | PeerRelayClose::NAME
+        | PeerUpdateStart::NAME => Err(RpcError::new(codes::NOT_AVAILABLE, format!("{method} is only available between machines."))),
         _ => Err(RpcError::method_not_found(method)),
     }
 }
@@ -1294,48 +1257,6 @@ async fn network_status(state: &AppState) -> Result<NetworkStatus, RpcError> {
     crate::network::status::network_status(state)
         .await
         .ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, "The machine network is unavailable on this machine."))
-}
-
-/// `network.update_all`: this machine starts its own update. Updating another machine needs a
-/// method it does not have in this release, so each of them is listed as skipped, with the reason.
-async fn network_update_all(state: &AppState) -> NetworkUpdateAllResult {
-    let mut result = NetworkUpdateAllResult { started: Vec::new(), skipped: Vec::new() };
-    let Some(membership) = state.network.membership() else { return result };
-    let me = membership.machine_id();
-    for (id, _) in membership.projection().members() {
-        if *id == me {
-            if state.desktop_managed.load(std::sync::atomic::Ordering::SeqCst) {
-                result.skipped.push(NetworkUpdateSkipped { machine_id: id.clone(), reason: "Updates with the app".into() });
-            } else {
-                state.daemon_updates.request(&state.store);
-                tokio::spawn(crate::self_update::tick(state.clone()));
-                result.started.push(id.clone());
-            }
-        } else {
-            result.skipped.push(NetworkUpdateSkipped {
-                machine_id: id.clone(),
-                reason: "Update it from its own Kybern; remote updates arrive in a later release".into(),
-            });
-        }
-    }
-    result
-}
-
-/// `machines.info`: what this machine says about itself for the Machines page.
-fn machines_info(state: &AppState) -> MachineInfo {
-    let cores = std::thread::available_parallelism().map(|cores| cores.get() as u32).unwrap_or(1);
-    let projects = state
-        .store
-        .projects_list()
-        .map(|projects| projects.into_iter().filter_map(|project| project.repo).filter(|repo| !repo.is_empty()).collect())
-        .unwrap_or_default();
-    MachineInfo {
-        cpu: Some(CpuInfo { model: std::env::consts::ARCH.to_string(), logical_cores: cores }),
-        gpu: Vec::new(),
-        mem: None,
-        harnesses: Vec::new(),
-        projects,
-    }
 }
 
 fn parse<T: DeserializeOwned>(v: Value) -> Result<T, RpcError> {

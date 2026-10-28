@@ -15,12 +15,14 @@
 
 pub mod client_grant;
 pub mod clipboard_filter;
+pub mod dial_out;
 pub mod doctor;
 pub mod federated;
 pub mod forward;
 pub mod git_transfer;
 pub mod join;
 pub mod keys;
+pub mod machine_info;
 pub mod manage;
 pub mod membership;
 pub mod ops;
@@ -28,11 +30,15 @@ pub mod outbox;
 pub mod peers;
 pub mod relay;
 pub mod removal;
+pub mod repo_identity;
 pub mod session;
 pub mod status;
 pub mod tailscale;
+pub mod updates;
 pub mod well_known;
 
+#[cfg(test)]
+mod gap_tests;
 #[cfg(test)]
 pub(crate) mod harness;
 #[cfg(test)]
@@ -103,6 +109,10 @@ pub struct Timing {
     /// Join machines of the same Tailscale user on discovery (§2.4a). Always on in a daemon; a test
     /// that builds its network by hand turns it off.
     pub auto_join: bool,
+    /// How long a lone machine waits for a lone same-owner machine with a smaller id to found the
+    /// network before it founds one itself (§2.4a). The other one may have its network turned off, or
+    /// not run Kybern at all by now; a network founded twice is reconciled by the merge path.
+    pub lone_wait: Duration,
 }
 
 impl Default for Timing {
@@ -121,6 +131,9 @@ impl Default for Timing {
             relay_idle: Duration::from_secs(30),
             clock_window: Duration::from_secs(60),
             auto_join: true,
+            // Two discovery ticks at the idle pace, so a machine that is merely slow to notice us
+            // still founds before this one gives up.
+            lone_wait: Duration::from_secs(12 * 60),
         }
     }
 }
@@ -142,6 +155,7 @@ impl Timing {
             relay_idle: Duration::from_secs(30),
             clock_window: Duration::from_secs(60),
             auto_join: true,
+            lone_wait: Duration::from_secs(3),
         }
     }
 }
@@ -269,6 +283,7 @@ impl Network {
             features::FORK_V1.to_string(),
             features::SETTINGS_FANOUT_V1.to_string(),
             features::NOTES_FEDERATED_V1.to_string(),
+            features::UPDATE_V1.to_string(),
         ]
     }
 

@@ -28,6 +28,10 @@ pub struct DaemonUpdates {
     record: Mutex<DaemonUpdate>,
     requested: AtomicBool,
     worker: tokio::sync::Mutex<()>,
+    /// A test build is a development build, which never replaces itself; the machine-network tests
+    /// set this to see a request get as far as being queued.
+    #[cfg(test)]
+    pub(crate) allow_development: AtomicBool,
 }
 
 impl DaemonUpdates {
@@ -54,7 +58,13 @@ impl DaemonUpdates {
             record.message = "The daemon restarted during an update. Retry the update.".into();
             record.checked_at = Some(Utc::now());
         }
-        Ok(Self { record: Mutex::new(record), requested: AtomicBool::new(false), worker: tokio::sync::Mutex::new(()) })
+        Ok(Self {
+            record: Mutex::new(record),
+            requested: AtomicBool::new(false),
+            worker: tokio::sync::Mutex::new(()),
+            #[cfg(test)]
+            allow_development: AtomicBool::new(false),
+        })
     }
 
     pub fn get(&self) -> DaemonUpdate {
@@ -105,6 +115,15 @@ async fn latest_version(client: &reqwest::Client) -> Result<String> {
     Ok(tag.trim_start_matches('v').to_string())
 }
 
+/// The newest version on the release feed, when it can be read.
+pub async fn feed_latest() -> Option<String> {
+    // Tests never reach for the network.
+    if cfg!(test) {
+        return None;
+    }
+    latest_version(&http().ok()?).await.ok()
+}
+
 fn parse_version(version: &str) -> Option<(u64, u64, u64)> {
     let core = version.trim().trim_start_matches('v').split(['-', '+']).next()?;
     let mut parts = core.split('.').map(|part| part.parse::<u64>().ok());
@@ -136,11 +155,15 @@ fn archive_name() -> Result<String> {
 // ---- install -----------------------------------------------------------------
 
 /// Why this daemon must not replace itself, if it must not.
-fn unsupported(state: &AppState) -> Option<String> {
+pub(crate) fn unsupported(state: &AppState) -> Option<String> {
     if state.desktop_managed.load(Ordering::SeqCst) {
         return Some("Managed by the Kybern desktop app on this machine; updating the app updates it.".into());
     }
-    if cfg!(debug_assertions) {
+    #[cfg(test)]
+    let development = !state.daemon_updates.allow_development.load(Ordering::SeqCst);
+    #[cfg(not(test))]
+    let development = true;
+    if cfg!(debug_assertions) && development {
         return Some("Development build; rebuild it instead.".into());
     }
     let exe = std::env::current_exe().ok()?;
@@ -249,7 +272,7 @@ fn due(record: &DaemonUpdate) -> bool {
 
 /// Anything a restart would interrupt. Automatic updates also wait for open
 /// terminals; a requested update treats those as the user's call.
-async fn busy(state: &AppState, automatic: bool) -> Result<bool> {
+pub(crate) async fn busy(state: &AppState, automatic: bool) -> Result<bool> {
     let activity = crate::maintenance::activity(state).await?;
     Ok(activity.running_threads > 0
         || activity.live_sessions != activity.idle_sessions
