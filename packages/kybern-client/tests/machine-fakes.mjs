@@ -202,12 +202,12 @@ export function fakeWorld(clock) {
         const message = `kybern-wk-v1\0${nonce}${machineId}${at}${parsed.host}`;
         return { machine_id: machineId, name: machineId, os: "linux", signing_key: key, at, proof: `sig|${key}|${message}` };
       },
-      createClient({ record, route, token }) {
+      createClient({ record, route, token, relayToken }) {
         const parsed = new URL(route.url);
         const path = parsed.pathname.replace(/\/ws$/, "").replace(/\/$/, "");
         const host = world.hosts.get(`${parsed.protocol}//${parsed.host}${path}`.replace(/^ws/, "http")) ?? world.hosts.get(`http://${parsed.host}${path}`);
         const client = new FakeClient(world, host ?? { machineId: record.machineId, online: false, info: {} }, route, token);
-        world.clients.push({ machineId: record.machineId, url: route.url, token, client });
+        world.clients.push({ machineId: record.machineId, url: route.url, token, relayToken, client });
         return client;
       },
     },

@@ -82,7 +82,15 @@ export interface CredentialStore {
   delete(machineId: MachineId): MaybePromise<void>;
 }
 
-export type SocketFactory = (url: string, token: string) => WebSocket;
+/**
+ * Opens the socket of one route. `headers` are extra upgrade headers the platform must send beside
+ * `Authorization`: a relay route needs the relay member's own token in `X-Kybern-Relay-Auth`,
+ * because `Authorization` is the end-to-end token the target checks (design §3.4).
+ */
+export type SocketFactory = (url: string, token: string, headers?: Record<string, string>) => WebSocket;
+
+/** The header a relay member reads its caller's token from. */
+export const RELAY_AUTH_HEADER = "X-Kybern-Relay-Auth";
 
 export interface Clock {
   now(): number;
@@ -100,8 +108,11 @@ const systemClock: Clock = {
 export interface MachineTransport {
   /** `GET` the identity document at `url`, with no credential. Throws when nothing answers in time. */
   probe(url: string, options: { timeoutMs: number }): Promise<unknown>;
-  /** A client that, once `connect()`ed, talks to `route` with `token`. Called only after the route verified. */
-  createClient(args: { record: MachineRecord; route: Route; token: string }): MachineClient;
+  /**
+   * A client that, once `connect()`ed, talks to `route` with `token`. Called only after the route verified.
+   * For a relay route `relayToken` is this device's token for the member the route goes through.
+   */
+  createClient(args: { record: MachineRecord; route: Route; token: string; relayToken?: string }): MachineClient;
   /** 32 random bytes, base64url. */
   nonce(): string;
 }
@@ -131,13 +142,26 @@ export function randomNonce(): string {
   return out.slice(0, 43);
 }
 
+/** The headers a relay route's upgrade carries for the relay member, or undefined without a token. */
+export function relayHeadersFor(relayToken: string | undefined): Record<string, string> | undefined {
+  return relayToken ? { [RELAY_AUTH_HEADER]: `Bearer ${relayToken}` } : undefined;
+}
+
 /** The default `createClient`: a `KybernClient` on the route, checking the machine id again on open. */
 export function kybernClientFactory(createSocket?: SocketFactory, base: ClientOptions = {}): MachineTransport["createClient"] {
-  return ({ record, route, token }) =>
-    new KybernClient(
+  return ({ record, route, token, relayToken }) => {
+    // The relay member authenticates its caller from its own header; the target's token travels in
+    // `Authorization` end to end. A browser cannot set either on an upgrade, so a relay route needs a
+    // platform socket.
+    const relayHeaders = route.kind === "relay" ? relayHeadersFor(relayToken) : undefined;
+    if (route.kind === "relay" && (!relayHeaders || !createSocket)) throw new Error("A relay route needs the relay member's token and a native socket");
+    const socket: SocketFactory | undefined =
+      createSocket && relayHeaders ? (url, bearer) => createSocket(url, bearer, relayHeaders) : createSocket;
+    return new KybernClient(
       { url: normalizeDaemonUrl(route.url), token, environmentId: record.machineId },
-      { ...base, expectedEnvironmentId: record.machineId, ...(createSocket ? { createSocket } : {}) },
+      { ...base, expectedEnvironmentId: record.machineId, ...(socket ? { createSocket: socket } : {}) },
     );
+  };
 }
 
 // ---- connection view ----
@@ -1125,8 +1149,15 @@ export class MachineSet {
     latencyMs: number | undefined,
   ): Promise<{ kind: "open"; opened: Opened } | { kind: "revoked" | "failed" }> {
     let inner: MachineClient;
+    // A relay route is authenticated twice: the target's token end to end, and the member's own
+    // token for the relay itself (design §3.4).
+    let relayToken: string | undefined;
+    if (route.kind === "relay") {
+      relayToken = (route.via ? await this.options.credentials.get(route.via) : undefined) || undefined;
+      if (!relayToken) return { kind: "failed" };
+    }
     try {
-      inner = this.transport.createClient({ record: slot.record, route, token });
+      inner = this.transport.createClient({ record: slot.record, route, token, ...(relayToken ? { relayToken } : {}) });
     } catch {
       return { kind: "failed" };
     }

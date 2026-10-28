@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { MachineSet, OfflineError, UnknownMachineError } from "../src/machines.ts";
+import { MachineSet, OfflineError, RELAY_AUTH_HEADER, UnknownMachineError, kybernClientFactory, relayHeadersFor } from "../src/machines.ts";
 import { MachineCache } from "../src/machineCache.ts";
 import { routeId } from "../src/machineRoutes.ts";
 import { fakeWorld, manualClock, memoryCacheStorage, memoryCredentials, memoryStore, verifyProof } from "./machine-fakes.mjs";
@@ -175,6 +175,81 @@ test("a machine only reachable through a member is relayed, and shown as relayin
   assert.equal(world.clients.find((c) => c.machineId === "b").token, "tok-b", "the relay carries b's own token; the member never sees it as its own");
   assert.equal(set.merged().threads.all.length, 1);
   set.dispose();
+});
+
+test("a relay route is opened with the relay member's own token beside the target's", async () => {
+  const { world, set } = setup({
+    records: [rec("a", [tailnet("http://100.64.0.1:4173")], { signingKey: "key-a" }), rec("b", [tailnet(T)], { signingKey: "key-b" })],
+    credentials: { a: "tok-a", b: "tok-b" },
+    localMachineId: "a",
+  });
+  world.host("http://100.64.0.1:4173", "a");
+  world.host("http://100.64.0.1:4173/relay/b", "b");
+  world.lists("a", [], []);
+  world.lists("b", [], []);
+  await set.ensureAll();
+  const direct = world.clients.find((c) => c.machineId === "a");
+  const relayed = world.clients.find((c) => c.machineId === "b");
+  assert.equal(direct.relayToken, undefined, "a direct route carries no relay token");
+  assert.equal(relayed.token, "tok-b");
+  assert.equal(relayed.relayToken, "tok-a", "the member authenticates the caller with its own token");
+  set.dispose();
+});
+
+test("a relay route without a token for its member does not open", async () => {
+  const { world, set } = setup({
+    records: [rec("a", [tailnet("http://100.64.0.1:4173")], { signingKey: "key-a" }), rec("b", [], { signingKey: "key-b" })],
+    credentials: { a: "tok-a", b: "tok-b" },
+    localMachineId: "a",
+  });
+  world.host("http://100.64.0.1:4173", "a");
+  world.host("http://100.64.0.1:4173/relay/b", "b");
+  world.lists("a", [], []);
+  await set.ensureAll();
+  assert.equal(set.connection("b").status, "relaying");
+  set.dispose();
+
+  const missing = setup({
+    records: [rec("a", [tailnet("http://100.64.0.1:4173")], { signingKey: "key-a" }), rec("b", [], { signingKey: "key-b" })],
+    credentials: { b: "tok-b" },
+    localMachineId: "a",
+  });
+  missing.world.host("http://100.64.0.1:4173", "a");
+  missing.world.host("http://100.64.0.1:4173/relay/b", "b");
+  missing.world.lists("a", [], []);
+  await missing.set.ensureAll();
+  assert.equal(missing.world.clients.some((c) => c.machineId === "b" && c.relayToken), false, "no client is made without the member's token");
+  assert.notEqual(missing.set.connection("b").status, "relaying");
+  missing.set.dispose();
+});
+
+test("the default client sends the relay member's token in X-Kybern-Relay-Auth and the target's in Authorization", () => {
+  const opened = [];
+  const createSocket = (url, token, headers) => {
+    opened.push({ url, token, headers });
+    return { close() {}, send() {} };
+  };
+  const create = kybernClientFactory(createSocket);
+  const record = { machineId: "b", name: "b", routes: [], member: true };
+
+  const relay = create({ record, route: { kind: "relay", url: "http://100.64.0.1:4173/relay/b", via: "a" }, token: "tok-b", relayToken: "tok-a" });
+  relay.connect();
+  relay.close();
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0].url, "ws://100.64.0.1:4173/relay/b/ws");
+  assert.equal(opened[0].token, "tok-b", "Authorization stays the end-to-end token");
+  assert.deepEqual(opened[0].headers, { [RELAY_AUTH_HEADER]: "Bearer tok-a" });
+  assert.equal(RELAY_AUTH_HEADER.toLowerCase(), "x-kybern-relay-auth", "the header the daemon reads");
+
+  const direct = create({ record, route: { kind: "direct_tailnet", url: T }, token: "tok-b" });
+  direct.connect();
+  direct.close();
+  assert.equal(opened[1].headers, undefined, "a direct route sends no relay header");
+
+  // A relay needs both tokens and a socket that can set headers.
+  assert.throws(() => create({ record, route: { kind: "relay", url: "http://100.64.0.1:4173/relay/b", via: "a" }, token: "tok-b" }));
+  assert.throws(() => kybernClientFactory()({ record, route: { kind: "relay", url: "http://100.64.0.1:4173/relay/b", via: "a" }, token: "tok-b", relayToken: "tok-a" }));
+  assert.equal(relayHeadersFor(undefined), undefined);
 });
 
 test("a relay is only offered through members that are connected", async () => {

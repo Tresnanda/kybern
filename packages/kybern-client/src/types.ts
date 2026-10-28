@@ -3936,7 +3936,7 @@ export interface Methods {
   "network.set_enabled": [{ enabled: boolean }, NetworkStatus];
   "network.add": [{ found_id: string }, NetworkAddResult];
   "network.code.create": [Empty, NetworkCodeCreateResult];
-  "network.join": [{ code: string; address: string }, MachineCard];
+  "network.join": [{ code: string; address: string; migrate?: boolean }, MachineCard];
   "network.remove": [NetworkRemoveParams, NetworkStatus];
   "network.pause": [{ machine_id: MachineId; paused: boolean }, MachineCard];
   "network.rename": [{ machine_id: MachineId; name: string }, MachineCard];
