@@ -28,7 +28,8 @@ use async_trait::async_trait;
 use chrono::Utc;
 use kybern_git::Repo;
 use kybern_protocol::methods::{
-    Method, PeerDelegate, PeerDelegationCancel, PeerDelegationGet, PeerFork, PeerGitBundle, PeerGitImport, PeerThreadCreate, PeerThreadSend,
+    Method, PeerDelegate, PeerDelegationCancel, PeerDelegationGet, PeerFork, PeerGitBundle, PeerGitImport, PeerMoveAbort, PeerMoveCommit,
+    PeerMoveGet, PeerMovePrepare, PeerThreadCreate, PeerThreadSend,
 };
 use kybern_protocol::*;
 use serde_json::{Value, json};
@@ -140,6 +141,8 @@ pub(super) struct RemoteState {
     followers: Mutex<HashSet<Uuid>>,
     /// Serializes read-modify-write of `remote_children`.
     writes: Mutex<()>,
+    /// Threads with a move attempt in flight (`move_thread.rs`).
+    pub(super) moving: Mutex<HashSet<ThreadId>>,
 }
 
 /// What one delivery attempt of an outbox item came to.
@@ -788,6 +791,10 @@ impl Orchestrator {
             self.fork_outbox_changed(item);
             return;
         }
+        if item.kind == OutboxKind::Move {
+            self.move_outbox_changed(item);
+            return;
+        }
         if item.kind != OutboxKind::Delegate {
             return;
         }
@@ -1078,6 +1085,10 @@ impl Orchestrator {
             PeerThreadCreate::NAME => to_value(self.create_thread(from_value(params)?).await.map_err(thread_error)),
             PeerThreadSend::NAME => to_value(self.send_client_message(from_value(params)?).await.map_err(thread_error)),
             PeerFork::NAME => to_value(self.accept_fork(from, from_value(params)?).await),
+            PeerMovePrepare::NAME => to_value(self.accept_move_prepare(from, from_value(params)?).await),
+            PeerMoveCommit::NAME => to_value(self.accept_move_commit(from, from_value(params)?).await),
+            PeerMoveGet::NAME => to_value(self.accept_move_status(from, from_value(params)?, false).await),
+            PeerMoveAbort::NAME => to_value(self.accept_move_status(from, from_value(params)?, true).await),
             _ => Err(RpcError::method_not_found(method)),
         }
     }
@@ -1207,6 +1218,7 @@ impl Orchestrator {
             coordinator_project_id: None,
             origin: Some(origin),
             inbound: None,
+            moved: None,
             subagent: None,
             delegation: Some(info),
             members: Vec::new(),

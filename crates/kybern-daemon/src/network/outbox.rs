@@ -248,6 +248,7 @@ fn announce(state: &AppState, item: &OutboxItem) {
 /// One look at the outbox: expire what ran out, fail what can never be delivered, start what is due.
 async fn pass(state: &AppState, hub: &Arc<dyn RemoteHub>, in_flight: &InFlight) {
     let now = Utc::now();
+    state.orchestrator.move_sweep();
     match state.store.outbox_overdue(now) {
         Ok(overdue) => {
             for mut item in overdue {
@@ -317,6 +318,7 @@ async fn deliver(state: &AppState, item: &OutboxItem) -> Delivery {
         OutboxKind::ThreadCreate => state.orchestrator.remote_deliver_call(item, PeerThreadCreate::NAME).await,
         OutboxKind::ThreadSend => state.orchestrator.remote_deliver_call(item, PeerThreadSend::NAME).await,
         OutboxKind::Fork => state.orchestrator.remote_deliver_fork(item).await,
+        OutboxKind::Move => state.orchestrator.remote_deliver_move(item).await,
         OutboxKind::SettingsPatch => crate::settings_share::deliver(state, item).await,
         OutboxKind::SecretsPut => super::broker::deliver_secrets_put(state, item).await,
         OutboxKind::FilesPush => super::files_push::deliver(state, item).await,

@@ -358,6 +358,10 @@ pub fn transcript(r: &ThreadsGetResult) {
                 };
                 println!("  ⟳ context refreshed {how}  ({rotation_id})");
             }
+            TranscriptEntry::History { from_machine_name, from_title, items, omitted, .. } => {
+                let older = if *omitted > 0 { format!(" (+{omitted} older)") } else { String::new() };
+                println!("  ⌛ earlier on {from_machine_name}: \"{from_title}\", {} items{older}", items.len());
+            }
             TranscriptEntry::OutsideRepoChanged { repos, .. } => {
                 for repo in repos {
                     println!("  ! {} changed outside this chat's worktree", repo.name);

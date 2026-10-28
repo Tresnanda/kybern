@@ -259,6 +259,7 @@ impl Orchestrator {
                     coordinator_project_id: None,
                     origin: None,
                     inbound: None,
+                    moved: None,
                     subagent: Some(info.clone()),
                     delegation: None,
                     members: Vec::new(),

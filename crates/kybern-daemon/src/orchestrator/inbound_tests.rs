@@ -246,6 +246,7 @@ async fn below_full_access_a_call_may_change_only_threads_the_calling_machine_st
             coordinator_project_id: None,
             origin,
             inbound: None,
+            moved: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),

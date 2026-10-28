@@ -40,6 +40,7 @@ mod lead_proposals;
 mod login_borrow;
 mod login_request;
 mod messaging;
+pub(crate) mod move_thread;
 mod note_claims;
 mod note_staleness;
 mod note_tidy;
@@ -1323,6 +1324,10 @@ impl Orchestrator {
             self.inner.queue_wakeup.notify_one();
         }
         let _ = self.inner.events.send(ev.clone());
+        // A move that waited for this thread's turn to end can go now.
+        if let EventPayload::ThreadUpdated { thread } = &ev.payload {
+            self.move_thread_idle(thread);
+        }
         if matches!(
             ev.payload,
             EventPayload::ApprovalRequested { .. } | EventPayload::UserInputRequested { .. } | EventPayload::ApprovalResolved { .. }
@@ -1356,6 +1361,8 @@ impl Orchestrator {
             if keep_stored_delegation {
                 thread.delegation = current.delegation;
             }
+            // Only the move code changes the lease; a stale copy must not undo it.
+            thread.moved = current.moved;
         }
         thread.updated_at = Utc::now();
         self.inner.store.thread_upsert(&thread)?;
@@ -1609,6 +1616,7 @@ impl Orchestrator {
             coordinator_project_id: None,
             origin: None,
             inbound: None,
+            moved: None,
             subagent: None,
             delegation: None,
             members,
@@ -1803,6 +1811,7 @@ impl Orchestrator {
             coordinator_project_id: None,
             origin: None,
             inbound: None,
+            moved: None,
             subagent: None,
             delegation: None,
             members,
@@ -2004,6 +2013,9 @@ impl Orchestrator {
             if current.inbound.is_some() {
                 return Err(anyhow!(inbound::INBOUND_READ_ONLY));
             }
+            if let Some(moved) = &current.moved {
+                return Err(anyhow!(move_thread::moved_message(moved)));
+            }
             let selected_target = if queued {
                 self.inner
                     .store
@@ -2190,6 +2202,9 @@ impl Orchestrator {
         let thread = self.inner.store.thread_get(message.thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
         if thread.subagent.is_some() {
             return Err(anyhow!(subagents::READ_ONLY_ERROR));
+        }
+        if let Some(moved) = &thread.moved {
+            return Err(anyhow!(move_thread::moved_message(moved)));
         }
         if thread.status == ThreadStatus::Archived {
             return Err(anyhow!("This chat is archived. Start a new chat to keep working."));
@@ -5460,6 +5475,7 @@ mod tests {
             coordinator_project_id: None,
             origin: None,
             inbound: None,
+            moved: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),
@@ -5863,6 +5879,7 @@ mod tests {
                 coordinator_project_id: None,
                 origin: None,
                 inbound: None,
+                moved: None,
                 subagent: None,
                 delegation: None,
                 members: Vec::new(),
@@ -8588,6 +8605,7 @@ for line in sys.stdin:
     include!("orchestrator/remote_delegation_tests.rs");
     include!("orchestrator/inbound_tests.rs");
     include!("orchestrator/fork_tests.rs");
+    include!("orchestrator/move_tests.rs");
     include!("orchestrator/federated_tools_tests.rs");
     include!("orchestrator/child_questions_tests.rs");
     include!("orchestrator/secret_tests.rs");

@@ -305,6 +305,7 @@ impl Network {
             features::DELEGATE_REMOTE_V1.to_string(),
             features::TOOLS_FORWARD_V1.to_string(),
             features::FORK_V1.to_string(),
+            features::MOVE_V1.to_string(),
             features::SETTINGS_FANOUT_V1.to_string(),
             features::NOTES_FEDERATED_V1.to_string(),
             features::SECRETS_STORE_V1.to_string(),

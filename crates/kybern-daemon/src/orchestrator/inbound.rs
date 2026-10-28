@@ -666,6 +666,7 @@ impl Orchestrator {
                 thread_id: origin_thread,
                 title: if params.thread_title.trim().is_empty() { INBOUND_TITLE_FALLBACK.to_string() } else { params.thread_title.clone() },
             })),
+            moved: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),

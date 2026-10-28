@@ -1364,6 +1364,8 @@ async fn dispatch_part_16(state: &AppState, ctx: &ConnectionCtx, method: &str, s
             let p: OutboxEnqueueParams = parse(params)?;
             if p.operation.kind == OutboxKind::Fork {
                 ok(crate::orchestrator::fork_machine::serve_fork_enqueue(state, p).await?)
+            } else if p.operation.kind == OutboxKind::Move {
+                ok(crate::orchestrator::move_thread::serve_move_enqueue(state, p).await?)
             } else {
                 ok(crate::network::outbox::enqueue(state, p)?)
             }
@@ -1371,6 +1373,9 @@ async fn dispatch_part_16(state: &AppState, ctx: &ConnectionCtx, method: &str, s
         // Fork to a machine (F1): the hand-off note to edit, and the fork itself.
         ThreadsForkNote::NAME => ok(state.orchestrator.fork_note(parse(params)?).await?),
         ThreadsForkToMachine::NAME => ok(crate::orchestrator::fork_machine::serve_fork_to_machine(state, params).await?),
+        // Continue on another machine (F2): queue the move, and give up one whose outcome is unknown.
+        ThreadsMoveToMachine::NAME => ok(crate::orchestrator::move_thread::serve_move_to_machine(state, params).await?),
+        ThreadsMoveAbandon::NAME => ok(state.orchestrator.move_abandon(parse(params)?).await?),
         // The machine network (N4). The logic is in `network/`; these arms parse and answer.
         NetworkStatusMethod::NAME => ok(network_status(state).await?),
         NetworkSetEnabled::NAME => {

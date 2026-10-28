@@ -956,6 +956,7 @@ impl Orchestrator {
             // Work another machine started stays that machine's, however deep it delegates here.
             origin: parent.origin.clone().filter(|origin| !matches!(origin.kind, OriginKind::Fork)),
             inbound: None,
+            moved: None,
             subagent: None,
             delegation: Some(info),
             members,

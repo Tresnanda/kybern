@@ -1,4 +1,5 @@
 mod accounts;
+mod continue_on;
 mod coordinator;
 mod credentials;
 mod fork;
@@ -260,6 +261,10 @@ enum Cmd {
     },
     /// Give another machine a copy of a thread's work: a hand-off note, its branch and your uncommitted changes.
     Fork(fork::ForkArgs),
+    /// Move a thread to another machine: its work and conversation go there and this thread becomes read-only.
+    Continue(continue_on::ContinueArgs),
+    /// Give up a move that could not be confirmed, so the thread is yours again.
+    ContinueAbandon(continue_on::ContinueAbandonArgs),
     /// Work waiting for machines that are offline.
     Outbox {
         #[command(subcommand)]
@@ -1744,6 +1749,8 @@ pub async fn run() -> Result<()> {
         Cmd::Spaces { cmd } => spaces::run(&client, cmd, json).await?,
         Cmd::Machines { cmd } => machines::run(&client, cmd, json).await?,
         Cmd::Fork(args) => fork::run(&client, args, json).await?,
+        Cmd::Continue(args) => continue_on::run(&client, args, json).await?,
+        Cmd::ContinueAbandon(args) => continue_on::abandon(&client, args, json).await?,
         Cmd::Outbox { cmd } => outbox::run(&client, cmd, json).await?,
         Cmd::Threads { project, archived } => {
             let project_id = match project {

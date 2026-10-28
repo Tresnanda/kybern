@@ -40,7 +40,7 @@ use crate::state::AppState;
 /// The branch every fork uses on both machines: `kybern/fork-<short id>`.
 const BRANCH_PREFIX: &str = "kybern/fork-";
 /// The note a client can send is limited, so a long edit cannot fill the target's context.
-const NOTE_CAP: usize = 64 * 1024;
+pub(super) const NOTE_CAP: usize = 64 * 1024;
 const GOAL_CAP: usize = 1_500;
 const STATE_CAP: usize = 2_500;
 const TURN_USER_CAP: usize = 400;
@@ -62,17 +62,17 @@ struct ForkPayload {
 }
 
 /// Whether another machine's work started this thread and it must not reach a third machine. A fork
-/// is the exception: the person who forked it owns the new thread like any other.
+/// or a move is the exception: the person who forked or moved it owns the new thread like any other.
 pub(super) fn second_hop(thread: &Thread) -> bool {
-    thread.origin.as_ref().is_some_and(|origin| !matches!(origin.kind, OriginKind::Fork))
+    thread.origin.as_ref().is_some_and(|origin| !matches!(origin.kind, OriginKind::Fork | OriginKind::Move))
 }
 
-fn short_id(operation_id: Uuid) -> String {
+pub(super) fn short_id(operation_id: Uuid) -> String {
     let simple = operation_id.simple().to_string();
     simple[simple.len() - 8..].to_string()
 }
 
-fn clip(text: &str, max: usize) -> String {
+pub(super) fn clip(text: &str, max: usize) -> String {
     let text = text.trim();
     if text.chars().count() <= max {
         return text.to_string();
@@ -82,11 +82,11 @@ fn clip(text: &str, max: usize) -> String {
     out
 }
 
-fn conflict(message: impl Into<String>) -> RpcError {
+pub(super) fn conflict(message: impl Into<String>) -> RpcError {
     RpcError::new(codes::CONFLICT, message)
 }
 
-fn not_found(message: impl Into<String>) -> RpcError {
+pub(super) fn not_found(message: impl Into<String>) -> RpcError {
     RpcError::new(codes::NOT_FOUND, message)
 }
 
@@ -99,7 +99,7 @@ impl Orchestrator {
         Ok(ThreadsForkNoteResult { note: self.handoff_note(&thread).await.map_err(internal)? })
     }
 
-    fn fork_source(&self, thread_id: ThreadId) -> Result<Thread, RpcError> {
+    pub(super) fn fork_source(&self, thread_id: ThreadId) -> Result<Thread, RpcError> {
         let thread = self.inner.store.thread_get(thread_id).map_err(internal)?.ok_or_else(|| not_found("no such thread"))?;
         if thread.subagent.is_some() || thread.inbound.is_some() {
             return Err(RpcError::invalid_params(
@@ -251,7 +251,7 @@ impl Orchestrator {
     /// The commit the fork carries: the work as it stands, or, while a turn runs, as of the last
     /// finished turn. A clean checkout needs no WIP commit: its HEAD is the fork. Returns whether the
     /// commit is from a finished turn rather than from now.
-    async fn fork_commit(&self, thread: &Thread, repo: &Repo, machine: &str) -> Result<(String, bool)> {
+    pub(super) async fn fork_commit(&self, thread: &Thread, repo: &Repo, machine: &str) -> Result<(String, bool)> {
         if matches!(thread.status, ThreadStatus::Running | ThreadStatus::AwaitingApproval) {
             let events = self.inner.store.events_for_thread(thread.id)?;
             let finished = events.iter().rev().find_map(|event| match &event.payload {
@@ -270,7 +270,7 @@ impl Orchestrator {
     }
 
     /// The hand-off note: what a person picking this thread up would need to know (§7.1).
-    async fn handoff_note(&self, thread: &Thread) -> Result<String> {
+    pub(super) async fn handoff_note(&self, thread: &Thread) -> Result<String> {
         let events = self.inner.store.events_for_thread(thread.id)?;
         let entries = kybern_store::project_transcript(&events);
         let machine = self.remote_hub().map(|hub| hub.self_name()).unwrap_or_else(|| "the other machine".into());
@@ -408,7 +408,10 @@ impl Orchestrator {
         if let Err(CallFailure::Remote(error)) = &answer
             && error.data.as_ref().and_then(|data| data.get("needs")).and_then(Value::as_str) == Some(FORK_NEEDS_BUNDLE)
         {
-            match self.fork_send_branch(&*hub, item, &payload, &repo).await {
+            match self
+                .send_branch(&*hub, item, &payload.params.repo, payload.params.project.as_deref(), &payload.params.commit, &repo)
+                .await
+            {
                 Ok(()) => answer = hub.call(&item.target, PeerFork::NAME, value).await,
                 Err(delivery) => return delivery,
             }
@@ -437,13 +440,20 @@ impl Orchestrator {
         }
     }
 
-    /// Send the fork branch as a bundle and have the target import it.
-    async fn fork_send_branch(&self, hub: &dyn RemoteHub, item: &OutboxItem, payload: &ForkPayload, repo: &Repo) -> Result<(), Delivery> {
-        let params = &payload.params;
+    /// Send the branch's commit as a bundle and have the target import it.
+    pub(super) async fn send_branch(
+        &self,
+        hub: &dyn RemoteHub,
+        item: &OutboxItem,
+        identity: &RepoIdentity,
+        project: Option<&str>,
+        commit: &str,
+        repo: &Repo,
+    ) -> Result<(), Delivery> {
         let staged = git_transfer::staged_path(&self.inner.paths.root, item.operation_id);
         let mut full = false;
         loop {
-            let bundle = match git_transfer::create_bundle(repo, &params.commit, item.operation_id, &staged, full).await {
+            let bundle = match git_transfer::create_bundle(repo, commit, item.operation_id, &staged, full).await {
                 Ok(Some(bundle)) => bundle,
                 // A remote already has everything yet the target lacks it: send the whole history.
                 Ok(None) if !full => {
@@ -453,7 +463,7 @@ impl Orchestrator {
                 Ok(None) => return Err(Delivery::Failed("There was nothing to send, yet the target lacks the commit.".into())),
                 Err(error) => return Err(Delivery::Failed(format!("{error:#}"))),
             };
-            let result = self.stream_bundle(hub, item, &params.repo, params.project.as_deref(), &params.commit, &bundle).await;
+            let result = self.stream_bundle(hub, item, identity, project, commit, &bundle).await;
             let _ = std::fs::remove_file(&staged);
             match result {
                 Ok(()) => return Ok(()),
@@ -581,28 +591,14 @@ impl Orchestrator {
         }
         let hub_name = hub.self_name();
         let project = self.match_project(&params.repo, params.project.as_deref(), &hub_name).await?;
-        let (kind, model, effort) = self.fork_provider(&project, params, &hub_name).await?;
+        let (kind, model, effort) = self.fork_provider(&project, ForkProvider::of(params), &hub_name).await?;
         let repo = Repo::new(&project.path);
         if !git_transfer::has_commit(&repo, &params.commit).await {
             return Err(RpcError::new(codes::CONFLICT, format!("{hub_name} does not have commit {} yet.", params.commit))
                 .with_data(json!({ "needs": FORK_NEEDS_BUNDLE, "project_id": project.id })));
         }
-        let dir = self.worktree_dir(&project, &thread_id.to_string());
-        if !dir.join(".git").exists() {
-            if let Some(parent_dir) = dir.parent() {
-                std::fs::create_dir_all(parent_dir).map_err(internal)?;
-            }
-            if let Err(error) = repo.worktree_add(&dir, &params.branch, Some(&params.commit)).await {
-                // The branch is already here (pushed to origin and fetched, or left by a try that died): use it if it is the fork.
-                let known = repo.rev_parse(&format!("refs/heads/{}", params.branch)).await.ok();
-                if known.as_deref() != Some(params.commit.as_str()) {
-                    return Err(conflict(format!("Could not create the fork's worktree on {}: {error:#}", params.branch)));
-                }
-                repo.worktree_add_existing(&dir, &params.branch).await.map_err(internal)?;
-            }
-        }
+        let path = self.fork_worktree(&project, &repo, thread_id, &params.branch, &params.commit).await?;
         git_transfer::forget(Some(&repo), &self.inner.paths.root, params.operation_id).await;
-        let path = dir.to_string_lossy().into_owned();
         let now = Utc::now();
         let provider = ProviderInstance::default_for(kind);
         let thread = Thread {
@@ -625,6 +621,7 @@ impl Orchestrator {
             coordinator_project_id: None,
             origin: Some(origin),
             inbound: None,
+            moved: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),
@@ -642,16 +639,42 @@ impl Orchestrator {
         Ok::<PeerForkResult, RpcError>(fork_result(hub, &created, params, Some(project.name)))
     }
 
-    async fn fork_send_note(&self, thread_id: ThreadId, message_id: MessageId, message: UserMessage) -> Result<(), RpcError> {
+    /// The worktree for a thread that starts from `branch` at `commit`, or the one an earlier try made.
+    pub(super) async fn fork_worktree(
+        &self,
+        project: &Project,
+        repo: &Repo,
+        thread_id: ThreadId,
+        branch: &str,
+        commit: &str,
+    ) -> Result<String, RpcError> {
+        let dir = self.worktree_dir(project, &thread_id.to_string());
+        if !dir.join(".git").exists() {
+            if let Some(parent_dir) = dir.parent() {
+                std::fs::create_dir_all(parent_dir).map_err(internal)?;
+            }
+            if let Err(error) = repo.worktree_add(&dir, branch, Some(commit)).await {
+                // The branch is already here (pushed to origin and fetched, or left by a try that died): use it if it is the fork.
+                let known = repo.rev_parse(&format!("refs/heads/{branch}")).await.ok();
+                if known.as_deref() != Some(commit) {
+                    return Err(conflict(format!("Could not create the worktree on {branch}: {error:#}")));
+                }
+                repo.worktree_add_existing(&dir, branch).await.map_err(internal)?;
+            }
+        }
+        Ok(dir.to_string_lossy().into_owned())
+    }
+
+    pub(super) async fn fork_send_note(&self, thread_id: ThreadId, message_id: MessageId, message: UserMessage) -> Result<(), RpcError> {
         self.send_with_id(thread_id, message_id, message, false, true).await.map(|_| ()).map_err(super::remote_delegation::thread_error)
     }
 
     /// The harness, model and effort the new thread runs: the source's when this machine has it, else
     /// the first usable one, unless the user named a harness.
-    async fn fork_provider(
+    pub(super) async fn fork_provider(
         &self,
         project: &Project,
-        params: &PeerForkParams,
+        wanted: ForkProvider,
         machine: &str,
     ) -> Result<(ProviderKind, Option<String>, Option<String>), RpcError> {
         let usable = |statuses: &Option<Vec<ProviderStatus>>, kind: ProviderKind| {
@@ -659,10 +682,10 @@ impl Orchestrator {
                 && statuses.as_ref().and_then(|all| all.iter().find(|status| status.kind == kind)).is_none_or(|status| status.available)
         };
         let cached = self.cached_provider_statuses(project.id).await.ok().flatten();
-        let mut kind = params.provider;
-        let (mut model, mut effort) = (params.model.clone(), params.effort.clone());
+        let mut kind = wanted.kind;
+        let (mut model, mut effort) = (wanted.model, wanted.effort);
         if !usable(&cached, kind) {
-            if params.provider_chosen {
+            if wanted.chosen {
                 return Err(RpcError::new(codes::PROVIDER_UNAVAILABLE, format!("{kind} is not available on {machine}.")));
             }
             let all = self.refresh_provider_statuses(project.id).await.ok();
@@ -680,6 +703,20 @@ impl Orchestrator {
             .await
             .map_err(|error| RpcError::new(codes::PROVIDER_UNAVAILABLE, format!("{error:#}")))?;
         Ok((kind, model, effort))
+    }
+}
+
+/// The harness a fork or move asks for, and whether the user named it.
+pub(super) struct ForkProvider {
+    pub kind: ProviderKind,
+    pub chosen: bool,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+}
+
+impl ForkProvider {
+    fn of(params: &PeerForkParams) -> Self {
+        Self { kind: params.provider, chosen: params.provider_chosen, model: params.model.clone(), effort: params.effort.clone() }
     }
 }
 
