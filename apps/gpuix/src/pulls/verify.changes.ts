@@ -1,4 +1,4 @@
-/** The Changes tab against the in-memory PR fixture (65 files in three pages): full-height tree, paging, Viewed, changed-since-viewed. */
+/** The Changes tab against the in-memory PR fixture (65 files in three pages): full-height tree, paging, tree and flat list. */
 import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
@@ -32,31 +32,12 @@ try {
   const tab = await a.getByTestId('pr-changes').bounds()
   console.log(`column ${JSON.stringify(col)} list ${JSON.stringify(list)} tab ${JSON.stringify(tab)}`)
   if (!compact) assert.ok(list.y + list.height > tab.y + tab.height - 40, `the list reaches the bottom of the tab: ${list.y + list.height} vs ${tab.y + tab.height}`)
-  assert.match(await painted(), /0 of 65 viewed/)
+  assert.match(await painted(), /65 files/)
   await shot('1-tree')
-  // Viewed: one box, then a Shift range.
-  await click('pr-viewed-0')
-  assert.match(await painted(), /1 of 65 viewed/)
-  const box = await a.getByTestId('pr-viewed-2').bounds()
-  await a.mouse.click({ x: box.x + box.width / 2, y: box.y + box.height / 2 }, { modifiers: 'shift' } as never)
-  await Bun.sleep(350)
-  assert.match(await painted(), /3 of 65 viewed/, 'Shift-click marks the range')
-  await shot('2-viewed')
   // Closing a folder hides its rows; the flat list shows every file.
   await click('pr-mode-list')
   await shot('3-list')
   await click('pr-mode-tree')
-  if (!compact) {
-    // A new push changes a viewed file's blob: it is unmarked and flagged.
-    fixture.bumpSha('.vitest/json/Cookie23.json')
-    fixture.bumpSha('.vitest/json/Ig7.md')
-    await click('pr-refresh-detail')
-    await Bun.sleep(1500)
-    const after = await painted()
-    assert.match(after, /1 of 65 viewed/, 'two files changed since viewed are unmarked')
-    assert.ok((after.match(/Changed/g) ?? []).length >= 2, 'and flagged')
-    await shot('4-changed')
-  }
   console.log(`PASS ${tag}`)
 } catch (error) {
   await shot('failure').catch(() => {})

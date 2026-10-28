@@ -1,4 +1,4 @@
-// Pure model of the Changes tab: the file tree, its flat alternative, and what "Viewed" means.
+// Pure model of the Changes tab: the file tree, its flat alternative, and the folders the reader closed.
 // No React and no native imports, so the unit tests run anywhere.
 
 /** What the file list needs of a changed file. `sha` is the file's blob id at the head (absent from older daemons). */
@@ -83,75 +83,24 @@ export function filterFiles(files: readonly FileMeta[], query: string): FileMeta
 /** The files in the order the rows show them, so Up and Down move through the list as it reads. */
 export const visibleFiles = (rows: readonly Row[]): FileMeta[] => rows.flatMap(r => (r.kind === 'file' ? [r.file] : []))
 
-// ---- Viewed ----
+// ---- Closed folders ----
 
-/**
- * What a file looked like when it was marked: its blob sha, or (daemon without shas) a weak stand-in from
- * its status and line counts. The two kinds are never compared, so a daemon update cannot unmark anything.
- */
-export function signature(file: Pick<FileMeta, 'sha' | 'status' | 'additions' | 'deletions'>): string {
-  return file.sha ? `b:${file.sha}` : `s:${file.status}:${file.additions}:${file.deletions}`
-}
-
-export type ViewedState = 'viewed' | 'changed' | 'none'
-
-/** Per pull request: viewed files by path with the signature they were marked at, and the folders the reader closed. */
-export interface PrViewed { at: number; files: Record<string, string>; closed: string[] }
-export type ViewedStore = Record<string, PrViewed>
+/** Per pull request: the folders the reader closed. */
+export interface PrFolders { at: number; closed: string[] }
+export type FolderStore = Record<string, PrFolders>
 
 export const MAX_PRS = 200
-export const MAX_PATHS = 3000
 
 export const prKey = (projectId: string, number: number, repo?: string) => `${projectId}${repo ? `/${repo}` : ''}#${number}`
 
-export function viewedState(entry: PrViewed | undefined, file: FileMeta): ViewedState {
-  const saved = entry?.files[file.path]
-  if (saved === undefined) return 'none'
-  const now = signature(file)
-  if (saved === now || saved[0] !== now[0]) return 'viewed'
-  return 'changed'
-}
-
-export function viewedCount(entry: PrViewed | undefined, files: readonly FileMeta[]): number {
-  let n = 0
-  for (const f of files) if (viewedState(entry, f) === 'viewed') n++
-  return n
-}
-
 /** Keep the newest `max` pull requests. */
-export function prune(store: ViewedStore, max = MAX_PRS): ViewedStore {
+export function prune(store: FolderStore, max = MAX_PRS): FolderStore {
   const keys = Object.keys(store)
   if (keys.length <= max) return store
   const keep = keys.sort((a, b) => (store[b]!.at - store[a]!.at)).slice(0, max)
   return Object.fromEntries(keep.map(k => [k, store[k]!]))
 }
 
-const empty = (now: number): PrViewed => ({ at: now, files: {}, closed: [] })
-
-/** Mark or unmark `files` for one pull request; returns a new store, touched and pruned. */
-export function setViewed(store: ViewedStore, key: string, files: readonly FileMeta[], on: boolean, now = Date.now()): ViewedStore {
-  const entry = store[key] ?? empty(now)
-  const next = { ...entry.files }
-  for (const f of files) {
-    if (on) next[f.path] = signature(f)
-    else delete next[f.path]
-  }
-  if (Object.keys(next).length > MAX_PATHS) return store
-  return prune({ ...store, [key]: { ...entry, at: now, files: next } })
+export function setClosed(store: FolderStore, key: string, closed: readonly string[], now = Date.now()): FolderStore {
+  return prune({ ...store, [key]: { at: now, closed: closed.slice(0, 500) } })
 }
-
-export function setClosed(store: ViewedStore, key: string, closed: readonly string[], now = Date.now()): ViewedStore {
-  const entry = store[key] ?? empty(now)
-  return prune({ ...store, [key]: { ...entry, at: now, closed: closed.slice(0, 500) } })
-}
-
-/** The files between two rows of the visible order, both ends included (Shift-click). */
-export function rangeBetween(order: readonly FileMeta[], a: string, b: string): FileMeta[] {
-  const i = order.findIndex(f => f.path === a)
-  const j = order.findIndex(f => f.path === b)
-  if (i < 0 || j < 0) return j < 0 ? [] : [order[j]!]
-  return order.slice(Math.min(i, j), Math.max(i, j) + 1)
-}
-
-/** "11 of 20 viewed" with the number format the rest of the page uses. */
-export const viewedLabel = (viewed: number, total: number) => `${viewed.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} viewed`
