@@ -2,7 +2,7 @@ import { readClipboardText } from '../platform/os.ts'
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useGpuix, type PublicInstance, type EventPayload } from '@gpuix/react'
 import type { TerminalInfo, TerminalOutputNotification, TerminalExitedNotification, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
-import { getClient, useApp } from '../state.ts'
+import { localClient, threadClient, useApp } from '../state.ts'
 import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
 import { ContextMenu, Menu, MenuItem, MenuLabel, MenuSeparator } from '../nav/overlay.tsx'
 import { SidebarIconButton } from '../sidebar/rows.tsx'
@@ -67,21 +67,21 @@ export function TerminalPane({ threadId, width }: { threadId: string; width: num
   const current = tabs.find(tab => tab.id === selected) ?? tabs[tabs.length - 1]
   const cols = () => Math.max(20, fitTerminal(width, 0, CELL, ROW).cols)
   const refresh = async () => {
-    try { const result = await getClient()!.call('terminals.list', { thread_id: threadId }); if (alive.current) setTabs(result.terminals) }
+    try { const result = await threadClient(threadId)!.call('terminals.list', { thread_id: threadId }); if (alive.current) setTabs(result.terminals) }
     catch (e) { if (alive.current) setError(String(e)) }
   }
   const create = async (command?: string[], kind = 'shell') => {
     if (busy) return
     setBusy(true); setError(null)
     try {
-      const tab = await getClient()!.call('terminals.create', { thread_id: threadId, cols: cols(), rows: 24, ...(command ? { command } : {}) })
+      const tab = await threadClient(threadId)!.call('terminals.create', { thread_id: threadId, cols: cols(), rows: 24, ...(command ? { command } : {}) })
       kinds.current.set(tab.id, kind)
       if (alive.current) { setTabs(old => [...old.filter(t => t.id !== tab.id), tab]); select(tab.id) }
     } catch (e) { if (alive.current) setError(String(e)) } finally { if (alive.current) setBusy(false) }
   }
   const close = async (id: string) => {
     try {
-      await getClient()!.call('terminals.close', { terminal_id: id })
+      await threadClient(threadId)!.call('terminals.close', { terminal_id: id })
       const left = tabs.filter(t => t.id !== id)
       setTabs(left); if (selected === id) select(null)
       // The pane always shows a live terminal: closing the last tab opens a fresh shell.
@@ -92,13 +92,14 @@ export function TerminalPane({ threadId, width }: { threadId: string; width: num
     alive.current = true
     if (!connected) return
     let live = true
-    void getClient()!.call('terminals.list', { thread_id: threadId }).then(async result => {
+    const client = threadClient(threadId)!
+    void client.call('terminals.list', { thread_id: threadId }).then(async result => {
       if (!live) return
       setTabs(result.terminals)
       if (!result.terminals.length) await create()
     }).catch(e => { if (live) setError(String(e)) })
-    void getClient()!.call('providers.list', {}).then(result => { if (live) setProviders(result.providers) }).catch(() => {})
-    const off = getClient()!.onNotification('terminal.exited', () => void refresh())
+    void localClient()!.call('providers.list', {}).then(result => { if (live) setProviders(result.providers) }).catch(() => {})
+    const off = client.onNotification('terminal.exited', () => void refresh())
     return () => { live = false; alive.current = false; off() }
   }, [threadId, connected])
   // The tab switched to by the pointer fades in over 150 ms (opacity only: terminal text must not shift). The first tab, and a tab
@@ -135,7 +136,7 @@ export function TerminalPane({ threadId, width }: { threadId: string; width: num
     </div>
     <ErrorLine error={error} retry={() => void refresh()} />
     {current ? <div key={current.id} paintTransform={PATCHED_NATIVE && fadeFor.current === current.id ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: DURATION.quick, ease: [...EASE.out] as [number, number, number, number] } } : undefined} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0 }}>
-      <Screen info={current} width={width} onTitle={title => setTitles(old => old[current.id] === title ? old : { ...old, [current.id]: title })} onExit={() => void close(current.id)} />
+      <Screen info={current} threadId={threadId} width={width} onTitle={title => setTitles(old => old[current.id] === title ? old : { ...old, [current.id]: title })} onExit={() => void close(current.id)} />
     </div> : <Button style={{ alignSelf: 'flex-start', margin: 8 }} onClick={() => void create()}>Open terminal</Button>}
   </div>
 }
@@ -205,12 +206,12 @@ const TerminalLine = memo(function TerminalLine({ line, model, palette, surface,
 })
 
 /** Also embedded by the Add account sheet's sign-in terminal, which keeps its tab when the program ends. */
-export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; width: number; onTitle?: (title: string) => void; onExit?: () => void }) {
+export function Screen({ info, threadId, width, onTitle, onExit }: { info: TerminalInfo; threadId?: string; width: number; onTitle?: (title: string) => void; onExit?: () => void }) {
   const t = useTheme()
   const palette = terminalPalette(t.variant)
   const { renderer } = useGpuix()
   const host = useRef<PublicInstance | null>(null), list = useRef<PublicInstance | null>(null)
-  const model = useMemo(() => new VT(info.cols, info.rows, 5000, 1_000_000, response => { void getClient()?.call('terminals.input', { terminal_id: info.id, data: Buffer.from(response).toString('base64') }).catch(() => {}) }), [info.id])
+  const model = useMemo(() => new VT(info.cols, info.rows, 5000, 1_000_000, response => { void threadClient(threadId)?.call('terminals.input', { terminal_id: info.id, data: Buffer.from(response).toString('base64') }).catch(() => {}) }), [info.id])
   model.colors = terminalColors(t.variant, t.surface)
   model.blinkOption = true // the desktop terminal sets `cursorBlink: true`
   const [version, update] = useState(0)
@@ -258,19 +259,19 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
     }
     setMatch(-1)
   }
-  const send = (text: string, encoding: 'utf8' | 'latin1' = 'utf8') => { if (text) void getClient()!.call('terminals.input', { terminal_id: info.id, data: Buffer.from(text, encoding).toString('base64') }).catch(e => setError(String(e))) }
+  const send = (text: string, encoding: 'utf8' | 'latin1' = 'utf8') => { if (text) void threadClient(threadId)!.call('terminals.input', { terminal_id: info.id, data: Buffer.from(text, encoding).toString('base64') }).catch(e => setError(String(e))) }
   const fit = () => {
     const bounds = host.current && renderer?.getElementBounds?.(host.current.id)
     if (!bounds) return
     const { cols, rows } = fitTerminal(bounds.width, bounds.height, CELL, ROW)
     if (cols === model.cols && rows === model.rows) return
     model.resize(cols, rows); update(v => v + 1)
-    void getClient()!.call('terminals.resize', { terminal_id: info.id, cols: model.cols, rows: model.rows }).catch(e => setError(String(e)))
+    void threadClient(threadId)!.call('terminals.resize', { terminal_id: info.id, cols: model.cols, rows: model.rows }).catch(e => setError(String(e)))
   }
   useEffect(() => {
     let live = true, timer: ReturnType<typeof setTimeout> | undefined, syncGuard: ReturnType<typeof setTimeout> | undefined, closing: ReturnType<typeof setTimeout> | undefined
     const decoder = new Utf8ToUtf32()
-    const client = getClient()!
+    const client = threadClient(threadId)!
     model.titleChanged = title => { const short = shortTitle(title); if (short) titleRef.current?.(short) }
     const changed = () => {
       // Synchronized output (DECSET 2026) holds the picture until the program finishes its update, for at most a second.
