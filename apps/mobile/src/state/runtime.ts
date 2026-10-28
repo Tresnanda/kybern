@@ -11,6 +11,10 @@ import * as SecureStore from "expo-secure-store";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { AppState, Platform } from "react-native";
 import { createNativeSocket } from "./nativeSocket";
+import { MachineHub } from "../machines/hub";
+import { MERGED_LISTS_ENABLED } from "../machines/flag";
+import { recordsFromComputers } from "../machines/records";
+import type { MachineId } from "./protocol";
 import { setDraft } from "./draft";
 import { applyIndexEvent } from "./indexProjection";
 import { ThreadCache } from "./threadCache";
@@ -245,10 +249,52 @@ export function useThreadValue<T>(
   }, [id, state.status]);
   return snapshot;
 }
+// ---- the machine set (design §5.3): a hub around the one connection above ----
+
+let hub: MachineHub | undefined;
+/**
+ * The phone's machine hub, made on first use from the saved computers. The
+ * active connection is its primary machine; the other saved computers are
+ * records only until merged lists are enabled (`machines/flag.ts`).
+ */
+export function machineHub(): MachineHub {
+  hub ??= new MachineHub({
+    records: () => recordsFromComputers(state.environments),
+    readCredential: (id) => state.environments.find((e) => e.id === id)?.token,
+    mergedLists: () => MERGED_LISTS_ENABLED,
+    socket: Platform.OS === "web" ? undefined : createNativeSocket,
+  });
+  return hub;
+}
+/** Tests: forget the hub so the next use builds a fresh one. */
+export function resetMachineHub() {
+  hub?.dispose();
+  hub = undefined;
+}
+/** The merged projects and threads of every machine. Nothing renders from it until N7 part 2. */
+export function useMachineView() {
+  const h = machineHub();
+  return useSyncExternalStore(h.subscribe.bind(h), () => h.view());
+}
+
+/**
+ * Call the daemon of the computer the user is at, or, with `machineId`, the
+ * machine that owns the thread or project.
+ * TODO(N7 part 2): default to `machineHub().machineOfThread(threadId)` for
+ * thread-scoped methods so callers stop passing the id themselves.
+ */
 export function rpc<M extends MethodName>(
   method: M,
   params: ParamsOf<M>,
+  machineId?: MachineId,
 ): Promise<ResultOf<M>> {
+  if (machineId && hub && machineId !== hub.primaryMachineId) {
+    try {
+      return hub.clientFor(machineId).call(method, params);
+    } catch (e) {
+      return Promise.reject(e);
+    }
+  }
   if (!client)
     return Promise.reject(new Error("Connect to your computer to continue."));
   return client.call(method, params);
@@ -375,6 +421,7 @@ async function saveEnvironment(environment: Environment) {
   ];
   await persist(environments);
   publish({ environments });
+  void hub?.syncRecords().catch(() => {});
 }
 export async function pairEnvironment(
   url: string,
@@ -433,6 +480,7 @@ export async function removeEnvironment(id: string) {
   await persist(environments, active);
   publish({ environments });
   if (state.activeId === id) connect(active);
+  void hub?.syncRecords().catch(() => {});
 }
 export function connect(id: string | null) {
   generation++;
@@ -445,6 +493,7 @@ export function connect(id: string | null) {
   indexEvents = null;
   refreshPromise = null;
   providerRefreshPromise = null;
+  hub?.releasePrimary();
   client?.close();
   client = null;
   snapshots.cancelReplay();
@@ -480,6 +529,7 @@ export function connect(id: string | null) {
     createSocket: Platform.OS === "web" ? undefined : createNativeSocket,
   });
   client = next;
+  machineHub().beginPrimary(next, { id: env.id, name: env.name });
   attachNotes(next, () => generation === thisGeneration);
   attachTasks(next, () => generation === thisGeneration);
   attachRequestProgress(next, () => generation === thisGeneration);
@@ -496,6 +546,8 @@ export function connect(id: string | null) {
   next.onStatus((status, detail) => {
     if (generation !== thisGeneration) return;
     publish({ status, error: status === "open" ? null : (detail ?? null) });
+    // The daemon answered: the computer joins the machine set under its machine id.
+    if (status === "open") void hub?.primaryOpened(next).catch(() => {});
     if (status !== "open") {
       subscriptionReady = false;
       // Only a completed replay may validate a snapshot after a disconnect.
@@ -644,6 +696,8 @@ export async function refresh() {
       };
       for (const event of events) next = applyIndexEvent(next, event);
       publish(next);
+      // The set merges these lists with other machines' (a no-op while merged lists are off).
+      if (client) hub?.ingestPrimary(client, projects.projects, threads.threads);
     }
   })().finally(() => {
     if (epoch === generation) {
@@ -757,8 +811,10 @@ export async function loadEarlier(id: string) {
 export async function mutate<M extends MethodName>(
   method: M,
   params: ParamsOf<M>,
+  machineId?: MachineId,
 ) {
-  const result = await rpc(method, params);
+  const result = await rpc(method, params, machineId);
+  // TODO(N7 part 2): refresh the machine that was written to, not only the active one.
   await refresh();
   return result;
 }
