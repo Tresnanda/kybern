@@ -1,32 +1,114 @@
 // The app's machine hub and the lookups the rest of GPUIX uses. The hub is made
-// on first use from the saved environments; state.ts feeds it the primary
-// connection (see hub.ts).
-import { useSyncExternalStore } from 'react'
+// on first use from the saved machines (`machines.json`, migrated once from
+// `environments.json`); state.ts feeds it the primary connection (see hub.ts).
+import { useMemo, useSyncExternalStore } from 'react'
 import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
-import type { MergedView } from '../../../../packages/kybern-client/src/machines.ts'
-import { localProfile, readRegistry } from '../environments/registry.ts'
-import { readCredential } from '../environments/credentials.ts'
+import { MachineCache } from '../../../../packages/kybern-client/src/machineCache.ts'
+import { machineGlyph, showMachineGlyph, type MachineGlyph } from '../../../../packages/kybern-client/src/machineMerge.ts'
+import type { MachineConnectionStatus, MergedView } from '../../../../packages/kybern-client/src/machines.ts'
+import { configDir, localProfile, readRegistry } from '../environments/registry.ts'
+import { readCredential, removeCredential, writeCredential } from '../environments/credentials.ts'
+import { ensureSshTunnel } from '../environments/ssh.ts'
 import { MachineHub } from './hub.ts'
-import { recordsFromRegistry } from './records.ts'
+import { fileCacheStorage, machineCredentials, migrateEnvironments, writeMachineRecords, type GpuixMachineRecord } from './store.ts'
 
 let hub: MachineHub | undefined
 export function machineHub(): MachineHub {
-  hub ??= new MachineHub({
-    records: () => {
-      try { return recordsFromRegistry(readRegistry(), localProfile) } catch { return recordsFromRegistry({ selected_id: 'local', environments: [] }, localProfile) }
+  if (hub) return hub
+  const dir = configDir()
+  // Read once, when the set loads: `machines.json`, made from `environments.json` the first time.
+  const loaded = () => migrateEnvironments({
+    dir,
+    registry: () => { try { return readRegistry() } catch { return null } },
+    local: localProfile,
+    read: readCredential, write: writeCredential, remove: removeCredential,
+  }).then((result) => result.records)
+  const current = new MachineHub({
+    records: loaded,
+    save: (records) => writeMachineRecords(dir, records),
+    credentials: machineCredentials({
+      read: readCredential, write: writeCredential, remove: removeCredential,
+      legacyProfileOf: (machineId) => current.set.connection(machineId)?.record.legacyProfileId,
+    }),
+    cache: new MachineCache(fileCacheStorage(dir)),
+    // A saved SSH machine is reached through a tunnel the app keeps open.
+    prepare: async (record) => {
+      const ssh = (record as GpuixMachineRecord).ssh
+      if (!ssh || !record.legacyProfileId) return
+      const port = await ensureSshTunnel(record.legacyProfileId, ssh)
+      const route = record.routes.find((item) => item.kind === 'ssh')
+      if (route) route.url = `http://127.0.0.1:${port}`
     },
+    forgetProfile: (profileId) => removeCredential(profileId),
     readCredential,
   })
-  return hub
+  hub = current
+  return current
 }
 /** Tests: forget the hub so the next use builds a fresh one. */
 export function resetMachineHub() { hub?.dispose(); hub = undefined }
 
-/** The merged projects and threads of every machine. Nothing renders from it until N6 step 3. */
+/** The merged projects and threads of every machine. */
 export function useMachineView(): MergedView {
   const h = machineHub()
   return useSyncExternalStore(h.subscribe.bind(h), () => h.view())
 }
+
+/** A machine as the sidebar and Settings show it. */
+export interface MachineRow {
+  machineId: string
+  name: string
+  status: MachineConnectionStatus
+  /** Not reachable now (offline, paused or unpaired): its threads are cached copies. */
+  offline: boolean
+  isLocal: boolean
+  lastSeenAt?: number
+  glyph: MachineGlyph
+  /** Show the glyph on this machine's threads. */
+  showGlyph: boolean
+  member: boolean
+  paused: boolean
+  os?: string
+  relayVia?: string
+  version?: string
+  error?: string
+}
+const LIVE = new Set<MachineConnectionStatus>(['online', 'relaying', 'needs-update'])
+
+export function machineRows(h: MachineHub): MachineRow[] {
+  const connections = h.connections()
+  const count = connections.length
+  const local = h.localMachineId
+  return connections.map((connection) => {
+    const { machineId, name } = connection.record
+    return {
+      machineId, name,
+      status: connection.status,
+      offline: !LIVE.has(connection.status),
+      isLocal: machineId === local,
+      ...(connection.lastSeenAt !== undefined ? { lastSeenAt: connection.lastSeenAt } : {}),
+      glyph: machineGlyph({ machineId, name }),
+      showGlyph: showMachineGlyph({ machineCount: count, machineId, ...(local ? { localMachineId: local } : {}) }),
+      member: connection.record.member,
+      paused: !!connection.record.paused,
+      ...(connection.record.os ? { os: connection.record.os } : {}),
+      ...(connection.relayVia ? { relayVia: connection.relayVia } : {}),
+      ...(connection.info?.version ? { version: connection.info.version } : {}),
+      ...(connection.error ? { error: connection.error.message } : {}),
+    }
+  })
+}
+
+/**
+ * The machines, without the lists. Cheap: it only reads machines and statuses, so with one machine
+ * nothing but the status dot ever re-renders (the merged lists are not kept for it).
+ */
+export function useMachines(): MachineRow[] {
+  const h = machineHub()
+  const version = useSyncExternalStore(h.onMachinesChanged.bind(h), () => h.set.version)
+  return useMemo(() => machineRows(h), [h, version])
+}
+
 export const clientFor = (machineId: string): KybernClient => machineHub().clientFor(machineId)
 export const clientForThread = (threadId: string, machineId?: string): KybernClient => machineHub().clientForThread(threadId, machineId)
 export const clientForProject = (projectId: string, machineId?: string): KybernClient => machineHub().clientForProject(projectId, machineId)

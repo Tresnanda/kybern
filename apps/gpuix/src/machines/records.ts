@@ -2,11 +2,8 @@
 // environments.json"). Each profile becomes a record that remembers its profile
 // id in `legacyProfileId`.
 //
-// TODO(N6 step 5): persist the records, move the device tokens to the credential
-// store under `machine:<machine_id>`, turn SSH profiles into SSH routes for
-// good, and rename `environments.json` to `environments.json.migrated`. Until
-// then the records are derived from the registry on every start and nothing is
-// written.
+// `store.ts` persists the records (`machines.json`) and migrates the old file;
+// this module only turns a profile into a record.
 import type { MachineRecord } from '../../../../packages/kybern-client/src/machines.ts'
 import type { Route } from '../../../../packages/kybern-client/src/types.ts'
 import type { EnvironmentProfile, Registry } from '../environments/registry.ts'

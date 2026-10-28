@@ -7,16 +7,14 @@
 //   has answered and its machine id is known, as a connection the set adopts but
 //   does not own, so its socket, status details and reconnects stay exactly as
 //   they were and the set never reads lists the app already has.
-// - Saved environments are loaded as machine records (`records.ts`) but are NOT
-//   connected: with one environment in use the app opens the same single socket
-//   it always did.
+// - Saved machines are loaded as records (`store.ts`). With one machine the app
+//   opens the same single socket it always did and nothing else is dialed.
 // - Other machines (connected by the set itself) are read by the set and their
-//   lists merged with the primary's. Nothing in the UI reads the merged view yet.
+//   lists merged with the primary's: `state.ts` shows the merged view.
 //
-// TODO(N6 steps 3-5): thread-scoped code asks `clientForThread`/`clientForProject`
-// instead of `getClient()`, the sidebar reads `useMachineView()`, the set calls
-// `ensureAll()` and opens the primary socket itself (the adopted connection goes
-// away), and the environment switch and per-environment windows go away.
+// The set connects the other machines itself (`connectOthers`: saved machines
+// and the rest of the network, learned from the primary when the daemon is a
+// member). The app keeps opening its own socket to the machine the user is at.
 import { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 import { normalizeDaemonUrl } from '../../../../packages/kybern-client/src/address.ts'
 import { MachineCache } from '../../../../packages/kybern-client/src/machineCache.ts'
@@ -32,7 +30,7 @@ import {
   type MachineTransport,
   type MergedView,
 } from '../../../../packages/kybern-client/src/machines.ts'
-import type { MachineId, Project, Thread, ThreadActivitySummary } from '../../../../packages/kybern-client/src/types.ts'
+import { NETWORK_FEATURES, type MachineId, type Project, type Thread, type ThreadActivitySummary } from '../../../../packages/kybern-client/src/types.ts'
 import { verifyMachineProof } from './proof.ts'
 import { createGpuixSocket } from './socket.ts'
 import { isLegacyMachineId } from './records.ts'
@@ -41,9 +39,19 @@ export interface PrimaryProfile { id: string; name: string }
 
 export interface MachineHubOptions {
   /** The saved machines, as records. Read once, when the set loads. */
-  records: () => MachineRecord[]
-  /** A saved environment's device token, by profile id. */
+  records: () => MachineRecord[] | Promise<MachineRecord[]>
+  /** Where the set saves its records (default: nowhere). */
+  save?: (records: MachineRecord[]) => void | Promise<void>
+  /** A saved environment's device token, by profile id (`records.ts` stand-ins). */
   readCredential?: (profileId: string) => Promise<string>
+  /** The set's credential store (default: reads `readCredential` by the record's profile id, writes nothing). */
+  credentials?: CredentialStore
+  /** The offline cache (default: in memory). */
+  cache?: MachineCache
+  /** Before any machine is dialed: a tunnel for a saved SSH machine, say. Failures never stop the others. */
+  prepare?: (record: MachineRecord) => void | Promise<void>
+  /** A saved profile's token was replaced by `machine:<id>`: drop the old one. */
+  forgetProfile?: (profileId: string) => void | Promise<void>
   /** This device's id for `network.client_grant`. */
   deviceId?: string
   /** Replaces the sockets of non-primary machines (tests). */
@@ -79,23 +87,28 @@ export class MachineHub {
   private readonly watched = new Set<MachineId>()
   private readonly refreshes = new Map<MachineId, boolean>()
   private readonly listeners = new Set<() => void>()
+  /** Told when the machines or their status change (not when lists do); watching is free. */
+  private readonly machineListeners = new Set<() => void>()
   private flushTimer: unknown
   private disposed = false
 
   constructor(options: MachineHubOptions) {
     this.options = options
     const store: MachineStore = {
-      load: () => options.records(),
-      // TODO(N6 step 5): persist `machines.json` and migrate `environments.json`.
-      save: () => {},
+      load: async () => {
+        const records = await options.records()
+        // A machine the app dials needs its tunnel first (a saved SSH machine).
+        if (options.prepare) await Promise.all(records.map((record) => Promise.resolve(options.prepare!(record)).catch(() => {})))
+        return records
+      },
+      save: (records) => options.save?.(records),
     }
     this.set = new MachineSet({
       store,
-      credentials: this.credentials(),
+      credentials: options.credentials ?? this.credentials(),
       deviceId: options.deviceId ?? 'gpuix-desktop',
       verifyProof: verifyMachineProof,
-      // TODO(N6 step 4): a MachineCache over a file in the client config dir, for "Offline · last seen".
-      cache: new MachineCache(),
+      cache: options.cache ?? new MachineCache(),
       socket: createGpuixSocket,
       transport: { ...options.transport, createClient: (args) => this.createClient(args) },
       ...(options.clock ? { clock: options.clock } : {}),
@@ -129,13 +142,17 @@ export class MachineHub {
       if (record.legacyProfileId !== primary.profile.id || record.machineId === machineId || !isLegacyMachineId(record.machineId)) continue
       if (this.set.connection(machineId)) await this.set.removeMachine(record.machineId)
       else await this.set.rekeyMachine(record.machineId, machineId)
+      await this.forgetProfile(record.legacyProfileId)
     }
+    if (this.primary?.client !== client || this.disposed) return
+    // A daemon with the network on is a member: the set learns the other machines from it.
+    const member = await this.isMember(client)
     if (this.primary?.client !== client || this.disposed) return
     // The set never dials this machine and never reads its lists: the app's socket is the connection and `ingestPrimary` hands over the lists.
     await this.set.adoptConnection({
       machineId,
       name: primary.profile.name,
-      member: false,
+      member,
       paused: false,
       legacyProfileId: primary.profile.id,
     }, client, { autoRefresh: false })
@@ -146,6 +163,47 @@ export class MachineHub {
     this.set.setLocalMachine(machineId)
     this.watchOthers()
     this.scheduleFlush()
+    // The rest of the network and the saved machines, in the background: the app already works.
+    void this.connectOthers().catch(() => {})
+  }
+
+  /** Connect every machine but the primary and read their lists (idempotent while the set is loaded). */
+  async connectOthers(): Promise<void> {
+    if (this.disposed) return
+    await this.set.ensureAll()
+    this.watchOthers()
+    await this.rekeyLegacy()
+  }
+
+  /** Does the daemon at `client` belong to a machine network (so it can name the other machines)? */
+  private async isMember(client: KybernClient): Promise<boolean> {
+    if (client.info?.features && !client.info.features.includes(NETWORK_FEATURES.network)) return false
+    try {
+      const status = await client.call('network.status', {})
+      return !!status.enabled
+    } catch {
+      return false
+    }
+  }
+
+  private async forgetProfile(profileId: string | undefined) {
+    // The local daemon has no saved token: its credentials are the data folder's files.
+    if (!profileId || profileId === 'local' || !this.options.forgetProfile) return
+    try { await this.options.forgetProfile(profileId) } catch { /* the token is unused once the record moved */ }
+  }
+
+  /** A saved machine that answered: its stand-in id becomes the daemon's. */
+  private async rekeyLegacy(): Promise<void> {
+    for (const connection of this.set.connections()) {
+      const record = connection.record
+      const id = connection.info?.machine_id || connection.info?.environment_id
+      if (!isLegacyMachineId(record.machineId) || !id || id === record.machineId) continue
+      try {
+        if (this.set.connection(id)) await this.set.removeMachine(record.machineId)
+        else await this.set.rekeyMachine(record.machineId, id)
+        await this.forgetProfile(record.legacyProfileId)
+      } catch { /* retried when it answers again */ }
+    }
   }
 
   /** The primary client was closed (an environment switch, a reconnect from scratch). */
@@ -189,6 +247,12 @@ export class MachineHub {
 
   connections(): readonly MachineConnection[] { return this.set.connections() }
 
+  /** Machines and statuses only. Unlike `subscribe` it never makes the hub keep the merged lists. */
+  onMachinesChanged(listener: () => void): () => void {
+    this.machineListeners.add(listener)
+    return () => { this.machineListeners.delete(listener) }
+  }
+
   /** A machine's client (throws `OfflineError` while it cannot be reached). */
   clientFor(machineId: MachineId): KybernClient {
     return this.set.clientFor(machineId)
@@ -217,6 +281,7 @@ export class MachineHub {
     this.cancelFlush()
     this.set.dispose()
     this.listeners.clear()
+    this.machineListeners.clear()
   }
 
   // ---- internals ----
@@ -255,6 +320,8 @@ export class MachineHub {
     if (event.type === 'records' || event.type === 'status') {
       this.watchOthers()
       this.scheduleFlush()
+      if (event.type === 'status') void this.rekeyLegacy().catch(() => {})
+      for (const listener of [...this.machineListeners]) listener()
     }
     for (const listener of [...this.listeners]) listener()
   }

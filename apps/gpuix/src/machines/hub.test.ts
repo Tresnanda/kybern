@@ -144,12 +144,41 @@ test('the primary joining or leaving never closes or reconnects the app’s own 
   expect(again.closed).toBe(0)
 })
 
-test('a saved environment is listed but never connected while the app uses one', async () => {
+test('a saved machine connects once the app’s own connection is up, and takes the daemon’s id when it answers', async () => {
   const created: string[] = []
-  const { hub } = makeHub([saved('vps', { environment_id: 'vps-1' })], { transport: { createClient: ({ record }) => { created.push(record.machineId); return new FakeDaemon(record.machineId) as never } } })
+  const vps = new FakeDaemon('vps-1', { 'projects.list': () => ({ projects: [] }), 'threads.list': () => ({ threads: [] }) })
+  const dropped: string[] = []
+  const { hub } = makeHub([saved('vps')], { forgetProfile: id => { dropped.push(id) }, transport: { createClient: ({ record }) => { created.push(record.machineId); return vps as never } } })
   await openPrimary(hub, new FakeDaemon('mac-1'))
-  expect(hub.connections().map(c => [c.record.machineId, c.status])).toEqual([['mac-1', 'needs-update'], ['vps-1', 'offline']])
-  expect(created).toEqual([])
+  await hub.connectOthers()
+  await settle()
+  expect(created).toEqual([`${LEGACY_PREFIX}vps`])
+  expect(hub.connections().map(c => [c.record.machineId, c.status])).toEqual([['mac-1', 'needs-update'], ['vps-1', 'needs-update']])
+  expect(hub.connections()[1]!.record.legacyProfileId).toBe('vps')
+  expect(dropped).toEqual(['vps'])
+})
+
+test('a daemon with the network on is a member and teaches the set the rest of the network', async () => {
+  const card = (id: string, name: string) => ({ machine_id: id, name, os: 'linux', status: 'online' })
+  const mac = new FakeDaemon('mac-1', {
+    'network.status': () => ({ enabled: true, self_machine: card('mac-1', 'Mac'), members: [card('mac-1', 'Mac'), card('vps-1', 'VPS')], found: [], outbox: {}, tailscale: {} }),
+    'network.routes': () => ({ routes: [{ kind: 'direct_tailnet', url: 'http://vps:4199' }] }),
+    'network.client_grant': () => ({ token: 'minted', scopes: [], routes: [] }),
+  }, ['network.v1'])
+  const created: string[] = []
+  const vps = new FakeDaemon('vps-1', { 'projects.list': () => ({ projects: [] }), 'threads.list': () => ({ threads: [] }) }, ['network.v1'])
+  const { hub } = makeHub([], { transport: { probe: async () => { throw new Error('no probe in this test') }, createClient: ({ record }) => { created.push(record.machineId); return vps as never } } })
+  await openPrimary(hub, mac)
+  expect(hub.set.connection('mac-1')?.record.member).toBe(true)
+  expect(hub.connections().map(c => c.record.machineId)).toContain('vps-1')
+  expect(mac.calls).toContain('network.status')
+})
+
+test('a daemon with the network off is not a member', async () => {
+  const mac = new FakeDaemon('mac-1', { 'network.status': () => ({ enabled: false, self_machine: {}, members: [], found: [], outbox: {}, tailscale: {} }) }, ['network.v1'])
+  const { hub } = makeHub()
+  await openPrimary(hub, mac)
+  expect(hub.set.connection('mac-1')?.record.member).toBe(false)
 })
 
 test('several machines: lists merge, rows carry their machine, and clients are routed by thread and project', async () => {
