@@ -47,6 +47,9 @@ pub struct Inner {
     pub previews: Arc<crate::previews::tickets::PreviewTickets>,
     /// Started by the desktop app, whose bundle owns this binary.
     pub desktop_managed: std::sync::atomic::AtomicBool,
+    /// This state belongs to a `kybernd` process (`run`), not to a test harness: the process may be
+    /// ended outright when a graceful shutdown that it asked for hangs.
+    pub process_owned: std::sync::atomic::AtomicBool,
     /// A newer binary is in place; hand over to it after the graceful shutdown.
     pub restart_pending: std::sync::atomic::AtomicBool,
     pub pairing: Pairing,
@@ -163,6 +166,7 @@ impl AppState {
                 session_imports: Default::default(),
                 previews,
                 desktop_managed: std::sync::atomic::AtomicBool::new(false),
+                process_owned: std::sync::atomic::AtomicBool::new(false),
                 restart_pending: std::sync::atomic::AtomicBool::new(false),
                 pairing: Pairing::default(),
                 tickets: crate::access::Tickets::default(),

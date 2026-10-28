@@ -163,8 +163,12 @@ pub async fn serve(
         return (StatusCode::BAD_REQUEST, "a Host header is required").into_response();
     };
     // Someone asking who we are may be a machine that has just started: look at the tailnet again soon.
-    if state.network.is_enabled() {
-        state.network.nudge_discovery();
+    if state.network.is_enabled()
+        && let Some(peer) = peer
+        && let Ok(whois) = state.network.tailscale.whois(peer.ip()).await
+    {
+        // A node of the tailnet asked: only that node is looked at again. A local caller is no news.
+        state.network.nudge_discovery(Some(&whois.node_id));
     }
     let keys = membership.keys();
     let body = answer(&state, &keys, &membership.machine_id(), nonce, host).await;

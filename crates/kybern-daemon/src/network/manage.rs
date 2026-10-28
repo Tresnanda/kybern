@@ -103,9 +103,18 @@ pub async fn rejoin(state: &AppState) -> Result<(), JoinError> {
             network.peers.close_all();
             network.notify_changed();
             let shutdown = state.shutdown.clone();
+            let process_owned = state.process_owned.load(std::sync::atomic::Ordering::SeqCst);
             tokio::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_millis(400)).await;
                 shutdown.cancel();
+                // A graceful shutdown waits for every open connection, and a peer's idle connection can
+                // hold it for minutes. The daemon must come back with its new identity, so a process
+                // that is still here after a few seconds ends; whatever supervises it restarts it.
+                if process_owned {
+                    tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+                    tracing::warn!(target: TARGET, "the daemon did not stop in time after a rejoin; exiting");
+                    std::process::exit(0);
+                }
             });
             Ok(())
         }

@@ -630,9 +630,26 @@ pub async fn auto_join(state: &AppState, status: &TsStatus) {
             Err(error) => {
                 tracing::debug!(target: DISCOVERY_TARGET, node = %node_id, %error, "could not join a machine automatically");
                 network.join.failed(&node_id, &network.timing);
+                // What answered earlier no longer does (it moved or restarted): look again next pass.
+                if matches!(error, JoinError::Identity(ProbeError::Unreachable(_))) {
+                    network.peers.replace_found(&node_id, None);
+                }
             }
         }
     }
+}
+
+/// What a found machine answers right now. The list is up to ten minutes old, and a machine can
+/// have moved to another port or rejoined with a new identity since (§2.6), so a click or an offer
+/// asks again first. A machine that no longer answers is dropped from the list.
+async fn refresh(state: &AppState, entry: FoundEntry) -> Option<FoundEntry> {
+    let node_id = entry.node.node_id.clone();
+    let fresh = super::peers::probe_node(state, entry.node.clone()).await;
+    state.network.peers.replace_found(&node_id, fresh.clone());
+    if fresh.is_none() {
+        state.network.notify_changed();
+    }
+    fresh
 }
 
 /// The identity check before an offer: the target answers a fresh nonce with the key it showed
@@ -666,6 +683,9 @@ pub async fn add_found(state: &AppState, found_id: &str) -> Result<kybern_protoc
         .into_iter()
         .find(|entry| entry.node.node_id == found_id)
         .ok_or_else(|| JoinError::NotFound("that machine is no longer on your tailnet".into()))?;
+    let entry = refresh(state, entry)
+        .await
+        .ok_or_else(|| JoinError::NotFound("that machine no longer answers; check that Kybern is running on it".into()))?;
     let me = Me::read(network).await.ok_or_else(|| JoinError::Unavailable("Tailscale is not running on this machine.".into()))?;
     let projection = membership.projection();
     let plan = classify(&me, &projection, &entry);
@@ -821,6 +841,9 @@ pub async fn merge(state: &AppState, found_id: &str) -> Result<(), JoinError> {
         .into_iter()
         .find(|entry| entry.node.node_id == found_id)
         .ok_or_else(|| JoinError::NotFound("that machine is no longer on your tailnet".into()))?;
+    let entry = refresh(state, entry)
+        .await
+        .ok_or_else(|| JoinError::NotFound("that machine no longer answers; check that Kybern is running on it".into()))?;
     let me = Me::read(network).await.ok_or_else(|| JoinError::Unavailable("Tailscale is not running on this machine.".into()))?;
     if classify(&me, &membership.projection(), &entry) != Plan::Merge {
         return Err(JoinError::Invalid("That machine is not in another of your networks.".into()));

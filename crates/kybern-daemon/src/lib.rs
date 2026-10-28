@@ -185,6 +185,7 @@ async fn serve() -> Result<()> {
         write_startup_announcement(&paths, startup_id, addr.port())?;
     }
     state.desktop_managed.store(args.desktop_startup_id.is_some(), std::sync::atomic::Ordering::SeqCst);
+    state.process_owned.store(true, std::sync::atomic::Ordering::SeqCst);
 
     // Recovery may need to close interrupted turns and capture final snapshots.
     // Keep the port reserved while it runs, but do not serve requests or publish

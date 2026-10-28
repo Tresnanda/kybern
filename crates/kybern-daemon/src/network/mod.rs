@@ -303,7 +303,8 @@ impl Network {
     /// Someone on the tailnet asked this machine who it is. If it is a Kybern machine that has just
     /// started, it wants to be found: look at the tailnet again now, at most every few seconds. This
     /// is how a machine that starts after its smaller-id peer gets noticed without waiting a tick.
-    pub fn nudge_discovery(&self) {
+    /// `node_id` is the caller's tailnet node when known: only that node is probed again.
+    pub fn nudge_discovery(&self, node_id: Option<&str>) {
         let every = Duration::from_secs(10).min(self.timing.tick_watching);
         let mut last = self.lock(&self.nudged);
         if last.is_some_and(|at| at.elapsed() < every) {
@@ -311,7 +312,7 @@ impl Network {
         }
         *last = Some(Instant::now());
         drop(last);
-        self.peers.forget_probes();
+        self.peers.forget_probes(node_id);
         self.wake();
     }
 

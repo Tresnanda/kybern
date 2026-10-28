@@ -73,8 +73,9 @@ pub enum MachinesCmd {
     Rejoin,
 }
 
+/// The part of an id that tells machines apart: ids are UUIDv7, whose first characters are a clock.
 fn short(id: &str) -> &str {
-    id.get(..8).unwrap_or(id)
+    id.get(id.len().saturating_sub(8)..).unwrap_or(id)
 }
 
 fn status_word(card: &MachineCard) -> &'static str {
@@ -97,7 +98,8 @@ pub fn resolve_machine<'a>(members: &'a [MachineCard], key: &str) -> Result<&'a 
     if let [only] = named.as_slice() {
         return Ok(only);
     }
-    let prefixed: Vec<&MachineCard> = members.iter().filter(|card| key.len() >= 4 && card.machine_id.starts_with(key)).collect();
+    let prefixed: Vec<&MachineCard> =
+        members.iter().filter(|card| key.len() >= 4 && (card.machine_id.starts_with(key) || card.machine_id.ends_with(key))).collect();
     match prefixed.as_slice() {
         [only] => Ok(only),
         [] if named.len() > 1 => Err(anyhow!("More than one machine is named \"{key}\". Use its id from kybern machines list.")),
@@ -395,6 +397,8 @@ mod tests {
         assert_eq!(resolve_machine(&members, "0192bbbb-2").unwrap().name, "satyamas");
         assert_eq!(resolve_machine(&members, "SATYAMAS").unwrap().machine_id, "0192bbbb-2");
         assert_eq!(resolve_machine(&members, "0192cccc").unwrap().machine_id, "0192cccc-3");
+        assert_eq!(resolve_machine(&members, "bbb-2").unwrap().machine_id, "0192bbbb-2", "the tail of an id works too");
+        assert_eq!(short("019a8c3e-1234-7abc-8def-0123456789ab"), "456789ab");
         assert!(resolve_machine(&members, "mac").unwrap_err().to_string().contains("More than one"));
         assert!(resolve_machine(&members, "nope").unwrap_err().to_string().contains("No machine named"));
         assert!(resolve_machine(&members, "019").is_err(), "a prefix needs four characters");

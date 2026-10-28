@@ -531,6 +531,17 @@ async fn rejoin_gives_a_removed_machine_a_new_identity_and_remembers_the_old_one
     assert!(super::previous_machine_ids(&b.state.store).unwrap().contains(&old));
     // Its node id is tombstoned, so nothing adds it by itself; a member's click does (§2.6).
     assert!(a.membership().projection().is_node_tombstoned("nb"));
+    let at_a = admin(&a).await;
+    eventually("a finds b again, with its new identity", WAIT, || {
+        a.state.network.peers.found().iter().any(|entry| entry.node.name() == "b" && entry.descriptor.machine_id == b.id())
+    })
+    .await;
+    assert_eq!(found_action(&at_a, "b").await, Some(FoundAction::Add));
+    let found_id = a.state.network.peers.found().iter().find(|entry| entry.node.name() == "b").unwrap().node.node_id.clone();
+    let added = at_a.call::<NetworkAdd>(NetworkFoundParams { found_id }).await.unwrap();
+    assert_eq!(added.machine.unwrap().machine_id, b.id());
+    assert_eq!(a.membership().projection().entry(&b.id()).unwrap().added_via, Some(JoinVia::Found));
+    assert!(a.membership().projection().is_removed(&old), "the old identity stays removed");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

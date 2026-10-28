@@ -360,9 +360,30 @@ impl Peers {
         self.lock().next_attempt.values().filter(|at| **at > now).map(|at| *at - now).min()
     }
 
-    /// Let the next discovery pass look at every node again, answered or not.
-    pub(super) fn forget_probes(&self) {
-        self.lock().probed.clear();
+    /// Keep a fresh answer for a node, or forget the node when it no longer answers: the next pass
+    /// looks at it again.
+    pub(super) fn replace_found(&self, node_id: &str, entry: Option<FoundEntry>) {
+        let mut inner = self.lock();
+        match entry {
+            Some(entry) => {
+                inner.found.insert(node_id.to_string(), entry);
+            }
+            None => {
+                inner.found.remove(node_id);
+                inner.probed.remove(node_id);
+            }
+        }
+    }
+
+    /// Let the next discovery pass look at one node again (or at every node, with `None`).
+    pub(super) fn forget_probes(&self, node_id: Option<&str>) {
+        let mut inner = self.lock();
+        match node_id {
+            Some(node_id) => {
+                inner.probed.remove(node_id);
+            }
+            None => inner.probed.clear(),
+        }
     }
 
     fn reset_backoff(&self) {
@@ -881,6 +902,18 @@ async fn discover(state: &AppState, status: &TsStatus) {
         // was removed is found again (a rejoined machine has a new key); only a click adds it (§2.6).
         let known: Vec<String> = projection.members().filter_map(|(_, entry)| entry.descriptor.ts_node_id.clone()).collect();
         inner.found.retain(|node_id, _| !known.contains(node_id) && status.peer(node_id).is_some_and(|peer| peer.online));
+        // What answered as a machine that was removed is stale: that node may have rejoined with a new
+        // identity (§2.6), so it is looked at again now.
+        let stale: Vec<String> = inner
+            .found
+            .iter()
+            .filter(|(_, entry)| projection.is_removed(&entry.descriptor.machine_id))
+            .map(|(node, _)| node.clone())
+            .collect();
+        for node in stale {
+            inner.found.remove(&node);
+            inner.probed.remove(&node);
+        }
         // A node that answered is not probed again for `ttl`; one that did not (Kybern may simply not be
         // running there yet) is looked at again on the next tick.
         let unanswered_ttl = ttl.min(network.timing.tick_watching);
@@ -922,19 +955,25 @@ async fn discover(state: &AppState, status: &TsStatus) {
     }
 }
 
-async fn probe_node(state: &AppState, node: TsNode) -> Option<FoundEntry> {
+pub(super) async fn probe_node(state: &AppState, node: TsNode) -> Option<FoundEntry> {
     let network = &state.network;
     let ip = node.ip()?;
     let dial_ip = network.tailscale.dial_target(ip);
-    let timeout = if dial_ip.is_loopback() { Duration::from_secs(3) } else { Duration::from_secs(10) };
-    for port in PORT_RANGE {
-        match well_known::probe(&network.http, &well_known::base_url(dial_ip, port), None, timeout, network.timing.clock_window).await {
-            Ok(descriptor) => {
-                let whois = network.tailscale.whois(ip).await.ok();
-                return Some(FoundEntry { node, whois, descriptor, port, probed_at: Instant::now() });
-            }
-            // Nothing there, or not Kybern: stop at the first answer, try the next port otherwise.
-            Err(_) => continue,
+    // A node that drops packets (a firewall, a phone asleep) costs one timeout, not one per port: the
+    // ports are tried together and the first answer wins.
+    let timeout = if dial_ip.is_loopback() { Duration::from_secs(3) } else { Duration::from_secs(6) };
+    let mut probes = futures::stream::iter(PORT_RANGE)
+        .map(|port| async move {
+            well_known::probe(&network.http, &well_known::base_url(dial_ip, port), None, timeout, network.timing.clock_window)
+                .await
+                .map(|descriptor| (port, descriptor))
+        })
+        .buffer_unordered(PORT_RANGE.count());
+    while let Some(result) = probes.next().await {
+        // Nothing there, or not Kybern: wait for the others.
+        if let Ok((port, descriptor)) = result {
+            let whois = network.tailscale.whois(ip).await.ok();
+            return Some(FoundEntry { node, whois, descriptor, port, probed_at: Instant::now() });
         }
     }
     None

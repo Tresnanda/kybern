@@ -369,7 +369,18 @@ async fn impostor(
     let seen = Arc::new(Mutex::new(Vec::new()));
     let me = Impostor { seen: seen.clone(), keys: Arc::new(MachineKeys::generate()), claims: claims.to_string(), claimed_key };
     let app = Router::new().fallback(any).with_state(me);
-    let listener = tokio::net::TcpListener::bind((ip, 4173)).await.unwrap();
+    // The previous impostor on this address may still be closing its socket.
+    let mut attempts = 0;
+    let listener = loop {
+        match tokio::net::TcpListener::bind((ip, 4173)).await {
+            Ok(listener) => break listener,
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse && attempts < 100 => {
+                attempts += 1;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            Err(error) => panic!("could not bind the impostor: {error}"),
+        }
+    };
     (seen, tokio::spawn(async move { axum::serve(listener, app).await.unwrap() }))
 }
 

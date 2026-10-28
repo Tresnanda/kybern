@@ -191,7 +191,8 @@ pub async fn routes(state: &AppState, machine_id: &str) -> Vec<Route> {
     let mut routes = Vec::new();
     if machine_id == me {
         for endpoint in crate::access::endpoints(state).await {
-            routes.push(Route { kind: kind_of(&endpoint), url: endpoint.trim_end_matches('/').to_string(), via: None });
+            let url = http_base(&endpoint);
+            routes.push(Route { kind: kind_of(&url), url, via: None });
         }
         return routes;
     }
@@ -202,7 +203,7 @@ pub async fn routes(state: &AppState, machine_id: &str) -> Vec<Route> {
     if network.peers.link(machine_id).is_some()
         && let Some(own) = crate::access::endpoints(state).await.into_iter().next()
     {
-        routes.push(Route { kind: RouteKind::Relay, url: format!("{}/relay/{machine_id}", own.trim_end_matches('/')), via: Some(me) });
+        routes.push(Route { kind: RouteKind::Relay, url: format!("{}/relay/{machine_id}", http_base(&own)), via: Some(me) });
     }
     routes
 }
@@ -210,6 +211,19 @@ pub async fn routes(state: &AppState, machine_id: &str) -> Vec<Route> {
 async fn tailnet_ip_of(network: &Network, node_id: Option<&str>) -> Option<IpAddr> {
     let status = network.tailscale.status().await.ok()?;
     status.peer(node_id?)?.ip()
+}
+
+/// A route's base URL: `http`/`https`, no trailing `/ws` (the client derives the socket address).
+fn http_base(endpoint: &str) -> String {
+    let url = endpoint.trim_end_matches('/');
+    let url = url.strip_suffix("/ws").unwrap_or(url);
+    if let Some(rest) = url.strip_prefix("wss://") {
+        format!("https://{rest}")
+    } else if let Some(rest) = url.strip_prefix("ws://") {
+        format!("http://{rest}")
+    } else {
+        url.to_string()
+    }
 }
 
 fn kind_of(endpoint: &str) -> RouteKind {
@@ -241,6 +255,13 @@ mod tests {
         assert_eq!(base_label("Phone"), "Phone");
         assert_eq!(base_label("  "), "paired device");
         assert_eq!(base_label("Notes (draft)"), "Notes (draft)");
+    }
+
+    #[test]
+    fn a_route_base_is_an_http_url_without_the_socket_path() {
+        assert_eq!(http_base("ws://100.64.0.2:4173/ws"), "http://100.64.0.2:4173");
+        assert_eq!(http_base("wss://mac.tail1234.ts.net/ws/"), "https://mac.tail1234.ts.net");
+        assert_eq!(http_base("http://100.64.0.2:4173/"), "http://100.64.0.2:4173");
     }
 
     #[test]

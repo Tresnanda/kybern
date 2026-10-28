@@ -281,7 +281,13 @@ pub async fn report(state: &AppState, only: Option<&str>) -> DoctorReport {
     if only.is_none()
         && let Some(status) = tailnet
     {
-        for node in status.peers.iter().filter(|node| node.online && projection.is_node_tombstoned(&node.node_id)) {
+        // A node that is a member again (a rejoined machine) is not a leftover.
+        let members: Vec<&str> = projection.members().filter_map(|(_, entry)| entry.descriptor.ts_node_id.as_deref()).collect();
+        for node in status
+            .peers
+            .iter()
+            .filter(|node| node.online && projection.is_node_tombstoned(&node.node_id) && !members.contains(&node.node_id.as_str()))
+        {
             checks.push(check(
                 "network.removed_nodes",
                 DoctorStatus::Warn,
