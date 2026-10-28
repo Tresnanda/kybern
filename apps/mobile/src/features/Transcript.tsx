@@ -5,6 +5,7 @@ import { memo, useCallback, useMemo, useState } from "react";
 import { Image, Share, StyleSheet, View } from "react-native";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import { GROUP_COPY, outsideChangeText } from "../../../../packages/kybern-client/src/groups";
+import { forkNotice, forkNoticeText } from "../../../../packages/kybern-client/src/forkMachine";
 import { coordinatorCardLine } from "../../../../packages/kybern-client/src/coordinatorCards";
 import { secretRequestInput } from "../../../../packages/kybern-client/src/secretRequest";
 import { agentResultItems, threadMessagePart } from "../../../../packages/kybern-client/src/delegations";
@@ -419,12 +420,23 @@ export const TranscriptBlock = memo(function TranscriptBlock({
         return <SettledApproval approval={block.approval} decision={block.decision} auto={block.auto} answeredBy={block.answeredBy} threadId={threadId} />;
       return <ApprovalPanel approval={block.approval} />;
     }
-    case "notice":
+    case "notice": {
+      // A fork notice ("Forked to satyamas") offers the new thread, on the machine that holds it.
+      const fork = block.data ? forkNotice(block.data) : null;
+      const open = fork?.threadId ?? null;
       return (
-        <T variant="footnote" tone={block.level === "error" ? "negative" : "secondary"}>
-          {block.text}
-        </T>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+          <T variant="footnote" tone={block.level === "error" ? "negative" : "secondary"} style={{ flexShrink: 1 }}>
+            {fork ? forkNoticeText(fork, block.text) : block.text}
+          </T>
+          {open ? (
+            <Tap label={`Open the thread on ${fork!.machineName}`} onPress={() => router.push({ pathname: "/thread/[id]", params: { id: open } })} style={{ minHeight: 36, justifyContent: "center" }}>
+              <T variant="footnote" tone="accent">Open</T>
+            </Tap>
+          ) : null}
+        </View>
       );
+    }
     case "runtime_task":
       return <TaskWorkRow task={block.task} />;
     case "turn_end":

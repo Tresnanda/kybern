@@ -217,7 +217,12 @@ export function TasksPage() {
   const [dockHeight, setDockHeight] = useState(150)
   const room = dockRoom(g.on, dockHeight)
   const foot = footVisible({ selected: selected.length, composer: !!s.composer, showHints: s.prefs.showHints })
-  const projectName = (task: { project_id?: string | null }) => projects.find((p) => p.id === task.project_id)?.name ?? 'Global'
+  // A task of another machine says which one ("satyamas · Global"): task keys count up per machine, so two can share one.
+  const projectName = (task: { id?: string; project_id?: string | null }) => {
+    const name = projects.find((p) => p.id === task.project_id)?.name ?? 'Global'
+    const owner = foreignOwner('tasks', task.id)
+    return owner ? `${owner.name} · ${name}` : name
+  }
   return (
     <div testId="page-tasks" style={{ position: 'relative', display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, width: '100%' }}>
       {task ? (

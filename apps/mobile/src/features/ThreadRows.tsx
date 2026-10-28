@@ -22,6 +22,7 @@ import { StatusGlyph } from "../ui/TaskGlyphs";
 import { radius, space, useTheme } from "../ui/theme";
 import { showToast } from "../ui/Toast";
 import { MachineGlyph } from "./MachineGlyph";
+import { originLabel } from "../../../../packages/kybern-client/src/forkMachine";
 import { threadMenuItems } from "./threadActions";
 
 const untitled = (thread: Thread) => thread.title.trim() || "Untitled thread";
@@ -157,6 +158,9 @@ function ThreadListRowView({
       <AgentMark thread={thread} unread={attention.unread} />
     );
     const parts = ctx.variant === "list" ? [ctx.projectName(thread.project_id), agent] : [agent];
+    // A thread another machine started by a fork or a delegation says where it came from.
+    const from = originLabel(thread);
+    if (from) parts.push(from);
     if (home?.offline) parts.push("Offline");
     if (word) parts.push(word);
     subtitle = parts.join(" · ");

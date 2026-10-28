@@ -122,6 +122,7 @@ function Inline({ text, checklist }: { text: string; checklist?: boolean }) {
                     pathname: "/file",
                     params: { threadId: fileContext.threadId, projectId: fileContext.projectId, path: target.path, scope: fileContext.scope ?? "thread", ...(target.line ? { line: String(target.line) } : {}) },
                   });
+                  else if (target.kind === "thread") router.push({ pathname: "/thread/[id]", params: { id: target.threadId } });
                   else if (target.kind !== "anchor") Alert.alert("Unable to open link", target.kind === "file" ? "Open this file from its conversation." : "This link cannot be opened.");
                 }}
                 style={{
