@@ -1,7 +1,7 @@
 // The "Mixed" marker beside a shared setting (design §9.1). When the machines that answered disagree about a field, a
 // small chip opens a popover with each machine's value and "Use <value> on all machines". A change that still waits for
 // an offline machine reads "Waiting for satyamas". Nothing shows with one machine, or for a field the machines agree on.
-import { describeSharedValue, fieldOf, machineValues, pendingMachineNames, silentReason, useOnAllLabel, useOnAllMachines, valueGroups } from '../../../../packages/kybern-client/src/sharedState.ts'
+import { describeSharedValue, fieldOf, machineValues, pendingMachineNames, silentDetail, useOnAllLabel, useOnAllMachines, valueGroups } from '../../../../packages/kybern-client/src/sharedState.ts'
 import { Menu, MenuItem, MenuLabel, MenuSeparator } from '../nav/overlay.tsx'
 import { errorText } from '../nav/actions.ts'
 import { toast } from '../shell/toasts.tsx'
@@ -36,7 +36,7 @@ export function SharedMark({ path }: { path: string }) {
       </div>}>
       <MenuLabel>On each machine</MenuLabel>
       {machineValues(view, path).map((entry) => <MenuItem key={entry.machine.id} id={`machine-${entry.machine.id}`} label={entry.machine.is_self ? `${entry.machine.name} (this computer)` : entry.machine.name}
-        detail={entry.known ? describeSharedValue(path, entry.value, LABELS) : (silentReason(entry.machine) ? 'No answer' : 'Not set')} disabled keepOpen onSelect={() => {}} />)}
+        detail={entry.known ? describeSharedValue(path, entry.value, LABELS) : (silentDetail(entry.machine) ?? 'Not set')} disabled keepOpen onSelect={() => {}} />)}
       <MenuSeparator />
       {valueGroups(view, path).map((group, index) => <MenuItem key={index} id={`use-${index}`} testId={`use-on-all-${path}-${index}`} label={useOnAllLabel(path, group.value, LABELS)} onSelect={() => void use(group.value)} />)}
     </Menu>}

@@ -10,6 +10,7 @@ import {
   machineValues,
   mixedFields,
   pendingMachineNames,
+  silentDetail,
   silentReason,
   useOnAllMachines,
   valueGroups,
@@ -151,4 +152,22 @@ test("values read in words in the popover", () => {
   assert.equal(describeSharedValue("orchestration", { max_active_children: 4, lead_max_children: 6, max_depth: 2 }), "4 agents per thread, 6 per Coordinator, depth 2");
   assert.equal(useOnAllLabel("notifications", true), "Turn on for all machines");
   assert.equal(useOnAllLabel("default_provider", "codex", { codex: "Codex" }), "Use Codex on all machines");
+});
+
+test("an offline machine is unknown even when its entry holds null, and the popover says it gets the value when it is back", () => {
+  // An offline machine reported nothing: a `null` beside it is not an unset value.
+  const offline = {
+    machines,
+    fields: [{ path: "title_provider", mixed: false, pending: ["c"], values: [{ machine_id: "a", value: null }, { machine_id: "b", value: null }, { machine_id: "c", value: null }] }],
+  };
+  assert.deepEqual(machineValues(offline, "title_provider").map((v) => [v.machine.name, v.known, v.pending]), [
+    ["mac", true, false],
+    ["satyamas", true, false],
+    ["vps", false, true],
+  ]);
+  assert.deepEqual(valueGroups(offline, "title_provider").map((g) => g.machines.map((m) => m.name)), [["mac", "satyamas"]], "it holds no value to offer");
+  assert.equal(silentDetail(machines[2]), "Offline \u00b7 gets this when it's back");
+  assert.equal(silentDetail(machines[0]), null);
+  assert.equal(silentDetail({ ...machines[1], state: "unsupported" }), "Needs a newer Kybern");
+  assert.equal(silentDetail({ ...machines[1], state: "unreachable" }), "No answer");
 });

@@ -25,7 +25,7 @@ import type {
 /** One machine's value of a field, joined with the machine it belongs to. */
 export interface FieldMachineValue {
   machine: SettingsMachineView;
-  /** The machine reported a value (an unset optional field reports `null`). */
+  /** The machine reported a value (an unset optional field reports `null`; a machine that did not answer reports nothing, whatever its entry holds). */
   known: boolean;
   value: unknown;
   /** A queued change for this machine has not arrived yet. */
@@ -51,7 +51,7 @@ export function machineValues(view: SettingsNetworkView, path: string): FieldMac
   if (!field) return [];
   return view.machines.map((machine, index) => {
     const entry = field.values[index];
-    const known = entry !== undefined && entry.machine_id === machine.id && "value" in entry && entry.value !== undefined;
+    const known = machine.state === "reported" && entry !== undefined && entry.machine_id === machine.id && "value" in entry && entry.value !== undefined;
     return { machine, known, value: known ? entry.value : undefined, pending: field.pending.includes(machine.id) };
   });
 }
@@ -67,6 +67,20 @@ export function silentReason(machine: SettingsMachineView): string | null {
       return `${machine.name} needs a newer Kybern to share settings.`;
     case "unreachable":
       return `${machine.name} did not answer.`;
+  }
+}
+
+/** What a machine that gave no value shows in the popover, in place of a value. */
+export function silentDetail(machine: SettingsMachineView): string | null {
+  switch (machine.state) {
+    case "reported":
+      return null;
+    case "offline":
+      return "Offline · gets this when it's back";
+    case "unsupported":
+      return "Needs a newer Kybern";
+    case "unreachable":
+      return "No answer";
   }
 }
 
