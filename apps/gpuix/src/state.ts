@@ -164,6 +164,11 @@ let client: KybernClient | null = null
  * thread-scoped folders honest.
  */
 export const getClient = () => client
+/**
+ * The same connection, named for what it is: surfaces that are about the machine the user is at, not about a thread or
+ * a project (its settings, accounts, providers, usage). Thread-scoped folders may use this, never `getClient()`.
+ */
+export const localClient = getClient
 export { clientFor, clientForProject, clientForThread, useMachineView, useMachines } from './machines/index.ts'
 export type { StateThread } from './machines/merged.ts'
 
