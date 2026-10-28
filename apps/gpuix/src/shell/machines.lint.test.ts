@@ -7,7 +7,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 
 const root = path.resolve(import.meta.dir, '..')
-const FOLDERS = ['composer', 'transcript', 'dock', 'requests', 'terminal', 'preview', 'tabs', 'subagents', 'draft']
+const FOLDERS = ['composer', 'transcript', 'dock', 'requests', 'terminal', 'preview', 'tabs', 'subagents', 'draft', 'pulls']
 const FILES = ['Composer.tsx', 'Transcript.tsx']
 /** Tests, mocks and on-screen checks drive the real or a fake connection directly. */
 const exempt = (name: string) => /\.(test|verify)\.[tj]sx?$/.test(name) || /^verify[-.]/.test(name) || /\.fixture\.[tj]sx?$/.test(name) || /\.lab\.[tj]sx?$/.test(name)
