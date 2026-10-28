@@ -4,7 +4,6 @@
 import { useSyncExternalStore } from 'react'
 import { createPendingStore, type PendingSend } from '../../../../packages/kybern-client/src/pendingSends.ts'
 import type { ThreadId } from '../../../../packages/kybern-client/src/types.ts'
-import { onEnvironmentChange } from '../shell/environment.ts'
 
 export { settledPending, withPending, type PendingSend } from '../../../../packages/kybern-client/src/pendingSends.ts'
 
@@ -14,7 +13,6 @@ export const pendingFor = store.pendingFor
 export const addPending = store.add
 export const updatePending = store.update
 export const removePending = store.remove
-onEnvironmentChange(store.clear)
 
 export function usePendingSends(threadId: ThreadId | null | undefined) {
   return useSyncExternalStore(subscribePending, () => pendingFor(threadId))

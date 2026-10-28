@@ -16,7 +16,6 @@ import { setNav } from './nav/store.ts'
 import { N } from './nav/glyphs.ts'
 import { activeEnvironment } from './shell/environment.ts'
 import { Tip } from './nav/overlay.tsx'
-import { onEnvironmentChange, onEnvironmentLeaving } from './shell/environment.ts'
 import { load as loadEnvironmentPreference, save as saveEnvironmentPreference } from './shell/persist.ts'
 // The composer (`views/Composer.tsx`, `composerPickerStyles.ts`): a 19.2px-radius
 // card with the editor on top and a footer of 28px chips (+ menu, permission
@@ -482,8 +481,6 @@ function uncataloguedName(model: string): string {
 
 /** Text and attachments kept per thread or project while the composer is away (`composer/drafts.ts`). */
 const drafts = createDraftStore<Attachment>(() => loadEnvironmentPreference<[string, { text: string; attachments: Attachment[] }][]>('kybern.composer.drafts', []), (entries) => saveEnvironmentPreference('kybern.composer.drafts', entries))
-onEnvironmentLeaving(() => drafts.persist())
-onEnvironmentChange(() => drafts.reload())
 
 /** Pasted keys the person chose to keep as text (this session, in memory only): they are not flagged again. */
 const keptSecrets = new Set<string>()

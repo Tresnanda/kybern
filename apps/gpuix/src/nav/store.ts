@@ -1,4 +1,3 @@
-import { onEnvironmentChange } from '../shell/environment.ts'
 // Navigation and sidebar state that the thread panel, rail and title bar share:
 // the page on screen, back/forward history, the open overlays, live child
 // threads and activity, and the reader's sidebar preferences. App state
@@ -155,4 +154,3 @@ export function setComposerDraft(key: string, present: boolean) {
   setNav({ composerDrafts })
 }
 
-onEnvironmentChange(() => setNav({ ...initialNav }), -50)

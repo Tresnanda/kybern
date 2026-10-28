@@ -30,9 +30,3 @@ export const environmentEndpoint = () => {
 }
 /** The machine this window is at. It does not change, so this is `activeEnvironment()` for components. */
 export function useEnvironment() { return useSyncExternalStore(() => () => {}, activeEnvironment) }
-/**
- * Nothing calls these back any more: the window's machine never changes. The registrations that remain reset
- * stores that no longer need resetting and are removed in the next commit.
- */
-export function onEnvironmentChange(_reset: (previous: Environment, next: Environment) => void, _priority = 0) { return () => {} }
-export function onEnvironmentLeaving(_save: () => void) { return () => {} }

@@ -2,7 +2,7 @@
 // persistent drafts, conservative line merge and explicit conflict resolution.
 import type { Note, NoteCategory } from '../../../../packages/kybern-client/src/types.ts'
 import { mergeNoteBodies } from '@/state/noteLines'
-import { activeEnvironment, onEnvironmentLeaving } from '../shell/environment.ts'
+import { activeEnvironment } from '../shell/environment.ts'
 import { load, save } from '../shell/persist.ts'
 import { getNotes, recordNote, rpc, subscribeNotes } from './store.ts'
 export const AUTOSAVE_MS = 500
@@ -149,7 +149,3 @@ export function noteSession(id: string) {
   if (sessions.size > 24) for (const [key, value] of sessions) { if (key !== id && value.getSnapshot().status === 'saved') { sessions.delete(key); if (sessions.size <= 24) break } }
   return session
 }
-onEnvironmentLeaving(() => {
-  for (const session of sessions.values()) session.retire()
-  sessions.clear()
-})

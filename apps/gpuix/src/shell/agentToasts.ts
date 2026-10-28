@@ -1,4 +1,4 @@
-import { environmentKey, onEnvironmentChange } from './environment.ts'
+import { environmentKey } from './environment.ts'
 // Agent event toasts (desktop `state/rpc.ts` `announce`): a turn that finishes or
 // fails, or an agent that needs an approval or an answer, while the reader is not
 // looking at that thread. Finished and failed toasts last 6 s; approval and
@@ -185,4 +185,3 @@ export function startAgentToasts() {
   }))
 }
 
-onEnvironmentChange(() => { for (const stop of stops) stop(); stops = []; started = false }, -100)

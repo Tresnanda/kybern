@@ -8,7 +8,7 @@ import type {
 } from '../../../../packages/kybern-client/src/types.ts'
 import { readTaskPrefs, type TaskViewPrefs } from '@/state/tasksModel'
 import { getClient, getState, useApp } from '../state.ts'
-import { activeEnvironment, onEnvironmentChange } from '../shell/environment.ts'
+import { activeEnvironment } from '../shell/environment.ts'
 import { load, save } from '../shell/persist.ts'
 import { toast } from '../shell/toasts.tsx'
 
@@ -155,13 +155,6 @@ export function useTasksFeed() {
     }
   }, [status])
 }
-// A switch starts from the new environment's tasks and saved view; a list
-// request or queued change for the previous one is dropped.
-onEnvironmentChange(() => {
-  generation++
-  pending = null
-  setTasks(initialState())
-})
 export async function createTask(params: TaskItemsCreateParams) {
   const client = getClient()
   if (!client) throw new Error('Reconnect to add a task.')

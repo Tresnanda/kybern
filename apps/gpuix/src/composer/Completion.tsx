@@ -1,4 +1,3 @@
-import { onEnvironmentChange } from '../shell/environment.ts'
 import { useNotes, refreshNotes } from '../notes/store.ts'
 import { useTasks, refreshTasks } from '../tasks/store.ts'
 // The composer's @ mention, / command and $ skill completions
@@ -137,7 +136,6 @@ const parentPath = (p: string) => (p.lastIndexOf('/') === -1 ? '' : p.slice(0, p
 /** The chips a draft's text carries (mentioned files, picked skills, thread and item references). */
 export type DraftReferences = { mentioned: Set<string>; picked: Map<string, SkillInfo>; threads: ComposerThreadReference[]; mentions: ComposerMentionReference[] }
 const referenceDrafts = new Map<string, DraftReferences>()
-onEnvironmentChange(() => referenceDrafts.clear())
 
 export function useCompletion({
   draftKey,

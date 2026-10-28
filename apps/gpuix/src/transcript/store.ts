@@ -1,4 +1,4 @@
-import { activeEnvironment, onEnvironmentChange } from '../shell/environment.ts'
+import { activeEnvironment } from '../shell/environment.ts'
 import { DeferredReads } from '../shell/deferredReads.ts'
 import { startupMark } from '../perf/startup.ts'
 import { memoryStep } from '../perf/memoryLog.ts'
@@ -428,4 +428,3 @@ export function useChildThreads(parentId: ThreadId, enabled: boolean): Thread[] 
   }, [cached, live, parentId])
 }
 
-onEnvironmentChange(() => { resetRowState(); diffs.clear(); diffLoads.clear(); hydrating.clear(); childThreads.clear(); childLoads.clear(); earlierLoads.clear(); earlierErrors.clear(); clearTimeout(actionErrorTimer); actionError.set(null); earlierError.set(null); })

@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react'
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import { imageSource } from '../../../../packages/kybern-client/src/responseImages.ts'
 import { threadClient, useApp } from '../state.ts'
-import { onEnvironmentChange, useEnvironment } from '../shell/environment.ts'
+import { useEnvironment } from '../shell/environment.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { Rise } from '../motion/kit.tsx'
 import { Icon } from '../icons.tsx'
@@ -30,7 +30,6 @@ const CACHE_ENTRIES = 256
 type Loaded = { source: string }
 type Failure = { status: number; reason: string }
 const cache = new Map<string, Loaded>()
-onEnvironmentChange(() => cache.clear())
 
 function remember(key: string, value: Loaded) {
   cache.delete(key)

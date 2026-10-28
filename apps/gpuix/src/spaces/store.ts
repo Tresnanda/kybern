@@ -5,7 +5,6 @@ import { useSyncExternalStore } from 'react'
 import { RpcCallError } from '../../../../packages/kybern-client/src/client.ts'
 import { SPACES_CHANGED_NOTIFICATION, type Project, type Space, type SpaceColor, type SpaceId, type SpaceLogo } from '../../../../packages/kybern-client/src/types.ts'
 import { SPACE_COPY } from '../../../../packages/kybern-client/src/spaces.ts'
-import { onEnvironmentChange } from '../shell/environment.ts'
 import { toast } from '../shell/toasts.tsx'
 import { getClient, getState, refreshLists, set, setForeignSpace } from '../state.ts'
 import { getNav, setNav } from '../nav/store.ts'
@@ -164,4 +163,3 @@ export async function moveProjectToSpace(project: Pick<Project, 'id' | 'name'>, 
   return true
 }
 
-onEnvironmentChange(() => { stopNotifications = undefined; setSpaces({ supported: null, spaces: [] }) }, -50)

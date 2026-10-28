@@ -1,7 +1,6 @@
 // Which space popover or dialog is open. The rail renders them where they anchor (a tile or
 // the "+" tile); the project menu and the palette open them from elsewhere through here.
 import { useSyncExternalStore } from 'react'
-import { onEnvironmentChange } from '../shell/environment.ts'
 
 export interface EditorRequest {
   /** `plus`: anchored to the "+" tile; a space id: to that space's tile. */
@@ -41,8 +40,6 @@ export const askDeleteSpace = (spaceId: string) => set({ deleting: spaceId, menu
 export const closeDeleteSpace = () => { if (state.deleting) set({ deleting: null }) }
 export const openSpaceMenu = (spaceId: string, at: { x: number; y: number }) => set({ menu: { spaceId, at } })
 export const closeSpaceMenu = () => { if (state.menu) set({ menu: null }) }
-
-onEnvironmentChange(() => set({ editor: null, deleting: null, menu: null }), -50)
 
 // A tile created by this window's pointer pops in once; remote creates and keyboard ones do not.
 const fresh = new Set<string>()

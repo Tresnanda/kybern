@@ -6,7 +6,7 @@ import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import type { HtmlSnapshotResult, JsonValue, VisualControl } from '../../../../packages/kybern-client/src/types.ts'
 import type { VisualTheme } from '../../../../packages/kybern-client/src/visuals.ts'
 import { threadClient } from '../state.ts'
-import { onEnvironmentChange, useEnvironment } from '../shell/environment.ts'
+import { useEnvironment } from '../shell/environment.ts'
 import { storeImageBytes } from './imageFiles.ts'
 
 export interface Picture {
@@ -23,7 +23,6 @@ export interface Picture {
 const ENTRIES = 128
 const cache = new Map<string, Picture>()
 const loading = new Map<string, Promise<Picture>>()
-onEnvironmentChange(() => { cache.clear(); loading.clear() })
 
 async function fetchPng(threadId: string, visualId: string, file: string): Promise<string> {
   const client = threadClient(threadId)

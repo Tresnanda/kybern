@@ -1,16 +1,11 @@
 import { useEffect, useSyncExternalStore } from 'react'
 import { EMPTY_MESSAGE_INDEX, mergeMessages, resolveMessage, setThreadIndex, type ThreadMessageIndex } from '../../../../packages/kybern-client/src/messageStates.ts'
-import { activeEnvironment, onEnvironmentChange } from '../shell/environment.ts'
+import { activeEnvironment } from '../shell/environment.ts'
 import { threadClient } from '../state.ts'
 import { onLiveEvent } from '../nav/live.ts'
 let indexes: Record<string, ThreadMessageIndex> = {}
 const loads = new Map<string, Promise<void>>()
 const listeners = new Set<() => void>()
-onEnvironmentChange(() => {
-  indexes = {}
-  loads.clear()
-  for (const listener of listeners) listener()
-})
 function put(id: string, index: ThreadMessageIndex) {
   if (indexes[id] === index) return
   indexes = setThreadIndex(indexes, id, index)

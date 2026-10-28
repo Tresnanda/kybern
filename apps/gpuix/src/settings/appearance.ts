@@ -1,4 +1,4 @@
-import { environmentKey, onEnvironmentChange } from '../shell/environment.ts'
+import { environmentKey } from '../shell/environment.ts'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
@@ -117,8 +117,3 @@ export function useAppearance() {
   return useSyncExternalStore((listener) => { listeners.add(listener); return () => { listeners.delete(listener) } }, appearance)
 }
 
-onEnvironmentChange(() => {
-  stored = load()
-  prefs = pinned(stored)
-  for (const listener of listeners) listener()
-})

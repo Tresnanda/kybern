@@ -5,7 +5,6 @@ import type { PreviewOpenResult, PreviewTargetInfo, PreviewProbeResult } from '.
 import { getState, threadClient } from '../state.ts'
 import { launchBrowser } from './browser.ts'
 import { openTab } from '../tabs/open.ts'
-import { onEnvironmentLeaving } from '../shell/environment.ts'
 import { openRelay } from './relay.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { recordRecent, recentsKeyForThread } from './recents.ts'
@@ -147,9 +146,6 @@ export function resetPreviews() {
   sessions.clear(); generations.clear(); nextGeneration++
   listeners.forEach(listener => listener())
 }
-
-// Tickets and in-flight opens belong to the old daemon; drop them before the new socket opens.
-onEnvironmentLeaving(resetPreviews)
 
 export function retryPreview(id: string) {
   const s = previewState(id), entry = s.entries[s.index]

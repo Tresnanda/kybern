@@ -5,7 +5,7 @@
 // third retires the least recently used one: its owner first turns it back into a picture (`retire`), then it is destroyed.
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import { visualHeight, visualLink, visualThemeFragment, type VisualTheme } from '../../../../packages/kybern-client/src/visuals.ts'
-import { activeEnvironment, onEnvironmentChange } from '../shell/environment.ts'
+import { activeEnvironment } from '../shell/environment.ts'
 import { threadClient } from '../state.ts'
 import { launchBrowser } from '../preview/browser.ts'
 import { webHost, type WebEvent } from '../native/webview.ts'
@@ -204,8 +204,6 @@ export function freezeDoc(id: string, path: string): number {
   webHost.snapshot(id, path, token)
   return token
 }
-
-onEnvironmentChange(() => { for (const doc of [...docs.values()]) destroy(doc) })
 
 /**
  * Open the visual's page in the default browser (no embedded web view). It takes a fresh frame ticket, which the daemon serves

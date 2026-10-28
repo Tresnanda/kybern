@@ -1,6 +1,5 @@
 import type { GroupChoice } from '../groups/tray.ts'
 import {readAccounts} from '../requests/accounts.ts'
-import { onEnvironmentChange, onEnvironmentLeaving } from '../shell/environment.ts'
 import { load, save } from '../shell/persist.ts'
 import { addPending, pendingFor, removePending, updatePending, type PendingSend } from './pending.ts'
 import { newChats } from './newChats.ts'
@@ -530,5 +529,3 @@ export async function uploadBytes(name: string, mediaType: string, bytes: ArrayB
   return (await response.json()) as UploadedAsset
 }
 
-onEnvironmentLeaving(() => save('kybern.composer.choices', { draft: savedDraft(data.draft), favorites: data.favorites, recents: data.recents }))
-onEnvironmentChange(() => { loadedFor = null; providerLoad = null; targetSeq.clear(); catalogSeq.clear(); targets.clear(); catalogs.clear(); catalogLoads.clear(); paneDrafts.clear(); patch({ ...initialData, ...load<Partial<Pick<ComposerData, 'draft' | 'favorites' | 'recents'>>>('kybern.composer.choices', {}) }) })

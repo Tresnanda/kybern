@@ -1,5 +1,4 @@
 import { N } from '../nav/glyphs.ts'
-import { onEnvironmentChange } from '../shell/environment.ts'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { tokens, usd } from '@/lib/format'
 import { PROVIDER_NAMES, limitLabel, limitLeftLabel, limitPace, limitUsed, limitTone, resetIn, staleCaption, updatedAgo } from '@/lib/providerUsage'
@@ -182,8 +181,6 @@ function PlanValue({ cost, period }: { cost: number; period: Period }) {
   const save = () => { const n = Number(draft); const next = Number.isFinite(n) && n > 0 ? n : null; try { savePreference('usage.plan-cost', next); planCost = next; setMonthly(next); setEdit(false); setError(null) } catch { setError('Unable to save plan cost. Check your local preferences folder and try again.') } }
   return <div style={{ ...column, gap: 8, padding: 18, borderWidth: 1, borderColor: t.border, borderRadius: 12 }}><div style={{ ...row, justifyContent: 'space-between' }}><Label color={t.text} size={13} weight={600}>Subscription value</Label>{edit ? <div style={row}><TextField label="Monthly plan cost" testId="usage-plan-input" autoFocus value={draft} onChange={v => setDraft(v.replace(/[^0-9.]/g, ''))} onSubmit={save} onKeyDown={e => { if (e.key === 'escape') setEdit(false) }} placeholder="200" width={96} /><Button variant="primary" onClick={save}>Save</Button></div> : <Button testId="usage-plan-edit" variant={monthly ? 'secondary' : 'primary'} onClick={() => { setDraft(monthly ? String(monthly) : ''); setEdit(true) }}>{monthly ? `$${monthly}/mo` : 'Set plan cost'}</Button>}</div>{error && <Label color={t.red} size={12}>{error}</Label>}{multiple !== null && <Label color={t.text} size={42} weight={600}>{`${multiple >= 10 ? Math.round(multiple).toLocaleString() : multiple.toFixed(1)}×`}</Label>}<Label color={t.textSecondary} size={12} lineHeight={19} style={{maxWidth:480}}>{multiple !== null ? `You ran ${usd(cost)} of pay-as-you-go compute on ${usd(periodCost!)} of subscription ${periodLabel}.` : monthly ? `${usd(cost)} of pay-as-you-go compute on your subscription ${periodLabel}. Pick a 7- or 30-day period to see your value multiple.` : 'Add your total plan cost per month to see how much pay-as-you-go compute your flat fee actually covers.'}</Label></div>
 }
-
-onEnvironmentChange(() => { const value = Number(load('usage.plan-cost', null)); planCost = Number.isFinite(value) && value > 0 ? value : null })
 
 /**
  * One bar of the daily chart. The bar is a full-height block under an `overflow: hidden` track, raised to its height by a paint-only

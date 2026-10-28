@@ -1,5 +1,5 @@
 import { AccountsHeaderAction } from './Accounts.tsx'
-import { onEnvironmentChange, useEnvironment } from '../shell/environment.ts'
+import { useEnvironment } from '../shell/environment.ts'
 import { useGpuix } from '@gpuix/react'
 import { useEffect, useMemo, useState } from 'react'
 import { setSettingsTitle } from './Breadcrumb.tsx'
@@ -110,4 +110,3 @@ export function SettingsScreen() {
   </div>
 }
 
-onEnvironmentChange(() => { lastTab = 'general'; for (const listener of tabListeners) listener() })

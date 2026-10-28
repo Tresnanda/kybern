@@ -1,4 +1,3 @@
-import { onEnvironmentChange } from '../shell/environment.ts'
 import { useEffect, useSyncExternalStore } from 'react'
 import type { Settings } from '../../../../packages/kybern-client/src/types.ts'
 import { getClient, useApp } from '../state.ts'
@@ -61,4 +60,3 @@ export function useSettingsConnection() {
   }, [status])
 }
 
-onEnvironmentChange(() => { revision++; emit({ settings: null, error: '', saving: false }) })

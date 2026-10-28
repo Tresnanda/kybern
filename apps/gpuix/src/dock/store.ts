@@ -1,5 +1,4 @@
 import { load, save } from '../shell/persist.ts'
-import { onEnvironmentChange, onEnvironmentLeaving } from '../shell/environment.ts'
 // Dock choices belong to the selected thread; closing a tab discards its content.
 // Bounded per-environment layout preferences survive ordinary app exits.
 import { useSyncExternalStore } from 'react'
@@ -101,5 +100,3 @@ export function moveDockDrag(x: number) {
   if (drag) setDock(drag.id, { width: Math.min(drag.max, Math.max(DOCK_MIN, drag.width + drag.x - x)) })
 }
 
-onEnvironmentLeaving(() => save('kybern.dock.choices', [...choices]))
-onEnvironmentChange(() => { choices.clear(); for (const [id, value] of restoreDockChoices(load('kybern.dock.choices', []))) choices.set(id, value); drag = null; emit() })

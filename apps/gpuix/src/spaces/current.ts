@@ -10,7 +10,6 @@ import { isFreeChatProject, type Project, type Space, type SpaceId } from '../..
 import { currentEntry, goPage, isNavEntryValid, sameNavEntry, selectChat } from '../nav/history.ts'
 import { getNav, setNav, subscribeNav, type NavEntry } from '../nav/store.ts'
 import { getState, subscribe, useApp } from '../state.ts'
-import { onEnvironmentChange } from '../shell/environment.ts'
 import { getSpaces, subscribeSpaces } from './store.ts'
 
 /**
@@ -204,4 +203,3 @@ export function startSpaces() {
   reconcile()
 }
 
-onEnvironmentChange(() => { for (const stop of stops) stop(); stops = []; switching = false; seen = [] }, -100)

@@ -1,5 +1,5 @@
 import { applyUsageLimits as applyLimits } from './limits.ts'
-import { environmentKey, onEnvironmentChange } from '../shell/environment.ts'
+import { environmentKey } from '../shell/environment.ts'
 // Keeps the thread panel live, like the desktop's `state/rpc.ts`:
 //
 // - one events subscription for every thread folds `thread_created`,
@@ -339,4 +339,3 @@ function stopLive() {
   clearTimeout(activityTimer); clearInterval(limitsTimer); limitsTimer = undefined
   started = false; owner = null; lastPrefs = ''; childLoads.clear(); archived.clear()
 }
-onEnvironmentChange(stopLive, -100)

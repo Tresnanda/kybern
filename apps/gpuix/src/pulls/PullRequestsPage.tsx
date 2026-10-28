@@ -3,7 +3,6 @@ import { Icon } from '../icons.tsx'
 import { ResizeHandle, useResize } from '../kit/Resize.tsx'
 import { SpinIcon } from '../kit/Spin.tsx'
 import { N } from '../nav/glyphs.ts'
-import { onEnvironmentChange } from '../shell/environment.ts'
 import { useGpuix, type PublicInstance } from '@gpuix/react'
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { mapWithConcurrency } from '@/lib/workload'
@@ -164,4 +163,3 @@ export function PullRequestsPage() {
   </div>
 }
 
-onEnvironmentChange(() => { cache.clear(); lastSelection = null })

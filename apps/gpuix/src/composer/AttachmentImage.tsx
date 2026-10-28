@@ -1,14 +1,13 @@
 import { useEffect, useState } from 'react'
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import { threadClient, useApp } from '../state.ts'
-import { activeEnvironment, onEnvironmentChange, useEnvironment } from '../shell/environment.ts'
+import { activeEnvironment, useEnvironment } from '../shell/environment.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { ResponseImage } from '../transcript/images.tsx'
 
 // Virtual rows may remount. Keep a bounded preview cache, scoped to the connection.
 const cache = new Map<string, { source: string; bytes: number }>()
 let bytes = 0
-onEnvironmentChange(() => { cache.clear(); bytes = 0 })
 /** A just-sent image the composer already holds (a file path or a data URI): the bubble shows it at once instead of
  *  loading it back from the daemon, so the new chat's image flight lands on the picture (`draft/Morph.tsx`). */
 export function primeAttachmentImage(assetId: string, source: string) {

@@ -1,5 +1,4 @@
 import { REDUCED_MOTION } from '../ui.tsx'
-import { onEnvironmentChange } from '../shell/environment.ts'
 import { useSyncExternalStore } from 'react'
 import { isWindowVisible, onWindowVisibility } from '../native/visibility.ts'
 
@@ -67,4 +66,3 @@ export function finishEnvironmentClose(closing: number) {
   emit()
 }
 
-onEnvironmentChange(() => closeEnvironmentPanel(true))

@@ -5,7 +5,7 @@ import type { Note, NoteSummary } from '../../../../packages/kybern-client/src/t
 import type { NotesFilter, NotesGroupBy, NotesSortBy } from '@/state/notesModel'
 import { getClient, getState, subscribe } from '../state.ts'
 import { goPage } from '../nav/history.ts'
-import { activeEnvironment, onEnvironmentChange } from '../shell/environment.ts'
+import { activeEnvironment } from '../shell/environment.ts'
 import { load, save } from '../shell/persist.ts'
 import { toast } from '../shell/toasts.tsx'
 import { isFreeChatProject } from '../../../../packages/kybern-client/src/types.ts'
@@ -76,13 +76,6 @@ export function refreshNotes(): Promise<void> {
   fetching = run
   return run
 }
-// A switch starts from the new environment's notes and its saved preferences.
-onEnvironmentChange(() => {
-  fetching = null
-  homeIds.clear()
-  again = false
-  setNotes(initialState())
-})
 /** One live feed while the app is mounted. No polling; reconnect reloads the list. */
 export function useNotesFeed() {
   useEffect(() => {

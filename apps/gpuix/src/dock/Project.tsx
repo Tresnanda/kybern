@@ -2,7 +2,6 @@ import { relativeTime } from '@/lib/format'
 import { muted } from '../nav/overlay.tsx'
 import { goPage } from '../nav/history.ts'
 import { setNotes as setNotesPage } from '../notes/store.ts'
-import { onEnvironmentChange } from '../shell/environment.ts'
 import { useEffect, useState } from 'react'
 import {
   AUTONOMY_OPTIONS, COORDINATOR_ROLES, COORDINATOR_SETTINGS_COPY as COPY,
@@ -222,4 +221,3 @@ function NoteDialog({ threadId, summary, onClose }: { threadId: string; summary:
   </Dialog>
 }
 
-onEnvironmentChange(() => { briefDrafts.clear() })

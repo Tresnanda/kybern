@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import { mock } from 'bun:test'
-const environment = { id: 'test', revision: 1 }, leaving: (() => void)[] = [], actions: unknown[] = []
+const environment = { id: 'test', revision: 1 }, actions: unknown[] = []
 const thread = { id: 'one', project_id: 'project', cwd: '/repo' }
 mock.module('../state.ts', () => ({ getState: () => ({ threads: [thread], projects: [{ id: 'project', path: '/repo' }] }) }))
-mock.module('../shell/environment.ts', () => ({ activeEnvironment: () => environment, onEnvironmentLeaving: (fn: () => void) => leaving.push(fn) }))
+mock.module('../shell/environment.ts', () => ({ activeEnvironment: () => environment }))
 mock.module('./store.ts', () => ({ chooseTab: (...args: unknown[]) => actions.push(args), setDock: (...args: unknown[]) => actions.push(args) }))
 const { showFileInExplorer, takeExplorerSelection, canShowFileInExplorer } = await import('./explorerSelection.ts')
 showFileInExplorer('one', 'project', '/repo/mock/deep/page.html')
@@ -20,5 +20,4 @@ assert.equal(takeExplorerSelection('one', 'project'), null, 'same environment re
 showFileInExplorer('one', 'project', '/repo/page.html'); assert.equal(takeExplorerSelection('other', 'project'), null)
 assert.equal(takeExplorerSelection('one', 'other'), null)
 assert.equal(takeExplorerSelection('one', 'project')?.path, 'page.html', 'unrelated Explorer must leave the intended request pending')
-showFileInExplorer('one', 'project', '/repo/page.html'); leaving.forEach(fn => fn()); assert.equal(takeExplorerSelection('one', 'project'), null)
 console.log('PASS one-shot Explorer handoff: current environment/thread/project/workspace; ancestor expansion plan; no stale or outside paths')

@@ -1,6 +1,5 @@
 import { pinChildThread } from '../tabs/Body.tsx'
 import { getState } from '../state.ts'
-import { onEnvironmentChange } from '../shell/environment.ts'
 // The Agents pane retains completed children (unlike the sidebar's temporary
 // ChildRow). Tree ordering, phases, result clamps and workspace copy are shared.
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -240,4 +239,3 @@ function TreeToggle({ open, onClick, testId }: { open: boolean; onClick: () => v
   </IconButton>
 }
 
-onEnvironmentChange(() => { choices.clear() })
