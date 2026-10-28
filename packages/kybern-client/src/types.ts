@@ -3418,6 +3418,8 @@ export interface MachineCard {
   os: string;
   arch?: string | null;
   ts_name?: string | null;
+  /** The machine's Ed25519 signing key, standard base64; a client pins it before it trusts a route. */
+  signing_key?: string | null;
   status: MachineStatus;
   is_self?: boolean;
   version?: string | null;
@@ -3530,6 +3532,8 @@ export interface NetworkClientGrantResult {
   token: string;
   scopes: Scope[];
   routes: Route[];
+  /** The machine's Ed25519 signing key, standard base64, from the membership set. */
+  signing_key?: string | null;
 }
 
 export interface NetworkUpdateAllResult {

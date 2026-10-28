@@ -26,8 +26,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 started_at: state.started_at,
                 machine_id: state.environment_id.clone(),
                 network_protocol: NETWORK_PROTOCOL,
-                // N1: features are listed by the package that makes each one work (N3 adds `network.v1`).
-                features: Vec::new(),
+                features: state.network.features(),
             };
             ok(info)
         }
@@ -1293,7 +1292,7 @@ fn provider_err(e: anyhow::Error) -> RpcError {
     RpcError::new(codes::PROVIDER_ERROR, e.to_string())
 }
 
-fn hostname() -> String {
+pub(crate) fn hostname() -> String {
     std::process::Command::new("hostname")
         .no_window()
         .output()

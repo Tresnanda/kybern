@@ -14,6 +14,7 @@ kybern-drivers.workspace = true
 kybern-git.workspace = true
 kybern-client.workspace = true
 anyhow.workspace = true
+async-trait.workspace = true
 axum.workspace = true
 base64.workspace = true
 chrono.workspace = true
@@ -44,5 +45,4 @@ zeroize = "=1.9.0"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Registry"] }
 
 [dev-dependencies]
-async-trait.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

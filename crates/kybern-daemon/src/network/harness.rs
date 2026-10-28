@@ -1,0 +1,284 @@
+//! The multi-daemon harness (design §11.3), in process.
+//!
+//! A [`Cluster`] plays a tailnet. Each [`Node`] is a real daemon state with its own data directory,
+//! store and keys, served on its own `127.<block>.0.<n>` address, with a [`Fake`] Tailscale that
+//! reads one fixture per node. Every node runs the production code paths: the network listener is
+//! opened by [`crate::exposure::apply_network`] on the node's fake Tailscale address at the network
+//! port, discovery and sessions run in [`peers::run`], and peers dial each other with the real
+//! handshake over real sockets. Only `tailscale` itself is fake.
+//!
+//! It lives inside the crate, like `remote_tests.rs`, because the daemon library exposes only
+//! `run()`; process-level tests that start the real `kybernd` with `KYBERN_TAILSCALE_FAKE` are in
+//! `crates/kybern/tests/network.rs`.
+//!
+//! Each cluster gets its own `127.<block>.0.0/24` so tests running in parallel never share an
+//! address. macOS only has `127.0.0.1` configured, so [`Cluster::new`] returns `None` there unless
+//! the aliases exist (`sudo ifconfig lo0 alias 127.1.0.2`), and the test is skipped.
+
+use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
+
+use axum::Router;
+use axum::routing::get;
+use kybern_protocol::{JoinVia, Scope};
+use tokio::task::JoinHandle;
+use uuid::Uuid;
+
+use super::peers;
+use super::tailscale::{Fake, FakeFixture, FakeNode};
+use super::testutil::TempDir;
+use super::{Membership, Timing};
+use crate::state::AppState;
+
+static NEXT_BLOCK: AtomicU32 = AtomicU32::new(1);
+
+pub const OWNER: &str = "owner@example.com";
+pub const TAILNET: &str = "fake.ts.net";
+
+/// What a node is on the tailnet, as `tailscale whois` reports it.
+#[derive(Debug, Clone)]
+pub struct NodeSpec {
+    pub name: String,
+    pub login: String,
+    pub user_id: i64,
+    pub tags: Vec<String>,
+    pub shared_in: bool,
+}
+
+impl NodeSpec {
+    /// A node of the owner (the same user).
+    pub fn owner(name: &str) -> Self {
+        Self { name: name.into(), login: OWNER.into(), user_id: 1, tags: vec![], shared_in: false }
+    }
+
+    /// A tagged server node (a VPS with `tag:server`).
+    pub fn tagged(name: &str) -> Self {
+        Self { tags: vec!["tag:server".into()], ..Self::owner(name) }
+    }
+
+    /// A node shared in from another tailnet.
+    pub fn shared_in(name: &str) -> Self {
+        Self { login: "friend@example.com".into(), user_id: 9, shared_in: true, ..Self::owner(name) }
+    }
+
+    /// A node of another user on the same tailnet.
+    pub fn other_user(name: &str) -> Self {
+        Self { login: "other@example.com".into(), user_id: 2, ..Self::owner(name) }
+    }
+}
+
+/// Whether this machine has more than one loopback address to play a tailnet with.
+fn loopback_aliases_available() -> bool {
+    std::net::TcpListener::bind(("127.1.0.2", 0)).is_ok()
+}
+
+pub struct Cluster {
+    pub dir: TempDir,
+    block: u32,
+    fixture: FakeFixture,
+}
+
+impl Cluster {
+    /// A tailnet of `specs`, the first one being the first node. `None` when the machine has no
+    /// loopback aliases to play it with.
+    pub fn new(specs: &[NodeSpec]) -> Option<Self> {
+        if !loopback_aliases_available() {
+            eprintln!("skipped: this machine has no 127.x.0.n loopback aliases (macOS: sudo ifconfig lo0 alias 127.1.0.2)");
+            return None;
+        }
+        let block = NEXT_BLOCK.fetch_add(1, Ordering::SeqCst);
+        let nodes = specs
+            .iter()
+            .enumerate()
+            .map(|(index, spec)| FakeNode {
+                name: spec.name.clone(),
+                node_id: format!("n{}", spec.name),
+                ip: format!("100.64.{block}.{}", index + 1).parse().unwrap(),
+                listen: format!("127.{block}.0.{}", index + 2).parse().unwrap(),
+                login: spec.login.clone(),
+                user_id: spec.user_id,
+                tags: spec.tags.clone(),
+                shared_in: spec.shared_in,
+                online: true,
+            })
+            .collect();
+        let cluster =
+            Self { dir: TempDir::new("cluster"), block, fixture: FakeFixture { self_name: String::new(), tailnet: TAILNET.into(), nodes } };
+        cluster.save();
+        Some(cluster)
+    }
+
+    fn fixture_path(&self, name: &str) -> PathBuf {
+        self.dir.path().join(format!("tailscale-{name}.json"))
+    }
+
+    /// Write one fixture per node: the same tailnet, a different `self`.
+    pub fn save(&self) {
+        for node in &self.fixture.nodes {
+            FakeFixture { self_name: node.name.clone(), ..self.fixture.clone() }.save(&self.fixture_path(&node.name)).unwrap();
+        }
+    }
+
+    pub fn fake(&self, name: &str) -> &FakeNode {
+        self.fixture.nodes.iter().find(|node| node.name == name).unwrap_or_else(|| panic!("no node {name}"))
+    }
+
+    pub fn listen_ip(&self, name: &str) -> IpAddr {
+        self.fake(name).listen
+    }
+
+    /// Take a node off the tailnet (or bring it back) without touching its daemon.
+    pub fn set_online(&mut self, name: &str, online: bool) {
+        self.fixture.nodes.iter_mut().find(|node| node.name == name).unwrap().online = online;
+        self.save();
+    }
+
+    /// Put `name` on the same computer as `with`: it listens on the same address, as a second
+    /// daemon on one host would. Call before starting either.
+    pub fn share_host(&mut self, name: &str, with: &str) {
+        let listen = self.fake(with).listen;
+        self.fixture.nodes.iter_mut().find(|node| node.name == name).unwrap().listen = listen;
+        self.save();
+    }
+
+    /// Start `name`'s daemon: its own data directory, an in-process server on a loopback primary
+    /// address, and (with `worker`) the peer manager that opens the network listener and dials.
+    pub async fn start(&self, name: &str, worker: bool) -> Node {
+        let root = self.dir.path().join(format!("data-{name}"));
+        std::fs::create_dir_all(&root).unwrap();
+        let paths = crate::config::Paths::resolve(Some(root.clone())).unwrap();
+        let tailscale = Arc::new(Fake::new(self.fixture_path(name)));
+        let state = AppState::initialize_with(&paths, tailscale, Timing::fast()).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let primary = listener.local_addr().unwrap();
+        *state.listen_addr.write().unwrap() = Some(primary);
+        state.port.store(primary.port(), Ordering::Relaxed);
+        let app = Router::new()
+            .merge(crate::http::routes())
+            .merge(super::routes())
+            .route("/ws", get(crate::ws::upgrade))
+            .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
+            .with_state(state.clone());
+        state.exposure.attach(app.clone()).await;
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await;
+        });
+        let worker = worker.then(|| tokio::spawn(peers::run(state.clone())));
+        Node { name: name.to_string(), state, primary, listen_ip: self.listen_ip(name), root, server, worker }
+    }
+
+    /// Found the network on `founder` and add `others` to it, the way N4's flows will: each is added
+    /// by a signed operation and handed the whole set. Every node is woken.
+    pub async fn form(&self, founder: &Node, others: &[&Node], via: JoinVia) {
+        let info = founder.state.network.self_info().await;
+        founder.membership().genesis(OWNER, TAILNET, &info).unwrap();
+        for other in others {
+            self.enroll(founder, other, via).await;
+        }
+        founder.state.network.wake();
+    }
+
+    /// Add `other` to the network `by` belongs to, and give it the set.
+    pub async fn enroll(&self, by: &Node, other: &Node, via: JoinVia) {
+        let info = other.state.network.self_info().await;
+        let descriptor = other.membership().self_descriptor(&info);
+        by.membership().add(descriptor, via).unwrap();
+        other.membership().join(by.membership().all_ops()).unwrap();
+        other.state.network.wake();
+    }
+}
+
+pub struct Node {
+    pub name: String,
+    pub state: AppState,
+    /// The loopback address the primary listener holds.
+    pub primary: SocketAddr,
+    /// The fake tailnet address' loopback twin, where the network listener binds.
+    pub listen_ip: IpAddr,
+    pub root: PathBuf,
+    server: JoinHandle<()>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl Node {
+    pub fn id(&self) -> String {
+        self.state.network.machine_id().unwrap()
+    }
+
+    pub fn membership(&self) -> &Arc<Membership> {
+        self.state.network.membership().unwrap()
+    }
+
+    /// `http://127.x.0.n:<network port>`: where peers reach this node.
+    pub fn network_base(&self, port: u16) -> String {
+        super::well_known::base_url(self.listen_ip, port)
+    }
+
+    /// `ws://` URL of the primary listener, where this node's own clients connect.
+    pub fn ws_url(&self) -> String {
+        format!("ws://{}/ws", self.primary)
+    }
+
+    pub fn http_url(&self) -> String {
+        format!("http://{}", self.primary)
+    }
+
+    /// A device token for a client of this node.
+    pub fn device_token(&self, scopes: &[Scope]) -> String {
+        let token = crate::auth::generate();
+        self.state.store.token_insert(Uuid::now_v7(), &crate::auth::hash(&token), "harness device", scopes).unwrap();
+        token
+    }
+
+    /// Run the peer manager again now, and wait for it to finish its pass.
+    pub async fn pass(&self) {
+        peers::pass(&self.state).await;
+    }
+
+    pub fn set_network_enabled(&self, enabled: bool) {
+        let mut settings = self.state.settings.get();
+        settings.network.enabled = enabled;
+        self.state.settings.set(settings).unwrap();
+        self.state.network.wake();
+    }
+
+    /// Stop the daemon the way a crash does: its sockets close and nothing answers.
+    pub fn stop(&mut self) {
+        self.state.shutdown.cancel();
+        self.state.network.peers.close_all();
+        self.server.abort();
+        if let Some(worker) = self.worker.take() {
+            worker.abort();
+        }
+    }
+}
+
+impl Drop for Node {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// Wait until `condition` holds, polling every 25 ms; panics with `what` after `timeout`.
+pub async fn eventually(what: &str, timeout: Duration, mut condition: impl FnMut() -> bool) {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if condition() {
+            return;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!("timed out waiting for: {what}");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+pub const WAIT: Duration = Duration::from_secs(20);
+
+/// Both nodes hold an open link to each other.
+pub fn linked(a: &Node, b: &Node) -> bool {
+    a.state.network.peers.link(&b.id()).is_some() && b.state.network.peers.link(&a.id()).is_some()
+}

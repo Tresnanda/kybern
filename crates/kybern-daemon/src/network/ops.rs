@@ -703,6 +703,7 @@ impl Projection {
             os: entry.descriptor.os.clone(),
             arch: None,
             ts_name: entry.descriptor.ts_name.clone(),
+            signing_key: Some(entry.descriptor.signing_key.clone()),
             status,
             is_self,
             version: None,

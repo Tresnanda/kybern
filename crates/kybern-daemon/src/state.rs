@@ -54,6 +54,9 @@ pub struct Inner {
     pub revoked_tokens: broadcast::Sender<uuid::Uuid>,
     pub listen_addr: std::sync::RwLock<Option<std::net::SocketAddr>>,
     pub exposure: crate::exposure::Exposure,
+    /// The machine network: this machine's identity and membership, and discovery and sessions with
+    /// the other members (ADE-86).
+    pub network: Arc<crate::network::Network>,
     pub advertised_urls: std::sync::RwLock<Vec<String>>,
     pub port: std::sync::atomic::AtomicU16,
     pub bootstrap_token: String,
@@ -88,6 +91,12 @@ impl AppState {
     /// handshake binds its socket after this step, then recovery completes
     /// before axum begins accepting requests.
     pub fn initialize(paths: &Paths) -> Result<Self> {
+        Self::initialize_with(paths, crate::network::tailscale::from_env(), crate::network::Timing::default())
+    }
+
+    /// [`AppState::initialize`] with the Tailscale seam and the network's intervals chosen by the
+    /// caller: the multi-daemon harness passes a fixture-driven fake and short intervals.
+    pub fn initialize_with(paths: &Paths, tailscale: Arc<dyn crate::network::Tailscale>, timing: crate::network::Timing) -> Result<Self> {
         let store = Store::open(&paths.db)?;
         let bootstrap_token = crate::auth::ensure_bootstrap(&store, &paths.token_file)?;
         let environment_id = match store.meta_get("environment_id")? {
@@ -113,6 +122,8 @@ impl AppState {
             .with_previews(previews.clone())
             .with_native_tools(native_tools.clone());
         let provider_catalogs = orchestrator.provider_catalog_cache();
+        let network = Arc::new(crate::network::Network::new(&paths.root, &store, &environment_id, tailscale, timing));
+        network.set_enabled(settings.get().network.enabled);
         Ok(Self {
             inner: Arc::new(Inner {
                 paths: paths.clone(),
@@ -140,6 +151,7 @@ impl AppState {
                 revoked_tokens: broadcast::channel(128).0,
                 listen_addr: std::sync::RwLock::new(None),
                 exposure: Default::default(),
+                network,
                 advertised_urls: std::sync::RwLock::new(vec![]),
                 port: std::sync::atomic::AtomicU16::new(0),
                 bootstrap_token,

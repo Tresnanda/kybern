@@ -222,6 +222,10 @@ pub struct MachineCard {
     pub arch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ts_name: Option<String>,
+    /// The machine's Ed25519 signing key, standard base64. A client pins it, so a route can only
+    /// attach to this machine by proving that key (§3.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing_key: Option<String>,
     pub status: MachineStatus,
     /// This daemon.
     #[serde(default)]
@@ -447,6 +451,10 @@ pub struct NetworkClientGrantResult {
     pub token: String,
     pub scopes: Vec<crate::Scope>,
     pub routes: Vec<Route>,
+    /// The machine's Ed25519 signing key, standard base64, from the membership set. The client
+    /// pins it before it first trusts a route, closing trust on first use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

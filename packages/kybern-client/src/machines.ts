@@ -1323,7 +1323,7 @@ export class MachineSet {
       const grant = (await member.inner.call("network.client_grant", {
         machine_id: slot.record.machineId,
         device_id: this.options.deviceId,
-      })) as NetworkClientGrantResult & { signing_key?: string | null };
+      })) as NetworkClientGrantResult;
       if (!grant?.token) return undefined;
       await this.options.credentials.set(slot.record.machineId, grant.token);
       if (grant.signing_key && !slot.record.signingKey) slot.record.signingKey = grant.signing_key;
@@ -1352,7 +1352,7 @@ export class MachineSet {
     const run = (async () => {
       const source = this.bestMember();
       if (!source?.inner) return;
-      let members: (MachineCard & { signing_key?: string | null })[];
+      let members: MachineCard[];
       let selfId: MachineId;
       try {
         const status = await source.inner.call("network.status", {});

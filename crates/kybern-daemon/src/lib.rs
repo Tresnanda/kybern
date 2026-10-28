@@ -23,7 +23,7 @@ mod integrations;
 mod lead_git;
 mod maintenance;
 mod native_tools_mcp;
-// Wired into the daemon by the peer manager (N3) and the network RPC handlers (N4).
+// Transport (N3) is wired in below; the joining flows and `network.*` handlers (N4) use the rest.
 #[allow(dead_code)]
 mod network;
 mod orchestrator;
@@ -225,6 +225,7 @@ async fn serve() -> Result<()> {
     let app = Router::new()
         .merge(http::routes())
         .merge(native_tools_mcp::routes())
+        .merge(network::routes())
         .route("/ws", get(ws::upgrade))
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
         .with_state(state.clone());
@@ -239,6 +240,10 @@ async fn serve() -> Result<()> {
     {
         tracing::warn!(%error, "could not listen on Tailscale; pairing stays loopback-only until it is enabled again");
     }
+
+    // Discovery, the network listener and the sessions with other members. It opens the Tailscale
+    // listener itself once the network is on and Tailscale is running (design §3.1).
+    let network_worker = tokio::spawn(network::peers::run(state.clone()));
 
     if args.pair {
         let endpoints = crate::access::endpoints(&state).await;
@@ -263,6 +268,7 @@ async fn serve() -> Result<()> {
     axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(shutdown).await?;
     queue_worker.abort();
     notes_worker.abort();
+    let _ = network_worker.await;
     let _ = maintenance_worker.await;
     let _ = update_worker.await;
     let _ = self_update_worker.await;

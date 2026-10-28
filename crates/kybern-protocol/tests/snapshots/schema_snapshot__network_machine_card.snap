@@ -29,6 +29,13 @@ expression: schema_for!(MachineCard)
         "null"
       ]
     },
+    "signing_key": {
+      "description": "The machine's Ed25519 signing key, standard base64. A client pins it, so a route can only\nattach to this machine by proving that key (§3.2).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "status": {
       "$ref": "#/$defs/MachineStatus"
     },
