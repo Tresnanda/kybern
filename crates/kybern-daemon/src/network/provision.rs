@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 use super::git_transfer;
 use super::peers::PeerLink;
-use crate::orchestrator::provision::{MAX_ENV_FILE_BYTES, SourceRepo, is_env_name, safe_relative, source_repos};
+use crate::orchestrator::provision::{MAX_ENV_FILE_BYTES, SourceRepo, inside, is_env_name, safe_relative, source_repos};
 use crate::orchestrator::remote_delegation::{CallFailure, Delivery, RemoteHub};
 use crate::state::AppState;
 
@@ -469,7 +469,8 @@ fn seal_env_files(
         let Some(part) = safe_relative(rel).filter(|part| part.file_name().is_some_and(|name| is_env_name(&name.to_string_lossy()))) else {
             return Err(Delivery::Failed(format!("{rel} is not an env file in the project.")));
         };
-        let path: PathBuf = root.join(part);
+        // A link in its folders (a tracked `config` pointing elsewhere) would read a file outside the project.
+        let path: PathBuf = inside(root, &part).map_err(Delivery::Failed)?;
         let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
         if !meta.is_file() || meta.len() > MAX_ENV_FILE_BYTES {
             continue;
@@ -494,9 +495,11 @@ pub async fn serve(state: &AppState, link: &Arc<PeerLink>, method: &str, params:
     let orchestrator = &state.orchestrator;
     match method {
         PeerProvisionProbeMethod::NAME => ok(serde_json::to_value(orchestrator.serve_provision_probe(parse(params)?).await?)),
-        PeerProvisionPrepare::NAME => ok(serde_json::to_value(orchestrator.serve_provision_prepare(parse(params)?).await?)),
+        PeerProvisionPrepare::NAME => {
+            ok(serde_json::to_value(orchestrator.serve_provision_prepare(&link.machine_id, parse(params)?).await?))
+        }
         PeerProvisionChunk::NAME => ok(serde_json::to_value(orchestrator.serve_provision_chunk(parse(params)?)?)),
-        PeerProvisionImport::NAME => ok(serde_json::to_value(orchestrator.serve_provision_import(parse(params)?).await?)),
+        PeerProvisionImport::NAME => ok(serde_json::to_value(orchestrator.serve_provision_import(&link.machine_id, parse(params)?).await?)),
         PeerProvisionFinish::NAME => {
             let params: PeerProvisionFinishParams = parse(params)?;
             let membership = state.network.membership().ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, "no network"))?;
@@ -510,7 +513,7 @@ pub async fn serve(state: &AppState, link: &Arc<PeerLink>, method: &str, params:
                     .map_err(|_| RpcError::new(codes::FORBIDDEN, format!("{} was not sealed for this machine.", file.path)))?;
                 files.push((file.path.clone(), plain));
             }
-            ok(serde_json::to_value(orchestrator.serve_provision_finish(&params, files).await?))
+            ok(serde_json::to_value(orchestrator.serve_provision_finish(&link.machine_id, &params, files).await?))
         }
         _ => Err(RpcError::method_not_found(method)),
     }

@@ -216,22 +216,28 @@ async fn provisioning_is_idempotent_by_operation_and_waits_for_an_offline_machin
 
     // The target's steps can be repeated: a resent prepare continues, a resent finish returns the same project.
     let dest = PathBuf::from(&result.project.path);
-    let again = net
-        .c
-        .state
-        .orchestrator
-        .serve_provision_prepare(PeerProvisionPrepareParams {
-            operation_id: operation,
-            path: result.project.path.clone(),
-            rel: ".".into(),
-            repo: crate::network::git_transfer::identity_of(&net.repo_b).await,
-            remote_url: Some(net.origin.to_string_lossy().into()),
-            branch: Some("main".into()),
-            commit: git_out(&net.repo_b, &["rev-parse", "HEAD"]),
-        })
-        .await
-        .unwrap();
+    let prepare = PeerProvisionPrepareParams {
+        operation_id: operation,
+        path: result.project.path.clone(),
+        rel: ".".into(),
+        repo: crate::network::git_transfer::identity_of(&net.repo_b).await,
+        remote_url: Some(net.origin.to_string_lossy().into()),
+        branch: Some("main".into()),
+        commit: git_out(&net.repo_b, &["rev-parse", "HEAD"]),
+    };
+    let orchestrator = &net.c.state.orchestrator;
+    let again = orchestrator.serve_provision_prepare(&net.b.id(), prepare.clone()).await.unwrap();
     assert_eq!(again.state, PrepareState::Ready);
+    // The id stays with its folder and its machine: resent for another folder it is refused, and that folder is
+    // left alone (it was once taken for the operation's own and emptied).
+    let unrelated = net.root().join("c-home").join("unrelated");
+    std::fs::create_dir_all(&unrelated).unwrap();
+    std::fs::write(unrelated.join("keep.txt"), "mine\n").unwrap();
+    let elsewhere = PeerProvisionPrepareParams { path: unrelated.to_string_lossy().into(), ..prepare.clone() };
+    assert!(orchestrator.serve_provision_prepare(&net.b.id(), elsewhere).await.is_err(), "another folder");
+    assert_eq!(std::fs::read_to_string(unrelated.join("keep.txt")).unwrap(), "mine\n");
+    assert!(!unrelated.join(".git").exists());
+    assert!(orchestrator.serve_provision_prepare(&net.a.id(), prepare.clone()).await.is_err(), "another machine");
     let finish = PeerProvisionFinishParams {
         operation_id: operation,
         path: result.project.path.clone(),
@@ -241,11 +247,11 @@ async fn provisioning_is_idempotent_by_operation_and_waits_for_an_offline_machin
         env_files: Vec::new(),
         cloned_from_remote: true,
     };
-    let repeat = net.c.state.orchestrator.serve_provision_finish(&finish, vec![(".env".into(), b"OTHER=1\n".to_vec())]).await.unwrap();
+    let repeat = net.c.state.orchestrator.serve_provision_finish(&net.b.id(), &finish, vec![(".env".into(), b"OTHER=1\n".to_vec())]).await.unwrap();
     assert_eq!(repeat.project.id, result.project.id);
     assert_eq!(repeat.env_kept, vec![".env".to_string()], "an env file that is there is never overwritten");
     assert_eq!(std::fs::read_to_string(dest.join(".env")).unwrap(), "API_KEY=zq-secret-root\n");
-    let refused = net.c.state.orchestrator.serve_provision_finish(&finish, vec![("src/main.rs".into(), b"x".to_vec())]).await;
+    let refused = net.c.state.orchestrator.serve_provision_finish(&net.b.id(), &finish, vec![("src/main.rs".into(), b"x".to_vec())]).await;
     assert!(refused.is_err(), "only env files are written");
 }
 

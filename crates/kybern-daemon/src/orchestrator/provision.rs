@@ -100,18 +100,69 @@ fn example_folder() -> &'static str {
     if cfg!(windows) { r"D:\projects" } else { "~/projects" }
 }
 
-fn path_same(windows: bool, a: &Path, b: &Path) -> bool {
-    if windows { a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy()) } else { a == b }
+/// A Windows path spelled one way for comparing: `\` separators, no `\\?\` prefix, lower case, no trailing `\`.
+fn windows_key(path: &Path) -> String {
+    let text = path.to_string_lossy().replace('/', "\\");
+    let text = kybern_git::simplify_path(Path::new(&text)).to_string_lossy().to_lowercase();
+    text.trim_end_matches('\\').to_string()
 }
 
-/// Whether `path` is `prefix` or inside it; Windows paths compare without regard to case.
+fn path_same(windows: bool, a: &Path, b: &Path) -> bool {
+    if windows { windows_key(a) == windows_key(b) } else { a == b }
+}
+
+/// Whether `path` is `prefix` or inside it; Windows paths compare without regard to case or spelling.
 fn path_starts(windows: bool, path: &Path, prefix: &Path) -> bool {
     if windows {
-        let (path, prefix) = (path.to_string_lossy().to_lowercase(), prefix.to_string_lossy().to_lowercase());
-        path == prefix || path.starts_with(&format!("{}\\", prefix.trim_end_matches('\\')))
+        let (path, prefix) = (windows_key(path), windows_key(prefix));
+        path == prefix || path.starts_with(&format!("{prefix}\\"))
     } else {
         path.starts_with(prefix)
     }
+}
+
+/// Where `path` really is: its deepest folder that exists, with links resolved, and the rest as given. A
+/// folder that does not exist yet is checked where it will be made, not where its spelling says.
+fn physical(path: &Path) -> PathBuf {
+    let mut existing = path;
+    let mut rest = Vec::new();
+    loop {
+        if let Ok(real) = std::fs::canonicalize(existing) {
+            let mut real = kybern_git::simplify_path(&real);
+            real.extend(rest.iter().rev());
+            return real;
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                existing = parent;
+            }
+            _ => return kybern_git::simplify_path(path),
+        }
+    }
+}
+
+/// `root` joined with `rel`, refused when a link (or a Windows junction) anywhere below `root` would lead
+/// out of it, so what is read or written there stays in the project. Parts that do not exist yet are fine.
+pub(crate) fn inside(root: &Path, rel: &Path) -> Result<PathBuf, String> {
+    let shown = rel.to_string_lossy().replace('\\', "/");
+    let mut path = root.to_path_buf();
+    for part in rel.components() {
+        let Component::Normal(part) = part else { return Err(format!("{shown} is not a path inside the project.")) };
+        path.push(part);
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(format!("{shown} goes through a link, so Kybern does not copy it."));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => return Err(format!("Kybern could not look at {shown}: {error}")),
+        }
+    }
+    if !path_starts(cfg!(windows), &physical(&path), &physical(root)) {
+        return Err(format!("{shown} leads out of the project, so Kybern does not copy it."));
+    }
+    Ok(path)
 }
 
 /// Expand `~` and check that `raw` is a place a project may be written to on this machine. Returns the
@@ -135,11 +186,8 @@ pub(crate) fn resolve_destination(raw: &str, data_dir: &Path) -> Result<PathBuf,
     if path.components().any(|component| matches!(component, Component::ParentDir | Component::CurDir)) {
         return Err("Enter the path without . or .. in it.".into());
     }
-    // A link resolves to where it points, and that place is the one checked.
-    let checked = match std::fs::canonicalize(&path) {
-        Ok(real) => kybern_git::simplify_path(&real),
-        Err(_) => path.clone(),
-    };
+    // A link resolves to where it points, and that place is the one checked, also for a folder not made yet.
+    let checked = physical(&path);
     if checked.parent().is_none() || checked.file_name().is_none() {
         return Err("That is the top of the drive. Choose a folder inside it.".into());
     }
@@ -368,7 +416,11 @@ pub(crate) async fn source_repos(project: &Project) -> Vec<SourceRepo> {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Record {
+    /// Where the project goes, as [`physical`] spells it.
     path: String,
+    /// The machine that started the operation; only it continues it.
+    #[serde(default)]
+    peer: String,
     /// The repository folders this operation created (so a retry may continue in them).
     #[serde(default)]
     created: Vec<String>,
@@ -388,6 +440,21 @@ fn save_record(data_dir: &Path, operation_id: Uuid, record: &Record) -> std::io:
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(path, serde_json::to_vec(record).unwrap_or_default())
+}
+
+/// The record of `operation_id` for `peer` putting a project in `dest`: a fresh one when there is none, and a
+/// refusal when another machine started it or it was for another folder, so a reused id never reaches (or
+/// removes) a folder the operation did not make.
+fn bound_record(data_dir: &Path, operation_id: Uuid, peer: &str, dest: &Path) -> Result<Record, RpcError> {
+    let record = load_record(data_dir, operation_id);
+    let here = physical(dest).to_string_lossy().into_owned();
+    if record.path.is_empty() && record.created.is_empty() {
+        return Ok(Record { path: here, peer: peer.to_string(), created: Vec::new() });
+    }
+    if record.peer != peer || !path_same(cfg!(windows), Path::new(&record.path), Path::new(&here)) {
+        return Err(conflict("That operation was started for another folder. Add the project again."));
+    }
+    Ok(record)
 }
 
 fn conflict(message: impl Into<String>) -> RpcError {
@@ -833,13 +900,17 @@ impl Orchestrator {
     }
 
     /// `peer.provision.prepare`: make the repository folder exist, cloning it from its remote when possible.
-    pub(crate) async fn serve_provision_prepare(&self, params: PeerProvisionPrepareParams) -> Result<PeerProvisionPrepareResult, RpcError> {
+    pub(crate) async fn serve_provision_prepare(
+        &self,
+        peer: &str,
+        params: PeerProvisionPrepareParams,
+    ) -> Result<PeerProvisionPrepareResult, RpcError> {
         let data_dir = self.inner.paths.root.clone();
         let dest = resolve_destination(&params.path, &data_dir).map_err(|message| RpcError::new(codes::FORBIDDEN, message))?;
         let rel = safe_relative(&params.rel).ok_or_else(|| RpcError::invalid_params("rel must be a folder inside the project"))?;
-        let dir = dest.join(&rel);
+        let dir = inside(&dest, &rel).map_err(|message| RpcError::new(codes::FORBIDDEN, message))?;
         let shown = dir.to_string_lossy().into_owned();
-        let mut record = load_record(&data_dir, params.operation_id);
+        let mut record = bound_record(&data_dir, params.operation_id, peer, &dest)?;
         let ours = record.created.contains(&params.rel);
         if !ours && dir.exists() && !(dir.is_dir() && is_empty_dir(&dir)) {
             if dir.is_dir() && git_transfer::same_repo(&params.repo, &git_transfer::identity_of(&dir).await) {
@@ -855,7 +926,6 @@ impl Orchestrator {
             return Err(conflict(format!("{shown} already holds other files. Choose an empty or new folder.")));
         }
         if !ours {
-            record.path = dest.to_string_lossy().into_owned();
             record.created.push(params.rel.clone());
             save_record(&data_dir, params.operation_id, &record).map_err(internal)?;
         }
@@ -914,12 +984,16 @@ impl Orchestrator {
     }
 
     /// `peer.provision.import`: import the staged bundle into a folder `prepare` made, and check it out.
-    pub(crate) async fn serve_provision_import(&self, params: PeerProvisionImportParams) -> Result<PeerProvisionPrepareResult, RpcError> {
+    pub(crate) async fn serve_provision_import(
+        &self,
+        peer: &str,
+        params: PeerProvisionImportParams,
+    ) -> Result<PeerProvisionPrepareResult, RpcError> {
         let data_dir = self.inner.paths.root.clone();
         let dest = resolve_destination(&params.path, &data_dir).map_err(|message| RpcError::new(codes::FORBIDDEN, message))?;
         let rel = safe_relative(&params.rel).ok_or_else(|| RpcError::invalid_params("rel must be a folder inside the project"))?;
-        let dir = dest.join(&rel);
-        let record = load_record(&data_dir, params.operation_id);
+        let dir = inside(&dest, &rel).map_err(|message| RpcError::new(codes::FORBIDDEN, message))?;
+        let record = bound_record(&data_dir, params.operation_id, peer, &dest)?;
         if !record.created.contains(&params.rel) {
             return Err(conflict("Kybern did not make that folder for this operation, so it does not import into it."));
         }
@@ -959,6 +1033,7 @@ impl Orchestrator {
     /// `peer.provision.finish` (the env files already opened): write them and register the project.
     pub(crate) async fn serve_provision_finish(
         &self,
+        peer: &str,
         params: &PeerProvisionFinishParams,
         env_files: Vec<(String, Vec<u8>)>,
     ) -> Result<ProvisionResult, RpcError> {
@@ -967,26 +1042,8 @@ impl Orchestrator {
         if !dest.is_dir() {
             return Err(conflict(format!("{} does not exist yet; add the project again.", dest.display())));
         }
-        let (mut written, mut kept) = (Vec::new(), Vec::new());
-        for (rel, contents) in env_files {
-            let Some(part) = safe_relative(&rel).filter(|part| !part.as_os_str().is_empty()) else {
-                return Err(RpcError::invalid_params(format!("{rel} is not a path inside the project.")));
-            };
-            if !part.file_name().is_some_and(|name| is_env_name(&name.to_string_lossy())) {
-                return Err(RpcError::new(codes::FORBIDDEN, format!("{rel} is not an env file, so Kybern does not write it.")));
-            }
-            let path = dest.join(&part);
-            if std::fs::symlink_metadata(&path).is_ok() {
-                kept.push(rel);
-                continue;
-            }
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|error| conflict(format!("Kybern could not create the folder for {rel}: {error}")))?;
-            }
-            write_private(&path, &contents).map_err(|error| conflict(format!("Kybern could not write {rel}: {error}")))?;
-            written.push(rel);
-        }
+        bound_record(&data_dir, params.operation_id, peer, &dest)?;
+        let (written, kept) = write_env_files(&dest, env_files)?;
         let path = dest.to_string_lossy().into_owned();
         let project = if params.kind == ProjectKind::Group {
             self.add_group_project(path, Some(params.name.clone()), None, params.members.clone())?
@@ -998,7 +1055,34 @@ impl Orchestrator {
     }
 }
 
-/// A file only its owner reads.
+/// Write the opened env files into `dest`, keeping any that are already there. Returns (written, kept).
+fn write_env_files(dest: &Path, env_files: Vec<(String, Vec<u8>)>) -> Result<(Vec<String>, Vec<String>), RpcError> {
+    let (mut written, mut kept) = (Vec::new(), Vec::new());
+    for (rel, contents) in env_files {
+        let Some(part) = safe_relative(&rel).filter(|part| !part.as_os_str().is_empty()) else {
+            return Err(RpcError::invalid_params(format!("{rel} is not a path inside the project.")));
+        };
+        if !part.file_name().is_some_and(|name| is_env_name(&name.to_string_lossy())) {
+            return Err(RpcError::new(codes::FORBIDDEN, format!("{rel} is not an env file, so Kybern does not write it.")));
+        }
+        // Its folders must not lead out of the project (a link the repository checked out, say).
+        inside(dest, part.parent().unwrap_or(Path::new(""))).map_err(|message| RpcError::new(codes::FORBIDDEN, message))?;
+        let path = dest.join(&part);
+        if std::fs::symlink_metadata(&path).is_ok() {
+            kept.push(rel);
+            continue;
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| conflict(format!("Kybern could not create the folder for {rel}: {error}")))?;
+        }
+        write_private(&path, &contents).map_err(|error| conflict(format!("Kybern could not write {rel}: {error}")))?;
+        written.push(rel);
+    }
+    Ok((written, kept))
+}
+
+/// A new file only its owner reads (never one that exists): 0600, or an owner-only ACL on Windows set
+/// before anything is written to it.
 fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     let mut options = std::fs::OpenOptions::new();
@@ -1009,6 +1093,12 @@ fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
         options.mode(0o600);
     }
     let mut file = options.open(path)?;
+    #[cfg(windows)]
+    if let Err(error) = crate::network::keys::restrict_to_current_user(path) {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(error);
+    }
     file.write_all(contents)?;
     file.flush()
 }
@@ -1044,6 +1134,99 @@ mod tests {
         assert!(path_starts(true, &data, &simple(r"D:\kybern")), "a folder that holds the data folder");
         assert!(!path_starts(true, &simple(r"D:\kybern\network-tests\x"), &data), "a sibling with the same prefix");
         assert!(path_same(true, &simple(r"\\?\D:\Work"), &simple(r"d:\work")));
+        // Spelled with `/`, with the prefix, or with a trailing separator, a system folder is still one.
+        let system = Path::new(r"C:\ProgramData");
+        for spelled in ["C:/ProgramData/new", r"\\?\C:\ProgramData\new", r"c:\programdata\", "C:/PROGRAMDATA"] {
+            assert!(path_starts(true, Path::new(spelled), system), "{spelled}");
+        }
+        assert!(path_same(true, Path::new("D:/work/"), Path::new(r"\\?\d:\Work")));
+    }
+
+    /// A scratch folder outside the system folders the destination check refuses (`/var` holds the macOS temp folder).
+    #[cfg(unix)]
+    fn scratch() -> PathBuf {
+        let base = std::env::var_os("CARGO_TARGET_TMPDIR").map(PathBuf::from).unwrap_or_else(|| std::env::current_dir().unwrap());
+        let dir = base.join(format!("kybern-provision-links-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn new_folders_are_checked_where_their_links_lead() {
+        let root = scratch();
+        let data = root.join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::create_dir_all(root.join("projects")).unwrap();
+        std::os::unix::fs::symlink(&data, root.join("projects/link")).unwrap();
+        let through = root.join("projects/link/new-project");
+        let refused = resolve_destination(&through.to_string_lossy(), &data).unwrap_err();
+        assert!(refused.contains("data folder"), "{refused}");
+        assert!(resolve_destination(&root.join("projects/new-project").to_string_lossy(), &data).is_ok());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn env_files_never_go_through_a_link_out_of_the_project() {
+        let root = scratch();
+        let (project, outside) = (root.join("project"), root.join("outside"));
+        std::fs::create_dir_all(project.join("apps/web")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join(".env"), "OUTSIDE=1\n").unwrap();
+        std::os::unix::fs::symlink(&outside, project.join("config")).unwrap();
+        // The source never reads a file through a linked folder.
+        assert!(inside(&project, Path::new("config/.env")).is_err());
+        assert_eq!(inside(&project, Path::new("apps/web/.env")).unwrap(), project.join("apps/web/.env"));
+        assert_eq!(inside(&project, Path::new("")).unwrap(), project);
+        // The target never writes one there: not beside an existing file, and not as a new one.
+        std::fs::remove_file(outside.join(".env")).unwrap();
+        let refused = write_env_files(&project, vec![("config/.env".into(), b"A=1\n".to_vec())]);
+        assert!(refused.is_err());
+        assert!(!outside.join(".env").exists(), "nothing was written outside the project");
+        let refused = write_env_files(&project, vec![("config/deeper/.envrc".into(), b"A=1\n".to_vec())]);
+        assert!(refused.is_err());
+        assert!(!outside.join("deeper").exists());
+        let (written, kept) = write_env_files(&project, vec![("apps/web/.env".into(), b"A=1\n".to_vec())]).unwrap();
+        assert_eq!((written, kept), (vec!["apps/web/.env".to_string()], Vec::new()));
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(project.join("apps/web/.env")).unwrap().permissions().mode() & 0o777, 0o600);
+        // A project folder that is itself a link is fine: only links below it lead out.
+        std::os::unix::fs::symlink(&project, root.join("alias")).unwrap();
+        assert!(inside(&root.join("alias"), Path::new("apps/web/.env")).is_ok());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn env_files_get_an_owner_only_acl_on_windows() {
+        let dir = std::env::temp_dir().join(format!("kybern-provision-acl-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A folder everyone may read, whose files inherit that.
+        let icacls = |args: &[&str]| {
+            let out = std::process::Command::new("icacls").arg(&dir).args(args).output().unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
+        };
+        icacls(&["/grant", "*S-1-1-0:(OI)(CI)R"]);
+        let plain = dir.join("plain.txt");
+        std::fs::write(&plain, "x").unwrap();
+        let sids = |path: &Path| {
+            let out = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-Command"])
+                .arg(format!("(Get-Acl -LiteralPath '{}').Access | ForEach-Object {{ $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value }}", path.display()))
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        assert!(sids(&plain).contains("S-1-1-0"), "the folder passes Everyone on: {}", sids(&plain));
+        let env = dir.join(".env");
+        write_private(&env, b"SECRET=1\n").unwrap();
+        let granted = sids(&env);
+        assert!(!granted.contains("S-1-1-0"), "{granted}");
+        assert_eq!(granted.lines().filter(|line| !line.trim().is_empty()).count(), 1, "only the owner: {granted}");
+        assert_eq!(std::fs::read_to_string(&env).unwrap(), "SECRET=1\n");
+        assert!(write_private(&env, b"OTHER=1\n").is_err(), "never overwrites");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[cfg(windows)]

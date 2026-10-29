@@ -323,7 +323,7 @@ pub(crate) fn write_private_file(network_dir: &Path, file_name: &str, bytes: &[u
         file.sync_all()?;
     }
     #[cfg(windows)]
-    restrict_to_current_user(&temp);
+    restrict_key_to_current_user(&temp);
     std::fs::rename(&temp, &target).with_context(|| format!("writing {}", target.display()))?;
     Ok(())
 }
@@ -331,27 +331,32 @@ pub(crate) fn write_private_file(network_dir: &Path, file_name: &str, bytes: &[u
 /// Replace the file's inherited ACL with one that admits only the current user. DPAPI already keeps
 /// other users from unwrapping the contents, so a failure here is logged and not fatal.
 #[cfg(windows)]
-fn restrict_to_current_user(path: &Path) {
+fn restrict_key_to_current_user(path: &Path) {
+    if let Err(error) = restrict_to_current_user(path) {
+        tracing::warn!(target: "kybern::network", %error, "machine.key keeps its inherited ACL");
+    }
+}
+
+/// Replace the file's inherited ACL with one that admits only the current user.
+#[cfg(windows)]
+pub(crate) fn restrict_to_current_user(path: &Path) -> std::io::Result<()> {
     use kybern_protocol::process::NoWindow;
 
-    let Ok(user) = std::env::var("USERNAME") else {
-        tracing::warn!(target: "kybern::network", "USERNAME is not set; machine.key keeps its inherited ACL");
-        return;
-    };
+    let user = std::env::var("USERNAME").map_err(|_| std::io::Error::other("USERNAME is not set"))?;
     let account = match std::env::var("USERDOMAIN") {
         Ok(domain) if !domain.is_empty() => format!("{domain}\\{user}"),
         _ => user,
     };
-    let result = std::process::Command::new("icacls")
+    let output = std::process::Command::new("icacls")
         .no_window()
         .arg(path)
         .args(["/inheritance:r", "/grant:r"])
         .arg(format!("{account}:F"))
-        .output();
-    match result {
-        Ok(output) if output.status.success() => {}
-        Ok(output) => tracing::warn!(target: "kybern::network", status = ?output.status, "icacls refused to restrict machine.key"),
-        Err(error) => tracing::warn!(target: "kybern::network", %error, "could not run icacls on machine.key"),
+        .output()?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!("icacls refused to restrict the file ({})", output.status)))
     }
 }
 
