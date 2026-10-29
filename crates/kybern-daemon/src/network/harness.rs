@@ -235,6 +235,11 @@ impl Cluster {
         auto_join: bool,
     ) -> Node {
         let state = AppState::initialize_with_drivers(paths, tailscale, Timing { auto_join, ..self.timing.clone() }, drivers).unwrap();
+        // The network is off until a user turns it on; every harness node has.
+        let mut settings = state.settings.get();
+        settings.network.enabled = true;
+        state.settings.set(settings).unwrap();
+        state.network.set_enabled(true);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let primary = listener.local_addr().unwrap();
         *state.listen_addr.write().unwrap() = Some(primary);

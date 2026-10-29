@@ -425,7 +425,7 @@ fn every_network_method_has_a_scope_and_peer_methods_need_a_machine_scope() {
 }
 
 #[test]
-fn an_older_daemon_info_and_project_still_parse_and_the_network_defaults_are_on() {
+fn an_older_daemon_info_and_project_still_parse_and_the_network_defaults_to_off() {
     let old: DaemonInfo = serde_json::from_value(serde_json::json!({
         "version": "0.18.0", "protocol_version": 1, "environment_id": "e", "hostname": "h", "os": "macos", "arch": "aarch64",
         "data_dir": "/d", "scopes": ["orchestration_read"], "started_at": "2026-10-28T10:00:00Z"
@@ -433,7 +433,10 @@ fn an_older_daemon_info_and_project_still_parse_and_the_network_defaults_are_on(
     .unwrap();
     assert_eq!((old.machine_id.as_str(), old.network_protocol, old.features.len()), ("", 0, 0));
     let settings: Settings = serde_json::from_value(serde_json::json!({})).unwrap();
-    assert_eq!(settings.network, NetworkSettings { enabled: true, port: DEFAULT_PORT });
+    assert_eq!(settings.network, NetworkSettings { enabled: false, port: DEFAULT_PORT });
+    // A settings file from before the default changed, saved with the network on, keeps it on.
+    let saved: Settings = serde_json::from_value(serde_json::json!({ "network": { "enabled": true } })).unwrap();
+    assert_eq!(saved.network, NetworkSettings { enabled: true, port: DEFAULT_PORT });
     assert_eq!(NETWORK_PROTOCOL, 1);
     assert_eq!(features::ALL.len(), 16);
 }

@@ -838,8 +838,9 @@ pub struct MoveInfo {
 // ---- settings ----
 
 /// The `settings.network` section.
-// N1: §3.1 names `settings.network.port` and the master toggle but gives no struct. "Network on
-// by default" (§12 Q1) means `enabled` defaults to true.
+// N1: §3.1 names `settings.network.port` and the master toggle but gives no struct. `enabled` is off
+// until the user turns it on (the desktop's network intro, Settings → Machines or `kybern machines
+// enable`); a settings file that already says `true` keeps it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct NetworkSettings {
@@ -851,7 +852,7 @@ pub struct NetworkSettings {
 
 impl Default for NetworkSettings {
     fn default() -> Self {
-        Self { enabled: true, port: crate::DEFAULT_PORT }
+        Self { enabled: false, port: crate::DEFAULT_PORT }
     }
 }
 

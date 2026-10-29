@@ -3393,7 +3393,7 @@ export type MachineScope =
 
 /** The `settings.network` section. */
 export interface NetworkSettings {
-  /** "Connect to your other machines". On by default. */
+  /** "Connect to your other machines". Off until the user turns it on. */
   enabled: boolean;
   /** The fixed port the Tailscale listener binds; the daemon tries the next six when it is taken. */
   port: number;

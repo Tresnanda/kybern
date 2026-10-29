@@ -92,14 +92,16 @@ struct Daemon {
 }
 
 impl Daemon {
-    /// Start `kybernd` on a loopback primary with the fake tailnet fixture. `network_port` is written
-    /// to `settings.json` when given.
+    /// Start `kybernd` on a loopback primary with the fake tailnet fixture and the network turned on
+    /// (it is off by default). `network_port` is written to `settings.json` when given.
     fn start(scratch: &Scratch, name: &str, fixture: &Path, network_port: Option<u16>) -> Self {
         let dir = scratch.0.join(name);
         std::fs::create_dir_all(&dir).unwrap();
-        if let Some(port) = network_port {
-            std::fs::write(dir.join("settings.json"), json!({ "network": { "enabled": true, "port": port } }).to_string()).unwrap();
-        }
+        let network = match network_port {
+            Some(port) => json!({ "enabled": true, "port": port }),
+            None => json!({ "enabled": true }),
+        };
+        std::fs::write(dir.join("settings.json"), json!({ "network": network }).to_string()).unwrap();
         let log = scratch.0.join(format!("{name}.log"));
         let file = std::fs::File::create(&log).unwrap();
         let process = Command::new(kybernd())
