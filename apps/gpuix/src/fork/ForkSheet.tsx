@@ -30,12 +30,27 @@ import { TextArea } from '../kit/TextArea.tsx'
 import { DialogBody, DialogFooter, DialogHeader, ErrorText, Field, Hint } from '../environments/kit.tsx'
 import { Label, useTheme } from '../ui.tsx'
 import { forkTargetsOf } from './targets.ts'
+import { provisionContextOf } from '../provision/targets.ts'
+import { FolderField, useProvisionPlan } from '../provision/parts.tsx'
+import { defaultPath, displayPath, notYetDetail, pathAccepted } from '../../../../packages/kybern-client/src/provision.ts'
+import { ownProjectOf } from '../machines/merged.ts'
+import { threadClient } from '../state.ts'
+
+/** A machine of the sheet: one that has the project, or one it will be added to first. */
+type SheetTarget = ForkInstance & { missing?: boolean }
 
 export function ForkSheet({ threadId, machineId, close, mode = 'fork' }: { threadId: string; machineId?: string; close: () => void; mode?: 'fork' | 'move' }) {
   const move = mode === 'move'
   const t = useTheme()
   const thread = useApp((s) => s.threads.find((item) => item.id === threadId && item.machineId === machineId))
-  const targets = useMemo<ForkInstance[]>(() => (thread ? forkTargetsOf(thread) : []), [thread])
+  // Machines without the project are offered too: the daemon adds it there first, then forks or moves.
+  const targets = useMemo<SheetTarget[]>(() => {
+    if (!thread) return []
+    const having = forkTargetsOf(thread)
+    const context = thread.subagent ? null : provisionContextOf(ownProjectOf(thread), thread.machineId)
+    const missing = (context?.targets ?? []).filter((item) => !item.has).map((item) => ({ machineId: item.machineId, machineName: item.machineName, projectId: '', online: item.online, missing: true }))
+    return [...having, ...missing]
+  }, [thread])
   const [state, setState] = useState(() => forkSheetDefaults(targets, ''))
   const [generated, setGenerated] = useState<string | null>(null)
   const [noteError, setNoteError] = useState('')
@@ -73,6 +88,16 @@ export function ForkSheet({ threadId, machineId, close, mode = 'fork' }: { threa
     return () => { clearInterval(timer); clearTimeout(stop) }
   }, [generated, renderer])
   const target = targets.find((item) => item.machineId === state.machine) ?? targets[0]
+  // A machine without the project: where it goes there (proposed by that machine, changeable) travels with the fork.
+  const [sourceClient] = useState(() => { try { return threadClient(threadId, machineId) } catch { return null } })
+  const [addPath, setAddPath] = useState<string | null>(null)
+  const [changing, setChanging] = useState(false)
+  const { plan: addPlan, check: addCheck, checking: addChecking } = useProvisionPlan(sourceClient, thread ? ownProjectOf(thread) : '', target?.missing ? target.machineId : null, addPath)
+  useEffect(() => { setAddPath(null); setChanging(false) }, [target?.machineId])
+  useEffect(() => { if (addPlan && addPath === null) setAddPath(defaultPath(addPlan)) }, [addPlan, addPath])
+  const addReady = !target?.missing || (!!addPlan && !addPlan.blocked && !addChecking && pathAccepted(addCheck) && (addPath !== null || !addPlan.target.online))
+  const provision = target?.missing ? { provision: { ...(addPath ? { path: addPath } : {}) } } : {}
+  const addShown = addPlan && addPath ? displayPath(addPath, addPlan.target_home, addPlan.target.os) : null
   // The new thread starts a turn at once, so it needs an agent that can sign in there: the thread's own when it can, else one that is.
   const agents = useMachineAgents(target?.machineId)
   const [picked, setPicked] = useState<{ machine: string; kind: ProviderKind } | null>(null)
@@ -95,14 +120,14 @@ export function ForkSheet({ threadId, machineId, close, mode = 'fork' }: { threa
     return Promise.resolve(true)
   }
   const fork = async () => {
-    if (!target || generated === null || blocked) return
+    if (!target || generated === null || blocked || !addReady) return
     setBusy(true); setError('')
     try {
       if (move) {
-        const result = await callThread(threadId, 'threads.move_to_machine', moveParams(threadId, target, state, generated, null, agent, choice), machineId)
+        const result = await callThread(threadId, 'threads.move_to_machine', { ...moveParams(threadId, target, state, generated, null, agent, choice), ...provision }, machineId)
         toast.success(moveQueuedText(result.target_name, target.online), { description: target.online ? 'This thread becomes read-only with a link once it arrives.' : 'It waits in the outbox; nothing is locked meanwhile.' })
       } else {
-        const result = await callThread(threadId, 'threads.fork_to_machine', forkParams(threadId, target, state, generated, null, agent, choice), machineId)
+        const result = await callThread(threadId, 'threads.fork_to_machine', { ...forkParams(threadId, target, state, generated, null, agent, choice), ...provision }, machineId)
         toast.success(forkQueuedText(result.target_name, target.online), { description: target.online ? 'A notice in this thread links to the new one when it arrives.' : 'It waits in the outbox.' })
       }
       close()
@@ -115,10 +140,19 @@ export function ForkSheet({ threadId, machineId, close, mode = 'fork' }: { threa
     <DialogHeader title={move ? 'Continue on another machine' : 'Fork to another machine'} description={move ? 'Moves the thread and its uncommitted work. This one becomes read-only.' : 'Starts a copy there with a hand-off note. Both threads keep going.'} onClose={dismiss} />
     <DialogBody footer scroll>
       {targets.length === 0
-        ? <Hint>No other machine has this project yet.</Hint>
+        ? <Hint>No other machine is in your network yet.</Hint>
         : <Field label="Machine"><div role="radiogroup" aria-label="Machine" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {targets.map((item) => <MachineChoice key={item.machineId} item={item} checked={target?.machineId === item.machineId} disabled={busy} onSelect={() => setState({ ...state, machine: item.machineId })} />)}
+          {targets.map((item) => <MachineChoice key={item.machineId} item={item} checked={target?.machineId === item.machineId} disabled={busy}
+            detail={item.missing ? notYetDetail(item.machineName, target?.machineId === item.machineId ? addShown : null) : undefined} onSelect={() => setState({ ...state, machine: item.machineId })} />)}
         </div></Field>}
+      {target?.missing && <div testId="fork-provision" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {addPlan?.blocked ? <ErrorText testId="fork-provision-blocked">{addPlan.blocked}</ErrorText> : changing && addPlan
+          ? <Field label={`Folder on ${target.machineName}`}><FolderField testId="fork-provision-folder" plan={addPlan} path={addPath ?? ''} onPath={setAddPath} check={addCheck} checking={addChecking} disabled={busy} /></Field>
+          : <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Hint>{addPlan ? `${target.machineName} gets the project first${addPlan.env_files.length ? `, with ${addPlan.env_files.length === 1 ? 'its env file' : `its ${addPlan.env_files.length} env files`}` : ''}; then the ${move ? 'thread moves' : 'fork starts'} there.` : `Asking ${target.machineName} where it keeps projects…`}</Hint>
+            {addPlan && addPlan.target.online && <Button size="sm" variant="ghost" testId="fork-provision-change" disabled={busy} onClick={() => setChanging(true)}>Change folder…</Button>}
+          </div>}
+      </div>}
       {/* Only the agents installed there; a signed-out Claude, Codex or Cursor says so (omp, OpenCode and pi have no sign-in). */}
       {target && installed.length > 0 && <Field label="Agent"><div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
@@ -153,13 +187,13 @@ export function ForkSheet({ threadId, machineId, close, mode = 'fork' }: { threa
     </DialogBody>
     <DialogFooter>
       <Button size="lg" variant="secondary" disabled={busy} onClick={dismiss}>Cancel</Button>
-      <Button size="lg" variant="primary" testId={move ? 'move-confirm' : 'fork-confirm'} busy={busy} disabled={!target || generated === null || blocked} onClick={() => void fork()}>{target ? `${move ? 'Continue on' : 'Fork to'} ${target.machineName}` : move ? 'Continue there' : 'Fork'}</Button>
+      <Button size="lg" variant="primary" testId={move ? 'move-confirm' : 'fork-confirm'} busy={busy} disabled={!target || generated === null || blocked || !addReady} onClick={() => void fork()}>{target ? `${move ? 'Continue on' : 'Fork to'} ${target.machineName}` : move ? 'Continue there' : 'Fork'}</Button>
     </DialogFooter>
   </Dialog>
 }
 
 /** One machine as a half-width tile: its badge, its name, and what it can do (the agents there, or offline). */
-function MachineChoice({ item, checked, disabled, onSelect }: { item: ForkInstance; checked: boolean; disabled: boolean; onSelect: () => void }) {
+function MachineChoice({ item, checked, disabled, onSelect, detail }: { item: ForkInstance; checked: boolean; disabled: boolean; onSelect: () => void; detail?: string }) {
   const t = useTheme()
   const c = useControls()
   const agents = useMachineAgents(item.online ? item.machineId : undefined)
@@ -177,7 +211,7 @@ function MachineChoice({ item, checked, disabled, onSelect }: { item: ForkInstan
       <div style={{ display: 'flex', opacity: item.online ? 1 : 0.55 }}><MachineBadge glyph={glyphOfMachine(item.machineId)} size={20} /></div>
       <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, minWidth: 0, pointerEvents: 'none' }}>
         <Label color={t.text} size={14} lineHeight={20} weight={500} truncate>{item.machineName}</Label>
-        <Label color={t.textSecondary} size={12} lineHeight={16} truncate>{machineChoiceDetail(item.online, agents)}</Label>
+        <Label color={t.textSecondary} size={12} lineHeight={16} truncate>{detail ?? machineChoiceDetail(item.online, agents)}</Label>
       </div>
       <Radio checked={checked} disabled={disabled} />
     </div>
