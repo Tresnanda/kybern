@@ -7,7 +7,7 @@ import { FieldShell } from '../kit/Field.tsx'
 import { T } from '../transcript/glyphs.ts'
 import { respondApproval } from '../transcript/store.ts'
 import { Label } from '../ui.tsx'
-import { CardShell, HintText, Hints, RequestHeader, useCardTokens } from './Card.tsx'
+import { CardShell, HintText, Hints, RequestBody, RequestHeader, useCardTokens } from './Card.tsx'
 import { keyboardAnswer } from './Panel.tsx'
 
 /** A blocking form: the field, where the value goes and the two buttons. Esc is ignored so a stray key never drops a typed value. */
@@ -31,6 +31,7 @@ export function SecretRequestPanel({ approval, input, count }: { approval: Appro
   return (
     <CardShell testId="secret-request-panel" stealFocus={false}>
       <RequestHeader glyph={T.key} title={input.label} chip={{ label: input.file, mono: true }} badge={count > 1 ? `1 of ${count}` : undefined} meta={input.reason || undefined} />
+      <RequestBody>
       <FieldShell size="lg" focused={focused} style={{ marginTop: 12, paddingRight: 4 }} trailing={
         <Button variant="ghost" size="sm" testId="secret-reveal" label={revealed ? 'Hide value' : 'Show value'} onClick={() => setRevealed(v => !v)}>{revealed ? 'Hide' : 'Show'}</Button>
       }>
@@ -42,6 +43,7 @@ export function SecretRequestPanel({ approval, input, count }: { approval: Appro
         ))}
         <Label color={k.t.textTertiary} size={11.5} lineHeight={18}>{' Git ignores this file.'}</Label>
       </div>
+      </RequestBody>
       <Hints
         error={error}
         left={<HintText>{COPY.footnote}</HintText>}

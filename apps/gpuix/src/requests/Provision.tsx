@@ -14,7 +14,7 @@ import { respondApproval } from '../transcript/store.ts'
 import { threadClient } from '../state.ts'
 import { T } from '../transcript/glyphs.ts'
 import { Label } from '../ui.tsx'
-import { CardShell, HintText, Hints, RequestHeader, useCardTokens } from './Card.tsx'
+import { CardShell, HintText, Hints, RequestBody, RequestHeader, useCardTokens } from './Card.tsx'
 import { keyboardAnswer } from './Panel.tsx'
 
 export function ProvisionRequestPanel({ approval, input, count, threadId }: { approval: ApprovalRequest; input: ProvisionCardInput; count: number; threadId: string }) {
@@ -40,7 +40,7 @@ export function ProvisionRequestPanel({ approval, input, count, threadId }: { ap
     <CardShell testId="provision-request-panel" stealFocus={false}>
       <RequestHeader glyph={T.laptop} title={COPY.cardTitle(view.target.name, view.project_name)} badge={count > 1 ? `1 of ${count}` : undefined} meta={input.reason || COPY.cardThen(input.then, view.target.name)}
         tileMark={<MachineBadge glyph={glyphOfMachine(view.target.id)} size={20} />} />
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
+      <RequestBody style={{ gap: 12, marginTop: 12 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <Label color={k.t.textSecondary} size={12.5} lineHeight={18} weight={500}>{`${COPY.folder} on ${view.target.name}`}</Label>
           <FolderField testId="provision-card-folder" plan={view} path={path} onPath={setPath} check={check} checking={checking} disabled={busy} />
@@ -49,7 +49,7 @@ export function ProvisionRequestPanel({ approval, input, count, threadId }: { ap
           <Label color={k.t.textSecondary} size={12.5} lineHeight={18} weight={500}>{COPY.envFiles}</Label>
           <EnvFileList plan={view} selected={env} onChange={setEnv} disabled={busy} />
         </div>
-      </div>
+      </RequestBody>
       <Hints
         error={error}
         left={<HintText>{`${view.target.name} clones it, or ${view.source.name} sends it`}</HintText>}

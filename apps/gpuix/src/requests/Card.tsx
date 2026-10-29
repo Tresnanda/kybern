@@ -166,6 +166,12 @@ export function RequestHeader({ glyph, title, chip, chipGlyph, chipMark, badge, 
   )
 }
 
+/** A form card's body (fields, lists, their labels and helper text) in the header's text column, so it starts where the title
+ *  and its line start: the tile keeps the gutter to itself. Full-width wells (a command, a diff) stay at the card's edge. */
+export function RequestBody({ children, style }: { children: ReactNode; style?: StyleDesc }) {
+  return <div style={{ display: 'flex', flexDirection: 'column', marginLeft: 34, minWidth: 0, ...style }}>{children}</div>
+}
+
 /** The line that replaces the rows while Kybern waits (spinner, what it waits for, the time left), or the green "continuing" line. */
 export function StatusRow({ tone = 'wait', label, trailing, testId }: { tone?: 'wait' | 'done'; label: string; trailing?: ReactNode; testId?: string }) {
   const k = useCardTokens()
