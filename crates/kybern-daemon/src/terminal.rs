@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -38,7 +39,8 @@ impl broadcast::RetainedSize for Arc<TerminalEvent> {
 pub struct Terminal {
     command: Option<Vec<String>>,
     pub info: Mutex<TerminalInfo>,
-    master: Mutex<Box<dyn MasterPty + Send>>,
+    /// Taken (closed) once the process has exited and its output is drained.
+    master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     writer: Mutex<Box<dyn Write + Send>>,
     scrollback: Mutex<VecDeque<u8>>,
     pub events: broadcast::Sender<Arc<TerminalEvent>>,
@@ -47,6 +49,8 @@ pub struct Terminal {
     last_activity: Mutex<Instant>,
     /// When the process ended; the record is purged after `EXITED_RETENTION`.
     exited_at: Mutex<Option<Instant>>,
+    /// Set by the first `finish`, so the reader and the exit watcher record one exit.
+    finished: AtomicBool,
 }
 
 /// One pseudo-terminal the daemon closed because nothing was using it.
@@ -135,13 +139,14 @@ impl TerminalManager {
                 exit_code: None,
                 created_at: Utc::now(),
             }),
-            master: Mutex::new(pair.master),
+            master: Mutex::new(Some(pair.master)),
             writer: Mutex::new(writer),
             scrollback: Mutex::new(VecDeque::with_capacity(SCROLLBACK_CAP)),
             events,
             child: Mutex::new(child),
             last_activity: Mutex::new(Instant::now()),
             exited_at: Mutex::new(None),
+            finished: AtomicBool::new(false),
         });
         self.terminals.lock().unwrap().insert(id, terminal.clone());
         self.issued_ids.lock().unwrap().insert(id);
@@ -176,17 +181,18 @@ impl TerminalManager {
                     }
                 }
                 let code = t.child.lock().unwrap().wait().ok().map(|s| s.exit_code() as i32);
-                {
-                    let mut info = t.info.lock().unwrap();
-                    info.alive = false;
-                    info.exit_code = code;
-                }
-                *t.exited_at.lock().unwrap() = Some(Instant::now());
-                let _ = t.events.send(Arc::new(TerminalEvent::Exited(code)));
                 // The record stays listed for `EXITED_RETENTION` so clients can
                 // read the exit; the maintenance sweep purges it.
+                t.finish(code);
             })
             .context("spawn pty reader thread")?;
+
+        // Windows (ConPTY): the output pipe stays open after the shell exits until the
+        // pseudoconsole is closed, so the reader never sees EOF. Watch the process itself.
+        if cfg!(windows) {
+            let t = terminal.clone();
+            std::thread::Builder::new().name(format!("pty-wait-{id}")).spawn(move || t.watch_exit()).context("spawn pty exit watcher")?;
+        }
 
         Ok(terminal)
     }
@@ -277,11 +283,55 @@ impl Terminal {
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> Result<()> {
-        self.master.lock().unwrap().resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })?;
+        if let Some(master) = self.master.lock().unwrap().as_ref() {
+            master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })?;
+        }
         let mut info = self.info.lock().unwrap();
         info.cols = cols;
         info.rows = rows;
         Ok(())
+    }
+
+    /// Record the process exit once: mark the terminal dead, stamp the retention
+    /// clock and tell subscribers. Later calls do nothing.
+    fn finish(&self, code: Option<i32>) {
+        if self.finished.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        {
+            let mut info = self.info.lock().unwrap();
+            info.alive = false;
+            info.exit_code = code;
+        }
+        *self.exited_at.lock().unwrap() = Some(Instant::now());
+        let _ = self.events.send(Arc::new(TerminalEvent::Exited(code)));
+    }
+
+    /// Wait for the process to end, let the reader drain what it wrote, then close the
+    /// master so a reader blocked on an open pipe returns, and record the exit.
+    fn watch_exit(&self) {
+        let code = loop {
+            if self.finished.load(Ordering::SeqCst) {
+                return;
+            }
+            match self.child.lock().unwrap().try_wait() {
+                Ok(Some(status)) => break Some(status.exit_code() as i32),
+                Ok(None) => {}
+                Err(_) => break None,
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        // Output the shell wrote before exiting is still in the pipe: wait for it to go quiet.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let seen = self.last_activity();
+            std::thread::sleep(Duration::from_millis(150));
+            if self.last_activity() == seen || Instant::now() >= deadline {
+                break;
+            }
+        }
+        self.finish(code);
+        drop(self.master.lock().unwrap().take());
     }
 
     pub fn info(&self) -> TerminalInfo {
@@ -302,7 +352,7 @@ impl Terminal {
         #[cfg(unix)]
         {
             let shell = self.child.lock().unwrap().process_id()?;
-            let leader = self.master.lock().unwrap().process_group_leader()?;
+            let leader = self.master.lock().unwrap().as_ref()?.process_group_leader()?;
             Some(u32::try_from(leader).ok() == Some(shell))
         }
         // portable-pty has no process-group query on Windows.
@@ -443,6 +493,36 @@ mod tests {
         assert_eq!(released.len(), 1);
         assert_eq!(released[0].id, terminal.info().id);
         assert!(manager.get(terminal.info().id).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exit_is_recorded_once_and_late_finishes_are_ignored() {
+        let manager = TerminalManager::default();
+        let terminal = manager
+            .create(
+                None,
+                None,
+                std::env::temp_dir().display().to_string(),
+                80,
+                24,
+                Some(vec!["/bin/sh".into(), "-c".into(), "exit 4".into()]),
+            )
+            .unwrap();
+        let (mut events, _) = terminal.subscribe_output(false);
+        assert!(wait_until(|| !terminal.info().alive), "command did not exit");
+        // The exit watcher Windows runs lands on the same path after the reader.
+        terminal.finish(Some(9));
+        terminal.watch_exit();
+        assert_eq!(terminal.info().exit_code, Some(4));
+        let mut exits = 0;
+        while let Ok(event) = events.try_recv() {
+            if matches!(event.as_ref(), TerminalEvent::Exited(_)) {
+                exits += 1;
+            }
+        }
+        assert!(exits <= 1, "Exited sent {exits} times");
+        assert!(terminal.resize(100, 30).is_ok());
     }
 
     #[cfg(unix)]

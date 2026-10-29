@@ -600,7 +600,8 @@ pub async fn terminal(client: &Client, cmd: crate::TerminalCommand, json: bool) 
         }
         T::Send { terminal, input } => {
             let mut line = input.join(" ");
-            line.push('\n');
+            // A terminal's Enter is a carriage return; cmd and PowerShell on Windows ignore a bare line feed.
+            line.push(if cfg!(windows) { '\r' } else { '\n' });
             client
                 .call::<TerminalsInput>(TerminalsInputParams { terminal_id: terminal.parse()?, data: b64.encode(line.as_bytes()) })
                 .await?;
