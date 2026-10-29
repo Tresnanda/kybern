@@ -32,6 +32,7 @@ pub mod ops;
 pub mod outbox;
 pub mod peers;
 pub mod ports;
+pub mod provision;
 pub mod relay;
 pub mod removal;
 pub mod repo_identity;
@@ -213,6 +214,8 @@ pub struct Network {
     pub ports: ports::Forwards,
     /// This machine's clipboard, explicit sends and the universal clipboard (M4, U2).
     pub clipboard: clipboard::Clipboard,
+    /// Projects this machine is adding to other machines, by operation.
+    pub provisions: provision::Tracker,
     /// The client every dial and probe uses. Under the fake it is bound to this node's loopback
     /// address, so the peer's `whois` can name the caller.
     pub http: reqwest::Client,
@@ -266,6 +269,7 @@ impl Network {
             files: Default::default(),
             ports: Default::default(),
             clipboard: Default::default(),
+            provisions: Default::default(),
             listen: Default::default(),
             self_ts: Default::default(),
             watching: Default::default(),
@@ -321,6 +325,7 @@ impl Network {
             features::PORTS_V1.to_string(),
             features::CLIPBOARD_V1.to_string(),
             features::GROUP_V1.to_string(),
+            features::PROVISION_V1.to_string(),
         ]
     }
 

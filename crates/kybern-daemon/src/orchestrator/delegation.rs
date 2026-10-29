@@ -11,6 +11,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail, ensure};
@@ -477,7 +478,7 @@ impl Orchestrator {
         &self,
         thread: &Thread,
         turn_id: TurnId,
-        live: &LiveSession,
+        live: &Arc<LiveSession>,
         name: &str,
         arguments: Value,
     ) -> Result<Value> {
@@ -696,7 +697,7 @@ impl Orchestrator {
 
     // ---- kybern_agent_delegate ----
 
-    async fn agent_delegate(&self, parent: &Thread, turn_id: TurnId, live: &LiveSession, args: DelegateArgs) -> Result<Value> {
+    async fn agent_delegate(&self, parent: &Thread, turn_id: TurnId, live: &Arc<LiveSession>, args: DelegateArgs) -> Result<Value> {
         let operation_id = args.operation_id.unwrap_or_else(Uuid::now_v7);
         let mode = args.mode.unwrap_or_default();
         let timeout = Duration::from_millis(args.timeout_ms.unwrap_or(DELEGATE_WAIT_DEFAULT_MS).clamp(1, DELEGATE_WAIT_MAX_MS));

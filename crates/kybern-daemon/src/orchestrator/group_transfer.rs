@@ -412,7 +412,8 @@ impl Orchestrator {
                 this_machine,
                 repos,
                 closest.as_ref().map(|(_, candidate, missing, extra)| (candidate, missing.clone(), extra.clone())),
-            ))),
+            ))
+            .with_data(serde_json::json!({ "needs": kybern_protocol::NEEDS_PROJECT }))),
             1 => Ok(exact.remove(0)),
             _ => {
                 let list = exact.iter().map(|c| format!("{} ({})", c.project.name, c.project.path)).collect::<Vec<_>>().join(", ");

@@ -324,6 +324,7 @@ async fn deliver(state: &AppState, item: &OutboxItem) -> Delivery {
         OutboxKind::SettingsPatch => crate::settings_share::deliver(state, item).await,
         OutboxKind::SecretsPut => super::broker::deliver_secrets_put(state, item).await,
         OutboxKind::FilesPush => super::files_push::deliver(state, item).await,
+        OutboxKind::Provision => super::provision::deliver(state, item).await,
     }
 }
 
@@ -364,6 +365,9 @@ fn finish(state: &AppState, mut item: OutboxItem, delivery: Delivery) {
 /// Tell the clients and the orchestrator that an item changed.
 fn settle(state: &AppState, item: &OutboxItem) {
     announce(state, item);
+    if item.kind == OutboxKind::Provision {
+        super::provision::settled(state, item);
+    }
     state.orchestrator.remote_outbox_changed(item);
 }
 

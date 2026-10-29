@@ -242,7 +242,7 @@ fn resolve(root: &Path, rel: &str) -> Result<std::path::PathBuf> {
 const OUTSIDE: &str = "This path leads outside the project. Use a path inside the workspace.";
 
 /// Folders that hold credentials rather than project files.
-const CREDENTIAL_DIRS: &[&str] = &[".ssh", ".gnupg", ".aws"];
+pub(crate) const CREDENTIAL_DIRS: &[&str] = &[".ssh", ".gnupg", ".aws"];
 
 /// Why Kybern will not open the file or folder at `parts` (relative to the
 /// project root), whoever names it: the repository's own `.git`, credential

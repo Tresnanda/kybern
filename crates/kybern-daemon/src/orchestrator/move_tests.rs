@@ -18,6 +18,7 @@ impl Pair {
             effort: None,
             permission_mode: None,
             operation_id: None,
+            provision: None,
         }
     }
 

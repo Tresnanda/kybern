@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 
 /// Bumped with every wording change so a changed guide is a deliberate act.
-pub(crate) const GUIDE_VERSION: u32 = 19;
+pub(crate) const GUIDE_VERSION: u32 = 20;
 
 /// Hard ceiling for the rendered guide (about 1.5k tokens at 4 bytes a token).
 #[cfg(test)]
@@ -155,6 +155,11 @@ pub(crate) fn render(tools: &GuideTools) -> String {
         if tools.has("kybern_agent_delegate") {
             out.push_str(" `kybern_agent_delegate` with `machine` queues work for it instead.");
         }
+        if tools.has(crate::orchestrator::provision::ADD_TOOL) {
+            out.push_str(
+                "\n- A machine without this repository: delegating there asks the user to add the project first, then goes on; `kybern_project_add_to_machine` asks for it alone.",
+            );
+        }
         out.push_str(
             "\n\
              - Your permission mode travels with the call and can only narrow there: the user on that machine may be asked.\n\
@@ -208,6 +213,7 @@ mod tests {
         let mut names: Vec<String> = native_tool_definitions().into_iter().map(|tool| tool.name).collect();
         names.extend(ComputerUse::tool_definitions().into_iter().map(|tool| tool.name));
         names.push(crate::network::forward::MACHINES_TOOL.to_string());
+        names.push(crate::orchestrator::provision::ADD_TOOL.to_string());
         names
     }
 
@@ -228,7 +234,7 @@ mod tests {
             include_str!("agent_guide_full.golden.txt"),
             "guide wording changed: bump GUIDE_VERSION and update the golden file (KYBERN_UPDATE_GOLDEN=1)"
         );
-        assert_eq!(GUIDE_VERSION, 19);
+        assert_eq!(GUIDE_VERSION, 20);
     }
 
     #[test]

@@ -74,6 +74,7 @@ pub async fn run(client: &Client, args: ForkArgs, json: bool) -> Result<()> {
             effort: None,
             permission_mode: args.mode.as_deref().map(|mode| parse("permission mode", mode)).transpose()?,
             operation_id: None,
+            provision: None,
         })
         .await?;
     if json {

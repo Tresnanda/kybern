@@ -286,6 +286,9 @@ impl Orchestrator {
             expires_at: now + chrono::Duration::days(self.outbox_expiry_days()),
             updated_at: now,
         };
+        if let Some(choice) = params.provision.clone() {
+            self.provision_before(&thread, &target, choice, operation_id).await?;
+        }
         let item = self.inner.store.outbox_insert(&item).map_err(internal)?;
         hub.kick();
         let waiting_for = if !target.online || target.paused {
@@ -564,7 +567,7 @@ impl Orchestrator {
             }
             Err(CallFailure::Offline(reason)) => return self.move_not_sent(thread_id, item.operation_id, Delivery::Retry(reason)),
             Err(CallFailure::Gone(reason)) => return self.move_not_sent(thread_id, item.operation_id, Delivery::Failed(reason)),
-            Err(CallFailure::Remote(error)) => return self.move_not_sent(thread_id, item.operation_id, remote_error_delivery(&error)),
+            Err(CallFailure::Remote(error)) => return self.move_not_sent(thread_id, item.operation_id, self.remote_refusal(item, &error)),
         }
 
         // From here on the target may create the thread, so a missing answer is "unknown", never "no".

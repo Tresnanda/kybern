@@ -612,6 +612,12 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
         | PeerMoveCommit::NAME
         | PeerMoveGet::NAME
         | PeerMoveAbort::NAME => state.orchestrator.peer_dispatch(&link.machine_id, method, params).await,
+        // Adding a project to this machine from another one.
+        PeerProvisionProbeMethod::NAME
+        | PeerProvisionPrepare::NAME
+        | PeerProvisionChunk::NAME
+        | PeerProvisionImport::NAME
+        | PeerProvisionFinish::NAME => super::provision::serve(state, link, method, params).await,
         // Forwarded agent tools (R2): the tool runs as an inbound thread; its scopes beyond `machine:tools` are checked there.
         PeerToolCall::NAME => {
             let granted = effective_scopes(network, link);

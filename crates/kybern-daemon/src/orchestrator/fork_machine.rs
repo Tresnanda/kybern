@@ -31,9 +31,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::group_transfer::{SourceMember, needed_members, needs_bundle};
-use super::remote_delegation::{
-    CallFailure, Delivery, RemoteHub, from_value, internal, namespaced_operation, narrower, remote_error_delivery,
-};
+use super::remote_delegation::{CallFailure, Delivery, RemoteHub, from_value, internal, namespaced_operation, narrower};
 use super::{Orchestrator, derived_operation_id};
 use crate::network::git_transfer;
 use crate::state::AppState;
@@ -246,6 +244,9 @@ impl Orchestrator {
             expires_at: now + chrono::Duration::days(self.outbox_expiry_days()),
             updated_at: now,
         };
+        if let Some(choice) = params.provision.clone() {
+            self.provision_before(&thread, &target, choice, operation_id).await?;
+        }
         let item = self.inner.store.outbox_insert(&item).map_err(internal)?;
         hub.kick();
         if !target.online || target.paused {
@@ -502,7 +503,7 @@ impl Orchestrator {
             },
             Err(CallFailure::Offline(reason)) => Delivery::Retry(reason),
             Err(CallFailure::Gone(reason)) => Delivery::Failed(reason),
-            Err(CallFailure::Remote(error)) => remote_error_delivery(&error),
+            Err(CallFailure::Remote(error)) => self.remote_refusal(item, &error),
         }
     }
 
@@ -557,7 +558,7 @@ impl Orchestrator {
                 }
                 Err(CallFailure::Offline(reason)) => return Err(Delivery::Retry(reason)),
                 Err(CallFailure::Gone(reason)) => return Err(Delivery::Failed(reason)),
-                Err(CallFailure::Remote(error)) => return Err(remote_error_delivery(&error)),
+                Err(CallFailure::Remote(error)) => return Err(self.remote_refusal(item, &error)),
             }
         }
     }

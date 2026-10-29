@@ -990,6 +990,29 @@ enum ProjectsCmd {
         /// A space id or name.
         space: String,
     },
+    /// Add a project of this machine to another machine of the network: it clones there, or this machine sends it.
+    Provision {
+        /// A project id, name or path.
+        project: String,
+        /// The other machine's name or id.
+        machine: String,
+        /// The folder on that machine (`~` is its home). Omit for the one it proposes.
+        #[arg(long)]
+        path: Option<String>,
+        /// An env file to copy, relative to the project. Repeat for each; omit to copy every detected one.
+        #[arg(long = "env")]
+        env_files: Vec<String>,
+        /// Copy no env files.
+        #[arg(long, conflicts_with = "env_files")]
+        no_env: bool,
+        /// Only show what would happen: the proposed folder and the env files.
+        #[arg(long)]
+        plan: bool,
+    },
+    /// Show where adding a project to another machine stands.
+    ProvisionStatus {
+        operation_id: uuid::Uuid,
+    },
     Remove {
         id: String,
     },
@@ -1703,6 +1726,28 @@ pub async fn run() -> Result<()> {
                     let project = client.call::<ProjectsList>(ProjectsListParams { refresh_git: Some(false) }).await?.projects;
                     render::members(&status, project.iter().find(|p| p.id == project_id))
                 }
+            }
+            ProjectsCmd::Provision { project, machine, path, env_files, no_env, plan } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                if plan {
+                    let result = client.call::<ProjectsProvisionPlan>(ProjectsProvisionPlanParams { project_id, machine, path }).await?;
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                } else {
+                    let env_files = if no_env { Some(Vec::new()) } else { (!env_files.is_empty()).then_some(env_files) };
+                    let result = client
+                        .call::<ProjectsProvision>(ProjectsProvisionParams {
+                            project_id,
+                            machine,
+                            choice: ProvisionChoice { path, env_files },
+                            operation_id: None,
+                        })
+                        .await?;
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                }
+            }
+            ProjectsCmd::ProvisionStatus { operation_id } => {
+                let result = client.call::<ProjectsProvisionStatusMethod>(ProjectsProvisionStatusParams { operation_id }).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
             }
             ProjectsCmd::Map { project } => {
                 let project_id = resolve_project(&client, &project, false).await?;

@@ -241,6 +241,28 @@ impl Store {
         })
     }
 
+    /// Whether a provisioning for `target` is still queued or in flight: work that needs the project there waits for it.
+    pub fn outbox_provision_pending(&self, target: &str) -> Result<bool> {
+        self.with(|c| {
+            Ok(c.query_row(
+                "SELECT EXISTS(SELECT 1 FROM outbox WHERE kind = 'provision' AND target = ?1 AND state IN ('queued','sending'))",
+                [target],
+                |r| r.get::<_, bool>(0),
+            )?)
+        })
+    }
+
+    /// Make the queued items for `target` that were waiting for a provisioning ("Waiting for …") due now: it settled.
+    pub fn outbox_wake_waiting(&self, target: &str) -> Result<usize> {
+        self.with(|c| {
+            Ok(c.execute(
+                "UPDATE outbox SET next_attempt_at = NULL
+                 WHERE target = ?1 AND kind != 'provision' AND state = 'queued' AND last_error LIKE 'Waiting for%'",
+                [target],
+            )?)
+        })
+    }
+
     /// After a restart a delivery that was in flight is queued again; the target deduplicates it.
     pub fn outbox_requeue_sending(&self) -> Result<usize> {
         self.with(|c| Ok(c.execute("UPDATE outbox SET state = 'queued', next_attempt_at = NULL WHERE state = 'sending'", [])?))

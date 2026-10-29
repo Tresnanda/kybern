@@ -220,6 +220,15 @@ async fn dispatch_part_3(state: &AppState, _ctx: &ConnectionCtx, method: &str, s
             let p: ProjectsBrowseParams = parse_or_default(params)?;
             ok(crate::files::browse_directories(p.path).await.map_err(bad)?)
         }
+        ProjectsProvisionPlan::NAME => {
+            let p: ProjectsProvisionPlanParams = parse(params)?;
+            ok(state.orchestrator.provision_plan(p.project_id, &p.machine, p.path).await?)
+        }
+        ProjectsProvision::NAME => ok(crate::network::provision::start(state, parse(params)?).await?),
+        ProjectsProvisionStatusMethod::NAME => {
+            let p: ProjectsProvisionStatusParams = parse(params)?;
+            ok(crate::network::provision::status(state, p.operation_id)?)
+        }
         ProjectsAdd::NAME => {
             let p: ProjectsAddParams = parse(params)?;
             match p.kind.unwrap_or_default() {

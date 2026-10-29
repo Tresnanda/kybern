@@ -195,7 +195,7 @@ impl Orchestrator {
         &self,
         parent: &Thread,
         turn_id: TurnId,
-        live: &LiveSession,
+        live: &Arc<LiveSession>,
         request: RemoteRequest,
     ) -> Result<Value> {
         let hub = self.hub()?.clone();
@@ -227,6 +227,11 @@ impl Orchestrator {
             );
         }
         Self::ensure_turn_active(live, turn_id).await?;
+        // A machine without the repository is offered the project first (a card, or Full access by itself); the
+        // delegation then waits for it instead of failing there.
+        let provision = self
+            .provision_for_agent(parent, turn_id, live, &target, "delegate", None, super::derived_operation_id(request.operation_id, 0x9b))
+            .await?;
 
         let create_lock = self.delegation_create_lock(parent.id);
         let _creating = create_lock.lock().await;
@@ -380,7 +385,11 @@ impl Orchestrator {
         drop(_creating);
         hub.kick();
         self.inner.delegation.changed.notify_waiters();
-        self.remote_response(child, parent.id, request.wait, request.timeout).await
+        let mut response = self.remote_response(child, parent.id, request.wait, request.timeout).await?;
+        if let (Some(note), Some(object)) = (provision.note(), response.as_object_mut()) {
+            object.insert("provision".into(), note);
+        }
+        Ok(response)
     }
 
     pub(crate) fn outbox_expiry_days(&self) -> i64 {
@@ -441,7 +450,7 @@ impl Orchestrator {
         }
     }
 
-    fn machine_name(&self, id: &str) -> String {
+    pub(super) fn machine_name(&self, id: &str) -> String {
         self.remote_hub().and_then(|hub| hub.target(id)).map(|target| target.name).unwrap_or_else(|| "the other machine".to_string())
     }
 
@@ -720,7 +729,7 @@ impl Orchestrator {
             },
             Err(CallFailure::Offline(reason)) => Delivery::Retry(reason),
             Err(CallFailure::Gone(reason)) => Delivery::Failed(reason),
-            Err(CallFailure::Remote(error)) => remote_error_delivery(&error),
+            Err(CallFailure::Remote(error)) => self.remote_refusal(item, &error),
         }
     }
 
@@ -783,7 +792,7 @@ impl Orchestrator {
                 }
                 Err(CallFailure::Offline(reason)) => return Err(Delivery::Retry(reason)),
                 Err(CallFailure::Gone(reason)) => return Err(Delivery::Failed(reason)),
-                Err(CallFailure::Remote(error)) => return Err(remote_error_delivery(&error)),
+                Err(CallFailure::Remote(error)) => return Err(self.remote_refusal(item, &error)),
             }
         }
     }
@@ -1376,8 +1385,11 @@ impl Orchestrator {
         match matches.len() {
             0 => Err(RpcError::new(
                 codes::NOT_FOUND,
-                format!("{this_machine} has no checkout of this repository. Clone it there, or delegate on this machine."),
-            )),
+                format!(
+                    "{this_machine} has no checkout of this repository. Add the project there (its menu → Add to another machine…), or delegate on this machine."
+                ),
+            )
+            .with_data(json!({ "needs": NEEDS_PROJECT }))),
             1 => Ok(matches.remove(0)),
             _ => {
                 let list = matches.iter().map(|project| format!("{} ({})", project.name, project.path)).collect::<Vec<_>>().join(", ");
@@ -1513,7 +1525,7 @@ fn to_value<T: serde::Serialize>(result: Result<T, RpcError>) -> Result<Value, R
 }
 
 /// A remote error as a delivery outcome: busy or broken peers are retried, refusals are final.
-pub(super) fn remote_error_delivery(error: &RpcError) -> Delivery {
+pub(crate) fn remote_error_delivery(error: &RpcError) -> Delivery {
     match error.code {
         codes::INTERNAL_ERROR | codes::THREAD_BUSY | codes::NOT_AVAILABLE => Delivery::Retry(error.message.clone()),
         _ => Delivery::Failed(error.message.clone()),

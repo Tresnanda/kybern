@@ -49,6 +49,7 @@ mod notes;
 mod omp_recovery;
 mod pick_request;
 mod project_map;
+pub(crate) mod provision;
 pub(crate) mod remote_delegation;
 mod request_tools;
 mod rotation;
@@ -341,6 +342,9 @@ impl Orchestrator {
             }
             if name == crate::network::forward::MACHINES_TOOL {
                 return self.execute_machines(thread).await;
+            }
+            if name == provision::ADD_TOOL {
+                return self.execute_add_to_machine(thread, turn_id, &live, arguments).await;
             }
             if name == crate::previews::agent::TOOL {
                 let roots = crate::previews::thread_roots(&self.inner.store, thread);
@@ -3738,6 +3742,7 @@ impl Orchestrator {
         if !fork_machine::second_hop(thread) && self.remote_hub().is_some_and(|hub| !hub.targets().is_empty()) {
             crate::network::forward::offer_machine_args(tools);
             tools.push(crate::network::forward::machines_tool_definition());
+            tools.push(crate::network::forward::add_to_machine_tool_definition());
         }
     }
 
@@ -5052,7 +5057,9 @@ pub(crate) use groups::{member_dir, pr_repo_dir};
 
 /// The wait budget of the summoned-card tools (sign-in, question, permission, terminal).
 pub(crate) fn request_call_budget(name: &str, arguments: &serde_json::Value) -> Option<Duration> {
-    login_request::call_budget(name).or_else(|| request_tools::call_budget(name, arguments))
+    login_request::call_budget(name)
+        .or_else(|| request_tools::call_budget(name, arguments))
+        .or_else(|| provision::call_budget(name, arguments))
 }
 
 /// The summoned-card tools offered to agent sessions.

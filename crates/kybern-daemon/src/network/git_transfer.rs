@@ -160,6 +160,18 @@ pub async fn base_commit(repo: &Repo) -> Result<String> {
 /// Write the commits `commit` needs that no remote-tracking ref reaches (`full` sends the whole history).
 /// `None` when a remote already has everything: the other machine can fetch it from there.
 pub async fn create_bundle(repo: &Repo, commit: &str, operation_id: Uuid, out: &Path, full: bool) -> Result<Option<BundleFile>> {
+    create_bundle_within(repo, commit, operation_id, out, full, MAX_BUNDLE_BYTES).await
+}
+
+/// [`create_bundle`] with its own size limit (a provisioning sends whole repositories).
+pub async fn create_bundle_within(
+    repo: &Repo,
+    commit: &str,
+    operation_id: Uuid,
+    out: &Path,
+    full: bool,
+    limit: u64,
+) -> Result<Option<BundleFile>> {
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -181,8 +193,11 @@ pub async fn create_bundle(repo: &Repo, commit: &str, operation_id: Uuid, out: &
         bail!("git bundle create failed: {}", result.stderr.trim());
     }
     let file = describe(out)?;
-    if file.size > MAX_BUNDLE_BYTES {
+    if file.size > limit {
         let _ = std::fs::remove_file(out);
+        if limit != MAX_BUNDLE_BYTES {
+            bail!(TooLarge { size: file.size, limit });
+        }
         bail!(
             "the changes to send are {} MiB, over the {} MiB limit. Push the branch and delegate from a clean checkout, or delegate on this machine",
             file.size / (1024 * 1024),
@@ -234,7 +249,14 @@ pub fn read_chunk(path: &Path, offset: u64) -> Result<Vec<u8>> {
 /// already held and changes nothing; one that starts after it is a gap and is refused. Returns how many
 /// bytes the file holds.
 pub fn append_chunk(path: &Path, offset: u64, total: u64, data: &[u8]) -> Result<u64> {
-    ensure_total(total)?;
+    append_chunk_within(path, offset, total, data, MAX_BUNDLE_BYTES)
+}
+
+/// [`append_chunk`] with its own size limit.
+pub fn append_chunk_within(path: &Path, offset: u64, total: u64, data: &[u8], limit: u64) -> Result<u64> {
+    if total > limit {
+        bail!("the bundle is {} MiB, over the {} MiB limit", total / (1024 * 1024), limit / (1024 * 1024));
+    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -258,12 +280,20 @@ pub fn append_chunk(path: &Path, offset: u64, total: u64, data: &[u8]) -> Result
     Ok(file.metadata()?.len())
 }
 
-fn ensure_total(total: u64) -> Result<()> {
-    if total > MAX_BUNDLE_BYTES {
-        bail!("the bundle is {} MiB, over the {} MiB limit", total / (1024 * 1024), MAX_BUNDLE_BYTES / (1024 * 1024));
-    }
-    Ok(())
+/// A bundle over its limit: the caller words what to do instead.
+#[derive(Debug)]
+pub struct TooLarge {
+    pub size: u64,
+    pub limit: u64,
 }
+
+impl std::fmt::Display for TooLarge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the repository is {} MiB, over the {} MiB limit", self.size / (1024 * 1024), self.limit / (1024 * 1024))
+    }
+}
+
+impl std::error::Error for TooLarge {}
 
 /// Check a staged bundle and import its commit into `repo` under `incoming_ref(operation_id)`. If the
 /// bundle builds on commits the checkout lacks, `origin` is fetched once before giving up with

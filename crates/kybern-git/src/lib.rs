@@ -880,6 +880,11 @@ impl Repo {
         self.output_with(args, &[], None).await
     }
 
+    /// Run git with extra environment and an optional time limit, and return what it printed.
+    pub async fn output_env(&self, args: &[&str], env: &[(&str, &str)], timeout: Option<std::time::Duration>) -> Result<GitOutput> {
+        self.output_with(args, env, timeout).await
+    }
+
     async fn output_with(&self, args: &[&str], env: &[(&str, &str)], timeout: Option<std::time::Duration>) -> Result<GitOutput> {
         let mut cmd = Command::new("git").no_window();
         cmd.arg("-C").arg(&self.workdir).args(args).stdin(Stdio::null()).kill_on_drop(true);
