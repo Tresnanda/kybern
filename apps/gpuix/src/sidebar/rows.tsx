@@ -747,6 +747,10 @@ export const ChildRow = memo(function ChildRow({
   const { renderer } = useGpuix()
   const rowRef = useRef<PublicInstance | null>(null)
   const info = (thread.subagent ?? thread.delegation)!
+  // A child another machine runs wears that machine's glyph, as a top-level thread row does.
+  const machineId = (thread as StateThread).machineId
+  const machineGlyph = machineId ? glyphOfMachine(machineId) : undefined
+  const machineName = machineId ? machineHub().set.displayName(machineId) : undefined
   const delegated = !thread.subagent
   const phase = rowPhase(thread)
   const working = phase === 'working'
@@ -810,6 +814,7 @@ export const ChildRow = memo(function ChildRow({
               </Label>
             )}
           </div>
+          {machineGlyph && <MachineBadge glyph={machineGlyph} name={machineName} testId={`machine-${thread.id}`} />}
         </div>
         {childCount > 0 && (
           <ChildToggle
