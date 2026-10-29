@@ -36,7 +36,7 @@ import { kitOverlayOpen } from '../kit/AlertDialog.tsx'
 import { TOOLTIP_DELAY_MS, TOOLTIP_SKIP_MS } from '../kit/hoverController.ts'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { N } from './glyphs.ts'
-import { containsPoint, submenuCorridor, type Point } from './menuGeometry.ts'
+import { containsPoint, submenuCorridor, submenuOverlapsParent, type Point } from './menuGeometry.ts'
 import { pointerNav } from './store.ts'
 import { observeElementBounds } from '../native/layout.ts'
 
@@ -643,6 +643,21 @@ export function MenuSub({
     if (open && byKey) menu.context.first()
   }, [open, byKey])
   const lit = open || parent.active === id
+  // GPUI's `switch` mirrors the popup onto its own trigger's menu. Kept in the window (`snap`), a popup that did not fit on the
+  // right lands over the parent instead, and then opens on the left of the row.
+  const [flipped, setFlipped] = useState(false)
+  useEffect(() => {
+    if (!open) { setFlipped(false); return }
+    const popup = menu.panelRef.current
+    if (!renderer || !popup || !wrapper.current) return
+    let decided = false
+    return observeElementBounds(renderer, { id: popup.id }, ({ rect }) => {
+      const row = wrapper.current && renderer.getElementBounds?.(wrapper.current.id)
+      if (decided || !rect || !row) return
+      decided = true
+      if (submenuOverlapsParent(rect, row)) setFlipped(true)
+    })
+  }, [open, renderer])
   // Enter and move do the same: a single synthetic move may arrive as an enter only.
   const hoverTrigger = (e: PointerPayload) => {
     if (disabled) return
@@ -699,11 +714,11 @@ export function MenuSub({
       {open && (
         <PopupLayer
           ref={menu.panelRef}
-          side="right"
+          side={flipped ? 'left' : 'right'}
           align="start"
           sideOffset={0}
           alignOffset={-5}
-          fit="switch"
+          fit="snap"
           priority={parent.depth + 3}
           tabIndex={0}
           autoFocus={byKey}

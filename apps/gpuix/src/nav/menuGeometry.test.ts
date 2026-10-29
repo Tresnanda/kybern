@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { containsPoint, submenuCorridor } from './menuGeometry.ts'
+import { containsPoint, submenuCorridor, submenuOverlapsParent } from './menuGeometry.ts'
 
 const panel = { x: 200, y: 100, width: 190, height: 120 }
 describe('submenu corridor', () => {
@@ -26,4 +26,11 @@ describe('submenu corridor', () => {
     expect(submenuCorridor(null, panel, { x: 195, y: 150 })).toBe(false)
     expect(containsPoint(panel, { x: 195, y: 150 }, 6)).toBe(true)
   })
+})
+
+describe('submenu placement', () => {
+  const row = { x: 1000, y: 300, width: 190, height: 26 }
+  test('a popup right of the row fits', () => expect(submenuOverlapsParent({ x: 1190, y: 295, width: 192, height: 120 }, row)).toBe(false))
+  test('a popup pushed back over the row’s menu opens on the left', () => expect(submenuOverlapsParent({ x: 1008, y: 295, width: 192, height: 120 }, row)).toBe(true))
+  test('nothing measured yet keeps the right side', () => expect(submenuOverlapsParent(null, row)).toBe(false))
 })

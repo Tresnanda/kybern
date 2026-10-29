@@ -23,3 +23,12 @@ export function submenuCorridor(origin: Point | null, panel: Box | null | undefi
   const bottom = origin.y + (panel.y + panel.height + 5 - origin.y) * progress
   return point.y >= Math.min(top, bottom) - 2 && point.y <= Math.max(top, bottom) + 2
 }
+
+/**
+ * A submenu opens to the right of its trigger row, and the layer keeps it inside the window. When there is no room it
+ * is pushed back over the trigger's own menu; that popup (`popup`, painted) then starts left of the row's right edge
+ * and the submenu opens on the left instead.
+ */
+export function submenuOverlapsParent(popup: Box | null | undefined, row: Box | null | undefined): boolean {
+  return !!popup && !!row && popup.x < row.x + row.width - 1
+}
