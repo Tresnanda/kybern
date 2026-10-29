@@ -623,6 +623,113 @@ async fn a_terminal_on_another_machine_runs_there_and_streams_back_through_the_r
     call(&mut socket, 4, "terminals.close", json!({"terminal_id": terminal_id})).await;
 }
 
+/// Keystrokes sent without waiting for an answer (a paste, an IME burst, a fast typist on a slow link) reach the pty in
+/// order and none is refused: the daemon runs a connection's `terminals.input` as one stream.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn terminal_input_sent_without_waiting_arrives_in_order_and_is_never_refused() {
+    if cfg!(windows) {
+        return;
+    }
+    let Some((_cluster, a, b)) = pair().await else { return };
+    let work = TempDir::new("terminal-input-order");
+    let cwd = canonical(&work);
+    let token_at_a = a.device_token(&Scope::CLIENT);
+    let token_at_b = b.device_token(&Scope::CLIENT);
+    let mut socket = relayed(&a, &b, &token_at_a, &token_at_b).await;
+    let terminal_id = Uuid::now_v7();
+    // `cat` copies what the tty hands it into a file; echo is off so the file is exactly the input.
+    let created = call(
+        &mut socket,
+        1,
+        "terminals.create",
+        json!({"terminal_id": terminal_id, "cwd": cwd.to_string_lossy(), "command": ["sh", "-c", "stty -echo; cat > typed.txt"], "cols": 80, "rows": 24}),
+    )
+    .await;
+    assert!(created["error"].is_null(), "{created}");
+    // 600 requests of one or two bytes, far more than the 16 a connection may have in flight.
+    let mut expected = String::new();
+    let mut frames = Vec::new();
+    for i in 0..600u32 {
+        let piece = if i % 40 == 39 { format!("{:03}\n", i % 1000) } else { format!("{:x}", i % 16) };
+        expected.push_str(&piece);
+        frames.push(piece);
+    }
+    expected.push('\n');
+    for (n, piece) in frames.iter().enumerate() {
+        let request = json!({"jsonrpc": "2.0", "id": 100 + n as i64, "method": "terminals.input", "params": {"terminal_id": terminal_id, "data": B64.encode(piece)}});
+        socket.send(Message::Text(request.to_string().into())).await.unwrap();
+    }
+    let last = json!({"jsonrpc": "2.0", "id": 9000, "method": "terminals.input", "params": {"terminal_id": terminal_id, "data": B64.encode("\n\u{4}")}});
+    socket.send(Message::Text(last.to_string().into())).await.unwrap();
+    let mut answered = 0;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while answered < frames.len() + 1 {
+        let message = tokio::time::timeout_at(deadline, socket.next()).await.expect("answers stopped").unwrap().unwrap();
+        if let Message::Text(text) = message {
+            let value: Value = serde_json::from_str(text.as_str()).unwrap();
+            if value["id"].is_i64() && value["id"].as_i64().unwrap() >= 100 {
+                assert!(value["error"].is_null(), "an input request was refused: {value}");
+                answered += 1;
+            }
+        }
+    }
+    let typed = work.path().join("typed.txt");
+    eventually("the file holds the input", WAIT, || std::fs::read_to_string(&typed).is_ok_and(|text| text.len() >= expected.len())).await;
+    assert_eq!(std::fs::read_to_string(&typed).unwrap(), expected);
+    call(&mut socket, 2, "terminals.close", json!({"terminal_id": terminal_id})).await;
+}
+
+/// The Browser lists the servers of another machine from that machine's own daemon, and opening one forwards its port here.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_servers_of_another_machine_are_listed_there_and_open_through_a_forward() {
+    if cfg!(windows) {
+        return;
+    }
+    let Some((_cluster, a, b)) = pair().await else { return };
+    // The scan skips the daemon's own process, so the dev server is a child process.
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let work = TempDir::new("remote-dev-server");
+    std::fs::write(work.path().join("index.html"), "<html><title>served on b</title></html>").unwrap();
+    let Ok(mut server) = std::process::Command::new("python3")
+        .args(["-m", "http.server", &port.to_string(), "--bind", "127.0.0.1"])
+        .current_dir(work.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    eventually("the server listens", WAIT, || std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()).await;
+    let result = async {
+        // b's own daemon names it; a's does not (the Browser asks the machine the user picked).
+        let on_b = admin(&b).await;
+        let mut listed = false;
+        for _ in 0..20 {
+            let result = on_b.call::<PreviewServersList>(PreviewServersListParams { thread_id: None }).await.unwrap();
+            if result.servers.iter().any(|server| server.port == port) {
+                listed = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        assert!(listed, "the server was not listed on the machine it runs on");
+        // Opening it: a forward on a's machine, whose local address serves b's page.
+        let on_a = admin(&a).await;
+        let forwarded = on_a.call::<PortsForward>(PortsForwardParams { machine: b.id(), remote_port: port, local_port: None }).await.unwrap();
+        let page = reqwest::get(format!("http://127.0.0.1:{}/", forwarded.local_port)).await.unwrap();
+        assert_eq!(page.status(), 200);
+        assert!(page.text().await.unwrap().contains("served on b"));
+        // A machine that is not in the network is a plain error, not a forward to nowhere.
+        let unknown = on_a.call::<PortsForward>(PortsForwardParams { machine: "no-such-machine".into(), remote_port: port, local_port: None }).await;
+        assert!(unknown.is_err());
+        on_a.call::<PortsStop>(PortsStopParams { id: forwarded.id }).await.unwrap();
+    }
+    .await;
+    let _ = server.kill();
+    let _ = server.wait();
+    result
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn terminal_tools_on_another_machine_need_the_terminals_capability() {
     let Some((_cluster, a, b)) = pair().await else { return };

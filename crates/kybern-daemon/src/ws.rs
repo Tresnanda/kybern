@@ -435,6 +435,9 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let (out_tx, mut out_rx) = mpsc::channel::<QueuedFrame>(64);
     let closed = tokio_util::sync::CancellationToken::new();
     let requests = Arc::new(tokio::sync::Semaphore::new(16));
+    // Terminal keystrokes are one ordered stream per connection: a task per request would let two writes pass each other
+    // (and a burst would hit the concurrency limit), so they queue here and run one at a time.
+    let (input_tx, mut input_rx) = mpsc::channel::<String>(INPUT_LANE_FRAMES);
     let ctx = Arc::new(ConnectionCtx {
         id: Uuid::now_v7(),
         principal,
@@ -464,6 +467,14 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     }
     tracing::info!(conn = %ctx.id, label = %ctx.principal.label, "client connected");
 
+    let input_state = state.clone();
+    let input_ctx = ctx.clone();
+    let input_lane = tokio::spawn(async move {
+        while let Some(text) = input_rx.recv().await {
+            handle_text(&input_state, &input_ctx, &text).await;
+        }
+    });
+
     let writer_closed = closed.clone();
     let writer = tokio::spawn(async move {
         while let Some(frame) = out_rx.recv().await {
@@ -487,6 +498,11 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
             msg = stream.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
+                        if is_terminal_input(text.as_str()) {
+                            // Waiting here is the backpressure: the socket is read no faster than the PTY takes input.
+                            let _ = input_tx.send(text.as_str().to_string()).await;
+                            continue;
+                        }
                         let state = state.clone();
                         let ctx = ctx.clone();
                         // Bound producers as well as queued bytes. Do not make a
@@ -705,6 +721,7 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     closed.cancel();
     drop(ctx);
     writer.abort();
+    input_lane.abort();
     tracing::info!("client disconnected");
 }
 
@@ -790,6 +807,15 @@ pub(crate) fn redact_progress(mut progress: kybern_protocol::RequestProgress) ->
     progress.user_code = None;
     progress.terminal = None;
     progress
+}
+
+/// Frames the ordered input lane carries: how many may wait for the PTY.
+const INPUT_LANE_FRAMES: usize = 1024;
+
+/// Whether a text frame is a `terminals.input` request (cheap substring test first; the parse only runs for candidates).
+fn is_terminal_input(text: &str) -> bool {
+    text.contains("terminals.input")
+        && serde_json::from_str::<Value>(text).is_ok_and(|v| v.get("method").and_then(Value::as_str) == Some(TerminalsInput::NAME))
 }
 
 async fn handle_text(state: &AppState, ctx: &Arc<ConnectionCtx>, text: &str) {
