@@ -715,12 +715,14 @@ async fn the_servers_of_another_machine_are_listed_there_and_open_through_a_forw
         assert!(listed, "the server was not listed on the machine it runs on");
         // Opening it: a forward on a's machine, whose local address serves b's page.
         let on_a = admin(&a).await;
-        let forwarded = on_a.call::<PortsForward>(PortsForwardParams { machine: b.id(), remote_port: port, local_port: None }).await.unwrap();
+        let forwarded =
+            on_a.call::<PortsForward>(PortsForwardParams { machine: b.id(), remote_port: port, local_port: None }).await.unwrap();
         let page = reqwest::get(format!("http://127.0.0.1:{}/", forwarded.local_port)).await.unwrap();
         assert_eq!(page.status(), 200);
         assert!(page.text().await.unwrap().contains("served on b"));
         // A machine that is not in the network is a plain error, not a forward to nowhere.
-        let unknown = on_a.call::<PortsForward>(PortsForwardParams { machine: "no-such-machine".into(), remote_port: port, local_port: None }).await;
+        let unknown =
+            on_a.call::<PortsForward>(PortsForwardParams { machine: "no-such-machine".into(), remote_port: port, local_port: None }).await;
         assert!(unknown.is_err());
         on_a.call::<PortsStop>(PortsStopParams { id: forwarded.id }).await.unwrap();
     }
