@@ -1,4 +1,5 @@
 import { readClipboardText } from '../platform/os.ts'
+import { shellExecutableLabel } from './title.ts'
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useGpuix, type PublicInstance, type EventPayload } from '@gpuix/react'
 import type { TerminalInfo, TerminalOutputNotification, TerminalExitedNotification, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
@@ -51,6 +52,8 @@ const OUTPUT_MS = 33
 function shortTitle(raw: string) {
   const title = raw.trim()
   if (!title) return ''
+  const shell = shellExecutableLabel(title)
+  if (shell) return shell
   const match = /^[^@\s]+@[^:]+:(.+)$/.exec(title)
   const path = match?.[1] ?? title
   const name = path.replace(/\/+$/, '').split('/').pop() || path
@@ -120,7 +123,7 @@ export function TerminalPane({ threadId, width }: { threadId: string; width: num
     if (kind && kind !== 'shell') return `${providers.find(p => p.kind === kind)?.display_name ?? kind} ${tabs.filter((x, i) => i <= index && (kinds.current.get(x.id) ?? 'shell') === kind).length}`
     if (titles[tab.id]) return titles[tab.id]!
     if (/^(zsh|bash|sh|fish)$/.test(tab.title)) return tab.cwd.split('/').filter(Boolean).at(-1) || 'Terminal'
-    return tab.title || (index ? `Terminal ${index + 1}` : 'Terminal')
+    return shellExecutableLabel(tab.title) ?? (tab.title || (index ? `Terminal ${index + 1}` : 'Terminal'))
   }
   return <div testId="dock-terminal" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0, overflow: 'hidden' }}>
     <div style={{ display: 'flex', alignItems: 'center', minHeight: 36, gap: 4, paddingLeft: 6, paddingRight: 6, paddingTop: 4, paddingBottom: 4, flexShrink: 0 }}>
