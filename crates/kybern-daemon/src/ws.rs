@@ -815,7 +815,7 @@ const INPUT_LANE_FRAMES: usize = 1024;
 /// Whether a text frame is a `terminals.input` request (cheap substring test first; the parse only runs for candidates).
 fn is_terminal_input(text: &str) -> bool {
     text.contains("terminals.input")
-        && serde_json::from_str::<Value>(text).is_ok_and(|v| v.get("method").and_then(Value::as_str) == Some(TerminalsInput::NAME))
+        && serde_json::from_str::<Value>(text).is_ok_and(|v| v.get("method").and_then(Value::as_str) == Some("terminals.input"))
 }
 
 async fn handle_text(state: &AppState, ctx: &Arc<ConnectionCtx>, text: &str) {
