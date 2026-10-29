@@ -55,7 +55,7 @@ pub(crate) enum AgentProvision {
     NotNeeded,
     /// Queued before the work that needs it; that work waits for it.
     Queued {
-        item: OutboxItem,
+        item: Box<OutboxItem>,
         target_name: String,
         project_name: String,
         path: Option<String>,
@@ -548,6 +548,7 @@ impl Orchestrator {
         self.provision_enqueue(&project, target, choice, super::derived_operation_id(operation_id, 0x9c), None).await
     }
 
+    #[allow(clippy::too_many_arguments)]
     /// The agent path: before a delegation, fork or move goes to `target`, make sure it has the thread's project.
     pub(super) async fn provision_for_agent(
         &self,
@@ -968,7 +969,14 @@ fn queued(
     env_files: Vec<String>,
     approved_by: &'static str,
 ) -> AgentProvision {
-    AgentProvision::Queued { item, target_name: target.name.clone(), project_name: project.name.clone(), path, env_files, approved_by }
+    AgentProvision::Queued {
+        item: Box::new(item),
+        target_name: target.name.clone(),
+        project_name: project.name.clone(),
+        path,
+        env_files,
+        approved_by,
+    }
 }
 
 #[cfg(test)]
