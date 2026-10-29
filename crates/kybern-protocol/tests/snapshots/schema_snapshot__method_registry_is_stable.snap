@@ -226,6 +226,14 @@ expression: names
 - peer.move.commit
 - peer.move.get
 - peer.move.abort
+- projects.provision_plan
+- projects.provision
+- projects.provision.status
+- peer.provision.probe
+- peer.provision.prepare
+- peer.provision.chunk
+- peer.provision.import
+- peer.provision.finish
 - peer.tool.call
 - peer.thread.archive_inbound
 - settings.network_view

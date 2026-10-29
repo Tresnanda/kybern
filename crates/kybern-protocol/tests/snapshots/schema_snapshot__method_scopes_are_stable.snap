@@ -450,6 +450,22 @@ expression: scopes
   - "machine:delegate"
 - - peer.move.abort
   - "machine:delegate"
+- - projects.provision_plan
+  - "orchestration:read"
+- - projects.provision
+  - "orchestration:operate"
+- - projects.provision.status
+  - "orchestration:read"
+- - peer.provision.probe
+  - "machine:delegate"
+- - peer.provision.prepare
+  - "machine:delegate"
+- - peer.provision.chunk
+  - "machine:delegate"
+- - peer.provision.import
+  - "machine:delegate"
+- - peer.provision.finish
+  - "machine:delegate"
 - - peer.tool.call
   - "machine:tools"
 - - peer.thread.archive_inbound
