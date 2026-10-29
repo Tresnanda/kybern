@@ -143,7 +143,8 @@ pub(crate) fn resolve_destination(raw: &str, data_dir: &Path) -> Result<PathBuf,
     if checked.parent().is_none() || checked.file_name().is_none() {
         return Err("That is the top of the drive. Choose a folder inside it.".into());
     }
-    let (same, starts) = (|a: &Path, b: &Path| path_same(cfg!(windows), a, b), |path: &Path, prefix: &Path| path_starts(cfg!(windows), path, prefix));
+    let (same, starts) =
+        (|a: &Path, b: &Path| path_same(cfg!(windows), a, b), |path: &Path, prefix: &Path| path_starts(cfg!(windows), path, prefix));
     if let Some(home) = home.as_deref().map(simple_canonical) {
         if same(&checked, &home) || starts(&home, &checked) {
             return Err(format!("That folder holds your home folder. Choose a folder inside it, like {}.", example_folder()));
