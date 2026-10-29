@@ -153,10 +153,9 @@ async fn read_hardware() -> Hardware {
     let script = "[Console]::OutputEncoding=[Text.Encoding]::UTF8; \
         (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory; \
         Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name }";
-    let (cpu, system) = tokio::join!(
-        run("reg", &["query", r"HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0", "/v", "ProcessorNameString"]),
-        run("powershell", &["-NoProfile", "-NonInteractive", "-Command", script]),
-    );
+    let reg_args = ["query", r"HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0", "/v", "ProcessorNameString"];
+    let ps_args = ["-NoProfile", "-NonInteractive", "-Command", script];
+    let (cpu, system) = tokio::join!(run("reg", &reg_args), run("powershell", &ps_args));
     let (memory_bytes, gpus) = system.map(|text| parse_windows_script(&text)).unwrap_or_default();
     Hardware { cpu_model: cpu.and_then(|text| parse_reg_query(&text)), memory_bytes, gpus }
 }
