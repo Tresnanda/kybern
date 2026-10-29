@@ -37,7 +37,7 @@ pub enum OutboxKind {
     SecretsPut,
     Fork,
     Move,
-    /// Add a project to the target (`projects.provision`; payload `ProvisionRequest`).
+    // Add a project to the target (`projects.provision`; payload `ProvisionRequest`).
     Provision,
 }
 
