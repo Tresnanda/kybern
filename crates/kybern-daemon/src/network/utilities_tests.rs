@@ -528,6 +528,50 @@ async fn a_forwarded_port_carries_tcp_both_ways_refuses_kybernd_ports_and_closes
     assert!(refused.is_err(), "{refused:?}");
 }
 
+/// One forwarded connection to b's echo server, proven open by an echo.
+async fn open_echo_connection(a: &Node, b: &Node, client: &Client, remote_port: u16) -> tokio::net::TcpStream {
+    let forwarded = client.call::<PortsForward>(PortsForwardParams { machine: b.id(), remote_port, local_port: None }).await.unwrap();
+    let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", forwarded.local_port)).await.unwrap();
+    socket.write_all(b"ping").await.unwrap();
+    let mut got = [0u8; 4];
+    tokio::time::timeout(Duration::from_secs(10), socket.read_exact(&mut got)).await.expect("no echo").unwrap();
+    assert_eq!(&got, b"ping");
+    eventually("b serves the stream", WAIT, || b.state.network.relays.open_streams() == 1 && a.state.network.relays.open_streams() == 1).await;
+    socket
+}
+
+/// The connection ends: a read sees the end, or an error, and nothing more is echoed.
+async fn assert_connection_ends(socket: &mut tokio::net::TcpStream) {
+    let _ = socket.write_all(b"more").await;
+    let mut rest = Vec::new();
+    let read = tokio::time::timeout(Duration::from_secs(10), socket.read_to_end(&mut rest)).await;
+    assert!(read.is_ok(), "the forwarded connection stayed open");
+    assert!(rest.is_empty(), "nothing passes once the capability is gone: {rest:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_open_forwarded_connection_ends_when_the_machine_is_paused_or_ports_are_turned_off() {
+    let Some((_cluster, a, b)) = pair().await else { return };
+    let remote_port = echo_server().await;
+    let client = admin(&a).await;
+
+    // b turns ports off for everyone: the connection a already has ends.
+    let mut socket = open_echo_connection(&a, &b, &client, remote_port).await;
+    let off = b.membership().set(&format!("allow.{}.ports", b.id()), json!(false)).unwrap();
+    b.state.network.publish_ops(vec![off]);
+    assert_connection_ends(&mut socket).await;
+    eventually("b ends the stream it served", WAIT, || b.state.network.relays.open_streams() == 0).await;
+
+    // Ports on again, then a is paused (written on b, as Settings → Machines does): the open connection ends too.
+    let on = b.membership().set(&format!("allow.{}.ports", b.id()), json!(true)).unwrap();
+    b.state.network.publish_ops(vec![on]);
+    let mut socket = open_echo_connection(&a, &b, &client, remote_port).await;
+    let pause = b.membership().set(&format!("machine.{}.paused", a.id()), json!(true)).unwrap();
+    b.state.network.publish_ops(vec![pause]);
+    assert_connection_ends(&mut socket).await;
+    eventually("b ends the stream it served", WAIT, || b.state.network.relays.open_streams() == 0).await;
+}
+
 fn client_connections(node: &Node) -> u32 {
     node.state.network.ports.views().iter().map(|forward| forward.connections).sum()
 }

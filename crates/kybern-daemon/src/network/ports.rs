@@ -31,7 +31,7 @@ use uuid::Uuid;
 
 use super::Network;
 use super::peers::PeerLink;
-use super::relay::{Chunk, Slot, Stream, frame_cost};
+use super::relay::{Chunk, Slot, Stream, StreamKind, frame_cost};
 use crate::state::AppState;
 
 const TARGET: &str = "kybern::network::ports";
@@ -296,7 +296,7 @@ async fn open_stream(link: &Arc<PeerLink>, network: &Network, port: u16) -> Resu
         .relays
         .acquire(&format!("ports:{}", link.machine_id))
         .ok_or_else(|| RpcError::new(codes::CONFLICT, "too many forwarded connections"))?;
-    let (stream, incoming) = link.relays.create(None).ok_or_else(|| RpcError::internal("stream id clash"))?;
+    let (stream, incoming) = link.relays.create(None, StreamKind::Ports, None).ok_or_else(|| RpcError::internal("stream id clash"))?;
     let open = PeerPortsOpenParams { stream_id: stream.id, port };
     match tokio::time::timeout(OPEN_TIMEOUT, link.call::<PeerPortsOpen>(open)).await {
         Ok(Ok(_)) => Ok((stream, incoming, slot)),
@@ -344,7 +344,7 @@ pub async fn handle_open(state: &AppState, link: &Arc<PeerLink>, params: PeerPor
         .ok_or_else(|| RpcError::new(codes::CONFLICT, "too many forwarded connections on this machine"))?;
     let socket = connect_loopback(params.port).await?;
     let (stream, incoming) =
-        link.relays.create(Some(params.stream_id)).ok_or_else(|| RpcError::invalid_params("that stream id is in use"))?;
+        link.relays.create(Some(params.stream_id), StreamKind::Ports, Some(Scope::MachinePorts)).ok_or_else(|| RpcError::invalid_params("that stream id is in use"))?;
     let link = link.clone();
     tokio::spawn(async move {
         let cancel = CancellationToken::new();

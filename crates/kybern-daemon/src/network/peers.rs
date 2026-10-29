@@ -32,7 +32,7 @@ use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use super::relay::LinkRelays;
+use super::relay::{LinkRelays, StreamKind};
 use super::session::{self, Target};
 use super::tailscale::{TsNode, TsStatus, Whois};
 use super::well_known::{self, WellKnown};
@@ -517,6 +517,17 @@ impl Network {
 
     /// The consequences of an applied batch. N4 calls it for operations it applied itself, with
     /// `from: None`.
+    /// End the streams this machine serves for members that lost the capability: paused, removed, or a register
+    /// that turned relaying or ports off. Opening is refused at use time; this ends what was already open.
+    pub(crate) fn close_unpermitted_streams(&self) {
+        for link in self.peers.links() {
+            let ended = link.relays.close_unpermitted(&effective_scopes(self, &link));
+            if ended > 0 {
+                tracing::info!(target: SESSION_TARGET, machine = %link.machine_id, ended, "ended streams a member may no longer use");
+            }
+        }
+    }
+
     pub fn after_apply(&self, from: Option<&str>, outcome: &ApplyOutcome) {
         if outcome.tampered() {
             tracing::warn!(target: TARGET, peer = ?from, "a peer sent a membership operation that does not verify; closing its session");
@@ -534,6 +545,7 @@ impl Network {
         if outcome.changed() {
             self.revoke_revoked_devices();
             self.peers.gossip(outcome.accepted.clone(), from);
+            self.close_unpermitted_streams();
             self.notify_changed();
             self.wake();
         }
@@ -598,8 +610,8 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
             ok(Empty {})
         }
         PeerRelayOpen::NAME => super::relay::handle_open(state, link, parse(params)?).await,
-        PeerRelayData::NAME => super::relay::handle_data(link, parse(params)?).await,
-        PeerRelayClose::NAME => super::relay::handle_close(link, parse(params)?),
+        PeerRelayData::NAME => super::relay::handle_data(link, parse(params)?, StreamKind::Relay).await,
+        PeerRelayClose::NAME => super::relay::handle_close(link, parse(params)?, StreamKind::Relay),
         // Remote delegation (R1): the child, its state, a stop, and the commits a worktree starts from.
         PeerDelegate::NAME
         | PeerDelegationGet::NAME
@@ -637,8 +649,8 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
             ok(Empty {})
         }
         PeerPortsOpen::NAME => super::ports::handle_open(state, link, parse(params)?).await,
-        PeerPortsData::NAME => super::relay::handle_data(link, parse(params)?).await,
-        PeerPortsClose::NAME => super::relay::handle_close(link, parse(params)?),
+        PeerPortsData::NAME => super::relay::handle_data(link, parse(params)?, StreamKind::Ports).await,
+        PeerPortsClose::NAME => super::relay::handle_close(link, parse(params)?, StreamKind::Ports),
         PeerThreadArchiveInbound::NAME => {
             let archive: PeerThreadArchiveInboundParams = parse(params)?;
             state.orchestrator.archive_inbound_threads(&link.machine_id, archive.thread_id).await?;

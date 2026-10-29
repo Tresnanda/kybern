@@ -516,6 +516,7 @@ impl Network {
     /// handlers spread an Add, a Remove or a register.
     pub fn publish_ops(&self, ops: Vec<OpEnvelope>) {
         self.peers.gossip(ops, None);
+        self.close_unpermitted_streams();
         self.notify_changed();
     }
 }

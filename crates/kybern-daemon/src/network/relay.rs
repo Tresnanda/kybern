@@ -107,9 +107,21 @@ impl Credit {
     }
 }
 
+/// What a stream carries. Its frames travel under that kind's method names only, so a frame sent under the other
+/// kind's names (`peer.ports.data` for a relay stream, which `machine:peer` alone allows) is not delivered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamKind {
+    Relay,
+    Ports,
+}
+
 /// One relayed stream, as the side that owns its local end sees it.
 pub struct Stream {
     pub id: u64,
+    kind: StreamKind,
+    /// On the machine that serves the stream (it took `peer.relay.open` or `peer.ports.open`), the capability the
+    /// other side needs to keep it: when the member is paused or the capability is turned off, the stream ends.
+    serves: Option<Scope>,
     incoming: mpsc::Sender<Chunk>,
     pub(super) credit: Credit,
     pub(super) cancel: CancellationToken,
@@ -142,12 +154,15 @@ impl LinkRelays {
         self.streams.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// A new stream with a fresh id, and the receiver for the frames the other side sends it.
-    pub(super) fn create(&self, id: Option<u64>) -> Option<(Arc<Stream>, mpsc::Receiver<Chunk>)> {
+    /// A new stream with a fresh id, and the receiver for the frames the other side sends it. `serves` is the
+    /// capability the other side needs for a stream this machine serves; `None` for one it opened.
+    pub(super) fn create(&self, id: Option<u64>, kind: StreamKind, serves: Option<Scope>) -> Option<(Arc<Stream>, mpsc::Receiver<Chunk>)> {
         let id = id.unwrap_or_else(|| self.next.fetch_add(2, Ordering::Relaxed));
         let (tx, rx) = mpsc::channel(256);
         let stream = Arc::new(Stream {
             id,
+            kind,
+            serves,
             incoming: tx,
             credit: Credit::new(),
             cancel: CancellationToken::new(),
@@ -161,8 +176,8 @@ impl LinkRelays {
         Some((stream, rx))
     }
 
-    fn get(&self, id: u64) -> Option<Arc<Stream>> {
-        self.lock().get(&id).cloned()
+    fn get(&self, id: u64, kind: StreamKind) -> Option<Arc<Stream>> {
+        self.lock().get(&id).filter(|stream| stream.kind == kind).cloned()
     }
 
     pub(super) fn remove(&self, id: u64) {
@@ -173,6 +188,22 @@ impl LinkRelays {
 
     pub fn len(&self) -> usize {
         self.lock().len()
+    }
+
+    /// End the streams this machine serves whose capability the other side no longer has (paused, or turned off).
+    /// Returns how many ended.
+    pub fn close_unpermitted(&self, scopes: &[Scope]) -> usize {
+        let ended: Vec<_> = {
+            let mut streams = self.lock();
+            let ids: Vec<u64> =
+                streams.values().filter(|stream| stream.serves.is_some_and(|scope| !scopes.contains(&scope))).map(|stream| stream.id).collect();
+            ids.into_iter().filter_map(|id| streams.remove(&id)).collect()
+        };
+        for stream in &ended {
+            stream.cancel.cancel();
+            let _ = stream.incoming.try_send(Chunk::End);
+        }
+        ended.len()
     }
 
     /// The session ended: every stream on it ends.
@@ -272,9 +303,9 @@ async fn send_close(link: &PeerLink, stream_id: u64, reason: Option<&str>) {
     let _ = link.notify(PeerRelayClose::NAME, serde_json::to_value(params).unwrap_or(Value::Null)).await;
 }
 
-/// `peer.relay.data`: a frame for a stream, or credit, or both.
-pub async fn handle_data(link: &Arc<PeerLink>, params: PeerRelayDataParams) -> Result<Value, RpcError> {
-    let Some(stream) = link.relays.get(params.stream_id) else { return Ok(json!({})) };
+/// `peer.relay.data` and `peer.ports.data`: a frame for a stream of that kind, or credit, or both.
+pub async fn handle_data(link: &Arc<PeerLink>, params: PeerRelayDataParams, kind: StreamKind) -> Result<Value, RpcError> {
+    let Some(stream) = link.relays.get(params.stream_id, kind) else { return Ok(json!({})) };
     if let Some(credit) = params.credit {
         stream.credit.add(credit as i64);
     }
@@ -297,9 +328,9 @@ pub async fn handle_data(link: &Arc<PeerLink>, params: PeerRelayDataParams) -> R
     Ok(json!({}))
 }
 
-/// `peer.relay.close`: the other side ended a stream.
-pub fn handle_close(link: &Arc<PeerLink>, params: PeerRelayCloseParams) -> Result<Value, RpcError> {
-    if let Some(stream) = link.relays.get(params.stream_id) {
+/// `peer.relay.close` and `peer.ports.close`: the other side ended a stream of that kind.
+pub fn handle_close(link: &Arc<PeerLink>, params: PeerRelayCloseParams, kind: StreamKind) -> Result<Value, RpcError> {
+    if let Some(stream) = link.relays.get(params.stream_id, kind) {
         let _ = stream.incoming.try_send(Chunk::End);
         stream.cancel.cancel();
         link.relays.remove(params.stream_id);
@@ -500,7 +531,7 @@ async fn relay_ws(state: &AppState, target: &str, headers: &HeaderMap, path: Str
     let Some(slot) = state.network.relays.acquire(&principal.token_id.to_string()) else {
         return refuse(StatusCode::TOO_MANY_REQUESTS, "too many relayed connections");
     };
-    let Some((stream, incoming)) = link.relays.create(None) else { return refuse(StatusCode::INTERNAL_SERVER_ERROR, "stream id clash") };
+    let Some((stream, incoming)) = link.relays.create(None, StreamKind::Relay, None) else { return refuse(StatusCode::INTERNAL_SERVER_ERROR, "stream id clash") };
     let protocols = requested_protocols(headers);
     let mut forwarded = forwarded_headers(headers);
     if !protocols.is_empty() {
@@ -597,7 +628,7 @@ pub async fn serve_http(State(state): State<AppState>, Path((target, path)): Pat
     let Some(slot) = state.network.relays.acquire(&principal.token_id.to_string()) else {
         return refuse(StatusCode::TOO_MANY_REQUESTS, "too many relayed connections");
     };
-    let Some((stream, mut incoming)) = link.relays.create(None) else {
+    let Some((stream, mut incoming)) = link.relays.create(None, StreamKind::Relay, None) else {
         return refuse(StatusCode::INTERNAL_SERVER_ERROR, "stream id clash");
     };
     let target_path = match parts.uri.query() {
@@ -731,7 +762,7 @@ pub async fn handle_open(state: &AppState, link: &Arc<PeerLink>, params: PeerRel
         .acquire(&format!("inbound:{}", link.machine_id))
         .ok_or_else(|| RpcError::new(codes::CONFLICT, "too many relayed connections on this machine"))?;
     let (stream, incoming) =
-        link.relays.create(Some(params.stream_id)).ok_or_else(|| RpcError::invalid_params("that stream id is in use"))?;
+        link.relays.create(Some(params.stream_id), StreamKind::Relay, Some(Scope::MachineRelay)).ok_or_else(|| RpcError::invalid_params("that stream id is in use"))?;
     let result = match params.kind {
         RelayStreamKind::Ws => open_local_ws(state, link, &stream, incoming, url, &params, slot).await,
         RelayStreamKind::Http => open_local_http(link, &stream, incoming, url, params, slot).await,
@@ -979,11 +1010,28 @@ mod tests {
     fn stream_ids_do_not_collide_between_the_two_directions() {
         let dialer = LinkRelays::new(Direction::Dialed);
         let acceptor = LinkRelays::new(Direction::Accepted);
-        let (a, _) = dialer.create(None).unwrap();
-        let (b, _) = dialer.create(None).unwrap();
-        let (c, _) = acceptor.create(None).unwrap();
+        let (a, _) = dialer.create(None, StreamKind::Relay, None).unwrap();
+        let (b, _) = dialer.create(None, StreamKind::Ports, None).unwrap();
+        let (c, _) = acceptor.create(None, StreamKind::Relay, None).unwrap();
         assert_eq!((a.id, b.id, c.id), (1, 3, 2));
-        assert!(dialer.create(Some(1)).is_none(), "an id in use is refused");
+        assert!(dialer.create(Some(1), StreamKind::Ports, None).is_none(), "an id in use is refused");
+        assert!(dialer.get(1, StreamKind::Ports).is_none() && dialer.get(1, StreamKind::Relay).is_some(), "a frame of the other kind finds nothing");
+    }
+
+    #[test]
+    fn a_withdrawn_capability_ends_the_streams_served_for_it_and_nothing_else() {
+        let relays = LinkRelays::new(Direction::Accepted);
+        let (port, _port_rx) = relays.create(Some(11), StreamKind::Ports, Some(Scope::MachinePorts)).unwrap();
+        let (relay, _relay_rx) = relays.create(Some(13), StreamKind::Relay, Some(Scope::MachineRelay)).unwrap();
+        let (own, _own_rx) = relays.create(None, StreamKind::Ports, None).unwrap();
+        assert_eq!(relays.close_unpermitted(&[Scope::MachinePeer, Scope::MachinePorts, Scope::MachineRelay]), 0);
+        // Ports turned off: the port stream it serves ends; the relay and the stream this side opened stay.
+        assert_eq!(relays.close_unpermitted(&[Scope::MachinePeer, Scope::MachineRelay]), 1);
+        assert!(port.cancel.is_cancelled() && !relay.cancel.is_cancelled() && !own.cancel.is_cancelled());
+        // Paused: only machine:peer is left.
+        assert_eq!(relays.close_unpermitted(&[Scope::MachinePeer]), 1);
+        assert!(relay.cancel.is_cancelled() && !own.cancel.is_cancelled());
+        assert_eq!(relays.len(), 1);
     }
 
     #[test]
