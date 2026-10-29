@@ -46,6 +46,14 @@ use crate::state::AppState;
 const TARGET: &str = "kybern::network::relay";
 /// The credit window of a stream in bytes (§3.4).
 pub const WINDOW: i64 = 256 * 1024;
+/// What a frame costs of the window at least. The window counts bytes but the receiving queue counts frames, so a burst of
+/// one-byte frames (keystrokes, a chatty socket) would fill the queue long before the bytes ran out and end the stream as an
+/// overrun. With this floor the window holds at most `WINDOW / MIN_FRAME_COST` (128) frames, half of the queue.
+pub(super) const MIN_FRAME_COST: usize = 2048;
+/// The part of the window a frame of `len` bytes takes, and the credit its receiver returns.
+pub(super) const fn frame_cost(len: usize) -> usize {
+    if len < MIN_FRAME_COST { MIN_FRAME_COST } else { len }
+}
 pub const MAX_STREAMS_PER_CLIENT: usize = 32;
 pub const MAX_STREAMS_PER_DAEMON: usize = 256;
 /// Request bodies and response bodies are cut into pieces of this size.
@@ -233,7 +241,7 @@ impl RelayHub {
 
 /// Send `bytes` on a stream, waiting for credit. `false` when the stream or the session ended.
 async fn send_data(link: &PeerLink, stream: &Stream, bytes: &[u8], text: bool) -> bool {
-    if !stream.credit.take(bytes.len(), &stream.cancel).await {
+    if !stream.credit.take(frame_cost(bytes.len()), &stream.cancel).await {
         return false;
     }
     stream.touch();
@@ -253,9 +261,7 @@ async fn send_chunks(link: &PeerLink, stream: &Stream, bytes: &[u8], text: bool)
 
 /// Tell the other side it may send `bytes` more.
 async fn grant(link: &PeerLink, stream: &Stream, bytes: usize) {
-    if bytes == 0 {
-        return;
-    }
+    let bytes = frame_cost(bytes);
     let params =
         PeerRelayDataParams { stream_id: stream.id, data: String::new(), credit: Some(bytes.min(u32::MAX as usize) as u32), text: false };
     let _ = link.notify(PeerRelayData::NAME, serde_json::to_value(params).unwrap_or(Value::Null)).await;

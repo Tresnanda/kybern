@@ -31,7 +31,7 @@ use uuid::Uuid;
 
 use super::Network;
 use super::peers::PeerLink;
-use super::relay::{Chunk, Slot, Stream};
+use super::relay::{Chunk, Slot, Stream, frame_cost};
 use crate::state::AppState;
 
 const TARGET: &str = "kybern::network::ports";
@@ -368,7 +368,7 @@ async fn connect_loopback(port: u16) -> Result<TcpStream, RpcError> {
 // ---- the stream ----
 
 async fn send_data(link: &PeerLink, stream: &Stream, bytes: &[u8], text: bool) -> bool {
-    if !stream.credit.take(bytes.len(), &stream.cancel).await {
+    if !stream.credit.take(frame_cost(bytes.len()), &stream.cancel).await {
         return false;
     }
     stream.touch();
@@ -380,6 +380,7 @@ async fn grant(link: &PeerLink, stream: &Stream, bytes: usize) {
     if bytes == 0 {
         return;
     }
+    let bytes = frame_cost(bytes);
     let params =
         PeerRelayDataParams { stream_id: stream.id, data: String::new(), credit: Some(bytes.min(u32::MAX as usize) as u32), text: false };
     let _ = link.notify(PeerPortsData::NAME, serde_json::to_value(params).unwrap_or(Value::Null)).await;
