@@ -8673,6 +8673,7 @@ for line in sys.stdin:
 
     include!("orchestrator/delegation_tests.rs");
     include!("orchestrator/remote_delegation_tests.rs");
+    include!("orchestrator/provision_tests.rs");
     include!("orchestrator/inbound_tests.rs");
     include!("orchestrator/fork_tests.rs");
     include!("orchestrator/move_tests.rs");
