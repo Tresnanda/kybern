@@ -40,7 +40,9 @@ async fn tailscale(args: &[&str]) -> Option<String> {
 async fn interfaces() -> Vec<IpAddr> {
     #[cfg(target_os = "windows")]
     {
-        return output(
+        // PowerShell with the NetTCPIP module takes about 2 s to start on some PCs, so the usual 2 s limit
+        // would drop the Tailscale address there.
+        return output_within(
             "powershell.exe",
             &[
                 "-NoProfile",
@@ -48,6 +50,7 @@ async fn interfaces() -> Vec<IpAddr> {
                 "-Command",
                 "Get-NetIPAddress | Where-Object { $_.AddressState -eq 'Preferred' } | Select-Object -ExpandProperty IPAddress",
             ],
+            Duration::from_secs(10),
         )
         .await
         .map(|text| text.lines().filter_map(|line| line.trim().parse().ok()).collect())
