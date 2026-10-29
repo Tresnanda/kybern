@@ -85,6 +85,8 @@ pub struct Cluster {
     auto_join: bool,
     /// The intervals every daemon runs on: [`Timing::fast`] unless a test slows part of it down.
     timing: Timing,
+    /// `(viewer, node)` pairs: the viewer's Tailscale lists the node offline while the node itself runs.
+    seen_offline: Vec<(String, String)>,
 }
 
 impl Cluster {
@@ -117,6 +119,7 @@ impl Cluster {
             fixture: FakeFixture { self_name: String::new(), tailnet: TAILNET.into(), nodes },
             auto_join: false,
             timing: Timing::fast(),
+            seen_offline: Vec::new(),
         };
         cluster.save();
         Some(cluster)
@@ -141,7 +144,11 @@ impl Cluster {
     /// Write one fixture per node: the same tailnet, a different `self`.
     pub fn save(&self) {
         for node in &self.fixture.nodes {
-            FakeFixture { self_name: node.name.clone(), ..self.fixture.clone() }.save(&self.fixture_path(&node.name)).unwrap();
+            let mut fixture = FakeFixture { self_name: node.name.clone(), ..self.fixture.clone() };
+            for (_, hidden) in self.seen_offline.iter().filter(|(viewer, _)| *viewer == node.name) {
+                fixture.nodes.iter_mut().find(|other| other.name == *hidden).unwrap().online = false;
+            }
+            fixture.save(&self.fixture_path(&node.name)).unwrap();
         }
     }
 
@@ -156,6 +163,16 @@ impl Cluster {
     /// Take a node off the tailnet (or bring it back) without touching its daemon.
     pub fn set_online(&mut self, name: &str, online: bool) {
         self.fixture.nodes.iter_mut().find(|node| node.name == name).unwrap().online = online;
+        self.save();
+    }
+
+    /// `viewer`'s Tailscale lists `name` as offline (it lost its coordination server) although its daemon
+    /// is up and reachable. Only `viewer`'s status changes.
+    pub fn list_offline_for(&mut self, viewer: &str, name: &str, offline: bool) {
+        self.seen_offline.retain(|(v, n)| !(v == viewer && n == name));
+        if offline {
+            self.seen_offline.push((viewer.into(), name.into()));
+        }
         self.save();
     }
 

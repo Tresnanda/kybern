@@ -364,6 +364,17 @@ impl Peers {
         inner.next_attempt.insert(machine_id.to_string(), Instant::now() + wait);
     }
 
+    /// A failed attempt at a member Tailscale lists offline: the usual backoff, but never sooner than
+    /// `offline_retry`, since most of the time it really is off.
+    fn fail_slow(&self, machine_id: &str, timing: &super::Timing, error: String) {
+        let mut inner = self.lock();
+        let status = inner.status.entry(machine_id.to_string()).or_default();
+        status.failures = status.failures.saturating_add(1);
+        status.last_error = Some(error);
+        let wait = backoff(timing, status.failures).max(timing.offline_retry);
+        inner.next_attempt.insert(machine_id.to_string(), Instant::now() + wait);
+    }
+
     fn due(&self, machine_id: &str) -> bool {
         self.lock().next_attempt.get(machine_id).is_none_or(|at| Instant::now() >= *at)
     }
@@ -846,6 +857,21 @@ async fn connect_socket(
 
 /// Dial a member: verify it, open a session, connect and run the link until it ends. Returns when
 /// the link is registered (the run continues on its own tasks) or the attempt failed.
+/// Dial a member that Tailscale lists offline. A node that lost contact with Tailscale's coordination
+/// server is listed offline by its peers yet still passes traffic through DERP relays, so the one cheap
+/// well-known probe decides whether a session is worth opening.
+async fn dial_listed_offline(state: &AppState, member: &str, node: &TsNode, url: Option<String>) -> Result<(), String> {
+    if probe_node(state, node.clone()).await.is_none() {
+        // The address it published, if any, is the other way to reach it.
+        if let Some(url) = url {
+            return super::dial_out::dial(state, member, &url).await;
+        }
+        return Err("Tailscale lists it offline and nothing answered".into());
+    }
+    tracing::info!(target: SESSION_TARGET, machine = %member, "Tailscale lists this machine offline, but it answers; dialing it");
+    dial(state, member, node).await
+}
+
 async fn dial(state: &AppState, member: &str, node: &TsNode) -> Result<(), String> {
     let network = &state.network;
     let membership = network.membership().ok_or("the network is unavailable")?;
@@ -1025,7 +1051,11 @@ pub async fn pass(state: &AppState) -> Option<Duration> {
     }
     // A machine off the tailnet (or with Tailscale stopped) has no status, but it still dials the
     // members that publish a URL (§3.5).
-    let status = network.tailscale.status().await.ok().filter(|status| status.running);
+    let raw_status = network.tailscale.status().await.ok();
+    let status = raw_status.clone().filter(|status| status.running);
+    // Tailscale that cannot reach its coordination server reports itself offline (`running` is false)
+    // while the backend still passes traffic through DERP; its peer list is still good for dialing.
+    let dial_status = raw_status.filter(|status| status.running || status.backend_state == "Running");
     if let Some(status) = &status {
         let sig = signature(status);
         let changed = {
@@ -1052,11 +1082,18 @@ pub async fn pass(state: &AppState) -> Option<Duration> {
             if *id == me || entry.paused || network.peers.link(id).is_some() || !network.peers.due(id) {
                 continue;
             }
-            let node = status.as_ref().zip(entry.descriptor.ts_node_id.as_deref()).and_then(|(status, node_id)| status.peer(node_id));
-            if let Some(node) = node.filter(|node| node.online && node.ip().is_some()) {
-                // The member with the smaller id dials (§3.3).
+            let node = dial_status.as_ref().zip(entry.descriptor.ts_node_id.as_deref()).and_then(|(status, node_id)| status.peer(node_id));
+            if let Some(node) = node.filter(|node| node.ip().is_some()) {
+                // The member with the smaller id dials (§3.3). Tailscale may list a member offline that
+                // still answers (it lost its coordination server and passes traffic through DERP), so an
+                // offline member is dialed too, after a cheap probe and on a slower schedule.
+                let url =
+                    super::dial_out::url_of(&projection, id).filter(|_| !node.online && (own_url.is_none() || me.as_str() < id.as_str()));
                 if me.as_str() < id.as_str() {
-                    dials.push((id.clone(), node.clone()));
+                    dials.push((id.clone(), node.clone(), url));
+                } else if let Some(url) = url {
+                    // A larger id that cannot see the other online dials the address it published.
+                    url_dials.push((id.clone(), url));
                 } else {
                     nudge_dialer(state, id, node);
                 }
@@ -1071,9 +1108,9 @@ pub async fn pass(state: &AppState) -> Option<Duration> {
             }
         }
         let results = futures::stream::iter(dials)
-            .map(|(id, node)| async move {
-                let result = dial(state, &id, &node).await;
-                (id, result)
+            .map(|(id, node, url)| async move {
+                let result = if node.online { dial(state, &id, &node).await } else { dial_listed_offline(state, &id, &node, url).await };
+                (id, !node.online, result)
             })
             .buffer_unordered(MAX_CONCURRENT_PROBES)
             .collect::<Vec<_>>()
@@ -1081,15 +1118,25 @@ pub async fn pass(state: &AppState) -> Option<Duration> {
         let url_results = futures::stream::iter(url_dials)
             .map(|(id, url)| async move {
                 let result = super::dial_out::dial(state, &id, &url).await;
-                (id, result)
+                (id, false, result)
             })
             .buffer_unordered(MAX_CONCURRENT_PROBES)
             .collect::<Vec<_>>()
             .await;
-        for (id, result) in results.into_iter().chain(url_results) {
-            if let Err(error) = result {
-                tracing::debug!(target: SESSION_TARGET, machine = %id, %error, "could not open a session");
-                network.peers.fail(&id, &network.timing, error);
+        for (id, listed_offline, result) in results.into_iter().chain(url_results) {
+            match result {
+                Ok(()) if listed_offline => {
+                    tracing::info!(target: SESSION_TARGET, machine = %id, "Tailscale lists this machine offline, but it answered; opened a session");
+                }
+                Ok(()) => {}
+                Err(error) => {
+                    tracing::debug!(target: SESSION_TARGET, machine = %id, %error, listed_offline, "could not open a session");
+                    if listed_offline {
+                        network.peers.fail_slow(&id, &network.timing, error);
+                    } else {
+                        network.peers.fail(&id, &network.timing, error);
+                    }
+                }
             }
         }
     }
@@ -1129,7 +1176,8 @@ fn reopen_widened_sessions(network: &Network) {
 /// check, which the member takes as news (`Network::nudge_discovery`).
 fn nudge_dialer(state: &AppState, member: &str, node: &TsNode) {
     let network = &state.network;
-    if !network.peers.nudge_out_due(member, Duration::from_secs(10).min(network.timing.tick_watching)) {
+    let every = if node.online { Duration::from_secs(10).min(network.timing.tick_watching) } else { network.timing.offline_retry };
+    if !network.peers.nudge_out_due(member, every) {
         return;
     }
     let state = state.clone();
@@ -1261,6 +1309,19 @@ pub fn dial_address(network: &Network, ts_ip: IpAddr, port: u16) -> SocketAddr {
 mod tests {
     use super::*;
     use crate::network::Timing;
+
+    #[test]
+    fn a_member_listed_offline_waits_at_least_the_offline_retry_after_a_failed_attempt() {
+        let timing = Timing::default();
+        let peers = Peers::default();
+        peers.fail_slow("m", &timing, "nothing answered".into());
+        assert!(!peers.due("m"));
+        let wait = peers.soonest_retry().unwrap();
+        assert!(wait > Duration::from_secs(25) && wait <= timing.offline_retry, "{wait:?}");
+        // The plain schedule would have retried after 2 s.
+        peers.fail("n", &timing, "nothing answered".into());
+        assert!(peers.soonest_retry().unwrap() <= Duration::from_secs(2));
+    }
 
     #[test]
     fn backoff_doubles_from_two_seconds_to_five_minutes() {

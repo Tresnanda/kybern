@@ -631,6 +631,9 @@ enum NoteCmd {
         /// Show Recently deleted notes instead.
         #[arg(long)]
         deleted: bool,
+        /// Machine name or id, or `all` for every online machine. Default: this one.
+        #[arg(long)]
+        machine: Option<String>,
     },
     /// Print a note as markdown.
     Show { id: String },
@@ -676,7 +679,12 @@ enum NoteCmd {
     /// Bring a deleted note back.
     Restore { id: String },
     /// Find notes whose title or text contains the words.
-    Search { query: Vec<String> },
+    Search {
+        query: Vec<String>,
+        /// Machine name or id, or `all` for every online machine. Default: this one.
+        #[arg(long)]
+        machine: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -692,6 +700,9 @@ enum TaskCmd {
         /// Include done and canceled tasks.
         #[arg(long, short)]
         all: bool,
+        /// Machine name or id, or `all` for every online machine. Default: this one.
+        #[arg(long)]
+        machine: Option<String>,
     },
     /// Print a task, its linked notes and its runs.
     Show {
@@ -2782,8 +2793,8 @@ fn print_import(job: &SessionsImportJob) {
 
 async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
     match cmd {
-        NoteCmd::List { deleted } => {
-            let mut result = client.call::<NotesList>(NotesListParams::default()).await?;
+        NoteCmd::List { deleted, machine } => {
+            let mut result = client.call::<NotesList>(NotesListParams { machine }).await?;
             result.notes.retain(|note| note.deleted_at.is_some() == deleted);
             if json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
@@ -2792,6 +2803,19 @@ async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
                     "{}",
                     if deleted { "No deleted notes." } else { "No notes yet. Create one with `kybern note new --title Ideas`." }
                 );
+            } else if let Some(federation) = &result.federation {
+                for section in &federation.sections {
+                    let notes: Vec<_> = result.notes.iter().filter(|note| section.ids.contains(&note.id)).cloned().collect();
+                    println!("{}{}", section.machine_name, if section.is_self { " (this machine)" } else { "" });
+                    if notes.is_empty() {
+                        println!("  No notes.");
+                    } else {
+                        render::notes(&notes);
+                    }
+                }
+                if let Some(footer) = &federation.footer {
+                    println!("{footer}");
+                }
             } else {
                 render::notes(&result.notes);
             }
@@ -2901,19 +2925,27 @@ async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
                 println!("Restored{}.", if note.scope == NoteScope::Global && note.origin.is_some() { " as a global note" } else { "" });
             }
         }
-        NoteCmd::Search { query } => {
+        NoteCmd::Search { query, machine } => {
             let query = query.join(" ");
             if query.trim().is_empty() {
                 return Err(anyhow!("type something to search for, like `kybern note search release plan`"));
             }
-            let result = client.call::<NotesSearch>(NotesSearchParams { query, limit: None, machine: None }).await?;
+            let result = client.call::<NotesSearch>(NotesSearchParams { query, limit: None, machine }).await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else if result.results.is_empty() {
                 println!("No matching notes.");
             }
             for hit in result.results.iter().filter(|_| !json) {
-                println!("{}  {}", hit.id, hit.snippet);
+                let machine = result
+                    .federation
+                    .as_ref()
+                    .and_then(|federation| federation.sections.iter().find(|section| section.ids.contains(&hit.id)))
+                    .map_or(String::new(), |section| format!("  [{}]", section.machine_name));
+                println!("{}{machine}  {}", hit.id, hit.snippet);
+            }
+            if let Some(footer) = result.federation.as_ref().and_then(|federation| federation.footer.as_ref()).filter(|_| !json) {
+                println!("{footer}");
             }
         }
     }
@@ -2948,12 +2980,12 @@ async fn resolve_task(client: &Client, key: &str) -> Result<TaskItem> {
 
 async fn task_command(client: &Client, cmd: TaskCmd, json: bool) -> Result<()> {
     match cmd {
-        TaskCmd::List { status, project, all } => {
+        TaskCmd::List { status, project, all, machine } => {
             let project_id = match &project {
                 Some(project) => Some(resolve_project(client, project, false).await?),
                 None => None,
             };
-            let mut tasks = client.call::<TaskItemsList>(TaskItemsListParams::default()).await?.tasks;
+            let TaskItemsListResult { mut tasks, federation } = client.call::<TaskItemsList>(TaskItemsListParams { machine }).await?;
             tasks.retain(|task| {
                 project_id.is_none_or(|id| task.project_id == Some(id))
                     && match status {
@@ -2962,9 +2994,22 @@ async fn task_command(client: &Client, cmd: TaskCmd, json: bool) -> Result<()> {
                     }
             });
             if json {
-                println!("{}", serde_json::to_string_pretty(&TaskItemsListResult { tasks, federation: None })?);
+                println!("{}", serde_json::to_string_pretty(&TaskItemsListResult { tasks, federation })?);
             } else if tasks.is_empty() {
                 println!("No tasks. Create one with `kybern task new \"Fix the login redirect\"`.");
+            } else if let Some(federation) = &federation {
+                for section in &federation.sections {
+                    let tasks: Vec<_> = tasks.iter().filter(|task| section.ids.contains(&task.id)).cloned().collect();
+                    println!("{}{}", section.machine_name, if section.is_self { " (this machine)" } else { "" });
+                    if tasks.is_empty() {
+                        println!("  No tasks.");
+                    } else {
+                        render::tasks(&tasks);
+                    }
+                }
+                if let Some(footer) = &federation.footer {
+                    println!("{footer}");
+                }
             } else {
                 render::tasks(&tasks);
             }

@@ -133,8 +133,23 @@ pub async fn run_ports(client: &Client, cmd: PortsCmd, json: bool) -> Result<()>
             if json { println!("{}", serde_json::to_string_pretty(&list)?) } else { render_forwards(&list.forwards) }
         }
         PortsCmd::Stop { id } => {
+            let before = client.call::<PortsList>(Empty {}).await?;
             let list = client.call::<PortsStop>(PortsStopParams { id }).await?;
-            if json { println!("{}", serde_json::to_string_pretty(&list)?) } else { render_forwards(&list.forwards) }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&list)?)
+            } else {
+                match before.forwards.iter().find(|forward| forward.id == id) {
+                    Some(forward) => println!(
+                        "Stopped the forward from 127.0.0.1:{} to {}:{}.",
+                        forward.local_port, forward.machine_name, forward.remote_port
+                    ),
+                    None => println!("No forward with that id. `kybern ports list` shows them."),
+                }
+                if !list.forwards.is_empty() {
+                    println!("Still forwarding:");
+                    render_forwards(&list.forwards);
+                }
+            }
         }
     }
     Ok(())

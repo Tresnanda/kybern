@@ -262,6 +262,39 @@ async fn a_member_off_the_tailnet_dials_out_to_a_member_that_publishes_a_url() {
     eventually("a clears its URL", Duration::from_secs(10), || dial_out::url_of(&a.membership().projection(), &a.id()).is_none()).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_tailscale_lists_offline_is_still_dialed_when_it_answers() {
+    let Some(mut cluster) = cluster(&[NodeSpec::owner("a"), NodeSpec::owner("b")]) else { return };
+    // Each side's Tailscale lists the other offline (as one that lost its coordination server is), but
+    // both daemons are up, so whichever has the smaller id dials and the probe finds the other.
+    cluster.list_offline_for("a", "b", true);
+    cluster.list_offline_for("b", "a", true);
+    let a = cluster.start("a", true).await;
+    let b = cluster.start("b", true).await;
+    cluster.form(&a, &[&b], JoinVia::Auto).await;
+    eventually("they link although each is listed offline", WAIT, || linked(&a, &b)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_machine_whose_own_tailscale_lost_its_coordination_server_still_dials() {
+    let Some(mut cluster) = cluster(&[NodeSpec::owner("a"), NodeSpec::owner("b")]) else { return };
+    let a = cluster.start("a", true).await;
+    let b = cluster.start("b", true).await;
+    cluster.form(&a, &[&b], JoinVia::Auto).await;
+    eventually("they link", WAIT, || linked(&a, &b)).await;
+    // Both lose their coordination server: "Running" but offline, so neither status says running and
+    // each lists the other offline. The sessions drop; the machines still answer on their ports.
+    cluster.set_online("a", false);
+    cluster.set_online("b", false);
+    let before = a.state.network.peers.link(&b.id()).unwrap();
+    a.state.network.drop_session(&b.id());
+    b.state.network.drop_session(&a.id());
+    eventually("a new session opens without a running Tailscale", WAIT, || {
+        linked(&a, &b) && a.state.network.peers.link(&b.id()).is_some_and(|link| !std::sync::Arc::ptr_eq(&link, &before))
+    })
+    .await;
+}
+
 #[test]
 fn only_a_machine_can_say_where_it_is_reached_and_only_an_https_address_carries_a_session() {
     // Another member cannot point traffic for `a` somewhere else.

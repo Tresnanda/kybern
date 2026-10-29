@@ -411,8 +411,10 @@ pub async fn run(client: &Client, cmd: MachinesCmd, json: bool) -> Result<()> {
                 println!("No routes: that machine is not reachable from this one right now.");
             } else {
                 for route in routes.routes {
-                    let via = route.via.as_deref().map(|via| format!("  via {}", short(via))).unwrap_or_default();
-                    println!("{:<16} {}{via}", format!("{:?}", route.kind).to_lowercase(), route.url);
+                    let via_name = route.via.as_deref().map(|via| {
+                        members.iter().find(|card| card.machine_id == via).map_or_else(|| short(via).to_string(), |card| card.name.clone())
+                    });
+                    println!("{:<20} {}", route_label(route.kind, via_name.as_deref()), route.url);
                 }
             }
         }
@@ -564,9 +566,26 @@ pub async fn run(client: &Client, cmd: MachinesCmd, json: bool) -> Result<()> {
     Ok(())
 }
 
+/// What a route is, in words.
+fn route_label(kind: RouteKind, via: Option<&str>) -> String {
+    match kind {
+        RouteKind::DirectTailnet => "Tailscale".into(),
+        RouteKind::DirectAdvertised => "Advertised URL".into(),
+        RouteKind::Ssh => "SSH tunnel".into(),
+        RouteKind::Relay => via.map_or_else(|| "Relay".into(), |via| format!("Relay via {via}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn routes_are_named_in_words() {
+        assert_eq!(route_label(RouteKind::DirectTailnet, None), "Tailscale");
+        assert_eq!(route_label(RouteKind::DirectAdvertised, None), "Advertised URL");
+        assert_eq!(route_label(RouteKind::Relay, Some("instabox")), "Relay via instabox");
+    }
 
     fn card(id: &str, name: &str) -> MachineCard {
         MachineCard {

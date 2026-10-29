@@ -431,7 +431,8 @@ impl Tailscale for Fake {
             .map(|node| (node.user_id, TsUser { login_name: node.login.clone(), display_name: node.login.clone() }))
             .collect();
         Ok(TsStatus {
-            running: true,
+            // A node that lost its coordination server is "Running" but not online, as the real thing says.
+            running: me.online,
             backend_state: "Running".into(),
             self_node: Some(me.ts_node()),
             peers: fixture.nodes.iter().filter(|node| node.name != me.name).map(FakeNode::ts_node).collect(),

@@ -102,6 +102,8 @@ pub struct Timing {
     pub dead_after: Duration,
     pub backoff_min: Duration,
     pub backoff_max: Duration,
+    /// The soonest a member that Tailscale lists offline is dialed again after a failed attempt.
+    pub offline_retry: Duration,
     /// The discovery tick while no client shows Settings → Machines.
     pub tick_idle: Duration,
     /// The discovery tick while a client does.
@@ -134,6 +136,7 @@ impl Default for Timing {
             dead_after: Duration::from_secs(95),
             backoff_min: Duration::from_secs(2),
             backoff_max: Duration::from_secs(300),
+            offline_retry: Duration::from_secs(30),
             tick_idle: Duration::from_secs(5 * 60),
             tick_watching: Duration::from_secs(60),
             watching_for: Duration::from_secs(90),
@@ -159,6 +162,7 @@ impl Timing {
             dead_after: Duration::from_millis(600),
             backoff_min: Duration::from_millis(100),
             backoff_max: Duration::from_millis(800),
+            offline_retry: Duration::from_millis(300),
             tick_idle: Duration::from_millis(400),
             tick_watching: Duration::from_millis(400),
             watching_for: Duration::from_secs(1),
