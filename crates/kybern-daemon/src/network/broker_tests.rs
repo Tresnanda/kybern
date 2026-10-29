@@ -893,6 +893,53 @@ async fn omp_is_pointed_at_the_brokers_own_broker_and_fallback_unsets_both_varia
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_removed_machine_drops_its_borrowed_logins_ends_their_sessions_and_deletes_pushed_keys() {
+    let Some(l) = lending().await else { return };
+    let (thread, _) = l.thread().await;
+    l.send(thread, "hello").await;
+    eventually("the turn completes", WAIT, || l.turns(thread, "turn_completed") == 1).await;
+    // A key pushed to the PC, wired into its Cursor env.
+    let store = crate::secret_store::store_of(&l.a.state).unwrap();
+    store.put("provider.cursor.CURSOR_API_KEY", "cursor-key-SENTINEL-77", &crate::secret_store::SecretSource::Local).unwrap();
+    client(&l.a)
+        .await
+        .call::<SecretsPush>(SecretsPushParams { name: "provider.cursor.CURSOR_API_KEY".into(), machines: vec![l.b.id()] })
+        .await
+        .unwrap();
+    let pc_store = crate::secret_store::store_of(&l.b.state).unwrap();
+    assert!(pc_store.contains("provider.cursor.CURSOR_API_KEY").unwrap());
+
+    // The mac removes the PC, which cooperates: it learns of its removal from the push.
+    super::removal::remove(&l.a.state, &l.b.id(), false, &[]).await.unwrap();
+    eventually("the PC knows it was removed", WAIT, || l.b.membership().self_removed()).await;
+    eventually("the borrowed session ends", WAIT, || l.spawns()[0].closed.load(std::sync::atomic::Ordering::SeqCst)).await;
+    eventually("the loan is released", WAIT, || l.b.state.store.loans_open(kybern_store::LoanRole::Borrower).unwrap().is_empty()).await;
+    eventually("the pushed key is deleted", WAIT, || !pc_store.contains("provider.cursor.CURSOR_API_KEY").unwrap()).await;
+    eventually("and unwired from the Cursor env", WAIT, || {
+        l.b.state.settings.get().providers.get(&ProviderKind::Cursor).is_none_or(|p| !p.env.contains_key("CURSOR_API_KEY"))
+    })
+    .await;
+    // Nothing cached is lent out again: a new session of the account is refused with a sentence.
+    let refused = l.broker(&l.b).acquire(ProviderKind::ClaudeCode, &l.local_account, &l.broker_account).await.err().unwrap();
+    assert!(refused.contains("not connected to your other machines"), "{refused}");
+    // The mac keeps its own copy of the key.
+    assert!(store.contains("provider.cursor.CURSOR_API_KEY").unwrap());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn turning_the_network_off_ends_the_sessions_on_borrowed_logins() {
+    let Some(l) = lending().await else { return };
+    let (thread, _) = l.thread().await;
+    l.send(thread, "hello").await;
+    eventually("the turn completes", WAIT, || l.turns(thread, "turn_completed") == 1).await;
+    super::manage::set_enabled(&l.b.state, false).await.unwrap();
+    eventually("the borrowed session ends", WAIT, || l.spawns()[0].closed.load(std::sync::atomic::Ordering::SeqCst)).await;
+    eventually("the loan is released", WAIT, || l.b.state.store.loans_open(kybern_store::LoanRole::Borrower).unwrap().is_empty()).await;
+    let refused = l.broker(&l.b).acquire(ProviderKind::ClaudeCode, &l.local_account, &l.broker_account).await.err().unwrap();
+    assert!(refused.contains("not connected to your other machines"), "{refused}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn releasing_a_loan_ends_the_session_that_holds_it_and_the_account_reads_signed_out() {
     let Some(l) = lending().await else { return };
     let (thread, _) = l.thread().await;

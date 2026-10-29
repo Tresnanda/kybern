@@ -105,7 +105,8 @@ impl Network {
             Ok(_) => {}
             Err(error) => tracing::warn!(target: TARGET, %error, "could not revoke client tokens issued through the network"),
         }
-        // Keys other machines pushed arrive with the secret store (M5); it clears them here.
+        // Borrowed logins, their sessions and the keys other machines pushed are cleared by the login broker's
+        // worker, which hears of the removal from `notify_changed` (`broker::run_every`).
     }
 
     /// Revoke the tokens of every device the membership set says was revoked. A member that was

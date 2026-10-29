@@ -115,6 +115,8 @@ pub enum BrokerError {
     Unsupported(String),
     /// The broker refused (`machine:logins` is off for this machine).
     Refused(String),
+    /// This machine is not in a network now: it was removed, or the network is turned off here.
+    Left,
     Failed(String),
 }
 
@@ -143,6 +145,9 @@ impl BrokerError {
             }
             BrokerError::Refused(name) => format!(
                 "{name} does not let this machine borrow its logins. Turn Logins on for this machine in Settings → Machines on {name}."
+            ),
+            BrokerError::Left => format!(
+                "This machine is not connected to your other machines, so {harness} cannot sign in through the login broker. Sign in here instead."
             ),
             BrokerError::Failed(reason) => reason.clone(),
         }
@@ -188,6 +193,10 @@ struct LeaseSource {
 #[async_trait]
 impl LoginSource for LeaseSource {
     async fn current(&self) -> Result<BorrowedLogin, String> {
+        // A machine that left the network keeps nothing it borrowed through it, even before the worker clears it.
+        if !self.broker.in_network() {
+            return Err(BrokerError::Left.message(self.lease.kind));
+        }
         if let Some(login) = lock(&self.lease.state).login.clone() {
             return Ok(login);
         }
@@ -234,6 +243,12 @@ impl LoginBroker {
 
     fn self_id(&self) -> String {
         self.hub.self_id()
+    }
+
+    /// This machine takes part in its network now: the network is on here and this machine is a current member.
+    /// Borrowed logins are only used while it does.
+    fn in_network(&self) -> bool {
+        self.network.is_enabled() && self.network.membership().is_some_and(|membership| membership.self_is_member())
     }
 
     /// The machine the `broker` register names, when it is a current member.
@@ -289,6 +304,9 @@ impl LoginBroker {
     /// The login source for a session of a bound account, borrowing now when the lease is empty.
     /// The error is the sentence to show ("Claude signs in through the VPS, which is offline · …").
     pub async fn acquire(self: &Arc<Self>, kind: ProviderKind, instance: &str, account: &str) -> Result<Arc<dyn LoginSource>, String> {
+        if !self.in_network() {
+            return Err(BrokerError::Left.message(kind));
+        }
         let lease = self.lease_for(kind, instance, account);
         let held = lock(&lease.state).login.is_some();
         if !held {
@@ -313,6 +331,9 @@ impl LoginBroker {
     }
 
     async fn borrow_from_broker(&self, lease: &Lease) -> Result<BorrowedLogin, BrokerError> {
+        if !self.in_network() {
+            return Err(BrokerError::Left);
+        }
         let me = self.self_id();
         let broker_id = self.broker_id().ok_or(BrokerError::NoBroker)?;
         if broker_id == me {
@@ -925,6 +946,41 @@ impl LoginBroker {
         PeerLoginReleaseAllResult { released: loans.len() as u32, signed_out }
     }
 
+    // ---- this machine left the network ----
+
+    /// This machine was removed, or its network was turned off: drop every borrowed login it holds, release the
+    /// loans, and end the sessions running on them (§2.5, §9.4). The broker hears of a release only while the network
+    /// is on; a removed machine's loans expire there on their own. Returns how many loans ended.
+    pub async fn forget_borrowed(&self, state: &AppState) -> usize {
+        let leases: Vec<Arc<Lease>> = lock(&self.leases).drain().map(|(_, lease)| lease).collect();
+        let mut ended: Vec<(ProviderKind, String)> = Vec::new();
+        for lease in &leases {
+            *lock(&lease.state) = LeaseState::default();
+            ended.push((lease.kind, lease.instance.clone()));
+        }
+        let loans = self.store.loans_open(LoanRole::Borrower).unwrap_or_default();
+        for loan in &loans {
+            let _ = self.store.loan_release(&loan.loan_id);
+            if self.network.is_enabled() {
+                let _ = tokio::time::timeout(STATUS_WAIT, self.hub.call(&loan.peer, PeerLoginRelease::NAME, json!({ "loan_id": loan.loan_id })))
+                    .await;
+            }
+            if let Some(instance) = &loan.local_instance
+                && !ended.contains(&(loan.provider, instance.clone()))
+            {
+                ended.push((loan.provider, instance.clone()));
+            }
+        }
+        for (kind, instance) in &ended {
+            // A session that holds the lent token must not outlive the loan.
+            state.orchestrator.end_login_sessions(*kind, instance, false).await;
+        }
+        if !ended.is_empty() {
+            tracing::info!(target: TARGET, loans = loans.len(), accounts = ended.len(), "this machine left its network; dropped its borrowed logins");
+        }
+        loans.len()
+    }
+
     // ---- the register moved: borrow from the new broker ----
 
     /// Borrow again from the current broker for every loan held from another machine, and let the old
@@ -1006,18 +1062,53 @@ pub async fn run(state: AppState) {
 pub async fn run_every(state: AppState, tick: Duration) {
     let Some(broker) = state.orchestrator.login_broker().cloned() else { return };
     let shutdown = state.shutdown.clone();
+    let mut changes = state.network.subscribe_changes();
     loop {
         tokio::select! {
             _ = shutdown.cancelled() => return,
             _ = tokio::time::sleep(tick) => {}
+            // A removal or the network turned off is acted on at once.
+            _ = changes.recv() => {}
         }
-        if !state.network.is_enabled() || state.network.membership().is_none() {
+        let Some(membership) = state.network.membership() else { continue };
+        if membership.self_removed() {
+            broker.forget_borrowed(&state).await;
+            forget_pushed_secrets(&state);
+            continue;
+        }
+        if !state.network.is_enabled() {
+            broker.forget_borrowed(&state).await;
             continue;
         }
         if broker.broker_id().as_deref() == Some(broker.self_id().as_str()) {
             broker.watch_lent(&state).await;
         }
         broker.rebind_borrowers(&state).await;
+    }
+}
+
+/// A removed machine deletes every key other members pushed to it, and the references to them in its provider
+/// environments (§2.5). Nothing to do when there are none.
+fn forget_pushed_secrets(state: &AppState) {
+    let store = match crate::secret_store::store_of(state) {
+        Ok(store) => store,
+        Err(error) => {
+            tracing::warn!(target: TARGET, %error, "could not open the secret store to delete pushed keys");
+            return;
+        }
+    };
+    let mut settings = state.settings.get();
+    match store.forget_pushed(&mut settings) {
+        Ok((0, _)) => {}
+        Ok((deleted, unwired)) => {
+            if unwired > 0
+                && let Err(error) = state.settings.set(settings)
+            {
+                tracing::warn!(target: TARGET, %error, "could not remove the references to pushed keys from settings");
+            }
+            tracing::info!(target: TARGET, deleted, "this machine was removed; deleted the keys other machines pushed to it");
+        }
+        Err(error) => tracing::warn!(target: TARGET, %error, "could not delete the keys other machines pushed"),
     }
 }
 

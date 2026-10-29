@@ -457,6 +457,25 @@ impl SecretStore {
         Ok(removed)
     }
 
+    /// Delete every secret another member pushed, and the provider env entries that point at them (this machine
+    /// was removed from its network, §2.5). Returns how many secrets were deleted and how many env entries were
+    /// removed from `settings`, which the caller saves.
+    pub fn forget_pushed(&self, settings: &mut Settings) -> Result<(usize, usize)> {
+        let mut deleted = BTreeSet::new();
+        for info in self.list()? {
+            if matches!(info.source, SecretSource::Pushed(_)) && self.delete(&info.name)? {
+                deleted.insert(info.name);
+            }
+        }
+        let mut unwired = 0;
+        for provider in settings.providers.values_mut() {
+            let before = provider.env.len();
+            provider.env.retain(|_, value| parse_reference(value).is_none_or(|name| !deleted.contains(name)));
+            unwired += before - provider.env.len();
+        }
+        Ok((deleted.len(), unwired))
+    }
+
     // ---- settings.json migration ----
 
     /// Move the plaintext credentials of an existing `settings.json` into the store and rewrite the
@@ -1013,6 +1032,31 @@ mod tests {
         // Two boxes of the same text differ; a low-order recipient key is refused.
         assert_ne!(seal(&bob.sealing_public(), b"ctx", SENTINEL.as_bytes()).unwrap(), sealed);
         assert!(seal(&[0u8; 32], b"ctx", b"x").is_err());
+    }
+
+    #[test]
+    fn a_removed_machine_forgets_the_pushed_keys_and_their_references_and_keeps_its_own() {
+        let dir = TempDir::new("secrets-forget-pushed");
+        let store = open_store(&dir);
+        store.put("provider.cursor.CURSOR_API_KEY", SENTINEL, &SecretSource::Pushed("machine-a".into())).unwrap();
+        store.put("provider.opencode.OPENAI_API_KEY", "local-value", &SecretSource::Local).unwrap();
+        let mut settings = Settings::default();
+        settings.providers.entry(ProviderKind::Cursor).or_default().env.insert("CURSOR_API_KEY".into(), reference("provider.cursor.CURSOR_API_KEY"));
+        settings.providers.entry(ProviderKind::Cursor).or_default().env.insert("PLAIN".into(), "kept".into());
+        settings
+            .providers
+            .entry(ProviderKind::Opencode)
+            .or_default()
+            .env
+            .insert("OPENAI_API_KEY".into(), reference("provider.opencode.OPENAI_API_KEY"));
+
+        assert_eq!(store.forget_pushed(&mut settings).unwrap(), (1, 1));
+        assert!(store.get("provider.cursor.CURSOR_API_KEY").unwrap().is_none(), "the pushed key is gone");
+        assert_eq!(store.get("provider.opencode.OPENAI_API_KEY").unwrap().unwrap().expose(), "local-value");
+        let cursor = &settings.providers[&ProviderKind::Cursor].env;
+        assert!(!cursor.contains_key("CURSOR_API_KEY") && cursor["PLAIN"] == "kept");
+        assert!(settings.providers[&ProviderKind::Opencode].env.contains_key("OPENAI_API_KEY"));
+        assert_eq!(store.forget_pushed(&mut settings).unwrap(), (0, 0), "a second pass has nothing to do");
     }
 
     #[test]
