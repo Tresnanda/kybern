@@ -505,8 +505,17 @@ async fn the_doctor_checks_tailscale_membership_and_each_peer() {
     let mut c = c;
     c.stop();
     eventually("a notices", WAIT, || a.state.network.peers.link(&c.id()).is_none()).await;
-    let after = at_a.call::<NetworkDoctor>(NetworkDoctorParams { machine_id: Some(c.id()) }).await.unwrap();
-    let session = after.checks.iter().find(|check| check.id == "peer.session").unwrap();
+    // Under load a's peer manager can still be mid-dial when the link first reads gone: ask until the
+    // doctor sees the stopped peer, within the usual wait, instead of once.
+    let deadline = tokio::time::Instant::now() + WAIT;
+    let session = loop {
+        let after = at_a.call::<NetworkDoctor>(NetworkDoctorParams { machine_id: Some(c.id()) }).await.unwrap();
+        let session = after.checks.into_iter().find(|check| check.id == "peer.session").unwrap();
+        if session.status == DoctorStatus::Fail || tokio::time::Instant::now() >= deadline {
+            break session;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
     assert_eq!(session.status, DoctorStatus::Fail);
     assert!(session.next_step.is_some());
 }
