@@ -7,6 +7,7 @@ import { requestCloseDirty } from './closeDirtyRequest.ts'
 import { closePane, closeTab, collectThreadPanes, getGroup, getGroups, groupsOfThread, moveTabToGroup, reopenClosedTab, splitTab, updateGroup, updateMemory, getSplitRoot, splitFocusedPane, type SplitDirection } from '../split/store.ts'
 import { activateIn, CHAT, cycleIn, hasTab, normalizeTab, numberIn, openIn, permanentIn, reorderIn, tabKey, type Tab } from './model.ts'
 import { getNav, setNav } from '../nav/store.ts'
+import { clientFor } from '../machines/index.ts'
 
 /** Pane ids of child-thread tabs, mapped to the leaf that hosts them (links inside a child tab open in its host group). */
 const hosts = new Map<string, string>()
@@ -95,7 +96,13 @@ export function closeTabAction(leafId: string, key: string) {
   const group = getGroup(leafId)
   const tab = group.tabs.find((t) => tabKey(t) === key)
   if (!tab || tab.kind === 'chat') return
-  if (tab.kind === 'terminal') void callThread(group.threadId, 'terminals.close', { terminal_id: tab.id }).catch(() => {})
+  if (tab.kind === 'terminal') {
+    // A terminal on another machine is closed there: the thread's own daemon does not know it.
+    const close = tab.machineId
+      ? Promise.resolve().then(() => clientFor(tab.machineId!).call('terminals.close', { terminal_id: tab.id }))
+      : callThread(group.threadId, 'terminals.close', { terminal_id: tab.id })
+    void close.catch(() => {})
+  }
   const buffer = fileTabBuffer(group.threadId, tab)
   if (buffer && getBuffer(buffer)?.dirty && tab.kind === 'file') {
     requestCloseDirty({ leafId, key, buffer, name: tab.path.split('/').pop() || tab.path })
