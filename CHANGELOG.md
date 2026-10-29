@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.19.3
+
+<!-- kybern-release-title: The window keeps responding when drawing stalls -->
+<!-- kybern-release-summary: When macOS stops handing Kybern new frames to draw into, the window stays responsive and recovers instead of freezing until you move or minimize it. -->
+
+- Fixes a freeze where the whole window stopped updating until you dragged it, minimized it or switched desktops. When macOS held on to every frame Kybern draws into, Kybern waited about a second for each new frame, so typing and clicks stalled with it. It now skips those draws, asks macOS to release the frames, and draws the current view as soon as one is free.
+- Each such episode is written to `gpuix-frames.log` in the Kybern data folder as `DrawableStarved`, with how it ended. `KYBERN_DRAWABLE_GATE=0` turns this off.
+
 ## 0.19.2
 
 <!-- kybern-release-title: Recovers when the window stops drawing -->
