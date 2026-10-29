@@ -86,6 +86,12 @@ pub(super) fn clip(text: &str, max: usize) -> String {
     out
 }
 
+/// Keeps a multi-line message (a table, a list) readable inside a `- ` list item: its later lines are
+/// indented to the item's content column instead of being joined into one line.
+fn in_list_item(text: &str) -> String {
+    text.lines().map(str::trim_end).collect::<Vec<_>>().join("\n  ")
+}
+
 pub(super) fn conflict(message: impl Into<String>) -> RpcError {
     RpcError::new(codes::CONFLICT, message)
 }
@@ -350,9 +356,9 @@ impl Orchestrator {
         let skip = replies.len().saturating_sub(RECENT_TURNS);
         for (turn_id, reply) in replies.iter().skip(skip) {
             if let Some((_, user)) = users.iter().rev().find(|(id, _)| id == turn_id) {
-                turns.push_str(&format!("- You asked: {}\n", clip(user, TURN_USER_CAP).replace('\n', " ")));
+                turns.push_str(&format!("- You asked: {}\n", in_list_item(&clip(user, TURN_USER_CAP))));
             }
-            turns.push_str(&format!("  The agent: {}\n", clip(reply, TURN_AGENT_CAP).replace('\n', " ")));
+            turns.push_str(&format!("  The agent: {}\n", in_list_item(&clip(reply, TURN_AGENT_CAP))));
         }
         if !turns.is_empty() {
             note.push_str(&format!("\n## Recent turns\n{turns}"));
@@ -885,4 +891,15 @@ pub(crate) async fn serve_fork_enqueue(state: &AppState, params: OutboxEnqueuePa
     let result = state.orchestrator.fork_to_machine(fork).await?;
     state.network.notify_outbox(result.item.clone());
     Ok(result.item)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::in_list_item;
+
+    #[test]
+    fn a_reply_with_a_table_keeps_its_lines_inside_the_list_item() {
+        let reply = "All green.\n\n| Machine | Result |\n| --- | --- |\n| os-kdi | pass |  ";
+        assert_eq!(in_list_item(reply), "All green.\n  \n  | Machine | Result |\n  | --- | --- |\n  | os-kdi | pass |");
+    }
 }
