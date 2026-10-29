@@ -285,43 +285,91 @@ export function showMachineGlyph(options: { machineCount: number; machineId: Mac
 }
 
 export interface MachineGlyph {
-  /** First letter of the machine's name, upper case. */
+  /** One or two characters of the machine's name ("S", "Sa"), upper case first. Stable once assigned. */
   letter: string;
   /** 0-359, derived from the machine id so it is the same on every client. */
   hue: number;
 }
 
-export function machineGlyph(machine: { machineId: MachineId; name?: string }): MachineGlyph {
-  const source = (machine.name ?? "").trim() || machine.machineId;
-  const letter = (Array.from(source)[0] ?? "?").toUpperCase();
+function hueOf(machineId: MachineId): number {
   let hash = 2166136261;
-  for (let at = 0; at < machine.machineId.length; at++) {
-    hash ^= machine.machineId.charCodeAt(at);
+  for (let at = 0; at < machineId.length; at++) {
+    hash ^= machineId.charCodeAt(at);
     hash = Math.imul(hash, 16777619) >>> 0;
   }
-  return { letter, hue: hash % 360 };
+  return hash % 360;
+}
+
+const isLetter = (char: string) => /\p{L}/u.test(char);
+
+/** "SatyaMas" → Satya, Mas; "srv1544252" → srv, 1544252; "VM-3-60-ubuntu" → VM, 3, 60, ubuntu. */
+function nameSegments(name: string): string[][] {
+  return name
+    .replace(/(\p{Ll})(\p{Lu})/gu, "$1 $2")
+    .replace(/(\p{L})(\p{N})|(\p{N})(\p{L})/gu, (_all, a, b, c, d) => `${a ?? c} ${b ?? d}`)
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean)
+    .map((segment) => Array.from(segment));
+}
+
+const upper = (char: string) => char.toUpperCase();
+const pair = (first: string, second: string) => upper(first) + second.toLowerCase();
+
+/** The letters a machine may take, best first: its first letter, the first letter of each later word, then two letters ("Sa"). */
+export function glyphCandidates(name: string): string[] {
+  const segments = nameSegments(name);
+  const out: string[] = [];
+  const add = (letter: string | undefined) => {
+    if (letter && !out.includes(letter)) out.push(letter);
+  };
+  const letters = segments.filter((segment) => isLetter(segment[0]!));
+  for (const segment of letters) add(upper(segment[0]!));
+  const lead = letters[0] ?? segments[0];
+  if (lead) {
+    for (let at = 1; at < lead.length; at++) add(pair(lead[0]!, lead[at]!));
+    for (const segment of segments.slice(1)) add(pair(lead[0]!, segment[0]!));
+  }
+  for (const segment of segments) add(upper(segment[0]!));
+  return out;
+}
+
+/** A machine's glyph in isolation: its name's first letter. Prefer `machineGlyphs`, which keeps letters distinct and stable. */
+export function machineGlyph(machine: { machineId: MachineId; name?: string }): MachineGlyph {
+  const source = (machine.name ?? "").trim() || machine.machineId;
+  return { letter: glyphCandidates(source)[0] ?? "?", hue: hueOf(machine.machineId) };
 }
 
 /**
- * The glyphs of a machine set, with distinct letters. A machine whose first letter another machine already
- * uses takes the next letter of its name that is free (satyamas and srv1544252 show S and R). Machines are
- * taken in id order, so every client gives the same letters; a name with no free letter keeps its first.
+ * The glyphs of a machine set, with distinct letters that never change once a machine has one. `assigned`
+ * is what an earlier call (or the saved machine record) already gave out: those machines keep their letter
+ * even when they are renamed. A new machine takes the first free candidate of its name (satyamas and
+ * srv1544252 show S and Sr, not S and a letter picked from the middle), in id order so every client agrees.
+ * `fresh` lists the letters this call gave out, for the caller to save.
  */
-export function machineGlyphs(machines: readonly { machineId: MachineId; name?: string }[]): Map<MachineId, MachineGlyph> {
+export function machineGlyphs(
+  machines: readonly { machineId: MachineId; name?: string }[],
+  assigned?: ReadonlyMap<MachineId, string> | Readonly<Record<MachineId, string | undefined>>,
+): Map<MachineId, MachineGlyph> & { fresh: Map<MachineId, string> } {
+  const had = (id: MachineId) => (assigned instanceof Map ? assigned.get(id) : (assigned as Record<MachineId, string | undefined> | undefined)?.[id]);
   const taken = new Set<string>();
-  const glyphs = new Map<MachineId, MachineGlyph>();
+  const glyphs = new Map<MachineId, MachineGlyph>() as Map<MachineId, MachineGlyph> & { fresh: Map<MachineId, string> };
+  glyphs.fresh = new Map();
   const ordered = [...machines].sort((a, b) => (a.machineId < b.machineId ? -1 : a.machineId > b.machineId ? 1 : 0));
   for (const machine of ordered) {
-    if (glyphs.has(machine.machineId)) continue;
-    const base = machineGlyph(machine);
-    const source = Array.from((machine.name ?? "").trim() || machine.machineId);
-    let letter = base.letter;
-    if (taken.has(letter)) {
-      const free = source.map((char) => char.toUpperCase()).find((char) => /[\p{L}\p{N}]/u.test(char) && !taken.has(char));
-      if (free) letter = free;
+    const kept = had(machine.machineId);
+    if (kept) {
+      taken.add(kept);
+      glyphs.set(machine.machineId, { letter: kept, hue: hueOf(machine.machineId) });
     }
+  }
+  for (const machine of ordered) {
+    if (glyphs.has(machine.machineId)) continue;
+    const source = (machine.name ?? "").trim() || machine.machineId;
+    const candidates = glyphCandidates(source);
+    const letter = candidates.find((candidate) => !taken.has(candidate)) ?? candidates[0] ?? "?";
     taken.add(letter);
-    glyphs.set(machine.machineId, { letter, hue: base.hue });
+    glyphs.set(machine.machineId, { letter, hue: hueOf(machine.machineId) });
+    glyphs.fresh.set(machine.machineId, letter);
   }
   return glyphs;
 }

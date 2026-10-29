@@ -9,6 +9,7 @@ import { useNotes } from '../notes/store.ts'
 import { showDialog } from '../dialogs/store.ts'
 import { forkTargetsOf } from '../fork/targets.ts'
 import type { StateThread } from '../machines/merged.ts'
+import { ThreadMachine } from '../machines/ThreadMachine.tsx'
 import { ThreadContextChips } from '../coordinator/Header.tsx'
 import { latestRotation, refreshContext } from '../coordinator/rotation.ts'
 import { formatTokens, ROTATION_COPY } from '../../../../packages/kybern-client/src/rotation.ts'
@@ -345,6 +346,7 @@ export const ThreadHeader = memo(function ThreadHeader({ leafId: given, size = '
                 </div>
               </>
             )}
+            {!inSplit && <ThreadMachine machineId={(thread as StateThread).machineId} testId="header-machine" />}
             {size === 'md' && !inSplit && <ThreadContextChips thread={thread} />}
             {thread.coordinator_project_id && size === 'md' && !inSplit && (
               <Label color={muted(t, 0.6)} size={10} weight={500} style={{ flexShrink: 0 }}>

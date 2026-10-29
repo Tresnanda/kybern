@@ -6,6 +6,9 @@ test('the footer counts machines, the ones that are away, and queued work', () =
   expect(footerText([{ offline: false }, { offline: true }, { offline: false }, { offline: false }])).toBe('4 machines · 1 offline')
   expect(footerText([{ offline: false }, { offline: false }])).toBe('2 machines')
   expect(footerText([{ offline: true }, { offline: false }], 2)).toBe('2 machines · 1 offline · 2 waiting')
+  // Paused on purpose is not "offline".
+  expect(footerText([{ offline: false }, { offline: true, paused: true }, { offline: false }, { offline: true }])).toBe('4 machines · 1 offline · 1 paused')
+  expect(footerText([{ offline: false }, { offline: true, paused: true }])).toBe('2 machines · 1 paused')
 })
 test('offline machines say when they were last seen', () => {
   expect(statusText({ status: 'offline', lastSeenAt: now - 2 * 3600_000 }, now)).toBe('Offline · last seen 2h ago')

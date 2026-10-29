@@ -136,6 +136,8 @@ const MARQUEE_DELAY_MS = 350
 const MARQUEE_MEASURE_MS = 190
 /** `transform var(--duration-slow) var(--ease-out)`: the pan back. */
 const MARQUEE_BACK = 0.4
+/** How long the tail stays in view before the title pans home again. */
+const MARQUEE_HOLD_MS = 900
 
 /**
  * `.t-marquee` + `primeMarquee` (`lib/kit/marquee.ts`, `styles/motion.css`): a truncated row title pans to show its tail
@@ -152,6 +154,9 @@ export function MarqueeLabel({ hover, text, color, lineHeight = 20 }: { hover: b
   // 'rest': the ellipsised label. 'live': hovered. 'back': panning home, then the ellipsis returns.
   const [phase, setPhase] = useState<'rest' | 'live' | 'back'>('rest')
   if (hover && phase !== 'live') setPhase('live')
+  // The pan shows the tail once, holds, and comes home while the pointer stays: a hovered title never stays cut at its start.
+  const [homeAgain, setHomeAgain] = useState(false)
+  if (!hover && homeAgain) setHomeAgain(false)
   useEffect(() => {
     if (!hover) return
     const timer = setTimeout(() => {
@@ -185,8 +190,13 @@ export function MarqueeLabel({ hover, text, color, lineHeight = 20 }: { hover: b
       </Label>
     )
   }
-  const panning = hover && overflow > 0
   const duration = Math.max(MARQUEE_MIN_MS, Math.round((overflow / MARQUEE_SPEED) * 1000)) / 1000
+  useEffect(() => {
+    if (!hover || overflow === 0 || REDUCED_MOTION) return
+    const timer = setTimeout(() => setHomeAgain(true), (MARQUEE_DELAY_MS - MARQUEE_MEASURE_MS) + duration * 1000 + MARQUEE_HOLD_MS)
+    return () => clearTimeout(timer)
+  }, [hover, overflow, duration])
+  const panning = hover && overflow > 0 && !homeAgain
   return (
     <div ref={box} style={{ display: 'flex', flexGrow: 1, minWidth: 0, height: lineHeight, overflow: 'hidden', pointerEvents: 'none', userSelect: 'none' }}>
       <Pan

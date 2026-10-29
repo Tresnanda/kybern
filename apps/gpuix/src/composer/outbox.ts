@@ -13,7 +13,7 @@ import { newChats } from './newChats.ts'
 import { addPending, updatePending } from './pending.ts'
 
 /** A machine's name as the composer says it ("Waiting for satyamas"). */
-export const machineName = (machineId: MachineId | undefined): string => (machineId ? machineHub().set.connection(machineId)?.record.name : undefined) ?? 'that machine'
+export const machineName = (machineId: MachineId | undefined): string => (machineId && machineHub().set.connection(machineId) ? machineHub().set.displayName(machineId) : undefined) ?? 'that machine'
 
 /** Follow-ups waiting in the outbox, by outbox item. */
 const sends = new Map<string, { threadId: ThreadId; sendId: string; machineId: MachineId }>()

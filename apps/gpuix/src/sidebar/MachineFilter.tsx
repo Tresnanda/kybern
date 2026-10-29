@@ -34,7 +34,7 @@ export function MachineFilter() {
   // One machine: the row looks as the environment row always did (this computer, a status dot, a chevron) and opens Settings → Machines, where the others are added.
   if (machines.length < 2) return <SingleMachine />
   const chosen = activeMachineFilter(machines, filter)
-  const offline = machines.filter((machine) => machine.offline).length
+  const offline = machines.filter((machine) => machine.offline && !machine.paused).length
   const tone: Tone = chosen ? statusTone(chosen.status) : offline ? 'warn' : 'good'
   const choose = (id: string | null) => setNav({ machineFilter: id })
   return <div style={{ display: 'flex', paddingLeft: 8, paddingRight: 8, paddingBottom: 6 }}>
@@ -55,7 +55,7 @@ export function MachineFilter() {
   </div>
 }
 
-/** The sidebar footer: "4 machines · 1 offline", plus "· 2 waiting" while the outbox holds work. It opens Settings → Machines. */
+/** The sidebar footer: "4 machines · 1 offline · 1 paused", plus "· 2 waiting" while the outbox holds work. It opens Settings → Machines. */
 export function MachinesFooter() {
   const t = useTheme()
   const machines = useMachines()
@@ -64,7 +64,7 @@ export function MachinesFooter() {
   const open = () => void import('../settings/SettingsScreen.tsx').then((m) => m.openSettingsTab('machines'))
   return <div testId="machines-footer" role="button" tabIndex={0} aria-label="Open machines settings" onClick={open} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') open() }}
     style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, minHeight: 28, marginLeft: 8, marginRight: 8, marginBottom: 6, paddingLeft: 8, paddingRight: 8, borderRadius: 8, cursor: 'pointer', hover: { backgroundColor: accent(t) } }}>
-    <StatusDot tone={machines.some((machine) => machine.offline) ? 'warn' : 'good'} />
+    <StatusDot tone={machines.some((machine) => machine.offline && !machine.paused) ? 'warn' : 'good'} />
     <Label color={muted(t, 0.72)} size={12} lineHeight={16} truncate style={{ pointerEvents: 'none' }}>{footerText(machines, net.status?.outbox.queued ?? 0)}</Label>
   </div>
 }

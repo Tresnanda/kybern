@@ -27,11 +27,13 @@ export function statusText(machine: StatusInput, now = Date.now()): string {
   }
 }
 
-/** The footer line: "4 machines · 1 offline", and "· 2 waiting" while the outbox holds work for machines that are away. */
-export function footerText(machines: readonly { offline: boolean }[], waiting = 0): string {
-  const offline = machines.filter((machine) => machine.offline).length
+/** The footer line: "4 machines · 1 offline · 1 paused", and "· 2 waiting" while the outbox holds work for machines that are away. A paused machine is on purpose, so it is not "offline". */
+export function footerText(machines: readonly { offline: boolean; paused?: boolean }[], waiting = 0): string {
+  const paused = machines.filter((machine) => machine.paused).length
+  const offline = machines.filter((machine) => machine.offline && !machine.paused).length
   const parts = [`${machines.length} machines`]
   if (offline) parts.push(`${offline} offline`)
+  if (paused) parts.push(`${paused} paused`)
   if (waiting) parts.push(`${waiting} waiting`)
   return parts.join(' · ')
 }

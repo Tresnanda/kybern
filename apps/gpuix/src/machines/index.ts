@@ -4,7 +4,7 @@
 import { useMemo, useSyncExternalStore } from 'react'
 import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 import { MachineCache } from '../../../../packages/kybern-client/src/machineCache.ts'
-import { machineGlyph, machineGlyphs, showMachineGlyph, type MachineGlyph } from '../../../../packages/kybern-client/src/machineMerge.ts'
+import { machineGlyph, showMachineGlyph, type MachineGlyph } from '../../../../packages/kybern-client/src/machineMerge.ts'
 import type { MachineConnectionStatus, MergedView } from '../../../../packages/kybern-client/src/machines.ts'
 import { configDir, localProfile, readLegacyRegistry } from '../environments/registry.ts'
 import { readCredential, removeCredential, writeCredential } from '../environments/credentials.ts'
@@ -86,9 +86,10 @@ export function machineRows(h: MachineHub): MachineRow[] {
   const connections = h.connections()
   const count = connections.length
   const local = h.localMachineId
-  const glyphs = machineGlyphs(connections.map((connection) => connection.record))
+  const glyphs = h.set.glyphs()
   return connections.map((connection) => {
-    const { machineId, name } = connection.record
+    const { machineId } = connection.record
+    const name = h.set.displayName(machineId)
     return {
       machineId, name,
       status: connection.status,
@@ -121,7 +122,7 @@ let glyphMemo: { version: number; glyphs: Map<string, MachineGlyph> } | undefine
 /** A machine's glyph by id: named from its record, with a letter no other machine of the set uses. */
 export function glyphOfMachine(machineId: string): MachineGlyph {
   const h = machineHub()
-  if (glyphMemo?.version !== h.set.version) glyphMemo = { version: h.set.version, glyphs: machineGlyphs(h.connections().map((connection) => connection.record)) }
+  if (glyphMemo?.version !== h.set.version) glyphMemo = { version: h.set.version, glyphs: h.set.glyphs() }
   return glyphMemo.glyphs.get(machineId) ?? machineGlyph({ machineId })
 }
 

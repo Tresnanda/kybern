@@ -79,7 +79,8 @@ export interface ComposerData {
   catalog: { key: string; status: ProviderStatus } | null
   catalogLoading: string | null
   queued: Record<ThreadId, QueuedMessage[]>
-  branches: { projectId: ProjectId; result: GitBranchesResult } | null
+  /** The branches of a project's checkout; `machineId` is unset for the machine the user is at. */
+  branches: { projectId: ProjectId; machineId?: MachineId | undefined; result: GitBranchesResult } | null
   draft: DraftChoices
   favorites: FavoriteModel[]
   recents: Record<string, string[]>
@@ -545,17 +546,19 @@ function adoptNewChat(paneId: string, from: ThreadId, to: ThreadId, sendId: stri
   })
 }
 
-export async function loadBranches(projectId: ProjectId) {
+export async function loadBranches(projectId: ProjectId, machineId?: MachineId) {
+  const empty = { projectId, machineId, result: { current: null, branches: [] } }
   // A project only an offline machine has: the branch chip waits with no branches instead of failing.
-  const client = (() => { try { return need(projectClient(projectId)) } catch { return null } })()
-  if (!client) { patch({ branches: { projectId, result: { current: null, branches: [] } } }); return }
+  const pick = () => (machineId ? clientFor(machineId) : projectClient(projectId))
+  const client = (() => { try { return need(pick()) } catch { return null } })()
+  if (!client) { patch({ branches: empty }); return }
   try {
     const result = await client.call('git.branches', { project_id: projectId })
-    if (projectClient(projectId) !== client) return
-    patch({ branches: { projectId, result } })
+    if (pick() !== client) return
+    patch({ branches: { projectId, machineId, result } })
   } catch {
-    if (projectClient(projectId) !== client) return
-    patch({ branches: { projectId, result: { current: null, branches: [] } } })
+    if (pick() !== client) return
+    patch({ branches: empty })
   }
 }
 

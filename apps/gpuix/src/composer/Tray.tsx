@@ -17,10 +17,11 @@ import { GlassEdge } from '../kit/GlassEdge.tsx'
 import { frostBackdrop, frostFill, useGlass } from '../platform/glass.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { alpha } from '../transcript/kit.tsx'
-import type { GitBranchesResult, Project, ProjectId, TaskItem } from '../../../../packages/kybern-client/src/types.ts'
+import type { GitBranchesResult, MachineId, Project, ProjectId, TaskItem } from '../../../../packages/kybern-client/src/types.ts'
 import type { ReactNode } from 'react'
 import { useApp } from '../state.ts'
 import { PickerChip } from '../kit/PickerChip.tsx'
+import { SearchField } from '../kit/SearchField.tsx'
 import { G } from './glyphs.ts'
 import { CheckMark, muted, PickerItem, PickerLabel, PickerMenu, PickerSeparator } from './Menu.tsx'
 import { loadBranches, patchDraft, useComposer } from './store.ts'
@@ -38,8 +39,10 @@ export function parentPath(p: string): string {
 /** Whether `LandingTray` draws anything: a free chat with no task attached has no chips, so the card sits alone. */
 export const landingTrayShown = (projectId: ProjectId | null, task: TaskItem | null | undefined) => !!projectId || !!task
 
-export function LandingTray({ projectId, useWorktree, task, onRemoveTask, still = false }: {
+export function LandingTray({ projectId, useWorktree, task, onRemoveTask, still = false, remote }: {
   projectId: ProjectId | null
+  /** The chat is made on another machine: its checkout of the project, whose branches the branch chip lists. */
+  remote?: { machineId: MachineId; project: Project }
   useWorktree: boolean
   /** The Up next task attached to the message. */
   task?: TaskItem | null
@@ -53,10 +56,13 @@ export function LandingTray({ projectId, useWorktree, task, onRemoveTask, still 
   // A group's folder is often not a repository itself, but every member is: worktree mode works, and the branch chip
   // speaks for the members (`GroupTray.tsx`).
   const group = isGroupProject(project)
-  const isGit = project?.is_git ?? false
+  const isGit = remote ? remote.project.is_git : project?.is_git ?? false
+  // The branches are the ones of the machine the chat runs on (its checkout's id, read through its own client).
+  const branchProjectId = remote ? remote.project.id : projectId
+  const branchMachine = remote?.machineId
   useEffect(() => {
-    if (!still && projectId && isGit && !group) void loadBranches(projectId)
-  }, [projectId, isGit, group, still])
+    if (!still && branchProjectId && isGit && !group) void loadBranches(branchProjectId, branchMachine)
+  }, [branchProjectId, branchMachine, isGit, group, still])
   // The chip stays through its 120 ms fade after ×; it is not animated away by a send (the tray leaves as a whole).
   const [shownTask, setShownTask] = useState(task ?? null)
   if (task && task !== shownTask) setShownTask(task)
@@ -72,7 +78,7 @@ export function LandingTray({ projectId, useWorktree, task, onRemoveTask, still 
       {project && <WorkspaceChip useWorktree={useWorktree} isGit={isGit || group} checkoutHint={parentPath(project.path)} />}
       {project && group && <GroupBranchChip project={project} useWorktree={useWorktree} still={still} />}
       {project && group && useWorktree && <ReposChip project={project} still={still} />}
-      {project && isGit && !group && <BranchChip projectId={project.id} useWorktree={useWorktree} />}
+      {project && isGit && !group && branchProjectId && <BranchChip projectId={branchProjectId} machineId={branchMachine} useWorktree={useWorktree} />}
     </TrayFrame>
   )
 }
@@ -180,20 +186,24 @@ export function WorkspaceTrayChip({ useWorktree, isGit, checkoutHint, onChange }
   )
 }
 
-function BranchChip({ projectId, useWorktree }: { projectId: ProjectId; useWorktree: boolean }) {
-  const branches = useComposer((d) => (d.branches?.projectId === projectId ? d.branches.result : null))
+function BranchChip({ projectId, machineId, useWorktree }: { projectId: ProjectId; machineId?: MachineId | undefined; useWorktree: boolean }) {
+  const branches = useComposer((d) => (d.branches?.projectId === projectId && d.branches.machineId === machineId ? d.branches.result : null))
   const baseBranch = useComposer((d) => d.draft.baseBranch)
   return (
     <BranchTrayChip
       branches={branches}
       baseBranch={baseBranch}
       useWorktree={useWorktree}
-      onOpen={() => void loadBranches(projectId)}
+      onOpen={() => void loadBranches(projectId, machineId)}
       onBranch={(name) => patchDraft({ baseBranch: name })}
       onWorktree={(worktree) => patchDraft({ worktree })}
     />
   )
 }
+
+/** More branches than this get a search field above the list; the list itself never grows past `LIST_HEIGHT`. */
+const SEARCH_FROM = 8
+const LIST_HEIGHT = 280
 
 /** `BranchTrayChip`: the branch to start from, and a worktree toggle. `branches` is null while they load. */
 export function BranchTrayChip({
@@ -214,6 +224,9 @@ export function BranchTrayChip({
 }) {
   const t = useTheme()
   const shown = baseBranch ?? branches?.current ?? 'Current branch'
+  const [query, setQuery] = useState('')
+  const needle = query.trim().toLowerCase()
+  const visible = !branches ? [] : needle ? branches.branches.filter((b) => b.name.toLowerCase().includes(needle)) : branches.branches
   return (
     <PickerMenu
       testId="tray-branch"
@@ -221,7 +234,7 @@ export function BranchTrayChip({
       align="start"
       sideOffset={8}
       width={288}
-      onOpenChange={(open) => open && onOpen()}
+      onOpenChange={(open) => { if (open) { setQuery(''); onOpen() } }}
       trigger={(open) => <PickerChip bare icon={G.branch} open={open} truncate maxWidth={256}>{shown}</PickerChip>}
     >
       <PickerLabel>{useWorktree ? 'Fork the worktree from' : 'Branch'}</PickerLabel>
@@ -234,20 +247,36 @@ export function BranchTrayChip({
           <Label color={t.textSecondary}>No branches yet. Make a first commit.</Label>
         </PickerItem>
       ) : (
-        branches.branches.map((b) => (
-          <PickerItem key={b.name} id={`branch:${b.name}`} onSelect={() => onBranch(b.name === branches.current ? null : b.name)}>
-            <Icon source={G.branch} size={14} color={t.text} />
-            <Label color={t.text} truncate style={{ flexGrow: 1 }}>
-              {b.name}
-            </Label>
-            {b.is_current && (
-              <Label color={muted(t, 0.7)} style={{ flexShrink: 0 }}>
-                current
-              </Label>
+        <>
+          {branches.branches.length > SEARCH_FROM && (
+            <div style={{ display: 'flex', paddingLeft: 4, paddingRight: 4, paddingBottom: 4, flexShrink: 0 }}>
+              <SearchField testId="tray-branch-search" label="Search branches" placeholder="Search branches" autoFocus width="100%" value={query} onChange={setQuery}
+                onSubmit={() => { const first = visible[0]; if (first) onBranch(first.name === branches.current ? null : first.name) }} />
+            </div>
+          )}
+          {/* A repository can have hundreds of branches: the list scrolls inside the menu instead of growing past the window. */}
+          <div style={{ display: 'flex', flexDirection: 'column', maxHeight: LIST_HEIGHT, overflowY: 'scroll' }}>
+            {visible.length === 0 && (
+              <PickerItem id="__none" disabled onSelect={() => {}}>
+                <Label color={t.textSecondary}>No branch matches</Label>
+              </PickerItem>
             )}
-            <CheckMark color={t.text} visible={(baseBranch ?? branches.current) === b.name} />
-          </PickerItem>
-        ))
+            {visible.map((b) => (
+              <PickerItem key={b.name} id={`branch:${b.name}`} onSelect={() => onBranch(b.name === branches.current ? null : b.name)}>
+                <Icon source={G.branch} size={14} color={t.text} />
+                <Label color={t.text} truncate style={{ flexGrow: 1 }}>
+                  {b.name}
+                </Label>
+                {b.is_current && (
+                  <Label color={muted(t, 0.7)} style={{ flexShrink: 0 }}>
+                    current
+                  </Label>
+                )}
+                <CheckMark color={t.text} visible={(baseBranch ?? branches.current) === b.name} />
+              </PickerItem>
+            ))}
+          </div>
+        </>
       )}
       <PickerSeparator />
       <PickerItem id="__worktree" keepOpen onSelect={() => onWorktree(!useWorktree)} style={{ paddingLeft: 10, paddingRight: 10 }}>

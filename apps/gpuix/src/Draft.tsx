@@ -53,7 +53,7 @@ export function Draft() {
   const compact = usePaneCompact()
   const coordinator = useApp((s) => s.draft.purpose === 'coordinator')
   const projects = useSpaceProjects()
-  const { projectId, project, useWorktree } = useDraftTarget()
+  const { projectId, project, useWorktree, machine } = useDraftTarget()
   const list = useMemo(() => [...projects].sort((a, b) => a.name.localeCompare(b.name)), [projects])
   const [enter] = useState(shouldEnter)
 
@@ -106,7 +106,7 @@ export function Draft() {
       handleRef={frozen ? undefined : (handle) => { pickup.current = handle }}
     />
   )
-  const tray = (still: boolean) => <LandingTray projectId={projectId} useWorktree={useWorktree} task={attached} onRemoveTask={() => clearAttachedTask(pane.id)} still={still} />
+  const tray = (still: boolean) => <LandingTray projectId={projectId} useWorktree={useWorktree} task={attached} onRemoveTask={() => clearAttachedTask(pane.id)} still={still} remote={machine.remote && machine.chosen?.project ? { machineId: machine.chosen.machineId, project: machine.chosen.project } : undefined} />
 
   /** The send has its thread: record where everything was, in this page's coordinates, for the thread page to carry on. */
   const onLaunch = (threadId: string, snapshot: ComposerSnapshot | undefined) => {

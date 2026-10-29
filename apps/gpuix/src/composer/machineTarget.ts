@@ -58,7 +58,8 @@ export function useMachineTarget(projectId: ProjectId | null | undefined, enable
 
 /** Pick (and so remember) the machine for a project's next chats. */
 export function chooseMachine(key: string, machineId: MachineId, paneId = getFocusedPaneId()) {
-  patchDraft({ machines: { ...getData(paneId).draft.machines, [key]: machineId } }, paneId)
+  // A branch picked from one machine's list means nothing on another's.
+  patchDraft({ machines: { ...getData(paneId).draft.machines, [key]: machineId }, baseBranch: null }, paneId)
 }
 
 const NO_PROVIDERS: RemoteLists['providers'] = []

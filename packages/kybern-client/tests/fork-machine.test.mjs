@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { chatLink } from "../src/chatLinks.ts";
-import { forkNotice, forkNoticeAction, forkParams, forkQueuedText, forkSheetDefaults, forkTargets, originLabel, parseThreadLink, sameForkProject, shortMachineName, threadLinkHref } from "../src/forkMachine.ts";
+import { forkNotice, forkNoticeAction, forkParams, forkQueuedText, forkSheetDefaults, forkTargets, originLabel, parseThreadLink, sameForkProject, shortMachineName, threadLinkHref, looksGeneratedName, friendlyMachineName } from "../src/forkMachine.ts";
 
 const THREAD = "0192f7a0-1111-7222-8333-444455556666";
 
@@ -105,4 +105,21 @@ test("the sheet starts on the first target with no push to origin, and an unedit
 test("a fork to a machine that is offline says it waits", () => {
   assert.equal(forkQueuedText("satyamas", true), "Forking to satyamas…");
   assert.equal(forkQueuedText("satyamas", false), "Forking to satyamas when it is back online.");
+});
+
+test("provider-made host names are spotted, names people chose are not", () => {
+  for (const name of ["srv1544252", "VM-3-60-ubuntu", "ip-10-0-0-1", "3f9a1c07", "123456", "ubuntu-s-1vcpu-nyc1-01", "vm-3-60-ubuntu.local"]) assert.equal(looksGeneratedName(name), true, name);
+  for (const name of ["satyamas", "os-kdi", "Treshnandas-Macbook.local", "instabox", "treshnandavps", "deadbeef", "", null]) assert.equal(looksGeneratedName(name), false, String(name));
+});
+
+test("a generated host name gives way to Tailscale's name, a chosen name does not", () => {
+  assert.equal(friendlyMachineName("srv1544252", "treshnandavps.tail1234.ts.net"), "treshnandavps");
+  assert.equal(friendlyMachineName("VM-3-60-ubuntu", "tencent-box"), "tencent-box");
+  // No Tailscale name, the same name, or one that is just as generated: keep the host name.
+  assert.equal(friendlyMachineName("srv1544252", null), "srv1544252");
+  assert.equal(friendlyMachineName("srv1544252", "srv1544252.tail1234.ts.net"), "srv1544252");
+  assert.equal(friendlyMachineName("srv1544252", "vm-9-9-9"), "srv1544252");
+  // The name the person set wins.
+  assert.equal(friendlyMachineName("satyamas", "desktop-abc"), "satyamas");
+  assert.equal(friendlyMachineName("Treshnandas-Macbook.local", "other"), "Treshnandas-Macbook");
 });

@@ -78,6 +78,7 @@ import { clipboardSources, sendTargets } from '../../../packages/kybern-client/s
 import { glyphOfMachine, useMachines } from './machines/index.ts'
 import { readClipboardFrom, sendClipboardTo } from './machines/clipboard.ts'
 import { MachineBadge } from './sidebar/MachineBadge.tsx'
+import { ThreadMachine } from './machines/ThreadMachine.tsx'
 import { useCompletion } from './composer/Completion.tsx'
 import { findSecret, scanInsert, type SecretMatch } from './composer/secretCatcher.ts'
 import { isSummonedCard } from './shell/waitingLine.ts'
@@ -247,6 +248,7 @@ function ThreadComposer({ thread, placeholderEnter }: { thread: StateThread; pla
       catalogLoading={catalogLoading === catalogKey}
       onReloadModels={(force) => loadCatalog(threadId, provider, ownProjectId(thread), force).then(() => {})}
       placeholderEnter={placeholderEnter}
+      machinePicker={thread.machineId ? <ThreadMachine machineId={thread.machineId} testId="composer-machine" /> : undefined}
     />
   )
 }
@@ -470,6 +472,7 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
             model: choice?.model,
             effort: choice?.effort,
             use_worktree: useWorktree && !freeChat,
+            ...(draft.baseBranch ? { base_branch: draft.baseBranch } : {}),
             message: first,
             thread_id: threadId,
             message_id: messageId,

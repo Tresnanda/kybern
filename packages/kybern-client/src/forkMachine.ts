@@ -101,6 +101,29 @@ export function shortMachineName(name: string | null | undefined): string {
   return (name ?? "").trim().replace(/\.[a-z0-9-]+\.ts\.net$/i, "").replace(/\.(local|lan|home|localdomain)$/i, "");
 }
 
+const GENERATED_PREFIX = /^(?:vm|ip|srv|vps|ec2|instance|host|server|node|ubuntu|debian|centos|lin|win)[-_]?\d/i;
+
+/** A name a provider or installer made up (`srv1544252`, `VM-3-60-ubuntu`, `ip-10-0-0-1`, `3f9a1c07`) rather than one a person chose. */
+export function looksGeneratedName(name: string | null | undefined): boolean {
+  const short = shortMachineName(name).split(".")[0] ?? "";
+  if (!short) return false;
+  if (/^\d+$/.test(short)) return true;
+  if (/^[0-9a-f]{6,}$/i.test(short) && /\d/.test(short)) return true;
+  return GENERATED_PREFIX.test(short) || /^(?:ubuntu|debian|centos)-s-/i.test(short) || /\d{5,}/.test(short);
+}
+
+/**
+ * The name to show for a machine: its own name, except when that looks machine-generated and Tailscale knows it
+ * by a different name that does not, which is nearly always the one the person gave the node. A name the person
+ * set with `network.rename` is the daemon's name and wins when it is not generated-looking.
+ */
+export function friendlyMachineName(name: string | null | undefined, tsName?: string | null): string {
+  const own = shortMachineName(name);
+  const ts = shortMachineName(tsName).split(".")[0] ?? "";
+  if (own && ts && looksGeneratedName(own) && !looksGeneratedName(ts) && ts.toLowerCase() !== own.toLowerCase()) return ts;
+  return own;
+}
+
 // ---- who can take a fork ----
 
 /** What of a project decides whether another machine's project can take a thread of it. */

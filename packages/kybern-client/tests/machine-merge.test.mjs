@@ -256,11 +256,36 @@ test("machines that start with the same letter get distinct letters, the same on
     { machineId: "c-id", name: "os-kdi" },
   ];
   const letters = (list) => Object.fromEntries([...machineGlyphs(list)].map(([id, glyph]) => [id, glyph.letter]));
-  assert.deepEqual(letters(machines), { "a-id": "S", "b-id": "R", "c-id": "O" });
+  assert.deepEqual(letters(machines), { "a-id": "S", "b-id": "Sr", "c-id": "O" });
   assert.deepEqual(letters([...machines].reverse()), letters(machines));
   // The hue still comes from the id alone.
   assert.equal(machineGlyphs(machines).get("b-id").hue, machineGlyph(machines[0]).hue);
-  // A name with no free letter keeps its first; a lone machine is unchanged.
-  assert.equal(machineGlyphs([{ machineId: "x", name: "ss" }, { machineId: "y", name: "ss" }]).get("y").letter, "S");
+  // A name with no free single letter takes two; a lone machine is unchanged.
+  assert.equal(machineGlyphs([{ machineId: "x", name: "ss" }, { machineId: "y", name: "ss" }]).get("y").letter, "Ss");
   assert.equal(machineGlyphs([{ machineId: "x", name: "satyamas" }]).get("x").letter, "S");
+});
+
+test("the next word gives the letter before a second letter does", () => {
+  const letters = (list) => Object.fromEntries([...machineGlyphs(list)].map(([id, glyph]) => [id, glyph.letter]));
+  assert.deepEqual(letters([{ machineId: "a", name: "Satya PC" }, { machineId: "b", name: "Studio Mac" }]), { a: "S", b: "M" });
+  assert.deepEqual(letters([{ machineId: "a", name: "SatyaMas" }, { machineId: "b", name: "Sandbox" }]), { a: "S", b: "Sa" });
+  assert.deepEqual(letters([{ machineId: "a", name: "VM-3-60-ubuntu" }, { machineId: "b", name: "vps-ubuntu" }]), { a: "V", b: "U" });
+});
+
+test("a letter never changes once assigned, whatever the machine is renamed to", () => {
+  const mac = { machineId: "a", name: "SatyaMas" };
+  const first = machineGlyphs([mac, { machineId: "b", name: "Sandbox" }]);
+  assert.equal(first.get("a").letter, "S");
+  assert.equal(first.get("b").letter, "Sa");
+  assert.deepEqual([...first.fresh], [["a", "S"], ["b", "Sa"]]);
+  const kept = new Map([...first].map(([id, glyph]) => [id, glyph.letter]));
+  // Renamed, and listed in another order: the same letters, nothing new to save.
+  const again = machineGlyphs([{ machineId: "b", name: "Sandbox" }, { machineId: "a", name: "Alpha" }], kept);
+  assert.equal(again.get("a").letter, "S");
+  assert.equal(again.get("b").letter, "Sa");
+  assert.equal(again.fresh.size, 0);
+  // A new machine takes the next free letter and does not move the others.
+  const third = machineGlyphs([mac, { machineId: "b", name: "Sandbox" }, { machineId: "c", name: "Sunbeam" }], kept);
+  assert.equal(third.get("c").letter, "Su");
+  assert.equal(third.get("a").letter, "S");
 });

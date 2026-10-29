@@ -37,7 +37,7 @@ import { newThread, openThread } from '../nav/history.ts'
 import { ContextMenu, Menu, MenuItem, MenuLabel, MenuSeparator, muted, Tip } from '../nav/overlay.tsx'
 import { DEFAULT_FILTER, getNav, setNav, useNav } from '../nav/store.ts'
 import { callThread, getState, toggleProject as toggleProjectState, type StateThread } from '../state.ts'
-import { glyphOfMachine } from '../machines/index.ts'
+import { glyphOfMachine, machineHub } from '../machines/index.ts'
 import { MachineBadge } from './MachineBadge.tsx'
 import { forkTargetsOf } from '../fork/targets.ts'
 import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
@@ -547,6 +547,7 @@ export const ThreadRow = memo(function ThreadRow({
   // A thread another machine owns: its glyph, and greyed while that machine is offline (design §5.2). The machine the user is at has neither.
   const remote = thread as StateThread
   const machineGlyph = remote.machineId ? glyphOfMachine(remote.machineId) : undefined
+  const machineName = remote.machineId ? machineHub().set.displayName(remote.machineId) : undefined
   const splitRoot = useSplitRoot(), focusedPane = useFocusedPane()
   const inSplit = collectThreadPanes(splitRoot).some((pane) => pane.threadId === thread.id)
   const { renderer } = useGpuix()
@@ -624,7 +625,7 @@ export const ThreadRow = memo(function ThreadRow({
             )}
           </div>
           {thread.worktree && <Icon source={N.worktree} size={12} color={muted(t, 0.55)} />}
-          {machineGlyph && <MachineBadge glyph={machineGlyph} testId={`machine-${thread.id}`} />}
+          {machineGlyph && <MachineBadge glyph={machineGlyph} name={machineName} testId={`machine-${thread.id}`} />}
           {/* The trailing padding, less the row's 8px gap. */}
           <PadTween width={(reveal ? ACTIONS_PAD : hasGlyph || thread.pinned ? 28 : 8) - 8} />
         </div>

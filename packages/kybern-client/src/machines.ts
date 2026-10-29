@@ -19,7 +19,7 @@ import {
   type MachineThread,
   type MergedThreads,
 } from "./machineMerge.ts";
-import { shortMachineName } from "./forkMachine.ts";
+import { friendlyMachineName } from "./forkMachine.ts";
 import {
   IDENTITY_MISMATCH_MESSAGE,
   MAX_ROUTES_PER_MACHINE,
@@ -68,6 +68,10 @@ export interface MachineRecord {
   learned?: Route[];
   /** Route ids that answered as another machine. They are never tried again until cleared. */
   blockedRoutes?: string[];
+  /** The glyph letters ("S", "Sa") given to this machine; kept so a rename never changes them. */
+  glyph?: string;
+  /** Tailscale's own name for the machine, as the network last reported it. */
+  tsName?: string;
 }
 
 type MaybePromise<T> = T | Promise<T>;
@@ -833,7 +837,7 @@ export class MachineSet {
       maxPerMachine: this.options.maxThreadsPerMachine ?? 2000,
     });
     const count = slots.length;
-    const glyphs = machineGlyphs(slots.map((slot) => ({ machineId: slot.record.machineId, name: slot.record.name })));
+    const glyphs = this.glyphs();
     this.mergedView = {
       version: this._version,
       projects: logical,
@@ -844,7 +848,7 @@ export class MachineSet {
         return {
           machineId,
           // The name people use: a host name loses `.local` and its tailnet suffix ("Treshnandas-Macbook.local").
-          name: shortMachineName(slot.record.name) || slot.record.name,
+          name: friendlyMachineName(slot.record.name, slot.record.tsName) || slot.record.name,
           status: slot.status,
           offline: offline.has(machineId),
           lastSeenAt: lastSeenAt.get(machineId),
@@ -855,6 +859,28 @@ export class MachineSet {
       }),
     };
     return this.mergedView;
+  }
+
+  /**
+   * Every machine's glyph. A machine keeps the letter it was first given (saved in its record), so renaming
+   * a machine or adding another never reshuffles the badges; a new machine takes the first free candidate of its name.
+   */
+  glyphs(): Map<MachineId, MachineGlyph> {
+    const slots = [...this.slots.values()];
+    const assigned = new Map<MachineId, string>();
+    for (const slot of slots) if (slot.record.glyph) assigned.set(slot.record.machineId, slot.record.glyph);
+    const glyphs = machineGlyphs(slots.map((slot) => ({ machineId: slot.record.machineId, name: friendlyMachineName(slot.record.name, slot.record.tsName) || slot.record.name })), assigned);
+    if (glyphs.fresh.size) {
+      for (const [id, letter] of glyphs.fresh) this.slots.get(id)!.record.glyph = letter;
+      this.persist();
+    }
+    return glyphs;
+  }
+
+  /** What a machine is called on screen (`friendlyMachineName`), or the id of a machine this set does not know. */
+  displayName(machineId: MachineId): string {
+    const record = this.slots.get(machineId)?.record;
+    return record ? friendlyMachineName(record.name, record.tsName) || record.name : machineId;
   }
 
   // ---- loading and persistence ----
@@ -1440,13 +1466,17 @@ export class MachineSet {
             member: true,
             paused: card.status === "paused",
             ...(card.signing_key ? { signingKey: card.signing_key } : {}),
+            ...(card.ts_name ? { tsName: card.ts_name } : {}),
           });
           fresh.push(slot);
         } else {
           const record = slot.record;
           const paused = card.status === "paused";
-          const changed = record.name !== card.name || record.os !== card.os || !record.member || !!record.paused !== paused;
+          const tsName = card.ts_name ?? undefined;
+          const changed = record.name !== card.name || record.os !== card.os || !record.member || !!record.paused !== paused || record.tsName !== tsName;
           record.name = card.name;
+          if (tsName) record.tsName = tsName;
+          else delete record.tsName;
           record.os = card.os;
           record.member = true;
           if (card.signing_key && !record.signingKey) record.signingKey = card.signing_key;
