@@ -3,8 +3,13 @@
 //! token and returns it **sealed to A's key**, so a relay in between cannot read it; A opens it and
 //! hands it to the client over the client's authenticated socket.
 //!
-//! Revoking a device on any member fans out as `peer.device.revoke` and revokes that device's
-//! tokens on every member.
+//! A token keeps the device it first named and the machines its authority came through
+//! (`issued_via` and `issued_lineage`), so removing any of them, or revoking the device, reaches
+//! every token minted from it, however many hops or self-grants later.
+//!
+//! Revoking a device on any member writes the `device.<id>.revoked` register, which syncs with the
+//! membership set: a member that was offline revokes the device's tokens when it next syncs, and no
+//! member mints for a revoked device again. `peer.device.revoke` still tells connected members at once.
 
 use std::net::IpAddr;
 
@@ -24,6 +29,8 @@ use crate::state::AppState;
 
 const MAX_DEVICE_ID: usize = 80;
 const MAX_LABEL: usize = 200;
+/// More hops than any real chain of members; a longer lineage is refused rather than cut.
+const MAX_LINEAGE: usize = 32;
 
 fn valid_device_id(device_id: &str) -> bool {
     !device_id.is_empty()
@@ -52,9 +59,34 @@ fn clip(text: &str, max: usize) -> String {
     text.chars().take(max).collect()
 }
 
+/// A new id for a device whose old id was revoked: a phone paired again after its revocation keeps
+/// sending the id it saved, and the token it pairs with names this one instead.
+fn fresh_device_id(revoked: &str) -> String {
+    let suffix = Uuid::now_v7().simple().to_string();
+    format!("{}.{}", clip(revoked, MAX_DEVICE_ID - 9), &suffix[suffix.len() - 8..])
+}
+
+/// The machines a token's authority came through: those before the machine that asked for it,
+/// then that machine.
+fn ancestry(origin: &kybern_store::TokenOrigin) -> Vec<String> {
+    let mut lineage = Vec::new();
+    for machine in origin.lineage.iter().chain(origin.issued_via.iter()) {
+        if !lineage.contains(machine) {
+            lineage.push(machine.clone());
+        }
+    }
+    lineage
+}
+
 /// Make a device token on this machine for a client. Any older token this machine issued to the
 /// same device for the same requester goes, so a client that asks again holds one.
-fn mint_local(state: &AppState, device_id: &str, label: &str, via: Option<&str>) -> Result<(String, Vec<Scope>), RpcError> {
+fn mint_local(
+    state: &AppState,
+    device_id: &str,
+    label: &str,
+    via: Option<&str>,
+    lineage: &[String],
+) -> Result<(String, Vec<Scope>), RpcError> {
     let store = &state.store;
     let internal = |error: anyhow::Error| RpcError::internal(format!("{error:#}"));
     if let Some(via) = via {
@@ -66,7 +98,7 @@ fn mint_local(state: &AppState, device_id: &str, label: &str, via: Option<&str>)
     let id = Uuid::now_v7();
     let scopes = crate::access::paired_scopes();
     store.token_insert(id, &crate::auth::hash(&token), &clip(label, MAX_LABEL), &scopes).map_err(internal)?;
-    store.token_set_device(id, device_id, via).map_err(internal)?;
+    store.token_set_device(id, device_id, via, lineage).map_err(internal)?;
     Ok((token, scopes))
 }
 
@@ -87,15 +119,31 @@ pub async fn grant(
     let Some(entry) = projection.entry(&params.machine_id).filter(|entry| entry.removed.is_none()) else {
         return Err(RpcError::not_found("machine"));
     };
+    let origin = state.store.token_origin(principal.token_id).map_err(RpcError::internal)?.unwrap_or_default();
     // The device that is asking is now a known device on this machine too, so revoking it here
-    // reaches the tokens minted elsewhere for it.
-    if state.store.token_device(principal.token_id).map_err(RpcError::internal)?.is_none() {
-        let _ = state.store.token_set_device(principal.token_id, &params.device_id, None);
+    // reaches the tokens minted elsewhere for it. A token speaks for the device it first named and
+    // no other, so a token cannot mint for a new id that revoking the old one would miss.
+    let device_id = match origin.device_id.clone() {
+        Some(device_id) => device_id,
+        None => {
+            let wanted =
+                if projection.is_device_revoked(&params.device_id) { fresh_device_id(&params.device_id) } else { params.device_id.clone() };
+            state.store.token_claim_device(principal.token_id, &wanted).map_err(RpcError::internal)?.unwrap_or(wanted)
+        }
+    };
+    if projection.is_device_revoked(&device_id) {
+        return Err(RpcError::new(codes::FORBIDDEN, "This device was revoked. Pair it again to connect."));
+    }
+    // A token minted from this one keeps where this one came from, so removing any machine on the
+    // way revokes it as well.
+    let lineage = ancestry(&origin);
+    if lineage.iter().any(|machine| projection.is_removed(machine)) {
+        return Err(RpcError::new(codes::FORBIDDEN, "This device's access came through a removed machine. Pair it again to connect."));
     }
     let my_name = projection.entry(&me).map(|entry| entry.descriptor.name.clone()).unwrap_or_else(|| "this machine".into());
     let label = format!("{} (via {})", base_label(&principal.label), my_name);
     let token = if params.machine_id == me {
-        mint_local(state, &params.device_id, &label, None)?.0
+        mint_local(state, &device_id, &label, None, &lineage)?.0
     } else {
         if entry.paused {
             return Err(RpcError::new(codes::NOT_AVAILABLE, format!("{} is paused. Resume it to connect.", entry.descriptor.name)));
@@ -107,12 +155,17 @@ pub async fn grant(
             )
         })?;
         let minted = link
-            .call::<PeerClientTokenMint>(PeerClientTokenMintParams { device_id: params.device_id.clone(), label: clip(&label, MAX_LABEL) })
+            .call::<PeerClientTokenMint>(PeerClientTokenMintParams {
+                device_id: device_id.clone(),
+                label: clip(&label, MAX_LABEL),
+                lineage: lineage.clone(),
+            })
             .await?;
         let sealed = B64.decode(&minted.sealed_token).map_err(|_| RpcError::internal("the machine returned a token that is not sealed"))?;
-        let plain = crate::secret_store::open(&membership.keys(), &context(&params.machine_id, &me, &params.device_id), &sealed).map_err(
-            |error| RpcError::internal(format!("could not open the token {} sealed for this machine: {error:#}", entry.descriptor.name)),
-        )?;
+        let plain =
+            crate::secret_store::open(&membership.keys(), &context(&params.machine_id, &me, &device_id), &sealed).map_err(|error| {
+                RpcError::internal(format!("could not open the token {} sealed for this machine: {error:#}", entry.descriptor.name))
+            })?;
         String::from_utf8(plain).map_err(|_| RpcError::internal("the sealed token is not text"))?
     };
     tracing::info!(target: TARGET, machine = %params.machine_id, "issued a client token for another machine");
@@ -125,7 +178,9 @@ pub async fn grant(
 }
 
 /// `peer.client_token.mint`: member A asks this machine for a token for one of A's clients; the
-/// answer is sealed to A's sealing key, which the membership set holds.
+/// answer is sealed to A's sealing key, which the membership set holds. A paused member mints
+/// nothing (it keeps operation sync only, §2.5), and nobody mints for a revoked device or from
+/// authority that came through a removed machine.
 pub fn mint_for_peer(state: &AppState, link: &PeerLink, params: PeerClientTokenMintParams) -> Result<PeerClientTokenMintResult, RpcError> {
     let network = &state.network;
     let membership = network.membership().ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, "no network"))?;
@@ -135,13 +190,34 @@ pub fn mint_for_peer(state: &AppState, link: &PeerLink, params: PeerClientTokenM
     let projection = membership.projection();
     let requester =
         projection.entry(&link.machine_id).filter(|entry| entry.removed.is_none()).ok_or_else(|| RpcError::forbidden("machine:peer"))?;
+    if requester.paused {
+        return Err(RpcError::new(
+            codes::FORBIDDEN,
+            format!("{} is paused. Resume it to connect its devices here.", requester.descriptor.name),
+        ));
+    }
+    if projection.is_device_revoked(&params.device_id) {
+        return Err(RpcError::new(codes::FORBIDDEN, "That device was revoked."));
+    }
+    let me = membership.machine_id();
+    let mut lineage: Vec<String> = Vec::new();
+    for machine in params.lineage {
+        if projection.is_removed(&machine) {
+            return Err(RpcError::new(codes::FORBIDDEN, "That device's access came through a removed machine."));
+        }
+        if machine != link.machine_id && machine != me && !lineage.contains(&machine) {
+            lineage.push(machine);
+        }
+    }
+    if lineage.len() > MAX_LINEAGE {
+        return Err(RpcError::invalid_params("lineage is too long"));
+    }
     let sealing_key: [u8; 32] = B64
         .decode(&requester.descriptor.sealing_key)
         .ok()
         .and_then(|bytes| bytes.try_into().ok())
         .ok_or_else(|| RpcError::internal("the requesting machine's sealing key is not valid"))?;
-    let me = membership.machine_id();
-    let (token, scopes) = mint_local(state, &params.device_id, &params.label, Some(&link.machine_id))?;
+    let (token, scopes) = mint_local(state, &params.device_id, &params.label, Some(&link.machine_id), &lineage)?;
     let sealed = crate::secret_store::seal(&sealing_key, &context(&me, &link.machine_id, &params.device_id), token.as_bytes())
         .map_err(|error| RpcError::internal(format!("{error:#}")))?;
     tracing::info!(target: TARGET, machine = %link.machine_id, "minted a client token for another machine");
@@ -165,11 +241,19 @@ pub fn revoke_device_local(state: &AppState, device_id: &str) -> usize {
     }
 }
 
-/// Revoke a device here and on every connected member (`peer.device.revoke`). A member that is
-/// offline learns nothing from this; its tokens for the device die when the device's other tokens
-/// are used to reach it, or when it is removed.
+/// Revoke a device here and on every member: the `device.<id>.revoked` register reaches members
+/// that are offline when they next sync, and `peer.device.revoke` tells the connected ones at once.
 pub async fn revoke_device_everywhere(state: &AppState, device_id: &str) {
     revoke_device_local(state, device_id);
+    if let Some(membership) = state.network.membership()
+        && membership.has_network()
+        && !membership.projection().is_device_revoked(device_id)
+    {
+        match membership.set(&super::ops::revoked_device_register(device_id), serde_json::Value::Bool(true)) {
+            Ok(op) => state.network.publish_ops(vec![op]),
+            Err(error) => tracing::warn!(target: TARGET, %error, "could not record a device revocation for the other machines"),
+        }
+    }
     for link in state.network.peers.links() {
         let device_id = device_id.to_string();
         tokio::spawn(async move {

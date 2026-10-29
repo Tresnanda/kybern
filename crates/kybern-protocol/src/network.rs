@@ -703,6 +703,10 @@ pub struct PeerClientTokenMintParams {
     pub device_id: String,
     /// Shown as "<device> (via <A>)".
     pub label: String,
+    /// The machines the asking client's own token came through before the caller, so removing any
+    /// of them revokes the token minted here too.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lineage: Vec<MachineId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

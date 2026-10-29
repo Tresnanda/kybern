@@ -13,6 +13,16 @@ use uuid::Uuid;
 
 use crate::{Store, parse_time};
 
+/// Where a device token's authority came from (`Store::token_origin`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TokenOrigin {
+    pub device_id: Option<String>,
+    /// The machine that asked this one to mint the token.
+    pub issued_via: Option<String>,
+    /// The machines the asking client's own authority came through before that.
+    pub lineage: Vec<String>,
+}
+
 /// One membership operation as stored: the exact signed bytes plus the fields worth indexing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkOpRecord {
@@ -192,43 +202,72 @@ impl Store {
     // ---- device tokens ----
 
     /// Tie a token to the client device it was issued to and, for a token another machine asked
-    /// for, to that machine.
-    pub fn token_set_device(&self, token_id: Uuid, device_id: &str, issued_via: Option<&str>) -> Result<bool> {
+    /// for, to that machine and to the machines its authority came through before it (`lineage`).
+    pub fn token_set_device(&self, token_id: Uuid, device_id: &str, issued_via: Option<&str>, lineage: &[String]) -> Result<bool> {
+        let lineage = if lineage.is_empty() { None } else { Some(serde_json::to_string(lineage)?) };
         self.with(|c| {
             Ok(c.execute(
-                "UPDATE tokens SET device_id = ?2, issued_via = ?3 WHERE id = ?1",
-                params![token_id.to_string(), device_id, issued_via],
+                "UPDATE tokens SET device_id = ?2, issued_via = ?3, issued_lineage = ?4 WHERE id = ?1",
+                params![token_id.to_string(), device_id, issued_via, lineage],
             )? > 0)
         })
     }
 
-    /// Revoke every token another machine asked this one to issue for a client (`issued_via`).
-    /// Returns the ids that were still active. A removed machine's tokens die with it (§2.5).
+    /// Name the device behind a token the first time it says who it is. A token keeps the device it
+    /// was first tied to: returns the device it is tied to now, `None` for an unknown token.
+    pub fn token_claim_device(&self, token_id: Uuid, device_id: &str) -> Result<Option<String>> {
+        self.with(|c| {
+            c.execute("UPDATE tokens SET device_id = ?2 WHERE id = ?1 AND device_id IS NULL", params![token_id.to_string(), device_id])?;
+            Ok(c.query_row("SELECT device_id FROM tokens WHERE id = ?1", [token_id.to_string()], |r| r.get::<_, Option<String>>(0))
+                .optional()?
+                .flatten())
+        })
+    }
+
+    /// Where a token's authority came from: its device, the machine that asked for it and the
+    /// machines before that one.
+    pub fn token_origin(&self, token_id: Uuid) -> Result<Option<TokenOrigin>> {
+        let row = self.with(|c| {
+            Ok(c.query_row("SELECT device_id, issued_via, issued_lineage FROM tokens WHERE id = ?1", [token_id.to_string()], |r| {
+                Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?))
+            })
+            .optional()?)
+        })?;
+        let Some((device_id, issued_via, lineage)) = row else { return Ok(None) };
+        let lineage = lineage.map(|json| serde_json::from_str(&json)).transpose()?.unwrap_or_default();
+        Ok(Some(TokenOrigin { device_id, issued_via, lineage }))
+    }
+
+    /// Revoke every token another machine asked this one to issue for a client (`issued_via`), or
+    /// whose authority came through it (`issued_lineage`). Returns the ids that were still active.
+    /// A removed machine's tokens die with it (§2.5).
     pub fn tokens_revoke_issued_via(&self, machine_id: &str) -> Result<Vec<Uuid>> {
+        const THROUGH: &str = "(issued_via = ?1 OR instr(COALESCE(issued_lineage, ''), '\"' || ?1 || '\"') > 0) AND revoked = 0";
         self.with(|c| {
             let tx = c.unchecked_transaction()?;
             let ids = {
-                let mut st = tx.prepare("SELECT id FROM tokens WHERE issued_via = ?1 AND revoked = 0 ORDER BY created_at, id")?;
+                let mut st = tx.prepare(&format!("SELECT id FROM tokens WHERE {THROUGH} ORDER BY created_at, id"))?;
                 let rows = st.query_map([machine_id], |r| r.get::<_, String>(0))?;
                 rows.map(|id| Ok(id?.parse()?)).collect::<Result<Vec<Uuid>>>()?
             };
-            tx.execute("UPDATE tokens SET revoked = 1 WHERE issued_via = ?1 AND revoked = 0", [machine_id])?;
+            tx.execute(&format!("UPDATE tokens SET revoked = 1 WHERE {THROUGH}"), [machine_id])?;
             tx.commit()?;
             Ok(ids)
         })
     }
 
-    /// Revoke every token any machine asked this one to issue. A machine that left its network
-    /// forgets the clients it served for the network's members (§2.5).
+    /// Revoke every token any machine asked this one to issue, or minted from one. A machine that
+    /// left its network forgets the clients it served for the network's members (§2.5).
     pub fn tokens_revoke_all_issued_via(&self) -> Result<Vec<Uuid>> {
+        const NETWORK: &str = "(issued_via IS NOT NULL OR issued_lineage IS NOT NULL) AND revoked = 0";
         self.with(|c| {
             let tx = c.unchecked_transaction()?;
             let ids = {
-                let mut st = tx.prepare("SELECT id FROM tokens WHERE issued_via IS NOT NULL AND revoked = 0 ORDER BY created_at, id")?;
+                let mut st = tx.prepare(&format!("SELECT id FROM tokens WHERE {NETWORK} ORDER BY created_at, id"))?;
                 let rows = st.query_map([], |r| r.get::<_, String>(0))?;
                 rows.map(|id| Ok(id?.parse()?)).collect::<Result<Vec<Uuid>>>()?
             };
-            tx.execute("UPDATE tokens SET revoked = 1 WHERE issued_via IS NOT NULL AND revoked = 0", [])?;
+            tx.execute(&format!("UPDATE tokens SET revoked = 1 WHERE {NETWORK}"), [])?;
             tx.commit()?;
             Ok(ids)
         })
@@ -482,9 +521,9 @@ mod tests {
         for (id, label) in [(a, "Phone (via m1)"), (b, "Phone (via m1)"), (c, "Phone (via m2)"), (d, "Desktop")] {
             store.token_insert(id, &format!("hash-{id}"), label, &Scope::CLIENT).unwrap();
         }
-        store.token_set_device(a, "dev-1", Some("m1")).unwrap();
-        store.token_set_device(b, "dev-2", Some("m1")).unwrap();
-        store.token_set_device(c, "dev-1", Some("m2")).unwrap();
+        store.token_set_device(a, "dev-1", Some("m1"), &[]).unwrap();
+        store.token_set_device(b, "dev-2", Some("m1"), &[]).unwrap();
+        store.token_set_device(c, "dev-1", Some("m2"), &[]).unwrap();
         assert_eq!(store.token_device(a).unwrap().as_deref(), Some("dev-1"));
         assert_eq!(store.token_device(d).unwrap(), None);
 
@@ -511,16 +550,45 @@ mod tests {
     }
 
     #[test]
+    fn a_token_keeps_its_device_and_dies_with_any_machine_its_authority_came_through() {
+        let store = Store::open_in_memory().unwrap();
+        let (paired, derived, remint, other) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+        for id in [paired, derived, remint, other] {
+            store.token_insert(id, &format!("hash-{id}"), "Phone", &Scope::CLIENT).unwrap();
+        }
+        // The first name a token gives for its device sticks; a later one does not replace it.
+        assert_eq!(store.token_claim_device(paired, "dev-1").unwrap().as_deref(), Some("dev-1"));
+        assert_eq!(store.token_claim_device(paired, "dev-2").unwrap().as_deref(), Some("dev-1"));
+        assert_eq!(store.token_claim_device(Uuid::now_v7(), "dev-1").unwrap(), None);
+
+        // `derived` came through m1 then m2; `remint` is a self-grant of a token that came via m3.
+        store.token_set_device(derived, "dev-1", Some("m2"), &["m1".to_string()]).unwrap();
+        store.token_set_device(remint, "dev-1", None, &["m3".to_string()]).unwrap();
+        store.token_set_device(other, "dev-9", Some("m2"), &[]).unwrap();
+        let origin = store.token_origin(derived).unwrap().unwrap();
+        assert_eq!((origin.issued_via.as_deref(), origin.lineage.as_slice()), (Some("m2"), ["m1".to_string()].as_slice()));
+        assert_eq!(store.token_origin(paired).unwrap().unwrap(), TokenOrigin { device_id: Some("dev-1".into()), ..Default::default() });
+
+        assert_eq!(store.tokens_revoke_issued_via("m1").unwrap(), vec![derived], "an earlier hop's removal reaches it");
+        assert_eq!(store.tokens_revoke_issued_via("m3").unwrap(), vec![remint], "so does a self-grant's");
+        assert!(store.tokens_revoke_issued_via("m").unwrap().is_empty(), "a machine id is matched whole");
+        assert!(store.token_is_active(other).unwrap() && store.token_is_active(paired).unwrap());
+        store.token_set_device(remint, "dev-1", None, &["m3".to_string()]).unwrap();
+        store.token_insert(Uuid::now_v7(), "hash-x", "x", &Scope::CLIENT).unwrap();
+        assert_eq!(store.tokens_revoke_all_issued_via().unwrap(), vec![other], "only network-minted tokens go when leaving");
+    }
+
+    #[test]
     fn tokens_are_tied_to_a_device_and_revoked_with_it() {
         let store = Store::open_in_memory().unwrap();
         let (a, b, other) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
         store.token_insert(a, "hash-a", "Phone (via Mac)", &Scope::CLIENT).unwrap();
         store.token_insert(b, "hash-b", "Phone", &Scope::CLIENT).unwrap();
         store.token_insert(other, "hash-c", "iPad", &Scope::CLIENT).unwrap();
-        assert!(store.token_set_device(a, "dev-1", Some("m1")).unwrap());
-        assert!(store.token_set_device(b, "dev-1", None).unwrap());
-        assert!(store.token_set_device(other, "dev-2", None).unwrap());
-        assert!(!store.token_set_device(Uuid::now_v7(), "dev-1", None).unwrap());
+        assert!(store.token_set_device(a, "dev-1", Some("m1"), &[]).unwrap());
+        assert!(store.token_set_device(b, "dev-1", None, &[]).unwrap());
+        assert!(store.token_set_device(other, "dev-2", None, &[]).unwrap());
+        assert!(!store.token_set_device(Uuid::now_v7(), "dev-1", None, &[]).unwrap());
 
         assert_eq!(store.tokens_for_device("dev-1").unwrap(), vec![a, b]);
         assert!(store.tokens_for_device("dev-3").unwrap().is_empty());

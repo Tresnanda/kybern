@@ -710,6 +710,14 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX threads_moving ON threads(id) WHERE moved IS NOT NULL;
     COMMIT;
     ",
+    // Client token ancestry (machine network review). `tokens.issued_lineage` is a JSON array of every
+    // machine a network-minted token's authority passed through before `issued_via`, so removing any of
+    // them revokes it, however many hops or self-grants later it was minted.
+    "
+    BEGIN;
+    ALTER TABLE tokens ADD COLUMN issued_lineage TEXT;
+    COMMIT;
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

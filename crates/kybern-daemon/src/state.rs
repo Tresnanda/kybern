@@ -148,6 +148,8 @@ impl AppState {
         network.set_enabled(settings.get().network.enabled);
         let revoked_tokens = broadcast::channel(128).0;
         network.attach_revocations(revoked_tokens.clone());
+        // A device revoked while this daemon was down, but already in its operation set, stays revoked.
+        network.revoke_revoked_devices();
         // Clients paired before the network existed hold the network scopes too (N4).
         crate::access::upgrade_paired_tokens(&store);
         Ok(Self {

@@ -108,6 +108,25 @@ impl Network {
         // Keys other machines pushed arrive with the secret store (M5); it clears them here.
     }
 
+    /// Revoke the tokens of every device the membership set says was revoked. A member that was
+    /// offline when a device was revoked does this when the revocation reaches it; idempotent.
+    pub(crate) fn revoke_revoked_devices(&self) {
+        let Some(membership) = self.membership() else { return };
+        for device in &membership.projection().revoked_devices {
+            match self.store.tokens_revoke_device(device) {
+                Ok(ids) => {
+                    if !ids.is_empty() {
+                        tracing::info!(target: TARGET, count = ids.len(), "revoked the tokens of a device revoked on another machine");
+                    }
+                    for id in ids {
+                        self.announce_revoked(id);
+                    }
+                }
+                Err(error) => tracing::warn!(target: TARGET, %error, "could not revoke a revoked device's tokens"),
+            }
+        }
+    }
+
     /// The tokens another machine asked this one to issue for its clients die with that machine
     /// (§2.5, §3.4).
     pub(super) fn revoke_tokens_issued_via(&self, machine_id: &str) {

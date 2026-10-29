@@ -506,6 +506,9 @@ pub struct Projection {
     pub registers: BTreeMap<String, Register>,
     /// Tailscale node ids of removed machines. Auto-join never applies to them (§2.6).
     pub tombstoned_nodes: BTreeSet<String>,
+    /// Client devices revoked anywhere (`device.<id>.revoked`). Like a removal, a revocation is
+    /// permanent: any operation that ever said so counts, whatever was written after it (§3.4).
+    pub revoked_devices: BTreeSet<String>,
 }
 
 impl Projection {
@@ -588,6 +591,11 @@ impl Projection {
             if !register_is_valid(key, op.signer()) {
                 continue;
             }
+            if let Some(device) = revoked_device_key(key)
+                && value.as_bool() == Some(true)
+            {
+                projection.revoked_devices.insert(device.to_string());
+            }
             let candidate =
                 Register { value: value.clone(), lamport: op.lamport, signer: op.signer().to_string(), op_id: op.id().to_string() };
             let wins = projection
@@ -663,6 +671,11 @@ impl Projection {
         self.entry(machine_id).and_then(|entry| entry.added_by.as_deref()).is_some_and(|adder| self.is_removed(adder))
     }
 
+    /// Whether a client device was revoked on any member.
+    pub fn is_device_revoked(&self, device_id: &str) -> bool {
+        self.revoked_devices.contains(device_id)
+    }
+
     pub fn register(&self, key: &str) -> Option<&Register> {
         self.registers.get(key)
     }
@@ -718,6 +731,17 @@ impl Projection {
             added_at: Some(entry.added_at),
         })
     }
+}
+
+/// The register that revokes a client device on every member.
+pub fn revoked_device_register(device_id: &str) -> String {
+    format!("device.{device_id}.revoked")
+}
+
+/// The device a `device.<id>.revoked` key names. Device ids may hold dots, so the id is everything
+/// between the prefix and the suffix.
+fn revoked_device_key(key: &str) -> Option<&str> {
+    key.strip_prefix("device.")?.strip_suffix(".revoked").filter(|device| !device.is_empty())
 }
 
 /// Whether a register's key and signer are a pair the design allows. An invalid one is kept in the
@@ -842,5 +866,25 @@ mod tests {
         let joined = set.apply(vec![parsed], true);
         assert_eq!(joined.accepted, vec![envelope.id]);
         assert_eq!(set.network_id(), Some("net"));
+    }
+
+    #[test]
+    fn a_revoked_device_stays_revoked_whatever_is_written_after() {
+        let keys = MachineKeys::generate();
+        let mut set = OpSet::default();
+        set.apply(vec![parse(&genesis(&keys, "a", "net")).unwrap()], true);
+        let write = |lamport: u64, key: &str, value: Value| {
+            let kind = OpKind::Set { key: key.into(), value };
+            parse(&seal(&keys, "a", encode_body("net", Utc::now(), lamport, &kind).unwrap())).unwrap()
+        };
+        let register = revoked_device_register("phone:1.a");
+        set.apply(
+            vec![write(2, &register, json!(true)), write(3, &register, json!(false)), write(4, "device..revoked", json!(true))],
+            false,
+        );
+        let projection = set.project();
+        assert!(projection.is_device_revoked("phone:1.a"), "a later write does not bring a revoked device back");
+        assert_eq!(projection.revoked_devices.len(), 1, "an empty device id names nothing");
+        assert!(!projection.is_device_revoked("phone"));
     }
 }

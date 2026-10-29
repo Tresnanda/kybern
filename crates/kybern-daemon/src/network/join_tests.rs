@@ -431,6 +431,108 @@ async fn a_client_gets_a_token_for_another_machine_through_the_one_it_paired_wit
     assert!(bad_device.is_err());
 }
 
+fn token_works(node: &Node, token: &str) -> bool {
+    crate::auth::authenticate(&node.state.store, token).unwrap().is_some()
+}
+
+async fn grant_at(node: &Node, token: &str, machine: &Node, device_id: &str) -> anyhow::Result<NetworkClientGrantResult> {
+    let client = Client::connect(&Endpoint { url: node.ws_url(), token: token.to_string() }).await.unwrap();
+    client.call::<NetworkClientGrant>(NetworkClientGrantParams { machine_id: machine.id(), device_id: device_id.into() }).await
+}
+
+/// Review finding 1: a paused member keeps operation sync only, so it cannot mint itself a device
+/// token on another machine and connect around the pause.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paused_machine_cannot_mint_device_tokens_on_the_others() {
+    let Some(cluster) = cluster(&[NodeSpec::owner("a"), NodeSpec::owner("b")]) else { return };
+    let a = cluster.start("a", true).await;
+    let b = cluster.start("b", true).await;
+    eventually("one network", WAIT, || converged(&[&a, &b], 2)).await;
+    all_linked(&[&a, &b]).await;
+    let mint = |device: &str| PeerClientTokenMintParams { device_id: device.into(), label: "invented".into(), lineage: vec![] };
+    let link = a.state.network.peers.link(&b.id()).unwrap();
+    assert!(link.call::<PeerClientTokenMint>(mint("before-pause")).await.is_ok(), "a member that is not paused mints");
+
+    admin(&b).await.call::<NetworkPause>(NetworkPauseParams { machine_id: a.id(), paused: true }).await.unwrap();
+    eventually("a sees itself paused", WAIT, || a.membership().projection().entry(&a.id()).unwrap().paused).await;
+    let link = a.state.network.peers.link(&b.id()).expect("the session stays for operation sync");
+    let refused = link.call::<PeerClientTokenMint>(mint("while-paused")).await;
+    assert!(refused.is_err(), "a paused machine minted a device token: {refused:?}");
+    assert!(b.state.store.tokens_for_device("while-paused").unwrap().is_empty());
+}
+
+/// Review finding 2: a token minted from a network-minted token keeps where that one came from, so
+/// removing the machine at the start of the chain revokes it, however it was minted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tokens_minted_from_a_network_token_die_with_every_machine_they_came_through() {
+    let Some(cluster) = cluster(&[NodeSpec::owner("a"), NodeSpec::owner("b"), NodeSpec::owner("c")]) else { return };
+    let a = cluster.start("a", true).await;
+    let b = cluster.start("b", true).await;
+    let c = cluster.start("c", true).await;
+    eventually("one network", WAIT, || converged(&[&a, &b, &c], 3)).await;
+    all_linked(&[&a, &b, &c]).await;
+
+    let paired = a.device_token(&crate::access::paired_scopes());
+    let on_b = grant_at(&a, &paired, &b, "phone-1").await.unwrap().token;
+    // With b's token: a self-grant on b, and a grant for c through b.
+    let again_on_b = grant_at(&b, &on_b, &b, "phone-1").await.unwrap().token;
+    let on_c = grant_at(&b, &on_b, &c, "phone-1").await.unwrap().token;
+    for (node, token) in [(&b, &on_b), (&b, &again_on_b), (&c, &on_c)] {
+        assert!(token_works(node, token));
+    }
+
+    admin(&c).await.call::<NetworkRemove>(NetworkRemoveParams { machine_id: a.id(), stolen: true, also_remove: vec![] }).await.unwrap();
+    eventually("b and c know", WAIT, || b.membership().projection().is_removed(&a.id()) && c.membership().projection().is_removed(&a.id()))
+        .await;
+    eventually("every token that came through a is revoked", WAIT, || {
+        !token_works(&b, &on_b) && !token_works(&b, &again_on_b) && !token_works(&c, &on_c)
+    })
+    .await;
+}
+
+/// Review findings 2 and 3: a token speaks for one device, and revoking that device while a member is
+/// offline reaches the member when it syncs again; no member mints for the device in the meantime.
+/// A phone paired again after its revocation gets tokens under a fresh device id.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_revoked_device_stays_revoked_on_a_member_that_was_offline() {
+    let Some(cluster) = cluster(&[NodeSpec::owner("a"), NodeSpec::owner("b"), NodeSpec::owner("c")]) else { return };
+    let a = cluster.start("a", true).await;
+    let b = cluster.start("b", true).await;
+    let c = cluster.start("c", true).await;
+    eventually("one network", WAIT, || converged(&[&a, &b, &c], 3)).await;
+    all_linked(&[&a, &b, &c]).await;
+
+    let paired = a.device_token(&crate::access::paired_scopes());
+    let on_b = grant_at(&a, &paired, &b, "phone-1").await.unwrap().token;
+    let on_c = grant_at(&a, &paired, &c, "phone-1").await.unwrap().token;
+    // A token cannot mint under a second device id that revoking the first would miss.
+    let renamed = grant_at(&b, &on_b, &b, "phone-2").await.unwrap().token;
+    let renamed_id = crate::auth::authenticate(&b.state.store, &renamed).unwrap().unwrap().token_id;
+    assert_eq!(b.state.store.token_device(renamed_id).unwrap().as_deref(), Some("phone-1"));
+
+    c.set_network_enabled(false);
+    eventually("c is offline", WAIT, || a.state.network.peers.link(&c.id()).is_none() && b.state.network.peers.link(&c.id()).is_none())
+        .await;
+    let phone_on_a = crate::auth::authenticate(&a.state.store, &paired).unwrap().unwrap().token_id;
+    root(&a).await.call::<TokensRevoke>(TokensRevokeParams { token_id: phone_on_a }).await.unwrap();
+    eventually("b revokes the device", WAIT, || !token_works(&b, &on_b) && !token_works(&b, &renamed)).await;
+    assert!(token_works(&c, &on_c), "c has not heard yet");
+    // A member that has not heard cannot get a token for the device from one that has.
+    let stale = a.state.network.peers.link(&b.id()).unwrap();
+    let mint = PeerClientTokenMintParams { device_id: "phone-1".into(), label: "stale".into(), lineage: vec![] };
+    assert!(stale.call::<PeerClientTokenMint>(mint).await.is_err());
+
+    c.set_network_enabled(true);
+    eventually("c syncs and revokes the device", WAIT, || !token_works(&c, &on_c)).await;
+
+    // The phone pairs again and keeps sending the id it saved: its new tokens name a fresh one.
+    let repaired = a.device_token(&crate::access::paired_scopes());
+    let fresh = grant_at(&a, &repaired, &b, "phone-1").await.unwrap().token;
+    let fresh_id = crate::auth::authenticate(&b.state.store, &fresh).unwrap().unwrap().token_id;
+    let device = b.state.store.token_device(fresh_id).unwrap().unwrap();
+    assert!(device.starts_with("phone-1.") && device != "phone-1", "{device}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn pause_rename_and_a_machines_own_policy_spread_to_everyone() {
     let Some(cluster) = cluster(&[NodeSpec::owner("a"), NodeSpec::owner("b"), NodeSpec::owner("c")]) else { return };

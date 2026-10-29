@@ -532,6 +532,7 @@ impl Network {
             self.forget_network_state();
         }
         if outcome.changed() {
+            self.revoke_revoked_devices();
             self.peers.gossip(outcome.accepted.clone(), from);
             self.notify_changed();
             self.wake();
