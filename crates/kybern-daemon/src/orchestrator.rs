@@ -3302,9 +3302,10 @@ impl Orchestrator {
                 continue;
             }
             let Some(driver) = self.inner.drivers.get(kind) else { continue };
+            let Some(env) = self.one_shot_env(thread, kind) else { continue };
             let _harness = self.inner.harness_gates[&kind].read().await;
             let binary = self.binary_for(kind);
-            match driver.one_shot(&cwd, &prompt, binary.as_ref()).await {
+            match driver.one_shot(&cwd, &prompt, binary.as_ref(), &env).await {
                 Ok(text) => {
                     let title = clean_title(&text);
                     if !title.is_empty() {
@@ -3318,6 +3319,24 @@ impl Orchestrator {
         Ok(None)
     }
 
+    /// The environment a one-shot helper call on behalf of `thread` runs with, or `None` when that harness
+    /// must not be used for it. A helper never falls back to this machine's own login for a thread that
+    /// has another account: the thread's account (a named account's own home, never the default one)
+    /// is the only one its prompt may go to. A login borrowed through the broker lives only in the
+    /// session's handle, so such a thread gets no model helper and keeps its plain title.
+    pub(crate) fn one_shot_env(&self, thread: &Thread, kind: ProviderKind) -> Option<std::collections::BTreeMap<String, String>> {
+        let borrowed = self.login_broker().is_some_and(|broker| broker.binding(thread.provider.kind, &thread.provider.instance).is_some());
+        if kind == thread.provider.kind {
+            return if borrowed { None } else { self.account_environment(thread).ok() };
+        }
+        if borrowed || thread.provider.instance != "default" {
+            return None;
+        }
+        let settings = self.inner.settings.get();
+        let provider = settings.providers.get(&kind).cloned().unwrap_or_default();
+        crate::provider_accounts::environment(&provider, kind, "default").ok()
+    }
+
     /// Ask a model for a short prompt answer using the thread's provider, falling back to others.
     async fn one_shot_any(&self, thread: &Thread, prompt: &str) -> Result<String> {
         let mut kinds = vec![thread.provider.kind, ProviderKind::ClaudeCode, ProviderKind::Codex];
@@ -3326,8 +3345,9 @@ impl Orchestrator {
         let mut last: Option<anyhow::Error> = None;
         for kind in kinds {
             let Some(driver) = self.inner.drivers.get(kind) else { continue };
+            let Some(env) = self.one_shot_env(thread, kind) else { continue };
             let _harness = self.inner.harness_gates[&kind].read().await;
-            match driver.one_shot(&cwd, prompt, self.binary_for(kind).as_ref()).await {
+            match driver.one_shot(&cwd, prompt, self.binary_for(kind).as_ref(), &env).await {
                 Ok(t) if !t.trim().is_empty() => return Ok(t),
                 Ok(_) => {}
                 Err(kybern_drivers::DriverError::Unsupported(_)) => {}

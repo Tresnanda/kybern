@@ -68,7 +68,13 @@ impl AgentDriver for ClaudeDriver {
         self.probe_context(context).await
     }
 
-    async fn one_shot(&self, cwd: &std::path::Path, prompt: &str, binary: Option<&PathBuf>) -> Result<String> {
+    async fn one_shot(
+        &self,
+        cwd: &std::path::Path,
+        prompt: &str,
+        binary: Option<&PathBuf>,
+        env: &std::collections::BTreeMap<String, String>,
+    ) -> Result<String> {
         let bin = resolve(ProviderKind::ClaudeCode, binary)?;
         let out = tokio::time::timeout(
             std::time::Duration::from_secs(60),
@@ -94,6 +100,7 @@ impl AgentDriver for ClaudeDriver {
                         "--",
                     ])
                     .arg(prompt)
+                    .envs(env)
                     .env_remove("NODE_OPTIONS")
                     .stdin(std::process::Stdio::null()),
             ),
@@ -2406,7 +2413,8 @@ mod tests {
         let binary = root.path().join("claude-fixture");
         std::fs::write(&binary, "#!/usr/bin/env python3\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n").unwrap();
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let out = super::ClaudeDriver::default().one_shot(root.path(), "Name this session", Some(&binary)).await.unwrap();
+        let out =
+            super::ClaudeDriver::default().one_shot(root.path(), "Name this session", Some(&binary), &Default::default()).await.unwrap();
         let args: Vec<String> = serde_json::from_str(&out).unwrap();
         assert_eq!(args[args.len() - 2..], ["--", "Name this session"]);
     }

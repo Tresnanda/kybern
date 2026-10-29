@@ -402,7 +402,13 @@ impl AgentDriver for CodexDriver {
         self.probe_inner(context).await
     }
 
-    async fn one_shot(&self, cwd: &std::path::Path, prompt: &str, binary: Option<&PathBuf>) -> Result<String> {
+    async fn one_shot(
+        &self,
+        cwd: &std::path::Path,
+        prompt: &str,
+        binary: Option<&PathBuf>,
+        env: &std::collections::BTreeMap<String, String>,
+    ) -> Result<String> {
         let bin = resolve(ProviderKind::Codex, binary)?;
         let dir = tempfile_dir()?;
         let last = dir.join("last.txt");
@@ -415,6 +421,7 @@ impl AgentDriver for CodexDriver {
                     .args(["exec", "-s", "read-only", "--skip-git-repo-check", "--output-last-message"])
                     .arg(&last)
                     .arg(prompt)
+                    .envs(env)
                     .kill_on_drop(true)
                     .stdin(std::process::Stdio::null()),
             ),

@@ -906,3 +906,21 @@ async fn new_thread_can_pin_cli_account_when_named_account_is_default() {
         assert_eq!(fixture.orchestrator.thread_target(thread.id).unwrap().target.provider.instance, expected);
     }
 }
+
+#[test]
+fn a_one_shot_helper_runs_with_the_threads_account_never_the_machines_login() {
+    let fixture = Fixture::new();
+    add_test_account(&fixture, ProviderKind::Codex, "work");
+    let mut thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Codex);
+    thread.provider.instance = "work".into();
+    // Its own harness: the named account's home, so nothing is read from or written to ~/.codex.
+    let env = fixture.orchestrator.one_shot_env(&thread, ProviderKind::Codex).unwrap();
+    assert_eq!(env.get("CODEX_HOME"), Some(&fixture.root.join("work").to_string_lossy().into_owned()));
+    // Another harness would run on that machine's default login: not for this thread.
+    assert!(fixture.orchestrator.one_shot_env(&thread, ProviderKind::ClaudeCode).is_none());
+    // A thread on the default account keeps the fallbacks.
+    let thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Codex);
+    assert!(fixture.orchestrator.one_shot_env(&thread, ProviderKind::Codex).is_some());
+    assert!(fixture.orchestrator.one_shot_env(&thread, ProviderKind::ClaudeCode).is_some());
+    std::fs::remove_dir_all(&fixture.root).ok();
+}
