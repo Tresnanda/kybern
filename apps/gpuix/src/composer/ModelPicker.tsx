@@ -98,6 +98,10 @@ export interface ModelPickerProps {
   label: (color: string) => ReactNode
   /** The trigger's lead where the provider mark is not enough (the account dot over the mark); defaults to the mark. */
   lead?: ReactNode
+  /** Where the panel opens; the composer's opens upward. */
+  side?: 'top' | 'bottom'
+  /** The panel's layer; one inside a dialog sits above the dialog's (`nav/overlay.tsx`). */
+  priority?: number
 }
 
 export function ModelPicker(props: ModelPickerProps) {
@@ -148,11 +152,12 @@ export function ModelPicker(props: ModelPickerProps) {
       {open && (
         // The desktop popover's open (`ModelPicker.tsx:129`): 250 ms smooth-out fade from the trigger.
         <PopupLayer
-          side="top"
+          side={props.side ?? 'top'}
           align="end"
           sideOffset={6}
           collisionPadding={8}
           testId="model-picker-panel"
+          {...(props.priority !== undefined ? { priority: props.priority } : {})}
           onMouseDownOutside={() => {
             dismissedByOutside.current = true
             queueMicrotask(() => {

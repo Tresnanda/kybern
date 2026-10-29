@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { agentLine, defaultAgent, machineAgents, machineChoiceDetail, noAgentWarning, signedInOf } from "../src/machineAgents.ts";
+import { agentLine, defaultAgent, machineAgents, machineChoiceDetail, noAgentWarning, signedInOf, targetModel } from "../src/machineAgents.ts";
 
 const account = (kind, status) => ({ provider: { kind, instance: "default" }, name: "default", status, is_default: true, projects: [], managed: false, can_sign_out: false });
 const harness = (kind, available = true) => ({ kind, available });
@@ -47,4 +47,36 @@ test("a machine choice names the agents installed there", () => {
   assert.equal(machineChoiceDetail(false, agents), "Offline · waits until it’s back");
   assert.equal(machineChoiceDetail(true, undefined), "Online");
   assert.equal(machineChoiceDetail(true, machineAgents([harness("pi", false)], [])), "No agents installed");
+});
+
+const catalog = [
+  { id: "opus", display_name: "Opus 5.5", efforts: ["low", "medium", "high"], default_effort: "medium" },
+  { id: "sonnet", display_name: "Sonnet 5.5", efforts: ["low", "medium", "high"], default_effort: "high", is_default: true },
+  { id: "haiku", display_name: "Haiku 5.5" },
+];
+
+test("a fork keeps the source thread's model and effort when the target has that model", () => {
+  const source = { kind: "claude-code", model: "opus", effort: "low" };
+  assert.deepEqual(targetModel(catalog, "claude-code", source), { model: "opus", effort: "low" });
+  // An effort the model does not offer falls back to the model's default.
+  assert.deepEqual(targetModel(catalog, "claude-code", { ...source, effort: "max" }), { model: "opus", effort: "medium" });
+});
+
+test("a fork falls back to the target's default model when the source's is missing or belongs to another agent", () => {
+  assert.deepEqual(targetModel(catalog, "claude-code", { kind: "claude-code", model: "opus-4", effort: "low" }), { model: "sonnet", effort: "high" });
+  assert.deepEqual(targetModel(catalog, "claude-code", { kind: "codex", model: "opus", effort: "low" }), { model: "sonnet", effort: "high" });
+  assert.deepEqual(targetModel([catalog[2]], "claude-code", null), { model: "haiku", effort: null });
+});
+
+test("the user's pick wins while it is valid for the chosen agent and machine", () => {
+  const source = { kind: "claude-code", model: "opus", effort: "low" };
+  assert.deepEqual(targetModel(catalog, "claude-code", source, { kind: "claude-code", model: "haiku", effort: null }), { model: "haiku", effort: null });
+  // A pick for another agent, or a model this machine lacks, is set aside.
+  assert.deepEqual(targetModel(catalog, "claude-code", source, { kind: "codex", model: "gpt", effort: "high" }), { model: "opus", effort: "low" });
+  assert.deepEqual(targetModel(catalog, "claude-code", source, { kind: "claude-code", model: "gone", effort: "high" }), { model: "opus", effort: "low" });
+});
+
+test("without a catalog the target machine chooses", () => {
+  assert.deepEqual(targetModel([], "claude-code", { kind: "claude-code", model: "opus", effort: "low" }), { model: null, effort: null });
+  assert.deepEqual(targetModel(catalog, null, null), { model: null, effort: null });
 });

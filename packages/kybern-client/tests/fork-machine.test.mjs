@@ -99,6 +99,9 @@ test("the sheet starts on the first target with no push to origin, and an unedit
   assert.deepEqual(forkParams(THREAD, targets[0], { note: "Edited", pushOrigin: true }, "# Hand-off\n", "supervised"), {
     thread_id: THREAD, machine: "b", project: "p2", push_origin: true, handoff_note: "Edited", permission_mode: "supervised",
   });
+  assert.deepEqual(forkParams(THREAD, targets[0], state, "# Hand-off\n", null, "codex", { model: "gpt-6", effort: "high" }), {
+    thread_id: THREAD, machine: "b", project: "p2", push_origin: false, provider: "codex", model: "gpt-6", effort: "high",
+  });
   assert.equal(forkSheetDefaults([], "n").machine, "");
 });
 

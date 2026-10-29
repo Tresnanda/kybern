@@ -7,9 +7,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useGpuix, type PublicInstance } from '@gpuix/react'
 import { forkParams, forkQueuedText, forkSheetDefaults, type ForkInstance } from '../../../../packages/kybern-client/src/forkMachine.ts'
 import { moveParams, moveQueuedText } from '../../../../packages/kybern-client/src/continueOn.ts'
-import { agentLine, defaultAgent, machineChoiceDetail, noAgentWarning } from '../../../../packages/kybern-client/src/machineAgents.ts'
-import type { ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
+import { agentLine, defaultAgent, machineChoiceDetail, noAgentWarning, targetModel, type KindedChoice } from '../../../../packages/kybern-client/src/machineAgents.ts'
+import { findModel, modelQualifier, triggerTraits } from '../../../../packages/kybern-client/src/models.ts'
+import type { ProviderKind, ProviderModel } from '../../../../packages/kybern-client/src/types.ts'
 import { useMachineAgents } from '../machines/agents.ts'
+import { ModelPicker, ModelTriggerLabel } from '../composer/ModelPicker.tsx'
+import { loadMachineLists, useComposer, type RemoteLists } from '../composer/store.ts'
+import { formatEffort } from '@/lib/format'
 import { nativeCapabilities } from '../native/api.ts'
 import { Dialog } from '../nav/overlay.tsx'
 import { errorText } from '../nav/actions.ts'
@@ -78,15 +82,27 @@ export function ForkSheet({ threadId, machineId, close, mode = 'fork' }: { threa
   const warning = agents && target ? noAgentWarning(agents, target.machineName) : null
   const [anyway, setAnyway] = useState(false)
   const blocked = !!warning && !anyway && target?.online !== false
+  // The model and effort come from that machine's catalog of the chosen agent: the source thread's when it has them,
+  // else its default; a pick the user made stays while it still fits the machine and agent.
+  const lists = useComposer((d) => (target ? d.remote[target.machineId] : undefined))
+  useEffect(() => { if (target?.online) void loadMachineLists(target.machineId, false, target.projectId) }, [target?.machineId, target?.online, target?.projectId])
+  const catalog = lists?.providers.find((item) => item.kind === agent)?.models ?? []
+  const [modelPick, setModelPick] = useState<(KindedChoice & { machine: string }) | null>(null)
+  const source = thread ? { kind: thread.provider.kind, model: thread.model ?? null, effort: thread.effort ?? null } : null
+  const choice = targetModel(catalog, agent, source, modelPick?.machine === target?.machineId ? modelPick : null)
+  const pickModel = (model: string | null, effort: string | null) => {
+    if (target && agent) setModelPick({ machine: target.machineId, kind: agent, model, effort })
+    return Promise.resolve(true)
+  }
   const fork = async () => {
     if (!target || generated === null || blocked) return
     setBusy(true); setError('')
     try {
       if (move) {
-        const result = await callThread(threadId, 'threads.move_to_machine', moveParams(threadId, target, state, generated, null, agent), machineId)
+        const result = await callThread(threadId, 'threads.move_to_machine', moveParams(threadId, target, state, generated, null, agent, choice), machineId)
         toast.success(moveQueuedText(result.target_name, target.online), { description: target.online ? 'This thread becomes read-only with a link once it arrives.' : 'It waits in the outbox; nothing is locked meanwhile.' })
       } else {
-        const result = await callThread(threadId, 'threads.fork_to_machine', forkParams(threadId, target, state, generated, null, agent), machineId)
+        const result = await callThread(threadId, 'threads.fork_to_machine', forkParams(threadId, target, state, generated, null, agent, choice), machineId)
         toast.success(forkQueuedText(result.target_name, target.online), { description: target.online ? 'A notice in this thread links to the new one when it arrives.' : 'It waits in the outbox.' })
       }
       close()
@@ -105,8 +121,13 @@ export function ForkSheet({ threadId, machineId, close, mode = 'fork' }: { threa
         </div></Field>}
       {/* Only the agents installed there; a signed-out Claude, Codex or Cursor says so (omp, OpenCode and pi have no sign-in). */}
       {target && installed.length > 0 && <Field label="Agent"><div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <div role="radiogroup" aria-label="Agent" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {installed.map((item) => <PickerChip key={item.kind} testId={`fork-agent-${item.kind}`} mark={item.kind} chevron={false} selected={agent === item.kind} secondary={item.signedIn === false ? 'Signed out' : undefined} disabled={busy} label={agentLine(item, target.machineName)} onClick={() => setPicked({ machine: target.machineId, kind: item.kind })}>{item.label}</PickerChip>)}
+        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+          <div role="radiogroup" aria-label="Agent" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, flexGrow: 1 }}>
+            {installed.map((item) => <PickerChip key={item.kind} testId={`fork-agent-${item.kind}`} mark={item.kind} chevron={false} selected={agent === item.kind} secondary={item.signedIn === false ? 'Signed out' : undefined} disabled={busy} label={agentLine(item, target.machineName)} onClick={() => setPicked({ machine: target.machineId, kind: item.kind })}>{item.label}</PickerChip>)}
+          </div>
+          {agent && lists && catalog.length > 0 && <ModelChoice catalog={catalog} lists={lists} agent={agent} machineName={target.machineName} model={choice.model} effort={choice.effort} busy={busy} onPick={pickModel}
+            onAgent={(kind, model, effort) => { setPicked({ machine: target.machineId, kind }); setModelPick({ machine: target.machineId, kind, model, effort }); return Promise.resolve(true) }}
+            onReload={() => void loadMachineLists(target.machineId, true, target.projectId)} />}
         </div>
         {warning ? <ErrorText testId="fork-agent-warning">{warning}</ErrorText> : signedOut ? <Hint>{`Sign in to ${signedOut.label} on ${target.machineName} first, or its first turn fails.`}</Hint> : null}
         {warning && target.online && <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -161,4 +182,24 @@ function MachineChoice({ item, checked, disabled, onSelect }: { item: ForkInstan
       <Radio checked={checked} disabled={disabled} />
     </div>
   )
+}
+
+/** The chosen agent's model and effort on the target machine, in the composer's picker. Its tabs are that machine's agents,
+ *  so picking another agent's model there also moves the agent chip. It opens downward, over the sheet. */
+function ModelChoice({ catalog, lists, agent, machineName, model, effort, busy, onPick, onAgent, onReload }: {
+  catalog: ProviderModel[]; lists: RemoteLists; agent: ProviderKind; machineName: string; model: string | null; effort: string | null; busy: boolean
+  onPick: (model: string | null, effort: string | null) => Promise<boolean>
+  onAgent: (kind: ProviderKind, model: string | null, effort: string | null) => Promise<boolean>; onReload: () => void
+}) {
+  const current = model ? findModel(catalog, model) : catalog.find((item) => item.is_default)
+  const traits = triggerTraits(current, model)
+  return <div testId="fork-model" style={{ display: 'flex', minWidth: 0, flexShrink: 1 }}>
+    <ModelPicker provider={{ kind: agent, instance: 'default' }} providers={lists.providers} machineName={machineName} model={model} effort={effort} accounts={lists.accounts}
+      canPickModel canPickProvider canReload loading={lists.loading} busy={busy} side="bottom" priority={7}
+      onModelChange={(next, nextEffort) => onPick(next || null, nextEffort ?? null)}
+      onEffortChange={(next) => onPick(model, next)}
+      onProviderChange={(next, picked) => onAgent(next.kind, picked?.model ?? null, picked?.effort ?? null)}
+      onReload={onReload}
+      label={() => <ModelTriggerLabel model={current?.display_name ?? model ?? ''} qualifier={modelQualifier(catalog, current)} fast={traits.fast} effort={effort ? formatEffort(effort) : null} traits={traits.labels} />} />
+  </div>
 }

@@ -54,6 +54,8 @@ export function moveParams(
   generated: string,
   permissionMode?: PermissionMode | null,
   provider?: ProviderKind | null,
+  /** The model and effort picked in the sheet; null ones leave the choice to the target. */
+  choice?: { model: string | null; effort: string | null } | null,
 ): ThreadsMoveToMachineParams {
   const note = state.note.trim();
   return {
@@ -63,6 +65,8 @@ export function moveParams(
     ...(note && note !== generated.trim() ? { handoff_note: note } : {}),
     ...(permissionMode ? { permission_mode: permissionMode } : {}),
     ...(provider ? { provider } : {}),
+    ...(choice?.model ? { model: choice.model } : {}),
+    ...(choice?.model && choice.effort ? { effort: choice.effort } : {}),
   };
 }
 

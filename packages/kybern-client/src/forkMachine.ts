@@ -186,6 +186,8 @@ export function forkParams(
   generated: string,
   permissionMode?: PermissionMode | null,
   provider?: ProviderKind | null,
+  /** The model and effort picked in the sheet; null ones leave the choice to the target. */
+  choice?: { model: string | null; effort: string | null } | null,
 ): ThreadsForkToMachineParams {
   const note = state.note.trim();
   return {
@@ -198,6 +200,8 @@ export function forkParams(
     ...(permissionMode ? { permission_mode: permissionMode } : {}),
     // The agent the user picked (or the one signed in there): the target uses it as named instead of swapping it.
     ...(provider ? { provider } : {}),
+    ...(choice?.model ? { model: choice.model } : {}),
+    ...(choice?.model && choice.effort ? { effort: choice.effort } : {}),
   };
 }
 

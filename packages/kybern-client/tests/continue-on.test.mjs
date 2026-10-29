@@ -45,6 +45,10 @@ test("the sheet sends the edited note only, and a waiting move is found by its t
   assert.deepEqual(moveParams(SOURCE, target, { note: "  generated  " }, "generated"), { thread_id: SOURCE, machine: "m-2", project: "p-1" });
   assert.equal(moveParams(SOURCE, target, { note: "mine" }, "generated", "auto").handoff_note, "mine");
   assert.equal(moveParams(SOURCE, target, { note: "mine" }, "generated", "auto").permission_mode, "auto");
+  const chosen = moveParams(SOURCE, target, { note: "" }, "generated", null, "claude-code", { model: "opus", effort: "low" });
+  assert.equal(chosen.model, "opus");
+  assert.equal(chosen.effort, "low");
+  assert.equal("model" in moveParams(SOURCE, target, { note: "" }, "generated", null, "claude-code", { model: null, effort: "low" }), false);
   assert.equal(moveQueuedText("satyamas", true), "Moving to satyamas when this turn ends…");
   assert.equal(moveQueuedText("satyamas", false), "Moving to satyamas when it is back online.");
 
