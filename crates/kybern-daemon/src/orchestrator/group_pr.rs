@@ -154,14 +154,20 @@ impl Orchestrator {
     }
 
     /// `git.branches` of one member of a group project (the primary by default).
-    pub async fn group_branches(&self, project: &Project, repo: Option<&str>) -> Result<methods::GitBranchesResult> {
+    pub async fn group_branches(
+        &self,
+        project: &Project,
+        repo: Option<&str>,
+        fetch: bool,
+        include_remote: bool,
+    ) -> Result<methods::GitBranchesResult> {
         let member = match repo {
             Some(repo) => {
                 project.members.iter().find(|m| m.path == repo).ok_or_else(|| anyhow!("{repo} isn't a repository of {}.", project.name))?
             }
             None => project.members.first().ok_or_else(|| anyhow!("{} has no repositories yet. Add one in its settings.", project.name))?,
         };
-        github::branches(&group_git::member_dir(Path::new(&project.path), &member.path)).await
+        github::branches(&group_git::member_dir(Path::new(&project.path), &member.path), fetch, include_remote).await
     }
 
     /// Whether any member of a group thread has something to commit.

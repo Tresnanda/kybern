@@ -1022,9 +1022,13 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
             state.orchestrator.refresh_project_git(project.id).await.map_err(internal)?;
             if project.kind == ProjectKind::Group {
-                return ok(state.orchestrator.group_branches(&project, p.repo.as_deref()).await.map_err(RpcError::invalid_params)?);
+                return ok(state
+                    .orchestrator
+                    .group_branches(&project, p.repo.as_deref(), p.fetch, p.include_remote)
+                    .await
+                    .map_err(RpcError::invalid_params)?);
             }
-            ok(crate::github::branches(std::path::Path::new(&project.path)).await.map_err(internal)?)
+            ok(crate::github::branches(std::path::Path::new(&project.path), p.fetch, p.include_remote).await.map_err(internal)?)
         }
         GitCommit::NAME => {
             let p: GitCommitParams = parse(params)?;

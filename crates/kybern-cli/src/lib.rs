@@ -2428,7 +2428,7 @@ pub async fn run() -> Result<()> {
         }
         Cmd::Branches { project } => {
             let project_id = resolve_project(&client, &project, false).await?;
-            let r = client.call::<GitBranches>(GitBranchesParams { project_id, repo: None }).await?;
+            let r = client.call::<GitBranches>(GitBranchesParams { project_id, repo: None, fetch: false, include_remote: false }).await?;
             for b in r.branches {
                 let upstream = b.upstream.map(|u| format!("  -> {u}")).unwrap_or_default();
                 println!("{} {}{upstream}", if b.is_current { "*" } else { " " }, b.name);

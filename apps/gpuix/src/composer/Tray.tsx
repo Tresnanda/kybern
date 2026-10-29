@@ -21,6 +21,7 @@ import type { GitBranchesResult, Project, ProjectId, TaskItem } from '../../../.
 import type { ReactNode } from 'react'
 import { useApp } from '../state.ts'
 import { PickerChip } from '../kit/PickerChip.tsx'
+import { SearchField } from '../kit/SearchField.tsx'
 import { G } from './glyphs.ts'
 import { CheckMark, muted, PickerItem, PickerLabel, PickerMenu, PickerSeparator } from './Menu.tsx'
 import { loadBranches, patchDraft, useComposer } from './store.ts'
@@ -182,10 +183,12 @@ export function WorkspaceTrayChip({ useWorktree, isGit, checkoutHint, onChange }
 
 function BranchChip({ projectId, useWorktree }: { projectId: ProjectId; useWorktree: boolean }) {
   const branches = useComposer((d) => (d.branches?.projectId === projectId ? d.branches.result : null))
+  const fetching = useComposer((d) => d.branches?.projectId === projectId && !!d.branches.fetching)
   const baseBranch = useComposer((d) => d.draft.baseBranch)
   return (
     <BranchTrayChip
       branches={branches}
+      fetching={fetching}
       baseBranch={baseBranch}
       useWorktree={useWorktree}
       onOpen={() => void loadBranches(projectId)}
@@ -195,9 +198,11 @@ function BranchChip({ projectId, useWorktree }: { projectId: ProjectId; useWorkt
   )
 }
 
-/** `BranchTrayChip`: the branch to start from, and a worktree toggle. `branches` is null while they load. */
+/** `BranchTrayChip`: the branch to start from, and a worktree toggle. `branches` is null while they load; `fetching`
+ *  while the remotes are fetched behind the list. Remote-tracking branches come after the local ones. */
 export function BranchTrayChip({
   branches,
+  fetching = false,
   baseBranch,
   useWorktree,
   onOpen,
@@ -205,6 +210,7 @@ export function BranchTrayChip({
   onWorktree,
 }: {
   branches: GitBranchesResult | null
+  fetching?: boolean
   baseBranch: string | null | undefined
   useWorktree: boolean
   onOpen: () => void
@@ -213,7 +219,10 @@ export function BranchTrayChip({
   onWorktree: (useWorktree: boolean) => void
 }) {
   const t = useTheme()
+  const [query, setQuery] = useState('')
   const shown = baseBranch ?? branches?.current ?? 'Current branch'
+  const search = query.trim().toLowerCase()
+  const matches = branches?.branches.filter((b) => !search || b.name.toLowerCase().includes(search)) ?? []
   return (
     <PickerMenu
       testId="tray-branch"
@@ -221,10 +230,26 @@ export function BranchTrayChip({
       align="start"
       sideOffset={8}
       width={288}
-      onOpenChange={(open) => open && onOpen()}
+      onOpenChange={(open) => {
+        setQuery('')
+        if (open) onOpen()
+      }}
       trigger={(open) => <PickerChip bare icon={G.branch} open={open} truncate maxWidth={256}>{shown}</PickerChip>}
     >
-      <PickerLabel>{useWorktree ? 'Fork the worktree from' : 'Branch'}</PickerLabel>
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        <PickerLabel>{useWorktree ? 'Fork the worktree from' : 'Branch'}</PickerLabel>
+        <div style={{ flexGrow: 1 }} />
+        {fetching && (
+          <Label color={muted(t, 0.6)} size={12} style={{ flexShrink: 0, paddingRight: 8 }}>
+            Fetching…
+          </Label>
+        )}
+      </div>
+      {branches !== null && branches.branches.length > 0 && (
+        <div style={{ display: 'flex', paddingLeft: 4, paddingRight: 4, paddingBottom: 4 }}>
+          <SearchField testId="tray-branch-search" label="Search branches" placeholder="Search branches" autoFocus width="100%" value={query} onChange={setQuery} />
+        </div>
+      )}
       {branches === null ? (
         <PickerItem id="__loading" disabled onSelect={() => {}}>
           <Label color={t.textSecondary}>Loading branches…</Label>
@@ -233,21 +258,27 @@ export function BranchTrayChip({
         <PickerItem id="__empty" disabled onSelect={() => {}}>
           <Label color={t.textSecondary}>No branches yet. Make a first commit.</Label>
         </PickerItem>
+      ) : matches.length === 0 ? (
+        <PickerItem id="__nomatch" disabled onSelect={() => {}}>
+          <Label color={t.textSecondary} truncate>{`No branches match “${query.trim()}”`}</Label>
+        </PickerItem>
       ) : (
-        branches.branches.map((b) => (
-          <PickerItem key={b.name} id={`branch:${b.name}`} onSelect={() => onBranch(b.name === branches.current ? null : b.name)}>
-            <Icon source={G.branch} size={14} color={t.text} />
-            <Label color={t.text} truncate style={{ flexGrow: 1 }}>
-              {b.name}
-            </Label>
-            {b.is_current && (
-              <Label color={muted(t, 0.7)} style={{ flexShrink: 0 }}>
-                current
+        <div style={{ display: 'flex', flexDirection: 'column', maxHeight: 320, overflowY: 'scroll' }}>
+          {matches.map((b) => (
+            <PickerItem key={b.name} id={`branch:${b.name}`} onSelect={() => onBranch(b.name === branches.current ? null : b.name)}>
+              <Icon source={G.branch} size={14} color={t.text} />
+              <Label color={t.text} truncate style={{ flexGrow: 1 }}>
+                {b.name}
               </Label>
-            )}
-            <CheckMark color={t.text} visible={(baseBranch ?? branches.current) === b.name} />
-          </PickerItem>
-        ))
+              {(b.is_current || b.remote) && (
+                <Label color={muted(t, 0.7)} style={{ flexShrink: 0 }}>
+                  {b.is_current ? 'current' : 'remote'}
+                </Label>
+              )}
+              <CheckMark color={t.text} visible={(baseBranch ?? branches.current) === b.name} />
+            </PickerItem>
+          ))}
+        </div>
       )}
       <PickerSeparator />
       <PickerItem id="__worktree" keepOpen onSelect={() => onWorktree(!useWorktree)} style={{ paddingLeft: 10, paddingRight: 10 }}>

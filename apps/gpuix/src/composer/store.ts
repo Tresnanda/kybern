@@ -61,7 +61,7 @@ export interface ComposerData {
   catalog: { key: string; status: ProviderStatus } | null
   catalogLoading: string | null
   queued: Record<ThreadId, QueuedMessage[]>
-  branches: { projectId: ProjectId; result: GitBranchesResult } | null
+  branches: { projectId: ProjectId; result: GitBranchesResult; fetching?: boolean } | null
   draft: DraftChoices
   favorites: FavoriteModel[]
   recents: Record<string, string[]>
@@ -476,15 +476,24 @@ function adoptNewChat(paneId: string, from: ThreadId, to: ThreadId, sendId: stri
   })
 }
 
+/** Lists the branches at once (local, then remote-tracking), then again after fetching every remote. */
 export async function loadBranches(projectId: ProjectId) {
   const client = rpc()
+  const current = () => getClient() === client && data.branches?.projectId === projectId
   try {
-    const result = await client.call('git.branches', { project_id: projectId })
+    const result = await client.call('git.branches', { project_id: projectId, include_remote: true })
     if (getClient() !== client) return
-    patch({ branches: { projectId, result } })
+    patch({ branches: { projectId, result, fetching: true } })
   } catch {
     if (getClient() !== client) return
     patch({ branches: { projectId, result: { current: null, branches: [] } } })
+    return
+  }
+  try {
+    const result = await client.call('git.branches', { project_id: projectId, include_remote: true, fetch: true })
+    if (current()) patch({ branches: { projectId, result } })
+  } catch {
+    if (current()) patch((d) => ({ branches: d.branches && { ...d.branches, fetching: false } }))
   }
 }
 
