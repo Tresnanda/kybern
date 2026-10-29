@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { agentLine, defaultAgent, machineAgents, noAgentWarning, signedInOf } from "../src/machineAgents.ts";
+import { agentLine, defaultAgent, machineAgents, machineChoiceDetail, noAgentWarning, signedInOf } from "../src/machineAgents.ts";
 
 const account = (kind, status) => ({ provider: { kind, instance: "default" }, name: "default", status, is_default: true, projects: [], managed: false, can_sign_out: false });
 const harness = (kind, available = true) => ({ kind, available });
@@ -39,4 +39,12 @@ test("a delegation to another machine parses before that machine acknowledged it
   assert.equal(pending?.threadId, "");
   assert.equal(parseDelegateResult({ task_id: "t1", thread_id: null, title: "Check" }), null);
   assert.equal(parseDelegateResult({ task_id: "t1", thread_id: "c1", title: "Check", status: "completed" })?.machine, null);
+});
+
+test("a machine choice names the agents installed there", () => {
+  const agents = machineAgents([harness("claude-code"), harness("codex"), harness("pi", false)], [account("claude-code", "signed_out")]);
+  assert.equal(machineChoiceDetail(true, agents), "Claude Code, Codex");
+  assert.equal(machineChoiceDetail(false, agents), "Offline · waits until it’s back");
+  assert.equal(machineChoiceDetail(true, undefined), "Online");
+  assert.equal(machineChoiceDetail(true, machineAgents([harness("pi", false)], [])), "No agents installed");
 });

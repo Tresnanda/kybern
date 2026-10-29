@@ -66,3 +66,14 @@ export function noAgentWarning(agents: readonly MachineAgent[], machineName: str
     ? `No agent is signed in on ${machineName}. Sign in there (Settings → Machines) before the first message, or it will fail.`
     : `No agent is installed on ${machineName}.`;
 }
+
+/**
+ * The second line of a machine in the fork and move sheets: "Offline · waits until it’s back", the agents installed there
+ * ("Claude Code, Codex"), or "Online" while they are not known yet.
+ */
+export function machineChoiceDetail(online: boolean, agents: readonly MachineAgent[] | null | undefined): string {
+  if (!online) return "Offline · waits until it’s back";
+  if (!agents) return "Online";
+  const installed = agents.filter((agent) => agent.available).map((agent) => agent.label);
+  return installed.length > 0 ? installed.join(", ") : "No agents installed";
+}
