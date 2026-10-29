@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { chatLink } from "../src/chatLinks.ts";
-import { forkNotice, forkNoticeAction, forkParams, forkQueuedText, forkSheetDefaults, forkTargets, originLabel, parseThreadLink, threadLinkHref } from "../src/forkMachine.ts";
+import { forkNotice, forkNoticeAction, forkParams, forkQueuedText, forkSheetDefaults, forkTargets, originLabel, parseThreadLink, shortMachineName, threadLinkHref } from "../src/forkMachine.ts";
 
 const THREAD = "0192f7a0-1111-7222-8333-444455556666";
 
@@ -39,6 +39,9 @@ test("fork notices carry the machine and, once delivered, the thread to open", (
 test("a thread another machine started says where it came from", () => {
   assert.equal(originLabel({ origin: { machine_name: "satyamas", kind: { kind: "fork" } } }), "From satyamas");
   assert.equal(originLabel({ origin: { machine_name: "vps", kind: { kind: "delegation", task_id: "t" } } }), "From vps");
+  assert.equal(originLabel({ origin: { machine_name: "Treshnandas-Macbook.local", kind: { kind: "fork" } } }), "From Treshnandas-Macbook");
+  assert.equal(originLabel({ origin: { machine_id: "m1", machine_name: "Treshnandas-Macbook.local", kind: { kind: "fork" } } }, (id) => (id === "m1" ? "Mac" : undefined)), "From Mac");
+  assert.equal(shortMachineName("srv1544252.tail1234.ts.net"), "srv1544252");
   assert.equal(originLabel({ origin: { machine_name: "vps", kind: { kind: "composer" } } }), null);
   assert.equal(originLabel({ origin: null }), null);
   assert.equal(originLabel(undefined), null);

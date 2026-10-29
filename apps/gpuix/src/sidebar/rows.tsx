@@ -40,7 +40,6 @@ import { callThread, getState, toggleProject as toggleProjectState, type StateTh
 import { glyphOfMachine } from '../machines/index.ts'
 import { MachineBadge } from './MachineBadge.tsx'
 import { forkTargetsOf } from '../fork/targets.ts'
-import { originLabel } from '../../../../packages/kybern-client/src/forkMachine.ts'
 import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
 import { raisedFill, useGlass } from '../platform/glass.ts'
 import type { Theme } from '../theme.ts'
@@ -548,8 +547,6 @@ export const ThreadRow = memo(function ThreadRow({
   // A thread another machine owns: its glyph, and greyed while that machine is offline (design §5.2). The machine the user is at has neither.
   const remote = thread as StateThread
   const machineGlyph = remote.machineId ? glyphOfMachine(remote.machineId) : undefined
-  // A thread another machine started by a fork or a delegation says where it came from.
-  const fromLabel = originLabel(thread)
   const splitRoot = useSplitRoot(), focusedPane = useFocusedPane()
   const inSplit = collectThreadPanes(splitRoot).some((pane) => pane.threadId === thread.id)
   const { renderer } = useGpuix()
@@ -619,7 +616,6 @@ export const ThreadRow = memo(function ThreadRow({
                 <MarqueeLabel hover={hover} text={thread.coordinator_project_id ? 'Open coordinator' : thread.title || 'Untitled'} color={selected ? t.text : resting(t)} />
               </TitleSwap>
             )}
-            {fromLabel && !renaming && <div testId={`origin-${thread.id}`} style={{ display: 'flex', flexShrink: 0 }}><Label color={muted(t, 0.6)} size={10} weight={500}>{fromLabel}</Label></div>}
             {hasDraft && !renaming && <DraftMarker />}
             {badge && (
               <Label color={amberText(t)} size={10} weight={500} style={{ flexShrink: 0 }} paintAnimation={pendingPop ? popAnimation() : undefined}>

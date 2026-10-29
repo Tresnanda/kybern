@@ -76,17 +76,28 @@ export function forkNoticeText(notice: ForkNotice, text: string): string {
 // ---- where a thread came from ----
 
 /** "From satyamas": a thread another machine started by a fork or a delegation. Null for work started here. */
-export function originLabel(thread: { origin?: Pick<Origin, "machine_name" | "kind"> | null } | null | undefined): string | null {
+export function originLabel(
+  thread: { origin?: (Pick<Origin, "machine_name" | "kind"> & Partial<Pick<Origin, "machine_id">>) | null } | null | undefined,
+  /** The machine's current name (the one Settings → Machines shows), when the client knows it. */
+  nameOf?: (machineId: string) => string | undefined,
+): string | null {
   const origin = thread?.origin;
-  if (!origin || !origin.machine_name) return null;
+  if (!origin) return null;
+  const name = (origin.machine_id ? nameOf?.(origin.machine_id) : undefined) ?? shortMachineName(origin.machine_name);
+  if (!name) return null;
   switch (origin.kind.kind) {
     case "fork":
     case "delegation":
     case "move":
-      return `From ${origin.machine_name}`;
+      return `From ${name}`;
     default:
       return null;
   }
+}
+
+/** A host name as people say it: "Treshnandas-Macbook.local" → "Treshnandas-Macbook". */
+export function shortMachineName(name: string | null | undefined): string {
+  return (name ?? "").trim().replace(/\.[a-z0-9-]+\.ts\.net$/i, "").replace(/\.(local|lan|home|localdomain)$/i, "");
 }
 
 // ---- who can take a fork ----
