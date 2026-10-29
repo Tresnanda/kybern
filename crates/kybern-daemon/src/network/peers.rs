@@ -1027,6 +1027,9 @@ fn signature(status: &TsStatus) -> String {
     format!("{}|{}", status.running, online.join(","))
 }
 
+/// How soon a network listener that failed to open is tried again.
+const LISTEN_RETRY: Duration = Duration::from_secs(10);
+
 /// The background worker: runs a pass, then waits for the next tick, a retry that is due, or a
 /// wake-up. It ends with the daemon.
 pub async fn run(state: AppState) {
@@ -1034,7 +1037,12 @@ pub async fn run(state: AppState) {
     loop {
         let retry = pass(&state).await;
         let tick = if network.is_watching() { network.timing.tick_watching } else { network.timing.tick_idle };
-        let wait = retry.map_or(tick, |retry| retry.min(tick)).max(Duration::from_millis(20));
+        let mut wait = retry.map_or(tick, |retry| retry.min(tick)).max(Duration::from_millis(20));
+        // A listener that could not open (a daemon started at boot before Tailscale was up) is tried
+        // again soon, not on the idle tick: until it opens, no other machine can reach this one.
+        if network.listen_info().error.is_some() {
+            wait = wait.min(LISTEN_RETRY);
+        }
         tokio::select! {
             _ = state.shutdown.cancelled() => break,
             _ = tokio::time::sleep(wait) => {}
