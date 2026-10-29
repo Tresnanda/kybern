@@ -166,13 +166,13 @@ function ThreadComposer({ thread, placeholderEnter }: { thread: StateThread; pla
   const projectName = useApp(s => s.projects.find(p => p.id === thread.coordinator_project_id)?.name)
 
   useEffect(() => {
-    if (!pane.frozen) void loadTarget(threadId)
-  }, [threadId, thread.status, thread.provider.instance, thread.model, pane.frozen])
+    if (!pane.frozen) void loadTarget(threadId, thread.machineId)
+  }, [threadId, thread.machineId, thread.status, thread.provider.instance, thread.model, pane.frozen])
 
   const provider = target?.target.provider ?? thread.provider
   const catalogKey = `${threadId}:${provider.kind}:${provider.instance}`
   useEffect(() => {
-    if (!pane.frozen) void loadCatalog(threadId, provider, ownProjectId(thread), false).catch(() => {})
+    if (!pane.frozen) void loadCatalog(threadId, provider, ownProjectId(thread), false, thread.machineId).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [catalogKey, thread.project_id, pane.frozen])
   const composerProviders = useMemo(
@@ -235,7 +235,7 @@ function ThreadComposer({ thread, placeholderEnter }: { thread: StateThread; pla
       sendDisabledReason={waitingChat ? `Waiting for ${machineName(thread.machineId)}. You can send again once it has the chat.` : undefined}
       canSteer={handoffSelected || canSteer(thread.provider)}
       mode={mode}
-      onModeChange={(m) => void setThreadMode(threadId, m).catch((e) => console.error('Unable to change mode:', errorText(e)))}
+      onModeChange={(m) => void setThreadMode(threadId, m, thread.machineId).catch((e) => console.error('Unable to change mode:', errorText(e)))}
       provider={provider}
       providers={composerProviders}
       accounts={accounts}
@@ -243,10 +243,10 @@ function ThreadComposer({ thread, placeholderEnter }: { thread: StateThread; pla
       onAccountChange={coordinator ? running ? undefined : (instance) => switchHarness({ ...provider, instance: instance ?? 'default' }, thread.model ?? undefined, thread.effort ?? undefined) : (instance) => chooseTarget({ ...provider, instance: instance ?? 'default' }, target?.target.model ?? undefined, target?.target.effort ?? undefined, instance === null)}
       model={target?.target.model ?? thread.model ?? undefined}
       effort={target?.target.effort ?? thread.effort ?? undefined}
-      onModelChange={coordinator ? running ? undefined : (model, effort) => switchHarness(provider, model, effort) : (model, effort) => setThreadModel(threadId, model, effort)}
+      onModelChange={coordinator ? running ? undefined : (model, effort) => switchHarness(provider, model, effort) : (model, effort) => setThreadModel(threadId, model, effort, thread.machineId)}
       onProviderChange={coordinator ? running ? undefined : (next, choice) => switchHarness(next, choice?.model, choice?.effort) : (next, choice) => chooseTarget(next, choice?.model, choice?.effort, !choice?.pinAccount)}
       catalogLoading={catalogLoading === catalogKey}
-      onReloadModels={(force) => loadCatalog(threadId, provider, ownProjectId(thread), force).then(() => {})}
+      onReloadModels={(force) => loadCatalog(threadId, provider, ownProjectId(thread), force, thread.machineId).then(() => {})}
       placeholderEnter={placeholderEnter}
       machinePicker={thread.machineId ? <ThreadMachine machineId={thread.machineId} testId="composer-machine" /> : undefined}
     />

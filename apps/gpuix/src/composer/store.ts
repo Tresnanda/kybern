@@ -159,7 +159,8 @@ function need(client: ReturnType<typeof localClient>) {
   if (!client) throw new Error('Start kybernd, then reopen this window')
   return client
 }
-function rpc(threadId?: ThreadId) { return need(threadId ? threadClient(threadId) : localClient()) }
+/** The client of the machine that owns the thread. Pass `machineId` when the thread is not listed (a child another machine runs), else the owner is guessed from the id. */
+function rpc(threadId?: ThreadId, machineId?: string) { return need(threadId ? threadClient(threadId, machineId) : localClient()) }
 
 /** `errorText` from `state/rpc.ts`: the daemon's message, or the thrown text. */
 export function errorText(e: unknown): string {
@@ -271,15 +272,15 @@ export function loadMachineLists(machineId: MachineId, force = false, projectId?
 // ---- the open thread's next-message target ----
 
 const targetSeq = new Map<string, number>()
-export async function loadTarget(threadId: ThreadId) {
+export async function loadTarget(threadId: ThreadId, machineId?: string) {
   // A new chat the daemon has not made yet has no target; its composer loads it once the thread exists.
   if (newChats.uncreated(threadId)) return
-  const client = rpc(threadId)
+  const client = rpc(threadId, machineId)
   const seq = (targetSeq.get(threadId) ?? 0) + 1
   targetSeq.set(threadId, seq)
   try {
     const state = await client.call('threads.target.get', { thread_id: threadId })
-    if (threadClient(threadId) === client && seq === targetSeq.get(threadId)) patch({ target: { threadId, state } })
+    if (threadClient(threadId, machineId) === client && seq === targetSeq.get(threadId)) patch({ target: { threadId, state } })
   } catch {
     // An old daemon has no target API; the thread's own fields stand in.
   }
@@ -287,44 +288,44 @@ export async function loadTarget(threadId: ThreadId) {
 
 const catalogSeq = new Map<string, number>()
 /** `refreshAccountCatalog` in `views/Thread.tsx`. */
-export async function loadCatalog(threadId: ThreadId, provider: ProviderInstance, projectId: ProjectId, force: boolean) {
+export async function loadCatalog(threadId: ThreadId, provider: ProviderInstance, projectId: ProjectId, force: boolean, machineId?: string) {
   const key = `${threadId}:${provider.kind}:${provider.instance}`
-  const client = rpc(threadId)
+  const client = rpc(threadId, machineId)
   const seq = (catalogSeq.get(threadId) ?? 0) + 1
   catalogSeq.set(threadId, seq)
   catalogLoads.set(threadId, key)
   patch({ catalogLoading: key })
   try {
     const status = await client.call('providers.accounts.catalog', { provider, project_id: projectId, force_refresh: force })
-    if (threadClient(threadId) === client && seq === catalogSeq.get(threadId)) { catalogs.set(threadId, { key, status }); if (catalogs.size > 100) catalogs.delete(catalogs.keys().next().value!); patch({ catalog: { key, status } }) }
+    if (threadClient(threadId, machineId) === client && seq === catalogSeq.get(threadId)) { catalogs.set(threadId, { key, status }); if (catalogs.size > 100) catalogs.delete(catalogs.keys().next().value!); patch({ catalog: { key, status } }) }
     return status
   } finally {
-    if (threadClient(threadId) === client && seq === catalogSeq.get(threadId)) { catalogLoads.delete(threadId); patch({ catalogLoading: null }) }
+    if (threadClient(threadId, machineId) === client && seq === catalogSeq.get(threadId)) { catalogLoads.delete(threadId); patch({ catalogLoading: null }) }
   }
 }
 
 /** `changePermission`: `threads.update`, then the target again. */
-export async function setThreadMode(threadId: ThreadId, mode: PermissionMode) {
-  const client = rpc(threadId)
+export async function setThreadMode(threadId: ThreadId, mode: PermissionMode, machineId?: string) {
+  const client = rpc(threadId, machineId)
   await client.call('threads.update', { thread_id: threadId, permission_mode: mode })
-  if (threadClient(threadId) !== client) return
+  if (threadClient(threadId, machineId) !== client) return
   await refreshLists()
-  if (threadClient(threadId) === client) await loadTarget(threadId)
+  if (threadClient(threadId, machineId) === client) await loadTarget(threadId, machineId)
 }
 
 /** `chooseTarget` with the thread's target and a new model/effort. */
-export async function setThreadModel(threadId: ThreadId, model: string | undefined, effort: string | undefined) {
+export async function setThreadModel(threadId: ThreadId, model: string | undefined, effort: string | undefined, machineId?: string) {
   const current = data.target?.threadId === threadId ? data.target.state : null
   const thread = getState().threads.find((t) => t.id === threadId) ?? getState().open.thread
   const provider = current?.target.provider ?? thread?.provider
   if (!provider) return
-  const client = rpc(threadId)
+  const client = rpc(threadId, machineId)
   const state = await client.call('threads.target.set', {
     thread_id: threadId,
     target: { provider, model, effort },
     inherit_account: !current?.account_override,
   })
-  if (threadClient(threadId) === client) patch({ target: { threadId, state } })
+  if (threadClient(threadId, machineId) === client) patch({ target: { threadId, state } })
 }
 
 // ---- sending ----
