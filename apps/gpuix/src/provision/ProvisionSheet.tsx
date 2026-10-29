@@ -2,7 +2,7 @@
 // files come along, then follow it to "Added to os-kdi". Every call goes to the SOURCE machine (the one that sends it, any
 // member that has the project); the folder chooser browses the TARGET. The work is an outbox item, so closing the sheet or
 // an offline target does not stop it.
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { PROVISION_CHANGED_NOTIFICATION, type ProvisionStatus } from '../../../../packages/kybern-client/src/types.ts'
 import {
   PROVISION_COPY as COPY, defaultEnvFiles, defaultPath, displayPath, pathAccepted, provisionFraction, provisionSettled, provisionStatusText, targetDetail, type ProvisionTarget,
@@ -18,17 +18,22 @@ import { glyphOfMachine, machineHub } from '../machines/index.ts'
 import { DialogBody, DialogFooter, DialogHeader, ErrorText, Field, Hint } from '../environments/kit.tsx'
 import { Label, useTheme } from '../ui.tsx'
 import { EnvFileList, FolderField, ProgressBar, useProvisionPlan } from './parts.tsx'
-import { provisionContextOf } from './targets.ts'
+import { fixtureClient, provisionContextOf } from './targets.ts'
 
-export function ProvisionSheet({ projectId, machineId, close }: { projectId: string; machineId?: string; close: () => void }) {
+/** `inline` draws the sheet in the window instead of a popup layer (native fixtures, whose captures leave popups out). */
+export function ProvisionSheet({ projectId, machineId, close, inline = false }: { projectId: string; machineId?: string; close: () => void; inline?: boolean }) {
   const t = useTheme()
+  const c = useControls()
+  const Frame = inline
+    ? ({ children, testId }: { children: ReactNode; testId?: string; onClose: () => void; width: number }) => <div testId={testId} style={{ display: 'flex', flexDirection: 'column', width: 560, alignSelf: 'center', borderRadius: 16, borderWidth: 1, borderColor: c.ink(0.1), backgroundColor: t.v('--popover') }}>{children}</div>
+    : Dialog
   const [sourceId, setSourceId] = useState<string | null>(null)
   const context = useMemo(() => provisionContextOf(projectId, machineId, sourceId), [projectId, machineId, sourceId])
   const source = context?.instances.find((instance) => instance.machineId === context.source) ?? null
   const choosable = context?.targets.filter((target) => !target.has) ?? []
   const [targetId, setTargetId] = useState<string | null>(null)
   const target = choosable.find((item) => item.machineId === targetId) ?? choosable[0] ?? null
-  const sourceClient = useMemo(() => (source ? machineHub().clientFor(source.machineId) : null), [source?.machineId])
+  const sourceClient = useMemo(() => (source ? fixtureClient() ?? machineHub().clientFor(source.machineId) : null), [source?.machineId])
   const [path, setPath] = useState<string | null>(null)
   const [env, setEnv] = useState<string[] | null>(null)
   const { plan, check, checking, error: planError } = useProvisionPlan(sourceClient, source?.projectId ?? projectId, target?.machineId ?? null, path)
@@ -65,7 +70,7 @@ export function ProvisionSheet({ projectId, machineId, close }: { projectId: str
     const done = status.phase === 'done'
     const failed = status.phase === 'failed' || status.phase === 'cancelled'
     const where = status.result?.project.path ?? status.path ?? ''
-    return <Dialog onClose={dismiss} width={560} testId="provision-sheet">
+    return <Frame onClose={dismiss} width={560} testId="provision-sheet">
       <DialogHeader title={done ? `Added to ${status.target_name}` : failed ? `Unable to add ${project}` : COPY.adding(status.target_name)} description={done ? `${project} is in the sidebar on ${status.target_name} now.` : failed ? 'Nothing else changed on either machine.' : 'You can close this; it keeps going and waits if the machine goes offline.'} onClose={dismiss} />
       <DialogBody footer>
         <div testId="provision-status" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -78,11 +83,11 @@ export function ProvisionSheet({ projectId, machineId, close }: { projectId: str
         {failed && <Button size="lg" variant="secondary" testId="provision-retry" onClick={() => setStatus(null)}>Change and try again</Button>}
         <Button size="lg" variant={running ? 'secondary' : 'primary'} testId="provision-done" onClick={close}>{running ? 'Close' : COPY.done}</Button>
       </DialogFooter>
-    </Dialog>
+    </Frame>
   }
 
-  return <Dialog onClose={dismiss} width={560} testId="provision-sheet">
-    <DialogHeader title={title} description={COPY.sheetDescription} onClose={dismiss} />
+  return <Frame onClose={dismiss} width={560} testId="provision-sheet">
+    <DialogHeader title={title} description={COPY.sheetDescription(target?.machineName ?? 'The machine', source?.machineName ?? 'this machine')} onClose={dismiss} />
     <DialogBody footer scroll>
       {!context || !source ? <Hint>{context ? `No machine that has ${project} is online to send it.` : 'This project is not on any machine of your network.'}</Hint> : <>
         {context.instances.length > 1 && <Field label={COPY.from}><div role="radiogroup" aria-label={COPY.from} style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -106,7 +111,7 @@ export function ProvisionSheet({ projectId, machineId, close }: { projectId: str
       <Button size="lg" variant="secondary" disabled={busy} onClick={dismiss}>Cancel</Button>
       <Button size="lg" variant="primary" testId="provision-confirm" busy={busy} disabled={!ready} onClick={() => void add()}>{target ? COPY.add(target.machineName) : 'Add'}</Button>
     </DialogFooter>
-  </Dialog>
+  </Frame>
 }
 
 /** A machine as a half-width tile, like the fork sheet's: badge, name, and whether it can take the project. */

@@ -13,6 +13,7 @@ import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { errorText } from '../nav/actions.ts'
 import { machineHub } from '../machines/index.ts'
+import { fixtureClient } from './targets.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { FONT_MONO } from '../theme.ts'
 
@@ -53,7 +54,7 @@ export function useProvisionPlan(source: KybernClient | null, projectId: string,
 /** The target's client, for browsing its folders. Null while it is offline. */
 export function targetClient(machineId: string | null | undefined): KybernClient | null {
   if (!machineId) return null
-  try { return machineHub().clientFor(machineId) } catch { return null }
+  try { return fixtureClient() ?? machineHub().clientFor(machineId) } catch { return null }
 }
 
 /** Where the project goes: an editable path, the target's verdict under it, and "Choose…" opening that machine's folders in place. */
@@ -64,7 +65,8 @@ export function FolderField({ plan, path, onPath, check, checking, disabled, tes
   const [choosing, setChoosing] = useState(false)
   const online = plan.target.online
   const tone = !check || checking ? t.textSecondary : pathAccepted(check) ? t.textSecondary : t.red
-  const shown = check?.path && check.path !== path ? displayPath(check.path, plan.target_home, plan.target.os) : null
+  const spelled = check?.path ? displayPath(check.path, plan.target_home, plan.target.os) : ''
+  const shown = spelled && spelled !== path && check?.path !== path ? spelled : null
   return <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
       <TextField testId={testId} size="lg" mono label={`Folder on ${plan.target.name}`} value={path} placeholder={online ? '' : '~/projects/name'} disabled={disabled} onChange={onPath} width="100%" />

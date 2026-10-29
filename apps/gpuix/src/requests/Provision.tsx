@@ -9,6 +9,7 @@ import { Button } from '../kit/Button.tsx'
 import { MachineBadge } from '../sidebar/MachineBadge.tsx'
 import { glyphOfMachine } from '../machines/index.ts'
 import { EnvFileList, FolderField, useProvisionPlan } from '../provision/parts.tsx'
+import { fixtureClient } from '../provision/targets.ts'
 import { respondApproval } from '../transcript/store.ts'
 import { threadClient } from '../state.ts'
 import { T } from '../transcript/glyphs.ts'
@@ -20,7 +21,7 @@ export function ProvisionRequestPanel({ approval, input, count, threadId }: { ap
   const k = useCardTokens()
   const { plan: asked } = input
   // The thread's own machine sent the card and is the source; it checks folders with the target.
-  const [source] = useState(() => { try { return threadClient(threadId) } catch { return null } })
+  const [source] = useState(() => { try { return fixtureClient() ?? threadClient(threadId) } catch { return null } })
   const [path, setPath] = useState<string>(() => defaultPath(asked))
   const [env, setEnv] = useState<string[]>(() => defaultEnvFiles(asked.env_files))
   const { plan, check, checking } = useProvisionPlan(source, asked.project_id, asked.target.id, path, asked)
@@ -51,7 +52,7 @@ export function ProvisionRequestPanel({ approval, input, count, threadId }: { ap
       </div>
       <Hints
         error={error}
-        left={<HintText>{`From ${view.source.name} · it clones there, or ${view.source.name} sends it`}</HintText>}
+        left={<HintText>{`${view.target.name} clones it, or ${view.source.name} sends it`}</HintText>}
         right={
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
             <Button variant="ghost" size="sm" onKeyboard={keyboardAnswer} testId="provision-decline" disabled={busy} onClick={() => void respond(false)}>{COPY.decline}</Button>

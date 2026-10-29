@@ -16,7 +16,7 @@ import {
 export const PROVISION_COPY = {
   menu: "Add to another machine…",
   sheetTitle: (project: string) => `Add ${project} to another machine`,
-  sheetDescription: "The machine clones it with its own git sign-in, or gets it from this one. Env files travel encrypted.",
+  sheetDescription: (target: string, source: string) => `${target} clones it with its own git sign-in, or ${source} sends it. Env files travel encrypted.`,
   machine: "Machine",
   from: "From",
   folder: "Folder",
@@ -78,11 +78,11 @@ export function pathAccepted(check: PathCheck | null | undefined): boolean {
   return !check || check.state === "free" || check.state === "same_repo" || check.state === "unknown";
 }
 
-/** The folder the sheet starts with: the checked one when it is usable, else the proposed one. */
-export function defaultPath(plan: Pick<ProvisionPlan, "suggested_path" | "path_check">): string {
+/** The folder the sheet starts with: the checked one when it is usable, else the proposed one, with the target's home as `~`. */
+export function defaultPath(plan: Pick<ProvisionPlan, "suggested_path" | "path_check"> & Partial<Pick<ProvisionPlan, "target_home" | "target">>): string {
   const checked = plan.path_check;
-  if (checked && checked.path && pathAccepted(checked) && checked.state !== "unknown") return checked.path;
-  return plan.suggested_path ?? checked?.path ?? "";
+  const path = checked && checked.path && pathAccepted(checked) && checked.state !== "unknown" ? checked.path : plan.suggested_path ?? checked?.path ?? "";
+  return displayPath(path, plan.target_home, plan.target?.os);
 }
 
 /** The env files ticked by default. */

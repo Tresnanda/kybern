@@ -1,4 +1,5 @@
 // Which machines have a sidebar project and which could get it, read from the machine hub when a menu or the sheet opens.
+import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 import type { MachineId } from '../../../../packages/kybern-client/src/types.ts'
 import { provisionSource, provisionTargets, type ProvisionTarget } from '../../../../packages/kybern-client/src/provision.ts'
 import { machineHub } from '../machines/index.ts'
@@ -16,8 +17,14 @@ export interface ProvisionContext {
 
 const LIVE = new Set(['online', 'relaying', 'needs-update'])
 
+/** Native fixtures only (`provision.fixture.tsx`): a fixed context and one client for every machine, with no machine hub. */
+let fixture: { context: ProvisionContext; client: () => KybernClient } | null = null
+export function setProvisionFixture(next: typeof fixture) { fixture = next }
+export const fixtureClient = (): KybernClient | null => fixture?.client() ?? null
+
 /** The project a sidebar row shows, across machines. `machineId` is the machine the row (or thread) is on, when known. */
 export function provisionContextOf(projectId: string, machineId?: MachineId | null, sourceOverride?: MachineId | null): ProvisionContext | null {
+  if (fixture) return fixture.context
   const hub = machineHub()
   if (hub.machineCount <= 1) return null
   const local = hub.localMachineId
