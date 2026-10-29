@@ -2617,6 +2617,10 @@ mod live {
         timed("act after the session ended", started);
         eprintln!("{again}");
         assert!(!again.contains("has ended") && !again.contains("failed") && !again.contains("refused"), "the session should renew");
+        // Unnamed calls (status, app lists) use the connection's implicit
+        // session, which the driver also ends on its own.
+        client.call_ok("end_session", json!({})).await.unwrap();
+        client.call_ok("list_apps", json!({})).await.expect("the implicit session should revive");
 
         let started = Instant::now();
         let read =
