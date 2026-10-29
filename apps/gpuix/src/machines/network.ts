@@ -20,14 +20,16 @@ export interface NetworkState {
   outbox: OutboxItem[]
   /** What the last "Update all machines" did on each machine, until the page is left. */
   updated: NetworkUpdateAllResult | null
+  /** What the last "Run check" found, kept until the next one so the list can be read and acted on. */
+  doctor: DoctorReport | null
 }
 
-let state: NetworkState = { status: null, unavailable: false, error: '', infos: {}, busy: null, outbox: [], updated: null }
+let state: NetworkState = { status: null, unavailable: false, error: '', infos: {}, busy: null, outbox: [], updated: null, doctor: null }
 const listeners = new Set<() => void>()
 const emit = (patch: Partial<NetworkState>) => { state = { ...state, ...patch }; for (const listener of listeners) listener() }
 export const getNetwork = () => state
 /** Tests: forget everything. */
-export function resetNetwork() { state = { status: null, unavailable: false, error: '', infos: {}, busy: null, outbox: [], updated: null }; reading = false; again = false }
+export function resetNetwork() { state = { status: null, unavailable: false, error: '', infos: {}, busy: null, outbox: [], updated: null, doctor: null }; reading = false; again = false }
 
 const text = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
@@ -125,6 +127,6 @@ export const updateAllMachines = (): Promise<NetworkUpdateAllResult> => act('upd
 export const setFollowUpdates = (enabled: boolean) => act('follow', (c) => c.call('network.follow_updates.set', { enabled }))
 export const retryOutbox = (id: string) => act(`outbox:${id}`, async (c) => { const item = await c.call('outbox.retry', { id }); await loadOutbox(); return item })
 export const cancelOutbox = (id: string) => act(`outbox:${id}`, async (c) => { const item = await c.call('outbox.cancel', { id }); await loadOutbox(); return item })
-export const doctor = (machineId?: MachineId): Promise<DoctorReport> => act('doctor', (c) => c.call('network.doctor', { machine_id: machineId ?? null }))
+export const doctor = (machineId?: MachineId): Promise<DoctorReport> => act('doctor', async (c) => { const report = await c.call('network.doctor', { machine_id: machineId ?? null }); emit({ doctor: report }); return report })
 /** "Show a code for this machine": the code another machine's member types, on a machine that is not in a network yet. */
 export const showCode = (): Promise<NetworkCodeCreateResult> => act('code', (c) => c.call('network.code.create', {}))

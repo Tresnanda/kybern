@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { destLabel, formatBytes, portLabel, receivedNotice, relayedPreviewPath, sendStatus, sendTargets, sendTooLarge } from "../src/machineUtilities.ts";
+import { destLabel, displayPath, formatBytes, portLabel, receivedNotice, relayedPreviewPath, sendStatus, sendTargets, sendTooLarge } from "../src/machineUtilities.ts";
 
 test("bytes read the way a file manager says them", () => {
   assert.equal(formatBytes(0), "0 B");
@@ -95,4 +95,12 @@ test("the clipboard goes to and from machines that answer", async () => {
   assert.equal(clipboardTooLarge("é".repeat(600 * 1024)), true);
   assert.equal(clipboardSentNotice("vps", { stored: "system", bytes: 2048 }).description, "2 KiB");
   assert.match(clipboardSentNotice("vps", { stored: "buffer", bytes: 5 }).description, /10 minutes/);
+});
+
+test("a Windows path loses the extended-length prefix the daemon spells it with", () => {
+  assert.equal(displayPath("\\\\?\\C:\\Users\\me\\Downloads"), "C:\\Users\\me\\Downloads");
+  assert.equal(displayPath("\\\\?\\UNC\\host\\share\\a"), "\\\\host\\share\\a");
+  assert.equal(displayPath("/home/me/a.txt"), "/home/me/a.txt");
+  assert.equal(receivedNotice({ transfer_id: "t", from_machine: "m", from_name: "Mac", name: "a", files: 1, bytes: 2048, dest_path: "\\\\?\\C:\\x\\a", at: "" }).description, "2 KiB · C:\\x\\a");
+  assert.equal(sendStatus({ state: "delivered", result: { dest_path: "\\\\?\\C:\\x" } }, "PC").text, "Sent to PC · C:\\x");
 });

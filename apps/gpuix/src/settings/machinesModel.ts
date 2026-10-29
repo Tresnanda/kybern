@@ -1,8 +1,8 @@
 // What a machine card says (Settings → Machines, design §5.2), from the machine set's row, the member card the network
 // reported and the machine's own `machines.info`. Pure, so the words are tested without a window.
-import { shortMachineName } from '../../../../packages/kybern-client/src/forkMachine.ts'
+import { looksGeneratedName, shortMachineName } from '../../../../packages/kybern-client/src/forkMachine.ts'
 import { harnessChips, machineSpecs, osKind, type HarnessChip, type MachineSpecs, type OsKind } from '../../../../packages/kybern-client/src/machineSpecs.ts'
-import type { MachineCard, MachineId, MachineInfo, NetworkUpdateAllResult, OutboxItem, OutboxKind } from '../../../../packages/kybern-client/src/types.ts'
+import type { DoctorReport, MachineCard, MachineId, MachineInfo, NetworkUpdateAllResult, OutboxItem, OutboxKind } from '../../../../packages/kybern-client/src/types.ts'
 import type { MachineRow } from '../machines/index.ts'
 import { statusText, statusTone, type Tone } from '../machines/format.ts'
 
@@ -142,4 +142,43 @@ export function outboxRows(items: readonly OutboxItem[], names: ReadonlyMap<Mach
         : `Did not reach ${target}${item.last_error ? `: ${item.last_error}` : ''}`
       return { id: item.id, title: OUTBOX_KIND[item.kind] ?? item.kind, detail, canRetry: item.state === 'failed' || item.state === 'expired', canCancel: item.state !== 'sending' }
     })
+}
+
+// ---- "Name your machines" ----
+
+/** Members whose name looks made up by a host or an installer (`srv1544252`, `VM-3-60-ubuntu`): the ones worth renaming. */
+export function unnamedMachines(cards: readonly Pick<MachineCardModel, 'name' | 'member' | 'canRename'>[]): typeof cards {
+  return cards.filter((card) => card.member && card.canRename && looksGeneratedName(card.name))
+}
+
+// ---- "Run check": the result list ----
+
+export interface DoctorRow {
+  id: string
+  tone: 'good' | 'warn' | 'bad'
+  title: string
+  /** What to do next, in the daemon's words; empty for a passing check. */
+  next: string
+}
+
+/** Failures first, then warnings, then what passed; each keeps the daemon's order. A per-machine check says which machine. */
+export function doctorRows(report: DoctorReport, names: ReadonlyMap<MachineId, string>): DoctorRow[] {
+  const rank = { fail: 0, warn: 1, pass: 2 } as const
+  const rows = report.checks.map((check, index) => ({
+    index,
+    rank: rank[check.status] ?? 2,
+    row: {
+      id: `${check.id}:${check.machine_id ?? ''}:${index}`,
+      tone: check.status === 'pass' ? 'good' as const : check.status === 'warn' ? 'warn' as const : 'bad' as const,
+      title: check.machine_id && names.get(check.machine_id) && !check.title.includes(names.get(check.machine_id)!) ? `${names.get(check.machine_id)}: ${check.title}` : check.title,
+      next: check.status === 'pass' ? '' : check.next_step ?? '',
+    },
+  }))
+  return rows.sort((a, b) => a.rank - b.rank || a.index - b.index).map((item) => item.row)
+}
+
+/** "All 9 checks passed" or "2 of 9 checks need a look". */
+export function doctorSummary(report: DoctorReport): string {
+  const bad = report.checks.filter((check) => check.status !== 'pass').length
+  return bad ? `${bad} of ${report.checks.length} ${report.checks.length === 1 ? 'check needs' : 'checks need'} a look` : `All ${report.checks.length} ${report.checks.length === 1 ? 'check' : 'checks'} passed`
 }

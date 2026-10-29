@@ -35,3 +35,19 @@ export function markNoticeShown(dir: string) {
     renameSync(temp, file)
   } catch { /* a read-only config folder only means it is said again next time */ }
 }
+
+/** "Name your machines" in Settings → Machines is a one-time hint: dismissing it is remembered the same way. */
+export const NAMES_HINT_FILE = 'machine-names-hint.json'
+export function namesHintDismissed(dir: string): boolean {
+  try { return (JSON.parse(readFileSync(path.join(dir, NAMES_HINT_FILE), 'utf8')) as { dismissed?: boolean }).dismissed === true } catch { return false }
+}
+export function dismissNamesHint(dir: string) {
+  const file = path.join(dir, NAMES_HINT_FILE)
+  if (!writeAllowed(file)) return
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    const temp = `${file}.${process.pid}.tmp`
+    writeFileSync(temp, JSON.stringify({ dismissed: true, at: new Date().toISOString() }), { mode: 0o600 })
+    renameSync(temp, file)
+  } catch { /* the hint comes back next time */ }
+}

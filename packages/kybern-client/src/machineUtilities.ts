@@ -67,6 +67,11 @@ export interface SendStatus {
   fraction?: number;
 }
 
+/** A path as people read it: the daemon spells a Windows path with its extended-length prefix (a drive path starting `\\?\`, a share starting `\\?\UNC\`), which nobody says. */
+export function displayPath(path: string): string {
+  return path.replace(/^\\\\\?\\UNC\\/i, "\\\\").replace(/^\\\\\?\\/, "");
+}
+
 /** How a `files_push` outbox item reads, with the latest progress notification for it when there is one. */
 export function sendStatus(item: Pick<OutboxItem, "state" | "last_error" | "result">, machineName: string, progress?: FilesProgress | null): SendStatus {
   switch (item.state) {
@@ -81,7 +86,7 @@ export function sendStatus(item: Pick<OutboxItem, "state" | "last_error" | "resu
     }
     case "delivered": {
       const path = (item.result as { dest_path?: string } | null | undefined)?.dest_path;
-      return { phase: "sent", text: path ? `Sent to ${machineName} · ${path}` : `Sent to ${machineName}` };
+      return { phase: "sent", text: path ? `Sent to ${machineName} · ${displayPath(path)}` : `Sent to ${machineName}` };
     }
     case "cancelled":
       return { phase: "cancelled", text: `Cancelled · not sent to ${machineName}` };
@@ -103,7 +108,7 @@ export function receivedNotice(received: FilesReceived): ReceivedNotice {
   const what = received.files === 1 ? received.name : `${received.name} (${received.files} files)`;
   return {
     title: `${what} from ${received.from_name}`,
-    description: `${formatBytes(received.bytes)} · ${received.dest_path}`,
+    description: `${formatBytes(received.bytes)} · ${displayPath(received.dest_path)}`,
     path: received.dest_path,
   };
 }

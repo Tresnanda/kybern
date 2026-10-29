@@ -3,7 +3,7 @@
 // code; Update all machines. Everything goes through the `network.*` RPCs of the machine the user is at, which any member
 // answers for the rest. Words come from `machinesModel.ts`.
 import { useEffect, useMemo, useState } from 'react'
-import type { FoundMachine, NetworkUpdateAllResult, OutboxItem } from '../../../../packages/kybern-client/src/types.ts'
+import type { DoctorReport, FoundMachine, NetworkUpdateAllResult, OutboxItem } from '../../../../packages/kybern-client/src/types.ts'
 import { Dialog, Tip } from '../nav/overlay.tsx'
 import { N } from '../nav/glyphs.ts'
 import { errorText } from '../nav/actions.ts'
@@ -27,7 +27,9 @@ import { Switch } from '../kit/Switch.tsx'
 import { readClipboardAuto, setClipboardAuto } from '../machines/clipboard.ts'
 import { S } from './glyphs.ts'
 import { Row, Section } from './controls.tsx'
-import { buildCards, outboxRows, updateResultRows, updateSummary, type MachineCardModel } from './machinesModel.ts'
+import { buildCards, doctorRows, doctorSummary, outboxRows, unnamedMachines, updateResultRows, updateSummary, type MachineCardModel } from './machinesModel.ts'
+import { dismissNamesHint, namesHintDismissed } from '../machines/notice.ts'
+import { configDir } from '../environments/registry.ts'
 
 export function Machines() {
   const t = useTheme()
@@ -43,6 +45,7 @@ export function Machines() {
   const found = (status?.found ?? []).filter((item) => !item.machine_id || !machines.some((machine) => machine.machineId === item.machine_id))
   const waiting = status?.outbox.queued ?? 0
   return <>
+    <NameYourMachines cards={cards} />
     <Section title="Machines" accessory={machines.length > 1 ? <Label color={t.textSecondary} size={13} lineHeight={19.5}>{footerText(machines, waiting)}</Label> : undefined}>
       {cards.map((card) => <MachineCardRow key={card.machineId} card={card} busy={net.busy === card.machineId} onRemove={() => setRemoving(card)} />)}
       {machines.length < 2 && <Row title="" description={<Hint>This is your only machine. Machines on your Tailscale network show up below, and you can add one with a code.</Hint>} />}
@@ -56,6 +59,7 @@ export function Machines() {
     {!net.unavailable && status && <Section title="Your network">
       <Row title="Let your machines find each other" description="Machines signed in to the same Tailscale account join without a code. Turn this off to leave the network and keep your machines separate."><Switch aria-label="Use your network" testId="machines-enabled" checked={status.enabled} disabled={net.busy === 'enabled'} onCheckedChange={(enabled) => void setNetworkEnabled(enabled).catch((e) => toast.error('Unable to change the network', { description: errorText(e) }))} /></Row>
       <Row title="Check the network" description="Looks at Tailscale, the pairing and each machine, and says what to fix."><Button testId="machines-doctor" busy={net.busy === 'doctor'} onClick={() => void runDoctor()}>Run check</Button></Row>
+      {net.doctor && <DoctorResults report={net.doctor} names={new Map(cards.map((card) => [card.machineId, card.name]))} />}
     </Section>}
     {net.error && !net.unavailable && <Section title="Something went wrong"><Row title="" description={<ErrorText>{net.error}</ErrorText>} /></Section>}
     {removing && <RemoveDialog card={removing} others={cards.filter((card) => card.machineId !== removing.machineId && card.member)} onClose={() => setRemoving(null)} />}
@@ -77,13 +81,51 @@ function ClipboardAuto({ machineId }: { machineId: string | undefined }) {
   </Section>
 }
 
-async function runDoctor() {
-  try {
-    const report = await doctor()
-    const bad = report.checks.filter((check) => check.status !== 'pass')
-    if (!bad.length) toast.success('Your network looks healthy', { description: `${report.checks.length} checks passed` })
-    else toast.info(`${bad.length} ${bad.length === 1 ? 'thing needs' : 'things need'} a look`, { description: bad.slice(0, 3).map((check) => check.next_step || check.title).join(' · ') })
-  } catch (e) { toast.error('Unable to check the network', { description: errorText(e) }) }
+function runDoctor() {
+  // The result stays on the page (`DoctorResults`); a toast only says when the check itself could not run.
+  return doctor().catch((e) => { toast.error('Unable to check the network', { description: errorText(e) }) })
+}
+
+/** What "Run check" found: failures first, each with what to do next. It stays until the next check. */
+function DoctorResults({ report, names }: { report: DoctorReport; names: ReadonlyMap<string, string> }) {
+  const t = useTheme()
+  const rows = doctorRows(report, names)
+  return <div testId="machines-doctor-results" style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 18, paddingRight: 18, paddingTop: 12, paddingBottom: 14 }}>
+    <Label color={t.textSecondary} size={13} lineHeight={20} weight={500}>{doctorSummary(report)}</Label>
+    {rows.map((row) => <div key={row.id} testId={`doctor-${row.id}`} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', height: 20 }}><StatusDot tone={row.tone === 'bad' ? 'bad' : row.tone === 'warn' ? 'warn' : 'good'} /></div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0, flexGrow: 1 }}>
+        <Label color={t.text} size={13} lineHeight={20}>{row.title}</Label>
+        {row.next && <Label color={t.textSecondary} size={13} lineHeight={20}>{row.next}</Label>}
+      </div>
+    </div>)}
+  </div>
+}
+
+/** Hosts name machines `srv1544252` and `VM-3-60-ubuntu`, and nobody can tell them apart: a one-time hint with a field per such machine. */
+function NameYourMachines({ cards }: { cards: MachineCardModel[] }) {
+  const t = useTheme()
+  const [dismissed, setDismissed] = useState(() => namesHintDismissed(configDir()))
+  const [names, setNames] = useState<Record<string, string>>({})
+  const [busy, setBusy] = useState<string | null>(null)
+  const unnamed = unnamedMachines(cards) as MachineCardModel[]
+  if (dismissed || unnamed.length === 0) return null
+  const save = (card: MachineCardModel) => {
+    const next = (names[card.machineId] ?? '').trim()
+    if (!next) return
+    setBusy(card.machineId)
+    void renameMachine(card.machineId, next).catch((e) => toast.error('Unable to rename', { description: errorText(e) })).finally(() => setBusy(null))
+  }
+  const dismiss = () => { dismissNamesHint(configDir()); setDismissed(true) }
+  return <Section title="Name your machines" accessory={<Button testId="machines-names-dismiss" size="sm" variant="secondary" onClick={dismiss}>Not now</Button>}>
+    <Row title="" description={<Hint>{unnamed.length === 1 ? 'This machine has a name its host made up.' : 'These machines have names their hosts made up.'} A name you recognise shows on its badge, in the thread header and in the machine picker.</Hint>} />
+    {unnamed.map((card) => <div key={card.machineId} testId={`name-hint-${card.machineId}`} style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 18, paddingRight: 18, paddingTop: 6, paddingBottom: 10 }}>
+      <MachineBadge glyph={card.row.glyph} size={18} />
+      <Label color={t.textSecondary} size={13} lineHeight={20} truncate style={{ width: 150, flexShrink: 0 }}>{card.name}</Label>
+      <TextField testId={`name-hint-input-${card.machineId}`} label={`New name for ${card.name}`} width="100%" shell={{ flexGrow: 1 }} value={names[card.machineId] ?? ''} onChange={(value) => setNames({ ...names, [card.machineId]: value })} placeholder="For example, Studio PC" onSubmit={() => save(card)} />
+      <Button testId={`name-hint-save-${card.machineId}`} variant="primary" size="sm" busy={busy === card.machineId} disabled={!(names[card.machineId] ?? '').trim()} onClick={() => save(card)}>Rename</Button>
+    </div>)}
+  </Section>
 }
 
 export function MachineCardRow({ card, busy, onRemove }: { card: MachineCardModel; busy: boolean; onRemove: () => void }) {

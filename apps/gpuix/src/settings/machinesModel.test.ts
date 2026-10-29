@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { MachineCard } from '../../../../packages/kybern-client/src/types.ts'
 import type { MachineRow } from '../machines/index.ts'
-import { buildCards, isBehind, osName, outboxRows, updateResultRows, updateSummary } from './machinesModel.ts'
+import { buildCards, doctorRows, doctorSummary, isBehind, osName, outboxRows, unnamedMachines, updateResultRows, updateSummary } from './machinesModel.ts'
 
 const row = (over: Partial<MachineRow> & { machineId: string; name: string }): MachineRow => ({ status: 'online', offline: false, isLocal: false, glyph: { letter: over.name[0]!, hue: 10 }, showGlyph: true, member: true, paused: false, ...over })
 const member = (over: Partial<MachineCard> & { machine_id: string; name: string }): MachineCard => ({ os: 'linux', status: 'online', ...over })
@@ -81,4 +81,26 @@ test('the outbox lists only work that has not arrived, with the actions that mak
   expect(rows[2]!.detail).toBe('Not delivered to satyamas in time')
   expect(rows[3]).toMatchObject({ detail: 'Sending to satyamas', canCancel: false })
   expect(outboxRows([item({ id: '7', kind: 'move' })], names)[0]).toMatchObject({ title: 'Move of a thread', detail: 'Waiting for satyamas' })
+})
+
+test('only machines with a host-made name get the "Name your machines" hint', () => {
+  const card = (name: string, over: object = {}) => ({ name, member: true, canRename: true, ...over })
+  const cards = [card('srv1544252'), card('VM-3-60-ubuntu'), card('os-kdi'), card('ip-10-0-0-1', { member: false }), card('3f9a1c07', { canRename: false })]
+  expect(unnamedMachines(cards).map((c) => c.name)).toEqual(['srv1544252', 'VM-3-60-ubuntu'])
+})
+
+test('a check run lists failures first with what to do, and says which machine a check is about', () => {
+  const report = { generated_at: '2026-10-29T12:00:00Z', checks: [
+    { id: 'tailscale.running', status: 'pass' as const, title: 'Tailscale is running' },
+    { id: 'peer.reach', status: 'fail' as const, title: 'Cannot reach', next_step: 'Start Kybern on it', machine_id: 'pc' },
+    { id: 'version', status: 'warn' as const, title: 'A machine is behind', next_step: 'Update all machines' },
+  ] }
+  const rows = doctorRows(report, new Map([['pc', 'satyamas']]))
+  expect(rows.map((r) => [r.tone, r.title, r.next])).toEqual([
+    ['bad', 'satyamas: Cannot reach', 'Start Kybern on it'],
+    ['warn', 'A machine is behind', 'Update all machines'],
+    ['good', 'Tailscale is running', ''],
+  ])
+  expect(doctorSummary(report)).toBe('2 of 3 checks need a look')
+  expect(doctorSummary({ ...report, checks: [report.checks[0]!] })).toBe('All 1 check passed')
 })

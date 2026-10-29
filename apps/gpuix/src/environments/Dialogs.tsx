@@ -4,6 +4,7 @@ import type { Exposure, PairingCreateResult, TokenInfo } from '../../../../packa
 import { Dialog } from '../nav/overlay.tsx'
 import { Switch } from '../kit/Switch.tsx'
 import { activeEnvironment } from '../shell/environment.ts'
+import { machineHub } from '../machines/index.ts'
 import { getClient } from '../state.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { DURATION, EASE } from '../motion/tokens.ts'
@@ -219,7 +220,7 @@ function DeviceAccess({ close }: { close: () => void }) {
   // `bg-muted/40`, measured in the desktop frontend: one level over the popover in dark (46 → 47), 1.6% black in light (255 → 251).
   const card = { display: 'flex', borderRadius: 14, backgroundColor: t.variant === 'dark' ? ink(t, .005) : ink(t, .016) }
   return <>
-    <DialogHeader title="Pair a device" description={`Give another device access to ${activeEnvironment().name}.`} onClose={close} />
+    <DialogHeader title="Pair a device" description={`Give another device access to ${activeEnvironment().name}${machineHub().machineCount > 1 ? ' and, through it, your other machines' : ''}.`} onClose={close} />
     <DialogBody testId="environment-access-body" scroll>
       {exposure && <div style={{ ...card, alignItems: 'center', gap: 16, paddingLeft: 16, paddingRight: 16, paddingTop: 12, paddingBottom: 12 }}><div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexGrow: 1, minWidth: 0 }}><Label color={t.text} size={14} lineHeight={21} weight={500}>Reachable over Tailscale</Label><Hint>{exposure.tailscale_ip ? exposure.tailscale ? `Devices on your tailnet connect to ${exposure.tailscale_ip} directly.` : 'Lets phones and other devices on your tailnet pair without a tunnel.' : 'Tailscale is not running on this machine.'}</Hint></div><Switch testId="environment-tailscale" aria-label="Reachable over Tailscale" checked={exposure.tailscale} disabled={exposureBusy || (!exposure.tailscale && !exposure.tailscale_ip)} onCheckedChange={tailscale => { setExposureBusy(true); setError(''); void (async () => { try { const value = await client.call('access.exposure.set', { tailscale }); setExposure(value); if (invitation) await create(value) } catch (e) { setError(errorText(e)) } finally { setExposureBusy(false) } })() }} /></div>}
       {invitation && <>

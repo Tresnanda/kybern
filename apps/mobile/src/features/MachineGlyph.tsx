@@ -24,7 +24,7 @@ export function MachineGlyph({ glyph, size = 16 }: { glyph: Glyph; size?: number
         backgroundColor: `hsl(${glyph.hue}, 48%, ${dark ? 40 : 44}%)`,
       }}
     >
-      <T variant="caption" allowFontScaling={false} style={{ color: "#FFFFFF", fontWeight: "700", fontSize: Math.round(size * 0.62), lineHeight: Math.round(size * 0.8) }}>
+      <T variant="caption" allowFontScaling={false} style={{ color: "#FFFFFF", fontWeight: "700", fontSize: Math.round(size * (glyph.letter.length > 1 ? 0.46 : 0.62)), lineHeight: Math.round(size * 0.8) }}>
         {glyph.letter}
       </T>
     </View>
