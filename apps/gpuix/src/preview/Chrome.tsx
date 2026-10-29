@@ -99,7 +99,7 @@ export function PreviewChrome({ threadId }: { threadId: string }) {
         {entry.target?.kind === 'file' && entry.target.in_project && <MenuItem id="explorer" testId="preview-explorer" label="Show file in Explorer" icon={N.folder} disabled={!thread?.project_id || !canShowFileInExplorer(threadId, thread.project_id, explorerPath)} onSelect={showExplorer} />}
         <MenuSeparator />
         {entry.kind === 'server' && environment.local && <MenuItem id="proxy" testId="preview-proxy" checked={!!entry.proxy} label="Preview through Kybern" onSelect={() => setPreviewProxy(threadId, !entry.proxy)} />}
-        {environment.local && forwardFrom.length > 0 && <MenuItem id="forward" testId="preview-forward-open" label="Forward a port from…" icon={N.globe} onSelect={() => setPreview(threadId, { forwardOpen: true })} />}
+        {environment.local && forwardFrom.length > 0 && <MenuItem id="forward" testId="preview-forward-open" label="Forward a port from…" icon={N.globe} onSelect={() => setPreview(threadId, { forwardOpen: true, forwardMachine: entry.machine?.id })} />}
         {ports.forwards.length > 0 && <>
           <MenuLabel>Forwarded ports</MenuLabel>
           {ports.forwards.map(f => <MenuItem key={f.id} id={`port-${f.id}`} testId={`preview-port-${f.local_port}`} label={portLabel(f)} icon={N.x} onSelect={() => void ports.stop(f.id).catch(e => toast.error('Could not stop the forward', { description: errorText(e) }))} />)}

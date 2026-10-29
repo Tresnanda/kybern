@@ -8,6 +8,7 @@ import { PickerChip } from '../kit/PickerChip.tsx'
 import { Menu, MenuItem } from '../nav/overlay.tsx'
 import { N } from '../nav/glyphs.ts'
 import { useTheme } from '../ui.tsx'
+import { shortMachineName } from '../../../../packages/kybern-client/src/forkMachine.ts'
 import { parseForwardTarget } from './remote.ts'
 import { openRemoteServer, previewState, setPreview, usePreview } from './store.ts'
 
@@ -25,11 +26,11 @@ export function PortForwardBar({ threadId }: { threadId: string }) {
     if (!chosen || previewState(threadId).busy) return
     const target = parseForwardTarget(port)
     if ('error' in target) { setPreview(threadId, { error: target.error }); return }
-    void openRemoteServer(threadId, { id: chosen.machineId, name: chosen.name, port: target.port, path: target.path }).then((opened) => { if (opened) close() })
+    void openRemoteServer(threadId, { id: chosen.machineId, name: shortMachineName(chosen.name), port: target.port, path: target.path }).then((opened) => { if (opened) close() })
   }
   return <div testId="preview-forward-bar" style={{ display: 'flex', alignItems: 'center', height: 36, gap: 6, paddingLeft: 8, paddingRight: 6, flexShrink: 0, borderBottomWidth: 1, borderColor: t.surfaceDivider }}>
-    {chosen ? <Menu testId="preview-forward-machine" trigger={(open) => <PickerChip size="sm" open={open}>{chosen.name}</PickerChip>}>
-      {sources.map((machine) => <MenuItem key={machine.machineId} id={machine.machineId} label={machine.name} checked={machine.machineId === chosen.machineId} onSelect={() => setPreview(threadId, { forwardMachine: machine.machineId })} />)}
+    {chosen ? <Menu testId="preview-forward-machine" trigger={(open) => <PickerChip size="sm" open={open}>{shortMachineName(chosen.name)}</PickerChip>}>
+      {sources.map((machine) => <MenuItem key={machine.machineId} id={machine.machineId} label={shortMachineName(machine.name)} checked={machine.machineId === chosen.machineId} onSelect={() => setPreview(threadId, { forwardMachine: machine.machineId })} />)}
     </Menu> : <Button size="sm" variant="ghost" disabled>No other machine is online</Button>}
     <TextField testId="preview-forward-port" label="Port" value={port} placeholder="Port, such as 5173" onChange={setPort} onSubmit={submit} shell={{ flexGrow: 1, minWidth: 0 }} />
     <Button size="sm" variant="primary" testId="preview-forward-go" disabled={!chosen || !port.trim() || s.busy} onClick={submit}>Forward</Button>
