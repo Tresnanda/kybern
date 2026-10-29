@@ -39,11 +39,12 @@ export function LaunchMember({ block, thread, task, delegated = false, grouped =
   const pending = useNav(s => delegated && id ? s.pending[id]?.own : undefined)
   const state = pending && (known.phase === 'working' || known.phase === 'waiting') ? { phase: 'waiting' as const, word: pending === 'question' ? 'Needs input' : 'Needs approval' } : known
   const info = thread?.delegation
-  // The machine shows as its badge on the avatar, the model by its catalog name ("Sonnet 5.5"), and the workspace only when the child has
-  // its own worktree: a shared checkout is the default and says nothing. Subagent rows keep their type label.
+  // The machine shows as its badge on the avatar and by name after the model ("Sonnet 5.5 · on Windows PC"), and the workspace only when
+  // the child has its own worktree: a shared checkout is the default and says nothing. Subagent rows keep their type label.
   const machineId = delegated ? thread?.machineId ?? result?.machine?.id : undefined
+  const machineName = machineId ? machineHub().set.displayName(machineId) : undefined
   const meta = delegated
-    ? delegationMeta(thread?.model ?? result?.model ?? input?.model, provider, catalog, info ? workspaceLabel(info) : (result?.workspace ?? input?.workspace) === 'worktree' ? 'Own worktree' : null)
+    ? delegationMeta(thread?.model ?? result?.model ?? input?.model, provider, catalog, info ? workspaceLabel(info) : (result?.workspace ?? input?.workspace) === 'worktree' ? 'Own worktree' : null, machineName)
     : [subagentTypeLabel(thread?.subagent?.agent_type), thread?.model ?? result?.model ?? input?.model].filter(Boolean).join(' · ')
   const start = thread?.subagent ? subagentSpan(thread) : thread ? { startedAt: childStartedAt(thread), endedAt: childEndedAt(thread) } : state.phase === 'working' ? { startedAt: Date.parse(block.at), endedAt: null } : null
   const override = info?.default_override ? defaultOverrideText(info.default_override, catalog) : null
@@ -58,7 +59,6 @@ export function LaunchMember({ block, thread, task, delegated = false, grouped =
     </div>
     return <PinRow id={thread?.machineId ? undefined : id} title={title}>{thread?.subagent ? <SubagentHover thread={thread}>{row}</SubagentHover> : row}</PinRow>
   }
-  const machineName = machineId ? machineHub().set.displayName(machineId) : undefined
   // Avatar · title over meta · then one trailing column pinned to the card's edge: the status word over the elapsed clock, both
   // right-aligned, so every row's status lines up under the group's chevron however long its title is.
   const row = (pin: ReactNode) => <div testId={`launch-member-${block.id}`} role="button" aria-label={`${id ? 'Open ' : ''}${title}${machineName ? ` on ${machineName}` : ''}, ${state.word}`} tabIndex={0} onClick={id ? () => openThread(id, thread?.machineId) : undefined} style={{ display: 'flex', gap: 10, alignItems: 'center', flexGrow: 1, minHeight: 44, paddingLeft: 6, paddingRight: 5, borderRadius: 8, minWidth: 0, cursor: id ? 'pointer' : 'default', hover: { backgroundColor: t.buttonSecondaryHover } }}>

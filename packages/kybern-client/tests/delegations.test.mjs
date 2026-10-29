@@ -326,4 +326,6 @@ test("delegationMeta names the model as the picker does and drops the default wo
   assert.equal(delegationMeta("gpt-6.1-sol", "codex", providers, "Own worktree"), "GPT-6.1 Sol · Own worktree");
   assert.equal(delegationMeta("mystery-1", "pi", providers, null), "mystery-1");
   assert.equal(delegationMeta(null, "codex", providers, "Worktree kept"), "Worktree kept");
+  assert.equal(delegationMeta("sonnet", "claude-code", providers, "Shared checkout", "Windows PC"), "Sonnet 5.5 · on Windows PC");
+  assert.equal(delegationMeta("gpt-6.1-sol", "codex", providers, "Own worktree", "instabox"), "GPT-6.1 Sol · on instabox · Own worktree");
 });
