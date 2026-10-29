@@ -337,21 +337,26 @@ fn restrict_key_to_current_user(path: &Path) {
     }
 }
 
-/// Replace the file's inherited ACL with one that admits only the current user.
+/// Replace the file's inherited ACL with one that admits only the current user, named by its SID: the
+/// `USERDOMAIN\\USERNAME` spelling is the workgroup, not the machine, in an SSH or service session.
 #[cfg(windows)]
 pub(crate) fn restrict_to_current_user(path: &Path) -> std::io::Result<()> {
     use kybern_protocol::process::NoWindow;
 
-    let user = std::env::var("USERNAME").map_err(|_| std::io::Error::other("USERNAME is not set"))?;
-    let account = match std::env::var("USERDOMAIN") {
-        Ok(domain) if !domain.is_empty() => format!("{domain}\\{user}"),
-        _ => user,
-    };
+    // `"machine\\user","S-1-5-21-…"`
+    let whoami = std::process::Command::new("whoami").no_window().args(["/user", "/fo", "csv", "/nh"]).output()?;
+    let sid = String::from_utf8_lossy(&whoami.stdout)
+        .trim()
+        .rsplit(',')
+        .next()
+        .map(|sid| sid.trim().trim_matches('"').to_string())
+        .filter(|sid| sid.starts_with("S-1-"))
+        .ok_or_else(|| std::io::Error::other("whoami did not say who the current user is"))?;
     let output = std::process::Command::new("icacls")
         .no_window()
         .arg(path)
         .args(["/inheritance:r", "/grant:r"])
-        .arg(format!("{account}:F"))
+        .arg(format!("*{sid}:F"))
         .output()?;
     if output.status.success() {
         Ok(())
