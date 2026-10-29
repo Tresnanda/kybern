@@ -352,12 +352,7 @@ async fn dispatch_part_5(state: &AppState, _ctx: &ConnectionCtx, method: &str, s
             } else if !p.include_subagents {
                 // A child another machine delegated here has no parent on this machine, so it lists as a thread of its own;
                 // clients nest it under the thread that started it (`Thread::origin`).
-                threads.retain(|thread| {
-                    (thread.subagent.is_none() && thread.delegation.is_none())
-                        || (thread.subagent.is_none()
-                            && thread.parent_thread_id.is_none()
-                            && thread.origin.as_ref().is_some_and(|origin| origin.thread_id.is_some()))
-                });
+                threads.retain(|thread| (thread.subagent.is_none() && thread.delegation.is_none()) || thread.is_remote_child());
             }
             // The hidden threads that record other machines' tool calls are opt-in too.
             if !p.include_inbound {

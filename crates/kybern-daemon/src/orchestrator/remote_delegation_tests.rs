@@ -268,6 +268,7 @@ async fn a_delegation_runs_on_the_other_machine_and_its_result_arrives_once() {
     assert!(matches!(origin.kind, OriginKind::Delegation { .. }));
     assert_eq!(child.permission_mode, PermissionMode::Supervised);
     assert_eq!(child.parent_thread_id, None, "nothing on b is its parent");
+    assert!(child.is_remote_child(), "b lists it as a thread of its own, under the thread on a that delegated it");
     let agent = p.agent("Fix the flaky clock test").await;
     assert!(agent.transcript().await.contains("different machine"), "the brief says it runs elsewhere");
 

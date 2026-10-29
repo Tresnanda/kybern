@@ -742,6 +742,17 @@ pub enum ThreadMessagePurpose {
     Warning,
 }
 
+impl Thread {
+    /// A delegated child another machine started here. Nothing on this machine is its parent, so `threads.list` lists it as a
+    /// thread of its own (`origin` names the thread on the other machine that delegated it) and clients nest it under that thread.
+    pub fn is_remote_child(&self) -> bool {
+        self.delegation.is_some()
+            && self.subagent.is_none()
+            && self.parent_thread_id.is_none()
+            && self.origin.as_ref().is_some_and(|origin| origin.thread_id.is_some())
+    }
+}
+
 impl ThreadMessagePurpose {
     pub fn as_str(self) -> &'static str {
         match self {
