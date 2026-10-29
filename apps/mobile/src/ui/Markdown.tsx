@@ -4,7 +4,7 @@ import { router } from "expo-router";
 import { chatLink, kybernRef, splitKybernRefs, type KybernRef } from "../../../../packages/kybern-client/src/chatLinks";
 import { ChatFileContext } from "../state/chatFileContext";
 import { Alert } from "./Alert";
-import { Image, Linking, ScrollView, Text, View, type ViewStyle } from "react-native";
+import { Linking, ScrollView, Text, View, type ViewStyle } from "react-native";
 import { httpBase } from "../state/protocol";
 import { activeEnvironment } from "../state/runtime";
 import { Lightbox } from "../features/Lightbox";
@@ -24,6 +24,7 @@ import { MermaidBlock } from "./Mermaid";
 import { taskLinkId } from "../state/tasksModel";
 import { TaskRef } from "./TaskRef";
 import { NoteRef } from "./NoteRef";
+import { AuthedImage } from "./AuthedImage";
 
 export function openLink(url: string) {
   if (/^(https?:|mailto:)/i.test(url))
@@ -360,7 +361,7 @@ function MarkdownPicture({ image }: { image: MarkdownImage }) {
   return (
     <View style={{ gap: 6 }}>
       <Tap label={`${label}. Open full screen`} onPress={() => setOpen(true)} feedback="none">
-        <Image
+        <AuthedImage
           key={attempt}
           source={source}
           accessibilityIgnoresInvertColors

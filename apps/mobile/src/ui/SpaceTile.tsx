@@ -3,11 +3,12 @@
 // (or a sparkle when the name has none). An image shows the swatch while it loads.
 import { spaceInitials } from "../../../../packages/kybern-client/src/spaces";
 import type { Space, SpaceColor } from "../state/protocol";
-import { Image, StyleSheet, View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import { activeEnvironment, assetUrl } from "../state/runtime";
 import type { IconName } from "./icons";
 import { Icon, T } from "./primitives";
 import { radius, useTheme } from "./theme";
+import { AuthedImage } from "./AuthedImage";
 
 /** The desktop's curated logo slugs (`SPACE_ICONS`) as app icons; unknown slugs draw initials. */
 const SPACE_GLYPHS: Record<string, IconName> = {
@@ -89,7 +90,7 @@ export function SpaceTile({
     >
       {image ? (
         <>
-          <Image source={image} resizeMode="cover" style={{ width: size, height: size }} />
+          <AuthedImage source={image} resizeMode="cover" style={{ width: size, height: size }} />
           {/* A hairline keeps a light image from melting into a light surface. */}
           <View
             pointerEvents="none"

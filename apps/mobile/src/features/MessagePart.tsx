@@ -1,4 +1,4 @@
-import { Image, View } from "react-native";
+import { View } from "react-native";
 import { router } from "expo-router";
 import { httpBase, type ContentPart } from "../state/protocol";
 import { activeEnvironment } from "../state/runtime";
@@ -7,6 +7,7 @@ import { radius } from "../ui/theme";
 import { AgentResultsList, ThreadMessageCard } from "./OrchestrationParts";
 import { SystemRowLine } from "./CoordinatorCards";
 import { threadReferenceLabel } from "../../../../packages/kybern-client/src/threadReferences";
+import { AuthedImage } from "../ui/AuthedImage";
 
 export function imageSource(part: ContentPart, localUri?: string) {
   if (localUri) return { uri: localUri };
@@ -37,7 +38,7 @@ export function MessagePart({
   const source = imageSource(part, localUri);
   if (source)
     return (
-      <Image
+      <AuthedImage
         fadeDuration={0}
         source={source}
         accessibilityLabel="Attached image"
