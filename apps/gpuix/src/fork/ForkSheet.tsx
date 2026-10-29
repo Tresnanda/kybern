@@ -6,6 +6,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { forkParams, forkQueuedText, forkSheetDefaults, type ForkInstance } from '../../../../packages/kybern-client/src/forkMachine.ts'
 import { moveParams, moveQueuedText } from '../../../../packages/kybern-client/src/continueOn.ts'
+import { agentLine, agentUsable, defaultAgent, noAgentWarning } from '../../../../packages/kybern-client/src/machineAgents.ts'
+import type { ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
+import { useMachineAgents } from '../machines/agents.ts'
 import { Dialog } from '../nav/overlay.tsx'
 import { errorText } from '../nav/actions.ts'
 import { callThread, useApp } from '../state.ts'
@@ -38,15 +41,24 @@ export function ForkSheet({ threadId, machineId, close, mode = 'fork' }: { threa
     return () => { live = false }
   }, [threadId, machineId])
   const target = targets.find((item) => item.machineId === state.machine) ?? targets[0]
+  // The new thread starts a turn at once, so it needs an agent that can sign in there: the thread's own when it can, else one that is.
+  const agents = useMachineAgents(target?.machineId)
+  const [picked, setPicked] = useState<{ machine: string; kind: ProviderKind } | null>(null)
+  const preferred = thread?.provider.kind
+  const fallback = agents ? defaultAgent(agents, preferred) : null
+  const agent = picked && picked.machine === target?.machineId ? picked.kind : fallback
+  const warning = agents && target ? noAgentWarning(agents, target.machineName) : null
+  const [anyway, setAnyway] = useState(false)
+  const blocked = !!warning && !anyway && target?.online !== false
   const fork = async () => {
-    if (!target || generated === null) return
+    if (!target || generated === null || blocked) return
     setBusy(true); setError('')
     try {
       if (move) {
-        const result = await callThread(threadId, 'threads.move_to_machine', moveParams(threadId, target, state, generated), machineId)
+        const result = await callThread(threadId, 'threads.move_to_machine', moveParams(threadId, target, state, generated, null, agent), machineId)
         toast.success(moveQueuedText(result.target_name, target.online), { description: target.online ? 'This thread becomes read-only with a link once it arrives.' : 'It waits in the outbox; nothing is locked meanwhile.' })
       } else {
-        const result = await callThread(threadId, 'threads.fork_to_machine', forkParams(threadId, target, state, generated), machineId)
+        const result = await callThread(threadId, 'threads.fork_to_machine', forkParams(threadId, target, state, generated, null, agent), machineId)
         toast.success(forkQueuedText(result.target_name, target.online), { description: target.online ? 'A notice in this thread links to the new one when it arrives.' : 'It waits in the outbox.' })
       }
       close()
@@ -61,6 +73,14 @@ export function ForkSheet({ threadId, machineId, close, mode = 'fork' }: { threa
         : <Field label="Machine"><div role="radiogroup" aria-label="Machine" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           {targets.map((item) => <RadioRow key={item.machineId} testId={`fork-machine-${item.machineId}`} checked={target?.machineId === item.machineId} title={item.machineName} description={item.online ? undefined : move ? 'Offline. The move waits until it is back; this thread works as usual meanwhile.' : 'Offline. The fork waits until it is back.'} disabled={busy} onSelect={() => setState({ ...state, machine: item.machineId })} />)}
         </div></Field>}
+      {target && agents && agents.length > 0 && <Field label="Agent"><div role="radiogroup" aria-label="Agent" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {agents.map((item) => <RadioRow key={item.kind} testId={`fork-agent-${item.kind}`} checked={agent === item.kind} title={agentLine(item, target.machineName)} disabled={busy || !item.available} onSelect={() => setPicked({ machine: target.machineId, kind: item.kind })} />)}
+        {warning ? <ErrorText testId="fork-agent-warning">{warning}</ErrorText> : agent && agents.find((item) => item.kind === agent && !agentUsable(item)) ? <Hint>That agent cannot start here until it is signed in.</Hint> : <Hint>The new thread starts a turn with this agent as soon as it arrives.</Hint>}
+        {warning && target.online && <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4 }}>
+          <Checkbox testId="fork-agent-anyway" aria-label="Start anyway" checked={anyway} disabled={busy} onCheckedChange={setAnyway} />
+          <Label color={t.text} size={14} lineHeight={22}>Start anyway; I will sign in there</Label>
+        </div>}
+      </div></Field>}
       <Field label="Hand-off note">
         <TextArea testId="fork-note" label="Hand-off note" value={generated === null ? '' : state.note} placeholder={generated === null ? 'Writing the hand-off note…' : 'What the other machine needs to pick this up'} disabled={generated === null || busy} minRows={8} maxRows={14} onChange={(note) => setState((current) => ({ ...current, note }))} />
         {noteError ? <ErrorText testId="fork-note-error">{noteError}</ErrorText> : <Hint>{move ? 'The continuing thread starts with this note and a link back to this one. Edit it before you move.' : 'The new thread starts with this note and a link back to this one. Edit it before you fork.'}</Hint>}
@@ -76,7 +96,7 @@ export function ForkSheet({ threadId, machineId, close, mode = 'fork' }: { threa
     </DialogBody>
     <DialogFooter>
       <Button size="lg" variant="secondary" disabled={busy} onClick={dismiss}>Cancel</Button>
-      <Button size="lg" variant="primary" testId={move ? 'move-confirm' : 'fork-confirm'} busy={busy} disabled={!target || generated === null} onClick={() => void fork()}>{move ? 'Continue there' : 'Fork'}</Button>
+      <Button size="lg" variant="primary" testId={move ? 'move-confirm' : 'fork-confirm'} busy={busy} disabled={!target || generated === null || blocked} onClick={() => void fork()}>{move ? 'Continue there' : 'Fork'}</Button>
     </DialogFooter>
   </Dialog>
 }

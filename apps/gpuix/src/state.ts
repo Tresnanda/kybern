@@ -26,6 +26,8 @@ import { isChildThread, isInboundThread } from '../../../packages/kybern-client/
 import type { MachineId, MethodName, ParamsOf, Project, ResultOf, Thread, ThreadActivitySummary, ThreadEvent, ThreadId } from '../../../packages/kybern-client/src/types.ts'
 import { mergeIntoCurrent } from '../../../packages/kybern-client/src/newChat.ts'
 import { newChats } from './composer/newChats.ts'
+import { getNav, setNav } from './nav/store.ts'
+import { withRemoteChildren } from './nav/remoteChildren.ts'
 
 export interface AppState {
   status: ConnectionStatus
@@ -437,11 +439,25 @@ const sameProjects = (current: readonly Project[], local: readonly Project[]) =>
 
 /** The local lists plus what the other machines list. With one machine this is the local lists, untouched. */
 function composeLists(localProjects: readonly Project[], localThreads: readonly StateThread[]): { projects: Project[]; threads: StateThread[] } {
+  const composed = composeListsOnly(localProjects, localThreads)
+  applyRemoteChildren(composed.children)
+  return composed
+}
+
+/** Delegated children other machines run for threads listed here; they go to `nav.children`, not the thread list. */
+let remoteChildIds: ReadonlySet<string> = new Set()
+function applyRemoteChildren(children: readonly StateThread[]) {
+  const next = withRemoteChildren(getNav().children, children, remoteChildIds)
+  remoteChildIds = next.ids
+  if (next.children) setNav({ children: next.children })
+}
+
+function composeListsOnly(localProjects: readonly Project[], localThreads: readonly StateThread[]): { projects: Project[]; threads: StateThread[]; children: StateThread[] } {
   const hub = machineHub()
   // Until the daemon answered and the machine is known, nothing can be told apart from another machine's: the local lists stand alone.
   if (hub.machineCount <= 1 || !hub.localMachineId) {
     if (foreignIds.size) { foreignIds = new Set(); machinesOf = new Map() }
-    return { projects: localProjects as Project[], threads: localThreads as StateThread[] }
+    return { projects: localProjects as Project[], threads: localThreads as StateThread[], children: [] }
   }
   hub.ingestPrimaryNow()
   const merged = merger.merge({ view: hub.view(), localProjects, spaceOfForeign: foreignSpace })
@@ -450,6 +466,7 @@ function composeLists(localProjects: readonly Project[], localThreads: readonly 
   return {
     projects: merged.projects,
     threads: merged.threads.length ? [...localThreads, ...merged.threads].sort(byPinnedThenNewest) : localThreads as StateThread[],
+    children: merged.children,
   }
 }
 

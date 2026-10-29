@@ -3,7 +3,7 @@
 // (`threads.move_to_machine`, `threads.move_abandon`); the thread's `moved` record is the truth about the lease.
 import { threadLinkHref } from "./forkMachine.ts";
 import type { ForkSheetState } from "./forkMachine.ts";
-import type { MachineId, OutboxItem, PermissionMode, Thread, ThreadId, ThreadsMoveToMachineParams } from "./types.ts";
+import type { MachineId, OutboxItem, PermissionMode, ProviderKind, Thread, ThreadId, ThreadsMoveToMachineParams } from "./types.ts";
 
 export interface MoveBanner {
   /** `departing` holds the lease (the thread takes no messages); `departed` is final. */
@@ -53,6 +53,7 @@ export function moveParams(
   state: Pick<ForkSheetState, "note">,
   generated: string,
   permissionMode?: PermissionMode | null,
+  provider?: ProviderKind | null,
 ): ThreadsMoveToMachineParams {
   const note = state.note.trim();
   return {
@@ -61,6 +62,7 @@ export function moveParams(
     project: target.projectId,
     ...(note && note !== generated.trim() ? { handoff_note: note } : {}),
     ...(permissionMode ? { permission_mode: permissionMode } : {}),
+    ...(provider ? { provider } : {}),
   };
 }
 

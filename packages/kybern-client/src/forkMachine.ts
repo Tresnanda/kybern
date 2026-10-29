@@ -3,7 +3,7 @@
 // resolve. The daemon does the work (`threads.fork_note`, `threads.fork_to_machine`); the target gets a new
 // thread whose `origin.kind` is `fork`, and the source gets a notice when the fork arrives, waits or fails.
 import { groupRepoKeys } from "./machineMerge.ts";
-import type { JsonValue, MachineId, Origin, PermissionMode, Project, ThreadId, ThreadsForkToMachineParams } from "./types.ts";
+import type { JsonValue, MachineId, Origin, PermissionMode, Project, ProviderKind, ThreadId, ThreadsForkToMachineParams } from "./types.ts";
 
 // ---- links ----
 
@@ -185,6 +185,7 @@ export function forkParams(
   state: Pick<ForkSheetState, "note" | "pushOrigin">,
   generated: string,
   permissionMode?: PermissionMode | null,
+  provider?: ProviderKind | null,
 ): ThreadsForkToMachineParams {
   const note = state.note.trim();
   return {
@@ -195,6 +196,8 @@ export function forkParams(
     // An empty or unchanged note lets the daemon build its own.
     ...(note && note !== generated.trim() ? { handoff_note: note } : {}),
     ...(permissionMode ? { permission_mode: permissionMode } : {}),
+    // The agent the user picked (or the one signed in there): the target uses it as named instead of swapping it.
+    ...(provider ? { provider } : {}),
   };
 }
 

@@ -1,0 +1,68 @@
+// Which agents a machine can run for you (ADE-86 dogfood). A harness that exists on a machine may still be signed out
+// there, and a fork, a move or a new thread that starts a turn with it fails at once with "Failed to authenticate".
+// Only Claude, Codex and Cursor have an account to sign in to; omp, OpenCode and pi use whatever provider keys the
+// machine has, so they are never reported as signed out (see `signedInOf`).
+import { PROVIDER_DISPLAY_NAME } from "./types.ts";
+import type { AccountSummary, HarnessSummary, ProviderKind } from "./types.ts";
+
+/** The harnesses with an account. */
+export const SIGN_IN_KINDS: readonly ProviderKind[] = ["claude-code", "codex", "cursor"];
+
+export const hasSignIn = (kind: ProviderKind): boolean => SIGN_IN_KINDS.includes(kind);
+
+export interface MachineAgent {
+  kind: ProviderKind;
+  label: string;
+  /** The harness is installed there. */
+  available: boolean;
+  /** `false` only when the machine said so for a harness with an account; `null` when unknown or not applicable. */
+  signedIn: boolean | null;
+}
+
+/** Whether the default account of `kind` is signed in, from a machine's `providers.accounts.list`; null when it cannot be told. */
+export function signedInOf(kind: ProviderKind, accounts: readonly AccountSummary[] | null | undefined): boolean | null {
+  if (!hasSignIn(kind) || !accounts) return null;
+  const own = accounts.filter((account) => account.provider.kind === kind);
+  if (own.length === 0) return null;
+  if (own.some((account) => account.status === "signed_in")) return true;
+  return own.some((account) => account.status === "signed_out" || account.status === "needs_sign_in") ? false : null;
+}
+
+/** The machine's harnesses (`machines.info`) with their sign-in state, installed ones first and in the harness order. */
+export function machineAgents(harnesses: readonly HarnessSummary[], accounts: readonly AccountSummary[] | null | undefined): MachineAgent[] {
+  return harnesses
+    .map((harness) => ({
+      kind: harness.kind,
+      label: PROVIDER_DISPLAY_NAME[harness.kind] ?? harness.kind,
+      available: harness.available,
+      signedIn: hasSignIn(harness.kind) ? (signedInOf(harness.kind, accounts) ?? harness.signed_in ?? null) : null,
+    }))
+    .sort((a, b) => Number(b.available) - Number(a.available));
+}
+
+/** Can start a turn: installed and not known to be signed out. */
+export const agentUsable = (agent: MachineAgent): boolean => agent.available && agent.signedIn !== false;
+
+/**
+ * The agent a new thread on this machine should use: `preferred` (the agent of the thread being forked or the one chosen
+ * in the composer) when it can run, else the first one signed in, else the first one that can run. Null when none can.
+ */
+export function defaultAgent(agents: readonly MachineAgent[], preferred?: ProviderKind | null): ProviderKind | null {
+  const preferredAgent = preferred ? agents.find((agent) => agent.kind === preferred) : undefined;
+  if (preferredAgent && agentUsable(preferredAgent)) return preferredAgent.kind;
+  return (agents.find((agent) => agent.available && agent.signedIn === true) ?? agents.find(agentUsable))?.kind ?? null;
+}
+
+/** "Claude Code · signed out on instabox", or the plain name when nothing is wrong. */
+export function agentLine(agent: MachineAgent, machineName: string): string {
+  if (!agent.available) return `${agent.label} · not installed on ${machineName}`;
+  return agent.signedIn === false ? `${agent.label} · signed out on ${machineName}` : agent.label;
+}
+
+/** The sheet's warning when no agent of the machine can run a turn; null when one can. */
+export function noAgentWarning(agents: readonly MachineAgent[], machineName: string): string | null {
+  if (defaultAgent(agents) !== null) return null;
+  return agents.some((agent) => agent.available)
+    ? `No agent is signed in on ${machineName}. Sign in there (Settings → Machines) before the first message, or it will fail.`
+    : `No agent is installed on ${machineName}.`;
+}

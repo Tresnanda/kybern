@@ -110,6 +110,8 @@ export interface DelegateResult {
   result: string | null;
   error: string | null;
   waitTimedOut: boolean;
+  /** The machine a remote delegation runs on; null for a child on this machine. */
+  machine: { id: string; name: string } | null;
 }
 
 const STATUSES: readonly string[] = ["running", "completed", "failed", "cancelled", "interrupted"];
@@ -118,7 +120,9 @@ export function parseDelegateResult(output: JsonValue | null | undefined): Deleg
   return findToolJson(output, (value) => {
     const taskId = str(value.task_id);
     const threadId = str(value.thread_id);
-    if (!taskId || !threadId) return null;
+    const machine = record(value.machine);
+    // A child on another machine has no thread id until that machine acknowledges the task.
+    if (!taskId || (!threadId && !machine)) return null;
     const status = str(value.status);
     return {
       taskId,
@@ -132,6 +136,7 @@ export function parseDelegateResult(output: JsonValue | null | undefined): Deleg
       result: optional(value.result),
       error: optional(value.error),
       waitTimedOut: value.wait_timed_out === true,
+      machine: machine && str(machine.id) ? { id: str(machine.id), name: str(machine.name) || str(machine.id) } : null,
     };
   });
 }

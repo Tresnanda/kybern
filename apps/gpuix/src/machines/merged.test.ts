@@ -89,3 +89,12 @@ test('pinned threads sort first, then the newest', () => {
   const rows = [thread('a', 'p', '2026-10-01T00:00:00Z'), thread('b', 'p', '2026-10-03T00:00:00Z'), thread('c', 'p', '2026-10-02T00:00:00Z', { pinned: true })]
   expect([...rows].sort(byPinnedThenNewest).map((t) => t.id)).toEqual(['c', 'b', 'a'])
 })
+
+test('a child another machine runs for a local thread is a child of that thread, not a thread of its own', () => {
+  const localProjects = [project('p-mac', 'kybern', 'r1')]
+  const remoteProjects = [project('p-vps', 'kybern', 'r1')]
+  const child = thread('c1', 'p-vps', '2026-10-03T00:00:00Z', { delegation: { status: 'running', started_at: '2026-10-03T00:00:00Z' }, origin: { machine_id: 'mac', thread_id: 'parent-1' } })
+  const lists = new ListMerger().merge({ view: view({ projects: localProjects, threads: [thread('parent-1', 'p-mac', '2026-10-02T00:00:00Z')] }, { projects: remoteProjects, threads: [child, thread('t2', 'p-vps', '2026-10-03T00:00:00Z')] }), localProjects, spaceOfForeign: space })
+  expect(lists.threads.map((t) => t.id)).toEqual(['t2'])
+  expect(lists.children.map((t) => [t.id, t.parent_thread_id, t.project_id, t.machineId])).toEqual([['c1', 'parent-1', 'p-mac', 'vps']])
+})

@@ -23,7 +23,7 @@ import { fadeTo } from '../shell/motion.ts'
 import { usePaneAccess } from '../state.ts'
 import { openTabFromPane } from '../tabs/open.ts'
 const providers: readonly string[] = ['claude-code', 'codex', 'cursor', 'opencode', 'pi', 'omp']
-export function LaunchMember({ block, thread, task, delegated = false, grouped = false }: { block: Block; thread?: Thread; task?: RuntimeTask; delegated?: boolean; grouped?: boolean }) {
+export function LaunchMember({ block, thread, task, delegated = false, grouped = false }: { block: Block; thread?: Thread & { machineId?: string }; task?: RuntimeTask; delegated?: boolean; grouped?: boolean }) {
   const t = useTheme(), catalog = useNav(s => s.providers)
   const call = block.kind === 'tool' ? block : null
   const input = call && delegated ? parseDelegateInput(call.call.input) : null
@@ -37,11 +37,11 @@ export function LaunchMember({ block, thread, task, delegated = false, grouped =
   const pending = useNav(s => delegated && id ? s.pending[id]?.own : undefined)
   const state = pending && (known.phase === 'working' || known.phase === 'waiting') ? { phase: 'waiting' as const, word: pending === 'question' ? 'Needs input' : 'Needs approval' } : known
   const info = thread?.delegation
-  const meta = [delegated ? delegationRoleLabel(info?.role ?? input?.role ?? 'general') : subagentTypeLabel(thread?.subagent?.agent_type), thread?.model ?? result?.model ?? input?.model, delegated ? info ? workspaceLabel(info) : (result?.workspace ?? input?.workspace) === 'worktree' ? 'Own worktree' : 'Shared checkout' : null].filter(Boolean).join(' · ')
+  const meta = [delegated ? delegationRoleLabel(info?.role ?? input?.role ?? 'general') : subagentTypeLabel(thread?.subagent?.agent_type), thread?.model ?? result?.model ?? input?.model, delegated ? info ? workspaceLabel(info) : (result?.workspace ?? input?.workspace) === 'worktree' ? 'Own worktree' : 'Shared checkout' : null, delegated && result?.machine ? `on ${result.machine.name}` : null].filter(Boolean).join(' · ')
   const start = thread?.subagent ? subagentSpan(thread) : thread ? { startedAt: childStartedAt(thread), endedAt: childEndedAt(thread) } : state.phase === 'working' ? { startedAt: Date.parse(block.at), endedAt: null } : null
   const override = info?.default_override ? defaultOverrideText(info.default_override, catalog) : null
   if (!delegated) {
-    const row = <div testId={`launch-member-${block.id}`} role="button" aria-label={`${id ? 'Open ' : ''}${title}, ${state.word}`} tabIndex={0} onClick={id ? () => openThread(id) : undefined} onKeyDown={event => { if (id && (event.key === 'enter' || event.key === 'space')) openThread(id) }} style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, height: grouped ? 32 : 40, paddingLeft: 6, paddingRight: 6, borderRadius: 8, minWidth: 0, cursor: id ? 'pointer' : 'default', hover: { backgroundColor: t.buttonSecondaryHover } }}>
+    const row = <div testId={`launch-member-${block.id}`} role="button" aria-label={`${id ? 'Open ' : ''}${title}, ${state.word}`} tabIndex={0} onClick={id ? () => openThread(id, thread?.machineId) : undefined} onKeyDown={event => { if (id && (event.key === 'enter' || event.key === 'space')) openThread(id, thread?.machineId) }} style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, height: grouped ? 32 : 40, paddingLeft: 6, paddingRight: 6, borderRadius: 8, minWidth: 0, cursor: id ? 'pointer' : 'default', hover: { backgroundColor: t.buttonSecondaryHover } }}>
       {grouped ? <SwapOnChange kind="icon" active={state.phase} style={{ width: 14, height: 14, flexShrink: 0 }}>{state.phase === 'working' ? <MatrixLoader /> : <Icon source={state.phase === 'failed' ? T.alert : T.check} size={14} color={muted(t)} />}</SwapOnChange> : <ProviderMark kind={provider} size={12} />}
       <Label color={t.text} size={13} truncate style={{ maxWidth: '55%', flexShrink: 0 }}>{title}</Label>
       <Label color={muted(t)} size={12} truncate style={{ flexGrow: 1, minWidth: 0 }}>{grouped ? [subagentTypeLabel(thread?.subagent?.agent_type), thread?.subagent?.detail].filter(Boolean).join(' · ') : meta}</Label>
@@ -49,16 +49,16 @@ export function LaunchMember({ block, thread, task, delegated = false, grouped =
       {!grouped && state.phase === 'working' && <MatrixLoader />}
       <Icon source={T.chevronRight} size={14} color={muted(t)} />
     </div>
-    return <PinRow id={id} title={title}>{thread?.subagent ? <SubagentHover thread={thread}>{row}</SubagentHover> : row}</PinRow>
+    return <PinRow id={thread?.machineId ? undefined : id} title={title}>{thread?.subagent ? <SubagentHover thread={thread}>{row}</SubagentHover> : row}</PinRow>
   }
-  const row = <div testId={`launch-member-${block.id}`} role="button" aria-label={`${id ? 'Open ' : ''}${title}, ${state.word}`} tabIndex={0} onClick={id ? () => openThread(id) : undefined} style={{ display: 'flex', gap: 8, alignItems: 'center', minHeight: 40, paddingLeft: 6, paddingRight: 6, borderRadius: 8, minWidth: 0, cursor: id ? 'pointer' : 'default', hover: { backgroundColor: t.buttonSecondaryHover } }}>
+  const row = <div testId={`launch-member-${block.id}`} role="button" aria-label={`${id ? 'Open ' : ''}${title}, ${state.word}`} tabIndex={0} onClick={id ? () => openThread(id, thread?.machineId) : undefined} style={{ display: 'flex', gap: 8, alignItems: 'center', minHeight: 40, paddingLeft: 6, paddingRight: 6, borderRadius: 8, minWidth: 0, cursor: id ? 'pointer' : 'default', hover: { backgroundColor: t.buttonSecondaryHover } }}>
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 12, backgroundColor: t.buttonSecondary, flexShrink: 0 }}><ProviderMark kind={provider} size={12} /></div>
     <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={t.text} size={13} truncate>{title}</Label>{meta && <Label color={muted(t)} size={11} truncate>{meta}</Label>}</div>
     {!!info?.conflicts?.length && <Label color={t.red} size={11}>{conflictsLabel(info.conflicts.length)}</Label>}
     {start?.startedAt && <Elapsed startedAt={start.startedAt} endedAt={start.endedAt} />}
     <SwapOnChange active={state.word} style={{ flexShrink: 0 }}><Label color={state.phase === 'failed' ? t.red : muted(t)} size={12}>{state.word}</Label></SwapOnChange>{id && <Icon source={T.chevronRight} size={14} color={muted(t)} />}
   </div>
-  return <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}><PinRow id={id} title={title}>{thread?.subagent ? <SubagentHover thread={thread}>{row}</SubagentHover> : row}</PinRow>{override && <Para color={muted(t)} size={11} style={{ paddingLeft: 38, paddingBottom: 6 }}>{override}</Para>}</div>
+  return <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}><PinRow id={thread?.machineId ? undefined : id} title={title}>{thread?.subagent ? <SubagentHover thread={thread}>{row}</SubagentHover> : row}</PinRow>{override && <Para color={muted(t)} size={11} style={{ paddingLeft: 38, paddingBottom: 6 }}>{override}</Para>}</div>
 }
 
 /**

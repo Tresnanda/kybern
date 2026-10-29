@@ -13,7 +13,7 @@
 //
 // Remapped objects are memoized per source object, so a refresh that changed one
 // machine leaves every other row the same object.
-import { isChildThread, isInboundThread } from '../../../../packages/kybern-client/src/subagents.ts'
+import { isChildThread, isInboundThread, isRemoteChildThread } from '../../../../packages/kybern-client/src/subagents.ts'
 import type { MachineThread, MergedThread } from '../../../../packages/kybern-client/src/machineMerge.ts'
 import type { MergedView } from '../../../../packages/kybern-client/src/machines.ts'
 import { FREE_CHAT_PROJECT_ID, isFreeChatProject, type MachineId, type Project, type Thread } from '../../../../packages/kybern-client/src/types.ts'
@@ -33,6 +33,11 @@ export interface MergedLists {
   projects: Project[]
   /** Threads of other machines, ready to be listed with the local ones. */
   threads: StateThread[]
+  /**
+   * Delegated children other machines run for a thread, ready for `nav.children`: `parent_thread_id` names the thread that
+   * delegated them (their `origin`), so the transcript's launch card and the sidebar find them like a local child.
+   */
+  children: StateThread[]
   /** Machines that have a checkout of a listed project, by the listed project's id. */
   machinesOf: Map<string, MachineId[]>
 }
@@ -78,14 +83,16 @@ export class ListMerger {
     }
     projects.push(...remoteOnly)
     const threads: StateThread[] = []
+    const children: StateThread[] = []
     for (const merged of view.threads.all) {
       if (merged.machineId === local) continue
       const thread = merged.thread as MachineThread
       // The hidden threads that record another machine's tool calls are never listed, even from a cached copy of an older list.
-      if (isChildThread(thread) || isInboundThread(thread) || thread.status === 'archived') continue
-      threads.push(this.remap(merged, shown.get(merged.projectKey) ?? thread.project_id))
+      if (isInboundThread(thread) || thread.status === 'archived') continue
+      if (isRemoteChildThread(thread)) children.push(this.remap(merged, shown.get(merged.projectKey) ?? thread.project_id))
+      else if (!isChildThread(thread)) threads.push(this.remap(merged, shown.get(merged.projectKey) ?? thread.project_id))
     }
-    return { projects, threads, machinesOf }
+    return { projects, threads, children, machinesOf }
   }
 
   private remap(merged: MergedThread, projectId: string): StateThread {
@@ -97,6 +104,7 @@ export class ListMerger {
     const result: StateThread = {
       ...thread,
       project_id: projectId,
+      ...(isRemoteChildThread(thread) ? { parent_thread_id: thread.origin!.thread_id! } : {}),
       machineId: merged.machineId,
       ...(own ? { ownProjectId: own } : {}),
       ...(offline ? { offline: true } : {}),
