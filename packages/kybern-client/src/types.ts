@@ -2949,6 +2949,8 @@ export interface GitStatus {
   upstream?: string | null;
   remote_url?: string | null;
   pull_request?: PullRequest | null;
+  /** Why a folder that is a repository reads as not git, e.g. git refusing a folder another user owns. */
+  issue?: string | null;
   /** Group threads: one entry per member in project order, excluded ones too. The fields above are the primary's. */
   repos?: RepoGitStatus[];
 }

@@ -2290,6 +2290,10 @@ pub struct GitStatus {
     /// Open pull request for this branch, if `gh` knows one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_request: Option<PullRequest>,
+    /// Why a folder that is a repository is reported as `is_git: false`, for a person to act on
+    /// (git refuses a folder another user owns).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue: Option<String>,
     /// Group threads: one entry per member in project order, excluded members
     /// included (`included: false`). The fields above are the primary's.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

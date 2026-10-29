@@ -54,6 +54,13 @@ expression: schema_for!(GitStatus)
         }
       ]
     },
+    "issue": {
+      "description": "Why a folder that is a repository is reported as `is_git: false`, for a person to act on\n(git refuses a folder another user owns).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "repos": {
       "description": "Group threads: one entry per member in project order, excluded members\nincluded (`included: false`). The fields above are the primary's.",
       "type": "array",
@@ -335,6 +342,13 @@ expression: schema_for!(GitStatus)
             {
               "type": "null"
             }
+          ]
+        },
+        "issue": {
+          "description": "Why a folder that is a repository is reported as `is_git: false`, for a person to act on\n(git refuses a folder another user owns).",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "repos": {

@@ -5,7 +5,7 @@ use kybern_protocol::process::NoWindow;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
-use kybern_git::Repo;
+use kybern_git::{Repo, RepoState};
 use kybern_protocol::methods::*;
 use serde_json::Value;
 use tokio::process::Command;
@@ -77,9 +77,14 @@ pub async fn gh_available() -> bool {
 }
 
 pub async fn status(cwd: &Path) -> Result<GitStatus> {
-    if !Repo::is_repo(cwd).await {
+    let state = Repo::probe(cwd).await;
+    if state != RepoState::Repo {
         return Ok(GitStatus {
             is_git: false,
+            issue: match state {
+                RepoState::Unsafe(message) => Some(message),
+                _ => None,
+            },
             branch: None,
             dirty_files: 0,
             ahead: 0,
@@ -117,7 +122,7 @@ pub async fn status(cwd: &Path) -> Result<GitStatus> {
         }
         _ => None,
     };
-    Ok(GitStatus { is_git: true, branch, dirty_files, ahead, behind, upstream, remote_url, pull_request, repos: Vec::new() })
+    Ok(GitStatus { is_git: true, issue: None, branch, dirty_files, ahead, behind, upstream, remote_url, pull_request, repos: Vec::new() })
 }
 
 pub(crate) fn parse_pr(v: &Value) -> Option<PullRequest> {
