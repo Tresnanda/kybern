@@ -21,11 +21,13 @@ export function responseImages(value: unknown): ResponseImage[] {
     let source = ""
     if (o.type === "image" && typeof raw.data === "string" && MIME.test(mime)) source = `data:${mime};base64,${raw.data}`
     else if (MIME.test(mime) && typeof raw.url === "string") source = raw.url
+    // Claude's Read result repeats the picture as `file: { base64, type }`; the same bytes give the same source, so it is shown once.
+    else if (typeof raw.base64 === "string" && MIME.test(String(raw.type ?? ""))) source = `data:${raw.type};base64,${raw.base64}`
     else if (o.type === "image" && raw.type === "url" && typeof raw.url === "string") source = raw.url
     else if (o.type === "imageGeneration" && typeof o.result === "string") source = `data:image/${o.outputFormat === "jpeg" || o.outputFormat === "webp" ? o.outputFormat : "png"};base64,${o.result}`
     else if ((o.type === "imageView" || o.type === "imageGeneration") && typeof o.path === "string") source = o.path
     if (source && imageSource(source)) found.set(source, { source, label: String(o.filename ?? o.title ?? "Agent image") })
-    for (const [key, child] of Object.entries(o)) if (!["data", "result"].includes(key) || typeof child === "object") visit(child, depth + 1)
+    for (const [key, child] of Object.entries(o)) if (!["data", "result", "base64"].includes(key) || typeof child === "object") visit(child, depth + 1)
   }
   visit(value, 0)
   return [...found.values()]
@@ -34,8 +36,15 @@ export function responseImages(value: unknown): ResponseImage[] {
 /** JSON replacer: omit image bytes without cloning the whole result first. */
 export function imageSafeValue(this: unknown, key: string, child: unknown): unknown {
   const record = this as Record<string, unknown> | null
-  if (!Array.isArray(record) && typeof child === "string" && (child.startsWith("data:image/") || (key === "data" && (record?.type === "base64" || record?.type === "image")) || (key === "result" && record?.type === "imageGeneration"))) return "[Image shown above]"
+  if (!Array.isArray(record) && typeof child === "string" && isImageBytes(record, key, child)) return "[Image shown above]"
   return child
+}
+
+/** A string that is an image's bytes: a `data:` URL, base64 `data`, a generated image's `result`, or Claude's Read result
+ *  `file.base64` (`{ base64, type: "image/png" }`), which otherwise reached the text view as one line of base64 megabytes long. */
+function isImageBytes(record: Record<string, unknown> | null, key: string, child: string): boolean {
+  return child.startsWith("data:image/") || (key === "data" && (record?.type === "base64" || record?.type === "image")) || (key === "result" && record?.type === "imageGeneration")
+    || (key === "base64" && MIME.test(String(record?.type ?? "")))
 }
 
 /** Keep binary payloads out of the expandable text view; the gallery displays them. */
@@ -44,7 +53,7 @@ export function imageSafeOutput(value: unknown): unknown {
   if (!value || typeof value !== "object") return value
   const record = value as Record<string, unknown>
   return Object.fromEntries(Object.entries(record).map(([key, child]) => {
-    if (typeof child === "string" && (child.startsWith("data:image/") || (key === "data" && (record.type === "base64" || record.type === "image")) || (key === "result" && record.type === "imageGeneration"))) return [key, "[Image shown above]"]
+    if (typeof child === "string" && isImageBytes(record, key, child)) return [key, "[Image shown above]"]
     return [key, imageSafeOutput(child)]
   }))
 }

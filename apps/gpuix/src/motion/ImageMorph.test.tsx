@@ -10,7 +10,9 @@ const restoreKeys = setKeyPlatform('darwin')
 afterAll(() => restoreKeys())
 
 mock.module('../native/visibility.ts', () => ({ isWindowVisible: () => true, onWindowVisibility: () => () => {} }))
-mock.module('../native/local-build.ts', () => ({ PATCHED_NATIVE: true }))
+// Spread the real module: its other exports (BACKDROP_BLUR, …) are read by modules this file imports.
+const localBuild = await import('../native/local-build.ts')
+mock.module('../native/local-build.ts', () => ({ ...localBuild, PATCHED_NATIVE: true }))
 const { fallbackTo, ImageViewer, LANDED, lightboxArea, lightboxLayout, lightboxRect, morphFrom, onScreen, MORPH_OPEN, MORPH_CLOSE } = await import('./ImageMorph.tsx')
 const { ThemeProvider } = await import('../ui.tsx')
 const entry = createRequire(import.meta.url).resolve('@gpuix/react')
@@ -49,7 +51,7 @@ test('a thumbnail that left the screen gets a shrink and fade towards where it w
 })
 
 function harness() {
-  const custom = new Map<number, Record<string, any>>(), style = new Map<number, Record<string, any>>(), moves: string[] = []
+  const custom = new Map<number, Record<string, any>>(), style = new Map<number, Record<string, any>>(), moves: string[] = [], children = new Map<number, number[]>()
   let resized: ((error: Error | null, event: unknown) => void) | undefined
   const renderer = {
     applyBatch(json: string) {
@@ -57,6 +59,7 @@ function harness() {
         if (op === 'createElement') custom.set(id, {})
         else if (op === 'setCustomProp') custom.get(id)![a] = b
         else if (op === 'setStyle') style.set(id, a)
+        else if (op === 'appendChild') children.set(id, [...(children.get(id) ?? []), a])
       }
       return []
     },
@@ -73,7 +76,7 @@ function harness() {
   const id = (testId: string) => [...custom].find(([, props]) => props.testId === testId)![0]
   const props = (testId: string) => custom.get(id(testId))!
   const fire = (testId: string, payload: Record<string, unknown>) => flushSync(() => handleGpuixEvent({ elementId: id(testId), ...payload }, renderer))
-  return { root, render, id, props, fire, style, moves, resize: (event: unknown) => flushSync(() => resized!(null, event)), custom }
+  return { root, render, id, props, fire, style, moves, children, resize: (event: unknown) => flushSync(() => resized!(null, event)), custom }
 }
 
 test('a pointer open morphs from the thumbnail and a pointer close returns into where it is now', () => {
@@ -103,6 +106,17 @@ test('a pointer open morphs from the thumbnail and a pointer close returns into 
   expect(h.props('viewer-scrim').paintTransform.transition).toEqual(MORPH_CLOSE)
   h.fire('viewer-image', { eventType: 'motionComplete', motionGeneration: closing.generation })
   expect(closed).toEqual(['closed'])
+  h.root.unmount()
+})
+
+// The zoom room spans the whole area under the toolbar's top, so a toolbar laid before it sat under its backdrop and every
+// button press closed the preview. The toolbar is the later sibling: it paints over the image and takes the pointer first.
+test('the toolbar sits above the zoomable image, so its buttons get their clicks', () => {
+  const h = harness()
+  h.render(<ImageViewer testId="viewer" src={image} label="icon.png" from={null} source={() => null} onClose={() => {}} />)
+  const order = h.children.get(h.id('viewer'))!
+  expect(order.indexOf(h.id('viewer-bar'))).toBeGreaterThan(order.indexOf(h.id('viewer-image')))
+  expect(order.indexOf(h.id('viewer-image'))).toBeGreaterThan(order.indexOf(h.id('viewer-scrim')))
   h.root.unmount()
 })
 
