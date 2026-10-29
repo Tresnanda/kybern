@@ -91,7 +91,7 @@ export function RunComposer({ ids, onEmptyChange }: { ids: string[]; onEmptyChan
     setBranches(null)
     if (projectId && project?.is_git)
       void getClient()
-        ?.call('git.branches', { project_id: projectId })
+        ?.call('git.branches', { project_id: projectId, include_remote: true })
         .then((result) => {
           if (current) setBranches(result)
         })

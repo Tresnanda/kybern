@@ -334,6 +334,7 @@ async fn get_thread_image(
     Query(query): Query<ImageQuery>,
 ) -> Response {
     let origin = allowed_asset_origin(&headers);
+    let started = std::time::Instant::now();
     let response = async {
         let Some(raw) = bearer(&headers) else { return (StatusCode::UNAUTHORIZED, "missing token").into_response() };
         if !matches!(authenticate(&state.store, &raw), Ok(Some(p)) if p.has(kybern_protocol::Scope::OrchestrationRead)) {
@@ -402,6 +403,15 @@ async fn get_thread_image(
             .into_response()
     }
     .await;
+    // Clients only see "Image unavailable"; this says which answer they got and how long it took to make.
+    tracing::debug!(
+        target: "kybern::images",
+        thread = %id,
+        status = response.status().as_u16(),
+        preview = query.preview,
+        ms = started.elapsed().as_millis() as u64,
+        "thread image"
+    );
     with_asset_cors(response, origin)
 }
 

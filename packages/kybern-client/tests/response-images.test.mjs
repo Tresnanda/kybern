@@ -21,6 +21,18 @@ test("native tool image blocks survive nested harness payloads and deduplicate",
   assert.ok(safe.includes("/workspace/result.webp"))
 })
 
+test("Claude's Read result keeps its picture out of the text view and shows it once", () => {
+  // `tool_use_result` repeats the bytes as `file.base64`; the text view printed them as one line of base64.
+  const output = { content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: "YQ==" } }], structured: { type: "image", file: { base64: "YQ==", type: "image/png", originalSize: 1, dimensions: { originalWidth: 1 } } } }
+  assert.deepEqual(responseImages(output).map((image) => image.source), ["data:image/png;base64,YQ=="])
+  for (const text of [JSON.stringify(output, imageSafeValue), JSON.stringify(imageSafeOutput(output))]) {
+    assert.ok(!text.includes("YQ=="), text)
+    assert.ok(text.includes('"originalSize":1'))
+  }
+  // A `base64` field that is not an image's stays.
+  assert.ok(JSON.stringify({ base64: "Yg==", type: "text/plain" }, imageSafeValue).includes("Yg=="))
+})
+
 test("only supported local image links open a thread preview", () => {
   for (const source of ["/workspace/a.png", "artifacts/first%20pass.PNG", "file:///workspace/a%20b.webp", "./result.jpeg"]) assert.equal(localImageLink(source), true, source)
   for (const source of ["https://example.com/a.png", "javascript:alert(1).png", "data:text/html,a.png", "file://other/a.png", "//other/a.png", "page.html", "image.svg", "invalid%zz.png"]) assert.equal(localImageLink(source), false, source)

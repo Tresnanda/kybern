@@ -2,7 +2,7 @@ import * as Clipboard from "expo-clipboard";
 import { useViewability } from "@legendapp/list/react-native";
 import { router } from "expo-router";
 import { memo, useCallback, useMemo, useState } from "react";
-import { Image, Share, StyleSheet, View } from "react-native";
+import { Share, StyleSheet, View } from "react-native";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import { GROUP_COPY, outsideChangeText } from "../../../../packages/kybern-client/src/groups";
 import { coordinatorCardLine } from "../../../../packages/kybern-client/src/coordinatorCards";
@@ -46,6 +46,7 @@ import { SecretRequestLine } from "./SecretRequest";
 import { UserMessageBubble } from "./UserMessageBubble";
 import { InlineVisual } from "./Visual";
 import { AgentsGroupRow, ProcessesRow, TaskWorkRow, ToolWorkRow, WorkSummaryRow, orchestrationRowFor } from "./WorkRow";
+import { AuthedImage } from "../ui/AuthedImage";
 
 /** Quiet warning after a group worktree turn: a left-out repository's own checkout changed. Never reverted. */
 function OutsideChangeRow({ block, threadId }: { block: Extract<Block, { kind: "outside_repo_changed" }>; threadId: string }) {
@@ -340,7 +341,7 @@ function AgentImage({ block, threadId }: { block: Extract<Block, { kind: "image"
   return (
     <>
       <Tap label="Image from the agent. Open full screen" onPress={() => setOpen(true)} feedback="none">
-        <Image
+        <AuthedImage
           source={source}
           accessibilityIgnoresInvertColors
           style={{ width: "100%", height: 240, borderRadius: radius.md, backgroundColor: colors.card }}

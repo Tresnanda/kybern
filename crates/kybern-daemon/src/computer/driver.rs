@@ -335,9 +335,17 @@ impl DriverClient {
     /// under this client's name for it, and a session that has ended is
     /// revived or replaced once before the call is sent again. The driver
     /// rejects calls on an ended session before acting, so the retry cannot
-    /// run a step twice.
+    /// run a step twice. Calls without one use the connection's implicit
+    /// session, which the driver also ends after a while; `start_session`
+    /// without a name revives it.
     pub(crate) async fn call(&self, tool: &str, mut arguments: Value) -> Result<CallResult> {
         let Some(label) = arguments.get("session").and_then(Value::as_str).map(str::to_owned) else {
+            let result = self.call_raw(tool, arguments.clone()).await?;
+            if !session_ended(&result) {
+                return Ok(result);
+            }
+            let revived = self.call_raw("start_session", json!({})).await;
+            tracing::debug!(target: "kybern::computer", ok = revived.is_ok_and(|result| !result.is_error), "revived the implicit CuaDriver session");
             return self.call_raw(tool, arguments).await;
         };
         let (name, fresh) = self.session_name(&label).await;

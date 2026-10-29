@@ -98,7 +98,7 @@ fn group_branches_of_an_unknown_member_name_the_project() {
     let mut project = fixture.project.clone();
     project.kind = ProjectKind::Group;
     project.members = vec![ProjectMember { path: "api".into(), name: "api".into(), status: MemberStatus::Ok }];
-    let error = futures::executor::block_on(fixture.orchestrator.group_branches(&project, Some("web"))).unwrap_err();
+    let error = futures::executor::block_on(fixture.orchestrator.group_branches(&project, Some("web"), false, false)).unwrap_err();
     assert_eq!(error.to_string(), "web isn't a repository of fixture.");
 }
 

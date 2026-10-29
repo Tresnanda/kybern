@@ -291,8 +291,38 @@ impl Repo {
             .collect())
     }
 
-    /// Check out an existing local branch in this working tree.
+    /// Remote-tracking branches (`origin/feature`), most recently committed
+    /// first. Each remote's `HEAD` alias is left out.
+    pub async fn remote_branches(&self) -> Result<Vec<BranchRef>> {
+        let out =
+            self.git(&["for-each-ref", "--sort=-committerdate", "--format=%(refname)%09%(committerdate:unix)", "refs/remotes"]).await?;
+        Ok(out
+            .lines()
+            .filter_map(|line| {
+                let mut it = line.split('\t');
+                let name = it.next()?.trim().strip_prefix("refs/remotes/")?.to_string();
+                if name.is_empty() || name.ends_with("/HEAD") {
+                    return None;
+                }
+                let committed_at = it.next().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+                Some(BranchRef { name, upstream: None, committed_at })
+            })
+            .collect())
+    }
+
+    /// Fetch every remote and prune branches deleted there. Never prompts: a
+    /// remote that needs credentials fails instead.
+    pub async fn fetch_all(&self) -> Result<()> {
+        self.git_env(&["fetch", "--all", "--prune", "--quiet"], &[("GIT_TERMINAL_PROMPT", "0")]).await.map(|_| ())
+    }
+
+    /// Check out a branch in this working tree. A remote-tracking branch
+    /// (`origin/feature`) without a local one gets a local branch tracking it.
     pub async fn switch(&self, branch: &str) -> Result<()> {
+        if self.rev_parse(&format!("refs/heads/{branch}")).await.is_err() && self.rev_parse(&format!("refs/remotes/{branch}")).await.is_ok()
+        {
+            return self.git(&["switch", "--track", branch]).await.map(|_| ());
+        }
         self.git(&["switch", branch]).await.map(|_| ())
     }
 
@@ -1101,7 +1131,8 @@ impl Repo {
     /// Add a worktree on a new branch, forked from `start` (HEAD when `None`).
     pub async fn worktree_add(&self, path: &Path, branch: &str, start: Option<&str>) -> Result<()> {
         let p = path.to_string_lossy().to_string();
-        let mut args = vec!["worktree", "add", "-b", branch, &p];
+        // A remote-tracking start (`origin/feature`) must not become the new branch's upstream.
+        let mut args = vec!["worktree", "add", "--no-track", "-b", branch, &p];
         if let Some(start) = start {
             args.push(start);
         }
@@ -1544,6 +1575,35 @@ mod tests {
         assert!(repo.is_ancestor("does-not-exist", &head).await.is_err());
         assert_eq!(repo.diffstat(&base, &head).await.unwrap(), DiffStat { files: 2, additions: 3, deletions: 0 });
         assert_eq!(repo.diffstat(&head, &head).await.unwrap(), DiffStat::default());
+    }
+
+    #[tokio::test]
+    async fn fetch_lists_new_remote_branches_and_switch_tracks_them() {
+        let (upstream_dir, upstream) = init_repo().await;
+        std::fs::write(upstream_dir.path().join("a.txt"), "one\n").unwrap();
+        upstream.git(&["add", "."]).await.unwrap();
+        upstream.git(&["commit", "-q", "-m", "init"]).await.unwrap();
+        let clone_dir = tempfile::tempdir().unwrap();
+        let clone_path = clone_dir.path().join("clone");
+        upstream.git(&["clone", "-q", &upstream_dir.path().to_string_lossy(), &clone_path.to_string_lossy()]).await.unwrap();
+        let clone = Repo::new(&clone_path);
+        assert!(clone.remote_branches().await.unwrap().iter().all(|b| !b.name.ends_with("/HEAD")));
+
+        upstream.git(&["branch", "feature/new"]).await.unwrap();
+        assert!(clone.remote_branches().await.unwrap().iter().all(|b| b.name != "origin/feature/new"));
+        clone.fetch_all().await.unwrap();
+        assert!(clone.remote_branches().await.unwrap().iter().any(|b| b.name == "origin/feature/new"));
+
+        let tree = clone_dir.path().join("tree");
+        clone.worktree_add(&tree, "kybern/child", Some("origin/feature/new")).await.unwrap();
+        assert!(
+            Repo::new(&tree).git(&["rev-parse", "--abbrev-ref", "@{upstream}"]).await.is_err(),
+            "the worktree's branch has no upstream"
+        );
+
+        clone.switch("origin/feature/new").await.unwrap();
+        assert_eq!(clone.current_branch().await.as_deref(), Some("feature/new"));
+        assert_eq!(clone.git(&["rev-parse", "--abbrev-ref", "@{upstream}"]).await.unwrap(), "origin/feature/new");
     }
 
     #[tokio::test]

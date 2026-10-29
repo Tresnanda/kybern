@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.19.1
+
+<!-- kybern-release-title: Terminal, branches and images fixed -->
+<!-- kybern-release-summary: The terminal takes clicks, typing and drag selection reliably, the branch picker lists remote branches with search, and images in chats load on Android. -->
+
+- The terminal tab focuses on any click, so typing reaches the shell every time, and dragging selects across lines. Fast typing no longer arrives out of order or gets dropped.
+- The branch picker for a new chat lists remote branches, fetches new ones from the remote when it opens, and has a search field. Starting a chat on `origin/feature` in the checkout makes a local branch that tracks it.
+- Tree lines (tool groups, runs, subagents in the sidebar) show on 1x displays such as external monitors, where only the last corner used to appear.
+- In the image viewer, the zoom, copy, download and open buttons work instead of closing the image. Expanded Read results no longer show the image's base64 text, which made image-heavy threads slow.
+- A click anywhere on a search field focuses it, including its magnifier icon (the pull request list search).
+- Computer use recovers by itself when CuaDriver ends its connection's session, instead of failing until restarted and reporting missing permissions.
+
 ## 0.19.0
 
 <!-- kybern-release-title: A clearer pull request page -->

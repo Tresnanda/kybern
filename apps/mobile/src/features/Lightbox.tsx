@@ -1,7 +1,7 @@
 // A full-screen image viewer for attached and agent images: pinch to zoom (about the fingers),
 // drag when zoomed, double-tap to toggle 2.5×, flick down to close at 1×. Release carries the
 // finger's velocity; scale past the limits rubber-bands and recoils (liquid-gooey weight).
-import { Image, Modal, View, useWindowDimensions, type ImageSourcePropType } from "react-native";
+import { Modal, View, useWindowDimensions, type ImageSourcePropType } from "react-native";
 import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
 import Animated, {
   useAnimatedStyle,
@@ -14,6 +14,7 @@ import { scheduleOnRN } from "react-native-worklets";
 import { DURATION, RECOIL, SHEET, withMomentum } from "../components/liquid/motion";
 import { IconButton } from "../ui/primitives";
 import { useTheme } from "../ui/theme";
+import { AuthedImage } from "../ui/AuthedImage";
 
 const MAX_SCALE = 5;
 
@@ -92,7 +93,7 @@ export function Lightbox({
         <View style={{ flex: 1 }} accessibilityViewIsModal>
           <GestureDetector gesture={gestures}>
             <Animated.View style={[{ flex: 1 }, imageStyle]}>
-              <Image source={source} accessibilityLabel={label} resizeMode="contain" fadeDuration={0} style={{ flex: 1, width: "100%" }} />
+              <AuthedImage source={source} accessibilityLabel={label} resizeMode="contain" fadeDuration={0} style={{ flex: 1, width: "100%" }} />
             </Animated.View>
           </GestureDetector>
           <View style={{ position: "absolute", top: insets.top + 8, right: 16 }}>

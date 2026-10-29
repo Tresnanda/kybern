@@ -2291,6 +2291,12 @@ pub struct GitBranchesParams {
     /// Group projects: the member whose branches to list. Defaults to the primary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
+    /// Fetch every remote first (prunes deleted branches; never prompts for credentials).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fetch: bool,
+    /// Also list remote-tracking branches (`origin/feature`) that have no local branch of the same name.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub include_remote: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct BranchInfo {
@@ -2300,12 +2306,17 @@ pub struct BranchInfo {
     pub upstream: Option<String>,
     /// Committer time of the tip commit, unix seconds.
     pub committed_at: i64,
+    /// A remote-tracking branch (`name` is `origin/feature`). Starting a chat on it in the checkout makes a local
+    /// branch that tracks it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remote: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GitBranchesResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current: Option<String>,
-    /// Local branches, most recently committed first. Empty when the project is not a repository.
+    /// Local branches, most recently committed first, then the remote ones when asked for. Empty when the project is
+    /// not a repository.
     pub branches: Vec<BranchInfo>,
 }
 method!(GitBranches, "git.branches", Some(Scope::OrchestrationRead), GitBranchesParams, GitBranchesResult);

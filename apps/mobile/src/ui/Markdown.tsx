@@ -1,10 +1,10 @@
 import * as Clipboard from "expo-clipboard";
-import { createContext, memo, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, memo, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { router } from "expo-router";
 import { chatLink, kybernRef, splitKybernRefs, type KybernRef } from "../../../../packages/kybern-client/src/chatLinks";
 import { ChatFileContext } from "../state/chatFileContext";
 import { Alert } from "./Alert";
-import { Image, Linking, ScrollView, Text, View } from "react-native";
+import { Linking, ScrollView, Text, View, type ViewStyle } from "react-native";
 import { httpBase } from "../state/protocol";
 import { activeEnvironment } from "../state/runtime";
 import { Lightbox } from "../features/Lightbox";
@@ -24,6 +24,7 @@ import { MermaidBlock } from "./Mermaid";
 import { taskLinkId } from "../state/tasksModel";
 import { TaskRef } from "./TaskRef";
 import { NoteRef } from "./NoteRef";
+import { AuthedImage } from "./AuthedImage";
 
 export function openLink(url: string) {
   if (/^(https?:|mailto:)/i.test(url))
@@ -143,6 +144,23 @@ function Inline({ text, checklist }: { text: string; checklist?: boolean }) {
     </>
   );
 }
+const claimTouch = () => true;
+const keepTouch = () => false;
+/**
+ * The content of a sideways scroll inside a message. It takes the JS responder for touches that
+ * start on it and keeps it, so no ancestor gets it: an answer's long-press `Pressable` (Android)
+ * or the transcript list (iOS, when it scrolls under the finger). An ancestor responder blocks
+ * the drag: on Android its view intercepts the moves, and on iOS the scroll view may no longer
+ * cancel content touches, so it never starts. While the keyboard is up the scroll view captured
+ * the touch itself, which is why sideways scrolling only worked reliably then.
+ */
+function ScrollContent({ style, children }: { style?: ViewStyle; children: ReactNode }) {
+  return (
+    <View style={style} onStartShouldSetResponder={claimTouch} onResponderTerminationRequest={keepTouch}>
+      {children}
+    </View>
+  );
+}
 export const Code = memo(function Code({
   text,
   language = "",
@@ -177,35 +195,37 @@ export const Code = memo(function Code({
         horizontal
         contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 18 }}
       >
-        <Text
-          selectable
-          style={{
-            fontFamily: MONO,
-            fontSize: scaleFont(13, textScale),
-            lineHeight: scaleLine(21, textScale),
-            color: colors.ink,
-          }}
-        >
-          {diff
-            ? text.split("\n").map((line, i) => (
-                <Text
-                  key={i}
-                  style={{
-                    color: line.startsWith("+")
-                      ? colors.positive
-                      : line.startsWith("-")
-                        ? colors.negative
-                        : line.startsWith("@@")
-                          ? colors.accent
-                          : colors.ink,
-                  }}
-                >
-                  {line}
-                  {"\n"}
-                </Text>
-              ))
-            : text}
-        </Text>
+        <ScrollContent>
+          <Text
+            selectable
+            style={{
+              fontFamily: MONO,
+              fontSize: scaleFont(13, textScale),
+              lineHeight: scaleLine(21, textScale),
+              color: colors.ink,
+            }}
+          >
+            {diff
+              ? text.split("\n").map((line, i) => (
+                  <Text
+                    key={i}
+                    style={{
+                      color: line.startsWith("+")
+                        ? colors.positive
+                        : line.startsWith("-")
+                          ? colors.negative
+                          : line.startsWith("@@")
+                            ? colors.accent
+                            : colors.ink,
+                    }}
+                  >
+                    {line}
+                    {"\n"}
+                  </Text>
+                ))
+              : text}
+          </Text>
+        </ScrollContent>
       </ScrollView>
     </View>
   );
@@ -280,48 +300,81 @@ const imageAspects = new Map<string, number>();
 /** Taller images than this stop growing and show with side margins instead. */
 const TALLEST_ASPECT = 0.6;
 
+/** Seconds since a picture started loading; shown once it has taken this long, so a slow link is told apart from a stuck one. */
+const SLOW_LOAD_SECONDS = 3;
+
 function MarkdownPicture({ image }: { image: MarkdownImage }) {
   const { colors } = useTheme();
   const threadId = useContext(ChatFileContext)?.threadId;
   const source = useMemo(() => imageSource(image, threadId), [image.target, threadId]);
-  const [failed, setFailed] = useState(false);
+  // Why the last load failed, as the image loader said it, and after how long; a tap on the card loads it again.
+  const [failure, setFailure] = useState<{ reason: string; seconds: number } | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const [startedAt, setStartedAt] = useState(() => Date.now());
+  const [loaded, setLoaded] = useState(false);
+  const [waited, setWaited] = useState(0);
   const [aspect, setAspect] = useState(() => (source?.uri ? imageAspects.get(source.uri) : undefined));
   const [open, setOpen] = useState(false);
   const label = imagePlaceholderText(image);
-  if (!source || failed)
+  const loading = !!source && !failure && !loaded;
+  useEffect(() => {
+    if (!loading) return;
+    const timer = setInterval(() => setWaited(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, [loading, startedAt]);
+  const retry = () => {
+    setFailure(null);
+    setLoaded(false);
+    setWaited(0);
+    setStartedAt(Date.now());
+    setAttempt((n) => n + 1);
+  };
+  if (!source || failure)
     return (
-      <View
-        accessible
-        accessibilityLabel={`Image unavailable: ${label}`}
-        style={{
-          flexDirection: "row",
-          alignItems: "center",
-          gap: 10,
-          padding: 12,
-          borderRadius: radius.md,
-          borderCurve: "continuous",
-          backgroundColor: colors.card,
-        }}
-      >
-        <Icon name="photo" size={20} color={colors.secondary} />
-        <View style={{ flex: 1 }}>
-          <T variant="footnote">{label}</T>
-          <T variant="footnote" tone="secondary">
-            Image unavailable
-          </T>
+      <Tap label={`${label}. Image unavailable${failure ? ". Tap to try again" : ""}`} onPress={failure ? retry : undefined} disabled={!failure} feedback="none">
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 10,
+            padding: 12,
+            borderRadius: radius.md,
+            borderCurve: "continuous",
+            backgroundColor: colors.card,
+          }}
+        >
+          <Icon name="photo" size={20} color={colors.secondary} />
+          <View style={{ flex: 1 }}>
+            <T variant="footnote">{label}</T>
+            <T variant="footnote" tone="secondary">
+              Image unavailable
+            </T>
+            {failure && (
+              <T variant="footnote" tone="secondary" selectable>
+                {`${failure.reason} (after ${failure.seconds}s). Tap to try again.`}
+              </T>
+            )}
+          </View>
         </View>
-      </View>
+      </Tap>
     );
   return (
     <View style={{ gap: 6 }}>
       <Tap label={`${label}. Open full screen`} onPress={() => setOpen(true)} feedback="none">
-        <Image
+        <AuthedImage
+          key={attempt}
           source={source}
           accessibilityIgnoresInvertColors
-          onError={() => setFailed(true)}
-          onLoad={({ nativeEvent: { source: loaded } }) => {
-            if (!source?.uri || !loaded?.width || !loaded?.height) return;
-            const next = Math.max(TALLEST_ASPECT, loaded.width / loaded.height);
+          onError={({ nativeEvent }) =>
+            setFailure({
+              reason: String((nativeEvent as { error?: unknown }).error ?? "").trim() || "The image did not load",
+              seconds: Math.round((Date.now() - startedAt) / 100) / 10,
+            })
+          }
+          onLoad={({ nativeEvent: { source: loadedSource } }) => {
+            setLoaded(true);
+            if (!source?.uri || !loadedSource?.width || !loadedSource?.height) return;
+            const next = Math.max(TALLEST_ASPECT, loadedSource.width / loadedSource.height);
             imageAspects.set(source.uri, next);
             setAspect(next);
           }}
@@ -332,6 +385,11 @@ function MarkdownPicture({ image }: { image: MarkdownImage }) {
           ]}
           resizeMode="contain"
         />
+        {loading && waited >= SLOW_LOAD_SECONDS && (
+          <View pointerEvents="none" style={{ position: "absolute", left: 12, bottom: 10 }}>
+            <T variant="footnote" tone="secondary">{`Loading… ${waited}s`}</T>
+          </View>
+        )}
       </Tap>
       {!!image.alt && (
         <T variant="footnote" tone="secondary">
@@ -372,8 +430,9 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
     const rows = [tableCells(lines[0]!), ...lines.slice(2).map(tableCells)];
     const widths = tableColumnWidths(rows);
     return (
-      // The scroll view owns horizontal drags that start on the table, and the content width is set
-      // outright so it is never clamped to the column. Vertical drags still reach the transcript.
+      // The scroll view owns horizontal drags that start on the table (`ScrollContent` keeps the
+      // touch away from ancestors), and the content width is set outright so it is never clamped
+      // to the column. Vertical drags still reach the transcript.
       <ScrollView
         horizontal
         nestedScrollEnabled
@@ -381,7 +440,7 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
         showsHorizontalScrollIndicator={false}
         style={{ marginVertical: 8, flexGrow: 0 }}
       >
-        <View
+        <ScrollContent
           style={{
             width: widths.reduce((sum, w) => sum + w, 0) + 2,
             borderWidth: 1,
@@ -409,7 +468,7 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
               ))}
             </View>
           ))}
-        </View>
+        </ScrollContent>
       </ScrollView>
     );
   }
