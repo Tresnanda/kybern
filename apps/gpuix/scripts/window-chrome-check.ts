@@ -48,6 +48,8 @@ const failures: string[] = []
 const data = path.join(process.env.KYBERN_DATA_DIR!, 'window-chrome')
 rmSync(data, { recursive: true, force: true })
 mkdirSync(data, { recursive: true })
+// An empty library opens the first-run onboarding over the title bar; this check measures the app behind it.
+writeFileSync(path.join(data, 'gpuix-ui.json'), JSON.stringify({ 'kybern.onboarding.completed': true }))
 const daemon = spawn(kybernd, ['--data-dir', data, '--port', String(port)], { stdio: 'inherit' })
 process.on('exit', () => daemon.exitCode === null && daemon.kill())
 for (const deadline = Date.now() + 60_000; !existsSync(path.join(data, 'daemon.port'));) {
