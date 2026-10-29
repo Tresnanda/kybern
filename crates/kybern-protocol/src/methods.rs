@@ -18,6 +18,7 @@ use crate::model::*;
 use crate::move_thread::*;
 use crate::network::*;
 use crate::outbox::*;
+use crate::provision::*;
 use crate::shared_state::*;
 use crate::thread_read::*;
 use crate::utilities::*;
@@ -4236,6 +4237,30 @@ method!(PeerMoveAbort, "peer.move.abort", Some(Scope::MachineDelegate), PeerMove
 method!(PeerToolCall, "peer.tool.call", Some(Scope::MachineTools), PeerToolCallParams, PeerToolCallResult);
 method!(PeerThreadArchiveInbound, "peer.thread.archive_inbound", Some(Scope::MachineTools), PeerThreadArchiveInboundParams, Empty);
 
+// Add a project to another machine (payloads in provision.rs). A client calls the `projects.provision*` methods on
+// the source machine; the source talks to the target with `peer.provision.*`.
+method!(ProjectsProvisionPlan, "projects.provision_plan", Some(Scope::OrchestrationRead), ProjectsProvisionPlanParams, ProvisionPlan);
+method!(ProjectsProvision, "projects.provision", Some(Scope::OrchestrationOperate), ProjectsProvisionParams, ProvisionStatus);
+method!(
+    ProjectsProvisionStatusMethod,
+    "projects.provision.status",
+    Some(Scope::OrchestrationRead),
+    ProjectsProvisionStatusParams,
+    ProvisionStatus
+);
+method!(PeerProvisionProbeMethod, "peer.provision.probe", Some(Scope::MachineDelegate), PeerProvisionProbeParams, PeerProvisionProbe);
+method!(
+    PeerProvisionPrepare,
+    "peer.provision.prepare",
+    Some(Scope::MachineDelegate),
+    PeerProvisionPrepareParams,
+    PeerProvisionPrepareResult
+);
+// A chunk of the bundle of a repository the target could not clone (up to `MAX_PROVISION_BUNDLE_BYTES`).
+method!(PeerProvisionChunk, "peer.provision.chunk", Some(Scope::MachineDelegate), PeerGitBundleParams, PeerGitBundleResult);
+method!(PeerProvisionImport, "peer.provision.import", Some(Scope::MachineDelegate), PeerProvisionImportParams, PeerProvisionPrepareResult);
+method!(PeerProvisionFinish, "peer.provision.finish", Some(Scope::MachineDelegate), PeerProvisionFinishParams, ProvisionResult);
+
 // Machine utilities (M4, U1 files and U3 ports; payloads in utilities.rs).
 method!(FilesSend, "files.send", Some(Scope::OrchestrationOperate), FilesSendParams, FilesSendResult);
 method!(PeerFilesBegin, "peer.files.begin", Some(Scope::MachineFiles), PeerFilesBeginParams, PeerFilesBeginResult);
@@ -4495,6 +4520,14 @@ registry!(
     PeerMoveCommit,
     PeerMoveGet,
     PeerMoveAbort,
+    ProjectsProvisionPlan,
+    ProjectsProvision,
+    ProjectsProvisionStatusMethod,
+    PeerProvisionProbeMethod,
+    PeerProvisionPrepare,
+    PeerProvisionChunk,
+    PeerProvisionImport,
+    PeerProvisionFinish,
     PeerToolCall,
     PeerThreadArchiveInbound,
     SettingsNetworkViewMethod,

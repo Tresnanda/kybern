@@ -312,6 +312,14 @@ fn main() {
     method::<PeerMoveCommit>(&mut methods);
     method::<PeerMoveGet>(&mut methods);
     method::<PeerMoveAbort>(&mut methods);
+    method::<ProjectsProvisionPlan>(&mut methods);
+    method::<ProjectsProvision>(&mut methods);
+    method::<ProjectsProvisionStatusMethod>(&mut methods);
+    method::<PeerProvisionProbeMethod>(&mut methods);
+    method::<PeerProvisionPrepare>(&mut methods);
+    method::<PeerProvisionChunk>(&mut methods);
+    method::<PeerProvisionImport>(&mut methods);
+    method::<PeerProvisionFinish>(&mut methods);
     method::<PeerToolCall>(&mut methods);
     method::<FilesSend>(&mut methods);
     method::<PeerFilesBegin>(&mut methods);

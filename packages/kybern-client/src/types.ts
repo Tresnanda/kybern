@@ -3877,7 +3877,8 @@ export type OutboxKind =
   | "settings_patch"
   | "secrets_put"
   | "fork"
-  | "move";
+  | "move"
+  | "provision";
 export type OutboxState = "queued" | "sending" | "delivered" | "failed" | "expired" | "cancelled";
 
 /** One queued piece of work for another machine. */
@@ -4017,6 +4018,91 @@ export interface PeerGitImportParams {
   group_repos?: RepoIdentity[];
 }
 
+// Add a project to another machine (provisioning). A client calls `projects.provision*` on the SOURCE machine's
+// connection; the source daemon sends the repository and env files to the target itself.
+export const PROVISION_CHANGED_NOTIFICATION = "projects.provision.changed";
+/** `tool_name` of the card "os-kdi doesn't have kybern yet". `input` is a `ProvisionCardInput`. Answer
+ * `{ decision: "submit", response: { path, env_files } }` or deny. */
+export const PROJECT_PROVISION_TOOL = "kybern_project_provision";
+/** `data.needs` of a delegation, fork or move refused because the target has no checkout. */
+export const NEEDS_PROJECT = "project";
+export interface ProvisionMachine { id: MachineId; name: string; os: string; online: boolean }
+export interface ProvisionRepo { path: string; remote?: string | null; branch?: string | null }
+export interface ProvisionExisting { project_id: ProjectId; name: string; path: string }
+export type PathState = "free" | "same_repo" | "not_empty" | "forbidden" | "unknown";
+export interface PathCheck { state: PathState; path: string; message: string }
+/** A git-ignored env file of the source project: its name and size only. */
+export interface EnvFileCandidate { path: string; size: number; selected: boolean }
+export interface ProjectsProvisionPlanParams { project_id: ProjectId; machine: string; path?: string | null }
+export interface ProvisionPlan {
+  project_id: ProjectId;
+  project_name: string;
+  kind?: ProjectKind;
+  source: ProvisionMachine;
+  target: ProvisionMachine;
+  repos: ProvisionRepo[];
+  /** The target's projects that already are this repository. */
+  existing?: ProvisionExisting[];
+  suggested_path?: string | null;
+  target_home?: string | null;
+  path_check?: PathCheck | null;
+  env_files: EnvFileCandidate[];
+  /** Why it cannot be done, in a sentence that says what to do. */
+  blocked?: string | null;
+}
+export interface ProvisionChoice {
+  /** A folder on the target; `~` is its home. Omit for the proposed one. */
+  path?: string | null;
+  /** Env files to copy; omit for every detected one. */
+  env_files?: string[] | null;
+}
+export interface ProjectsProvisionParams extends ProvisionChoice { project_id: ProjectId; machine: string; operation_id?: Uuid | null }
+export type ProvisionPhase = "queued" | "cloning" | "sending" | "importing" | "copying_env" | "done" | "failed" | "cancelled";
+export interface ProvisionResult {
+  /** The project as the target registered it. */
+  project: Project;
+  env_written: string[];
+  env_kept: string[];
+  cloned_from_remote: boolean;
+}
+export interface ProvisionStatus {
+  operation_id: Uuid;
+  item_id: Uuid;
+  project_id: ProjectId;
+  project_name: string;
+  target: MachineId;
+  target_name: string;
+  path?: string | null;
+  phase: ProvisionPhase;
+  detail?: string | null;
+  bytes_sent?: number;
+  bytes_total?: number | null;
+  error?: string | null;
+  result?: ProvisionResult | null;
+  updated_at: string;
+}
+export interface ProvisionCardInput {
+  operation_id: Uuid;
+  plan: ProvisionPlan;
+  /** What waits for it: "delegate", "fork", "move" or "add". */
+  then: string;
+  reason?: string | null;
+}
+export interface PeerProvisionProbeParams { repos: RepoIdentity[]; members?: string[]; kind?: ProjectKind; name: string; path?: string | null }
+export interface PeerProvisionProbe { os: string; home?: string | null; existing?: ProvisionExisting[]; suggested_path: string; path_check: PathCheck }
+export interface PeerProvisionPrepareParams {
+  operation_id: Uuid; path: string; rel: string; repo: RepoIdentity; remote_url?: string | null; branch?: string | null; commit: string;
+}
+export interface PeerProvisionPrepareResult {
+  state: "ready" | "existing" | "needs_bundle"; path: string; full?: boolean; cloned?: boolean; clone_error?: string | null;
+}
+export interface PeerProvisionImportParams {
+  operation_id: Uuid; transfer_id: Uuid; path: string; rel: string; total: number; sha256: string; branch?: string | null; commit: string; remote_url?: string | null;
+}
+export interface PeerProvisionFinishParams {
+  operation_id: Uuid; path: string; name: string; kind?: ProjectKind; members?: string[]; env_files?: { path: string; sealed: string }[]; cloned_from_remote?: boolean;
+}
+
 // Fork to a machine (F1, design §7.1).
 export interface ThreadsForkNoteResult { note: string }
 export interface ThreadsForkToMachineParams {
@@ -4034,6 +4120,8 @@ export interface ThreadsForkToMachineParams {
   model?: string | null;
   effort?: string | null;
   permission_mode?: PermissionMode | null;
+  /** The target has no checkout yet: add the project there first (folder and env files), then go on. */
+  provision?: ProvisionChoice | null;
   operation_id?: Uuid | null;
 }
 export interface ThreadsForkToMachineResult {
@@ -4102,6 +4190,8 @@ export interface ThreadsMoveToMachineParams {
   model?: string | null;
   effort?: string | null;
   permission_mode?: PermissionMode | null;
+  /** The target has no checkout yet: add the project there first (folder and env files), then go on. */
+  provision?: ProvisionChoice | null;
   operation_id?: Uuid | null;
 }
 export interface ThreadsMoveToMachineResult {
@@ -4342,6 +4432,14 @@ export interface Methods {
   "peer.fork": [PeerForkParams, PeerForkResult];
   "threads.move_to_machine": [ThreadsMoveToMachineParams, ThreadsMoveToMachineResult];
   "threads.move_abandon": [ThreadsMoveAbandonParams, ThreadsMoveAbandonResult];
+  "projects.provision_plan": [ProjectsProvisionPlanParams, ProvisionPlan];
+  "projects.provision": [ProjectsProvisionParams, ProvisionStatus];
+  "projects.provision.status": [{ operation_id: Uuid }, ProvisionStatus];
+  "peer.provision.probe": [PeerProvisionProbeParams, PeerProvisionProbe];
+  "peer.provision.prepare": [PeerProvisionPrepareParams, PeerProvisionPrepareResult];
+  "peer.provision.chunk": [PeerGitBundleParams, { received: number }];
+  "peer.provision.import": [PeerProvisionImportParams, PeerProvisionPrepareResult];
+  "peer.provision.finish": [PeerProvisionFinishParams, ProvisionResult];
   "peer.tool.call": [PeerToolCallParams, PeerToolCallResult];
   "peer.thread.archive_inbound": [PeerThreadArchiveInboundParams, Empty];
   "settings.network_view": [Empty, SettingsNetworkView];

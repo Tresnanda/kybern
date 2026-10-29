@@ -1927,6 +1927,7 @@ pub fn is_user_input_tool(tool_name: &str) -> bool {
             | COORDINATOR_BRIEF_TOOL
             | COORDINATOR_SETTINGS_TOOL
             | COORDINATOR_NOTES_TOOL
+            | crate::PROJECT_PROVISION_TOOL
             | "request_user_input"
             | "opencode_question"
             | crate::CURSOR_QUESTION_TOOL
@@ -2115,6 +2116,24 @@ impl ApprovalRequest {
                 });
                 if !valid {
                     return Err("Keep at least one change ticked, or decline.".into());
+                }
+            }
+            crate::PROJECT_PROVISION_TOOL => {
+                let path = response.get("path").and_then(Value::as_str).map(str::trim);
+                if !path.is_some_and(|path| !path.is_empty() && path.len() <= 4096 && !path.contains('\0')) {
+                    return Err("Choose a folder on that machine, or cancel.".into());
+                }
+                let known: Vec<&str> = self
+                    .input
+                    .pointer("/plan/env_files")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|file| file.get("path").and_then(Value::as_str))
+                    .collect();
+                let files = response.get("env_files").and_then(Value::as_array);
+                if !files.is_some_and(|files| files.iter().all(|file| file.as_str().is_some_and(|file| known.contains(&file)))) {
+                    return Err(invalid());
                 }
             }
             // Kybern's computer-use consent: `{"scope":"always"}` remembers the app.

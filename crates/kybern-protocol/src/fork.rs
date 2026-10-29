@@ -57,6 +57,9 @@ pub struct ThreadsForkToMachineParams {
     /// The new thread's permission mode, which also caps it. Defaults to the source thread's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<PermissionMode>,
+    /// The target has no checkout of the repository yet: add the project there first (folder and env files), then go on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provision: Option<crate::ProvisionChoice>,
     /// Reuse the same key to make a repeated request return the first fork.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<Uuid>,

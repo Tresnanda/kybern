@@ -37,6 +37,8 @@ pub enum OutboxKind {
     SecretsPut,
     Fork,
     Move,
+    /// Add a project to the target (`projects.provision`; payload `ProvisionRequest`).
+    Provision,
 }
 
 impl OutboxKind {
@@ -50,6 +52,7 @@ impl OutboxKind {
             OutboxKind::SecretsPut => "secrets_put",
             OutboxKind::Fork => "fork",
             OutboxKind::Move => "move",
+            OutboxKind::Provision => "provision",
         }
     }
 }

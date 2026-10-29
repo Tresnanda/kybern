@@ -43,9 +43,11 @@ pub mod features {
     /// A group project's thread (several repositories) can be forked, moved or delegated to this machine:
     /// `group` in `peer.fork`, `peer.move.prepare` and `peer.delegate`, `group_repos` in `peer.git.import`.
     pub const GROUP_V1: &str = "group.v1";
+    /// `peer.provision.*`: a project can be added to this machine from another one (clone or bundle, env files).
+    pub const PROVISION_V1: &str = "provision.v1";
 
     /// Every feature the network design names, in design order.
-    pub const ALL: [&str; 15] = [
+    pub const ALL: [&str; 16] = [
         NETWORK_V1,
         RELAY_V1,
         DELEGATE_REMOTE_V1,
@@ -61,6 +63,7 @@ pub mod features {
         LOGIN_BROKER_V1,
         UPDATE_V1,
         GROUP_V1,
+        PROVISION_V1,
     ];
 }
 
