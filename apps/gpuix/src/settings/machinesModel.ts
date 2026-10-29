@@ -1,22 +1,32 @@
 // What a machine card says (Settings → Machines, design §5.2), from the machine set's row, the member card the network
 // reported and the machine's own `machines.info`. Pure, so the words are tested without a window.
-import type { HarnessSummary, MachineCard, MachineId, MachineInfo, NetworkUpdateAllResult, OutboxItem, OutboxKind } from '../../../../packages/kybern-client/src/types.ts'
+import { shortMachineName } from '../../../../packages/kybern-client/src/forkMachine.ts'
+import { harnessChips, machineSpecs, osKind, type HarnessChip, type MachineSpecs, type OsKind } from '../../../../packages/kybern-client/src/machineSpecs.ts'
+import type { MachineCard, MachineId, MachineInfo, NetworkUpdateAllResult, OutboxItem, OutboxKind } from '../../../../packages/kybern-client/src/types.ts'
 import type { MachineRow } from '../machines/index.ts'
 import { statusText, statusTone, type Tone } from '../machines/format.ts'
-import { PROVIDER_LABEL } from '../shared/lib/format.ts'
 
 export interface MachineCardModel {
   machineId: string
+  /** As people say it: no `.local` or tailnet suffix. */
   name: string
   row: MachineRow
   member: boolean
   tone: Tone
   status: string
-  /** OS, Tailscale name, version. */
-  facts: string[]
-  harnesses: string[]
-  /** CPU, GPU and memory once the machine answered `machines.info`; null while unknown. */
-  hardware: string | null
+  /** The machine's version, shown beside its status. */
+  version: string | null
+  os: OsKind | null
+  /** "macOS", or the raw name of an OS we have no mark for. */
+  osLabel: string | null
+  /** The Tailscale name: a tooltip on the machine's name. */
+  tsName: string | null
+  /** CPU, memory and GPUs once the machine answered `machines.info`; empty while unknown. */
+  specs: MachineSpecs
+  /** Only the harnesses the machine has. */
+  harnesses: HarnessChip[]
+  /** The machine (or its network card) said which harnesses it has; false for one that never answered. */
+  harnessesKnown: boolean
   /** The machine runs an older version than the one the user is at. */
   behind: boolean
   canPause: boolean
@@ -25,24 +35,6 @@ export interface MachineCardModel {
 
 const OS_NAME: Record<string, string> = { macos: 'macOS', darwin: 'macOS', windows: 'Windows', linux: 'Linux' }
 export const osName = (os: string | undefined | null) => (os ? OS_NAME[os.toLowerCase()] ?? os : null)
-
-export function harnessText(harness: HarnessSummary): string {
-  const name = PROVIDER_LABEL[harness.kind] ?? harness.kind
-  if (!harness.available) return `${name} not installed`
-  const named = harness.version ? `${name} ${harness.version}` : name
-  if (harness.signed_in === false) return `${named} not signed in`
-  return harness.signed_in ? `${named} signed in` : named
-}
-
-const gib = (bytes: number) => `${Math.round(bytes / 2 ** 30)} GB`
-export function hardwareText(info: MachineInfo | false | undefined): string | null {
-  if (!info) return null
-  const parts: string[] = []
-  if (info.cpu?.model) parts.push(`${info.cpu.model}${info.cpu.logical_cores ? ` · ${info.cpu.logical_cores} cores` : ''}`)
-  if (info.gpu?.length) parts.push(info.gpu.slice(0, 2).join(', '))
-  if (info.mem?.total_bytes) parts.push(gib(info.mem.total_bytes))
-  return parts.length ? parts.join(' · ') : null
-}
 
 /** Version numbers compared by their numeric parts; a missing or odd one is never "behind". */
 export function isBehind(version: string | undefined | null, latest: string | undefined | null): boolean {
@@ -71,14 +63,18 @@ export function buildCards(input: {
     const via = card?.relay_via ? names.get(card.relay_via) : row.relayVia ? names.get(row.relayVia) : undefined
     return {
       machineId: row.machineId,
-      name: row.name,
+      name: shortMachineName(row.name) || row.name,
       row,
       member: row.member,
       tone: statusTone(row.status),
       status: statusText({ status: row.status, ...(row.lastSeenAt !== undefined ? { lastSeenAt: row.lastSeenAt } : {}), ...(via ? { via } : {}), ...(row.error ? { error: row.error } : {}) }, input.now),
-      facts: [osName(card?.os ?? row.os), card?.ts_name, version ? `Version ${version}` : null].filter((fact): fact is string => !!fact),
-      harnesses: (info && info.harnesses?.length ? info.harnesses : harnesses).map(harnessText),
-      hardware: hardwareText(info),
+      version: version || null,
+      os: osKind(card?.os ?? row.os),
+      osLabel: osName(card?.os ?? row.os),
+      tsName: card?.ts_name || null,
+      specs: machineSpecs(info),
+      harnesses: harnessChips(info && info.harnesses?.length ? info.harnesses : harnesses),
+      harnessesKnown: !!(info && info.harnesses) || !!card?.harnesses,
       behind: !row.isLocal && isBehind(version, input.latest),
       canPause: row.member && !row.isLocal,
       canRename: row.member,

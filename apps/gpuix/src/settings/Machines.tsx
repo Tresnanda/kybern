@@ -1,10 +1,10 @@
-// Settings › Machines (design §5.2): your network. It replaces the environment switcher. One card per machine with its
-// status, version, OS, Tailscale name, harnesses and hardware; Pause and Remove; machines found on the tailnet; Add by
+// Settings › Machines (design §5.2): your network. It replaces the environment switcher. One card per machine: its
+// status and version, then icon chips for the OS, processor, memory, graphics and installed harnesses (the Tailscale name is a tooltip); Pause and Remove; machines found on the tailnet; Add by
 // code; Update all machines. Everything goes through the `network.*` RPCs of the machine the user is at, which any member
 // answers for the rest. Words come from `machinesModel.ts`.
 import { useEffect, useMemo, useState } from 'react'
 import type { FoundMachine, NetworkUpdateAllResult, OutboxItem } from '../../../../packages/kybern-client/src/types.ts'
-import { Dialog } from '../nav/overlay.tsx'
+import { Dialog, Tip } from '../nav/overlay.tsx'
 import { N } from '../nav/glyphs.ts'
 import { errorText } from '../nav/actions.ts'
 import { toast } from '../shell/toasts.tsx'
@@ -16,14 +16,16 @@ import { stopSshTunnel } from '../environments/ssh.ts'
 import { MachineBadge } from '../sidebar/MachineBadge.tsx'
 import { StatusDot } from '../sidebar/MachineFilter.tsx'
 import { DialogBody, DialogFooter, DialogHeader, ErrorText, Field, Hint } from '../environments/kit.tsx'
-import { ink, Label, useTheme } from '../ui.tsx'
+import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
 import { FONT_MONO } from '../theme.ts'
 import { Button } from '../kit/Button.tsx'
 import { Checkbox } from '../kit/Checkbox.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
 import { TextField } from '../kit/Field.tsx'
+import { StatusChip } from '../kit/StatusChip.tsx'
 import { Switch } from '../kit/Switch.tsx'
 import { readClipboardAuto, setClipboardAuto } from '../machines/clipboard.ts'
+import { S } from './glyphs.ts'
 import { Row, Section } from './controls.tsx'
 import { buildCards, outboxRows, updateResultRows, updateSummary, type MachineCardModel } from './machinesModel.ts'
 
@@ -84,7 +86,7 @@ async function runDoctor() {
   } catch (e) { toast.error('Unable to check the network', { description: errorText(e) }) }
 }
 
-function MachineCardRow({ card, busy, onRemove }: { card: MachineCardModel; busy: boolean; onRemove: () => void }) {
+export function MachineCardRow({ card, busy, onRemove }: { card: MachineCardModel; busy: boolean; onRemove: () => void }) {
   const t = useTheme()
   const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState(card.name)
@@ -95,26 +97,38 @@ function MachineCardRow({ card, busy, onRemove }: { card: MachineCardModel; busy
     if (next && next !== card.name) void renameMachine(card.machineId, next).catch((e) => toast.error('Unable to rename', { description: errorText(e) }))
     else setName(card.name)
   }
-  const details = [card.facts.join(' · '), card.hardware].filter(Boolean)
-  return <div testId={`machine-${card.machineId}`} style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 20, paddingLeft: 18, paddingRight: 18, paddingTop: 16, paddingBottom: 16, opacity: row.offline && !row.paused ? 0.78 : 1 }}>
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexGrow: 1, flexShrink: 1, minWidth: 0 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 28 }}>
+  const { specs } = card
+  const osGlyph = card.os === 'macos' ? S.osMacos : card.os === 'windows' ? S.osWindows : S.osLinux
+  const nameLabel = <Label color={t.text} size={14} lineHeight={21} weight={500} truncate style={{ flexShrink: 1, minWidth: 0 }}>{card.name}</Label>
+  const actions = <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+    {card.canPause && <Button testId={`machine-pause-${card.machineId}`} size="sm" busy={busy} onClick={() => void pauseMachine(card.machineId, !row.paused).catch((e) => toast.error('Unable to change the machine', { description: errorText(e) }))}>{row.paused ? 'Resume' : 'Pause'}</Button>}
+    {!row.isLocal && <Button testId={`machine-remove-${card.machineId}`} size="sm" variant="secondary" danger onClick={onRemove}>Remove</Button>}
+  </div>
+  return <div testId={`machine-${card.machineId}`} style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 18, paddingRight: 18, paddingTop: 16, paddingBottom: 16, opacity: row.offline && !row.paused ? 0.78 : 1 }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, minHeight: 28 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 1, minWidth: 0 }}>
         <MachineBadge glyph={row.glyph} size={18} />
         {renaming
           ? <TextField testId={`machine-name-${card.machineId}`} label="Machine name" size="md" width={240} autoFocus value={name} onChange={setName} onSubmit={save} onBlur={save} />
-          : <Label color={t.text} size={14} lineHeight={21} weight={500} truncate>{card.name}</Label>}
-        {row.isLocal && <Label color={t.textSecondary} size={12} lineHeight={18}>This computer</Label>}
-        {card.canRename && !renaming && <IconButton testId={`machine-rename-${card.machineId}`} label={`Rename ${card.name}`} icon={N.pencil} size="sm" onClick={() => { setName(card.name); setRenaming(true) }} />}
+          : card.tsName ? <Tip label={card.tsName} side="bottom" size={Math.min(240, [...card.name].length * 8)}><div style={{ display: 'flex', flexShrink: 1, minWidth: 0 }}>{nameLabel}</div></Tip> : nameLabel}
+        {row.isLocal && <Label color={t.textSecondary} size={12} lineHeight={18} style={{ flexShrink: 0 }}>This computer</Label>}
+        {card.canRename && !renaming && <div style={{ display: 'flex', flexShrink: 0 }}><IconButton testId={`machine-rename-${card.machineId}`} label={`Rename ${card.name}`} icon={N.pencil} size="sm" onClick={() => { setName(card.name); setRenaming(true) }} /></div>}
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><StatusDot tone={card.tone} /><Label color={t.textSecondary} size={13} lineHeight={20}>{card.status}</Label>{card.behind && <Label color={t.textSecondary} size={13} lineHeight={20}>· Needs an update</Label>}</div>
-      {details.map((line) => <Label key={line} color={t.textSecondary} size={13} lineHeight={20}>{line}</Label>)}
-      {card.harnesses.length > 0 && <Label color={t.textSecondary} size={13} lineHeight={20}>{card.harnesses.join(' · ')}</Label>}
-      {!card.member && <Label color={t.textSecondary} size={13} lineHeight={20}>Saved on this device, not in your network.</Label>}
+      {actions}
     </div>
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-      {card.canPause && <Button testId={`machine-pause-${card.machineId}`} size="sm" busy={busy} onClick={() => void pauseMachine(card.machineId, !row.paused).catch((e) => toast.error('Unable to change the machine', { description: errorText(e) }))}>{row.paused ? 'Resume' : 'Pause'}</Button>}
-      {!row.isLocal && <Button testId={`machine-remove-${card.machineId}`} size="sm" variant="secondary" danger onClick={onRemove}>Remove</Button>}
+    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: 6 }}><StatusDot tone={card.tone} /><Label color={t.textSecondary} size={13} lineHeight={20}>{[card.status, card.version].filter(Boolean).join(' · ')}</Label>{card.behind && <Label color={t.textSecondary} size={13} lineHeight={20}>· Needs an update</Label>}</div>
+    <div testId={`machine-specs-${card.machineId}`} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+      {card.osLabel && <StatusChip icon={osGlyph}>{card.osLabel}</StatusChip>}
+      {specs.cpu && <StatusChip icon={S.cpu}>{specs.cores ? `${specs.cpu} · ${specs.cores}` : specs.cpu}</StatusChip>}
+      {specs.memory && <StatusChip icon={S.memory}>{specs.memory}</StatusChip>}
+      {specs.gpus.length > 0 && <StatusChip icon={S.gpu}>{specs.gpus.join(', ')}</StatusChip>}
     </div>
+    {card.harnessesKnown && (card.harnesses.length > 0
+      ? <div testId={`machine-harnesses-${card.machineId}`} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+        {card.harnesses.map((harness) => <StatusChip key={harness.kind} tone={harness.signedOut ? 'warning' : 'neutral'} lead={<ProviderMark kind={harness.kind} size={14} />}>{harness.signedOut ? `${harness.label} · signed out` : harness.label}</StatusChip>)}
+      </div>
+      : <Label color={t.textSecondary} size={13} lineHeight={20}>No agents installed</Label>)}
+    {!card.member && <Label color={t.textSecondary} size={13} lineHeight={20}>Saved on this device, not in your network.</Label>}
   </div>
 }
 

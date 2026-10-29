@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { MachineCard } from '../../../../packages/kybern-client/src/types.ts'
 import type { MachineRow } from '../machines/index.ts'
-import { buildCards, hardwareText, harnessText, isBehind, osName, outboxRows, updateResultRows, updateSummary } from './machinesModel.ts'
+import { buildCards, isBehind, osName, outboxRows, updateResultRows, updateSummary } from './machinesModel.ts'
 
 const row = (over: Partial<MachineRow> & { machineId: string; name: string }): MachineRow => ({ status: 'online', offline: false, isLocal: false, glyph: { letter: over.name[0]!, hue: 10 }, showGlyph: true, member: true, paused: false, ...over })
 const member = (over: Partial<MachineCard> & { machine_id: string; name: string }): MachineCard => ({ os: 'linux', status: 'online', ...over })
@@ -16,18 +16,7 @@ test('versions compare by number, never by text', () => {
   expect(isBehind('dev', '0.19.0')).toBe(false)
 })
 
-test('harnesses say whether they are usable on that machine', () => {
-  expect(harnessText({ kind: 'claude-code', available: true, signed_in: true })).toBe('Claude Code signed in')
-  expect(harnessText({ kind: 'codex', available: true, signed_in: false })).toBe('Codex not signed in')
-  expect(harnessText({ kind: 'cursor', available: false })).toBe('Cursor not installed')
-  expect(harnessText({ kind: 'opencode', available: true })).toBe('OpenCode')
-})
-
-test('hardware: CPU, GPU and memory, whatever the machine reports', () => {
-  expect(hardwareText({ cpu: { model: 'Apple M2', logical_cores: 8 }, gpu: ['Apple M2'], mem: { total_bytes: 16 * 2 ** 30 } })).toBe('Apple M2 · 8 cores · Apple M2 · 16 GB')
-  expect(hardwareText({ cpu: { model: 'Ryzen 7', logical_cores: 16 }, gpu: ['RTX 3060', 'AMD Radeon'] })).toBe('Ryzen 7 · 16 cores · RTX 3060, AMD Radeon')
-  expect(hardwareText({})).toBeNull()
-  expect(hardwareText(false)).toBeNull()
+test('OS names', () => {
   expect(osName('macos')).toBe('macOS')
   expect(osName('freebsd')).toBe('freebsd')
 })
@@ -41,15 +30,15 @@ test('a card: status, facts, harnesses, relay name, and whether it is behind', (
     now: 3 * 3600_000,
   })
   const [mac, vps, sat] = cards
-  expect(mac!.facts).toEqual(['macOS', 'Version 0.19.0'])
+  expect([mac!.os, mac!.osLabel, mac!.version]).toEqual(['macos', 'macOS', '0.19.0'])
   expect(mac!.canPause).toBe(false)
   expect(mac!.behind).toBe(false)
   expect(vps!.status).toBe('Relaying via This Mac')
-  expect(vps!.facts).toEqual(['Linux', 'vps.tail.ts.net', 'Version 0.18.0'])
-  expect(vps!.harnesses).toEqual(['Claude Code not signed in'])
+  expect([vps!.os, vps!.tsName, vps!.version]).toEqual(['linux', 'vps.tail.ts.net', '0.18.0'])
+  expect(vps!.harnesses).toEqual([{ kind: 'claude-code', label: 'Claude', signedOut: true }])
   expect(vps!.behind).toBe(true)
   expect(sat!.status).toBe('Offline · last seen 3h ago')
-  expect(sat!.hardware).toBe('Ryzen · 12 cores')
+  expect(sat!.specs).toEqual({ cpu: 'Ryzen', cores: '12 cores', memory: null, gpus: [] })
   expect(sat!.canPause).toBe(true)
 })
 
@@ -58,10 +47,15 @@ test('a saved machine that is not in the network cannot be paused or renamed', (
   expect([card!.canPause, card!.canRename, card!.member]).toEqual([false, false, false])
 })
 
-test('harness versions show beside the name', () => {
-  expect(harnessText({ kind: 'claude-code', available: true, signed_in: true, version: '2.1.4' })).toBe('Claude Code 2.1.4 signed in')
-  expect(harnessText({ kind: 'codex', available: true, signed_in: false, version: '0.60.0' })).toBe('Codex 0.60.0 not signed in')
-  expect(harnessText({ kind: 'cursor', available: false, version: '1.0' })).toBe('Cursor not installed')
+test('a card names the machine without .local and lists only installed harnesses', () => {
+  const [card] = buildCards({
+    rows: [row({ machineId: 'mac', name: 'Treshnandas-Macbook.local', isLocal: true })],
+    members: [member({ machine_id: 'mac', name: 'Treshnandas-Macbook.local', os: 'macos' })],
+    infos: { mac: { cpu: { model: 'Apple M1', logical_cores: 8 }, gpu: ['Apple M1'], mem: { total_bytes: 16 * 2 ** 30 }, harnesses: [{ kind: 'claude-code', available: true, signed_in: true, version: '2.1.312 (Claude Code)' }, { kind: 'codex', available: false }] } },
+  })
+  expect(card!.name).toBe('Treshnandas-Macbook')
+  expect(card!.specs).toEqual({ cpu: 'Apple M1', cores: '8 cores', memory: '16 GB', gpus: [] })
+  expect(card!.harnesses).toEqual([{ kind: 'claude-code', label: 'Claude 2.1.312', signedOut: false }])
 })
 
 test('update results list every machine with its reason', () => {
