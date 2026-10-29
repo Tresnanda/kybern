@@ -7,7 +7,8 @@ import { activeEnvironment } from '../shell/environment.ts'
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { VIEWPORT_PRESETS, isViewportSizeValid, parseViewportField } from '../../../../packages/kybern-client/src/previewViewport.ts'
 import type { PreviewOpenRequestedNotification, PreviewServer } from '../../../../packages/kybern-client/src/types.ts'
-import { localClient, threadClient, useApp } from '../state.ts'
+import { localClient, machineOfThreadId, threadClient, useApp } from '../state.ts'
+import { clientFor, useMachines } from '../machines/index.ts'
 import { setNav, useNav } from '../nav/store.ts'
 import { addWindowKeyHandler, onWindowKeyDown } from '../nav/keys.ts'
 import { webHost } from '../native/webview.ts'
@@ -23,7 +24,7 @@ import { pressRow } from '../shell/motion.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { Floating } from '../live/Floating.tsx'
 import { DockEmpty, ErrorLine } from '../dock/parts.tsx'
-import { floatingPreview, openPreview, previewState, setPreview, showPreview, subscribePreviews, usePreview } from './store.ts'
+import { floatingPreview, openPreview, openRemoteServer, previewState, setPreview, showPreview, subscribePreviews, usePreview } from './store.ts'
 import { PreviewSlot, PreviewSurface, previewCommand } from './Surface.tsx'
 import { previewDockSize } from './Surface.tsx'
 import { useElementBounds } from '../native/layout-hooks.ts'
@@ -35,6 +36,8 @@ import { PreviewResizeCapture } from './resize.tsx'
 import { MiniResize, type MiniCorner } from './MiniResize.tsx'
 import { MiniChrome } from './MiniChrome.tsx'
 import { PreviewChrome } from './Chrome.tsx'
+import { PortForwardBar } from './PortForwardBar.tsx'
+import { addressPath } from './remote.ts'
 import { PreviewStateView } from './States.tsx'
 import { PictureInPictureIcon } from '@hugeicons/core-free-icons'
 import { glyph } from '../icons.tsx'
@@ -64,6 +67,14 @@ export function PreviewPane({ threadId }: { threadId: string }) {
   const [searching, setSearching] = useState(false)
   const [showAll, setShowAll] = useState(false)
   const environment = activeEnvironment()
+  // Servers are listed per machine (ADE-86 U3): the thread's own machine first, any other reachable one from the picker. A server on
+  // another machine opens through a forward of its port. Inside a remote environment the list stays that environment's.
+  const machines = useMachines(), reachable = machines.filter(m => !m.offline), local = machines.find(m => m.isLocal)
+  const home = (machineOfThreadId(threadId) ?? local?.machineId) as string | undefined
+  const multi = environment.local && reachable.length > 1
+  const chosen = multi ? reachable.find(m => m.machineId === s.serversOn) ?? reachable.find(m => m.machineId === home) ?? local : undefined
+  const remote = !!chosen && !chosen.isLocal
+  const ownsThread = !chosen || chosen.machineId === home
   const sorted = servers.slice().sort((a, b) => Number(!!b.in_project) - Number(!!a.in_project) || a.port - b.port)
   const shown = showAll ? sorted : sorted.slice(0, 12)
   useEffect(() => onWindowVisibility(setVisible), [])
@@ -71,22 +82,25 @@ export function PreviewPane({ threadId }: { threadId: string }) {
   useEffect(() => {
     if (entry || !visible) return
     let live = true
-    const scan = async () => { setSearching(true); try { const result = await threadClient(threadId)!.call('previews.servers.list', { thread_id: threadId }); if (live) setServers(result.servers) } catch { /* Keep the last successful list. */ } finally { if (live) setSearching(false) } }
-    void scan(); const timer = setInterval(() => { void scan() }, 3000)
+    const scan = async () => { setSearching(true); try { const result = await (ownsThread ? threadClient(threadId)! : clientFor(chosen!.machineId)).call('previews.servers.list', ownsThread ? { thread_id: threadId } : {}); if (live) setServers(result.servers) } catch { /* Keep the last successful list. */ } finally { if (live) setSearching(false) } }
+    setServers([]); void scan(); const timer = setInterval(() => { void scan() }, 3000)
     return () => { live = false; clearInterval(timer) }
-  }, [threadId, !!entry, visible])
+  }, [threadId, !!entry, visible, chosen?.machineId, ownsThread])
+  const openServer = (server: PreviewServer) => { if (remote && chosen) void openRemoteServer(threadId, { id: chosen.machineId, name: chosen.name, port: server.port, path: addressPath(server.url) }); else void openPreview(threadId, server.url) }
   return <div testId="dock-preview" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
     <PreviewChrome threadId={threadId} />
     {entry && s.device && <DeviceToolbar threadId={threadId} />}
     <ErrorLine error={s.error} />
+    {s.forwardOpen && <PortForwardBar threadId={threadId} />}
+    {!entry && multi && <ServersBar threadId={threadId} chosenId={chosen?.machineId} />}
     {s.wsFailed && !s.wsNoticeDismissed && entry?.proxy && <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 12, height: 28 }}><Label color={t.textSecondary} size={11} truncate>{`Live reload isn't connected through ${environment.name}. Reload to see changes.`}</Label><Button variant="ghost" size="sm" onClick={() => previewCommand(threadId, 'reload')}>Reload</Button><IconButton icon={N.x} label="Dismiss" size="sm" onClick={() => setPreview(threadId, { wsNoticeDismissed: true })} /></div>}
     {s.permission ? <PreviewStateView threadId={threadId} />
     : s.busy && s.load.phase !== 'waiting' ? <DockEmpty icon={N.globe} title="Opening preview…" />
     : entry ? s.floating ? <FloatingState><Button size="sm" testId="preview-return" onClick={() => setPreview(threadId, { floating: false })}>Return to tab</Button></FloatingState> : s.load.phase !== 'ready' || !webHost.available ? <PreviewStateView threadId={threadId} /> : <PreviewSlot threadId={threadId} kind="dock" />
     : sorted.length || recents.length ? <virtual-list style={{ flexGrow: 1, minHeight: 0, width: '100%' }}><div style={{ paddingLeft: 12, paddingRight: 12, paddingTop: 16, paddingBottom: 16 }}>
-      <DockSection label={environment.local ? 'Local servers' : `Servers on ${environment.name}`} count={servers.length} />
+      <DockSection label={remote ? `Servers on ${chosen!.name}` : environment.local ? 'Local servers' : `Servers on ${environment.name}`} count={servers.length} />
       <div style={{ display: 'flex', flexDirection: 'column', marginLeft: 12, marginRight: 12, padding: 4, borderRadius: 10, backgroundColor: t.buttonSecondary }}>
-        {shown.map(server => <div key={server.url} testId={`preview-server-${server.port}`} role="button" tabIndex={0} onClick={() => void openPreview(threadId, server.url)} onKeyDown={e => { if (e.key === 'enter') void openPreview(threadId, server.url) }} style={{ display: 'flex', alignItems: 'center', gap: 10, height: 44, paddingLeft: 10, paddingRight: 10, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.hover }, ...pressRow(t, t.hover) }}>
+        {shown.map(server => <div key={server.url} testId={`preview-server-${server.port}`} role="button" tabIndex={0} onClick={() => openServer(server)} onKeyDown={e => { if (e.key === 'enter') openServer(server) }} style={{ display: 'flex', alignItems: 'center', gap: 10, height: 44, paddingLeft: 10, paddingRight: 10, borderRadius: 6, cursor: 'pointer', hover: { backgroundColor: t.hover }, ...pressRow(t, t.hover) }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 5, backgroundColor: t.v('--color-background-elevated-secondary'), position: 'relative', flexShrink: 0 }}><Icon source={N.globe} size={13} color={t.textSecondary} />{/* `size-1.5 bg-emerald-500 ring-[1.5px] ring-(button-secondary)` */}<div style={{ position: 'absolute', right: -3.5, bottom: -3.5, width: 9, height: 9, borderRadius: 4.5, backgroundColor: t.buttonSecondary, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: 'oklch(0.696 0.17 162.48)' }} /></div></div>
           <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={ink(t, 0.9)} size={14} lineHeight={21} truncate>{server.title && server.title.length <= 48 ? server.title : server.process_name ?? server.host}</Label><Label color={muted(t, 0.7)} size={13} lineHeight={19.5} truncate>{[server.process_name, server.cwd?.split('/').filter(Boolean).slice(-3).join('/')].filter(Boolean).join(' · ')}</Label></div>
           <Label color={t.textSecondary} size={13}>{new URL(server.url).host}</Label>
@@ -96,9 +110,20 @@ export function PreviewPane({ threadId }: { threadId: string }) {
       {recents.length > 0 && <><DockSection label="Recent" /><div style={{ display: 'flex', flexDirection: 'column', marginLeft: 12, marginRight: 12, padding: 4, borderRadius: 10, backgroundColor: t.buttonSecondary }}>
         {recents.map((recent, index) => <RecentRow key={`${recent.kind}:${recent.value}`} recent={recent} index={index} now={now} open={() => void openPreview(threadId, recent.value)} forget={() => forgetRecent(key, recent)} />)}
       </div></>}
-      <Label color={muted(t, 0.6)} size={13} lineHeight={16} style={{ paddingLeft: 14, paddingTop: 2, paddingBottom: 8 }}>{environment.local ? 'Servers in this project come first. Updated every few seconds.' : `Kybern forwards these through the connection to ${environment.name}.`}</Label>
-    </div></virtual-list> : <DockEmpty icon={N.globe} title={searching ? 'Looking for local servers…' : 'No local servers running'} body="Start a dev server or enter a file path above. Servers appear here while they run." />}
+      <Label color={muted(t, 0.6)} size={13} lineHeight={16} style={{ paddingLeft: 14, paddingTop: 2, paddingBottom: 8 }}>{remote ? `Kybern forwards the port you open from ${chosen!.name} to this machine. Updated every few seconds.` : environment.local ? 'Servers in this project come first. Updated every few seconds.' : `Kybern forwards these through the connection to ${environment.name}.`}</Label>
+    </div></virtual-list> : <DockEmpty icon={N.globe} title={searching ? (remote ? `Looking for servers on ${chosen!.name}…` : 'Looking for local servers…') : remote ? `No servers running on ${chosen!.name}` : 'No local servers running'} body="Start a dev server or enter a file path above. Servers appear here while they run." />}
 
+  </div>
+}
+/** Which machine's servers the empty Browser lists, and the way to forward a port by hand. */
+function ServersBar({ threadId, chosenId }: { threadId: string; chosenId?: string }) {
+  const machines = useMachines().filter(m => !m.offline), chosen = machines.find(m => m.machineId === chosenId)
+  return <div testId="preview-servers-bar" style={{ display: 'flex', alignItems: 'center', gap: 6, height: 36, flexShrink: 0, paddingLeft: 8, paddingRight: 8 }}>
+    <Menu testId="preview-servers-machine" trigger={open => <PickerChip size="sm" open={open}>{chosen ? (chosen.isLocal ? `${chosen.name} (this machine)` : chosen.name) : 'Machine'}</PickerChip>}>
+      {machines.map(m => <MenuItem key={m.machineId} id={m.machineId} testId={`preview-servers-${m.machineId}`} label={m.isLocal ? `${m.name} (this machine)` : m.name} checked={m.machineId === chosenId} onSelect={() => setPreview(threadId, { serversOn: m.machineId })} />)}
+    </Menu>
+    <div style={{ flexGrow: 1 }} />
+    <Button size="sm" variant="ghost" testId="preview-forward-open" onClick={() => setPreview(threadId, { forwardOpen: true, forwardMachine: chosenId && chosenId !== machines.find(m => m.isLocal)?.machineId ? chosenId : undefined })}>Forward a port…</Button>
   </div>
 }
 function RecentRow({ recent, index, now, open, forget }: { recent: PreviewRecent; index: number; now: number; open: () => void; forget: () => void }) {

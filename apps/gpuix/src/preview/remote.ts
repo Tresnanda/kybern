@@ -1,0 +1,33 @@
+// A dev server on another machine (ADE-86 U3): the Browser lists it under that machine, and opening it forwards its port to this
+// machine (`ports.forward`) and shows `http://localhost:<local>`. The page, its assets and its hot-reload WebSocket are plain
+// TCP to the webview, so nothing in the page changes.
+import type { PortForward, PortsForwardParams } from '../../../../packages/kybern-client/src/types.ts'
+
+/** A server on another machine, as an entry remembers it so reload, back and forward can forward the port again. */
+export interface RemoteServer { id: string; name: string; port: number; path: string }
+
+export interface ForwardClient { call(method: 'ports.forward', params: PortsForwardParams): Promise<PortForward> }
+
+/** Forward `port` of `machine`; the daemon returns the forward it already holds for the same machine and port. */
+export const forwardPort = (client: ForwardClient, machineId: string, port: number): Promise<PortForward> => client.call('ports.forward', { machine: machineId, remote_port: port })
+
+/** The page to show once the port is forwarded. */
+export const forwardedAddress = (forward: Pick<PortForward, 'local_port'>, path = ''): string => `http://localhost:${forward.local_port}${path.startsWith('/') || !path ? path : `/${path}`}`
+
+/** The part of a server's address after the host. */
+export function addressPath(url: string): string {
+  try { const parsed = new URL(url); return parsed.pathname === '/' && !parsed.search && !parsed.hash ? '' : `${parsed.pathname}${parsed.search}${parsed.hash}` } catch { return '' }
+}
+
+/** What the "Forward a port" field accepts: `5173`, `localhost:5173` or `http://localhost:5173/app`. */
+export function parseForwardTarget(text: string): { port: number; path: string } | { error: string } {
+  const trimmed = text.trim()
+  if (!trimmed) return { error: 'Enter the port of the server, such as 5173.' }
+  const absolute = /^\d+$/.test(trimmed) ? `http://localhost:${trimmed}` : trimmed.includes('://') ? trimmed : `http://${trimmed}`
+  let url: URL
+  try { url = new URL(absolute) } catch { return { error: 'Enter the port of the server, such as 5173 or localhost:5173.' } }
+  if (!['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) return { error: "A forward reaches the other machine's own localhost, such as localhost:5173." }
+  const port = Number(url.port || (url.protocol === 'https:' ? 443 : 80))
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return { error: 'Use a port between 1 and 65535.' }
+  return { port, path: addressPath(url.toString()) }
+}
