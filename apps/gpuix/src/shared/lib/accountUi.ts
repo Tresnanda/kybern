@@ -3,6 +3,7 @@
 // imports, so node tests load it directly.
 
 import type { AccountSummary, ProviderKind, ProviderLimits } from "../../../../../packages/kybern-client/src/types.ts"
+import { hasSignIn } from "../../../../../packages/kybern-client/src/machineAgents.ts"
 import { CLI_ACCOUNT_NAME, CLI_INSTANCE, isCliInstance } from "./accounts.ts"
 
 /**
@@ -46,6 +47,8 @@ export type PickerTab =
       ariaLabel: string
       /** The account can't send until it is signed in again: selecting it opens the sign-in sheet. */
       needsSignIn: boolean
+      /** Set when the machine the thread runs on has this agent signed out (the tab is dimmed, its tooltip says where). */
+      signedOutOn?: string
       /** The agent isn't set up: selecting it opens its setup. */
       notSetUp: boolean
       /** Another agent while the thread can't change agent. */
@@ -68,15 +71,19 @@ export function pickerTabs({
   current,
   canPickProvider,
   starredView,
+  machineName,
 }: {
   agents: readonly PickerAgent[]
   accounts: readonly AccountSummary[]
   current: { kind: ProviderKind; instance: string }
   canPickProvider: boolean
   starredView: boolean
+  /** The thread runs on another machine: list only the agents installed there, and mark one that is signed out there. */
+  machineName?: string
 }): PickerTab[] {
   const tabs: PickerTab[] = [{ type: "starred", key: "starred", selected: starredView, label: "Starred", tooltip: "Starred models" }]
   for (const agent of agents) {
+    if (machineName && !agent.available) continue
     const own = accountsOfKind(accounts, agent.kind)
     const multi = own.length > 1
     const isCurrentKind = agent.kind === current.kind
@@ -90,16 +97,20 @@ export function pickerTabs({
       const instance = account.provider.instance
       const cli = isCliInstance(instance)
       const name = cli ? CLI_ACCOUNT_NAME : account.name
-      const needsSignIn = accountNeedsSignIn(account)
+      // The CLI account is the machine's own login: on another machine, "signed out" there is worth saying.
+      const signedOutThere = !!machineName && cli && hasSignIn(agent.kind) && (account.status === "signed_out" || account.status === "needs_sign_in")
+      const needsSignIn = accountNeedsSignIn(account) || signedOutThere
       const selected = !starredView && isCurrentKind && (!multi || instance === selectedInstance)
       const base = multi ? `${agent.display_name} · ${name}` : agent.display_name
       const tooltip = !agent.available
         ? `${agent.display_name} isn’t installed`
         : !isCurrentKind && !canPickProvider
           ? `Start a new thread to use ${agent.display_name}`
-          : needsSignIn
-            ? `${base} — needs sign-in`
-            : base
+          : signedOutThere
+            ? `${base} · signed out on ${machineName}`
+            : needsSignIn
+              ? `${base} — needs sign-in`
+              : base
       tabs.push({
         type: "account",
         key: `${agent.kind}:${instance}`,
@@ -111,8 +122,9 @@ export function pickerTabs({
         multi,
         label: multi && selected ? (cli ? "CLI" : name) : null,
         tooltip,
-        ariaLabel: !agent.available ? `${agent.display_name}, not set up` : needsSignIn ? `${base}, needs sign-in` : base,
+        ariaLabel: !agent.available ? `${agent.display_name}, not set up` : signedOutThere ? `${base}, signed out on ${machineName}` : needsSignIn ? `${base}, needs sign-in` : base,
         needsSignIn,
+        ...(signedOutThere ? { signedOutOn: machineName } : {}),
         notSetUp: !agent.available,
         disabled: !isCurrentKind && !canPickProvider,
       })

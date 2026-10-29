@@ -357,6 +357,7 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
       onReloadModels={(force) => machine.machineId ? loadMachineLists(machine.machineId, force, machine.chosen?.projectId) : loadProviders(force, projectId ?? undefined).then(() => {})}
       machinePicker={machine.show ? <MachinePicker target={machine} /> : undefined}
       uploadMachine={machine.remote && machine.reachable ? machine.machineId : undefined}
+      agentsOn={machine.remote ? machine.chosen?.name : undefined}
       sendDisabled={!provider || (coordinator && !projectId)}
       sendDisabledReason={!provider ? machine.remote && !machine.reachable ? `${machine.chosen?.name} is offline and its agents have not been seen yet.` : 'Choose an available agent before sending.' : coordinator && !projectId ? 'Choose a project for the Coordinator.' : undefined}
       onSend={async (message, _delivery, snapshot) => {
@@ -581,6 +582,8 @@ export interface ComposerViewProps {
   machinePicker?: ReactNode
   /** Attachments upload to this machine's assets (a new chat that runs there); unset is the machine the user is at. */
   uploadMachine?: MachineId
+  /** The machine a new chat runs on when it is not this one: the agent picker lists that machine's agents and sign-ins. */
+  agentsOn?: string
 }
 
 /** Where the prompt was when Send was pressed (window coordinates; `ComposerViewProps.launch`). */
@@ -1149,6 +1152,7 @@ export function ComposerView(input: ComposerViewProps) {
               <ModelPicker
                 provider={provider}
                 providers={providers}
+                {...(props.agentsOn ? { machineName: props.agentsOn } : {})}
                 model={model}
                 effort={effort}
                 canPickModel={canPickModel}

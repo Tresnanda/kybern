@@ -50,9 +50,11 @@ import { alpha, cachedMarkdownTheme, Chevron, fg, META, muted, Para, ROW_LINE, R
 import { over } from '../theme.ts'
 import { Collapse, Rise } from '../motion/kit.tsx'
 import { Shimmer } from './motion.tsx'
+import { agentName } from '../requests/model.ts'
+import { silenceNotice } from '../../../../packages/kybern-client/src/silence.ts'
 import { GROUP_TREE, HEADER_STEM, WorkRows, type RowContext } from './rows.tsx'
 import { markTreeOpen, TreeGroup, TreeLines } from '../tree/Tree.tsx'
-import { filePatch, hydrateToolOutput, loadFilePatch, reportError, revertTo, useChildThreads, useRowState, useTurnDiff, type ToolBlock } from './store.ts'
+import { filePatch, hydrateToolOutput, loadFilePatch, reportError, revertTo, interrupt, useChildThreads, useRowState, useTurnDiff, type ToolBlock } from './store.ts'
 import { signInRows } from '../../../../packages/kybern-client/src/signIn.ts'
 
 const isTaskActive = (task: RuntimeTask) => task.status === 'pending' || task.status === 'running' || task.status === 'waiting' || task.status === 'stopping'
@@ -81,10 +83,14 @@ export function DateSeparator({ at }: { at: string }) {
 }
 
 /** The orbit loader animates independently; elapsed labels update once a second. */
-function WorkingHeader({ since }: { since: string }) {
+function WorkingHeader({ since, lastAt, quiet, threadId }: { since: string; lastAt: number; quiet: boolean; threadId: ThreadId }) {
   const t = useTheme()
   const loop = useLoopVisibility()
   useLoaderSecond(loop.visible)
+  const kind = useApp(s => s.open.thread?.provider.kind)
+  const [stopping, setStopping] = useState(false)
+  // Nothing has arrived from the agent for a long time and nothing is running: say so, with a way out.
+  const silence = quiet ? silenceNotice(Date.now() - lastAt, agentName(kind)) : null
   return (
     <div ref={loop.ref} testId="working-header" style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: -2 }}>
       <div style={{ display: 'flex', width: 16, justifyContent: 'center' }}>
@@ -93,8 +99,17 @@ function WorkingHeader({ since }: { since: string }) {
       <Label color={muted(t)} lineHeight={TEXT.lineHeight}>
         {`Working for ${clockDuration(elapsedSince(since, Date.now()))}`}
       </Label>
+      {silence && <div testId="silence-notice"><Label color={muted(t)} lineHeight={TEXT.lineHeight}>{`· ${silence}`}</Label></div>}
+      {silence && <Button size="sm" variant="ghost" testId="silence-stop" disabled={stopping} onClick={() => { setStopping(true); void interrupt(threadId).catch(() => setStopping(false)) }}>{stopping ? 'Stopping…' : 'Stop'}</Button>}
     </div>
   )
+}
+
+/** When this turn last showed anything: its newest block, else the message that started it. */
+function lastActivityAt(group: TurnGroup): number {
+  let last = Date.parse(group.user?.at ?? '') || 0
+  for (const block of group.work) last = Math.max(last, Date.parse(block.at) || 0)
+  return last || Date.now()
 }
 
 function itemCards(group: TurnGroup) {
@@ -195,7 +210,7 @@ export const Turn = memo(function Turn({ group, threadId, isLast, threadRunning,
       {group.visuals?.map(block => <VisualCard key={block.id} visual={block.visual} answer={block.answer} threadId={threadId} />)}
       {running && (
         <div testId="live-work" style={{ display: 'flex', flexDirection: 'column', paddingBottom: 8 }}>
-          <WorkingHeader since={group.user?.at ?? group.work[0]?.at ?? ''} />
+          <WorkingHeader since={group.user?.at ?? group.work[0]?.at ?? ''} lastAt={lastActivityAt(group)} quiet={!hasLiveWork} threadId={threadId} />
           {roots.length > 0 && (
             <div style={{ marginTop: 4 }}>
               <WorkRows compact blocks={roots} ctx={ctx} tone="bright" liveTextId={group.liveTextId} liveThinkingId={group.liveThinkingId} waiting={endsInRun} />

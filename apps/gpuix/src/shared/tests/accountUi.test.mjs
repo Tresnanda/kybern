@@ -110,3 +110,16 @@ test("glyph aria label", () => {
   assert.equal(glyphAriaLabel({ contextPercent: null, cache: null, account: null }), "Context usage unavailable.")
   assert.equal(glyphAriaLabel({ contextPercent: 5, cache: { state: "cold" }, account: null }), "Context 5% used. Prompt cache cold.")
 })
+
+test("on another machine only its installed agents are listed, and one signed out there says where", () => {
+  const remoteAccounts = [acct("claude-code", "default", "CLI account", { is_default: true, status: "signed_out" }), acct("codex", "default", "CLI account", { is_default: true })]
+  const tabs = accountTabs(pickerTabs({ agents, accounts: remoteAccounts, current: { kind: "codex", instance: "default" }, canPickProvider: true, starredView: false, machineName: "instabox" }))
+  assert.deepEqual(tabs.map((t) => t.key), ["claude-code:default", "codex:default"])
+  assert.equal(tabs[0].needsSignIn, true)
+  assert.equal(tabs[0].signedOutOn, "instabox")
+  assert.equal(tabs[0].tooltip, "Claude Code · signed out on instabox")
+  assert.equal(tabs[1].needsSignIn, false)
+  // On this machine nothing changes: the CLI account is never "needs sign-in", and an agent that is not installed still shows as not set up.
+  const here = accountTabs(pickerTabs({ agents, accounts: remoteAccounts, current: { kind: "codex", instance: "default" }, canPickProvider: true, starredView: false }))
+  assert.deepEqual([here.length, here[0].needsSignIn, here[2].notSetUp], [3, false, true])
+})
