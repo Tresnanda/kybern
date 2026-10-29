@@ -86,6 +86,34 @@ fn home_dir() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf())
 }
 
+/// The path with links resolved and, on Windows, without the `\\?\` prefix canonicalizing adds, so it can
+/// be compared with paths spelled the ordinary way. A path that does not exist is returned as given.
+fn simple_canonical(path: &Path) -> PathBuf {
+    match std::fs::canonicalize(path) {
+        Ok(real) => kybern_git::simplify_path(&real),
+        Err(_) => kybern_git::simplify_path(path),
+    }
+}
+
+/// A folder name to suggest on this machine, in the spelling it uses.
+fn example_folder() -> &'static str {
+    if cfg!(windows) { r"D:\projects" } else { "~/projects" }
+}
+
+fn path_same(windows: bool, a: &Path, b: &Path) -> bool {
+    if windows { a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy()) } else { a == b }
+}
+
+/// Whether `path` is `prefix` or inside it; Windows paths compare without regard to case.
+fn path_starts(windows: bool, path: &Path, prefix: &Path) -> bool {
+    if windows {
+        let (path, prefix) = (path.to_string_lossy().to_lowercase(), prefix.to_string_lossy().to_lowercase());
+        path == prefix || path.starts_with(&format!("{}\\", prefix.trim_end_matches('\\')))
+    } else {
+        path.starts_with(prefix)
+    }
+}
+
 /// Expand `~` and check that `raw` is a place a project may be written to on this machine. Returns the
 /// folder as this machine spells it.
 pub(crate) fn resolve_destination(raw: &str, data_dir: &Path) -> Result<PathBuf, String> {
@@ -102,7 +130,7 @@ pub(crate) fn resolve_destination(raw: &str, data_dir: &Path) -> Result<PathBuf,
         _ => PathBuf::from(raw),
     };
     if !path.is_absolute() {
-        return Err("Enter the full path of the folder, like ~/projects/name.".into());
+        return Err(format!("Enter the full path of the folder, like {}.", example_folder()));
     }
     if path.components().any(|component| matches!(component, Component::ParentDir | Component::CurDir)) {
         return Err("Enter the path without . or .. in it.".into());
@@ -115,25 +143,16 @@ pub(crate) fn resolve_destination(raw: &str, data_dir: &Path) -> Result<PathBuf,
     if checked.parent().is_none() || checked.file_name().is_none() {
         return Err("That is the top of the drive. Choose a folder inside it.".into());
     }
-    let same = |a: &Path, b: &Path| if cfg!(windows) { a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy()) } else { a == b };
-    let starts = |path: &Path, prefix: &Path| {
-        if cfg!(windows) {
-            let (path, prefix) = (path.to_string_lossy().to_lowercase(), prefix.to_string_lossy().to_lowercase());
-            path == prefix || path.starts_with(&format!("{}\\", prefix.trim_end_matches('\\')))
-        } else {
-            path.starts_with(prefix)
-        }
-    };
-    if let Some(home) = home.as_deref().map(|home| home.canonicalize().map(|h| kybern_git::simplify_path(&h)).unwrap_or(home.to_path_buf()))
-    {
+    let (same, starts) = (|a: &Path, b: &Path| path_same(cfg!(windows), a, b), |path: &Path, prefix: &Path| path_starts(cfg!(windows), path, prefix));
+    if let Some(home) = home.as_deref().map(simple_canonical) {
         if same(&checked, &home) || starts(&home, &checked) {
-            return Err("That folder holds your home folder. Choose a folder inside it, like ~/projects.".into());
+            return Err(format!("That folder holds your home folder. Choose a folder inside it, like {}.", example_folder()));
         }
         if cfg!(target_os = "macos") && starts(&checked, &home.join("Library")) {
             return Err("~/Library belongs to macOS and apps. Choose a folder like ~/projects.".into());
         }
     }
-    let data = data_dir.canonicalize().unwrap_or_else(|_| data_dir.to_path_buf());
+    let data = simple_canonical(data_dir);
     if starts(&checked, &data) || starts(&data, &checked) {
         return Err("That folder is Kybern's own data folder. Choose another one.".into());
     }
@@ -145,7 +164,7 @@ pub(crate) fn resolve_destination(raw: &str, data_dir: &Path) -> Result<PathBuf,
         &["/usr", "/bin", "/sbin", "/etc", "/var", "/proc", "/sys", "/dev", "/boot", "/lib", "/lib64", "/run", "/snap"]
     };
     if let Some(folder) = system.iter().map(Path::new).find(|folder| starts(&checked, folder)) {
-        return Err(format!("{} is a system folder. Choose a folder in your home folder, like ~/projects.", folder.display()));
+        return Err(format!("{} is a system folder. Choose another folder, like {}.", folder.display(), example_folder()));
     }
     Ok(path)
 }
@@ -212,11 +231,12 @@ fn folder_name(name: &str) -> String {
 /// The parent folder most of this machine's projects live in, else `~/projects`.
 fn projects_parent(projects: &[Project], data_dir: &Path) -> Option<PathBuf> {
     let mut counts: Vec<(PathBuf, usize, chrono::DateTime<Utc>)> = Vec::new();
-    let data = data_dir.canonicalize().unwrap_or_else(|_| data_dir.to_path_buf());
+    let data = simple_canonical(data_dir);
     for project in projects {
-        let path = Path::new(&project.path);
+        let path = kybern_git::simplify_path(Path::new(&project.path));
         let Some(parent) = path.parent() else { continue };
-        if path.starts_with(&data) || parent.parent().is_none() {
+        // Never propose Kybern's own data folder, nor a folder that holds it (both are refused as destinations).
+        if path_starts(cfg!(windows), &path, &data) || path_starts(cfg!(windows), &data, parent) || parent.parent().is_none() {
             continue;
         }
         match counts.iter_mut().find(|(known, ..)| known == parent) {
@@ -427,7 +447,14 @@ impl Orchestrator {
             env_files: detect_env_files(Path::new(&project.path)).await,
             blocked: None,
         };
-        if repos.is_empty() || repos.iter().any(|repo| repo.identity.is_empty() || repo.commit.is_none()) {
+        if repos.iter().any(|repo| repo.identity.is_empty() || repo.commit.is_none()) || repos.is_empty() {
+            // Git also finds "no commits" in a folder it refuses to open (another user owns it): say that instead.
+            for repo in &repos {
+                if let kybern_git::RepoState::Unsafe(message) = Repo::probe(&repo.dir).await {
+                    plan.blocked = Some(message);
+                    return Ok(plan);
+                }
+            }
             plan.blocked = Some(format!(
                 "{} has no git commits here yet, so there is nothing to copy. Commit once, then add it to {}.",
                 project.name, target.name
@@ -992,6 +1019,54 @@ fn queued(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_paths_compare_without_case_or_the_verbatim_prefix() {
+        let simple = |text: &str| kybern_git::simplify_path(Path::new(text));
+        // What `canonicalize` gives for the data folder must match the way people spell a project path.
+        let data = simple(r"\\?\D:\kybern\network-test");
+        assert!(path_starts(true, &simple(r"d:\Kybern\Network-Test\x"), &data));
+        assert!(path_starts(true, &data, &simple(r"D:\kybern")), "a folder that holds the data folder");
+        assert!(!path_starts(true, &simple(r"D:\kybern\network-tests\x"), &data), "a sibling with the same prefix");
+        assert!(path_same(true, &simple(r"\\?\D:\Work"), &simple(r"d:\work")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_proposed_folder_never_lands_inside_the_data_folder_on_windows() {
+        let data = std::env::temp_dir().join(format!("kybern-provision-data-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&data).unwrap();
+        let verbatim = std::fs::canonicalize(&data).unwrap();
+        assert!(verbatim.to_string_lossy().starts_with(r"\\?\"), "canonicalize adds the prefix");
+        assert!(resolve_destination(&data.join("x").to_string_lossy(), &data).is_err(), "inside the data folder");
+        assert!(resolve_destination(&data.to_string_lossy().to_uppercase(), &data).is_err(), "different case");
+        let project = |path: &Path| {
+            let now = Utc::now();
+            Project {
+                repo: None,
+                repos: Vec::new(),
+                id: Uuid::now_v7(),
+                name: "p".into(),
+                path: path.to_string_lossy().into_owned(),
+                is_git: true,
+                worktrees_default: None,
+                task_prefix: None,
+                brief_in_all_threads: false,
+                coordinator: None,
+                space_id: None,
+                created_at: now,
+                updated_at: now,
+                kind: ProjectKind::Single,
+                members: Vec::new(),
+                worktree_copy: Vec::new(),
+                instructions_offer_dismissed: false,
+            }
+        };
+        let inside = [project(&data.join("a")), project(&data.join("b"))];
+        let parent = projects_parent(&inside, &data).expect("falls back to home");
+        assert!(!path_starts(true, &parent, &simple_canonical(&data)), "{parent:?}");
+        std::fs::remove_dir_all(&data).ok();
+    }
 
     #[test]
     fn destinations_refuse_roots_home_and_system_folders() {
