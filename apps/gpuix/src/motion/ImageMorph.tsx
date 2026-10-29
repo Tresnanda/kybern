@@ -255,8 +255,22 @@ export function ImageViewer({ src, label, from, source, onClose, finalFocus, onO
         }}
         style={{ position: 'relative', width: window.width, height: window.height, pointerEvents: closing ? 'none' : undefined }}
       >
-      {/* The scrim takes outside clicks; the image and toolbar sit above it. */}
+      {/* The scrim takes outside clicks; the image, then the toolbar, sit above it. */}
       <div testId={`${testId}-scrim`} onClick={() => close(false)} paintTransform={scrim} style={{ position: 'absolute', left: 0, top: 0, width: window.width, height: window.height, backgroundColor: SCRIM }} />
+      <div
+        testId={`${testId}-image`}
+        paintTransform={outer}
+        onMotionComplete={e => { if (closing && e.motionGeneration === closing.generation) finish() }}
+        style={{ position: 'absolute', left: area.x, top: area.y, width: area.width, height: area.height }}
+      >
+        {/* The lift shadow stays outside the clip and fades in as the image lands (`shadowOpacity`). */}
+        <LiftShadow controller={zoom} box={{ x: rect.x - area.x, y: rect.y - area.y, width: rect.width, height: rect.height }} />
+        <div paintTransform={inner} style={{ position: 'absolute', left: 0, top: 0, width: area.width, height: area.height, display: 'flex', overflow: 'hidden' }}>
+          <ZoomSurface controller={zoom} src={src} label={label} radius={PREVIEW_RADIUS} outline={outline} onBackdrop={() => close(false)} testId={`${testId}-zoom-surface`} />
+        </div>
+      </div>
+      {/* After the image: the zoom room spans the whole area under the toolbar's top, so a toolbar drawn before it sat under
+        its backdrop, and every button press closed the preview. Later siblings paint and take the pointer first. */}
       <div testId={`${testId}-bar`} paintTransform={chrome} style={{ position: 'absolute', left: rect.x, top: rect.y - BAR - GAP, width: rect.width, height: BAR, display: 'flex', alignItems: 'center', gap: 12, paddingLeft: 16, paddingRight: onOpenInTab ? 148 : 116, borderRadius: 14, borderWidth: 1, borderColor: t.borderLight, backgroundColor: t.popover }}>
         <Label color={t.text} size={13} weight={500} truncate style={{ flexShrink: 1, minWidth: 0 }}>{label}</Label>
         <ZoomHud controller={zoom} compact={rect.width < 520} testId={`${testId}-zoom`} />
@@ -270,18 +284,6 @@ export function ImageViewer({ src, label, from, source, onClose, finalFocus, onO
           onKeyDown={(e: { key?: string }) => { if (e.key === 'enter' || e.key === 'space') close(true) }}
           style={{ position: 'absolute', top: 10, right: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, cursor: 'pointer', hover: { backgroundColor: t.buttonTertiaryHover } }}>
           <Icon source={N.x} size={14} color={t.iconSecondary} />
-        </div>
-      </div>
-      <div
-        testId={`${testId}-image`}
-        paintTransform={outer}
-        onMotionComplete={e => { if (closing && e.motionGeneration === closing.generation) finish() }}
-        style={{ position: 'absolute', left: area.x, top: area.y, width: area.width, height: area.height }}
-      >
-        {/* The lift shadow stays outside the clip and fades in as the image lands (`shadowOpacity`). */}
-        <LiftShadow controller={zoom} box={{ x: rect.x - area.x, y: rect.y - area.y, width: rect.width, height: rect.height }} />
-        <div paintTransform={inner} style={{ position: 'absolute', left: 0, top: 0, width: area.width, height: area.height, display: 'flex', overflow: 'hidden' }}>
-          <ZoomSurface controller={zoom} src={src} label={label} radius={PREVIEW_RADIUS} outline={outline} onBackdrop={() => close(false)} testId={`${testId}-zoom-surface`} />
         </div>
       </div>
       </div>

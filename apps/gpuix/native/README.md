@@ -917,6 +917,42 @@ live labels for comparisons), and settled loops run in Core Animation
 separate visibility-aware seconds clock. Round-seven measurements and remaining
 acceptance gaps are in `../perf/pacing-round7-2026-10-17.md`.
 
+**Frame watchdog (macOS, fork branches `frame-stall`).** A window draws only when its display's link calls
+`step`, and AppKit re-subscribes it only on occlusion, screen and key changes. A link that stops calling back while
+the registry believes it runs (CoreVideo, seen on Apple silicon), a window left unsubscribed, or one subscribed to a
+display it left froze the whole UI until it was minimized, changed Space, moved to another display or became key
+again; a move on the same display does not help. `pump_events` (at least every 100 ms through the JS fallback timer,
+no timer of its own) checks each visible window: 250 ms without a frame re-subscribes it, restarts a silent link and
+then replaces it (the old one leaked, as every link is). Screen-parameter and wake notifications re-subscribe at once.
+A draw whose `nextDrawable` timed out (1 s, all drawables held by the compositor) presents the same scene again after
+100 ms, backing off to 1.6 s, instead of leaving the previous frame up until something else changes.
+`getFrameWatchdog()` reports frames, stalls, repairs, the last stall in words, and dropped/slow drawables; a stall or
+a first dropped drawable raises a window-state event, and `src/platform/frameWatchdog.ts` appends a line to
+`gpuix-frames.log` in the data dir. `KYBERN_FRAME_WATCHDOG=0` turns it off, `=log` only reports.
+`KYBERN_FRAME_STALL_TEST=silent-link|dead-link|unsubscribe|drop-drawable:<ms>` injects each fault;
+`frame-stall-check.ts` (with `frame-stall-lab.tsx`) shows each one freezing with `=log` and repaired with the
+watchdog on. Measurements: `../perf/frame-stall-2026-10-29.md`.
+
+**Drawable starvation (macOS, fork branches `drawable-starvation`).** The freeze sampled in the field (0.17.0) was
+none of those states: the link ran, and the main thread sat in `-[CAMetalLayer nextDrawable]` for every frame. When
+WindowServer shows none of the drawables a layer presented, `nextDrawable` waits about 1 s and then hands one back
+anyway (`allowsNextDrawableTimeout` is NO, so it never returns nil and the dropped-drawable path above never ran),
+and a window drawing on every frame spends the whole time there: no input, no JS, nothing new on screen. The gate
+in `gpui_apple/src/drawable_gate.rs` counts presented drawables until their presented handler runs. With two
+unshown (the pool of three is empty) a draw waits for a handler at most until the older one is 100 ms old, then
+skips the draw (`take_dropped_frame`, so the window presents the scene again later) instead of blocking. A
+`nextDrawable` over 100 ms twice in a row starts the same episode. While starved the layer is kicked (pending
+`CATransaction`s flushed, `presentsWithTransaction` off, `drawableSize` nudged for fresh surfaces) at 100 ms,
+backing off to 3.2 s, and a draw is tried again as soon as a handler shows the compositor moving or after that
+backoff. Presents with a transaction are not counted: their handlers run on the main thread. `getFrameWatchdog()`
+adds `drawableStarvations`, `drawableRecoveries`, `starvedSkips`, `drawableKicks` and `lastStarvation`; an episode
+starting and ending each raise a window-state event and a `gpuix-frames.log` line (`starvation x1 …`,
+`starvation ended …`, with how long it lasted and what cleared it). `KYBERN_DRAWABLE_GATE=0` turns the gate off;
+`KYBERN_FRAME_STALL_TEST=starve-drawables:<ms>` emulates a compositor that shows nothing for 3 s after every <ms>
+(handlers held back, `nextDrawable` blocking 1 s once the pool is empty), and `frame-stall-check.ts` runs it with
+the gate off and on. Whether the kicks release a real stalled compositor is unproven; the log says which cleared
+it.
+
 Subtree scale is now `paintTransform` ("Paint-only subtree transforms" below); the reasons in the native springs
 section: quads, paths, masks, glyphs and hitboxes need one coordinated GPUI scene
 transform. Translation is not presented as scale.

@@ -2452,6 +2452,20 @@ mod startup_cleanup_tests {
     use super::*;
     use std::{os::unix::fs::PermissionsExt, time::Duration};
 
+    /// Linux refuses to run a file that another test's freshly forked child
+    /// still holds open for writing (ETXTBSY) until that child execs. Retry.
+    async fn spawn_fixture(config: SessionConfig) -> Result<SpawnedSession> {
+        for _ in 0..50 {
+            match CodexDriver.spawn(config.clone()).await {
+                Err(DriverError::Io(error)) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    tokio::time::sleep(Duration::from_millis(20)).await
+                }
+                result => return result,
+            }
+        }
+        CodexDriver.spawn(config).await
+    }
+
     #[tokio::test]
     async fn provider_session_attach_scopes_tools_and_coordinator_instructions() {
         use crate::{NativeToolDefinition, NativeToolRestrictions};
@@ -2501,22 +2515,21 @@ wait
                 }],
                 restrictions: NativeToolRestrictions::default(),
             };
-            let spawned = CodexDriver
-                .spawn(SessionConfig {
-                    cwd: root.path().into(),
-                    model: None,
-                    effort: None,
-                    permission_mode: PermissionMode::Supervised,
-                    native_tool_bridge: Some(bridge),
-                    resume_session_id: resume.map(str::to_string),
-                    resume_lacks_instructions: false,
-                    fork,
-                    rewind: None,
-                    binary: Some(binary),
-                    env: HashMap::from([("REQUESTS".into(), requests.to_string_lossy().into_owned())]),
-                })
-                .await
-                .unwrap();
+            let spawned = spawn_fixture(SessionConfig {
+                cwd: root.path().into(),
+                model: None,
+                effort: None,
+                permission_mode: PermissionMode::Supervised,
+                native_tool_bridge: Some(bridge),
+                resume_session_id: resume.map(str::to_string),
+                resume_lacks_instructions: false,
+                fork,
+                rewind: None,
+                binary: Some(binary),
+                env: HashMap::from([("REQUESTS".into(), requests.to_string_lossy().into_owned())]),
+            })
+            .await
+            .unwrap();
             let recorded = std::fs::read_to_string(requests).unwrap();
             let lines = recorded.lines().map(|line| serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
             assert_eq!(lines.len(), 3);
@@ -2553,21 +2566,20 @@ wait
         )
         .unwrap();
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let result = CodexDriver
-            .spawn(SessionConfig {
-                cwd: root.path().into(),
-                model: None,
-                effort: None,
-                permission_mode: PermissionMode::Supervised,
-                native_tool_bridge: None,
-                resume_session_id: Some("fixture".into()),
-                resume_lacks_instructions: false,
-                fork: false,
-                rewind: None,
-                binary: Some(binary),
-                env: HashMap::new(),
-            })
-            .await;
+        let result = spawn_fixture(SessionConfig {
+            cwd: root.path().into(),
+            model: None,
+            effort: None,
+            permission_mode: PermissionMode::Supervised,
+            native_tool_bridge: None,
+            resume_session_id: Some("fixture".into()),
+            resume_lacks_instructions: false,
+            fork: false,
+            rewind: None,
+            binary: Some(binary),
+            env: HashMap::new(),
+        })
+        .await;
         let error = match result {
             Ok(_) => panic!("resume should fail"),
             Err(error) => error.to_string(),

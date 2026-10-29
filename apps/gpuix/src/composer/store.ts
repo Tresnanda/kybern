@@ -79,8 +79,8 @@ export interface ComposerData {
   catalog: { key: string; status: ProviderStatus } | null
   catalogLoading: string | null
   queued: Record<ThreadId, QueuedMessage[]>
-  /** The branches of a project's checkout; `machineId` is unset for the machine the user is at. */
-  branches: { projectId: ProjectId; machineId?: MachineId | undefined; result: GitBranchesResult } | null
+  /** The branches of a project's checkout; `machineId` is unset for the machine the user is at. `fetching` while the remotes are fetched. */
+  branches: { projectId: ProjectId; machineId?: MachineId | undefined; result: GitBranchesResult; fetching?: boolean } | null
   draft: DraftChoices
   favorites: FavoriteModel[]
   recents: Record<string, string[]>
@@ -547,19 +547,28 @@ function adoptNewChat(paneId: string, from: ThreadId, to: ThreadId, sendId: stri
   })
 }
 
+/** Lists the branches at once (local, then remote-tracking), then again after fetching every remote. */
 export async function loadBranches(projectId: ProjectId, machineId?: MachineId) {
   const empty = { projectId, machineId, result: { current: null, branches: [] } }
   // A project only an offline machine has: the branch chip waits with no branches instead of failing.
   const pick = () => (machineId ? clientFor(machineId) : projectClient(projectId))
   const client = (() => { try { return need(pick()) } catch { return null } })()
   if (!client) { patch({ branches: empty }); return }
+  const current = () => { try { return pick() === client && data.branches?.projectId === projectId && data.branches.machineId === machineId } catch { return false } }
   try {
-    const result = await client.call('git.branches', { project_id: projectId })
+    const result = await client.call('git.branches', { project_id: projectId, include_remote: true })
     if (pick() !== client) return
-    patch({ branches: { projectId, machineId, result } })
+    patch({ branches: { projectId, machineId, result, fetching: true } })
   } catch {
     if (pick() !== client) return
     patch({ branches: empty })
+    return
+  }
+  try {
+    const result = await client.call('git.branches', { project_id: projectId, include_remote: true, fetch: true })
+    if (current()) patch({ branches: { projectId, machineId, result } })
+  } catch {
+    if (current()) patch((d) => ({ branches: d.branches && { ...d.branches, fetching: false } }))
   }
 }
 

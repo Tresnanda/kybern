@@ -2967,6 +2967,10 @@ export interface GitBranchesParams {
   project_id: ProjectId;
   /** Group projects: the member whose branches to list. Defaults to the primary. */
   repo?: string;
+  /** Fetch every remote first (prunes deleted branches; never prompts for credentials). */
+  fetch?: boolean;
+  /** Also list remote-tracking branches (`origin/feature`) that have no local branch of the same name. */
+  include_remote?: boolean;
 }
 
 export interface BranchInfo {
@@ -2975,6 +2979,9 @@ export interface BranchInfo {
   upstream?: string | null;
   /** Committer time of the tip commit, unix seconds. */
   committed_at: number;
+  /** A remote-tracking branch (`name` is `origin/feature`). Starting a chat on it in the checkout makes a local branch
+   *  that tracks it. */
+  remote?: boolean;
 }
 
 export interface GitBranchesResult {

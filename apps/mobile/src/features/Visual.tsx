@@ -5,7 +5,7 @@
 // A visual that asks (`await_answer`) gets the answer bar: the page drafts a value, the reader sends
 // it or skips. The receipt line stays under an answered visual.
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Image, Linking, StyleSheet, View } from "react-native";
+import { Linking, StyleSheet, View } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import { httpBase } from "../../../../packages/kybern-client/src/address";
 import {
@@ -32,6 +32,7 @@ import { haptics } from "../ui/haptics";
 import { Button, ErrorBanner, Icon, T, Tap } from "../ui/primitives";
 import { MONO, radius, space, useTheme, type Colors } from "../ui/theme";
 import { agentFor, respondApproval } from "./RequestCards";
+import { AuthedImage } from "../ui/AuthedImage";
 
 type VisualBlock = Extract<Block, { kind: "visual" }>;
 
@@ -208,7 +209,7 @@ export const InlineVisual = memo(function InlineVisual({ block, threadId }: { bl
             style={{ height: restHeight }}
           >
             {pictureUri ? (
-              <Image
+              <AuthedImage
                 source={{ uri: pictureUri, headers: { authorization: `Bearer ${environment?.token ?? ""}` } }}
                 accessibilityIgnoresInvertColors
                 fadeDuration={0}

@@ -50,13 +50,23 @@ pub(crate) async fn run_stdin(cwd: &Path, program: &str, args: &[&str], input: &
 }
 
 /// Local branches of a project checkout, most recently committed first.
-pub async fn branches(cwd: &Path) -> Result<GitBranchesResult> {
+/// How long `git.branches { fetch }` waits for the remotes before listing what it has.
+const BRANCH_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+pub async fn branches(cwd: &Path, fetch: bool, include_remote: bool) -> Result<GitBranchesResult> {
     if !Repo::is_repo(cwd).await {
         return Ok(GitBranchesResult { current: None, branches: Vec::new() });
     }
     let repo = Repo::new(cwd);
+    if fetch {
+        match tokio::time::timeout(BRANCH_FETCH_TIMEOUT, repo.fetch_all()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::debug!(cwd = %cwd.display(), %error, "branch list: fetch failed"),
+            Err(_) => tracing::debug!(cwd = %cwd.display(), "branch list: fetch timed out"),
+        }
+    }
     let current = repo.current_branch().await;
-    let branches = repo
+    let mut branches: Vec<BranchInfo> = repo
         .branches()
         .await?
         .into_iter()
@@ -65,8 +75,23 @@ pub async fn branches(cwd: &Path) -> Result<GitBranchesResult> {
             name: b.name,
             upstream: b.upstream,
             committed_at: b.committed_at,
+            remote: false,
         })
         .collect();
+    if include_remote {
+        // `origin/feature` is listed only when there is no local `feature`; `git switch --track` would make that one.
+        let local: std::collections::HashSet<String> = branches.iter().map(|b| b.name.clone()).collect();
+        let remote = repo.remote_branches().await.unwrap_or_default();
+        branches.extend(
+            remote.into_iter().filter(|b| b.name.split_once('/').is_none_or(|(_, short)| !local.contains(short))).map(|b| BranchInfo {
+                name: b.name,
+                is_current: false,
+                upstream: None,
+                committed_at: b.committed_at,
+                remote: true,
+            }),
+        );
+    }
     Ok(GitBranchesResult { current, branches })
 }
 

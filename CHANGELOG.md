@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.19.3
+
+<!-- kybern-release-title: The window keeps responding when drawing stalls -->
+<!-- kybern-release-summary: When macOS stops handing Kybern new frames to draw into, the window stays responsive and recovers instead of freezing until you move or minimize it. -->
+
+- Fixes a freeze where the whole window stopped updating until you dragged it, minimized it or switched desktops. When macOS held on to every frame Kybern draws into, Kybern waited about a second for each new frame, so typing and clicks stalled with it. It now skips those draws, asks macOS to release the frames, and draws the current view as soon as one is free.
+- Each such episode is written to `gpuix-frames.log` in the Kybern data folder as `DrawableStarved`, with how it ended. `KYBERN_DRAWABLE_GATE=0` turns this off.
+
+## 0.19.2
+
+<!-- kybern-release-title: Recovers when the window stops drawing -->
+<!-- kybern-release-summary: When a Kybern window stops updating, it now recovers on its own within a moment instead of waiting for you to move or minimize it. -->
+
+- When a Kybern window stops updating (it used to come back only after you dragged it, minimized it or switched desktops), the app now notices within a quarter second and recovers on its own. It reattaches the window to its screen's frame timer, restarting or replacing the timer if needed, and redraws a frame that was dropped.
+- Each recovery is written to `gpuix-frames.log` in the Kybern data folder, so a freeze that still happens can be traced. `KYBERN_FRAME_WATCHDOG=0` turns the watchdog off.
+
+## 0.19.1
+
+<!-- kybern-release-title: Terminal, branches and images fixed -->
+<!-- kybern-release-summary: The terminal takes clicks, typing and drag selection reliably, the branch picker lists remote branches with search, and images in chats load on Android. -->
+
+- The terminal tab focuses on any click, so typing reaches the shell every time, and dragging selects across lines. Fast typing no longer arrives out of order or gets dropped.
+- The branch picker for a new chat lists remote branches, fetches new ones from the remote when it opens, and has a search field. Starting a chat on `origin/feature` in the checkout makes a local branch that tracks it.
+- Tree lines (tool groups, runs, subagents in the sidebar) show on 1x displays such as external monitors, where only the last corner used to appear.
+- In the image viewer, the zoom, copy, download and open buttons work instead of closing the image. Expanded Read results no longer show the image's base64 text, which made image-heavy threads slow.
+- A click anywhere on a search field focuses it, including its magnifier icon (the pull request list search).
+- Computer use recovers by itself when CuaDriver ends its connection's session, instead of failing until restarted and reporting missing permissions.
+
 ## 0.19.0
 
 <!-- kybern-release-title: A clearer pull request page -->

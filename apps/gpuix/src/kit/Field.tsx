@@ -3,8 +3,8 @@
 // focus a 1.5 px accent edge over a faint accent wash, invalid a 1 px red edge and a 3 px red halo, disabled drops the fill for
 // a 1 px ink edge (the spec's 45° hatch needs a repeating pattern the renderer does not have, so it is the edge alone).
 // Placeholder text is the theme's `textPlaceholder`, painted over the input (the native one is a fixed grey); the caret is the accent.
-import type { InputProps, StyleDesc } from '@gpuix/react'
-import { useState, type ReactNode } from 'react'
+import { useGpuix, type InputProps, type PublicInstance, type StyleDesc } from '@gpuix/react'
+import { useRef, useState, type ReactNode } from 'react'
 import { FONT_MONO, FONT_UI } from '../theme.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { HEIGHT, RADIUS, useControls } from './controls.ts'
@@ -26,9 +26,11 @@ export interface FieldShellProps {
   children: ReactNode
   testId?: string
   style?: StyleDesc
+  /** A click anywhere on the box (its glyph, padding, gaps); `TextField` focuses its input with it. */
+  onClick?: () => void
 }
 
-export function FieldShell({ size = 'md', focused = false, invalid = false, disabled = false, bare = false, multiline = false, width, leading, trailing, children, testId, style }: FieldShellProps) {
+export function FieldShell({ size = 'md', focused = false, invalid = false, disabled = false, bare = false, multiline = false, width, leading, trailing, children, testId, style, onClick }: FieldShellProps) {
   const c = useControls()
   const edge = (color: string, spread: number) => ({ offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: spread, color, inset: true })
   const shadow = invalid
@@ -37,6 +39,7 @@ export function FieldShell({ size = 'md', focused = false, invalid = false, disa
   return (
     <div
       testId={testId}
+      onClick={onClick}
       style={{
         display: 'flex', alignItems: multiline ? 'flex-start' : 'center', gap: 6, minWidth: 0, flexShrink: 1,
         ...(width ? { width } : {}),
@@ -79,13 +82,25 @@ export interface TextFieldProps extends Omit<InputProps, 'value' | 'onChange' | 
   onBlur?: () => void
 }
 
-export function TextField({ label, value, onChange, size = 'md', width, invalid = false, disabled = false, bare = false, mono = false, leading, trailing, style, shell, testId, onBlur, onFocus, placeholder, ...props }: TextFieldProps) {
+export function TextField({ label, value, onChange, size = 'md', width, invalid = false, disabled = false, bare = false, mono = false, leading, trailing, style, shell, testId, onBlur, onFocus, placeholder, ref, ...props }: TextFieldProps) {
   const t = useTheme()
+  const { renderer } = useGpuix()
   const [focused, setFocused] = useState(false)
+  // The whole box is the field, as in the desktop: a click on its glyph or padding focuses the input (the PR list's
+  // narrow search read as a search button that did nothing). A focused input keeps its caret.
+  const input = useRef<PublicInstance | null>(null)
+  // Focus lands on mouse down, before the click, and a render may not have happened yet: read it from a ref.
+  const hasFocus = useRef(false)
+  const attach = (el: PublicInstance | null) => {
+    input.current = el
+    if (typeof ref === 'function') ref(el)
+    else if (ref) (ref as { current: PublicInstance | null }).current = el
+  }
+  const focusInput = () => { if (!disabled && !hasFocus.current && input.current) renderer?.focusElement?.(input.current.id) }
   const font = mono ? FONT_MONO : FONT_UI
   const fontSize = typeof style?.fontSize === 'number' ? style.fontSize : size === 'lg' ? 14 : 13
   return (
-    <FieldShell size={size} focused={focused} invalid={invalid} disabled={disabled} bare={bare} width={width} leading={leading} trailing={trailing} style={shell}>
+    <FieldShell size={size} focused={focused} invalid={invalid} disabled={disabled} bare={bare} width={width} leading={leading} trailing={trailing} style={shell} onClick={focusInput}>
       <div style={{ position: 'relative', display: 'flex', flexGrow: 1, flexShrink: 1, minWidth: 0, height: '100%' }}>
         {/* GPUIX paints its own placeholder in a fixed #8f8f8f (2.6:1 on frost, 3.2:1 on white); this one follows the theme. */}
         {placeholder && !value && (
@@ -95,6 +110,7 @@ export function TextField({ label, value, onChange, size = 'md', width, invalid 
         )}
         <input
           {...props}
+          ref={attach}
           testId={testId}
           tabIndex={disabled ? -1 : 0}
           aria-label={label}
@@ -102,8 +118,8 @@ export function TextField({ label, value, onChange, size = 'md', width, invalid 
           value={value}
           readOnly={disabled}
           onChange={(e) => onChange(e.value ?? '')}
-          onFocus={(e) => { setFocused(true); onFocus?.(e) }}
-          onBlur={() => { setFocused(false); onBlur?.() }}
+          onFocus={(e) => { hasFocus.current = true; setFocused(true); onFocus?.(e) }}
+          onBlur={() => { hasFocus.current = false; setFocused(false); onBlur?.() }}
           style={{ flexGrow: 1, flexShrink: 1, minWidth: 0, height: '100%', borderWidth: 0, fontFamily: font, fontSize, color: disabled ? t.textTertiary : t.text, backgroundColor: 'rgba(0, 0, 0, 0)', ...style }}
         />
       </div>

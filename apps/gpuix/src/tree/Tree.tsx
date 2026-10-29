@@ -99,6 +99,19 @@ const REST: Record<Segment['draw'], PaintTransformValue> = {
   corner: { scale: 1, opacity: 1 },
   none: { opacity: 1 },
 }
+/**
+ * A stem or tick as the left or top border of a 2 px box, not a `HAIRLINE`-thick fill. GPUI snaps a fill's edges to device
+ * pixels one by one, so a 0.5 px fill is one device pixel at 2x but rounds to nothing at 1x (an external display) or at
+ * 1.25x/1.5x wherever it lands on a half pixel, leaving only the elbow (a border, which never snaps below one device
+ * pixel). The box keeps an interior beside the border at 1x (a box the border fills paints nothing there). At 2x the
+ * border paints the same device pixel the fill did. `verify.lines.ts` checks both densities.
+ */
+function hairline(segment: Segment, color: string) {
+  // Ticks draw along x; stems, rails and the stem below a row along y.
+  return segment.draw === 'right'
+    ? { width: segment.width, height: 2, borderTopWidth: HAIRLINE, borderColor: color }
+    : { width: 2, borderLeftWidth: HAIRLINE, borderColor: color }
+}
 /** Opacity reaches full a quarter of the way in, so the line reads as drawing rather than fading. */
 const DRAW_KEYS = [{ offset: 0.25, opacity: 1 }]
 
@@ -187,11 +200,10 @@ export const TreeLines = memo(function TreeLines({ shape, motion: own }: { shape
             position: 'absolute',
             left: segment.left,
             top: segment.top,
-            width: segment.width,
             ...(segment.height !== undefined ? { height: segment.height } : { bottom: segment.bottom ?? 0 }),
             ...(segment.corner
-              ? { borderLeftWidth: HAIRLINE, borderBottomWidth: HAIRLINE, borderColor: color, borderBottomLeftRadius: segment.corner }
-              : { backgroundColor: color }),
+              ? { width: segment.width, borderLeftWidth: HAIRLINE, borderBottomWidth: HAIRLINE, borderColor: color, borderBottomLeftRadius: segment.corner }
+              : hairline(segment, color)),
             pointerEvents: 'none',
           }}
         />
