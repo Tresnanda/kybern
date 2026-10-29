@@ -235,7 +235,7 @@ export function BranchTrayChip({
       sideOffset={8}
       width={288}
       onOpenChange={(open) => { if (open) { setQuery(''); onOpen() } }}
-      trigger={(open) => <PickerChip bare icon={G.branch} open={open} truncate maxWidth={256}>{shown}</PickerChip>}
+      trigger={(open) => <PickerChip testId="tray-branch-chip" bare icon={G.branch} open={open} truncate maxWidth={256}>{shown}</PickerChip>}
     >
       <PickerLabel>{useWorktree ? 'Fork the worktree from' : 'Branch'}</PickerLabel>
       {branches === null ? (

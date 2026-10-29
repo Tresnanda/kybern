@@ -183,6 +183,12 @@ export function MarqueeLabel({ hover, text, color, lineHeight = 20 }: { hover: b
     }, MARQUEE_BACK * 1000 + 40)
     return () => clearTimeout(timer)
   }, [hover, phase, overflow])
+  const duration = Math.max(MARQUEE_MIN_MS, Math.round((overflow / MARQUEE_SPEED) * 1000)) / 1000
+  useEffect(() => {
+    if (!hover || overflow === 0 || REDUCED_MOTION) return
+    const timer = setTimeout(() => setHomeAgain(true), (MARQUEE_DELAY_MS - MARQUEE_MEASURE_MS) + duration * 1000 + MARQUEE_HOLD_MS)
+    return () => clearTimeout(timer)
+  }, [hover, overflow, duration])
   if (phase === 'rest') {
     return (
       <Label color={color} lineHeight={lineHeight} truncate style={{ flexGrow: 1, pointerEvents: 'none', userSelect: 'none' }}>
@@ -190,12 +196,6 @@ export function MarqueeLabel({ hover, text, color, lineHeight = 20 }: { hover: b
       </Label>
     )
   }
-  const duration = Math.max(MARQUEE_MIN_MS, Math.round((overflow / MARQUEE_SPEED) * 1000)) / 1000
-  useEffect(() => {
-    if (!hover || overflow === 0 || REDUCED_MOTION) return
-    const timer = setTimeout(() => setHomeAgain(true), (MARQUEE_DELAY_MS - MARQUEE_MEASURE_MS) + duration * 1000 + MARQUEE_HOLD_MS)
-    return () => clearTimeout(timer)
-  }, [hover, overflow, duration])
   const panning = hover && overflow > 0 && !homeAgain
   return (
     <div ref={box} style={{ display: 'flex', flexGrow: 1, minWidth: 0, height: lineHeight, overflow: 'hidden', pointerEvents: 'none', userSelect: 'none' }}>

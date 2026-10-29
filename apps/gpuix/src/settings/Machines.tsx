@@ -118,7 +118,7 @@ function NameYourMachines({ cards }: { cards: MachineCardModel[] }) {
   }
   const dismiss = () => { dismissNamesHint(configDir()); setDismissed(true) }
   return <Section title="Name your machines" accessory={<Button testId="machines-names-dismiss" size="sm" variant="secondary" onClick={dismiss}>Not now</Button>}>
-    <Row title="" description={<Hint>{unnamed.length === 1 ? 'This machine has a name its host made up.' : 'These machines have names their hosts made up.'} A name you recognise shows on its badge, in the thread header and in the machine picker.</Hint>} />
+    <Row title="" description={<Hint>{`${unnamed.length === 1 ? 'This machine has a name its host made up.' : 'These machines have names their hosts made up.'} A name you recognise shows on its badge, in the thread header and in the machine picker.`}</Hint>} />
     {unnamed.map((card) => <div key={card.machineId} testId={`name-hint-${card.machineId}`} style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 18, paddingRight: 18, paddingTop: 6, paddingBottom: 10 }}>
       <MachineBadge glyph={card.row.glyph} size={18} />
       <Label color={t.textSecondary} size={13} lineHeight={20} truncate style={{ width: 150, flexShrink: 0 }}>{card.name}</Label>
