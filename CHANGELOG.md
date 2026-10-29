@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.19.2
+
+<!-- kybern-release-title: Recovers when the window stops drawing -->
+<!-- kybern-release-summary: When a Kybern window stops updating, it now recovers on its own within a moment instead of waiting for you to move or minimize it. -->
+
+- When a Kybern window stops updating (it used to come back only after you dragged it, minimized it or switched desktops), the app now notices within a quarter second and recovers on its own. It reattaches the window to its screen's frame timer, restarting or replacing the timer if needed, and redraws a frame that was dropped.
+- Each recovery is written to `gpuix-frames.log` in the Kybern data folder, so a freeze that still happens can be traced. `KYBERN_FRAME_WATCHDOG=0` turns the watchdog off.
+
 ## 0.19.1
 
 <!-- kybern-release-title: Terminal, branches and images fixed -->
