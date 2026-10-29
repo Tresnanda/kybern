@@ -341,6 +341,28 @@ async fn the_add_project_tool_takes_its_machine_argument_through_the_real_dispat
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_add_project_tool_puts_the_project_at_the_agents_path_and_refuses_a_bad_one() {
+    let Some((cluster, _a, b, fixture, parent, live, _spawned)) = agent_pair(PermissionMode::FullAccess).await else { return };
+    let home = std::fs::canonicalize(cluster.dir.path().join("b-home")).unwrap();
+    // The home folder itself is refused with the target's reason, and nothing is queued.
+    let refused = fixture
+        .tool(&parent, &live, "p0", "kybern_project_add_to_machine", json!({"machine": b.id(), "path": home.to_string_lossy()}))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("cannot take the project at"), "{refused}");
+    // A free folder the agent names is where the project lands.
+    let wanted = home.join("code").join("app");
+    let queued = fixture
+        .tool(&parent, &live, "p1", "kybern_project_add_to_machine", json!({"machine": b.id(), "path": wanted.to_string_lossy()}))
+        .await
+        .unwrap();
+    assert_eq!(queued["status"], "queued", "{queued}");
+    wait_until("the project landed at the agent's path", WAIT * 4, || wanted.join(".git").exists()).await;
+    assert!(!home.join("kybern").exists(), "not the proposed folder");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn declining_the_card_fails_the_delegation_and_queues_nothing() {
     let Some((_cluster, a2, b2, fixture2, parent2, live2, _)) = agent_pair(PermissionMode::Supervised).await else { return };
     let (orchestrator, thread_id, session, target) = (fixture2.orchestrator.clone(), parent2.id, live2.session_instance_id, b2.id());

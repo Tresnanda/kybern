@@ -230,7 +230,16 @@ impl Orchestrator {
         // A machine without the repository is offered the project first (a card, or Full access by itself); the
         // delegation then waits for it instead of failing there.
         let provision = self
-            .provision_for_agent(parent, turn_id, live, &target, "delegate", None, super::derived_operation_id(request.operation_id, 0x9b))
+            .provision_for_agent(
+                parent,
+                turn_id,
+                live,
+                &target,
+                "delegate",
+                None,
+                None,
+                super::derived_operation_id(request.operation_id, 0x9b),
+            )
             .await?;
 
         let create_lock = self.delegation_create_lock(parent.id);

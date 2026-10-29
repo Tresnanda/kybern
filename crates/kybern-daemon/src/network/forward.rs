@@ -225,12 +225,13 @@ pub fn machines_tool_definition() -> NativeToolDefinition {
 pub fn add_to_machine_tool_definition() -> NativeToolDefinition {
     NativeToolDefinition {
         name: crate::orchestrator::provision::ADD_TOOL.into(),
-        description: "Add this thread's project to another machine of the network that does not have it yet. The user is asked first in a card (folder on that machine, which env files to copy); Full access goes ahead with the proposed folder. The machine clones the repository with its own git login, or this machine sends it; env files travel encrypted. Returns at once with `queued`; delegate to that machine afterwards as usual (the work waits until the project is there). `kybern_agent_delegate` with `machine` does this by itself when needed.".into(),
+        description: "Add this thread's project to another machine of the network that does not have it yet. The user is asked first in a card (folder on that machine, which env files to copy); Full access goes ahead with your `path`, or the proposed folder. The machine clones the repository with its own git login, or this machine sends it; env files travel encrypted. Returns at once with `queued`; delegate to that machine afterwards as usual (the work waits until the project is there). `kybern_agent_delegate` with `machine` does this by itself when needed.".into(),
         input_schema: json!({
             "type": "object",
             "additionalProperties": false,
             "properties": {
                 "machine": {"type": "string", "description": "The machine's name or id, from kybern_machines."},
+                "path": {"type": ["string", "null"], "description": "The folder on that machine, in its own form (`~/code/app`, `D:\\code\\app`). Leave it out to use the proposed folder. A folder Kybern refuses (a system folder, home itself, one holding other files) fails with the reason."},
                 "reason": {"type": ["string", "null"], "description": "One sentence for the card: why the project is needed there."},
                 "request_key": {"type": ["string", "null"], "description": "Reuse to make a retry return the first request."}
             },

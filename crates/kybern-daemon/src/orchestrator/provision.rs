@@ -586,6 +586,7 @@ impl Orchestrator {
         target: &RemoteTarget,
         then: &str,
         reason: Option<String>,
+        requested_path: Option<String>,
         operation_id: Uuid,
     ) -> Result<AgentProvision> {
         if !target.online || target.paused {
@@ -596,9 +597,20 @@ impl Orchestrator {
         if let Some(existing) = self.inner.store.outbox_get_by_operation(operation_id)?.filter(|item| item.kind == OutboxKind::Provision) {
             return Ok(queued(existing, target, &project, None, Vec::new(), "earlier"));
         }
-        let plan = self.provision_plan(project.id, &target.id, None).await.map_err(|error| anyhow!(error.message))?;
+        let requested_path = requested_path.map(|path| path.trim().to_string()).filter(|path| !path.is_empty());
+        let plan = self.provision_plan(project.id, &target.id, requested_path.clone()).await.map_err(|error| anyhow!(error.message))?;
         if !plan.existing.is_empty() || plan.blocked.is_some() || !plan.target.online {
             return Ok(AgentProvision::NotNeeded);
+        }
+        // A folder the agent named is checked by the target like one typed in the sheet; a refused one fails, never falls back.
+        if let Some(asked) = &requested_path
+            && let Some(check) = plan.path_check.as_ref().filter(|check| !matches!(check.state, PathState::Free | PathState::SameRepo))
+        {
+            bail!(
+                "{} cannot take the project at {asked}: {}. Pass another path, or leave it out to use the proposed folder.",
+                target.name,
+                check.message
+            );
         }
         if self.inner.store.outbox_provision_pending(&target.id)? {
             return Ok(AgentProvision::NotNeeded);
@@ -675,6 +687,8 @@ impl Orchestrator {
         struct Args {
             machine: String,
             #[serde(default)]
+            path: Option<String>,
+            #[serde(default)]
             reason: Option<String>,
             #[serde(default)]
             request_key: Option<String>,
@@ -692,7 +706,7 @@ impl Orchestrator {
         let key = args.request_key.unwrap_or_else(|| format!("{}:{}", thread.id, target.id));
         let digest = <sha2::Sha256 as sha2::Digest>::digest(format!("kybern-provision-add\0{key}").as_bytes());
         let operation_id = Uuid::from_slice(&digest[..16]).unwrap_or_else(|_| Uuid::now_v7());
-        match self.provision_for_agent(thread, turn_id, live, &target, "add", args.reason, operation_id).await? {
+        match self.provision_for_agent(thread, turn_id, live, &target, "add", args.reason, args.path, operation_id).await? {
             AgentProvision::NotNeeded => {
                 let project = self.inner.store.project_get(thread.project_id)?.map(|project| project.name).unwrap_or_default();
                 Ok(json!({ "status": "already_there", "machine": target.name, "project": project }))
