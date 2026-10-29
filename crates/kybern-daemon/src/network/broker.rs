@@ -444,7 +444,8 @@ impl LoginBroker {
     /// broker are never lent on.
     pub async fn lendable(&self, state: &AppState) -> Vec<LendableAccount> {
         let mut lendable = Vec::new();
-        for kind in [ProviderKind::ClaudeCode, ProviderKind::Codex, ProviderKind::Omp] {
+        // Only harnesses with an account sign-in: omp, OpenCode and pi have none to lend or borrow.
+        for kind in [ProviderKind::ClaudeCode, ProviderKind::Codex] {
             let Ok(list) = crate::provider_accounts::list(state, AccountsListParams { kind: Some(kind), refresh: false }).await else {
                 continue;
             };
@@ -783,7 +784,8 @@ impl LoginBroker {
         let local_lendable = if is_broker { self.lendable(state).await } else { Vec::new() };
         let settings = state.settings.get();
         let mut providers = Vec::new();
-        for kind in [ProviderKind::ClaudeCode, ProviderKind::Codex, ProviderKind::Omp] {
+        // Only harnesses with an account sign-in: omp, OpenCode and pi have none to lend or borrow.
+        for kind in [ProviderKind::ClaudeCode, ProviderKind::Codex] {
             let bound = settings
                 .providers
                 .get(&kind)
@@ -807,7 +809,8 @@ impl LoginBroker {
                     None => (BrokerLoginState::NotUsed, None),
                 }
             } else if is_broker {
-                (BrokerLoginState::Lending, None)
+                // Lending means something is signed in here to lend.
+                (if lendable.is_empty() { BrokerLoginState::NotUsed } else { BrokerLoginState::Lending }, None)
             } else if broker_id.is_none() {
                 (BrokerLoginState::NotUsed, None)
             } else if remote.is_none() {

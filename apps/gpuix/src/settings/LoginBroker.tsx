@@ -3,7 +3,7 @@
 // `machines/broker.ts`. The section is hidden on a lone machine, and on a daemon older than the login broker.
 import { useEffect, useMemo, useState } from 'react'
 import type { MachineId, ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
-import { BROKER_KINDS, brokerBlocker, brokerLine, lendableLabel, providerStatus, signInAllSummary, type SignInAllRow } from '../../../../packages/kybern-client/src/loginBroker.ts'
+import { BROKER_KINDS, brokerBlocker, brokerLine, lendableLabel, loanLines, providerStatus, signInAllSummary, type SignInAllRow } from '../../../../packages/kybern-client/src/loginBroker.ts'
 import { PROVIDER_NAMES } from '../shared/lib/providerUsage.ts'
 import { errorText } from '../nav/actions.ts'
 import { Dialog } from '../nav/overlay.tsx'
@@ -63,8 +63,10 @@ function movedText(rebound: number, offline: number, signedOut: number, note: st
   return parts.join(' · ')
 }
 
-function HarnessRow({ kind }: { kind: ProviderKind }) {
+/// `names` stands in for the machine list (native fixtures have no hub).
+export function HarnessRow({ kind, names }: { kind: ProviderKind; names?: Record<MachineId, string> }) {
   const broker = useBroker()
+  const machines = useMachines()
   const t = useTheme()
   const harness = PROVIDER_NAMES[kind] ?? kind
   const status = providerStatus(broker.status, kind)
@@ -74,6 +76,7 @@ function HarnessRow({ kind }: { kind: ProviderKind }) {
   const busy = broker.busy === kind
   const fail = (title: string) => (e: unknown) => toast.error(title, { description: errorText(e) })
   const lendable = status.lendable[0]
+  const loans = loanLines(broker.status, kind, (id) => names?.[id] ?? machines.find((machine) => machine.machineId === id)?.name, sinceTime)
   const act = () => {
     if (line.action === 'use_broker' && lendable) void useBrokerSignIn(kind, harness, brokerName ?? 'broker', lendable.account).catch(fail(`Unable to use ${brokerName ?? 'the broker'}'s sign-in`))
     else if (line.action === 'sign_in_here' && status.local_account) void signInHereInstead(kind, status.local_account).then(() => showDialog({ kind: 'account', provider: kind, instance: status.local_account })).catch(fail('Unable to sign in here'))
@@ -82,11 +85,15 @@ function HarnessRow({ kind }: { kind: ProviderKind }) {
   return <Row title={harness} description={<div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><StatusDot tone={line.tone === 'ok' ? 'good' : line.tone === 'problem' ? 'bad' : 'idle'} /><div testId={`login-broker-${kind}`}><Label color={t.textSecondary} size={13} lineHeight={20}>{line.text}</Label></div></div>
     {lendable && status.state === 'not_used' && <Label color={t.textSecondary} size={12} lineHeight={18}>{lendableLabel(lendable)}</Label>}
+    {loans.map((loan) => <div key={loan.loanId} testId={`login-broker-loan-${loan.loanId}`} style={{ paddingLeft: 14 }}><Label color={loan.problem ? t.red : t.textSecondary} size={12} lineHeight={18}>{loan.problem ? `${loan.machine} · since ${loan.since} · ${loan.problem}` : `${harness} → ${loan.machine} · since ${loan.since}`}</Label></div>)}
   </div>}>
     {line.action && <Button testId={`login-broker-action-${kind}`} size="sm" busy={busy} onClick={act}>{line.actionLabel ?? ''}</Button>}
     <Button testId={`login-broker-all-${kind}`} size="sm" variant="secondary" disabled={all_disabled(broker.busy)} onClick={() => void startSignInAll(kind, harness)}>Sign in on all machines</Button>
   </Row>
 }
+
+/// "14:02": when a loan began, in the person's own clock format.
+const sinceTime = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 
 const all_disabled = (busy: string | null) => busy !== null
 

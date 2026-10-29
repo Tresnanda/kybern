@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { brokerBlocker, brokerLine, driveLogin, lendableLabel, planSignInAll, runSignInAll, signInAllSummary, throughBroker } from "../src/loginBroker.ts";
+import { loanLines, brokerBlocker, brokerLine, driveLogin, lendableLabel, planSignInAll, runSignInAll, signInAllSummary, throughBroker } from "../src/loginBroker.ts";
 
 const status = (state, extra = {}) => ({ provider: "claude-code", state, lendable: [], sessions: 0, ...extra });
 
 test("each state of a harness reads as a sentence with at most one action", () => {
-  assert.deepEqual(brokerLine(status("borrowing"), "VPS", "Claude Code"), { text: "Signs in through VPS", tone: "ok" });
+  assert.deepEqual(brokerLine(status("borrowing"), "VPS", "Claude Code"), { text: "Borrowing Claude Code from VPS", tone: "ok" });
   const offline = brokerLine(status("broker_offline"), "VPS", "Claude Code");
   assert.equal(offline.text, "VPS is offline · Sign in here instead");
   assert.equal(offline.action, "sign_in_here");
@@ -143,4 +143,15 @@ test("aborting cancels the sign-in on the machine", async () => {
   const outcome = await driveLogin(client, { kind: "claude-code", mode: "paste", accountName: "x", signal: controller.signal, sleep: async () => controller.abort() }, () => {});
   assert.deepEqual(outcome, { ok: false, detail: "Canceled" });
   assert.ok(client.calls.some(([method]) => method === "providers.accounts.login.cancel"));
+});
+
+test("a broker lists who borrows each harness, and a borrower or a harness without a sign-in lists nothing", () => {
+  const loan = (loan_id, provider, machine_id, created_at) => ({ loan_id, provider, machine_id, account: "default", created_at });
+  const broker = { is_broker: true, providers: [], loans: [loan("2", "codex", "m2", "2026-10-29T14:05:00Z"), loan("1", "codex", "m1", "2026-10-29T14:02:00Z"), loan("3", "claude-code", "m1", "2026-10-29T13:00:00Z"), loan("4", "omp", "m1", "2026-10-29T13:00:00Z")] };
+  const names = (id) => ({ m1: "VPS" })[id];
+  const lines = loanLines(broker, "codex", names, (iso) => iso.slice(11, 16));
+  assert.deepEqual(lines.map((line) => [line.machine, line.since]), [["VPS", "14:02"], ["Another machine", "14:05"]]);
+  assert.deepEqual(loanLines(broker, "omp", names, String), []);
+  assert.deepEqual(loanLines({ ...broker, is_broker: false }, "codex", names, String), []);
+  assert.deepEqual(loanLines(null, "codex", names, String), []);
 });

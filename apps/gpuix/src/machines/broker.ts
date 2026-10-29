@@ -26,6 +26,8 @@ let state: BrokerState = EMPTY
 const listeners = new Set<() => void>()
 const emit = (patch: Partial<BrokerState>) => { state = { ...state, ...patch }; for (const listener of listeners) listener() }
 export const getBroker = () => state
+/** Fixtures: show this status without a daemon. */
+export function seedBroker(status: LoginBrokerStatus) { state = { ...EMPTY, status } }
 /** Tests: forget everything. */
 export function resetBroker() { state = EMPTY; reading = false }
 

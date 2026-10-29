@@ -44,9 +44,9 @@ export function brokerLine(status: BrokerProviderStatus, brokerName: string | un
   const broker = brokerName || "the login broker";
   switch (status.state) {
     case "borrowing":
-      return { text: `Signs in through ${broker}`, tone: "ok" };
+      return { text: `Borrowing ${harness} from ${broker}`, tone: "ok" };
     case "lending":
-      return { text: "Other machines sign in through this one", tone: "ok" };
+      return { text: `Lending ${harness} to your other machines`, tone: "ok" };
     case "broker_offline":
       return status.message
         ? { text: status.message, action: "sign_in_here", actionLabel: "Sign in here instead", tone: "problem" }
@@ -60,6 +60,30 @@ export function brokerLine(status: BrokerProviderStatus, brokerName: string | un
         ? { text: `${broker} is signed in to ${harness}`, action: "use_broker", actionLabel: `Use ${broker}'s sign-in`, tone: "quiet" }
         : { text: "Signs in on this machine", tone: "quiet" };
   }
+}
+
+/** One loan on the broker, as a line: "VPS · since 14:02". The machine's name comes from `nameOf`; the time is formatted by the caller. */
+export interface LoanLine {
+  loanId: string;
+  machineId: MachineId;
+  machine: string;
+  since: string;
+  /** The broker could not push the borrower a rotated login. */
+  problem?: string;
+}
+
+/** The loans on this broker for one harness, oldest first. Empty on a machine that is not the broker. */
+export function loanLines(
+  status: LoginBrokerStatus | null | undefined,
+  kind: ProviderKind,
+  nameOf: (machineId: MachineId) => string | undefined,
+  time: (iso: string) => string,
+): LoanLine[] {
+  if (!status?.is_broker || !supportsBroker(kind)) return [];
+  return status.loans
+    .filter((loan) => loan.provider === kind)
+    .sort((a, b) => a.created_at.localeCompare(b.created_at))
+    .map((loan) => ({ loanId: loan.loan_id, machineId: loan.machine_id, machine: nameOf(loan.machine_id) ?? "Another machine", since: time(loan.created_at), problem: loan.last_error }));
 }
 
 /** "Mac (Max) · work@example.com", the line a lendable account gets in the picker. */
