@@ -5,6 +5,7 @@ import {
   canStopDelegation,
   childState,
   conflictPaths,
+  delegationMeta,
   delegationStatusWord,
   descendantsOf,
   diffstatLabel,
@@ -313,4 +314,16 @@ test("findToolJson stops on cycles and deep nesting", () => {
   let deep = { task_id: "t", thread_id: "x" };
   for (let i = 0; i < 12; i++) deep = { result: deep };
   assert.equal(parseDelegateResult(deep), null);
+});
+
+test("delegationMeta names the model as the picker does and drops the default workspace", () => {
+  const providers = [
+    { kind: "claude-code", models: [{ id: "sonnet", resolved_id: "claude-sonnet-5-5", display_name: "Sonnet 5.5" }] },
+    { kind: "codex", models: [{ id: "gpt-6.1-sol", display_name: "GPT-6.1 Sol" }] },
+  ];
+  assert.equal(delegationMeta("claude-sonnet-5-5", "claude-code", providers, "Shared checkout"), "Sonnet 5.5");
+  assert.equal(delegationMeta("sonnet", "claude-code", providers, "Shared checkout"), "Sonnet 5.5");
+  assert.equal(delegationMeta("gpt-6.1-sol", "codex", providers, "Own worktree"), "GPT-6.1 Sol · Own worktree");
+  assert.equal(delegationMeta("mystery-1", "pi", providers, null), "mystery-1");
+  assert.equal(delegationMeta(null, "codex", providers, "Worktree kept"), "Worktree kept");
 });
