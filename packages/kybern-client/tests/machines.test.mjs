@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { MachineSet, OfflineError, RELAY_AUTH_HEADER, UnknownMachineError, kybernClientFactory, relayHeadersFor } from "../src/machines.ts";
 import { MachineCache } from "../src/machineCache.ts";
+import { scopedKey } from "../src/machineMerge.ts";
 import { routeId } from "../src/machineRoutes.ts";
 import { fakeWorld, manualClock, memoryCacheStorage, memoryCredentials, memoryStore, verifyProof } from "./machine-fakes.mjs";
 
@@ -632,6 +633,29 @@ test("ingest replaces a machine's lists with a read the app made and caches them
   off();
   set.ingest("b", { threads: [] });
   assert.equal(set.merged().threads.all.length, 0);
+  set.dispose();
+});
+
+test("patchThread and removeThread follow a machine's live events without another read", async () => {
+  const { world, set } = setup({ records: [rec("b", [tailnet(T)], { signingKey: "key-b" })], credentials: { b: "tok-b" } });
+  world.host(T, "b");
+  world.lists("b", [], []);
+  await set.ensureAll();
+  const running = { ...thread("t", "p", "2026-10-28T10:00:00Z"), status: "running", last_seq: 5 };
+  set.ingest("b", { threads: [running] });
+  const before = set.merged();
+  assert.equal(set.patchThread("b", { ...running, status: "idle", last_seq: 8 }), true);
+  assert.equal(set.merged().threads.byKey.get(scopedKey("b", "t")).thread.status, "idle");
+  assert.notEqual(set.merged(), before);
+  assert.equal(set.patchThread("b", { ...running, status: "running", last_seq: 6 }), false, "an older event changes nothing");
+  assert.equal(set.merged().threads.byKey.get(scopedKey("b", "t")).thread.status, "idle");
+  assert.equal(set.patchThread("b", { ...thread("n", "p", "2026-10-28T11:00:00Z"), last_seq: 1 }), true, "a new thread is listed");
+  assert.equal(set.merged().threads.all.length, 2);
+  assert.equal(set.patchThread("b", { ...running, status: "archived", last_seq: 9 }), true);
+  assert.deepEqual(set.merged().threads.all.map((t) => t.thread.id), ["n"]);
+  assert.equal(set.removeThread("b", "n"), true);
+  assert.equal(set.removeThread("b", "n"), false);
+  assert.equal(set.patchThread("nobody", running), false);
   set.dispose();
 });
 

@@ -43,7 +43,15 @@ class FakeDaemon {
     return handler(params)
   }
   callRaw(method: string, params: unknown) { return this.call(method, params) }
-  subscribeEvents() { return { unsubscribe() {}, lastSeq: undefined } }
+  /** Event streams opened on this connection (`subscribeEvents`), with what each was asked for. */
+  streams: { params: { after_seq?: number }; handler: (event: unknown) => void; open: boolean }[] = []
+  subscribeEvents(params: { after_seq?: number }, handler: (event: unknown) => void) {
+    const stream = { params, handler, open: true }
+    this.streams.push(stream)
+    return { unsubscribe() { stream.open = false }, lastSeq: undefined }
+  }
+  /** Deliver a thread event to every open stream. */
+  emit(event: Record<string, unknown>) { for (const stream of this.streams) if (stream.open) stream.handler(event) }
   asClient() { return this as unknown as KybernClient }
 }
 
@@ -286,4 +294,50 @@ test('the activity the app read with the primary’s threads reaches the set wit
   await settle()
   expect(hub.set.activityOf('mac-1')).toEqual(activity)
   expect(daemon.calls).toEqual([])
+})
+
+test('another machine’s events reach a listener with its machine id; one machine opens no stream', async () => {
+  const vps = new FakeDaemon('vps-1', { 'projects.list': () => ({ projects: [] }), 'threads.list': () => ({ threads: [] }) })
+  const mac = new FakeDaemon('mac-1')
+  const { hub } = makeHub([saved('vps', { environment_id: 'vps-1' })], { transport: { createClient: () => vps as never } })
+  const events: [string, string][] = []
+  const stop = hub.onMachineEvent((machineId, event) => events.push([machineId, event.kind]))
+  await openPrimary(hub, mac, undefined, { projects: [], threads: [] })
+  // The machine the user is at is the app's own socket: the hub never subscribes on it.
+  expect(mac.streams).toEqual([])
+  await hub.set.ensureAll()
+  await settle()
+  expect(vps.streams.filter(s => s.open).length).toBe(1)
+  vps.emit({ kind: 'thread_updated', seq: 1 })
+  mac.emit({ kind: 'thread_updated', seq: 1 })
+  expect(events).toEqual([['vps-1', 'thread_updated']])
+  stop()
+  expect(vps.streams.filter(s => s.open).length).toBe(0)
+})
+
+test('without another machine the event listener opens nothing', async () => {
+  const mac = new FakeDaemon('mac-1')
+  const { hub } = makeHub()
+  hub.onMachineEvent(() => {})
+  await openPrimary(hub, mac, undefined, { projects: [], threads: [] })
+  await hub.connectOthers()
+  await settle()
+  expect(mac.streams).toEqual([])
+  expect(hub.machineCount).toBe(1)
+})
+
+test('a machine that is removed closes its event stream', async () => {
+  const vps = new FakeDaemon('vps-1', { 'projects.list': () => ({ projects: [] }), 'threads.list': () => ({ threads: [] }) })
+  const { hub } = makeHub([saved('vps', { environment_id: 'vps-1' })], { transport: { createClient: () => vps as never } })
+  const events: string[] = []
+  hub.onMachineEvent((_, event) => events.push(event.kind))
+  await openPrimary(hub, new FakeDaemon('mac-1'), undefined, { projects: [], threads: [] })
+  await hub.set.ensureAll()
+  await settle()
+  vps.emit({ kind: 'thread_updated', seq: 1 })
+  await hub.set.removeMachine('vps-1')
+  await settle()
+  // The removed machine's connection may still be draining: it is not heard.
+  vps.emit({ kind: 'thread_updated', seq: 2 })
+  expect(events).toEqual(['thread_updated'])
 })

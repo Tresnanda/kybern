@@ -10,6 +10,7 @@ import { MachineCache } from "./machineCache.ts";
 import { MachineClientProxy, OfflineError, type MachineClient } from "./machineClient.ts";
 import {
   machineGlyph,
+  machineGlyphs,
   mergeProjects,
   mergeThreads,
   showMachineGlyph,
@@ -707,6 +708,34 @@ export class MachineSet {
     this.touch(slot, "lists");
   }
 
+  /**
+   * A live event changed one thread of a machine (`thread_created`, `thread_updated`): replace its row in the
+   * machine's list, or add it, without another `threads.list`. An archived thread leaves the list. Stale events
+   * (an older `last_seq` than the listed row) and machines without lists yet change nothing. Not cached: the
+   * next list read is.
+   */
+  patchThread(machineId: MachineId, thread: Thread): boolean {
+    const slot = this.slots.get(machineId);
+    if (!slot?.lists) return false;
+    const threads = slot.lists.threads;
+    const index = threads.findIndex((t) => t.id === thread.id);
+    if (index >= 0 && threads[index]!.last_seq > thread.last_seq) return false;
+    if (thread.status === "archived") return this.removeThread(machineId, thread.id);
+    const next = index >= 0 ? threads.map((t, at) => (at === index ? thread : t)) : [thread, ...threads];
+    slot.lists = { ...slot.lists, threads: next };
+    this.touch(slot, "lists");
+    return true;
+  }
+
+  /** `thread_archived` on a machine: the thread leaves its list. */
+  removeThread(machineId: MachineId, threadId: string): boolean {
+    const slot = this.slots.get(machineId);
+    if (!slot?.lists || !slot.lists.threads.some((t) => t.id === threadId)) return false;
+    slot.lists = { ...slot.lists, threads: slot.lists.threads.filter((t) => t.id !== threadId) };
+    this.touch(slot, "lists");
+    return true;
+  }
+
   /** What `threads.list` reported as live activity for a machine, as of its last read. */
   activityOf(machineId: MachineId): readonly ThreadActivitySummary[] | undefined {
     return this.slots.get(machineId)?.lists?.activity;
@@ -803,6 +832,7 @@ export class MachineSet {
       maxPerMachine: this.options.maxThreadsPerMachine ?? 2000,
     });
     const count = slots.length;
+    const glyphs = machineGlyphs(slots.map((slot) => ({ machineId: slot.record.machineId, name: slot.record.name })));
     this.mergedView = {
       version: this._version,
       projects: logical,
@@ -817,7 +847,7 @@ export class MachineSet {
           offline: offline.has(machineId),
           lastSeenAt: lastSeenAt.get(machineId),
           isLocal: machineId === this.localId,
-          glyph: machineGlyph({ machineId, name: slot.record.name }),
+          glyph: glyphs.get(machineId) ?? machineGlyph({ machineId, name: slot.record.name }),
           showGlyph: showMachineGlyph({ machineCount: count, machineId, localMachineId: this.localId }),
         };
       }),

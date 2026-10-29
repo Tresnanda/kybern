@@ -15,7 +15,7 @@
 // The set connects the other machines itself (`connectOthers`: saved machines
 // and the rest of the network, learned from the primary when the daemon is a
 // member). The app keeps opening its own socket to the machine the user is at.
-import { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
+import { KybernClient, type Subscription } from '../../../../packages/kybern-client/src/client.ts'
 import { normalizeDaemonUrl } from '../../../../packages/kybern-client/src/address.ts'
 import { MachineCache } from '../../../../packages/kybern-client/src/machineCache.ts'
 import {
@@ -30,7 +30,8 @@ import {
   type MachineTransport,
   type MergedView,
 } from '../../../../packages/kybern-client/src/machines.ts'
-import { NETWORK_FEATURES, type MachineId, type NetworkStatus, type Project, type Thread, type ThreadActivitySummary } from '../../../../packages/kybern-client/src/types.ts'
+import { MachineClientProxy } from '../../../../packages/kybern-client/src/machineClient.ts'
+import { NETWORK_FEATURES, type MachineId, type NetworkStatus, type Project, type Thread, type ThreadActivitySummary, type ThreadEvent } from '../../../../packages/kybern-client/src/types.ts'
 import { verifyMachineProof } from './proof.ts'
 import { createGpuixSocket } from './socket.ts'
 import { isLegacyMachineId } from './records.ts'
@@ -87,6 +88,9 @@ export class MachineHub {
   /** Every machine id that has been the primary in this run: the app's own socket carries it, the set never dials it. */
   private readonly adopted = new Set<MachineId>()
   private readonly watched = new Set<MachineId>()
+  /** Live event streams of the machines the set connects itself, by the machine's proxy (it survives routes and re-keys). */
+  private readonly streams = new Map<KybernClient, Subscription>()
+  private readonly eventListeners = new Set<(machineId: MachineId, event: ThreadEvent) => void>()
   private readonly refreshes = new Map<MachineId, boolean>()
   private readonly listeners = new Set<() => void>()
   /** Told when the machines or their status change (not when lists do); watching is free. */
@@ -218,6 +222,7 @@ export class MachineHub {
     this.cancelFlush()
     // Paused, so the set does not retry a socket that only the app can open.
     if (primary.machineId) void this.set.setPaused(primary.machineId, true)
+    this.syncStreams()
   }
 
   /** The primary's lists reach the set now, not after the delay (`state.ts` is about to read the merged view). */
@@ -261,6 +266,26 @@ export class MachineHub {
     return () => { this.machineListeners.delete(listener) }
   }
 
+  /**
+   * Every thread event of every machine but the one the user is at (`thread_updated`, `turn_completed`, requests…),
+   * with the machine that raised it. The streams open while someone listens and another machine is connected, follow
+   * the machine across reconnects and re-keys (replaying what they missed), and close when it is removed. One machine
+   * opens none.
+   */
+  onMachineEvent(listener: (machineId: MachineId, event: ThreadEvent) => void): () => void {
+    this.eventListeners.add(listener)
+    this.syncStreams()
+    return () => {
+      this.eventListeners.delete(listener)
+      this.syncStreams()
+    }
+  }
+
+  /** Read one machine's lists again now (folded with a read already running). */
+  refreshMachineLists(machineId: MachineId): Promise<void> {
+    return this.refreshMachine(machineId).catch(() => {})
+  }
+
   /** A machine's client (throws `OfflineError` while it cannot be reached). */
   clientFor(machineId: MachineId): KybernClient {
     return this.set.clientFor(machineId)
@@ -287,6 +312,9 @@ export class MachineHub {
   dispose() {
     this.disposed = true
     this.cancelFlush()
+    for (const stream of this.streams.values()) stream.unsubscribe()
+    this.streams.clear()
+    this.eventListeners.clear()
     this.set.dispose()
     this.listeners.clear()
     this.machineListeners.clear()
@@ -336,6 +364,7 @@ export class MachineHub {
 
   /** Lists changed on a machine the set connects itself: read that machine again (state.ts does it for the primary). */
   private watchOthers() {
+    this.syncStreams()
     for (const connection of this.set.connections()) {
       const id = connection.record.machineId
       if (this.watched.has(id) || this.adopted.has(id) || (connection.record.legacyProfileId && isLegacyMachineId(id))) continue
@@ -344,6 +373,37 @@ export class MachineHub {
       const refresh = () => void this.refreshMachine(id).catch(() => {})
       handle.onNotification('projects.changed', refresh)
       handle.onNotification('threads.changed', refresh)
+    }
+  }
+
+  /** Open an event stream for each machine the set connects itself while someone listens; close the streams of machines that left. */
+  private syncStreams() {
+    const wanted = new Map<KybernClient, MachineId>()
+    if (!this.disposed && this.eventListeners.size > 0 && this.primary?.adopted) {
+      for (const connection of this.set.connections()) {
+        const id = connection.record.machineId
+        if (this.adopted.has(id) || (connection.record.legacyProfileId && isLegacyMachineId(id))) continue
+        wanted.set(connection.client, id)
+      }
+    }
+    for (const [client, stream] of this.streams) {
+      if (wanted.has(client)) continue
+      stream.unsubscribe()
+      this.streams.delete(client)
+    }
+    for (const [client] of wanted) {
+      if (this.streams.has(client)) continue
+      // The proxy keeps this subscription while the machine is offline and re-issues it from its cursor on the next route.
+      const stream: { sub?: Subscription } = {}
+      stream.sub = client.subscribeEvents({ include_tool_output: false }, (event) => {
+        // A stream that was closed (the machine was removed) says nothing more.
+        if (this.streams.get(client) !== stream.sub || this.disposed) return
+        // The machine's id now, not when the stream opened: a stand-in id is re-keyed once the daemon answers.
+        const machineId = client instanceof MachineClientProxy ? client.machineId : wanted.get(client)
+        if (!machineId) return
+        for (const listener of [...this.eventListeners]) listener(machineId, event)
+      })
+      this.streams.set(client, stream.sub)
     }
   }
 
