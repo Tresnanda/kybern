@@ -91,7 +91,7 @@ export class FakeClient {
   connect() {
     queueMicrotask(() => {
       if (this.closed) return;
-      if (this.host.rejectToken && this.host.rejectToken(this.token)) return this.setStatus("failed", "Access was revoked. Pair this environment again");
+      if (this.host.rejectToken && this.host.rejectToken(this.token)) { this.failure = "auth"; return this.setStatus("failed", "Access was revoked. Pair this environment again"); }
       if (!this.host.online) return; // never opens: the machine set's timeout decides
       this.info = { ...this.host.info };
       this.setStatus("open");

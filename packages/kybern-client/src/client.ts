@@ -45,11 +45,21 @@ export class ConnectionClosedError extends Error {
   }
 }
 
+/** Why a client stopped for good: the machine refused its credential. */
+export type ClientFailure = "auth";
+
 export interface ClientOptions {
   expectedEnvironmentId?: string;
   /** Native platforms can authenticate the upgrade with a header. Browsers
    * exchange the credential for a short-lived, single-use socket ticket. */
   createSocket?: (url: string, token: string) => WebSocket;
+  /**
+   * A native socket that is refused at the upgrade reports only "closed before open": the HTTP
+   * status (401) never reaches the page. After such a close this asks the machine directly whether
+   * the credential is what it refused. `"rejected"` fails the client with `failure === "auth"`;
+   * anything else keeps retrying.
+   */
+  probeAuth?: () => Promise<"rejected" | "accepted" | "unknown">;
   requestTimeoutMs?: number;
   heartbeatMs?: number;
 }
@@ -92,6 +102,7 @@ export class KybernClient {
   private subscriptions = new Set<EventSubscription>();
   private byRemoteId = new Map<SubscriptionId, EventSubscription>();
   private _status: ConnectionStatus = "idle";
+  private _failure: ClientFailure | undefined;
   private _info: DaemonInfo | null = null;
   private stopped = true;
   private attempt = 0;
@@ -114,11 +125,16 @@ export class KybernClient {
   get info() {
     return this._info;
   }
+  /** Set when the client failed because the credential was refused (revoked or never valid). */
+  get failure() {
+    return this._failure;
+  }
 
   connect() {
     if (!this.stopped) return;
     this.stopped = false;
     this.attempt = 0;
+    this._failure = undefined;
     void this.open();
   }
 
@@ -297,6 +313,7 @@ export class KybernClient {
         if (response.status === 401 || response.status === 403) {
           this.fail(
             "Access was revoked or the credential is invalid. Pair this environment again",
+            "auth",
           );
           return;
         }
@@ -327,16 +344,20 @@ export class KybernClient {
         if (this.ws === socket) this.frame(String(event.data));
       };
       socket.onerror = () => {}; // onclose owns retries; never expose a credential-bearing URL.
+      let opened = false;
       socket.onclose = (event) => {
         if (this.ws !== socket || this.stopped) return;
         if (event.code === 4401)
-          this.fail("Access was revoked. Pair this environment again");
+          this.fail("Access was revoked. Pair this environment again", "auth");
+        else if (!opened && this.options.createSocket && this.options.probeAuth)
+          void this.probeRefusal(socket, generation);
         else
           this.retry(
             "Connection interrupted; reconnecting to this environment",
           );
       };
       socket.onopen = async () => {
+        opened = true;
         try {
           const info = (await this.callRaw(
             "daemon.info",
@@ -424,7 +445,25 @@ export class KybernClient {
     }, delay);
   }
 
-  private fail(detail: string) {
+  /** The upgrade was refused without a status: find out whether the credential is why. */
+  private async probeRefusal(socket: WebSocket, generation: number) {
+    let verdict: "rejected" | "accepted" | "unknown" = "unknown";
+    try {
+      verdict = await this.options.probeAuth!();
+    } catch {
+      // unreachable or timed out: an ordinary retry
+    }
+    if (this.stopped || this.ws !== socket || generation !== this.generation) return;
+    if (verdict === "rejected")
+      this.fail(
+        "Access was revoked or the credential is invalid. Pair this environment again",
+        "auth",
+      );
+    else this.retry("Connection interrupted; reconnecting to this environment");
+  }
+
+  private fail(detail: string, failure?: ClientFailure) {
+    this._failure = failure;
     this.close(detail);
     this.setStatus("failed", detail);
   }

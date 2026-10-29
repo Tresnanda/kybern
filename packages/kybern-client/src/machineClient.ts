@@ -16,7 +16,7 @@ import type { EventsSubscribeParams, MethodName, ParamsOf, ResultOf } from "./ty
 /** What the machine set needs from a connection; `KybernClient` is one. */
 export type MachineClient = Pick<
   KybernClient,
-  "connect" | "close" | "status" | "info" | "endpoint" | "onStatus" | "onNotification" | "call" | "callRaw" | "subscribeEvents" | "checkConnection"
+  "connect" | "close" | "status" | "failure" | "info" | "endpoint" | "onStatus" | "onNotification" | "call" | "callRaw" | "subscribeEvents" | "checkConnection"
 >;
 
 /** The machine cannot be reached now. `cached` says whether its last lists are still available. */

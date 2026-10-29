@@ -4,7 +4,7 @@
 // member, lazily minted per-machine tokens, and each machine's last lists for
 // when it is offline. It is framework-agnostic: sockets, HTTP, storage, clocks
 // and Ed25519 are all injected, so GPUIX, React Native and the tests share it.
-import { normalizeDaemonUrl } from "./address.ts";
+import { httpBase, normalizeDaemonUrl } from "./address.ts";
 import { KybernClient, type ClientOptions } from "./client.ts";
 import { MachineCache } from "./machineCache.ts";
 import { MachineClientProxy, OfflineError, type MachineClient } from "./machineClient.ts";
@@ -153,6 +153,39 @@ export function relayHeadersFor(relayToken: string | undefined): Record<string, 
   return relayToken ? { [RELAY_AUTH_HEADER]: `Bearer ${relayToken}` } : undefined;
 }
 
+/**
+ * Ask the machine whether it accepts `token`, with the `POST /session` a browser socket would make.
+ * A native socket refused at the upgrade shows no status, so this is how a revoked token is told
+ * from a machine that is merely down. On a relay route a refusal that names the relay is the relay
+ * member's own token being refused, which a fresh token for the target would not fix.
+ */
+export async function probeAuth(
+  url: string,
+  token: string,
+  headers: Record<string, string> | undefined,
+  relay: boolean,
+  timeoutMs = 5_000,
+): Promise<"rejected" | "accepted" | "unknown"> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${httpBase(url)}/session`, {
+      method: "POST",
+      headers: { ...headers, authorization: `Bearer ${token}` },
+      signal: controller.signal,
+      redirect: "error",
+    });
+    if (response.ok) return "accepted";
+    if (response.status !== 401 && response.status !== 403) return "unknown";
+    if (relay && /relay/i.test(await response.text().catch(() => ""))) return "unknown";
+    return "rejected";
+  } catch {
+    return "unknown";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** The default `createClient`: a `KybernClient` on the route, checking the machine id again on open. */
 export function kybernClientFactory(createSocket?: SocketFactory, base: ClientOptions = {}): MachineTransport["createClient"] {
   return ({ record, route, token, relayToken }) => {
@@ -163,9 +196,14 @@ export function kybernClientFactory(createSocket?: SocketFactory, base: ClientOp
     if (route.kind === "relay" && (!relayHeaders || !createSocket)) throw new Error("A relay route needs the relay member's token and a native socket");
     const socket: SocketFactory | undefined =
       createSocket && relayHeaders ? (url, bearer) => createSocket(url, bearer, relayHeaders) : createSocket;
+    const url = normalizeDaemonUrl(route.url);
     return new KybernClient(
-      { url: normalizeDaemonUrl(route.url), token, environmentId: record.machineId },
-      { ...base, expectedEnvironmentId: record.machineId, ...(socket ? { createSocket: socket } : {}) },
+      { url, token, environmentId: record.machineId },
+      {
+        ...base,
+        expectedEnvironmentId: record.machineId,
+        ...(socket ? { createSocket: socket, probeAuth: () => probeAuth(url, token, relayHeaders, route.kind === "relay") } : {}),
+      },
     );
   };
 }
@@ -1229,9 +1267,9 @@ export class MachineSet {
         off();
         resolve(value);
       };
-      const off = inner.onStatus((status, detail) => {
+      const off = inner.onStatus((status) => {
         if (status === "open") done("open");
-        else if (status === "failed" || status === "closed") done(/revoked|invalid|pair/i.test(detail ?? "") ? "revoked" : "failed");
+        else if (status === "failed" || status === "closed") done(inner.failure === "auth" ? "revoked" : "failed");
       });
       timer = this.clock.setTimeout(() => done("failed"), this.options.connectTimeoutMs ?? 15_000);
       inner.connect();
