@@ -151,6 +151,25 @@ fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
 }
 
 /// Run the daemon with the process arguments. `kybernd` is a thin wrapper around this.
+/// Windows: a daemon hosted in a console (a scheduled task's `run.cmd`, a terminal) is ended a few
+/// seconds after that console closes or the system shuts down, with no other trace. Shut down
+/// cleanly instead, and say why in the log. Never resolves elsewhere.
+async fn console_closed() {
+    #[cfg(windows)]
+    {
+        use tokio::signal::windows::{ctrl_close, ctrl_shutdown};
+        let (Ok(mut close), Ok(mut shutdown)) = (ctrl_close(), ctrl_shutdown()) else {
+            return std::future::pending().await;
+        };
+        tokio::select! {
+            _ = close.recv() => tracing::warn!("the console hosting the daemon closed"),
+            _ = shutdown.recv() => tracing::warn!("Windows is shutting down"),
+        }
+    }
+    #[cfg(not(windows))]
+    std::future::pending::<()>().await
+}
+
 pub fn run() -> Result<()> {
     runtime()?.block_on(serve())
 }
@@ -271,7 +290,8 @@ async fn serve() -> Result<()> {
     let shutdown_token = state.shutdown.clone();
     let shutdown = async move {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {}
+            _ = tokio::signal::ctrl_c() => tracing::info!("Ctrl+C received"),
+            _ = console_closed() => {}
             _ = shutdown_token.cancelled() => {}
         }
         // Signal-driven shutdown must also wake maintenance/update workers
