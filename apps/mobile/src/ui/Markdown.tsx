@@ -1,5 +1,5 @@
 import * as Clipboard from "expo-clipboard";
-import { createContext, memo, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, memo, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { router } from "expo-router";
 import { chatLink, kybernRef, splitKybernRefs, type KybernRef } from "../../../../packages/kybern-client/src/chatLinks";
 import { ChatFileContext } from "../state/chatFileContext";
@@ -299,48 +299,81 @@ const imageAspects = new Map<string, number>();
 /** Taller images than this stop growing and show with side margins instead. */
 const TALLEST_ASPECT = 0.6;
 
+/** Seconds since a picture started loading; shown once it has taken this long, so a slow link is told apart from a stuck one. */
+const SLOW_LOAD_SECONDS = 3;
+
 function MarkdownPicture({ image }: { image: MarkdownImage }) {
   const { colors } = useTheme();
   const threadId = useContext(ChatFileContext)?.threadId;
   const source = useMemo(() => imageSource(image, threadId), [image.target, threadId]);
-  const [failed, setFailed] = useState(false);
+  // Why the last load failed, as the image loader said it, and after how long; a tap on the card loads it again.
+  const [failure, setFailure] = useState<{ reason: string; seconds: number } | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const [startedAt, setStartedAt] = useState(() => Date.now());
+  const [loaded, setLoaded] = useState(false);
+  const [waited, setWaited] = useState(0);
   const [aspect, setAspect] = useState(() => (source?.uri ? imageAspects.get(source.uri) : undefined));
   const [open, setOpen] = useState(false);
   const label = imagePlaceholderText(image);
-  if (!source || failed)
+  const loading = !!source && !failure && !loaded;
+  useEffect(() => {
+    if (!loading) return;
+    const timer = setInterval(() => setWaited(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, [loading, startedAt]);
+  const retry = () => {
+    setFailure(null);
+    setLoaded(false);
+    setWaited(0);
+    setStartedAt(Date.now());
+    setAttempt((n) => n + 1);
+  };
+  if (!source || failure)
     return (
-      <View
-        accessible
-        accessibilityLabel={`Image unavailable: ${label}`}
-        style={{
-          flexDirection: "row",
-          alignItems: "center",
-          gap: 10,
-          padding: 12,
-          borderRadius: radius.md,
-          borderCurve: "continuous",
-          backgroundColor: colors.card,
-        }}
-      >
-        <Icon name="photo" size={20} color={colors.secondary} />
-        <View style={{ flex: 1 }}>
-          <T variant="footnote">{label}</T>
-          <T variant="footnote" tone="secondary">
-            Image unavailable
-          </T>
+      <Tap label={`${label}. Image unavailable${failure ? ". Tap to try again" : ""}`} onPress={failure ? retry : undefined} disabled={!failure} feedback="none">
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 10,
+            padding: 12,
+            borderRadius: radius.md,
+            borderCurve: "continuous",
+            backgroundColor: colors.card,
+          }}
+        >
+          <Icon name="photo" size={20} color={colors.secondary} />
+          <View style={{ flex: 1 }}>
+            <T variant="footnote">{label}</T>
+            <T variant="footnote" tone="secondary">
+              Image unavailable
+            </T>
+            {failure && (
+              <T variant="footnote" tone="secondary" selectable>
+                {`${failure.reason} (after ${failure.seconds}s). Tap to try again.`}
+              </T>
+            )}
+          </View>
         </View>
-      </View>
+      </Tap>
     );
   return (
     <View style={{ gap: 6 }}>
       <Tap label={`${label}. Open full screen`} onPress={() => setOpen(true)} feedback="none">
         <Image
+          key={attempt}
           source={source}
           accessibilityIgnoresInvertColors
-          onError={() => setFailed(true)}
-          onLoad={({ nativeEvent: { source: loaded } }) => {
-            if (!source?.uri || !loaded?.width || !loaded?.height) return;
-            const next = Math.max(TALLEST_ASPECT, loaded.width / loaded.height);
+          onError={({ nativeEvent }) =>
+            setFailure({
+              reason: String((nativeEvent as { error?: unknown }).error ?? "").trim() || "The image did not load",
+              seconds: Math.round((Date.now() - startedAt) / 100) / 10,
+            })
+          }
+          onLoad={({ nativeEvent: { source: loadedSource } }) => {
+            setLoaded(true);
+            if (!source?.uri || !loadedSource?.width || !loadedSource?.height) return;
+            const next = Math.max(TALLEST_ASPECT, loadedSource.width / loadedSource.height);
             imageAspects.set(source.uri, next);
             setAspect(next);
           }}
@@ -351,6 +384,11 @@ function MarkdownPicture({ image }: { image: MarkdownImage }) {
           ]}
           resizeMode="contain"
         />
+        {loading && waited >= SLOW_LOAD_SECONDS && (
+          <View pointerEvents="none" style={{ position: "absolute", left: 12, bottom: 10 }}>
+            <T variant="footnote" tone="secondary">{`Loading… ${waited}s`}</T>
+          </View>
+        )}
       </Tap>
       {!!image.alt && (
         <T variant="footnote" tone="secondary">
