@@ -1407,6 +1407,17 @@ impl Orchestrator {
         for project in &groups {
             changed |= self.refresh_group_members(project)?;
         }
+        for project in &projects {
+            let plain = kybern_git::simplify_path(std::path::Path::new(&project.path)).to_string_lossy().into_owned();
+            if plain != project.path && self.inner.store.project_by_path(&plain)?.is_none() {
+                let mut fixed = project.clone();
+                fixed.path = plain;
+                self.inner.store.project_update(&fixed)?;
+                changed = true;
+            }
+        }
+        let projects =
+            self.inner.store.projects_list()?.into_iter().filter(|project| project.kind != ProjectKind::Group).collect::<Vec<_>>();
         for batch in projects.chunks(8) {
             let probes = batch.iter().map(|project| async { (project.id, Repo::is_repo(std::path::Path::new(&project.path)).await) });
             for (id, is_git) in futures::future::join_all(probes).await {
@@ -1425,7 +1436,8 @@ impl Orchestrator {
 
     pub fn add_project(&self, path: String, name: Option<String>, space_id: Option<SpaceId>) -> Result<Project> {
         let p = PathBuf::from(&path);
-        let p = p.canonicalize().with_context(|| format!("project path {path} does not exist"))?;
+        // `canonicalize` returns `\\?\D:\x` on Windows; the project is stored and shown as `D:\x`.
+        let p = kybern_git::simplify_path(&p.canonicalize().with_context(|| format!("project path {path} does not exist"))?);
         if !p.is_dir() {
             return Err(anyhow!("{} is not a directory", p.display()));
         }
@@ -1435,7 +1447,19 @@ impl Orchestrator {
         {
             return Err(anyhow!("not found: space"));
         }
-        if let Some(mut existing) = self.inner.store.project_by_path(&path)? {
+        // A project registered before the prefix was dropped keeps working: it is found by its old path and renamed.
+        let verbatim = format!(r"\\?\{path}");
+        let found = match self.inner.store.project_by_path(&path)? {
+            Some(existing) => Some(existing),
+            None => self.inner.store.project_by_path(&verbatim)?,
+        };
+        if let Some(mut existing) = found {
+            if existing.path != path && existing.kind != ProjectKind::Group {
+                existing.path = path.clone();
+                existing.updated_at = Utc::now();
+                self.inner.store.project_update(&existing)?;
+                self.publish_projects();
+            }
             // Self-heal a stale cached flag: the folder may have gained (or lost) a
             // repo since it was first registered. Re-probe and persist any change so
             // edit/integration spawns are not permanently blocked after a `git init`.
@@ -3264,7 +3288,7 @@ impl Orchestrator {
         kinds.push(ProviderKind::ClaudeCode);
         kinds.push(ProviderKind::Codex);
         let prompt = format!(
-            "Write a title for a coding session that starts with the request below. Reply with the title only: at most 6 words, sentence case, no quotes, no trailing period.\n\nRequest:\n{}",
+            "Write a title for a coding session that starts with the request below. Reply with the title only, with no label or preface such as \"Title:\": at most 6 words, sentence case, no quotes, no trailing period.\n\nRequest:\n{}",
             first.plain_text().chars().take(1500).collect::<String>()
         );
         let cwd = PathBuf::from(&thread.cwd);
@@ -4992,10 +5016,48 @@ fn output_indicates_running(output: &serde_json::Value) -> bool {
 }
 
 fn clean_title(text: &str) -> String {
+    let trim = |s: &str| {
+        s.trim_matches(|c: char| c == '"' || c == '\'' || c == '*' || c == '#' || c == '`').trim_end_matches('.').trim().to_string()
+    };
     let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
-    let line = line.trim_matches(|c: char| c == '"' || c == '\'' || c == '*' || c == '#' || c == '`').trim_end_matches('.').trim();
-    let title: String = line.chars().take(80).collect();
+    let line = trim(&strip_title_preamble(&trim(line)));
+    let title: String = sentence_case(&line).chars().take(80).collect();
     if title.split_whitespace().count() > 12 { String::new() } else { title }
+}
+
+/// A model that answers "Title: fix login" or "Titles the session: fix login" instead of the bare
+/// title: the words before the first colon are talk about the title, not part of it.
+fn strip_title_preamble(line: &str) -> String {
+    let Some((head, rest)) = line.split_once(':') else { return line.to_string() };
+    let words: Vec<String> = head.split_whitespace().map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase()).collect();
+    let about_the_title = words.len() <= 5
+        && (words.iter().any(|w| matches!(w.as_str(), "title" | "titles" | "titled" | "heading"))
+            || words.first().is_some_and(|w| matches!(w.as_str(), "here" | "suggested")));
+    if about_the_title && !rest.trim().is_empty() { rest.trim().to_string() } else { line.to_string() }
+}
+
+/// Sentence case: a Title Case Reply is lowercased after its first word, keeping words that carry
+/// their own capitals (`iOS`, `OSes`, `API`).
+fn sentence_case(title: &str) -> String {
+    let words: Vec<&str> = title.split_whitespace().collect();
+    let capitalized = |w: &&str| w.chars().next().is_some_and(char::is_uppercase);
+    let letters = words.iter().filter(|w| w.chars().next().is_some_and(char::is_alphabetic)).count();
+    let title_case = letters >= 3 && words.iter().filter(|w| w.chars().next().is_some_and(char::is_alphabetic)).all(capitalized);
+    let mut out = Vec::with_capacity(words.len());
+    for (at, word) in words.iter().enumerate() {
+        let mut chars = word.chars();
+        let first = chars.next();
+        let rest: String = chars.collect();
+        let own_capitals = rest.chars().any(char::is_uppercase);
+        let text = match first {
+            Some(c) if at == 0 => c.to_uppercase().collect::<String>() + &rest,
+            Some(c) if title_case && !own_capitals => c.to_lowercase().collect::<String>() + &rest,
+            Some(c) => c.to_string() + &rest,
+            None => String::new(),
+        };
+        out.push(text);
+    }
+    out.join(" ")
 }
 
 /// What `kybern askpass` gets back for a prompt.
@@ -5056,6 +5118,20 @@ pub(crate) fn worktree_label(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_generated_title_loses_talk_about_the_title_and_keeps_sentence_case() {
+        use super::clean_title;
+        assert_eq!(clean_title("Titles the session: check main green across OSes"), "Check main green across OSes");
+        assert_eq!(clean_title("Title: **Fix login redirect**"), "Fix login redirect");
+        assert_eq!(clean_title("Here's a title: fix the flaky test."), "Fix the flaky test");
+        assert_eq!(clean_title("\"Add Machine Network Tests\""), "Add machine network tests");
+        assert_eq!(clean_title("Fix iOS crash on launch"), "Fix iOS crash on launch");
+        // A colon that is part of the title stays.
+        assert_eq!(clean_title("Session tokens: rotate on login"), "Session tokens: rotate on login");
+        assert_eq!(clean_title("Title:"), "Title:");
+        assert_eq!(clean_title("one two three four five six seven eight nine ten eleven twelve thirteen"), "");
+    }
+
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
     use std::sync::Arc;
