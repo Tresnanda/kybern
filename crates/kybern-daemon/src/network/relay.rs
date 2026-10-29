@@ -338,10 +338,59 @@ fn forwarded_headers(headers: &HeaderMap) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Paths a relay never reaches: other relays (no onward hops) and the session handshake.
+/// Paths a relay never reaches: anything but an origin-relative path, other relays (no onward hops) and the
+/// session handshake. See [`local_url`].
 fn path_refused(path: &str) -> bool {
-    let path = path.trim_start_matches('/');
-    path.starts_with("relay/") || path.starts_with("network/")
+    local_url("http", std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 1)), path).is_none()
+}
+
+/// The URL B opens on its own listener at `addr` for a relayed `path` (with its query), or `None` when the path
+/// is refused. The path must be origin-relative (one leading `/`, no backslash, fragment or control character),
+/// so it can never turn the daemon's address into user-info and name another host or port; the parsed URL is
+/// checked to still point at `addr`. The deny list runs on the path the URL parser normalized (dot segments,
+/// `%2e` included), percent-decoded once more, because that is what the listener routes on.
+fn local_url(scheme: &str, addr: std::net::SocketAddr, path: &str) -> Option<reqwest::Url> {
+    if !path.starts_with('/') || path.starts_with("//") || path.chars().any(|c| c == '\\' || c == '#' || c == ' ' || c.is_control()) {
+        return None;
+    }
+    let url = reqwest::Url::parse(&format!("{scheme}://{addr}{path}")).ok()?;
+    let host = match addr.ip() {
+        std::net::IpAddr::V4(ip) => ip.to_string(),
+        std::net::IpAddr::V6(ip) => format!("[{ip}]"),
+    };
+    if url.host_str() != Some(host.as_str()) || url.port_or_known_default() != Some(addr.port()) || !url.username().is_empty() || url.password().is_some() {
+        return None;
+    }
+    let decoded = percent_decoded(url.path());
+    let mut segments = decoded.split('/').filter(|segment| !segment.is_empty());
+    if decoded.split('/').any(|segment| segment == "." || segment == "..") {
+        return None;
+    }
+    let first = segments.next().unwrap_or_default().to_ascii_lowercase();
+    if first == "relay" || first == "network" {
+        return None;
+    }
+    Some(url)
+}
+
+/// `text` with each `%XX` replaced by its byte; anything else is kept as it is.
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        let hex = |byte: u8| (byte as char).to_digit(16);
+        if bytes[at] == b'%'
+            && let (Some(high), Some(low)) = (bytes.get(at + 1).and_then(|b| hex(*b)), bytes.get(at + 2).and_then(|b| hex(*b)))
+        {
+            out.push((high * 16 + low) as u8);
+            at += 3;
+        } else {
+            out.push(bytes[at]);
+            at += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 // ---- M: the relay endpoint ----
@@ -668,9 +717,14 @@ fn local_addr(state: &AppState) -> Result<std::net::SocketAddr, RpcError> {
 
 /// `peer.relay.open`: open the local end of a stream M asked for.
 pub async fn handle_open(state: &AppState, link: &Arc<PeerLink>, params: PeerRelayOpenParams) -> Result<Value, RpcError> {
-    if path_refused(&params.path) {
+    let addr = local_addr(state)?;
+    let scheme = match params.kind {
+        RelayStreamKind::Ws => "ws",
+        RelayStreamKind::Http => "http",
+    };
+    let Some(url) = local_url(scheme, addr, &params.path) else {
         return Err(RpcError::new(codes::FORBIDDEN, "the relay does not carry this path"));
-    }
+    };
     let slot = state
         .network
         .relays
@@ -678,10 +732,9 @@ pub async fn handle_open(state: &AppState, link: &Arc<PeerLink>, params: PeerRel
         .ok_or_else(|| RpcError::new(codes::CONFLICT, "too many relayed connections on this machine"))?;
     let (stream, incoming) =
         link.relays.create(Some(params.stream_id)).ok_or_else(|| RpcError::invalid_params("that stream id is in use"))?;
-    let addr = local_addr(state)?;
     let result = match params.kind {
-        RelayStreamKind::Ws => open_local_ws(state, link, &stream, incoming, addr, &params, slot).await,
-        RelayStreamKind::Http => open_local_http(link, &stream, incoming, addr, params, slot).await,
+        RelayStreamKind::Ws => open_local_ws(state, link, &stream, incoming, url, &params, slot).await,
+        RelayStreamKind::Http => open_local_http(link, &stream, incoming, url, params, slot).await,
     };
     if result.is_err() {
         link.relays.remove(stream.id);
@@ -704,12 +757,11 @@ async fn open_local_ws(
     link: &Arc<PeerLink>,
     stream: &Arc<Stream>,
     mut incoming: mpsc::Receiver<Chunk>,
-    addr: std::net::SocketAddr,
+    url: reqwest::Url,
     params: &PeerRelayOpenParams,
     slot: Slot,
 ) -> Result<(), RpcError> {
-    let url = format!("ws://{addr}{}", params.path);
-    let mut request = url.into_client_request().map_err(RpcError::internal)?;
+    let mut request = url.as_str().into_client_request().map_err(RpcError::internal)?;
     for (name, value) in &params.headers {
         if name == PROTOCOLS_HEADER {
             if let Ok(value) = TValue::from_str(value) {
@@ -776,14 +828,14 @@ async fn open_local_http(
     link: &Arc<PeerLink>,
     stream: &Arc<Stream>,
     mut incoming: mpsc::Receiver<Chunk>,
-    addr: std::net::SocketAddr,
+    url: reqwest::Url,
     params: PeerRelayOpenParams,
     slot: Slot,
 ) -> Result<(), RpcError> {
     let method = params.method.as_deref().unwrap_or("GET");
     let method = reqwest::Method::from_bytes(method.as_bytes()).map_err(|_| RpcError::invalid_params("bad method"))?;
     let client = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).build().map_err(RpcError::internal)?;
-    let mut request = client.request(method.clone(), format!("http://{addr}{}", params.path));
+    let mut request = client.request(method.clone(), url);
     for (name, value) in &params.headers {
         if hop_by_hop(name) {
             continue;
@@ -890,6 +942,37 @@ mod tests {
         assert!(!path_refused("/ws"));
         assert!(!path_refused("/.well-known/kybern/machine"));
         assert!(!path_refused("/preview-files/t/index.html"));
+    }
+
+    #[test]
+    fn a_relayed_path_stays_on_the_daemon_and_is_checked_after_normalization() {
+        let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 4199));
+        // Concatenated, this would make the daemon's address user-info and connect to port 8080.
+        let naive = reqwest::Url::parse(&format!("http://{addr}@127.0.0.1:8080/admin")).unwrap();
+        assert_eq!(naive.port(), Some(8080), "the parser reqwest uses reads the authority this way");
+        for path in [
+            "@127.0.0.1:8080/admin",
+            ":8080/admin",
+            "//127.0.0.1:8080/admin",
+            "/\\127.0.0.1:8080/admin",
+            "/ok/../network/session",
+            "/ok/%2e%2e/network/session",
+            "/ok/.%2E/relay/abc/ws",
+            "/%6Eetwork/session",
+            "/Network/session",
+            "/x/..%2Fnetwork/session",
+            "/ws#frag",
+            "",
+        ] {
+            assert!(path_refused(path), "{path:?} is refused");
+            assert!(local_url("http", addr, path).is_none(), "{path:?} gets no URL");
+        }
+        for path in ["/ws?token=abc", "/preview-files/t/index.html", "/.well-known/kybern/machine", "/api/x?q=a@b:c"] {
+            let url = local_url("http", addr, path).unwrap_or_else(|| panic!("{path:?} is carried"));
+            assert_eq!((url.host_str(), url.port()), (Some("127.0.0.1"), Some(4199)));
+        }
+        let ws = local_url("ws", std::net::SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, 4199)), "/ws").unwrap();
+        assert_eq!(ws.as_str(), "ws://[::1]:4199/ws");
     }
 
     #[test]
