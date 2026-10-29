@@ -19,6 +19,7 @@ import {
   type MachineThread,
   type MergedThreads,
 } from "./machineMerge.ts";
+import { shortMachineName } from "./forkMachine.ts";
 import {
   IDENTITY_MISMATCH_MESSAGE,
   MAX_ROUTES_PER_MACHINE,
@@ -842,7 +843,8 @@ export class MachineSet {
         const machineId = slot.record.machineId;
         return {
           machineId,
-          name: slot.record.name,
+          // The name people use: a host name loses `.local` and its tailnet suffix ("Treshnandas-Macbook.local").
+          name: shortMachineName(slot.record.name) || slot.record.name,
           status: slot.status,
           offline: offline.has(machineId),
           lastSeenAt: lastSeenAt.get(machineId),
