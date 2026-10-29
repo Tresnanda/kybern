@@ -63,6 +63,14 @@ impl Orchestrator {
         if kind != ProviderKind::ClaudeCode {
             return;
         }
+        self.end_login_sessions(kind, instance, true).await;
+    }
+
+    /// Stop the live sessions of a local account whose borrowed login is gone (the loan was released, the
+    /// broker moved, the lender left): a Codex app-server or a Claude process keeps the lent token in memory
+    /// for as long as it runs. The next message starts a session without the loan, which finds the account
+    /// signed out. With `idle_only`, a session with a turn, a task or queued input in flight is left to finish.
+    pub async fn end_login_sessions(&self, kind: ProviderKind, instance: &str, idle_only: bool) {
         let candidates: Vec<(ThreadId, Arc<LiveSession>)> =
             self.inner.sessions.lock().await.iter().map(|(id, live)| (*id, live.clone())).collect();
         for (thread_id, live) in candidates {
@@ -70,10 +78,11 @@ impl Orchestrator {
             if thread.provider.kind != kind || thread.provider.instance != instance {
                 continue;
             }
-            if live.turn.lock().await.is_some()
-                || live.tasks.lock().await.values().any(|task| task.status.is_active())
-                || !live.pending.lock().await.is_empty()
-                || thread.status == ThreadStatus::Running
+            if idle_only
+                && (live.turn.lock().await.is_some()
+                    || live.tasks.lock().await.values().any(|task| task.status.is_active())
+                    || !live.pending.lock().await.is_empty()
+                    || thread.status == ThreadStatus::Running)
             {
                 continue;
             }
@@ -87,7 +96,7 @@ impl Orchestrator {
             live.mark_released();
             self.revoke_native_session(&live);
             if let Err(error) = live.session.close().await {
-                tracing::debug!(%error, %thread_id, "closing a session after its login rotated failed");
+                tracing::debug!(%error, %thread_id, "closing a session after its login ended failed");
             }
             let _ = self.emit(thread_id, None, EventPayload::ProviderSessionReleased { reason: SessionReleaseReason::Manual });
         }

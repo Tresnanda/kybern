@@ -885,6 +885,8 @@ impl LoginBroker {
                     let _ = self.hub.call(&broker, PeerLoginRelease::NAME, json!({ "loan_id": loan_id })).await;
                 }
             }
+            // A session that holds the lent token must not outlive the loan.
+            state.orchestrator.end_login_sessions(params.provider, &params.instance, false).await;
         }
         state.account_identities.invalidate(&ProviderInstance { kind: params.provider, instance: params.instance });
         Ok(self.status(state).await)
@@ -934,13 +936,19 @@ impl LoginBroker {
                 continue;
             }
             let (Some(instance), Some(new_broker)) = (loan.local_instance.clone(), current.clone()) else {
+                // No broker any more, or the lender left: nothing backs the loan, so the sessions on it end.
                 let _ = self.store.loan_release(&loan.loan_id);
+                if let Some(instance) = &loan.local_instance {
+                    lock(&self.leases).remove(&(loan.provider, instance.clone()));
+                    state.orchestrator.end_login_sessions(loan.provider, instance, false).await;
+                }
                 continue;
             };
             if new_broker == me {
                 // This machine became the broker: it signs in locally; the old loan only needs releasing.
                 let _ = self.store.loan_release(&loan.loan_id);
-                lock(&self.leases).remove(&(loan.provider, instance));
+                lock(&self.leases).remove(&(loan.provider, instance.clone()));
+                state.orchestrator.end_login_sessions(loan.provider, &instance, false).await;
                 continue;
             }
             if lendable.is_none() {
@@ -968,7 +976,8 @@ impl LoginBroker {
             if self.borrow(&lease, true).await.is_ok() {
                 let _ = self.store.loan_release(&loan.loan_id);
                 let _ = self.hub.call(&loan.peer, PeerLoginRelease::NAME, json!({ "loan_id": loan.loan_id })).await;
-                state.orchestrator.login_rotated(loan.provider, &instance).await;
+                // The old broker's token is no good once it signs out: idle sessions start over on the new one.
+                state.orchestrator.end_login_sessions(loan.provider, &instance, true).await;
                 tracing::info!(target: TARGET, provider = loan.provider.as_str(), "borrowed again from the new login broker");
             }
         }

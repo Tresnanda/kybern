@@ -891,3 +891,52 @@ async fn omp_is_pointed_at_the_brokers_own_broker_and_fallback_unsets_both_varia
     .unwrap();
     assert!(l.broker(&l.b).binding(ProviderKind::Omp, &local.instance).is_none());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn releasing_a_loan_ends_the_session_that_holds_it_and_the_account_reads_signed_out() {
+    let Some(l) = lending().await else { return };
+    let (thread, _) = l.thread().await;
+    l.send(thread, "hello").await;
+    eventually("the turn completes", WAIT, || l.turns(thread, "turn_completed") == 1).await;
+    assert!(!l.spawns()[0].closed.load(std::sync::atomic::Ordering::SeqCst));
+
+    client(&l.b)
+        .await
+        .call::<LoginBrokerBind>(LoginBrokerBindParams {
+            provider: ProviderKind::ClaudeCode,
+            instance: l.local_account.clone(),
+            broker_account: None,
+        })
+        .await
+        .unwrap();
+
+    // The process that held the lent token is stopped, and the thread has no live session left.
+    assert!(l.spawns()[0].closed.load(std::sync::atomic::Ordering::SeqCst), "the borrowed session was left running");
+    assert!(l.b.state.orchestrator.session_activity().await.unwrap().live == 0);
+    assert_eq!(l.turns(thread, "provider_session_released"), 1);
+    assert!(l.b.state.store.loans_open(kybern_store::LoanRole::Borrower).unwrap().is_empty());
+    let list = crate::provider_accounts::list(&l.b.state, AccountsListParams { kind: Some(ProviderKind::ClaudeCode), refresh: true })
+        .await
+        .unwrap();
+    let account = list.accounts.iter().find(|a| a.provider.instance == l.local_account).unwrap();
+    assert!(
+        matches!(account.status, AccountStatus::SignedOut | AccountStatus::NeedsSignIn),
+        "still reads as signed in: {:?}",
+        account.status
+    );
+    assert!(account.broker.is_none(), "the account still points at the broker");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_thread_on_a_borrowed_account_gets_no_model_helper_and_keeps_its_plain_title() {
+    let Some(l) = lending().await else { return };
+    let (thread, _) = l.thread().await;
+    let stored = l.b.state.store.thread_get(thread).unwrap().unwrap();
+    // Neither its own harness nor another one: a borrowed login lives only in the session, and the machine's
+    // own logins are not the thread's to use.
+    for kind in [ProviderKind::ClaudeCode, ProviderKind::Codex] {
+        assert!(l.b.state.orchestrator.one_shot_env(&stored, kind).is_none(), "{kind} would run on the machine's own login");
+    }
+    let title = l.b.state.orchestrator.generate_title(&stored, &UserMessage::text("name this")).await.unwrap();
+    assert_eq!(title, None);
+}
