@@ -339,7 +339,7 @@ impl Orchestrator {
 
     // ---- the receiving machine ----
 
-    async fn group_candidates(&self) -> Result<Vec<GroupCandidate>, RpcError> {
+    pub(super) async fn group_candidates(&self) -> Result<Vec<GroupCandidate>, RpcError> {
         let mut candidates = Vec::new();
         for project in self.inner.store.projects_list().map_err(internal)?.into_iter().filter(|project| project.kind == ProjectKind::Group)
         {

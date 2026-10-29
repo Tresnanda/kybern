@@ -289,6 +289,7 @@ async fn delegating_to_a_machine_without_the_repository_asks_and_then_runs_there
             .await
     });
     let card = secret_card(&live).await;
+    wait_until("the card is stored", WAIT, || fixture.store.approval_get(card).ok().flatten().is_some()).await;
     let (request, _) = fixture.store.approval_get(card).unwrap().unwrap();
     assert_eq!(request.tool_name, PROJECT_PROVISION_TOOL);
     let input: ProvisionCardInput = serde_json::from_value(request.input.clone()).unwrap();
@@ -312,7 +313,7 @@ async fn delegating_to_a_machine_without_the_repository_asks_and_then_runs_there
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn full_access_adds_the_project_with_the_proposed_folder_and_a_decline_fails_the_delegation() {
+async fn full_access_adds_the_project_with_the_proposed_folder_without_a_card() {
     let Some((cluster, _a, b, fixture, parent, live, spawned)) = agent_pair(PermissionMode::FullAccess).await else { return };
     let started = fixture
         .tool(&parent, &live, "d1", "kybern_agent_delegate", json!({"task": "Full access task", "machine": b.id()}))
@@ -325,13 +326,18 @@ async fn full_access_adds_the_project_with_the_proposed_folder_and_a_decline_fai
     assert!(proposed.join(".git").exists());
     assert!(live.daemon_approvals.lock().await.is_empty(), "no card in Full access");
 
-    // Supervised on a fresh pair: declining the card fails the call and queues nothing.
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn declining_the_card_fails_the_delegation_and_queues_nothing() {
     let Some((_cluster, a2, b2, fixture2, parent2, live2, _)) = agent_pair(PermissionMode::Supervised).await else { return };
     let (orchestrator, thread_id, session, target) = (fixture2.orchestrator.clone(), parent2.id, live2.session_instance_id, b2.id());
     let call = tokio::spawn(async move {
         orchestrator.execute_native_app_tool_call(thread_id, session, "d2", "kybern_agent_delegate", json!({"task": "Nope", "machine": target})).await
     });
     let card = secret_card(&live2).await;
+    // The card is in the session before it is stored: answer once the store has it.
+    wait_until("the card is stored", WAIT, || fixture2.store.approval_get(card).ok().flatten().is_some()).await;
     fixture2.orchestrator.respond_approval(card, ApprovalDecision::Deny { reason: None }).await.unwrap();
     let error = call.await.unwrap().unwrap_err().to_string();
     assert!(error.contains("chose not to add"), "{error}");

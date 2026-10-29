@@ -727,10 +727,20 @@ impl Orchestrator {
                 .zip(members.iter().chain(std::iter::repeat(&String::new())))
                 .map(|(repo, name)| GroupRepo { name: name.clone(), repo: repo.clone() })
                 .collect();
-            return Ok(match self.match_group(&named, None, "").await {
-                Ok(candidate) => vec![view(&candidate.project)],
-                Err(_) => Vec::new(),
-            });
+            if let Ok(candidate) = self.match_group(&named, None, "").await {
+                return Ok(vec![view(&candidate.project)]);
+            }
+            // A group that has some of these repositories is this project, set up differently: adding a second copy
+            // would only confuse which one work goes to, so it counts as there (work sent to it says what is missing).
+            return Ok(self
+                .group_candidates()
+                .await?
+                .into_iter()
+                .filter(|candidate| {
+                    candidate.members.iter().any(|member| repos.iter().any(|repo| git_transfer::same_repo(repo, &member.repo)))
+                })
+                .map(|candidate| view(&candidate.project))
+                .collect());
         }
         let Some(primary) = repos.first() else { return Ok(Vec::new()) };
         let mut found = Vec::new();
