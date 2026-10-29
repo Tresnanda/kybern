@@ -566,9 +566,10 @@ mod windows_clipboard {
         if !has_text {
             return Ok(None);
         }
-        let bytes =
-            bytes_of(unsafe { GetClipboardData(CF_UNICODETEXT) }).ok_or_else(|| std::io::Error::other("the clipboard's text could not be read"))?;
-        let wide: Vec<u16> = bytes.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).take_while(|unit| *unit != 0).collect();
+        let bytes = bytes_of(unsafe { GetClipboardData(CF_UNICODETEXT) })
+            .ok_or_else(|| std::io::Error::other("the clipboard's text could not be read"))?;
+        let wide: Vec<u16> =
+            bytes.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).take_while(|unit| *unit != 0).collect();
         Ok(Some((String::from_utf16_lossy(&wide), windows_markers(&formats))))
     }
 }

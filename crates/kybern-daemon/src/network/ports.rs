@@ -343,8 +343,10 @@ pub async fn handle_open(state: &AppState, link: &Arc<PeerLink>, params: PeerPor
         .acquire(&format!("inbound:{}", link.machine_id))
         .ok_or_else(|| RpcError::new(codes::CONFLICT, "too many forwarded connections on this machine"))?;
     let socket = connect_loopback(params.port).await?;
-    let (stream, incoming) =
-        link.relays.create(Some(params.stream_id), StreamKind::Ports, Some(Scope::MachinePorts)).ok_or_else(|| RpcError::invalid_params("that stream id is in use"))?;
+    let (stream, incoming) = link
+        .relays
+        .create(Some(params.stream_id), StreamKind::Ports, Some(Scope::MachinePorts))
+        .ok_or_else(|| RpcError::invalid_params("that stream id is in use"))?;
     let link = link.clone();
     tokio::spawn(async move {
         let cancel = CancellationToken::new();

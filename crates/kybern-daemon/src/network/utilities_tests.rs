@@ -536,7 +536,8 @@ async fn open_echo_connection(a: &Node, b: &Node, client: &Client, remote_port: 
     let mut got = [0u8; 4];
     tokio::time::timeout(Duration::from_secs(10), socket.read_exact(&mut got)).await.expect("no echo").unwrap();
     assert_eq!(&got, b"ping");
-    eventually("b serves the stream", WAIT, || b.state.network.relays.open_streams() == 1 && a.state.network.relays.open_streams() == 1).await;
+    eventually("b serves the stream", WAIT, || b.state.network.relays.open_streams() == 1 && a.state.network.relays.open_streams() == 1)
+        .await;
     socket
 }
 

@@ -962,8 +962,11 @@ impl LoginBroker {
         for loan in &loans {
             let _ = self.store.loan_release(&loan.loan_id);
             if self.network.is_enabled() {
-                let _ = tokio::time::timeout(STATUS_WAIT, self.hub.call(&loan.peer, PeerLoginRelease::NAME, json!({ "loan_id": loan.loan_id })))
-                    .await;
+                let _ = tokio::time::timeout(
+                    STATUS_WAIT,
+                    self.hub.call(&loan.peer, PeerLoginRelease::NAME, json!({ "loan_id": loan.loan_id })),
+                )
+                .await;
             }
             if let Some(instance) = &loan.local_instance
                 && !ended.contains(&(loan.provider, instance.clone()))

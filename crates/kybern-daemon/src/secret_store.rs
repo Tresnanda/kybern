@@ -1041,7 +1041,12 @@ mod tests {
         store.put("provider.cursor.CURSOR_API_KEY", SENTINEL, &SecretSource::Pushed("machine-a".into())).unwrap();
         store.put("provider.opencode.OPENAI_API_KEY", "local-value", &SecretSource::Local).unwrap();
         let mut settings = Settings::default();
-        settings.providers.entry(ProviderKind::Cursor).or_default().env.insert("CURSOR_API_KEY".into(), reference("provider.cursor.CURSOR_API_KEY"));
+        settings
+            .providers
+            .entry(ProviderKind::Cursor)
+            .or_default()
+            .env
+            .insert("CURSOR_API_KEY".into(), reference("provider.cursor.CURSOR_API_KEY"));
         settings.providers.entry(ProviderKind::Cursor).or_default().env.insert("PLAIN".into(), "kept".into());
         settings
             .providers

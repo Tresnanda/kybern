@@ -195,8 +195,11 @@ impl LinkRelays {
     pub fn close_unpermitted(&self, scopes: &[Scope]) -> usize {
         let ended: Vec<_> = {
             let mut streams = self.lock();
-            let ids: Vec<u64> =
-                streams.values().filter(|stream| stream.serves.is_some_and(|scope| !scopes.contains(&scope))).map(|stream| stream.id).collect();
+            let ids: Vec<u64> = streams
+                .values()
+                .filter(|stream| stream.serves.is_some_and(|scope| !scopes.contains(&scope)))
+                .map(|stream| stream.id)
+                .collect();
             ids.into_iter().filter_map(|id| streams.remove(&id)).collect()
         };
         for stream in &ended {
@@ -389,7 +392,11 @@ fn local_url(scheme: &str, addr: std::net::SocketAddr, path: &str) -> Option<req
         std::net::IpAddr::V4(ip) => ip.to_string(),
         std::net::IpAddr::V6(ip) => format!("[{ip}]"),
     };
-    if url.host_str() != Some(host.as_str()) || url.port_or_known_default() != Some(addr.port()) || !url.username().is_empty() || url.password().is_some() {
+    if url.host_str() != Some(host.as_str())
+        || url.port_or_known_default() != Some(addr.port())
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
         return None;
     }
     let decoded = percent_decoded(url.path());
@@ -531,7 +538,9 @@ async fn relay_ws(state: &AppState, target: &str, headers: &HeaderMap, path: Str
     let Some(slot) = state.network.relays.acquire(&principal.token_id.to_string()) else {
         return refuse(StatusCode::TOO_MANY_REQUESTS, "too many relayed connections");
     };
-    let Some((stream, incoming)) = link.relays.create(None, StreamKind::Relay, None) else { return refuse(StatusCode::INTERNAL_SERVER_ERROR, "stream id clash") };
+    let Some((stream, incoming)) = link.relays.create(None, StreamKind::Relay, None) else {
+        return refuse(StatusCode::INTERNAL_SERVER_ERROR, "stream id clash");
+    };
     let protocols = requested_protocols(headers);
     let mut forwarded = forwarded_headers(headers);
     if !protocols.is_empty() {
@@ -761,8 +770,10 @@ pub async fn handle_open(state: &AppState, link: &Arc<PeerLink>, params: PeerRel
         .relays
         .acquire(&format!("inbound:{}", link.machine_id))
         .ok_or_else(|| RpcError::new(codes::CONFLICT, "too many relayed connections on this machine"))?;
-    let (stream, incoming) =
-        link.relays.create(Some(params.stream_id), StreamKind::Relay, Some(Scope::MachineRelay)).ok_or_else(|| RpcError::invalid_params("that stream id is in use"))?;
+    let (stream, incoming) = link
+        .relays
+        .create(Some(params.stream_id), StreamKind::Relay, Some(Scope::MachineRelay))
+        .ok_or_else(|| RpcError::invalid_params("that stream id is in use"))?;
     let result = match params.kind {
         RelayStreamKind::Ws => open_local_ws(state, link, &stream, incoming, url, &params, slot).await,
         RelayStreamKind::Http => open_local_http(link, &stream, incoming, url, params, slot).await,
@@ -1015,7 +1026,10 @@ mod tests {
         let (c, _) = acceptor.create(None, StreamKind::Relay, None).unwrap();
         assert_eq!((a.id, b.id, c.id), (1, 3, 2));
         assert!(dialer.create(Some(1), StreamKind::Ports, None).is_none(), "an id in use is refused");
-        assert!(dialer.get(1, StreamKind::Ports).is_none() && dialer.get(1, StreamKind::Relay).is_some(), "a frame of the other kind finds nothing");
+        assert!(
+            dialer.get(1, StreamKind::Ports).is_none() && dialer.get(1, StreamKind::Relay).is_some(),
+            "a frame of the other kind finds nothing"
+        );
     }
 
     #[test]
