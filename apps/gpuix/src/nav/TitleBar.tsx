@@ -9,7 +9,7 @@ import { useNotes } from '../notes/store.ts'
 import { showDialog } from '../dialogs/store.ts'
 import { forkTargetsOf } from '../fork/targets.ts'
 import type { StateThread } from '../machines/merged.ts'
-import { ThreadMachine } from '../machines/ThreadMachine.tsx'
+import { MachinePill } from '../machines/ThreadMachine.tsx'
 import { ThreadContextChips } from '../coordinator/Header.tsx'
 import { latestRotation, refreshContext } from '../coordinator/rotation.ts'
 import { formatTokens, ROTATION_COPY } from '../../../../packages/kybern-client/src/rotation.ts'
@@ -310,13 +310,21 @@ export const ThreadHeader = memo(function ThreadHeader({ leafId: given, size = '
           <Breadcrumb thread={thread} ancestors={ancestors} />
         ) : (
           <>
+            {/* Where this child sits: its main thread (a ghost button that goes back), a chevron, then its own title. */}
             {mainThread && size === 'md' && (
-              <HeaderChip testId="main-thread" onClick={() => openThread(mainThread.id)}>
-                <Icon source={N.arrowLeft} size={14} color={muted(t, 1)} />
-                <Label color={muted(t, 1)} truncate>
-                  Main thread
-                </Label>
-              </HeaderChip>
+              <>
+                <Tip label="Back to the main thread" side="bottom">
+                  <div style={{ display: 'flex', minWidth: 0, flexShrink: 1, pointerEvents: 'auto' }}>
+                    <HeaderChip testId="main-thread" onClick={() => openThread(mainThread.id)}>
+                      <ProviderMark kind={mainThread.provider.kind} size={12} />
+                      <Label color={t.textSecondary} truncate>
+                        {mainThread.title || 'Main thread'}
+                      </Label>
+                    </HeaderChip>
+                  </div>
+                </Tip>
+                <Icon source={N.chevronRight} size={12} color={ink(t, 0.32)} style={{ flexShrink: 0 }} />
+              </>
             )}
             {renaming ? (
               <>
@@ -346,7 +354,7 @@ export const ThreadHeader = memo(function ThreadHeader({ leafId: given, size = '
                 </div>
               </>
             )}
-            {!inSplit && <ThreadMachine machineId={(thread as StateThread).machineId} testId="header-machine" />}
+            {!inSplit && !strip && <MachinePill machineId={(thread as StateThread).machineId} testId="header-machine" />}
             {size === 'md' && !inSplit && <ThreadContextChips thread={thread} />}
             {thread.coordinator_project_id && size === 'md' && !inSplit && (
               <Label color={muted(t, 0.6)} size={10} weight={500} style={{ flexShrink: 0 }}>

@@ -112,6 +112,8 @@ const GEOMETRY = {
   sm: { height: 24, pad: 7, text: 12, glyph: 14 },
 } as const
 const MAX = 200, CLOSE = 16
+/** A pinned tab (the chat) is up to 320 wide; one with an `extra` (the title bar's machine pill) gets room for it on top. */
+const pinnedMax = (item: { extra?: unknown }) => 320 + (item.extra ? 120 : 0)
 
 /** Italic is a Markdown emphasis in GPUIX (text styles have no `fontStyle`): one short line, pre-truncated to the tab's room. */
 const italicThemes = new WeakMap<Theme, Map<string, object>>()
@@ -279,7 +281,7 @@ const TabView = memo(function TabView({ item, index, size, active, focused, prop
   const glyphNode = item.iconNode ?? (item.mark ? <ProviderMark kind={item.mark} size={geometry.glyph} /> : item.icon ? <Icon source={item.icon} size={geometry.glyph} color={iconColor} /> : null)
   // A label longer than the tab's room fades out at its trailing edge instead of ending in "…" (the tooltip has the rest).
   // Its width is estimated from the character count, as `clip` does; the stock addon has no fade and keeps the ellipsis.
-  const room = (item.pinned ? 320 : MAX) - geometry.pad - (glyphNode ? geometry.glyph + 6 : 0) - (closable ? 6 + CLOSE + geometry.pad - 3 : geometry.pad)
+  const room = (item.pinned ? pinnedMax(item) : MAX) - geometry.pad - (glyphNode ? geometry.glyph + 6 : 0) - (closable ? 6 + CLOSE + geometry.pad - 3 : geometry.pad)
   const fade = EDGE_FADE && !item.iconOnly && !item.detail && !item.extra && item.label.length * geometry.text * 0.53 > room
   const label = item.iconOnly ? null : item.preview
     ? <ItalicLabel text={item.label} size={geometry.text} color={labelColor} fade={fade} />
@@ -329,7 +331,7 @@ const TabView = memo(function TabView({ item, index, size, active, focused, prop
       onMouseEnter={() => { setHover(true); onHover(() => item.key) }}
       onMouseLeave={() => { setHover(false); onHover((key) => key === item.key ? null : key) }}
       style={{
-        display: 'flex', alignItems: 'center', height: geometry.height, minWidth: item.pinned ? undefined : minWidth, maxWidth: item.pinned ? 320 : MAX, flexShrink: 0,
+        display: 'flex', alignItems: 'center', height: geometry.height, minWidth: item.pinned ? undefined : minWidth, maxWidth: item.pinned ? pinnedMax(item) : MAX, flexShrink: 0,
         paddingRight: closable ? geometry.pad - 3 : 0, borderRadius: 8, position: 'relative', ...(item.disabled ? { opacity: 0.55 } : {}),
         hover: { backgroundColor: tok.hover },
       }}

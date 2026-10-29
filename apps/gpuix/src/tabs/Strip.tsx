@@ -27,6 +27,7 @@ import { closeTabAction, fileTabBuffer, keepTab, openTab, selectTab } from './op
 import { useDirtyKeys } from '../dock/fileBuffers.ts'
 import { TerminalOnMenu } from '../machines/TerminalOnMenu.tsx'
 import { MachineBadge } from '../sidebar/MachineBadge.tsx'
+import { MachinePill } from '../machines/ThreadMachine.tsx'
 import { glyphOfMachine, machineHub } from '../machines/index.ts'
 import { terminalTooltip } from '../../../../packages/kybern-client/src/machineUtilities.ts'
 import { beginTabsDrag, endTabsPress, releaseStrip, stripRegistry, trackTabsPress, unregisterTab, useTabsDrop } from './drag.tsx'
@@ -53,12 +54,15 @@ export function useTabItems(threadId: string | null, tabs: Tab[], preview: strin
   const page = previewState.pageTitle || previewState.entries[previewState.index]?.title
   const dirtyKeys = useDirtyKeys()
   const dirty = useMemo(() => new Set(dirtyKeys.split('\n')), [dirtyKeys])
+  // A thread on another machine says which in its chat tab (`MachinePill`).
+  const ownMachine = (thread as { machineId?: string } | null)?.machineId
+  const remoteMachine = ownMachine && machineHub().machineCount > 1 && ownMachine !== machineHub().localMachineId ? ownMachine : undefined
   return useMemo(() => tabs.map((tab): TabsItem => {
     const key = tabKey(tab)
     const common = { key, preview: preview === key, testId: `tab-${key}` }
     switch (tab.kind) {
       // A dot on the chat while an approval waits there (it is hidden behind a document tab).
-      case 'chat': return { ...common, pinned: true, label: thread?.title || 'Untitled', mark: thread?.provider.kind, testId: 'tab-chat', dirty: tabs.length > 1 && thread?.status === 'awaiting-approval', tooltip: thread?.status === 'awaiting-approval' ? `${thread.title || 'Untitled'} · waiting for approval` : undefined }
+      case 'chat': return { ...common, pinned: true, label: thread?.title || 'Untitled', mark: thread?.provider.kind, testId: 'tab-chat', extra: remoteMachine ? <MachinePill machineId={remoteMachine} testId="header-machine" /> : undefined, dirty: tabs.length > 1 && thread?.status === 'awaiting-approval', tooltip: thread?.status === 'awaiting-approval' ? `${thread.title || 'Untitled'} · waiting for approval` : undefined }
       case 'file': { const unsaved = dirty.has(fileTabBuffer(threadId, tab) ?? ''); return { ...common, label: base(tab.path), icon: T.file, dirty: unsaved, tooltip: `${tab.line ? `${tab.path}:${tab.line}` : tab.path}${unsaved ? ' · unsaved' : ''}` } }
       case 'diff': return tab.path ? { ...common, label: base(tab.path), icon: DOCK_ICONS.changes, tooltip: `Changes in ${tab.path}` } : { ...common, label: 'Changes', icon: DOCK_ICONS.changes }
       case 'terminal': if (tab.machineId) return { ...common, label: terminalTabLabel(tab.title, machineHub().set.connection(tab.machineId)?.record.name), iconNode: <MachineBadge glyph={glyphOfMachine(tab.machineId)} size={14} />, tooltip: terminalTooltip(machineHub().set.connection(tab.machineId)?.record.name ?? 'another machine', tab.title) }
@@ -78,7 +82,7 @@ export function useTabItems(threadId: string | null, tabs: Tab[], preview: strin
         return { ...common, label: child?.title || tab.title || 'Agent', mark: child?.provider.kind, ...(phase === 'working' ? { dirty: true } : phase === 'done' ? { detail: 'Done' } : phase === 'failed' ? { detail: 'Failed' } : {}) }
       }
     }
-  }), [tabs, preview, thread?.title, thread?.provider.kind, children, threads, notes, tasks, page, dirty, threadId])
+  }), [tabs, preview, thread?.title, thread?.provider.kind, remoteMachine, children, threads, notes, tasks, page, dirty, threadId])
 }
 
 /**
