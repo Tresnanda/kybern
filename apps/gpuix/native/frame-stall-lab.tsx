@@ -54,9 +54,17 @@ function Lab() {
     }), slowMs || 50)
     // Frame gaps measured here, apart from the watchdog: the served-frame
     // counter sampled every 20 ms; a gap over 200 ms counts as a stall.
+    // The sampler's own lateness shows a blocked main thread (JS runs on it):
+    // `labMaxLateMs` is the longest delay past its 20 ms period, `labBlocks` the
+    // delays over 200 ms.
     let lastFrames = -1, lastChange = performance.now(), maxGap = 0, gaps = 0, stalledMs = 0, inGap = false
+    let lastSample = performance.now(), maxLate = 0, blocks = 0
     const sample = idle ? undefined : setInterval(() => {
       const frames = Number(renderer.getFrameWatchdog?.()?.frames ?? 0), now = performance.now()
+      const late = now - lastSample - 20
+      lastSample = now
+      maxLate = Math.max(maxLate, late)
+      if (late > 200) blocks++
       if (frames !== lastFrames) {
         const gap = now - lastChange
         if (gap > 200) stalledMs += gap
@@ -69,8 +77,8 @@ function Lab() {
     }, 20)
     const report = setInterval(() => {
       const open = performance.now() - lastChange
-      process.stderr.write(`[frame-stall-lab] ${JSON.stringify({ ...renderer.getFrameWatchdog?.(), labGaps: gaps, labMaxGapMs: Math.round(maxGap), labStalledMs: Math.round(stalledMs + (open > 200 ? open : 0)) })}\n`)
-      maxGap = 0
+      process.stderr.write(`[frame-stall-lab] ${JSON.stringify({ ...renderer.getFrameWatchdog?.(), labGaps: gaps, labMaxGapMs: Math.round(maxGap), labStalledMs: Math.round(stalledMs + (open > 200 ? open : 0)), labMaxLateMs: Math.round(maxLate), labBlocks: blocks })}\n`)
+      maxGap = 0; maxLate = 0
     }, 1000)
     let step = 0
     const hopper = hopDisplays.length && hopMs ? setInterval(() => hop(++step), hopMs) : undefined
