@@ -4,7 +4,7 @@ import { router } from "expo-router";
 import { chatLink, kybernRef, splitKybernRefs, type KybernRef } from "../../../../packages/kybern-client/src/chatLinks";
 import { ChatFileContext } from "../state/chatFileContext";
 import { Alert } from "./Alert";
-import { Image, Linking, ScrollView, Text, View } from "react-native";
+import { Image, Linking, ScrollView, Text, View, type ViewStyle } from "react-native";
 import { httpBase } from "../state/protocol";
 import { activeEnvironment } from "../state/runtime";
 import { Lightbox } from "../features/Lightbox";
@@ -143,6 +143,23 @@ function Inline({ text, checklist }: { text: string; checklist?: boolean }) {
     </>
   );
 }
+const claimTouch = () => true;
+const keepTouch = () => false;
+/**
+ * The content of a sideways scroll inside a message. It takes the JS responder for touches that
+ * start on it and keeps it, so no ancestor gets it: an answer's long-press `Pressable` (Android)
+ * or the transcript list (iOS, when it scrolls under the finger). An ancestor responder blocks
+ * the drag: on Android its view intercepts the moves, and on iOS the scroll view may no longer
+ * cancel content touches, so it never starts. While the keyboard is up the scroll view captured
+ * the touch itself, which is why sideways scrolling only worked reliably then.
+ */
+function ScrollContent({ style, children }: { style?: ViewStyle; children: ReactNode }) {
+  return (
+    <View style={style} onStartShouldSetResponder={claimTouch} onResponderTerminationRequest={keepTouch}>
+      {children}
+    </View>
+  );
+}
 export const Code = memo(function Code({
   text,
   language = "",
@@ -177,35 +194,37 @@ export const Code = memo(function Code({
         horizontal
         contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 18 }}
       >
-        <Text
-          selectable
-          style={{
-            fontFamily: MONO,
-            fontSize: scaleFont(13, textScale),
-            lineHeight: scaleLine(21, textScale),
-            color: colors.ink,
-          }}
-        >
-          {diff
-            ? text.split("\n").map((line, i) => (
-                <Text
-                  key={i}
-                  style={{
-                    color: line.startsWith("+")
-                      ? colors.positive
-                      : line.startsWith("-")
-                        ? colors.negative
-                        : line.startsWith("@@")
-                          ? colors.accent
-                          : colors.ink,
-                  }}
-                >
-                  {line}
-                  {"\n"}
-                </Text>
-              ))
-            : text}
-        </Text>
+        <ScrollContent>
+          <Text
+            selectable
+            style={{
+              fontFamily: MONO,
+              fontSize: scaleFont(13, textScale),
+              lineHeight: scaleLine(21, textScale),
+              color: colors.ink,
+            }}
+          >
+            {diff
+              ? text.split("\n").map((line, i) => (
+                  <Text
+                    key={i}
+                    style={{
+                      color: line.startsWith("+")
+                        ? colors.positive
+                        : line.startsWith("-")
+                          ? colors.negative
+                          : line.startsWith("@@")
+                            ? colors.accent
+                            : colors.ink,
+                    }}
+                  >
+                    {line}
+                    {"\n"}
+                  </Text>
+                ))
+              : text}
+          </Text>
+        </ScrollContent>
       </ScrollView>
     </View>
   );
@@ -372,8 +391,9 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
     const rows = [tableCells(lines[0]!), ...lines.slice(2).map(tableCells)];
     const widths = tableColumnWidths(rows);
     return (
-      // The scroll view owns horizontal drags that start on the table, and the content width is set
-      // outright so it is never clamped to the column. Vertical drags still reach the transcript.
+      // The scroll view owns horizontal drags that start on the table (`ScrollContent` keeps the
+      // touch away from ancestors), and the content width is set outright so it is never clamped
+      // to the column. Vertical drags still reach the transcript.
       <ScrollView
         horizontal
         nestedScrollEnabled
@@ -381,7 +401,7 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
         showsHorizontalScrollIndicator={false}
         style={{ marginVertical: 8, flexGrow: 0 }}
       >
-        <View
+        <ScrollContent
           style={{
             width: widths.reduce((sum, w) => sum + w, 0) + 2,
             borderWidth: 1,
@@ -409,7 +429,7 @@ const MarkdownParagraph = memo(function MarkdownParagraph({
               ))}
             </View>
           ))}
-        </View>
+        </ScrollContent>
       </ScrollView>
     );
   }
