@@ -3364,6 +3364,7 @@ export const NETWORK_FEATURES = {
   secretsStore: "secrets.store.v1",
   loginBroker: "login.broker.v1",
   update: "update.v1",
+  group: "group.v1",
 } as const;
 
 /** Scopes only a daemon-to-daemon grant carries, never a device token. */
@@ -3399,6 +3400,19 @@ export interface RepoIdentity {
   /** The `origin` URL as `host/owner/repo`: lowercase, no scheme, user or `.git`. */
   remote?: string | null;
 }
+
+/** One member repository of a group project, by name and identity. */
+export interface GroupRepo { name: string; repo: RepoIdentity }
+/** A member repository a group thread works in, and the commit that holds its work. */
+export interface GroupMemberWork {
+  /** The member's path in the sender's group folder ("." is the group folder's own repository). */
+  path: string;
+  name: string;
+  repo: RepoIdentity;
+  commit?: string | null;
+}
+/** What a group project's thread carries to another machine: the receiver needs a group of exactly `repos`. */
+export interface GroupWork { repos: GroupRepo[]; members: GroupMemberWork[] }
 
 /** What `projects.repo_identity` stores: a single project has `repo`; a group also has `repos`. */
 export interface ProjectRepoIdentity {
@@ -3928,6 +3942,8 @@ export interface PeerDelegateParams {
   repo: RepoIdentity;
   project?: string | null;
   base_commit?: string | null;
+  /** A group project's delegation: its repositories and, for a worktree, each member's base commit. */
+  group?: GroupWork | null;
 }
 
 /** Run one Kybern agent tool for an agent on another machine (forwarded tools, design §6.3). */
@@ -3993,6 +4009,8 @@ export interface PeerGitImportParams {
   commit: string;
   repo: RepoIdentity;
   project?: string | null;
+  /** A member of a group: the identities of the group's repositories. */
+  group_repos?: RepoIdentity[];
 }
 
 // Fork to a machine (F1, design §7.1).
@@ -4033,6 +4051,8 @@ export interface PeerForkParams {
   project?: string | null;
   branch: string;
   commit: string;
+  /** A group project's fork: every member's snapshot. */
+  group?: GroupWork | null;
   provider: ProviderKind;
   provider_chosen?: boolean;
   model?: string | null;

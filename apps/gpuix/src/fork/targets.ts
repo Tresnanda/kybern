@@ -13,6 +13,7 @@ export function forkTargetsOf(thread: Pick<StateThread, 'project_id' | 'ownProje
   const own = ownProjectOf(thread)
   const logical = hub.view().projects.find((project) => project.instances.some((instance) => instance.machineId === owner && instance.project.id === own))
   if (!logical) return []
+  const ownInstance = logical.instances.find((instance) => instance.machineId === owner && instance.project.id === own)
   const paused = new Set(hub.connections().filter((connection) => connection.record.paused).map((connection) => connection.record.machineId))
   return forkTargets(
     logical.instances.map((instance) => ({
@@ -21,7 +22,8 @@ export function forkTargetsOf(thread: Pick<StateThread, 'project_id' | 'ownProje
       projectId: instance.project.id,
       online: !instance.offline,
       paused: paused.has(instance.machineId) || hub.set.connection(instance.machineId)?.record.member === false,
+      project: instance.project,
     })),
-    { machineId: owner },
+    { machineId: owner, ...(ownInstance ? { project: ownInstance.project } : {}) },
   )
 }

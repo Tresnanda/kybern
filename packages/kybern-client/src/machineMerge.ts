@@ -61,6 +61,11 @@ function identityKey(identity: RepoIdentity | null | undefined): string | undefi
   return undefined;
 }
 
+/** The sorted, distinct repository keys of a group project: what two groups must share to be one project (and one fork target). */
+export function groupRepoKeys(project: Pick<Project, "repos">): string[] {
+  return [...new Set((project.repos ?? []).map(identityKey).filter((k): k is string => !!k))].sort();
+}
+
 interface Entry {
   machineId: MachineId;
   project: Project;
@@ -93,7 +98,7 @@ export function mergeProjects(
       const entry: Entry = { machineId, project };
       if (isFreeChatProject(project.id)) entry.key = `local:${machineId}:${project.id}`;
       else if (project.kind === "group") {
-        const members = [...new Set((project.repos ?? []).map(identityKey).filter((k): k is string => !!k))].sort();
+        const members = groupRepoKeys(project);
         entry.key = members.length ? `group:${members.join("+")}` : `local:${machineId}:${project.id}`;
       } else {
         entry.root = project.repo?.root_commit || undefined;

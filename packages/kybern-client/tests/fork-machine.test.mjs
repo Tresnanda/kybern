@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { chatLink } from "../src/chatLinks.ts";
-import { forkNotice, forkNoticeAction, forkParams, forkQueuedText, forkSheetDefaults, forkTargets, originLabel, parseThreadLink, shortMachineName, threadLinkHref } from "../src/forkMachine.ts";
+import { forkNotice, forkNoticeAction, forkParams, forkQueuedText, forkSheetDefaults, forkTargets, originLabel, parseThreadLink, sameForkProject, shortMachineName, threadLinkHref } from "../src/forkMachine.ts";
 
 const THREAD = "0192f7a0-1111-7222-8333-444455556666";
 
@@ -56,6 +56,39 @@ test("targets are the other machines that have the project; paused ones are left
   ];
   assert.deepEqual(forkTargets(instances, { machineId: "a" }).map((item) => item.machineId), ["c", "b"], "online first, then by name");
   assert.deepEqual(forkTargets(instances.slice(0, 1), { machineId: "a" }), []);
+});
+
+const id = (root) => ({ root_commit: root });
+const group = (...roots) => ({ kind: "group", repos: roots.map(id) });
+
+test("a group thread is offered only to machines whose group has exactly the same repositories", () => {
+  const instances = [
+    { machineId: "b", machineName: "satyamas", projectId: "g-b", online: true, project: group("w", "a") },
+    { machineId: "c", machineName: "cachy", projectId: "g-c", online: true, project: group("a") },
+    { machineId: "d", machineName: "vps", projectId: "g-d", online: false, project: group("a", "w", "i") },
+    { machineId: "e", machineName: "nas", projectId: "s-e", online: true, project: { repos: [id("a")] } },
+    { machineId: "f", machineName: "pi", projectId: "g-f", online: true, project: { kind: "group", repos: [] } },
+    { machineId: "g", machineName: "lap", projectId: "g-g", online: true },
+  ];
+  const source = group("a", "w");
+  assert.deepEqual(forkTargets(instances, { machineId: "a", project: source }).map((item) => item.machineId), ["b"], "same repositories in another order; a subset, a superset, a single repository and an unread group are not");
+  // A group matches by identity key, as the merge does: a remote alone is a repository too.
+  const byRemote = (...remotes) => ({ kind: "group", repos: remotes.map((remote) => ({ remote })) });
+  assert.deepEqual(forkTargets([{ machineId: "b", machineName: "b", projectId: "p", online: true, project: byRemote("github.com/x/web", "github.com/x/api") }], { machineId: "a", project: byRemote("github.com/x/api", "github.com/x/web") }).length, 1);
+  // A group that has not read its identities yet matches nothing, even itself.
+  assert.deepEqual(forkTargets([{ machineId: "b", machineName: "b", projectId: "p", online: true, project: group() }], { machineId: "a", project: group() }), []);
+  assert.equal(sameForkProject(source, group("w", "a")), true);
+  assert.equal(sameForkProject(source, undefined), false);
+});
+
+test("a single repository's thread is never offered to a group, and legacy callers without projects still list every machine", () => {
+  const instances = [
+    { machineId: "b", machineName: "satyamas", projectId: "s-b", online: true, project: { repos: [] } },
+    { machineId: "c", machineName: "cachy", projectId: "g-c", online: true, project: group("a", "w") },
+    { machineId: "d", machineName: "vps", projectId: "p-d", online: true },
+  ];
+  assert.deepEqual(forkTargets(instances, { machineId: "a", project: { repos: [] } }).map((item) => item.machineId), ["b", "d"]);
+  assert.deepEqual(forkTargets(instances, { machineId: "a" }).map((item) => item.machineId), ["c", "b", "d"]);
 });
 
 test("the sheet starts on the first target with no push to origin, and an unedited note is not sent", () => {

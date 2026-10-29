@@ -2,7 +2,8 @@
 // what the sheet asks, how the three transcript notices read and how `kybern://thread/<machine>/<thread>` links
 // resolve. The daemon does the work (`threads.fork_note`, `threads.fork_to_machine`); the target gets a new
 // thread whose `origin.kind` is `fork`, and the source gets a notice when the fork arrives, waits or fails.
-import type { JsonValue, MachineId, Origin, PermissionMode, ThreadId, ThreadsForkToMachineParams } from "./types.ts";
+import { groupRepoKeys } from "./machineMerge.ts";
+import type { JsonValue, MachineId, Origin, PermissionMode, Project, ThreadId, ThreadsForkToMachineParams } from "./types.ts";
 
 // ---- links ----
 
@@ -102,6 +103,9 @@ export function shortMachineName(name: string | null | undefined): string {
 
 // ---- who can take a fork ----
 
+/** What of a project decides whether another machine's project can take a thread of it. */
+export type ForkProjectShape = Pick<Project, "kind" | "repos">;
+
 export interface ForkInstance {
   machineId: MachineId;
   machineName: string;
@@ -110,18 +114,32 @@ export interface ForkInstance {
   /** Reachable now. A fork to an offline machine waits in the outbox, so it is still offered. */
   online: boolean;
   paused?: boolean;
+  /** The machine's project itself, so a group's thread is only offered to a group of the same repositories. */
+  project?: ForkProjectShape;
+}
+
+/** Whether `candidate` can take a thread of `source`: a group takes only a group made of exactly the same repositories, a single repository never a group. */
+export function sameForkProject(source: ForkProjectShape | undefined, candidate: ForkProjectShape | undefined): boolean {
+  if (!source) return true;
+  if (source.kind !== "group") return candidate?.kind !== "group";
+  if (candidate?.kind !== "group") return false;
+  const wanted = groupRepoKeys(source);
+  const have = groupRepoKeys(candidate);
+  return wanted.length > 0 && wanted.length === have.length && wanted.every((key, index) => key === have[index]);
 }
 
 /**
- * The machines a thread can be forked to: every other machine that has the thread's project. Offline ones stay
- * in the list (the fork waits in the outbox and arrives when the machine returns); a paused one is left out.
+ * The machines a thread can be forked to (or continued on): every other machine that has the thread's project.
+ * For a group project that means a group of exactly the same repositories, the rule `mergeProjects` merges by;
+ * the daemon pairs the members by repository, whatever the folders are called. Offline ones stay in the list
+ * (the fork waits in the outbox and arrives when the machine returns); a paused one is left out.
  */
 export function forkTargets(
-  instances: readonly { machineId: MachineId; machineName: string; projectId: string; online: boolean; paused?: boolean }[],
-  thread: { machineId: MachineId },
+  instances: readonly ForkInstance[],
+  thread: { machineId: MachineId; project?: ForkProjectShape },
 ): ForkInstance[] {
   return instances
-    .filter((instance) => instance.machineId !== thread.machineId && !instance.paused)
+    .filter((instance) => instance.machineId !== thread.machineId && !instance.paused && sameForkProject(thread.project, instance.project))
     .map((instance) => ({ ...instance }))
     .sort((a, b) => Number(b.online) - Number(a.online) || a.machineName.localeCompare(b.machineName));
 }
