@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   machineGlyph,
+  machineGlyphs,
   mergeProjects,
   mergeThreads,
   mergedThreadRows,
@@ -246,4 +247,20 @@ test("the glyph is the first letter of the name, with a hue from the id", () => 
   assert.ok(a.hue >= 0 && a.hue < 360);
   assert.equal(machineGlyph({ machineId: "xyz", name: "  " }).letter, "X");
   assert.equal(machineGlyph({ machineId: "xyz", name: "école" }).letter, "É");
+});
+
+test("machines that start with the same letter get distinct letters, the same on every client", () => {
+  const machines = [
+    { machineId: "b-id", name: "srv1544252" },
+    { machineId: "a-id", name: "satyamas" },
+    { machineId: "c-id", name: "os-kdi" },
+  ];
+  const letters = (list) => Object.fromEntries([...machineGlyphs(list)].map(([id, glyph]) => [id, glyph.letter]));
+  assert.deepEqual(letters(machines), { "a-id": "S", "b-id": "R", "c-id": "O" });
+  assert.deepEqual(letters([...machines].reverse()), letters(machines));
+  // The hue still comes from the id alone.
+  assert.equal(machineGlyphs(machines).get("b-id").hue, machineGlyph(machines[0]).hue);
+  // A name with no free letter keeps its first; a lone machine is unchanged.
+  assert.equal(machineGlyphs([{ machineId: "x", name: "ss" }, { machineId: "y", name: "ss" }]).get("y").letter, "S");
+  assert.equal(machineGlyphs([{ machineId: "x", name: "satyamas" }]).get("x").letter, "S");
 });

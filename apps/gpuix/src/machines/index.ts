@@ -4,7 +4,7 @@
 import { useMemo, useSyncExternalStore } from 'react'
 import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 import { MachineCache } from '../../../../packages/kybern-client/src/machineCache.ts'
-import { machineGlyph, showMachineGlyph, type MachineGlyph } from '../../../../packages/kybern-client/src/machineMerge.ts'
+import { machineGlyph, machineGlyphs, showMachineGlyph, type MachineGlyph } from '../../../../packages/kybern-client/src/machineMerge.ts'
 import type { MachineConnectionStatus, MergedView } from '../../../../packages/kybern-client/src/machines.ts'
 import { configDir, localProfile, readLegacyRegistry } from '../environments/registry.ts'
 import { readCredential, removeCredential, writeCredential } from '../environments/credentials.ts'
@@ -53,7 +53,7 @@ export function machineHub(): MachineHub {
   return current
 }
 /** Tests: forget the hub so the next use builds a fresh one. */
-export function resetMachineHub() { hub?.dispose(); hub = undefined }
+export function resetMachineHub() { hub?.dispose(); hub = undefined; glyphMemo = undefined }
 
 /** The merged projects and threads of every machine. */
 export function useMachineView(): MergedView {
@@ -86,6 +86,7 @@ export function machineRows(h: MachineHub): MachineRow[] {
   const connections = h.connections()
   const count = connections.length
   const local = h.localMachineId
+  const glyphs = machineGlyphs(connections.map((connection) => connection.record))
   return connections.map((connection) => {
     const { machineId, name } = connection.record
     return {
@@ -94,7 +95,7 @@ export function machineRows(h: MachineHub): MachineRow[] {
       offline: !LIVE.has(connection.status),
       isLocal: machineId === local,
       ...(connection.lastSeenAt !== undefined ? { lastSeenAt: connection.lastSeenAt } : {}),
-      glyph: machineGlyph({ machineId, name }),
+      glyph: glyphs.get(machineId) ?? machineGlyph({ machineId, name }),
       showGlyph: showMachineGlyph({ machineCount: count, machineId, ...(local ? { localMachineId: local } : {}) }),
       member: connection.record.member,
       paused: !!connection.record.paused,
@@ -116,9 +117,12 @@ export function useMachines(): MachineRow[] {
   return useMemo(() => machineRows(h), [h, version])
 }
 
-/** A machine's glyph by id; named from its record. */
+let glyphMemo: { version: number; glyphs: Map<string, MachineGlyph> } | undefined
+/** A machine's glyph by id: named from its record, with a letter no other machine of the set uses. */
 export function glyphOfMachine(machineId: string): MachineGlyph {
-  return machineGlyph({ machineId, name: machineHub().set.connection(machineId)?.record.name })
+  const h = machineHub()
+  if (glyphMemo?.version !== h.set.version) glyphMemo = { version: h.set.version, glyphs: machineGlyphs(h.connections().map((connection) => connection.record)) }
+  return glyphMemo.glyphs.get(machineId) ?? machineGlyph({ machineId })
 }
 
 export const clientFor = (machineId: string): KybernClient => machineHub().clientFor(machineId)

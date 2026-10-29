@@ -296,3 +296,27 @@ export function machineGlyph(machine: { machineId: MachineId; name?: string }): 
   }
   return { letter, hue: hash % 360 };
 }
+
+/**
+ * The glyphs of a machine set, with distinct letters. A machine whose first letter another machine already
+ * uses takes the next letter of its name that is free (satyamas and srv1544252 show S and R). Machines are
+ * taken in id order, so every client gives the same letters; a name with no free letter keeps its first.
+ */
+export function machineGlyphs(machines: readonly { machineId: MachineId; name?: string }[]): Map<MachineId, MachineGlyph> {
+  const taken = new Set<string>();
+  const glyphs = new Map<MachineId, MachineGlyph>();
+  const ordered = [...machines].sort((a, b) => (a.machineId < b.machineId ? -1 : a.machineId > b.machineId ? 1 : 0));
+  for (const machine of ordered) {
+    if (glyphs.has(machine.machineId)) continue;
+    const base = machineGlyph(machine);
+    const source = Array.from((machine.name ?? "").trim() || machine.machineId);
+    let letter = base.letter;
+    if (taken.has(letter)) {
+      const free = source.map((char) => char.toUpperCase()).find((char) => /[\p{L}\p{N}]/u.test(char) && !taken.has(char));
+      if (free) letter = free;
+    }
+    taken.add(letter);
+    glyphs.set(machine.machineId, { letter, hue: base.hue });
+  }
+  return glyphs;
+}
