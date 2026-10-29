@@ -12,7 +12,8 @@
 //!   content.
 //! * **Backends** are the system's own tools, found at run time: `pbcopy` / `pbpaste` (and `osascript` for the
 //!   concealed markers) on macOS, PowerShell's `Set-Clipboard` / `Get-Clipboard` on Windows (the daemon must
-//!   run in the user's interactive session; it does under `schtasks` in session 2), and `wl-copy` /
+//!   run in the user's interactive session; it does under `schtasks` in session 2; the universal clipboard reads the
+//!   text and the password-manager formats natively, in one snapshot), and `wl-copy` /
 //!   `wl-paste`, else `xclip`, on Linux. Without one, the Kybern buffer is the clipboard.
 
 use std::process::Stdio;
@@ -190,6 +191,18 @@ impl Clipboard {
             }
         };
         Ok(done.is_some())
+    }
+
+    /// The system clipboard's text with the markers its source set, read together. On Windows both come from one
+    /// opened clipboard, so the markers belong to the text; a clipboard that cannot be read that way is an error, never
+    /// a text without markers. Elsewhere the text is read, then the markers.
+    async fn system_snapshot(&self) -> std::io::Result<Option<(String, Markers)>> {
+        #[cfg(windows)]
+        if self.backend() == Backend::Os {
+            return tokio::task::spawn_blocking(windows_clipboard::snapshot).await.map_err(std::io::Error::other)?;
+        }
+        let Some(text) = self.system_get().await? else { return Ok(None) };
+        Ok(Some((text, self.system_markers().await)))
     }
 
     /// The markers the source set on what is on the clipboard now (concealed by a password manager, transient).
@@ -418,7 +431,7 @@ pub(crate) async fn tick(state: &AppState) {
         return;
     }
     let clipboard = &state.network.clipboard;
-    let Ok(Some(text)) = clipboard.system_get().await else { return };
+    let Ok(Some((text, markers))) = clipboard.system_snapshot().await else { return };
     if text.is_empty() || text.len() > MAX_CLIPBOARD_BYTES {
         return;
     }
@@ -426,7 +439,7 @@ pub(crate) async fn tick(state: &AppState) {
     if clipboard.last_seen.swap(hash, Ordering::Relaxed) == hash || clipboard.last_applied.load(Ordering::Relaxed) == hash {
         return;
     }
-    let verdict = classify(&text, clipboard.system_markers().await);
+    let verdict = classify(&text, markers);
     if let Verdict::Secret(reason) = verdict {
         clipboard.skips.record(verdict);
         tracing::debug!(target: TARGET, reason = reason.as_str(), "not sharing a clipboard change");
@@ -448,9 +461,138 @@ pub(crate) async fn tick(state: &AppState) {
 #[allow(dead_code)]
 fn _value(_: Value) {}
 
+/// Windows' clipboard formats that carry a DWORD: `0` keeps the content out of clipboard history and the cloud
+/// clipboard, and so out of sharing.
+const WINDOWS_FLAG_FORMATS: [&str; 2] = ["CanIncludeInClipboardHistory", "CanUploadToCloudClipboard"];
+
+/// Markers from the registered formats a Windows source offered, with the value of each flag format when it could be
+/// read. A flag that is present but unreadable counts as set to `0`.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_markers(formats: &[(String, Option<u32>)]) -> Markers {
+    let mut markers = Markers::default();
+    for (name, value) in formats {
+        markers.note_format(name);
+        if WINDOWS_FLAG_FORMATS.contains(&name.as_str()) {
+            markers.note_history_allowed(value.unwrap_or(0));
+        }
+    }
+    markers
+}
+
+/// The Windows clipboard read natively, so the text and the password-manager markers are one snapshot.
+#[cfg(windows)]
+mod windows_clipboard {
+    use super::{Markers, WINDOWS_FLAG_FORMATS, windows_markers};
+    use windows_sys::Win32::Foundation::{GetLastError, HANDLE, SetLastError};
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, EnumClipboardFormats, GetClipboardData, GetClipboardFormatNameW, OpenClipboard,
+    };
+    use windows_sys::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
+
+    const CF_UNICODETEXT: u32 = 13;
+    /// Registered formats are numbered from here; the ones below are the standard formats.
+    const FIRST_REGISTERED: u32 = 0xC000;
+
+    /// Closes the clipboard when dropped.
+    struct Opened;
+
+    impl Drop for Opened {
+        fn drop(&mut self) {
+            unsafe { CloseClipboard() };
+        }
+    }
+
+    /// The bytes of a clipboard handle, while the clipboard is open.
+    fn bytes_of(handle: HANDLE) -> Option<Vec<u8>> {
+        if handle.is_null() {
+            return None;
+        }
+        unsafe {
+            let size = GlobalSize(handle);
+            let data = GlobalLock(handle) as *const u8;
+            if data.is_null() {
+                return None;
+            }
+            let bytes = std::slice::from_raw_parts(data, size).to_vec();
+            GlobalUnlock(handle);
+            Some(bytes)
+        }
+    }
+
+    /// The text and the markers on the clipboard now; `Ok(None)` when it holds no text.
+    pub fn snapshot() -> std::io::Result<Option<(String, Markers)>> {
+        // Another program may hold the clipboard for a moment.
+        let mut attempts = 0;
+        while unsafe { OpenClipboard(std::ptr::null_mut()) } == 0 {
+            attempts += 1;
+            if attempts == 10 {
+                return Err(std::io::Error::other("the clipboard is held by another program"));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let _opened = Opened;
+        let mut formats: Vec<(String, Option<u32>)> = Vec::new();
+        let mut has_text = false;
+        let mut format = 0;
+        loop {
+            // The end of the list and a failure both return 0; only a failure sets the last error.
+            unsafe { SetLastError(0) };
+            format = unsafe { EnumClipboardFormats(format) };
+            if format == 0 {
+                if unsafe { GetLastError() } != 0 {
+                    return Err(std::io::Error::other("the clipboard's formats could not be listed"));
+                }
+                break;
+            }
+            if format == CF_UNICODETEXT {
+                has_text = true;
+            }
+            if format < FIRST_REGISTERED {
+                continue;
+            }
+            let mut name = [0u16; 256];
+            let len = unsafe { GetClipboardFormatNameW(format, name.as_mut_ptr(), name.len() as i32) };
+            if len <= 0 {
+                continue;
+            }
+            let name = String::from_utf16_lossy(&name[..len as usize]);
+            let value = if WINDOWS_FLAG_FORMATS.contains(&name.as_str()) {
+                bytes_of(unsafe { GetClipboardData(format) }).and_then(|bytes| Some(u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?)))
+            } else {
+                None
+            };
+            formats.push((name, value));
+        }
+        if !has_text {
+            return Ok(None);
+        }
+        let bytes =
+            bytes_of(unsafe { GetClipboardData(CF_UNICODETEXT) }).ok_or_else(|| std::io::Error::other("the clipboard's text could not be read"))?;
+        let wide: Vec<u16> = bytes.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).take_while(|unit| *unit != 0).collect();
+        Ok(Some((String::from_utf16_lossy(&wide), windows_markers(&formats))))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_password_manager_formats_keep_a_copy_from_being_shared() {
+        let short_password = "Tr0ub4dor";
+        assert_eq!(classify(short_password, windows_markers(&[])), Verdict::Shareable, "nothing in the text gives it away");
+        for formats in [
+            vec![("ExcludeClipboardContentFromMonitorProcessing".to_string(), None)],
+            vec![("CanIncludeInClipboardHistory".to_string(), Some(0))],
+            vec![("CanUploadToCloudClipboard".to_string(), Some(0))],
+            // Present but unreadable: kept out too.
+            vec![("CanIncludeInClipboardHistory".to_string(), None)],
+        ] {
+            assert!(matches!(classify(short_password, windows_markers(&formats)), Verdict::Secret(_)), "{formats:?}");
+        }
+        let allowed = [("CanIncludeInClipboardHistory".to_string(), Some(1)), ("HTML Format".to_string(), None)];
+        assert_eq!(classify(short_password, windows_markers(&allowed)), Verdict::Shareable);
+    }
 
     #[tokio::test]
     async fn a_machine_with_no_desktop_keeps_the_text_in_a_buffer_for_ten_minutes() {
