@@ -18,8 +18,12 @@ import type {
   ProviderInstance,
 } from "./types.ts";
 
-/** Harnesses a broker can lend a sign-in for. The others take pushed keys (§9.3). */
-export const BROKER_KINDS: readonly ProviderKind[] = ["claude-code", "codex", "omp"];
+/**
+ * Harnesses with an account sign-in a broker can lend. omp, OpenCode and pi run on the model providers
+ * configured in them and have no sign-in of their own, so they never get a sign-in row; their provider
+ * keys are pushed to every machine instead (§9.3).
+ */
+export const BROKER_KINDS: readonly ProviderKind[] = ["claude-code", "codex"];
 
 export const supportsBroker = (kind: ProviderKind): boolean => BROKER_KINDS.includes(kind);
 
