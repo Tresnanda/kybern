@@ -26,6 +26,7 @@ import { observeElementBounds } from '../native/layout.ts'
 import { terminalCommand, terminalKey, terminalPaste, terminalMouse, terminalViewportKey, type TerminalMouseEvent } from './keys.ts'
 import { SHORTCUT } from '../platform/keys.ts'
 import { Utf8ToUtf32 } from './utf8.ts'
+import { inputQueue } from './input.ts'
 import { fitTerminal, PANE_BOTTOM, PANE_X, XTERM_X, XTERM_Y } from './fit.ts'
 import { blend, indexedColor, parseCss, terminalColors, terminalPalette, type TerminalPalette } from './palette.ts'
 
@@ -143,8 +144,9 @@ export function TerminalPane({ threadId, width }: { threadId: string; width: num
 interface RowProps {
   line: Line; revision: number; model: VT; palette: TerminalPalette; surface: string; selectionColor: string; cursorColor: string
   cursor: number; cursorShape: 'block' | 'underline' | 'bar' | 'outline'; selection: [number, number] | null
-  selectCell: (line: Line, column: number, begin: boolean, end: boolean, clicks: number, shift: boolean) => void
-  reportMouse: (line: Line, column: number, event: EventPayload, kind: TerminalMouseEvent['kind']) => boolean
+  selectCell: (line: Line, column: number, begin: boolean, end: boolean, clicks: number, shift: boolean, rows?: number) => void
+  reportMouse: (line: Line, column: number, event: EventPayload, kind: TerminalMouseEvent['kind'], rows?: number) => boolean
+  press: () => void
 }
 function resolveRun(pen: Pen, props: { palette: TerminalPalette; surface: string; model: VT }) {
   const { palette, surface, model } = props
@@ -162,9 +164,12 @@ function resolveRun(pen: Pen, props: { palette: TerminalPalette; surface: string
   if (pen.hidden) fg = bg ?? defaultBg
   return { fg, bg }
 }
-const TerminalLine = memo(function TerminalLine({ line, model, palette, surface, selectionColor, cursorColor, cursor, cursorShape, selection, selectCell, reportMouse }: RowProps) {
+const TerminalLine = memo(function TerminalLine({ line, model, palette, surface, selectionColor, cursorColor, cursor, cursorShape, selection, selectCell, reportMouse, press }: RowProps) {
   const { renderer } = useGpuix(), row = useRef<PublicInstance | null>(null)
   const x0 = (x: number | undefined) => { const bounds = row.current && renderer?.getElementBounds?.(row.current.id); return bounds && x !== undefined ? x - bounds.x : undefined }
+  // A row with mouse down and move captures the pointer (native `capture_pointer`): after the press, every move and the release
+  // come to this row wherever the pointer is, so a drag reaches other rows by its distance from this one.
+  const rows = (y: number | undefined) => { const bounds = row.current && renderer?.getElementBounds?.(row.current.id); return bounds && y !== undefined ? Math.floor((y - bounds.y) / ROW) : 0 }
   const column = (x: number | undefined) => { const local = x0(x); return local === undefined ? 0 : Math.max(0, Math.min(model.cols, Math.round(local / CELL))) }
   const mouseColumn = (x: number | undefined) => { const local = x0(x); return local === undefined ? 0 : Math.max(0, Math.min(model.cols - 1, Math.floor(local / CELL))) }
   const cell = (x: number | undefined) => { const local = x0(x); return local === undefined ? 0 : Math.max(0, Math.min(model.cols - 1, Math.floor(local / CELL))) }
@@ -188,9 +193,10 @@ const TerminalLine = memo(function TerminalLine({ line, model, palette, surface,
     col += run.columns
   }
   return <div ref={row} testId={`terminal-line-${line.id}`} onScroll={e => { reportMouse(line, mouseColumn(e.x), e, 'wheel') }}
-    onMouseDown={e => { if (!reportMouse(line, mouseColumn(e.x), e, 'down') && e.button === 0) selectCell(line, e.clickCount && e.clickCount > 1 ? cell(e.x) : column(e.x), true, false, e.clickCount ?? 1, !!e.modifiers?.shift) }}
-    onMouseMove={e => { if (!reportMouse(line, mouseColumn(e.x), e, 'move') && e.pressedButton === 0) selectCell(line, column(e.x), false, false, 1, false) }}
-    onMouseUp={e => { if (!reportMouse(line, mouseColumn(e.x), e, 'up')) selectCell(line, column(e.x), false, true, 1, false) }}
+    // The capture also hides the press from the screen's own focus-on-press and click, so the row focuses it.
+    onMouseDown={e => { press(); if (!reportMouse(line, mouseColumn(e.x), e, 'down') && e.button === 0) selectCell(line, e.clickCount && e.clickCount > 1 ? cell(e.x) : column(e.x), true, false, e.clickCount ?? 1, !!e.modifiers?.shift) }}
+    onMouseMove={e => { const dy = rows(e.y); if (!reportMouse(line, mouseColumn(e.x), e, 'move', dy) && e.pressedButton === 0) selectCell(line, column(e.x), false, false, 1, false, dy) }}
+    onMouseUp={e => { const dy = rows(e.y); if (!reportMouse(line, mouseColumn(e.x), e, 'up', dy)) selectCell(line, column(e.x), false, true, 1, false, dy) }}
     style={{ display: 'flex', height: ROW, minHeight: ROW, flexShrink: 0, position: 'relative', cursor: model.mouseTracking ? 'default' : 'text' }}>
     {runs.map(({ run, plain, overlays, fg, bg }, i) => <Fragment key={i}>
       <text style={{ width: run.columns * CELL, flexShrink: 0, fontFamily: run.style.italic ? FONT_ITALIC : FONT, fontSize: FONT_SIZE, lineHeight: ROW, color: fg, ...(bg ? { backgroundColor: bg } : {}), fontWeight: run.style.bold ? WEIGHT_BOLD : WEIGHT, ...(run.style.underline || run.style.link ? { textDecoration: 'underline' } : run.style.strike ? { textDecoration: 'line-through' } : {}), whiteSpace: 'nowrap', userSelect: 'none', pointerEvents: 'none' }}>{plain}</text>
@@ -210,7 +216,9 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
   const palette = terminalPalette(t.variant)
   const { renderer } = useGpuix()
   const host = useRef<PublicInstance | null>(null), list = useRef<PublicInstance | null>(null)
-  const model = useMemo(() => new VT(info.cols, info.rows, 5000, 1_000_000, response => { void getClient()?.call('terminals.input', { terminal_id: info.id, data: Buffer.from(response).toString('base64') }).catch(() => {}) }), [info.id])
+  const failure = useRef((_: unknown) => {})
+  const input = useMemo(() => inputQueue(data => getClient()!.call('terminals.input', { terminal_id: info.id, data: data.toString('base64') }), e => failure.current(e)), [info.id])
+  const model = useMemo(() => new VT(info.cols, info.rows, 5000, 1_000_000, response => input(Buffer.from(response))), [info.id])
   model.colors = terminalColors(t.variant, t.surface)
   model.blinkOption = true // the desktop terminal sets `cursorBlink: true`
   const [version, update] = useState(0)
@@ -228,8 +236,9 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
   const titleRef = useRef(onTitle); titleRef.current = onTitle
   const exitRef = useRef(onExit); exitRef.current = onExit
   const lines = model.mouseTracking ? model.screen : model.lines()
-  const selectCell = useCallback((line: Line, column: number, begin: boolean, end: boolean, clicks: number, shift: boolean) => {
+  const selectCell = useCallback((pressed: Line, column: number, begin: boolean, end: boolean, clicks: number, shift: boolean, rows = 0) => {
     const all = model.mouseTracking ? model.screen : model.lines()
+    const line = rows ? all[Math.max(0, Math.min(all.length - 1, all.indexOf(pressed) + rows))] ?? pressed : pressed
     if (begin) {
       follow.current = false
       const index = all.indexOf(line)
@@ -258,7 +267,8 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
     }
     setMatch(-1)
   }
-  const send = (text: string, encoding: 'utf8' | 'latin1' = 'utf8') => { if (text) void getClient()!.call('terminals.input', { terminal_id: info.id, data: Buffer.from(text, encoding).toString('base64') }).catch(e => setError(String(e))) }
+  failure.current = e => setError(String(e))
+  const send = (text: string, encoding: 'utf8' | 'latin1' = 'utf8') => { if (text) input(Buffer.from(text, encoding)) }
   const fit = () => {
     const bounds = host.current && renderer?.getElementBounds?.(host.current.id)
     if (!bounds) return
@@ -290,9 +300,13 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
     const attach = () => client.call('terminals.subscribe', { terminal_id: info.id, replay: true }).then(() => { if (live) { fit(); update(v => v + 1); if (host.current) renderer?.focusElement?.(host.current.id) } }).catch(e => { if (live) setError(String(e)) })
     // The daemon dropped output for this client: start over from its replay.
     const lagged = client.onNotification('terminal.lagged', params => { if ((params as { terminal_id: string }).terminal_id === info.id) { model.write('\x1bc'); void attach() } })
+    // The daemon keeps a terminal's subscription per connection: after a reconnect a screen that stays mounted (the sign-in sheets'),
+    // would get no more output and look dead. Subscribe again from the replay, as after a lag.
+    let dropped = false
+    const status = client.onStatus(s => { if (s !== 'open') dropped = true; else if (dropped) { dropped = false; model.write('\x1bc'); void attach() } })
     const visibility = onWindowVisibility(shown => { if (shown) { update(v => v + 1); fit() } else { clearTimeout(timer); timer = undefined } })
     void attach()
-    return () => { live = false; clearTimeout(timer); clearTimeout(syncGuard); clearTimeout(closing); output(); exited(); lagged(); visibility(); void client.call('terminals.unsubscribe', { terminal_id: info.id }).catch(() => {}) }
+    return () => { live = false; clearTimeout(timer); clearTimeout(syncGuard); clearTimeout(closing); output(); exited(); lagged(); status(); visibility(); void client.call('terminals.unsubscribe', { terminal_id: info.id }).catch(() => {}) }
   }, [info.id, model])
   useEffect(() => {
     if (!renderer || !host.current) return
@@ -320,7 +334,8 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
   )
   const copy = () => { const text = selectedText(model.lines(), selection, model.cols); if (text) copyText(text) }
   const cursorLine = (model.alternate || model.mouseTracking ? 0 : model.history.length) + model.y
-  const reportMouse = (line: Line, column: number, event: EventPayload, kind: TerminalMouseEvent['kind']) => {
+  const press = useCallback(() => { if (host.current) renderer?.focusElement?.(host.current.id) }, [renderer])
+  const reportMouse = (line: Line, column: number, event: EventPayload, kind: TerminalMouseEvent['kind'], rows = 0) => {
     if (kind === 'wheel' && model.alternate && !model.mouseTracking && !event.modifiers?.shift) {
       // xterm.js: in the alternate buffer the wheel moves the cursor, three lines a notch, in bursts the trackpad softens.
       const pixels = event.precise ? (event.deltaY ?? 0) : (event.deltaY ?? 0) * 20
@@ -332,7 +347,7 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
       if (count && exit === null) send((model.applicationCursor ? '\x1bO' : '\x1b[') .concat(pixels > 0 ? 'B' : 'A').repeat(count))
       return true
     }
-    const row = model.screen.indexOf(line)
+    const row = Math.max(0, Math.min(model.rows - 1, model.screen.indexOf(line) + rows))
     const text = terminalMouse({ kind, column: Math.min(column, model.cols - 1), row, button: kind === 'move' ? event.pressedButton : event.button, deltaY: event.deltaY, modifiers: event.modifiers, px: (event.x ?? 0), py: (event.y ?? 0) }, model)
     if (text && exit === null) {
       let count = 1
@@ -351,7 +366,7 @@ export function Screen({ info, width, onTitle, onExit }: { info: TerminalInfo; w
   // Unfocused, xterm.js draws `cursorInactiveStyle: 'outline'` (a 1px box inside the cell) and does not blink.
   const shape = focused ? model.cursorShape ?? 'bar' : 'outline'
   const cursorVisible = model.cursorVisible && model.cursorInitialized && exit === null && (!focused || blinkOn)
-  const renderLine = (line: Line, index: number) => <TerminalLine key={line.id} line={line} revision={line.revision} model={model} palette={palette} surface={t.surface} selectionColor={palette.selection} cursorColor={model.cursorOverride ? `rgb(${model.cursorOverride.join(',')})` : palette.cursor} selection={selectionColumns(indexedSelection, index, model.cols)} selectCell={selectCell} reportMouse={reportMouse} cursorShape={shape} cursor={cursorVisible && index === cursorLine ? Math.min(model.x, model.cols - 1) : -1} />
+  const renderLine = (line: Line, index: number) => <TerminalLine key={line.id} line={line} revision={line.revision} model={model} palette={palette} surface={t.surface} selectionColor={palette.selection} cursorColor={model.cursorOverride ? `rgb(${model.cursorOverride.join(',')})` : palette.cursor} selection={selectionColumns(indexedSelection, index, model.cols)} selectCell={selectCell} reportMouse={reportMouse} press={press} cursorShape={shape} cursor={cursorVisible && index === cursorLine ? Math.min(model.x, model.cols - 1) : -1} />
   return <>
     <ErrorLine error={error} />
     {search !== null && <div style={{ display: 'flex', alignItems: 'center', height: 32, gap: 4, paddingLeft: 8 }}>
