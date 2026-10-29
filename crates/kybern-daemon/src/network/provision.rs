@@ -64,8 +64,8 @@ fn publish(state: &AppState, status: ProvisionStatus) {
 /// The status an outbox item stands for, when nothing newer is known.
 pub fn status_of_item(state: &AppState, item: &OutboxItem) -> ProvisionStatus {
     let request: Option<ProvisionRequest> = serde_json::from_value(item.payload.clone()).ok();
-    let target_name =
-        state.orchestrator.remote_hub().and_then(|hub| hub.target(&item.target)).map_or_else(|| item.target.clone(), |t| t.name);
+    let machine = state.orchestrator.remote_hub().and_then(|hub| hub.target(&item.target));
+    let target_name = machine.as_ref().map_or_else(|| item.target.clone(), |t| t.name.clone());
     let result: Option<ProvisionResult> = item.result.clone().and_then(|value| serde_json::from_value(value).ok());
     let phase = match item.state {
         OutboxState::Queued | OutboxState::Sending => ProvisionPhase::Queued,
@@ -75,7 +75,12 @@ pub fn status_of_item(state: &AppState, item: &OutboxItem) -> ProvisionStatus {
     };
     let detail = match item.state {
         OutboxState::Queued if item.last_error.is_some() => item.last_error.clone(),
-        OutboxState::Queued => Some(format!("Sends when {target_name} is online")),
+        // Worded by what is true now: an online machine is about to be reached, not waited for.
+        OutboxState::Queued => Some(match &machine {
+            Some(machine) if machine.paused => format!("{target_name} is paused. Resume it in Settings → Machines to send."),
+            Some(machine) if machine.online => format!("Waiting to send to {target_name}"),
+            _ => format!("Sends when {target_name} is online"),
+        }),
         OutboxState::Expired => Some(format!("{target_name} did not come back in time. Retry it from Settings → Machines.")),
         _ => None,
     };
@@ -97,6 +102,15 @@ pub fn status_of_item(state: &AppState, item: &OutboxItem) -> ProvisionStatus {
     }
 }
 
+/// `status` with the byte counts of the live status, which the outbox row does not keep.
+fn with_progress(mut status: ProvisionStatus, live: Option<&ProvisionStatus>) -> ProvisionStatus {
+    if let Some(live) = live {
+        status.bytes_sent = live.bytes_sent;
+        status.bytes_total = live.bytes_total;
+    }
+    status
+}
+
 /// `projects.provision.status`.
 pub fn status(state: &AppState, operation_id: Uuid) -> Result<ProvisionStatus, RpcError> {
     let item = state
@@ -108,7 +122,8 @@ pub fn status(state: &AppState, operation_id: Uuid) -> Result<ProvisionStatus, R
     let live = state.network.provisions.get(operation_id);
     Ok(match live {
         Some(live) if !item.state.is_settled() => live,
-        _ => status_of_item(state, &item),
+        // A finished item is rebuilt from the outbox, which does not know how much was sent.
+        live => with_progress(status_of_item(state, &item), live.as_ref()),
     })
 }
 
@@ -140,8 +155,11 @@ pub async fn start(state: &AppState, params: ProjectsProvisionParams) -> Result<
 /// An item settled (or was queued again): publish its final state and wake the work that waited for it.
 pub fn settled(state: &AppState, item: &OutboxItem) {
     if item.state.is_settled() || item.state == OutboxState::Queued {
+        let live = state.network.provisions.get(item.operation_id);
         let mut status = status_of_item(state, item);
-        if let Some(live) = state.network.provisions.get(item.operation_id).filter(|_| !item.state.is_settled()) {
+        if item.state.is_settled() {
+            status = with_progress(status, live.as_ref());
+        } else if let Some(live) = &live {
             status.bytes_total = live.bytes_total;
         }
         publish(state, status);
