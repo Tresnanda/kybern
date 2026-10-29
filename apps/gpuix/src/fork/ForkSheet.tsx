@@ -32,7 +32,7 @@ import { Label, useTheme } from '../ui.tsx'
 import { forkTargetsOf } from './targets.ts'
 import { provisionContextOf } from '../provision/targets.ts'
 import { FolderField, useProvisionPlan } from '../provision/parts.tsx'
-import { defaultPath, displayPath, notYetDetail, pathAccepted } from '../../../../packages/kybern-client/src/provision.ts'
+import { defaultPath, displayPath, expandPath, notYetDetail, pathAccepted } from '../../../../packages/kybern-client/src/provision.ts'
 import { ownProjectOf } from '../machines/merged.ts'
 import { threadClient } from '../state.ts'
 
@@ -96,7 +96,7 @@ export function ForkSheet({ threadId, machineId, close, mode = 'fork' }: { threa
   useEffect(() => { setAddPath(null); setChanging(false) }, [target?.machineId])
   useEffect(() => { if (addPlan && addPath === null) setAddPath(defaultPath(addPlan)) }, [addPlan, addPath])
   const addReady = !target?.missing || (!!addPlan && !addPlan.blocked && !addChecking && pathAccepted(addCheck) && (addPath !== null || !addPlan.target.online))
-  const provision = target?.missing ? { provision: { ...(addPath ? { path: addPath } : {}) } } : {}
+  const provision = target?.missing ? { provision: { ...(addPath ? { path: expandPath(addPath, addPlan?.target_home, addPlan?.target.os) } : {}) } } : {}
   const addShown = addPlan && addPath ? displayPath(addPath, addPlan.target_home, addPlan.target.os) : null
   // The new thread starts a turn at once, so it needs an agent that can sign in there: the thread's own when it can, else one that is.
   const agents = useMachineAgents(target?.machineId)
@@ -148,9 +148,9 @@ export function ForkSheet({ threadId, machineId, close, mode = 'fork' }: { threa
       {target?.missing && <div testId="fork-provision" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {addPlan?.blocked ? <ErrorText testId="fork-provision-blocked">{addPlan.blocked}</ErrorText> : changing && addPlan
           ? <Field label={`Folder on ${target.machineName}`}><FolderField testId="fork-provision-folder" plan={addPlan} path={addPath ?? ''} onPath={setAddPath} check={addCheck} checking={addChecking} disabled={busy} /></Field>
-          : <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Hint>{addPlan ? `${target.machineName} gets the project first${addPlan.env_files.length ? `, with ${addPlan.env_files.length === 1 ? 'its env file' : `its ${addPlan.env_files.length} env files`}` : ''}; then the ${move ? 'thread moves' : 'fork starts'} there.` : `Asking ${target.machineName} where it keeps projects…`}</Hint>
-            {addPlan && addPlan.target.online && <Button size="sm" variant="ghost" testId="fork-provision-change" disabled={busy} onClick={() => setChanging(true)}>Change folder…</Button>}
+          : <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            <div style={{ display: 'flex', flexShrink: 1, flexGrow: 1, minWidth: 0 }}><Hint>{addPlan ? `${target.machineName} gets the project first${addPlan.env_files.length ? `, with ${addPlan.env_files.length === 1 ? 'its env file' : `its ${addPlan.env_files.length} env files`}` : ''}; then the ${move ? 'thread moves' : 'fork starts'} there.` : `Asking ${target.machineName} where it keeps projects…`}</Hint></div>
+            {addPlan && addPlan.target.online && <Button size="sm" variant="ghost" testId="fork-provision-change" style={{ flexShrink: 0 }} disabled={busy} onClick={() => setChanging(true)}>Change folder…</Button>}
           </div>}
       </div>}
       {/* Only the agents installed there; a signed-out Claude, Codex or Cursor says so (omp, OpenCode and pi have no sign-in). */}
@@ -211,7 +211,8 @@ function MachineChoice({ item, checked, disabled, onSelect, detail }: { item: Fo
       <div style={{ display: 'flex', opacity: item.online ? 1 : 0.55 }}><MachineBadge glyph={glyphOfMachine(item.machineId)} size={20} /></div>
       <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, minWidth: 0, pointerEvents: 'none' }}>
         <Label color={t.text} size={14} lineHeight={20} weight={500} truncate>{item.machineName}</Label>
-        <Label color={t.textSecondary} size={12} lineHeight={16} truncate>{detail ?? machineChoiceDetail(item.online, agents)}</Label>
+        {/* The not-yet-there line carries a folder, so it wraps inside the tile instead of being cut. */}
+        <Label color={t.textSecondary} size={12} lineHeight={16} truncate={detail === undefined}>{detail ?? machineChoiceDetail(item.online, agents)}</Label>
       </div>
       <Radio checked={checked} disabled={disabled} />
     </div>

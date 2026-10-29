@@ -73,8 +73,12 @@ export function launchThread(block: Block, ctx: RowContext): Thread | undefined 
   if (block.kind === 'runtime_task') return findSubagentFor(ctx.children, { toolCallId: block.task.tool_call_id, taskId: block.task.id })
   if (block.kind !== 'tool') return undefined
   if (isDelegationLaunchBlock(block)) {
-    const id = parseDelegateResult(block.output)?.threadId
-    if (id) return ctx.children.find((thread) => thread.id === id)
+    const parsed = parseDelegateResult(block.output)
+    if (parsed?.threadId) return ctx.children.find((thread) => thread.id === parsed.threadId)
+    // A child on another machine, added there first, has no thread id in the result: its task id finds it, so the row follows it
+    // to Done instead of staying on "Working".
+    const byTask = parsed?.taskId ? ctx.children.find((thread) => thread.delegation?.task_id === parsed.taskId) : undefined
+    if (byTask) return byTask
     const operationId = block.isError ? null : parseDelegateInput(block.call.input).operationId
     return operationId ? ctx.children.find((thread) => thread.delegation?.operation_id === operationId) : undefined
   }

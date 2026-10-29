@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  baseName, defaultEnvFiles, defaultPath, displayPath, formatSize, joinPath, notYetDetail, pathAccepted, provisionAnswer,
+  baseName, defaultEnvFiles, defaultPath, displayPath, expandPath, formatSize, joinPath, notYetDetail, pathAccepted, provisionAnswer,
   provisionCardInput, provisionFraction, provisionRecordText, provisionSource, provisionStatusText, provisionTargets, targetDetail,
 } from "../src/provision.ts";
 
@@ -62,4 +62,16 @@ test("progress and records read as sentences", () => {
   assert.equal(provisionRecordText(input, null), "Waiting to add kybern to os-kdi");
   assert.equal(provisionRecordText(input, { decision: "submit", response: { path: "/home/u/projects/kybern" } }), "Adding kybern to os-kdi · ~/projects/kybern");
   assert.equal(provisionRecordText(input, { decision: "deny" }), "Did not add kybern to os-kdi");
+});
+
+test("a folder shown with ~ is sent as the target's absolute path and shown the same again", () => {
+  const home = "/home/me";
+  assert.equal(expandPath("~/projects/kybern", home, "linux"), "/home/me/projects/kybern");
+  assert.equal(expandPath(" ~ ", home, "linux"), "/home/me");
+  assert.equal(displayPath(expandPath("~/projects/kybern", home, "linux"), home, "linux"), "~/projects/kybern");
+  assert.equal(expandPath("~other/x", home, "linux"), "~other/x");
+  assert.equal(expandPath("/srv/x", home, "linux"), "/srv/x");
+  assert.equal(expandPath("~/x", null, "linux"), "~/x");
+  assert.equal(expandPath("~/code/x", "C:\\Users\\Bagus", "windows"), "C:\\Users\\Bagus\\code\\x");
+  assert.equal(expandPath("D:\\projects\\x", "C:\\Users\\Bagus", "windows"), "D:\\projects\\x");
 });

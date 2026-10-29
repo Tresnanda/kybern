@@ -4,7 +4,7 @@
 // and the waiting work goes on by itself; nothing is asked again.
 import { useEffect, useState } from 'react'
 import type { ApprovalRequest, ProvisionCardInput } from '../../../../packages/kybern-client/src/types.ts'
-import { PROVISION_COPY as COPY, defaultEnvFiles, defaultPath, pathAccepted, provisionAnswer } from '../../../../packages/kybern-client/src/provision.ts'
+import { PROVISION_COPY as COPY, defaultEnvFiles, defaultPath, expandPath, pathAccepted, provisionAnswer } from '../../../../packages/kybern-client/src/provision.ts'
 import { Button } from '../kit/Button.tsx'
 import { MachineBadge } from '../sidebar/MachineBadge.tsx'
 import { glyphOfMachine } from '../machines/index.ts'
@@ -33,7 +33,7 @@ export function ProvisionRequestPanel({ approval, input, count, threadId }: { ap
   const respond = async (add: boolean) => {
     if (busy || (add && !ready)) return
     setBusy(true); setError('')
-    try { await respondApproval(approval.id, add ? provisionAnswer(path.trim(), env) : { decision: 'deny' }) }
+    try { await respondApproval(approval.id, add ? provisionAnswer(expandPath(path, view.target_home, view.target.os), env) : { decision: 'deny' }) }
     catch { setError('Unable to send your answer. Check the connection and try again.'); setBusy(false) }
   }
   return (

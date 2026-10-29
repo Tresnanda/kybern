@@ -62,6 +62,19 @@ export function displayPath(path: string, home?: string | null, os?: string): st
   return path.startsWith(`${base}/`) ? `~${path.slice(base.length)}` : path;
 }
 
+/** The inverse of [`displayPath`]: `~/x` becomes the absolute path on the target, which is what it expects. Anything else,
+ *  and `~` where the target has no home to put in, comes back as typed. */
+export function expandPath(path: string, home?: string | null, os?: string): string {
+  const typed = path.trim();
+  if (!home || !typed.startsWith("~")) return typed;
+  const rest = typed.slice(1);
+  if (rest !== "" && !rest.startsWith("/") && !rest.startsWith("\\")) return typed;
+  const sep = separatorOf(home, os);
+  const tail = rest.replace(/^[\\/]+/, "");
+  const base = home.replace(/[\\/]+$/, "");
+  return tail ? `${base}${sep}${sep === "\\" ? tail.replace(/\//g, "\\") : tail}` : base;
+}
+
 /** `parent` + `name` with the target's separator. */
 export function joinPath(parent: string, name: string, os?: string): string {
   const sep = separatorOf(parent, os);

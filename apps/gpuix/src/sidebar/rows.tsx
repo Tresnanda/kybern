@@ -621,8 +621,9 @@ export const ThreadRow = memo(function ThreadRow({
               </TitleSwap>
             )}
             {hasDraft && !renaming && <DraftMarker />}
+            {/* The title keeps its room: with the pin and archive buttons showing, the badge is what gets cut (ellipsis). */}
             {badge && (
-              <Label color={amberText(t)} size={10} weight={500} style={{ flexShrink: 0 }} paintAnimation={pendingPop ? popAnimation() : undefined}>
+              <Label color={amberText(t)} size={10} weight={500} truncate style={{ flexShrink: 8, minWidth: 0 }} paintAnimation={pendingPop ? popAnimation() : undefined}>
                 {badge}
               </Label>
             )}
@@ -811,8 +812,9 @@ export const ChildRow = memo(function ChildRow({
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexGrow: 1, minWidth: 0 }}>
             {/* A little quieter than its parent, so the parent stays dominant. */}
             <MarqueeLabel hover={hover} text={thread.title || (delegated ? 'Agent' : 'Subagent')} color={selected ? t.text : ink(t, 0.82)} />
+            {/* The title keeps its room: with the pin and archive buttons showing, the badge is what gets cut (ellipsis). */}
             {badge && (
-              <Label color={amberText(t)} size={10} weight={500} style={{ flexShrink: 0 }} paintAnimation={pendingPop ? popAnimation() : undefined}>
+              <Label color={amberText(t)} size={10} weight={500} truncate style={{ flexShrink: 8, minWidth: 0 }} paintAnimation={pendingPop ? popAnimation() : undefined}>
                 {badge}
               </Label>
             )}
