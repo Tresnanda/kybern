@@ -15,6 +15,15 @@ test('a line only when a stall or a dropped drawable was added', () => {
     .toBe('2026-10-29T06:00:00.000Z; no drawable x2 (2 presented again in total); slow drawables 3, longest wait 1001 ms\n')
 })
 
+test('a line when a drawable starvation begins and when it ends', () => {
+  const starving = { ...base, drawableStarvations: 1, drawableRecoveries: 0, starvedSkips: 3, drawableKicks: 1, lastStarvation: 'DrawableStarved: presented drawables unshown for 100 ms (presentsWithTransaction=false); skipping draws, kicking the layer' }
+  expect(frameLogLine(base, starving, at))
+    .toBe('2026-10-29T06:00:00.000Z; starvation x1 (3 draws skipped, 1 kicks in total): DrawableStarved: presented drawables unshown for 100 ms (presentsWithTransaction=false); skipping draws, kicking the layer; slow drawables 0, longest wait 0 ms\n')
+  const ended = { ...starving, drawableRecoveries: 1, starvedSkips: 58, drawableKicks: 5, lastStarvation: 'DrawableStarved (presented drawables unshown for 100 ms) for 2917 ms: 58 draws skipped, 5 kicks; cleared as the compositor showed drawables again' }
+  expect(frameLogLine(starving, ended, at)).toContain('starvation ended (58 draws skipped, 5 kicks in total): DrawableStarved (presented drawables unshown for 100 ms) for 2917 ms')
+  expect(frameLogLine(ended, { ...ended, starvedSkips: 60 }, at)).toBeNull()
+})
+
 test('appends the report from window-state events', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'frame-watchdog-'))
   try {

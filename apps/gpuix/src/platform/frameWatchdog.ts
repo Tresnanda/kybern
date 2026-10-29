@@ -1,6 +1,8 @@
 // Field log for the native frame watchdog (gpui_macos window.rs, macOS). When a
-// visible window goes 250 ms without a display-link frame, or a draw gets no
-// Metal drawable, the addon repairs it and raises a window-state event; this
+// visible window goes 250 ms without a display-link frame, a draw gets no Metal
+// drawable, or the compositor holds every drawable (`DrawableStarved`, gpui_apple
+// drawable_gate.rs: draws are skipped instead of blocking the main thread), the
+// addon repairs it and raises a window-state event, also when a starvation ends; this
 // appends the native report as one line to `gpuix-frames.log` beside the
 // daemon's data (`KYBERN_DATA_DIR` or `~/.kybern`), so a freeze seen in real use
 // can be matched to its cause afterwards. Nothing polls: the line is written
@@ -20,20 +22,32 @@ export type FrameWatchdogReport = {
   representedFrames: number
   slowDrawables: number
   maxDrawableWaitMs: number
+  // Older addons leave these out.
+  drawableStarvations?: number
+  drawableRecoveries?: number
+  starvedSkips?: number
+  drawableKicks?: number
+  lastStarvation?: string | null
 }
 
 type WatchdogRenderer = { getFrameWatchdog?: () => FrameWatchdogReport | null }
 
 const MAX_BYTES = 256 * 1024
 
-/** The log line for what changed between two reports, or null when no stall or dropped drawable was added. */
+/** The log line for what changed between two reports, or null when no stall, dropped drawable or drawable starvation was added. */
 export function frameLogLine(previous: FrameWatchdogReport | null, next: FrameWatchdogReport, at = new Date()): string | null {
   const stalls = next.stalls - (previous?.stalls ?? 0)
   const dropped = next.droppedFrames - (previous?.droppedFrames ?? 0)
-  if (stalls <= 0 && dropped <= 0) return null
+  const starved = (next.drawableStarvations ?? 0) - (previous?.drawableStarvations ?? 0)
+  const recovered = (next.drawableRecoveries ?? 0) - (previous?.drawableRecoveries ?? 0)
+  if (stalls <= 0 && dropped <= 0 && starved <= 0 && recovered <= 0) return null
   const parts = [at.toISOString()]
   if (stalls > 0) parts.push(`stall x${stalls} (${next.repairs} repaired in total): ${next.lastStall ?? 'unknown'}`)
   if (dropped > 0) parts.push(`no drawable x${dropped} (${next.representedFrames} presented again in total)`)
+  if (starved > 0 || recovered > 0) {
+    const counts = `${next.starvedSkips ?? 0} draws skipped, ${next.drawableKicks ?? 0} kicks in total`
+    parts.push(`${recovered > 0 ? 'starvation ended' : `starvation x${starved}`} (${counts}): ${next.lastStarvation ?? 'DrawableStarved'}`)
+  }
   parts.push(`slow drawables ${next.slowDrawables}, longest wait ${next.maxDrawableWaitMs.toFixed(0)} ms`)
   return `${parts.join('; ')}\n`
 }

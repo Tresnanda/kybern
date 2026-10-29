@@ -933,6 +933,26 @@ a first dropped drawable raises a window-state event, and `src/platform/frameWat
 `frame-stall-check.ts` (with `frame-stall-lab.tsx`) shows each one freezing with `=log` and repaired with the
 watchdog on. Measurements: `../perf/frame-stall-2026-10-29.md`.
 
+**Drawable starvation (macOS, fork branches `drawable-starvation`).** The freeze sampled in the field (0.17.0) was
+none of those states: the link ran, and the main thread sat in `-[CAMetalLayer nextDrawable]` for every frame. When
+WindowServer shows none of the drawables a layer presented, `nextDrawable` waits about 1 s and then hands one back
+anyway (`allowsNextDrawableTimeout` is NO, so it never returns nil and the dropped-drawable path above never ran),
+and a window drawing on every frame spends the whole time there: no input, no JS, nothing new on screen. The gate
+in `gpui_apple/src/drawable_gate.rs` counts presented drawables until their presented handler runs. With two
+unshown (the pool of three is empty) a draw waits for a handler at most until the older one is 100 ms old, then
+skips the draw (`take_dropped_frame`, so the window presents the scene again later) instead of blocking. A
+`nextDrawable` over 100 ms twice in a row starts the same episode. While starved the layer is kicked (pending
+`CATransaction`s flushed, `presentsWithTransaction` off, `drawableSize` nudged for fresh surfaces) at 100 ms,
+backing off to 3.2 s, and a draw is tried again as soon as a handler shows the compositor moving or after that
+backoff. Presents with a transaction are not counted: their handlers run on the main thread. `getFrameWatchdog()`
+adds `drawableStarvations`, `drawableRecoveries`, `starvedSkips`, `drawableKicks` and `lastStarvation`; an episode
+starting and ending each raise a window-state event and a `gpuix-frames.log` line (`starvation x1 …`,
+`starvation ended …`, with how long it lasted and what cleared it). `KYBERN_DRAWABLE_GATE=0` turns the gate off;
+`KYBERN_FRAME_STALL_TEST=starve-drawables:<ms>` emulates a compositor that shows nothing for 3 s after every <ms>
+(handlers held back, `nextDrawable` blocking 1 s once the pool is empty), and `frame-stall-check.ts` runs it with
+the gate off and on. Whether the kicks release a real stalled compositor is unproven; the log says which cleared
+it.
+
 Subtree scale is now `paintTransform` ("Paint-only subtree transforms" below); the reasons in the native springs
 section: quads, paths, masks, glyphs and hitboxes need one coordinated GPUI scene
 transform. Translation is not presented as scale.
