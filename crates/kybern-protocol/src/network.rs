@@ -40,9 +40,12 @@ pub mod features {
     pub const LOGIN_BROKER_V1: &str = "login.broker.v1";
     /// `peer.update.start`: another member can ask this machine to update itself.
     pub const UPDATE_V1: &str = "update.v1";
+    /// A group project's thread (several repositories) can be forked, moved or delegated to this machine:
+    /// `group` in `peer.fork`, `peer.move.prepare` and `peer.delegate`, `group_repos` in `peer.git.import`.
+    pub const GROUP_V1: &str = "group.v1";
 
     /// Every feature the network design names, in design order.
-    pub const ALL: [&str; 14] = [
+    pub const ALL: [&str; 15] = [
         NETWORK_V1,
         RELAY_V1,
         DELEGATE_REMOTE_V1,
@@ -57,6 +60,7 @@ pub mod features {
         SECRETS_STORE_V1,
         LOGIN_BROKER_V1,
         UPDATE_V1,
+        GROUP_V1,
     ];
 }
 
@@ -79,6 +83,49 @@ pub struct RepoIdentity {
 impl RepoIdentity {
     pub fn is_empty(&self) -> bool {
         self.root_commit.is_none() && self.remote.is_none()
+    }
+}
+
+/// One member repository of a group project, named as its people know it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct GroupRepo {
+    pub name: String,
+    pub repo: RepoIdentity,
+}
+
+/// A member repository a group thread works in, and the commit that holds its work.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct GroupMemberWork {
+    /// The member's path in the sender's group folder ("." is the group folder's own repository).
+    pub path: String,
+    pub name: String,
+    pub repo: RepoIdentity,
+    /// The snapshot of the member's work (a fork or move: its branch and uncommitted changes; a worktree
+    /// delegation: the base). `None` when the receiver needs no commit (a shared workspace).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+}
+
+/// What a group project's thread carries to another machine instead of a single repository.
+///
+/// The receiver looks for a group project made of exactly `repos` (the same rule clients merge by), then
+/// maps every member of `members` to its checkout there by repository identity. A partial match is
+/// refused with the missing repositories named: nothing is transferred half way.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct GroupWork {
+    /// Every repository of the sender's group project.
+    pub repos: Vec<GroupRepo>,
+    /// The members the thread works in (all of them unless a worktree chat left some out).
+    pub members: Vec<GroupMemberWork>,
+}
+
+impl GroupWork {
+    /// The identities of the group project, sorted: the key a group is matched by.
+    pub fn repo_identities(&self) -> Vec<RepoIdentity> {
+        let mut identities: Vec<RepoIdentity> = self.repos.iter().map(|repo| repo.repo.clone()).collect();
+        identities.sort();
+        identities.dedup();
+        identities
     }
 }
 

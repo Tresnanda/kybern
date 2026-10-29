@@ -39,6 +39,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::delegation::{cap_error, child_title, delegation_brief, validate_owns};
+use super::group_transfer::{SourceMember, needed_members, needs_bundle, validate_group};
 use super::{LiveSession, Orchestrator};
 use crate::network::git_transfer;
 
@@ -208,10 +209,6 @@ impl Orchestrator {
             "Another machine started this thread, so it cannot hand work on to a third machine. Delegate on this machine instead."
         );
         ensure!(
-            !super::group_git::is_group(parent),
-            "A group project spans several repositories, and delegating one to another machine is not supported yet. Delegate on this machine."
-        );
-        ensure!(
             request.workspace == DelegationWorkspace::Shared || request.owns.is_empty(),
             "owns only applies to a shared workspace. A worktree agent has its own copy of the files."
         );
@@ -221,6 +218,11 @@ impl Orchestrator {
             ensure!(
                 features.iter().any(|feature| feature == features::DELEGATE_REMOTE_V1),
                 "{} needs a newer Kybern to run delegated agents. Update it from Settings → Machines.",
+                target.name
+            );
+            ensure!(
+                !super::group_git::is_group(parent) || features.iter().any(|feature| feature == features::GROUP_V1),
+                "{} needs a newer Kybern to run agents for a group project. Update it from Settings → Machines.",
                 target.name
             );
         }
@@ -260,15 +262,33 @@ impl Orchestrator {
             super::delegation::resolve_child_permission(parent.permission_mode, parent.provider.kind, kind, request.permission_mode)?;
 
         // The repository, so the target can find its checkout of it; the base for a worktree.
-        let repo_identity = git_transfer::identity_of(Path::new(&parent.cwd)).await;
+        let (repo_identity, base_commit, group) = if super::group_git::is_group(parent) {
+            // Per member, as for a local group child: a clean checkout is its HEAD, a dirty one a snapshot of its changes.
+            let (mut work, targets) = self.group_work(parent).await.map_err(|error| anyhow!(error.message))?;
+            if request.workspace == DelegationWorkspace::Worktree {
+                for (member, target) in work.members.iter_mut().zip(&targets) {
+                    let repo = target.git();
+                    let clean = repo.status_porcelain(&target.exclude).await.is_ok_and(|lines| lines.is_empty());
+                    member.commit = Some(match repo.head().await {
+                        Some(head) if clean => head,
+                        _ => repo.snapshot_excluding("kybern delegation base", &target.exclude).await?,
+                    });
+                }
+            }
+            let primary = work.members.first().ok_or_else(|| anyhow!("This group thread has no repository to delegate in."))?;
+            (primary.repo.clone(), primary.commit.clone(), Some(work))
+        } else {
+            let identity = git_transfer::identity_of(Path::new(&parent.cwd)).await;
+            let base = match request.workspace {
+                DelegationWorkspace::Shared => None,
+                DelegationWorkspace::Worktree => Some(git_transfer::base_commit(&Repo::new(&parent.cwd)).await?),
+            };
+            (identity, base, None)
+        };
         ensure!(
             !repo_identity.is_empty(),
             "Delegating to another machine needs a git repository, so Kybern can find the matching checkout there. Delegate on this machine."
         );
-        let base_commit = match request.workspace {
-            DelegationWorkspace::Shared => None,
-            DelegationWorkspace::Worktree => Some(git_transfer::base_commit(&Repo::new(&parent.cwd)).await?),
-        };
 
         let task_id = Uuid::now_v7();
         let origin = Origin {
@@ -297,6 +317,7 @@ impl Orchestrator {
             repo: repo_identity,
             project: request.project.clone(),
             base_commit: base_commit.clone(),
+            group,
         };
         let now = Utc::now();
         let title = child_title(request.title.as_deref(), &task);
@@ -686,7 +707,8 @@ impl Orchestrator {
         if let Err(CallFailure::Remote(error)) = &answer
             && error.data.as_ref().and_then(|data| data.get("needs")).and_then(Value::as_str) == Some(NEEDS_BUNDLE)
         {
-            match self.push_base(&*hub, item, &params).await {
+            let only = needed_members(error);
+            match self.push_base(&*hub, item, &params, only).await {
                 Ok(()) => answer = hub.call(&item.target, PeerDelegate::NAME, value).await,
                 Err(delivery) => return delivery,
             }
@@ -703,7 +725,13 @@ impl Orchestrator {
     }
 
     /// Send the commit a worktree child starts from as a bundle and have the target import it.
-    async fn push_base(&self, hub: &dyn RemoteHub, item: &OutboxItem, params: &PeerDelegateParams) -> Result<(), Delivery> {
+    async fn push_base(
+        &self,
+        hub: &dyn RemoteHub,
+        item: &OutboxItem,
+        params: &PeerDelegateParams,
+        only: Option<Vec<String>>,
+    ) -> Result<(), Delivery> {
         let Some(commit) = params.base_commit.clone() else {
             return Err(Delivery::Failed("The target asked for a base commit that this delegation does not have.".into()));
         };
@@ -714,6 +742,21 @@ impl Orchestrator {
         let Some(parent_cwd) = parent_cwd else {
             return Err(Delivery::Failed("The delegating thread no longer exists, so its changes cannot be sent.".into()));
         };
+        if let Some(group) = &params.group {
+            // Each member's base is a bundle of its own, from the member's checkout in the parent.
+            let parent = match self.inner.store.remote_child_by_operation(item.operation_id) {
+                Ok(Some(child)) => self.inner.store.thread_get(child.parent_thread_id).ok().flatten(),
+                _ => None,
+            };
+            let Some(parent) = parent else {
+                return Err(Delivery::Failed("The delegating thread no longer exists, so its changes cannot be sent.".into()));
+            };
+            let sources: Vec<SourceMember> = super::group_git::targets(&parent)
+                .into_iter()
+                .map(|target| SourceMember { path: target.repo_path().to_string(), dir: target.dir.to_string_lossy().into_owned() })
+                .collect();
+            return self.send_group_bundles(hub, item, group, params.project.as_deref(), &sources, only.as_deref()).await;
+        }
         let repo = Repo::new(&parent_cwd);
         let staged = git_transfer::staged_path(&self.inner.paths.root, item.operation_id);
         let mut full = false;
@@ -728,7 +771,8 @@ impl Orchestrator {
                 Ok(None) => return Err(Delivery::Failed("There was nothing to send, yet the target lacks the commit.".into())),
                 Err(error) => return Err(Delivery::Failed(format!("{error:#}"))),
             };
-            let result = self.stream_bundle(hub, item, &params.repo, params.project.as_deref(), &commit, &bundle).await;
+            let result =
+                self.stream_bundle(hub, item, item.operation_id, &[], &params.repo, params.project.as_deref(), &commit, &bundle).await;
             let _ = std::fs::remove_file(&staged);
             match result {
                 Ok(()) => return Ok(()),
@@ -744,10 +788,14 @@ impl Orchestrator {
         }
     }
 
+    /// Stream `bundle` as transfer `transfer_id` (the operation's own id, or a group member's) and import it.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn stream_bundle(
         &self,
         hub: &dyn RemoteHub,
         item: &OutboxItem,
+        transfer_id: Uuid,
+        group_repos: &[RepoIdentity],
         repo: &RepoIdentity,
         project: Option<&str>,
         commit: &str,
@@ -755,7 +803,7 @@ impl Orchestrator {
     ) -> Result<(), CallFailure> {
         use base64::Engine;
         let chunk = |offset: u64, data: &[u8]| PeerGitBundleParams {
-            operation_id: item.operation_id,
+            operation_id: transfer_id,
             offset,
             total: bundle.size,
             data: base64::engine::general_purpose::STANDARD.encode(data),
@@ -774,12 +822,13 @@ impl Orchestrator {
                 serde_json::from_value::<PeerGitBundleResult>(answer).map(|result| result.received).unwrap_or(offset + data.len() as u64);
         }
         let import = PeerGitImportParams {
-            operation_id: item.operation_id,
+            operation_id: transfer_id,
             total: bundle.size,
             sha256: bundle.sha256.clone(),
             commit: commit.to_string(),
             repo: repo.clone(),
             project: project.map(str::to_string),
+            group_repos: group_repos.to_vec(),
         };
         hub.call(&item.target, PeerGitImport::NAME, serde_json::to_value(import).unwrap_or(Value::Null)).await?;
         Ok(())
@@ -1127,7 +1176,16 @@ impl Orchestrator {
         }
         validate_owns(&params.owns).map_err(RpcError::invalid_params)?;
 
-        let project = self.match_project(&params.repo, params.project.as_deref(), &hub.self_name()).await?;
+        if let Some(group) = &params.group {
+            validate_group(group, params.workspace == DelegationWorkspace::Worktree)?;
+        }
+        let (project, matched) = match &params.group {
+            Some(work) => {
+                let (candidate, matched) = self.group_target(work, params.project.as_deref(), &hub.self_name()).await?;
+                (candidate.project, Some(matched))
+            }
+            None => (self.match_project(&params.repo, params.project.as_deref(), &hub.self_name()).await?, None),
+        };
         let kind = params.provider.ok_or_else(|| RpcError::invalid_params("provider is required"))?;
         if self.inner.drivers.get(kind).is_none() {
             return Err(RpcError::new(codes::PROVIDER_UNAVAILABLE, format!("{kind} is not available on {}.", hub.self_name())));
@@ -1153,8 +1211,32 @@ impl Orchestrator {
         let permission_mode = narrower(params.permission_mode, origin.permission_cap);
 
         let child_id = Uuid::now_v7();
+        let mut members = Vec::new();
         let (cwd, worktree, base_commit, branch) = match params.workspace {
-            DelegationWorkspace::Shared => (project.path.clone(), None, None, None),
+            DelegationWorkspace::Shared => {
+                if let Some(matched) = &matched {
+                    members = Self::group_thread_members(&project, matched);
+                }
+                (project.path.clone(), None, None, None)
+            }
+            DelegationWorkspace::Worktree if matched.is_some() => {
+                let matched = matched.as_deref().unwrap_or_default();
+                let missing = Self::group_missing_commits(matched).await;
+                if !missing.is_empty() {
+                    return Err(needs_bundle(NEEDS_BUNDLE, missing, project.id));
+                }
+                let template = Self::group_thread_members(&project, matched);
+                let starts: std::collections::BTreeMap<String, String> =
+                    matched.iter().filter_map(|member| member.work.commit.clone().map(|commit| (member.path.clone(), commit))).collect();
+                let (worktree, group_members) = self
+                    .create_group_workspace(&project, child_id, template, &starts, None)
+                    .await
+                    .map_err(|error| RpcError::new(codes::CONFLICT, format!("Could not create the worktrees for this group: {error:#}")))?;
+                self.group_forget(matched, params.operation_id).await;
+                members = group_members;
+                let base = params.base_commit.clone().or_else(|| matched.first().and_then(|member| member.work.commit.clone()));
+                (worktree.path.clone(), Some(worktree.clone()), base, Some(worktree.branch))
+            }
             DelegationWorkspace::Worktree => {
                 let base = params.base_commit.clone().ok_or_else(|| RpcError::invalid_params("base_commit is required for a worktree"))?;
                 let repo = Repo::new(&project.path);
@@ -1221,7 +1303,7 @@ impl Orchestrator {
             moved: None,
             subagent: None,
             delegation: Some(info),
-            members: Vec::new(),
+            members,
         };
         self.inner.store.thread_upsert(&thread).map_err(internal)?;
         let event = self.emit(thread.id, None, EventPayload::ThreadCreated { thread: thread.clone() }).map_err(internal)?;
@@ -1369,8 +1451,20 @@ impl Orchestrator {
         if file.size != params.total || file.sha256 != params.sha256 {
             return Err(RpcError::new(codes::CONFLICT, "the staged bundle is incomplete or damaged; send it again"));
         }
-        let project = self.match_project(&params.repo, params.project.as_deref(), &hub.self_name()).await?;
-        let repo = Repo::new(&project.path);
+        // A group member's bundle goes into that member's checkout of the matching group.
+        let dir = if params.group_repos.is_empty() {
+            self.match_project(&params.repo, params.project.as_deref(), &hub.self_name()).await?.path
+        } else {
+            let repos: Vec<GroupRepo> =
+                params.group_repos.iter().map(|repo| GroupRepo { name: String::new(), repo: repo.clone() }).collect();
+            let candidate = self.match_group(&repos, params.project.as_deref(), &hub.self_name()).await?;
+            let member =
+                candidate.members.iter().find(|member| git_transfer::same_repo(&params.repo, &member.repo)).ok_or_else(|| {
+                    RpcError::new(codes::NOT_FOUND, "This machine has no checkout of that repository in the matching group.")
+                })?;
+            member.dir.to_string_lossy().into_owned()
+        };
+        let repo = Repo::new(&dir);
         let imported = git_transfer::import_bundle(&repo, &path, params.operation_id, &params.commit).await;
         let _ = std::fs::remove_file(&path);
         match imported {

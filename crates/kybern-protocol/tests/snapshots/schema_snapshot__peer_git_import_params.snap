@@ -33,6 +33,13 @@ expression: schema_for!(PeerGitImportParams)
         "string",
         "null"
       ]
+    },
+    "group_repos": {
+      "description": "A member of a group project: the identities of the group's repositories. B imports into the checkout of\nthe group project made of exactly these repositories whose member is `repo`. `operation_id` then names\nthis member's transfer, not the whole operation.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RepoIdentity"
+      }
     }
   },
   "required": [

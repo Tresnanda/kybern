@@ -38,6 +38,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::fork_machine::{ForkProvider, NOTE_CAP, clip, conflict, not_found, short_id};
+use super::group_transfer::{MatchedMember, SourceMember, needed_members, needs_bundle};
 use super::remote_delegation::{
     CallFailure, Delivery, RemoteHub, from_value, internal, namespaced_operation, narrower, remote_error_delivery,
 };
@@ -64,6 +65,10 @@ struct MovePayload {
     title: Option<String>,
     project: Option<String>,
     repo: RepoIdentity,
+    /// A group thread: the group's repositories and the members it works in (commits are taken when the
+    /// lease is, so the payload has none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    group: Option<GroupWork>,
     provider: ProviderKind,
     provider_chosen: bool,
     model: Option<String>,
@@ -84,6 +89,26 @@ struct MoveSlot {
     thread_id: Option<ThreadId>,
     /// What the continuing thread runs, from the request that reserved the slot.
     wanted: MoveWanted,
+    /// A group move: the members here that take the work and their commits.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    members: Vec<SlotMember>,
+}
+
+/// One member of a group move on the target.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SlotMember {
+    /// The member's path in the sender's group (names its transfer).
+    source_path: String,
+    work: GroupMemberWork,
+    /// The member's path in the group here.
+    path: String,
+    dir: String,
+}
+
+impl SlotMember {
+    fn matched(&self) -> MatchedMember {
+        MatchedMember { work: self.work.clone(), path: self.path.clone(), dir: std::path::PathBuf::from(&self.dir) }
+    }
 }
 
 /// What the continuing thread should run.
@@ -161,6 +186,16 @@ impl Orchestrator {
                 target.name
             )));
         }
+        let is_group = super::group_git::is_group(&thread);
+        if is_group
+            && let Some(features) = &target.features
+            && !features.iter().any(|feature| feature == features::GROUP_V1)
+        {
+            return Err(conflict(format!(
+                "{} needs a newer Kybern to continue a group project's thread there. Update it from Settings → Machines.",
+                target.name
+            )));
+        }
         let operation_id = params.operation_id.unwrap_or_else(Uuid::now_v7);
         if let Some(existing) = self.inner.store.outbox_get_by_operation(operation_id).map_err(internal)? {
             return self.move_result_of(existing, params.thread_id);
@@ -176,10 +211,19 @@ impl Orchestrator {
                 ));
             }
         }
-        let repo_identity = git_transfer::identity_of(std::path::Path::new(&thread.cwd)).await;
-        if repo_identity.is_empty() {
-            return Err(conflict("Continuing on another machine needs a git repository, so Kybern can find the matching checkout there."));
-        }
+        let (repo_identity, group) = if is_group {
+            let (work, _) = self.group_work(&thread).await?;
+            let primary = work.members.first().map(|member| member.repo.clone()).unwrap_or_default();
+            (primary, Some(work))
+        } else {
+            let identity = git_transfer::identity_of(std::path::Path::new(&thread.cwd)).await;
+            if identity.is_empty() {
+                return Err(conflict(
+                    "Continuing on another machine needs a git repository, so Kybern can find the matching checkout there.",
+                ));
+            }
+            (identity, None)
+        };
         let handoff_note = match params.handoff_note.as_deref().map(str::trim).filter(|note| !note.is_empty()) {
             Some(note) => note.to_string(),
             None => self.handoff_note(&thread).await.map_err(internal)?,
@@ -218,6 +262,7 @@ impl Orchestrator {
             title: params.title.clone().filter(|title| !title.trim().is_empty()),
             project: params.project.clone(),
             repo: repo_identity,
+            group,
             provider: kind,
             provider_chosen: params.provider.is_some(),
             model,
@@ -408,15 +453,26 @@ impl Orchestrator {
         if self.inner.store.queue_list(Some(thread.id)).map(|queued| !queued.is_empty()).unwrap_or(false) {
             return Err(Delivery::Retry("Waiting for the queued messages to finish.".into()));
         }
-        let repo = Repo::new(&thread.cwd);
-        let (commit, _) = self
-            .fork_commit(&thread, &repo, &hub.self_name())
-            .await
-            .map_err(|error| Delivery::Failed(format!("Could not snapshot the work: {error:#}")))?;
         let branch = format!("{BRANCH_PREFIX}{}", short_id(item.operation_id));
-        repo.update_ref(&format!("refs/heads/{branch}"), &commit)
-            .await
-            .map_err(|error| Delivery::Failed(format!("Could not create the move branch: {error:#}")))?;
+        let commit = if super::group_git::is_group(&thread) {
+            // Each member is snapshotted and named by the move branch in its own repository; the primary's commit stands for the set.
+            let snapshot = self
+                .group_snapshot(&thread, &hub.self_name())
+                .await
+                .map_err(|error| Delivery::Failed(format!("Could not snapshot the work: {}", error.message)))?;
+            self.group_branch(&snapshot, &branch).await.map_err(|error| Delivery::Failed(error.message))?;
+            snapshot.primary().and_then(|member| member.commit.clone()).unwrap_or_default()
+        } else {
+            let repo = Repo::new(&thread.cwd);
+            let (commit, _) = self
+                .fork_commit(&thread, &repo, &hub.self_name())
+                .await
+                .map_err(|error| Delivery::Failed(format!("Could not snapshot the work: {error:#}")))?;
+            repo.update_ref(&format!("refs/heads/{branch}"), &commit)
+                .await
+                .map_err(|error| Delivery::Failed(format!("Could not create the move branch: {error:#}")))?;
+            commit
+        };
         let info = MoveInfo {
             state: MoveState::Departing,
             peer: item.target.clone(),
@@ -449,6 +505,17 @@ impl Orchestrator {
             self.move_release_unless_uncertain(thread_id, item.operation_id);
             return Delivery::Failed("The queued move has no origin.".into());
         };
+        // A group's members take their commits from the move branch each of them holds.
+        let (group, sources) = match &payload.group {
+            Some(work) => match self.group_move_commits(&thread, work, &branch).await {
+                Ok((work, sources)) => (Some(work), sources),
+                Err(reason) => {
+                    self.move_release_unless_uncertain(thread_id, item.operation_id);
+                    return Delivery::Failed(reason);
+                }
+            },
+            None => (None, Vec::new()),
+        };
         let prepare = PeerMovePrepareParams {
             operation_id: item.operation_id,
             origin,
@@ -457,6 +524,7 @@ impl Orchestrator {
             project: payload.project.clone(),
             branch,
             commit: commit.clone(),
+            group: group.clone(),
             provider: payload.provider,
             provider_chosen: payload.provider_chosen,
             model: payload.model.clone(),
@@ -470,7 +538,16 @@ impl Orchestrator {
         if let Err(CallFailure::Remote(error)) = &answer
             && error.data.as_ref().and_then(|data| data.get("needs")).and_then(Value::as_str) == Some(MOVE_NEEDS_BUNDLE)
         {
-            match self.send_branch(&**hub, item, &payload.repo, payload.project.as_deref(), &commit, &repo).await {
+            let sent = match &group {
+                Some(work) => {
+                    let only = needed_members(error);
+                    self.send_group_bundles(&**hub, item, work, payload.project.as_deref(), &sources, only.as_deref()).await
+                }
+                None => {
+                    self.send_branch(&**hub, item, &payload.repo, payload.project.as_deref(), &commit, &repo, item.operation_id, &[]).await
+                }
+            };
+            match sent {
                 Ok(()) => answer = hub.call(&item.target, PeerMovePrepare::NAME, prepare_value).await,
                 Err(delivery) => return self.move_not_sent(thread_id, item.operation_id, delivery),
             }
@@ -848,10 +925,19 @@ impl Orchestrator {
         if params.history_bytes as usize > MAX_HISTORY_BYTES + 64 * 1024 {
             return Err(RpcError::invalid_params("The conversation to carry is too large."));
         }
+        if let Some(group) = &params.group {
+            super::group_transfer::validate_group(group, true)?;
+        }
         let from_thread = params.origin.thread_id.ok_or_else(|| RpcError::invalid_params("origin.thread_id is required"))?;
         let operation = namespaced_operation(from, Some(from_thread), params.operation_id);
         let hub_name = hub.self_name();
-        let project = self.match_project(&params.repo, params.project.as_deref(), &hub_name).await?;
+        let (project, group) = match &params.group {
+            Some(work) => {
+                let (candidate, matched) = self.group_target(work, params.project.as_deref(), &hub_name).await?;
+                (candidate.project, Some(matched))
+            }
+            None => (self.match_project(&params.repo, params.project.as_deref(), &hub_name).await?, None),
+        };
         if let Some(slot) = self.move_slot_live(operation)
             && slot.state == PeerMoveState::Committed
         {
@@ -864,10 +950,30 @@ impl Orchestrator {
             effort: params.effort.clone(),
         };
         let (kind, ..) = self.fork_provider(&project, wanted, &hub_name).await?;
-        let repo = Repo::new(&project.path);
-        if !git_transfer::has_commit(&repo, &params.commit).await {
-            return Err(RpcError::new(codes::CONFLICT, format!("{hub_name} does not have commit {} yet.", params.commit))
-                .with_data(json!({ "needs": MOVE_NEEDS_BUNDLE, "project_id": project.id })));
+        let mut members = Vec::new();
+        match &group {
+            Some(matched) => {
+                let missing = Self::group_missing_commits(matched).await;
+                if !missing.is_empty() {
+                    return Err(needs_bundle(MOVE_NEEDS_BUNDLE, missing, project.id));
+                }
+                members = matched
+                    .iter()
+                    .map(|member| SlotMember {
+                        source_path: member.work.path.clone(),
+                        work: member.work.clone(),
+                        path: member.path.clone(),
+                        dir: member.dir.to_string_lossy().into_owned(),
+                    })
+                    .collect();
+            }
+            None => {
+                let repo = Repo::new(&project.path);
+                if !git_transfer::has_commit(&repo, &params.commit).await {
+                    return Err(RpcError::new(codes::CONFLICT, format!("{hub_name} does not have commit {} yet.", params.commit))
+                        .with_data(json!({ "needs": MOVE_NEEDS_BUNDLE, "project_id": project.id })));
+                }
+            }
         }
         let lease_until = Utc::now() + chrono::Duration::seconds(MOVE_LEASE_SECONDS);
         let slot = MoveSlot {
@@ -887,6 +993,7 @@ impl Orchestrator {
                 permission_mode: params.permission_mode,
                 cap: params.origin.permission_cap,
             },
+            members,
         };
         self.move_slot_save(operation, &slot)?;
         Ok(PeerMovePrepareResult { lease_until, project_name: project.name, provider: kind })
@@ -928,7 +1035,7 @@ impl Orchestrator {
             return Err(RpcError::new(codes::FORBIDDEN, "That move belongs to another machine."));
         }
         let from_name = hub.target(from).map(|target| target.name).unwrap_or_else(|| from.to_string());
-        let message = UserMessage::text(move_message(params, &slot.branch, &from_name, from));
+        let message = UserMessage::text(move_message(params, &slot.branch, &from_name, from, &slot.members));
         if let Some(existing) = self.inner.store.thread_get(thread_id).map_err(internal)? {
             if !existing.origin.as_ref().is_some_and(|known| known.machine_id == from && known.kind == OriginKind::Move) {
                 return Err(conflict("operation_id already belongs to another thread."));
@@ -954,12 +1061,24 @@ impl Orchestrator {
             effort: slot.wanted.effort.clone(),
         };
         let (kind, model, effort) = self.fork_provider(&project, wanted, &hub.self_name()).await?;
-        let repo = Repo::new(&project.path);
-        if !git_transfer::has_commit(&repo, &slot.commit).await {
-            return Err(conflict(format!("{} lost the move's commit.", hub.self_name())));
-        }
-        let path = self.fork_worktree(&project, &repo, thread_id, &slot.branch, &slot.commit).await?;
-        git_transfer::forget(Some(&repo), &self.inner.paths.root, params.operation_id).await;
+        let (worktree, members) = if slot.members.is_empty() {
+            let repo = Repo::new(&project.path);
+            if !git_transfer::has_commit(&repo, &slot.commit).await {
+                return Err(conflict(format!("{} lost the move's commit.", hub.self_name())));
+            }
+            let path = self.fork_worktree(&project, &repo, thread_id, &slot.branch, &slot.commit).await?;
+            git_transfer::forget(Some(&repo), &self.inner.paths.root, params.operation_id).await;
+            (WorktreeInfo { path, branch: slot.branch.clone() }, Vec::new())
+        } else {
+            let matched: Vec<MatchedMember> = slot.members.iter().map(SlotMember::matched).collect();
+            if !Self::group_missing_commits(&matched).await.is_empty() {
+                return Err(conflict(format!("{} lost the move's commits.", hub.self_name())));
+            }
+            let (worktree, members) = self.group_fork_workspace(&project, thread_id, &matched, &slot.branch).await?;
+            self.group_forget(&matched, params.operation_id).await;
+            (worktree, members)
+        };
+        let path = worktree.path.clone();
         let origin = Origin {
             machine_id: from.to_string(),
             machine_name: from_name.clone(),
@@ -979,7 +1098,7 @@ impl Orchestrator {
             effort,
             permission_mode: narrower(slot.wanted.permission_mode, origin.permission_cap),
             status: ThreadStatus::Idle,
-            worktree: Some(WorktreeInfo { path: path.clone(), branch: slot.branch.clone() }),
+            worktree: Some(worktree),
             cwd: path,
             provider_session_id: None,
             pinned: false,
@@ -993,7 +1112,7 @@ impl Orchestrator {
             moved: None,
             subagent: None,
             delegation: None,
-            members: Vec::new(),
+            members,
         };
         self.inner.store.thread_upsert(&thread).map_err(internal)?;
         let created = self.emit(thread.id, None, EventPayload::ThreadCreated { thread: thread.clone() }).map_err(internal)?;
@@ -1053,8 +1172,13 @@ impl Orchestrator {
         if abort && slot.state == PeerMoveState::Prepared {
             slot.state = PeerMoveState::Aborted;
             self.move_slot_save(operation, &slot)?;
-            if let Ok(Some(project)) = self.inner.store.project_get(slot.project_id) {
-                git_transfer::forget(Some(&Repo::new(&project.path)), &self.inner.paths.root, params.operation_id).await;
+            if slot.members.is_empty() {
+                if let Ok(Some(project)) = self.inner.store.project_get(slot.project_id) {
+                    git_transfer::forget(Some(&Repo::new(&project.path)), &self.inner.paths.root, params.operation_id).await;
+                }
+            } else {
+                let matched: Vec<MatchedMember> = slot.members.iter().map(SlotMember::matched).collect();
+                self.group_forget(&matched, params.operation_id).await;
             }
         }
         let thread = slot.thread_id.and_then(|id| self.inner.store.thread_get(id).ok().flatten());
@@ -1066,6 +1190,29 @@ impl Orchestrator {
             branch: Some(slot.branch),
             provider: thread.map(|thread| thread.provider.kind),
         })
+    }
+}
+
+impl Orchestrator {
+    /// The group work of a move with each member's commit read from the move branch it holds, and where
+    /// each member's repository is.
+    async fn group_move_commits(&self, thread: &Thread, work: &GroupWork, branch: &str) -> Result<(GroupWork, Vec<SourceMember>), String> {
+        let mut with = work.clone();
+        let mut sources = Vec::new();
+        for target in super::group_git::targets(thread) {
+            let Some(member) = with.members.iter_mut().find(|member| member.path == target.repo_path()) else { continue };
+            let commit = target
+                .git()
+                .rev_parse(&format!("refs/heads/{branch}"))
+                .await
+                .map_err(|_| format!("The move branch of {} is gone, so its work cannot be sent.", target.name))?;
+            member.commit = Some(commit);
+            sources.push(SourceMember { path: target.repo_path().to_string(), dir: target.dir.to_string_lossy().into_owned() });
+        }
+        if with.members.iter().any(|member| member.commit.is_none()) {
+            return Err("A repository of this group is no longer part of the thread, so the move cannot be sent.".into());
+        }
+        Ok((with, sources))
     }
 }
 
@@ -1126,12 +1273,18 @@ fn move_commit_result(hub: &Arc<dyn RemoteHub>, thread: &Thread, project_name: O
 }
 
 /// The continuing thread's first message: the note, the way back, and what the checkout holds.
-fn move_message(params: &PeerMoveCommitParams, branch: &str, from_name: &str, from_id: &str) -> String {
+fn move_message(params: &PeerMoveCommitParams, branch: &str, from_name: &str, from_id: &str, members: &[SlotMember]) -> String {
     let mut text = params.handoff_note.trim().to_string();
     text.push_str("\n\n---\n");
     text.push_str(&format!("Continued from \"{}\" on {from_name}: {}\n", params.from_title, thread_link(from_id, params.from_thread)));
+    let checkout = if members.is_empty() {
+        format!("This checkout is on `{branch}`")
+    } else {
+        let names: Vec<&str> = members.iter().map(|member| member.work.name.as_str()).collect();
+        format!("Each repository of this group ({}) is checked out on `{branch}`", super::group_git::join_names(&names))
+    };
     text.push_str(&format!(
-        "This checkout is on `{branch}`, a snapshot of that thread's work including its uncommitted changes. The earlier conversation is above, under \"Earlier on {from_name}\"; the original thread is now read-only and this one carries on from it."
+        "{checkout}, a snapshot of that thread's work including its uncommitted changes. The earlier conversation is above, under \"Earlier on {from_name}\"; the original thread is now read-only and this one carries on from it."
     ));
     text
 }

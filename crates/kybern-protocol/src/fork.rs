@@ -11,7 +11,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{MachineId, Origin, OutboxItem, PermissionMode, ProviderKind, RepoIdentity, ThreadId};
+use crate::{GroupWork, MachineId, Origin, OutboxItem, PermissionMode, ProviderKind, RepoIdentity, ThreadId};
 
 /// The error `data` of a `peer.fork` that needs the fork branch first (`"needs": "bundle"`); the same
 /// word `peer.delegate` uses.
@@ -96,8 +96,12 @@ pub struct PeerForkParams {
     pub project: Option<String>,
     /// The fork branch's name on A; B uses the same name for its worktree.
     pub branch: String,
-    /// The commit the branch points to.
+    /// The commit the branch points to. For a group, the primary member's.
     pub commit: String,
+    /// A group project's fork: every member's snapshot. `repo` and `commit` are then the first member's, and
+    /// `branch` is the name each member's branch has on A and its worktree gets on B.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<GroupWork>,
     pub provider: ProviderKind,
     /// The user named the harness, so B must not swap it for another.
     #[serde(default)]

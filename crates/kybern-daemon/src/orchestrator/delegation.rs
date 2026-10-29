@@ -879,7 +879,7 @@ impl Orchestrator {
                     };
                     starts.insert(target.repo_path().to_string(), base);
                 }
-                let (worktree, members) = self.create_group_workspace(&project, child_id, template, &starts).await?;
+                let (worktree, members) = self.create_group_workspace(&project, child_id, template, &starts, None).await?;
                 let base = members.iter().filter(|m| m.included).find_map(|m| m.base_commit.clone());
                 (worktree.path.clone(), Some(worktree.clone()), base, Some(worktree.branch), members)
             }

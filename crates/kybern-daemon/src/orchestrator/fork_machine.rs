@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use super::group_transfer::{SourceMember, needed_members, needs_bundle};
 use super::remote_delegation::{
     CallFailure, Delivery, RemoteHub, from_value, internal, namespaced_operation, narrower, remote_error_delivery,
 };
@@ -59,6 +60,9 @@ struct ForkPayload {
     source_cwd: String,
     push_origin: bool,
     params: PeerForkParams,
+    /// A group thread: where each member's branch lives here. Empty for one repository.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    source_members: Vec<SourceMember>,
 }
 
 /// Whether another machine's work started this thread and it must not reach a third machine. A fork
@@ -109,9 +113,6 @@ impl Orchestrator {
         if second_hop(&thread) {
             return Err(conflict("Another machine started this thread, so it cannot be forked to a third machine."));
         }
-        if super::group_git::is_group(&thread) {
-            return Err(conflict("A group project spans several repositories, and forking one to another machine is not supported yet."));
-        }
         Ok(thread)
     }
 
@@ -126,20 +127,40 @@ impl Orchestrator {
         {
             return Err(conflict(format!("{} needs a newer Kybern to receive a fork. Update it from Settings → Machines.", target.name)));
         }
+        let is_group = super::group_git::is_group(&thread);
+        if is_group
+            && let Some(features) = &target.features
+            && !features.iter().any(|feature| feature == features::GROUP_V1)
+        {
+            return Err(conflict(format!(
+                "{} needs a newer Kybern to receive a fork of a group project. Update it from Settings → Machines.",
+                target.name
+            )));
+        }
         let operation_id = params.operation_id.unwrap_or_else(Uuid::now_v7);
         // A repeat is the first fork: no second snapshot, no second item.
         if let Some(existing) = self.inner.store.outbox_get_by_operation(operation_id).map_err(internal)? {
             return self.fork_result_of(existing, params.thread_id);
         }
 
-        let repo = Repo::new(&thread.cwd);
-        let repo_identity = git_transfer::identity_of(Path::new(&thread.cwd)).await;
-        if repo_identity.is_empty() {
-            return Err(conflict("Forking to another machine needs a git repository, so Kybern can find the matching checkout there."));
-        }
-        let (commit, at_turn_end) = self.fork_commit(&thread, &repo, &hub.self_name()).await.map_err(internal)?;
         let branch = format!("{BRANCH_PREFIX}{}", short_id(operation_id));
-        repo.update_ref(&format!("refs/heads/{branch}"), &commit).await.map_err(internal)?;
+        let (repo_identity, commit, at_turn_end, group, source_members) = if is_group {
+            // Every member the thread works in is snapshotted before anything is queued: one that cannot be refuses the fork.
+            let snapshot = self.group_snapshot(&thread, &hub.self_name()).await?;
+            self.group_branch(&snapshot, &branch).await?;
+            let primary = snapshot.primary().ok_or_else(|| conflict("This group thread has no repository to fork."))?;
+            let (identity, commit) = (primary.repo.clone(), primary.commit.clone().unwrap_or_default());
+            (identity, commit, snapshot.at_turn_end, Some(snapshot.work.clone()), snapshot.sources())
+        } else {
+            let repo = Repo::new(&thread.cwd);
+            let repo_identity = git_transfer::identity_of(Path::new(&thread.cwd)).await;
+            if repo_identity.is_empty() {
+                return Err(conflict("Forking to another machine needs a git repository, so Kybern can find the matching checkout there."));
+            }
+            let (commit, at_turn_end) = self.fork_commit(&thread, &repo, &hub.self_name()).await.map_err(internal)?;
+            repo.update_ref(&format!("refs/heads/{branch}"), &commit).await.map_err(internal)?;
+            (repo_identity, commit, at_turn_end, None, Vec::new())
+        };
 
         let mut handoff_note = match params.handoff_note.as_deref().map(str::trim).filter(|note| !note.is_empty()) {
             Some(note) => note.to_string(),
@@ -188,14 +209,20 @@ impl Orchestrator {
             project: params.project.clone(),
             branch: branch.clone(),
             commit: commit.clone(),
+            group,
             provider: kind,
             provider_chosen: params.provider.is_some(),
             model,
             effort,
             permission_mode,
         };
-        let payload =
-            ForkPayload { source_thread_id: thread.id, source_cwd: thread.cwd.clone(), push_origin: params.push_origin, params: peer };
+        let payload = ForkPayload {
+            source_thread_id: thread.id,
+            source_cwd: thread.cwd.clone(),
+            push_origin: params.push_origin,
+            params: peer,
+            source_members,
+        };
         let now = Utc::now();
         let item = OutboxItem {
             id: Uuid::now_v7(),
@@ -352,6 +379,13 @@ impl Orchestrator {
         }
 
         note.push_str(&format!("\n## Checkout on {machine}\n"));
+        if super::group_git::is_group(thread) {
+            if let Some(worktree) = &thread.worktree {
+                note.push_str(&format!("- Each repository is a worktree on `{}`.\n", worktree.branch));
+            }
+            note.push_str(&self.group_checkout_note(thread).await);
+            return Ok(note);
+        }
         let repo = Repo::new(&thread.cwd);
         let branch = repo.current_branch().await;
         let head = repo.head().await;
@@ -392,26 +426,65 @@ impl Orchestrator {
             return Delivery::Failed("The queued fork is unreadable.".into());
         };
         let repo = Repo::new(&payload.source_cwd);
-        if !git_transfer::has_commit(&repo, &payload.params.commit).await {
-            return Delivery::Failed(format!(
-                "The fork branch {} is no longer in {}, so it cannot be sent. Fork the thread again.",
-                payload.params.branch, payload.source_cwd
-            ));
-        }
-        if payload.push_origin
-            && let Err(delivery) = self.fork_push_origin(&repo, &payload.params.branch).await
-        {
-            return delivery;
+        if let Some(group) = &payload.params.group {
+            for member in &group.members {
+                let dir = payload.source_members.iter().find(|source| source.path == member.path).map(|source| source.dir.as_str());
+                let held = match (dir, member.commit.as_deref()) {
+                    (Some(dir), Some(commit)) => git_transfer::has_commit(&Repo::new(dir), commit).await,
+                    _ => false,
+                };
+                if !held {
+                    return Delivery::Failed(format!(
+                        "The fork branch {} of {} is no longer here, so it cannot be sent. Fork the thread again.",
+                        payload.params.branch, member.name
+                    ));
+                }
+                if payload.push_origin
+                    && let Some(dir) = dir
+                    && let Err(delivery) = self.fork_push_origin(&Repo::new(dir), &payload.params.branch).await
+                {
+                    return delivery;
+                }
+            }
+        } else {
+            if !git_transfer::has_commit(&repo, &payload.params.commit).await {
+                return Delivery::Failed(format!(
+                    "The fork branch {} is no longer in {}, so it cannot be sent. Fork the thread again.",
+                    payload.params.branch, payload.source_cwd
+                ));
+            }
+            if payload.push_origin
+                && let Err(delivery) = self.fork_push_origin(&repo, &payload.params.branch).await
+            {
+                return delivery;
+            }
         }
         let value = serde_json::to_value(&payload.params).unwrap_or(Value::Null);
         let mut answer = hub.call(&item.target, PeerFork::NAME, value.clone()).await;
         if let Err(CallFailure::Remote(error)) = &answer
             && error.data.as_ref().and_then(|data| data.get("needs")).and_then(Value::as_str) == Some(FORK_NEEDS_BUNDLE)
         {
-            match self
-                .send_branch(&*hub, item, &payload.params.repo, payload.params.project.as_deref(), &payload.params.commit, &repo)
-                .await
-            {
+            let sent = match &payload.params.group {
+                Some(group) => {
+                    let only = needed_members(error);
+                    self.send_group_bundles(&*hub, item, group, payload.params.project.as_deref(), &payload.source_members, only.as_deref())
+                        .await
+                }
+                None => {
+                    self.send_branch(
+                        &*hub,
+                        item,
+                        &payload.params.repo,
+                        payload.params.project.as_deref(),
+                        &payload.params.commit,
+                        &repo,
+                        item.operation_id,
+                        &[],
+                    )
+                    .await
+                }
+            };
+            match sent {
                 Ok(()) => answer = hub.call(&item.target, PeerFork::NAME, value).await,
                 Err(delivery) => return delivery,
             }
@@ -440,7 +513,9 @@ impl Orchestrator {
         }
     }
 
-    /// Send the branch's commit as a bundle and have the target import it.
+    /// Send the branch's commit as a bundle (transfer `transfer_id`: the operation's own id, or a group
+    /// member's) and have the target import it. `group_repos` is empty for one repository.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn send_branch(
         &self,
         hub: &dyn RemoteHub,
@@ -449,11 +524,13 @@ impl Orchestrator {
         project: Option<&str>,
         commit: &str,
         repo: &Repo,
+        transfer_id: Uuid,
+        group_repos: &[RepoIdentity],
     ) -> Result<(), Delivery> {
-        let staged = git_transfer::staged_path(&self.inner.paths.root, item.operation_id);
+        let staged = git_transfer::staged_path(&self.inner.paths.root, transfer_id);
         let mut full = false;
         loop {
-            let bundle = match git_transfer::create_bundle(repo, commit, item.operation_id, &staged, full).await {
+            let bundle = match git_transfer::create_bundle(repo, commit, transfer_id, &staged, full).await {
                 Ok(Some(bundle)) => bundle,
                 // A remote already has everything yet the target lacks it: send the whole history.
                 Ok(None) if !full => {
@@ -463,7 +540,7 @@ impl Orchestrator {
                 Ok(None) => return Err(Delivery::Failed("There was nothing to send, yet the target lacks the commit.".into())),
                 Err(error) => return Err(Delivery::Failed(format!("{error:#}"))),
             };
-            let result = self.stream_bundle(hub, item, identity, project, commit, &bundle).await;
+            let result = self.stream_bundle(hub, item, transfer_id, group_repos, identity, project, commit, &bundle).await;
             let _ = std::fs::remove_file(&staged);
             match result {
                 Ok(()) => return Ok(()),
@@ -544,6 +621,9 @@ impl Orchestrator {
         if !matches!(params.commit.len(), 40 | 64) || !params.commit.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(RpcError::invalid_params("commit must be a full commit hash"));
         }
+        if let Some(group) = &params.group {
+            super::group_transfer::validate_group(group, true)?;
+        }
         if params.handoff_note.len() > NOTE_CAP {
             return Err(RpcError::invalid_params("The hand-off note is too long."));
         }
@@ -590,15 +670,37 @@ impl Orchestrator {
             return Ok(fork_result(hub, &existing, params, None));
         }
         let hub_name = hub.self_name();
-        let project = self.match_project(&params.repo, params.project.as_deref(), &hub_name).await?;
+        let (project, group) = match &params.group {
+            Some(work) => {
+                let (candidate, matched) = self.group_target(work, params.project.as_deref(), &hub_name).await?;
+                (candidate.project, Some(matched))
+            }
+            None => (self.match_project(&params.repo, params.project.as_deref(), &hub_name).await?, None),
+        };
         let (kind, model, effort) = self.fork_provider(&project, ForkProvider::of(params), &hub_name).await?;
-        let repo = Repo::new(&project.path);
-        if !git_transfer::has_commit(&repo, &params.commit).await {
-            return Err(RpcError::new(codes::CONFLICT, format!("{hub_name} does not have commit {} yet.", params.commit))
-                .with_data(json!({ "needs": FORK_NEEDS_BUNDLE, "project_id": project.id })));
-        }
-        let path = self.fork_worktree(&project, &repo, thread_id, &params.branch, &params.commit).await?;
-        git_transfer::forget(Some(&repo), &self.inner.paths.root, params.operation_id).await;
+        // Nothing is made before every commit is here, so a fork that waits for a bundle leaves no half-built thread.
+        let (worktree, members) = match &group {
+            Some(matched) => {
+                let missing = Self::group_missing_commits(matched).await;
+                if !missing.is_empty() {
+                    return Err(needs_bundle(FORK_NEEDS_BUNDLE, missing, project.id));
+                }
+                let (worktree, members) = self.group_fork_workspace(&project, thread_id, matched, &params.branch).await?;
+                self.group_forget(matched, params.operation_id).await;
+                (worktree, members)
+            }
+            None => {
+                let repo = Repo::new(&project.path);
+                if !git_transfer::has_commit(&repo, &params.commit).await {
+                    return Err(RpcError::new(codes::CONFLICT, format!("{hub_name} does not have commit {} yet.", params.commit))
+                        .with_data(json!({ "needs": FORK_NEEDS_BUNDLE, "project_id": project.id })));
+                }
+                let path = self.fork_worktree(&project, &repo, thread_id, &params.branch, &params.commit).await?;
+                git_transfer::forget(Some(&repo), &self.inner.paths.root, params.operation_id).await;
+                (WorktreeInfo { path, branch: params.branch.clone() }, Vec::new())
+            }
+        };
+        let path = worktree.path.clone();
         let now = Utc::now();
         let provider = ProviderInstance::default_for(kind);
         let thread = Thread {
@@ -610,7 +712,7 @@ impl Orchestrator {
             effort,
             permission_mode: narrower(params.permission_mode, origin.permission_cap),
             status: ThreadStatus::Idle,
-            worktree: Some(WorktreeInfo { path: path.clone(), branch: params.branch.clone() }),
+            worktree: Some(worktree),
             cwd: path,
             provider_session_id: None,
             pinned: false,
@@ -624,7 +726,7 @@ impl Orchestrator {
             moved: None,
             subagent: None,
             delegation: None,
-            members: Vec::new(),
+            members,
         };
         self.inner.store.thread_upsert(&thread).map_err(internal)?;
         let event = self.emit(thread.id, None, EventPayload::ThreadCreated { thread: thread.clone() }).map_err(internal)?;
@@ -752,10 +854,17 @@ fn fork_message(params: &PeerForkParams, from_name: &str, from_id: &str, source:
         }
         None => text.push_str(&format!("Forked from \"{}\" on {from_name}.\n", params.source_title)),
     }
-    text.push_str(&format!(
-        "This checkout is on `{}`, a snapshot of that thread's work including its uncommitted changes. The original thread keeps going on {from_name}, independently; nothing you commit here is pushed unless you push it.",
-        params.branch
-    ));
+    match &params.group {
+        Some(group) => text.push_str(&format!(
+            "Each repository of this group ({}) is checked out on `{}`, a snapshot of that thread's work including its uncommitted changes. The original thread keeps going on {from_name}, independently; nothing you commit here is pushed unless you push it.",
+            super::group_git::join_names(&group.members.iter().map(|member| member.name.as_str()).collect::<Vec<_>>()),
+            params.branch
+        )),
+        None => text.push_str(&format!(
+            "This checkout is on `{}`, a snapshot of that thread's work including its uncommitted changes. The original thread keeps going on {from_name}, independently; nothing you commit here is pushed unless you push it.",
+            params.branch
+        )),
+    }
     text
 }
 

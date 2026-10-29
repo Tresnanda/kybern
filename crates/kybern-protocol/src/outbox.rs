@@ -12,7 +12,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
-    DelegationRole, DelegationStatus, DelegationWorkspace, DiffStat, EventSeq, MachineId, Origin, PermissionMode, ProviderKind,
+    DelegationRole, DelegationStatus, DelegationWorkspace, DiffStat, EventSeq, GroupWork, MachineId, Origin, PermissionMode, ProviderKind,
     RepoIdentity, ThreadId,
 };
 
@@ -187,6 +187,10 @@ pub struct PeerDelegateParams {
     /// Worktree: the commit B seeds its worktree from (A's snapshot of the parent's changes).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_commit: Option<String>,
+    /// A group project's delegation: its repositories and, for a worktree, each member's base commit.
+    /// `repo` and `base_commit` are then the first member's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<GroupWork>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -288,6 +292,11 @@ pub struct PeerGitImportParams {
     pub repo: RepoIdentity,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    /// A member of a group project: the identities of the group's repositories. B imports into the checkout of
+    /// the group project made of exactly these repositories whose member is `repo`. `operation_id` then names
+    /// this member's transfer, not the whole operation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub group_repos: Vec<RepoIdentity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

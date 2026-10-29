@@ -71,17 +71,74 @@ fn two_checkouts(root: &std::path::Path) -> (PathBuf, PathBuf) {
     (a, b)
 }
 
+/// A group project of the given member folders (each a repository) at `path`.
+fn group_project(name: &str, path: &std::path::Path, members: &[&str]) -> Project {
+    let mut project = git_project(name, path);
+    project.is_git = false;
+    project.kind = ProjectKind::Group;
+    project.members =
+        members.iter().map(|member| ProjectMember { path: (*member).into(), name: (*member).into(), status: MemberStatus::Ok }).collect();
+    project
+}
+
+/// Two group folders, `group-a` and `group-b`, each holding checkouts of the repositories `api` and `web`
+/// (b only of those in `on_b`): every repository has its own bare origin and its own root commit.
+fn group_checkouts(root: &std::path::Path, on_b: &[&str]) -> (PathBuf, PathBuf) {
+    let (folder_a, folder_b) = (root.join("group-a"), root.join("group-b"));
+    for folder in [&folder_a, &folder_b] {
+        std::fs::create_dir_all(folder).unwrap();
+    }
+    for member in ["api", "web"] {
+        let origin = root.join(format!("origin-{member}.git"));
+        std::fs::create_dir_all(&origin).unwrap();
+        run_git(&origin, &["init", "-q", "--bare", "-b", "main"]);
+        let seed = root.join(format!("seed-{member}"));
+        std::fs::create_dir_all(&seed).unwrap();
+        run_git(&seed, &["init", "-q", "-b", "main"]);
+        std::fs::write(seed.join("tracked.txt"), format!("{member}\n")).unwrap();
+        run_git(&seed, &["add", "."]);
+        run_git(&seed, &["commit", "-q", "-m", &format!("init {member}")]);
+        run_git(&seed, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        run_git(&seed, &["push", "-q", "origin", "main"]);
+        run_git(root, &["clone", "-q", origin.to_str().unwrap(), folder_a.join(member).to_str().unwrap()]);
+        if on_b.contains(&member) {
+            run_git(root, &["clone", "-q", origin.to_str().unwrap(), folder_b.join(member).to_str().unwrap()]);
+        }
+    }
+    (folder_a, folder_b)
+}
+
 impl Pair {
     async fn new() -> Option<Self> {
+        Self::build(None).await
+    }
+
+    /// Like `new`, but the project is a group of two repositories, `api` and `web`: machine a has both and
+    /// machine b has those in `on_b`. `repo_a` and `repo_b` are the group folders.
+    async fn group(on_b: &[&str]) -> Option<Self> {
+        Self::build(Some(on_b)).await
+    }
+
+    async fn build(group_on_b: Option<&[&str]>) -> Option<Self> {
         let cluster = Cluster::new(&[NodeSpec::owner("a"), NodeSpec::owner("b")])?;
         let spawned = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let (repo_a, repo_b) = two_checkouts(cluster.dir.path());
+        let (repo_a, repo_b, project_a, project_b) = match group_on_b {
+            None => {
+                let (repo_a, repo_b) = two_checkouts(cluster.dir.path());
+                let (project_a, project_b) = (git_project("repo-a", &repo_a), git_project("repo-b", &repo_b));
+                (repo_a, repo_b, project_a, project_b)
+            }
+            Some(on_b) => {
+                let (repo_a, repo_b) = group_checkouts(cluster.dir.path(), on_b);
+                let (project_a, project_b) = (group_project("acme-a", &repo_a, &["api", "web"]), group_project("acme-b", &repo_b, on_b));
+                (repo_a, repo_b, project_a, project_b)
+            }
+        };
         let a = cluster.start_with("a", true, scripted_drivers(&Arc::new(std::sync::Mutex::new(Vec::new())))).await;
         let b = cluster.start_with("b", true, scripted_drivers(&spawned)).await;
         cluster.form(&a, &[&b], JoinVia::Auto).await;
-        let project_a = git_project("repo-a", &repo_a);
         a.state.store.project_insert(&project_a).unwrap();
-        b.state.store.project_insert(&git_project("repo-b", &repo_b)).unwrap();
+        b.state.store.project_insert(&project_b).unwrap();
         wait_until("a and b linked", WAIT, || crate::network::harness::linked(&a, &b)).await;
 
         let fixture = Fixture {
@@ -93,6 +150,9 @@ impl Pair {
         fixture.orchestrator.set_delegation_debounce(Duration::from_millis(60));
         let mut parent = fixture.thread(ThreadStatus::Idle);
         parent.title = "Parent on a".into();
+        if group_on_b.is_some() {
+            parent.members = super::group_git::snapshot_members(&fixture.project);
+        }
         fixture.store.thread_upsert(&parent).unwrap();
         let (live, _, _) = fixture.park_recording(&parent, Instant::now()).await;
         fixture.orchestrator.send(parent.id, UserMessage::text("coordinate the work")).await.unwrap();
@@ -559,6 +619,7 @@ async fn the_target_takes_the_origin_from_the_session_and_the_mode_can_only_narr
         repo: repo_identity.clone(),
         project: None,
         base_commit: None,
+        group: None,
     };
     let a_id = p.a.id();
     let dispatch = |params: PeerDelegateParams| {
@@ -630,6 +691,7 @@ async fn the_target_finds_its_checkout_by_repository_and_says_so_when_it_cannot(
         repo,
         project,
         base_commit: None,
+        group: None,
     };
     let call = |params: PeerDelegateParams| p.b.state.orchestrator.peer_dispatch(&a_id, "peer.delegate", serde_json::to_value(params).unwrap());
     let error = call(make(strange, None)).await.unwrap_err();

@@ -92,6 +92,7 @@ impl Pair {
             project: None,
             branch: format!("kybern/move-{}", &operation_id.simple().to_string()[24..]),
             commit: run_git(&self.repo_a, &["rev-parse", "HEAD"]),
+            group: None,
             provider: self.parent.provider.kind,
             provider_chosen: false,
             model: None,

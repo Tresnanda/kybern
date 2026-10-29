@@ -23,6 +23,17 @@ use uuid::Uuid;
 /// Bytes sent per `peer.git.bundle` call (before base64).
 pub const CHUNK_BYTES: usize = 512 * 1024;
 
+/// The transfer id of one member repository of a group's operation: the staged file and the refs of that
+/// member's bundle are named by it on both machines, so the members of one operation never collide.
+pub fn member_transfer_id(operation_id: Uuid, member_path: &str) -> Uuid {
+    let mut hasher = Sha256::new();
+    hasher.update(b"kybern-group-member\0");
+    hasher.update(operation_id.as_bytes());
+    hasher.update(member_path.as_bytes());
+    let digest = hasher.finalize();
+    Uuid::from_slice(&digest[..16]).unwrap_or(operation_id)
+}
+
 /// The ref a bundle carries its commit under.
 pub fn transfer_ref(operation_id: Uuid) -> String {
     format!("refs/kybern/transfer/{operation_id}")
@@ -321,6 +332,16 @@ mod tests {
             git(root, &["clone", "-q", origin.to_str().unwrap(), dir.to_str().unwrap()]);
         }
         (origin, a, b)
+    }
+
+    #[test]
+    fn a_groups_members_get_distinct_stable_transfer_ids() {
+        let op = Uuid::now_v7();
+        let api = member_transfer_id(op, "api");
+        assert_eq!(api, member_transfer_id(op, "api"));
+        assert_ne!(api, member_transfer_id(op, "web"));
+        assert_ne!(api, member_transfer_id(Uuid::now_v7(), "api"));
+        assert_ne!(api, op);
     }
 
     #[test]

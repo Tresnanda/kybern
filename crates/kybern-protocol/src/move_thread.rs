@@ -17,7 +17,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{MachineId, Origin, OutboxItem, PermissionMode, ProviderKind, RepoIdentity, ThreadId};
+use crate::{GroupWork, MachineId, Origin, OutboxItem, PermissionMode, ProviderKind, RepoIdentity, ThreadId};
 
 pub use crate::outbox::NEEDS_BUNDLE as MOVE_NEEDS_BUNDLE;
 
@@ -131,6 +131,9 @@ pub struct PeerMovePrepareParams {
     /// The branch on A that holds the snapshot; B uses the same name for its worktree.
     pub branch: String,
     pub commit: String,
+    /// A group project's move: every member's snapshot (see `PeerForkParams.group`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<GroupWork>,
     pub provider: ProviderKind,
     /// The user named the harness, so B must not swap it for another.
     #[serde(default)]

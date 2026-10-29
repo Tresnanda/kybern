@@ -32,6 +32,7 @@ mod federated_tools;
 pub(crate) mod fork_machine;
 pub(crate) mod group_git;
 mod group_pr;
+mod group_transfer;
 mod groups;
 pub(crate) mod inbound;
 mod lead;
@@ -1768,7 +1769,7 @@ impl Orchestrator {
             }
             if use_worktree {
                 let selected = group_git::select_members(&project, params.members.as_deref())?;
-                let (worktree, snapshot) = self.create_group_workspace(&project, id, selected, &bases).await?;
+                let (worktree, snapshot) = self.create_group_workspace(&project, id, selected, &bases, None).await?;
                 members = snapshot;
                 Some(worktree)
             } else {
@@ -8606,6 +8607,7 @@ for line in sys.stdin:
     include!("orchestrator/inbound_tests.rs");
     include!("orchestrator/fork_tests.rs");
     include!("orchestrator/move_tests.rs");
+    include!("orchestrator/group_transfer_tests.rs");
     include!("orchestrator/federated_tools_tests.rs");
     include!("orchestrator/child_questions_tests.rs");
     include!("orchestrator/secret_tests.rs");
