@@ -5036,28 +5036,14 @@ fn strip_title_preamble(line: &str) -> String {
     if about_the_title && !rest.trim().is_empty() { rest.trim().to_string() } else { line.to_string() }
 }
 
-/// Sentence case: a Title Case Reply is lowercased after its first word, keeping words that carry
-/// their own capitals (`iOS`, `OSes`, `API`).
+/// The title starts with a capital. The rest stays as the model wrote it: lowercasing a Title Case
+/// reply would also lowercase names (`Windows`, `Linux`), and the prompt already asks for sentence case.
 fn sentence_case(title: &str) -> String {
-    let words: Vec<&str> = title.split_whitespace().collect();
-    let capitalized = |w: &&str| w.chars().next().is_some_and(char::is_uppercase);
-    let letters = words.iter().filter(|w| w.chars().next().is_some_and(char::is_alphabetic)).count();
-    let title_case = letters >= 3 && words.iter().filter(|w| w.chars().next().is_some_and(char::is_alphabetic)).all(capitalized);
-    let mut out = Vec::with_capacity(words.len());
-    for (at, word) in words.iter().enumerate() {
-        let mut chars = word.chars();
-        let first = chars.next();
-        let rest: String = chars.collect();
-        let own_capitals = rest.chars().any(char::is_uppercase);
-        let text = match first {
-            Some(c) if at == 0 => c.to_uppercase().collect::<String>() + &rest,
-            Some(c) if title_case && !own_capitals => c.to_lowercase().collect::<String>() + &rest,
-            Some(c) => c.to_string() + &rest,
-            None => String::new(),
-        };
-        out.push(text);
+    let mut chars = title.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
     }
-    out.join(" ")
 }
 
 /// What `kybern askpass` gets back for a prompt.
@@ -5124,7 +5110,7 @@ mod tests {
         assert_eq!(clean_title("Titles the session: check main green across OSes"), "Check main green across OSes");
         assert_eq!(clean_title("Title: **Fix login redirect**"), "Fix login redirect");
         assert_eq!(clean_title("Here's a title: fix the flaky test."), "Fix the flaky test");
-        assert_eq!(clean_title("\"Add Machine Network Tests\""), "Add machine network tests");
+        assert_eq!(clean_title("\"fix the Windows build\""), "Fix the Windows build");
         assert_eq!(clean_title("Fix iOS crash on launch"), "Fix iOS crash on launch");
         // A colon that is part of the title stays.
         assert_eq!(clean_title("Session tokens: rotate on login"), "Session tokens: rotate on login");
