@@ -55,6 +55,11 @@ function orderedMachines(ids: Iterable<MachineId>, order: readonly MachineId[] |
   return [...first, ...rest];
 }
 
+/** Every root commit an identity names: the list, plus the smallest one older daemons send alone. */
+function rootsOf(identity: RepoIdentity | null | undefined): string[] {
+  return [...new Set([...(identity?.root_commit ? [identity.root_commit] : []), ...(identity?.root_commits ?? [])])].sort();
+}
+
 function identityKey(identity: RepoIdentity | null | undefined): string | undefined {
   if (identity?.root_commit) return `root:${identity.root_commit}`;
   if (identity?.remote) return `remote:${identity.remote}`;
@@ -69,7 +74,7 @@ export function groupRepoKeys(project: Pick<Project, "repos">): string[] {
 interface Entry {
   machineId: MachineId;
   project: Project;
-  root?: string;
+  roots: string[];
   remote?: string;
   key?: string;
 }
@@ -95,29 +100,48 @@ export function mergeProjects(
   const entries: Entry[] = [];
   for (const machineId of machines)
     for (const project of perMachine.get(machineId) ?? []) {
-      const entry: Entry = { machineId, project };
+      const entry: Entry = { machineId, project, roots: [] };
       if (isFreeChatProject(project.id)) entry.key = `local:${machineId}:${project.id}`;
       else if (project.kind === "group") {
         const members = groupRepoKeys(project);
         entry.key = members.length ? `group:${members.join("+")}` : `local:${machineId}:${project.id}`;
       } else {
-        entry.root = project.repo?.root_commit || undefined;
+        entry.roots = rootsOf(project.repo);
         entry.remote = project.repo?.remote || undefined;
       }
       entries.push(entry);
     }
 
+  // Checkouts that share any root commit are one repository (a repository with merged histories has
+  // several roots): the group's key is its smallest root.
+  const parent = new Map<string, string>();
+  const find = (root: string): string => {
+    let top = root;
+    while (parent.get(top) !== top) top = parent.get(top) ?? top;
+    parent.set(root, top);
+    return top;
+  };
+  for (const entry of entries)
+    for (const root of entry.roots) if (!parent.has(root)) parent.set(root, root);
+  for (const entry of entries)
+    for (const root of entry.roots.slice(1)) {
+      const a = find(entry.roots[0]!);
+      const b = find(root);
+      if (a !== b) parent.set(a < b ? b : a, a < b ? a : b);
+    }
+  const rootKey = (root: string) => find(root);
+
   // Which root commits each remote is known under.
   const rootsOfRemote = new Map<string, Set<string>>();
   for (const entry of entries)
-    if (entry.root && entry.remote) {
+    if (entry.roots.length && entry.remote) {
       const roots = rootsOfRemote.get(entry.remote) ?? new Set<string>();
-      roots.add(entry.root);
+      roots.add(rootKey(entry.roots[0]!));
       rootsOfRemote.set(entry.remote, roots);
     }
   for (const entry of entries) {
     if (entry.key) continue;
-    if (entry.root) entry.key = `root:${entry.root}`;
+    if (entry.roots.length) entry.key = `root:${rootKey(entry.roots[0]!)}`;
     else if (entry.remote) {
       const roots = rootsOfRemote.get(entry.remote);
       entry.key = roots?.size === 1 ? `root:${[...roots][0]}` : `remote:${entry.remote}`;

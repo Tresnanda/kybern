@@ -360,11 +360,18 @@ expression: schema_for!(ProjectsChangedNotification)
       "type": "object",
       "properties": {
         "root_commit": {
-          "description": "The smallest hash in `git rev-list --max-parents=0 HEAD`.",
+          "description": "The smallest hash in `git rev-list --max-parents=0 HEAD`. Absent for a shallow clone, whose\n\"root\" is only where the history was cut.",
           "type": [
             "string",
             "null"
           ]
+        },
+        "root_commits": {
+          "description": "Every root commit, sorted. A repository with several roots (merged histories) matches a\ncheckout that shares any of them. Empty from a daemon that predates this field.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "remote": {
           "description": "The `origin` URL normalized to `host/owner/repo`: lowercase, no scheme, user or `.git`.",

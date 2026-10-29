@@ -534,7 +534,7 @@ mod tests {
     use super::*;
 
     fn id(root: &str) -> RepoIdentity {
-        RepoIdentity { root_commit: Some(root.into()), remote: None }
+        RepoIdentity { root_commit: Some(root.into()), ..Default::default() }
     }
 
     #[test]
@@ -543,8 +543,8 @@ mod tests {
         assert_eq!(pair_repos(&wanted, &[id("b"), id("a"), id("a")]), [Some(1), Some(0), Some(2)], "two clones need two checkouts");
         assert_eq!(pair_repos(&wanted, &[id("a"), id("b")]), [Some(0), Some(1), None], "a checkout serves one member");
         assert_eq!(pair_repos(&[id("c")], &[id("a")]), [None]);
-        let by_remote = RepoIdentity { root_commit: None, remote: Some("github.com/acme/web".into()) };
-        let both = RepoIdentity { root_commit: Some("w".into()), remote: Some("github.com/acme/web".into()) };
+        let by_remote = RepoIdentity { remote: Some("github.com/acme/web".into()), ..Default::default() };
+        let both = RepoIdentity { root_commit: Some("w".into()), remote: Some("github.com/acme/web".into()), ..Default::default() };
         assert_eq!(pair_repos(&[by_remote], &[both]), [Some(0)], "a remote alone matches a repository that has one");
     }
 

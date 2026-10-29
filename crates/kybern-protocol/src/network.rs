@@ -72,9 +72,14 @@ pub type MachineId = String;
 /// What makes two checkouts the same logical project on different machines.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 pub struct RepoIdentity {
-    /// The smallest hash in `git rev-list --max-parents=0 HEAD`.
+    /// The smallest hash in `git rev-list --max-parents=0 HEAD`. Absent for a shallow clone, whose
+    /// "root" is only where the history was cut.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_commit: Option<String>,
+    /// Every root commit, sorted. A repository with several roots (merged histories) matches a
+    /// checkout that shares any of them. Empty from a daemon that predates this field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub root_commits: Vec<String>,
     /// The `origin` URL normalized to `host/owner/repo`: lowercase, no scheme, user or `.git`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<String>,
@@ -82,7 +87,12 @@ pub struct RepoIdentity {
 
 impl RepoIdentity {
     pub fn is_empty(&self) -> bool {
-        self.root_commit.is_none() && self.remote.is_none()
+        self.root_commit.is_none() && self.root_commits.is_empty() && self.remote.is_none()
+    }
+
+    /// Every root commit known for this checkout, `root_commit` included.
+    pub fn roots(&self) -> impl Iterator<Item = &String> {
+        self.root_commit.iter().chain(self.root_commits.iter())
     }
 }
 

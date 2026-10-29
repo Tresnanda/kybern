@@ -3397,6 +3397,8 @@ export type MachineId = string;
 export interface RepoIdentity {
   /** The smallest hash in `git rev-list --max-parents=0 HEAD`. */
   root_commit?: string | null;
+  /** Every root commit, sorted: checkouts sharing any one are the same repository. Absent from older daemons and shallow clones. */
+  root_commits?: string[];
   /** The `origin` URL as `host/owner/repo`: lowercase, no scheme, user or `.git`. */
   remote?: string | null;
 }

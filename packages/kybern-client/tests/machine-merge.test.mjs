@@ -289,3 +289,17 @@ test("a letter never changes once assigned, whatever the machine is renamed to",
   assert.equal(third.get("c").letter, "Su");
   assert.equal(third.get("a").letter, "S");
 });
+
+test("checkouts that share any root commit are one project; a shallow clone joins by its remote", () => {
+  const remote = "github.com/me/kybern";
+  const merged = mergeProjects(
+    maps({
+      mac: [project("a", "kybern", { root_commit: "r1", root_commits: ["r1", "r7"], remote })],
+      pc: [project("b", "kybern", { root_commit: "r7", root_commits: ["r7", "r9"], remote })],
+      vps: [project("c", "kybern", { remote })],
+      old: [project("d", "kybern", { root_commit: "r7" })],
+    }),
+  );
+  assert.deepEqual(merged.map((p) => p.key), ["root:r1"]);
+  assert.equal(merged[0].instances.length, 4);
+});

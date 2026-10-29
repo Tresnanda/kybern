@@ -18,7 +18,7 @@ use kybern_protocol::{Project, ProjectKind, ProjectRepoIdentity, RepoIdentity};
 use kybern_store::Store;
 use tokio::sync::Semaphore;
 
-use super::git_transfer::{identity_of, normalize_remote};
+use super::git_transfer::{identity_of, is_shallow, normalize_remote};
 use crate::orchestrator::member_dir;
 use crate::state::AppState;
 
@@ -42,12 +42,15 @@ fn checkouts(project: &Project) -> Vec<PathBuf> {
 
 /// The identity of one checkout, reusing the cached root commit when there is one.
 async fn identity_for(path: &std::path::Path, cached: Option<&RepoIdentity>) -> RepoIdentity {
-    match cached.and_then(|cached| cached.root_commit.clone()) {
-        Some(root_commit) => {
-            let remote = kybern_git::Repo::new(path).config_get("remote.origin.url").await.and_then(|url| normalize_remote(&url));
-            RepoIdentity { root_commit: Some(root_commit), remote }
+    let repo = kybern_git::Repo::new(path);
+    // A cached identity from before roots were listed has no `root_commits`, and a shallow clone
+    // cached its cut point as a root: both are read again.
+    match cached.filter(|cached| !cached.root_commits.is_empty()) {
+        Some(cached) if !is_shallow(&repo).await => {
+            let remote = repo.config_get("remote.origin.url").await.and_then(|url| normalize_remote(&url));
+            RepoIdentity { remote, ..cached.clone() }
         }
-        None => identity_of(path).await,
+        _ => identity_of(path).await,
     }
 }
 

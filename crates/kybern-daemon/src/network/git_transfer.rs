@@ -109,21 +109,38 @@ pub fn normalize_remote(url: &str) -> Option<String> {
 /// normalized `origin`. Empty when `path` is not a repository.
 pub async fn identity_of(path: &Path) -> RepoIdentity {
     let repo = Repo::new(path);
-    let root_commit = match repo.output(&["rev-list", "--max-parents=0", "HEAD"]).await {
-        Ok(out) if out.success => out.stdout.lines().map(str::trim).filter(|line| !line.is_empty()).min().map(str::to_string),
-        _ => None,
+    // A shallow clone's parentless commits are where history was cut, not the repository's roots:
+    // naming one would make this checkout match no other, so only the remote identifies it.
+    let mut roots: Vec<String> = if is_shallow(&repo).await {
+        Vec::new()
+    } else {
+        match repo.output(&["rev-list", "--max-parents=0", "HEAD"]).await {
+            Ok(out) if out.success => out.stdout.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_string).collect(),
+            _ => Vec::new(),
+        }
     };
+    roots.sort();
+    roots.dedup();
     let remote = repo.config_get("remote.origin.url").await.and_then(|url| normalize_remote(&url));
-    RepoIdentity { root_commit, remote }
+    RepoIdentity { root_commit: roots.first().cloned(), root_commits: roots, remote }
 }
 
-/// Whether `identity` names the same repository as `other`: the root commit decides when both have
-/// one, then the remote.
+/// Whether the checkout's history is cut (`git clone --depth`).
+pub async fn is_shallow(repo: &Repo) -> bool {
+    repo.output(&["rev-parse", "--is-shallow-repository"]).await.is_ok_and(|out| out.success && out.stdout.trim() == "true")
+}
+
+/// Whether `identity` names the same repository as `other`: sharing any root commit decides yes.
+/// When both sides know their roots and share none, they are different repositories whatever their
+/// remotes say. When a side has no roots (a shallow clone, or a checkout git could not read) the
+/// remote decides.
 pub fn same_repo(identity: &RepoIdentity, other: &RepoIdentity) -> bool {
-    match (&identity.root_commit, &other.root_commit) {
-        (Some(a), Some(b)) => a == b,
-        _ => matches!((&identity.remote, &other.remote), (Some(a), Some(b)) if a == b),
+    let mine: Vec<&String> = identity.roots().collect();
+    let theirs: Vec<&String> = other.roots().collect();
+    if !mine.is_empty() && !theirs.is_empty() {
+        return mine.iter().any(|root| theirs.contains(root));
     }
+    matches!((&identity.remote, &other.remote), (Some(a), Some(b)) if a == b)
 }
 
 /// Whether `commit` exists in the checkout.
@@ -367,12 +384,49 @@ mod tests {
         assert!(ida.root_commit.is_some());
         assert_eq!(ida.root_commit, idb.root_commit);
         assert!(same_repo(&ida, &idb));
-        assert!(!same_repo(&ida, &RepoIdentity { root_commit: Some("0".into()), remote: None }));
+        assert!(!same_repo(&ida, &RepoIdentity { root_commit: Some("0".into()), ..Default::default() }));
         assert!(same_repo(
-            &RepoIdentity { root_commit: None, remote: Some("github.com/a/b".into()) },
-            &RepoIdentity { root_commit: Some("x".into()), remote: Some("github.com/a/b".into()) }
+            &RepoIdentity { remote: Some("github.com/a/b".into()), ..Default::default() },
+            &RepoIdentity { root_commit: Some("x".into()), remote: Some("github.com/a/b".into()), ..Default::default() }
         ));
         assert_eq!(identity_of(dir.path()).await, RepoIdentity::default(), "a folder that is not a repository has no identity");
+    }
+
+    #[test]
+    fn checkouts_match_on_any_shared_root_and_fall_back_to_the_remote_without_roots() {
+        let roots = |roots: &[&str], remote: Option<&str>| RepoIdentity {
+            root_commit: roots.first().map(|root| root.to_string()),
+            root_commits: roots.iter().map(|root| root.to_string()).collect(),
+            remote: remote.map(str::to_string),
+        };
+        // Two roots (merged histories): the smallest differs between checkouts that share one.
+        assert!(same_repo(&roots(&["a", "m"], None), &roots(&["m", "z"], None)));
+        assert!(!same_repo(&roots(&["a"], Some("github.com/o/r")), &roots(&["b"], Some("github.com/o/r"))), "known, disjoint roots decide");
+        // A shallow clone has no roots: its remote is the identity.
+        let shallow = roots(&[], Some("github.com/o/r"));
+        assert!(same_repo(&shallow, &roots(&["a", "m"], Some("github.com/o/r"))));
+        assert!(same_repo(&roots(&["a"], Some("github.com/o/r")), &shallow));
+        assert!(!same_repo(&shallow, &roots(&["a"], Some("github.com/o/other"))));
+        assert!(!same_repo(&roots(&[], None), &roots(&["a"], None)));
+        // An identity stored by an older daemon has only `root_commit`.
+        assert!(same_repo(&RepoIdentity { root_commit: Some("m".into()), ..Default::default() }, &roots(&["a", "m"], None)));
+    }
+
+    #[tokio::test]
+    async fn a_shallow_clone_is_identified_by_its_remote_and_still_matches_the_full_checkout() {
+        let dir = TempDir::new("shallow");
+        let (origin, a, _b) = machines(dir.path());
+        std::fs::write(a.join("a.txt"), "two\n").unwrap();
+        git(&a, &["commit", "-qam", "second"]);
+        git(&a, &["push", "-q", "origin", "HEAD"]);
+        let shallow = dir.path().join("shallow");
+        git(dir.path(), &["clone", "-q", "--depth", "1", &format!("file://{}", origin.display()), shallow.to_str().unwrap()]);
+        let full = identity_of(&a).await;
+        let cut = identity_of(&shallow).await;
+        assert!(!full.root_commits.is_empty());
+        assert!(cut.root_commits.is_empty() && cut.root_commit.is_none(), "the cut point is not a root: {cut:?}");
+        assert!(cut.remote.is_some() && cut.remote == full.remote);
+        assert!(same_repo(&full, &cut) && same_repo(&cut, &full));
     }
 
     #[tokio::test]

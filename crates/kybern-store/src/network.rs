@@ -453,8 +453,12 @@ mod tests {
         assert_eq!(store.project_get(project.id).unwrap().unwrap().repo, None);
 
         let identity = ProjectRepoIdentity {
-            repo: Some(RepoIdentity { root_commit: Some("abc".into()), remote: Some("github.com/tresnanda/ade".into()) }),
-            repos: vec![RepoIdentity { root_commit: Some("abc".into()), remote: None }],
+            repo: Some(RepoIdentity {
+                root_commit: Some("abc".into()),
+                remote: Some("github.com/tresnanda/ade".into()),
+                ..Default::default()
+            }),
+            repos: vec![RepoIdentity { root_commit: Some("abc".into()), ..Default::default() }],
         };
         assert!(store.project_set_repo_identity(project.id, Some(&identity)).unwrap());
         assert!(!store.project_set_repo_identity(project.id, Some(&identity)).unwrap(), "an identical refresh is quiet");
