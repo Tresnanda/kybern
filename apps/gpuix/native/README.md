@@ -917,6 +917,22 @@ live labels for comparisons), and settled loops run in Core Animation
 separate visibility-aware seconds clock. Round-seven measurements and remaining
 acceptance gaps are in `../perf/pacing-round7-2026-10-17.md`.
 
+**Frame watchdog (macOS, fork branches `frame-stall`).** A window draws only when its display's link calls
+`step`, and AppKit re-subscribes it only on occlusion, screen and key changes. A link that stops calling back while
+the registry believes it runs (CoreVideo, seen on Apple silicon), a window left unsubscribed, or one subscribed to a
+display it left froze the whole UI until it was minimized, changed Space, moved to another display or became key
+again; a move on the same display does not help. `pump_events` (at least every 100 ms through the JS fallback timer,
+no timer of its own) checks each visible window: 250 ms without a frame re-subscribes it, restarts a silent link and
+then replaces it (the old one leaked, as every link is). Screen-parameter and wake notifications re-subscribe at once.
+A draw whose `nextDrawable` timed out (1 s, all drawables held by the compositor) presents the same scene again after
+100 ms, backing off to 1.6 s, instead of leaving the previous frame up until something else changes.
+`getFrameWatchdog()` reports frames, stalls, repairs, the last stall in words, and dropped/slow drawables; a stall or
+a first dropped drawable raises a window-state event, and `src/platform/frameWatchdog.ts` appends a line to
+`gpuix-frames.log` in the data dir. `KYBERN_FRAME_WATCHDOG=0` turns it off, `=log` only reports.
+`KYBERN_FRAME_STALL_TEST=silent-link|dead-link|unsubscribe|drop-drawable:<ms>` injects each fault;
+`frame-stall-check.ts` (with `frame-stall-lab.tsx`) shows each one freezing with `=log` and repaired with the
+watchdog on. Measurements: `../perf/frame-stall-2026-10-29.md`.
+
 Subtree scale is now `paintTransform` ("Paint-only subtree transforms" below); the reasons in the native springs
 section: quads, paths, masks, glyphs and hitboxes need one coordinated GPUI scene
 transform. Translation is not presented as scale.

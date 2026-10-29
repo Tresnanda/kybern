@@ -30,6 +30,8 @@ geometry)
   bun perf/motion-fps/lab-check.ts --light
   bun perf/motion-fps/lab-check.ts --reduced
   KYBERN_COMPOSITOR_LOOPS=0 bun perf/motion-fps/lab-check.ts
+  # Frame watchdog (gpui_macos window.rs): each injected stall freezes with it reporting only, and is repaired with it on.
+  bun native/frame-stall-check.ts
   ;;
 content)
   bun native/markdown-check.ts

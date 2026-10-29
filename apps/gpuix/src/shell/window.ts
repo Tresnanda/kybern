@@ -23,6 +23,7 @@ import { setWindowWidth } from './layout.ts'
 import { load, save } from './persist.ts'
 import { readWindowBackdrop, refreshAccessibilityDisplay } from '../platform/material.ts'
 import { installIdleMemory } from '../platform/idleMemory.ts'
+import { installFrameWatchdogLog } from '../platform/frameWatchdog.ts'
 
 const FRAME_KEY = 'kybern.window.frame'
 const POLL_MS = 900
@@ -240,4 +241,5 @@ export function startWindowShell(renderer: NativeRenderer) {
   // Checks drive the options through a file (`KYBERN_A11Y_FILE`), which raises no AppKit event.
   if (process.env.KYBERN_A11Y_FILE) setInterval(refreshAccessibilityDisplay, 250)
   installIdleMemory(renderer, isWindowFocused)
+  installFrameWatchdogLog(renderer)
 }
