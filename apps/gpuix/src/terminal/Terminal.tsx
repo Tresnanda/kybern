@@ -23,6 +23,7 @@ import { DURATION, EASE, revealTransform } from '../motion/kit.tsx'
 import { fadeTo } from '../shell/motion.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { noteTerminalFocus } from './focus.ts'
+import { createInputStream, type InputStream } from './inputStream.ts'
 import { VT, cellWidth, type Line, type Pen } from './vt.ts'
 import { glyphRects, isCustomGlyph } from './glyphs.ts'
 import { allRange, lineRange, selectedText, selectionByIndex, selectionColumns, wordRange, type TerminalSelection } from './selection.ts'
@@ -216,7 +217,9 @@ export function Screen({ info, threadId, machineId, width, onTitle, onExit }: { 
   const palette = terminalPalette(t.variant)
   const { renderer } = useGpuix()
   const host = useRef<PublicInstance | null>(null), list = useRef<PublicInstance | null>(null)
-  const model = useMemo(() => new VT(info.cols, info.rows, 5000, 1_000_000, response => { void clientOf()?.call('terminals.input', { terminal_id: info.id, data: Buffer.from(response).toString('base64') }).catch(() => {}) }), [info.id])
+  // Keystrokes, pastes and the program's own query replies share one ordered stream (see inputStream.ts).
+  const input = useRef<InputStream | null>(null)
+  const model = useMemo(() => new VT(info.cols, info.rows, 5000, 1_000_000, response => { input.current?.push(Buffer.from(response)) }), [info.id])
   model.colors = terminalColors(t.variant, t.surface)
   model.blinkOption = true // the desktop terminal sets `cursorBlink: true`
   const [version, update] = useState(0)
@@ -264,14 +267,20 @@ export function Screen({ info, threadId, machineId, width, onTitle, onExit }: { 
     }
     setMatch(-1)
   }
-  const send = (text: string, encoding: 'utf8' | 'latin1' = 'utf8') => { if (text) void clientOf()?.call('terminals.input', { terminal_id: info.id, data: Buffer.from(text, encoding).toString('base64') }).catch(e => setError(String(e))) }
-  const fit = () => {
+  const send = (text: string, encoding: 'utf8' | 'latin1' = 'utf8') => { if (text) input.current?.push(Buffer.from(text, encoding)) }
+  useEffect(() => {
+    const stream = createInputStream(data => { const client = clientOf(); return client ? client.call('terminals.input', { terminal_id: info.id, data }) : Promise.reject(new Error('This machine is not reachable. Reopen the terminal when it is back.')) }, e => setError(String(e)))
+    input.current = stream
+    return () => { stream.close(); if (input.current === stream) input.current = null }
+  }, [info.id, machineId, threadId])
+  /** Fits the model and the pty to the pane; resolves when the daemon has the new size. */
+  const fit = (): Promise<void> => {
     const bounds = host.current && renderer?.getElementBounds?.(host.current.id)
-    if (!bounds) return
+    if (!bounds) return Promise.resolve()
     const { cols, rows } = fitTerminal(bounds.width, bounds.height, CELL, ROW)
-    if (cols === model.cols && rows === model.rows) return
+    if (cols === model.cols && rows === model.rows) return Promise.resolve()
     model.resize(cols, rows); update(v => v + 1)
-    void clientOf()?.call('terminals.resize', { terminal_id: info.id, cols: model.cols, rows: model.rows }).catch(e => setError(String(e)))
+    return Promise.resolve(clientOf()?.call('terminals.resize', { terminal_id: info.id, cols: model.cols, rows: model.rows })).then(() => {}, e => { setError(String(e)) })
   }
   useEffect(() => {
     let live = true, timer: ReturnType<typeof setTimeout> | undefined, syncGuard: ReturnType<typeof setTimeout> | undefined, closing: ReturnType<typeof setTimeout> | undefined
@@ -294,7 +303,9 @@ export function Screen({ info, threadId, machineId, width, onTitle, onExit }: { 
       // A tab whose program ended closes itself.
       if (exitRef.current) closing = setTimeout(() => { if (live) exitRef.current?.() }, 600)
     })
-    const attach = () => client.call('terminals.subscribe', { terminal_id: info.id, replay: true }).then(() => { if (live) { fit(); update(v => v + 1); if (host.current) renderer?.focusElement?.(host.current.id) } }).catch(e => { if (live) setError(String(e)) })
+    // The pty takes the pane's size before the replay starts, so the scrollback is drawn at the width it is shown at (a replay at
+    // the old width, resized afterwards, scrambled lines on a remote terminal).
+    const attach = () => fit().then(() => client.call('terminals.subscribe', { terminal_id: info.id, replay: true })).then(() => { if (live) { void fit(); update(v => v + 1); if (host.current) renderer?.focusElement?.(host.current.id) } }).catch(e => { if (live) setError(String(e)) })
     // The daemon dropped output for this client: start over from its replay.
     const lagged = client.onNotification('terminal.lagged', params => { if ((params as { terminal_id: string }).terminal_id === info.id) { model.write('\x1bc'); void attach() } })
     const visibility = onWindowVisibility(shown => { if (shown) { update(v => v + 1); fit() } else { clearTimeout(timer); timer = undefined } })
