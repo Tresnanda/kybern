@@ -30,6 +30,10 @@ import { Row, Section } from './controls.tsx'
 import { buildCards, doctorRows, doctorSummary, outboxRows, unnamedMachines, updateResultRows, updateSummary, type MachineCardModel } from './machinesModel.ts'
 import { dismissNamesHint, namesHintDismissed } from '../machines/notice.ts'
 import { configDir } from '../environments/registry.ts'
+import { machineGlyph } from '../../../../packages/kybern-client/src/machineMerge.ts'
+import { openIntro, tailscaleNote } from '../machines/intro.ts'
+import { TAILSCALE_DOWNLOAD } from '../machines/NetworkIntro.tsx'
+import { openUrl } from '../pulls/PrStates.tsx'
 
 export function Machines() {
   const t = useTheme()
@@ -44,6 +48,15 @@ export function Machines() {
   const cards = useMemo(() => buildCards({ rows: machines, members: status?.members ?? [], infos: net.infos, latest }), [machines, status, net.infos, latest])
   const found = (status?.found ?? []).filter((item) => !item.machine_id || !machines.some((machine) => machine.machineId === item.machine_id))
   const waiting = status?.outbox.queued ?? 0
+  // Off (the default): say what it is and offer to turn it on, instead of an empty list. Saved machines still show.
+  if (status && !status.enabled && !net.unavailable) return <>
+    <NetworkOff tailscale={status.tailscale} busy={net.busy === 'enabled'} />
+    {cards.length > 1 && <Section title="Saved machines">
+      {cards.filter((card) => !card.row.isLocal).map((card) => <MachineCardRow key={card.machineId} card={card} busy={net.busy === card.machineId} onRemove={() => setRemoving(card)} />)}
+    </Section>}
+    {net.error && <Section title="Something went wrong"><Row title="" description={<ErrorText>{net.error}</ErrorText>} /></Section>}
+    {removing && <RemoveDialog card={removing} others={cards.filter((card) => card.machineId !== removing.machineId && card.member)} onClose={() => setRemoving(null)} />}
+  </>
   return <>
     <NameYourMachines cards={cards} />
     <Section title="Machines" accessory={machines.length > 1 ? <Label color={t.textSecondary} size={13} lineHeight={19.5}>{footerText(machines, waiting)}</Label> : undefined}>
@@ -56,7 +69,7 @@ export function Machines() {
     {!net.unavailable && <AddByCode busy={net.busy === 'join'} />}
     {!net.unavailable && <Outbox items={net.outbox} machines={cards} />}
     {!net.unavailable && <Updates busy={net.busy === 'update'} following={status ? !!status.follow_updates : undefined} machines={cards} result={net.updated} />}
-    {!net.unavailable && status && <Section title="Your network">
+    {!net.unavailable && status && <Section title="Your network" accessory={<Button testId="machines-intro" size="sm" variant="ghost" onClick={() => openIntro(true)}>What is this?</Button>}>
       <Row title="Let your machines find each other" description="Machines signed in to the same Tailscale account join without a code. Turn this off to leave the network and keep your machines separate."><Switch aria-label="Use your network" testId="machines-enabled" checked={status.enabled} disabled={net.busy === 'enabled'} onCheckedChange={(enabled) => void setNetworkEnabled(enabled).catch((e) => toast.error('Unable to change the network', { description: errorText(e) }))} /></Row>
       <Row title="Check the network" description="Looks at Tailscale, the pairing and each machine, and says what to fix."><Button testId="machines-doctor" busy={net.busy === 'doctor'} onClick={() => void runDoctor()}>Run check</Button></Row>
       {net.doctor && <DoctorResults report={net.doctor} names={new Map(cards.map((card) => [card.machineId, card.name]))} />}
@@ -64,6 +77,41 @@ export function Machines() {
     {net.error && !net.unavailable && <Section title="Something went wrong"><Row title="" description={<ErrorText>{net.error}</ErrorText>} /></Section>}
     {removing && <RemoveDialog card={removing} others={cards.filter((card) => card.machineId !== removing.machineId && card.member)} onClose={() => setRemoving(null)} />}
   </>
+}
+
+/** The network is off: the intro's one line, Turn on, and the way back to the intro. */
+function NetworkOff({ tailscale, busy }: { tailscale: { installed: boolean; running: boolean }; busy: boolean }) {
+  const t = useTheme()
+  const note = tailscaleNote(tailscale)
+  const turnOn = () => void setNetworkEnabled(true).then(() => openIntro(true, 'on'), (e) => toast.error('Unable to turn on the network', { description: errorText(e) }))
+  return <Section title="Your network">
+    <div testId="machines-off" style={{ display: 'flex', alignItems: 'flex-start', gap: 16, paddingLeft: 18, paddingRight: 18, paddingTop: 18, paddingBottom: 18 }}>
+      <BadgeStack />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexGrow: 1, flexShrink: 1, minWidth: 0 }}>
+        <Label color={t.text} size={14} lineHeight={21} weight={500}>Use all your computers from one window</Label>
+        <Label color={t.textSecondary} size={14} lineHeight={21.7} style={{ maxWidth: 451 }}>Join your computers into one private network over Tailscale: one sidebar, and agents, terminals and previews on any of them.</Label>
+        {note !== 'running' && <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingTop: 4 }}>
+          <StatusDot tone="warn" />
+          <Label color={t.textSecondary} size={13} lineHeight={20}>{note === 'missing' ? 'Needs Tailscale, which isn’t installed on this computer.' : 'Needs Tailscale, which isn’t running on this computer.'}</Label>
+        </div>}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 12 }}>
+          <Button testId="machines-turn-on" variant="primary" size="sm" busy={busy} onClick={turnOn}>Turn on</Button>
+          <Button testId="machines-intro" variant="ghost" size="sm" onClick={() => openIntro(true)}>What is this?</Button>
+          {note === 'missing' && <Button testId="machines-tailscale" variant="ghost" size="sm" iconAfter={S.externalLink} onClick={() => openUrl(TAILSCALE_DOWNLOAD)}>Get Tailscale</Button>}
+        </div>
+      </div>
+    </div>
+  </Section>
+}
+
+/** Three machine badges in a small cluster: this computer and two others. */
+function BadgeStack() {
+  const local = useMachines().find((machine) => machine.isLocal)
+  const glyphs = [local?.glyph ?? machineGlyph({ machineId: 'example-macbook', name: 'MacBook' }), machineGlyph({ machineId: 'example-windows-pc', name: 'Windows PC' }), machineGlyph({ machineId: 'example-linux-server', name: 'Linux server' })]
+  const at = [{ left: 0, top: 12 }, { left: 23, top: 1 }, { left: 23, top: 23 }]
+  return <div style={{ display: 'flex', position: 'relative', width: 43, height: 44, flexShrink: 0 }}>
+    {glyphs.map((glyph, i) => <div key={i} style={{ position: 'absolute', ...at[i] }}><MachineBadge glyph={glyph} size={20} /></div>)}
+  </div>
 }
 
 /** Off by default and only for this machine: another machine's copies appear here only when both turned it on. */

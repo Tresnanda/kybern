@@ -10,7 +10,6 @@ import { configDir, localProfile, readLegacyRegistry } from '../environments/reg
 import { readCredential, removeCredential, writeCredential } from '../environments/credentials.ts'
 import { ensureSshTunnel } from '../environments/ssh.ts'
 import { MachineHub } from './hub.ts'
-import { markNoticeShown, noticeFor, noticeShown } from './notice.ts'
 import { fileCacheStorage, machineCredentials, migrateEnvironments, writeMachineRecords, type GpuixMachineRecord } from './store.ts'
 
 let hub: MachineHub | undefined
@@ -42,12 +41,6 @@ export function machineHub(): MachineHub {
     },
     forgetProfile: (profileId) => removeCredential(profileId),
     readCredential,
-    onNetwork: (status) => {
-      const text = noticeFor(status, noticeShown(dir))
-      if (!text) return
-      markNoticeShown(dir)
-      void import('../shell/toasts.tsx').then(({ toast }) => toast.info(text.title, { description: text.description, duration: 15000, action: { label: 'Open Machines', onClick: () => void import('../settings/SettingsScreen.tsx').then((m) => m.openSettingsTab('machines')) } })).catch(() => {})
-    },
   })
   hub = current
   return current

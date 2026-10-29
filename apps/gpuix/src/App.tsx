@@ -66,6 +66,7 @@ import { ResizeCaptureLayer } from './kit/Resize.tsx'
 import { ThemeFade } from './motion/themeFade.tsx'
 import { Toaster } from './shell/toasts.tsx'
 import { AppUpdateSurface } from './platform/UpdateSurface.tsx'
+import { NetworkIntroSurface } from './machines/NetworkIntro.tsx'
 import { TranscriptReleased } from './platform/TranscriptReleased.tsx'
 import { installWindowSurface, useTranscriptReleased } from './platform/surface.ts'
 import { useApp, usePaneAccess, usePaneCompact } from './state.ts'
@@ -257,6 +258,7 @@ function Workspace() {
       <WebPageUi />
       <Toaster />
       <AppUpdateSurface />
+      <NetworkIntroSurface />
       <SidebarDragLayer />
       <ResizeCaptureLayer />
       <DockResizeCapture />
