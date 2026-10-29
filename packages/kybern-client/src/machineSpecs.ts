@@ -111,7 +111,7 @@ export interface HarnessChip {
   kind: ProviderKind;
   /** "Claude 2.1.312". */
   label: string;
-  /** Installed, but the harness says nobody is signed in. */
+  /** Installed, but nobody is signed in (only for harnesses with an account sign-in: Claude, Codex, Cursor). */
   signedOut: boolean;
 }
 
@@ -122,6 +122,12 @@ export function harnessChips(harnesses: readonly HarnessSummary[] | undefined): 
     .map((harness) => {
       const name = HARNESS_NAME[harness.kind] ?? harness.kind;
       const version = shortVersion(harness.version);
-      return { kind: harness.kind, label: version ? `${name} ${version}` : name, signedOut: harness.signed_in === false };
+      return { kind: harness.kind, label: version ? `${name} ${version}` : name, signedOut: SIGNS_IN.has(harness.kind) && harness.signed_in === false };
     });
 }
+
+/**
+ * Harnesses with one account sign-in of their own. omp, OpenCode and pi run on whichever model
+ * providers are configured in them, so "signed out" means nothing for them and is never shown.
+ */
+const SIGNS_IN: ReadonlySet<ProviderKind> = new Set<ProviderKind>(["claude-code", "codex", "cursor"]);

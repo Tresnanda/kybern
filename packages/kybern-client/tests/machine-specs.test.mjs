@@ -78,7 +78,7 @@ test("harness chips list only what is installed", () => {
     [
       { kind: "claude-code", label: "Claude 2.1.284", signedOut: false },
       { kind: "codex", label: "Codex 0.165.0", signedOut: false },
-      { kind: "omp", label: "omp 18.13.2", signedOut: true },
+      { kind: "omp", label: "omp 18.13.2", signedOut: false },
     ],
   );
   assert.deepEqual(harnessChips([{ kind: "codex", available: false }]), []);
