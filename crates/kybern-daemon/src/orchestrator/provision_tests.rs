@@ -329,6 +329,18 @@ async fn full_access_adds_the_project_with_the_proposed_folder_without_a_card() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_add_project_tool_takes_its_machine_argument_through_the_real_dispatch() {
+    let Some((cluster, _a, b, fixture, parent, live, _spawned)) = agent_pair(PermissionMode::FullAccess).await else { return };
+    // `machine` names the target to provision: the call must reach the tool, not be refused as "cannot run on another machine".
+    let queued = fixture.tool(&parent, &live, "p1", "kybern_project_add_to_machine", json!({"machine": b.id(), "reason": "Needed for tests"})).await.unwrap();
+    assert_eq!(queued["status"], "queued", "{queued}");
+    assert_eq!(queued["approved_by"], "full_access", "{queued}");
+    let proposed = std::fs::canonicalize(cluster.dir.path().join("b-home")).unwrap().join("kybern");
+    wait_until("the project landed on b", WAIT * 4, || proposed.join(".git").exists()).await;
+    assert!(live.daemon_approvals.lock().await.is_empty(), "no card in Full access");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn declining_the_card_fails_the_delegation_and_queues_nothing() {
     let Some((_cluster, a2, b2, fixture2, parent2, live2, _)) = agent_pair(PermissionMode::Supervised).await else { return };
     let (orchestrator, thread_id, session, target) = (fixture2.orchestrator.clone(), parent2.id, live2.session_instance_id, b2.id());

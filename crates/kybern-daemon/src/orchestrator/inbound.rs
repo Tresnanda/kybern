@@ -201,8 +201,9 @@ impl Orchestrator {
         let project =
             arguments.get(forward::PROJECT_ARG).and_then(Value::as_str).map(str::trim).filter(|p| !p.is_empty()).map(str::to_owned);
         let class = forward::classify(name);
-        if class == ToolClass::Delegation {
-            // Remote delegation reads `machine` itself.
+        if class == ToolClass::Delegation || name == super::provision::ADD_TOOL {
+            // Remote delegation reads `machine` itself, and so does adding a project: there `machine` is
+            // the TARGET to provision, not a machine to run the call on.
             return Ok(Forwarded::Local(arguments));
         }
         let hub = self.forward_hub()?.clone();
