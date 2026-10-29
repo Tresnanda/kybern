@@ -119,6 +119,7 @@ const OUTBOX_KIND: Record<OutboxKind, string> = {
   secrets_put: 'Provider keys',
   fork: 'Fork of a thread',
   move: 'Move of a thread',
+  provision: 'Project for another machine',
 }
 
 export interface OutboxRowModel {

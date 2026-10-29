@@ -5,6 +5,7 @@ import { GroupProject } from './GroupProject.tsx'
 import { Repositories } from './Repositories.tsx'
 import { WorktreeCleanup } from './WorktreeCleanup.tsx'
 import { ForkSheet } from '../fork/ForkSheet.tsx'
+import { ProvisionSheet } from '../provision/ProvisionSheet.tsx'
 
 export function WorkspaceDialogs() {
   const dialog = useDialog()
@@ -15,6 +16,7 @@ export function WorkspaceDialogs() {
   if (dialog?.kind === 'worktree') return <WorktreeCleanup key={dialog.threadId} threadId={dialog.threadId} close={close} />
   if (dialog?.kind === 'fork') return <ForkSheet key={`${dialog.machineId ?? ''}:${dialog.threadId}`} threadId={dialog.threadId} {...(dialog.machineId ? { machineId: dialog.machineId } : {})} close={close} />
   if (dialog?.kind === 'move') return <ForkSheet key={`move:${dialog.machineId ?? ''}:${dialog.threadId}`} mode="move" threadId={dialog.threadId} {...(dialog.machineId ? { machineId: dialog.machineId } : {})} close={close} />
+  if (dialog?.kind === 'provision') return <ProvisionSheet key={`provision:${dialog.machineId ?? ''}:${dialog.projectId}`} projectId={dialog.projectId} {...(dialog.machineId ? { machineId: dialog.machineId } : {})} close={close} />
   if (dialog?.kind === 'account') return <Account key={`${dialog.provider ?? ''}:${dialog.instance ?? ''}`} close={close} provider={dialog.provider} instance={dialog.instance} />
   return null
 }

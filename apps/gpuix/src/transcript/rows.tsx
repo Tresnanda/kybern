@@ -8,6 +8,7 @@ import { SentToRow } from './Messages.tsx'
 import { openThread } from '../nav/history.ts'
 import { pickRecordText, pickRequestInput } from '../../../../packages/kybern-client/src/pickRequest.ts'
 import { secretRequestInput, secretOutcomeLine, secretPartsText } from '../../../../packages/kybern-client/src/secretRequest.ts'
+import { provisionCardInput, provisionRecordText } from '../../../../packages/kybern-client/src/provision.ts'
 import { answerRowText, visualAnswerInput } from '../../../../packages/kybern-client/src/visualAnswer.ts'
 import { coordinatorCardLine, cardPartsText } from '../../../../packages/kybern-client/src/coordinatorCards.ts'
 import { recordText, requestRecord } from '../../../../packages/kybern-client/src/requestCards.ts'
@@ -148,6 +149,8 @@ export function approvalRowText(approval: ApprovalRequest, decision: ApprovalDec
   if (auto) return `Allowed by Full access — ${approval.summary || approval.tool_name}`
   const secret = secretRequestInput(approval)
   if (secret) return secretPartsText(secretOutcomeLine(secret, decision, live))
+  const provision = provisionCardInput(approval)
+  if (provision) return provisionRecordText(provision, decision)
   const asked = visualAnswerInput(approval)
   if (asked) return answerRowText(asked.title, decision)
   const pick = pickRequestInput(approval)

@@ -3,6 +3,7 @@
 import { pickRequestInput } from '../../../../packages/kybern-client/src/pickRequest.ts'
 import { loginRequestInput, passwordPurpose, permissionPane, permissionRequestInput, promptRequestInput } from '../../../../packages/kybern-client/src/requestCards.ts'
 import { secretRequestInput } from '../../../../packages/kybern-client/src/secretRequest.ts'
+import { provisionCardInput } from '../../../../packages/kybern-client/src/provision.ts'
 import type { ApprovalRequest, PromptRequestInput } from '../../../../packages/kybern-client/src/types.ts'
 import { isUserInput } from '../../../../packages/kybern-client/src/userInput.ts'
 import { visualAnswerInput } from '../../../../packages/kybern-client/src/visualAnswer.ts'
@@ -33,6 +34,8 @@ export function waitingLine(approval: ApprovalRequest, agent: string): string {
   if (permission) return `${agent} is waiting for you to let ${permission.app} ${permissionPane(permission.pane).verb}`
   const secret = secretRequestInput(approval)
   if (secret) return `${agent} is waiting for ${secret.label}`
+  const provision = provisionCardInput(approval)
+  if (provision) return `${agent} is waiting for you to add ${provision.plan.project_name} to ${provision.plan.target.name}`
   // `kybern_ask_user` (a question with a deadline) arrives as an approval of its own `AskUserQuestion`.
   if (isUserInput(approval)) return questionLine(approval, agent)
   return `Needs approval: ${approval.summary}`
@@ -40,7 +43,7 @@ export function waitingLine(approval: ApprovalRequest, agent: string): string {
 
 /** A card that asks the reader for something rather than for permission to run a tool. */
 export const isSummonedCard = (approval: ApprovalRequest) =>
-  !!(visualAnswerInput(approval) || pickRequestInput(approval) || loginRequestInput(approval) || promptRequestInput(approval) || permissionRequestInput(approval) || secretRequestInput(approval))
+  !!(visualAnswerInput(approval) || pickRequestInput(approval) || loginRequestInput(approval) || promptRequestInput(approval) || permissionRequestInput(approval) || secretRequestInput(approval) || provisionCardInput(approval))
 
 /** A question (`user_input_requested`): the first question when there is one. */
 export function questionLine(approval: ApprovalRequest, agent: string): string {

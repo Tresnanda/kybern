@@ -40,6 +40,8 @@ import { callThread, getState, toggleProject as toggleProjectState, type StateTh
 import { glyphOfMachine, machineHub } from '../machines/index.ts'
 import { MachineBadge } from './MachineBadge.tsx'
 import { forkTargetsOf } from '../fork/targets.ts'
+import { canProvision } from '../provision/targets.ts'
+import { PROVISION_COPY } from '../../../../packages/kybern-client/src/provision.ts'
 import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
 import { raisedFill, useGlass } from '../platform/glass.ts'
 import type { Theme } from '../theme.ts'
@@ -492,6 +494,7 @@ export const ProjectHeader = memo(function ProjectHeader({
             </>
           )}
           <MoveToSpaceMenu project={project} />
+          {canProvision(project.id) && <MenuItem id="provision" testId="project-menu-provision" icon={N.laptop} label={PROVISION_COPY.menu} onSelect={() => showDialog({ kind: 'provision', projectId: project.id })} />}
           <MenuSeparator />
           <MenuItem
             id="remove"
