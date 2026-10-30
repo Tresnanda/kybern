@@ -16,6 +16,7 @@ import { machineHub } from '../machines/index.ts'
 import { EnvFileList, FolderField, ProgressBar, useProvisionPlan } from './parts.tsx'
 import { fixtureClient, provisionContextOf } from './targets.ts'
 import { setupAttempts, type SetupAttempt } from './setupAttempts.ts'
+import { MachineSymbol, SetupRoute, SetupStatus } from '../machines/SetupVisuals.tsx'
 
 type Prepared = { ready: boolean; start: () => Promise<void> }
 
@@ -83,6 +84,7 @@ export function MachineSetupSheet({ projectId, targetId, close, onReady, onProvi
       description={started ? selected ? `Ready on ${chosen?.machineName ?? 'the selected machine'}. Your draft is preserved; send it when you’re ready.` : 'Each machine keeps its progress. Your selected machine switches when its setup finishes. Your draft is not sent.' : 'This project is missing or incomplete on this machine. Add it before starting a chat there.'} onClose={dismiss} />
     <DialogBody testId="machine-setup-body" footer scroll>
       {!client || !source ? <Hint>No machine with the complete project is online. Connect a machine that has it and reopen this sheet.</Hint> : <>
+        <SetupRoute source={source.machineName} destination={all ? `${targets.length} machines` : chosen?.machineName ?? 'Selected machine'} />
         {!started && context!.instances.length > 1 && <Field label="From"><div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           {context!.instances.map((item) => <PickerChip key={item.machineId} chevron={false} selected={sourceId === item.machineId} disabled={!item.online} label={`From ${item.machineName}`} onClick={() => setSourceId(item.machineId)}>{item.machineName}</PickerChip>)}
         </div></Field>}
@@ -101,7 +103,7 @@ export function MachineSetupSheet({ projectId, targetId, close, onReady, onProvi
     </DialogBody>
     <DialogFooter>
       <Button size="lg" variant="secondary" testId="machine-setup-cancel" disabled={busy} onClick={dismiss}>{started ? 'Close' : 'Cancel'}</Button>
-      {!started && <Button size="lg" variant="primary" testId="machine-setup-add" busy={busy} disabled={!client || !targets.length || !targets.every((item) => readiness[item.machineId])} onClick={() => void add()}>{all ? `Add to ${targets.length} machines` : 'Add project'}</Button>}
+      {!started && <Button size="lg" icon="plus" variant="primary" testId="machine-setup-add" busy={busy} disabled={!client || !targets.length || !targets.every((item) => readiness[item.machineId])} onClick={() => void add()}>{all ? `Add to ${targets.length} machines` : 'Add project'}</Button>}
       {done && !selected && <Button size="lg" variant="primary" testId="machine-setup-use" busy={busy} onClick={() => void useTarget()}>Retry selection</Button>}
     </DialogFooter>
   </>
@@ -175,7 +177,11 @@ function SetupTarget({ client, sourceId, projectId, target, started, register, r
   const failed = status?.phase === 'failed' || status?.phase === 'cancelled'
   const retry = () => { if (inFlight.current) return; setupAttempts.forget(key); attemptRecord.current = undefined; operation.current = null; pendingRequest.current = null; pendingPlan.current = null; setStatus(null); setError(''); setAttempt((n) => n + 1) }
   return <div testId={`machine-setup-${target.machineId}`} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-    <Label color={t.text} size={14} lineHeight={20} weight={600}>{target.machineName}</Label>
+    <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+      <MachineSymbol os={plan?.target.os} size={32} />
+      <Label color={t.text} size={14} lineHeight={20} weight={600} style={{ flexGrow: 1, flexShrink: 1 }}>{target.machineName}</Label>
+      {status && <SetupStatus kind={status.phase === 'done' ? 'ready' : failed ? 'error' : 'waiting'} text={status.phase === 'done' ? 'Added' : failed ? 'Needs attention' : status.phase === 'queued' ? 'Queued' : 'Adding'} />}
+    </div>
     {!target.online && (!status || status.phase === 'queued') && <Hint>Offline · setup is queued until this machine returns.</Hint>}
     {status ? <>
       {!provisionSettled(status) && provisionFraction(status) !== null && <ProgressBar fraction={provisionFraction(status)} />}

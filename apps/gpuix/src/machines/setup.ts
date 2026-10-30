@@ -20,6 +20,7 @@ export type SetupAccess = 'paired' | 'ssh' | 'guidance'
 export interface SetupTarget {
   id: string
   name: string
+  os?: string
   access: SetupAccess
   machineId?: string
   target?: string
@@ -39,9 +40,9 @@ export const setupBusy = (phase: SetupPhase) => ['queued', 'checking', 'installi
 const detail = (phase: SetupPhase) => ({
   queued: 'Waiting to check saved access', checking: 'Checking saved access', installing: 'Installing the daemon and CLI',
   starting: 'Starting the persistent service', pairing: 'Connecting this device',
-  ready: 'Network enabled. Machines on the same Tailscale account join automatically.',
-  off: 'Network is off on this machine. Turn it on there to connect. Older saved off settings are kept off too.',
-  install: 'Kybern is not installed. Install its daemon and CLI to connect.',
+  ready: 'Joins machines on the same Tailscale account automatically.',
+  off: 'Turn on networking on that machine to connect.',
+  install: 'Install the Kybern daemon and CLI to connect.',
   access: 'Add a pairing invitation or save and verify an SSH connection to set up this machine.',
   error: 'Unable to connect. Check access and retry.', canceled: 'Setup canceled. Retry when you are ready.',
 }[phase])

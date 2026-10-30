@@ -42,7 +42,7 @@ async function discover(): Promise<SetupTarget[]> {
   await hub.set.load()
   const records = hub.connections().map(connection => connection.record as GpuixMachineRecord)
   const targets: SetupTarget[] = records.filter(record => record.machineId !== status.self_machine.machine_id && !record.member).map(record => ({
-    id: `paired:${record.machineId}`, name: record.name, access: 'paired', machineId: record.machineId,
+    id: `paired:${record.machineId}`, name: record.name, os: record.os, access: 'paired', machineId: record.machineId,
     ...(record.ssh ? { target: sshAddress(record.ssh), dataDir: record.ssh.data_dir ?? undefined } : {}),
   }))
   // Fixture/background runs cannot even probe the user's own SSH aliases.

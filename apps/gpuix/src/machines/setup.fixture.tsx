@@ -8,9 +8,9 @@ import { MachineSetupPanel } from './MachineSetup.tsx'
 import type { SetupRow, SetupState } from './setup.ts'
 
 const initial: SetupState = { discovering: false, error: '', rows: [
-  { target: { id: 'installed', name: 'Studio Mac', access: 'paired' }, phase: 'ready', detail: 'Network enabled. Machines on the same Tailscale account join automatically.' },
-  { target: { id: 'missing', name: 'Build server', access: 'ssh', target: 'build' }, phase: 'install', detail: 'Kybern is not installed. Install its daemon and CLI to connect.' },
-  { target: { id: 'off', name: 'Workstation kept separate', access: 'paired' }, phase: 'off', detail: 'Network is off on this machine. Turn it on there to connect. Older saved off settings are kept off too.' },
+  { target: { id: 'installed', name: 'Studio Mac', os: 'darwin', access: 'paired' }, phase: 'ready', detail: 'Joins machines on the same Tailscale account automatically.' },
+  { target: { id: 'missing', name: 'Build server', os: 'linux', access: 'ssh', target: 'build' }, phase: 'install', detail: 'Install the Kybern daemon and CLI to connect.' },
+  { target: { id: 'off', name: 'Workstation kept separate', os: 'windows', access: 'paired' }, phase: 'off', detail: 'Turn on networking on that machine to connect.' },
   { target: { id: 'failed', name: 'A machine with a long name that should wrap without hiding its retry action', access: 'ssh', target: 'offline' }, phase: 'error', detail: 'SSH could not sign in without a password. Load your SSH key and retry.' },
   { target: { id: 'untrusted', name: 'New tailnet computer', access: 'guidance', online: false }, phase: 'access', detail: 'Add a pairing invitation or save and verify an SSH connection to set up this machine.' },
 ] }
@@ -21,7 +21,7 @@ function Fixture() {
     <MachineSetupPanel state={state} onCheck={() => setState(initial)}
       onInstall={row => update(row, 'installing', 'Installing the daemon and CLI')}
       onCancel={row => update(row, 'canceled', 'Setup canceled. Retry when you are ready.')}
-      onRetry={row => update(row, 'ready', 'Network enabled. Machines on the same Tailscale account join automatically.')}
+      onRetry={row => update(row, 'ready', 'Joins machines on the same Tailscale account automatically.')}
       onAccess={row => update(row, 'access', 'Fixture: access setup selected. No connection opened.')} />
   </div>
 }
