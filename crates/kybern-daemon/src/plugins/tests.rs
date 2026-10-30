@@ -138,6 +138,27 @@ async fn configured_packages_are_idempotent_and_refuse_stale_replacements() {
     let tampered = PluginInstallRequest { plugin: inventory(&state).await.unwrap().plugins[0].clone(), ..request };
     assert!(install(&state, "a", tampered).await.is_err());
 }
+
+#[tokio::test]
+async fn replacement_preserves_unknown_target_options_and_their_credentials() {
+    let source = TempDir::new("plugin-options-source");
+    let ctx = context(&source);
+    seed(&ctx);
+    let plugin = inventory::read(&ctx).plugins.into_iter().find(|p| p.id == "@acme/review").unwrap();
+    let target = TempDir::new("plugin-options-target");
+    let state = state(&target);
+    let home = target.path().join("home");
+    let before = r#"{"plugin":[{"package":"@acme/review@1.0.0","options":{"token":"keep-this-private"}}]}"#;
+    put(&home, ".config/opencode/opencode.json", before);
+    let existing = inventory(&state).await.unwrap().plugins.into_iter().find(|p| p.id == plugin.id).unwrap();
+    let result =
+        install(&state, "a", PluginInstallRequest { operation_id: uuid::Uuid::now_v7(), plugin, replaces: Some(existing.fingerprint) })
+            .await
+            .unwrap();
+    assert_eq!(result.state, PluginInstallState::Failed);
+    assert_eq!(text(&home.join(".config/opencode/opencode.json")).unwrap(), before);
+    assert!(!serde_json::to_string(&result).unwrap().contains("keep-this-private"));
+}
 #[cfg(unix)]
 #[tokio::test]
 async fn fake_installers_receive_only_the_target_environment_and_report_failures() {

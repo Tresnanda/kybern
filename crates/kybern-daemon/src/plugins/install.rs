@@ -303,6 +303,8 @@ pub async fn install(state: &AppState, from: &str, request: PluginInstallRequest
     } else if existing.is_some_and(|v| v.fingerprint == p.fingerprint) {
         result.state = PluginInstallState::AlreadyThere;
         result.message = "Already there".into();
+    } else if existing.is_some_and(|v| v.problem.is_some()) {
+        result.message = "The target has custom or unsupported plugin settings. Configure this plugin on that machine.".into();
     } else if existing.is_some_and(|v| request.replaces.as_ref() != Some(&v.fingerprint))
         || existing.is_none() && request.replaces.is_some()
     {
