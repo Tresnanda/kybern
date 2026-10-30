@@ -531,3 +531,15 @@ fn plugin_declarations_and_confirmations_are_stable() {
     insta::assert_json_snapshot!("plugins_copy_params", schema_for!(PluginsCopyParams));
     insta::assert_json_snapshot!("plugin_install_request", schema_for!(PluginInstallRequest));
 }
+
+#[test]
+fn provision_member_plans_are_stable() {
+    insta::assert_json_snapshot!("provision_plan", schema_for!(ProvisionPlan));
+    insta::assert_json_snapshot!("provision_probe", schema_for!(PeerProvisionProbe));
+    let older: PeerProvisionProbe = serde_json::from_value(serde_json::json!({
+        "os": "linux", "suggested_path": "/home/me/group",
+        "path_check": { "state": "free", "path": "/home/me/group", "message": "New folder" }
+    }))
+    .unwrap();
+    assert!(older.members.is_empty(), "older peers do not report member mappings");
+}

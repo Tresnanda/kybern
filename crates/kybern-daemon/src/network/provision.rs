@@ -489,13 +489,27 @@ fn seal_env_files(
         }
         let Ok(contents) = std::fs::read(&path) else { continue };
         // Bind encryption to the destination spelling while reading from the source spelling.
-        let mapped = members.iter().filter(|m| m.path != "." && rel.starts_with(&format!("{}/", m.path))).max_by_key(|m| m.path.len());
-        let target_rel = mapped.map_or_else(|| rel.clone(), |m| format!("{}/{}", m.target_path, &rel[m.path.len() + 1..]));
+        let target_rel = env_target_path(rel, members);
         let context = env_file_context(operation_id, &me, target, &target_rel);
         let blob = crate::secret_store::seal(&recipient, &context, &contents).map_err(|error| Delivery::Failed(format!("{error:#}")))?;
         sealed.push(SealedEnvFile { path: target_rel, sealed: B64.encode(blob) });
     }
     Ok(sealed)
+}
+
+/// The most specific member owns a file; `.` can itself be a group member too.
+fn env_target_path(rel: &str, members: &[ProvisionMember]) -> String {
+    let mapped = members
+        .iter()
+        .filter_map(|member| {
+            if member.path == "." { Some((member, rel)) } else { rel.strip_prefix(&format!("{}/", member.path)).map(|tail| (member, tail)) }
+        })
+        .max_by_key(|(member, _)| if member.path == "." { 0 } else { member.path.len() });
+    match mapped {
+        Some((member, tail)) if member.target_path == "." => tail.to_string(),
+        Some((member, tail)) => format!("{}/{tail}", member.target_path),
+        None => rel.to_string(),
+    }
 }
 
 // ---- the target ----
@@ -531,5 +545,23 @@ pub async fn serve(state: &AppState, link: &Arc<PeerLink>, method: &str, params:
             ok(serde_json::to_value(orchestrator.serve_provision_finish(&link.machine_id, &params, files).await?))
         }
         _ => Err(RpcError::method_not_found(method)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provision_env_paths_follow_the_member_including_the_group_root() {
+        let members = vec![
+            ProvisionMember { path: ".".into(), target_path: "app".into(), present: true },
+            ProvisionMember { path: "api".into(), target_path: ".".into(), present: true },
+        ];
+        assert_eq!(env_target_path(".env", &members), "app/.env");
+        assert_eq!(env_target_path("api/.env", &members), ".env");
+        assert_eq!(env_target_path("api/config/.env", &members), "config/.env");
+        assert_eq!(env_target_path("api2/.env", &members), "app/api2/.env");
+        assert_eq!(env_target_path(".env", &[]), ".env");
     }
 }

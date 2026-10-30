@@ -1,0 +1,139 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(PeerProvisionProbe)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PeerProvisionProbe",
+  "type": "object",
+  "properties": {
+    "os": {
+      "type": "string"
+    },
+    "home": {
+      "description": "The target's home folder, so a client can show `~/projects/kybern`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "existing": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ProvisionExisting"
+      }
+    },
+    "members": {
+      "description": "Member paths and availability in the checked destination (groups only).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ProvisionMember"
+      }
+    },
+    "suggested_path": {
+      "type": "string"
+    },
+    "path_check": {
+      "$ref": "#/$defs/PathCheck"
+    }
+  },
+  "required": [
+    "os",
+    "suggested_path",
+    "path_check"
+  ],
+  "$defs": {
+    "ProvisionExisting": {
+      "description": "A project of the target that already is this repository.",
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_id",
+        "name",
+        "path"
+      ]
+    },
+    "ProvisionMember": {
+      "description": "A source member paired with a folder on the target. Existing checkouts stay untouched.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "target_path": {
+          "type": "string"
+        },
+        "present": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "target_path",
+        "present"
+      ]
+    },
+    "PathCheck": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/PathState"
+        },
+        "path": {
+          "description": "The folder as the target spells it (`~` expanded).",
+          "type": "string"
+        },
+        "message": {
+          "description": "A sentence for the sheet: \"Empty folder · will be created\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "path",
+        "message"
+      ]
+    },
+    "PathState": {
+      "description": "What a destination folder on the target holds.",
+      "oneOf": [
+        {
+          "description": "Missing or empty: it will be created and filled.",
+          "type": "string",
+          "const": "free"
+        },
+        {
+          "description": "Already a checkout of the same repository: it is registered as it is.",
+          "type": "string",
+          "const": "same_repo"
+        },
+        {
+          "description": "Holds other files: refused.",
+          "type": "string",
+          "const": "not_empty"
+        },
+        {
+          "description": "Not a place Kybern writes a project to (a root, the home folder, a system folder, not absolute).",
+          "type": "string",
+          "const": "forbidden"
+        },
+        {
+          "description": "The target is offline; it checks the folder when the work arrives.",
+          "type": "string",
+          "const": "unknown"
+        }
+      ]
+    }
+  }
+}

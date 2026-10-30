@@ -492,15 +492,18 @@ async fn provision_partial_group_reuses_renamed_members_and_adds_only_the_missin
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn provision_partial_group_card_resumes_the_waiting_delegation() {
-    let Some((cluster, a, b, mut fixture, mut parent, live, spawned)) = agent_pair(PermissionMode::Auto).await else { return };
+    let Some((cluster, a, b, mut fixture, _parent, _live, spawned)) = agent_pair(PermissionMode::Auto).await else { return };
     let root = cluster.dir.path();
     init_project_repo(&root.join("addon"));
     let group = group_project("group", root, &["checkout-a", "addon"]);
     a.state.store.project_insert(&group).unwrap();
     fixture.project = group.clone();
-    parent.project_id = group.id;
-    parent.cwd = group.path.clone();
-    a.state.store.thread_upsert(&parent).unwrap();
+    let mut parent = fixture.thread(ThreadStatus::Idle);
+    parent.members = super::group_git::snapshot_members(&fixture.project);
+    fixture.store.thread_upsert(&parent).unwrap();
+    let (live, _, _) = fixture.park_recording(&parent, Instant::now()).await;
+    fixture.orchestrator.send(parent.id, UserMessage::text("coordinate the group")).await.unwrap();
+    live.turn_ready.notified().await;
     let dest = root.join("b-home/partial");
     std::fs::create_dir_all(&dest).unwrap();
     run_git(&dest, &["clone", "-q", root.join("checkout-a").to_str().unwrap(), "api"]);
@@ -515,7 +518,7 @@ async fn provision_partial_group_card_resumes_the_waiting_delegation() {
     wait_until("partial card stored", WAIT, || fixture.store.approval_get(card).ok().flatten().is_some()).await;
     let (request, _) = fixture.store.approval_get(card).unwrap().unwrap();
     let input: ProvisionCardInput = serde_json::from_value(request.input).unwrap();
-    assert_eq!(input.plan.members.iter().filter(|m| m.present).count(), 1);
+    assert_eq!(input.plan.members.iter().filter(|m| m.present).count(), 1, "{:?}", input.plan);
     assert!(input.plan.members.iter().any(|m| m.path == "addon" && !m.present));
     fixture.orchestrator.respond_approval(card, ApprovalDecision::Submit { response: json!({"path":dest.to_string_lossy(), "env_files":[]}) }).await.unwrap();
     let started = call.await.unwrap().unwrap();

@@ -36,7 +36,7 @@ if (process.env.PROVISION_PARTIAL === '1') {
   PLAN.path_check = { state: 'same_repo', path: PLAN.suggested_path!, message: 'Has 1 of 3 repos · only the missing repos will be added' }
   PLAN.env_files = [{ path: 'api/.env', size: 412, selected: true }]
 }
-let mode = 'sheet' 
+let mode = 'sheet'
 let sequence = 0
 const thread = (): Thread => ({ id: 'thread-provision', project_id: 'p-kybern', title: 'Fix the flaky clock test', provider: { kind: 'claude_code', instance: 'default' }, model: null, effort: null, permission_mode: 'auto', status: 'awaiting_approval', worktree: null, cwd: 'D:\\code\\kybern', provider_session_id: null, pinned: false, created_at: at, updated_at: at, last_seq: 1 } as unknown as Thread)
 const status = (phase: ProvisionStatus['phase']): ProvisionStatus => ({
