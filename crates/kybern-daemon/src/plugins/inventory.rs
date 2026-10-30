@@ -158,7 +158,14 @@ fn claude(ctx: &Context, provider: ProviderKind) -> Result<Vec<MachinePlugin>, S
             item.version = lock["plugins"][name]["version"].as_str().map(Into::into);
             let pin = item.version.as_ref().map(|v| format!("{name}@{v}"));
             let spec = spec.as_str().unwrap_or("");
-            if spec.starts_with("file:") || spec.starts_with("link:") {
+            let registry = if spec.starts_with("npm:") {
+                npm_spec(spec) && package_name(spec) == name
+            } else {
+                semver::VersionReq::parse(spec).is_ok()
+                    || spec.starts_with(|c: char| c.is_ascii_alphabetic())
+                        && spec.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+            };
+            if !registry {
                 source(&mut item, None, true);
             } else {
                 source(&mut item, pin.as_deref(), true);

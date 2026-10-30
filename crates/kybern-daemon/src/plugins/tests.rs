@@ -327,3 +327,27 @@ fn credential_urls_never_leave_inventory_even_as_names_and_public_pi_git_is_copy
     assert_eq!(p.source.as_deref(), Some("git:github.com/acme/review@v1"));
     install::validate(&p).unwrap();
 }
+
+#[test]
+fn omp_git_and_alias_packages_are_not_replaced_with_an_unrelated_npm_package() {
+    let dir = TempDir::new("plugin-omp-sources");
+    let ctx = context(&dir);
+    put(
+        &ctx.home,
+        ".omp/plugins/package.json",
+        r#"{"dependencies":{"review":"git+https://example.com/private/review.git","alias":"npm:different-package@1.0.0","registry":"^1.0.0"}}"#,
+    );
+    put(
+        &ctx.home,
+        ".omp/plugins/omp-plugins.lock.json",
+        r#"{"plugins":{"review":{"version":"1.0.0"},"alias":{"version":"1.0.0"},"registry":{"version":"1.0.0"}}}"#,
+    );
+    let inv = inventory::read(&ctx);
+    for id in ["review", "alias"] {
+        let p = inv.plugins.iter().find(|p| p.id == id).unwrap();
+        assert!(p.source.is_none() && p.problem.is_some());
+    }
+    let p = inv.plugins.iter().find(|p| p.id == "registry").unwrap();
+    assert_eq!(p.source.as_deref(), Some("registry@1.0.0"));
+    install::validate(p).unwrap();
+}
