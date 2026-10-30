@@ -359,12 +359,16 @@ fn file_url_path(input: &str) -> Result<String, PreviewError> {
         return Err(PreviewError::invalid_address());
     }
     let path = path.split(['?', '#']).next().unwrap_or(path);
-    percent_decode(path).ok_or_else(PreviewError::invalid_address)?;
-    reqwest::Url::parse(input)
-        .map_err(|_| PreviewError::invalid_address())?
-        .to_file_path()
-        .map(|path| path.to_string_lossy().into_owned())
-        .map_err(|_| PreviewError::invalid_address())
+    let decoded = percent_decode(path).ok_or_else(PreviewError::invalid_address)?;
+    if cfg!(windows) {
+        // `file:///C:/a` names `C:\a`; the URL parser knows the drive and UNC forms.
+        return reqwest::Url::parse(input)
+            .map_err(|_| PreviewError::invalid_address())?
+            .to_file_path()
+            .map(|path| path.to_string_lossy().into_owned())
+            .map_err(|_| PreviewError::invalid_address());
+    }
+    Ok(decoded)
 }
 
 fn expand_home(raw: &str, policy: &GrantPolicy) -> Option<PathBuf> {

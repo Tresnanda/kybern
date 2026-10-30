@@ -398,7 +398,7 @@ async fn resolve_reference(
             return Ok(Reference::Outside);
         }
     }
-    if clean.is_empty() || Path::new(clean).is_absolute() {
+    if clean.is_empty() || clean.starts_with(['/', '\\']) || Path::new(clean).is_absolute() {
         return Ok(Reference::Missing);
     }
     if index.is_none() {

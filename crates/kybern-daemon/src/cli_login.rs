@@ -265,7 +265,8 @@ pub fn shell() -> String {
     if cfg!(windows) {
         "powershell.exe".into()
     } else {
-        std::env::var("SHELL").ok().filter(|shell| Path::new(shell).is_absolute()).unwrap_or_else(|| "/bin/sh".into())
+        let fallback = if cfg!(target_os = "macos") { "/bin/zsh" } else { "/bin/sh" };
+        std::env::var("SHELL").ok().filter(|shell| Path::new(shell).is_absolute()).unwrap_or_else(|| fallback.into())
     }
 }
 
