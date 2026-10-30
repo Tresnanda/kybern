@@ -11,9 +11,9 @@ that release builds restore. Publishing is a separate action.
 | Wire protocol | `PROTOCOL_VERSION` is a compatibility contract, not an app release number. Bump it for breaking wire changes and update both clients and the daemon together. Additive features may still require a newer daemon even when the protocol number is unchanged. |
 
 The tag-triggered release workflow requires successful main CI for the exact
-tagged commit, including all five jobs `scripts/check-release-ci.mjs` lists
-(`requiredJobs`: rustfmt, clippy + test on Linux and macOS, release checks, and
-gpuix). It waits for an in-progress run and blocks
+tagged commit, including all six jobs `scripts/check-release-ci.mjs` lists
+(`requiredJobs`: rustfmt, clippy + test on Linux and macOS, Windows cargo check,
+release checks, and gpuix). It waits for an in-progress run and blocks
 publication on failures, skipped jobs, missing results, or timeout. Publication
 also requires both macOS GPUIX bundles to succeed (the Linux and Windows
 bundles are betas whose failure only leaves their `latest.json` entry out). Only the publishing `host` job

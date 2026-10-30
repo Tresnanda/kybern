@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.20.0
+
+<!-- kybern-release-title: Your machines, together in Kybern -->
+<!-- kybern-release-summary: Connect your machines over Tailscale, see their projects and chats together, and send work to the machine you choose. Turn it on in Settings → Machines. -->
+
+- Connect your machines over Tailscale and see their projects, chats, notes and tasks together. Networking stays off until you turn it on; a one-time introduction explains it, and Settings → Machines lets you add, pause, remove and choose permissions for each machine.
+- Pick a machine when starting a chat, delegate an agent to another machine, or fork and continue a conversation there. Work for an offline machine waits in a queue, and remote agents show their machine and live progress beside the original conversation.
+- Add a repository or a group project to another machine by cloning or sending it directly. Partial groups offer only the missing repositories, preserve existing branches and edits, and resume work that was waiting for the project. Choose which env files to transfer.
+- Open terminals and preview dev servers on other machines from the desktop app. Closing a remote terminal tab closes its shell, Windows terminals report when their shell exits, and rapid terminal input arrives in order.
+- Send files between machines and choose when to send, paste or automatically share clipboard text. Automatic sharing filters secrets and password-manager content.
+- Compare user skills and plugins across machines in Settings. Review a copy before applying it, confirm replacements, and queue copies for an offline machine. Plugin copying uses each supported harness's installer; local sources and unsupported configurations stay visible with a reason they cannot be copied.
+- Choose a machine to lend supported agent logins to the others, and apply supported settings across machines. Provider keys are stored encrypted; removing a machine or turning networking off ends its borrowed sessions.
+- Preserve saved connections and account settings when migrating to the machine network, including when returning to an older app version.
+- Includes the recent macOS fixes for stalled drawing and unresponsive typing, plus the refreshed Windows WebView2 installer.
+
 ## 0.19.5
 
 <!-- kybern-release-title: Typing and clicks stay responsive -->
