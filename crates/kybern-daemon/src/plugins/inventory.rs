@@ -171,7 +171,9 @@ fn claude(ctx: &Context, provider: ProviderKind) -> Result<Vec<MachinePlugin>, S
                 source(&mut item, pin.as_deref(), true);
             }
             item.enabled = Some(lock["plugins"][name]["enabled"].as_bool().unwrap_or(true));
-            item.contents = contents(&root.join("plugins/node_modules").join(name));
+            if npm_spec(name) {
+                item.contents = contents(&root.join("plugins/node_modules").join(name));
+            }
             item.contents.npm_packages.insert(0, name.clone());
             if !lock["plugins"][name]["enabledFeatures"].is_null() {
                 item.problem = Some("Custom feature selection; configure this package on the target.".into());
@@ -270,9 +272,10 @@ fn packages(ctx: &Context, provider: ProviderKind) -> Result<Vec<MachinePlugin>,
         let s = entry.as_str().or_else(|| entry[if pi { "source" } else { "package" }].as_str()).unwrap_or("");
         let spec = s.strip_prefix("npm:").unwrap_or(s);
         let name = package_name(spec);
-        let local = s.starts_with(['.', '/', '~']) || s.starts_with("file:");
-        let npm = npm_spec(spec);
         let git = pi && pi_git_source(s);
+        // Pi reads a source without `npm:`, `git:` or a URL as a path relative to its settings.
+        let npm = npm_spec(spec) && (!pi || s.starts_with("npm:"));
+        let local = s.starts_with(['.', '/', '~']) || s.starts_with("file:") || pi && !npm && !git && !s.contains(':');
         // A rejected URL can include credentials even in its apparent package name. Do not send
         // any part of it as a name/id; the opaque identity only keeps separate rows stable.
         let display = if local {

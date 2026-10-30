@@ -100,14 +100,39 @@ pub(super) fn portable_source(value: &str) -> bool {
     {
         return false;
     }
+    // A ref reaches git (and Codex's `--ref`), so it may not look like an option or escape upward.
+    let (value, reference) = match value.split_once('#') {
+        Some((value, reference)) => (value, Some(reference)),
+        None => (value, None),
+    };
+    if reference.is_some_and(|r| !git_ref(r)) {
+        return false;
+    }
     if value.starts_with("https://") {
         return reqwest::Url::parse(value).is_ok_and(|u| u.username().is_empty() && u.password().is_none() && u.host_str().is_some());
     }
-    if value.starts_with("git@") {
-        return value.contains(':') && !value.contains("://");
+    if let Some(rest) = value.strip_prefix("git@") {
+        return rest.starts_with(|c: char| c.is_ascii_alphanumeric())
+            && rest.contains(':')
+            && !rest.contains(['@', '#'])
+            && !value.contains("://");
     }
-    let base = value.split(['#', '@']).next().unwrap_or("");
-    base.split('/').count() == 2 && base.chars().all(|c| c.is_ascii_alphanumeric() || "-_/ .".contains(c))
+    let (base, at_ref) = match value.split_once('@') {
+        Some((base, r)) => (base, Some(r)),
+        None => (value, None),
+    };
+    at_ref.is_none_or(git_ref)
+        && !(reference.is_some() && at_ref.is_some())
+        && base.split('/').count() == 2
+        && base.split('/').all(|part| part.starts_with(|c: char| c.is_ascii_alphanumeric()) && !part.contains(".."))
+        && base.chars().all(|c| c.is_ascii_alphanumeric() || "-_/.".contains(c))
+}
+pub(super) fn git_ref(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 200
+        && value.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && !value.contains("..")
+        && value.chars().all(|c| c.is_ascii_alphanumeric() || "._/-".contains(c))
 }
 pub(super) fn npm_spec(value: &str) -> bool {
     let value = value.strip_prefix("npm:").unwrap_or(value);

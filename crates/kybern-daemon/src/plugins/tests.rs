@@ -374,3 +374,67 @@ fn omp_git_and_alias_packages_are_not_replaced_with_an_unrelated_npm_package() {
     assert_eq!(p.source.as_deref(), Some("registry@1.0.0"));
     install::validate(p).unwrap();
 }
+
+#[test]
+fn refs_hosts_and_package_identities_cannot_smuggle_options_or_other_packages() {
+    for bad in [
+        "acme/tools#--upload-pack=x",
+        "acme/tools@-x",
+        "https://github.com/acme/tools.git#-x",
+        "git@-oProxyCommand=x:repo",
+        "acme/..",
+        "acme/tools#v1@v2",
+        "acme/tools#../../x",
+    ] {
+        assert!(!portable_source(bad), "{bad}");
+    }
+    for good in ["acme/tools@v1.2", "git@github.com:acme/tools.git#main", "https://github.com/acme/tools.git#release/1"] {
+        assert!(portable_source(good), "{good}");
+    }
+    let dir = TempDir::new("plugin-identity");
+    let ctx = context(&dir);
+    seed(&ctx);
+    let inv = inventory::read(&ctx);
+    let pi = inv.plugins.iter().find(|p| p.id == "pi-review").unwrap().clone();
+    let mut other = pi.clone();
+    other.source = Some("npm:other-package@1.0.0".into());
+    other.fingerprint = fingerprint(&other);
+    assert!(install::validate(&other).is_err());
+    // Pi reads an unprefixed source as a local path, so it is never an npm install.
+    let mut bare = pi.clone();
+    bare.source = Some("pi-review@2.0.0".into());
+    bare.fingerprint = fingerprint(&bare);
+    assert!(install::validate(&bare).is_err());
+    let mut market = inv.plugins.iter().find(|p| p.id == "@acme/review").unwrap().clone();
+    market.kind = PluginKind::Marketplace;
+    market.source = Some("acme/tools".into());
+    market.fingerprint = fingerprint(&market);
+    assert!(install::validate(&market).is_err());
+    put(&ctx.home, ".pi/agent/settings.json", r#"{"packages":["pi-review"]}"#);
+    let p = inventory::read(&ctx).plugins.into_iter().find(|p| p.provider == ProviderKind::Pi).unwrap();
+    assert!(p.source.is_none() && p.problem.is_some(), "{p:?}");
+}
+
+#[tokio::test]
+async fn codex_plugins_setting_of_another_type_fails_without_panicking() {
+    let dir = TempDir::new("plugin-codex-shape");
+    let ctx = context(&dir);
+    put(&ctx.home, ".codex/config.toml", "plugins = \"odd\"\n");
+    let mut p = MachinePlugin {
+        id: "review@tools".into(),
+        provider: ProviderKind::Codex,
+        kind: PluginKind::Plugin,
+        name: "review".into(),
+        marketplace: Some("tools".into()),
+        source: Some("acme/tools".into()),
+        version: None,
+        enabled: Some(true),
+        resources: BTreeMap::new(),
+        contents: PluginContents::default(),
+        problem: None,
+        fingerprint: String::new(),
+    };
+    p.fingerprint = fingerprint(&p);
+    assert!(install::codex_enabled(&ctx, &p).is_err());
+    assert_eq!(text(&ctx.home.join(".codex/config.toml")).unwrap(), "plugins = \"odd\"\n");
+}

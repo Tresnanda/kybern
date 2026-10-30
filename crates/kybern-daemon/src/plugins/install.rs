@@ -17,11 +17,14 @@ pub(super) fn validate(p: &MachinePlugin) -> Result<(), String> {
     }
     let source = p.source.as_deref().ok_or("No installable source")?;
     let valid = if p.kind == PluginKind::Marketplace || p.marketplace.is_some() {
-        portable_source(source)
+        // Only these harnesses have marketplace installers; others would be started with unknown arguments.
+        matches!(p.provider, ProviderKind::ClaudeCode | ProviderKind::Codex | ProviderKind::Omp) && portable_source(source)
     } else {
+        // A package row installs exactly the package it names. Pi reads an unprefixed source as a local path.
+        let named = |spec: &str| package_name(spec) == p.id;
         match p.provider {
-            ProviderKind::Pi => npm_spec(source) || pi_git_source(source),
-            ProviderKind::Omp | ProviderKind::Opencode => npm_spec(source),
+            ProviderKind::Pi => (source.starts_with("npm:") && npm_spec(source) || pi_git_source(source)) && named(source),
+            ProviderKind::Omp | ProviderKind::Opencode => npm_spec(source) && named(source),
             _ => false,
         }
     };
@@ -112,10 +115,10 @@ fn args(parts: &[&str]) -> Vec<String> {
 }
 
 fn write(path: &Path, before: &str, after: &str) -> Result<(), String> {
-    for parent in path.ancestors() {
-        if std::fs::symlink_metadata(parent).is_ok_and(|m| m.file_type().is_symlink()) {
-            return Err("Config path is a symlink; edit it on this machine instead.".into());
-        }
+    // Renaming over a linked config would replace the user's link with a file. Linked folders
+    // (macOS /var, a dotfiles-managed ~/.config) are fine: the rename stays in that folder.
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err("Config file is a symlink; edit it on this machine instead.".into());
     }
     if text(path)? != before {
         return Err("Config changed while preparing the copy. Refresh and try again.".into());
@@ -178,12 +181,16 @@ fn package_config(ctx: &Context, p: &MachinePlugin) -> Result<(), String> {
     let after = json_config::replace(&before, key, &json!(entries))?;
     write(&path, &before, &after)
 }
-fn codex_enabled(ctx: &Context, p: &MachinePlugin) -> Result<(), String> {
+pub(super) fn codex_enabled(ctx: &Context, p: &MachinePlugin) -> Result<(), String> {
     let path = ctx.root(p.provider).join("config.toml");
     let before = text(&path)?;
     let mut doc =
         before.parse::<toml_edit::DocumentMut>().map_err(|_| "Cannot edit config.toml. Fix its TOML syntax first.".to_string())?;
-    doc["plugins"][&p.id]["enabled"] = toml_edit::value(p.enabled.unwrap_or(false));
+    // Indexing a non-table panics in toml_edit; an unexpected shape is the user's to fix.
+    let unexpected = || "config.toml has an unexpected plugins setting. Fix it on this machine.".to_string();
+    let plugins = doc.entry("plugins").or_insert(toml_edit::table()).as_table_like_mut().ok_or_else(unexpected)?;
+    let entry = plugins.entry(&p.id).or_insert(toml_edit::table()).as_table_like_mut().ok_or_else(unexpected)?;
+    entry.insert("enabled", toml_edit::value(p.enabled.unwrap_or(false)));
     write(&path, &before, &doc.to_string())
 }
 async fn apply(
@@ -208,7 +215,7 @@ async fn apply(
             if p.provider == ProviderKind::Codex
                 && let Some((url, r)) = source.rsplit_once('#')
             {
-                a = args(&["plugin", "marketplace", "add", url, "--ref", r]);
+                a = args(&["plugin", "marketplace", "add", url, &format!("--ref={r}")]);
             }
             run(state, ctx, p.provider, a).await?;
             // Do not install an ID against an unexpected catalog of the same name.
