@@ -364,20 +364,37 @@ impl AccountLogins {
         };
         ensure!(mode == AccountLoginMode::Paste, "This sign-in doesn't take a code.");
         let writer = writer.ok_or_else(|| anyhow!("This sign-in isn't ready for a code yet."))?;
-        match writer {
-            Writer::Pipe(stdin) => {
+        // Mark the code as sent before the harness can see it: a wrong code can
+        // make it exit before the write returns, and the driver must then
+        // restart it rather than fail, and must not be overwritten afterwards.
+        let previous = self
+            .update(id, |login| {
+                let previous = (login.public.phase, login.public.error.take());
+                login.code_sent = true;
+                login.public.phase = AccountLoginPhase::Verifying;
+                previous
+            })
+            .ok_or_else(|| anyhow!("This sign-in has ended. Start again."))?;
+        let written = match writer {
+            Writer::Pipe(stdin) => async {
                 let mut stdin = stdin.lock().await;
                 stdin.write_all(code.as_bytes()).await?;
                 stdin.write_all(b"\n").await?;
-                stdin.flush().await?;
+                stdin.flush().await
             }
-            Writer::Pty(terminal) => terminal.write(format!("{code}\r").as_bytes())?,
+            .await
+            .map_err(anyhow::Error::from),
+            Writer::Pty(terminal) => terminal.write(format!("{code}\r").as_bytes()),
+        };
+        if let Err(error) = written {
+            self.update(id, |login| {
+                if login.code_sent && login.public.phase == AccountLoginPhase::Verifying {
+                    login.code_sent = false;
+                    (login.public.phase, login.public.error) = previous;
+                }
+            });
+            return Err(error);
         }
-        self.update(id, |login| {
-            login.code_sent = true;
-            login.public.phase = AccountLoginPhase::Verifying;
-            login.public.error = None;
-        });
         self.get(id)
     }
 
