@@ -399,7 +399,10 @@ async fn a_delegation_that_reaches_a_machine_without_the_repository_waits_for_it
     assert!(started.get("provision").is_none(), "an offline machine is not asked about");
     b.set_network_enabled(true);
     wait_until("the child started on b", WAIT * 4, || !spawned.lock().unwrap().is_empty()).await;
-    assert!(a.state.store.outbox_list(None, None).unwrap().iter().all(|item| item.state == OutboxState::Delivered));
+    wait_until("provisioning and delegation acknowledged", WAIT * 4, || {
+        let items = a.state.store.outbox_list(None, None).unwrap();
+        !items.is_empty() && items.iter().all(|item| item.state == OutboxState::Delivered)
+    }).await;
 }
 
 /// A group exercises a clone and a local-only bundle in the same delivery. Nested member paths also
@@ -514,17 +517,21 @@ async fn provision_partial_group_card_resumes_the_waiting_delegation() {
     let call = tokio::spawn(async move {
         orchestrator.execute_native_app_tool_call(thread_id, session, "partial", "kybern_agent_delegate", json!({"task":"Test the completed group", "machine":target})).await
     });
-    let card = secret_card(&live).await;
+    let card = tokio::time::timeout(WAIT, secret_card(&live)).await.expect("the partial-group approval card");
     wait_until("partial card stored", WAIT, || fixture.store.approval_get(card).ok().flatten().is_some()).await;
     let (request, _) = fixture.store.approval_get(card).unwrap().unwrap();
     let input: ProvisionCardInput = serde_json::from_value(request.input).unwrap();
     assert_eq!(input.plan.members.iter().filter(|m| m.present).count(), 1, "{:?}", input.plan);
     assert!(input.plan.members.iter().any(|m| m.path == "addon" && !m.present));
     fixture.orchestrator.respond_approval(card, ApprovalDecision::Submit { response: json!({"path":dest.to_string_lossy(), "env_files":[]}) }).await.unwrap();
-    let started = call.await.unwrap().unwrap();
+    let started = tokio::time::timeout(WAIT * 4, call).await.expect("the approved delegation resumes").unwrap().unwrap();
     assert_eq!(started["provision"]["approved_by"], "user");
     wait_until("partial group's child started", WAIT * 4, || !spawned.lock().unwrap().is_empty()).await;
     assert!(dest.join("addon/.git").exists());
     assert!(!dest.join("checkout-a").exists());
-    assert!(a.state.store.outbox_list(None, None).unwrap().iter().all(|item| item.state == OutboxState::Delivered));
+    // The target starts the child before its acknowledgement reaches the source outbox.
+    wait_until("partial-group provisioning and delegation acknowledged", WAIT * 4, || {
+        let items = a.state.store.outbox_list(None, None).unwrap();
+        !items.is_empty() && items.iter().all(|item| item.state == OutboxState::Delivered)
+    }).await;
 }

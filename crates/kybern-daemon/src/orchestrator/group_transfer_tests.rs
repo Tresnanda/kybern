@@ -303,11 +303,34 @@ async fn a_group_shared_delegation_works_in_the_target_group_folder() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_group_delegation_to_a_group_missing_a_member_fails_with_the_missing_repository() {
+async fn a_group_delegation_to_a_partial_group_waits_for_approval_and_declining_queues_nothing() {
     let Some(p) = Pair::group(&["api"]).await else { return };
-    let started = p.delegate(json!({"task": "Change both repositories", "workspace": "worktree"})).await;
-    let task_id = task_id_of(&started);
-    let row = eventually(|| async { Some(p.row(task_id)).filter(|row| row.state.is_terminal()) }).await;
-    assert!(row.info.error.unwrap().contains("missing web"));
+    let (orchestrator, thread_id, session, target) = (p.fixture.orchestrator.clone(), p.parent.id, p.live.session_instance_id, p.b.id());
+    let call = tokio::spawn(async move {
+        orchestrator
+            .execute_native_app_tool_call(
+                thread_id,
+                session,
+                "missing-member",
+                "kybern_agent_delegate",
+                json!({"task": "Change both repositories", "workspace": "worktree", "machine": target}),
+            )
+            .await
+    });
+    // Partial groups now offer to add their missing repositories before delegation. Do not await the
+    // tool without answering that card: it deliberately waits for the user, up to thirty minutes.
+    let card = tokio::time::timeout(WAIT, secret_card(&p.live)).await.expect("the missing-member approval card");
+    let (request, _) = eventually(|| async { p.fixture.store.approval_get(card).unwrap() }).await;
+    let input: ProvisionCardInput = serde_json::from_value(request.input).unwrap();
+    assert_eq!(request.tool_name, PROJECT_PROVISION_TOOL);
+    assert_eq!(input.plan.members.iter().filter(|member| member.present).count(), 1);
+    assert!(input.plan.members.iter().any(|member| member.path == "web" && !member.present));
+    assert!(!call.is_finished(), "the delegation waits for the user's answer");
+    assert!(p.a.state.store.outbox_list(None, None).unwrap().is_empty());
+    p.fixture.orchestrator.respond_approval(card, ApprovalDecision::Deny { reason: None }).await.unwrap();
+    let error = tokio::time::timeout(WAIT, call).await.unwrap().unwrap().unwrap_err().to_string();
+    assert!(error.contains("chose not to add"), "{error}");
+    assert!(p.a.state.store.outbox_list(None, None).unwrap().is_empty());
     assert_eq!(p.children_on_b(), 0);
+    assert!(!p.repo_b.join("web").exists());
 }
