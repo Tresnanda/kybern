@@ -54,6 +54,7 @@ export function sendTooLarge(bytes: number): boolean {
 /** Where a send lands, in words. */
 export function destLabel(dest: PushDest | null | undefined, machineName: string): string {
   if (!dest || dest.kind === "downloads") return `${machineName} · Downloads/Kybern`;
+  if (dest.kind === "skill") return `${machineName} · skill ${dest.name}`;
   return dest.subdir ? `${machineName} · ${dest.project}/${dest.subdir}` : `${machineName} · ${dest.project}`;
 }
 

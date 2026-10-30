@@ -3812,7 +3812,11 @@ export const FILES_RECEIVED_NOTIFICATION = "files.received";
 export const PORTS_CHANGED_NOTIFICATION = "ports.changed";
 
 /** Where a send lands on the other machine. */
-export type PushDest = { kind: "downloads" } | { kind: "project"; project: string; subdir?: string | null };
+export type PushDest =
+  | { kind: "downloads" }
+  | { kind: "project"; project: string; subdir?: string | null }
+  /** A skill's folder in the target's skill homes (`skills.copy`). */
+  | { kind: "skill"; name: string; homes: SkillHome[]; hash: string; replaces?: string[] };
 
 export interface FilesSendParams {
   project_id: ProjectId;
@@ -3840,11 +3844,93 @@ export interface FilesReceived {
   dest_path: string;
   at: DateTime;
 }
-export interface PushEntry { path: string; size: number; sha256: string }
+export interface PushEntry { path: string; size: number; sha256: string; executable?: boolean }
 export interface PeerFilesBeginParams { transfer_id: Uuid; name: string; is_folder: boolean; dest: PushDest; entries: PushEntry[] }
 export interface PeerFilesBeginResult { offsets: number[]; complete?: boolean; dest_path?: string | null }
 export interface PeerFilesChunkParams { transfer_id: Uuid; index: number; offset: number; data: string }
-export interface PeerFilesFinishResult { dest_path: string; files: number; bytes: number }
+export interface PeerFilesFinishResult { dest_path: string; files: number; bytes: number; skill?: SkillLanded | null }
+
+// ---- user skills on every machine (ADE-86; skill_sync.rs) ----
+
+/** The largest skill a copy carries, all its files together. */
+export const MAX_SKILL_COPY_BYTES = 20 * 1024 * 1024;
+/** A harness's user skill folder. */
+export type SkillHome = "agents" | "claude" | "codex" | "cursor" | "opencode" | "pi" | "omp";
+export const SKILL_HOMES: readonly SkillHome[] = ["agents", "claude", "codex", "cursor", "opencode", "pi", "omp"];
+export interface SkillHomeInfo { home: SkillHome; path: string; exists: boolean }
+/** One copy of a skill: its folder in one home. */
+export interface SkillCopyInfo {
+  home: SkillHome;
+  path: string;
+  /** SHA-256 over the copied files' paths and contents; equal hashes are the same skill. Absent when it can't be copied. */
+  hash?: string | null;
+  size: number;
+  files: number;
+  /** A link to this skill's copy in another home: that copy, not another one. */
+  linked_to?: SkillHome | null;
+  is_link?: boolean;
+  /** What a copy leaves out: links, .git, node_modules, secret-looking files. */
+  skipped?: string[];
+  /** Why it can't be copied. */
+  problem?: string | null;
+}
+export interface MachineSkill { name: string; display_name?: string | null; description?: string | null; copies: SkillCopyInfo[] }
+export interface SkillInventory { homes: SkillHomeInfo[]; skills: MachineSkill[]; os?: string }
+export type SkillsMachineState = "reported" | "offline" | "unsupported" | "unreachable";
+export interface SkillsMachineView {
+  id: MachineId;
+  name: string;
+  is_self: boolean;
+  state: SkillsMachineState;
+  os?: string;
+  homes?: SkillHomeInfo[];
+  detail?: string | null;
+}
+export interface SkillOnMachine { machine_id: MachineId; copies: SkillCopyInfo[] }
+export interface SkillPending { machine_id: MachineId; outbox_id: Uuid; from: MachineId }
+export interface SkillNetworkEntry {
+  name: string;
+  display_name?: string | null;
+  description?: string | null;
+  /** The machines that have it, in `SkillsNetworkView.machines` order. */
+  machines: SkillOnMachine[];
+  /** Distinct hashes, most common first. */
+  versions: string[];
+  differs: boolean;
+  pending?: SkillPending[];
+}
+/** `skills.network_view`. */
+export interface SkillsNetworkView { machines: SkillsMachineView[]; skills: SkillNetworkEntry[] }
+export interface SkillCopyTarget {
+  machine: string;
+  /** Left empty: the homes it is in on the source. */
+  homes?: SkillHome[];
+  /** Hashes of the versions on this machine the user agreed to replace. */
+  replaces?: string[];
+}
+export interface SkillsCopyParams { name: string; from?: string | null; from_home?: SkillHome | null; to: SkillCopyTarget[] }
+export type SkillCopyState = "queued" | "done" | "unsupported" | "failed";
+export type SkillPlaceAction = "written" | "replaced" | "same" | "linked";
+export interface SkillPlaced { home: SkillHome; path: string; action: SkillPlaceAction; backup?: string | null }
+export interface SkillLanded { name: string; hash: string; placed: SkillPlaced[] }
+export interface SkillCopyOutcome {
+  machine_id: MachineId;
+  name: string;
+  state: SkillCopyState;
+  outbox_id?: Uuid | null;
+  placed?: SkillPlaced[];
+  error?: string | null;
+}
+export interface SkillsCopyResult {
+  source: MachineId;
+  name: string;
+  hash: string;
+  files: number;
+  bytes: number;
+  skipped?: string[];
+  targets: SkillCopyOutcome[];
+}
+export interface SkillCopyPayload { name: string; from_home: SkillHome; homes: SkillHome[]; replaces?: string[] }
 
 export interface PortsForwardParams { machine: string; remote_port: number; local_port?: number | null }
 export interface PortForward {
@@ -3885,7 +3971,8 @@ export type OutboxKind =
   | "secrets_put"
   | "fork"
   | "move"
-  | "provision";
+  | "provision"
+  | "skill_copy";
 export type OutboxState = "queued" | "sending" | "delivered" | "failed" | "expired" | "cancelled";
 
 /** One queued piece of work for another machine. */
@@ -4470,6 +4557,11 @@ export interface Methods {
   "peer.files.chunk": [PeerFilesChunkParams, { offset: number }];
   "peer.files.finish": [{ transfer_id: Uuid }, PeerFilesFinishResult];
   "peer.files.abort": [{ transfer_id: Uuid }, Empty];
+  "skills.inventory": [Empty, SkillInventory];
+  "skills.network_view": [Empty, SkillsNetworkView];
+  "skills.copy": [SkillsCopyParams, SkillsCopyResult];
+  "peer.skills.inventory": [Empty, SkillInventory];
+  "peer.skills.copy": [SkillsCopyParams, SkillsCopyResult];
   "ports.forward": [PortsForwardParams, PortForward];
   "ports.list": [Empty, PortsListResult];
   "ports.stop": [{ id: Uuid }, PortsListResult];

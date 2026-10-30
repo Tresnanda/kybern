@@ -22,6 +22,7 @@ import { Notifications } from './Notifications.tsx'
 import { About } from './About.tsx'
 import { Machines } from './Machines.tsx'
 import { PairedDevices } from './PairedDevices.tsx'
+import { Skills } from '../skills/Skills.tsx'
 
 export const TABS = [
   ['general', 'General', 'Defaults for new threads and workspace behavior.', N.settings, 'default agent permissions worktree titles close notes preview files editor open in wrap lines'],
@@ -30,6 +31,7 @@ export const TABS = [
   ['agents', 'Agent providers', 'Manage the coding agents on your connected machine.', S.terminal, 'harness install updates claude codex cursor opencode pi omp profiles sdk delegation coordinator autonomy models'],
   ['accounts', 'Accounts', 'Sign in to more than one account for each agent. Threads use the default unless you pick another account in the model picker.', N.users, 'login email plan default project color work personal'],
   ['integrations', 'Integrations', 'Plugins and connectors for your agents.', S.plugin, 'tools mcp skills authentication'],
+  ['skills', 'Skills', 'Your skills on every machine, in the folders each agent reads. Copy one where it’s missing; nothing copies by itself.', S.skills, 'skills skill.md claude codex agents cursor opencode pi omp copy sync machines different missing replace'],
   ['computer', 'Computer use', 'Let agents read and use apps on this Mac.', N.laptop, 'cuadriver screen accessibility recording cursor'],
   ['machines', 'Machines', 'Your network: the machines you code on, and which ones can run agents for you.', N.laptop, 'network tailscale tailnet add code pair remote ssh status version update pause remove glyph'],
   ['devices', 'Paired devices', 'Phones and other devices that reach all your machines.', N.users, 'phone pair qr code ipad iphone android invitation'],
@@ -44,7 +46,7 @@ export function openSettingsTab(tab: Tab) {
  for (const listener of tabListeners) listener()
  if (!getNav().settingsOpen) setNav({ settingsOpen: true })
 }
-const GROUPS = [{ label: 'Personal', ids: ['general', 'appearance', 'notifications'] }, { label: 'Coding', ids: ['agents', 'accounts', 'integrations', 'computer'] }, { label: 'System', ids: ['machines', 'devices', 'background', 'about'] }]
+const GROUPS = [{ label: 'Personal', ids: ['general', 'appearance', 'notifications'] }, { label: 'Coding', ids: ['agents', 'accounts', 'integrations', 'skills', 'computer'] }, { label: 'System', ids: ['machines', 'devices', 'background', 'about'] }]
 
 export function SettingsScreen() {
   const environment = useEnvironment()
@@ -85,7 +87,7 @@ export function SettingsScreen() {
     if ('group' in row) offset += (offset ? 12 : 0) + 33
     else { if (row.item[0] === tab) pillTop = offset; offset += 30 }
   }
-  const content = tab === 'general' ? <General /> : tab === 'appearance' ? <Appearance /> : tab === 'agents' ? <Agents /> : tab === 'about' ? <About /> : tab === 'notifications' ? <Notifications /> : tab === 'background' ? <Background /> : tab === 'accounts' ? <Accounts /> : tab === 'machines' ? <Machines /> : tab === 'devices' ? <PairedDevices /> : tab === 'integrations' ? <Integrations /> : <Computer />
+  const content = tab === 'general' ? <General /> : tab === 'appearance' ? <Appearance /> : tab === 'agents' ? <Agents /> : tab === 'about' ? <About /> : tab === 'notifications' ? <Notifications /> : tab === 'background' ? <Background /> : tab === 'accounts' ? <Accounts /> : tab === 'machines' ? <Machines /> : tab === 'devices' ? <PairedDevices /> : tab === 'integrations' ? <Integrations /> : tab === 'skills' ? <Skills /> : <Computer />
   return <div testId="page-settings" onKeyDown={(e) => { if (e.key === 'tab' && settingsOverlayOwnsEscape()) e.preventDefault() /* Tab navigation is the window default; an open overlay keeps it */; if (e.key === 'escape' && !settingsOverlayOwnsEscape()) { if (query) setQuery(''); else close(true) } }} style={{ display: 'flex', flexGrow: 1, minHeight: 0 }}>
     <div style={{ display: 'flex', flexDirection: 'column', width: 256, flexShrink: 0, paddingLeft: 6, paddingRight: 6, paddingTop: 8, paddingBottom: 12, backgroundColor: fills.sidebar, borderTopLeftRadius: 12, borderBottomLeftRadius: 12 }}>
       <div testId="settings-back" tabIndex={0} autoFocus onClick={() => close()} onKeyDown={(e) => { if (e.key === 'enter' || e.key === 'space') close(true) }} style={{ display: 'flex', alignItems: 'center', height: 28, gap: 8, paddingLeft: 8, borderRadius: 8, hover: { backgroundColor: t.hover } }}><Icon source={N.arrowLeft} size={16} color={t.iconSecondary} /><Label color={t.text} size={14} lineHeight={21}>Back to workspace</Label></div>
