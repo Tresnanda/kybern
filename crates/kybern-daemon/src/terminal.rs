@@ -430,25 +430,37 @@ fn plain_windows_path(path: &str) -> String {
 // portable-pty enables ConPTY's INHERIT_CURSOR flag. Every terminal here starts
 // with a fresh, empty screen, so the host can answer its initial position request
 // before any client attaches. Consume that request so a renderer cannot reply twice.
+// Only ConPTY's startup preamble is searched: a later request from the shell or a
+// TUI passes through to the attached renderer untouched.
 #[cfg(any(windows, test))]
 #[derive(Default)]
 struct InitialCursorReport {
     pending: Vec<u8>,
+    seen: usize,
     answered: bool,
 }
 
 #[cfg(any(windows, test))]
 impl InitialCursorReport {
+    const PREAMBLE: usize = 256;
+
     fn push(&mut self, bytes: &[u8]) -> (Vec<u8>, bool) {
         const QUERY: &[u8] = b"\x1b[6n";
         if self.answered {
             return (bytes.to_vec(), false);
         }
+        self.seen += bytes.len();
         self.pending.extend_from_slice(bytes);
-        if let Some(index) = self.pending.windows(QUERY.len()).position(|part| part == QUERY) {
+        if let Some(index) = self.pending.windows(QUERY.len()).position(|part| part == QUERY)
+            && self.seen - self.pending.len() + index < Self::PREAMBLE
+        {
             self.pending.drain(index..index + QUERY.len());
             self.answered = true;
             return (std::mem::take(&mut self.pending), true);
+        }
+        if self.seen >= Self::PREAMBLE {
+            self.answered = true;
+            return (std::mem::take(&mut self.pending), false);
         }
         let keep = (1..QUERY.len()).rev().find(|&len| self.pending.ends_with(&QUERY[..len])).unwrap_or(0);
         let tail = self.pending.split_off(self.pending.len() - keep);
@@ -472,6 +484,11 @@ mod tests {
         }
         let mut cursor = InitialCursorReport::default();
         assert_eq!(cursor.push(b"before\x1b[6nAfter"), (b"beforeAfter".to_vec(), true));
+        // A request after the startup preamble belongs to the renderer.
+        let mut cursor = InitialCursorReport::default();
+        let output = vec![b'x'; InitialCursorReport::PREAMBLE];
+        assert_eq!(cursor.push(&output), (output.clone(), false));
+        assert_eq!(cursor.push(b"\x1b[6n"), (b"\x1b[6n".to_vec(), false));
     }
 
     #[test]

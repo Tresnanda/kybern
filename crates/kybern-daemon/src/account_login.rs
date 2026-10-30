@@ -503,8 +503,9 @@ impl AccountLogins {
                     event = attempt.rx.recv() => match event {
                         Some(Event::Out(text)) => {
                             // ConPTY and interactive prompt libraries wait for a cursor report.
-                            // A hidden terminal has no renderer to answer it.
-                            if spec.hidden_pty && let Some(terminal) = &attempt.terminal {
+                            // A hidden terminal has no renderer to answer it. Unix PTYs never
+                            // block on one, so their behaviour stays as it was.
+                            if cfg!(windows) && spec.hidden_pty && let Some(terminal) = &attempt.terminal {
                                 for _ in text.matches("\x1b[6n") {
                                     let _ = terminal.write(b"\x1b[1;1R");
                                 }
