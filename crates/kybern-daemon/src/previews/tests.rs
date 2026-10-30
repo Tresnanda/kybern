@@ -188,7 +188,7 @@ fn file_inside_the_worktree_needs_no_permission() {
     assert_eq!(plan, FilePlan { root: work.0.clone(), rel: "mockups/index.html".into() });
     assert!(matches!(resolved.info, PreviewTargetInfo::File { in_project: true, .. }));
     // The same file by absolute path and file URL.
-    for form in [page.to_string_lossy().into_owned(), format!("file://{}", page.display())] {
+    for form in [page.to_string_lossy().into_owned(), reqwest::Url::from_file_path(&page).unwrap().into()] {
         let r = resolve(&form, &roots(&work), &[], false, &elsewhere_policy()).unwrap();
         assert_eq!(r.file.unwrap().rel, "mockups/index.html", "{form}");
     }

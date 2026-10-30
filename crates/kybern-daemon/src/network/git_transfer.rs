@@ -88,6 +88,11 @@ pub fn normalize_remote(url: &str) -> Option<String> {
     if url.is_empty() {
         return None;
     }
+    // Git accepts a native Windows path as well as its file:// form. Normalize
+    // those separators before the URL/scp forms so shallow clones still match.
+    let windows_path = url.as_bytes().get(1) == Some(&b':') && url.as_bytes().get(2).is_some_and(|b| matches!(b, b'/' | b'\\'));
+    let normalized = if windows_path || url.starts_with("\\\\") { url.replace('\\', "/") } else { url.to_string() };
+    let url = normalized.as_str();
     let without_scheme = match url.split_once("://") {
         Some((_, rest)) => rest.to_string(),
         // `git@github.com:owner/repo.git`
@@ -368,6 +373,7 @@ mod tests {
         let seed = root.join("seed");
         std::fs::create_dir_all(&seed).unwrap();
         git(&seed, &["init", "-b", "main"]);
+        git(&seed, &["config", "core.autocrlf", "false"]);
         std::fs::write(seed.join("a.txt"), "one\n").unwrap();
         git(&seed, &["add", "a.txt"]);
         git(&seed, &["commit", "-m", "first"]);
@@ -376,7 +382,7 @@ mod tests {
         let a = root.join("a");
         let b = root.join("b");
         for dir in [&a, &b] {
-            git(root, &["clone", "-q", origin.to_str().unwrap(), dir.to_str().unwrap()]);
+            git(root, &["clone", "-q", "--config", "core.autocrlf=false", origin.to_str().unwrap(), dir.to_str().unwrap()]);
         }
         (origin, a, b)
     }
@@ -395,6 +401,9 @@ mod tests {
     fn remotes_are_normalized_to_host_owner_repo() {
         for (url, expected) in [
             ("https://GitHub.com/Tresnanda/Kybern.git", "github.com/tresnanda/kybern"),
+            (r"D:\Work\App.git", "d/work/app"),
+            ("file:///D:/Work/App.git", "d/work/app"),
+            (r"\\server\shared\App.git", "server/shared/app"),
             ("git@github.com:Tresnanda/kybern.git", "github.com/tresnanda/kybern"),
             ("ssh://git@github.com:22/tresnanda/kybern", "github.com/tresnanda/kybern"),
             ("https://user:pw@gitlab.example.com/group/sub/repo/", "gitlab.example.com/group/sub/repo"),
@@ -450,7 +459,19 @@ mod tests {
         git(&a, &["commit", "-qam", "second"]);
         git(&a, &["push", "-q", "origin", "HEAD"]);
         let shallow = dir.path().join("shallow");
-        git(dir.path(), &["clone", "-q", "--depth", "1", &format!("file://{}", origin.display()), shallow.to_str().unwrap()]);
+        git(
+            dir.path(),
+            &[
+                "clone",
+                "-q",
+                "--config",
+                "core.autocrlf=false",
+                "--depth",
+                "1",
+                reqwest::Url::from_file_path(&origin).unwrap().as_str(),
+                shallow.to_str().unwrap(),
+            ],
+        );
         let full = identity_of(&a).await;
         let cut = identity_of(&shallow).await;
         assert!(!full.root_commits.is_empty());

@@ -326,7 +326,8 @@ fn has_entry_extension(input: &str) -> bool {
 }
 
 fn looks_like_path(input: &str) -> bool {
-    input.starts_with('/')
+    Path::new(input).is_absolute()
+        || input.starts_with('/')
         || input.starts_with('~')
         || input.starts_with("./")
         || input.starts_with("../")
@@ -358,7 +359,12 @@ fn file_url_path(input: &str) -> Result<String, PreviewError> {
         return Err(PreviewError::invalid_address());
     }
     let path = path.split(['?', '#']).next().unwrap_or(path);
-    percent_decode(path).ok_or_else(PreviewError::invalid_address)
+    percent_decode(path).ok_or_else(PreviewError::invalid_address)?;
+    reqwest::Url::parse(input)
+        .map_err(|_| PreviewError::invalid_address())?
+        .to_file_path()
+        .map(|path| path.to_string_lossy().into_owned())
+        .map_err(|_| PreviewError::invalid_address())
 }
 
 fn expand_home(raw: &str, policy: &GrantPolicy) -> Option<PathBuf> {

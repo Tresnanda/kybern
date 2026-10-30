@@ -296,7 +296,7 @@ fn the_repository_note_matches_the_golden_text() {
     if std::env::var_os("KYBERN_UPDATE_GOLDEN").is_some() {
         std::fs::write(golden, &out).unwrap();
     }
-    assert_eq!(out, include_str!("group_note.golden.txt"), "repository note wording changed: update the golden file (KYBERN_UPDATE_GOLDEN=1)");
+    assert_eq!(out, include_str!("group_note.golden.txt").replace("\r\n", "\n"), "repository note wording changed: update the golden file (KYBERN_UPDATE_GOLDEN=1)");
 }
 
 #[tokio::test]

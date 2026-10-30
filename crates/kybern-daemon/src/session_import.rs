@@ -344,7 +344,12 @@ impl RootResolver {
             }
         }
         let root = if exists { path.canonicalize().unwrap_or_else(|_| path.to_path_buf()) } else { path.to_path_buf() };
-        Some(RootInfo { root: root.to_string_lossy().into_owned(), is_git: false, git_remote: None, folder_missing: !exists })
+        Some(RootInfo {
+            root: kybern_git::simplify_path(&root).to_string_lossy().into_owned(),
+            is_git: false,
+            git_remote: None,
+            folder_missing: !exists,
+        })
     }
 
     fn repo(&mut self, dir: &Path) -> RootInfo {
@@ -353,7 +358,7 @@ impl RootResolver {
         self.repos
             .entry(main.clone())
             .or_insert_with(|| RootInfo {
-                root: main.to_string_lossy().into_owned(),
+                root: kybern_git::simplify_path(&main).to_string_lossy().into_owned(),
                 is_git: true,
                 git_remote: origin_url(&main),
                 folder_missing: false,
@@ -462,7 +467,12 @@ impl ScanRun {
         let project_ids = state
             .store
             .projects_list()
-            .map(|projects| projects.into_iter().map(|project| (project.path, project.id)).collect())
+            .map(|projects| {
+                projects
+                    .into_iter()
+                    .map(|project| (kybern_git::simplify_path(Path::new(&project.path)).to_string_lossy().into_owned(), project.id))
+                    .collect()
+            })
             .unwrap_or_default();
         let providers = targets
             .iter()

@@ -167,7 +167,7 @@ fn walk(root: &Path) -> (Vec<String>, Vec<String>) {
                     stack.push(path);
                 }
             } else if let Ok(rel) = path.strip_prefix(root) {
-                out.push(rel.to_string_lossy().to_string());
+                out.push(relative_wire_path(rel));
                 if out.len() >= MAX_FILES {
                     return (out, repos);
                 }
@@ -206,6 +206,10 @@ pub fn rank(files: &[String], query: &str, limit: usize) -> Vec<String> {
         .collect();
     scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(b.2)));
     scored.into_iter().take(limit).map(|(_, _, path)| path.to_string()).collect()
+}
+
+fn relative_wire_path(path: &Path) -> String {
+    path.components().map(|part| part.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")
 }
 
 /// Resolve a file or folder someone named: a file tab, a chat link, an agent's
@@ -373,7 +377,7 @@ async fn resolve_reference(
     path: &str,
 ) -> Result<Reference> {
     let path = path.trim();
-    if path.is_empty() || path.contains(['\0', '\\']) {
+    if path.is_empty() || path.contains('\0') || (cfg!(unix) && path.contains('\\')) {
         return Ok(Reference::Missing);
     }
     // A file really named `a:1` or `a#L1` wins over the location reading.
@@ -394,13 +398,14 @@ async fn resolve_reference(
             return Ok(Reference::Outside);
         }
     }
-    if clean.is_empty() || clean.starts_with('/') {
+    if clean.is_empty() || Path::new(clean).is_absolute() {
         return Ok(Reference::Missing);
     }
     if index.is_none() {
         *index = Some(indexes.list(cwd).await?);
     }
-    let name = clean.trim_start_matches("./");
+    let normalized = if cfg!(windows) { clean.replace('\\', "/") } else { clean.into() };
+    let name = normalized.trim_start_matches("./");
     let suffix = format!("/{name}");
     let mut matches = index.as_ref().unwrap().iter().filter(|file| *file == name || file.ends_with(&suffix));
     Ok(match (matches.next(), matches.next()) {
@@ -442,11 +447,10 @@ async fn thread_relative(root: &Path, source: &str) -> Result<(std::path::PathBu
     let path = tokio::fs::canonicalize(candidate)
         .await
         .map_err(|_| anyhow::anyhow!("File not found. Check the path or ask the agent to recreate it."))?;
-    let relative = path
-        .strip_prefix(&root)
-        .map_err(|_| anyhow::anyhow!("This file is outside the conversation's workspace. Ask the agent to copy it into the workspace."))?
-        .to_string_lossy()
-        .into_owned();
+    let relative =
+        relative_wire_path(path.strip_prefix(&root).map_err(|_| {
+            anyhow::anyhow!("This file is outside the conversation's workspace. Ask the agent to copy it into the workspace.")
+        })?);
     Ok((root, relative))
 }
 
@@ -485,7 +489,7 @@ pub async fn resolve_thread_files(indexes: &FileIndexCache, cwd: &Path, paths: &
 /// path when it opens, or why it is refused.
 async fn existing_file(root: &Path, path: &str) -> Option<Result<String, String>> {
     let canon = tokio::fs::canonicalize(root.join(path)).await.ok()?;
-    let relative = canon.strip_prefix(root).ok()?.to_string_lossy().into_owned();
+    let relative = relative_wire_path(canon.strip_prefix(root).ok()?);
     canon.is_file().then(|| resolve(root, &relative).map(|_| relative).map_err(|error| error.to_string()))
 }
 
@@ -576,7 +580,7 @@ pub async fn write_file(
     }
     let canon_root = std::fs::canonicalize(root)?;
     let real = target.strip_prefix(&canon_root).map_err(|_| anyhow::anyhow!(OUTSIDE))?;
-    resolve(&canon_root, &real.to_string_lossy())?;
+    resolve(&canon_root, &relative_wire_path(real))?;
     let named = rel.split('/').chain(real.components().filter_map(|part| part.as_os_str().to_str()));
     if let Some(folder) = generated_folder(named) {
         anyhow::bail!("{folder} holds generated files, so Kybern doesn't save into it. Change the source that generates it instead.");
