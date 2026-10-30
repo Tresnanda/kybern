@@ -20,8 +20,9 @@ repo=https://github.com/Tresnanda/gpuix.git
 # while the compositor holds every drawable; the layer is kicked) and its getFrameWatchdog fields.
 # `frame-clock`: lost deliveries, acknowledgements and callback chains recover; GPUI preserves
 # callbacks across failed window updates. Both forks are integrated into `next` and `kybern`.
-# `ui-update-freeze`: background Metal drawable acquisition keeps AppKit/JS
-# responsive even when nextDrawable waits below the gate's tracked queue limit.
+# Background Metal drawable acquisition keeps AppKit/JS responsive even when
+# nextDrawable waits below the gate's tracked queue limit. Integrated into both
+# forks' `next` and `kybern` branches.
 commit=9eeb1ee18414b7e8f8d5d208dc62f8b2d25a07f0
 # The zed submodule commit `commit` records; update.sh refuses a checkout that differs.
 zed=9bededa33fd6cb33607fa4c2514bbc4f838bc974
