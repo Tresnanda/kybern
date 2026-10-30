@@ -4,6 +4,7 @@
 fn pr_init_member(dir: &std::path::Path, file: &str) {
     std::fs::create_dir_all(dir).unwrap();
     git_in(dir, &["init", "-q"]);
+    git_in(dir, &["config", "core.autocrlf", "false"]);
     git_in(dir, &["symbolic-ref", "HEAD", "refs/heads/main"]);
     git_in(dir, &["config", "user.name", "Group Test"]);
     git_in(dir, &["config", "user.email", "group@example.com"]);

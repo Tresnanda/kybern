@@ -1322,6 +1322,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repo::new(dir.path());
         repo.git(&["init", "-q"]).await.unwrap();
+        repo.git(&["config", "core.autocrlf", "false"]).await.unwrap();
         repo.git(&["config", "user.email", "t@t"]).await.unwrap();
         repo.git(&["config", "user.name", "t"]).await.unwrap();
         (dir, repo)
@@ -1359,7 +1360,8 @@ mod tests {
         assert_eq!(repo.status_porcelain_unlocked(&[], timeout).await.unwrap(), [" M a.txt"]);
         // A file-system monitor hook that sleeps holds `git status`; a timeout of a
         // few nanoseconds instead raced a fast git on a busy runner.
-        repo.git(&["config", "core.fsmonitor", "sleep 10; :"]).await.unwrap();
+        let hook = if cfg!(windows) { "powershell.exe -NoProfile -Command \"Start-Sleep -Seconds 10\"" } else { "sleep 10; :" };
+        repo.git(&["config", "core.fsmonitor", hook]).await.unwrap();
         let error = repo.status_porcelain_unlocked(&[], std::time::Duration::from_millis(300)).await.unwrap_err();
         assert!(error.to_string().contains("timed out"), "{error}");
     }
@@ -1940,6 +1942,7 @@ mod group_tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repo::new(dir.path());
         repo.git(&["init", "-q"]).await.unwrap();
+        repo.git(&["config", "core.autocrlf", "false"]).await.unwrap();
         repo.git(&["config", "user.email", "t@t"]).await.unwrap();
         repo.git(&["config", "user.name", "t"]).await.unwrap();
         (dir, repo)

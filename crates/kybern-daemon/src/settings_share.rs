@@ -653,6 +653,7 @@ mod tests {
         }
         let next = next_stamp(&store);
         assert!(next > far, "{next:?} must outrank {far:?}");
+        drop(store);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -692,11 +693,12 @@ mod state_tests {
     use super::*;
     use serde_json::json;
 
-    /// A daemon state in its own data directory, with no network.
+    /// File-backed settings with an in-memory database: the process-global
+    /// secret-store handle may outlive this fixture and must not hold its files open.
     fn lone() -> (AppState, std::path::PathBuf) {
         let root = std::env::temp_dir().join(format!("kybern-share-state-{}", uuid::Uuid::now_v7()));
         let paths = crate::config::Paths::resolve(Some(root.clone())).unwrap();
-        (AppState::initialize(&paths).unwrap(), root)
+        (AppState::initialize_in_memory(&paths).unwrap(), root)
     }
 
     fn patch(stamp: &SettingsStamp, fields: &[(&str, Value)]) -> SettingsPatch {

@@ -938,7 +938,11 @@ mod account_tests {
         let provider = settings.providers.entry(ProviderKind::Codex).or_default();
         provider.accounts.insert(
             "work".into(),
-            kybern_protocol::ProviderAccount { name: "Work".into(), directory: "/account-work".into(), ..Default::default() },
+            kybern_protocol::ProviderAccount {
+                name: "Work".into(),
+                directory: std::env::temp_dir().join("account-work").to_string_lossy().into_owned(),
+                ..Default::default()
+            },
         );
         provider.default_account = Some("work".into());
         monitor.inner.settings.set(settings).unwrap();
@@ -967,7 +971,11 @@ mod named_account_tests {
         let provider = settings.providers.entry(ProviderKind::ClaudeCode).or_default();
         provider.accounts.insert(
             "work".into(),
-            kybern_protocol::ProviderAccount { name: "Work".into(), directory: "/account-work".into(), ..Default::default() },
+            kybern_protocol::ProviderAccount {
+                name: "Work".into(),
+                directory: std::env::temp_dir().join("account-work").to_string_lossy().into_owned(),
+                ..Default::default()
+            },
         );
         monitor.inner.settings.set(settings).unwrap();
         monitor
@@ -1075,7 +1083,11 @@ mod persistence_tests {
     }
 
     fn work_account() -> kybern_protocol::ProviderAccount {
-        kybern_protocol::ProviderAccount { name: "Work".into(), directory: "/account-work".into(), ..Default::default() }
+        kybern_protocol::ProviderAccount {
+            name: "Work".into(),
+            directory: std::env::temp_dir().join("account-work").to_string_lossy().into_owned(),
+            ..Default::default()
+        }
     }
 
     #[test]

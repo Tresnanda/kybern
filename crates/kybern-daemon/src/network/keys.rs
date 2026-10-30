@@ -443,12 +443,13 @@ mod tests {
         std::fs::write(&path, b"{ not json").unwrap();
         assert!(load(&net).is_err());
         assert!(load_or_create(&net).is_err(), "load_or_create must not paper over a damaged key");
-        std::fs::write(&path, br#"{"v":1,"signing":"AAAA","sealing":"AAAA"}"#).unwrap();
+        std::fs::write(&path, platform_protector().protect(br#"{"v":1,"signing":"AAAA","sealing":"AAAA"}"#).unwrap()).unwrap();
         assert!(load(&net).is_err(), "short secrets are refused");
-        std::fs::write(&path, br#"{"v":9,"signing":"AAAA","sealing":"AAAA"}"#).unwrap();
+        let unsupported = platform_protector().protect(br#"{"v":9,"signing":"AAAA","sealing":"AAAA"}"#).unwrap();
+        std::fs::write(&path, &unsupported).unwrap();
         assert!(load(&net).unwrap_err().to_string().contains("version 9"));
         // Nothing replaced it.
-        assert_eq!(std::fs::read(&path).unwrap(), br#"{"v":9,"signing":"AAAA","sealing":"AAAA"}"#);
+        assert_eq!(std::fs::read(&path).unwrap(), unsupported);
         let _ = made;
     }
 

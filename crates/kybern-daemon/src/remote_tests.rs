@@ -155,6 +155,8 @@ async fn skill_picker_explicit_account_overrides_project_and_provider_defaults()
     );
 }
 
+// Successful cleanup requires the lsof or /proc process-ownership backend.
+#[cfg(unix)]
 #[tokio::test]
 async fn ordinary_worktree_cleanup_rpc_retains_thread_and_source_association() {
     let host = Host::start().await;
@@ -2152,7 +2154,7 @@ async fn previews_open_serve_grant_and_close_over_rpc_and_http() {
     assert!(closed.is_err());
 
     // Outside the project: a card first, then a persisted grant.
-    let outside = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target").join(format!("preview-e2e-{}", Uuid::now_v7()));
+    let outside = outside_folder();
     std::fs::create_dir_all(outside.join("deeper")).unwrap();
     let outside = outside.canonicalize().unwrap();
     std::fs::write(outside.join("page.html"), "<p>outside</p>").unwrap();
@@ -2343,7 +2345,10 @@ async fn review_adversarial_image_route() {
         eprintln!("{path} -> {status}");
         assert!(matches!(status, reqwest::StatusCode::FORBIDDEN | reqwest::StatusCode::NOT_FOUND), "{path} -> {status}");
     }
+    #[cfg(unix)]
     std::os::unix::fs::symlink(host.root.join(".git/shot.png"), host.root.join("link.png")).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file(host.root.join(".git/shot.png"), host.root.join("link.png")).unwrap();
     assert_eq!(get("link.png".into()).await, reqwest::StatusCode::FORBIDDEN);
     // No existence oracle outside the workspace: nothing is named, so every answer is the same 404.
     let home = std::env::var("HOME").unwrap();

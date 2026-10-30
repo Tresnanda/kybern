@@ -454,21 +454,9 @@ mod tests {
 
     #[tokio::test]
     async fn closed_port_is_connection_refused() {
-        // A freed port can be taken by a test running in parallel before the probe; try a few fresh ones.
-        let mut result = None;
-        for _ in 0..5 {
-            let port = {
-                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                listener.local_addr().unwrap().port()
-            };
-            let probed = probe(&format!("http://127.0.0.1:{port}")).await.unwrap();
-            let refused = probed.error == Some(PreviewProbeError::ConnectionRefused);
-            result = Some(probed);
-            if refused {
-                break;
-            }
-        }
-        let result = result.unwrap();
+        // Port zero can never be a listening TCP endpoint: binding it allocates
+        // another port. This cannot race another test taking a just-freed port.
+        let result = probe("http://127.0.0.1:0").await.unwrap();
         assert!(!result.reachable);
         assert_eq!(result.error, Some(PreviewProbeError::ConnectionRefused));
     }

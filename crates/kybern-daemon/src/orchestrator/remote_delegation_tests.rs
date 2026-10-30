@@ -59,6 +59,9 @@ fn two_checkouts(root: &std::path::Path) -> (PathBuf, PathBuf) {
     let seed = root.join("seed");
     std::fs::create_dir_all(&seed).unwrap();
     run_git(&seed, &["init", "-q", "-b", "main"]);
+    run_git(&seed, &["config", "core.autocrlf", "false"]);
+    // The transfer assertions compare exact bytes even on a CRLF-default machine.
+    std::fs::write(seed.join(".gitattributes"), "* text eol=lf\n").unwrap();
     std::fs::write(seed.join("tracked.txt"), "one\n").unwrap();
     run_git(&seed, &["add", "."]);
     run_git(&seed, &["commit", "-q", "-m", "init"]);
@@ -66,7 +69,7 @@ fn two_checkouts(root: &std::path::Path) -> (PathBuf, PathBuf) {
     run_git(&seed, &["push", "-q", "origin", "main"]);
     let (a, b) = (root.join("checkout-a"), root.join("checkout-b"));
     for dir in [&a, &b] {
-        run_git(root, &["clone", "-q", origin.to_str().unwrap(), dir.to_str().unwrap()]);
+        run_git(root, &["clone", "-q", "--config", "core.autocrlf=false", origin.to_str().unwrap(), dir.to_str().unwrap()]);
     }
     (a, b)
 }
@@ -95,14 +98,16 @@ fn group_checkouts(root: &std::path::Path, on_b: &[&str]) -> (PathBuf, PathBuf) 
         let seed = root.join(format!("seed-{member}"));
         std::fs::create_dir_all(&seed).unwrap();
         run_git(&seed, &["init", "-q", "-b", "main"]);
+        run_git(&seed, &["config", "core.autocrlf", "false"]);
+        std::fs::write(seed.join(".gitattributes"), "* text eol=lf\n").unwrap();
         std::fs::write(seed.join("tracked.txt"), format!("{member}\n")).unwrap();
         run_git(&seed, &["add", "."]);
         run_git(&seed, &["commit", "-q", "-m", &format!("init {member}")]);
         run_git(&seed, &["remote", "add", "origin", origin.to_str().unwrap()]);
         run_git(&seed, &["push", "-q", "origin", "main"]);
-        run_git(root, &["clone", "-q", origin.to_str().unwrap(), folder_a.join(member).to_str().unwrap()]);
+        run_git(root, &["clone", "-q", "--config", "core.autocrlf=false", origin.to_str().unwrap(), folder_a.join(member).to_str().unwrap()]);
         if on_b.contains(&member) {
-            run_git(root, &["clone", "-q", origin.to_str().unwrap(), folder_b.join(member).to_str().unwrap()]);
+            run_git(root, &["clone", "-q", "--config", "core.autocrlf=false", origin.to_str().unwrap(), folder_b.join(member).to_str().unwrap()]);
         }
     }
     (folder_a, folder_b)
@@ -701,7 +706,7 @@ async fn the_target_finds_its_checkout_by_repository_and_says_so_when_it_cannot(
 
     // Two checkouts of the same repository: b lists them and the hint picks one.
     let second = p.cluster.dir.path().join("checkout-b2");
-    run_git(p.cluster.dir.path(), &["clone", "-q", p.repo_b.to_str().unwrap(), second.to_str().unwrap()]);
+    run_git(p.cluster.dir.path(), &["clone", "-q", "--config", "core.autocrlf=false", p.repo_b.to_str().unwrap(), second.to_str().unwrap()]);
     p.b.state.store.project_insert(&git_project("repo-b-again", &second)).unwrap();
     let repo = crate::network::git_transfer::identity_of(&p.repo_a).await;
     let error = call(make(repo.clone(), None)).await.unwrap_err();

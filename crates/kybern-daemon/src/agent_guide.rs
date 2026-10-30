@@ -231,7 +231,7 @@ mod tests {
         }
         assert_eq!(
             guide,
-            include_str!("agent_guide_full.golden.txt"),
+            include_str!("agent_guide_full.golden.txt").replace("\r\n", "\n"),
             "guide wording changed: bump GUIDE_VERSION and update the golden file (KYBERN_UPDATE_GOLDEN=1)"
         );
         assert_eq!(GUIDE_VERSION, 20);

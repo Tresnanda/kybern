@@ -665,6 +665,7 @@ mod tests {
         store: Store,
         thread: Thread,
         other_thread: Thread,
+        #[cfg(unix)]
         terminals: TerminalManager,
     }
 
@@ -726,7 +727,15 @@ mod tests {
             store.thread_upsert(&other_thread).unwrap();
             let terminals = TerminalManager::default();
             let tools = AppTools::new(store.clone(), terminals.clone());
-            Self { root, tools, store, thread, other_thread, terminals }
+            Self {
+                root,
+                tools,
+                store,
+                thread,
+                other_thread,
+                #[cfg(unix)]
+                terminals,
+            }
         }
     }
 

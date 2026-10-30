@@ -801,7 +801,7 @@ mod tests {
         // A damaged key file is an error, not a new key (which would orphan every secret).
         std::fs::write(data_key_path(&net), b"{ not json").unwrap();
         assert!(SecretStore::open(store.clone(), &net).is_err());
-        std::fs::write(data_key_path(&net), br#"{"v":9,"key":"AAAA"}"#).unwrap();
+        std::fs::write(data_key_path(&net), keys::platform_protector().protect(br#"{"v":9,"key":"AAAA"}"#).unwrap()).unwrap();
         assert!(format!("{:#}", SecretStore::open(store.clone(), &net).unwrap_err()).contains("version 9"));
         // A different key cannot read the old rows.
         std::fs::remove_file(data_key_path(&net)).unwrap();

@@ -256,8 +256,12 @@ async fn a_group_worktree_delegation_runs_in_the_matching_group_on_the_other_mac
     let Some(p) = Pair::group(&["api", "web"]).await else { return };
     p.make_api_dirty();
     let started = p.delegate(json!({"task": "Change both repositories", "workspace": "worktree"})).await;
-    assert_eq!(started["remote_state"], "running", "the target acknowledged: {started}");
     let task_id = task_id_of(&started);
+    // Acceptance may outlive the call's short inline wait while member worktrees
+    // are prepared. Observe the target's acknowledgement in durable task state.
+    eventually(|| async { (p.row(task_id).state == RemoteChildState::Running).then_some(()) }).await;
+    let status = p.tool("kybern_agent_status", json!({"task_ids": [task_id]})).await.unwrap();
+    assert_eq!(status["agents"][0]["remote_state"], "running", "the target acknowledged: {status}");
 
     let child = eventually(|| async { p.child_on_b(task_id) }).await;
     let worktree = child.worktree.clone().expect("a worktree delegation gets a container");

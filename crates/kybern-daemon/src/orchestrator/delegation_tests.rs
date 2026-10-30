@@ -272,6 +272,7 @@ fn run_git(dir: &std::path::Path, args: &[&str]) -> String {
 fn init_project_repo(dir: &std::path::Path) {
     std::fs::create_dir_all(dir).unwrap();
     run_git(dir, &["init", "-q"]);
+    run_git(dir, &["config", "core.autocrlf", "false"]);
     std::fs::write(dir.join("tracked.txt"), "one\n").unwrap();
     run_git(dir, &["add", "."]);
     run_git(dir, &["commit", "-q", "-m", "init"]);
@@ -1340,6 +1341,7 @@ async fn a_group_parent_delegates_into_its_own_container_of_member_worktrees() {
         let dir = folder.join(member);
         std::fs::create_dir_all(&dir).unwrap();
         run_git(&dir, &["init", "-q"]);
+        run_git(&dir, &["config", "core.autocrlf", "false"]);
         run_git(&dir, &["config", "user.name", "Group"]);
         run_git(&dir, &["config", "user.email", "group@example.com"]);
         std::fs::write(dir.join("a.txt"), "one\n").unwrap();
@@ -1403,6 +1405,7 @@ async fn a_group_child_s_files_outside_its_repositories_block_cleanup_and_surviv
         let dir = folder.join(member);
         std::fs::create_dir_all(&dir).unwrap();
         run_git(&dir, &["init", "-q"]);
+        run_git(&dir, &["config", "core.autocrlf", "false"]);
         run_git(&dir, &["config", "user.name", "Group"]);
         run_git(&dir, &["config", "user.email", "group@example.com"]);
         std::fs::write(dir.join("a.txt"), "one\n").unwrap();

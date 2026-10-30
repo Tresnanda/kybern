@@ -111,7 +111,27 @@ impl AppState {
         timing: crate::network::Timing,
         drivers: DriverRegistry,
     ) -> Result<Self> {
-        let store = Store::open(&paths.db)?;
+        Self::initialize_with_store(paths, tailscale, timing, drivers, Store::open(&paths.db)?)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn initialize_in_memory(paths: &Paths) -> Result<Self> {
+        Self::initialize_with_store(
+            paths,
+            crate::network::tailscale::from_env(),
+            crate::network::Timing::default(),
+            DriverRegistry::with_cache_dir(&paths.root.join("cache")),
+            Store::open_in_memory()?,
+        )
+    }
+
+    fn initialize_with_store(
+        paths: &Paths,
+        tailscale: Arc<dyn crate::network::Tailscale>,
+        timing: crate::network::Timing,
+        drivers: DriverRegistry,
+        store: Store,
+    ) -> Result<Self> {
         let bootstrap_token = crate::auth::ensure_bootstrap(&store, &paths.token_file)?;
         let environment_id = match store.meta_get("environment_id")? {
             Some(id) => id,

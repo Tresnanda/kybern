@@ -211,9 +211,13 @@ async fn a_running_thread_moves_only_when_its_turn_ends() {
     assert!(matches!(p.parent_now().status, ThreadStatus::Running | ThreadStatus::AwaitingApproval), "{:?}", p.parent_now().status);
 
     let queued = p.a.state.orchestrator.move_to_machine(p.move_params()).await.unwrap();
-    eventually(|| async { (p.move_item(queued.operation_id).attempts > 0).then_some(()) }).await;
+    // Wait for the attempt's completion, not its start: Sending is transient.
+    eventually(|| async {
+        let item = p.move_item(queued.operation_id);
+        (item.attempts > 0 && item.state == OutboxState::Queued
+            && p.notices_on_a().iter().any(|(text, _)| text.contains("this turn to finish"))).then_some(())
+    }).await;
     // The attempt found a running turn: no lease, nothing sent, and the thread works as usual.
-    tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(p.parent_now().moved.is_none(), "no lease while a turn runs");
     assert!(p.moves_on_b().is_empty());
     assert_eq!(p.move_item(queued.operation_id).state, OutboxState::Queued);

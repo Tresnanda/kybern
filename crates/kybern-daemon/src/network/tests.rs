@@ -609,10 +609,25 @@ async fn a_peer_that_goes_away_is_retried_with_growing_waits_and_found_again() {
     // The other side turns the network off: its listener closes and its sessions end.
     other.set_network_enabled(false);
     eventually("the session ends", WAIT, || dialer.state.network.peers.link(&other.id()).is_none()).await;
+    other.state.exposure.clear_network().await;
+    // Reject TCP connections immediately while the peer is unavailable. Windows
+    // otherwise spends seconds retrying each of the seven closed discovery ports;
+    // this scenario measures peer retries, not the operating system's SYN policy.
+    let mut rejectors = tokio::task::JoinSet::new();
+    for port in peers::PORT_RANGE {
+        let listener = tokio::net::TcpListener::bind(std::net::SocketAddr::new(other.listen_ip, port)).await.unwrap();
+        rejectors.spawn(async move {
+            while let Ok((connection, _)) = listener.accept().await {
+                drop(connection);
+            }
+        });
+    }
     eventually("failed attempts pile up", WAIT, || dialer.state.network.peers.status(&other.id()).failures >= 3).await;
     let status = dialer.state.network.peers.status(&other.id());
     assert!(!status.online && status.last_error.is_some(), "{status:?}");
     // Back on: the dialer finds it again within the capped backoff.
+    rejectors.abort_all();
+    while rejectors.join_next().await.is_some() {}
     other.set_network_enabled(true);
     eventually("linked again", WAIT, || linked(&a, &b)).await;
 }

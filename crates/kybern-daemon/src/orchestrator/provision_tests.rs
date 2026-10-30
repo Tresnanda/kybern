@@ -80,7 +80,7 @@ impl ProvisionNet {
 
     fn c_project_at(&self, path: &std::path::Path) -> Option<Project> {
         let wanted = std::fs::canonicalize(path).ok()?;
-        self.c.state.store.projects_list().unwrap().into_iter().find(|project| std::path::Path::new(&project.path) == wanted)
+        self.c.state.store.projects_list().unwrap().into_iter().find(|project| std::fs::canonicalize(&project.path).ok().as_ref() == Some(&wanted))
     }
 }
 
@@ -97,7 +97,7 @@ async fn a_project_is_cloned_from_its_remote_on_another_machine_with_its_env_fil
     assert!(plan.blocked.is_none() && plan.existing.is_empty(), "{plan:?}");
     assert_eq!(plan.source.id, net.b.id(), "the source is the machine asked, not the first one");
     let suggested = PathBuf::from(plan.suggested_path.clone().unwrap());
-    assert_eq!(suggested, std::fs::canonicalize(net.root().join("c-home")).unwrap().join("kybern"), "next to c's other projects");
+    assert_eq!(suggested, kybern_git::simplify_path(&std::fs::canonicalize(net.root().join("c-home")).unwrap()).join("kybern"), "next to c's other projects");
     assert_eq!(plan.path_check.as_ref().unwrap().state, PathState::Free);
     let env: Vec<&str> = plan.env_files.iter().map(|file| file.path.as_str()).collect();
     assert_eq!(env, vec![".env", "apps/web/.env.local"], "ignored env files only, no template");
@@ -314,7 +314,7 @@ async fn delegating_to_a_machine_without_the_repository_asks_and_then_runs_there
     wait_until("the child started on b", WAIT * 4, || !spawned.lock().unwrap().is_empty()).await;
     let child = b.state.store.threads_list(None, true).unwrap().into_iter().find(|thread| thread.delegation.is_some()).unwrap();
     let project = b.state.store.project_get(child.project_id).unwrap().unwrap();
-    assert_eq!(std::path::Path::new(&project.path), std::fs::canonicalize(&dest).unwrap());
+    assert_eq!(std::path::Path::new(&project.path), kybern_git::simplify_path(&std::fs::canonicalize(&dest).unwrap()));
     let _ = (&a, &parent);
 }
 
@@ -326,7 +326,7 @@ async fn full_access_adds_the_project_with_the_proposed_folder_without_a_card() 
         .await
         .unwrap();
     assert_eq!(started["provision"]["approved_by"], "full_access", "{started}");
-    let proposed = std::fs::canonicalize(cluster.dir.path().join("b-home")).unwrap().join("kybern");
+    let proposed = kybern_git::simplify_path(&std::fs::canonicalize(cluster.dir.path().join("b-home")).unwrap()).join("kybern");
     assert_eq!(started["provision"]["path"], json!(proposed.to_string_lossy()));
     wait_until("the child started on b", WAIT * 4, || !spawned.lock().unwrap().is_empty()).await;
     assert!(proposed.join(".git").exists());
@@ -341,7 +341,7 @@ async fn the_add_project_tool_takes_its_machine_argument_through_the_real_dispat
     let queued = fixture.tool(&parent, &live, "p1", "kybern_project_add_to_machine", json!({"machine": b.id(), "reason": "Needed for tests"})).await.unwrap();
     assert_eq!(queued["status"], "queued", "{queued}");
     assert_eq!(queued["approved_by"], "full_access", "{queued}");
-    let proposed = std::fs::canonicalize(cluster.dir.path().join("b-home")).unwrap().join("kybern");
+    let proposed = kybern_git::simplify_path(&std::fs::canonicalize(cluster.dir.path().join("b-home")).unwrap()).join("kybern");
     wait_until("the project landed on b", WAIT * 4, || proposed.join(".git").exists()).await;
     assert!(live.daemon_approvals.lock().await.is_empty(), "no card in Full access");
 }
@@ -349,7 +349,7 @@ async fn the_add_project_tool_takes_its_machine_argument_through_the_real_dispat
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_add_project_tool_puts_the_project_at_the_agents_path_and_refuses_a_bad_one() {
     let Some((cluster, _a, b, fixture, parent, live, _spawned)) = agent_pair(PermissionMode::FullAccess).await else { return };
-    let home = std::fs::canonicalize(cluster.dir.path().join("b-home")).unwrap();
+    let home = kybern_git::simplify_path(&std::fs::canonicalize(cluster.dir.path().join("b-home")).unwrap());
     // The home folder itself is refused with the target's reason, and nothing is queued.
     let refused = fixture
         .tool(&parent, &live, "p0", "kybern_project_add_to_machine", json!({"machine": b.id(), "path": home.to_string_lossy()}))
