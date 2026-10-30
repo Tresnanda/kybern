@@ -10,6 +10,9 @@ function Lab() {
   const [tick, setTick] = useState(0)
   return <div testId="app-ready" onKeyDown={event => { if (event.key === 't') setTick(n => n + 1) }} style={{ width: '100%', height: '100%', backgroundColor: light ? '#f5f5f5' : '#202020' }}>
     <div paintTransform={{ initial: false, animate: { opacity: 1 }, retain: true }} style={{ position: 'absolute', left: 40, top: 40, width: 440, height: 220, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ position: 'absolute', left: 360, top: 8, display: 'flex' }}>
+        {Array.from({ length: 4 }, (_, bit) => <div key={bit} style={{ width: 8, height: 8, backgroundColor: tick & (1 << bit) ? '#00ff00' : '#ff0000' }} />)}
+      </div>
       <text testId="status" style={{ color: light ? '#202020' : '#eeeeee' }}>{`Tick ${tick}`}</text>
       <div style={{ width: 300, height: 160 }}>
         <div cache testId="island" style={{ width: 300, height: 160, backgroundColor: '#5070c0' }}>

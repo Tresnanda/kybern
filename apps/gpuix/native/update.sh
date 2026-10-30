@@ -161,6 +161,12 @@ fi
   native_src=$app_src/packages/native/src
   rustc --edition 2021 --test "$native_src/frame_clock_test.rs" -o native/build/frame-clock-tests$exe
   native/build/frame-clock-tests$exe
+  if [ "$prebuilt" = 1 ]; then
+    echo "drawable acquisition tests: ran when the cached build was made"
+  else
+    rustc --edition 2021 --test "$app_src/zed/crates/gpui_apple/src/drawable_acquisition.rs" -o native/build/drawable-acquisition-tests$exe
+    native/build/drawable-acquisition-tests$exe
+  fi
   rustc --test "$native_src/spring.rs" -o native/build/spring-tests$exe
   native/build/spring-tests$exe
   rustc --test "$native_src/physical_spring.rs" -o native/build/physical-spring-tests$exe
