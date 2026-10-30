@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.19.4
+
+- The desktop app recovers automatically when its animation-frame subscription stalls, fixing chats that would not open and a thinking shimmer that stayed until the window was minimized and restored.
+
 ## 0.19.3
 
 <!-- kybern-release-title: The window keeps responding when drawing stalls -->

@@ -1580,7 +1580,12 @@ the callback receives `(error,{timeMs})`. Acknowledge with
 `acknowledgeAnimationFrame(token)` to allow the next delivery; unsubscribe with
 `unsubscribeAnimationFrames(token)`. Deliveries are bounded, and consumers must
 ignore already-queued stale callbacks after unsubscribe. `src/native/frame.ts`
-shares one subscription and handles generations. Hidden-window behavior is a
+shares one subscription and handles generations. A pending native delivery expires
+after one second so a lost acknowledgement cannot silence it indefinitely; a
+failed callback enqueue retries on the next frame. The shared JS clock also
+replaces a subscription after one second without deliveries while visible and
+in use. `frame-check.ts` deliberately drops an acknowledgement and checks recovery.
+Hidden-window behavior is a
 required regression check, not something inferred from callback counts.
 
 `paintAnimation: {kind:'matrix'|'breathe',cycleMs:number,delayMs?:number}` is allowed

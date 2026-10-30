@@ -41,7 +41,13 @@ for(const theme of process.env.KYBERN_CHECK_THEMES?.split(',')??['dark','light']
   if(reduced==='0')assert.ok(intervals.length>30,'native animation did not present continuous frames')
   const summary={theme,reduced,frames:frames.length,p50:intervals[Math.floor(intervals.length*.5)]??null,p95:intervals[Math.floor(intervals.length*.95)]??null,islandRenders:after.renders-before.renders,shots}
   writeFileSync(path.join(out,`frames-${theme}-reduced${reduced}.json`),JSON.stringify(summary,null,2));console.log(JSON.stringify(summary))
-  await key('b');await Bun.sleep(250);await key('i');assert.match(await a.getByTestId('result').textContent(),/raw 1$/,'unacknowledged callbacks accumulated');await key('a');await Bun.sleep(150);await key('i');assert.match(await a.getByTestId('result').textContent(),/raw 2$/);await key('v')
+  await key('b');await Bun.sleep(250);await key('i');assert.match(await a.getByTestId('result').textContent(),/raw 1$/,'unacknowledged callbacks accumulated')
+  // Deliberately lose an acknowledge: the native lease must recover by itself.
+  const recoveryStart=performance.now()
+  let raw=''
+  do {await Bun.sleep(50);await key('i');raw=await a.getByTestId('result').textContent()} while(/raw 1$/.test(raw)&&performance.now()-recoveryStart<2500)
+  assert.match(raw,/raw 2$/,'lost acknowledge did not recover with one bounded retry')
+  await key('a');await Bun.sleep(150);await key('i');assert.match(await a.getByTestId('result').textContent(),/raw 3$/);await key('v')
   await key('s');await Bun.sleep(250);await key('u');await key('i');const stopped=await a.getByTestId('result').textContent();await Bun.sleep(250);await key('i');assert.equal(await a.getByTestId('result').textContent(),stopped,'unsubscribe still delivered callbacks')
   if(reduced==='0'){await key('m');await Bun.sleep(1500);const hidden=f.counts().frames;await Bun.sleep(500);assert.equal(f.counts().frames,hidden,'minimized loops kept presenting');await key('r');await Bun.sleep(300)}
   await key('h');await Bun.sleep(300);const idleFrames=f.counts().frames;await Bun.sleep(500);assert.equal(f.counts().frames,idleFrames,'unmounted loops kept presenting')

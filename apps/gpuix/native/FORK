@@ -18,7 +18,9 @@ repo=https://github.com/Tresnanda/gpuix.git
 # getFrameWatchdog, until merged into `kybern`.
 # `drawable-starvation`: that plus the macOS drawable gate (a draw is skipped instead of blocking in nextDrawable
 # while the compositor holds every drawable; the layer is kicked) and its getFrameWatchdog fields.
-commit=fe14c29ee60bd28e74cf85c7b5fc5acb2edf5b5f
+# `frame-clock`: lost frame deliveries and acknowledgements recover after one second;
+# integrated into `next` and `kybern`, with the existing zed pin.
+commit=ee18f4b49a93bb5527c9c35e25027881943e28e4
 # The zed submodule commit `commit` records; update.sh refuses a checkout that differs.
 zed=c3ae94c131932465c46d36f353b59387ac4746cd
 # The upstream tag `commit` is based on. It must be `@gpuix/native@<VERSION>`.
