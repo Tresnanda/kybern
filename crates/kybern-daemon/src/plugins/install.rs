@@ -32,10 +32,10 @@ pub(super) fn validate(p: &MachinePlugin) -> Result<(), String> {
     if !valid || p.provider == ProviderKind::Cursor {
         return Err("This source has no supported portable installer.".into());
     }
-    if let Some(m) = &p.marketplace {
-        if !safe_id(m) || m.contains(['@', '/', ':']) || (p.kind == PluginKind::Plugin && !p.id.ends_with(&format!("@{m}"))) {
-            return Err("Invalid marketplace selector".into());
-        }
+    if let Some(m) = &p.marketplace
+        && (!safe_id(m) || m.contains(['@', '/', ':']) || (p.kind == PluginKind::Plugin && !p.id.ends_with(&format!("@{m}"))))
+    {
+        return Err("Invalid marketplace selector".into());
     }
     if p.resources.keys().any(|k| !["extensions", "skills", "prompts", "themes"].contains(&k.as_str())) {
         return Err("Unsupported resource settings".into());
@@ -185,7 +185,8 @@ fn package_config(ctx: &Context, p: &MachinePlugin) -> Result<(), String> {
 fn codex_enabled(ctx: &Context, p: &MachinePlugin) -> Result<(), String> {
     let path = ctx.root(p.provider).join("config.toml");
     let before = text(&path)?;
-    let mut doc = before.parse::<toml_edit::DocumentMut>().map_err(|e| e.to_string())?;
+    let mut doc =
+        before.parse::<toml_edit::DocumentMut>().map_err(|_| "Cannot edit config.toml. Fix its TOML syntax first.".to_string())?;
     doc["plugins"][&p.id]["enabled"] = toml_edit::value(p.enabled.unwrap_or(false));
     write(&path, &before, &doc.to_string())
 }
@@ -208,10 +209,10 @@ async fn apply(
             }
         } else {
             let mut a = args(&["plugin", "marketplace", "add", source]);
-            if p.provider == ProviderKind::Codex {
-                if let Some((url, r)) = source.rsplit_once('#') {
-                    a = args(&["plugin", "marketplace", "add", url, "--ref", r]);
-                }
+            if p.provider == ProviderKind::Codex
+                && let Some((url, r)) = source.rsplit_once('#')
+            {
+                a = args(&["plugin", "marketplace", "add", url, "--ref", r]);
             }
             run(state, ctx, p.provider, a).await?;
             // Do not install an ID against an unexpected catalog of the same name.
@@ -312,7 +313,7 @@ pub async fn install(state: &AppState, from: &str, request: PluginInstallRequest
         result.message = "Target changed or has a different declaration. Refresh and explicitly replace the version shown.".into();
     } else {
         match apply(state, &ctx, p, existing, &inventory).await {
-            Err(e) => result.message = e,
+            Err(e) => result.message = kybern_drivers::account_auth::redact(&e),
             Ok(()) => {
                 result.actual = inventory::read(&ctx).plugins.into_iter().find(|v| v.provider == p.provider && v.id == p.id);
                 if result.actual.as_ref().is_some_and(|v| v.enabled == p.enabled && v.source == p.source) {

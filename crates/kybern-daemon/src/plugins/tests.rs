@@ -50,7 +50,7 @@ fn inventory_covers_six_harnesses_without_credentials_or_cli() {
     let ctx = context(&dir);
     seed(&ctx);
     let inv = inventory::read(&ctx);
-    assert!(inv.warnings.is_empty(), "{:?}", inv.warnings);
+    assert_eq!(inv.warnings.len(), 1, "{:?}", inv.warnings);
     for provider in ProviderKind::ALL {
         assert!(inv.plugins.iter().any(|p| p.provider == provider), "{provider:?}");
     }
@@ -195,4 +195,113 @@ async fn unconfigured_test_state_never_reads_real_harness_data() {
     let paths = crate::config::Paths::resolve(Some(dir.path().to_path_buf())).unwrap();
     let state = AppState::initialize_in_memory(&paths).unwrap();
     assert!(inventory(&state).await.unwrap().plugins.is_empty());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn fake_installers_install_then_disable_and_repeated_requests_do_not_execute_again() {
+    use std::os::unix::fs::PermissionsExt;
+    for provider in [ProviderKind::ClaudeCode, ProviderKind::Codex, ProviderKind::Pi, ProviderKind::Omp] {
+        let src = TempDir::new("plugin-success-source");
+        let ctx = context(&src);
+        seed(&ctx);
+        let plugin = inventory::read(&ctx)
+            .plugins
+            .into_iter()
+            .find(|p| p.provider == provider && p.kind == PluginKind::Plugin && p.problem.is_none())
+            .unwrap();
+        let dst = TempDir::new("plugin-success-target");
+        let state = state(&dst);
+        let home = dst.path().join("home");
+        // Each fake invocation consumes a fixture step: argument contract and resulting on-disk metadata are independent assertions.
+        let mut steps = Vec::new();
+        let record=json!({"version":2,"plugins":{&plugin.id:[{"scope":"user","version":"1","installPath":home.join(".claude/plugins/cache/tools/review/1")}]}}).to_string();
+        match provider {
+            ProviderKind::ClaudeCode => {
+                steps.push(json!({"args":["plugin","marketplace","add","acme/tools"],"files":{".claude/plugins/known_marketplaces.json":"{\"tools\":{\"source\":{\"source\":\"github\",\"repo\":\"acme/tools\"}}}"}}));
+                steps.push(json!({"args":["plugin","install","review@tools","--scope","user"],"files":{".claude/plugins/installed_plugins.json":record,".claude/plugins/cache/tools/review/1/.claude-plugin/plugin.json":"{\"name\":\"review\",\"version\":\"1\"}",".claude/plugins/cache/tools/review/1/hooks/hooks.json":"{\"hooks\":{\"PreToolUse\":[{},{}]}}",".claude/plugins/cache/tools/review/1/.mcp.json":"{\"mcpServers\":{\"review\":{}}}"}}));
+                steps.push(json!({"args":["plugin","disable","review@tools","--scope","user"],"files":{".claude/settings.json":"{\"enabledPlugins\":{\"review@tools\":false},\"keep\":true}"}}));
+            }
+            ProviderKind::Codex => {
+                steps.push(json!({"args":["plugin","marketplace","add","https://github.com/acme/tools.git"],"files":{".codex/config.toml":"# keep this comment\n[marketplaces.tools]\nsource_type='git'\nsource='https://github.com/acme/tools.git'\n"}}));
+                steps.push(json!({"args":["plugin","add","review@tools","--json"],"files":{".codex/plugins/cache/tools/review/1/.claude-plugin/plugin.json":"{\"name\":\"review\",\"version\":\"1\"}"}}));
+            }
+            ProviderKind::Pi => {
+                steps.push(json!({"args":["install","npm:pi-review@2.0.0"],"files":{".pi/agent/settings.json":"{\"packages\":[\"npm:pi-review@2.0.0\"],\"keep\":true}"}}));
+            }
+            ProviderKind::Omp => {
+                steps.push(json!({"args":["plugin","install","omp-review@1.0.0"],"files":{".omp/plugins/package.json":"{\"dependencies\":{\"omp-review\":\"npm:omp-review@1.0.0\"}}",".omp/plugins/omp-plugins.lock.json":"{\"plugins\":{\"omp-review\":{\"version\":\"1.0.0\",\"enabled\":true}}}"}}));
+                steps.push(json!({"args":["plugin","disable","omp-review"],"files":{".omp/plugins/omp-plugins.lock.json":"{\"plugins\":{\"omp-review\":{\"version\":\"1.0.0\",\"enabled\":false}}}"}}));
+            }
+            _ => unreachable!(),
+        }
+        let count = steps.len();
+        put(&home, "steps.json", &json!(steps).to_string());
+        let fake = dst.path().join("fake-success.py");
+        std::fs::write(
+            &fake,
+            r#"#!/usr/bin/python3
+import os,sys,json
+from pathlib import Path
+h=Path(os.environ['HOME'])
+f=h/'steps.json'
+steps=json.loads(f.read_text())
+assert steps, 'Unexpected extra invocation'
+step=steps.pop(0)
+assert sys.argv[1:]==step['args'], (sys.argv[1:],step['args'])
+for rel,body in step['files'].items():
+ p=h/rel;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(body)
+f.write_text(json.dumps(steps))
+with (h/'calls').open('a') as log:log.write('called\n')
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        state.plugin_runtime.binaries.write().unwrap().insert(provider, fake);
+        let request = PluginInstallRequest { operation_id: uuid::Uuid::now_v7(), plugin: plugin.clone(), replaces: None };
+        let result = install(&state, "source", request.clone()).await.unwrap();
+        assert_eq!(result.state, PluginInstallState::Installed, "{provider:?}: {}", result.message);
+        assert_eq!(result.actual.as_ref().unwrap().enabled, Some(false));
+        assert_eq!(result.actual.as_ref().unwrap().fingerprint, plugin.fingerprint, "{provider:?}");
+        install(&state, "source", request.clone()).await.unwrap();
+        let again = install(&state, "source", PluginInstallRequest { operation_id: uuid::Uuid::now_v7(), ..request }).await.unwrap();
+        assert_eq!(again.state, PluginInstallState::AlreadyThere);
+        assert_eq!(std::fs::read_to_string(home.join("calls")).unwrap().lines().count(), count);
+        if provider == ProviderKind::Codex {
+            assert!(text(&home.join(".codex/config.toml")).unwrap().contains("# keep this comment"));
+        }
+    }
+}
+#[test]
+fn codex_selects_the_active_version_and_package_pins_override_stale_cache() {
+    let dir = TempDir::new("plugins-versions");
+    let ctx = context(&dir);
+    seed(&ctx);
+    for v in ["1.9.0", "1.10.0"] {
+        put(
+            &ctx.home,
+            &format!(".codex/plugins/cache/tools/review/{v}/.claude-plugin/plugin.json"),
+            &format!("{{\"name\":\"review\",\"version\":\"{v}\"}}"),
+        );
+    }
+    let get =
+        || inventory::read(&ctx).plugins.into_iter().find(|p| p.provider == ProviderKind::Codex && p.kind == PluginKind::Plugin).unwrap();
+    assert_eq!(get().version.as_deref(), Some("1.10.0"));
+    put(&ctx.home, ".codex/plugins/cache/tools/review/local/.claude-plugin/plugin.json", r#"{"name":"review","version":"local"}"#);
+    assert_eq!(get().version.as_deref(), Some("local"));
+    put(&ctx.home, ".config/opencode/node_modules/@acme/review/package.json", r#"{"name":"@acme/review","version":"0.9.0"}"#);
+    let p = inventory::read(&ctx).plugins.into_iter().find(|p| p.id == "@acme/review").unwrap();
+    assert_eq!(p.version.as_deref(), Some("1.2.3"));
+}
+#[test]
+fn malformed_configs_never_become_an_empty_inventory_or_leak_their_contents() {
+    let dir = TempDir::new("plugin-bad-config");
+    let ctx = context(&dir);
+    seed(&ctx);
+    put(&ctx.home, ".codex/config.toml", "token = 'never-send' broken");
+    put(&ctx.home, ".config/opencode/opencode.jsonc", r#"{"plugin":"wrong-type"}"#);
+    let inv = inventory::read(&ctx);
+    assert!(inv.warnings.iter().any(|w| w.starts_with("codex:")));
+    assert!(inv.warnings.iter().any(|w| w.starts_with("opencode:")));
+    assert!(!serde_json::to_string(&inv).unwrap().contains("never-send"));
 }

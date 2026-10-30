@@ -174,21 +174,36 @@ fn claude(ctx: &Context, provider: ProviderKind) -> Result<Vec<MachinePlugin>, S
     }
     Ok(items)
 }
+fn active_codex_version(base: &Path) -> Option<PathBuf> {
+    if base.join("local").is_dir() {
+        return Some(base.join("local"));
+    }
+    dirs(base).into_iter().max_by(|a, b| {
+        let a = a.file_name().unwrap().to_string_lossy();
+        let b = b.file_name().unwrap().to_string_lossy();
+        match (semver::Version::parse(&a), semver::Version::parse(&b)) {
+            (Ok(a), Ok(b)) => a.cmp(&b),
+            _ => a.cmp(&b),
+        }
+    })
+}
 fn codex(ctx: &Context) -> Result<Vec<MachinePlugin>, String> {
     let provider = ProviderKind::Codex;
     let root = ctx.root(provider);
-    let doc = text(&root.join("config.toml"))?.parse::<toml_edit::DocumentMut>().map_err(|e| e.to_string())?;
+    let doc = text(&root.join("config.toml"))?
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|_| "Cannot read config.toml. Fix its TOML syntax on this machine.".to_string())?;
     let mut items = Vec::new();
     if let Some(markets) = doc.get("marketplaces").and_then(toml_edit::Item::as_table_like) {
         for (name, m) in markets.iter() {
             let uri = m.get("source").and_then(toml_edit::Item::as_str);
             let mut item = marketplace(provider, name, uri);
             // --ref is reconstructed separately from the source suffix by the install adapter.
-            if let Some(r) = m.get("ref").and_then(toml_edit::Item::as_str) {
-                if let Some(s) = item.source.as_mut() {
-                    s.push('#');
-                    s.push_str(r);
-                }
+            if let Some(r) = m.get("ref").and_then(toml_edit::Item::as_str)
+                && let Some(s) = item.source.as_mut()
+            {
+                s.push('#');
+                s.push_str(r);
             }
             items.push(item);
         }
@@ -196,7 +211,7 @@ fn codex(ctx: &Context) -> Result<Vec<MachinePlugin>, String> {
     let enabled = doc.get("plugins").and_then(toml_edit::Item::as_table_like);
     for market in dirs(&root.join("plugins/cache")) {
         for plugin in dirs(&market) {
-            let Some(path) = dirs(&plugin).into_iter().max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok()) else {
+            let Some(path) = active_codex_version(&plugin) else {
                 continue;
             };
             let m = manifest(&path);
@@ -238,16 +253,29 @@ fn packages(ctx: &Context, provider: ProviderKind) -> Result<Vec<MachinePlugin>,
     } else {
         "plugin"
     };
+    if doc.get(key).is_some_and(|v| !v.is_array()) {
+        return Err(format!("{key} must be an array; fix the config before copying"));
+    }
+    if !pi && doc.get("plugin").is_some() && doc.get("plugins").is_some() {
+        return Err("Both plugin and plugins are configured. Resolve them on this machine before copying.".into());
+    }
     for entry in doc[key].as_array().into_iter().flatten() {
         let s = entry.as_str().or_else(|| entry[if pi { "source" } else { "package" }].as_str()).unwrap_or("");
         let spec = s.strip_prefix("npm:").unwrap_or(s);
         let name = package_name(spec);
-        let mut item = base(provider, name, PluginKind::Plugin);
+        let local = s.starts_with(['.', '/', '~']) || s.starts_with("file:");
+        let display = if local { Path::new(s).file_name().and_then(|n| n.to_str()).unwrap_or("local") } else { name };
+        let mut item = base(provider, &if local { format!("local:{display}") } else { name.to_string() }, PluginKind::Plugin);
+        item.name = display.to_string();
         let npm = npm_spec(spec);
         if npm {
             let pkgroot = if pi { root.join("npm/node_modules") } else { root.join("node_modules") };
             let pkg = json(&pkgroot.join(name).join("package.json"))?;
-            item.version = pkg["version"].as_str().map(Into::into).or_else(|| spec.strip_prefix(&format!("{name}@")).map(Into::into));
+            item.version = spec
+                .strip_prefix(&format!("{name}@"))
+                .filter(|v| semver::Version::parse(v).is_ok())
+                .map(Into::into)
+                .or_else(|| pkg["version"].as_str().map(Into::into));
             let pinned = item.version.as_ref().map(|v| format!("{}{}@{v}", if pi { "npm:" } else { "" }, name)).unwrap_or_else(|| s.into());
             source(&mut item, Some(&pinned), true);
             item.contents = contents(&pkgroot.join(name));
@@ -347,6 +375,7 @@ pub(super) fn read(ctx: &Context) -> PluginInventory {
             result.plugins.extend(local_extensions(ctx, provider));
         }
     }
+    result.warnings.push("cursor: Cached plugins only; active installation and enabled state are not available from Cursor’s local metadata. Manage them in Cursor.".into());
     result.plugins.retain(|p| safe_id(&p.id));
     result.plugins.sort_by(|a, b| (a.provider.as_str(), &a.id).cmp(&(b.provider.as_str(), &b.id)));
     for item in &mut result.plugins {

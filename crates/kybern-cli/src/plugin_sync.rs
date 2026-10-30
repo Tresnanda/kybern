@@ -148,9 +148,9 @@ pub async fn run(client: &Client, cmd: PluginsCmd, json_output: bool) -> Result<
                         {
                             continue;
                         }
-                        if p.problem.is_some() {
+                        if let Some(problem) = &p.problem {
                             if !missing {
-                                bail!("{}", p.problem.as_ref().unwrap());
+                                bail!("{problem}");
                             }
                             continue;
                         }
