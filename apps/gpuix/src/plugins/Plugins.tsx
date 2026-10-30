@@ -32,7 +32,7 @@ export function Plugins({ inlineSheet = false }: { inlineSheet?: boolean }) {
           <MachineBadge glyph={glyphOfMachine(machine.id)} size={20} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flexGrow: 1, minWidth: 0 }}>
             <Label color={t.text} size={14} weight={500}>{machine.name + (machine.is_self ? ' (this computer)' : '')}</Label>
-            <Label color={t.textSecondary} size={13}>{machine.state === 'reported' ? `${machine.inventory?.plugins.length ?? 0} plugins and sources · ${missing.length} missing` : machine.detail ?? (machine.state === 'offline' ? 'Offline · copies wait for it' : 'Update Kybern or check Files access')}</Label>
+            <Label color={t.textSecondary} size={13}>{machine.state === 'reported' ? `${machine.inventory?.plugins.length ?? 0} ${machine.inventory?.plugins.length === 1 ? 'plugin or source' : 'plugins and sources'} · ${missing.length} missing` : machine.detail ?? (machine.state === 'offline' ? 'Offline · copies wait for it' : 'Update Kybern or check Files access')}</Label>
           </div>
           {missing.length > 0 && <Button testId={`plugins-missing-${machine.id}`} size="sm" variant="secondary" onClick={() => setReview({view, rows: missing, target: machine.id})}>{`Copy ${missing.length} missing…`}</Button>}
         </div>
