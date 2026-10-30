@@ -160,9 +160,11 @@ native module" in `apps/gpuix/native/README.md` first.
 - `ci.yml` runs GPUIX tests on Linux, where Ctrl is the primary shortcut key.
   Tests written for macOS shortcuts set `setKeyPlatform('darwin')` from
   `src/platform/keys.ts`; off-macOS cases set their platform themselves.
-- PR CI never compiles Windows. The Windows build runs in `GPUIX platforms`
-  and in the release. Grep new daemon code for Unix-only APIs (`os::unix`,
-  `libc::`, `/proc/`) without a `cfg` gate before tagging.
+- PR CI runs `cargo check --workspace --all-targets` on `windows-latest`
+  when Rust inputs change; every main push runs it too. Warnings fail the
+  check, and test code is checked without running Windows tests. Full Windows
+  builds run in `GPUIX platforms` and in the release. Grep new daemon code for
+  Unix-only APIs (`os::unix`, `libc::`, `/proc/`) without a `cfg` gate before tagging.
 - Real hardware: the user's Windows 11 PC is `ssh satyamas` (RTX 3060 and AMD
   iGPU, WSL Ubuntu with a 22.04 chroot for release-floor Linux builds). Use it
   for real-GPU checks and as a fast dev build box, one lane at a time; PRs,
@@ -278,8 +280,9 @@ pnpm exec expo export --platform all
 
 Protocol changes break `crates/kybern-protocol/tests/snapshots`. That is the
 point: review the diff, then `INSTA_UPDATE=always cargo test -p kybern-protocol`.
-CI runs fmt, clippy and the Rust tests on ubuntu and macos, and the GPUIX,
-shared-client and release checks on ubuntu (see Cross-platform checks for the GPUIX on-screen checks).
+CI runs fmt, clippy and the Rust tests on ubuntu and macos, checks every Rust
+target on Windows without running tests, and runs the GPUIX, shared-client and
+release checks on ubuntu (see Cross-platform checks for the GPUIX on-screen checks).
 A test that fails at random on CI gets fixed or removed, not rerun until green.
 Mobile checks and EAS builds are currently manual; run the mobile checks for
 mobile or shared-client changes. Native configuration changes need a new build.

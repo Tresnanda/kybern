@@ -111,6 +111,27 @@ jobs:
       - name: test
         run: cargo test --workspace
 
+  windows-check:
+    name: cargo check (windows-latest)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: windows-latest
+    steps:
+      - name: Allow long paths
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: "1.99.1"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # As above, pull requests restore main's cache; only main writes it.
+          shared-key: check
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Check test code too, without running Windows tests.
+      - name: check
+        run: cargo check --workspace --all-targets
+
   release:
     name: release checks
     needs: changes
@@ -165,7 +186,7 @@ jobs:
     # rule needs only this name.
     name: CI
     if: always()
-    needs: [changes, fmt, check, release, gpuix]
+    needs: [changes, fmt, check, windows-check, release, gpuix]
     runs-on: ubuntu-24.04
     steps:
       - env:
