@@ -3908,6 +3908,22 @@ export interface SkillCopyTarget {
   /** Hashes of the versions on this machine the user agreed to replace. */
   replaces?: string[];
 }
+/** Plugin declarations cross machines; installed files and credentials never do. */
+export type PluginKind = "plugin" | "marketplace";
+export interface PluginContents { hooks: number; mcp_servers: number; commands: number; agents: number; skills: number; extensions: number; npm_packages: string[]; notes: string[] }
+export interface MachinePlugin { id: string; provider: ProviderKind; kind: PluginKind; name: string; marketplace: string | null; source: string | null; version: string | null; enabled: boolean | null; resources: Record<string, string[]>; contents: PluginContents; problem: string | null; fingerprint: string }
+export interface PluginInventory { plugins: MachinePlugin[]; warnings: string[]; jobs: PluginCopyJob[] }
+export interface PluginsMachineView { id: MachineId; name: string; is_self: boolean; state: SkillsMachineState; inventory: PluginInventory | null; detail: string | null }
+export interface PluginsNetworkView { machines: PluginsMachineView[] }
+export interface PluginCopyTarget { machine: MachineId; replaces: string | null }
+export interface PluginsCopyParams { provider: ProviderKind; id: string; from: MachineId | null; to: PluginCopyTarget[]; confirmed: string }
+export interface PluginInstallRequest { operation_id: string; plugin: MachinePlugin; replaces: string | null }
+export type PluginInstallState = "installed" | "already_there" | "configured" | "failed";
+export interface PluginInstallResult { state: PluginInstallState; message: string; actual: MachinePlugin | null }
+export interface PluginCopyOutcome { machine: MachineId; name: string; outbox_id: string | null; result: PluginInstallResult | null; error: string | null }
+export interface PluginsCopyResult { targets: PluginCopyOutcome[] }
+export interface PluginCopyJob { id: string; provider: ProviderKind; plugin_id: string; target: MachineId; state: OutboxState; result: PluginInstallResult | null; error: string | null }
+
 export interface SkillsCopyParams { name: string; from?: string | null; from_home?: SkillHome | null; to: SkillCopyTarget[] }
 export type SkillCopyState = "queued" | "done" | "unsupported" | "failed";
 export type SkillPlaceAction = "written" | "replaced" | "same" | "linked";
@@ -3972,6 +3988,7 @@ export type OutboxKind =
   | "fork"
   | "move"
   | "provision"
+  | "plugin_install"
   | "skill_copy";
 export type OutboxState = "queued" | "sending" | "delivered" | "failed" | "expired" | "cancelled";
 
@@ -4557,6 +4574,12 @@ export interface Methods {
   "peer.files.chunk": [PeerFilesChunkParams, { offset: number }];
   "peer.files.finish": [{ transfer_id: Uuid }, PeerFilesFinishResult];
   "peer.files.abort": [{ transfer_id: Uuid }, Empty];
+  "plugins.inventory": [Empty, PluginInventory];
+  "plugins.network_view": [Empty, PluginsNetworkView];
+  "plugins.copy": [PluginsCopyParams, PluginsCopyResult];
+  "peer.plugins.inventory": [Empty, PluginInventory];
+  "peer.plugins.copy": [PluginsCopyParams, PluginsCopyResult];
+  "peer.plugins.install": [PluginInstallRequest, PluginInstallResult];
   "skills.inventory": [Empty, SkillInventory];
   "skills.network_view": [Empty, SkillsNetworkView];
   "skills.copy": [SkillsCopyParams, SkillsCopyResult];

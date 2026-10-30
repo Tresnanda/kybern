@@ -120,6 +120,7 @@ const OUTBOX_KIND: Record<OutboxKind, string> = {
   fork: 'Fork of a thread',
   move: 'Move of a thread',
   provision: 'Project for another machine',
+  plugin_install: 'Install plugin',
   skill_copy: 'Skill',
 }
 
