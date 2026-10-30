@@ -9,7 +9,7 @@ export function loginBrokerCandidates(machines: readonly MachineRow[], status: N
     return status.members.map((member) => ({
       machineId: member.machine_id,
       name: member.name,
-      online: member.status === 'online',
+      online: member.status === 'online' || member.status === 'relaying',
       features: member.features ?? [],
     }))
   }

@@ -28,3 +28,11 @@ test('broker honors disabled and removed networks and never promotes unrelated s
   expect(loginBrokerCandidates(saved, { ...status, removed: true })).toEqual([])
   expect(loginBrokerCandidates(saved, { ...status, members: [] })).toEqual([])
 })
+
+test('a member reachable through a relay can be chosen as the broker', () => {
+  const relayed = { ...status, members: [{ ...status.members[1]!, status: 'relaying' as const }] }
+  const candidates = loginBrokerCandidates(saved, relayed)
+  expect(candidates).toHaveLength(1)
+  expect(candidates[0]!.online).toBe(true)
+  expect(brokerBlocker(candidates[0]!)).toBeNull()
+})
