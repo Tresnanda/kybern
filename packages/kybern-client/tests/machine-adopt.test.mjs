@@ -304,3 +304,27 @@ test("a list read that hangs while connecting does not stop ensureAll or leave a
   assert.equal(set.connection("b").error.code, "refresh_failed");
   set.dispose();
 });
+
+test("rekeyMachine copies the token and asks a store that keeps an older app's copy to discard, not delete, the stand-in", async () => {
+  const { set, creds } = setup({ records: [rec("legacy:a", [], { legacyProfileId: "p-a" })], credentials: { "legacy:a": "tok" } });
+  const discarded = [];
+  creds.discard = (id) => void discarded.push(id);
+  const deleted = [];
+  const realDelete = creds.delete;
+  creds.delete = (id) => (deleted.push(id), realDelete(id));
+  await set.ensureAll();
+  await set.rekeyMachine("legacy:a", "a");
+  assert.equal(creds.tokens.get("a"), "tok");
+  assert.deepEqual(discarded, ["legacy:a"]);
+  assert.deepEqual(deleted, []);
+  set.dispose();
+});
+
+test("removeMachine deletes the token through delete (a store removes every copy then)", async () => {
+  const { set, creds } = setup({ records: [rec("a")], credentials: { a: "tok" } });
+  creds.discard = () => assert.fail("forgetting a machine is not a discard");
+  await set.ensureAll();
+  await set.removeMachine("a");
+  assert.equal(creds.tokens.has("a"), false);
+  set.dispose();
+});

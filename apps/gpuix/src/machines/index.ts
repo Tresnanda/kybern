@@ -21,7 +21,7 @@ export function machineHub(): MachineHub {
     dir,
     registry: () => { try { return readLegacyRegistry() } catch { return null } },
     local: localProfile,
-    read: readCredential, write: writeCredential, remove: removeCredential,
+    read: readCredential, write: writeCredential,
   }).then((result) => result.records)
   const current = new MachineHub({
     records: loaded,
@@ -39,7 +39,7 @@ export function machineHub(): MachineHub {
       const route = record.routes.find((item) => item.kind === 'ssh')
       if (route) route.url = `http://127.0.0.1:${port}`
     },
-    forgetProfile: (profileId) => removeCredential(profileId),
+    // The profile-id accounts stay: releases without machines read them. `credentials.delete` removes both when the user forgets a machine.
     readCredential,
   })
   hub = current

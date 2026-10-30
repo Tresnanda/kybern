@@ -86,6 +86,11 @@ export interface CredentialStore {
   get(machineId: MachineId): MaybePromise<string | null | undefined>;
   set(machineId: MachineId, token: string): MaybePromise<void>;
   delete(machineId: MachineId): MaybePromise<void>;
+  /**
+   * Drop a token the machine rejected so `get` stops returning it, without removing a copy an older app
+   * still reads. Falls back to `delete` when the store keeps no such copy.
+   */
+  discard?(machineId: MachineId): MaybePromise<void>;
 }
 
 /**
@@ -659,7 +664,9 @@ export class MachineSet {
     this.touch(slot, "records");
     if (token) {
       try {
-        await this.options.credentials.delete(oldId);
+        // The copy under the stand-in id only; a store that keeps the older app's copy leaves it (see `discard`).
+        const { credentials } = this.options;
+        await (credentials.discard ? credentials.discard(oldId) : credentials.delete(oldId));
       } catch {
         // The old id has no record any more; its token is never used.
       }
@@ -1178,7 +1185,8 @@ export class MachineSet {
         if (outcome.kind === "revoked" && !retried) {
           // The machine no longer accepts this device's token: mint a fresh one through a member, once.
           retried = true;
-          await this.options.credentials.delete(record.machineId);
+          const { credentials } = this.options;
+          await (credentials.discard ? credentials.discard(record.machineId) : credentials.delete(record.machineId));
           token = await this.token(slot);
           if (!token) return { kind: "unpaired", error: { code: "unpaired", message: errorMessage("unpaired", record.name) } };
           continue;

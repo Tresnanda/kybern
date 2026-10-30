@@ -6,9 +6,12 @@
 // - Device tokens live in the credential store under `machine:<machine id>`. A
 //   record that came from a saved profile reads that profile's token until its
 //   machine id is verified (the set moves it then, see `MachineSet.rekeyMachine`).
-// - `migrateEnvironments` turns the old `environments.json` into `machines.json`
-//   the first time and renames the old file to `environments.json.migrated`. It
-//   is idempotent: with `machines.json` present nothing is read or written.
+// - `migrateEnvironments` turns the old `environments.json` into `machines.json` the
+//   first time. It is idempotent: with `machines.json` present nothing is read or written.
+// - Coexistence: releases without machines read only `environments.json` and the profile-id
+//   credential accounts. A newer build therefore never renames or removes them: tokens are
+//   copied to `machine:<id>`, the profile-id copy stays (and follows a replaced token) until
+//   the user forgets the machine, and `syncEnvironments` keeps the profiles in step.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { CredentialStore, MachineRecord } from '../../../../packages/kybern-client/src/machines.ts'
@@ -25,7 +28,6 @@ const VERSION = 1
 export const MACHINES_FILE = 'machines.json'
 export const MACHINE_CACHE_FILE = 'machine-cache.json'
 export const ENVIRONMENTS_FILE = 'environments.json'
-export const ENVIRONMENTS_MIGRATED = 'environments.json.migrated'
 export const machineCredentialId = (machineId: string) => `machine:${machineId}`
 
 function writeJson(file: string, value: unknown) {
@@ -55,7 +57,29 @@ export function readMachineRecords(dir: string): GpuixMachineRecord[] | null {
 }
 
 export function writeMachineRecords(dir: string, records: readonly MachineRecord[]) {
+  const previous = (() => { try { return readMachineRecords(dir) } catch { return null } })()
   writeJson(path.join(dir, MACHINES_FILE), { version: VERSION, machines: records })
+  syncEnvironments(dir, previous, records as readonly GpuixMachineRecord[])
+}
+
+/**
+ * Best effort: keep `environments.json` (read by releases without machines) in step. A record that was saved
+ * from a profile and is now gone loses its profile; a profile added by the new app is not written, because the
+ * older app would have no token for it. Only a file that exists is touched, and an unreadable one is left alone.
+ */
+function syncEnvironments(dir: string, previous: readonly GpuixMachineRecord[] | null, records: readonly GpuixMachineRecord[]) {
+  const file = path.join(dir, ENVIRONMENTS_FILE)
+  if (!previous || !existsSync(file) || !writeAllowed(file)) return
+  const kept = new Set(records.map((record) => record.legacyProfileId).filter(Boolean))
+  const gone = new Set(previous.map((record) => record.legacyProfileId).filter((id): id is string => !!id && !kept.has(id)))
+  if (!gone.size) return
+  try {
+    const value = JSON.parse(readFileSync(file, 'utf8')) as Registry
+    if (!Array.isArray(value.environments)) return
+    const environments = value.environments.filter((profile) => !gone.has(profile.id))
+    if (environments.length === value.environments.length) return
+    writeJson(file, { ...value, selected_id: environments.some((p) => p.id === value.selected_id) ? value.selected_id : 'local', environments })
+  } catch { /* the older app's file stays as it is */ }
 }
 
 /** The offline cache's file, written whole each time. */
@@ -74,14 +98,14 @@ export interface MigrationDeps {
   local: EnvironmentProfile
   read: (id: string) => Promise<string>
   write: (id: string, token: string) => Promise<void>
-  remove: (id: string) => Promise<void>
 }
 
 export interface MigrationResult { records: GpuixMachineRecord[]; migrated: boolean }
 
 /**
- * `machines.json` as it is, else made from `environments.json`. A profile whose daemon id is known gets its token under
- * `machine:<id>` now; the rest keep theirs under the profile id until the machine answers. Then the old file is renamed.
+ * `machines.json` as it is, else made from `environments.json`. A profile whose daemon id is known gets a copy of its token under
+ * `machine:<id>` now; the rest use theirs under the profile id until the machine answers. The old file and the profile-id
+ * tokens stay, so a release without machines keeps working.
  */
 export async function migrateEnvironments(deps: MigrationDeps): Promise<MigrationResult> {
   const existing = readMachineRecords(deps.dir)
@@ -95,18 +119,15 @@ export async function migrateEnvironments(deps: MigrationDeps): Promise<Migratio
   }
   writeMachineRecords(deps.dir, records)
   if (!registry) return { records, migrated: false }
-  // Verified machines first: a token that cannot move (locked keyring) stays under the profile id, which the record still names.
+  // A token that cannot be copied (locked keyring) is still found under the profile id, which the record names.
   for (const profile of registry.environments) {
     const record = records.find((item) => item.legacyProfileId === profile.id)
     if (!record || isLegacyMachineId(record.machineId)) continue
     try {
       const token = await deps.read(profile.id)
       await deps.write(machineCredentialId(record.machineId), token)
-      await deps.remove(profile.id)
     } catch { /* The legacy token keeps working through `legacyProfileId`. */ }
   }
-  const file = path.join(deps.dir, ENVIRONMENTS_FILE)
-  if (existsSync(file) && writeAllowed(file)) renameSync(file, path.join(deps.dir, ENVIRONMENTS_MIGRATED))
   return { records, migrated: true }
 }
 
@@ -118,16 +139,34 @@ export interface CredentialDeps {
   legacyProfileOf: (machineId: string) => string | undefined
 }
 
-/** The set's credentials: `machine:<id>`, then the saved profile's token for a machine that has not moved yet. */
+/**
+ * The set's credentials: `machine:<id>`, then the saved profile's token for a machine that has not moved yet.
+ * The profile-id account is the older app's: a new token also replaces it where it still exists, `discard` leaves
+ * it, and only `delete` (the user forgot the machine) removes both.
+ */
 export function machineCredentials(deps: CredentialDeps): CredentialStore {
+  // Machines whose token was rejected: the profile copy is the same dead token, so `get` must not hand it back.
+  const rejected = new Set<string>()
   return {
     get: async (machineId) => {
       try { return await deps.read(machineCredentialId(machineId)) } catch { /* not moved yet */ }
       const profile = deps.legacyProfileOf(machineId)
-      if (!profile) return undefined
+      if (!profile || rejected.has(machineId)) return undefined
       try { return await deps.read(profile) } catch { return undefined }
     },
-    set: (machineId, token) => deps.write(machineCredentialId(machineId), token),
+    set: async (machineId, token) => {
+      await deps.write(machineCredentialId(machineId), token)
+      rejected.delete(machineId)
+      const profile = deps.legacyProfileOf(machineId)
+      if (!profile || profile === machineId) return
+      // Only an account that exists: a machine added by this build must not leave a token the older app cannot use.
+      try { await deps.read(profile) } catch { return }
+      await deps.write(profile, token).catch(() => {})
+    },
+    discard: async (machineId) => {
+      await deps.remove(machineCredentialId(machineId)).catch(() => {})
+      rejected.add(machineId)
+    },
     delete: async (machineId) => {
       const profile = deps.legacyProfileOf(machineId)
       await deps.remove(machineCredentialId(machineId)).catch(() => {})
