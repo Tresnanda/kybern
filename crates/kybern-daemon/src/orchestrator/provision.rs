@@ -162,7 +162,7 @@ pub(crate) fn inside(root: &Path, rel: &Path) -> Result<PathBuf, String> {
     if !path_starts(cfg!(windows), &physical(&path), &physical(root)) {
         return Err(format!("{shown} leads out of the project, so Kybern does not copy it."));
     }
-    Ok(path)
+    Ok(root.join(rel))
 }
 
 /// Expand `~` and check that `raw` is a place a project may be written to on this machine. Returns the
@@ -253,17 +253,25 @@ async fn check_path(dest: &Path, repos: &[RepoIdentity], rels: &[String], name: 
     if is_empty_dir(dest) {
         return check(PathState::Free, "Empty folder · it will be used".into());
     }
-    let mut all = !repos.is_empty();
+    let mut present = 0;
     for (index, repo) in repos.iter().enumerate() {
         let rel = rels.get(index).map(String::as_str).unwrap_or(".");
-        let dir = safe_relative(rel).map(|rel| dest.join(rel)).unwrap_or_else(|| dest.to_path_buf());
-        if !git_transfer::same_repo(repo, &git_transfer::identity_of(&dir).await) {
-            all = false;
-            break;
+        let dir = match safe_relative(rel).and_then(|rel| inside(dest, &rel).ok()) {
+            Some(dir) => dir,
+            None => return check(PathState::Forbidden, "A member leads outside the project. Choose another folder.".into()),
+        };
+        if !dir.exists() || (dir.is_dir() && is_empty_dir(&dir)) {
+            continue;
         }
+        if !dir.is_dir() || !git_transfer::same_repo(repo, &git_transfer::identity_of(&dir).await) {
+            return check(PathState::NotEmpty, format!("{rel} already holds other files. Choose an empty or new folder."));
+        }
+        present += 1;
     }
-    if all {
+    if present == repos.len() && present > 0 {
         check(PathState::SameRepo, format!("Already has {name} · it will be added as it is"))
+    } else if present > 0 {
+        check(PathState::SameRepo, format!("Has {present} of {} repos · only the missing repos will be added", repos.len()))
     } else {
         check(PathState::NotEmpty, "This folder already holds other files. Choose an empty or new folder.".into())
     }
@@ -350,6 +358,27 @@ pub(crate) async fn detect_env_files(root: &Path) -> Vec<EnvFileCandidate> {
     }
     found.sort_by(|a, b| a.path.matches('/').count().cmp(&b.path.matches('/').count()).then(a.path.cmp(&b.path)));
     found
+}
+
+/// Scan each git root: a group folder is usually not itself a repository.
+async fn project_env_files(project: &Project) -> Vec<EnvFileCandidate> {
+    let mut files = Vec::new();
+    let root = Path::new(&project.path);
+    let rels = if project.kind.is_single() { vec!["."] } else { project.members.iter().map(|m| m.path.as_str()).collect() };
+    for rel in rels {
+        let Some(dir) = safe_relative(rel).and_then(|part| inside(root, &part).ok()) else { continue };
+        for mut file in detect_env_files(&dir).await {
+            if rel != "." {
+                file.path = format!("{rel}/{}", file.path);
+            }
+            if !files.iter().any(|known: &EnvFileCandidate| known.path == file.path) {
+                files.push(file);
+            }
+        }
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    files.truncate(MAX_ENV_FILES);
+    files
 }
 
 /// The source's `origin` URL with any user name or password removed.
@@ -509,10 +538,11 @@ impl Orchestrator {
                 .map(|repo| ProvisionRepo { path: repo.rel.clone(), remote: repo.identity.remote.clone(), branch: repo.branch.clone() })
                 .collect(),
             existing: Vec::new(),
+            members: Vec::new(),
             suggested_path: None,
             target_home: None,
             path_check: None,
-            env_files: detect_env_files(Path::new(&project.path)).await,
+            env_files: project_env_files(&project).await,
             blocked: None,
         };
         if repos.iter().any(|repo| repo.identity.is_empty() || repo.commit.is_none()) || repos.is_empty() {
@@ -550,6 +580,7 @@ impl Orchestrator {
                         plan.target.os = probe.os.clone();
                     }
                     plan.existing = probe.existing;
+                    plan.members = probe.members;
                     plan.suggested_path = Some(probe.suggested_path);
                     plan.target_home = probe.home;
                     plan.path_check = Some(probe.path_check);
@@ -598,9 +629,7 @@ impl Orchestrator {
                 }
                 files
             }
-            None => {
-                detect_env_files(Path::new(&project.path)).await.into_iter().filter(|file| file.selected).map(|file| file.path).collect()
-            }
+            None => project_env_files(project).await.into_iter().filter(|file| file.selected).map(|file| file.path).collect(),
         };
         let request = ProvisionRequest {
             operation_id,
@@ -839,17 +868,7 @@ impl Orchestrator {
             if let Ok(candidate) = self.match_group(&named, None, "").await {
                 return Ok(vec![view(&candidate.project)]);
             }
-            // A group that has some of these repositories is this project, set up differently: adding a second copy
-            // would only confuse which one work goes to, so it counts as there (work sent to it says what is missing).
-            return Ok(self
-                .group_candidates()
-                .await?
-                .into_iter()
-                .filter(|candidate| {
-                    candidate.members.iter().any(|member| repos.iter().any(|repo| git_transfer::same_repo(repo, &member.repo)))
-                })
-                .map(|candidate| view(&candidate.project))
-                .collect());
+            return Ok(Vec::new());
         }
         let Some(primary) = repos.first() else { return Ok(Vec::new()) };
         let mut found = Vec::new();
@@ -875,25 +894,67 @@ impl Orchestrator {
         let parent =
             projects_parent(&projects, &data_dir).ok_or_else(|| conflict("This machine has no home folder to propose a folder in."))?;
         let base = folder_name(&params.name);
-        let mut suggested = parent.join(&base);
-        for n in 2..50 {
-            let check = check_path(&suggested, &params.repos, &params.members, &params.name).await;
-            if check.state != PathState::NotEmpty {
-                break;
+        // Reuse the closest group whose repositories are a subset of the source. Pair by identity,
+        // not folder name, so a local rename never causes a second checkout of an existing member.
+        let candidates = if params.kind == ProjectKind::Group { self.group_candidates().await? } else { Vec::new() };
+        let partial = candidates
+            .iter()
+            .filter(|candidate| {
+                !candidate.members.is_empty()
+                    && candidate.members.iter().all(|member| params.repos.iter().any(|repo| git_transfer::same_repo(repo, &member.repo)))
+            })
+            .max_by_key(|candidate| candidate.members.len());
+        let reuse = existing.first().map(|project| project.path.clone()).or_else(|| partial.map(|c| c.project.path.clone()));
+        let mut suggested = reuse.as_ref().map(PathBuf::from).unwrap_or_else(|| parent.join(&base));
+        if reuse.is_none() {
+            for n in 2..50 {
+                let check = check_path(&suggested, &params.repos, &params.members, &params.name).await;
+                if check.state != PathState::NotEmpty {
+                    break;
+                }
+                suggested = parent.join(format!("{base}-{n}"));
             }
-            suggested = parent.join(format!("{base}-{n}"));
         }
-        let path_check = match params.path.as_deref().map(str::trim).filter(|path| !path.is_empty()) {
-            Some(asked) => match resolve_destination(asked, &data_dir) {
-                Ok(dest) => check_path(&dest, &params.repos, &params.members, &params.name).await,
-                Err(message) => PathCheck { state: PathState::Forbidden, path: asked.to_string(), message },
-            },
-            None => check_path(&suggested, &params.repos, &params.members, &params.name).await,
+        let asked = params.path.as_deref().map(str::trim).filter(|path| !path.is_empty());
+        let raw = asked.map(str::to_string).unwrap_or_else(|| suggested.to_string_lossy().into_owned());
+        let mut members = Vec::new();
+        let path_check = match resolve_destination(&raw, &data_dir) {
+            Ok(dest) => {
+                let candidate =
+                    candidates.iter().find(|c| path_same(cfg!(windows), &physical(Path::new(&c.project.path)), &physical(&dest)));
+                let mut used = Vec::new();
+                if params.kind == ProjectKind::Group {
+                    for (repo, rel) in params.repos.iter().zip(&params.members) {
+                        let matched = candidate
+                            .and_then(|c| c.members.iter().find(|m| !used.contains(&m.path) && git_transfer::same_repo(repo, &m.repo)));
+                        let target_path = matched.map_or_else(|| rel.clone(), |m| m.path.clone());
+                        used.push(target_path.clone());
+                        let present = match safe_relative(&target_path).and_then(|part| inside(&dest, &part).ok()) {
+                            Some(dir) if dir.join(".git").exists() => git_transfer::same_repo(repo, &git_transfer::identity_of(&dir).await),
+                            _ => false,
+                        };
+                        members.push(ProvisionMember { path: rel.clone(), target_path, present });
+                    }
+                }
+                let rels =
+                    if members.is_empty() { params.members.clone() } else { members.iter().map(|m| m.target_path.clone()).collect() };
+                if rels.iter().enumerate().any(|(i, rel)| rels[..i].contains(rel)) {
+                    PathCheck {
+                        state: PathState::NotEmpty,
+                        path: raw,
+                        message: "A missing repository's name is already used here. Choose another folder.".into(),
+                    }
+                } else {
+                    check_path(&dest, &params.repos, &rels, &params.name).await
+                }
+            }
+            Err(message) => PathCheck { state: PathState::Forbidden, path: raw, message },
         };
         Ok(PeerProvisionProbe {
             os: this_os().into(),
             home: home_dir().map(|home| home.to_string_lossy().into_owned()),
             existing,
+            members,
             suggested_path: suggested.to_string_lossy().into_owned(),
             path_check,
         })
@@ -911,6 +972,7 @@ impl Orchestrator {
         let dir = inside(&dest, &rel).map_err(|message| RpcError::new(codes::FORBIDDEN, message))?;
         let shown = dir.to_string_lossy().into_owned();
         let mut record = bound_record(&data_dir, params.operation_id, peer, &dest)?;
+        save_record(&data_dir, params.operation_id, &record).map_err(internal)?;
         let ours = record.created.contains(&params.rel);
         if !ours && dir.exists() && !(dir.is_dir() && is_empty_dir(&dir)) {
             if dir.is_dir() && git_transfer::same_repo(&params.repo, &git_transfer::identity_of(&dir).await) {
@@ -1046,7 +1108,24 @@ impl Orchestrator {
         let (written, kept) = write_env_files(&dest, env_files)?;
         let path = dest.to_string_lossy().into_owned();
         let project = if params.kind == ProjectKind::Group {
-            self.add_group_project(path, Some(params.name.clone()), None, params.members.clone())?
+            for member in &params.members {
+                let rel = safe_relative(member).ok_or_else(|| RpcError::invalid_params("invalid group member"))?;
+                inside(&dest, &rel).map_err(|message| RpcError::new(codes::FORBIDDEN, message))?;
+            }
+            let mut project = self.add_group_project(path, Some(params.name.clone()), None, params.members.clone())?;
+            let mut members: Vec<String> = project.members.iter().map(|m| m.path.clone()).collect();
+            for member in &params.members {
+                if !members.contains(member) {
+                    members.push(member.clone());
+                }
+            }
+            if let Some(members) = self.apply_group_update(&mut project, Some(members), None, None)? {
+                self.inner.store.project_set_members(project.id, &members).map_err(internal)?;
+                self.inner.store.project_update(&project).map_err(internal)?;
+                self.publish_projects();
+                self.spawn_repo_identity(project.id);
+            }
+            project
         } else {
             self.add_project(path, Some(params.name.clone()), None).map_err(|error| conflict(format!("{error:#}")))?
         };
@@ -1179,6 +1258,7 @@ mod tests {
         assert!(inside(&project, Path::new("config/.env")).is_err());
         assert_eq!(inside(&project, Path::new("apps/web/.env")).unwrap(), project.join("apps/web/.env"));
         assert_eq!(inside(&project, Path::new("")).unwrap(), project);
+        assert_eq!(inside(&project, Path::new("new/deeper/.env")).unwrap(), project.join("new/deeper/.env"));
         // The target never writes one there: not beside an existing file, and not as a new one.
         std::fs::remove_file(outside.join(".env")).unwrap();
         let refused = write_env_files(&project, vec![("config/.env".into(), b"A=1\n".to_vec())]);

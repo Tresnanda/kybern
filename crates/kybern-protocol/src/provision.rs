@@ -66,6 +66,14 @@ pub struct ProvisionExisting {
     pub path: String,
 }
 
+/// A source member paired with a folder on the target. Existing checkouts stay untouched.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ProvisionMember {
+    pub path: String,
+    pub target_path: String,
+    pub present: bool,
+}
+
 /// What a destination folder on the target holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -124,6 +132,9 @@ pub struct ProvisionPlan {
     /// The target's projects that already are this repository; non-empty means it is there already.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub existing: Vec<ProvisionExisting>,
+    /// Member paths and availability in the checked destination (groups only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<ProvisionMember>,
     /// The folder the target proposes (`~/projects/kybern`, `D:\code\kybern`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suggested_path: Option<String>,
@@ -282,6 +293,9 @@ pub struct PeerProvisionProbe {
     pub home: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub existing: Vec<ProvisionExisting>,
+    /// Member paths and availability in the checked destination (groups only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<ProvisionMember>,
     pub suggested_path: String,
     pub path_check: PathCheck,
 }

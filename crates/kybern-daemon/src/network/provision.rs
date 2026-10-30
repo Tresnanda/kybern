@@ -272,17 +272,21 @@ async fn run(
         Err(delivery) => return delivery,
     };
     let path = match &request.path {
-        Some(_) if probe.path_check.state == PathState::Forbidden || probe.path_check.state == PathState::NotEmpty => {
+        _ if probe.path_check.state == PathState::Forbidden || probe.path_check.state == PathState::NotEmpty => {
             return Delivery::Failed(format!("{}: {}", probe.path_check.path, probe.path_check.message));
         }
         Some(_) => probe.path_check.path.clone(),
-        None => probe.existing.first().map(|existing| existing.path.clone()).unwrap_or_else(|| probe.suggested_path.clone()),
+        None => probe.suggested_path.clone(),
     };
     progress.status.path = Some(path.clone());
 
     let mut cloned_from_remote = true;
     for repo in &repos {
-        match provision_repo(state, hub, item, repo, &path, target_name, progress).await {
+        let mut mapped = repo.clone();
+        if let Some(member) = probe.members.iter().find(|m| m.path == repo.rel) {
+            mapped.rel = member.target_path.clone();
+        }
+        match provision_repo(state, hub, item, &mapped, &path, target_name, progress).await {
             Ok(cloned) => cloned_from_remote &= cloned,
             Err(delivery) => return delivery,
         }
@@ -294,7 +298,7 @@ async fn run(
     } else {
         progress
             .phase(ProvisionPhase::CopyingEnv, format!("Copying {} env file{}", request.env_files.len(), plural(request.env_files.len())));
-        match seal_env_files(state, target, item.operation_id, Path::new(&project.path), &request.env_files) {
+        match seal_env_files(state, target, item.operation_id, Path::new(&project.path), &request.env_files, &probe.members) {
             Ok(sealed) => sealed,
             Err(delivery) => return delivery,
         }
@@ -304,7 +308,14 @@ async fn run(
         path,
         name: project.name.clone(),
         kind: project.kind,
-        members: if project.kind.is_single() { Vec::new() } else { repos.iter().map(|repo| repo.rel.clone()).collect() },
+        members: if project.kind.is_single() {
+            Vec::new()
+        } else {
+            repos
+                .iter()
+                .map(|repo| probe.members.iter().find(|m| m.path == repo.rel).map_or_else(|| repo.rel.clone(), |m| m.target_path.clone()))
+                .collect()
+        },
         env_files: sealed,
         cloned_from_remote,
     };
@@ -452,6 +463,7 @@ fn seal_env_files(
     operation_id: Uuid,
     root: &Path,
     files: &[String],
+    members: &[ProvisionMember],
 ) -> Result<Vec<SealedEnvFile>, Delivery> {
     let Some(membership) = state.network.membership() else {
         return Err(Delivery::Failed("The machine network is unavailable on this machine.".into()));
@@ -476,9 +488,12 @@ fn seal_env_files(
             continue;
         }
         let Ok(contents) = std::fs::read(&path) else { continue };
-        let context = env_file_context(operation_id, &me, target, rel);
+        // Bind encryption to the destination spelling while reading from the source spelling.
+        let mapped = members.iter().filter(|m| m.path != "." && rel.starts_with(&format!("{}/", m.path))).max_by_key(|m| m.path.len());
+        let target_rel = mapped.map_or_else(|| rel.clone(), |m| format!("{}/{}", m.target_path, &rel[m.path.len() + 1..]));
+        let context = env_file_context(operation_id, &me, target, &target_rel);
         let blob = crate::secret_store::seal(&recipient, &context, &contents).map_err(|error| Delivery::Failed(format!("{error:#}")))?;
-        sealed.push(SealedEnvFile { path: rel.clone(), sealed: B64.encode(blob) });
+        sealed.push(SealedEnvFile { path: target_rel, sealed: B64.encode(blob) });
     }
     Ok(sealed)
 }

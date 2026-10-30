@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { PROVISION_CHANGED_NOTIFICATION, type ProvisionStatus } from '../../../../packages/kybern-client/src/types.ts'
 import {
-  PROVISION_COPY as COPY, defaultEnvFiles, defaultPath, expandPath, displayPath, pathAccepted, provisionFraction, provisionSettled, provisionStatusText, targetDetail, type ProvisionTarget,
+  PROVISION_COPY as COPY, defaultEnvFiles, defaultPath, expandPath, displayPath, pathAccepted, provisionFraction, partialGroupDetail, provisionAddLabel, provisionSettled, provisionStatusText, targetDetail, type ProvisionTarget,
 } from '../../../../packages/kybern-client/src/provision.ts'
 import { Dialog } from '../nav/overlay.tsx'
 import { errorText } from '../nav/actions.ts'
@@ -101,6 +101,7 @@ export function ProvisionSheet({ projectId, machineId, close, inline = false }: 
         {plan?.blocked && <ErrorText testId="provision-blocked">{plan.blocked}</ErrorText>}
         {target && !plan && !planError && <Hint>{`Asking ${target.machineName} where it keeps projects…`}</Hint>}
         {plan && !plan.blocked && <>
+          {partialGroupDetail(plan) && <Hint>{partialGroupDetail(plan)}</Hint>}
           <Field label={COPY.folder}><FolderField plan={plan} path={path ?? ''} onPath={setPath} check={check} checking={checking} disabled={busy} /></Field>
           <Field label={COPY.envFiles}><EnvFileList plan={plan} selected={env ?? []} onChange={setEnv} disabled={busy} /></Field>
         </>}
@@ -109,7 +110,7 @@ export function ProvisionSheet({ projectId, machineId, close, inline = false }: 
     </DialogBody>
     <DialogFooter>
       <Button size="lg" variant="secondary" disabled={busy} onClick={dismiss}>Cancel</Button>
-      <Button size="lg" variant="primary" testId="provision-confirm" busy={busy} disabled={!ready} onClick={() => void add()}>{target ? COPY.add(target.machineName) : 'Add'}</Button>
+      <Button size="lg" variant="primary" testId="provision-confirm" busy={busy} disabled={!ready} onClick={() => void add()}>{plan ? provisionAddLabel(plan) : target ? COPY.add(target.machineName) : 'Add'}</Button>
     </DialogFooter>
   </Frame>
 }

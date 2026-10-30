@@ -4,7 +4,7 @@
 // and the waiting work goes on by itself; nothing is asked again.
 import { useEffect, useState } from 'react'
 import type { ApprovalRequest, ProvisionCardInput } from '../../../../packages/kybern-client/src/types.ts'
-import { PROVISION_COPY as COPY, defaultEnvFiles, defaultPath, expandPath, pathAccepted, provisionAnswer } from '../../../../packages/kybern-client/src/provision.ts'
+import { PROVISION_COPY as COPY, defaultEnvFiles, defaultPath, expandPath, pathAccepted, partialGroupDetail, provisionAddLabel, provisionAnswer } from '../../../../packages/kybern-client/src/provision.ts'
 import { Button } from '../kit/Button.tsx'
 import { MachineBadge } from '../sidebar/MachineBadge.tsx'
 import { glyphOfMachine } from '../machines/index.ts'
@@ -38,7 +38,7 @@ export function ProvisionRequestPanel({ approval, input, count, threadId }: { ap
   }
   return (
     <CardShell testId="provision-request-panel" stealFocus={false}>
-      <RequestHeader glyph={T.laptop} title={COPY.cardTitle(view.target.name, view.project_name)} badge={count > 1 ? `1 of ${count}` : undefined} meta={input.reason || COPY.cardThen(input.then, view.target.name)}
+      <RequestHeader glyph={T.laptop} title={partialGroupDetail(view) ?? COPY.cardTitle(view.target.name, view.project_name)} badge={count > 1 ? `1 of ${count}` : undefined} meta={input.reason || COPY.cardThen(input.then, view.target.name)}
         tileMark={<MachineBadge glyph={glyphOfMachine(view.target.id)} size={20} />} />
       <RequestBody style={{ gap: 12, marginTop: 12 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -56,7 +56,7 @@ export function ProvisionRequestPanel({ approval, input, count, threadId }: { ap
         right={
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
             <Button variant="ghost" size="sm" onKeyboard={keyboardAnswer} testId="provision-decline" disabled={busy} onClick={() => void respond(false)}>{COPY.decline}</Button>
-            <Button variant="primary" size="sm" swap onKeyboard={keyboardAnswer} kbd="↵" testId="provision-approve" disabled={!ready} onClick={() => void respond(true)}>{busy ? COPY.adding(view.target.name) : COPY.add(view.target.name)}</Button>
+            <Button variant="primary" size="sm" swap onKeyboard={keyboardAnswer} kbd="↵" testId="provision-approve" disabled={!ready} onClick={() => void respond(true)}>{busy ? COPY.adding(view.target.name) : provisionAddLabel(view)}</Button>
           </div>
         }
       />

@@ -2,6 +2,7 @@
 import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 import type { MachineId } from '../../../../packages/kybern-client/src/types.ts'
 import { provisionSource, provisionTargets, type ProvisionTarget } from '../../../../packages/kybern-client/src/provision.ts'
+import { sameForkProject } from '../../../../packages/kybern-client/src/forkMachine.ts'
 import { machineHub } from '../machines/index.ts'
 
 export interface ProvisionInstance { machineId: MachineId; machineName: string; projectId: string; online: boolean }
@@ -45,7 +46,9 @@ export function provisionContextOf(projectId: string, machineId?: MachineId | nu
     paused: !!connection.record.paused,
     member: connection.record.member,
   }))
-  return { name: logical.name, instances, targets: source ? provisionTargets(members, new Set(instances.map((instance) => instance.machineId)), source) : [], source }
+  const sourceProject = logical.instances.find((instance) => instance.machineId === source)?.project
+  const having = logical.instances.filter((instance) => sameForkProject(sourceProject, instance.project)).map((instance) => instance.machineId)
+  return { name: logical.name, instances, targets: source ? provisionTargets(members, new Set(having), source) : [], source }
 }
 
 /** Whether "Add to another machine…" belongs in a project's menu: another member exists that lacks it. */

@@ -127,7 +127,7 @@ export function friendlyMachineName(name: string | null | undefined, tsName?: st
 // ---- who can take a fork ----
 
 /** What of a project decides whether another machine's project can take a thread of it. */
-export type ForkProjectShape = Pick<Project, "kind" | "repos">;
+export type ForkProjectShape = Pick<Project, "kind" | "repos" | "members">;
 
 export interface ForkInstance {
   machineId: MachineId;
@@ -146,6 +146,7 @@ export function sameForkProject(source: ForkProjectShape | undefined, candidate:
   if (!source) return true;
   if (source.kind !== "group") return candidate?.kind !== "group";
   if (candidate?.kind !== "group") return false;
+  if (candidate.members?.some((member) => member.status !== "ok")) return false;
   const wanted = groupRepoKeys(source);
   const have = groupRepoKeys(candidate);
   return wanted.length > 0 && wanted.length === have.length && wanted.every((key, index) => key === have[index]);

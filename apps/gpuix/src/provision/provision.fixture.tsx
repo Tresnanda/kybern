@@ -29,7 +29,14 @@ const PLAN: ProvisionPlan = {
   path_check: { state: 'free', path: `${HOME}/projects/kybern`, message: 'New folder · it will be created' },
   env_files: [{ path: '.env', size: 412, selected: true }, { path: 'apps/mobile/.env.local', size: 1830, selected: true }, { path: 'crates/kybern-daemon/.envrc', size: 96, selected: true }],
 }
-let mode = 'sheet'
+if (process.env.PROVISION_PARTIAL === '1') {
+  PLAN.kind = 'group'
+  PLAN.repos = ['web', 'api', 'worker'].map((path) => ({ path, branch: 'main' }))
+  PLAN.members = PLAN.repos.map((repo, index) => ({ path: repo.path, target_path: repo.path, present: index === 0 }))
+  PLAN.path_check = { state: 'same_repo', path: PLAN.suggested_path!, message: 'Has 1 of 3 repos · only the missing repos will be added' }
+  PLAN.env_files = [{ path: 'api/.env', size: 412, selected: true }]
+}
+let mode = 'sheet' 
 let sequence = 0
 const thread = (): Thread => ({ id: 'thread-provision', project_id: 'p-kybern', title: 'Fix the flaky clock test', provider: { kind: 'claude_code', instance: 'default' }, model: null, effort: null, permission_mode: 'auto', status: 'awaiting_approval', worktree: null, cwd: 'D:\\code\\kybern', provider_session_id: null, pinned: false, created_at: at, updated_at: at, last_seq: 1 } as unknown as Thread)
 const status = (phase: ProvisionStatus['phase']): ProvisionStatus => ({
@@ -47,7 +54,7 @@ function answer(method: string, params: Record<string, unknown>): unknown {
   switch (method) {
     case 'projects.provision_plan': {
       const asked = params.path as string | undefined
-      if (!asked) return PLAN
+      if (!asked || asked.replace(/^~/, HOME) === PLAN.suggested_path) return PLAN
       return { ...PLAN, path_check: asked.endsWith('/gallery') ? { state: 'not_empty', path: asked, message: 'This folder already holds other files. Choose an empty or new folder.' } : { state: 'free', path: asked, message: 'New folder · it will be created' } }
     }
     case 'projects.browse': { const p = ((params.path as string) || HOME).replace(/^~/, HOME); const dirs = FOLDERS[p] ?? []; return { path: p, parent: p === '/' ? null : path.dirname(p), directories: dirs.map((name) => ({ name, path: `${p}/${name}` })), has_more: false } }

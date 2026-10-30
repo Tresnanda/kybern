@@ -39,6 +39,18 @@ export const PROVISION_COPY = {
   decline: "Cancel",
 };
 
+/** Partial group copy is shared by the card, manual sheet and fork sheet. */
+export function partialGroupDetail(plan: Pick<ProvisionPlan, "members" | "project_name" | "target">): string | null {
+  const members = plan.members ?? [];
+  const present = members.filter((member) => member.present).length;
+  return present > 0 && present < members.length ? `${plan.target.name} has ${present} of ${members.length} repos of ${plan.project_name}` : null;
+}
+
+export function provisionAddLabel(plan: ProvisionPlan): string {
+  const missing = (plan.members ?? []).filter((member) => !member.present).length;
+  return partialGroupDetail(plan) ? `Add the ${missing} missing` : PROVISION_COPY.add(plan.target.name);
+}
+
 /** The card's input, when this approval is the provisioning card. */
 export function provisionCardInput(approval: Pick<ApprovalRequest, "tool_name" | "input">): ProvisionCardInput | null {
   if (approval.tool_name !== PROJECT_PROVISION_TOOL) return null;

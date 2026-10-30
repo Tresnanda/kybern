@@ -4139,6 +4139,7 @@ export const PROJECT_PROVISION_TOOL = "kybern_project_provision";
 export const NEEDS_PROJECT = "project";
 export interface ProvisionMachine { id: MachineId; name: string; os: string; online: boolean }
 export interface ProvisionRepo { path: string; remote?: string | null; branch?: string | null }
+export interface ProvisionMember { path: string; target_path: string; present: boolean }
 export interface ProvisionExisting { project_id: ProjectId; name: string; path: string }
 export type PathState = "free" | "same_repo" | "not_empty" | "forbidden" | "unknown";
 export interface PathCheck { state: PathState; path: string; message: string }
@@ -4154,6 +4155,7 @@ export interface ProvisionPlan {
   repos: ProvisionRepo[];
   /** The target's projects that already are this repository. */
   existing?: ProvisionExisting[];
+  members?: ProvisionMember[];
   suggested_path?: string | null;
   target_home?: string | null;
   path_check?: PathCheck | null;
@@ -4200,7 +4202,7 @@ export interface ProvisionCardInput {
   reason?: string | null;
 }
 export interface PeerProvisionProbeParams { repos: RepoIdentity[]; members?: string[]; kind?: ProjectKind; name: string; path?: string | null }
-export interface PeerProvisionProbe { os: string; home?: string | null; existing?: ProvisionExisting[]; suggested_path: string; path_check: PathCheck }
+export interface PeerProvisionProbe { os: string; home?: string | null; existing?: ProvisionExisting[]; members?: ProvisionMember[]; suggested_path: string; path_check: PathCheck }
 export interface PeerProvisionPrepareParams {
   operation_id: Uuid; path: string; rel: string; repo: RepoIdentity; remote_url?: string | null; branch?: string | null; commit: string;
 }

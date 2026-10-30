@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   baseName, defaultEnvFiles, defaultPath, displayPath, expandPath, formatSize, joinPath, notYetDetail, pathAccepted, provisionAnswer,
-  provisionCardInput, provisionFraction, provisionRecordText, provisionSource, provisionStatusText, provisionTargets, targetDetail,
+  partialGroupDetail, provisionAddLabel, provisionCardInput, provisionFraction, provisionRecordText, provisionSource, provisionStatusText, provisionTargets, targetDetail,
 } from "../src/provision.ts";
 
 test("paths read the way the target spells them", () => {
@@ -74,4 +74,17 @@ test("a folder shown with ~ is sent as the target's absolute path and shown the 
   assert.equal(expandPath("~/x", null, "linux"), "~/x");
   assert.equal(expandPath("~/code/x", "C:\\Users\\Bagus", "windows"), "C:\\Users\\Bagus\\code\\x");
   assert.equal(expandPath("D:\\projects\\x", "C:\\Users\\Bagus", "windows"), "D:\\projects\\x");
+});
+
+
+test("partial groups name their availability and offer only the missing repositories", () => {
+  const plan = { project_name: "kybern", target: { name: "os-kdi" }, members: [
+    { path: "web", target_path: "api", present: true },
+    { path: "local", target_path: "local", present: false },
+    { path: "worker", target_path: "worker", present: false },
+  ] };
+  assert.equal(partialGroupDetail(plan), "os-kdi has 1 of 3 repos of kybern");
+  assert.equal(provisionAddLabel(plan), "Add the 2 missing");
+  assert.equal(partialGroupDetail({ ...plan, members: [] }), null);
+  assert.equal(provisionAddLabel({ ...plan, members: [] }), "Add to os-kdi");
 });

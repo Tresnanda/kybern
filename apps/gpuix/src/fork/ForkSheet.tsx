@@ -32,7 +32,7 @@ import { Label, useTheme } from '../ui.tsx'
 import { forkTargetsOf } from './targets.ts'
 import { provisionContextOf } from '../provision/targets.ts'
 import { FolderField, useProvisionPlan } from '../provision/parts.tsx'
-import { defaultPath, displayPath, expandPath, notYetDetail, pathAccepted } from '../../../../packages/kybern-client/src/provision.ts'
+import { defaultPath, displayPath, expandPath, notYetDetail, partialGroupDetail, pathAccepted } from '../../../../packages/kybern-client/src/provision.ts'
 import { ownProjectOf } from '../machines/merged.ts'
 import { threadClient } from '../state.ts'
 
@@ -49,7 +49,7 @@ export function ForkSheet({ threadId, machineId, close, mode = 'fork' }: { threa
     const having = forkTargetsOf(thread)
     const context = thread.subagent ? null : provisionContextOf(ownProjectOf(thread), thread.machineId)
     const missing = (context?.targets ?? []).filter((item) => !item.has).map((item) => ({ machineId: item.machineId, machineName: item.machineName, projectId: '', online: item.online, missing: true }))
-    return [...having, ...missing]
+    return [...having.filter((item) => !missing.some((other) => other.machineId === item.machineId)), ...missing]
   }, [thread])
   const [state, setState] = useState(() => forkSheetDefaults(targets, ''))
   const [generated, setGenerated] = useState<string | null>(null)
@@ -143,13 +143,13 @@ export function ForkSheet({ threadId, machineId, close, mode = 'fork' }: { threa
         ? <Hint>No other machine is in your network yet.</Hint>
         : <Field label="Machine"><div role="radiogroup" aria-label="Machine" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           {targets.map((item) => <MachineChoice key={item.machineId} item={item} checked={target?.machineId === item.machineId} disabled={busy}
-            detail={item.missing ? notYetDetail(item.machineName, target?.machineId === item.machineId ? addShown : null) : undefined} onSelect={() => setState({ ...state, machine: item.machineId })} />)}
+            detail={item.missing ? (target?.machineId === item.machineId && addPlan ? partialGroupDetail(addPlan) : null) ?? notYetDetail(item.machineName, target?.machineId === item.machineId ? addShown : null) : undefined} onSelect={() => setState({ ...state, machine: item.machineId })} />)}
         </div></Field>}
       {target?.missing && <div testId="fork-provision" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {addPlan?.blocked ? <ErrorText testId="fork-provision-blocked">{addPlan.blocked}</ErrorText> : changing && addPlan
           ? <Field label={`Folder on ${target.machineName}`}><FolderField testId="fork-provision-folder" plan={addPlan} path={addPath ?? ''} onPath={setAddPath} check={addCheck} checking={addChecking} disabled={busy} /></Field>
           : <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-            <div style={{ display: 'flex', flexShrink: 1, flexGrow: 1, minWidth: 0 }}><Hint>{addPlan ? `${target.machineName} gets the project first${addPlan.env_files.length ? `, with ${addPlan.env_files.length === 1 ? 'its env file' : `its ${addPlan.env_files.length} env files`}` : ''}; then the ${move ? 'thread moves' : 'fork starts'} there.` : `Asking ${target.machineName} where it keeps projects…`}</Hint></div>
+            <div style={{ display: 'flex', flexShrink: 1, flexGrow: 1, minWidth: 0 }}><Hint>{addPlan ? `${partialGroupDetail(addPlan) ? "The missing repos are added first" : `${target.machineName} gets the project first`}${addPlan.env_files.length ? `, with ${addPlan.env_files.length === 1 ? 'its env file' : `its ${addPlan.env_files.length} env files`}` : ''}; then the ${move ? 'thread moves' : 'fork starts'} there.` : `Asking ${target.machineName} where it keeps projects…`}</Hint></div>
             {addPlan && addPlan.target.online && <Button size="sm" variant="ghost" testId="fork-provision-change" style={{ flexShrink: 0 }} disabled={busy} onClick={() => setChanging(true)}>Change folder…</Button>}
           </div>}
       </div>}

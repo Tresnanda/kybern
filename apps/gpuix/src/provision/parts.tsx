@@ -20,13 +20,14 @@ import { FONT_MONO } from '../theme.ts'
 /** The plan for `projectId` going to `machineId`, asked of `source`; `path` is re-checked by the target 300 ms after it settles. */
 export function useProvisionPlan(source: KybernClient | null, projectId: string, machineId: string | null, path: string | null, initial?: ProvisionPlan) {
   const [plan, setPlan] = useState<ProvisionPlan | null>(initial ?? null)
+  const [checkedPlan, setCheckedPlan] = useState<ProvisionPlan | null>(null)
   const [check, setCheck] = useState<PathCheck | null>(initial?.path_check ?? null)
   const [error, setError] = useState('')
   const [checking, setChecking] = useState(false)
   useEffect(() => {
     // A plan the daemon already sent (the agent card) is used as it is; only the folder is checked again.
     if (initial) return
-    setPlan(null); setCheck(null); setError('')
+    setPlan(null); setCheckedPlan(null); setCheck(null); setError('')
     if (!source || !machineId) return
     let live = true
     source.call('projects.provision_plan', { project_id: projectId, machine: machineId }).then(
@@ -42,13 +43,13 @@ export function useProvisionPlan(source: KybernClient | null, projectId: string,
     setChecking(true)
     const timer = setTimeout(() => {
       source.call('projects.provision_plan', { project_id: projectId, machine: machineId, path }).then(
-        (next) => { if (attempt === asked.current) { setCheck(next.path_check ?? null); setChecking(false) } },
+        (next) => { if (attempt === asked.current) { setCheckedPlan(next); setCheck(next.path_check ?? null); setChecking(false) } },
         (e) => { if (attempt === asked.current) { setCheck({ state: 'forbidden', path, message: errorText(e) }); setChecking(false) } },
       )
     }, 300)
-    return () => clearTimeout(timer)
+    return () => { clearTimeout(timer); asked.current++ }
   }, [source, projectId, machineId, plan, path])
-  return { plan, check, checking, error }
+  return { plan: checkedPlan ?? plan, check, checking, error }
 }
 
 /** The target's client, for browsing its folders. Null while it is offline. */

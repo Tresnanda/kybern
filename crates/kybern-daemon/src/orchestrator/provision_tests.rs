@@ -401,3 +401,127 @@ async fn a_delegation_that_reaches_a_machine_without_the_repository_waits_for_it
     wait_until("the child started on b", WAIT * 4, || !spawned.lock().unwrap().is_empty()).await;
     assert!(a.state.store.outbox_list(None, None).unwrap().iter().all(|item| item.state == OutboxState::Delivered));
 }
+
+/// A group exercises a clone and a local-only bundle in the same delivery. Nested member paths also
+/// cover containment when none of the destination's intermediate folders exist yet.
+async fn provision_group(net: &mut ProvisionNet, extra: bool) -> PathBuf {
+    let root = net.root().join("source-group");
+    std::fs::create_dir_all(root.join("services")).unwrap();
+    std::fs::rename(&net.repo_b, root.join("web")).unwrap();
+    net.repo_b = root.join("web");
+    init_project_repo(&root.join("services/local"));
+    let mut members = vec!["web".to_string(), "services/local".to_string()];
+    if extra {
+        let worker = root.join("worker");
+        init_project_repo(&worker);
+        // Distinct root history, even if these test commits happen within the same second.
+        run_git(&worker, &["commit", "--amend", "-q", "-m", "worker root"]);
+        members.push("worker".into());
+    }
+    net.project_b = net.b.state.orchestrator.add_group_project(root.to_string_lossy().into(), Some("group".into()), None, members).unwrap();
+    root
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn provision_group_clones_and_bundles_members_with_env_files() {
+    let Some(mut net) = ProvisionNet::new().await else { return };
+    let source = provision_group(&mut net, false).await;
+    let dest = net.root().join("c-home/new/deep/group");
+    let plan = net.b.state.orchestrator.provision_plan(net.project_b.id, &net.c.id(), Some(dest.to_string_lossy().into())).await.unwrap();
+    assert_eq!(plan.members.len(), 2);
+    assert!(plan.members.iter().all(|member| !member.present));
+    assert_eq!(plan.env_files.iter().map(|file| file.path.as_str()).collect::<Vec<_>>(), vec!["web/.env", "web/apps/web/.env.local"]);
+    let queued = net.provision(Some(dest.clone()), None, None).await;
+    let item = net.settled(queued.operation_id).await;
+    assert_eq!(item.state, OutboxState::Delivered, "{:?}", item.last_error);
+    let result: ProvisionResult = serde_json::from_value(item.result.unwrap()).unwrap();
+    assert_eq!(result.project.kind, ProjectKind::Group);
+    assert_eq!(result.project.members.len(), 2);
+    assert!(!result.cloned_from_remote, "one member needed a bundle");
+    for member in ["web", "services/local"] {
+        assert_eq!(git_out(&dest.join(member), &["rev-parse", "HEAD"]), git_out(&source.join(member), &["rev-parse", "HEAD"]));
+    }
+    assert_eq!(std::fs::read(dest.join("web/.env")).unwrap(), std::fs::read(source.join("web/.env")).unwrap());
+    assert_eq!(std::fs::read(dest.join("web/apps/web/.env.local")).unwrap(), std::fs::read(source.join("web/apps/web/.env.local")).unwrap());
+    assert!(!item.payload.to_string().contains("zq-secret"));
+    assert_eq!(net.b.state.orchestrator.provision_plan(net.project_b.id, &net.c.id(), None).await.unwrap().existing.len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn provision_partial_group_reuses_renamed_members_and_adds_only_the_missing_repo() {
+    let Some(mut net) = ProvisionNet::new().await else { return };
+    let source = provision_group(&mut net, true).await;
+    let dest = net.root().join("c-home/partial");
+    std::fs::create_dir_all(&dest).unwrap();
+    for (from, to) in [("web", "api"), ("services/local", "backend")] {
+        run_git(&dest, &["clone", "-q", source.join(from).to_str().unwrap(), to]);
+    }
+    let original = net.c.state.orchestrator.add_group_project(dest.to_string_lossy().into(), Some("my group".into()), None, vec!["api".into(), "backend".into()]).unwrap();
+    run_git(&dest.join("api"), &["checkout", "-q", "-b", "my-work"]);
+    std::fs::write(dest.join("api/tracked.txt"), "keep my edits").unwrap();
+    std::fs::write(dest.join("api/.env"), "KEEP=1\n").unwrap();
+    let head = git_out(&dest.join("api"), &["rev-parse", "HEAD"]);
+    let plan = net.b.state.orchestrator.provision_plan(net.project_b.id, &net.c.id(), None).await.unwrap();
+    assert!(plan.existing.is_empty(), "a partial group must offer provisioning");
+    assert_eq!(PathBuf::from(plan.suggested_path.unwrap()), dest);
+    assert_eq!(plan.members.iter().filter(|m| m.present).count(), 2);
+    assert!(plan.members.iter().any(|m| m.path == "web" && m.target_path == "api" && m.present));
+    assert_eq!(plan.path_check.unwrap().state, PathState::SameRepo);
+    // A conflicting missing-member folder is refused before any write, including env files.
+    std::fs::create_dir_all(dest.join("worker")).unwrap();
+    std::fs::write(dest.join("worker/keep.txt"), "mine").unwrap();
+    let bad = net.provision(None, None, None).await;
+    assert_eq!(net.settled(bad.operation_id).await.state, OutboxState::Failed);
+    assert_eq!(std::fs::read_to_string(dest.join("worker/keep.txt")).unwrap(), "mine");
+    std::fs::remove_dir_all(dest.join("worker")).unwrap();
+    let queued = net.provision(None, None, None).await;
+    let item = net.settled(queued.operation_id).await;
+    assert_eq!(item.state, OutboxState::Delivered, "{:?}", item.last_error);
+    let result: ProvisionResult = serde_json::from_value(item.result.unwrap()).unwrap();
+    assert_eq!(result.project.id, original.id, "extend the existing group");
+    assert_eq!(result.project.members.len(), 3);
+    assert!(!dest.join("web").exists() && !dest.join("services").exists(), "no duplicate checkouts");
+    assert_eq!(git_out(&dest.join("api"), &["rev-parse", "HEAD"]), head);
+    assert_eq!(git_out(&dest.join("api"), &["symbolic-ref", "--short", "HEAD"]), "my-work");
+    assert_eq!(std::fs::read_to_string(dest.join("api/tracked.txt")).unwrap(), "keep my edits");
+    assert_eq!(std::fs::read_to_string(dest.join("api/.env")).unwrap(), "KEEP=1\n");
+    assert!(dest.join("api/apps/web/.env.local").exists(), "env files follow renamed members");
+    assert_eq!(git_out(&dest.join("worker"), &["rev-parse", "HEAD"]), git_out(&source.join("worker"), &["rev-parse", "HEAD"]));
+    assert_eq!(net.b.state.orchestrator.provision_plan(net.project_b.id, &net.c.id(), None).await.unwrap().existing.len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn provision_partial_group_card_resumes_the_waiting_delegation() {
+    let Some((cluster, a, b, mut fixture, mut parent, live, spawned)) = agent_pair(PermissionMode::Auto).await else { return };
+    let root = cluster.dir.path();
+    init_project_repo(&root.join("addon"));
+    let group = group_project("group", root, &["checkout-a", "addon"]);
+    a.state.store.project_insert(&group).unwrap();
+    fixture.project = group.clone();
+    parent.project_id = group.id;
+    parent.cwd = group.path.clone();
+    a.state.store.thread_upsert(&parent).unwrap();
+    let dest = root.join("b-home/partial");
+    std::fs::create_dir_all(&dest).unwrap();
+    run_git(&dest, &["clone", "-q", root.join("checkout-a").to_str().unwrap(), "api"]);
+    // A group with a deleted member is a normal project state; it still holds the other checkout.
+    let partial = group_project("group", &dest, &["api", "addon"]);
+    b.state.store.project_insert(&partial).unwrap();
+    let (orchestrator, thread_id, session, target) = (fixture.orchestrator.clone(), parent.id, live.session_instance_id, b.id());
+    let call = tokio::spawn(async move {
+        orchestrator.execute_native_app_tool_call(thread_id, session, "partial", "kybern_agent_delegate", json!({"task":"Test the completed group", "machine":target})).await
+    });
+    let card = secret_card(&live).await;
+    wait_until("partial card stored", WAIT, || fixture.store.approval_get(card).ok().flatten().is_some()).await;
+    let (request, _) = fixture.store.approval_get(card).unwrap().unwrap();
+    let input: ProvisionCardInput = serde_json::from_value(request.input).unwrap();
+    assert_eq!(input.plan.members.iter().filter(|m| m.present).count(), 1);
+    assert!(input.plan.members.iter().any(|m| m.path == "addon" && !m.present));
+    fixture.orchestrator.respond_approval(card, ApprovalDecision::Submit { response: json!({"path":dest.to_string_lossy(), "env_files":[]}) }).await.unwrap();
+    let started = call.await.unwrap().unwrap();
+    assert_eq!(started["provision"]["approved_by"], "user");
+    wait_until("partial group's child started", WAIT * 4, || !spawned.lock().unwrap().is_empty()).await;
+    assert!(dest.join("addon/.git").exists());
+    assert!(!dest.join("checkout-a").exists());
+    assert!(a.state.store.outbox_list(None, None).unwrap().iter().all(|item| item.state == OutboxState::Delivered));
+}
