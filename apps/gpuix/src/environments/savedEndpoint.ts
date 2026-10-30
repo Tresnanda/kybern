@@ -23,4 +23,3 @@ export async function withVerifiedEndpoint<T>(endpoint: Endpoint, action: (clien
     return await action(client)
   } finally { signal?.removeEventListener('abort', abort); client.close() }
 }
-
