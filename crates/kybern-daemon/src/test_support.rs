@@ -38,7 +38,7 @@ fn powershell_launcher() -> &'static Path {
     use kybern_protocol::process::NoWindow;
     use std::sync::OnceLock;
     static FIXTURE: OnceLock<PathBuf> = OnceLock::new();
-    &FIXTURE.get_or_init(|| {
+    FIXTURE.get_or_init(|| {
         let dir = std::env::temp_dir().join(format!("kybern-test-launcher-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(&dir).unwrap();
         let source = dir.join("launcher.rs");
