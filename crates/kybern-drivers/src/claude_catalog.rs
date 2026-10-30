@@ -494,6 +494,7 @@ mod tests {
         assert_eq!(state.entries[MAX_ENTRIES - 1].key.stamp, MAX_ENTRIES.to_string());
     }
 
+    #[cfg(unix)]
     const REPLY: &str = r#"{"type":"control_response","response":{"subtype":"success","request_id":"kybern-model-catalog","response":{"models":[{"value":"opus","resolvedModel":"claude-opus-5-5","displayName":"Opus"}]}}}"#;
 
     /// A stand-in `claude` that counts its launches, then answers

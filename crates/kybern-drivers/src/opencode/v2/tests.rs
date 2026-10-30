@@ -4,7 +4,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn session(base: &str) -> (Arc<OpencodeSession>, mpsc::Receiver<DriverEvent>) {
     let (events, rx) = mpsc::channel(64);
-    let mut command = Command::new("sleep");
+    let mut command = crate::test_process::sleep();
     command.arg("30").kill_on_drop(true);
     let session = Arc::new(OpencodeSession {
         server: Api { http: reqwest::Client::new(), base: base.into(), password: "pw".into() },

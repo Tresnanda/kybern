@@ -1652,7 +1652,7 @@ mod tests {
     async fn child_session_output_reaches_the_subagent_and_never_the_root() {
         use super::*;
         let (events, mut rx) = mpsc::channel(64);
-        let mut command = Command::new("sleep");
+        let mut command = crate::test_process::sleep();
         command.arg("30").kill_on_drop(true);
         let session = Arc::new(OpencodeSession {
             http: reqwest::Client::new(),
@@ -1775,7 +1775,7 @@ mod tests {
             requests
         });
         let (events, mut rx) = mpsc::channel(8);
-        let mut command = Command::new("sleep");
+        let mut command = crate::test_process::sleep();
         command.arg("30").kill_on_drop(true);
         let session = Arc::new(OpencodeSession {
             http: reqwest::Client::new(),
@@ -1875,7 +1875,7 @@ mod tests {
             requests
         });
         let (events, mut rx) = mpsc::channel(8);
-        let mut command = Command::new("sleep");
+        let mut command = crate::test_process::sleep();
         command.arg("30").kill_on_drop(true);
         let session = Arc::new(OpencodeSession {
             http: reqwest::Client::new(),

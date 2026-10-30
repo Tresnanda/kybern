@@ -183,7 +183,7 @@ mod lifecycle_tests {
 
     #[tokio::test]
     async fn closing_stdin_delivers_eof() {
-        let child = NdjsonChild::spawn(Command::new("cat")).unwrap();
+        let child = NdjsonChild::spawn(crate::test_process::echo()).unwrap();
         child.close_stdin().await.unwrap();
         assert_eq!(tokio::time::timeout(Duration::from_secs(2), child.wait()).await.unwrap(), Some(0));
     }
@@ -251,7 +251,7 @@ mod lifecycle_tests {
         cmd.current_dir(dir.path())
             .args(["-c", "(while [ ! -f proceed ]; do sleep 0.02; done; touch escaped) & printf '{\"ready\":true}\\n'; wait"]);
         let child = Arc::new(NdjsonChild::spawn(cmd).unwrap());
-        let mut unrelated = Command::new("sleep").arg("30").kill_on_drop(true).spawn().unwrap();
+        let mut unrelated = crate::test_process::sleep().arg("30").kill_on_drop(true).spawn().unwrap();
         let lifetime = SessionLifetime::new(child.clone());
         tokio::time::timeout(Duration::from_secs(2), async { child.lines.lock().await.recv().await.unwrap() }).await.unwrap();
         drop(lifetime);

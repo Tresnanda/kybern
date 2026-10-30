@@ -8,6 +8,8 @@
 pub mod account_auth;
 pub mod binary;
 #[cfg(test)]
+mod test_process;
+#[cfg(test)]
 pub(crate) mod test_support {
     use kybern_protocol::*;
     use uuid::Uuid;

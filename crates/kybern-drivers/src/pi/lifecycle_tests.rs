@@ -23,7 +23,7 @@ impl Harness {
         flavor: Flavor,
         initial: Option<std::result::Result<(), String>>,
     ) -> (Self, tokio::sync::watch::Sender<Option<std::result::Result<(), String>>>) {
-        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, rx) = mpsc::channel(64);
         let (initialized_tx, initialized) = tokio::sync::watch::channel(initial);
         let session = Arc::new(PiSession {

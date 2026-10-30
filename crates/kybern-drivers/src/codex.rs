@@ -2211,7 +2211,7 @@ fi
         use super::*;
         use crate::{NativeToolDefinition, NativeToolRestrictions};
 
-        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, mut rx) = mpsc::channel(8);
         let session = Arc::new(CodexSession {
             child: child.clone(),
@@ -2277,7 +2277,7 @@ fi
     async fn questions_round_trip_and_withdraw_on_provider_resolution() {
         use super::*;
 
-        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, mut rx) = mpsc::channel(8);
         let session = Arc::new(CodexSession {
             child: child.clone(),
@@ -2599,7 +2599,7 @@ wait
 
     #[tokio::test]
     async fn parent_context_and_account_limits_ignore_child_token_usage() {
-        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, mut rx) = mpsc::channel(8);
         let session = Arc::new(CodexSession {
             child: child.clone(),
@@ -2655,7 +2655,7 @@ wait
 
     #[tokio::test]
     async fn early_resume_notifications_never_register_the_root_as_a_subagent() {
-        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, mut rx) = mpsc::channel(64);
         let session = Arc::new(CodexSession {
             child: child.clone(),
@@ -2725,7 +2725,7 @@ wait
 
     #[tokio::test]
     async fn subagent_items_and_deltas_are_forwarded_to_the_subagent_only() {
-        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, mut rx) = mpsc::channel(64);
         let session = Arc::new(CodexSession {
             child: child.clone(),
@@ -2824,7 +2824,7 @@ wait
 
     #[tokio::test]
     async fn manual_compaction_uses_native_rpc_and_waits_for_turn_completion() {
-        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, mut rx) = mpsc::channel(8);
         let session = Arc::new(CodexSession {
             child: child.clone(),
@@ -2893,7 +2893,7 @@ wait
 
     #[tokio::test]
     async fn async_questions_keep_native_fields_and_answers_steer_the_current_turn() {
-        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, mut rx) = mpsc::channel(8);
         let session = Arc::new(CodexSession {
             child: child.clone(),
