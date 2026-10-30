@@ -31,6 +31,7 @@ pub mod membership;
 pub mod ops;
 pub mod outbox;
 pub mod peers;
+pub mod plugin_sync;
 pub mod ports;
 pub mod provision;
 pub mod relay;
@@ -51,6 +52,8 @@ mod gap_tests;
 pub(crate) mod harness;
 #[cfg(test)]
 mod join_tests;
+#[cfg(test)]
+mod plugin_sync_tests;
 #[cfg(test)]
 mod recovery_tests;
 #[cfg(test)]

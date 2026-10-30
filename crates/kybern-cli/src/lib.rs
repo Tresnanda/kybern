@@ -5,6 +5,7 @@ mod credentials;
 mod fork;
 mod machines;
 mod outbox;
+mod plugin_sync;
 mod render;
 mod requests;
 mod skill_sync;
@@ -523,6 +524,11 @@ enum Cmd {
     },
     /// List skills available to an agent in a project, or your user skills on every machine.
     #[command(args_conflicts_with_subcommands = true)]
+    /// Compare and explicitly copy user plugins between machines.
+    Plugins {
+        #[command(subcommand)]
+        cmd: plugin_sync::PluginsCmd,
+    },
     Skills {
         #[command(subcommand)]
         cmd: Option<skill_sync::SkillsCmd>,
@@ -2457,6 +2463,7 @@ pub async fn run() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }
         },
+        Cmd::Plugins { cmd } => plugin_sync::run(&client, cmd, json).await?,
         Cmd::Skills { cmd: Some(cmd), .. } => skill_sync::run(&client, cmd, json).await?,
         Cmd::Skills { cmd: None, project, provider } => {
             let project = project.ok_or_else(|| anyhow!("Name a project: kybern skills <project>, or kybern skills machines"))?;

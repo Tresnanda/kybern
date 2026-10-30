@@ -40,6 +40,7 @@ mod rpc;
 #[cfg(test)]
 mod test_support;
 // S3: the encrypted secret store. Its RPC, push transport and outbox hooks arrive with N3/R1.
+mod plugins;
 #[allow(dead_code)]
 mod secret_store;
 mod secrets;

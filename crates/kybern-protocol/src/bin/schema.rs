@@ -338,6 +338,12 @@ fn main() {
     method::<PeerPortsOpen>(&mut methods);
     method::<PeerPortsData>(&mut methods);
     method::<PeerPortsClose>(&mut methods);
+    method::<PluginsInventory>(&mut methods);
+    method::<PluginsNetworkViewMethod>(&mut methods);
+    method::<PluginsCopy>(&mut methods);
+    method::<PeerPluginsInventory>(&mut methods);
+    method::<PeerPluginsCopy>(&mut methods);
+    method::<PeerPluginsInstall>(&mut methods);
     method::<SkillsInventoryMethod>(&mut methods);
     method::<SkillsNetworkViewMethod>(&mut methods);
     method::<SkillsCopy>(&mut methods);

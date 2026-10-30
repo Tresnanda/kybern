@@ -41,6 +41,7 @@ pub enum OutboxKind {
     Provision,
     // Copy a skill of this machine to the target (`skills.copy`; payload `SkillCopyPayload`).
     SkillCopy,
+    PluginInstall,
 }
 
 impl OutboxKind {
@@ -56,6 +57,7 @@ impl OutboxKind {
             OutboxKind::Move => "move",
             OutboxKind::Provision => "provision",
             OutboxKind::SkillCopy => "skill_copy",
+            OutboxKind::PluginInstall => "plugin_install",
         }
     }
 }

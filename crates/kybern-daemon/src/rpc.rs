@@ -907,6 +907,9 @@ async fn dispatch_part_11(state: &AppState, ctx: &ConnectionCtx, method: &str, s
         }
         SettingsNetworkViewMethod::NAME => ok(crate::settings_share::network_view(state).await),
         SettingsShare::NAME => ok(crate::settings_share::share(state, parse(params)?).await?),
+        PluginsInventory::NAME => ok(crate::plugins::inventory(state).await?),
+        PluginsNetworkViewMethod::NAME => ok(crate::network::plugin_sync::network_view(state).await?),
+        PluginsCopy::NAME => ok(crate::network::plugin_sync::copy(state, parse(params)?).await?),
         SkillsInventoryMethod::NAME => ok(crate::network::skill_sync::inventory(state).await?),
         SkillsNetworkViewMethod::NAME => ok(crate::network::skill_sync::network_view(state).await?),
         SkillsCopy::NAME => ok(crate::network::skill_sync::copy(state, parse(params)?).await?),

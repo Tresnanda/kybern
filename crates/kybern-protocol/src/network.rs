@@ -47,10 +47,11 @@ pub mod features {
     pub const PROVISION_V1: &str = "provision.v1";
     /// `peer.skills.*` and the `skill` destination of `peer.files.*`: this machine lists its user skills
     /// and takes skill copies.
+    pub const PLUGINS_SYNC_V1: &str = "plugins.sync.v1";
     pub const SKILLS_SYNC_V1: &str = "skills.sync.v1";
 
     /// Every feature the network design names, in design order.
-    pub const ALL: [&str; 17] = [
+    pub const ALL: [&str; 18] = [
         NETWORK_V1,
         RELAY_V1,
         DELEGATE_REMOTE_V1,
@@ -68,6 +69,7 @@ pub mod features {
         GROUP_V1,
         PROVISION_V1,
         SKILLS_SYNC_V1,
+        PLUGINS_SYNC_V1,
     ];
 }
 

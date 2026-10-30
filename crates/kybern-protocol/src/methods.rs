@@ -18,6 +18,7 @@ use crate::model::*;
 use crate::move_thread::*;
 use crate::network::*;
 use crate::outbox::*;
+use crate::plugin_sync::*;
 use crate::provision::*;
 use crate::shared_state::*;
 use crate::skill_sync::*;
@@ -4295,6 +4296,13 @@ method!(PeerPortsClose, "peer.ports.close", Some(Scope::MachinePeer), PeerRelayC
 
 // User skills on every machine (payloads in skill_sync.rs). Reading another machine's skills and asking it to
 // send one are file reads there, and the copy itself is a file send: `machine:files` gates all of it.
+method!(PluginsInventory, "plugins.inventory", Some(Scope::OrchestrationRead), Empty, PluginInventory);
+method!(PluginsNetworkViewMethod, "plugins.network_view", Some(Scope::OrchestrationRead), Empty, PluginsNetworkView);
+method!(PluginsCopy, "plugins.copy", Some(Scope::OrchestrationOperate), PluginsCopyParams, PluginsCopyResult);
+method!(PeerPluginsInventory, "peer.plugins.inventory", Some(Scope::MachineFiles), Empty, PluginInventory);
+method!(PeerPluginsCopy, "peer.plugins.copy", Some(Scope::MachineFiles), PluginsCopyParams, PluginsCopyResult);
+method!(PeerPluginsInstall, "peer.plugins.install", Some(Scope::MachineFiles), PluginInstallRequest, PluginInstallResult);
+
 method!(SkillsInventoryMethod, "skills.inventory", Some(Scope::OrchestrationRead), Empty, SkillInventory);
 method!(SkillsNetworkViewMethod, "skills.network_view", Some(Scope::OrchestrationRead), Empty, SkillsNetworkView);
 method!(SkillsCopy, "skills.copy", Some(Scope::OrchestrationOperate), SkillsCopyParams, SkillsCopyResult);
@@ -4583,6 +4591,12 @@ registry!(
     PeerPortsOpen,
     PeerPortsData,
     PeerPortsClose,
+    PluginsInventory,
+    PluginsNetworkViewMethod,
+    PluginsCopy,
+    PeerPluginsInventory,
+    PeerPluginsCopy,
+    PeerPluginsInstall,
     SkillsInventoryMethod,
     SkillsNetworkViewMethod,
     SkillsCopy,

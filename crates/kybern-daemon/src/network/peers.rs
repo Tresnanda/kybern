@@ -642,6 +642,9 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
             super::files_push::serve(state, link, method, params).await
         }
         // User skills: this machine's inventory, and a copy of one of them to other machines.
+        PeerPluginsInventory::NAME => ok(crate::plugins::inventory(state).await?),
+        PeerPluginsCopy::NAME => ok(super::plugin_sync::serve_copy(state, parse(params)?).await?),
+        PeerPluginsInstall::NAME => ok(crate::plugins::install(state, &link.machine_id, parse(params)?).await?),
         PeerSkillsInventory::NAME => ok(super::skill_sync::inventory(state).await?),
         PeerSkillsCopy::NAME => ok(super::skill_sync::serve_copy(state, &link.machine_id, parse(params)?).await?),
         // The clipboard (U2): an explicit text, a read, and a change of the universal clipboard.

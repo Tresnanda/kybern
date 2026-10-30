@@ -68,7 +68,7 @@ impl SkillHomes {
         *self.set.write().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((env, home));
     }
 
-    fn context(&self) -> Option<(BTreeMap<String, String>, PathBuf)> {
+    pub(crate) fn context(&self) -> Option<(BTreeMap<String, String>, PathBuf)> {
         if let Some(set) = self.set.read().unwrap_or_else(|poisoned| poisoned.into_inner()).clone() {
             return Some(set);
         }

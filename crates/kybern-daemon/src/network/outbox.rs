@@ -326,6 +326,7 @@ async fn deliver(state: &AppState, item: &OutboxItem) -> Delivery {
         OutboxKind::FilesPush => super::files_push::deliver(state, item).await,
         OutboxKind::Provision => super::provision::deliver(state, item).await,
         OutboxKind::SkillCopy => super::skill_sync::deliver(state, item).await,
+        OutboxKind::PluginInstall => super::plugin_sync::deliver(state, item).await,
     }
 }
 
