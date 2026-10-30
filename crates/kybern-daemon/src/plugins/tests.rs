@@ -34,7 +34,7 @@ fn seed(ctx: &Context) {
     put(
         h,
         ".pi/agent/settings.json",
-        r#"{"packages":[{"source":"npm:pi-review@2.0.0","extensions":[],"skills":[],"prompts":[],"themes":[]},"./local"]}"#,
+        r#"{"packages":[{"source":"npm:pi-review@2.0.0","extensions":[],"skills":[],"prompts":[],"themes":[]},"./local tools"]}"#,
     );
     put(h, ".omp/plugins/package.json", r#"{"dependencies":{"omp-review":"npm:omp-review@1.0.0"}}"#);
     put(
@@ -62,6 +62,8 @@ fn inventory_covers_six_harnesses_without_credentials_or_cli() {
     let pi = inv.plugins.iter().find(|p| p.id == "pi-review").unwrap();
     assert_eq!(pi.enabled, Some(false));
     assert_eq!(pi.resources.len(), 4);
+    let local = inv.plugins.iter().find(|p| p.name == "local tools").unwrap();
+    assert!(local.problem.is_some() && local.source.is_none());
     assert!(inv.plugins.iter().find(|p| p.provider == ProviderKind::Cursor).unwrap().problem.is_some());
     assert!(!serde_json::to_string(&inv).unwrap().contains("never-send"));
     assert!(!serde_json::to_string(&inv).unwrap().contains(dir.path().to_str().unwrap()));

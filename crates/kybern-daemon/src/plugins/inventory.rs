@@ -395,10 +395,15 @@ pub(super) fn read(ctx: &Context) -> PluginInventory {
         }
     }
     result.warnings.push("cursor: Cached plugins only; active installation and enabled state are not available from Cursor’s local metadata. Manage them in Cursor.".into());
-    result.plugins.retain(|p| safe_id(&p.id));
-    result.plugins.sort_by(|a, b| (a.provider.as_str(), &a.id).cmp(&(b.provider.as_str(), &b.id)));
     for item in &mut result.plugins {
+        if !safe_id(&item.id) {
+            // Local extensions can have filenames (including spaces) that are not CLI selectors.
+            // Keep them visible with an opaque identity, but never offer to install them remotely.
+            item.id = format!("unavailable:{}", fingerprint(item));
+            item.problem.get_or_insert_with(|| "Unsupported plugin identifier; configure it on the target machine.".into());
+        }
         item.fingerprint = fingerprint(item);
     }
+    result.plugins.sort_by(|a, b| (a.provider.as_str(), &a.id).cmp(&(b.provider.as_str(), &b.id)));
     result
 }
