@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { launchFixture } from '../src/requests/harness.ts'
+import { checkWindowOnscreenAsync } from '../perf/bench/window-onscreen.ts'
 
 // Frame watchdog (gpui_macos window.rs, macOS). The lab window redraws 20 times a
 // second while `KYBERN_FRAME_STALL_TEST` puts it into each stalled state the
@@ -25,8 +26,12 @@ async function run(env: Record<string, string>, seconds: number, during?: (lines
   const lines = () => text.split('\n').filter(line => line.startsWith('[frame-stall-lab]'))
   try {
     await f.app.getByTestId('app-ready').waitFor({ timeoutMs: 30_000 })
+    // Occlusion on the working desktop can stop display callbacks legitimately.
+    // This check measures recovery only on its documented isolated display.
+    await checkWindowOnscreenAsync(f.pid)
     if (during) await during(lines)
     else await Bun.sleep(seconds * 1000)
+    await checkWindowOnscreenAsync(f.pid)
     const reports = lines().filter(line => line.includes('{')).map(line => JSON.parse(line.slice(line.indexOf('{'))) as Report)
     assert.ok(reports.length, `no reports: ${f.diagnostics()}`)
     return { last: reports.at(-1)!, maxGap: Math.max(...reports.slice(1).map(r => r.labMaxGapMs)), maxLate: Math.max(...reports.slice(1).map(r => r.labMaxLateMs)), lines }
@@ -49,7 +54,10 @@ for (const fault of ['silent-link', 'unsubscribe']) {
   const before = await run({ KYBERN_FRAME_WATCHDOG: 'log', KYBERN_FRAME_STALL_TEST: `${fault}:1500` }, 6)
   expect(`${fault}, watchdog only reporting: stays frozen`, before.last.labStalledMs > 3000 && before.last.repairs === 0, `${before.last.labStalledMs} ms without frames, ${before.last.stalls} stalls reported`)
   const after = await run({ KYBERN_FRAME_STALL_TEST: `${fault}:1500` }, 12)
-  expect(`${fault}, watchdog on: every stall repaired`, after.last.stalls >= 5 && after.last.repairs === after.last.stalls && after.last.labGaps === after.last.stalls && after.maxGap < 700,
+  // A manual recovery frame can split one stopped-link interval into two
+  // observed gaps. Require every reported stall to recover and bound every
+  // independently sampled gap, rather than equating the two counters.
+  expect(`${fault}, watchdog on: every stall repaired`, after.last.stalls >= 5 && after.last.repairs === after.last.stalls && after.last.labGaps >= after.last.stalls && after.maxGap < 700,
     `${after.last.repairs}/${after.last.stalls} repaired, ${after.last.labGaps} gaps, longest ${after.maxGap} ms`)
 }
 {
@@ -64,7 +72,7 @@ for (const fault of ['silent-link', 'unsubscribe']) {
 // per draw; with it, draws are skipped instead and each episode ends once the
 // compositor shows drawables again.
 {
-  const before = await run({ KYBERN_DRAWABLE_GATE: '0', KYBERN_FRAME_STALL_TEST: 'starve-drawables:5000' }, 17)
+  const before = await run({ KYBERN_ASYNC_DRAWABLE: '0', KYBERN_DRAWABLE_GATE: '0', KYBERN_FRAME_STALL_TEST: 'starve-drawables:5000' }, 17)
   expect('starve-drawables, gate off: the main thread blocks in nextDrawable', before.maxLate > 900 && before.last.labBlocks >= 2 && before.last.drawableStarvations === 0,
     `${before.last.labBlocks} blocks over 200 ms, longest ${before.maxLate} ms late, ${before.last.slowDrawables} slow drawables`)
   const after = await run({ KYBERN_FRAME_STALL_TEST: 'starve-drawables:5000' }, 17)
@@ -94,7 +102,7 @@ const centerColor = (id: string, file: string) => {
 for (const mode of ['log', 'on']) {
   const scratch = mkdtempSync(path.join(tmpdir(), 'gpuix-frame-capture-'))
   let wrong = 0, checked = 0
-  const { last } = await run({ KYBERN_LAB_SLOW_MS: '1000', KYBERN_FRAME_STALL_TEST: 'drop-drawable:900', ...(mode === 'log' ? { KYBERN_FRAME_WATCHDOG: 'log' } : {}) }, 0, async lines => {
+  const { last } = await run({ KYBERN_LAB_SLOW_MS: '1000', KYBERN_FRAME_STALL_TEST: 'drop-drawable:900', ...(mode === 'log' ? { KYBERN_FRAME_WATCHDOG: 'log', KYBERN_ASYNC_DRAWABLE: '0' } : {}) }, 0, async lines => {
     await Bun.sleep(1500)
     const id = windowId()
     // Start from the next tick, so a capture never races the following one.

@@ -32,6 +32,8 @@ geometry)
   KYBERN_COMPOSITOR_LOOPS=0 bun perf/motion-fps/lab-check.ts
   # Frame watchdog (gpui_macos window.rs): each injected stall freezes with it reporting only, and is repaired with it on.
   bun native/frame-stall-check.ts
+  # Input remains live when nextDrawable blocks even below the gate's queue limit.
+  KYBERN_FRAME_STALL_TEST=slow-drawable:1200 KYBERN_FREEZE_TRIALS=30 bun native/update-freeze-check.ts
   ;;
 content)
   bun native/markdown-check.ts

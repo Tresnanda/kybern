@@ -16,8 +16,8 @@ import { lease } from '../bench/lease.ts'
 const light = process.argv.includes('--light'), reduced = process.argv.includes('--reduced')
 const compositor = process.env.KYBERN_COMPOSITOR_LOOPS !== '0'
 const mode = `${light ? 'light' : 'dark'}${reduced ? '-reduced' : ''}${compositor ? '' : '-scene'}`
-const out = path.join('/Users/mymac/projects/ade/previews/motion/fps/lab', mode)
-const scratch = '/Users/mymac/projects/ade-gpuix-scratch/motion-fps/lab-scratch'
+const out = path.join(process.env.KYBERN_VERIFY_OUTPUT ?? '/Users/mymac/projects/ade/previews/motion/fps/lab', mode)
+const scratch = process.env.KYBERN_MOTION_SCRATCH ?? '/Users/mymac/projects/ade-gpuix-scratch/motion-fps/lab-scratch'
 rmSync(out, { recursive: true, force: true }); mkdirSync(out, { recursive: true }); mkdirSync(scratch, { recursive: true })
 type Probe = { layers: { frame: string; color: number[]; radius: number; ink: { top: number; bottom: number; left: number; right: number; rows: string[] } | null }[]; samples: { t: number; opacity: number[]; angle: number[]; lum: number[] }[] }
 const release = await lease()

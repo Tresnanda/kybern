@@ -21,7 +21,25 @@ for (const theme of ['dark', 'light']) {
     await a.getByTestId('app-ready').waitFor()
     await a.call('focus', { elementId: (await a.getByTestId('app-ready').element()).id })
     await Bun.sleep(600)
-    for (let i = 1; i <= 12; i++) { await a.call('keyDown', { key: 't' }); await a.getByText(`Tick ${i}`).waitFor(); await Bun.sleep(40) }
+    for (let i = 1; i <= 12; i++) {
+      await a.call('keyDown', { key: 't' }); await a.getByText(`Tick ${i}`).waitFor()
+      // Tree commits can run ahead of drawable availability. Wait for the
+      // exact submitted state without forcing a new render with a screenshot.
+      const deadline = Date.now() + 3000
+      let shown = false
+      while (!shown && Date.now() < deadline) {
+        for (const name of readdirSync(frames).filter(name => name.endsWith('.png')).sort().reverse().slice(0, 3)) {
+          try {
+            const p = pixels(path.join(frames, name)), scale = p.w / 520
+            const tick = Array.from({ length: 4 }, (_, bit) => p.at((402 + bit * 8) * scale, 51 * scale))
+              .reduce((value, color, bit) => value | (color[1]! > color[0]! ? 1 << bit : 0), 0)
+            if (tick === i) { shown = true; break }
+          } catch { /* A presented-frame dump is still being written. */ }
+        }
+        if (!shown) await Bun.sleep(20)
+      }
+      assert.ok(shown, `Tick ${i} never reached the submitted frame`)
+    }
     await Bun.sleep(600)
   } finally { await f.close() }
   await Bun.sleep(300)
