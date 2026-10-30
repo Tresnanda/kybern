@@ -280,7 +280,8 @@ fn packages(ctx: &Context, provider: ProviderKind) -> Result<Vec<MachinePlugin>,
         } else if npm || git {
             name.to_string()
         } else {
-            format!("unavailable:{:x}", Sha256::digest(s.as_bytes()))
+            let digest: String = Sha256::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+            format!("unavailable:{digest}")
         };
         let mut item = base(provider, &id, PluginKind::Plugin);
         item.name = display.to_string();

@@ -1,4 +1,4 @@
-// Evidence captures of Settings › Skills: `SHOT_THEMES=dark,light bun src/plugins/plugins.shots.ts [mode…]`.
+// Evidence captures of Settings › Plugins: `SHOT_THEMES=dark,light bun src/plugins/plugins.shots.ts [mode…]`.
 // Writes `<out>/<mode>-<theme>.png`.
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
