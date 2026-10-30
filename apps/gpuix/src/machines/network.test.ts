@@ -18,6 +18,7 @@ test('enable waits for a trailing status read, and switching primaries discards 
     } }
     mock.module('../state.ts', () => ({ getClient: () => active }))
     mock.module('./index.ts', () => ({ machineHub: () => ({ set: { syncMembers: async () => { events.push('sync') } } }) }))
+    mock.module('./setupRuntime.ts', () => ({ startMachineSetup: () => events.push('start-setup'), cancelMachineSetup: () => events.push('cancel-setup') }))
     const { refreshNetwork, setNetworkEnabled, getNetwork, resetNetwork } = await import('./network.ts')
     const read = refreshNetwork()
     let done = false
@@ -27,7 +28,12 @@ test('enable waits for a trailing status read, and switching primaries discards 
     release({ enabled: false })
     await Promise.all([read, turnOn])
     expect(getNetwork().status.enabled).toBe(true)
-    expect(events).toEqual(['read-enabled', 'sync'])
+    expect(events).toEqual(['start-setup', 'read-enabled', 'sync'])
+
+    events.length = 0
+    await setNetworkEnabled(false)
+    expect(getNetwork().status.enabled).toBe(false)
+    expect(events).toEqual(['cancel-setup', 'read-enabled', 'sync'])
 
     resetNetwork()
     let finishOld
