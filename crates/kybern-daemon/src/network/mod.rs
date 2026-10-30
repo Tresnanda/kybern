@@ -37,6 +37,7 @@ pub mod relay;
 pub mod removal;
 pub mod repo_identity;
 pub mod session;
+pub mod skill_sync;
 pub mod status;
 pub mod tailscale;
 pub mod updates;
@@ -54,6 +55,8 @@ mod join_tests;
 mod recovery_tests;
 #[cfg(test)]
 mod shared_state_tests;
+#[cfg(test)]
+mod skill_sync_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -326,6 +329,7 @@ impl Network {
             features::CLIPBOARD_V1.to_string(),
             features::GROUP_V1.to_string(),
             features::PROVISION_V1.to_string(),
+            features::SKILLS_SYNC_V1.to_string(),
         ]
     }
 

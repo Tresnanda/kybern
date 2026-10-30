@@ -220,7 +220,10 @@ pub async fn deliver(state: &AppState, item: &OutboxItem) -> Delivery {
     let entries = match tokio::task::spawn_blocking(move || {
         files
             .iter()
-            .map(|(path, rel, size)| sha256_file(path).map(|sha256| PushEntry { path: rel.clone(), size: *size, sha256 }))
+            .map(|(path, rel, size)| {
+                let executable = std::fs::metadata(path).is_ok_and(|meta| is_executable(&meta));
+                sha256_file(path).map(|sha256| PushEntry { path: rel.clone(), size: *size, sha256, executable })
+            })
             .collect::<std::io::Result<Vec<_>>>()
     })
     .await
@@ -229,51 +232,88 @@ pub async fn deliver(state: &AppState, item: &OutboxItem) -> Delivery {
         Ok(Err(error)) => return Delivery::Failed(format!("Could not read {}: {error}", payload.name)),
         Err(_) => return Delivery::Retry("The scan was interrupted.".into()),
     };
-    let total: u64 = entries.iter().map(|entry| entry.size).sum();
     let begin = PeerFilesBeginParams {
         transfer_id: item.operation_id,
         name: payload.name.clone(),
         is_folder: payload.is_folder,
         dest: payload.dest.clone(),
-        entries: entries.clone(),
+        entries,
     };
-    let began: PeerFilesBeginResult = match call(&hub, &item.target, PeerFilesBegin::NAME, &begin).await {
-        Ok(began) => began,
-        Err(delivery) => return delivery,
+    let paths: Vec<PathBuf> = scanned.files.iter().map(|(path, _, _)| path.clone()).collect();
+    match stream(state, &hub, item, &begin, &paths, &failure_delivery).await {
+        Ok(done) => Delivery::Delivered(serde_json::to_value(done).unwrap_or(Value::Null)),
+        Err(delivery) => delivery,
+    }
+}
+
+/// How a failed call ends a delivery, for [`stream`]'s caller to choose.
+pub(crate) type MapFailure<'a> = dyn Fn(&Arc<dyn RemoteHub>, &str, CallFailure) -> Delivery + Send + Sync + 'a;
+
+/// Announce a send, stream its bytes from wherever the target left off and settle it. `paths[i]` holds the bytes
+/// of `begin.entries[i]`. Shared by `files_push` and `skill_copy` items.
+pub(crate) async fn stream(
+    state: &AppState,
+    hub: &Arc<dyn RemoteHub>,
+    item: &OutboxItem,
+    begin: &PeerFilesBeginParams,
+    paths: &[PathBuf],
+    map: &MapFailure<'_>,
+) -> Result<PeerFilesFinishResult, Delivery> {
+    let entries = &begin.entries;
+    let total: u64 = entries.iter().map(|entry| entry.size).sum();
+    let began: PeerFilesBeginResult = match call_raw(hub, &item.target, PeerFilesBegin::NAME, begin).await {
+        Ok(value) => serde_json::from_value(value)
+            .map_err(|error| Delivery::Failed(format!("The machine answered with something unreadable: {error}")))?,
+        Err(failure) => return Err(map(hub, &item.target, failure)),
     };
     if began.complete {
-        let done = json!({ "dest_path": began.dest_path, "files": entries.len(), "bytes": total });
-        return Delivery::Delivered(done);
+        // Finished before (a repeat after a lost answer): finish answers the same again.
+        return match call_raw(hub, &item.target, PeerFilesFinish::NAME, &PeerFilesTransferParams { transfer_id: item.operation_id }).await {
+            Ok(value) => serde_json::from_value(value).or_else(|_| {
+                Ok(PeerFilesFinishResult {
+                    dest_path: began.dest_path.unwrap_or_default(),
+                    files: entries.len() as u32,
+                    bytes: total,
+                    skill: None,
+                })
+            }),
+            Err(_) => Ok(PeerFilesFinishResult {
+                dest_path: began.dest_path.unwrap_or_default(),
+                files: entries.len() as u32,
+                bytes: total,
+                skill: None,
+            }),
+        };
     }
     let mut offsets = began.offsets;
     offsets.resize(entries.len(), 0);
-    let mut sent: u64 = offsets.iter().zip(&entries).map(|(offset, entry)| (*offset).min(entry.size)).sum();
+    let mut sent: u64 = offsets.iter().zip(entries).map(|(offset, entry)| (*offset).min(entry.size)).sum();
     let mut last_progress = Instant::now() - PROGRESS_EVERY;
     progress(state, item.id, sent, total);
-    for (index, (entry, (path, _, _))) in entries.iter().zip(&scanned.files).enumerate() {
+    for (index, (entry, path)) in entries.iter().zip(paths).enumerate() {
         let mut offset = offsets[index].min(entry.size);
         if offset == entry.size {
             continue;
         }
         let mut file = match std::fs::File::open(path) {
             Ok(file) => file,
-            Err(error) => return Delivery::Retry(format!("Could not read {}: {error}", entry.path)),
+            Err(error) => return Err(Delivery::Retry(format!("Could not read {}: {error}", entry.path))),
         };
         let mut resyncs = 0;
         while offset < entry.size {
             // A cancel ends the attempt; the target drops what it staged.
             if state.store.outbox_get(item.id).ok().flatten().is_some_and(|current| current.state != OutboxState::Sending) {
                 let _ = hub.call(&item.target, PeerFilesAbort::NAME, json!({ "transfer_id": item.operation_id })).await;
-                return Delivery::Failed("The send was cancelled.".into());
+                return Err(Delivery::Failed("The send was cancelled.".into()));
             }
             let want = ((entry.size - offset) as usize).min(PUSH_CHUNK_BYTES);
             let mut chunk = vec![0u8; want];
             let read = file.seek(SeekFrom::Start(offset)).and_then(|_| file.read_exact(&mut chunk));
             if let Err(error) = read {
-                return Delivery::Retry(format!("{} changed while it was being sent ({error}). Trying again.", entry.path));
+                return Err(Delivery::Retry(format!("{} changed while it was being sent ({error}). Trying again.", entry.path)));
             }
             let request = PeerFilesChunkParams { transfer_id: item.operation_id, index: index as u32, offset, data: B64.encode(&chunk) };
-            match call_raw(&hub, &item.target, PeerFilesChunk::NAME, &request).await {
+            match call_raw(hub, &item.target, PeerFilesChunk::NAME, &request).await {
                 Ok(value) => {
                     let next = value["offset"].as_u64().unwrap_or(offset + want as u64);
                     sent += next.saturating_sub(offset);
@@ -282,14 +322,14 @@ pub async fn deliver(state: &AppState, item: &OutboxItem) -> Delivery {
                 // The target holds a different offset (an earlier attempt's chunk landed after all): carry on from it.
                 Err(CallFailure::Remote(error)) if error.code == codes::CONFLICT && resyncs < 3 => {
                     let Some(expected) = error.data.as_ref().and_then(|data| data["offset"].as_u64()) else {
-                        return Delivery::Retry(error.message);
+                        return Err(Delivery::Retry(error.message));
                     };
                     resyncs += 1;
                     sent = (sent + expected).saturating_sub(offset);
                     offset = expected;
                     continue;
                 }
-                Err(failure) => return failure_delivery(&hub, &item.target, failure),
+                Err(failure) => return Err(map(hub, &item.target, failure)),
             }
             if last_progress.elapsed() >= PROGRESS_EVERY {
                 last_progress = Instant::now();
@@ -298,16 +338,10 @@ pub async fn deliver(state: &AppState, item: &OutboxItem) -> Delivery {
         }
     }
     progress(state, item.id, total, total);
-    match call::<PeerFilesFinishResult>(
-        &hub,
-        &item.target,
-        PeerFilesFinish::NAME,
-        &PeerFilesTransferParams { transfer_id: item.operation_id },
-    )
-    .await
-    {
-        Ok(done) => Delivery::Delivered(serde_json::to_value(done).unwrap_or(Value::Null)),
-        Err(delivery) => delivery,
+    match call_raw(hub, &item.target, PeerFilesFinish::NAME, &PeerFilesTransferParams { transfer_id: item.operation_id }).await {
+        Ok(value) => serde_json::from_value(value)
+            .map_err(|error| Delivery::Failed(format!("The machine answered with something unreadable: {error}"))),
+        Err(failure) => Err(map(hub, &item.target, failure)),
     }
 }
 
@@ -321,21 +355,8 @@ async fn call_raw<P: Serialize>(hub: &Arc<dyn RemoteHub>, target: &str, method: 
     hub.call(target, method, serde_json::to_value(params).unwrap_or(Value::Null)).await
 }
 
-async fn call<R: serde::de::DeserializeOwned>(
-    hub: &Arc<dyn RemoteHub>,
-    target: &str,
-    method: &str,
-    params: &impl Serialize,
-) -> Result<R, Delivery> {
-    match call_raw(hub, target, method, params).await {
-        Ok(value) => serde_json::from_value(value)
-            .map_err(|error| Delivery::Failed(format!("The machine answered with something unreadable: {error}"))),
-        Err(failure) => Err(failure_delivery(hub, target, failure)),
-    }
-}
-
 /// How a failed call ends a delivery: a machine that is away waits, a refusal is final.
-fn failure_delivery(hub: &Arc<dyn RemoteHub>, target: &str, failure: CallFailure) -> Delivery {
+pub(crate) fn failure_delivery(hub: &Arc<dyn RemoteHub>, target: &str, failure: CallFailure) -> Delivery {
     let name = || hub.target(target).map_or_else(|| "That machine".to_string(), |target| target.name);
     match failure {
         CallFailure::Offline(reason) => Delivery::Retry(reason),
@@ -374,6 +395,8 @@ struct Done {
     dest_path: String,
     files: u32,
     bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    skill: Option<SkillLanded>,
 }
 
 /// The sends this machine is receiving. The manifests are cached, since a chunk is a hot request.
@@ -420,6 +443,9 @@ pub fn clean_relative(path: &str) -> Result<Vec<&str>, RpcError> {
 }
 
 fn check_dest_shape(dest: &PushDest) -> Result<(), RpcError> {
+    if let PushDest::Skill { name, homes, hash, replaces } = dest {
+        return super::skill_sync::check_dest(name, homes, hash, replaces);
+    }
     if let PushDest::Project { project, subdir } = dest {
         if project.trim().is_empty() {
             return Err(rpc_invalid("Name the project the files go to."));
@@ -448,6 +474,12 @@ fn downloads_root() -> Option<PathBuf> {
 /// result stays under the canonical root.
 fn resolve_dest(state: &AppState, dest: &PushDest, from_name: &str, create: bool) -> Result<PathBuf, RpcError> {
     match dest {
+        // Skills land through `skill_sync::place`; announcing one checks every home it goes to.
+        PushDest::Skill { name, homes, hash, replaces } => {
+            let roots = state.skill_homes.resolve();
+            super::skill_sync::preflight(&roots, name, homes, hash, replaces)?;
+            Ok(state.paths.root.join(STAGING))
+        }
         PushDest::Downloads => {
             let base = downloads_root().ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, "This machine has no Downloads folder."))?;
             let dir = base.join("Kybern").join(sanitize_dir_name(from_name));
@@ -681,12 +713,16 @@ async fn finish(state: &AppState, link: &Arc<PeerLink>, id: Uuid) -> Result<Peer
     if let Ok(text) = std::fs::read_to_string(dir.join("done.json"))
         && let Ok(done) = serde_json::from_str::<Done>(&text)
     {
-        return Ok(PeerFilesFinishResult { dest_path: done.dest_path, files: done.files, bytes: done.bytes });
+        return Ok(PeerFilesFinishResult { dest_path: done.dest_path, files: done.files, bytes: done.bytes, skill: done.skill });
     }
     let state_for_move = state.clone();
     let manifest_for_move = manifest.clone();
     let result = tokio::task::spawn_blocking(move || land(&state_for_move, id, &manifest_for_move)).await.map_err(RpcError::internal)??;
     state.network.files.lock().remove(&id);
+    if let Some(skill) = &result.skill {
+        tracing::info!(target: TARGET, machine = %manifest.from, skill = %skill.name, "received a skill");
+        return Ok(result);
+    }
     let received = FilesReceived {
         transfer_id: id,
         from_machine: manifest.from.clone(),
@@ -720,6 +756,41 @@ fn land(state: &AppState, id: Uuid, manifest: &Manifest) -> Result<PeerFilesFini
         }
         bytes += entry.size;
     }
+    if let PushDest::Skill { name, homes, hash, replaces } = &manifest.dest {
+        let files: Vec<super::skill_sync::PlaceFile> = manifest
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| super::skill_sync::PlaceFile {
+                src: part_path(&dir, index),
+                rel: entry.path.clone(),
+                sha256: entry.sha256.to_lowercase(),
+                executable: entry.executable,
+            })
+            .collect();
+        let roots = state.skill_homes.resolve();
+        let placed =
+            match super::skill_sync::place(&roots, &files, name, homes, hash, replaces, &state.paths.root.join(super::skill_sync::BACKUPS))
+            {
+                Ok(placed) => placed,
+                Err(error) => {
+                    // A version the user did not agree to replace: nothing to resume, so the staged bytes go.
+                    if error.code == codes::CONFLICT {
+                        let _ = std::fs::remove_dir_all(&dir);
+                        state.network.files.lock().remove(&id);
+                    }
+                    return Err(error);
+                }
+            };
+        let skill = SkillLanded { name: name.clone(), hash: hash.clone(), placed };
+        let dest_path = skill.placed.first().map(|placed| placed.path.clone()).unwrap_or_default();
+        let done = Done { dest_path, files: manifest.entries.len() as u32, bytes, skill: Some(skill) };
+        for index in 0..manifest.entries.len() {
+            let _ = std::fs::remove_file(part_path(&dir, index));
+        }
+        let _ = std::fs::write(dir.join("done.json"), serde_json::to_vec(&done).unwrap_or_default());
+        return Ok(PeerFilesFinishResult { dest_path: done.dest_path, files: done.files, bytes, skill: done.skill });
+    }
     let root = resolve_dest(state, &manifest.dest, &manifest.from_name, true)?;
     let hold = root.join(format!(".kybern-recv-{id}"));
     let _ = std::fs::remove_dir_all(&hold);
@@ -731,6 +802,9 @@ fn land(state: &AppState, id: Uuid, manifest: &Manifest) -> Result<PeerFilesFini
                 std::fs::create_dir_all(parent).map_err(RpcError::internal)?;
             }
             move_file(&part_path(&dir, index), &target).map_err(RpcError::internal)?;
+            if entry.executable {
+                set_executable(&target);
+            }
         }
         let name = clean_name(&manifest.name)?;
         let final_path = unique_path(&root, name, manifest.is_folder);
@@ -743,14 +817,37 @@ fn land(state: &AppState, id: Uuid, manifest: &Manifest) -> Result<PeerFilesFini
     })();
     let _ = std::fs::remove_dir_all(&hold);
     let final_path = landed?;
-    let done = Done { dest_path: final_path.to_string_lossy().into_owned(), files: manifest.entries.len() as u32, bytes };
+    let done = Done { dest_path: final_path.to_string_lossy().into_owned(), files: manifest.entries.len() as u32, bytes, skill: None };
     // Keep the manifest and the marker so a repeated finish or begin answers the same; drop the bytes.
     for index in 0..manifest.entries.len() {
         let _ = std::fs::remove_file(part_path(&dir, index));
     }
     let _ = std::fs::write(dir.join("done.json"), serde_json::to_vec(&done).unwrap_or_default());
-    Ok(PeerFilesFinishResult { dest_path: done.dest_path, files: done.files, bytes })
+    Ok(PeerFilesFinishResult { dest_path: done.dest_path, files: done.files, bytes, skill: None })
 }
+
+#[cfg(unix)]
+fn is_executable(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    meta.is_file() && meta.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn is_executable(_meta: &std::fs::Metadata) -> bool {
+    false
+}
+
+/// Keep a sender's executable bit (Unix only; Windows has none).
+#[cfg(unix)]
+fn set_executable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = std::fs::metadata(path) {
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(meta.permissions().mode() | 0o111));
+    }
+}
+
+#[cfg(not(unix))]
+fn set_executable(_path: &Path) {}
 
 fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
     if std::fs::rename(from, to).is_ok() {
@@ -863,7 +960,7 @@ mod tests {
 
     #[test]
     fn a_manifest_is_checked_before_a_byte_moves() {
-        let entry = |path: &str, size: u64| PushEntry { path: path.into(), size, sha256: "0".repeat(64) };
+        let entry = |path: &str, size: u64| PushEntry { path: path.into(), size, sha256: "0".repeat(64), executable: false };
         let base = |entries: Vec<PushEntry>, is_folder: bool, name: &str| PeerFilesBeginParams {
             transfer_id: Uuid::now_v7(),
             name: name.into(),

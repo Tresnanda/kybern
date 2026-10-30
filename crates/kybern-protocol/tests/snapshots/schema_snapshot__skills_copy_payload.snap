@@ -1,0 +1,78 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(SkillCopyPayload)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SkillCopyPayload",
+  "description": "What the outbox keeps of a `skill_copy` item (its payload), on the source machine.",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "from_home": {
+      "description": "The home of the source copy; the folder is found again from it when the item is delivered.",
+      "$ref": "#/$defs/SkillHome"
+    },
+    "homes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SkillHome"
+      }
+    },
+    "replaces": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "name",
+    "from_home",
+    "homes"
+  ],
+  "$defs": {
+    "SkillHome": {
+      "description": "A harness's user skill folder.",
+      "oneOf": [
+        {
+          "description": "`~/.agents/skills`: read by Codex, Cursor, OpenCode and omp.",
+          "type": "string",
+          "const": "agents"
+        },
+        {
+          "description": "`$CLAUDE_CONFIG_DIR/skills` or `~/.claude/skills`: Claude Code, also read by Cursor and OpenCode.",
+          "type": "string",
+          "const": "claude"
+        },
+        {
+          "description": "`$CODEX_HOME/skills` or `~/.codex/skills`: Codex, also read by Cursor.",
+          "type": "string",
+          "const": "codex"
+        },
+        {
+          "description": "`~/.cursor/skills`.",
+          "type": "string",
+          "const": "cursor"
+        },
+        {
+          "description": "`$XDG_CONFIG_HOME/opencode/skills` or `~/.config/opencode/skills`.",
+          "type": "string",
+          "const": "opencode"
+        },
+        {
+          "description": "`$PI_CODING_AGENT_DIR/skills` or `~/.pi/agent/skills`: pi, also read by omp.",
+          "type": "string",
+          "const": "pi"
+        },
+        {
+          "description": "`~/.omp/agent/skills` (or the active omp profile's).",
+          "type": "string",
+          "const": "omp"
+        }
+      ]
+    }
+  }
+}

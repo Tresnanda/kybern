@@ -20,6 +20,7 @@ use crate::network::*;
 use crate::outbox::*;
 use crate::provision::*;
 use crate::shared_state::*;
+use crate::skill_sync::*;
 use crate::thread_read::*;
 use crate::utilities::*;
 
@@ -4292,6 +4293,14 @@ method!(PeerPortsOpen, "peer.ports.open", Some(Scope::MachinePorts), PeerPortsOp
 method!(PeerPortsData, "peer.ports.data", Some(Scope::MachinePeer), PeerRelayDataParams, Empty);
 method!(PeerPortsClose, "peer.ports.close", Some(Scope::MachinePeer), PeerRelayCloseParams, Empty);
 
+// User skills on every machine (payloads in skill_sync.rs). Reading another machine's skills and asking it to
+// send one are file reads there, and the copy itself is a file send: `machine:files` gates all of it.
+method!(SkillsInventoryMethod, "skills.inventory", Some(Scope::OrchestrationRead), Empty, SkillInventory);
+method!(SkillsNetworkViewMethod, "skills.network_view", Some(Scope::OrchestrationRead), Empty, SkillsNetworkView);
+method!(SkillsCopy, "skills.copy", Some(Scope::OrchestrationOperate), SkillsCopyParams, SkillsCopyResult);
+method!(PeerSkillsInventory, "peer.skills.inventory", Some(Scope::MachineFiles), Empty, SkillInventory);
+method!(PeerSkillsCopy, "peer.skills.copy", Some(Scope::MachineFiles), SkillsCopyParams, SkillsCopyResult);
+
 /// Registry used by the daemon's auth check and the schema dump.
 pub struct MethodInfo {
     pub name: &'static str,
@@ -4574,6 +4583,11 @@ registry!(
     PeerPortsOpen,
     PeerPortsData,
     PeerPortsClose,
+    SkillsInventoryMethod,
+    SkillsNetworkViewMethod,
+    SkillsCopy,
+    PeerSkillsInventory,
+    PeerSkillsCopy,
 );
 
 pub fn scope_for(method: &str) -> Option<Option<Scope>> {

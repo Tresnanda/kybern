@@ -641,6 +641,9 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
         PeerFilesBegin::NAME | PeerFilesChunk::NAME | PeerFilesFinish::NAME | PeerFilesAbort::NAME => {
             super::files_push::serve(state, link, method, params).await
         }
+        // User skills: this machine's inventory, and a copy of one of them to other machines.
+        PeerSkillsInventory::NAME => ok(super::skill_sync::inventory(state).await?),
+        PeerSkillsCopy::NAME => ok(super::skill_sync::serve_copy(state, &link.machine_id, parse(params)?).await?),
         // The clipboard (U2): an explicit text, a read, and a change of the universal clipboard.
         PeerClipboardSet::NAME => ok(super::clipboard::peer_set(state, parse(params)?).await?),
         PeerClipboardGet::NAME => ok(super::clipboard::peer_get(state).await?),

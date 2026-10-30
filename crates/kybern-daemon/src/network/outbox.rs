@@ -325,6 +325,7 @@ async fn deliver(state: &AppState, item: &OutboxItem) -> Delivery {
         OutboxKind::SecretsPut => super::broker::deliver_secrets_put(state, item).await,
         OutboxKind::FilesPush => super::files_push::deliver(state, item).await,
         OutboxKind::Provision => super::provision::deliver(state, item).await,
+        OutboxKind::SkillCopy => super::skill_sync::deliver(state, item).await,
     }
 }
 

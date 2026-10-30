@@ -907,6 +907,9 @@ async fn dispatch_part_11(state: &AppState, ctx: &ConnectionCtx, method: &str, s
         }
         SettingsNetworkViewMethod::NAME => ok(crate::settings_share::network_view(state).await),
         SettingsShare::NAME => ok(crate::settings_share::share(state, parse(params)?).await?),
+        SkillsInventoryMethod::NAME => ok(crate::network::skill_sync::inventory(state).await?),
+        SkillsNetworkViewMethod::NAME => ok(crate::network::skill_sync::network_view(state).await?),
+        SkillsCopy::NAME => ok(crate::network::skill_sync::copy(state, parse(params)?).await?),
         UsageSummary::NAME => {
             let p: UsageSummaryParams = parse_or_default(params)?;
             let rows = state.store.usage_summary(p.since, p.group_by).map_err(internal)?;

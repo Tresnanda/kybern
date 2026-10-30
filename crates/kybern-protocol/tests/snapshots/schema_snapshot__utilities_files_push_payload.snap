@@ -68,6 +68,82 @@ expression: schema_for!(FilesPushPayload)
             "kind",
             "project"
           ]
+        },
+        {
+          "description": "A skill's folder in the target's skill homes (`skills.copy`; see `skill_sync.rs`). Never `name (2)`:\nthe same version is left as it is, and a different one is replaced only when its hash is in `replaces`.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "description": "[`crate::MachineSkill::name`], relative to each home.",
+              "type": "string"
+            },
+            "homes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/SkillHome"
+              }
+            },
+            "hash": {
+              "description": "The hash of the version that is sent.",
+              "type": "string"
+            },
+            "replaces": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "skill"
+            }
+          },
+          "required": [
+            "kind",
+            "name",
+            "homes",
+            "hash"
+          ]
+        }
+      ]
+    },
+    "SkillHome": {
+      "description": "A harness's user skill folder.",
+      "oneOf": [
+        {
+          "description": "`~/.agents/skills`: read by Codex, Cursor, OpenCode and omp.",
+          "type": "string",
+          "const": "agents"
+        },
+        {
+          "description": "`$CLAUDE_CONFIG_DIR/skills` or `~/.claude/skills`: Claude Code, also read by Cursor and OpenCode.",
+          "type": "string",
+          "const": "claude"
+        },
+        {
+          "description": "`$CODEX_HOME/skills` or `~/.codex/skills`: Codex, also read by Cursor.",
+          "type": "string",
+          "const": "codex"
+        },
+        {
+          "description": "`~/.cursor/skills`.",
+          "type": "string",
+          "const": "cursor"
+        },
+        {
+          "description": "`$XDG_CONFIG_HOME/opencode/skills` or `~/.config/opencode/skills`.",
+          "type": "string",
+          "const": "opencode"
+        },
+        {
+          "description": "`$PI_CODING_AGENT_DIR/skills` or `~/.pi/agent/skills`: pi, also read by omp.",
+          "type": "string",
+          "const": "pi"
+        },
+        {
+          "description": "`~/.omp/agent/skills` (or the active omp profile's).",
+          "type": "string",
+          "const": "omp"
         }
       ]
     }

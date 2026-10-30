@@ -100,7 +100,8 @@ expression: schema_for!(OutboxItem)
         "secrets_put",
         "fork",
         "move",
-        "provision"
+        "provision",
+        "skill_copy"
       ]
     },
     "Origin": {

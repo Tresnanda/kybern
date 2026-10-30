@@ -1,0 +1,315 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(SkillsNetworkView)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SkillsNetworkView",
+  "description": "`skills.network_view`: every reported skill, laid out per machine.",
+  "type": "object",
+  "properties": {
+    "machines": {
+      "description": "This machine first, then the members by name.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SkillsMachineView"
+      }
+    },
+    "skills": {
+      "description": "By name.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SkillNetworkEntry"
+      }
+    }
+  },
+  "required": [
+    "machines",
+    "skills"
+  ],
+  "$defs": {
+    "SkillsMachineView": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "is_self": {
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/$defs/SkillsMachineState"
+        },
+        "os": {
+          "type": "string"
+        },
+        "homes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SkillHomeInfo"
+          }
+        },
+        "detail": {
+          "description": "Why it did not report, when it did not.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "is_self",
+        "state"
+      ]
+    },
+    "SkillsMachineState": {
+      "description": "Where a machine stands in a [`SkillsNetworkView`].",
+      "oneOf": [
+        {
+          "description": "Its skills are in the view.",
+          "type": "string",
+          "const": "reported"
+        },
+        {
+          "description": "Offline or paused: copies to it wait in the outbox.",
+          "type": "string",
+          "const": "offline"
+        },
+        {
+          "description": "It runs a Kybern without skill copies.",
+          "type": "string",
+          "const": "unsupported"
+        },
+        {
+          "description": "It did not answer in time, or refused (Files is off for this machine there).",
+          "type": "string",
+          "const": "unreachable"
+        }
+      ]
+    },
+    "SkillHomeInfo": {
+      "description": "One home on one machine.",
+      "type": "object",
+      "properties": {
+        "home": {
+          "$ref": "#/$defs/SkillHome"
+        },
+        "path": {
+          "description": "The absolute folder on that machine.",
+          "type": "string"
+        },
+        "exists": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "home",
+        "path",
+        "exists"
+      ]
+    },
+    "SkillHome": {
+      "description": "A harness's user skill folder.",
+      "oneOf": [
+        {
+          "description": "`~/.agents/skills`: read by Codex, Cursor, OpenCode and omp.",
+          "type": "string",
+          "const": "agents"
+        },
+        {
+          "description": "`$CLAUDE_CONFIG_DIR/skills` or `~/.claude/skills`: Claude Code, also read by Cursor and OpenCode.",
+          "type": "string",
+          "const": "claude"
+        },
+        {
+          "description": "`$CODEX_HOME/skills` or `~/.codex/skills`: Codex, also read by Cursor.",
+          "type": "string",
+          "const": "codex"
+        },
+        {
+          "description": "`~/.cursor/skills`.",
+          "type": "string",
+          "const": "cursor"
+        },
+        {
+          "description": "`$XDG_CONFIG_HOME/opencode/skills` or `~/.config/opencode/skills`.",
+          "type": "string",
+          "const": "opencode"
+        },
+        {
+          "description": "`$PI_CODING_AGENT_DIR/skills` or `~/.pi/agent/skills`: pi, also read by omp.",
+          "type": "string",
+          "const": "pi"
+        },
+        {
+          "description": "`~/.omp/agent/skills` (or the active omp profile's).",
+          "type": "string",
+          "const": "omp"
+        }
+      ]
+    },
+    "SkillNetworkEntry": {
+      "description": "One skill across the machines that reported.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "machines": {
+          "description": "The machines that have it, in the view's machine order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SkillOnMachine"
+          }
+        },
+        "versions": {
+          "description": "Distinct content hashes among every copy that reported one, most common first.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "differs": {
+          "description": "More than one version exists.",
+          "type": "boolean"
+        },
+        "pending": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SkillPending"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "machines",
+        "versions",
+        "differs"
+      ]
+    },
+    "SkillOnMachine": {
+      "description": "One machine's copies of a skill in the network view.",
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "copies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SkillCopyInfo"
+          }
+        }
+      },
+      "required": [
+        "machine_id",
+        "copies"
+      ]
+    },
+    "SkillCopyInfo": {
+      "description": "One copy of a skill: the skill's folder in one home.",
+      "type": "object",
+      "properties": {
+        "home": {
+          "$ref": "#/$defs/SkillHome"
+        },
+        "path": {
+          "description": "The skill's folder on that machine.",
+          "type": "string"
+        },
+        "hash": {
+          "description": "Lowercase hex SHA-256 over the copied files' paths and contents (`kybern-skill-v1`). Two copies\nwith the same hash are the same skill. Absent when the copy cannot be copied (too large, unreadable).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "size": {
+          "description": "Bytes of the files a copy would carry.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "files": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "linked_to": {
+          "description": "The folder is a symbolic link to this skill's copy in another home, so it is that copy.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SkillHome"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "is_link": {
+          "description": "The folder is a symbolic link (anywhere). A link is read through, and never replaced by a copy.",
+          "type": "boolean"
+        },
+        "skipped": {
+          "description": "Paths inside the skill a copy leaves out: links, `.git`, `node_modules`, secret-looking files.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "problem": {
+          "description": "Why this copy cannot be sent, in words.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "home",
+        "path",
+        "size",
+        "files"
+      ]
+    },
+    "SkillPending": {
+      "description": "A copy of a skill still in the outbox for a machine.",
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "outbox_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "from": {
+          "description": "The machine the outbox item waits on.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "machine_id",
+        "outbox_id",
+        "from"
+      ]
+    }
+  }
+}

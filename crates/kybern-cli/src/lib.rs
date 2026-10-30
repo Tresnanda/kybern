@@ -7,6 +7,7 @@ mod machines;
 mod outbox;
 mod render;
 mod requests;
+mod skill_sync;
 mod spaces;
 mod utilities;
 
@@ -520,9 +521,12 @@ enum Cmd {
         #[command(subcommand)]
         cmd: ArtifactsCmd,
     },
-    /// List skills available to an agent in a project.
+    /// List skills available to an agent in a project, or your user skills on every machine.
+    #[command(args_conflicts_with_subcommands = true)]
     Skills {
-        project: String,
+        #[command(subcommand)]
+        cmd: Option<skill_sync::SkillsCmd>,
+        project: Option<String>,
         #[arg(long, default_value = "codex")]
         provider: ProviderKind,
     },
@@ -2453,7 +2457,9 @@ pub async fn run() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }
         },
-        Cmd::Skills { project, provider } => {
+        Cmd::Skills { cmd: Some(cmd), .. } => skill_sync::run(&client, cmd, json).await?,
+        Cmd::Skills { cmd: None, project, provider } => {
+            let project = project.ok_or_else(|| anyhow!("Name a project: kybern skills <project>, or kybern skills machines"))?;
             let project_id = resolve_project(&client, &project, false).await?;
             let r = client.call::<SkillsList>(SkillsListParams { project_id, provider, instance: None }).await?;
             if json {

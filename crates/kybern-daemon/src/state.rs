@@ -43,6 +43,8 @@ pub struct Inner {
     pub account_logins: crate::account_login::AccountLogins,
     /// First-run scan and bulk import of saved harness sessions.
     pub session_imports: crate::session_import::SessionImports,
+    /// Where this machine's user skill folders are (ADE-86 skill copies).
+    pub skill_homes: crate::network::skill_sync::SkillHomes,
     /// Preview file and proxy tickets (ADE-34).
     pub previews: Arc<crate::previews::tickets::PreviewTickets>,
     /// Started by the desktop app, whose bundle owns this binary.
@@ -191,6 +193,7 @@ impl AppState {
                 account_identities: Default::default(),
                 account_logins: Default::default(),
                 session_imports: Default::default(),
+                skill_homes: Default::default(),
                 previews,
                 desktop_managed: std::sync::atomic::AtomicBool::new(false),
                 process_owned: std::sync::atomic::AtomicBool::new(false),

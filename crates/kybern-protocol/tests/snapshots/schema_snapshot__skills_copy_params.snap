@@ -1,0 +1,113 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(SkillsCopyParams)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SkillsCopyParams",
+  "description": "`skills.copy` (and `peer.skills.copy`, asked of the source by another member).",
+  "type": "object",
+  "properties": {
+    "name": {
+      "description": "[`MachineSkill::name`].",
+      "type": "string"
+    },
+    "from": {
+      "description": "The machine that sends it, by id or name; this machine when left out.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "from_home": {
+      "description": "Which copy on the source, when its copies differ. Required then.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SkillHome"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "to": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SkillCopyTarget"
+      }
+    }
+  },
+  "required": [
+    "name",
+    "to"
+  ],
+  "$defs": {
+    "SkillHome": {
+      "description": "A harness's user skill folder.",
+      "oneOf": [
+        {
+          "description": "`~/.agents/skills`: read by Codex, Cursor, OpenCode and omp.",
+          "type": "string",
+          "const": "agents"
+        },
+        {
+          "description": "`$CLAUDE_CONFIG_DIR/skills` or `~/.claude/skills`: Claude Code, also read by Cursor and OpenCode.",
+          "type": "string",
+          "const": "claude"
+        },
+        {
+          "description": "`$CODEX_HOME/skills` or `~/.codex/skills`: Codex, also read by Cursor.",
+          "type": "string",
+          "const": "codex"
+        },
+        {
+          "description": "`~/.cursor/skills`.",
+          "type": "string",
+          "const": "cursor"
+        },
+        {
+          "description": "`$XDG_CONFIG_HOME/opencode/skills` or `~/.config/opencode/skills`.",
+          "type": "string",
+          "const": "opencode"
+        },
+        {
+          "description": "`$PI_CODING_AGENT_DIR/skills` or `~/.pi/agent/skills`: pi, also read by omp.",
+          "type": "string",
+          "const": "pi"
+        },
+        {
+          "description": "`~/.omp/agent/skills` (or the active omp profile's).",
+          "type": "string",
+          "const": "omp"
+        }
+      ]
+    },
+    "SkillCopyTarget": {
+      "description": "A machine a skill goes to, and where it goes there.",
+      "type": "object",
+      "properties": {
+        "machine": {
+          "description": "The machine, by id or name. The source itself is allowed: the skill is then copied to more homes there.",
+          "type": "string"
+        },
+        "homes": {
+          "description": "The homes it lands in. Left empty: the homes it is in on the source (a link counts as its own home).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SkillHome"
+          }
+        },
+        "replaces": {
+          "description": "The hashes of versions on this machine the user saw and chose to replace. A different version whose\nhash is not listed is kept, and the copy fails with what is there.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "machine"
+      ]
+    }
+  }
+}

@@ -536,3 +536,13 @@ expression: scopes
   - "machine:peer"
 - - peer.ports.close
   - "machine:peer"
+- - skills.inventory
+  - "orchestration:read"
+- - skills.network_view
+  - "orchestration:read"
+- - skills.copy
+  - "orchestration:operate"
+- - peer.skills.inventory
+  - "machine:files"
+- - peer.skills.copy
+  - "machine:files"

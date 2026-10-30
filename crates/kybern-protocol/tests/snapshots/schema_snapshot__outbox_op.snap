@@ -38,7 +38,8 @@ expression: schema_for!(OutboxOp)
         "secrets_put",
         "fork",
         "move",
-        "provision"
+        "provision",
+        "skill_copy"
       ]
     }
   }

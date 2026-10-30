@@ -353,6 +353,37 @@ fn machine_utility_schemas_are_stable() {
     insta::assert_json_snapshot!("utilities_peer_ports_open_params", schema_for!(PeerPortsOpenParams));
 }
 
+#[test]
+fn skill_sync_schemas_are_stable() {
+    insta::assert_json_snapshot!("skills_inventory", schema_for!(SkillInventory));
+    insta::assert_json_snapshot!("skills_network_view", schema_for!(SkillsNetworkView));
+    insta::assert_json_snapshot!("skills_copy_params", schema_for!(SkillsCopyParams));
+    insta::assert_json_snapshot!("skills_copy_result", schema_for!(SkillsCopyResult));
+    insta::assert_json_snapshot!("skills_copy_payload", schema_for!(SkillCopyPayload));
+    insta::assert_json_snapshot!("skills_landed", schema_for!(SkillLanded));
+    insta::assert_json_snapshot!("skills_conflict", schema_for!(SkillConflict));
+}
+
+#[test]
+fn skill_homes_name_their_folders_and_readers() {
+    for home in SkillHome::ALL {
+        assert_eq!(serde_json::to_value(home).unwrap(), home.as_str());
+        assert_eq!(SkillHome::parse(home.as_str()), Some(home));
+        assert!(home.usual_path().starts_with("~/.") && home.usual_path().ends_with("skills"));
+        assert!(!home.readers().is_empty());
+    }
+    // Every harness reads at least one home, and the cross-agent folder reaches more than one.
+    for provider in ProviderKind::ALL {
+        assert!(SkillHome::ALL.iter().any(|home| home.readers().contains(&provider)), "{provider} reads no home");
+    }
+    assert!(SkillHome::Agents.readers().len() > 1);
+    assert_eq!(
+        serde_json::to_value(PushDest::Skill { name: "x".into(), homes: vec![SkillHome::Agents], hash: "h".into(), replaces: vec![] })
+            .unwrap()["kind"],
+        "skill"
+    );
+}
+
 fn machine(id: &str) -> MachineDescriptor {
     MachineDescriptor {
         machine_id: id.into(),
@@ -438,7 +469,7 @@ fn an_older_daemon_info_and_project_still_parse_and_the_network_defaults_to_off(
     let saved: Settings = serde_json::from_value(serde_json::json!({ "network": { "enabled": true } })).unwrap();
     assert_eq!(saved.network, NetworkSettings { enabled: true, port: DEFAULT_PORT });
     assert_eq!(NETWORK_PROTOCOL, 1);
-    assert_eq!(features::ALL.len(), 16);
+    assert_eq!(features::ALL.len(), 17);
 }
 
 #[test]
@@ -475,6 +506,8 @@ fn outbox_states_and_kinds_use_the_names_the_tables_check() {
         OutboxKind::SecretsPut,
         OutboxKind::Fork,
         OutboxKind::Move,
+        OutboxKind::Provision,
+        OutboxKind::SkillCopy,
     ] {
         assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
     }

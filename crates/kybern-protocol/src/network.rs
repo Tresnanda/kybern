@@ -45,9 +45,12 @@ pub mod features {
     pub const GROUP_V1: &str = "group.v1";
     /// `peer.provision.*`: a project can be added to this machine from another one (clone or bundle, env files).
     pub const PROVISION_V1: &str = "provision.v1";
+    /// `peer.skills.*` and the `skill` destination of `peer.files.*`: this machine lists its user skills
+    /// and takes skill copies.
+    pub const SKILLS_SYNC_V1: &str = "skills.sync.v1";
 
     /// Every feature the network design names, in design order.
-    pub const ALL: [&str; 16] = [
+    pub const ALL: [&str; 17] = [
         NETWORK_V1,
         RELAY_V1,
         DELEGATE_REMOTE_V1,
@@ -64,6 +67,7 @@ pub mod features {
         UPDATE_V1,
         GROUP_V1,
         PROVISION_V1,
+        SKILLS_SYNC_V1,
     ];
 }
 

@@ -269,3 +269,8 @@ expression: names
 - peer.ports.open
 - peer.ports.data
 - peer.ports.close
+- skills.inventory
+- skills.network_view
+- skills.copy
+- peer.skills.inventory
+- peer.skills.copy

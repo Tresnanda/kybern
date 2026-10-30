@@ -52,6 +52,17 @@ pub enum PushDest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         subdir: Option<String>,
     },
+    /// A skill's folder in the target's skill homes (`skills.copy`; see `skill_sync.rs`). Never `name (2)`:
+    /// the same version is left as it is, and a different one is replaced only when its hash is in `replaces`.
+    Skill {
+        /// [`crate::MachineSkill::name`], relative to each home.
+        name: String,
+        homes: Vec<crate::SkillHome>,
+        /// The hash of the version that is sent.
+        hash: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        replaces: Vec<String>,
+    },
 }
 
 /// One file of a send.
@@ -62,6 +73,9 @@ pub struct PushEntry {
     pub size: u64,
     /// Lowercase hex SHA-256 of the whole file.
     pub sha256: String,
+    /// The file is executable on the sender (a Unix mode bit); the target keeps it on Unix.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub executable: bool,
 }
 
 /// `files.send`: queue a file or folder of a project of this machine for another machine.
@@ -148,6 +162,9 @@ pub struct PeerFilesFinishResult {
     pub dest_path: String,
     pub files: u32,
     pub bytes: u64,
+    /// For a [`PushDest::Skill`] send: where it landed in each home.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill: Option<crate::SkillLanded>,
 }
 
 /// Pushed to the sender's clients while a send runs.

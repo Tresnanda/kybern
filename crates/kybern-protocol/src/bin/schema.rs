@@ -338,6 +338,11 @@ fn main() {
     method::<PeerPortsOpen>(&mut methods);
     method::<PeerPortsData>(&mut methods);
     method::<PeerPortsClose>(&mut methods);
+    method::<SkillsInventoryMethod>(&mut methods);
+    method::<SkillsNetworkViewMethod>(&mut methods);
+    method::<SkillsCopy>(&mut methods);
+    method::<PeerSkillsInventory>(&mut methods);
+    method::<PeerSkillsCopy>(&mut methods);
     method::<PeerThreadArchiveInbound>(&mut methods);
     method::<SettingsNetworkViewMethod>(&mut methods);
     method::<SettingsShare>(&mut methods);

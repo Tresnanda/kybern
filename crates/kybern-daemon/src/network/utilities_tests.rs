@@ -76,7 +76,7 @@ async fn a_send_resumes_by_offset_after_a_disconnect_and_lands_only_once_every_c
     add_project(&b, &project_dir, "dest").await;
 
     let bytes = pattern(9 * 1024 * 1024 + 123);
-    let entry = PushEntry { path: "big.bin".into(), size: bytes.len() as u64, sha256: sha(&bytes) };
+    let entry = PushEntry { executable: false, path: "big.bin".into(), size: bytes.len() as u64, sha256: sha(&bytes) };
     let transfer_id = Uuid::now_v7();
     let begin = PeerFilesBeginParams {
         transfer_id,
@@ -132,7 +132,7 @@ async fn a_send_resumes_by_offset_after_a_disconnect_and_lands_only_once_every_c
         name: "bad.txt".into(),
         is_folder: false,
         dest: PushDest::Project { project: "dest".into(), subdir: None },
-        entries: vec![PushEntry { path: "bad.txt".into(), size: 5, sha256: sha(b"right") }],
+        entries: vec![PushEntry { executable: false, path: "bad.txt".into(), size: 5, sha256: sha(b"right") }],
     };
     link.call::<PeerFilesBegin>(bad).await.unwrap();
     link.call::<PeerFilesChunk>(PeerFilesChunkParams { transfer_id: bad_id, index: 0, offset: 0, data: B64.encode(b"wrong") })
@@ -161,7 +161,7 @@ async fn the_destination_root_is_enforced_and_nothing_is_overwritten() {
         dest,
         entries,
     };
-    let one = |path: &str| PushEntry { path: path.into(), size: 1, sha256: sha(b"x") };
+    let one = |path: &str| PushEntry { executable: false, path: path.into(), size: 1, sha256: sha(b"x") };
     let project = |subdir: Option<&str>| PushDest::Project { project: "dest".into(), subdir: subdir.map(str::to_string) };
 
     // Climbing out, absolute paths, .git, credential folders and env files are all refused.
@@ -194,7 +194,12 @@ async fn the_destination_root_is_enforced_and_nothing_is_overwritten() {
     let id = Uuid::now_v7();
     let announce = PeerFilesBeginParams {
         transfer_id: id,
-        ..begin(project(None), vec![PushEntry { path: "notes.txt".into(), size: 5, sha256: sha(b"yours") }], false, "notes.txt")
+        ..begin(
+            project(None),
+            vec![PushEntry { executable: false, path: "notes.txt".into(), size: 5, sha256: sha(b"yours") }],
+            false,
+            "notes.txt",
+        )
     };
     link.call::<PeerFilesBegin>(announce).await.unwrap();
     link.call::<PeerFilesChunk>(PeerFilesChunkParams { transfer_id: id, index: 0, offset: 0, data: B64.encode(b"yours") }).await.unwrap();
@@ -246,7 +251,7 @@ async fn a_send_is_capped_at_two_gib_on_both_machines() {
         name: "x.bin".into(),
         is_folder: false,
         dest: PushDest::Downloads,
-        entries: vec![PushEntry { path: "x.bin".into(), size, sha256: sha(b"x") }],
+        entries: vec![PushEntry { executable: false, path: "x.bin".into(), size, sha256: sha(b"x") }],
     };
     assert_eq!(link.call::<PeerFilesBegin>(claim(MAX_PUSH_BYTES + 1)).await.unwrap_err().code, codes::INVALID_PARAMS);
     // And a chunk cannot run past the size it announced.
@@ -260,7 +265,7 @@ async fn a_send_is_capped_at_two_gib_on_both_machines() {
         name: "s.bin".into(),
         is_folder: false,
         dest: PushDest::Project { project: "p".into(), subdir: None },
-        entries: vec![PushEntry { path: "s.bin".into(), size: 3, sha256: sha(b"abc") }],
+        entries: vec![PushEntry { executable: false, path: "s.bin".into(), size: 3, sha256: sha(b"abc") }],
     };
     link.call::<PeerFilesBegin>(small).await.unwrap();
     let over = link.call::<PeerFilesChunk>(PeerFilesChunkParams { transfer_id: id, index: 0, offset: 0, data: B64.encode(b"abcd") }).await;
@@ -355,7 +360,7 @@ async fn a_machine_that_turned_files_off_refuses_a_send() {
             name: "f.txt".into(),
             is_folder: false,
             dest: PushDest::Downloads,
-            entries: vec![PushEntry { path: "f.txt".into(), size: 5, sha256: sha(b"hello") }],
+            entries: vec![PushEntry { executable: false, path: "f.txt".into(), size: 5, sha256: sha(b"hello") }],
         })
         .await
         .unwrap_err();

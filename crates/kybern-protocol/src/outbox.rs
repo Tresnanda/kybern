@@ -39,6 +39,8 @@ pub enum OutboxKind {
     Move,
     // Add a project to the target (`projects.provision`; payload `ProvisionRequest`).
     Provision,
+    // Copy a skill of this machine to the target (`skills.copy`; payload `SkillCopyPayload`).
+    SkillCopy,
 }
 
 impl OutboxKind {
@@ -53,6 +55,7 @@ impl OutboxKind {
             OutboxKind::Fork => "fork",
             OutboxKind::Move => "move",
             OutboxKind::Provision => "provision",
+            OutboxKind::SkillCopy => "skill_copy",
         }
     }
 }
