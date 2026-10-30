@@ -2154,7 +2154,9 @@ async fn previews_open_serve_grant_and_close_over_rpc_and_http() {
     assert!(closed.is_err());
 
     // Outside the project: a card first, then a persisted grant.
-    let outside = outside_folder();
+    // Under the build's target folder, not the system temp folder: macOS's `/private/var` is a system
+    // folder that previews (rightly) refuse to grant.
+    let outside = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target").join(format!("preview-e2e-{}", Uuid::now_v7()));
     std::fs::create_dir_all(outside.join("deeper")).unwrap();
     let outside = outside.canonicalize().unwrap();
     std::fs::write(outside.join("page.html"), "<p>outside</p>").unwrap();
