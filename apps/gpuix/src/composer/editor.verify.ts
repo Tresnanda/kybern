@@ -25,7 +25,15 @@ for (const variant of ['dark', 'light'] as const) {
       await until(async () => (await app.getByTestId('message-record').textContent()) !== before, 'send')
       return JSON.parse(await app.getByTestId('message-record').textContent()).parts as { type: string; text?: string; path?: string }[]
     }
-    const pick = async (query: string) => { await composer.fill('@' + query); await until(menu, 'menu'); await composer.press('enter'); await until(async () => !(await menu()), 'menu closed') }
+    const pick = async (query: string) => {
+      await composer.fill('@' + query)
+      await until(menu, 'menu')
+      // Opening the popup precedes its async note results. Enter on the loading
+      // shell submits the draft; wait for the selected result to be painted.
+      await until(async () => await app.getByTestId('completion-selected').count() === 1 && (await painted()).includes('Release notes'), 'mention result painted')
+      await composer.press('enter')
+      await until(async () => !(await menu()), 'menu closed')
+    }
 
     console.log('CHECK token then text sends structured parts')
     await pick('Release'); await composer.press('x'); await composer.press('y')

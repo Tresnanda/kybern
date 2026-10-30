@@ -953,6 +953,24 @@ starting and ending each raise a window-state event and a `gpuix-frames.log` lin
 the gate off and on. Whether the kicks release a real stalled compositor is unproven; the log says which cleared
 it.
 
+**Drawable acquisition (2026-10-30).** The gate cannot predict every slow `nextDrawable`: field logs on 0.19.4 still
+record waits above one second with the gate enabled. The fault replay also reproduces a slow acquisition below the
+gate's tracked-queue limit. Metal acquisition now runs on
+one worker per window renderer (`gpui_apple/src/drawable_acquisition*.rs`), with one pending request/result and at most
+one prefetched drawable. The input thread waits at most 1 ms for it. Until it arrives, the existing base frame and
+compositor loops stay together; the latest scene is rendered when the drawable is ready. Readiness requests a present
+on the existing display callback, bypassing the dropped-frame backoff without creating an idle render loop. A resize
+discards an old-sized drawable. Closing a window does not join a worker blocked inside Metal. Headless renders use
+their existing path. `KYBERN_ASYNC_DRAWABLE=0` selects the synchronous control; the asynchronous path also enables
+Metal's drawable timeout. The gate still reports/kicks starvation, without waiting on the UI thread.
+
+`KYBERN_FRAME_STALL_TEST=slow-drawable:<ms>` delays acquisition by one second regardless of the presented queue's
+count. `native/update-freeze-check.ts` drives marquee rows, native compositor loops, streaming text, clicks and the
+real composer editor, measures input and JS timer delay, and checks the exact click/character counts encoded in
+submitted pixels after acquisition recovers. It reads presented-frame dumps without requesting a fresh screenshot.
+This reproduces a confirmed blocking path; the original field trigger and any separate persistent stale-view fault
+remain unproven until verified in normal use.
+
 Subtree scale is now `paintTransform` ("Paint-only subtree transforms" below); the reasons in the native springs
 section: quads, paths, masks, glyphs and hitboxes need one coordinated GPUI scene
 transform. Translation is not presented as scale.
@@ -1580,7 +1598,16 @@ the callback receives `(error,{timeMs})`. Acknowledge with
 `acknowledgeAnimationFrame(token)` to allow the next delivery; unsubscribe with
 `unsubscribeAnimationFrames(token)`. Deliveries are bounded, and consumers must
 ignore already-queued stale callbacks after unsubscribe. `src/native/frame.ts`
-shares one subscription and handles generations. Hidden-window behavior is a
+shares one subscription and handles generations. A pending native delivery expires
+after one second so a lost acknowledgement cannot silence it indefinitely; a
+failed callback enqueue retries on the next frame. The shared JS clock also
+replaces a subscription after one second without deliveries while visible and
+in use. A generation guard lets a new subscription or acknowledgement restart
+a lost native callback chain without duplicating a delayed chain. GPUI preserves
+next-frame callbacks when a re-entrant window update fails, and logs that deferral.
+`frame_clock_test.rs` checks enqueue failure, lost acknowledgement, lost chains
+and late callbacks; `frame-check.ts` drops an acknowledgement in a real window.
+Hidden-window behavior is a
 required regression check, not something inferred from callback counts.
 
 `paintAnimation: {kind:'matrix'|'breathe',cycleMs:number,delayMs?:number}` is allowed

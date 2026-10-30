@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.19.5
+
+<!-- kybern-release-title: Typing and clicks stay responsive -->
+<!-- kybern-release-summary: Fixes macOS UI freezes where sidebar highlights, clicks and composer typing stopped updating until you switched desktops. -->
+
+- Fixes macOS UI freezes where sidebar highlights, clicks and composer typing stopped updating until you switched desktops. Waiting for a new frame no longer blocks the UI thread, and the current view draws as soon as a frame is available.
+
+## 0.19.4
+
+- The desktop app recovers automatically when its animation-frame subscription stalls, fixing chats that would not open and a thinking shimmer that stayed until the window was minimized and restored.
+
 ## 0.19.3
 
 <!-- kybern-release-title: The window keeps responding when drawing stalls -->
