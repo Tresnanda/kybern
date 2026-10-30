@@ -30,6 +30,38 @@ function appClient(world, machineId, features = ["network.v1"]) {
   return client;
 }
 
+test("a late saved profile merges into a discovered member without losing routes, trust, lists or profile credentials", async () => {
+  const ssh = { kind: "ssh", url: "http://127.0.0.1:5555" };
+  const profile = { target: "me@box", remote_port: 4173, local_port: 5555 };
+  const { set, world, creds, store } = setup({ records: [
+    rec("legacy:box", [ssh], { legacyProfileId: "box", ssh: profile }),
+    rec("box", [], { member: true, signingKey: "network-pin" }),
+  ], credentials: { "legacy:box": "saved-token" } });
+  await set.load();
+  const discarded = [], deleted = [];
+  creds.discard = (id) => { discarded.push(id); creds.tokens.delete(id); };
+  creds.delete = (id) => { deleted.push(id); };
+  const saved = appClient(world, "box"), discovered = appClient(world, "box");
+  await set.adoptConnection(rec("legacy:box", [ssh], { legacyProfileId: "box", ssh: profile }), saved, { autoRefresh: false });
+  await set.adoptConnection(rec("box", [], { member: true, signingKey: "network-pin" }), discovered, { autoRefresh: false });
+  set.ingest("legacy:box", { projects: [project("p1", "Kybern", "root")], threads: [] });
+  const proxy = set.clientFor("box");
+  await set.mergeSavedMachine("legacy:box", "box");
+  await set.flush();
+  assert.deepEqual(set.connections().map((c) => c.record.machineId), ["box"]);
+  assert.deepEqual(set.connection("box").record.routes, [ssh]);
+  assert.equal(set.connection("box").record.legacyProfileId, "box");
+  assert.deepEqual(store.records[0].ssh, profile);
+  assert.equal(set.connection("box").record.signingKey, "network-pin");
+  assert.equal(creds.tokens.get("box"), "saved-token");
+  assert.equal(set.clientFor("box"), proxy);
+  assert.deepEqual(discarded, ["legacy:box"]);
+  assert.deepEqual(deleted, []);
+  assert.equal(set.merged().projects[0].instances[0].machineId, "box");
+  assert.equal(saved.closed, false, "the app-owned saved socket stays owned by the app");
+  set.dispose();
+});
+
 test("adoptConnection joins an open client the set did not open, never dials it and never closes it", async () => {
   const { world, set, clock } = setup();
   const client = appClient(world, "mac");

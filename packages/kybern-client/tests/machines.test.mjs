@@ -329,7 +329,7 @@ test("members found through network.status are added, connected and forgotten wh
   world.lists("a", [], []);
   world.lists("b", [project("p", "x", "r1")], [thread("t", "p", "2026-10-28T10:00:00Z")]);
   let members = [card("a"), card("b", { name: "satyamas", os: "windows" })];
-  world.on("a", "network.status", () => ({ self_machine: card("a"), members }));
+  world.on("a", "network.status", () => ({ enabled: true, self_machine: card("a"), members }));
   world.on("a", "network.routes", () => ({ routes: [tailnet(T)] }));
   world.on("a", "network.client_grant", () => ({ token: "tok-b", scopes: [], routes: [tailnet(T)], signing_key: "key-b" }));
   await set.ensureAll();
@@ -372,12 +372,136 @@ test("members that are not in the network are never removed by a sync", async ()
   world.host("https://old.example.com", "old", { features: [] });
   world.lists("a", [], []);
   world.lists("old", [], []);
-  world.on("a", "network.status", () => ({ self_machine: card("a"), members: [card("a")] }));
+  world.on("a", "network.status", () => ({ enabled: true, self_machine: card("a"), members: [card("a")] }));
   await set.ensureAll();
   assert.ok(set.connection("old"));
   // A daemon older than the network has no identity document: it is reached on its environment id alone, and shown as needing an update.
   assert.equal(world.probes.some((u) => u.startsWith("https://old.example.com")), false);
   assert.equal(set.connection("old").status, "needs-update");
+  set.dispose();
+});
+
+test("enabling after startup bootstraps all member:false records without replacing saved SSH routes or credentials", async () => {
+  const ssh = { kind: "ssh", url: "http://127.0.0.1:5555" };
+  const profile = { target: "me@box", remote_port: 4173, local_port: 5555 };
+  const { world, set, clock, creds, store } = setup({
+    records: [rec("a", [tailnet("http://100.64.0.1:4173")], { member: false }),
+      rec("b", [ssh], { member: false, legacyProfileId: "box", ssh: profile }),
+      rec("old", [advertised("https://old.example.com")], { member: false })],
+    credentials: { a: "tok-a", b: "saved-ssh-token", old: "tok-old" }, localMachineId: "a",
+  });
+  world.host("http://100.64.0.1:4173", "a");
+  world.host(ssh.url, "b");
+  world.host("https://old.example.com", "old", { features: [] });
+  world.host(T, "c");
+  for (const id of ["a", "b", "old", "c"]) world.lists(id, [], []);
+  let enabled = false;
+  let members = [card("a"), card("b"), card("c", { name: "SatyaMas" })];
+  world.on("a", "network.status", () => ({ enabled, self_machine: card("a"), members }));
+  world.on("a", "network.routes", () => ({ routes: [tailnet(T)] }));
+  world.on("a", "network.client_grant", () => ({ token: "tok-c", routes: [tailnet(T)], signing_key: "key-c" }));
+  await set.ensureAll();
+  assert.ok(set.connections().every((c) => !c.record.member));
+  enabled = true;
+  const primary = world.clients.find((c) => c.machineId === "a").client;
+  primary.notify("network.changed", {});
+  await clock.advance(300);
+  await set.flush();
+  assert.deepEqual(set.connections().map((c) => [c.record.machineId, c.record.member]), [["a", true], ["b", true], ["old", false], ["c", true]]);
+  assert.deepEqual(set.connection("b").record.routes, [ssh]);
+  assert.deepEqual(store.records.find((r) => r.machineId === "b").ssh, profile);
+  assert.equal(set.connection("b").record.legacyProfileId, "box");
+  assert.equal(creds.tokens.get("b"), "saved-ssh-token");
+  assert.equal(set.localMachineId, "a");
+  assert.equal(set.connection("c").status, "online");
+  assert.equal(world.clients.filter((c) => c.machineId === "b").length, 1);
+
+  // Disable keeps remembered peers and credentials. Re-enable, including on reconnect without
+  // a notification, reads a fresh list and drops a genuinely removed member.
+  enabled = false;
+  await set.syncMembers();
+  assert.equal(set.connection("a").record.member, false);
+  assert.ok(set.connection("c"));
+  assert.equal(creds.tokens.get("c"), "tok-c");
+  primary.setStatus("reconnecting");
+  enabled = true;
+  members = [card("a"), card("b")];
+  primary.setStatus("open");
+  await clock.advance(300);
+  assert.equal(set.connection("a").record.member, true);
+  assert.equal(set.connection("c"), undefined);
+  assert.equal(creds.tokens.has("c"), false);
+  assert.ok(set.connection("old"));
+  set.dispose();
+});
+
+test("a notification received during a member read reruns it before applying an obsolete removal", async () => {
+  const { world, set, clock, creds } = setup({
+    records: [rec("a", [tailnet("http://100.64.0.1:4173")]), rec("b", [tailnet(T)])],
+    credentials: { a: "tok-a", b: "tok-b" }, localMachineId: "a",
+  });
+  world.host("http://100.64.0.1:4173", "a"); world.host(T, "b");
+  world.lists("a", [], []); world.lists("b", [], []);
+  let release;
+  let pending = false;
+  let reads = 0;
+  world.on("a", "network.status", async () => {
+    reads++;
+    const members = pending ? [card("a")] : [card("a"), card("b")];
+    if (pending) await new Promise((resolve) => { release = resolve; });
+    return { enabled: true, self_machine: card("a"), members };
+  });
+  await set.ensureAll();
+  await clock.advance(300);
+  const before = reads;
+  pending = true;
+  const syncing = set.syncMembers();
+  await clock.flush();
+  pending = false;
+  world.clients.find((c) => c.machineId === "a").client.notify("network.machine.changed", {});
+  release();
+  await syncing;
+  assert.equal(reads - before, 2);
+  assert.equal(creds.tokens.get("b"), "tok-b");
+  assert.equal(set.connection("b").status, "online");
+  assert.equal(world.clients.filter((c) => c.machineId === "b").length, 1);
+  set.dispose();
+});
+
+test("bootstrap trusts only the active authenticated machine's enabled membership answer", async () => {
+  const { world, set } = setup({ records: [rec("a", [tailnet("http://100.64.0.1:4173")], { member: false })], credentials: { a: "tok-a" }, localMachineId: "a" });
+  world.host("http://100.64.0.1:4173", "a"); world.lists("a", [], []);
+  let status = { enabled: true, self_machine: card("other"), members: [card("other"), card("b")] };
+  world.on("a", "network.status", () => status);
+  await set.ensureAll();
+  assert.equal(set.connection("a").record.member, false);
+  assert.equal(set.connection("b"), undefined);
+  status = { enabled: true, self_machine: card("a"), members: [card("b")] };
+  await set.syncMembers();
+  assert.equal(set.connection("b"), undefined);
+  status = { enabled: true, removed: true, self_machine: card("a"), members: [card("a"), card("b")] };
+  await set.syncMembers();
+  assert.equal(set.connection("a").record.member, false);
+  assert.equal(set.connection("b"), undefined);
+  set.dispose();
+});
+
+test("discovery rekeys a saved stand-in before creating a duplicate member", async () => {
+  const ssh = { kind: "ssh", url: "http://127.0.0.1:5555" };
+  const { world, set, creds } = setup({
+    records: [rec("a", [tailnet("http://100.64.0.1:4173")], { member: false }), rec("legacy:box", [ssh], { member: false, legacyProfileId: "box" })],
+    credentials: { a: "tok-a", "legacy:box": "saved-token" }, localMachineId: "a",
+  });
+  world.host("http://100.64.0.1:4173", "a"); world.host(ssh.url, "b");
+  world.lists("a", [], []); world.lists("b", [], []);
+  world.on("a", "network.status", () => ({ enabled: true, self_machine: card("a"), members: [card("a"), card("b")] }));
+  await set.ensureAll();
+  assert.deepEqual(set.connections().map((c) => c.record.machineId), ["a", "b"]);
+  assert.deepEqual(set.connection("b").record.routes, [ssh]);
+  assert.equal(set.connection("b").record.legacyProfileId, "box");
+  assert.equal(creds.tokens.get("b"), "saved-token");
+  assert.equal(creds.tokens.has("legacy:box"), false);
+  assert.equal(world.clients.length, 2);
   set.dispose();
 });
 

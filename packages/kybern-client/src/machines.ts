@@ -458,6 +458,7 @@ export class MachineSet {
   private probeTimer: unknown;
   private syncTimer: unknown;
   private syncing: Promise<void> | undefined;
+  private syncAgain = false;
   private disposed = false;
   private _version = 0;
   private mergedView: MergedView | undefined;
@@ -672,6 +673,47 @@ export class MachineSet {
       }
     }
     return this.viewOf(slot);
+  }
+
+  /**
+   * Discovery learned a machine before its saved profile answered with that id. Keep the
+   * canonical member's proxy and trust pin, and move the saved profile's routes and metadata
+   * onto it. Discard only the obsolete machine-id credential, never the saved profile token.
+   */
+  async mergeSavedMachine(oldId: MachineId, newId: MachineId): Promise<MachineConnection> {
+    const saved = this.slots.get(oldId);
+    const member = this.slots.get(newId);
+    if (!saved || !member) throw new UnknownMachineError(!saved ? oldId : newId);
+    if (saved === member) return this.viewOf(member);
+    const { credentials } = this.options;
+    const token = await credentials.get(oldId);
+    const currentToken = await credentials.get(newId);
+    if (this.slots.get(oldId) !== saved || this.slots.get(newId) !== member) {
+      if (!this.slots.has(oldId) && this.slots.get(newId) === member) return this.viewOf(member);
+      throw new UnknownMachineError(oldId);
+    }
+    if (!currentToken && token) await credentials.set(newId, token);
+    if (this.slots.get(oldId) !== saved || this.slots.get(newId) !== member) throw new UnknownMachineError(oldId);
+    member.record = {
+      ...saved.record, ...member.record,
+      routes: orderRoutes(saved.record.routes, member.record.routes).slice(0, MAX_ROUTES_PER_MACHINE),
+      learned: orderRoutes(saved.record.learned, member.record.learned).slice(0, MAX_ROUTES_PER_MACHINE),
+      blockedRoutes: [...new Set([...(saved.record.blockedRoutes ?? []), ...(member.record.blockedRoutes ?? [])])].slice(-MAX_ROUTES_PER_MACHINE),
+      ...(saved.record.legacyProfileId ? { legacyProfileId: saved.record.legacyProfileId } : {}),
+    };
+    const cached = this.cache.get(oldId);
+    if (cached && !this.cache.get(newId)) this.cache.put(newId, { projects: cached.projects, threads: cached.threads }, cached.savedAt);
+    member.lists ??= saved.lists;
+    this.cache.delete(oldId);
+    this.dropSlot(saved);
+    this.slots.delete(oldId);
+    if (this.localId === oldId) this.localId = newId;
+    this.persist();
+    this.touch(member, "records");
+    // A desktop store with legacy profiles supplies discard. Other stores have only
+    // machine-id credentials, so deleting the old id cannot delete a profile account.
+    await (credentials.discard ? credentials.discard(oldId) : credentials.delete(oldId));
+    return this.viewOf(member);
   }
 
   /** Forget a machine: close it and delete its token, cached lists and record. */
@@ -1314,7 +1356,7 @@ export class MachineSet {
     this.touch(slot, "status");
     // What the cache holds for this machine is replaced with a fresh read.
     if (!wasLive && live && slot.autoRefresh) this.refreshQuietly(slot.record.machineId);
-    if (slot.record.member && !wasLive) this.scheduleSync();
+    if (!wasLive && (slot.record.member || slot.inner.info?.features?.includes(NETWORK_FEATURES.network))) this.scheduleSync();
   }
 
   private liveStatus(slot: Slot): MachineConnectionStatus {
@@ -1332,6 +1374,7 @@ export class MachineSet {
       slot.status = this.liveStatus(slot);
       this.touch(slot, "status");
       if (slot.autoRefresh) this.refreshQuietly(slot.record.machineId);
+      if (slot.record.member || inner.info?.features?.includes(NETWORK_FEATURES.network)) this.scheduleSync();
     } else if (status === "reconnecting" || status === "connecting") {
       if (LIVE.has(slot.status)) {
         slot.status = "offline";
@@ -1472,6 +1515,7 @@ export class MachineSet {
 
   private scheduleSync() {
     if (this.disposed) return;
+    if (this.syncing) { this.syncAgain = true; return; }
     this.clock.clearTimeout(this.syncTimer);
     this.syncTimer = this.clock.setTimeout(() => void this.syncMembers(), 300);
   }
@@ -1483,75 +1527,112 @@ export class MachineSet {
    * user) are never touched.
    */
   async syncMembers(): Promise<void> {
-    if (this.syncing) return this.syncing;
+    if (this.syncing) { this.syncAgain = true; return this.syncing; }
     const run = (async () => {
-      const source = this.bestMember();
-      if (!source?.inner) return;
-      let members: MachineCard[];
-      let selfId: MachineId;
-      try {
-        const status = await source.inner.call("network.status", {});
-        members = status.members;
-        selfId = status.self_machine.machine_id;
-      } catch {
-        return;
-      }
-      // A list that does not even contain the machine that served it is not a network list.
-      if (this.disposed || !members.some((card) => card.machine_id === selfId)) return;
-      const ids = new Set(members.map((card) => card.machine_id));
-      const fresh: Slot[] = [];
-      for (const card of members) {
-        let slot = this.slots.get(card.machine_id);
-        if (!slot) {
-          if (this.slots.size >= (this.options.maxMachines ?? 32)) continue;
-          slot = this.createSlot({
-            machineId: card.machine_id,
-            name: card.name,
-            os: card.os,
-            routes: [],
-            member: true,
-            paused: card.status === "paused",
-            ...(card.signing_key ? { signingKey: card.signing_key } : {}),
-            ...(card.ts_name ? { tsName: card.ts_name } : {}),
-          });
-          fresh.push(slot);
-        } else {
-          const record = slot.record;
-          const paused = card.status === "paused";
-          const tsName = card.ts_name ?? undefined;
-          const changed = record.name !== card.name || record.os !== card.os || !record.member || !!record.paused !== paused || record.tsName !== tsName;
-          record.name = card.name;
-          if (tsName) record.tsName = tsName;
-          else delete record.tsName;
-          record.os = card.os;
-          record.member = true;
-          if (card.signing_key && !record.signingKey) record.signingKey = card.signing_key;
-          if (!!record.paused !== paused) {
-            record.paused = paused;
-            if (paused) this.goOffline(slot, "paused");
-            else fresh.push(slot);
-          }
-          if (changed) this.touch(slot, "records");
-        }
-      }
-      for (const slot of [...this.slots.values()])
-        if (slot.record.member && !ids.has(slot.record.machineId)) await this.removeMachine(slot.record.machineId);
-      for (const slot of this.slots.values()) {
-        if (!slot.record.member || slot === source) continue;
-        try {
-          const result = await source.inner!.call("network.routes", { machine_id: slot.record.machineId });
-          this.learn(slot, result.routes);
-        } catch {
-          // Routes are refreshed on the next sync.
-        }
-      }
-      this.persist();
-      this.touch(undefined, "records");
-      await mapLimit(fresh, 4, (slot) => this.connectSlot(slot));
+      do {
+        this.syncAgain = false;
+        await this.syncMembersOnce();
+      } while (this.syncAgain && !this.disposed);
     })();
     this.syncing = run.finally(() => {
       this.syncing = undefined;
     });
     return this.syncing;
+  }
+
+  private async syncMembersOnce(): Promise<void> {
+    // The authenticated primary may have enabled networking since it opened. Ask it even when
+    // every saved record says member:false; only its answer can promote those records.
+    const local = this.localId ? this.slots.get(this.localId) : undefined;
+    const source = local?.inner && LIVE.has(local.status) && local.inner.info?.features?.includes(NETWORK_FEATURES.network)
+      ? local : this.bestMember();
+    if (!source?.inner) return;
+    const inner = source.inner;
+    const gen = source.gen;
+    const localId = this.localId;
+    const current = () => !this.disposed && this.localId === localId && this.slots.get(source.record.machineId) === source && source.inner === inner && source.gen === gen && LIVE.has(source.status);
+    let members: MachineCard[];
+    try {
+      const status = await inner.call("network.status", {});
+      if (!current() || this.syncAgain || status.self_machine.machine_id !== source.record.machineId) return;
+      // Turning the switch off keeps the saved network, routes and credentials. It must not
+      // become an authoritative empty member list (or mint grants through this connection).
+      if (!status.enabled || status.removed || !status.members.some((card) => card.machine_id === source.record.machineId)) {
+        if (source.record.member) {
+          source.record.member = false;
+          this.persist();
+          this.touch(source, "records");
+        }
+        return;
+      }
+      members = status.members;
+    } catch {
+      return;
+    }
+    const ids = new Set(members.map((card) => card.machine_id));
+    const fresh: Slot[] = [];
+    for (const card of members) {
+      let slot = this.slots.get(card.machine_id);
+      // A saved profile can still carry a stand-in id while its authenticated socket has
+      // already answered with the real id. Move it before creating a duplicate network row.
+      if (!slot) {
+        const saved = [...this.slots.values()].find((other) => !other.record.member &&
+          (other.inner?.info?.machine_id || other.inner?.info?.environment_id) === card.machine_id);
+        if (saved) {
+          try { await this.rekeyMachine(saved.record.machineId, card.machine_id); } catch { /* the hub may have re-keyed it first */ }
+          if (!current() || this.syncAgain) return;
+          slot = this.slots.get(card.machine_id);
+        }
+      }
+      if (!slot) {
+        if (this.slots.size >= (this.options.maxMachines ?? 32)) continue;
+        slot = this.createSlot({
+          machineId: card.machine_id,
+          name: card.name,
+          os: card.os,
+          routes: [],
+          member: true,
+          paused: card.status === "paused",
+          ...(card.signing_key ? { signingKey: card.signing_key } : {}),
+          ...(card.ts_name ? { tsName: card.ts_name } : {}),
+        });
+        fresh.push(slot);
+      } else {
+        const record = slot.record;
+        const paused = card.status === "paused";
+        const tsName = card.ts_name ?? undefined;
+        const changed = record.name !== card.name || record.os !== card.os || !record.member || !!record.paused !== paused || record.tsName !== tsName;
+        record.name = card.name;
+        if (tsName) record.tsName = tsName;
+        else delete record.tsName;
+        record.os = card.os;
+        record.member = true;
+        if (card.signing_key && !record.signingKey) record.signingKey = card.signing_key;
+        if (!!record.paused !== paused) {
+          record.paused = paused;
+          if (paused) this.goOffline(slot, "paused");
+          else fresh.push(slot);
+        }
+        if (changed) this.touch(slot, "records");
+      }
+    }
+    for (const slot of [...this.slots.values()])
+      if (slot.record.member && !ids.has(slot.record.machineId)) {
+        await this.removeMachine(slot.record.machineId);
+        if (!current() || this.syncAgain) return;
+      }
+    for (const slot of this.slots.values()) {
+      if (!slot.record.member || slot === source) continue;
+      try {
+        const result = await inner.call("network.routes", { machine_id: slot.record.machineId });
+        if (!current() || this.syncAgain) return;
+        this.learn(slot, result.routes);
+      } catch {
+        // Routes are refreshed on the next sync.
+      }
+    }
+    this.persist();
+    this.touch(undefined, "records");
+    await mapLimit(fresh, 4, (slot) => this.connectSlot(slot));
   }
 }

@@ -19,6 +19,7 @@ import { TextField } from '../kit/Field.tsx'
 import { Row, Section, Select } from './controls.tsx'
 import { openExternal } from './external.ts'
 import { showDialog } from '../dialogs/store.ts'
+import { loginBrokerCandidates } from './loginBrokerCandidates.ts'
 
 const NO_BROKER = '__none__'
 
@@ -28,15 +29,11 @@ export function LoginBrokerSection() {
   const net = useNetwork()
   const broker = useBroker()
   const all = useSignInAll()
-  const members = net.status?.members ?? []
   const [confirming, setConfirming] = useState<MachineId | null | undefined>(undefined)
   const info = broker.status
   const brokerName = info?.broker?.name ?? machines.find((machine) => machine.machineId === info?.broker?.machine_id)?.name
-  const candidates = useMemo(() => machines.filter((machine) => machine.member).map((machine) => {
-    const features = members.find((member) => member.machine_id === machine.machineId)?.features ?? []
-    return { machineId: machine.machineId, name: machine.name, online: !machine.offline, features }
-  }), [machines, members])
-  if (broker.unavailable || machines.length < 2) return null
+  const candidates = useMemo(() => loginBrokerCandidates(machines, net.status), [machines, net.status])
+  if (broker.unavailable || Math.max(machines.length, candidates.length) < 2) return null
   const fail = (title: string) => (e: unknown) => toast.error(title, { description: errorText(e) })
   const moved = broker.moved
   return <>

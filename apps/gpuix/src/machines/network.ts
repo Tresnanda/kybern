@@ -29,32 +29,34 @@ const listeners = new Set<() => void>()
 const emit = (patch: Partial<NetworkState>) => { state = { ...state, ...patch }; for (const listener of listeners) listener() }
 export const getNetwork = () => state
 /** Tests: forget everything. */
-export function resetNetwork() { state = { status: null, unavailable: false, error: '', infos: {}, busy: null, outbox: [], updated: null, doctor: null }; reading = false; again = false }
+export function resetNetwork() { state = { status: null, unavailable: false, error: '', infos: {}, busy: null, outbox: [], updated: null, doctor: null }; reading = undefined; again = false }
 
 const text = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
-let reading = false
+let reading: Promise<void> | undefined
 let again = false
 /** Read `network.status` from the machine the user is at. Reads that arrive during a read fold into one rerun. */
 export async function refreshNetwork(): Promise<void> {
-  const client = getClient()
-  if (!client || client.status !== 'open') return
-  if (reading) { again = true; return }
-  reading = true
-  try {
+  if (reading) { again = true; return reading }
+  const run = (async () => {
     do {
       again = false
+      const client = getClient()
+      if (!client || client.status !== 'open') return
       try {
         const status = await client.call('network.status', {})
-        if (getClient() !== client) return
+        if (getClient() !== client) { again = true; continue }
         emit({ status, unavailable: false, error: '' })
       } catch (error) {
-        if (getClient() !== client) return
+        if (getClient() !== client) { again = true; continue }
         // Method not found: a daemon older than the network.
         emit({ unavailable: /not found|unknown method|-32601/i.test(text(error)), error: text(error) })
       }
     } while (again)
-  } finally { reading = false }
+  })()
+  const pending = run.finally(() => { if (reading === pending) reading = undefined })
+  reading = pending
+  return pending
 }
 
 /** The work that has not reached its machine yet (queued, sending, failed or expired). */
@@ -106,7 +108,7 @@ async function act<T>(key: string, run: (client: NonNullable<ReturnType<typeof g
     const result = await run(client)
     await refreshNetwork()
     // The set learns who joined or left from any member.
-    void machineHub().set.syncMembers().catch(() => {})
+    await machineHub().set.syncMembers()
     return result
   } catch (error) {
     emit({ error: text(error) })

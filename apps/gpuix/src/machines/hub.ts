@@ -146,7 +146,7 @@ export class MachineHub {
     for (const other of this.set.connections()) {
       const record = other.record
       if (record.legacyProfileId !== primary.profile.id || record.machineId === machineId || !isLegacyMachineId(record.machineId)) continue
-      if (this.set.connection(machineId)) await this.set.removeMachine(record.machineId)
+      if (this.set.connection(machineId)) await this.set.mergeSavedMachine(record.machineId, machineId)
       else await this.set.rekeyMachine(record.machineId, machineId)
       await this.forgetProfile(record.legacyProfileId)
     }
@@ -187,7 +187,8 @@ export class MachineHub {
     try {
       const status = await client.call('network.status', {})
       try { this.options.onNetwork?.(status) } catch { /* a notice never touches the connection */ }
-      return !!status.enabled
+      const id = client.info?.machine_id || client.info?.environment_id
+      return !!status.enabled && !status.removed && status.self_machine.machine_id === id && status.members.some((member) => member.machine_id === id)
     } catch {
       return false
     }
@@ -206,7 +207,7 @@ export class MachineHub {
       const id = connection.info?.machine_id || connection.info?.environment_id
       if (!isLegacyMachineId(record.machineId) || !id || id === record.machineId) continue
       try {
-        if (this.set.connection(id)) await this.set.removeMachine(record.machineId)
+        if (this.set.connection(id)) await this.set.mergeSavedMachine(record.machineId, id)
         else await this.set.rekeyMachine(record.machineId, id)
         await this.forgetProfile(record.legacyProfileId)
       } catch { /* retried when it answers again */ }
