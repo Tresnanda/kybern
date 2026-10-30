@@ -276,9 +276,11 @@ async fn a_send_is_capped_at_two_gib_on_both_machines() {
 async fn a_folder_sent_to_an_offline_machine_waits_in_the_outbox_and_lands_when_it_returns() {
     let Some(cluster) = Cluster::new(&[NodeSpec::owner("a"), NodeSpec::owner("b")]) else { return };
     let a = cluster.start("a", true).await;
-    let mut b = cluster.start("b", true).await;
+    // Register b and its destination without opening peer sessions. Stopping an already linked
+    // node leaves in-flight handshakes, so a transient Sending state while they close is valid;
+    // this scenario exercises an offline destination, not shutdown detection.
+    let mut b = cluster.start("b", false).await;
     cluster.form(&a, &[&b], JoinVia::Auto).await;
-    eventually("linked", WAIT, || linked(&a, &b)).await;
     let work = TempDir::new("push-offline");
     let root = canonical(&work);
     let src = root.join("src");
@@ -296,9 +298,9 @@ async fn a_folder_sent_to_an_offline_machine_waits_in_the_outbox_and_lands_when_
     add_project(&b, &dst, "dst").await;
     let b_id = b.id();
 
-    // b goes away: its daemon stops and a's session to it ends.
+    // b is registered but offline; no session has ever opened to it.
     b.stop();
-    eventually("a sees b leave", WAIT, || a.state.network.peers.link(&b_id).is_none()).await;
+    assert!(a.state.network.peers.link(&b_id).is_none());
     let client = admin(&a).await;
     let sent = client
         .call::<FilesSend>(FilesSendParams {
@@ -317,6 +319,8 @@ async fn a_folder_sent_to_an_offline_machine_waits_in_the_outbox_and_lands_when_
     eventually("the item waits for b", WAIT, || state_of() == OutboxState::Queued).await;
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(state_of(), OutboxState::Queued, "nothing is delivered to an offline machine");
+    assert_eq!(a.state.store.outbox_get(sent.item.id).unwrap().unwrap().attempts, 0, "no session means no delivery attempt");
+    assert!(!dst.join("received").exists(), "no files arrive before b comes online");
 
     // b comes back (same data directory): the item is delivered on its own.
     drop(b);
