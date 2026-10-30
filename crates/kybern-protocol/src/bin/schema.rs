@@ -74,6 +74,7 @@ fn main() {
     add::<MachineCard>(&mut types, "MachineCard");
     add::<NetworkStatus>(&mut types, "NetworkStatus");
     add::<FoundMachine>(&mut types, "FoundMachine");
+    add::<NetworkSetupCandidate>(&mut types, "NetworkSetupCandidate");
     add::<Route>(&mut types, "Route");
     add::<RepoIdentity>(&mut types, "RepoIdentity");
     add::<ProjectRepoIdentity>(&mut types, "ProjectRepoIdentity");

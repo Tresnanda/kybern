@@ -2661,3 +2661,22 @@ async fn space_logos_are_derived_into_square_assets_and_validated() {
     let unchanged = client.call::<SpacesList>(Empty {}).await.unwrap().spaces.into_iter().find(|s| s.id == space.id).unwrap();
     assert_eq!(unchanged.logo, saved.logo, "a rejected logo keeps the previous one");
 }
+
+#[tokio::test]
+async fn trusted_setup_enables_only_unconfigured_and_preserves_off_after_restart() {
+    let host = Host::start().await;
+    let client = host.client().await;
+    let before = client.call::<NetworkStatusMethod>(Empty {}).await.unwrap();
+    assert_eq!(before.configured, Some(false));
+    let automatic = || NetworkSetEnabledParams { enabled: true, only_if_unconfigured: true };
+    let on = client.call::<NetworkSetEnabled>(automatic()).await.unwrap();
+    assert!(on.enabled);
+    assert_eq!(on.configured, Some(true));
+    let off = client.call::<NetworkSetEnabled>(NetworkSetEnabledParams { enabled: false, only_if_unconfigured: false }).await.unwrap();
+    assert!(!off.enabled);
+    assert!(!client.call::<NetworkSetEnabled>(automatic()).await.unwrap().enabled);
+    let persisted = crate::settings::SettingsStore::load(&host.state.settings.dir().join("settings.json")).unwrap();
+    assert!(persisted.get().network.configured);
+    assert!(!persisted.get().network.enabled);
+    assert!(client.call::<NetworkSetEnabled>(NetworkSetEnabledParams { enabled: false, only_if_unconfigured: true }).await.is_err());
+}

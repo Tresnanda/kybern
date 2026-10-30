@@ -76,9 +76,25 @@ pub async fn allow(state: &AppState, machine_id: &str, capability: &str, allowed
 /// `network.set_enabled`: the master switch ("Connect to your other machines"). Off leaves the
 /// network and keeps membership (§4.1).
 pub async fn set_enabled(state: &AppState, enabled: bool) -> Result<(), JoinError> {
+    set_enabled_guarded(state, enabled, false).await
+}
+
+/// The check and write share a lock with explicit toggles, so a concurrent off always wins
+/// over a later automatic setup. This is an authenticated NetworkAdmin RPC, never discovery.
+pub async fn set_enabled_guarded(state: &AppState, enabled: bool, only_if_unconfigured: bool) -> Result<(), JoinError> {
+    let _guard = state.network.enabled_change.lock().await;
     let mut settings = state.settings.get();
-    if settings.network.enabled != enabled {
+    if only_if_unconfigured {
+        if !enabled {
+            return Err(JoinError::Invalid("Guarded setup can only turn the network on.".into()));
+        }
+        if settings.network.configured {
+            return Ok(());
+        }
+    }
+    if settings.network.enabled != enabled || !settings.network.configured {
         settings.network.enabled = enabled;
+        settings.network.configured = true;
         state.settings.set(settings).map_err(|error| JoinError::Unavailable(format!("{error:#}")))?;
     }
     state.network.set_enabled(enabled);

@@ -241,6 +241,7 @@ pub struct Network {
     /// Notifications of the machine utilities (file progress, received files, port forwards) for clients.
     utility_events: broadcast::Sender<(&'static str, serde_json::Value)>,
     enabled: AtomicBool,
+    pub(crate) enabled_change: tokio::sync::Mutex<()>,
 }
 
 impl Network {
@@ -285,6 +286,7 @@ impl Network {
             outbox_changed: broadcast::channel(64).0,
             utility_events: broadcast::channel(64).0,
             enabled: AtomicBool::new(true),
+            enabled_change: Default::default(),
         }
     }
 

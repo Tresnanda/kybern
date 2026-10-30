@@ -3,6 +3,7 @@
 // `environments/ssh.ts` executes the SSH plans (bootstrap, tunnel keeper).
 import { lstat, mkdir, readlink, realpath, symlink, unlink } from 'node:fs/promises'
 import path from 'node:path'
+import remoteInstaller from '../../../../scripts/install-remote.sh' with { type: 'text' }
 
 export interface SshTarget { target: string; port?: number }
 export interface SshConfig extends SshTarget { remotePort: number; localPort: number; dataDir?: string }
@@ -50,6 +51,18 @@ export function remoteScript(config: SshConfig, script: string, timeoutMs: numbe
 }
 export function tunnelPlan(config: SshConfig): CommandPlan {
   return { command: 'ssh', args: [...sshArguments(config), '-o', 'ExitOnForwardFailure=yes', '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '-N', '-L', `127.0.0.1:${portNumber(config.localPort)}:127.0.0.1:${portNumber(config.remotePort)}`, config.target] }
+}
+
+/** Trusted network setup embeds the verified installer and pins it to the desktop release.
+ * Automatic probes require a previously verified SSH host key; no first-contact trust prompt. */
+export function networkBootstrapPlan(config: SshConfig, version: string) {
+  if (!/^\d+\.\d+\.\d+$/.test(version)) throw Error('Use a published Kybern version for remote setup.')
+  const strict = (plan: CommandPlan): CommandPlan => ({ ...plan, args: plan.args.map(arg => arg === 'StrictHostKeyChecking=accept-new' ? 'StrictHostKeyChecking=yes' : arg) })
+  return {
+    probe: strict(remoteScript(config, PROBE_SCRIPT, 45000)),
+    installIfMissingOrOlder: strict(remoteScript(config, `set -- --version ${shellQuote(version)}\n${remoteInstaller}`, 600000)),
+    startIfUnreachable: strict(remoteScript(config, `set -- --service-only --port ${portNumber(config.remotePort)}\n${remoteInstaller}`, 60000)),
+  }
 }
 
 export function bootstrapPlan(config: SshConfig, installer = REMOTE_INSTALL_URL) {

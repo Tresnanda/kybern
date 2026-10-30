@@ -123,7 +123,13 @@ export const joinByCode = (code: string, address: string, migrate = false) => ac
 export const pauseMachine = (machineId: MachineId, paused: boolean) => act(machineId, (c) => c.call('network.pause', { machine_id: machineId, paused }))
 export const renameMachine = (machineId: MachineId, name: string) => act(machineId, (c) => c.call('network.rename', { machine_id: machineId, name }))
 export const removeFromNetwork = (params: NetworkRemoveParams) => act(params.machine_id, (c) => c.call('network.remove', params))
-export const setNetworkEnabled = (enabled: boolean) => act('enabled', (c) => c.call('network.set_enabled', { enabled }))
+export const setNetworkEnabled = (enabled: boolean) => act('enabled', async (c) => {
+  const setup = await import('./setupRuntime.ts')
+  if (!enabled) setup.cancelMachineSetup()
+  const result = await c.call('network.set_enabled', { enabled })
+  if (enabled) setup.startMachineSetup()
+  return result
+})
 export const updateAllMachines = (): Promise<NetworkUpdateAllResult> => act('update', async (c) => { const updated = await c.call('network.update_all', {}); emit({ updated }); return updated })
 /** "Keep all machines on the same version": a member that sees a newer version updates itself when idle. */
 export const setFollowUpdates = (enabled: boolean) => act('follow', (c) => c.call('network.follow_updates.set', { enabled }))

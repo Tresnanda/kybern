@@ -639,10 +639,10 @@ async fn status_describes_a_lone_machine_and_the_master_switch_leaves_the_networ
     assert!(formed.digest.is_some() && formed.network_id.is_some());
 
     // Off keeps membership but ends the sessions; on brings them back.
-    let off = client.call::<NetworkSetEnabled>(NetworkSetEnabledParams { enabled: false }).await.unwrap();
+    let off = client.call::<NetworkSetEnabled>(NetworkSetEnabledParams { enabled: false, only_if_unconfigured: false }).await.unwrap();
     assert!(!off.enabled && off.members.len() == 2);
     assert!(a.state.network.peers.links().is_empty());
-    let on = client.call::<NetworkSetEnabled>(NetworkSetEnabledParams { enabled: true }).await.unwrap();
+    let on = client.call::<NetworkSetEnabled>(NetworkSetEnabledParams { enabled: true, only_if_unconfigured: false }).await.unwrap();
     assert!(on.enabled);
 
     // Founding a network by joining something needs the network on and a reachable machine.

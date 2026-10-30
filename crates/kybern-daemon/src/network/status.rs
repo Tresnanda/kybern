@@ -128,12 +128,45 @@ pub async fn network_status(state: &AppState) -> Option<NetworkStatus> {
             reachable: id == me || network.peers.link(id).is_some(),
         }
     });
+    let found = join::found_list(state).await;
+    let setup_candidates = if network.is_enabled() {
+        network
+            .tailscale
+            .status()
+            .await
+            .ok()
+            .map(|ts| {
+                ts.peers
+                    .iter()
+                    .filter(|node| {
+                        !projection.members().any(|(_, entry)| entry.descriptor.ts_node_id.as_deref() == Some(node.node_id.as_str()))
+                            && !found.iter().any(|item| item.found_id == node.node_id)
+                    })
+                    .take(64)
+                    .map(|node| kybern_protocol::NetworkSetupCandidate {
+                        node_id: node.node_id.clone(),
+                        name: node.name(),
+                        address: if node.dns_name.is_empty() {
+                            node.ip().map(|ip| ip.to_string()).unwrap_or_default()
+                        } else {
+                            node.dns_name.clone()
+                        },
+                        online: node.online,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     Some(NetworkStatus {
+        configured: Some(state.settings.get().network.configured),
+        setup_candidates,
         enabled: network.is_enabled(),
         network_id: membership.network_id(),
         self_machine,
         members,
-        found: join::found_list(state).await,
+        found,
         outbox: OutboxSummary::default(),
         broker,
         tailscale: tailscale_state(state).await,

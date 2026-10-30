@@ -146,6 +146,7 @@ expression: schema_for!(Settings)
       "description": "Joining and staying joined to the machine network.",
       "$ref": "#/$defs/NetworkSettings",
       "default": {
+        "configured": false,
         "enabled": false,
         "port": 4173
       }
@@ -545,6 +546,11 @@ expression: schema_for!(Settings)
       "description": "The `settings.network` section.",
       "type": "object",
       "properties": {
+        "configured": {
+          "description": "A user has chosen on or off. Old saved switches are conservatively treated as choices.",
+          "type": "boolean",
+          "default": false
+        },
         "enabled": {
           "description": "\"Connect to your other machines\".",
           "type": "boolean",
