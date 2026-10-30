@@ -1,14 +1,15 @@
 // Where the composer's next new chat runs (design §6.1, Q35). With one machine none of this costs anything: `useMachineTarget`
 // answers a shared, frozen "this machine" and the composer looks as it always did. With several, it works out the picker's rows,
 // the default (the last machine used for the project, else the machine you are at) and the machine's own agent lists.
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   machineChoices, machineMemoryKey, machineReachable, resolveMachine, showMachinePicker, type MachineChoice,
 } from '../../../../packages/kybern-client/src/machineTarget.ts'
-import type { MachineId, ProjectId } from '../../../../packages/kybern-client/src/types.ts'
+import type { MachineId, ProjectId, ProvisionPlan } from '../../../../packages/kybern-client/src/types.ts'
 import { machineHub, useMachines } from '../machines/index.ts'
-import { getFocusedPaneId, useApp } from '../state.ts'
+import { getFocusedPaneId, useApp, usePaneId } from '../state.ts'
 import { getData, loadMachineLists, patchDraft, useComposer, type RemoteLists } from './store.ts'
+import { groupPathsFromPlan, groupPathsKey, readGroupPaths } from './groupPaths.ts'
 
 export interface MachineTarget {
   /** Show the picker chip: there is a real choice. */
@@ -25,22 +26,29 @@ export interface MachineTarget {
   /** The key the pick is remembered under: the logical project, or the free chat's. */
   key: string
   projectId?: ProjectId
+  sourceMachineId?: MachineId
+  groupPathsReady?: boolean
+  groupPathsError?: string
 }
 
 const SOLO: MachineTarget = Object.freeze({ show: false, choices: [], remote: false, reachable: true, key: 'free' })
 
 /** `projectId` is the listed project (the machine you are at's when it has one); `null` is a free chat. */
 export function useMachineTarget(projectId: ProjectId | null | undefined, enabled = true): MachineTarget {
+  const paneId = usePaneId()
   const rows = useMachines()
   const picked = useComposer((d) => d.draft.machines)
+  const paths = useComposer((d) => d.draft.groupPaths)
+  const [mappingError, setMappingError] = useState<{ key: string; error: string } | null>(null)
   // A project's checkouts change with the lists; re-derive when they do.
   const projects = useApp((s) => s.projects)
-  return useMemo(() => {
+  const target = useMemo(() => {
     if (!enabled || rows.length < 2) return SOLO
     const logical = projectId ? machineHub().view().projects.find((item) => item.instances.some((instance) => instance.project.id === projectId)) ?? null : null
     // A project the merged view does not know yet must not read as a free chat.
     if (projectId && !logical) return SOLO
-    const choices = machineChoices({ machines: rows, project: logical, sourceProject: logical?.instances.find((instance) => instance.project.id === projectId)?.project })
+    const source = logical?.instances.find((instance) => instance.project.id === projectId)
+    const choices = machineChoices({ machines: rows, project: logical, sourceProject: source?.project })
     const key = machineMemoryKey(logical)
     const chosen = resolveMachine(choices, picked?.[key], picked?.[key])
     if (!chosen) return { ...SOLO, key }
@@ -48,6 +56,7 @@ export function useMachineTarget(projectId: ProjectId | null | undefined, enable
       show: showMachinePicker(choices, logical),
       choices,
       ...(projectId ? { projectId } : {}),
+      ...(source ? { sourceMachineId: source.machineId } : {}),
       chosen,
       ...(chosen.isLocal ? {} : { machineId: chosen.machineId }),
       remote: !chosen.isLocal,
@@ -56,6 +65,40 @@ export function useMachineTarget(projectId: ProjectId | null | undefined, enable
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, projectId, picked, projects, enabled])
+  const mapKey = groupPathsKey(target.key, projectId ?? '', target.chosen?.machineId ?? '')
+  const needsPaths = target.remote && target.chosen?.project?.kind === 'group' && target.chosen.machineId !== target.sourceMachineId
+  const ready = !needsPaths || !!paths?.[mapKey]
+  useEffect(() => {
+    if (ready || !projectId || !target.chosen) return
+    let live = true
+    void loadGroupPaths(projectId, target.chosen.machineId, paneId).catch((error) => {
+      if (live) setMappingError({ key: mapKey, error: error instanceof Error ? error.message : String(error) })
+    })
+    return () => { live = false }
+  }, [ready, projectId, target.chosen?.machineId, mapKey, paneId, rows])
+  return needsPaths ? { ...target, groupPathsReady: ready, ...(!ready && mappingError?.key === mapKey ? { groupPathsError: mappingError.error } : {}) } : target
+}
+
+const pathLoads = new Map<string, Promise<void>>()
+/** Store mappings in the pane that requested them, even if focus moves during the probe. */
+export function loadGroupPaths(projectId: string, machineId: string, paneId: string, plan?: ProvisionPlan): Promise<void> {
+  const hub = machineHub()
+  const logical = hub.view().projects.find((item) => item.instances.some((instance) => instance.project.id === projectId))
+  if (!logical) return Promise.reject(new Error('The project list has not refreshed yet.'))
+  const key = groupPathsKey(logical.key, projectId, machineId)
+  if (getData(paneId).draft.groupPaths?.[key]) return Promise.resolve()
+  const pendingKey = `${paneId}:${projectId}:${key}`
+  const pending = pathLoads.get(pendingKey)
+  if (pending) return pending
+  const source = logical.instances.find((item) => item.project.id === projectId)
+  const target = logical.instances.find((item) => item.machineId === machineId)
+  const planned = plan?.project_id === projectId && plan.target.id === machineId && source?.project.kind === 'group' && target
+    ? Promise.resolve().then(() => groupPathsFromPlan(source.project, target.project, plan)) : null
+  const load = (planned ?? readGroupPaths(logical, projectId, machineId, (id) => hub.clientFor(id))).then((paths) => {
+    if (paths) patchDraft({ groupPaths: { ...getData(paneId).draft.groupPaths, [key]: paths } }, paneId)
+  }).finally(() => { pathLoads.delete(pendingKey) })
+  pathLoads.set(pendingKey, load)
+  return load
 }
 
 /** Pick (and so remember) the machine for a project's next chats. */

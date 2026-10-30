@@ -15,6 +15,7 @@ import { Label, useTheme } from '../ui.tsx'
 import { machineHub } from '../machines/index.ts'
 import { EnvFileList, FolderField, ProgressBar, useProvisionPlan } from './parts.tsx'
 import { fixtureClient, provisionContextOf } from './targets.ts'
+import { setupAttempts, type SetupAttempt } from './setupAttempts.ts'
 
 type Prepared = { ready: boolean; start: () => Promise<void> }
 
@@ -31,7 +32,7 @@ export function MachineSetupSheet({ projectId, targetId, close, onReady, onProvi
   }, [source?.machineId])
   const missing = context?.targets.filter((item) => !item.has) ?? []
   const chosen = missing.find((item) => item.machineId === targetId)
-  const [all, setAll] = useState(false)
+  const [all, setAll] = useState(() => !!source && missing.some((item) => item.machineId !== targetId && setupAttempts.get(setupAttempts.key(source.machineId, source.projectId, item.machineId))))
   const targets = all ? missing : chosen ? [chosen] : []
   const prepared = useRef(new Map<string, Prepared>())
   const [readiness, setReadiness] = useState<Record<string, boolean>>({})
@@ -45,34 +46,38 @@ export function MachineSetupSheet({ projectId, targetId, close, onReady, onProvi
   provisioned.current = onProvisioned
   const [statuses, setStatuses] = useState<Record<string, ProvisionStatus>>({})
   const report = useCallback((next: ProvisionStatus, plan: ProvisionPlan | null) => {
+    setStarted(true)
     if (plan) plans.current.set(next.target, plan)
     if (plan && next.phase === 'done' && !completed.current.has(next.operation_id)) {
       completed.current.add(next.operation_id); provisioned.current?.(plan)
     }
     setStatuses((old) => ({ ...old, [next.target]: next }))
   }, [])
-  const [started, setStarted] = useState(false)
-  const [busy, setBusy] = useState(false)
+  const [started, setStarted] = useState(() => !!source && targets.some((item) => setupAttempts.get(setupAttempts.key(source.machineId, source.projectId, item.machineId))))
+  const [adding, setAdding] = useState(false)
+  const submitting = useRef(false)
+  const [choosing, setChoosing] = useState(false)
+  const busy = adding || choosing
   const [error, setError] = useState('')
   const [selected, setSelected] = useState(false)
   const selecting = useRef(false)
   const mounted = useRef(true)
   useEffect(() => () => { mounted.current = false }, [])
   const add = async () => {
-    if (busy || !targets.length || !targets.every((item) => readiness[item.machineId])) return
-    setStarted(true); setBusy(true)
-    await Promise.all(targets.map((item) => prepared.current.get(item.machineId)!.start()))
-    setBusy(false)
+    if (submitting.current || selecting.current || !targets.length || !targets.every((item) => prepared.current.get(item.machineId)?.ready)) return
+    submitting.current = true; setStarted(true); setAdding(true)
+    try { await Promise.all(targets.map((item) => prepared.current.get(item.machineId)!.start())) }
+    finally { submitting.current = false; if (mounted.current) setAdding(false) }
   }
   const useTarget = async () => {
-    if (selecting.current) return
-    selecting.current = true; setBusy(true); setError('')
-    try { await onReady(plans.current.get(targetId)); if (mounted.current) setSelected(true) } catch (e) { if (mounted.current) setError(`${errorText(e)} Retry selecting the machine.`) } finally { selecting.current = false; if (mounted.current) setBusy(false) }
+    if (selecting.current || submitting.current) return
+    selecting.current = true; setChoosing(true); setError('')
+    try { await onReady(plans.current.get(targetId)); if (mounted.current) setSelected(true) } catch (e) { if (mounted.current) setError(`${errorText(e)} Retry selecting the machine.`) } finally { selecting.current = false; if (mounted.current) setChoosing(false) }
   }
   const name = context?.name ?? 'this project'
   const done = statuses[targetId]?.phase === 'done'
-  const dismiss = () => { if (!busy) close() }
-  useEffect(() => { if (done) void useTarget() }, [done])
+  const dismiss = () => { if (!submitting.current && !selecting.current) close() }
+  useEffect(() => { if (done && !adding) void useTarget() }, [done, adding])
   const content = <>
     <DialogHeader title={started ? `Setup for ${name}` : `Add ${name} to ${chosen?.machineName ?? 'this machine'}?`}
       description={started ? selected ? `Ready on ${chosen?.machineName ?? 'the selected machine'}. Your draft is preserved; send it when you’re ready.` : 'Each machine keeps its progress. Your selected machine switches when its setup finishes. Your draft is not sent.' : 'This project is missing or incomplete on this machine. Add it before starting a chat there.'} onClose={dismiss} />
@@ -85,9 +90,12 @@ export function MachineSetupSheet({ projectId, targetId, close, onReady, onProvi
           <Checkbox testId="machine-setup-all" aria-label="Add to all machines that don’t have it" checked={all} onCheckedChange={setAll} />
           <Label color={t.text} size={13} lineHeight={20}>Add to all machines that don’t have it</Label>
         </div>}
-        {!chosen && <Hint>This machine is paused or no longer in the network. Resume it in Settings → Machines and try again.</Hint>}
         <Hint>{`Targets: ${targets.map((item) => item.machineName).join(', ')}.${started ? '' : ' Choose env files separately for each machine.'}`}</Hint>
-        {targets.map((item) => <SetupTarget key={`${source.machineId}:${item.machineId}`} client={client} projectId={source.projectId} target={item} started={started} register={register} report={report} />)}
+        {targets.map((item) => <SetupTarget key={`${source.machineId}:${item.machineId}`} sourceId={source.machineId} client={client} projectId={source.projectId} target={item} started={started} register={register} report={report} />)}
+      </>}
+      {!chosen && <>
+        <Hint>This machine needs to join your network or resume before setup. Open Settings → Machines, enable or resume it, then reopen this sheet.</Hint>
+        <Button variant="secondary" testId="machine-setup-settings" onClick={() => { close(); void import('../settings/SettingsScreen.tsx').then((m) => m.openSettingsTab('machines')) }}>Open machines settings</Button>
       </>}
       {error && <ErrorText>{error}</ErrorText>}
     </DialogBody>
@@ -101,59 +109,78 @@ export function MachineSetupSheet({ projectId, targetId, close, onReady, onProvi
     : <Dialog testId="machine-setup-sheet" width={560} onClose={dismiss}>{content}</Dialog>
 }
 
-function SetupTarget({ client, projectId, target, started, register, report }: {
-  client: KybernClient; projectId: string; target: ProvisionTarget; started: boolean
+function SetupTarget({ client, sourceId, projectId, target, started, register, report }: {
+  client: KybernClient; sourceId: string; projectId: string; target: ProvisionTarget; started: boolean
   register: (id: string, next: Prepared | null) => void; report: (status: ProvisionStatus, plan: ProvisionPlan | null) => void
 }) {
   const t = useTheme()
-  const [path, setPath] = useState<string | null>(null)
+  const key = setupAttempts.key(sourceId, projectId, target.machineId)
+  const [saved] = useState(() => setupAttempts.get(key))
+  const attemptRecord = useRef<SetupAttempt | undefined>(saved)
+  const [path, setPath] = useState<string | null>(saved?.request.path ?? null)
   // Never inherit another target's selection or preselect a secret for an extra machine.
-  const [env, setEnv] = useState<string[]>([])
+  const [env, setEnv] = useState<string[]>(saved?.request.env_files ?? [])
   const [attempt, setAttempt] = useState(0)
-  const [status, setStatus] = useState<ProvisionStatus | null>(null)
+  const [status, setStatus] = useState<ProvisionStatus | null>(saved?.status ?? null)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const operation = useRef<string | null>(null)
-  const pendingRequest = useRef<ProjectsProvisionParams | null>(null)
+  const [error, setError] = useState(saved?.error ?? '')
+  const operation = useRef<string | null>(saved?.request.operation_id ?? null)
+  const inFlight = useRef(false)
+  const pendingRequest = useRef<ProjectsProvisionParams | null>(saved?.request ?? null)
+  const pendingPlan = useRef<ProvisionPlan | null>(saved?.plan ?? null)
   const { plan, check, checking, error: planError } = useProvisionPlan(client, projectId, target.machineId, path, undefined, attempt)
   useEffect(() => { if (plan && path === null) setPath(defaultPath(plan)) }, [plan, path])
+  const updateStatus = (next: ProvisionStatus) => {
+    const previous = attemptRecord.current?.status
+    if (previous && provisionSettled(previous) && previous.operation_id === next.operation_id && !provisionSettled(next)) return
+    if (attemptRecord.current) attemptRecord.current.status = next
+    setStatus(next)
+  }
   // Subscribe before submitting; a fast local transfer can finish before the RPC response arrives.
   useEffect(() => client.onNotification(PROVISION_CHANGED_NOTIFICATION, (params) => {
     const next = params as ProvisionStatus
-    if (next.operation_id === operation.current) setStatus(next)
+    if (next.operation_id === operation.current) updateStatus(next)
   }), [client])
-  useEffect(() => { if (status) report(status, plan) }, [status, report, plan])
+  useEffect(() => { if (status) report(status, pendingPlan.current) }, [status, report])
   useEffect(() => {
     if (!status || provisionSettled(status)) return
     let live = true
-    const poll = () => void client.call('projects.provision.status', { operation_id: status.operation_id }).then((next) => { if (live && next.operation_id === operation.current) setStatus(next) }, () => {})
+    const poll = () => void client.call('projects.provision.status', { operation_id: status.operation_id }).then((next) => { if (live && next.operation_id === operation.current) updateStatus(next) }, () => {})
     const timer = setInterval(poll, 3000)
     poll()
     return () => { live = false; clearInterval(timer) }
   }, [client, status?.operation_id, status && provisionSettled(status)])
-  const ready = !!plan && !plan.blocked && !planError && !checking && !!path?.trim() && pathAccepted(check) && !busy && !status
+  const ready = !busy && !status && (!!pendingRequest.current || !!plan && !plan.blocked && !planError && !checking && !!path?.trim() && pathAccepted(check))
   const start = async () => {
-    if (!ready || !plan) return
+    if (inFlight.current || !ready || (!plan && !pendingPlan.current)) return
+    inFlight.current = true
     setBusy(true); setError('')
     // A lost response may still have queued the operation: retries reuse its id and exact consent.
-    const request = pendingRequest.current ?? { project_id: projectId, machine: target.machineId, operation_id: crypto.randomUUID(), path: expandPath(path!, plan.target_home, plan.target.os), env_files: [...env] }
-    pendingRequest.current = request; operation.current = request.operation_id!
+    const options = pendingPlan.current ?? plan!
+    const request = pendingRequest.current ?? { project_id: projectId, machine: target.machineId, operation_id: crypto.randomUUID(), path: expandPath(path!, options.target_home, options.target.os), env_files: [...env] }
     try {
+      const record = attemptRecord.current ?? { request, plan: options, status: null, error: '' }
+      setupAttempts.remember(key, record); attemptRecord.current = record
+      pendingRequest.current = request; operation.current = request.operation_id!; pendingPlan.current ??= options
       const next = await client.call('projects.provision', request)
-      setStatus((old) => old?.operation_id === request.operation_id ? old : next)
-    } catch (e) { setError(`${errorText(e)} Reconnect and retry to confirm this setup. Its folder and env choices are kept.`) } finally { setBusy(false) }
+      updateStatus(attemptRecord.current?.status ?? next)
+    } catch (e) {
+      const message = `${errorText(e)} Reconnect and retry to confirm this setup. Its folder and env choices are kept.`
+      if (attemptRecord.current) attemptRecord.current.error = message
+      setError(message)
+    } finally { inFlight.current = false; setBusy(false) }
   }
   useEffect(() => { register(target.machineId, { ready, start }) })
   useEffect(() => () => register(target.machineId, null), [target.machineId, register])
   const failed = status?.phase === 'failed' || status?.phase === 'cancelled'
-  const retry = () => { operation.current = null; pendingRequest.current = null; setStatus(null); setError(''); setAttempt((n) => n + 1) }
+  const retry = () => { if (inFlight.current) return; setupAttempts.forget(key); attemptRecord.current = undefined; operation.current = null; pendingRequest.current = null; pendingPlan.current = null; setStatus(null); setError(''); setAttempt((n) => n + 1) }
   return <div testId={`machine-setup-${target.machineId}`} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
     <Label color={t.text} size={14} lineHeight={20} weight={600}>{target.machineName}</Label>
     {!target.online && (!status || status.phase === 'queued') && <Hint>Offline · setup is queued until this machine returns.</Hint>}
     {status ? <>
       {!provisionSettled(status) && provisionFraction(status) !== null && <ProgressBar fraction={provisionFraction(status)} />}
       {failed ? <ErrorText>{provisionStatusText(status)}</ErrorText> : <Hint>{provisionStatusText(status)}</Hint>}
-      {failed && <Button testId={`machine-setup-retry-${target.machineId}`} variant="secondary" onClick={retry}>Change and retry</Button>}
+      {failed && <Button testId={`machine-setup-retry-${target.machineId}`} variant="secondary" disabled={busy} onClick={retry}>Change and retry</Button>}
     </> : <>
       {planError && <><ErrorText>{planError}</ErrorText><Button variant="secondary" onClick={() => setAttempt((n) => n + 1)}>Retry loading options</Button></>}
       {!plan && !planError && <Hint>Loading folder and env file options…</Hint>}

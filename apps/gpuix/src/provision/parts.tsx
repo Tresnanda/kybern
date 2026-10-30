@@ -2,6 +2,7 @@
 // machine, re-checked on the target as the folder changes), the folder field with its inline chooser (it browses the TARGET
 // machine's folders with `projects.browse` on that machine's own connection) and the env file list.
 import { useEffect, useRef, useState } from 'react'
+export { useProvisionPlan } from './plan.ts'
 import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 import type { PathCheck, ProjectsBrowseResult, ProvisionPlan } from '../../../../packages/kybern-client/src/types.ts'
 import { PROVISION_COPY as COPY, baseName, displayPath, formatSize, joinPath, pathAccepted } from '../../../../packages/kybern-client/src/provision.ts'
@@ -16,41 +17,6 @@ import { machineHub } from '../machines/index.ts'
 import { fixtureClient } from './targets.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { FONT_MONO } from '../theme.ts'
-
-/** The plan for `projectId` going to `machineId`, asked of `source`; `path` is re-checked by the target 300 ms after it settles. */
-export function useProvisionPlan(source: KybernClient | null, projectId: string, machineId: string | null, path: string | null, initial?: ProvisionPlan, retry = 0) {
-  const [plan, setPlan] = useState<ProvisionPlan | null>(initial ?? null)
-  const [checkedPlan, setCheckedPlan] = useState<ProvisionPlan | null>(null)
-  const [check, setCheck] = useState<PathCheck | null>(initial?.path_check ?? null)
-  const [error, setError] = useState('')
-  const [checking, setChecking] = useState(false)
-  useEffect(() => {
-    // A plan the daemon already sent (the agent card) is used as it is; only the folder is checked again.
-    if (initial) return
-    setPlan(null); setCheckedPlan(null); setCheck(null); setError(''); setChecking(false)
-    if (!source || !machineId) return
-    let live = true
-    source.call('projects.provision_plan', { project_id: projectId, machine: machineId }).then(
-      (next) => { if (live) { setPlan(next); setCheck(next.path_check ?? null) } },
-      (e) => { if (live) setError(errorText(e)) },
-    )
-    return () => { live = false }
-  }, [source, projectId, machineId, retry])
-  const asked = useRef(0)
-  useEffect(() => {
-    if (!source || !machineId || !plan || path === null || path === (plan.path_check?.path ?? '')) return
-    const attempt = ++asked.current
-    setChecking(true)
-    const timer = setTimeout(() => {
-      source.call('projects.provision_plan', { project_id: projectId, machine: machineId, path }).then(
-        (next) => { if (attempt === asked.current) { setCheckedPlan(next); setCheck(next.path_check ?? null); setChecking(false) } },
-        (e) => { if (attempt === asked.current) { setCheck({ state: 'forbidden', path, message: errorText(e) }); setChecking(false) } },
-      )
-    }, 300)
-    return () => { clearTimeout(timer); asked.current++ }
-  }, [source, projectId, machineId, plan, path])
-  return { plan: checkedPlan ?? plan, check, checking, error }
-}
 
 /** The target's client, for browsing its folders. Null while it is offline. */
 export function targetClient(machineId: string | null | undefined): KybernClient | null {

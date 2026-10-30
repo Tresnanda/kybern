@@ -1,11 +1,9 @@
 // The machine chip of a new chat's composer (design §6.1): where the chat runs. Rows in machine order: machines with a checkout
 // of the project (an away one says "Offline · sends when it returns"), then the ones without, which offer project setup. It only
 // exists while there is a choice (`useMachineTarget().show`), so one machine looks as the composer always did.
-import type { ProvisionPlan } from '../../../../packages/kybern-client/src/types.ts'
-import { completeProvisionProject } from '../../../../packages/kybern-client/src/provision.ts'
 import { glyphOfMachine } from '../machines/index.ts'
 import { MachineBadge } from '../sidebar/MachineBadge.tsx'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { MachineSetupSheet } from '../provision/MachineSetupSheet.tsx'
 import { machineHub } from '../machines/index.ts'
 import { Label, useTheme } from '../ui.tsx'
@@ -13,26 +11,22 @@ import { PickerChip } from '../kit/PickerChip.tsx'
 import { usePaneId, usePaneCompact } from '../state.ts'
 import { useFooterFit } from './footerWidth.tsx'
 import { CheckMark, PickerItem, PickerMenu } from './Menu.tsx'
-import { chooseMachine, type MachineTarget } from './machineTarget.ts'
-import { getData, loadMachineLists, patchDraft } from './store.ts'
+import { chooseMachine, loadGroupPaths, type MachineTarget } from './machineTarget.ts'
+import { loadMachineLists } from './store.ts'
+import { finishMachineSetup } from './machineSetup.ts'
 
 export function MachinePicker({ target, locked }: { target: MachineTarget; locked?: boolean }) {
   const t = useTheme()
   const paneId = usePaneId()
   const [setup, setSetup] = useState<string | null>(null)
+  const [error, setError] = useState('')
+  const picking = useRef(false)
   // Every machine that can be picked has its agents read once the chip shows, so choosing one paints its chips at once.
   const online = target.choices.filter((choice) => choice.selectable && choice.state === 'online' && !choice.isLocal).map((choice) => choice.machineId).join(',')
   useEffect(() => { for (const id of online ? online.split(',') : []) void loadMachineLists(id) }, [online])
   const chosen = target.chosen
   // As the mode chip: the label leaves in a narrow footer or a split pane, the glyph stays.
   const showLabel = useFooterFit().labels && !usePaneCompact()
-  const rememberGroupPaths = (plan: ProvisionPlan) => {
-    if (!plan.members?.length) return
-    const paths = getData(paneId).draft.groupPaths
-    const sourcePaths = paths?.[`${target.key}:${plan.source.id}`]
-    const inverse = Object.fromEntries(Object.entries(sourcePaths ?? {}).map(([original, source]) => [source, original]))
-    patchDraft({ groupPaths: { ...paths, [`${target.key}:${plan.target.id}`]: Object.fromEntries(plan.members.map((member) => [inverse[member.path] ?? member.path, member.target_path])) } }, paneId)
-  }
   if (!target.show || !chosen) return null
   return (
     <>
@@ -59,7 +53,16 @@ export function MachinePicker({ target, locked }: { target: MachineTarget; locke
             testId={`machine-${choice.machineId}`}
             onSelect={() => {
               if (!choice.selectable && target.projectId) setSetup(choice.machineId)
-              else if (!checked) chooseMachine(target.key, choice.machineId, paneId)
+              else if (!checked) { setError(''); chooseMachine(target.key, choice.machineId, paneId) }
+              else if (target.groupPathsReady === false && target.projectId && !picking.current) {
+                picking.current = true; setError('')
+                void (async () => {
+                  try {
+                    await loadGroupPaths(target.projectId!, choice.machineId, paneId)
+                  } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+                  finally { picking.current = false }
+                })()
+              }
             }}
             style={{ minHeight: 40, paddingLeft: 10, paddingRight: 10, paddingTop: 4, paddingBottom: 4 }}
           >
@@ -75,13 +78,13 @@ export function MachinePicker({ target, locked }: { target: MachineTarget; locke
         )
       })}
     </PickerMenu>
-    {setup && target.projectId && <MachineSetupSheet projectId={target.projectId} targetId={setup} close={() => setSetup(null)} onProvisioned={rememberGroupPaths} onReady={async () => {
-      await machineHub().refreshMachineLists(setup)
-      const logical = machineHub().view().projects.find((item) => item.key === target.key)
-      const destination = logical?.instances.find((item) => item.machineId === setup)
-      if (!destination || !completeProvisionProject(chosen.project, destination.project)) throw new Error('The project list has not refreshed yet.')
-      if (setup !== machineHub().localMachineId) await loadMachineLists(setup, true, destination.project.id)
-      chooseMachine(target.key, setup, paneId)
+    {(error || target.groupPathsError) && <Label color={t.red} size={12} truncate>{error || target.groupPathsError}</Label>}
+    {setup && target.projectId && <MachineSetupSheet projectId={target.projectId} targetId={setup} close={() => setSetup(null)} onReady={(plan) => {
+      const hub = machineHub()
+      return finishMachineSetup({ projectId: target.projectId!, key: target.key, targetId: setup, paneId, plan }, {
+        refresh: (id) => hub.refreshMachineLists(id), projects: () => hub.view().projects, localMachineId: hub.localMachineId,
+        paths: loadGroupPaths, providers: loadMachineLists, select: chooseMachine,
+      })
     }} />}
     </>
   )

@@ -24,28 +24,28 @@ import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { Menu, MenuItem, MenuLabel, MenuSeparator, MenuSub } from '../nav/overlay.tsx'
 import { activeEnvironment } from '../shell/environment.ts'
-import { projectClient } from '../state.ts'
+import { projectClient, usePaneId } from '../state.ts'
 import { FONT_MONO } from '../theme.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { G } from './glyphs.ts'
 import { muted, PickerItem, PickerLabel, PickerMenu } from './Menu.tsx'
 import { useMachineTarget } from './machineTarget.ts'
+import { groupPathsKey } from './groupPaths.ts'
 import { patchDraft, useComposer } from './store.ts'
 
 /** The draft's group choice for this project (a fresh one when the draft holds another project's). */
 export function useGroupChoice(projectId: string, machineId?: string) {
+  const paneId = usePaneId()
   const stored = useComposer((d) => d.draft.group)
   const target = useMachineTarget(projectId)
-  const paths = useComposer((d) => machineId ? d.draft.groupPaths?.[`${target.key}:${machineId}`] : undefined)
+  const paths = useComposer((d) => machineId ? d.draft.groupPaths?.[groupPathsKey(target.key, projectId, machineId)] : undefined)
   const choice = mappedGroupChoice(stored, projectId, paths)
   const save = (next: GroupChoice) => {
     const inverse = paths ? Object.fromEntries(Object.entries(paths).map(([from, to]) => [to, from])) : undefined
-    setChoice(mappedGroupChoice(next, projectId, inverse))
+    patchDraft({ group: mappedGroupChoice(next, projectId, inverse) }, paneId)
   }
-  return { choice, save }
+  return { choice, save, ready: target.groupPathsReady !== false, error: target.groupPathsError }
 }
-
-const setChoice = (choice: GroupChoice) => patchDraft({ group: choice })
 
 /** Load the members' branches and dirty counts once the tray shows a group. */
 export function useGroupStatus(projectId: string, still: boolean, machineId?: string) {
@@ -65,12 +65,13 @@ export function useGroupStatus(projectId: string, still: boolean, machineId?: st
 export function GroupBranchChip({ project, useWorktree, still = false, machineId, choiceProjectId = project.id }: { project: Project; useWorktree: boolean; still?: boolean; machineId?: string; choiceProjectId?: string }) {
   const t = useTheme()
   const status = useGroupStatus(project.id, still, machineId)
-  const { choice, save } = useGroupChoice(choiceProjectId, machineId)
+  const { choice, save, ready, error } = useGroupChoice(choiceProjectId, machineId)
   const included = includedMembers(project, choice, useWorktree)
   const primary = included[0]
   const missing = (project.members ?? []).filter((m) => m.status !== 'ok')
   const { label, extra } = branchChipLabel(primary ? branchOf(choice, primary.path, status?.members) : null, included.length - 1)
   const folder = !machineId && activeEnvironment().local ? tildify(project.path, homedir()) : project.path
+  if (!ready) return <PickerChip bare disabled label={error ?? 'Matching repositories…'}>Matching repositories…</PickerChip>
   return (
     <Menu
       testId="tray-branch"
@@ -148,7 +149,7 @@ function BranchList({ project, repo, selected, onPick, machineId }: { project: P
 export function ReposChip({ project, still = false, machineId, choiceProjectId = project.id }: { project: Project; still?: boolean; machineId?: string; choiceProjectId?: string }) {
   const t = useTheme()
   const status = useGroupStatus(project.id, still, machineId)
-  const { choice, save } = useGroupChoice(choiceProjectId, machineId)
+  const { choice, save, ready, error } = useGroupChoice(choiceProjectId, machineId)
   const available = availableMembers(project)
   const included = includedMembers(project, choice, true)
   const deselected = available.filter((m) => !included.includes(m))
@@ -157,6 +158,7 @@ export function ReposChip({ project, still = false, machineId, choiceProjectId =
   const footer = included.length === 1 && available.length > 1 ? GROUP_COPY.lastRepository
     : deselected.length ? deselectedNote(deselected, (m) => (local ? tildify(absolute(m.path), homedir()) : absolute(m.path)))
     : GROUP_COPY.reposMenuFooter
+  if (!ready) return <PickerChip bare disabled label={error ?? 'Matching repositories…'}>Matching repositories…</PickerChip>
   return (
     <PickerMenu
       testId="tray-repos"

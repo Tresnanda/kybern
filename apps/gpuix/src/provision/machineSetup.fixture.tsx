@@ -44,7 +44,9 @@ const fake = {
       if (target !== 'offline') setTimeout(() => {
         const next: ProvisionStatus = { ...status, phase: target === 'vps' && count === 1 ? 'failed' : 'done', error: target === 'vps' && count === 1 ? 'Could not reach Build server. Reconnect and retry.' : null }
         operations.set(id, next); for (const fn of listeners) fn(next)
-      }, 180)
+      }, target === 'pc' ? 0 : 180)
+      // The selected target can finish before another machine's enqueue response returns.
+      if (target === 'vps' && count === 1) await new Promise((resolve) => setTimeout(resolve, 1500))
       return status
     }
     if (method === 'projects.browse') return { path: '/home/dev', parent: '/', directories: [{ name: 'projects', path: '/home/dev/projects' }], has_more: false }
