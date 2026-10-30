@@ -24,6 +24,7 @@ export interface MachineTarget {
   reachable: boolean
   /** The key the pick is remembered under: the logical project, or the free chat's. */
   key: string
+  projectId?: ProjectId
 }
 
 const SOLO: MachineTarget = Object.freeze({ show: false, choices: [], remote: false, reachable: true, key: 'free' })
@@ -39,13 +40,14 @@ export function useMachineTarget(projectId: ProjectId | null | undefined, enable
     const logical = projectId ? machineHub().view().projects.find((item) => item.instances.some((instance) => instance.project.id === projectId)) ?? null : null
     // A project the merged view does not know yet must not read as a free chat.
     if (projectId && !logical) return SOLO
-    const choices = machineChoices({ machines: rows, project: logical })
+    const choices = machineChoices({ machines: rows, project: logical, sourceProject: logical?.instances.find((instance) => instance.project.id === projectId)?.project })
     const key = machineMemoryKey(logical)
     const chosen = resolveMachine(choices, picked?.[key], picked?.[key])
     if (!chosen) return { ...SOLO, key }
     return {
       show: showMachinePicker(choices, logical),
       choices,
+      ...(projectId ? { projectId } : {}),
       chosen,
       ...(chosen.isLocal ? {} : { machineId: chosen.machineId }),
       remote: !chosen.isLocal,

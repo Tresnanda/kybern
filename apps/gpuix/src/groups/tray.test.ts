@@ -36,3 +36,15 @@ test('a picked branch wins over the checkout', () => {
   expect(branchOf({ projectId: 'p', members: null, baseBranches: { api: 'dev' } }, 'api', status)).toBe('dev')
   expect(branchOf({ projectId: 'p', members: null, baseBranches: {} }, 'web', status)).toBeNull()
 })
+
+
+test('provisioned groups preserve selected repositories and branches across renamed target folders', async () => {
+  const { mappedGroupChoice } = await import('./tray.ts')
+  const source = { projectId: 'source', members: ['web'], baseBranches: { web: 'feature', api: 'main' } }
+  const paths = { web: 'frontend', api: 'backend' }
+  const target = { members: [{ path: 'frontend', name: 'Frontend', status: 'ok' }, { path: 'backend', name: 'Backend', status: 'ok' }] } as any
+  const mapped = mappedGroupChoice(source, 'source', paths)
+  expect(groupCreateParams(target, mapped, true)).toEqual({ members: ['frontend'], base_branches: { frontend: 'feature' } })
+  expect(mappedGroupChoice(mapped, 'source', { frontend: 'web', backend: 'api' })).toEqual(source)
+  expect(source.members).toEqual(['web'])
+})

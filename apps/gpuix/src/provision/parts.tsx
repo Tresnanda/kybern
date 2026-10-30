@@ -18,7 +18,7 @@ import { Label, useTheme } from '../ui.tsx'
 import { FONT_MONO } from '../theme.ts'
 
 /** The plan for `projectId` going to `machineId`, asked of `source`; `path` is re-checked by the target 300 ms after it settles. */
-export function useProvisionPlan(source: KybernClient | null, projectId: string, machineId: string | null, path: string | null, initial?: ProvisionPlan) {
+export function useProvisionPlan(source: KybernClient | null, projectId: string, machineId: string | null, path: string | null, initial?: ProvisionPlan, retry = 0) {
   const [plan, setPlan] = useState<ProvisionPlan | null>(initial ?? null)
   const [checkedPlan, setCheckedPlan] = useState<ProvisionPlan | null>(null)
   const [check, setCheck] = useState<PathCheck | null>(initial?.path_check ?? null)
@@ -27,7 +27,7 @@ export function useProvisionPlan(source: KybernClient | null, projectId: string,
   useEffect(() => {
     // A plan the daemon already sent (the agent card) is used as it is; only the folder is checked again.
     if (initial) return
-    setPlan(null); setCheckedPlan(null); setCheck(null); setError('')
+    setPlan(null); setCheckedPlan(null); setCheck(null); setError(''); setChecking(false)
     if (!source || !machineId) return
     let live = true
     source.call('projects.provision_plan', { project_id: projectId, machine: machineId }).then(
@@ -35,7 +35,7 @@ export function useProvisionPlan(source: KybernClient | null, projectId: string,
       (e) => { if (live) setError(errorText(e)) },
     )
     return () => { live = false }
-  }, [source, projectId, machineId])
+  }, [source, projectId, machineId, retry])
   const asked = useRef(0)
   useEffect(() => {
     if (!source || !machineId || !plan || path === null || path === (plan.path_check?.path ?? '')) return
@@ -140,17 +140,17 @@ function ChooserRow({ name, onClick, disabled }: { name: string; onClick: () => 
 }
 
 /** The git-ignored env files with a box each; names and sizes only. */
-export function EnvFileList({ plan, selected, onChange, disabled }: { plan: ProvisionPlan; selected: readonly string[]; onChange: (files: string[]) => void; disabled: boolean }) {
+export function EnvFileList({ plan, selected, onChange, disabled, testId = 'provision-env' }: { testId?: string; plan: ProvisionPlan; selected: readonly string[]; onChange: (files: string[]) => void; disabled: boolean }) {
   const t = useTheme()
   const c = useControls()
   if (plan.env_files.length === 0) return <Label color={t.textSecondary} size={13} lineHeight={20}>{COPY.noEnvFiles}</Label>
   const toggle = (path: string, on: boolean) => onChange(on ? [...selected, path] : selected.filter((item) => item !== path))
   return <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-    <div testId="provision-env" style={{ display: 'flex', flexDirection: 'column', borderWidth: 1, borderColor: c.ink(0.08), borderRadius: RADIUS.lg, paddingTop: 2, paddingBottom: 2 }}>
+    <div testId={testId} style={{ display: 'flex', flexDirection: 'column', borderWidth: 1, borderColor: c.ink(0.08), borderRadius: RADIUS.lg, paddingTop: 2, paddingBottom: 2 }}>
       {plan.env_files.map((file) => {
         const on = selected.includes(file.path)
         return <div key={file.path} onClick={disabled ? undefined : () => toggle(file.path, !on)} style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 32, paddingLeft: 10, paddingRight: 12, cursor: disabled ? 'default' : 'pointer' }}>
-          <Checkbox testId={`provision-env-${file.path}`} aria-label={file.path} checked={on} disabled={disabled} onCheckedChange={(next) => toggle(file.path, next)} />
+          <Checkbox testId={`${testId}-${file.path}`} aria-label={file.path} checked={on} disabled={disabled} onCheckedChange={(next) => toggle(file.path, next)} />
           <Label color={t.text} size={13} lineHeight={18} font={FONT_MONO} truncate style={{ flexGrow: 1, flexShrink: 1, minWidth: 0 }}>{file.path}</Label>
           <Label color={t.textTertiary} size={12} lineHeight={16}>{formatSize(file.size)}</Label>
         </div>

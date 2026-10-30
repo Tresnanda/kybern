@@ -13,7 +13,7 @@ const project = (...instances) => ({ key: "root:abc", instances });
 test("rows: online and offline machines with the project can be chosen, the rest say why not", () => {
   const rows = machineChoices({ machines, project: project(instance("mac", "p1"), instance("vps", "p3", true)) });
   assert.deepEqual(rows.map((row) => [row.machineId, row.state, row.selectable]), [["mac", "online", true], ["sat", "no-checkout", false], ["vps", "offline", true]]);
-  assert.equal(rows[1].detail, "No checkout on satyamas");
+  assert.equal(rows[1].detail, "No checkout · add to this machine…");
   assert.equal(rows[2].detail, "Offline · sends when it returns");
   assert.equal(rows[0].projectId, "p1");
   assert.equal(rows[2].projectId, "p3");
@@ -30,11 +30,11 @@ test("a free chat counts every machine as having it", () => {
   assert.equal(rows[0].projectId, undefined);
 });
 
-test("the chip shows for a project on more than one machine, and for a free chat with more than one online", () => {
+test("the chip offers setup with multiple machines and one checkout; free chat keeps its online rule", () => {
   const two = project(instance("mac", "p1"), instance("sat", "p2"));
   assert.equal(showMachinePicker(machineChoices({ machines, project: two }), two), true);
   const one = project(instance("mac", "p1"));
-  assert.equal(showMachinePicker(machineChoices({ machines, project: one }), one), false);
+  assert.equal(showMachinePicker(machineChoices({ machines, project: one }), one), true);
   assert.equal(showMachinePicker(machineChoices({ machines, project: null }), null), true);
   assert.equal(showMachinePicker(machineChoices({ machines: [machines[0], machines[2]], project: null }), null), false);
   assert.equal(showMachinePicker(machineChoices({ machines: [machines[0]], project: null }), null), false);
@@ -83,4 +83,29 @@ test("a queued create is a thread_create with the composer's parameters", () => 
   assert.equal(op.operation_id, "op1");
   assert.equal(op.payload.thread_id, "t1");
   assert.equal("operation_id" in queuedCreate({ thread_id: "t1", provider: { kind: "codex", instance: "default" } }), false);
+});
+
+
+test("a partial group offers setup, cannot become the send target, and leaves the source selected", () => {
+  const full = { kind: "group", repos: [{ root_commit: "web" }, { root_commit: "api" }], members: [{ path: "web", status: "ok" }, { path: "api", status: "ok" }] };
+  const source = { ...instance("mac", "p1"), project: { ...full, id: "p1" } };
+  for (const members of [undefined, [], [{ path: "web", status: "ok" }], [{ path: "web", status: "ok" }, { path: "api", status: "missing" }]]) {
+    const partial = { ...instance("sat", "p2"), project: { ...full, id: "p2", members } };
+    const choices = machineChoices({ machines, project: project(source, partial) });
+    assert.equal(choices[1].state, "no-checkout");
+    assert.equal(resolveMachine(choices, "sat", null).machineId, "mac");
+    assert.equal(showMachinePicker(choices, {}), true);
+  }
+  const choices = machineChoices({ machines, project: project(source, { ...instance("sat", "p2"), project: { ...full, id: "p2" } }) });
+  assert.equal(resolveMachine(choices, "sat", null).projectId, "p2");
+  assert.equal(showMachinePicker(machineChoices({ machines: [machines[0]], project: project(source) }), {}), false);
+});
+
+
+test("a local group remains usable before git identity refresh", () => {
+  const local = { ...instance("mac", "p1"), project: { id: "p1", kind: "group", members: [{ path: "web", status: "ok" }] } };
+  const choices = machineChoices({ machines, project: project(local) });
+  assert.equal(choices[0].selectable, true);
+  assert.equal(showMachinePicker(choices, {}), true);
+  assert.equal(choices[1].state, "no-checkout");
 });

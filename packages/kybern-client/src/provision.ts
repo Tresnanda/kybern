@@ -1,6 +1,7 @@
 // "Add to another machine", for clients (ADE-86 provisioning). Plain functions: which machines a project can go to,
 // which machine sends it, how paths read on the target, and the words of the sheet, the agent card and the transcript.
 // The daemons do the work (`projects.provision_plan`, `projects.provision`, called on the SOURCE machine's connection).
+import { sameForkProject, type ForkProjectShape } from "./forkMachine.ts";
 import {
   PROJECT_PROVISION_TOOL,
   type ApprovalDecision,
@@ -212,4 +213,14 @@ export function provisionRecordText(input: ProvisionCardInput, decision: Approva
     return typeof path === "string" && path ? `Adding ${project} to ${target.name} · ${displayPath(path, input.plan.target_home, target.os)}` : `Adding ${project} to ${target.name}`;
   }
   return `Did not add ${project} to ${target.name}`;
+}
+
+/** A group is ready only when every registered repository exists, with the same membership as the source. */
+export function completeProvisionProject(source: ForkProjectShape | undefined, candidate: ForkProjectShape | undefined): boolean {
+  if (!candidate) return false;
+  if (source !== candidate && !sameForkProject(source, candidate)) return false;
+  if (candidate.kind !== "group") return true;
+  const members = candidate.members ?? [];
+  return members.length > 0 && members.every((member) => member.status === "ok")
+    && (!source?.members || members.length === source.members.length);
 }

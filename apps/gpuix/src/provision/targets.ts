@@ -1,8 +1,7 @@
 // Which machines have a sidebar project and which could get it, read from the machine hub when a menu or the sheet opens.
 import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 import type { MachineId } from '../../../../packages/kybern-client/src/types.ts'
-import { provisionSource, provisionTargets, type ProvisionTarget } from '../../../../packages/kybern-client/src/provision.ts'
-import { sameForkProject } from '../../../../packages/kybern-client/src/forkMachine.ts'
+import { completeProvisionProject, provisionSource, provisionTargets, type ProvisionTarget } from '../../../../packages/kybern-client/src/provision.ts'
 import { machineHub } from '../machines/index.ts'
 
 export interface ProvisionInstance { machineId: MachineId; machineName: string; projectId: string; online: boolean }
@@ -37,7 +36,8 @@ export function provisionContextOf(projectId: string, machineId?: MachineId | nu
   const connections = hub.connections()
   const nameOf = (id: MachineId) => hub.set.displayName(id) ?? id
   const onlineOf = (id: MachineId) => LIVE.has(connections.find((connection) => connection.record.machineId === id)?.status ?? '')
-  const instances = logical.instances.map((instance) => ({ machineId: instance.machineId, machineName: nameOf(instance.machineId), projectId: instance.project.id, online: !instance.offline && onlineOf(instance.machineId) }))
+  const reference = logical.instances.find((instance) => instance.project.id === projectId)?.project ?? logical.primary.project
+  const instances = logical.instances.filter((instance) => completeProvisionProject(reference, instance.project)).map((instance) => ({ machineId: instance.machineId, machineName: nameOf(instance.machineId), projectId: instance.project.id, online: !instance.offline && onlineOf(instance.machineId) }))
   const source = provisionSource(instances, sourceOverride ?? owner)
   const members = connections.map((connection) => ({
     machineId: connection.record.machineId,
@@ -47,7 +47,7 @@ export function provisionContextOf(projectId: string, machineId?: MachineId | nu
     member: connection.record.member,
   }))
   const sourceProject = logical.instances.find((instance) => instance.machineId === source)?.project
-  const having = logical.instances.filter((instance) => sameForkProject(sourceProject, instance.project)).map((instance) => instance.machineId)
+  const having = logical.instances.filter((instance) => completeProvisionProject(sourceProject, instance.project)).map((instance) => instance.machineId)
   return { name: logical.name, instances, targets: source ? provisionTargets(members, new Set(having), source) : [], source }
 }
 

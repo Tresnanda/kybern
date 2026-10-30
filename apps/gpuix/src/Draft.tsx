@@ -160,7 +160,7 @@ export function Draft() {
       enter={enter}
       headline={headline(false)}
       middle={<>
-        {!coordinator && <InstructionsOffer project={project} />}
+        {!coordinator && !machine.remote && <InstructionsOffer project={project} />}
         <DraftComposer
           tray={trayShown ? tray(false) : undefined}
           extras={{

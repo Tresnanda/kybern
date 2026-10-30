@@ -131,7 +131,7 @@ import {
 import { alreadyAttachedText, contentHash, newFiles } from './composer/attached.ts'
 import { isGroupProject } from '../../../packages/kybern-client/src/groups.ts'
 import { canSteer } from '../../../packages/kybern-client/src/steering.ts'
-import { choiceFor, groupCreateParams } from './groups/tray.ts'
+import { choiceFor, groupCreateParams, mappedGroupChoice } from './groups/tray.ts'
 
 export const COMPOSER_RADIUS = 19.2
 const DEFAULT_PLACEHOLDER = 'Ask anything, @ to mention, $ skills, or / commands'
@@ -272,7 +272,7 @@ export function useDraftTarget(stayLocal = false) {
   const listed = projectId ? projects.find((p) => p.id === projectId) : undefined
   // Where the chat runs (`composer/machineTarget.ts`): with one machine this is the machine you are at, at no cost. A project that
   // only another machine has runs there. A Coordinator or a task's run stays on the machine you are at.
-  const machine = useMachineTarget(projectId ?? null, !stayLocal && !(listed && isGroupProject(listed)))
+  const machine = useMachineTarget(projectId ?? null, !stayLocal)
   const { providers, settings, accounts, loading: listsLoading, loaded: listsLoaded } = useMachineLists(machine.machineId)
   // The checkout the lists follow: the chosen machine's own (its path keys that machine's project accounts).
   const project = machine.remote && machine.chosen?.project ? machine.chosen.project : listed
@@ -284,13 +284,13 @@ export function useDraftTarget(stayLocal = false) {
       return (project ? config?.project_accounts?.[project.path] : undefined) ?? config?.default_account ?? 'default'
     }
     if (stored && available.some((p) => p.kind === stored.kind)) {
-      if (stored.pinAccount || stored.instance !== 'default') return stored
+      if ((stored.pinAccount || stored.instance !== 'default') && (!machine.remote || stored.instance === 'default' || accounts.some((account) => account.provider.kind === stored.kind && account.provider.instance === stored.instance))) return stored
       return { kind: stored.kind, instance: instanceFor(stored.kind) }
     }
     const pick = available.find((p) => p.kind === settings?.default_provider) ?? available[0]
     return pick ? { kind: pick.kind, instance: instanceFor(pick.kind) } : null
-  }, [draft.provider, available, settings, project])
-  const pinAccount = !!draft.provider && (draft.provider.pinAccount ?? draft.provider.instance !== 'default')
+  }, [draft.provider, available, settings, project, accounts, machine.remote])
+  const pinAccount = !!draft.provider && provider?.kind === draft.provider.kind && provider?.instance === draft.provider.instance && (draft.provider.pinAccount ?? draft.provider.instance !== 'default')
   const preferred = draft.mode ?? settings?.default_permission_mode ?? 'supervised'
   const status = provider ? available.find((p) => p.kind === provider.kind) : undefined
   const mode: PermissionMode = status && !status.supported_permission_modes.includes(preferred) ? status.supported_permission_modes[0] ?? preferred : preferred
@@ -474,6 +474,7 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
             effort: choice?.effort,
             use_worktree: useWorktree && !freeChat,
             ...(draft.baseBranch ? { base_branch: draft.baseBranch } : {}),
+            ...(project && isGroupProject(project) ? groupCreateParams(project, mappedGroupChoice(draft.group, projectId!, draft.groupPaths?.[`${machine.key}:${target.machineId}`]), useWorktree) : {}),
             message: first,
             thread_id: threadId,
             message_id: messageId,

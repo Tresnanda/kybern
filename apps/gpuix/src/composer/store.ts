@@ -54,6 +54,8 @@ export interface DraftChoices {
   baseBranch: string | null
   /** Group projects: the members and per-member branches of the new chat (`groups/tray.ts`), for one project. */
   group?: GroupChoice | null
+  /** Source member path → target member path, captured by project setup. */
+  groupPaths?: Record<string, Record<string, string>>
   /** The machine a new chat starts on, by logical project (`composer/machineTarget.ts`): the pick, and the last machine used.
    *  A missing entry follows the default (the machine you are at). */
   machines?: Record<string, MachineId>
