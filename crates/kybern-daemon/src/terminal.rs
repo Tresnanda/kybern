@@ -157,10 +157,21 @@ impl TerminalManager {
             .name(format!("pty-{id}"))
             .spawn(move || {
                 let mut buf = [0u8; 8192];
+                #[cfg(windows)]
+                let mut cursor = InitialCursorReport::default();
                 loop {
                     match reader.read(&mut buf) {
                         Ok(0) => break,
                         Ok(n) => {
+                            #[cfg(windows)]
+                            let chunk = {
+                                let (chunk, answer) = cursor.push(&buf[..n]);
+                                if answer {
+                                    let _ = t.write(b"\x1b[1;1R");
+                                }
+                                chunk
+                            };
+                            #[cfg(not(windows))]
                             let chunk = buf[..n].to_vec();
                             t.touch();
                             {
@@ -416,8 +427,53 @@ fn plain_windows_path(path: &str) -> String {
     }
 }
 
+// portable-pty enables ConPTY's INHERIT_CURSOR flag. Every terminal here starts
+// with a fresh, empty screen, so the host can answer its initial position request
+// before any client attaches. Consume that request so a renderer cannot reply twice.
+#[cfg(any(windows, test))]
+#[derive(Default)]
+struct InitialCursorReport {
+    pending: Vec<u8>,
+    answered: bool,
+}
+
+#[cfg(any(windows, test))]
+impl InitialCursorReport {
+    fn push(&mut self, bytes: &[u8]) -> (Vec<u8>, bool) {
+        const QUERY: &[u8] = b"\x1b[6n";
+        if self.answered {
+            return (bytes.to_vec(), false);
+        }
+        self.pending.extend_from_slice(bytes);
+        if let Some(index) = self.pending.windows(QUERY.len()).position(|part| part == QUERY) {
+            self.pending.drain(index..index + QUERY.len());
+            self.answered = true;
+            return (std::mem::take(&mut self.pending), true);
+        }
+        let keep = (1..QUERY.len()).rev().find(|&len| self.pending.ends_with(&QUERY[..len])).unwrap_or(0);
+        let tail = self.pending.split_off(self.pending.len() - keep);
+        (std::mem::replace(&mut self.pending, tail), false)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_initial_cursor_request_is_answered_once_even_across_reads() {
+        for split in 0..=4 {
+            let mut cursor = InitialCursorReport::default();
+            assert_eq!(cursor.push(b"ready"), (b"ready".to_vec(), false));
+            let query = b"\x1b[6n";
+            let first = cursor.push(&query[..split]);
+            let second = cursor.push(&query[split..]);
+            assert!(first.0.is_empty() && second.0.is_empty());
+            assert_eq!(usize::from(first.1) + usize::from(second.1), 1);
+            assert_eq!(cursor.push(b"prompt\x1b[6n"), (b"prompt\x1b[6n".to_vec(), false));
+        }
+        let mut cursor = InitialCursorReport::default();
+        assert_eq!(cursor.push(b"before\x1b[6nAfter"), (b"beforeAfter".to_vec(), true));
+    }
+
     #[test]
     fn verbatim_windows_paths_become_plain_for_the_shell() {
         use super::plain_windows_path;
@@ -453,6 +509,7 @@ mod tests {
         manager.close(terminal.info().id).unwrap();
     }
 
+    #[cfg(unix)]
     fn wait_until(check: impl Fn() -> bool) -> bool {
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {

@@ -37,6 +37,8 @@ mod provider_assets;
 mod remote_tests;
 mod requests;
 mod rpc;
+#[cfg(test)]
+mod test_support;
 // S3: the encrypted secret store. Its RPC, push transport and outbox hooks arrive with N3/R1.
 #[allow(dead_code)]
 mod secret_store;
@@ -429,7 +431,9 @@ fn owns_endpoint_file(contents: &str, expected: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{desktop_listen_port, nvm_default_bin, owns_endpoint_file, runtime, startup_announcement_filename};
+    #[cfg(unix)]
+    use super::nvm_default_bin;
+    use super::{desktop_listen_port, owns_endpoint_file, runtime, startup_announcement_filename};
 
     /// A spawned task (every RPC runs in one) has room for more than Tokio's 2 MiB default.
     #[test]
@@ -477,6 +481,8 @@ mod tests {
         assert!(startup_announcement_filename("").is_err());
     }
 
+    // nvm-sh uses Unix-only alias filenames (including `lts/*`).
+    #[cfg(unix)]
     #[test]
     fn nvm_default_bin_follows_aliases_to_an_installed_node() {
         let nvm = std::env::temp_dir().join(format!("kybern-nvm-{}", uuid::Uuid::new_v4()));

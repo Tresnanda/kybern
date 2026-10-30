@@ -9,9 +9,10 @@ use std::time::Duration;
 /// waits up to 2 s for a refresh in flight.
 pub(crate) const TERMINATE_GRACE: Duration = Duration::from_secs(5);
 
-// Own only the isolated process group/tree created for this spawn. Dropping
-// it asks the group to exit and kills what remains after `TERMINATE_GRACE`.
-pub(crate) struct ProcessTree(pub u32);
+/// Own only the isolated process group/tree created for this spawn. Dropping
+/// it asks the group to exit and kills what remains after `TERMINATE_GRACE`.
+/// On Unix, the caller must spawn the child with `process_group(0)`.
+pub struct ProcessTree(pub u32);
 
 impl ProcessTree {
     /// Ask every process in the group to exit. Windows has no such signal for

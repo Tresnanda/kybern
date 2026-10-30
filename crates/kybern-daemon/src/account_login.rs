@@ -111,7 +111,7 @@ struct Attempt {
 
 impl Drop for Attempt {
     fn drop(&mut self) {
-        // Aborting drops the child, and `kill_on_drop` ends it.
+        // Aborting drops the process-tree guard, which also ends launcher children.
         if let Some(task) = self.task.take() {
             task.abort();
         }
@@ -502,6 +502,13 @@ impl AccountLogins {
                 tokio::select! {
                     event = attempt.rx.recv() => match event {
                         Some(Event::Out(text)) => {
+                            // ConPTY and interactive prompt libraries wait for a cursor report.
+                            // A hidden terminal has no renderer to answer it.
+                            if spec.hidden_pty && let Some(terminal) = &attempt.terminal {
+                                for _ in text.matches("\x1b[6n") {
+                                    let _ = terminal.write(b"\x1b[1;1R");
+                                }
+                            }
                             buffer.push_str(&auth::strip_ansi(&text).replace('\r', "\n"));
                             if buffer.len() > BUFFER_CAP {
                                 let mut cut = buffer.len() - BUFFER_CAP;
@@ -788,8 +795,9 @@ fn spawn_attempt(state: &AppState, spec: &Spec, visible_terminal: bool) -> Resul
     let mut env = spec.env.clone();
     if spec.mode != AccountLoginMode::Terminal {
         let inherited = env.get("PATH").cloned().or_else(|| std::env::var("PATH").ok()).unwrap_or_default();
-        env.insert("PATH".into(), format!("{}:{}", spec.shim.display(), inherited));
-        env.insert("BROWSER".into(), spec.shim.join("open").to_string_lossy().into_owned());
+        let paths = std::iter::once(spec.shim.clone()).chain(std::env::split_paths(&inherited));
+        env.insert("PATH".into(), std::env::join_paths(paths)?.to_string_lossy().into_owned());
+        env.insert("BROWSER".into(), spec.shim.join(if cfg!(windows) { "open.cmd" } else { "open" }).to_string_lossy().into_owned());
         env.insert("KYBERN_LOGIN_URL_FILE".into(), spec.url_file.to_string_lossy().into_owned());
     }
     if spec.hidden_pty || visible_terminal {
@@ -848,8 +856,11 @@ fn spawn_attempt(state: &AppState, spec: &Spec, visible_terminal: bool) -> Resul
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
+        .kill_on_drop(false);
+    #[cfg(unix)]
+    command.process_group(0);
     let mut child = command.spawn()?;
+    let tree = kybern_drivers::process_tree::ProcessTree(child.id().expect("spawned login"));
     let stdin = child.stdin.take().map(|stdin| Arc::new(tokio::sync::Mutex::new(stdin)));
     let (tx, rx) = mpsc::channel(256);
     let read = |stream: Option<Box<dyn tokio::io::AsyncRead + Unpin + Send>>, tx: mpsc::Sender<Event>| {
@@ -871,6 +882,7 @@ fn spawn_attempt(state: &AppState, spec: &Spec, visible_terminal: bool) -> Resul
     let out = read(child.stdout.take().map(|stream| Box::new(stream) as _), tx.clone());
     let err = read(child.stderr.take().map(|stream| Box::new(stream) as _), tx.clone());
     let task = tokio::spawn(async move {
+        let _tree = tree;
         let status = child.wait().await;
         // Give the readers a moment to drain; a grandchild may hold the pipes open.
         let _ = tokio::time::timeout(Duration::from_millis(500), async {
@@ -939,8 +951,11 @@ pub fn install_shim(data_dir: &Path) -> Result<PathBuf> {
     let dir = data_dir.join("run/login-shim");
     std::fs::create_dir_all(&dir)?;
     for name in ["open", "xdg-open"] {
-        let path = dir.join(name);
+        let path = dir.join(if cfg!(windows) { format!("{name}.cmd") } else { name.into() });
+        #[cfg(unix)]
         let script = "#!/bin/sh\n[ -n \"$KYBERN_LOGIN_URL_FILE\" ] && printf '%s\\n' \"$@\" >> \"$KYBERN_LOGIN_URL_FILE\"\nexit 0\n";
+        #[cfg(windows)]
+        let script = "@echo off\r\nsetlocal DisableDelayedExpansion\r\n:next\r\nif \"%~1\"==\"\" exit /b 0\r\nset \"url=%~1\"\r\nsetlocal EnableDelayedExpansion\r\nif defined KYBERN_LOGIN_URL_FILE >>\"!KYBERN_LOGIN_URL_FILE!\" echo(!url!\r\nendlocal\r\nshift\r\ngoto next\r\n";
         if std::fs::read_to_string(&path).ok().as_deref() != Some(script) {
             std::fs::write(&path, script)?;
         }
@@ -1114,9 +1129,9 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let shim = install_shim(&root).unwrap();
         for name in ["open", "xdg-open"] {
-            let path = shim.join(name);
+            let path = shim.join(if cfg!(windows) { format!("{name}.cmd") } else { name.into() });
             let script = std::fs::read_to_string(&path).unwrap();
-            assert!(script.starts_with("#!/bin/sh"));
+            assert!(script.starts_with(if cfg!(windows) { "@echo off" } else { "#!/bin/sh" }));
             assert!(!script.contains("http"), "the shim must not hard-code a browser or host");
             #[cfg(unix)]
             {
@@ -1125,13 +1140,13 @@ mod tests {
             }
         }
         let record = root.join("urls");
-        let status = std::process::Command::new(shim.join("open"))
-            .arg("https://example.test/a?b=c")
+        let status = std::process::Command::new(shim.join(if cfg!(windows) { "open.cmd" } else { "open" }))
+            .arg("https://example.test/a?b=c&state=test!value")
             .env("KYBERN_LOGIN_URL_FILE", &record)
             .status()
             .unwrap();
         assert!(status.success());
-        assert_eq!(std::fs::read_to_string(&record).unwrap(), "https://example.test/a?b=c\n");
+        assert_eq!(std::fs::read_to_string(&record).unwrap().replace("\r\n", "\n"), "https://example.test/a?b=c&state=test!value\n");
     }
 
     #[test]
@@ -1167,8 +1182,6 @@ mod tests {
 #[cfg(test)]
 mod flow_tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
-
     const FAKE_CLAUDE: &str = r#"#!/bin/sh
 case "$1 $2" in
 "auth login")
@@ -1219,15 +1232,59 @@ exit 0
         std::fs::create_dir_all(&root).unwrap();
         let bin = root.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
-        for (name, script) in [("claude", FAKE_CLAUDE), ("codex", FAKE_CODEX)] {
-            std::fs::write(bin.join(name), script).unwrap();
-            std::fs::set_permissions(bin.join(name), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let claude = crate::test_support::powershell_script(
+            &bin,
+            "claude",
+            FAKE_CLAUDE,
+            r#"
+$dir = $env:CLAUDE_CONFIG_DIR
+switch ("$($args[0]) $($args[1])") {
+    'auth login' {
+        if (Test-Path "$dir/fail") { 'login failed: https://x.test/cb?code=SECRETCODE&state=SECRETSTATE'; exit 1 }
+        if (Test-Path "$dir/paste") {
+            'Opening browser to sign in...'
+            "If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&state=S"
+            $code = Read-Host 'Paste code here if prompted > '
+            if ($code -eq 'good') { Copy-Item "$dir/email" "$dir/.signed-in"; exit 0 }
+            'bad code'
+            exit 1
         }
+        & $env:BROWSER 'https://claude.com/cai/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A1%2Fcb&state=S'
+        while (!(Test-Path "$dir/approve")) { Start-Sleep -Milliseconds 50 }
+        Copy-Item "$dir/email" "$dir/.signed-in"
+        exit 0
+    }
+    'auth status' {
+        if (Test-Path "$dir/slow-status") { Start-Sleep -Seconds 1 }
+        if (Test-Path "$dir/.signed-in") {
+            @{ loggedIn = $true; authMethod = 'claude.ai'; email = ([IO.File]::ReadAllText([IO.Path]::Combine($dir, '.signed-in'))); subscriptionType = 'pro' } | ConvertTo-Json -Compress
+            exit 0
+        }
+        '{"loggedIn":false}'
+        exit 1
+    }
+    'auth logout' { Remove-Item -Force -ErrorAction SilentlyContinue "$dir/.signed-in"; exit 0 }
+}
+exit 2
+"#,
+        );
+        let codex = crate::test_support::powershell_script(
+            &bin,
+            "codex",
+            FAKE_CODEX,
+            r#"
+if ($args[0] -eq 'login') {
+    & $env:BROWSER 'https://auth.openai.com/oauth/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A1455%2Fcb'
+    Start-Sleep -Seconds 30
+}
+exit 0
+"#,
+        );
         let paths = crate::config::Paths::resolve(Some(root.join("data"))).unwrap();
         let state = AppState::initialize(&paths).unwrap();
         let mut settings = state.settings.get();
-        settings.providers.entry(ProviderKind::ClaudeCode).or_default().binary = Some(bin.join("claude").to_string_lossy().into_owned());
-        settings.providers.entry(ProviderKind::Codex).or_default().binary = Some(bin.join("codex").to_string_lossy().into_owned());
+        settings.providers.entry(ProviderKind::ClaudeCode).or_default().binary = Some(claude.to_string_lossy().into_owned());
+        settings.providers.entry(ProviderKind::Codex).or_default().binary = Some(codex.to_string_lossy().into_owned());
         state.settings.set(settings).unwrap();
         Fixture { state, root }
     }
@@ -1270,7 +1327,7 @@ exit 0
         let fixture = fixture();
         let state = &fixture.state;
         let login = state.account_logins.start(state, params(ProviderKind::ClaudeCode, AccountLoginMode::Browser)).await.unwrap();
-        assert_eq!(login.phase, AccountLoginPhase::Waiting);
+        assert_eq!(login.phase, AccountLoginPhase::Waiting, "{:?}", login.error);
         assert!(login.url.as_deref().unwrap().starts_with("https://claude.com/"), "the shim captured the page");
         let dir = fixture.login_dir(&login);
         assert!(dir.is_dir());
@@ -1368,7 +1425,7 @@ exit 0
         let mut start = params(ProviderKind::ClaudeCode, AccountLoginMode::Paste);
         start.directory = Some(folder.to_string_lossy().into_owned());
         let login = state.account_logins.start(state, start).await.unwrap();
-        assert_eq!(login.phase, AccountLoginPhase::Waiting);
+        assert_eq!(login.phase, AccountLoginPhase::Waiting, "{:?}", login.error);
         assert!(login.url.as_deref().unwrap().contains("platform.claude.com"), "paste uses the manual page");
         state.account_logins.input(&login.id, "wrong".into()).await.unwrap();
         let retry = wait_for(state, &login.id, |login| login.phase == AccountLoginPhase::Waiting && login.error.is_some()).await;
