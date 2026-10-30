@@ -159,6 +159,8 @@ fi
   cd "$app"
   mkdir -p native/build
   native_src=$app_src/packages/native/src
+  rustc --edition 2021 --test "$native_src/frame_clock_test.rs" -o native/build/frame-clock-tests$exe
+  native/build/frame-clock-tests$exe
   rustc --test "$native_src/spring.rs" -o native/build/spring-tests$exe
   native/build/spring-tests$exe
   rustc --test "$native_src/physical_spring.rs" -o native/build/physical-spring-tests$exe

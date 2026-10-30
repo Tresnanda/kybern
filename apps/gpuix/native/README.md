@@ -1580,7 +1580,16 @@ the callback receives `(error,{timeMs})`. Acknowledge with
 `acknowledgeAnimationFrame(token)` to allow the next delivery; unsubscribe with
 `unsubscribeAnimationFrames(token)`. Deliveries are bounded, and consumers must
 ignore already-queued stale callbacks after unsubscribe. `src/native/frame.ts`
-shares one subscription and handles generations. Hidden-window behavior is a
+shares one subscription and handles generations. A pending native delivery expires
+after one second so a lost acknowledgement cannot silence it indefinitely; a
+failed callback enqueue retries on the next frame. The shared JS clock also
+replaces a subscription after one second without deliveries while visible and
+in use. A generation guard lets a new subscription or acknowledgement restart
+a lost native callback chain without duplicating a delayed chain. GPUI preserves
+next-frame callbacks when a re-entrant window update fails, and logs that deferral.
+`frame_clock_test.rs` checks enqueue failure, lost acknowledgement, lost chains
+and late callbacks; `frame-check.ts` drops an acknowledgement in a real window.
+Hidden-window behavior is a
 required regression check, not something inferred from callback counts.
 
 `paintAnimation: {kind:'matrix'|'breathe',cycleMs:number,delayMs?:number}` is allowed
