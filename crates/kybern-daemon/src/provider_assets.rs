@@ -125,7 +125,11 @@ fn link_asset(local: &Path, shared: &Path, directory: bool) -> Result<()> {
     create_link(shared, &replacement, directory)?;
     let result = migrate_asset(local, shared, directory, &replacement);
     if present(&replacement) {
-        let _ = std::fs::remove_file(&replacement);
+        if cfg!(windows) && directory {
+            let _ = std::fs::remove_dir(&replacement);
+        } else {
+            let _ = std::fs::remove_file(&replacement);
+        }
     }
     result
 }
@@ -442,8 +446,8 @@ mod tests {
         assert!(registry["plugins"].get("shared@m").is_some());
         assert!(registry["plugins"].get("local@m").is_some());
         assert_eq!(
-            registry["plugins"]["local@m"][0]["installPath"],
-            scratch.0.join("home/.claude/plugins/cache/local").to_string_lossy().as_ref()
+            Path::new(registry["plugins"]["local@m"][0]["installPath"].as_str().unwrap()),
+            scratch.0.join("home/.claude/plugins/cache/local")
         );
         let settings = read_json(&scratch.0.join("one/settings.json")).unwrap();
         assert_eq!(settings["enabledPlugins"]["shared@m"], true);

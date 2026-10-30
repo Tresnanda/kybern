@@ -1,13 +1,28 @@
-import type { DelegationInfo, RuntimeTaskStatus, SubagentInfo } from "./types.ts";
+import type { DelegationInfo, InboundInfo, Origin, RuntimeTaskStatus, SubagentInfo } from "./types.ts";
 
 /** A child thread that mirrors a provider-native subagent. Native input has a dedicated route. */
 export function isSubagentThread(thread: { subagent?: SubagentInfo | null } | null | undefined): boolean {
   return !!thread?.subagent;
 }
 
+/** The hidden thread a machine keeps for another machine's forwarded tool calls: never listed, never written to. */
+export function isInboundThread(thread: { inbound?: InboundInfo | null } | null | undefined): boolean {
+  return !!thread?.inbound;
+}
+
 /** A thread that is reached from its parent rather than listed: a provider subagent or a delegated child. */
 export function isChildThread(thread: { subagent?: SubagentInfo | null; delegation?: DelegationInfo | null } | null | undefined): boolean {
   return !!thread?.subagent || !!thread?.delegation;
+}
+
+/**
+ * A delegated child another machine started on this one. Nothing here is its parent (`parent_thread_id` is unset); its
+ * `origin` names the thread that delegated it, so clients list it under that thread, wherever that thread lives.
+ */
+export function isRemoteChildThread(
+  thread: { subagent?: SubagentInfo | null; delegation?: DelegationInfo | null; parent_thread_id?: string | null; origin?: Origin | null } | null | undefined,
+): boolean {
+  return !!thread?.delegation && !thread.subagent && !thread.parent_thread_id && !!thread.origin?.thread_id;
 }
 
 /** Threads a user manages themselves: subagent threads are reached from their parent, never listed. */

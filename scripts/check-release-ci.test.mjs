@@ -18,8 +18,12 @@ test('latest run and attempt take precedence over prior success', () => {
 test('every required job must complete successfully', () => {
   const jobs = requiredJobs.map(name => ({ name, status: 'completed', conclusion: 'success' }))
   assert.equal(verifyJobs(jobs), true)
-  assert.equal(verifyJobs(jobs.slice(1)), false)
-  assert.equal(verifyJobs(jobs.map((job, i) => i ? job : { ...job, conclusion: 'skipped' })), false)
+  for (const name of requiredJobs) {
+    assert.equal(verifyJobs(jobs.filter(job => job.name !== name)), false, `missing ${name}`)
+    for (const conclusion of ['skipped', 'failure', 'cancelled']) {
+      assert.equal(verifyJobs(jobs.map(job => job.name === name ? { ...job, conclusion } : job)), false, `${name}: ${conclusion}`)
+    }
+  }
 })
 
 async function releaseJobs() {

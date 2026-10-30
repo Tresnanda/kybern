@@ -5,7 +5,7 @@
 import { useSyncExternalStore } from 'react'
 import { REQUESTS_PROGRESS_NOTIFICATION, type RequestProgress, type ThreadEvent } from '../../../../packages/kybern-client/src/types.ts'
 import { onLiveEvent } from '../nav/live.ts'
-import { getClient } from '../state.ts'
+import { getPaneIds, getPaneState, localClient, threadClient } from '../state.ts'
 import { openTerminalTab } from '../tabs/open.ts'
 
 const items = new Map<string, RequestProgress>()
@@ -46,7 +46,8 @@ export function forgetProgress(approvalId: string) {
 
 /** Read the live cards (all of them, or one thread's) and fold them in. */
 export async function refreshProgress(threadId?: string): Promise<void> {
-  const client = getClient()
+  let client: ReturnType<typeof localClient>
+  try { client = threadId ? threadClient(threadId) : localClient() } catch { return } // the machine owning the thread is offline
   if (!client || client.status !== 'open') return
   try {
     const { items: list } = await client.call('requests.progress', threadId ? { thread_id: threadId } : {})
@@ -56,16 +57,18 @@ export async function refreshProgress(threadId?: string): Promise<void> {
 
 /** A button that is not an answer (`requests.act`). Throws the daemon's sentence, which the card shows under its title. */
 export async function actOnRequest(approvalId: string, action: string, value?: string): Promise<void> {
-  const client = getClient()
+  // The card's thread owns the approval: read from the live progress, else from the panes showing it.
+  const threadId = items.get(approvalId)?.thread_id ?? getPaneIds().flatMap(id => getPaneState(id).open.pendingApprovals).find(a => a.id === approvalId)?.thread_id
+  const client = threadClient(threadId)
   if (!client) throw new Error('Kybern is not connected. Reconnect, then try again.')
   await client.call('requests.act', { approval_id: approvalId, action, ...(value === undefined ? {} : { value }) })
 }
 
-let owner: ReturnType<typeof getClient> = null
+let owner: ReturnType<typeof localClient> = null
 let stops: (() => void)[] = []
 /** Follow the daemon's request progress. Called by the app shell with the other live feeds (`startAgentToasts`). */
 export function startRequestProgress() {
-  const client = getClient()
+  const client = localClient() // local machine only: other machines' request progress is not followed here
   if (!client || owner === client) return
   for (const stop of stops) stop()
   owner = client

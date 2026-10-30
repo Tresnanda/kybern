@@ -307,7 +307,7 @@ impl Orchestrator {
     }
 
     pub(super) fn environment_fingerprint(&self, thread: &Thread) -> Result<String> {
-        let bytes = Sha256::digest(serde_json::to_vec(&(&thread.cwd, self.account_environment(thread)?))?);
+        let bytes = Sha256::digest(serde_json::to_vec(&(&thread.cwd, self.account_environment(thread)?, self.login_binding_tag(thread)))?);
         Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
     }
 

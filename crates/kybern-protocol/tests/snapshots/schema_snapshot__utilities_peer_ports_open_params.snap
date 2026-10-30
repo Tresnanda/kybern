@@ -1,0 +1,27 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(PeerPortsOpenParams)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PeerPortsOpenParams",
+  "description": "`peer.ports.open`: the target connects a stream to a loopback port of its own.",
+  "type": "object",
+  "properties": {
+    "stream_id": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "port": {
+      "type": "integer",
+      "format": "uint16",
+      "minimum": 0,
+      "maximum": 65535
+    }
+  },
+  "required": [
+    "stream_id",
+    "port"
+  ]
+}

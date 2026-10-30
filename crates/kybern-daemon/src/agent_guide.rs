@@ -10,11 +10,11 @@
 use std::collections::BTreeSet;
 
 /// Bumped with every wording change so a changed guide is a deliberate act.
-pub(crate) const GUIDE_VERSION: u32 = 18;
+pub(crate) const GUIDE_VERSION: u32 = 20;
 
 /// Hard ceiling for the rendered guide (about 1.5k tokens at 4 bytes a token).
 #[cfg(test)]
-pub(crate) const MAX_GUIDE_BYTES: usize = 7800;
+pub(crate) const MAX_GUIDE_BYTES: usize = 8400;
 
 /// Which groups of Kybern tools a session has.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -146,6 +146,26 @@ pub(crate) fn render(tools: &GuideTools) -> String {
              - A question from an agent ends `kybern_agent_wait` (`has_pending_question`) or arrives as a notice; answer with `kybern_answer_question` only if your task or the user settled it, else leave it to the user.\n",
         );
     }
+    if tools.has("kybern_machines") {
+        out.push_str(
+            "\n## Machines\n\
+             Your user's machines form a network. Check `kybern_machines` before naming one, then pass `machine` to a Kybern tool to run it there; `project` picks that machine's project when its checkout of this repository is not the one you mean. Paths are that machine's own.\n\
+             - A tool fails at once when the machine is offline.",
+        );
+        if tools.has("kybern_agent_delegate") {
+            out.push_str(" `kybern_agent_delegate` with `machine` queues work for it instead.");
+        }
+        if tools.has(crate::orchestrator::provision::ADD_TOOL) {
+            out.push_str(
+                "\n- A machine without this repository: delegating there asks the user to add the project first, then goes on; `kybern_project_add_to_machine` asks for it alone.",
+            );
+        }
+        out.push_str(
+            "\n\
+             - Your permission mode travels with the call and can only narrow there: the user on that machine may be asked.\n\
+             - Nothing is pushed to a shared remote to move work between machines.\n",
+        );
+    }
     if tools.has("kybern_request_secret") {
         out.push_str(
             "\n## Secrets\n\
@@ -192,6 +212,8 @@ mod tests {
     fn all_names() -> Vec<String> {
         let mut names: Vec<String> = native_tool_definitions().into_iter().map(|tool| tool.name).collect();
         names.extend(ComputerUse::tool_definitions().into_iter().map(|tool| tool.name));
+        names.push(crate::network::forward::MACHINES_TOOL.to_string());
+        names.push(crate::orchestrator::provision::ADD_TOOL.to_string());
         names
     }
 
@@ -209,10 +231,10 @@ mod tests {
         }
         assert_eq!(
             guide,
-            include_str!("agent_guide_full.golden.txt"),
+            include_str!("agent_guide_full.golden.txt").replace("\r\n", "\n"),
             "guide wording changed: bump GUIDE_VERSION and update the golden file (KYBERN_UPDATE_GOLDEN=1)"
         );
-        assert_eq!(GUIDE_VERSION, 18);
+        assert_eq!(GUIDE_VERSION, 20);
     }
 
     #[test]
@@ -274,6 +296,12 @@ mod tests {
         assert!(help.contains("## When you need the user") && help.contains("`kybern_request_login`") && help.contains("sudo -A"));
         assert!(!help.contains("kybern_run_in_terminal") && !help.contains("kybern_request_permission"));
         assert!(!none.contains("## When you need the user"));
+
+        let machines = guide_for(&["kybern_machines"]);
+        assert!(machines.contains("## Machines") && machines.contains("kybern_machines") && machines.contains("can only narrow"));
+        assert!(!machines.contains("kybern_agent_delegate"), "the queueing hint needs the delegation tool");
+        assert!(guide_for(&["kybern_machines", "kybern_agent_delegate"]).contains("queues work for it"));
+        assert!(!none.contains("## Machines") && !guide_for(&["kybern_thread_read"]).contains("## Machines"));
 
         let computer = guide_for(&["kybern_computer_act"]);
         assert!(computer.contains("kybern_computer_apps") && !computer.contains("## Notes and tasks"));

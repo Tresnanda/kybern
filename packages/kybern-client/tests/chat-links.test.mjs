@@ -29,9 +29,15 @@ test("kybern note and task links classify as references, other kybern URIs stay 
   assert.deepEqual(chatLink(`kybern://note/${NOTE}`), { kind: "kybern", target: "note", id: NOTE });
   assert.deepEqual(chatLink(`<kybern://task/${TASK}/>`), { kind: "kybern", target: "task", id: TASK.toLowerCase() });
   assert.deepEqual(kybernRef(` KYBERN://Task/${NOTE} `), { target: "task", id: NOTE });
-  for (const url of ["kybern://note/7b0c", `kybern://thread/${NOTE}`, "kybern://computer", "kybern://pair?code=1", `kybern://note/${NOTE}/extra`, `kybern://note/${NOTE}?x=1`, `xkybern://note/${NOTE}`])
+  for (const url of ["kybern://note/7b0c", "kybern://computer", "kybern://pair?code=1", `kybern://note/${NOTE}/extra`, `kybern://note/${NOTE}?x=1`, `xkybern://note/${NOTE}`])
     assert.deepEqual(chatLink(url), { kind: "unsupported" }, url);
   assert.equal(kybernRef("https://example.com"), null);
+});
+
+test("kybern thread links resolve, with or without the machine", () => {
+  assert.deepEqual(chatLink(`kybern://thread/${NOTE}`), { kind: "thread", threadId: NOTE });
+  assert.deepEqual(chatLink(`kybern://thread/satyamas/${NOTE}`), { kind: "thread", threadId: NOTE, machineId: "satyamas" });
+  assert.deepEqual(chatLink(`kybern://thread/${NOTE}/extra`), { kind: "unsupported" });
 });
 
 test("bare kybern references are found in running text and keep their punctuation outside", () => {

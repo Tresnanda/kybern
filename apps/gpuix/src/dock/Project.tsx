@@ -2,7 +2,6 @@ import { relativeTime } from '@/lib/format'
 import { muted } from '../nav/overlay.tsx'
 import { goPage } from '../nav/history.ts'
 import { setNotes as setNotesPage } from '../notes/store.ts'
-import { onEnvironmentChange } from '../shell/environment.ts'
 import { useEffect, useState } from 'react'
 import {
   AUTONOMY_OPTIONS, COORDINATOR_ROLES, COORDINATOR_SETTINGS_COPY as COPY,
@@ -16,7 +15,7 @@ import { N } from '../nav/glyphs.ts'
 import { loadProviders } from '../nav/live.ts'
 import { Dialog, DialogHeader } from '../nav/overlay.tsx'
 import { useNav } from '../nav/store.ts'
-import { getClient, getState, set, useApp } from '../state.ts'
+import { getState, set, threadClient, useApp } from '../state.ts'
 import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { Label, useTheme } from '../ui.tsx'
 import { DockFooter, DockSection as Section, ScopeHeader } from './Notes.tsx'
@@ -42,14 +41,14 @@ export function ProjectPane({ thread }: { thread: Thread }) {
   const [confirm, setConfirm] = useState<'redo' | 'reset' | null>(null)
   useEffect(() => {
     let current = true
-    const client = getClient()!
+    const client = threadClient(thread.id)!
     setError(null)
     void Promise.all([client.call('notes.list', {}), client.call('settings.get', {})]).then(([result, settings]) => {
       if (current) { setNotes(result.notes); setGlobal(settings.orchestration); setLoaded(true) }
     }, (e) => { if (current) setError(errorText(e)) })
     const off = client.onNotification('notes.changed', () => setReload((n) => n + 1))
     return () => { current = false; off() }
-  }, [projectId, reload])
+  }, [projectId, thread.id, reload])
   const space = projectSpaceNotes(notes, projectId)
   const effective = effectiveCoordinatorSettings(global, project?.coordinator)
   const current = () => getState().projects.find((p) => p.id === projectId)?.coordinator ?? null
@@ -57,7 +56,7 @@ export function ProjectPane({ thread }: { thread: Thread }) {
     if (busy) return false
     setBusy(true); setError(null)
     try {
-      const result = await getClient()!.call('projects.update', { project_id: projectId, coordinator })
+      const result = await threadClient(thread.id)!.call('projects.update', { project_id: projectId, coordinator })
       set({ projects: getState().projects.map((p) => p.id === result.id ? result : p) }); return true
     } catch (e) { setError(errorText(e)); return false } finally { setBusy(false) }
   }
@@ -65,7 +64,7 @@ export function ProjectPane({ thread }: { thread: Thread }) {
     if (busy) return
     setBusy(true); setError(null)
     try {
-      const result = await getClient()!.call('projects.update', { project_id: projectId, brief_in_all_threads: !project?.brief_in_all_threads })
+      const result = await threadClient(thread.id)!.call('projects.update', { project_id: projectId, brief_in_all_threads: !project?.brief_in_all_threads })
       set({ projects: getState().projects.map((p) => p.id === result.id ? result : p) })
     } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
   }
@@ -73,7 +72,7 @@ export function ProjectPane({ thread }: { thread: Thread }) {
     <ScopeHeader thread={thread} action={null} />
     <ErrorLine error={error} retry={() => setReload((n) => n + 1)} />
     <virtual-list testId="dock-project-list" style={{ flexGrow: 1, minHeight: 0, width: '100%' }}>
-      <div key="brief">{loaded && <Brief projectId={projectId} summary={space.brief} onSave={() => setReload((n) => n + 1)} />}</div>
+      <div key="brief">{loaded && <Brief threadId={thread.id} projectId={projectId} summary={space.brief} onSave={() => setReload((n) => n + 1)} />}</div>
       <div key="setup-heading" style={{ paddingTop: 8 }}><Section label="Setup" /></div>
       <div key="setup">{space.setup ? <NoteRow note={space.setup} onClick={() => setSelected(space.setup)} /> : <Hint>{PROJECT_SPACE_COPY.setupEmpty}</Hint>}</div>
       <div key="memory-heading" style={{ paddingTop: 8 }}><Section label="Memory" count={space.memory.length || undefined} /></div>
@@ -111,14 +110,14 @@ export function ProjectPane({ thread }: { thread: Thread }) {
       </div>
       <DockFooter key="all-notes" testId="dock-project-all-notes" onClick={() => { setNotesPage({ selected: null, filter: { kind: 'project', projectId } }); goPage('notes') }}>Show all in Notes</DockFooter>
     </virtual-list>
-    {selected && <NoteDialog summary={selected} onClose={() => setSelected(null)} />}
+    {selected && <NoteDialog threadId={thread.id} summary={selected} onClose={() => setSelected(null)} />}
     {confirm && <Dialog onClose={() => { if (!busy) setConfirm(null) }} width={430}>
       <DialogHeader title={confirm === 'redo' ? COPY.redoTitle : COPY.resetTitle} description={confirm === 'redo' ? COPY.redoDetail : COPY.resetDetail} onClose={() => { if (!busy) setConfirm(null) }} />
       <div style={{ display: 'flex', justifyContent: 'flex-end', padding: 12, gap: 8 }}>
         <Button size="lg" disabled={busy} onClick={() => setConfirm(null)}>Cancel</Button>
         <Button size="lg" variant="primary" busy={busy} onClick={() => { void (async () => {
           if (confirm === 'reset') { if (await write(null)) setConfirm(null) }
-          else { setBusy(true); try { await getClient()!.call('coordinator.setup', { project_id: projectId }); setConfirm(null) } catch (e) { setError(errorText(e)) } finally { setBusy(false) } }
+          else { setBusy(true); try { await threadClient(thread.id)!.call('coordinator.setup', { project_id: projectId }); setConfirm(null) } catch (e) { setError(errorText(e)) } finally { setBusy(false) } }
         })() }}>{confirm === 'redo' ? COPY.redo : COPY.reset}</Button>
       </div>
     </Dialog>}
@@ -161,7 +160,7 @@ function NoteRow({ note, onClick }: { note: NoteSummary; onClick: () => void }) 
 // Unmount hidden panes without dropping an unsaved brief or advancing the
 // revision it was based on when another client edits the note.
 const briefDrafts = new Map<string, { body: string; base: Note | null }>()
-function Brief({ projectId, summary, onSave }: { projectId: string; summary: NoteSummary | null; onSave: () => void }) {
+function Brief({ threadId, projectId, summary, onSave }: { threadId: string; projectId: string; summary: NoteSummary | null; onSave: () => void }) {
   const t = useTheme()
   const [note, setNote] = useState<Note | null>(null)
   const [body, setBody] = useState(() => briefDrafts.get(projectId)?.body ?? '')
@@ -172,14 +171,14 @@ function Brief({ projectId, summary, onSave }: { projectId: string; summary: Not
   useEffect(() => {
     if (!summary) return
     let current = true
-    void getClient()!.call('notes.get', { id: summary.id }).then((result) => { if (current) setNote(result.note ?? null) }, (e) => { if (current) setError(errorText(e)) })
+    void threadClient(threadId)!.call('notes.get', { id: summary.id }).then((result) => { if (current) setNote(result.note ?? null) }, (e) => { if (current) setError(errorText(e)) })
     return () => { current = false }
-  }, [summary?.id, summary?.revision])
+  }, [threadId, summary?.id, summary?.revision])
   const save = async () => {
     if (busy) return
     setBusy(true); setError(null)
     try {
-      const result = base ? await getClient()!.call('notes.update', { id: base.id, expected_revision: base.revision, body }) : await getClient()!.call('notes.create', { scope: 'project', project_id: projectId, project_role: 'brief', title: BRIEF_NOTE_TITLE, body })
+      const result = base ? await threadClient(threadId)!.call('notes.update', { id: base.id, expected_revision: base.revision, body }) : await threadClient(threadId)!.call('notes.create', { scope: 'project', project_id: projectId, project_role: 'brief', title: BRIEF_NOTE_TITLE, body })
       briefDrafts.delete(projectId); setNote(result); setEditing(false); onSave()
     } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
   }
@@ -204,15 +203,15 @@ function Brief({ projectId, summary, onSave }: { projectId: string; summary: Not
   </>
 }
 
-function NoteDialog({ summary, onClose }: { summary: NoteSummary; onClose: () => void }) {
+function NoteDialog({ threadId, summary, onClose }: { threadId: string; summary: NoteSummary; onClose: () => void }) {
   const t = useTheme()
   const [body, setBody] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
     let current = true
-    void getClient()!.call('notes.get', { id: summary.id }).then((result) => { if (current) setBody(result.note?.body ?? '') }, (e) => { if (current) setError(errorText(e)) })
+    void threadClient(threadId)!.call('notes.get', { id: summary.id }).then((result) => { if (current) setBody(result.note?.body ?? '') }, (e) => { if (current) setError(errorText(e)) })
     return () => { current = false }
-  }, [summary.id])
+  }, [threadId, summary.id])
   return <Dialog onClose={onClose} width={600} testId="dock-project-note">
     <DialogHeader title={summary.title} onClose={onClose} />
     <ErrorLine error={error} />
@@ -222,4 +221,3 @@ function NoteDialog({ summary, onClose }: { summary: NoteSummary; onClose: () =>
   </Dialog>
 }
 
-onEnvironmentChange(() => { briefDrafts.clear() })

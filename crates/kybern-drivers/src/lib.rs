@@ -8,6 +8,8 @@
 pub mod account_auth;
 pub mod binary;
 #[cfg(test)]
+mod test_process;
+#[cfg(test)]
 pub(crate) mod test_support {
     use kybern_protocol::*;
     use uuid::Uuid;
@@ -47,6 +49,7 @@ pub mod codex;
 pub mod codex_integrations;
 pub mod cursor;
 pub mod edit_paths;
+pub mod login_lend;
 pub mod login_recipes;
 pub mod models;
 mod ndjson;
@@ -543,7 +546,15 @@ pub trait AgentDriver: Send + Sync {
         true
     }
     /// Run a single tool-free prompt and return the model's text. Used for thread titles.
-    async fn one_shot(&self, _cwd: &std::path::Path, _prompt: &str, _binary: Option<&PathBuf>) -> Result<String> {
+    /// `env` is the account environment of whoever the prompt is for (a named account's
+    /// `CODEX_HOME` / `CLAUDE_CONFIG_DIR`); without it the CLI would use this machine's own login.
+    async fn one_shot(
+        &self,
+        _cwd: &std::path::Path,
+        _prompt: &str,
+        _binary: Option<&PathBuf>,
+        _env: &std::collections::BTreeMap<String, String>,
+    ) -> Result<String> {
         Err(DriverError::Unsupported("one-shot prompts".into()))
     }
     async fn spawn(&self, config: SessionConfig) -> Result<SpawnedSession>;

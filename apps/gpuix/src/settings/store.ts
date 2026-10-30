@@ -1,7 +1,8 @@
-import { onEnvironmentChange } from '../shell/environment.ts'
 import { useEffect, useSyncExternalStore } from 'react'
 import type { Settings } from '../../../../packages/kybern-client/src/types.ts'
+import { changedSharedFields } from '../../../../packages/kybern-client/src/sharedState.ts'
 import { getClient, useApp } from '../state.ts'
+import { shareSettings } from './shared.ts'
 
 let state: { settings: Settings | null; error: string; saving: boolean } = { settings: null, error: '', saving: false }
 const listeners = new Set<() => void>()
@@ -16,10 +17,13 @@ export async function updateSettings(patch: Partial<Settings>) {
   if (!client || !state.settings || state.saving) return
   emit({ saving: true, error: '' })
   try {
-    const saved = await client.call('settings.update', { settings: { ...state.settings, ...patch } })
+    const before = state.settings
+    const saved = await client.call('settings.update', { settings: { ...before, ...patch } })
     if (getClient() !== client) return
     revision++
     emit({ settings: saved })
+    // A shared field also goes to the other machines (a queued change waits for an offline one); per-machine fields stay here.
+    void shareSettings(changedSharedFields(before, saved))
   } catch (error) {
     if (getClient() !== client) return
     emit({ error: `Unable to save settings. Check the connection and try again. ${String(error)}` })
@@ -61,4 +65,3 @@ export function useSettingsConnection() {
   }, [status])
 }
 
-onEnvironmentChange(() => { revision++; emit({ settings: null, error: '', saving: false }) })

@@ -11,6 +11,9 @@ import { Button } from '../kit/Button.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
 import { PickerChip } from '../kit/PickerChip.tsx'
 import { useApp } from '../state.ts'
+import { useMachines } from '../machines/index.ts'
+import { foreignOwner } from '../machines/federated.ts'
+import { footerOf } from '../../../../packages/kybern-client/src/sharedState.ts'
 import { inSpace } from '../../../../packages/kybern-client/src/spaces.ts'
 import { useCurrentSpaceId, useSpaceProjects } from '../spaces/current.ts'
 import { Label, useTheme } from '../ui.tsx'
@@ -19,7 +22,7 @@ import { notesSearchRef } from './Header.tsx'
 import { NoteThumb } from './NoteThumb.tsx'
 import { cardIn, cardLeave, useFreshNotes, useLeavingNotes } from './motion.ts'
 import { NOTES_META, NOTES_UI, ProjectDot, Ring, notesTokens, useNotesTokens } from './kit.tsx'
-import { deleteNote, display, getNotes, openNote, refreshNotes, searchNotes, setNotes, useNotes } from './store.ts'
+import { deleteNote, display, getNotes, openNote, refreshNotes, searchNotes, setAllMachines, setNotes, useNotes } from './store.ts'
 import { isPrimaryNotAltGr, shortcutLabel } from '../platform/keys.ts'
 
 let galleryEntered = false
@@ -45,12 +48,16 @@ export function NotesGallery() {
   const filter = useNotes((s) => s.filter)
   const prefs = useNotes((s) => s.display)
   const query = useNotes((s) => s.query)
+  const allMachines = useNotes((s) => s.allMachines)
+  const federation = useNotes((s) => s.federation)
+  const machineCount = useMachines().length
   const everyProject = useApp((s) => s.projects)
   const projects = useSpaceProjects()
   const spaceId = useCurrentSpaceId()
   // The name map stays complete; notes of other spaces' projects are hidden, global notes stay.
   const projectMap = useMemo(() => Object.fromEntries(everyProject.map((p) => [p.id, p])), [everyProject])
-  const all = useMemo(() => allNotes.filter((note) => inSpace(note.project_id, everyProject, spaceId)), [allNotes, everyProject, spaceId])
+  // A note of another machine names that machine's project, which this machine may not list: it stays.
+  const all = useMemo(() => allNotes.filter((note) => foreignOwner('notes', note.id) || inSpace(note.project_id, everyProject, spaceId)), [allNotes, everyProject, spaceId])
   const [hits, setHits] = useState<{ query: string; ids: Set<string> } | null>(null)
   const [active, setActive] = useState<string | null>(null)
   const list = useRef<PublicInstance>(null)
@@ -76,6 +83,8 @@ export function NotesGallery() {
   const sections = useMemo(() => gallerySections(visible, { ...prefs, projects: projectMap, projectOrder: [], flat: !!query || filter.kind === 'deleted' }), [visible, prefs, projectMap, query, filter.kind])
   const rows = useMemo(() => {
     const out: Row[] = [{ key: 'filters', kind: 'filters' }]
+    const left = allMachines ? footerOf(federation, 'notes') : null
+    if (left) out.push({ key: 'federation', kind: 'notice', label: left })
     if (filter.kind === 'deleted' && visible.length) out.push({ key: 'notice', kind: 'notice', label: 'Notes here are deleted forever after 30 days. Right-click a note to restore it.' })
     if (query.trim() && visible.length) out.push({ key: 'notice', kind: 'notice', label: `${visible.length === 1 ? '1 note matches' : `${visible.length} notes match`} “${query.trim()}”` })
     sections.forEach((section, index) => {
@@ -84,7 +93,7 @@ export function NotesGallery() {
       for (let i = 0; i < section.notes.length; i += per) out.push({ key: section.notes[i]!.id, kind: 'cards', notes: section.notes.slice(i, i + per), per, big: section.pinned, list: prefs.layout === 'list' })
     })
     return out
-  }, [sections, prefs.layout, cols, filter.kind, query, visible])
+  }, [sections, prefs.layout, cols, filter.kind, query, visible, allMachines, federation])
   const order = rows.flatMap((r) => r.notes ?? [])
   const choices = filterChoices(all, projectMap, [])
   const pickFilter = (next: NotesFilter, byKey = false) => {
@@ -127,6 +136,7 @@ export function NotesGallery() {
     </Menu>
     {filter.kind === 'deleted' && <Chip label="Recently deleted" selected onClick={(byKey) => pickFilter({ kind: 'deleted' }, byKey)} />}
     <div style={{ flexGrow: 1 }} />
+    {machineCount > 1 && <Chip testId="notes-all-machines" label="All machines" selected={allMachines} onClick={() => setAllMachines(!allMachines)} />}
     {choices.deleted > 0 && filter.kind !== 'deleted' && <Chip testId="notes-filter-deleted" label="Recently deleted" onClick={(byKey) => pickFilter({ kind: 'deleted' }, byKey)} />}
   </div>
   return <div testId="page-notes" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
@@ -136,7 +146,7 @@ export function NotesGallery() {
         {row.kind === 'filters' ? filters
           : row.kind === 'notice' ? <div style={{ paddingTop: 16, paddingBottom: 12 }}><Label color={k.fg3} size={NOTES_META} lineHeight={18}>{row.label!}</Label></div>
           : row.kind === 'header' ? <div style={{ paddingTop: row.first || row.list ? 24 : 4, paddingBottom: 10 }}><Label color={k.fg} size={NOTES_UI} lineHeight={18} weight={600}>{row.label!}</Label></div>
-          : <div style={{ display: 'flex', gap: row.list ? 0 : 20, paddingBottom: row.list ? 0 : 24 }}>{row.notes!.map((note, column) => <NoteCard key={note.id} note={note} big={!!row.big} list={!!row.list} scope={note.scope === 'global' ? 'Global' : projectMap[note.project_id ?? '']?.name ?? 'Chats'} projectId={note.scope === 'global' ? null : note.project_id ?? null} active={active === note.id && keyboard} enter={!keyboard && ((enterGen > 0 && index < 5 && !seen.current.has(note.id)) || fresh.has(note.id))} enterGen={enterGen} leaving={leaving.get(note.id)} onGone={gone} index={index + column} onSeen={() => seen.current.add(note.id)} onFocus={() => setActive(note.id)} />)}{Array.from({ length: row.per! - row.notes!.length }, (_, i) => <div key={i} style={{ flexGrow: 1, flexBasis: 0 }} />)}</div>}
+          : <div style={{ display: 'flex', gap: row.list ? 0 : 20, paddingBottom: row.list ? 0 : 24 }}>{row.notes!.map((note, column) => <NoteCard key={note.id} note={note} big={!!row.big} list={!!row.list} scope={foreignOwner('notes', note.id)?.name ?? (note.scope === 'global' ? 'Global' : projectMap[note.project_id ?? '']?.name ?? 'Chats')} projectId={note.scope === 'global' ? null : note.project_id ?? null} active={active === note.id && keyboard} enter={!keyboard && ((enterGen > 0 && index < 5 && !seen.current.has(note.id)) || fresh.has(note.id))} enterGen={enterGen} leaving={leaving.get(note.id)} onGone={gone} index={index + column} onSeen={() => seen.current.add(note.id)} onFocus={() => setActive(note.id)} />)}{Array.from({ length: row.per! - row.notes!.length }, (_, i) => <div key={i} style={{ flexGrow: 1, flexBasis: 0 }} />)}</div>}
       </div>)}
       {loaded && !visible.length && <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6, minHeight: 320, paddingTop: 48, paddingBottom: 48 }}>
         <Label color={k.fg} size={17} lineHeight={23} weight={600}>{query ? `No notes match “${query.trim()}”` : emptyTitle(filter, projectMap)}</Label>

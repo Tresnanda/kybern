@@ -147,7 +147,7 @@ export interface BootstrapDependencies {
   stop: typeof stopSshTunnel
   info: (port: number, token: string) => Promise<{ version: string; hostname: string; environment_id: string }>
   shutdown: (port: number, token: string) => Promise<void>
-  pair: (port: number, token: string, input: BootstrapInput, ssh: SavedSsh, identity: string) => Promise<EnvironmentProfile>
+  pair: (port: number, token: string, input: BootstrapInput, ssh: SavedSsh, identity: string) => Promise<{ machineId: string; name: string }>
   version: string
   signal?: AbortSignal
   sleep?: typeof delay

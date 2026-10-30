@@ -31,6 +31,45 @@ const SNAPSHOT_INDEX: &str = "kybern-snapshot-index";
 /// Commit-message line naming a path a snapshot left out.
 const SKIPPED_TRAILER: &str = "Kybern-Skipped: ";
 
+/// What git says about a folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepoState {
+    Repo,
+    NotRepo,
+    /// Git refuses the folder because another user owns it; the message tells the person what to run.
+    Unsafe(String),
+}
+
+/// The message for git's "dubious ownership" refusal, or `None` for any other stderr. Kybern never
+/// writes the user's global git config itself.
+pub fn dubious_ownership(stderr: &str, path: &Path) -> Option<String> {
+    if !stderr.contains("dubious ownership") {
+        return None;
+    }
+    // git names the folder as it sees it: "repository at 'D:/work/repo'".
+    let named = stderr.split("repository at '").nth(1).and_then(|rest| rest.split('\'').next()).filter(|name| !name.is_empty());
+    let shown = named.map(str::to_string).unwrap_or_else(|| simplify_path(path).to_string_lossy().replace('\\', "/"));
+    Some(format!("Git refuses this folder because another user owns it. Run: git config --global --add safe.directory {shown}"))
+}
+
+/// `path` without the `\\?\` prefix that `canonicalize` adds on Windows (`\\?\D:\x` becomes `D:\x`,
+/// `\\?\UNC\host\share` becomes `\\host\share`), which git and people do not expect. Other paths
+/// come back unchanged.
+pub fn simplify_path(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        let bytes = rest.as_bytes();
+        // Only a drive path: `\\?\Volume{..}` and device paths keep their prefix.
+        if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes.get(2).is_none_or(|b| *b == b'\\') {
+            return PathBuf::from(rest);
+        }
+    }
+    path.to_path_buf()
+}
+
 /// An untracked path too large to snapshot.
 #[derive(Debug, Clone)]
 struct SkippedPath {
@@ -187,6 +226,20 @@ impl Repo {
         }
         cmd.output().await.context("run git")?;
         Ok(())
+    }
+
+    /// Like [`Repo::is_repo`], but says why git refused a folder it would otherwise open: a daemon
+    /// running as another user (a scheduled task on Windows) meets git's ownership check.
+    pub async fn probe(path: &Path) -> RepoState {
+        let out = Command::new("git").no_window().arg("-C").arg(path).args(["rev-parse", "--is-inside-work-tree"]).output().await;
+        match out {
+            Ok(out) if out.status.success() => RepoState::Repo,
+            Ok(out) => match dubious_ownership(&String::from_utf8_lossy(&out.stderr), path) {
+                Some(message) => RepoState::Unsafe(message),
+                None => RepoState::NotRepo,
+            },
+            Err(_) => RepoState::NotRepo,
+        }
     }
 
     pub async fn is_repo(path: &Path) -> bool {
@@ -857,6 +910,11 @@ impl Repo {
         self.output_with(args, &[], None).await
     }
 
+    /// Run git with extra environment and an optional time limit, and return what it printed.
+    pub async fn output_env(&self, args: &[&str], env: &[(&str, &str)], timeout: Option<std::time::Duration>) -> Result<GitOutput> {
+        self.output_with(args, env, timeout).await
+    }
+
     async fn output_with(&self, args: &[&str], env: &[(&str, &str)], timeout: Option<std::time::Duration>) -> Result<GitOutput> {
         let mut cmd = Command::new("git").no_window();
         cmd.arg("-C").arg(&self.workdir).args(args).stdin(Stdio::null()).kill_on_drop(true);
@@ -1264,6 +1322,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repo::new(dir.path());
         repo.git(&["init", "-q"]).await.unwrap();
+        repo.git(&["config", "core.autocrlf", "false"]).await.unwrap();
         repo.git(&["config", "user.email", "t@t"]).await.unwrap();
         repo.git(&["config", "user.name", "t"]).await.unwrap();
         (dir, repo)
@@ -1301,7 +1360,8 @@ mod tests {
         assert_eq!(repo.status_porcelain_unlocked(&[], timeout).await.unwrap(), [" M a.txt"]);
         // A file-system monitor hook that sleeps holds `git status`; a timeout of a
         // few nanoseconds instead raced a fast git on a busy runner.
-        repo.git(&["config", "core.fsmonitor", "sleep 10; :"]).await.unwrap();
+        let hook = if cfg!(windows) { "powershell.exe -NoProfile -Command \"Start-Sleep -Seconds 10\"" } else { "sleep 10; :" };
+        repo.git(&["config", "core.fsmonitor", hook]).await.unwrap();
         let error = repo.status_porcelain_unlocked(&[], std::time::Duration::from_millis(300)).await.unwrap_err();
         assert!(error.to_string().contains("timed out"), "{error}");
     }
@@ -1882,6 +1942,7 @@ mod group_tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repo::new(dir.path());
         repo.git(&["init", "-q"]).await.unwrap();
+        repo.git(&["config", "core.autocrlf", "false"]).await.unwrap();
         repo.git(&["config", "user.email", "t@t"]).await.unwrap();
         repo.git(&["config", "user.name", "t"]).await.unwrap();
         (dir, repo)
@@ -2027,5 +2088,33 @@ mod group_tests {
         assert_eq!(tail.iter().map(|c| c.entry.subject.as_str()).collect::<Vec<_>>(), ["second again", "first"]);
         assert_eq!(repo.count_range("", "HEAD").await.unwrap(), 2);
         assert_eq!(repo.count_range("HEAD~1", "HEAD").await.unwrap(), 1);
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn the_verbatim_prefix_is_dropped_from_drive_and_unc_paths_only() {
+        let plain = |text: &str| simplify_path(Path::new(text)).to_string_lossy().into_owned();
+        assert_eq!(plain(r"\\?\D:\kybern\repo"), r"D:\kybern\repo");
+        assert_eq!(plain(r"\\?\UNC\box\share\repo"), r"\\box\share\repo");
+        assert_eq!(plain(r"\\?\Volume{1234}\repo"), r"\\?\Volume{1234}\repo");
+        assert_eq!(plain(r"D:\kybern\repo"), r"D:\kybern\repo");
+        assert_eq!(plain("/Users/me/repo"), "/Users/me/repo");
+    }
+
+    #[test]
+    fn git_s_ownership_refusal_becomes_a_message_with_the_command_to_run() {
+        let stderr = "fatal: detected dubious ownership in repository at 'D:/kybern/repo'\nTo add an exception for this directory, call:\n\n\tgit config --global --add safe.directory D:/kybern/repo\n";
+        let message = dubious_ownership(stderr, Path::new(r"\\?\D:\kybern\repo")).unwrap();
+        assert_eq!(
+            message,
+            "Git refuses this folder because another user owns it. Run: git config --global --add safe.directory D:/kybern/repo"
+        );
+        let unnamed = dubious_ownership("fatal: detected dubious ownership", Path::new(r"\\?\D:\x")).unwrap();
+        assert!(unnamed.ends_with("safe.directory D:/x"), "{unnamed}");
+        assert_eq!(dubious_ownership("fatal: not a git repository", Path::new("/x")), None);
     }
 }

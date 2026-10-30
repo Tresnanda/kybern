@@ -14,7 +14,6 @@ import { USAGE_LIMITS_CHANGED_NOTIFICATION, type AccountSummary, type ProviderIn
 import { errorText } from '../nav/actions.ts'
 import { useNav } from '../nav/store.ts'
 import { toast } from '../shell/toasts.tsx'
-import { onEnvironmentChange } from '../shell/environment.ts'
 import { getClient, useApp } from '../state.ts'
 import { setSettings, latestSettings, useSettings } from '../settings/store.ts'
 import { refreshComposerAccounts } from '../composer/store.ts'
@@ -38,7 +37,6 @@ const emit = (patch: Partial<State>) => { state = { ...state, ...patch }; for (c
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } }
 const select = <T,>(pick: (s: State) => T) => useSyncExternalStore(subscribe, () => pick(state))
 let generation = 0
-onEnvironmentChange(() => { generation++; inflight.clear(); emit({ ...EMPTY }) })
 
 const isMethodNotFound = (error: unknown) => /method not found|-32601/i.test(errorText(error))
 const inflight = new Map<string, Promise<boolean>>()

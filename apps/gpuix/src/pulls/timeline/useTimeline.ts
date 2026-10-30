@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PrTimelineEvent } from '../../../../../packages/kybern-client/src/types.ts'
-import { getClient, useApp } from '../../state.ts'
+import { useApp } from '../../state.ts'
+import { prClient } from '../client.ts'
 import { mergeTimeline, TIMELINE_LIMIT } from './model.ts'
 
 interface State { key: string; events: PrTimelineEvent[]; cursor?: string; page: number; hasMore: boolean; loading: boolean; error?: string }
@@ -16,7 +17,7 @@ export function useTimeline(projectId: string, number: number, repo: string | un
   const current = useRef(state)
   current.current = state
   const fetchPage = useCallback((forKey: string, cursor: string | undefined, page: number) => {
-    const client = getClient()
+    const client = prClient(projectId)
     if (!client) return
     void client.call('github.pr.page', { project_id: projectId, number, kind: 'timeline', page, ...(cursor ? { cursor } : {}), ...(repo ? { repo } : {}) }).then(result => {
       setState(s => s.key !== forKey ? s : { key: forKey, events: mergeTimeline(page === 1 ? [] : s.events, result.timeline ?? []), ...(result.next_cursor ? { cursor: result.next_cursor } : {}), page, hasMore: !!result.has_more && !!result.next_cursor, loading: false })

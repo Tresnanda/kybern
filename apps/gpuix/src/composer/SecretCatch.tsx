@@ -17,10 +17,11 @@ import { PickerItem, PickerMenu } from './Menu.tsx'
 import { TrayFrame } from './Tray.tsx'
 import { FONT_MONO } from '../theme.ts'
 import { Label, useTheme } from '../ui.tsx'
-import { getClient } from '../state.ts'
+import { projectClient, threadClient } from '../state.ts'
 
 /** What the strip stores into: the open thread, or the project's folder for a chat that has not started. */
 export interface SecretWorkspace { thread_id?: string; project_id?: string }
+const workspaceClient = (workspace: SecretWorkspace) => workspace.thread_id ? threadClient(workspace.thread_id) : projectClient(workspace.project_id)
 
 export const CATCH_FILES = ['.env.local', '.env'] as const
 const NAME_RULE = /^[A-Z_][A-Z0-9_]*$/
@@ -61,7 +62,7 @@ export function SecretNameForm({ match, workspace, onCancel, onStored }: { match
   // The first look picks the file: an existing git-ignored env file first, else `.env.local`. After the person chooses, it stays.
   useEffect(() => {
     let alive = true
-    const client = getClient()
+    const client = workspaceClient(workspace)
     if (!client || !valid) return
     void (async () => {
       try {
@@ -80,7 +81,7 @@ export function SecretNameForm({ match, workspace, onCancel, onStored }: { match
   }, [])
 
   useEffect(() => {
-    const client = getClient()
+    const client = workspaceClient(workspace)
     if (!client || !valid) { setCheck(null); return }
     let alive = true
     // The first look is at once (the form opens already knowing what it will do); edits of the name wait for a pause.
@@ -99,7 +100,7 @@ export function SecretNameForm({ match, workspace, onCancel, onStored }: { match
   const replaces = !!result?.replaces
   const addIgnore = !!result && !result.ignored && !result.tracked
   const store = async () => {
-    const client = getClient()
+    const client = workspaceClient(workspace)
     if (!client || busy || !valid || blocked) return
     setBusy(true); setError('')
     try {

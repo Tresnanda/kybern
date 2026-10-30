@@ -23,6 +23,9 @@ mod integrations;
 mod lead_git;
 mod maintenance;
 mod native_tools_mcp;
+// Transport (N3) is wired in below; the joining flows and `network.*` handlers (N4) use the rest.
+#[allow(dead_code)]
+mod network;
 mod orchestrator;
 mod pick;
 mod power;
@@ -34,10 +37,17 @@ mod provider_assets;
 mod remote_tests;
 mod requests;
 mod rpc;
+#[cfg(test)]
+mod test_support;
+// S3: the encrypted secret store. Its RPC, push transport and outbox hooks arrive with N3/R1.
+mod plugins;
+#[allow(dead_code)]
+mod secret_store;
 mod secrets;
 mod self_update;
 mod session_import;
 mod settings;
+mod settings_share;
 mod skills;
 mod state;
 mod terminal;
@@ -131,18 +141,38 @@ fn desktop_listen_port(requested: u16, desktop_managed: bool, root: &std::path::
     }
 }
 
-/// Stack for each runtime thread. Unoptimized builds give every arm of the
-/// `rpc::dispatch` match its own stack slots: its poll frame alone is about
-/// 1.4 MB on macOS and larger with MSVC, so a preview snapshot on top of it
-/// overflowed Tokio's 2 MiB default and aborted the daemon on Windows. This
-/// is address space; pages are committed only as they are touched.
-const RUNTIME_THREAD_STACK: usize = 8 * 1024 * 1024;
+/// Stack for each runtime thread. Unoptimized builds give every arm of an
+/// `rpc` dispatch match its own stack slots (the whole match was a poll frame of
+/// about 1.4 MB on macOS and larger with MSVC, now split into parts), so a
+/// preview snapshot on top of it overflowed Tokio's 2 MiB default and aborted
+/// the daemon on Windows. This is address space; pages are committed only as
+/// they are touched.
+pub(crate) const RUNTIME_THREAD_STACK: usize = 8 * 1024 * 1024;
 
 fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_multi_thread().enable_all().thread_stack_size(RUNTIME_THREAD_STACK).build()
 }
 
 /// Run the daemon with the process arguments. `kybernd` is a thin wrapper around this.
+/// Windows: a daemon hosted in a console (a scheduled task's `run.cmd`, a terminal) is ended a few
+/// seconds after that console closes or the system shuts down, with no other trace. Shut down
+/// cleanly instead, and say why in the log. Never resolves elsewhere.
+async fn console_closed() {
+    #[cfg(windows)]
+    {
+        use tokio::signal::windows::{ctrl_close, ctrl_shutdown};
+        let (Ok(mut close), Ok(mut shutdown)) = (ctrl_close(), ctrl_shutdown()) else {
+            return std::future::pending().await;
+        };
+        tokio::select! {
+            _ = close.recv() => tracing::warn!("the console hosting the daemon closed"),
+            _ = shutdown.recv() => tracing::warn!("Windows is shutting down"),
+        }
+    }
+    #[cfg(not(windows))]
+    std::future::pending::<()>().await
+}
+
 pub fn run() -> Result<()> {
     runtime()?.block_on(serve())
 }
@@ -179,6 +209,7 @@ async fn serve() -> Result<()> {
         write_startup_announcement(&paths, startup_id, addr.port())?;
     }
     state.desktop_managed.store(args.desktop_startup_id.is_some(), std::sync::atomic::Ordering::SeqCst);
+    state.process_owned.store(true, std::sync::atomic::Ordering::SeqCst);
 
     // Recovery may need to close interrupted turns and capture final snapshots.
     // Keep the port reserved while it runs, but do not serve requests or publish
@@ -219,6 +250,7 @@ async fn serve() -> Result<()> {
     let app = Router::new()
         .merge(http::routes())
         .merge(native_tools_mcp::routes())
+        .merge(network::routes())
         .route("/ws", get(ws::upgrade))
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
         .with_state(state.clone());
@@ -234,6 +266,22 @@ async fn serve() -> Result<()> {
         tracing::warn!(%error, "could not listen on Tailscale; pairing stays loopback-only until it is enabled again");
     }
 
+    // Discovery, the network listener and the sessions with other members. It opens the Tailscale
+    // listener itself once the network is on and Tailscale is running (design §3.1).
+    let network_worker = tokio::spawn(network::peers::run(state.clone()));
+    // Delivery of work queued for machines that were offline, and the followers of agents that run
+    // on other machines (they pick up where a restart left them).
+    let outbox_worker = tokio::spawn(network::outbox::run(state.clone()));
+    state.orchestrator.remote_start();
+    // Which repository each project is, for matching checkouts across machines (design §4.4).
+    let repo_identity_worker = tokio::spawn(network::repo_identity::run(state.clone()));
+    // "Keep all machines on the same version": follows the newest version another member runs.
+    let follow_updates_worker = tokio::spawn(network::updates::run(state.clone()));
+    // The login broker's watch (rotation, refresh ahead of expiry) and every member's catch-up after a move.
+    let login_broker_worker = tokio::spawn(network::broker::run(state.clone()));
+    // The universal clipboard: idle unless this machine's owner turned on "Share clipboard automatically".
+    let clipboard_worker = tokio::spawn(network::clipboard::run(state.clone()));
+
     if args.pair {
         let endpoints = crate::access::endpoints(&state).await;
         let (code, expires_at) = state.pairing.create(None)?;
@@ -245,7 +293,8 @@ async fn serve() -> Result<()> {
     let shutdown_token = state.shutdown.clone();
     let shutdown = async move {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {}
+            _ = tokio::signal::ctrl_c() => tracing::info!("Ctrl+C received"),
+            _ = console_closed() => {}
             _ = shutdown_token.cancelled() => {}
         }
         // Signal-driven shutdown must also wake maintenance/update workers
@@ -257,6 +306,12 @@ async fn serve() -> Result<()> {
     axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(shutdown).await?;
     queue_worker.abort();
     notes_worker.abort();
+    let _ = network_worker.await;
+    outbox_worker.abort();
+    repo_identity_worker.abort();
+    follow_updates_worker.abort();
+    login_broker_worker.abort();
+    clipboard_worker.abort();
     let _ = maintenance_worker.await;
     let _ = update_worker.await;
     let _ = self_update_worker.await;
@@ -377,7 +432,9 @@ fn owns_endpoint_file(contents: &str, expected: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{desktop_listen_port, nvm_default_bin, owns_endpoint_file, runtime, startup_announcement_filename};
+    #[cfg(unix)]
+    use super::nvm_default_bin;
+    use super::{desktop_listen_port, owns_endpoint_file, runtime, startup_announcement_filename};
 
     /// A spawned task (every RPC runs in one) has room for more than Tokio's 2 MiB default.
     #[test]
@@ -425,6 +482,8 @@ mod tests {
         assert!(startup_announcement_filename("").is_err());
     }
 
+    // nvm-sh uses Unix-only alias filenames (including `lts/*`).
+    #[cfg(unix)]
     #[test]
     fn nvm_default_bin_follows_aliases_to_an_installed_node() {
         let nvm = std::env::temp_dir().join(format!("kybern-nvm-{}", uuid::Uuid::new_v4()));

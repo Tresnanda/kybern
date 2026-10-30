@@ -1,5 +1,5 @@
 import { applyUsageLimits as applyLimits } from './limits.ts'
-import { environmentKey, onEnvironmentChange } from '../shell/environment.ts'
+import { environmentKey } from '../shell/environment.ts'
 // Keeps the thread panel live, like the desktop's `state/rpc.ts`:
 //
 // - one events subscription for every thread folds `thread_created`,
@@ -10,7 +10,8 @@ import { environmentKey, onEnvironmentChange } from '../shell/environment.ts'
 // - background activity (working, monitoring) comes from `threads.list`, re-read
 //   shortly after runtime tasks change;
 // - a turn that completes while its thread is not open marks it unread;
-// - plan limits follow `usage.limits` and `usage.limits.changed`.
+// - plan limits follow `usage.limits` and `usage.limits.changed`;
+// - the other machines' threads follow their own event streams (`remoteLive.ts`), only while another machine is connected.
 //
 // Text deltas cost one switch here and nothing else: no state changes, no render.
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
@@ -18,7 +19,6 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { isChildThread } from '../../../../packages/kybern-client/src/subagents.ts'
 import { isChildWorking } from '../../../../packages/kybern-client/src/delegations.ts'
-import { pendingOf } from '../../../../packages/kybern-client/src/threadAttention.ts'
 import {
   USAGE_LIMITS_CHANGED_NOTIFICATION,
   type Thread,
@@ -32,6 +32,8 @@ import { DEFAULT_FILTER, getNav, setNav, subscribeNav, type NavState } from './s
 import { followSpaces, loadSpaces } from '../spaces/store.ts'
 import { followWorkspaceProgress } from '../groups/store.ts'
 import { gpuixConfigDir } from '../platform/os.ts'
+import { machineHub } from '../machines/index.ts'
+import { RemoteLive, activityMaps, withRemote } from './remoteLive.ts'
 
 const LIMITS_POLL_MS = 60_000
 const ACTIVITY_DEBOUNCE_MS = 600
@@ -79,16 +81,17 @@ function upsertThread(thread: Thread) {
     }
     return setNav({ children: { ...children, [thread.id]: thread } })
   }
+  // This is the machine the user is at: a thread of another machine with the same id is not this one (`remoteLive.ts`).
   const threads = getState().threads
-  const index = threads.findIndex((t) => t.id === thread.id)
+  const index = threads.findIndex((t) => t.id === thread.id && !t.machineId)
   if (index >= 0 && threads[index]!.last_seq > thread.last_seq) return
   // An update that changes nothing the lists show keeps the same array: no commit, no layout.
   if (index >= 0 && threadKey(threads[index]!) === threadKey(thread)) return
   if (thread.status === 'archived') {
-    if (index >= 0) set({ threads: threads.filter((t) => t.id !== thread.id) })
+    if (index >= 0) set({ threads: threads.filter((t, at) => at !== index) })
     return
   }
-  const next = index >= 0 ? threads.map((t) => (t.id === thread.id ? thread : t)) : [thread, ...threads]
+  const next = index >= 0 ? threads.map((t, at) => (at === index ? thread : t)) : [thread, ...threads]
   set({ threads: next.sort(byRecent) })
 }
 
@@ -108,7 +111,7 @@ function onEvent(event: ThreadEvent) {
     case 'thread_archived': {
       archived.add(event.thread_id)
       const threads = getState().threads
-      if (threads.some((t) => t.id === event.thread_id)) set({ threads: threads.filter((t) => t.id !== event.thread_id) })
+      if (threads.some((t) => t.id === event.thread_id && !t.machineId)) set({ threads: threads.filter((t) => t.id !== event.thread_id || t.machineId) })
       if (getNav().children[event.thread_id]) {
         const children = { ...getNav().children }
         delete children[event.thread_id]
@@ -119,8 +122,8 @@ function onEvent(event: ThreadEvent) {
     case 'turn_completed': {
       // A finished turn the reader did not watch (desktop `announce` → "done").
       if (event.stop_reason !== 'completed') return
-      const thread = getState().threads.find((t) => t.id === event.thread_id)
-      if (!thread || thread.parent_thread_id || getState().selectedId === event.thread_id) return
+      const thread = getState().threads.find((t) => t.id === event.thread_id && !t.machineId)
+      if (!thread || thread.parent_thread_id || (getState().selectedId === event.thread_id && !getState().selectedMachineId)) return
       if (!getNav().unread[event.thread_id]) setNav({ unread: { ...getNav().unread, [event.thread_id]: true } })
       return
     }
@@ -167,16 +170,23 @@ function loadChildren(parentId: ThreadId): Promise<void> {
   return request
 }
 
+/** What the machine the user is at reported; `publishActivity` adds the other machines'. */
+let localActivity: NavState['activity'] = {}
+let localPending: NavState['pending'] = {}
+let remote: RemoteLive | undefined
+
 function applyActivity(summaries: ThreadActivitySummary[] | undefined) {
-  const activity: NavState['activity'] = {}
-  const pending: NavState['pending'] = {}
-  for (const summary of summaries ?? []) {
-    if (summary.state) activity[summary.thread_id] = summary.state
-    const waiting = pendingOf(summary)
-    if (waiting) pending[summary.thread_id] = waiting
-    // Delegated children are no runtime tasks of their parent: they count in `active_children` (ADE-74).
-    if (summary.active_agents > 0 || (summary.active_children ?? 0) > 0) void loadChildren(summary.thread_id)
-  }
+  const maps = activityMaps(summaries)
+  localActivity = maps.activity
+  localPending = maps.pending
+  // Delegated children are no runtime tasks of their parent: they count in `active_children` (ADE-74).
+  for (const summary of summaries ?? []) if (summary.active_agents > 0 || (summary.active_children ?? 0) > 0) void loadChildren(summary.thread_id)
+  publishActivity()
+}
+
+function publishActivity() {
+  const activity = remote ? withRemote(localActivity, remote.activity) : localActivity
+  const pending = remote ? withRemote(localPending, remote.pending) : localPending
   const current = getNav().activity
   const same =
     Object.keys(activity).length === Object.keys(current).length &&
@@ -229,6 +239,7 @@ const prefsFile = () => prefsFileFor(environmentKey())
 interface Prefs {
   collapsed?: Record<string, boolean>
   projectOrder?: string[]
+  machineFilter?: string | null
   filter?: NavState['filter']
   sidebarOpen?: boolean
   unread?: NavState['unread']
@@ -253,6 +264,7 @@ function persistPrefs() {
   const prefs: Prefs = {
     collapsed: getState().collapsed,
     projectOrder: getNav().projectOrder,
+    machineFilter: getNav().machineFilter,
     filter: getNav().filter,
     sidebarOpen: getState().sidebarOpen,
     unread: getNav().unread,
@@ -301,11 +313,20 @@ export function startLive() {
   const prefs = readPrefs()
   lastPrefs = JSON.stringify(prefs)
   set({ collapsed: prefs.collapsed ?? {}, ...(prefs.sidebarOpen === undefined ? {} : { sidebarOpen: prefs.sidebarOpen }) })
-  setNav({ projectOrder: prefs.projectOrder ?? [], filter: prefs.filter ?? DEFAULT_FILTER, unread: prefs.unread ?? {}, attentionDismissals: prefs.attentionDismissals ?? {}, spaceId: prefs.spaceId ?? null, spaceViews: prefs.spaceViews ?? {} })
+  setNav({ projectOrder: prefs.projectOrder ?? [], machineFilter: prefs.machineFilter ?? null, filter: prefs.filter ?? DEFAULT_FILTER, unread: prefs.unread ?? {}, attentionDismissals: prefs.attentionDismissals ?? {}, spaceId: prefs.spaceId ?? null, spaceViews: prefs.spaceViews ?? {} })
   stops.push(subscribe(persistPrefs), subscribeNav(persistPrefs))
 
   const events = client.subscribeEvents({ include_tool_output: false }, (event) => { if (getClient() === client) onEvent(event) })
   stops.push(() => events.unsubscribe())
+  remote = new RemoteLive({
+    hub: machineHub(),
+    state: getState,
+    unread: () => getNav().unread,
+    setUnread: (unread) => setNav({ unread }),
+    publish: publishActivity,
+  })
+  remote.start()
+  stops.push(() => { remote?.stop(); remote = undefined; localActivity = {}; localPending = {} })
   stops.push(followSpaces())
   stops.push(followWorkspaceProgress())
   stops.push(client.onNotification(USAGE_LIMITS_CHANGED_NOTIFICATION, (params) => applyLimits(params as UsageLimitsResult)))
@@ -337,4 +358,3 @@ function stopLive() {
   clearTimeout(activityTimer); clearInterval(limitsTimer); limitsTimer = undefined
   started = false; owner = null; lastPrefs = ''; childLoads.clear(); archived.clear()
 }
-onEnvironmentChange(stopLive, -100)

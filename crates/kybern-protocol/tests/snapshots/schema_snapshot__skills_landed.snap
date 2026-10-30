@@ -1,0 +1,123 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(SkillLanded)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SkillLanded",
+  "description": "What a target reports once a skill landed (the `skill` of `peer.files.finish`, and a delivered\n`skill_copy` item's result).",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "hash": {
+      "type": "string"
+    },
+    "placed": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SkillPlaced"
+      }
+    }
+  },
+  "required": [
+    "name",
+    "hash",
+    "placed"
+  ],
+  "$defs": {
+    "SkillPlaced": {
+      "type": "object",
+      "properties": {
+        "home": {
+          "$ref": "#/$defs/SkillHome"
+        },
+        "path": {
+          "description": "The skill's folder on the target.",
+          "type": "string"
+        },
+        "action": {
+          "$ref": "#/$defs/SkillPlaceAction"
+        },
+        "backup": {
+          "description": "Where the replaced version was moved, for `replaced`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "home",
+        "path",
+        "action"
+      ]
+    },
+    "SkillHome": {
+      "description": "A harness's user skill folder.",
+      "oneOf": [
+        {
+          "description": "`~/.agents/skills`: read by Codex, Cursor, OpenCode and omp.",
+          "type": "string",
+          "const": "agents"
+        },
+        {
+          "description": "`$CLAUDE_CONFIG_DIR/skills` or `~/.claude/skills`: Claude Code, also read by Cursor and OpenCode.",
+          "type": "string",
+          "const": "claude"
+        },
+        {
+          "description": "`$CODEX_HOME/skills` or `~/.codex/skills`: Codex, also read by Cursor.",
+          "type": "string",
+          "const": "codex"
+        },
+        {
+          "description": "`~/.cursor/skills`.",
+          "type": "string",
+          "const": "cursor"
+        },
+        {
+          "description": "`$XDG_CONFIG_HOME/opencode/skills` or `~/.config/opencode/skills`.",
+          "type": "string",
+          "const": "opencode"
+        },
+        {
+          "description": "`$PI_CODING_AGENT_DIR/skills` or `~/.pi/agent/skills`: pi, also read by omp.",
+          "type": "string",
+          "const": "pi"
+        },
+        {
+          "description": "`~/.omp/agent/skills` (or the active omp profile's).",
+          "type": "string",
+          "const": "omp"
+        }
+      ]
+    },
+    "SkillPlaceAction": {
+      "description": "What happened to a skill in one home of a target.",
+      "oneOf": [
+        {
+          "description": "It was not there; now it is.",
+          "type": "string",
+          "const": "written"
+        },
+        {
+          "description": "A different version was there; it was moved to the backup and this one put in its place.",
+          "type": "string",
+          "const": "replaced"
+        },
+        {
+          "description": "The same version was already there.",
+          "type": "string",
+          "const": "same"
+        },
+        {
+          "description": "The folder there is a link to another home that this copy also writes.",
+          "type": "string",
+          "const": "linked"
+        }
+      ]
+    }
+  }
+}

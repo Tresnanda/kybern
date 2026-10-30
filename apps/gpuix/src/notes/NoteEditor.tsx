@@ -13,6 +13,7 @@ import type { TaskItem } from '../../../../packages/kybern-client/src/types.ts'
 import { addWindowKeyHandler } from '../nav/keys.ts'
 import { getNav } from '../nav/store.ts'
 import { openThread } from '../nav/history.ts'
+import { parseThreadLink } from '../../../../packages/kybern-client/src/forkMachine.ts'
 import { Button } from '../kit/Button.tsx'
 import { observeElementBounds } from '../native/layout.ts'
 import { onWindowVisibility } from '../native/visibility.ts'
@@ -41,8 +42,8 @@ function plainText(body: string): string {
 export function openLink(href: string, _noteId?: string) {
   const task = /^kybern:\/\/task\/([a-f\d-]{36})\/?$/i.exec(href)
   if (task) { openTask(task[1]!); goPage('tasks'); return }
-  const thread = /^kybern:\/\/thread\/([a-f\d-]{36})\/?$/i.exec(href)
-  if (thread) { openThread(thread[1]!); return }
+  const thread = parseThreadLink(href)
+  if (thread) { openThread(thread.threadId, thread.machineId); return }
   if (/^(https?:|mailto:|tel:)/i.test(href)) openQuietly(href)
 }
 /** Where a note's images are kept: the daemon that keeps the note. */

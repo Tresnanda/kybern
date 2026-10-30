@@ -1,22 +1,24 @@
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import { homeClient, sharesHome, watchGlobalNotesHome } from './home.ts'
 import { useEffect, useSyncExternalStore } from 'react'
-import type { Note, NoteSummary } from '../../../../packages/kybern-client/src/types.ts'
+import type { Federation, Note, NoteSummary } from '../../../../packages/kybern-client/src/types.ts'
 import type { NotesFilter, NotesGroupBy, NotesSortBy } from '@/state/notesModel'
 import { getClient, getState, subscribe } from '../state.ts'
 import { goPage } from '../nav/history.ts'
-import { activeEnvironment, onEnvironmentChange } from '../shell/environment.ts'
+import { activeEnvironment } from '../shell/environment.ts'
 import { load, save } from '../shell/persist.ts'
 import { toast } from '../shell/toasts.tsx'
 import { isFreeChatProject } from '../../../../packages/kybern-client/src/types.ts'
 import { resolveNewNoteHome } from '@/state/notesModel'
 import { osLabels } from '../platform/os.ts'
+import { machineHub } from '../machines/index.ts'
+import { foreignOwner, MACHINE_ALL, ownerClient, recordFederation } from '../machines/federated.ts'
 
 export interface Capture { text: string; threadTitle: string; threadId: string }
 interface Display { layout: 'gallery' | 'list'; group: NotesGroupBy; sort: NotesSortBy; hints: boolean; outline: boolean }
-interface State { notes: NoteSummary[]; /** When categories began (`notes.list` `history_since`): undated notes predate it. */ historySince: string | null; loaded: boolean; error: string | null; selected: string | null; filter: NotesFilter; display: Display; quick: boolean; capture: Capture | null; query: string }
+interface State { /** "All machines": notes of every machine in the list; the footer names the ones left out. */ allMachines: boolean; federation: Federation | null; notes: NoteSummary[]; /** When categories began (`notes.list` `history_since`): undated notes predate it. */ historySince: string | null; loaded: boolean; error: string | null; selected: string | null; filter: NotesFilter; display: Display; quick: boolean; capture: Capture | null; query: string }
 const defaults: Display = { layout: 'gallery', group: 'none', sort: 'edited', hints: true, outline: true }
-const initialState = (): State => ({ notes: [], historySince: null, loaded: false, error: null, selected: load<string | null>('kybern.notes.lastOpenId', null), filter: { kind: 'all' }, display: { ...defaults, ...load<Partial<Display>>('kybern.notes.display', {}) }, quick: false, capture: null, query: '' })
+const initialState = (): State => ({ allMachines: false, federation: null, notes: [], historySince: null, loaded: false, error: null, selected: load<string | null>('kybern.notes.lastOpenId', null), filter: { kind: 'all' }, display: { ...defaults, ...load<Partial<Display>>('kybern.notes.display', {}) }, quick: false, capture: null, query: '' })
 let state: State = initialState()
 const listeners = new Set<() => void>()
 export const getNotes = () => state
@@ -25,6 +27,8 @@ export const subscribeNotes = (l: () => void) => { listeners.add(l); return () =
 export function useNotes<T>(select: (s: State) => T): T { return useSyncExternalStore(subscribeNotes, () => select(state)) }
 export function display(patch: Partial<Display>) { const value = { ...state.display, ...patch }; setNotes({ display: value }); save('kybern.notes.display', value) }
 export function openNote(id: string) { setNotes({ selected: id }); save('kybern.notes.lastOpenId', id); goPage('notes') }
+/** Show the notes of every machine, or only this one's. */
+export function setAllMachines(on: boolean) { setNotes({ allMachines: on, selected: null }); void refreshNotes() }
 export function gallery() { setNotes({ selected: null }) }
 export function openQuickNote() { setNotes({ quick: true }) }
 export function currentNoteHome() {
@@ -40,7 +44,7 @@ export function recordNote(note: NoteSummary) {
   setNotes({ notes: [note, ...state.notes.filter((n) => n.id !== note.id)] })
 }
 const homeIds = new Set<string>()
-export function rpc(id?: string, global = false) { const client = sharesHome() && (global || (id && homeIds.has(id))) ? homeClient(() => void refreshNotes()) : getClient(); if (!client) throw new Error('Reconnect to save your note.'); return client }
+export function rpc(id?: string, global = false) { if (foreignOwner('notes', id)) return ownerClient('notes', id, getClient)!; const client = sharesHome() && (global || (id && homeIds.has(id))) ? homeClient(() => void refreshNotes()) : getClient(); if (!client) throw new Error('Reconnect to save your note.'); return client }
 let fetching: Promise<void> | null = null
 let again = false
 export function refreshNotes(): Promise<void> {
@@ -50,9 +54,15 @@ export function refreshNotes(): Promise<void> {
     do {
       again = false
       try {
-        const result = await rpc().call('notes.list', {})
+        // "All machines": the machine the user is at merges what the online members hold and says who was left out.
+        const all = state.allMachines && machineHub().machineCount > 1
+        const result = await rpc().call('notes.list', all ? { machine: MACHINE_ALL } : {})
         if (owner !== activeEnvironment()) return
-        if (sharesHome()) {
+        recordFederation('notes', all ? result.federation : null)
+        if (all) {
+          homeIds.clear()
+          setNotes({ notes: result.notes, federation: result.federation ?? null, historySince: result.history_since ?? null, loaded: true, error: null })
+        } else if (sharesHome()) {
           const home = await homeClient(() => void refreshNotes()).call('notes.list', {}).catch((error) => {
             if (owner === activeEnvironment()) setNotes({ notes: [...result.notes.filter((note) => note.scope !== 'global'), ...state.notes.filter((note) => homeIds.has(note.id))], loaded: true, error: `Global notes ${osLabels().onThisComputer} are unavailable. Reconnect and try again. ${String(error)}` })
             return null
@@ -62,10 +72,10 @@ export function refreshNotes(): Promise<void> {
           homeIds.clear()
           const globals = home.notes.filter((note) => note.scope === 'global')
           globals.forEach((note) => homeIds.add(note.id))
-          setNotes({ notes: [...result.notes.filter((note) => note.scope !== 'global'), ...globals], historySince: result.history_since ?? null, loaded: true, error: null })
+          setNotes({ notes: [...result.notes.filter((note) => note.scope !== 'global'), ...globals], federation: null, historySince: result.history_since ?? null, loaded: true, error: null })
         } else {
           homeIds.clear()
-          setNotes({ notes: result.notes, historySince: result.history_since ?? null, loaded: true, error: null })
+          setNotes({ notes: result.notes, federation: null, historySince: result.history_since ?? null, loaded: true, error: null })
         }
       } catch (e) {
         if (owner !== activeEnvironment()) return
@@ -76,13 +86,6 @@ export function refreshNotes(): Promise<void> {
   fetching = run
   return run
 }
-// A switch starts from the new environment's notes and its saved preferences.
-onEnvironmentChange(() => {
-  fetching = null
-  homeIds.clear()
-  again = false
-  setNotes(initialState())
-})
 /** One live feed while the app is mounted. No polling; reconnect reloads the list. */
 export function useNotesFeed() {
   useEffect(() => {

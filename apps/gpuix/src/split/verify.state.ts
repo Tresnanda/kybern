@@ -13,7 +13,6 @@ KybernClient.prototype.subscribeEvents = ((p: { thread_id: string }, call: (even
   return { unsubscribe: () => { record.stopped = true } }
 }) as typeof KybernClient.prototype.subscribeEvents
 const state = await import('../state.ts')
-const { switchEnvironment, activeEnvironment } = await import('../shell/environment.ts')
 const result = (id: string, seq: number) => ({ thread: { id, last_seq: seq }, transcript: [], pending_approvals: [], pending_questions: [], notes: '' }) as unknown as ThreadsGetResult
 function resolve(id: string, seq: number) { const item = pending.findIndex(p => p.id === id); assert.ok(item >= 0); pending.splice(item, 1)[0]!.resolve(result(id, seq)) }
 await state.connect()
@@ -46,15 +45,6 @@ newer.resolve(result('race', 40)); await second
 older.resolve(result('race', 5)); await first
 assert.equal(state.getState().open.lastSeq, 40)
 assert.equal(callbacks.filter(c => c.id === 'race').length, 1)
-// Environment switch invalidates every pending pane and subscription.
-state.createPane('two')
-const late = state.selectPaneThread('two', 'late')
-switchEnvironment({ ...activeEnvironment(), dataDir: process.env.KYBERN_DATA_DIR! + '/next' })
-resolve('late', 100); await late
-assert.deepEqual(state.getPaneIds(), ['main'])
-assert.equal(state.getState().selectedId, null)
-assert.ok(callbacks.every(c => c.stopped))
-assert.equal(callbacks.some(c => c.id === 'late'), false)
 state.resetClient()
 const split = await import('./store.ts')
 const { flush } = await import('../shell/persist.ts')
@@ -67,13 +57,7 @@ assert.equal(split.splitPane('main', 'vertical'), true)
 assert.equal(split.splitPane(firstPair[1]!.id, 'vertical'), true)
 assert.equal(split.collectThreadPanes(split.getSplitRoot()).length, 4)
 assert.equal(split.splitPane('main', 'vertical'), false)
-const savedRoot = split.getSplitRoot()
 flush()
-const previous = activeEnvironment()
-switchEnvironment({ ...previous, dataDir: process.env.KYBERN_DATA_DIR! + '/third' })
-assert.equal(split.getSplitRoot().kind, 'leaf')
-switchEnvironment(previous)
-assert.deepEqual(split.getSplitRoot(), savedRoot)
 state.resetClient()
-console.log('PASS topology bounds and environment-specific persistence')
-console.log('PASS different threads, shared subscription, pane close, stale hydration and environment reset')
+console.log('PASS topology bounds')
+console.log('PASS different threads, shared subscription, pane close, stale hydration')

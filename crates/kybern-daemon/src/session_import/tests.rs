@@ -16,7 +16,8 @@ impl Drop for Fixture {
 }
 
 fn fixture() -> Fixture {
-    let root = std::fs::canonicalize(std::env::temp_dir()).unwrap().join(format!("kybern-session-import-{}", uuid::Uuid::now_v7()));
+    let root = kybern_git::simplify_path(&std::fs::canonicalize(std::env::temp_dir()).unwrap())
+        .join(format!("kybern-session-import-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir_all(root.join("home")).unwrap();
     let paths = crate::config::Paths::resolve(Some(root.join("data"))).unwrap();
     let state = AppState::initialize(&paths).unwrap();
@@ -115,7 +116,7 @@ fn set_age(path: &Path, age: chrono::Duration) {
 }
 
 fn root_of(path: &Path) -> String {
-    std::fs::canonicalize(path).unwrap().to_string_lossy().into_owned()
+    kybern_git::simplify_path(&std::fs::canonicalize(path).unwrap()).to_string_lossy().into_owned()
 }
 
 fn import_root(path: &Path) -> SessionsImportRoot {

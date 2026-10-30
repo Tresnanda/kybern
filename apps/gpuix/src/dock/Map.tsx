@@ -11,7 +11,7 @@ import { Tip } from '../nav/overlay.tsx'
 import { SwapOnChange } from '../motion/kit.tsx'
 import { Spinner } from '../kit/Spinner.tsx'
 import { LimitFill } from '../usage/AccountMark.tsx'
-import { getClient, useApp } from '../state.ts'
+import { threadClient, useApp } from '../state.ts'
 import { FONT_MONO } from '../theme.ts'
 import { ink, Label, useTheme } from '../ui.tsx'
 import { TaskWindow, type TaskWindowEntry } from '../tasks/TaskWindow.tsx'
@@ -34,10 +34,10 @@ export function MapPane({ thread }: { thread: Thread }) {
     const mine = ++request.current
     setLoading(true); setError(null)
     try {
-      const result = await getClient()!.call('projects.map', { project_id: projectId })
+      const result = await threadClient(thread.id)!.call('projects.map', { project_id: projectId })
       if (mine === request.current) setMap(result.map)
     } catch (e) { if (mine === request.current) setError(errorText(e)) } finally { if (mine === request.current) setLoading(false) }
-  }, [projectId])
+  }, [projectId, thread.id])
   useEffect(() => { void load(); return () => { request.current++ } }, [load])
   const reveal = (repo: ProjectMapRepo | undefined, rel: string) => {
     if (!project || !canShowFileInExplorer(thread.id, thread.project_id, absolute(project.path, repo, rel))) return

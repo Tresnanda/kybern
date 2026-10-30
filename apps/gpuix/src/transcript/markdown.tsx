@@ -8,7 +8,7 @@ import { useGpuix, type PublicInstance } from '@gpuix/react'
 import { chatLink } from '../../../../packages/kybern-client/src/chatLinks.ts'
 import { fileRefCandidates, linkifyFileRefs } from '../../../../packages/kybern-client/src/fileRefs.ts'
 import { TOOL_RESULT_CHAR_LIMIT, TOOL_RESULT_LINE_LIMIT } from '../shared/lib/toolResultText.ts'
-import { getClient, usePaneAccess } from '../state.ts'
+import { threadClient, usePaneAccess } from '../state.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { FONT_MONO } from '../theme.ts'
 import { Dialog, DialogHeader } from '../nav/overlay.tsx'
@@ -22,7 +22,7 @@ import { chipifyKybernRefs } from './refs.ts'
 import { useFileRefs } from './fileRefs.ts'
 import { useNotes, openNote } from '../notes/store.ts'
 import { useTasks, openTask } from '../tasks/store.ts'
-import { goPage } from '../nav/history.ts'
+import { goPage, openThread } from '../nav/history.ts'
 import type { NoteSummary, TaskItem } from '../../../../packages/kybern-client/src/types.ts'
 import type { MarkdownStream } from '../native/markdown.ts'
 import { StreamMarkdown } from './StreamMarkdown.tsx'
@@ -265,7 +265,7 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
   const [image, setImage] = useState<string | null>(null)
   const open = async (href: string) => {
     const link = chatLink(href)
-    const client = getClient()
+    const client = threadClient(threadId, pane.get().selectedMachineId)
     if (!client) return
     // An image link (or an inline image native Markdown paints as a link) opens the image, wherever its folder is.
     if (localImageLink(href) || (link.kind === 'file' && /\.(?:png|jpe?g|gif|webp|avif)$/i.test(link.path))) { setImage(href); return }
@@ -292,6 +292,9 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
           const file = await client.call('threads.files.read', { thread_id: threadId, path })
           setPreview({ title: link.line ? `${path}:${link.line}` : path, text: file.content, code: true, line: link.line, markdown: MARKDOWN_FILE.test(path) })
         }
+      } else if (link.kind === 'thread') {
+        // A thread of another machine (`kybern://thread/<machine>/<thread>`), e.g. the fork this thread started.
+        openThread(link.threadId, link.machineId)
       } else if (link.kind === 'kybern') {
         if (link.target === 'note') { if (!openTabFromPane(pane.id, { kind: 'note', id: link.id })) openNote(link.id) }
         else if (!openTabFromPane(pane.id, { kind: 'task', id: link.id })) { goPage('tasks'); openTask(link.id) }

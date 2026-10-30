@@ -3,15 +3,15 @@ import { parsePairingInvitation, pairingInvitation, normalizeDaemonUrl } from '.
 import type { Exposure, PairingCreateResult, TokenInfo } from '../../../../packages/kybern-client/src/types.ts'
 import { Dialog } from '../nav/overlay.tsx'
 import { Switch } from '../kit/Switch.tsx'
-import { activeEnvironment, onEnvironmentChange } from '../shell/environment.ts'
+import { activeEnvironment } from '../shell/environment.ts'
+import { machineHub } from '../machines/index.ts'
 import { getClient } from '../state.ts'
 import { ink, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { DURATION, EASE } from '../motion/tokens.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { copyText, errorText } from '../transcript/store.ts'
 import { toast } from '../shell/toasts.tsx'
-import { connectEnvironment, forgetEnvironment, saveEnvironment, setupSshEnvironment } from './actions.ts'
-import { localProfile, readRegistry, type EnvironmentProfile } from './registry.ts'
+import { saveMachine, setupSshEnvironment } from './actions.ts'
 import { pairingQrSvg } from './qr.ts'
 import { Delete02Icon } from '@hugeicons/core-free-icons'
 import { glyph, Icon } from '../icons.tsx'
@@ -24,27 +24,26 @@ import { IconButton } from '../kit/IconButton.tsx'
 import { TextField } from '../kit/Field.tsx'
 import { Spinner } from '../shell/Connection.tsx'
 
-type Screen = { kind: 'add'; profile?: EnvironmentProfile } | { kind: 'manage' | 'pair' }
+type Screen = { kind: 'add' | 'pair' }
 let screen: Screen | null = null
 const listeners = new Set<() => void>()
 export function showEnvironmentDialog(next: Screen | null) { screen = next; for (const listener of listeners) listener() }
-onEnvironmentChange(() => showEnvironmentDialog(null))
 export function EnvironmentDialogs() {
   const value = useSyncExternalStore((fn) => { listeners.add(fn); return () => { listeners.delete(fn) } }, () => screen)
   if (!value) return null
   const close = () => showEnvironmentDialog(null)
   return <Dialog onClose={close} width={512} testId="environment-dialog">
-    {value.kind === 'add' ? <EnvironmentForm key={value.profile?.id ?? 'new'} profile={value.profile} close={close} /> : value.kind === 'manage' ? <Manage close={close} /> : <DeviceAccess close={close} />}
+    {value.kind === 'add' ? <EnvironmentForm close={close} /> : <DeviceAccess close={close} />}
   </Dialog>
 }
 
-function EnvironmentForm({ profile, close }: { profile?: EnvironmentProfile; close: () => void }) {
-  const initialMode = profile && !profile.ssh ? 'address' : 'ssh'
+function EnvironmentForm({ close }: { close: () => void }) {
+  const initialMode = 'ssh'
   const [selection, setSelection] = useState({ mode: initialMode, previous: initialMode, keyboard: false })
   const [busy, setBusy] = useState(false)
   const { mode } = selection
-  const chooser = !profile && <EnvironmentChooser {...selection} busy={busy} onChange={(next, keyboard) => setSelection({ mode: next, previous: mode, keyboard })} />
-  return mode === 'ssh' ? <SshForm profile={profile} close={close} chooser={chooser} busy={busy} setBusy={setBusy} /> : <AddressForm profile={profile} close={close} chooser={chooser} busy={busy} setBusy={setBusy} />
+  const chooser = <EnvironmentChooser {...selection} busy={busy} onChange={(next, keyboard) => setSelection({ mode: next, previous: mode, keyboard })} />
+  return mode === 'ssh' ? <SshForm close={close} chooser={chooser} busy={busy} setBusy={setBusy} /> : <AddressForm close={close} chooser={chooser} busy={busy} setBusy={setBusy} />
 }
 /** The desktop's `t-tabs` sliding pill: 478px track, 4px padding, two 233px tabs of 31.5px. */
 function EnvironmentChooser({ mode, previous, keyboard, busy, onChange }: { mode: string; previous: string; keyboard: boolean; busy: boolean; onChange: (mode: string, keyboard: boolean) => void }) {
@@ -56,11 +55,11 @@ function EnvironmentChooser({ mode, previous, keyboard, busy, onChange }: { mode
   </div>
 }
 const BOOTSTRAP_STEPS: { id: BootstrapStep; label: string }[] = [{ id: 'connect', label: 'Connect over SSH' }, { id: 'install', label: 'Install kybernd' }, { id: 'start', label: 'Start the daemon' }, { id: 'pair', label: 'Pair this device' }]
-function SshForm({ profile, close, chooser, busy, setBusy }: { profile?: EnvironmentProfile; close: () => void; chooser: ReactNode; busy: boolean; setBusy: (busy: boolean) => void }) {
+function SshForm({ close, chooser, busy, setBusy }: { close: () => void; chooser: ReactNode; busy: boolean; setBusy: (busy: boolean) => void }) {
   const t = useTheme()
-  const [name, setName] = useState(profile?.name ?? '')
-  const [target, setTarget] = useState(profile?.ssh ? `${profile.ssh.target}${profile.ssh.port ? `:${profile.ssh.port}` : ''}` : '')
-  const [dataDir, setDataDir] = useState(profile?.ssh?.data_dir ?? '')
+  const [name, setName] = useState('')
+  const [target, setTarget] = useState('')
+  const [dataDir, setDataDir] = useState('')
   const [hosts, setHosts] = useState<string[]>([])
   const [advanced, setAdvanced] = useState(false)
   const controller = useRef<AbortController | null>(null)
@@ -73,15 +72,15 @@ function SshForm({ profile, close, chooser, busy, setBusy }: { profile?: Environ
     if (busy || !ready) return
     setBusy(true); setError(''); setSteps({}); controller.current = new AbortController()
     try {
-      const saved = await setupSshEnvironment({ id: profile?.id, name, target, data_dir: dataDir }, progress => setSteps(old => ({ ...old, [progress.step]: progress })), controller.current.signal)
-      await connectEnvironment(saved.id); close()
+      const saved = await setupSshEnvironment({ name, target, data_dir: dataDir }, progress => setSteps(old => ({ ...old, [progress.step]: progress })), controller.current.signal)
+      toast.success(`Added ${saved.name}`); close()
     }
     catch (e) { setError(errorText(e)) } finally { setBusy(false) }
   }
   const suggestions = !!target && hosts.some(host => host.startsWith(target) && host !== target) ? hosts.filter(host => host.startsWith(target) && host !== target).slice(0, 4) : []
   const host = target.trim().replace(/^ssh:\/\//, '').replace(/^[^@]*@/, '')
   return <>
-    <DialogHeader title={profile ? 'Edit environment' : 'Add environment'} description="Switch between machines. Each keeps its own projects and threads." onClose={close} />
+    <DialogHeader title="Add a machine" description="It joins your list of machines. Each keeps its own projects and threads, and you see them all together." onClose={close} />
     <DialogBody footer>
       {chooser}
       <Field label="Name"><TextField size="lg" width="100%" testId="environment-name" label="Name" autoFocus value={name} onChange={setName} disabled={busy} placeholder="Dev server" onSubmit={() => void submit()} /></Field>
@@ -94,15 +93,15 @@ function SshForm({ profile, close, chooser, busy, setBusy }: { profile?: Environ
       {!!Object.keys(steps).length && <div testId="environment-setup-progress" aria-label="Setup progress" style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: ink(t, t.variant === 'dark' ? .06 : .08) }}>{BOOTSTRAP_STEPS.map(step => { const state = steps[step.id]?.state ?? 'pending'; return <div key={step.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}><div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, marginTop: 2 }}>{state === 'running' ? <Spinner size={13} color={t.text} /> : state === 'done' ? <Icon source={N.check} size={14} color="#10b981" /> : state === 'failed' ? <div style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: t.red }} /> : <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: ink(t, .4 * .58) }} />}</div><div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={state === 'pending' ? t.textSecondary : t.text} size={13} lineHeight={17.5}>{step.label}</Label>{steps[step.id]?.detail && state !== 'failed' && <Hint>{steps[step.id]!.detail!}</Hint>}</div></div> })}</div>}
       {error && <div testId="environment-setup-error" role="alert" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}><Label color={t.red} size={13} lineHeight={21.125}>{error}</Label>{/Permission denied|ssh-copy-id/.test(error) && !!host && <Label color={t.text} size={13} lineHeight={21.125} font={FONT_MONO}>{`ssh-copy-id ${target.trim()}`}</Label>}</div>}
     </DialogBody>
-    <DialogFooter><Button size="lg" variant="primary" testId="environment-save" disabled={!ready} busy={busy} onClick={() => void submit()}>{busy ? 'Setting up' : profile ? 'Set up again and connect' : 'Set up and connect'}</Button></DialogFooter>
+    <DialogFooter><Button size="lg" variant="primary" testId="environment-save" disabled={!ready} busy={busy} onClick={() => void submit()}>{busy ? 'Setting up' : 'Set up and connect'}</Button></DialogFooter>
   </>
 }
 
 /** `isLoopbackAddress` for the address a user typed, tolerant of scheme-less input. */
 function isLoopback(address: string) { return isLoopbackAddress(address.includes('://') ? address : `ws://${address}`) }
-function AddressForm({ profile, close, chooser, busy, setBusy }: { profile?: EnvironmentProfile; close: () => void; chooser: ReactNode; busy: boolean; setBusy: (busy: boolean) => void }) {
-  const [name, setName] = useState(profile?.name ?? '')
-  const [address, setAddress] = useState(profile?.url ?? '')
+function AddressForm({ close, chooser, busy, setBusy }: { close: () => void; chooser: ReactNode; busy: boolean; setBusy: (busy: boolean) => void }) {
+  const [name, setName] = useState('')
+  const [address, setAddress] = useState('')
   const [code, setCode] = useState('')
   const [token, setToken] = useState('')
   const [expectedIdentity, setExpectedIdentity] = useState<string | undefined>(undefined)
@@ -120,13 +119,13 @@ function AddressForm({ profile, close, chooser, busy, setBusy }: { profile?: Env
     if (invitation) { setAddress(invitation.url); setCode(invitation.code); setToken(''); setExpectedIdentity(invitation.environmentId) }
     else { setAddress(value); setExpectedIdentity(undefined) }
   }
-  const ready = !!name.trim() && !!address.trim() && (!!profile || code.length === 6 || !!token.trim())
+  const ready = !!name.trim() && !!address.trim() && (code.length === 6 || !!token.trim())
   const submit = async () => {
     if (busy || !ready || !validateAddress()) return
     setBusy(true); setError('')
     try {
-      const saved = await saveEnvironment({ id: profile?.id, name, address, code: code || undefined, token: token || undefined, expectedIdentity })
-      await connectEnvironment(saved.id); close()
+      const saved = await saveMachine({ name, address, code: code || undefined, token: token || undefined, expectedIdentity })
+      toast.success(`Added ${saved.name}`); close()
     } catch (e) {
       const detail = errorText(e)
       const unreachable = /error sending request|connection refused|timed out|Unable to connect|ConnectionRefused|fetch failed|Unable to reach/i.test(detail)
@@ -136,42 +135,19 @@ function AddressForm({ profile, close, chooser, busy, setBusy }: { profile?: Env
     } finally { setBusy(false) }
   }
   return <>
-    <DialogHeader title={profile ? 'Edit environment' : 'Add environment'} description="Switch between machines. Each keeps its own projects and threads." onClose={close} />
+    <DialogHeader title="Add a machine" description="It joins your list of machines. Each keeps its own projects and threads, and you see them all together." onClose={close} />
     <DialogBody footer>
       {chooser}
       <Field label="Name"><TextField size="lg" width="100%" testId="environment-name" autoFocus label="Name" value={name} onChange={setName} disabled={busy} placeholder="Dev server" onSubmit={() => void submit()} /></Field>
       <Field label="Address or pairing invitation"><TextField size="lg" width="100%" testId="environment-address" label="Address or pairing invitation" value={address} onChange={setAddressOrInvitation} disabled={busy} invalid={!!addressError} onBlur={() => { if (address.trim()) validateAddress() }} placeholder="https://machine.example.ts.net" onSubmit={() => void submit()} />
         {!!addressError && <ErrorText testId="environment-address-error">{addressError}</ErrorText>}</Field>
-      <Field label={`Pairing code${profile ? ' (optional)' : ''}`}><TextField size="lg" width="100%" testId="environment-code" label="Pairing code" value={code} onChange={(value) => { setCode(value.replace(/\D/g, '').slice(0, 6)); setToken('') }} disabled={busy} placeholder="000000" onSubmit={() => void submit()} /></Field>
-      <Hint>{profile ? 'Leave the code empty to keep this device’s access.' : 'On the other machine, choose Pair a device in the environment menu. For a server or VPS, run kybern pair over SSH.'}</Hint>
+      <Field label="Pairing code"><TextField size="lg" width="100%" testId="environment-code" label="Pairing code" value={code} onChange={(value) => { setCode(value.replace(/\D/g, '').slice(0, 6)); setToken('') }} disabled={busy} placeholder="000000" onSubmit={() => void submit()} /></Field>
+      <Hint>On the other machine, open Settings → Paired devices and choose Pair a device. For a server or VPS, run kybern pair over SSH.</Hint>
       <Disclosure testId="environment-token-toggle" label="Use an existing device token" open={advanced} toggle={() => setAdvanced(!advanced)} />
       {advanced && <Field label="Device token"><TextField size="lg" width="100%" secure testId="environment-token" label="Device token" value={token} onChange={value => { setToken(value); setCode('') }} disabled={busy} placeholder="Device token" onSubmit={() => void submit()} /></Field>}
       {!!error && <ErrorText testId="environment-save-error">{error}</ErrorText>}
     </DialogBody>
     <DialogFooter><Button size="lg" variant="primary" testId="environment-save" disabled={!ready} busy={busy} onClick={() => void submit()}>{busy ? 'Connecting' : 'Save and connect'}</Button></DialogFooter>
-  </>
-}
-
-function Manage({ close }: { close: () => void }) {
-  const t = useTheme()
-  const [revision, setRevision] = useState(0)
-  const [busy, setBusy] = useState<string | null>(null)
-  const [error, setError] = useState('')
-  const profiles = useMemo(() => { try { return [localProfile, ...readRegistry().environments] } catch { return [localProfile] } }, [revision])
-  const forget = async (profile: EnvironmentProfile) => {
-    setBusy(profile.id); setError('')
-    try { await forgetEnvironment(profile.id); setRevision(n => n + 1) } catch (e) { setError(errorText(e)) } finally { setBusy(null) }
-  }
-  return <>
-    <DialogHeader title="Manage environments" description="Edit a connection or remove it from this device. Work on that machine keeps running." onClose={close} />
-    <div testId="environment-manage-list" style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 16, paddingRight: 16, paddingBottom: 16 }}>
-      {profiles.map((profile) => <div key={profile.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, paddingTop: 12, paddingBottom: 12 }}>
-        <Icon source={N.globe} size={16} color={t.textSecondary} style={{ marginTop: 4 }} />
-        <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}><Label color={t.text} size={14} lineHeight={22.75}>{profile.name}</Label><Hint>{profile.ssh ? `ssh ${profile.ssh.target}${profile.ssh.port ? `:${profile.ssh.port}` : ''}` : profile.url ?? profile.hostname ?? 'Managed by Kybern'}</Hint></div>
-        {profile.id !== 'local' && <><IconButton testId={`environment-edit-${profile.id}`} label={`Edit ${profile.name}`} icon={N.pencil} disabled={!!busy} onClick={() => showEnvironmentDialog({ kind: 'add', profile })} />{busy === profile.id ? <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28 }}><Spinner size={13} color={t.textSecondary} /></div> : <IconButton testId={`environment-forget-${profile.id}`} label={`Remove ${profile.name}`} icon={glyph(Delete02Icon)} disabled={!!busy} onClick={() => void forget(profile)} />}</>}
-      </div>)}
-      {!!error && <ErrorText testId="environment-manage-error">{error}</ErrorText>}
-    </div>
   </>
 }
 
@@ -244,7 +220,7 @@ function DeviceAccess({ close }: { close: () => void }) {
   // `bg-muted/40`, measured in the desktop frontend: one level over the popover in dark (46 → 47), 1.6% black in light (255 → 251).
   const card = { display: 'flex', borderRadius: 14, backgroundColor: t.variant === 'dark' ? ink(t, .005) : ink(t, .016) }
   return <>
-    <DialogHeader title="Pair a device" description={`Give another device access to ${activeEnvironment().name}.`} onClose={close} />
+    <DialogHeader title="Pair a device" description={`Give another device access to ${activeEnvironment().name}${machineHub().machineCount > 1 ? ' and, through it, your other machines' : ''}.`} onClose={close} />
     <DialogBody testId="environment-access-body" scroll>
       {exposure && <div style={{ ...card, alignItems: 'center', gap: 16, paddingLeft: 16, paddingRight: 16, paddingTop: 12, paddingBottom: 12 }}><div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexGrow: 1, minWidth: 0 }}><Label color={t.text} size={14} lineHeight={21} weight={500}>Reachable over Tailscale</Label><Hint>{exposure.tailscale_ip ? exposure.tailscale ? `Devices on your tailnet connect to ${exposure.tailscale_ip} directly.` : 'Lets phones and other devices on your tailnet pair without a tunnel.' : 'Tailscale is not running on this machine.'}</Hint></div><Switch testId="environment-tailscale" aria-label="Reachable over Tailscale" checked={exposure.tailscale} disabled={exposureBusy || (!exposure.tailscale && !exposure.tailscale_ip)} onCheckedChange={tailscale => { setExposureBusy(true); setError(''); void (async () => { try { const value = await client.call('access.exposure.set', { tailscale }); setExposure(value); if (invitation) await create(value) } catch (e) { setError(errorText(e)) } finally { setExposureBusy(false) } })() }} /></div>}
       {invitation && <>

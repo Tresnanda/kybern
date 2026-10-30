@@ -1,0 +1,37 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(PeerFilesChunkParams)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PeerFilesChunkParams",
+  "type": "object",
+  "properties": {
+    "transfer_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "index": {
+      "description": "The index into the announced entries.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "offset": {
+      "description": "Where this chunk starts in the file; it must be the target's current offset.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "data": {
+      "description": "Standard base64 of at most [`PUSH_CHUNK_BYTES`] bytes.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "transfer_id",
+    "index",
+    "offset",
+    "data"
+  ]
+}

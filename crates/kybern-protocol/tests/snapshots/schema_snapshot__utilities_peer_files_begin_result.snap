@@ -1,0 +1,34 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(PeerFilesBeginResult)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PeerFilesBeginResult",
+  "type": "object",
+  "properties": {
+    "offsets": {
+      "description": "For each entry, the bytes the target already holds; send from there.",
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      }
+    },
+    "complete": {
+      "description": "The send was finished before: nothing is left to do.",
+      "type": "boolean"
+    },
+    "dest_path": {
+      "description": "Where a finished send landed, when `complete`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "offsets"
+  ]
+}

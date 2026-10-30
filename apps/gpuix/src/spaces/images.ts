@@ -3,7 +3,6 @@
 // at most 50 spaces of ~20 KB each. Cleared when the environment changes.
 import { useEffect, useSyncExternalStore } from 'react'
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
-import { onEnvironmentChange } from '../shell/environment.ts'
 import { getClient } from '../state.ts'
 
 const sources = new Map<string, string>()
@@ -43,4 +42,3 @@ export function useSpaceImage(assetId: string | null): string | null {
 /** Show a picked file at once, before the daemon has derived it (the editor's preview). */
 export function previewSource(key: string, dataUri: string) { sources.set(key, dataUri); bump() }
 
-onEnvironmentChange(() => { sources.clear(); failed.clear(); loading.clear(); bump() }, -50)

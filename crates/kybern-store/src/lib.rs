@@ -3,21 +3,28 @@
 //! The store is synchronous; the daemon wraps calls in `spawn_blocking` when
 //! they may take more than a few milliseconds (replays, projections).
 
+mod broker;
 mod groups;
+mod network;
 mod notes;
+mod outbox;
 mod projection;
 mod schema;
+mod secrets;
 mod spaces;
 mod subagent_messages;
 mod tasks;
 mod thread_history;
 mod transcript_page;
 mod visuals;
+pub use broker::{LoanRole, LoanRow};
 pub use groups::{GROUP_FOLDER_MEMBER, folder_name, member_display_names};
+pub use network::{NetworkOpRecord, TokenOrigin};
 pub use notes::{
     NOTE_BODY_MAX_BYTES, NOTE_RETENTION_DAYS, NOTE_TITLE_MAX_CHARS, NoteError, NoteTarget, checklist as note_checklist,
     preview as note_preview,
 };
+pub use secrets::{SecretMeta, SecretRow};
 pub use spaces::SpaceError;
 pub use tasks::{
     GLOBAL_TASK_PREFIX, NewTask, TASK_BODY_MAX_BYTES, TASK_RETENTION_DAYS, TASK_TITLE_MAX_CHARS, TaskError, TaskPatch, TaskRunPatch,
@@ -693,6 +700,38 @@ impl Store {
                 row_to_thread,
             )
             .optional()?)
+        })
+    }
+
+    /// The inbound threads machine `machine_id` keeps for its thread `thread_id` (one per project), oldest first.
+    pub fn inbound_threads(&self, machine_id: &str, thread_id: ThreadId) -> Result<Vec<Thread>> {
+        self.with(|c| {
+            let mut st = c.prepare(&format!(
+                "{THREAD_SELECT} WHERE inbound IS NOT NULL AND json_extract(inbound, '$.machine_id') = ?1
+                 AND json_extract(inbound, '$.thread_id') = ?2 ORDER BY created_at, id"
+            ))?;
+            let rows = st.query_map(params![machine_id, thread_id.to_string()], row_to_thread)?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+    }
+
+    /// Set or clear a thread's move record (`threads.moved`). Returns the thread as it is afterwards, or
+    /// `None` when there is no such thread. Nothing else writes the column.
+    pub fn thread_set_moved(&self, id: ThreadId, moved: Option<&MoveInfo>) -> Result<Option<Thread>> {
+        self.with(|c| {
+            let json = moved.map(serde_json::to_string).transpose()?;
+            c.execute("UPDATE threads SET moved = ?2 WHERE id = ?1", params![id.to_string(), json])?;
+            Ok(c.query_row(&format!("{THREAD_SELECT} WHERE id = ?1"), [id.to_string()], row_to_thread).optional()?)
+        })
+    }
+
+    /// The threads that have a move record, `departing` ones first.
+    pub fn threads_with_move(&self) -> Result<Vec<Thread>> {
+        self.with(|c| {
+            let mut st = c.prepare(&format!(
+                "{THREAD_SELECT} WHERE moved IS NOT NULL ORDER BY json_extract(moved, '$.state') = 'departing' DESC, created_at, id"
+            ))?;
+            Ok(st.query_map([], row_to_thread)?.collect::<Result<Vec<_>, _>>()?)
         })
     }
 
@@ -1838,7 +1877,7 @@ fn stamp_runtime_task_sequence(payload: &mut EventPayload, seq: EventSeq) -> boo
 
 const THREAD_SELECT: &str = "SELECT id, project_id, title, provider_kind, provider_instance, model, effort, permission_mode, status,
     worktree_path, worktree_branch, cwd, provider_session_id, pinned, created_at, updated_at, last_seq,
-    parent_thread_id, coordinator_project_id, subagent, delegation, members FROM threads";
+    parent_thread_id, coordinator_project_id, subagent, delegation, members, origin, inbound, moved FROM threads";
 
 const THREAD_MESSAGE_SELECT: &str = "SELECT id, operation_id, from_thread_id, to_thread_id, purpose, reply_to, body, delivery, state,
     held_reason, created_at, updated_at FROM thread_messages";
@@ -1876,7 +1915,15 @@ fn coordinator_json(project: &Project) -> rusqlite::Result<Option<String>> {
 }
 
 fn row_to_project(r: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
+    let identity: ProjectRepoIdentity = r
+        .get::<_, Option<String>>(14)?
+        .map(|json| serde_json::from_str(&json))
+        .transpose()
+        .map_err(|error| rusqlite::Error::FromSqlConversionFailure(14, rusqlite::types::Type::Text, Box::new(error)))?
+        .unwrap_or_default();
     Ok(Project {
+        repo: identity.repo,
+        repos: identity.repos,
         id: parse_uuid(r.get::<_, String>(0)?)?,
         name: r.get(1)?,
         path: r.get(2)?,
@@ -1905,7 +1952,7 @@ fn row_to_project(r: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
 }
 
 const PROJECT_SELECT: &str = "SELECT id, name, path, is_git, worktrees_default, created_at, updated_at, task_prefix, brief_in_all_threads,
-    coordinator, space_id, kind, instructions_offer_dismissed, worktree_copy FROM projects";
+    coordinator, space_id, kind, instructions_offer_dismissed, worktree_copy, repo_identity FROM projects";
 
 fn with_members(c: &Connection, project: Option<Project>) -> Result<Option<Project>> {
     let Some(project) = project else { return Ok(None) };
@@ -1952,6 +1999,9 @@ fn row_to_thread(r: &rusqlite::Row<'_>) -> rusqlite::Result<Thread> {
         subagent: r.get::<_, Option<String>>(19)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
         delegation: r.get::<_, Option<String>>(20)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
         members: r.get::<_, Option<String>>(21)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?.unwrap_or_default(),
+        origin: r.get::<_, Option<String>>(22)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
+        inbound: r.get::<_, Option<String>>(23)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
+        moved: r.get::<_, Option<String>>(24)?.map(|json| serde_json::from_str(&json).map_err(other)).transpose()?,
     })
 }
 
@@ -2148,8 +2198,8 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
     c.execute(
         "INSERT INTO threads(id, project_id, title, provider_kind, provider_instance, model, effort, permission_mode,
                     status, worktree_path, worktree_branch, cwd, provider_session_id, pinned, created_at, updated_at, last_seq,
-                    parent_thread_id, coordinator_project_id, subagent, delegation, members)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
+                    parent_thread_id, coordinator_project_id, subagent, delegation, members, origin, inbound)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
                  ON CONFLICT(id) DO UPDATE SET
                     provider_kind = excluded.provider_kind, provider_instance = excluded.provider_instance,
                     title = excluded.title, model = excluded.model, effort = excluded.effort, permission_mode = excluded.permission_mode,
@@ -2160,7 +2210,9 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
                     coordinator_project_id = excluded.coordinator_project_id,
                     subagent = COALESCE(excluded.subagent, threads.subagent),
                     delegation = COALESCE(excluded.delegation, threads.delegation),
-                    members = COALESCE(excluded.members, threads.members)",
+                    members = COALESCE(excluded.members, threads.members),
+                    origin = COALESCE(threads.origin, excluded.origin),
+                    inbound = COALESCE(threads.inbound, excluded.inbound)",
         params![
             t.id.to_string(),
             t.project_id.to_string(),
@@ -2184,6 +2236,8 @@ fn write_thread(c: &Connection, t: &Thread) -> Result<()> {
             t.subagent.as_ref().map(serde_json::to_string).transpose()?,
             t.delegation.as_ref().map(serde_json::to_string).transpose()?,
             (!t.members.is_empty()).then(|| serde_json::to_string(&t.members)).transpose()?,
+            t.origin.as_ref().map(serde_json::to_string).transpose()?,
+            t.inbound.as_ref().map(serde_json::to_string).transpose()?,
         ],
     )?;
     Ok(())
@@ -2284,10 +2338,43 @@ mod tests {
         assert_eq!(store.thread_message_texts_containing(thread.id, "reply", last, i64::MAX).unwrap(), (Vec::new(), None));
     }
 
+    #[test]
+    fn the_move_record_is_written_by_its_own_call_and_survives_thread_upserts() {
+        let (store, mut thread) = thread_fixture();
+        assert!(store.threads_with_move().unwrap().is_empty());
+        let info = MoveInfo {
+            state: MoveState::Departing,
+            peer: "m-2".into(),
+            peer_name: "satyamas".into(),
+            peer_thread_id: None,
+            lease_until: Some(Utc::now()),
+            operation_id: Uuid::now_v7(),
+            branch: Some("kybern/move-1".into()),
+            commit: Some("abc".into()),
+            uncertain: false,
+        };
+        let stored = store.thread_set_moved(thread.id, Some(&info)).unwrap().unwrap();
+        assert_eq!(stored.moved.as_ref(), Some(&info));
+        assert_eq!(store.thread_get(thread.id).unwrap().unwrap().moved, Some(info.clone()));
+        assert_eq!(store.threads_with_move().unwrap().len(), 1);
+
+        // A thread saved from a copy read earlier neither clears nor changes it.
+        thread.title = "Renamed".into();
+        store.thread_upsert(&thread).unwrap();
+        let after = store.thread_get(thread.id).unwrap().unwrap();
+        assert_eq!((after.title.as_str(), after.moved), ("Renamed", Some(info)));
+
+        assert!(store.thread_set_moved(thread.id, None).unwrap().unwrap().moved.is_none());
+        assert!(store.threads_with_move().unwrap().is_empty());
+        assert!(store.thread_set_moved(Uuid::now_v7(), None).unwrap().is_none(), "no such thread");
+    }
+
     fn thread_fixture() -> (Store, Thread) {
         let store = Store::open_in_memory().unwrap();
         let now = Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: "demo".into(),
             path: "/tmp/demo".into(),
@@ -2323,6 +2410,9 @@ mod tests {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
+            origin: None,
+            inbound: None,
+            moved: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),
@@ -2352,6 +2442,8 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let now = Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: "Import".into(),
             path: "/tmp/import".into(),
@@ -2387,6 +2479,9 @@ mod tests {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
+            origin: None,
+            inbound: None,
+            moved: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),
@@ -2430,6 +2525,8 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let now = Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: "demo".into(),
             path: "/tmp/demo".into(),
@@ -2471,6 +2568,8 @@ mod tests {
         let s = Store::open_in_memory().unwrap();
         let now = Utc::now();
         let p = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: "demo".into(),
             path: "/tmp/demo".into(),
@@ -2506,6 +2605,9 @@ mod tests {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
+            origin: None,
+            inbound: None,
+            moved: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),
@@ -2572,6 +2674,8 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let now = Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: "tools".into(),
             path: format!("/tmp/{}", Uuid::now_v7()),
@@ -2607,6 +2711,9 @@ mod tests {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
+            origin: None,
+            inbound: None,
+            moved: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),
@@ -3312,6 +3419,8 @@ mod orchestration_tests {
     fn project(store: &Store) -> Project {
         let now = Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: "orchestration".into(),
             path: format!("/tmp/{}", Uuid::now_v7()),
@@ -3352,6 +3461,9 @@ mod orchestration_tests {
             last_seq: 0,
             parent_thread_id: parent,
             coordinator_project_id: None,
+            origin: None,
+            inbound: None,
+            moved: None,
             subagent: None,
             delegation,
             members: Vec::new(),
@@ -3432,6 +3544,34 @@ mod orchestration_tests {
         assert_eq!(conn.query_row("SELECT COUNT(*) FROM projects", [], |r| r.get::<_, i64>(0)).unwrap(), before);
         conn.query_row("SELECT COUNT(delegation) FROM threads", [], |r| r.get::<_, i64>(0)).unwrap();
         conn.query_row("SELECT COUNT(*) FROM thread_messages", [], |r| r.get::<_, i64>(0)).unwrap();
+    }
+
+    #[test]
+    fn a_threads_origin_is_written_once_and_never_changes() {
+        let store = Store::open_in_memory().unwrap();
+        let project = project(&store);
+        let mut thread = thread(&project, None, None);
+        store.thread_upsert(&thread).unwrap();
+        assert_eq!(store.thread_get(thread.id).unwrap().unwrap().origin, None, "work the user started here has none");
+        let origin = |machine: &str| Origin {
+            machine_id: machine.into(),
+            machine_name: machine.into(),
+            thread_id: Some(Uuid::now_v7()),
+            operation_id: Uuid::now_v7(),
+            kind: OriginKind::ToolCall,
+            permission_cap: PermissionMode::Supervised,
+            hops: vec![machine.into()],
+        };
+        let first = origin("mac");
+        thread.origin = Some(first.clone());
+        store.thread_upsert(&thread).unwrap();
+        assert_eq!(store.thread_get(thread.id).unwrap().unwrap().origin, Some(first.clone()));
+        // A later write, from anywhere, cannot replace or clear it.
+        thread.origin = Some(origin("elsewhere"));
+        store.thread_upsert(&thread).unwrap();
+        thread.origin = None;
+        store.thread_upsert(&thread).unwrap();
+        assert_eq!(store.thread_get(thread.id).unwrap().unwrap().origin, Some(first));
     }
 
     #[test]
@@ -3811,6 +3951,8 @@ mod coordinator_upgrade_tests {
         let store = Store::open_in_memory().unwrap();
         let now = Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: "demo".into(),
             path: "/tmp/roles".into(),
@@ -3846,6 +3988,9 @@ mod coordinator_upgrade_tests {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: Some(project.id),
+            origin: None,
+            inbound: None,
+            moved: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),

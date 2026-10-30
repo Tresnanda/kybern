@@ -11,13 +11,10 @@ fn git_in(dir: &std::path::Path, args: &[&str]) -> String {
 /// Pull request 7 is open with one passed and one running check; branch `feat`
 /// has a pull request only after `gh pr create` ran.
 fn fake_gh(dir: &std::path::Path, signed_in: bool) -> (std::path::PathBuf, std::path::PathBuf) {
-    use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(dir).unwrap();
-    let (log, created, script) = (dir.join("gh.log"), dir.join("gh-created"), dir.join("gh"));
+    let (log, created) = (dir.join("gh.log"), dir.join("gh-created"));
     let auth = if signed_in { "exit 0" } else { "echo 'not logged in' >&2; exit 1" };
-    std::fs::write(
-        &script,
-        format!(
+    let unix = format!(
             r#"#!/bin/sh
 echo "$@" >> "{log}"
 case "$1" in
@@ -44,10 +41,32 @@ esac
             log = log.display(),
             created = created.display(),
             auth = auth,
-        ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
+    let windows = format!(r#"
+$args -join ' ' | Add-Content -LiteralPath '{log}'
+switch ($args[0]) {{
+    '--version' {{ 'gh version 2.0.0'; exit 0 }}
+    'auth' {{ exit {auth_code} }}
+    'repo' {{ 'main'; exit 0 }}
+    'pr' {{
+        switch ($args[1]) {{
+            'view' {{
+                if ($args[2] -eq '7') {{
+                    '{{"number":7,"title":"Fix the importer","url":"https://github.com/o/r/pull/7","state":"OPEN","mergeable":"MERGEABLE","isDraft":false,"statusCheckRollup":[{{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}},{{"__typename":"CheckRun","status":"IN_PROGRESS"}}]}}'
+                }} elseif ($args[2] -eq '8') {{
+                    '{{"number":8,"title":"Conflicted","url":"https://github.com/o/r/pull/8","state":"OPEN","mergeable":"CONFLICTING","isDraft":false,"statusCheckRollup":[]}}'
+                }} elseif (Test-Path -LiteralPath '{created}') {{
+                    '{{"number":12,"title":"Add b","url":"https://github.com/o/r/pull/12","state":"OPEN","headRefName":"feat","baseRefName":"main","isDraft":false,"author":{{"login":"me"}},"updatedAt":"2026-01-01T00:00:00Z"}}'
+                }} else {{ [Console]::Error.WriteLine('no pull requests found'); exit 1 }}
+            }}
+            'create' {{ New-Item -ItemType File -Path '{created}' | Out-Null; 'https://github.com/o/r/pull/12' }}
+            'merge' {{ 'merged' }}
+        }}
+    }}
+}}
+exit 0
+"#, log = log.display(), created = created.display(), auth_code = if signed_in { 0 } else { 1 });
+    let script = crate::test_support::powershell_script(dir, "gh", &unix, &windows);
     (script, log)
 }
 
@@ -69,6 +88,7 @@ impl LeadRepo {
         let repo = fixture.root.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
         git_in(&repo, &["init", "-q"]);
+        git_in(&repo, &["config", "core.autocrlf", "false"]);
         git_in(&repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
         git_in(&repo, &["config", "user.name", "Lead Test"]);
         git_in(&repo, &["config", "user.email", "lead@example.com"]);
@@ -84,7 +104,7 @@ impl LeadRepo {
         std::fs::create_dir_all(&home).unwrap();
         fixture.orchestrator.lead_git_config().set_git_env(vec![
             ("HOME".into(), home.to_string_lossy().into_owned()),
-            ("GIT_CONFIG_GLOBAL".into(), "/dev/null".into()),
+            ("GIT_CONFIG_GLOBAL".into(), home.join(".gitconfig").to_string_lossy().into_owned()),
             ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
         ]);
         let mut thread = fixture.thread(ThreadStatus::Idle);
@@ -556,6 +576,7 @@ struct GroupLead {
 fn init_member(dir: &std::path::Path, file: &str) {
     std::fs::create_dir_all(dir).unwrap();
     git_in(dir, &["init", "-q"]);
+    git_in(dir, &["config", "core.autocrlf", "false"]);
     git_in(dir, &["symbolic-ref", "HEAD", "refs/heads/main"]);
     git_in(dir, &["config", "user.name", "Lead Test"]);
     git_in(dir, &["config", "user.email", "lead@example.com"]);

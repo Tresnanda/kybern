@@ -37,6 +37,8 @@ import {
   styles,
 } from "../src/ui/primitives";
 import { ProviderMark } from "../src/ui/ProviderMark";
+import { useMachineTarget } from "../src/state/machineTarget";
+import { useProviders } from "../src/state/machineProviders";
 import { useTheme } from "../src/ui/theme";
 import { modelChoices } from "../../../packages/kybern-client/src/models";
 
@@ -91,13 +93,16 @@ export default function Configure() {
   const [error, setError] = useState("");
   const [section, setSection] = useState("");
   const [modelQuery, setModelQuery] = useState("");
-  const provider = app.providers.find((p) => p.kind === options.provider);
+  const project = app.projects.find((p) => p.id === options.projectId);
+  // A new thread's agents are those of the machine it will run on (`state/machineTarget.ts`); an open thread keeps its own.
+  const target = useMachineTarget(threadId ? undefined : project);
+  const providers = useProviders(!threadId && target.remote && target.chosen ? { machineId: target.chosen.machineId, reachable: target.reachable } : undefined);
+  const provider = providers.find((p) => p.kind === options.provider);
   const { models: visibleModels, customId } = modelChoices(
     provider?.models ?? [],
     options.model,
     modelQuery,
   );
-  const project = app.projects.find((p) => p.id === options.projectId);
   const patch = (value: Partial<DraftOptions>) => {
     setOptions((p) => ({ ...p, ...value }));
   };
@@ -116,7 +121,7 @@ export default function Configure() {
     };
   }, [options.projectId, threadId]);
   function chooseProvider(kind: ProviderKind) {
-    const next = app.providers.find((p) => p.kind === kind);
+    const next = providers.find((p) => p.kind === kind);
     if (!next?.available) return;
     setModelQuery("");
     patch({
@@ -282,7 +287,7 @@ export default function Configure() {
         </Group>
       )}
       <Group title={handoff ? "Hand off to" : "Agent"}>
-        {app.providers.map((p) => (
+        {providers.map((p) => (
           <Tap
             key={p.kind}
             label={`${p.display_name}${p.available ? "" : ", unavailable"}`}

@@ -885,7 +885,7 @@ async fn thread_context_guidance_and_the_guide_describe_the_new_tools() {
     for phrase in ["kybern_thread_send to message another thread", "kybern_agent_delegate to hand work", "end your turn"] {
         assert!(guidance.contains(phrase), "guidance mentions {phrase}: {guidance}");
     }
-    let golden = include_str!("../agent_guide_full.golden.txt");
+    let golden = include_str!("../agent_guide_full.golden.txt").replace("\r\n", "\n");
     assert!(golden.contains("`kybern_agent_delegate`") && golden.contains("end your turn") && golden.contains("held until the user approves"));
     assert!(golden.len() <= crate::agent_guide::MAX_GUIDE_BYTES);
 }

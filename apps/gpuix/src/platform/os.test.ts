@@ -1,12 +1,14 @@
 // Platform services against simulated platforms: each test passes an `OsContext`, so nothing reads this machine's
 // PATH, home or session.
 import { afterAll, expect, test } from 'bun:test'
+import type { ChildProcess } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
   MissingToolError, UnsafeTargetError, appCacheDir, appConfigDir, appLocalDataDir, clipboardReadCommands, clipboardWriteCommands, desktopConfigDir, downloadsDir, executableName, fileUri, folderPickerCommands,
-  gpuixCacheDir, gpuixConfigDir, homeFor, launchFirst, openCommands, openManyCommands, osLabels, pathPlan, pickFolderDialog, powershell, revealCommands, runFirst, runFirstSync,
+  gpuixCacheDir, gpuixConfigDir, homeFor, launchFirst, observeLaunch, openCommands, openManyCommands, osLabels, pathPlan, pickFolderDialog, powershell, revealCommands, runFirst, runFirstSync,
   openTarget, openTargets, savePanelCommands, userDirsDownload, windowCaptureCommand, windowsTarget, withPath, type Cmd, type OsContext,
 } from './os.ts'
 
@@ -250,6 +252,16 @@ test.skipIf(!posix)('S1: stopOnExit treats a closed dialog as "no" and does not 
 })
 
 // ---- S2: a slow foreground app is not a failure, and the target never opens twice ----
+
+test('S2: a delayed spawn error cannot be mistaken for a running application', async () => {
+  const child = Object.assign(new EventEmitter(), { unref() {} }) as ChildProcess
+  let settled = false
+  const pending = observeLaunch(child, 0).then(result => { settled = true; return result })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  expect(settled).toBe(false)
+  child.emit('error', Object.assign(new Error('not installed'), { code: 'ENOENT' }))
+  expect(await pending).toBe('missing')
+})
 
 test.skipIf(!posix)('S2: an app that keeps running counts as opened; the fallback tool does not open the target a second time', async () => {
   const log = path.join(scratch, 'open-slow')

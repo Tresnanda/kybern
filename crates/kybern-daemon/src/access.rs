@@ -11,9 +11,41 @@ use kybern_store::Store;
 use rand::RngExt;
 use uuid::Uuid;
 
+/// What a code is for. A device code pairs a client; a machine code lets a member add the machine
+/// that shows it to the network (design §2.4c). The two never redeem each other.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Purpose {
+    Device,
+    Machine,
+}
+
 struct Pending {
     label: String,
     expires_at: DateTime<Utc>,
+    purpose: Purpose,
+}
+
+/// The scopes a paired client gets: the ordinary client scopes plus `network:admin`, so a phone can
+/// add and remove machines too (decision 2026-10-28). `Scope::CLIENT` itself stays the read side.
+pub fn paired_scopes() -> Vec<Scope> {
+    let mut scopes = Scope::CLIENT.to_vec();
+    scopes.push(Scope::NetworkAdmin);
+    scopes
+}
+
+/// Tokens paired before the network existed lack `network:read` and `network:admin`; give them
+/// both once at startup. Idempotent. A token that is not a paired client (the bootstrap token has
+/// every scope already) is untouched in effect.
+pub fn upgrade_paired_tokens(store: &Store) {
+    for scope in [Scope::NetworkRead, Scope::NetworkAdmin] {
+        match store.tokens_add_scope(scope, |_| true) {
+            Ok(0) => {}
+            Ok(count) => {
+                tracing::info!(target: "kybern::network", count, scope = scope.as_str(), "added a scope to tokens paired before the machine network")
+            }
+            Err(error) => tracing::warn!(target: "kybern::network", %error, "could not upgrade paired tokens"),
+        }
+    }
 }
 
 const MAX_PAIRING_CODES: usize = 128;
@@ -31,6 +63,15 @@ pub struct PairingRateLimited;
 
 impl Pairing {
     pub fn create(&self, label: Option<String>) -> Result<(String, DateTime<Utc>)> {
+        self.create_for(Purpose::Device, label)
+    }
+
+    /// A code this machine shows so a member can add it to a network (`network.code.create`).
+    pub fn create_machine_code(&self) -> Result<(String, DateTime<Utc>)> {
+        self.create_for(Purpose::Machine, Some("machine join".into()))
+    }
+
+    fn create_for(&self, purpose: Purpose, label: Option<String>) -> Result<(String, DateTime<Utc>)> {
         if label.as_ref().is_some_and(|label| label.len() > MAX_PAIRING_LABEL_BYTES) {
             return Err(anyhow!("Device label is too long"));
         }
@@ -47,32 +88,47 @@ impl Pairing {
             }
         };
         let expires_at = Utc::now() + Duration::minutes(10);
-        codes.insert(code.clone(), Pending { label: label.unwrap_or_else(|| "paired device".into()), expires_at });
+        codes.insert(code.clone(), Pending { label: label.unwrap_or_else(|| "paired device".into()), expires_at, purpose });
         Ok((code, expires_at))
+    }
+
+    /// Count an attempt against the global limit: five a minute, whoever guesses. This also works
+    /// behind private proxies, without trusting spoofable forwarding headers.
+    fn spend_attempt(&self) -> Result<()> {
+        let mut attempts = self.attempts.lock().unwrap();
+        let now = Utc::now();
+        attempts.retain(|at| *at > now - Duration::minutes(1));
+        if attempts.len() >= 5 {
+            return Err(PairingRateLimited.into());
+        }
+        attempts.push(now);
+        Ok(())
+    }
+
+    fn take(&self, code: &str, purpose: Purpose) -> Result<Pending> {
+        let mut codes = self.codes.lock().unwrap();
+        codes.retain(|_, p| p.expires_at > Utc::now());
+        match codes.get(code.trim()) {
+            Some(pending) if pending.purpose == purpose => Ok(codes.remove(code.trim()).expect("just found")),
+            _ => Err(anyhow!("pairing code is invalid or expired")),
+        }
     }
 
     /// Exchange a code for a new token. Returns the raw token and its scopes.
     pub fn redeem(&self, store: &Store, code: &str, device_name: Option<String>) -> Result<(String, Vec<Scope>)> {
-        // Bound guesses globally as well as code lifetime. This also works
-        // behind private proxies, without trusting spoofable forwarding headers.
-        {
-            let mut attempts = self.attempts.lock().unwrap();
-            let now = Utc::now();
-            attempts.retain(|at| *at > now - Duration::minutes(1));
-            if attempts.len() >= 5 {
-                return Err(PairingRateLimited.into());
-            }
-            attempts.push(now);
-        }
-        let pending = {
-            let mut codes = self.codes.lock().unwrap();
-            codes.retain(|_, p| p.expires_at > Utc::now());
-            codes.remove(code.trim()).ok_or_else(|| anyhow!("pairing code is invalid or expired"))?
-        };
+        self.spend_attempt()?;
+        let pending = self.take(code, Purpose::Device)?;
         let token = crate::auth::generate();
         let label = device_name.unwrap_or(pending.label);
-        store.token_insert(Uuid::now_v7(), &crate::auth::hash(&token), &label, &Scope::CLIENT)?;
-        Ok((token, Scope::CLIENT.to_vec()))
+        let scopes = paired_scopes();
+        store.token_insert(Uuid::now_v7(), &crate::auth::hash(&token), &label, &scopes)?;
+        Ok((token, scopes))
+    }
+
+    /// Spend a machine code shown by `network.code.create`. One use.
+    pub fn redeem_machine_code(&self, code: &str) -> Result<()> {
+        self.spend_attempt()?;
+        self.take(code, Purpose::Machine).map(|_| ())
     }
 }
 

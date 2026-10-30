@@ -1,5 +1,4 @@
 import { Button } from '../kit/Button.tsx'
-import { onEnvironmentChange } from './environment.ts'
 // Toasts (issue #108 §23): the desktop's sonner `Toaster` at the bottom right
 // (`components/ui/sonner.tsx`, `views/AppUpdate.tsx`), on GPUIX.
 //
@@ -8,7 +7,7 @@ import { onEnvironmentChange } from './environment.ts'
 //   toast.dismiss(id)
 //
 // Geometry follows sonner: 356px wide, 16px padding, 14px between toasts, 24px
-// from the window's corner, three visible (the newest), the popover surface with
+// from the window's right edge and 24px + the composer's clearance from its bottom, three visible (the newest), the popover surface with
 // its 1px border, 13px text, a 16px icon, and an ink action pill (24px, 4px
 // radius, 12px/500). A toast times out after 4 s unless `duration` says
 // otherwise (`Infinity` stays until dismissed: approvals). The timer stops while
@@ -78,6 +77,8 @@ interface Item {
 const WIDTH = 356
 const GAP = 14
 const OFFSET = 24
+/** The stack sits this far above the window's bottom edge, clear of the composer's Send button and pickers (a toast at the corner took the click meant for Send). */
+const COMPOSER_CLEARANCE = 96
 const VISIBLE = 3
 /** How far each older card of a collapsed stack peeks above the one in front. */
 const PEEK = 12.5
@@ -245,7 +246,7 @@ function ToastStack({ list }: { list: readonly Item[] }) {
   const live = placed.filter((p) => !p.item.leaving)
   const collapsed = !hovered && live.length > 1
   const x = size.width - OFFSET
-  const base = size.height - OFFSET
+  const base = size.height - OFFSET - COMPOSER_CLEARANCE
   const layers: Layer[] = placed.map(({ item, lift: above }) => {
     if (!collapsed || item.leaving) return { key: item.key, item, step: 0, x, y: base - above, lift: above, height: item.height }
     const step = live.findIndex((p) => p.item === item)
@@ -464,4 +465,3 @@ function ToastCard({ item }: { item: Item }) {
   )
 }
 
-onEnvironmentChange(() => { for (const item of items) clearTimeout(item.timer); items = []; hovered = false; commit() })

@@ -1,16 +1,19 @@
 //! settings.json: loaded at startup, replaced atomically on update.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use anyhow::{Context, Result};
 use kybern_protocol::Settings;
+use kybern_store::Store;
 
 #[derive(Clone)]
 pub struct SettingsStore {
     path: PathBuf,
     current: Arc<RwLock<Settings>>,
     changed: tokio::sync::broadcast::Sender<Settings>,
+    /// Where the stamps of shared-field changes are kept once the daemon attaches its store (S1).
+    stamps: Arc<OnceLock<Store>>,
 }
 
 impl SettingsStore {
@@ -25,7 +28,17 @@ impl SettingsStore {
             Err(e) => return Err(e.into()),
         };
         crate::provider_assets::prepare_existing(&settings);
-        Ok(Self { path: path.to_path_buf(), current: Arc::new(RwLock::new(settings)), changed: tokio::sync::broadcast::channel(32).0 })
+        Ok(Self {
+            path: path.to_path_buf(),
+            current: Arc::new(RwLock::new(settings)),
+            changed: tokio::sync::broadcast::channel(32).0,
+            stamps: Arc::new(OnceLock::new()),
+        })
+    }
+
+    /// Stamp every later change of a shared field in `store` (see `settings_share`).
+    pub fn attach_stamps(&self, store: Store) {
+        let _ = self.stamps.set(store);
     }
 
     /// The data directory `settings.json` lives in.
@@ -41,7 +54,9 @@ impl SettingsStore {
         self.changed.subscribe()
     }
 
-    pub fn set(&self, settings: Settings) -> Result<Settings> {
+    pub fn set(&self, mut settings: Settings) -> Result<Settings> {
+        // A credential a client just typed goes into the secret store; settings keep the reference.
+        crate::secret_store::externalize(&mut settings)?;
         validate_orchestration(&settings.orchestration)?;
         if let Some(omp) = settings.providers.get(&kybern_protocol::ProviderKind::Omp) {
             for profile in omp.env.get("OMP_PROFILE").into_iter().chain(omp.project_profiles.values()) {
@@ -49,8 +64,13 @@ impl SettingsStore {
             }
         }
         crate::provider_accounts::validate(&settings)?;
+        let before = self.current.read().unwrap().clone();
         write_atomic(&self.path, &settings)?;
         *self.current.write().unwrap() = settings.clone();
+        if let Some(store) = self.stamps.get() {
+            crate::settings_share::note_local_change(store, &before, &settings);
+        }
+        crate::secret_store::collect_garbage(&settings);
         let _ = self.changed.send(settings.clone());
         Ok(settings)
     }

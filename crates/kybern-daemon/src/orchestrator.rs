@@ -28,14 +28,20 @@ mod askpass;
 mod change_report;
 mod child_questions;
 mod delegation;
+mod federated_tools;
+pub(crate) mod fork_machine;
 pub(crate) mod group_git;
 mod group_pr;
+mod group_transfer;
 mod groups;
+pub(crate) mod inbound;
 mod lead;
 mod lead_git;
 mod lead_proposals;
+mod login_borrow;
 mod login_request;
 mod messaging;
+pub(crate) mod move_thread;
 mod note_claims;
 mod note_staleness;
 mod note_tidy;
@@ -43,6 +49,8 @@ mod notes;
 mod omp_recovery;
 mod pick_request;
 mod project_map;
+pub(crate) mod provision;
+pub(crate) mod remote_delegation;
 mod request_tools;
 mod rotation;
 mod secret_request;
@@ -215,6 +223,17 @@ impl Orchestrator {
                 .ok_or_else(|| anyhow!("native tool request has no active owning turn"))?;
             let operation_id =
                 crate::app_tools::prepare_native_operation(thread_id, session_instance_id, turn_id, call_id, name, &mut arguments)?;
+            // `machine: "all"` reads every machine's notes and tasks (design §9.2).
+            if crate::network::federated::wants_all(&arguments) {
+                return self.federated_tool_call(thread_id, session_instance_id, name, arguments).await;
+            }
+            // `machine` runs the tool on another machine of the network (forwarded tools, design §6.3).
+            if inbound::named_machine(&arguments).is_some() {
+                match self.forward_named_call(thread_id, session_instance_id, turn_id, call_id, name, arguments, operation_id).await? {
+                    inbound::Forwarded::Done(value) => return Ok(value),
+                    inbound::Forwarded::Local(local) => arguments = local,
+                }
+            }
             let mut result = self.execute_native_app_tool(thread_id, session_instance_id, name, arguments).await?;
             if let (Some(id), Some(object)) = (operation_id, result.as_object_mut()) {
                 object.insert("operation_id".into(), serde_json::to_value(id)?);
@@ -259,6 +278,25 @@ impl Orchestrator {
                 .filter(|turn| !turn.completed && turn.internal.is_none())
                 .map(|turn| turn.id)
                 .ok_or_else(|| anyhow!("native tool request has no active owning turn"))?;
+            self.dispatch_native_tool(&thread, turn_id, &live, session_instance_id, name, arguments).await
+        })
+    }
+
+    /// Run one Kybern agent tool for `thread`, whose live session `live` owns the turn `turn_id`. The caller
+    /// has checked that the session is current and that the tool is offered; a forwarded call from another
+    /// machine arrives here too, as the inbound thread (`inbound.rs`).
+    fn dispatch_native_tool<'a>(
+        &'a self,
+        thread: &'a Thread,
+        turn_id: TurnId,
+        live: &'a Arc<LiveSession>,
+        session_instance_id: Uuid,
+        name: &'a str,
+        arguments: serde_json::Value,
+    ) -> futures::future::BoxFuture<'a, Result<serde_json::Value>> {
+        Box::pin(async move {
+            let thread_id = thread.id;
+            let live = live.clone();
             if matches!(name, "kybern_html_preview" | "kybern_html_publish") {
                 anyhow::ensure!(serde_json::to_vec(&arguments)?.len() <= 768 * 1024, "HTML tool arguments exceed 768 KiB.");
                 if name == "kybern_html_preview" {
@@ -302,8 +340,14 @@ impl Orchestrator {
                     serde_json::json!({"visual":visual,"message":"The visual is published inline. Add only what the page does not already explain."}),
                 );
             }
+            if name == crate::network::forward::MACHINES_TOOL {
+                return self.execute_machines(thread).await;
+            }
+            if name == provision::ADD_TOOL {
+                return self.execute_add_to_machine(thread, turn_id, &live, arguments).await;
+            }
             if name == crate::previews::agent::TOOL {
-                let roots = crate::previews::thread_roots(&self.inner.store, &thread);
+                let roots = crate::previews::thread_roots(&self.inner.store, thread);
                 let policy = crate::previews::GrantPolicy::new(&self.inner.paths.root);
                 let settings = self.inner.settings.get();
                 let clients = self.inner.preview_requests.receiver_count();
@@ -325,37 +369,37 @@ impl Orchestrator {
                 return self.inner.computer.execute(ctx, name, arguments).await;
             }
             if crate::secrets::is_tool(name) {
-                return self.execute_request_secret(&thread, turn_id, &live, arguments).await;
+                return self.execute_request_secret(thread, turn_id, &live, arguments).await;
             }
             if crate::pick::is_tool(name) {
-                return self.execute_request_pick(&thread, turn_id, &live, arguments).await;
+                return self.execute_request_pick(thread, turn_id, &live, arguments).await;
             }
             if login_request::is_tool(name) {
-                return self.execute_request_login(&thread, turn_id, &live, arguments).await;
+                return self.execute_request_login(thread, turn_id, &live, arguments).await;
             }
             if request_tools::is_tool(name) {
-                return self.execute_request_tool(&thread, turn_id, &live, name, arguments).await;
+                return self.execute_request_tool(thread, turn_id, &live, name, arguments).await;
             }
             if crate::lead_git::is_tool(name) {
-                return self.execute_lead_git(&thread, turn_id, &live, arguments).await;
+                return self.execute_lead_git(thread, turn_id, &live, arguments).await;
             }
             if lead_proposals::is_tool(name) {
-                return self.execute_lead_tool(&thread, turn_id, &live, name, arguments).await;
+                return self.execute_lead_tool(thread, turn_id, &live, name, arguments).await;
             }
             if crate::project_map::is_tool(name) {
-                return self.execute_project_map(&thread, arguments).await;
+                return self.execute_project_map(thread, arguments).await;
             }
             if agent_items::is_tool(name) {
-                return self.execute_notes_tasks_tool(&thread, turn_id, &live, name, arguments).await;
+                return self.execute_notes_tasks_tool(thread, turn_id, &live, name, arguments).await;
             }
             if delegation::is_tool(name) {
-                return self.execute_agent_tool(&thread, turn_id, &live, name, arguments).await;
+                return self.execute_agent_tool(thread, turn_id, &live, name, arguments).await;
             }
             if child_questions::is_tool(name) {
-                return self.execute_child_question_tool(&thread, name, arguments).await;
+                return self.execute_child_question_tool(thread, name, arguments).await;
             }
             if messaging::is_tool(name) {
-                return self.execute_messaging_tool(&thread, turn_id, &live, name, arguments).await;
+                return self.execute_messaging_tool(thread, turn_id, &live, name, arguments).await;
             }
             let mut value = self.inner.app_tools.execute(thread_id, name, arguments).await?;
             if name == "kybern_thread_context" {
@@ -543,6 +587,10 @@ struct Inner {
     subagents: std::sync::Mutex<subagents::SubagentRouter>,
     /// Orchestrator V2 delegation engine state (batches, waiters).
     delegation: delegation::DelegationState,
+    /// Remote delegation: the machine hub, followers of children on other machines.
+    remote: remote_delegation::RemoteState,
+    /// Forwarded agent tools served for other machines: their inbound threads' sessions.
+    inbound: inbound::InboundState,
     /// Orchestrator V2 messaging engine state (blocked askers, owed answers, edit guards).
     messaging: messaging::MessagingState,
     /// Test hooks for the Coordinator's git tool (the `gh` program, git environment).
@@ -921,6 +969,8 @@ impl Orchestrator {
                 agent_item_ops: Mutex::new(()),
                 subagents: std::sync::Mutex::new(Default::default()),
                 delegation: Default::default(),
+                remote: Default::default(),
+                inbound: Default::default(),
                 messaging: Default::default(),
                 lead_git: Default::default(),
                 rotation: Default::default(),
@@ -1279,6 +1329,10 @@ impl Orchestrator {
             self.inner.queue_wakeup.notify_one();
         }
         let _ = self.inner.events.send(ev.clone());
+        // A move that waited for this thread's turn to end can go now.
+        if let EventPayload::ThreadUpdated { thread } = &ev.payload {
+            self.move_thread_idle(thread);
+        }
         if matches!(
             ev.payload,
             EventPayload::ApprovalRequested { .. } | EventPayload::UserInputRequested { .. } | EventPayload::ApprovalResolved { .. }
@@ -1312,6 +1366,8 @@ impl Orchestrator {
             if keep_stored_delegation {
                 thread.delegation = current.delegation;
             }
+            // Only the move code changes the lease; a stale copy must not undo it.
+            thread.moved = current.moved;
         }
         thread.updated_at = Utc::now();
         self.inner.store.thread_upsert(&thread)?;
@@ -1355,10 +1411,25 @@ impl Orchestrator {
         for project in &groups {
             changed |= self.refresh_group_members(project)?;
         }
+        for project in &projects {
+            let plain = kybern_git::simplify_path(std::path::Path::new(&project.path)).to_string_lossy().into_owned();
+            if plain != project.path && self.inner.store.project_by_path(&plain)?.is_none() {
+                let mut fixed = project.clone();
+                fixed.path = plain;
+                self.inner.store.project_update(&fixed)?;
+                changed = true;
+            }
+        }
+        let projects =
+            self.inner.store.projects_list()?.into_iter().filter(|project| project.kind != ProjectKind::Group).collect::<Vec<_>>();
         for batch in projects.chunks(8) {
             let probes = batch.iter().map(|project| async { (project.id, Repo::is_repo(std::path::Path::new(&project.path)).await) });
             for (id, is_git) in futures::future::join_all(probes).await {
-                changed |= self.inner.store.project_set_git_status(id, is_git)?;
+                if self.inner.store.project_set_git_status(id, is_git)? {
+                    changed = true;
+                    // A folder that became (or stopped being) a repository has a new identity.
+                    self.spawn_repo_identity(id);
+                }
             }
         }
         if changed {
@@ -1369,7 +1440,8 @@ impl Orchestrator {
 
     pub fn add_project(&self, path: String, name: Option<String>, space_id: Option<SpaceId>) -> Result<Project> {
         let p = PathBuf::from(&path);
-        let p = p.canonicalize().with_context(|| format!("project path {path} does not exist"))?;
+        // `canonicalize` returns `\\?\D:\x` on Windows; the project is stored and shown as `D:\x`.
+        let p = kybern_git::simplify_path(&p.canonicalize().with_context(|| format!("project path {path} does not exist"))?);
         if !p.is_dir() {
             return Err(anyhow!("{} is not a directory", p.display()));
         }
@@ -1379,7 +1451,19 @@ impl Orchestrator {
         {
             return Err(anyhow!("not found: space"));
         }
-        if let Some(mut existing) = self.inner.store.project_by_path(&path)? {
+        // A project registered before the prefix was dropped keeps working: it is found by its old path and renamed.
+        let verbatim = format!(r"\\?\{path}");
+        let found = match self.inner.store.project_by_path(&path)? {
+            Some(existing) => Some(existing),
+            None => self.inner.store.project_by_path(&verbatim)?,
+        };
+        if let Some(mut existing) = found {
+            if existing.path != path && existing.kind != ProjectKind::Group {
+                existing.path = path.clone();
+                existing.updated_at = Utc::now();
+                self.inner.store.project_update(&existing)?;
+                self.publish_projects();
+            }
             // Self-heal a stale cached flag: the folder may have gained (or lost) a
             // repo since it was first registered. Re-probe and persist any change so
             // edit/integration spawns are not permanently blocked after a `git init`.
@@ -1392,11 +1476,14 @@ impl Orchestrator {
                 existing.updated_at = Utc::now();
                 self.inner.store.project_update(&existing)?;
                 self.publish_projects();
+                self.spawn_repo_identity(existing.id);
             }
             return Ok(existing);
         }
         let now = Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: name.unwrap_or_else(|| p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| path.clone())),
             is_git: project_path_is_git(&path),
@@ -1422,6 +1509,7 @@ impl Orchestrator {
             return Err(error);
         }
         self.publish_projects();
+        self.spawn_repo_identity(project.id);
         // The store assigns the task prefix on insert; return the project as stored.
         Ok(self.inner.store.project_get(project.id)?.unwrap_or(project))
     }
@@ -1446,6 +1534,19 @@ impl Orchestrator {
             }
             Err(error) => tracing::warn!(%error, "could not read projects to announce a change"),
         }
+    }
+
+    /// Read a project's repository identity in the background and announce it when it changed
+    /// (design §4.4). A project that is just being created does not wait for git.
+    pub fn spawn_repo_identity(&self, id: ProjectId) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else { return };
+        let this = self.clone();
+        runtime.spawn(async move {
+            let Ok(Some(project)) = this.inner.store.project_get(id) else { return };
+            if crate::network::repo_identity::refresh(&this.inner.store, &project).await {
+                this.publish_projects();
+            }
+        });
     }
 
     // ---- threads ----
@@ -1542,6 +1643,9 @@ impl Orchestrator {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
+            origin: None,
+            inbound: None,
+            moved: None,
             subagent: None,
             delegation: None,
             members,
@@ -1693,7 +1797,7 @@ impl Orchestrator {
             }
             if use_worktree {
                 let selected = group_git::select_members(&project, params.members.as_deref())?;
-                let (worktree, snapshot) = self.create_group_workspace(&project, id, selected, &bases).await?;
+                let (worktree, snapshot) = self.create_group_workspace(&project, id, selected, &bases, None).await?;
                 members = snapshot;
                 Some(worktree)
             } else {
@@ -1734,6 +1838,9 @@ impl Orchestrator {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
+            origin: None,
+            inbound: None,
+            moved: None,
             subagent: None,
             delegation: None,
             members,
@@ -1762,6 +1869,8 @@ impl Orchestrator {
         std::fs::create_dir_all(&path)?;
         let now = Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: FREE_CHAT_PROJECT_ID,
             name: "Free chats".into(),
             path: path.to_string_lossy().into_owned(),
@@ -1887,6 +1996,8 @@ impl Orchestrator {
             self.emit(thread_id, None, EventPayload::ThreadArchived)?;
             self.subagents_archive_below(thread_id)?;
         }
+        // Machines this thread ran tools on archive their inbound threads for it.
+        self.archive_forwarded(thread_id);
         self.close_retained_sessions(thread_id).await?;
         if let Some(live) = self.inner.sessions.lock().await.remove(&thread_id) {
             live.mark_released();
@@ -1927,6 +2038,12 @@ impl Orchestrator {
             let current = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
             if current.subagent.is_some() {
                 return Err(anyhow!(subagents::READ_ONLY_ERROR));
+            }
+            if current.inbound.is_some() {
+                return Err(anyhow!(inbound::INBOUND_READ_ONLY));
+            }
+            if let Some(moved) = &current.moved {
+                return Err(anyhow!(move_thread::moved_message(moved)));
             }
             let selected_target = if queued {
                 self.inner
@@ -2114,6 +2231,9 @@ impl Orchestrator {
         let thread = self.inner.store.thread_get(message.thread_id)?.ok_or_else(|| anyhow!("thread not found"))?;
         if thread.subagent.is_some() {
             return Err(anyhow!(subagents::READ_ONLY_ERROR));
+        }
+        if let Some(moved) = &thread.moved {
+            return Err(anyhow!(move_thread::moved_message(moved)));
         }
         if thread.status == ThreadStatus::Archived {
             return Err(anyhow!("This chat is archived. Start a new chat to keep working."));
@@ -3172,7 +3292,7 @@ impl Orchestrator {
         kinds.push(ProviderKind::ClaudeCode);
         kinds.push(ProviderKind::Codex);
         let prompt = format!(
-            "Write a title for a coding session that starts with the request below. Reply with the title only: at most 6 words, sentence case, no quotes, no trailing period.\n\nRequest:\n{}",
+            "Write a title for a coding session that starts with the request below. Reply with the title only, with no label or preface such as \"Title:\": at most 6 words, sentence case, no quotes, no trailing period.\n\nRequest:\n{}",
             first.plain_text().chars().take(1500).collect::<String>()
         );
         let cwd = PathBuf::from(&thread.cwd);
@@ -3182,9 +3302,10 @@ impl Orchestrator {
                 continue;
             }
             let Some(driver) = self.inner.drivers.get(kind) else { continue };
+            let Some(env) = self.one_shot_env(thread, kind) else { continue };
             let _harness = self.inner.harness_gates[&kind].read().await;
             let binary = self.binary_for(kind);
-            match driver.one_shot(&cwd, &prompt, binary.as_ref()).await {
+            match driver.one_shot(&cwd, &prompt, binary.as_ref(), &env).await {
                 Ok(text) => {
                     let title = clean_title(&text);
                     if !title.is_empty() {
@@ -3198,6 +3319,24 @@ impl Orchestrator {
         Ok(None)
     }
 
+    /// The environment a one-shot helper call on behalf of `thread` runs with, or `None` when that harness
+    /// must not be used for it. A helper never falls back to this machine's own login for a thread that
+    /// has another account: the thread's account (a named account's own home, never the default one)
+    /// is the only one its prompt may go to. A login borrowed through the broker lives only in the
+    /// session's handle, so such a thread gets no model helper and keeps its plain title.
+    pub(crate) fn one_shot_env(&self, thread: &Thread, kind: ProviderKind) -> Option<std::collections::BTreeMap<String, String>> {
+        let borrowed = self.login_broker().is_some_and(|broker| broker.binding(thread.provider.kind, &thread.provider.instance).is_some());
+        if kind == thread.provider.kind {
+            return if borrowed { None } else { self.account_environment(thread).ok() };
+        }
+        if borrowed || thread.provider.instance != "default" {
+            return None;
+        }
+        let settings = self.inner.settings.get();
+        let provider = settings.providers.get(&kind).cloned().unwrap_or_default();
+        crate::provider_accounts::environment(&provider, kind, "default").ok()
+    }
+
     /// Ask a model for a short prompt answer using the thread's provider, falling back to others.
     async fn one_shot_any(&self, thread: &Thread, prompt: &str) -> Result<String> {
         let mut kinds = vec![thread.provider.kind, ProviderKind::ClaudeCode, ProviderKind::Codex];
@@ -3206,8 +3345,9 @@ impl Orchestrator {
         let mut last: Option<anyhow::Error> = None;
         for kind in kinds {
             let Some(driver) = self.inner.drivers.get(kind) else { continue };
+            let Some(env) = self.one_shot_env(thread, kind) else { continue };
             let _harness = self.inner.harness_gates[&kind].read().await;
-            match driver.one_shot(&cwd, prompt, self.binary_for(kind).as_ref()).await {
+            match driver.one_shot(&cwd, prompt, self.binary_for(kind).as_ref(), &env).await {
                 Ok(t) if !t.trim().is_empty() => return Ok(t),
                 Ok(_) => {}
                 Err(kybern_drivers::DriverError::Unsupported(_)) => {}
@@ -3450,6 +3590,8 @@ impl Orchestrator {
         let mut provider_settings =
             crate::settings::provider_settings(&self.inner.settings.get(), thread.provider.kind, Some(&project.path));
         provider_settings.env = self.account_environment(thread)?;
+        // An account that signs in through the login broker (S4) borrows its login for this session.
+        let borrowed_handle = self.borrowed_login(thread, &mut provider_settings.env).await?;
         let mut profile_binding = None;
         if thread.provider.kind == ProviderKind::Omp && thread.provider.instance == "default" {
             // A resumed chat must keep the profile that owns its native session,
@@ -3495,6 +3637,7 @@ impl Orchestrator {
                 if thread.coordinator_project_id.is_some() {
                     tools.extend(lead_proposals::tool_definitions());
                 }
+                self.offer_machine_tools(thread, &mut tools);
                 let guide = self.agent_guide(&tools, &restrictions);
                 gateway.register_coordinator(thread.id, session_instance_id, tools, restrictions, coordinator_instructions, guide)
             })
@@ -3539,7 +3682,12 @@ impl Orchestrator {
             env: provider_settings.env.into_iter().collect(),
             native_tool_bridge,
         };
-        let SpawnedSession { session, events } = match driver.spawn(config).await {
+        let spawned = driver.spawn(config).await;
+        // The drivers resolved the lent login's handle while spawning; nothing needs it afterwards.
+        if let Some(handle) = &borrowed_handle {
+            kybern_drivers::login_lend::unregister(handle);
+        }
+        let SpawnedSession { session, events } = match spawned {
             Ok(spawned) => spawned,
             Err(error) => {
                 if let Some(gateway) = &self.inner.native_tools {
@@ -3605,6 +3753,17 @@ impl Orchestrator {
         let script = crate::askpass::install_script(&self.inner.paths.root, &cli).ok()?;
         let (url, token) = gateway.register_askpass(thread_id, session_instance_id)?;
         Some(crate::askpass::session_env(&script, &url, &token))
+    }
+
+    /// A machine that is in a network with others can run tools there (design §6.3). A thread another
+    /// machine started never can: it would be a second hop.
+    #[inline(never)]
+    fn offer_machine_tools(&self, thread: &Thread, tools: &mut Vec<kybern_drivers::NativeToolDefinition>) {
+        if !fork_machine::second_hop(thread) && self.remote_hub().is_some_and(|hub| !hub.targets().is_empty()) {
+            crate::network::forward::offer_machine_args(tools);
+            tools.push(crate::network::forward::machines_tool_definition());
+            tools.push(crate::network::forward::add_to_machine_tool_definition());
+        }
     }
 
     /// Whether a session spawned now would expose the computer-use tools.
@@ -4612,6 +4771,12 @@ impl Orchestrator {
             }
             DriverEvent::TurnFailed { error } => {
                 let Some(turn) = turn_guard.as_mut() else { return Ok(()) };
+                // A login another machine lent was rejected (the broker rotated it): borrow again, resume and
+                // send the message once more instead of failing the turn.
+                if turn.internal.is_none() && !retiring && self.recover_rejected_login(thread_id, live, turn.id, &error).await {
+                    *turn_guard = None;
+                    return Ok(());
+                }
                 turn.completed = true;
                 let turn_id = turn.id;
                 *turn_guard = None;
@@ -4876,19 +5041,45 @@ fn output_indicates_running(output: &serde_json::Value) -> bool {
 }
 
 fn clean_title(text: &str) -> String {
+    let trim = |s: &str| {
+        s.trim_matches(|c: char| c == '"' || c == '\'' || c == '*' || c == '#' || c == '`').trim_end_matches('.').trim().to_string()
+    };
     let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
-    let line = line.trim_matches(|c: char| c == '"' || c == '\'' || c == '*' || c == '#' || c == '`').trim_end_matches('.').trim();
-    let title: String = line.chars().take(80).collect();
+    let line = trim(&strip_title_preamble(&trim(line)));
+    let title: String = sentence_case(&line).chars().take(80).collect();
     if title.split_whitespace().count() > 12 { String::new() } else { title }
+}
+
+/// A model that answers "Title: fix login" or "Titles the session: fix login" instead of the bare
+/// title: the words before the first colon are talk about the title, not part of it.
+fn strip_title_preamble(line: &str) -> String {
+    let Some((head, rest)) = line.split_once(':') else { return line.to_string() };
+    let words: Vec<String> = head.split_whitespace().map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase()).collect();
+    let about_the_title = words.len() <= 5
+        && (words.iter().any(|w| matches!(w.as_str(), "title" | "titles" | "titled" | "heading"))
+            || words.first().is_some_and(|w| matches!(w.as_str(), "here" | "suggested")));
+    if about_the_title && !rest.trim().is_empty() { rest.trim().to_string() } else { line.to_string() }
+}
+
+/// The title starts with a capital. The rest stays as the model wrote it: lowercasing a Title Case
+/// reply would also lowercase names (`Windows`, `Linux`), and the prompt already asks for sentence case.
+fn sentence_case(title: &str) -> String {
+    let mut chars = title.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 /// What `kybern askpass` gets back for a prompt.
 pub(crate) use askpass::PromptReply;
-pub(crate) use groups::pr_repo_dir;
+pub(crate) use groups::{member_dir, pr_repo_dir};
 
 /// The wait budget of the summoned-card tools (sign-in, question, permission, terminal).
 pub(crate) fn request_call_budget(name: &str, arguments: &serde_json::Value) -> Option<Duration> {
-    login_request::call_budget(name).or_else(|| request_tools::call_budget(name, arguments))
+    login_request::call_budget(name)
+        .or_else(|| request_tools::call_budget(name, arguments))
+        .or_else(|| provision::call_budget(name, arguments))
 }
 
 /// The summoned-card tools offered to agent sessions.
@@ -4940,6 +5131,20 @@ pub(crate) fn worktree_label(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_generated_title_loses_talk_about_the_title_and_keeps_sentence_case() {
+        use super::clean_title;
+        assert_eq!(clean_title("Titles the session: check main green across OSes"), "Check main green across OSes");
+        assert_eq!(clean_title("Title: **Fix login redirect**"), "Fix login redirect");
+        assert_eq!(clean_title("Here's a title: fix the flaky test."), "Fix the flaky test");
+        assert_eq!(clean_title("\"fix the Windows build\""), "Fix the Windows build");
+        assert_eq!(clean_title("Fix iOS crash on launch"), "Fix iOS crash on launch");
+        // A colon that is part of the title stays.
+        assert_eq!(clean_title("Session tokens: rotate on login"), "Session tokens: rotate on login");
+        assert_eq!(clean_title("Title:"), "Title:");
+        assert_eq!(clean_title("one two three four five six seven eight nine ten eleven twelve thirteen"), "");
+    }
+
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -5321,6 +5526,8 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let now = chrono::Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: "fixture".into(),
             path: root.to_string_lossy().into_owned(),
@@ -5356,6 +5563,9 @@ mod tests {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
+            origin: None,
+            inbound: None,
+            moved: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),
@@ -5706,6 +5916,8 @@ mod tests {
             let store = if on_disk { Store::open(&root.join("state.sqlite")).unwrap() } else { Store::open_in_memory().unwrap() };
             let now = chrono::Utc::now();
             let project = Project {
+                repo: None,
+                repos: Vec::new(),
                 id: Uuid::now_v7(),
                 name: "fixture".into(),
                 path: root.to_string_lossy().into_owned(),
@@ -5755,6 +5967,9 @@ mod tests {
                 last_seq: 0,
                 parent_thread_id: None,
                 coordinator_project_id: None,
+                origin: None,
+                inbound: None,
+                moved: None,
                 subagent: None,
                 delegation: None,
                 members: Vec::new(),
@@ -8477,6 +8692,13 @@ for line in sys.stdin:
     }
 
     include!("orchestrator/delegation_tests.rs");
+    include!("orchestrator/remote_delegation_tests.rs");
+    include!("orchestrator/provision_tests.rs");
+    include!("orchestrator/inbound_tests.rs");
+    include!("orchestrator/fork_tests.rs");
+    include!("orchestrator/move_tests.rs");
+    include!("orchestrator/group_transfer_tests.rs");
+    include!("orchestrator/federated_tools_tests.rs");
     include!("orchestrator/child_questions_tests.rs");
     include!("orchestrator/secret_tests.rs");
     include!("orchestrator/request_tests.rs");

@@ -11,8 +11,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::Scope;
 use crate::event::ThreadEvent;
+use crate::fork::*;
+use crate::forward::*;
+use crate::login_broker::*;
 use crate::model::*;
+use crate::move_thread::*;
+use crate::network::*;
+use crate::outbox::*;
+use crate::plugin_sync::*;
+use crate::provision::*;
+use crate::shared_state::*;
+use crate::skill_sync::*;
 use crate::thread_read::*;
+use crate::utilities::*;
 
 /// Static description of a method, used for auth checks and docs.
 pub trait Method {
@@ -51,6 +62,15 @@ pub struct DaemonInfo {
     pub data_dir: String,
     pub scopes: Vec<Scope>,
     pub started_at: chrono::DateTime<chrono::Utc>,
+    /// This machine's id on the network; equal to `environment_id`. Empty from a daemon older than the network.
+    #[serde(default)]
+    pub machine_id: String,
+    /// Version of the daemon-to-daemon protocol; 0 from a daemon older than the network.
+    #[serde(default)]
+    pub network_protocol: u32,
+    /// Feature names this daemon supports; see [`crate::features`].
+    #[serde(default)]
+    pub features: Vec<String>,
 }
 method!(DaemonInfoMethod, "daemon.info", None, Empty, DaemonInfo);
 method!(DaemonShutdown, "daemon.shutdown", Some(Scope::AccessWrite), Empty, Empty);
@@ -454,6 +474,9 @@ pub struct AccountSummary {
     pub managed: bool,
     #[serde(default)]
     pub can_sign_out: bool,
+    /// Set when this account signs in through the login broker (design §9.4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub broker: Option<AccountBroker>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -1067,6 +1090,9 @@ pub struct ThreadsListParams {
     /// Implies `include_subagents`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_thread_id: Option<ThreadId>,
+    /// Also return the hidden threads that record tool calls other machines made here (`Thread::inbound`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub include_inbound: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadsListResult {
@@ -2267,6 +2293,10 @@ pub struct GitStatus {
     /// Open pull request for this branch, if `gh` knows one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_request: Option<PullRequest>,
+    /// Why a folder that is a repository is reported as `is_git: false`, for a person to act on
+    /// (git refuses a folder another user owns).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue: Option<String>,
     /// Group threads: one entry per member in project order, excluded members
     /// included (`included: false`). The fields above are the primary's.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -3556,8 +3586,11 @@ pub struct NotesListResult {
     /// it are `undated`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_since: Option<chrono::DateTime<chrono::Utc>>,
+    /// Which machine each note came from, and which machines were left out. Only with `machine`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub federation: Option<Federation>,
 }
-method!(NotesList, "notes.list", Some(Scope::OrchestrationRead), Empty, NotesListResult);
+method!(NotesList, "notes.list", Some(Scope::OrchestrationRead), NotesListParams, NotesListResult);
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct NotesGetParams {
@@ -3649,6 +3682,9 @@ pub struct NotesSearchParams {
     /// Defaults to 50, at most 200.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+    /// `"all"` searches every online machine; a name or id searches that machine. Absent: this one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct NoteSearchHit {
@@ -3659,6 +3695,9 @@ pub struct NoteSearchHit {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct NotesSearchResult {
     pub results: Vec<NoteSearchHit>,
+    /// Which machine each hit came from, and which machines were left out. Only with `machine`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub federation: Option<Federation>,
 }
 method!(NotesSearch, "notes.search", Some(Scope::OrchestrationRead), NotesSearchParams, NotesSearchResult);
 
@@ -3864,8 +3903,11 @@ pub struct TaskItem {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct TaskItemsListResult {
     pub tasks: Vec<TaskItem>,
+    /// Which machine each task came from, and which machines were left out. Only with `machine`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub federation: Option<Federation>,
 }
-method!(TaskItemsList, "tasks.items.list", Some(Scope::OrchestrationRead), Empty, TaskItemsListResult);
+method!(TaskItemsList, "tasks.items.list", Some(Scope::OrchestrationRead), TaskItemsListParams, TaskItemsListResult);
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct TaskItemsGetParams {
@@ -4113,6 +4155,160 @@ pub struct TaskItemsChangedNotification {
     pub deleted_id: Option<TaskItemId>,
 }
 
+// ---- machine network (M1; payloads in network.rs) ----
+
+method!(NetworkStatusMethod, "network.status", Some(Scope::NetworkRead), Empty, NetworkStatus);
+method!(NetworkSetEnabled, "network.set_enabled", Some(Scope::NetworkAdmin), NetworkSetEnabledParams, NetworkStatus);
+method!(NetworkAdd, "network.add", Some(Scope::NetworkAdmin), NetworkFoundParams, NetworkAddResult);
+method!(NetworkCodeCreate, "network.code.create", Some(Scope::NetworkAdmin), Empty, NetworkCodeCreateResult);
+method!(NetworkJoin, "network.join", Some(Scope::NetworkAdmin), NetworkJoinParams, MachineCard);
+method!(NetworkRemove, "network.remove", Some(Scope::NetworkAdmin), NetworkRemoveParams, NetworkStatus);
+method!(NetworkPause, "network.pause", Some(Scope::NetworkAdmin), NetworkPauseParams, MachineCard);
+method!(NetworkRename, "network.rename", Some(Scope::NetworkAdmin), NetworkRenameParams, MachineCard);
+method!(NetworkMerge, "network.merge", Some(Scope::NetworkAdmin), NetworkFoundParams, NetworkStatus);
+method!(NetworkRejoin, "network.rejoin", Some(Scope::NetworkAdmin), Empty, NetworkStatus);
+method!(NetworkClientGrant, "network.client_grant", Some(Scope::NetworkRead), NetworkClientGrantParams, NetworkClientGrantResult);
+method!(NetworkRoutes, "network.routes", Some(Scope::NetworkRead), NetworkRoutesParams, NetworkRoutesResult);
+method!(NetworkAllowSet, "network.allow.set", Some(Scope::NetworkAdmin), NetworkAllowSetParams, MachineCard);
+method!(NetworkUpdateAll, "network.update_all", Some(Scope::NetworkAdmin), Empty, NetworkUpdateAllResult);
+method!(NetworkDoctor, "network.doctor", Some(Scope::NetworkRead), NetworkDoctorParams, DoctorReport);
+method!(MachinesInfo, "machines.info", Some(Scope::NetworkRead), Empty, MachineInfo);
+method!(NetworkFollowUpdatesSet, "network.follow_updates.set", Some(Scope::NetworkAdmin), NetworkFollowUpdatesParams, NetworkStatus);
+
+// Daemon-to-daemon. A device token never carries a machine scope, so these refuse clients.
+method!(PeerOpsSync, "peer.ops.sync", Some(Scope::MachinePeer), PeerOpsSyncParams, PeerOpsSyncResult);
+method!(PeerOpsPush, "peer.ops.push", Some(Scope::MachinePeer), PeerOpsPushParams, PeerOpsPushResult);
+method!(PeerPresenceMethod, "peer.presence", Some(Scope::MachinePeer), PeerPresence, Empty);
+method!(PeerClientTokenMint, "peer.client_token.mint", Some(Scope::MachinePeer), PeerClientTokenMintParams, PeerClientTokenMintResult);
+method!(PeerDeviceRevoke, "peer.device.revoke", Some(Scope::MachinePeer), PeerDeviceRevokeParams, Empty);
+method!(PeerRelayOpen, "peer.relay.open", Some(Scope::MachineRelay), PeerRelayOpenParams, Empty);
+method!(PeerRelayData, "peer.relay.data", Some(Scope::MachineRelay), PeerRelayDataParams, Empty);
+method!(PeerRelayClose, "peer.relay.close", Some(Scope::MachineRelay), PeerRelayCloseParams, Empty);
+// Asking a member to update itself. `machine:settings` is the narrowest machine scope that a machine's owner
+// can turn off per machine and that is not the always-on operation sync: a machine that does not let others
+// change its settings does not let them restart it into a new version either.
+method!(PeerUpdateStart, "peer.update.start", Some(Scope::MachineSettings), PeerUpdateStartParams, PeerUpdateStartResult);
+
+// Remote delegation and the outbox (M2, R1; payloads in outbox.rs).
+method!(OutboxList, "outbox.list", Some(Scope::OrchestrationRead), OutboxListParams, OutboxListResult);
+method!(OutboxRetry, "outbox.retry", Some(Scope::OrchestrationOperate), OutboxIdParams, OutboxItem);
+method!(OutboxCancel, "outbox.cancel", Some(Scope::OrchestrationOperate), OutboxIdParams, OutboxItem);
+method!(OutboxEnqueue, "outbox.enqueue", Some(Scope::OrchestrationOperate), OutboxEnqueueParams, OutboxItem);
+method!(PeerDelegate, "peer.delegate", Some(Scope::MachineDelegate), PeerDelegateParams, PeerDelegateResult);
+method!(PeerDelegationGet, "peer.delegation.get", Some(Scope::MachineDelegate), PeerDelegationGetParams, PeerDelegationView);
+method!(PeerDelegationCancel, "peer.delegation.cancel", Some(Scope::MachineDelegate), PeerDelegationCancelParams, PeerDelegationView);
+method!(PeerGitBundle, "peer.git.bundle", Some(Scope::MachineDelegate), PeerGitBundleParams, PeerGitBundleResult);
+method!(PeerGitImport, "peer.git.import", Some(Scope::MachineDelegate), PeerGitImportParams, PeerGitImportResult);
+// Outbox delivery of a composer's new thread and message: the same parameters as `threads.create` and
+// `threads.send`, which already take a client-chosen `thread_id` and `message_id`, so a repeat is the first.
+method!(PeerThreadCreate, "peer.thread.create", Some(Scope::MachineDelegate), ThreadsCreateParams, Thread);
+method!(PeerThreadSend, "peer.thread.send", Some(Scope::MachineDelegate), ThreadsSendParams, ThreadsSendResult);
+// Shared state (M5; payloads in shared_state.rs). `peer.settings.*` need `machine:settings` on the target.
+method!(SettingsNetworkViewMethod, "settings.network_view", Some(Scope::OrchestrationRead), Empty, SettingsNetworkView);
+method!(SettingsShare, "settings.share", Some(Scope::OrchestrationOperate), SettingsShareParams, SettingsShareResult);
+method!(PeerSettingsGet, "peer.settings.get", Some(Scope::MachineSettings), Empty, PeerSettingsGetResult);
+method!(PeerSettingsPatch, "peer.settings.patch", Some(Scope::MachineSettings), SettingsPatch, PeerSettingsPatchResult);
+method!(PeerFederatedRead, "peer.federated.read", Some(Scope::MachineTools), PeerFederatedReadParams, PeerFederatedReadResult);
+// The login broker and pushed keys (S4; payloads in login_broker.rs). The `machine:logins` calls are served only
+// by the machine the `broker` register names (borrow, usage, release_all) or sent only by it (push); `machine:secrets`
+// carries a key sealed to the target.
+method!(PeerLoginBorrow, "peer.login.borrow", Some(Scope::MachineLogins), PeerLoginBorrowParams, PeerLoginBorrowResult);
+method!(PeerLoginPush, "peer.login.push", Some(Scope::MachineLogins), PeerLoginPushParams, Empty);
+method!(PeerLoginRelease, "peer.login.release", Some(Scope::MachineLogins), PeerLoginReleaseParams, Empty);
+method!(PeerLoginStatusMethod, "peer.login.status", Some(Scope::MachineLogins), Empty, PeerLoginStatus);
+method!(PeerLoginReleaseAll, "peer.login.release_all", Some(Scope::MachineLogins), PeerLoginReleaseAllParams, PeerLoginReleaseAllResult);
+method!(PeerLoginUsage, "peer.login.usage", Some(Scope::MachineLogins), PeerLoginUsageParams, UsageLimitsResult);
+method!(PeerSecretsPut, "peer.secrets.put", Some(Scope::MachineSecrets), PeerSecretsPutParams, Empty);
+method!(LoginBrokerStatusMethod, "login.broker.status", Some(Scope::OrchestrationRead), Empty, LoginBrokerStatus);
+method!(LoginBrokerBind, "login.broker.bind", Some(Scope::AccessWrite), LoginBrokerBindParams, LoginBrokerStatus);
+method!(LoginBrokerSet, "login.broker.set", Some(Scope::NetworkAdmin), LoginBrokerSetParams, LoginBrokerSetResult);
+method!(SecretsPush, "secrets.push", Some(Scope::AccessWrite), SecretsPushParams, SecretsPushResult);
+// Forwarded agent tools (M2, R2; payloads in forward.rs). Files and terminals also need their own scope on the target.
+// Fork to a machine (M3, F1; payloads in fork.rs).
+method!(ThreadsForkNote, "threads.fork_note", Some(Scope::OrchestrationRead), ThreadsForkNoteParams, ThreadsForkNoteResult);
+method!(
+    ThreadsForkToMachine,
+    "threads.fork_to_machine",
+    Some(Scope::OrchestrationOperate),
+    ThreadsForkToMachineParams,
+    ThreadsForkToMachineResult
+);
+method!(PeerFork, "peer.fork", Some(Scope::MachineDelegate), PeerForkParams, PeerForkResult);
+// Continue on another machine (M3, F2; payloads in move_thread.rs).
+method!(
+    ThreadsMoveToMachine,
+    "threads.move_to_machine",
+    Some(Scope::OrchestrationOperate),
+    ThreadsMoveToMachineParams,
+    ThreadsMoveToMachineResult
+);
+method!(ThreadsMoveAbandon, "threads.move_abandon", Some(Scope::OrchestrationOperate), ThreadsMoveAbandonParams, ThreadsMoveAbandonResult);
+method!(PeerMovePrepare, "peer.move.prepare", Some(Scope::MachineDelegate), PeerMovePrepareParams, PeerMovePrepareResult);
+method!(PeerMoveCommit, "peer.move.commit", Some(Scope::MachineDelegate), PeerMoveCommitParams, PeerMoveCommitResult);
+method!(PeerMoveGet, "peer.move.get", Some(Scope::MachineDelegate), PeerMoveRefParams, PeerMoveStatus);
+method!(PeerMoveAbort, "peer.move.abort", Some(Scope::MachineDelegate), PeerMoveRefParams, PeerMoveStatus);
+method!(PeerToolCall, "peer.tool.call", Some(Scope::MachineTools), PeerToolCallParams, PeerToolCallResult);
+method!(PeerThreadArchiveInbound, "peer.thread.archive_inbound", Some(Scope::MachineTools), PeerThreadArchiveInboundParams, Empty);
+
+// Add a project to another machine (payloads in provision.rs). A client calls the `projects.provision*` methods on
+// the source machine; the source talks to the target with `peer.provision.*`.
+method!(ProjectsProvisionPlan, "projects.provision_plan", Some(Scope::OrchestrationRead), ProjectsProvisionPlanParams, ProvisionPlan);
+method!(ProjectsProvision, "projects.provision", Some(Scope::OrchestrationOperate), ProjectsProvisionParams, ProvisionStatus);
+method!(
+    ProjectsProvisionStatusMethod,
+    "projects.provision.status",
+    Some(Scope::OrchestrationRead),
+    ProjectsProvisionStatusParams,
+    ProvisionStatus
+);
+method!(PeerProvisionProbeMethod, "peer.provision.probe", Some(Scope::MachineDelegate), PeerProvisionProbeParams, PeerProvisionProbe);
+method!(
+    PeerProvisionPrepare,
+    "peer.provision.prepare",
+    Some(Scope::MachineDelegate),
+    PeerProvisionPrepareParams,
+    PeerProvisionPrepareResult
+);
+// A chunk of the bundle of a repository the target could not clone (up to `MAX_PROVISION_BUNDLE_BYTES`).
+method!(PeerProvisionChunk, "peer.provision.chunk", Some(Scope::MachineDelegate), PeerGitBundleParams, PeerGitBundleResult);
+method!(PeerProvisionImport, "peer.provision.import", Some(Scope::MachineDelegate), PeerProvisionImportParams, PeerProvisionPrepareResult);
+method!(PeerProvisionFinish, "peer.provision.finish", Some(Scope::MachineDelegate), PeerProvisionFinishParams, ProvisionResult);
+
+// Machine utilities (M4, U1 files and U3 ports; payloads in utilities.rs).
+method!(FilesSend, "files.send", Some(Scope::OrchestrationOperate), FilesSendParams, FilesSendResult);
+method!(PeerFilesBegin, "peer.files.begin", Some(Scope::MachineFiles), PeerFilesBeginParams, PeerFilesBeginResult);
+method!(PeerFilesChunk, "peer.files.chunk", Some(Scope::MachineFiles), PeerFilesChunkParams, PeerFilesChunkResult);
+method!(PeerFilesFinish, "peer.files.finish", Some(Scope::MachineFiles), PeerFilesTransferParams, PeerFilesFinishResult);
+method!(PeerFilesAbort, "peer.files.abort", Some(Scope::MachineFiles), PeerFilesTransferParams, Empty);
+method!(PortsForward, "ports.forward", Some(Scope::OrchestrationOperate), PortsForwardParams, PortForward);
+method!(PortsList, "ports.list", Some(Scope::OrchestrationRead), Empty, PortsListResult);
+method!(PortsStop, "ports.stop", Some(Scope::OrchestrationOperate), PortsStopParams, PortsListResult);
+method!(ClipboardSet, "clipboard.set", Some(Scope::OrchestrationOperate), ClipboardSetParams, ClipboardSetResult);
+method!(ClipboardGet, "clipboard.get", Some(Scope::OrchestrationOperate), ClipboardGetParams, ClipboardGetResult);
+method!(ClipboardStatusMethod, "clipboard.status", Some(Scope::OrchestrationRead), Empty, ClipboardStatus);
+method!(PeerClipboardSet, "peer.clipboard.set", Some(Scope::MachineClipboard), PeerClipboardSetParams, ClipboardSetResult);
+method!(PeerClipboardGet, "peer.clipboard.get", Some(Scope::MachineClipboard), Empty, ClipboardGetResult);
+method!(PeerClipboardAuto, "peer.clipboard.auto", Some(Scope::MachineClipboardAuto), PeerClipboardAutoParams, Empty);
+method!(PeerPortsOpen, "peer.ports.open", Some(Scope::MachinePorts), PeerPortsOpenParams, Empty);
+// Data and close frames only reach a stream that an authorized open created, so `machine:peer` is enough.
+method!(PeerPortsData, "peer.ports.data", Some(Scope::MachinePeer), PeerRelayDataParams, Empty);
+method!(PeerPortsClose, "peer.ports.close", Some(Scope::MachinePeer), PeerRelayCloseParams, Empty);
+
+// User skills on every machine (payloads in skill_sync.rs). Reading another machine's skills and asking it to
+// send one are file reads there, and the copy itself is a file send: `machine:files` gates all of it.
+method!(PluginsInventory, "plugins.inventory", Some(Scope::OrchestrationRead), Empty, PluginInventory);
+method!(PluginsNetworkViewMethod, "plugins.network_view", Some(Scope::OrchestrationRead), Empty, PluginsNetworkView);
+method!(PluginsCopy, "plugins.copy", Some(Scope::OrchestrationOperate), PluginsCopyParams, PluginsCopyResult);
+method!(PeerPluginsInventory, "peer.plugins.inventory", Some(Scope::MachineFiles), Empty, PluginInventory);
+method!(PeerPluginsCopy, "peer.plugins.copy", Some(Scope::MachineFiles), PluginsCopyParams, PluginsCopyResult);
+method!(PeerPluginsInstall, "peer.plugins.install", Some(Scope::MachineFiles), PluginInstallRequest, PluginInstallResult);
+
+method!(SkillsInventoryMethod, "skills.inventory", Some(Scope::OrchestrationRead), Empty, SkillInventory);
+method!(SkillsNetworkViewMethod, "skills.network_view", Some(Scope::OrchestrationRead), Empty, SkillsNetworkView);
+method!(SkillsCopy, "skills.copy", Some(Scope::OrchestrationOperate), SkillsCopyParams, SkillsCopyResult);
+method!(PeerSkillsInventory, "peer.skills.inventory", Some(Scope::MachineFiles), Empty, SkillInventory);
+method!(PeerSkillsCopy, "peer.skills.copy", Some(Scope::MachineFiles), SkillsCopyParams, SkillsCopyResult);
+
 /// Registry used by the daemon's auth check and the schema dump.
 pub struct MethodInfo {
     pub name: &'static str,
@@ -4306,6 +4502,106 @@ registry!(
     EventsSubscribe,
     EventsUnsubscribe,
     EventsRange,
+    NetworkStatusMethod,
+    NetworkSetEnabled,
+    NetworkAdd,
+    NetworkCodeCreate,
+    NetworkJoin,
+    NetworkRemove,
+    NetworkPause,
+    NetworkRename,
+    NetworkMerge,
+    NetworkRejoin,
+    NetworkClientGrant,
+    NetworkRoutes,
+    NetworkAllowSet,
+    NetworkUpdateAll,
+    NetworkDoctor,
+    MachinesInfo,
+    NetworkFollowUpdatesSet,
+    PeerOpsSync,
+    PeerOpsPush,
+    PeerPresenceMethod,
+    PeerClientTokenMint,
+    PeerDeviceRevoke,
+    PeerRelayOpen,
+    PeerRelayData,
+    PeerRelayClose,
+    PeerUpdateStart,
+    OutboxList,
+    OutboxRetry,
+    OutboxCancel,
+    OutboxEnqueue,
+    PeerDelegate,
+    PeerDelegationGet,
+    PeerDelegationCancel,
+    PeerGitBundle,
+    PeerGitImport,
+    PeerThreadCreate,
+    PeerThreadSend,
+    ThreadsForkNote,
+    ThreadsForkToMachine,
+    PeerFork,
+    ThreadsMoveToMachine,
+    ThreadsMoveAbandon,
+    PeerMovePrepare,
+    PeerMoveCommit,
+    PeerMoveGet,
+    PeerMoveAbort,
+    ProjectsProvisionPlan,
+    ProjectsProvision,
+    ProjectsProvisionStatusMethod,
+    PeerProvisionProbeMethod,
+    PeerProvisionPrepare,
+    PeerProvisionChunk,
+    PeerProvisionImport,
+    PeerProvisionFinish,
+    PeerToolCall,
+    PeerThreadArchiveInbound,
+    SettingsNetworkViewMethod,
+    SettingsShare,
+    PeerSettingsGet,
+    PeerSettingsPatch,
+    PeerFederatedRead,
+    PeerLoginBorrow,
+    PeerLoginPush,
+    PeerLoginRelease,
+    PeerLoginStatusMethod,
+    PeerLoginReleaseAll,
+    PeerLoginUsage,
+    PeerSecretsPut,
+    LoginBrokerStatusMethod,
+    LoginBrokerBind,
+    LoginBrokerSet,
+    SecretsPush,
+    FilesSend,
+    PeerFilesBegin,
+    PeerFilesChunk,
+    PeerFilesFinish,
+    PeerFilesAbort,
+    PortsForward,
+    PortsList,
+    PortsStop,
+    ClipboardSet,
+    ClipboardGet,
+    ClipboardStatusMethod,
+    PeerClipboardSet,
+    PeerClipboardGet,
+    PeerClipboardAuto,
+    PeerPortsOpen,
+    PeerPortsData,
+    PeerPortsClose,
+    PluginsInventory,
+    PluginsNetworkViewMethod,
+    PluginsCopy,
+    PeerPluginsInventory,
+    PeerPluginsCopy,
+    PeerPluginsInstall,
+    SkillsInventoryMethod,
+    SkillsNetworkViewMethod,
+    SkillsCopy,
+    PeerSkillsInventory,
+    PeerSkillsCopy,
 );
 
 pub fn scope_for(method: &str) -> Option<Option<Scope>> {

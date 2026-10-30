@@ -1,0 +1,38 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(PeerGitBundleParams)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PeerGitBundleParams",
+  "description": "`peer.git.bundle`: one chunk of a bundle, in order. Sending the same offset again is accepted, so a\nbundle that was interrupted resumes from `received`.",
+  "type": "object",
+  "properties": {
+    "operation_id": {
+      "description": "The delegation's operation id: it names the staged file on B.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "offset": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "total": {
+      "description": "The whole bundle's size.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "data": {
+      "description": "Standard base64 of this chunk.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "operation_id",
+    "offset",
+    "total",
+    "data"
+  ]
+}

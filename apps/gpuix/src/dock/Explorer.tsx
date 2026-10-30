@@ -16,11 +16,14 @@ import type { FileEntry, FilesReadResult } from '../../../../packages/kybern-cli
 import { ISLAND } from '../MatrixLoader.tsx'
 import { errorText } from '../nav/actions.ts'
 import { N } from '../nav/glyphs.ts'
-import { Menu, MenuCheckboxItem, MenuItem, MenuLabel, MenuSeparator } from '../nav/overlay.tsx'
+import { ContextMenu, Menu, MenuCheckboxItem, MenuItem, MenuLabel, MenuSeparator, MenuSub } from '../nav/overlay.tsx'
+import { sendTargets } from '../../../../packages/kybern-client/src/machineUtilities.ts'
+import { useMachines } from '../machines/index.ts'
+import { sendPath } from '../machines/utilities.ts'
 import { IconButton } from '../kit/IconButton.tsx'
 import { SearchField } from '../kit/SearchField.tsx'
 import { Button } from '../kit/Button.tsx'
-import { getClient, useApp } from '../state.ts'
+import { ownProjectId, threadClient, useApp } from '../state.ts'
 import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { copyText } from '../transcript/store.ts'
 import { FONT_MONO } from '../theme.ts'
@@ -39,7 +42,7 @@ type Listing = FileEntry[] | 'loading' | 'error'
 // Reuse the native row geometry/input path used by the PR viewports. Paint,
 // hit testing and selection are rebuilt at the current scroll offset.
 const EXPLORER_SCROLL_LAYOUT = { cacheLayout: true, cache: 'fill' as const }
-export function Explorer({ projectId, width }: { projectId: string; width: number }) {
+export function Explorer({ projectId, thread, width }: { projectId: string; thread: { id: string; project_id: string; ownProjectId?: string }; width: number }) {
   const t = useTheme()
   const { renderer } = useGpuix()
   const tree = useRef<PublicInstance | null>(null)
@@ -53,6 +56,7 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
   const [results, setResults] = useState<string[] | null>(null)
   const selectionRequest = useExplorerSelection(), threadId = useApp(s => s.selectedId)
   const reveal = useRef<string | null>(null)
+  const [menu, setMenu] = useState<{ row: TreeRow; at: { x: number; y: number } } | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
   const requested = useRef(new Set<string>())
@@ -62,12 +66,12 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
     if (!retry && requested.current.has(dir)) return
     requested.current.add(dir)
     setListings((previous) => ({ ...previous, [dir]: 'loading' }))
-    void getClient()!.call('files.list', { project_id: projectId, path: dir }).then((result) => {
+    void threadClient(thread.id)!.call('files.list', { project_id: ownProjectId(thread), path: dir }).then((result) => {
       if (live.current) setListings((previous) => ({ ...previous, [dir]: result.entries }))
     }, (e) => {
       if (live.current) { setError(errorText(e)); setListings((previous) => ({ ...previous, [dir]: 'error' })) }
     })
-  }, [projectId])
+  }, [thread.id, ownProjectId(thread)])
   useEffect(() => { load('') }, [load])
   useEffect(() => {
     if (!selectionRequest || !threadId) return
@@ -81,10 +85,10 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
     let current = true
     if (!query.trim()) { setResults(null); return }
     const timer = setTimeout(() => {
-      void getClient()!.call('files.search', { project_id: projectId, query: query.trim(), limit: 80 }).then((result) => { if (current) setResults(result.files) }, (e) => { if (current) setError(errorText(e)) })
+      void threadClient(thread.id)!.call('files.search', { project_id: ownProjectId(thread), query: query.trim(), limit: 80 }).then((result) => { if (current) setResults(result.files) }, (e) => { if (current) setError(errorText(e)) })
     }, 200)
     return () => { current = false; clearTimeout(timer) }
-  }, [query, projectId])
+  }, [query, thread.id, ownProjectId(thread)])
   const rows = useMemo(() => {
     if (results) return results.map((path, index): TreeRow => ({ key: path, path, name: path, kind: 'file', depth: 0, position: index + 1, setSize: results.length }))
     const out: TreeRow[] = []
@@ -176,9 +180,13 @@ export function Explorer({ projectId, width }: { projectId: string; width: numbe
       <TreeHost ref={treeList} testId="dock-file-tree" {...(virtualTree ? { ...EXPLORER_SCROLL_LAYOUT, estimatedItemHeight: TREE_ROW_HEIGHT, overdraw: 0, onVisibleRange: (event: { startIndex?: number; endIndex?: number }) => {
         setTreeWindow(previous => treeWindowRange(rows.length, event.startIndex ?? 0, event.endIndex ?? 0, previous))
       } } : {})} style={{ display: 'flex', flexDirection: 'column', width: '100%', flexGrow: 1, minHeight: 0, overflowY: virtualTree ? undefined : 'scroll', overflowX: 'hidden' }}>
-        <MotionFileTreeRows rows={rows} open={expanded} loading={loadingDirs} selected={selected} focus={focus} virtual={virtualTree} window={virtualTree ? treeWindow : undefined} search={results !== null} activate={activateRow} />
+        <MotionFileTreeRows rows={rows} open={expanded} loading={loadingDirs} selected={selected} focus={focus} virtual={virtualTree} window={virtualTree ? treeWindow : undefined} search={results !== null} activate={activateRow} context={(row, at) => { if (row.kind === 'file' || row.kind === 'directory') setMenu({ row, at }) }} />
       </TreeHost>
       </div>
+      {menu && <ContextMenu at={menu.at} onClose={() => setMenu(null)} testId="dock-file-menu">
+        <SendToMenu thread={thread} path={menu.row.path} />
+        <MenuItem id="relative" label="Copy relative path" onSelect={() => copyText(menu.row.path)} />
+      </ContextMenu>}
     </div>
   </div>
 }
@@ -198,7 +206,8 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
   const project = useApp((s) => s.projects.find((p) => p.id === projectId))
   const thread = useApp((s) => threadId ? s.threads.find((th) => th.id === threadId) : undefined)
   const absolutePath = path.startsWith('/') ? path : project ? `${project.path}/${path}` : thread ? `${thread.cwd}/${path}` : null
-  const root = useMemo<FileRoot | null>(() => projectId ? { projectId } : threadId ? { threadId } : null, [projectId, threadId])
+  // A project root is read through the machine of the thread that shows it.
+  const root = useMemo<FileRoot | null>(() => projectId ? { projectId, ...(threadId ? { threadId } : {}) } : threadId ? { threadId } : null, [projectId, threadId])
   const key = root ? bufferKey(root, path) : null
   // A file shown before (`fileCache.ts`) draws at once and is re-read behind it; an unchanged read keeps the same object, so its
   // syntax document is not rebuilt.
@@ -287,7 +296,7 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
           <MenuSeparator />
         </>}
         <MenuItem id="reveal" label={osLabels().reveal} icon={N.folder} disabled={!absolutePath || !activeEnvironment().local} onSelect={() => { if (absolutePath && activeEnvironment().local) revealQuietly(absolutePath) }} />
-        <MenuSeparator />
+        <SendToMenu thread={projectId && !path.startsWith('/') ? thread : undefined} path={path} separated />
         <MenuItem id="relative" label="Copy relative path" onSelect={() => copyText(path)} />
         <MenuItem id="absolute" label="Copy absolute path" disabled={!absolutePath} onSelect={() => { if (absolutePath) copyText(absolutePath) }} />
         <MenuItem id="contents" label="Copy contents" disabled={!file || file.binary} onSelect={() => { const text = key ? getBuffer(key)?.text : undefined; if (text != null) copyText(text); else if (file && !file.binary) copyText(file.content) }} />
@@ -308,6 +317,19 @@ export const FileViewer = memo(function FileViewer({ projectId, threadId, path, 
     </>}</Rise> : !error && <LoadingLines testId="dock-file-loading" />}
   </>
 })
+
+/** "Send to…" (U1): the other machines, an offline one still selectable. Nothing renders with a single machine. */
+function SendToMenu({ thread, path, separated = false }: { thread?: { id: string; project_id: string; ownProjectId?: string }; path: string; separated?: boolean }) {
+  const targets = sendTargets(useMachines())
+  if (!thread || !targets.length) return null
+  const client = threadClient(thread.id)
+  return <>
+    {separated && <MenuSeparator />}
+    <MenuSub id="send" label="Send to…" icon={N.arrowRight} testId="file-send-to" width={232}>
+      {targets.map((target) => <MenuItem key={target.machineId} id={`send-${target.machineId}`} testId={`file-send-${target.machineId}`} label={target.name} detail={target.online ? undefined : 'Offline · sends when it returns'} onSelect={() => { if (client) void sendPath(client, ownProjectId(thread), path, target) }} />)}
+    </MenuSub>
+  </>
+}
 
 /** Why a file opened read-only. */
 function ReadOnlyNote({ size }: { size: number }) {

@@ -396,7 +396,13 @@ impl Orchestrator {
         {
             return Err(RpcError::not_found("space"));
         }
-        if let Some(existing) = self.inner.store.project_by_path(&folder_path).map_err(internal)? {
+        // Single-repository projects use the display form on Windows; canonicalization
+        // returns a verbatim path. Both names must identify the same existing project.
+        let existing = match self.inner.store.project_by_path(&folder_path).map_err(internal)? {
+            Some(project) => Some(project),
+            None => self.inner.store.project_by_path(&kybern_git::simplify_path(&folder).to_string_lossy()).map_err(internal)?,
+        };
+        if let Some(existing) = existing {
             if existing.kind != ProjectKind::Group {
                 return Err(invalid(format!(
                     "{} is already a single-repository project. Open it from the sidebar, or choose another folder for the group.",
@@ -410,6 +416,8 @@ impl Orchestrator {
         let now = Utc::now();
         let names = member_display_names(&folder_path, &paths.iter().map(String::as_str).collect::<Vec<_>>());
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| label.clone()),
             is_git: paths.iter().any(|p| p == GROUP_FOLDER_MEMBER),
@@ -437,6 +445,7 @@ impl Orchestrator {
             return Err(internal(error));
         }
         self.publish_projects();
+        self.spawn_repo_identity(project.id);
         Ok(self.inner.store.project_get(project.id).map_err(internal)?.unwrap_or(project))
     }
 
@@ -544,14 +553,14 @@ impl Orchestrator {
             .map_err(internal)?
             .into_iter()
             .filter(|p| p.kind == ProjectKind::Single)
-            .map(|p| (p.path, p.id))
+            .map(|p| (kybern_git::simplify_path(Path::new(&p.path)).to_string_lossy().into_owned(), p.id))
             .collect();
         let names = member_display_names(&root_path, &paths.iter().map(String::as_str).collect::<Vec<_>>());
         let candidates: Vec<RepoCandidate> = futures::stream::iter(paths.into_iter().zip(names))
             .map(|(path, name)| {
                 let dir = member_dir(&root, &path);
                 let added = added.contains(&path);
-                let project_id = projects.get(&dir.to_string_lossy().into_owned()).copied();
+                let project_id = projects.get(&kybern_git::simplify_path(&dir).to_string_lossy().into_owned()).copied();
                 let root = root.clone();
                 async move {
                     let (branch, detached) = branch_of(&dir).await;
@@ -563,7 +572,13 @@ impl Orchestrator {
             .collect()
             .await;
         Ok(ProjectsScanReposResult {
-            existing_project_id: self.inner.store.project_by_path(&root_path).map_err(internal)?.map(|p| p.id),
+            existing_project_id: self
+                .inner
+                .store
+                .project_by_path(&root_path)
+                .map_err(internal)?
+                .map(|p| p.id)
+                .or_else(|| projects.get(&kybern_git::simplify_path(&root).to_string_lossy().into_owned()).copied()),
             is_git: has_git(&root),
             name: label,
             path: root_path,

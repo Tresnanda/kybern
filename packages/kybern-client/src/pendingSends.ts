@@ -4,7 +4,7 @@
 // real one by id, under the same row (clients key the turn by the user id): no duplicate, jump or replayed entrance. A
 // rejected send stays as a failed bubble with Retry and Edit. The model is plain data; each client owns one store.
 import type { Block } from "./transcript.ts";
-import type { ThreadId, TurnId, UserMessage } from "./types.ts";
+import type { MachineId, OutboxItem, ThreadId, TurnId, UserMessage } from "./types.ts";
 
 export interface PendingSend {
   id: string;
@@ -12,9 +12,12 @@ export interface PendingSend {
   message: UserMessage;
   at: string;
   delivery: "send" | "steer";
-  /** `accepted`: the daemon answered; the block shows until its own event arrives. */
-  state: "sending" | "accepted" | "failed";
+  /** `accepted`: the daemon answered; the block shows until its own event arrives. `waiting`: queued in the outbox for a
+   *  machine that is away; it stays until the machine takes it (no timeout, the wait can be days). */
+  state: "sending" | "accepted" | "waiting" | "failed";
   error?: string;
+  /** The machine a `waiting` send is for. */
+  machineId?: MachineId;
 }
 
 /** How long an accepted send waits for its event before it is dropped (the thread was closed meanwhile; reopening loads it). */
@@ -27,7 +30,7 @@ export interface PendingStore {
   pendingFor(threadId: ThreadId | null | undefined): readonly PendingSend[];
   subscribe(listener: () => void): () => void;
   add(send: PendingSend): void;
-  update(threadId: ThreadId, id: string, patch: Partial<Pick<PendingSend, "state" | "error">>): void;
+  update(threadId: ThreadId, id: string, patch: Partial<Pick<PendingSend, "state" | "error" | "machineId">>): void;
   remove(threadId: ThreadId, id: string): void;
   /** Forget everything (another daemon environment). */
   clear(): void;
@@ -119,4 +122,48 @@ function pendingBlock(send: PendingSend, turnId: TurnId): Block {
     if (blocksFor.size > 64) blocksFor.delete(blocksFor.keys().next().value!);
   }
   return block;
+}
+
+// ---- sends queued for another machine (machine network design §6.1, §6.4) ----
+//
+// A composer send to a machine that is away goes into the outbox of the machine the user is at (`outbox.enqueue`). The
+// thread the client named does not exist anywhere until that machine takes it, so the client shows it as waiting.
+
+/** What the person reads on a send waiting for a machine: "Waiting for satyamas". */
+export const waitingLabel = (machineName: string): string => `Waiting for ${machineName}`;
+
+/** Where a queued send stands, from its outbox item. */
+export type QueuedPhase =
+  | { phase: "waiting"; label: string; attempts: number }
+  | { phase: "delivered" }
+  | { phase: "failed"; error: string };
+
+/** The outbox states a client shows as "waiting": the item will still be delivered. */
+export const isWaitingOutbox = (state: OutboxItem["state"]): boolean => state === "queued" || state === "sending";
+
+/** Map an outbox item to the phase a send shows. Failed, expired and cancelled items are failures with words and a next step. */
+export function queuedPhase(item: Pick<OutboxItem, "state" | "attempts" | "last_error">, machineName: string): QueuedPhase {
+  switch (item.state) {
+    case "queued":
+    case "sending":
+      return { phase: "waiting", label: waitingLabel(machineName), attempts: item.attempts };
+    case "delivered":
+      return { phase: "delivered" };
+    case "expired":
+      return { phase: "failed", error: `${machineName} did not come back in time. Retry to queue it again.` };
+    case "cancelled":
+      return { phase: "failed", error: "The send was cancelled. Retry to queue it again." };
+    case "failed":
+      return { phase: "failed", error: item.last_error?.trim() || `${machineName} could not start the chat. Retry, or edit the message.` };
+  }
+}
+
+/** Whether an outbox item is a queued composer send (a new thread or a follow-up message). */
+export const isComposerOutbox = (item: Pick<OutboxItem, "kind">): boolean => item.kind === "thread_create" || item.kind === "thread_send";
+
+/** The thread id a queued composer send is for (`thread_create` names the new thread, `thread_send` the existing one). */
+export function outboxThreadId(item: Pick<OutboxItem, "kind" | "payload">): ThreadId | undefined {
+  if (!isComposerOutbox(item)) return undefined;
+  const payload = item.payload as { thread_id?: unknown } | null;
+  return typeof payload?.thread_id === "string" ? payload.thread_id : undefined;
 }

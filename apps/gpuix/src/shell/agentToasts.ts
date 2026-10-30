@@ -1,4 +1,4 @@
-import { environmentKey, onEnvironmentChange } from './environment.ts'
+import { environmentKey } from './environment.ts'
 // Agent event toasts (desktop `state/rpc.ts` `announce`): a turn that finishes or
 // fails, or an agent that needs an approval or an answer, while the reader is not
 // looking at that thread. Finished and failed toasts last 6 s; approval and
@@ -17,9 +17,10 @@ import { onLiveEvent } from '../nav/live.ts'
 import { getNav, subscribeNav } from '../nav/store.ts'
 import { notifications } from '../native/notifications.ts'
 import { isWindowVisible } from '../native/visibility.ts'
-import { getClient, getState, subscribe } from '../state.ts'
+import { getClient, getPane, getPaneIds, getState, subscribe } from '../state.ts'
 import { isWindowFocused } from './window.ts'
 import { toast } from './toasts.tsx'
+import { startReceivedNotices } from '../machines/utilities.ts'
 import { questionLine, waitingLine } from './waitingLine.ts'
 import { agentName } from '../requests/model.ts'
 import { createThreadNotices } from './threadNotices.ts'
@@ -58,6 +59,8 @@ export function startAgentToasts() {
   owner = client
   started = true
   const startedAt = Date.now()
+  // Files that arrive from another machine (U1): a notice with Show in folder.
+  try { stops.push(startReceivedNotices()) } catch { /* the machine hub is not ready: no notices */ }
   const announced = new Map<ThreadId, number>()
   /** Waiting toasts on screen, by thread. */
   const waiting = new Map<ThreadId, Set<string>>()
@@ -136,7 +139,9 @@ export function startAgentToasts() {
     if (Date.parse(event.at) < startedAt || event.seq <= (announced.get(event.thread_id) ?? 0)) return
     announced.set(event.thread_id, event.seq)
     const nav = getNav()
-    const viewing = (getState().selectedId === event.thread_id || (!!delegated && getState().selectedId === thread.id)) && nav.page === 'home' && !nav.settingsOpen
+    // On screen in any pane, not just the focused one: its own transcript already shows the result.
+    const onScreen = (id: ThreadId) => getState().selectedId === id || getPaneIds().some((paneId) => getPane(paneId)?.selectedId === id)
+    const viewing = (onScreen(event.thread_id) || (!!delegated && onScreen(thread.id))) && nav.page === 'home' && !nav.settingsOpen
     if (viewing && isWindowVisible() && isWindowFocused()) return
     if (kind === 'done') {
       if (event.turn_id && finished.get(event.thread_id) === event.turn_id) return
@@ -163,6 +168,8 @@ export function startAgentToasts() {
         if (process.env.KYBERN_DEBUG_NOTIFICATIONS) console.error('[notifications] not posted', status)
       }).catch(error => console.error('[notifications]', error))
     }
+    // Visible but not focused: the system notification above says it, and a toast would only sit on the page being read.
+    if (viewing && isWindowVisible()) return
     const open = { label: 'Open thread', onClick: () => openThread(event.thread_id) }
     if (event.kind === 'user_input_requested' || event.kind === 'approval_requested') {
       const id = `agent-input:${event.approval.id}`
@@ -185,4 +192,3 @@ export function startAgentToasts() {
   }))
 }
 
-onEnvironmentChange(() => { for (const stop of stops) stop(); stops = []; started = false }, -100)

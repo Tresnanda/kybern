@@ -12,18 +12,31 @@ struct Host {
     state: crate::state::AppState,
     url: String,
     root: PathBuf,
-    server: tokio::task::JoinHandle<()>,
+    /// The server side runs on the stack the daemon's own runtime gives its threads: an
+    /// unoptimized build's RPC frames do not fit the 2 MiB of a test thread, and a test must not
+    /// depend on how close to the edge the dispatch happens to be.
+    server: Option<tokio::runtime::Runtime>,
 }
 impl Host {
     async fn start() -> Self {
         let root = std::env::temp_dir().join(format!("kybern-remote-test-{}", Uuid::now_v7()));
         let paths = crate::config::Paths::resolve(Some(root.clone())).unwrap();
         let state = crate::state::AppState::initialize(&paths).unwrap();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let app = Router::new().merge(crate::http::routes()).route("/ws", get(crate::ws::upgrade)).with_state(state.clone());
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        Self { state, url, root, server }
+        let server = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .thread_stack_size(crate::RUNTIME_THREAD_STACK)
+            .build()
+            .unwrap();
+        server.spawn(async move {
+            let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+            axum::serve(listener, app).await.unwrap()
+        });
+        Self { state, url, root, server: Some(server) }
     }
     async fn client(&self) -> Client {
         Client::connect(&Endpoint { url: format!("{}/ws", self.url.replace("http:", "ws:")), token: self.state.bootstrap_token.clone() })
@@ -51,6 +64,9 @@ impl Host {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
+            origin: None,
+            inbound: None,
+            moved: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),
@@ -61,9 +77,22 @@ impl Host {
 }
 impl Drop for Host {
     fn drop(&mut self) {
-        self.server.abort();
+        if let Some(server) = self.server.take() {
+            server.shutdown_background();
+        }
         let _ = std::fs::remove_dir_all(&self.root);
     }
+}
+
+#[tokio::test]
+async fn a_device_token_that_starts_like_a_machine_grant_still_connects() {
+    let host = Host::start().await;
+    // One device token in 4096 begins `kyb_m_`, the machine-grant prefix.
+    let token = format!("kyb_m_{}", "q".repeat(37));
+    host.state.store.token_insert(Uuid::now_v7(), &crate::auth::hash(&token), "lookalike", &Scope::ALL).unwrap();
+    let endpoint = Endpoint { url: format!("{}/ws", host.url.replace("http:", "ws:")), token };
+    let client = Client::connect(&endpoint).await.unwrap();
+    client.call::<ThreadsList>(ThreadsListParams::default()).await.unwrap();
 }
 
 #[tokio::test]
@@ -126,6 +155,8 @@ async fn skill_picker_explicit_account_overrides_project_and_provider_defaults()
     );
 }
 
+// Successful cleanup requires the lsof or /proc process-ownership backend.
+#[cfg(unix)]
 #[tokio::test]
 async fn ordinary_worktree_cleanup_rpc_retains_thread_and_source_association() {
     let host = Host::start().await;
@@ -571,7 +602,7 @@ async fn notes_round_trip_over_rpc_and_conflicts_use_the_conflict_code() {
 
     let announced = next_notes_changed(&phone).await;
     assert_eq!(announced.note.as_ref().map(|note| note.id), Some(created.summary.id));
-    assert_eq!(phone.call::<NotesList>(Empty {}).await.unwrap().notes, vec![created.summary.clone()]);
+    assert_eq!(phone.call::<NotesList>(NotesListParams::default()).await.unwrap().notes, vec![created.summary.clone()]);
     let fetched = phone.call::<NotesGet>(NotesGetParams { id: Some(created.summary.id), thread_id: None }).await.unwrap();
     assert_eq!(fetched.note, Some(created.clone()));
     assert!(phone.call::<NotesGet>(NotesGetParams { id: None, thread_id: Some(thread.id) }).await.unwrap().note.is_none());
@@ -605,7 +636,7 @@ async fn notes_round_trip_over_rpc_and_conflicts_use_the_conflict_code() {
     assert_eq!((moved.scope, moved.project_id), (NoteScope::Global, None));
     next_notes_changed(&phone).await;
 
-    let hits = phone.call::<NotesSearch>(NotesSearchParams { query: "DESKTOP".into(), limit: None }).await.unwrap().results;
+    let hits = phone.call::<NotesSearch>(NotesSearchParams { query: "DESKTOP".into(), limit: None, machine: None }).await.unwrap().results;
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].id, created.summary.id);
 
@@ -614,7 +645,14 @@ async fn notes_round_trip_over_rpc_and_conflicts_use_the_conflict_code() {
     assert!(next_notes_changed(&phone).await.note.unwrap().deleted_at.is_some());
     let edit_deleted = phone.call_raw(NotesUpdate::NAME, serde_json::to_value(update("late", 2)).unwrap()).await.unwrap_err().to_string();
     assert!(edit_deleted.contains("Restore this note before editing it."), "{edit_deleted}");
-    assert!(phone.call::<NotesSearch>(NotesSearchParams { query: "desktop".into(), limit: None }).await.unwrap().results.is_empty());
+    assert!(
+        phone
+            .call::<NotesSearch>(NotesSearchParams { query: "desktop".into(), limit: None, machine: None })
+            .await
+            .unwrap()
+            .results
+            .is_empty()
+    );
     assert!(phone.call_raw(NotesPurge::NAME, json!({"id": Uuid::now_v7()})).await.unwrap_err().to_string().contains("code -32003"));
     desktop.call::<NotesRestore>(NotesIdParams { id: created.summary.id }).await.unwrap();
     assert!(next_notes_changed(&phone).await.note.unwrap().deleted_at.is_none());
@@ -622,7 +660,7 @@ async fn notes_round_trip_over_rpc_and_conflicts_use_the_conflict_code() {
     next_notes_changed(&phone).await;
     desktop.call::<NotesPurge>(NotesIdParams { id: created.summary.id }).await.unwrap();
     assert_eq!(next_notes_changed(&phone).await.purged_id, Some(created.summary.id));
-    assert!(phone.call::<NotesList>(Empty {}).await.unwrap().notes.is_empty());
+    assert!(phone.call::<NotesList>(NotesListParams::default()).await.unwrap().notes.is_empty());
 
     // The same thread note through both APIs, and the legacy field on threads.get.
     let thread_note = desktop
@@ -694,7 +732,7 @@ async fn removing_a_project_over_rpc_keeps_its_notes_in_recently_deleted() {
     let first = next_notes_changed(&watcher).await.note.unwrap();
     let second = next_notes_changed(&watcher).await.note.unwrap();
     assert!(first.deleted_at.is_some() && second.deleted_at.is_some());
-    let listed = client.call::<NotesList>(Empty {}).await.unwrap().notes;
+    let listed = client.call::<NotesList>(NotesListParams::default()).await.unwrap().notes;
     assert_eq!(listed.len(), 2);
     assert!(
         listed.iter().all(|note| note.deleted_at.is_some() && note.origin.as_deref().is_some_and(|origin| origin.starts_with("Fixture")))
@@ -734,8 +772,8 @@ async fn note_notifications_reach_only_clients_that_can_read_orchestration() {
     let mut notifications = blind.notifications.lock().await;
     assert!(tokio::time::timeout(Duration::from_millis(300), futures::StreamExt::next(&mut *notifications)).await.is_err());
     drop(notifications);
-    assert!(blind.call::<NotesList>(Empty {}).await.unwrap_err().to_string().contains("missing scope"));
-    assert!(reader.call::<NotesList>(Empty {}).await.is_ok());
+    assert!(blind.call::<NotesList>(NotesListParams::default()).await.unwrap_err().to_string().contains("missing scope"));
+    assert!(reader.call::<NotesList>(NotesListParams::default()).await.is_ok());
     assert!(
         reader
             .call::<NotesCreate>(NotesCreateParams {
@@ -881,7 +919,7 @@ async fn tasks_round_trip_over_rpc_with_notifications_and_error_codes() {
     assert_eq!(global.key, "TSK-1");
     next_tasks_changed(&phone).await;
 
-    let listed = phone.call::<TaskItemsList>(Empty {}).await.unwrap().tasks;
+    let listed = phone.call::<TaskItemsList>(TaskItemsListParams::default()).await.unwrap().tasks;
     assert_eq!(listed.iter().map(|task| task.key.as_str()).collect::<Vec<_>>(), ["FIX-1", "TSK-1"]);
     let by_key = phone.call::<TaskItemsGet>(TaskItemsGetParams { id: None, key: Some("fix-1".into()) }).await.unwrap();
     assert_eq!(by_key.task, Some(created.clone()));
@@ -936,7 +974,7 @@ async fn tasks_round_trip_over_rpc_with_notifications_and_error_codes() {
 
     desktop.call::<TaskItemsDelete>(TaskItemsIdParams { id: created.id }).await.unwrap();
     assert_eq!(next_tasks_changed(&phone).await.deleted_id, Some(created.id));
-    assert_eq!(phone.call::<TaskItemsList>(Empty {}).await.unwrap().tasks.len(), 1);
+    assert_eq!(phone.call::<TaskItemsList>(TaskItemsListParams::default()).await.unwrap().tasks.len(), 1);
     let restored = desktop.call::<TaskItemsRestore>(TaskItemsIdParams { id: created.id }).await.unwrap();
     assert_eq!((restored.key.as_str(), restored.pending_followup.as_deref()), ("FIX-1", Some("also tests")));
     assert_eq!(next_tasks_changed(&phone).await.task.map(|task| task.id), Some(created.id));
@@ -1094,7 +1132,7 @@ async fn removing_a_project_over_rpc_hides_its_tasks_and_task_notifications_resp
 
     client.call::<ProjectsRemove>(ProjectsRemoveParams { project_id: thread.project_id }).await.unwrap();
     assert_eq!(next_tasks_changed(&watcher).await.deleted_id, Some(task.id));
-    let remaining = client.call::<TaskItemsList>(Empty {}).await.unwrap().tasks;
+    let remaining = client.call::<TaskItemsList>(TaskItemsListParams::default()).await.unwrap().tasks;
     assert_eq!(remaining.iter().map(|task| task.id).collect::<Vec<_>>(), vec![global.id]);
     let restored = client.call::<TaskItemsRestore>(TaskItemsIdParams { id: task.id }).await.unwrap();
     assert_eq!((restored.scope, restored.project_id, restored.key.as_str()), (TaskScope::Global, None, "FIX-1"));
@@ -1111,8 +1149,8 @@ async fn removing_a_project_over_rpc_hides_its_tasks_and_task_notifications_resp
     let mut notifications = blind.notifications.lock().await;
     assert!(tokio::time::timeout(Duration::from_millis(300), futures::StreamExt::next(&mut *notifications)).await.is_err());
     drop(notifications);
-    assert!(blind.call::<TaskItemsList>(Empty {}).await.unwrap_err().to_string().contains("missing scope"));
-    assert!(reader.call::<TaskItemsList>(Empty {}).await.is_ok());
+    assert!(blind.call::<TaskItemsList>(TaskItemsListParams::default()).await.unwrap_err().to_string().contains("missing scope"));
+    assert!(reader.call::<TaskItemsList>(TaskItemsListParams::default()).await.is_ok());
     assert!(reader.call::<TaskItemsCreate>(task_create(None, "No")).await.unwrap_err().to_string().contains("missing scope"));
 }
 
@@ -2116,6 +2154,8 @@ async fn previews_open_serve_grant_and_close_over_rpc_and_http() {
     assert!(closed.is_err());
 
     // Outside the project: a card first, then a persisted grant.
+    // Under the build's target folder, not the system temp folder: macOS's `/private/var` is a system
+    // folder that previews (rightly) refuse to grant.
     let outside = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target").join(format!("preview-e2e-{}", Uuid::now_v7()));
     std::fs::create_dir_all(outside.join("deeper")).unwrap();
     let outside = outside.canonicalize().unwrap();
@@ -2179,7 +2219,7 @@ async fn the_coordinator_and_project_brief_work_over_rpc() {
     assert_eq!(client.call::<CoordinatorGet>(CoordinatorGetParams { project_id }).await.unwrap().unwrap().id, opened.thread.id);
 
     // The brief is a pinned project note with a role; the user edits it through the notes RPCs.
-    let notes = client.call::<NotesList>(Empty {}).await.unwrap().notes;
+    let notes = client.call::<NotesList>(NotesListParams::default()).await.unwrap().notes;
     let brief = notes.iter().find(|note| note.project_role == Some(ProjectNoteRole::Brief)).expect("the brief note");
     assert!(brief.pinned && brief.project_id == Some(project_id) && brief.created_by_thread.is_none());
     let second = client
@@ -2307,7 +2347,10 @@ async fn review_adversarial_image_route() {
         eprintln!("{path} -> {status}");
         assert!(matches!(status, reqwest::StatusCode::FORBIDDEN | reqwest::StatusCode::NOT_FOUND), "{path} -> {status}");
     }
+    #[cfg(unix)]
     std::os::unix::fs::symlink(host.root.join(".git/shot.png"), host.root.join("link.png")).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file(host.root.join(".git/shot.png"), host.root.join("link.png")).unwrap();
     assert_eq!(get("link.png".into()).await, reqwest::StatusCode::FORBIDDEN);
     // No existence oracle outside the workspace: nothing is named, so every answer is the same 404.
     let home = std::env::var("HOME").unwrap();

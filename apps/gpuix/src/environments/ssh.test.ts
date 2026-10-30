@@ -12,7 +12,7 @@ function fixture() {
     tunnel: async () => 12345, stop: id => { stopped.push(id) },
     info: async () => ({ version: '0.9.1', hostname: 'scratch', environment_id: 'fixture-environment' }),
     shutdown: async () => {}, sleep: async () => {},
-    pair: async (...args) => { paired.push(args); return { id: 'fixture-id', name: 'Fixture', local: false } },
+    pair: async (...args) => { paired.push(args); return { machineId: 'fixture-id', name: 'Fixture' } },
   }
   return { deps, plans, paired, stopped, progress, report: (value: BootstrapProgress) => progress.push(value) }
 }

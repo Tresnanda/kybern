@@ -1,6 +1,7 @@
 // One group's tab strip: the chat (provider mark + thread title, pinned first) and the documents opened beside it. In the
 // thread header (46 px, `md`) or, for the lower groups of a split, a 32 px row (`sm`). The + menu opens what has no list of its
 // own in the dock: a terminal (or an agent CLI), the browser preview, Review, and all changes.
+import { terminalTabLabel } from '../terminal/title.ts'
 import { toast } from '../shell/toasts.tsx'
 import { errorText } from '../nav/actions.ts'
 import { memo, useMemo, useState, type ReactNode } from 'react'
@@ -15,7 +16,7 @@ import { N } from '../nav/glyphs.ts'
 import { T } from '../transcript/glyphs.ts'
 import { Menu, MenuItem, MenuLabel, MenuSeparator } from '../nav/overlay.tsx'
 import { useNav } from '../nav/store.ts'
-import { useApp, getClient, getThreadOpen } from '../state.ts'
+import { useApp, getThreadOpen, threadClient } from '../state.ts'
 import { useNotes } from '../notes/store.ts'
 import { useTasks } from '../tasks/store.ts'
 import { usePreview } from '../preview/store.ts'
@@ -24,6 +25,11 @@ import { ink, ProviderMark, useTheme } from '../ui.tsx'
 import { CHAT, tabKey, type Tab } from './model.ts'
 import { closeTabAction, fileTabBuffer, keepTab, openTab, selectTab } from './open.ts'
 import { useDirtyKeys } from '../dock/fileBuffers.ts'
+import { TerminalOnMenu } from '../machines/TerminalOnMenu.tsx'
+import { MachineBadge } from '../sidebar/MachineBadge.tsx'
+import { MachinePill } from '../machines/ThreadMachine.tsx'
+import { glyphOfMachine, machineHub } from '../machines/index.ts'
+import { terminalTooltip } from '../../../../packages/kybern-client/src/machineUtilities.ts'
 import { beginTabsDrag, endTabsPress, releaseStrip, stripRegistry, trackTabsPress, unregisterTab, useTabsDrop } from './drag.tsx'
 
 const ICONS = { browser: glyph(BrowserIcon), diagram: glyph(FlowchartIcon), image: glyph(Image01Icon) }
@@ -48,15 +54,19 @@ export function useTabItems(threadId: string | null, tabs: Tab[], preview: strin
   const page = previewState.pageTitle || previewState.entries[previewState.index]?.title
   const dirtyKeys = useDirtyKeys()
   const dirty = useMemo(() => new Set(dirtyKeys.split('\n')), [dirtyKeys])
+  // A thread on another machine says which in its chat tab (`MachinePill`).
+  const ownMachine = (thread as { machineId?: string } | null)?.machineId
+  const remoteMachine = ownMachine && machineHub().machineCount > 1 && ownMachine !== machineHub().localMachineId ? ownMachine : undefined
   return useMemo(() => tabs.map((tab): TabsItem => {
     const key = tabKey(tab)
     const common = { key, preview: preview === key, testId: `tab-${key}` }
     switch (tab.kind) {
       // A dot on the chat while an approval waits there (it is hidden behind a document tab).
-      case 'chat': return { ...common, pinned: true, label: thread?.title || 'Untitled', mark: thread?.provider.kind, testId: 'tab-chat', dirty: tabs.length > 1 && thread?.status === 'awaiting-approval', tooltip: thread?.status === 'awaiting-approval' ? `${thread.title || 'Untitled'} · waiting for approval` : undefined }
+      case 'chat': return { ...common, pinned: true, label: thread?.title || 'Untitled', mark: thread?.provider.kind, testId: 'tab-chat', extra: remoteMachine ? <MachinePill machineId={remoteMachine} testId="header-machine" /> : undefined, dirty: tabs.length > 1 && thread?.status === 'awaiting-approval', tooltip: thread?.status === 'awaiting-approval' ? `${thread.title || 'Untitled'} · waiting for approval` : undefined }
       case 'file': { const unsaved = dirty.has(fileTabBuffer(threadId, tab) ?? ''); return { ...common, label: base(tab.path), icon: T.file, dirty: unsaved, tooltip: `${tab.line ? `${tab.path}:${tab.line}` : tab.path}${unsaved ? ' · unsaved' : ''}` } }
       case 'diff': return tab.path ? { ...common, label: base(tab.path), icon: DOCK_ICONS.changes, tooltip: `Changes in ${tab.path}` } : { ...common, label: 'Changes', icon: DOCK_ICONS.changes }
-      case 'terminal': return tab.cli ? { ...common, label: tab.title || 'Terminal', mark: tab.cli } : { ...common, label: tab.title || 'Terminal', icon: DOCK_ICONS.terminal }
+      case 'terminal': if (tab.machineId) return { ...common, label: terminalTabLabel(tab.title, machineHub().set.connection(tab.machineId)?.record.name), iconNode: <MachineBadge glyph={glyphOfMachine(tab.machineId)} size={14} />, tooltip: terminalTooltip(machineHub().set.connection(tab.machineId)?.record.name ?? 'another machine', tab.title) }
+        return tab.cli ? { ...common, label: tab.title || 'Terminal', mark: tab.cli } : { ...common, label: terminalTabLabel(tab.title), icon: DOCK_ICONS.terminal }
       case 'preview': return { ...common, label: page || 'Browser', icon: ICONS.browser, tooltip: page ? `Browser · ${page}` : 'Browser' }
       case 'review': return { ...common, label: 'Review', icon: N.pullRequest }
       case 'pr': return { ...common, label: `#${tab.number}${tab.title ? ` ${tab.title}` : ''}`, icon: N.pullRequest }
@@ -72,7 +82,7 @@ export function useTabItems(threadId: string | null, tabs: Tab[], preview: strin
         return { ...common, label: child?.title || tab.title || 'Agent', mark: child?.provider.kind, ...(phase === 'working' ? { dirty: true } : phase === 'done' ? { detail: 'Done' } : phase === 'failed' ? { detail: 'Failed' } : {}) }
       }
     }
-  }), [tabs, preview, thread?.title, thread?.provider.kind, children, threads, notes, tasks, page, dirty, threadId])
+  }), [tabs, preview, thread?.title, thread?.provider.kind, remoteMachine, children, threads, notes, tasks, page, dirty, threadId])
 }
 
 /**
@@ -125,7 +135,7 @@ function AddMenu({ leafId, threadId, size }: { leafId: string; threadId: string;
   const box = size === 'md' ? 24 : 20
   const terminal = async (command?: string[], cli?: string) => {
     try {
-      const info = await getClient()!.call('terminals.create', { thread_id: threadId, cols: 100, rows: 24, ...(command ? { command } : {}) })
+      const info = await threadClient(threadId)!.call('terminals.create', { thread_id: threadId, cols: 100, rows: 24, ...(command ? { command } : {}) })
       openTab(threadId, { kind: 'terminal', id: info.id, title: cli ? providers.find((p) => p.kind === cli)?.display_name : undefined, ...(cli ? { cli } : {}) }, { leaf: leafId })
     } catch (error) { toast.error('Unable to open a terminal', { description: errorText(error) }) }
   }
@@ -138,6 +148,7 @@ function AddMenu({ leafId, threadId, size }: { leafId: string; threadId: string;
       </div>
     )}>
       <MenuItem id="terminal" testId="tabs-add-terminal" icon={DOCK_ICONS.terminal} label="New terminal" onSelect={() => void terminal()} />
+      <TerminalOnMenu threadId={threadId} leaf={leafId} />
       {clis.length > 0 && <MenuSubList>{clis.map((p) => <MenuItem key={p.kind} id={`cli-${p.kind}`} iconNode={<ProviderMark kind={p.kind} size={14} />} label={p.display_name} onSelect={() => void terminal([p.binary_path!], p.kind)} />)}</MenuSubList>}
       <MenuSeparator />
       <MenuItem id="preview" testId="tabs-add-preview" icon={ICONS.browser} label="Browser" shortcut="⌘L" onSelect={() => openTab(threadId, { kind: 'preview' }, { leaf: leafId })} />

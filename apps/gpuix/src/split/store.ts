@@ -2,7 +2,6 @@ import { useSyncExternalStore } from 'react'
 import { canSplitPane, collectThreadPanes, findParentSplit, findThreadPane, removeThreadPane, replacePaneThread, setSplitNodeRatio, splitThreadPane, type Pane, type SplitDirection, type SplitSide } from '../shared/state/splitView.ts'
 import { createPane, closePaneState, DEFAULT_PANE, focusPane, getFocusedPaneId, getState, getPane, selectPaneThread, setPane, subscribe } from '../state.ts'
 import { load, save } from '../shell/persist.ts'
-import { onEnvironmentChange, onEnvironmentLeaving } from '../shell/environment.ts'
 import { CHAT, chatGroup, closeIn, moveBetween, normalize, readGroup, readMemory, release, remember, retarget, tabKey, writeMemory, type Group, type GroupRecord, type Groups, type Memory, type Tab } from '../tabs/model.ts'
 export { canSplitPane, collectThreadPanes }
 export type { Pane, SplitDirection, SplitSide }
@@ -276,5 +275,3 @@ function restore() {
   persist(); notify(); notifyTabs()
 }
 export function startSplitView() { if (!started) { started = true; restore() } }
-onEnvironmentLeaving(() => { restoring = true })
-onEnvironmentChange(() => { if (started) restore() }, -40)

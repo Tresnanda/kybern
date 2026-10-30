@@ -1,5 +1,4 @@
 import { useTranscriptRowLease, useTranscriptFocusRestoration } from './Window.tsx'
-import { onEnvironmentChange } from '../shell/environment.ts'
 // `components/kybern/ResponseImage.tsx`: a 280px-wide image (rounded 12, 8 when
 // compact) or a 64px thumbnail, with a hairline outline. GPUIX's <img> needs a
 // box, so the size comes from the image header (PNG, JPEG, GIF, WebP) read once
@@ -169,4 +168,3 @@ export function ImageLightbox({ label, onClose, finalFocus, body }: { label: str
   </Dialog>
 }
 
-onEnvironmentChange(() => { sizes.clear() })

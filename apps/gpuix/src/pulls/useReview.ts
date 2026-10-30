@@ -4,7 +4,8 @@ import type { MergeMethod, PrActionKind, PrDetailResult, PrPageKind, PrPageResul
 import { load, save as persist } from './persist.ts'
 import { getData } from '../composer/store.ts'
 import { openThread } from '../nav/history.ts'
-import { getClient, refreshLists, useApp } from '../state.ts'
+import { refreshLists, useApp } from '../state.ts'
+import { prCall, prClient } from './client.ts'
 
 /** `repo`: the member repository of a group project the pull request is in. */
 export function useReview(projectId: string, number: number, repo?: string) {
@@ -33,21 +34,21 @@ export function useReview(projectId: string, number: number, repo?: string) {
     if (connection !== 'open') return
     let canceled = false
     setLoading(true)
-    void getClient()!.call('github.pr.detail', { project_id: projectId, number, ...member }).then(next => {
+    void prCall(projectId, 'github.pr.detail', { project_id: projectId, number, ...member }).then(next => {
       if (!canceled) { setDetail(next); setError(null); setLoading(false) }
     }, e => { if (!canceled) { setError(String(e)); setLoading(false) } })
     return () => { canceled = true }
   }, [projectId, number, repo, revision, connection])
   /** `options`: `merge` and `enable_auto_merge` take a method; `merge` may be an admin merge ("Merge anyway"). */
   const submit = async (action: PrActionKind, confirmedHead?: string, threadId?: string, options: { merge_method?: MergeMethod; admin?: boolean } = {}): Promise<boolean> => {
-    if (!detail || submitting.current || !getClient()) return false
+    if (!detail || submitting.current || !prClient(projectId)) return false
     const submitted = draftRef.current
     const review = ['comment', 'approve', 'request_changes'].includes(action)
     try {
       if (confirmedHead && confirmedHead !== detail.head_sha) throw new Error('The pull request changed while this confirmation was open. Cancel, review the current changes and open the action again.')
       if (review) assertReviewDraftHead(submitted, detail.head_sha)
       submitting.current = true; setBusy(true); setActionError(null)
-      await getClient()!.call('github.pr.action', { project_id: projectId, number, action, head_sha: detail.head_sha, body: submitted.body, inline_comments: review ? submitted.inline : [], ...(threadId ? { thread_id: threadId } : {}), ...options, ...member })
+      await prCall(projectId, 'github.pr.action', { project_id: projectId, number, action, head_sha: detail.head_sha, body: submitted.body, inline_comments: review ? submitted.inline : [], ...(threadId ? { thread_id: threadId } : {}), ...options, ...member })
       if (review) save(afterReviewSubmission(draftRef.current, submitted))
       if (alive.current) refresh(n => n + 1)
       return true
@@ -58,7 +59,7 @@ export function useReview(projectId: string, number: number, repo?: string) {
   const agentThread = useRef<string | undefined>(undefined)
   const repair = async (linkedId?: string, prompt?: string): Promise<boolean> => {
     const settings = getData().settings
-    const client = getClient()
+    const client = prClient(projectId)
     if (!detail || !settings || !client || submitting.current) return false
     try {
       // Refused before a thread exists, so a member pull request leaves no orphan chat.
@@ -99,7 +100,7 @@ export function usePage(projectId: string, number: number, kind: PrPageKind, pag
   useEffect(() => {
     if (!enabled || !head || connection !== 'open') return
     let canceled = false
-    void getClient()!.call('github.pr.page', { project_id: projectId, number, kind, page, ...(repo ? { repo } : {}) }).then(data => { if (!canceled) setState({ key, data }) }, e => { if (!canceled) setState({ key, error: String(e) }) })
+    void prCall(projectId, 'github.pr.page', { project_id: projectId, number, kind, page, ...(repo ? { repo } : {}) }).then(data => { if (!canceled) setState({ key, data }) }, e => { if (!canceled) setState({ key, error: String(e) }) })
     return () => { canceled = true }
   }, [key, projectId, number, repo, kind, page, enabled, head, connection])
   return { data: state?.key === key ? state.data : undefined, error: state?.key === key ? state.error : undefined }

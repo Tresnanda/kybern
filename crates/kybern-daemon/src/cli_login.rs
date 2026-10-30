@@ -41,7 +41,7 @@ async fn locate_one(name: &str) -> Option<PathBuf> {
     if !name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) {
         return None;
     }
-    if let Some(found) = search(&std::env::var("PATH").unwrap_or_default().split(':').map(PathBuf::from).collect::<Vec<_>>(), name) {
+    if let Some(found) = search(&std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect::<Vec<_>>(), name) {
         return Some(found);
     }
     // The user's login shell knows Homebrew and other profile additions.
@@ -90,13 +90,13 @@ fn common_dirs() -> Vec<PathBuf> {
 pub fn run_env(binary: &Path) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
     let inherited = std::env::var("PATH").unwrap_or_default();
-    let mut dirs: Vec<String> = Vec::new();
-    if let Some(dir) = binary.parent() {
-        dirs.push(dir.display().to_string());
+    let mut dirs: Vec<PathBuf> = binary.parent().map(Path::to_path_buf).into_iter().collect();
+    #[cfg(unix)]
+    dirs.extend(["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from));
+    dirs.extend(std::env::split_paths(&inherited));
+    if let Ok(path) = std::env::join_paths(dirs) {
+        env.insert("PATH".into(), path.to_string_lossy().into_owned());
     }
-    dirs.extend(["/opt/homebrew/bin", "/usr/local/bin"].map(String::from));
-    dirs.push(inherited);
-    env.insert("PATH".into(), dirs.join(":"));
     env.insert("NO_COLOR".into(), "1".into());
     env
 }
@@ -260,9 +260,30 @@ pub fn shim_url(file: &Path) -> Option<String> {
         .and_then(|text| text.lines().map(str::trim).find(|line| line.starts_with("https://")).map(str::to_string))
 }
 
-/// A user-visible name of this Mac for sentences.
+/// The platform shell used for user-supplied terminal commands (PowerShell on Windows).
 pub fn shell() -> String {
-    std::env::var("SHELL").ok().filter(|shell| Path::new(shell).is_absolute()).unwrap_or_else(|| "/bin/zsh".into())
+    if cfg!(windows) {
+        "powershell.exe".into()
+    } else {
+        let fallback = if cfg!(target_os = "macos") { "/bin/zsh" } else { "/bin/sh" };
+        std::env::var("SHELL").ok().filter(|shell| Path::new(shell).is_absolute()).unwrap_or_else(|| fallback.into())
+    }
+}
+
+pub fn shell_args(command: &str) -> Vec<String> {
+    if cfg!(windows) {
+        use base64::Engine;
+        // PowerShell's encoded form avoids applying C argv quoting to shell text
+        // (cmd.exe does not understand those escapes, notably for quoted paths).
+        let bytes: Vec<u8> = command.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        vec!["-NoLogo".into(), "-NoProfile".into(), "-EncodedCommand".into(), base64::engine::general_purpose::STANDARD.encode(bytes)]
+    } else {
+        vec!["-lc".into(), command.into()]
+    }
+}
+
+pub fn shell_command(command: &str) -> Vec<String> {
+    std::iter::once(shell()).chain(shell_args(command)).collect()
 }
 
 /// A single-quoted shell word.

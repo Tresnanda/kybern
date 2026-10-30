@@ -187,7 +187,7 @@ impl Checker {
             Plan::Custom { verify, .. } => {
                 let mut command = tokio::process::Command::new(cli_login::shell()).no_window();
                 command
-                    .args(["-lc", verify])
+                    .args(cli_login::shell_args(verify))
                     .current_dir(&self.cwd)
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
@@ -413,13 +413,7 @@ impl Orchestrator {
                         Plan::Custom { command, .. } => command.clone(),
                     };
                     let env = cli_login::run_env(&checker.binary);
-                    let pty = cli_login::spawn_pty(
-                        terminals,
-                        Some(thread_id),
-                        &checker.cwd,
-                        vec![cli_login::shell(), "-lc".into(), command],
-                        &env,
-                    )?;
+                    let pty = cli_login::spawn_pty(terminals, Some(thread_id), &checker.cwd, cli_login::shell_command(&command), &env)?;
                     Attempt { pty, screen: Screen::default(), method: "terminal", url_file: None, started, exited: false }
                 } else {
                     let Plan::Known(recipe) = plan else { unreachable!("checked above") };
@@ -427,8 +421,13 @@ impl Orchestrator {
                     let url_file = cli_login::ensure_url_file(data_dir, &card.to_string())?;
                     let mut env = cli_login::run_env(&checker.binary);
                     let path = env.get("PATH").cloned().unwrap_or_default();
-                    env.insert("PATH".into(), format!("{}:{path}", shim.display()));
-                    let opener = shim.join("open").to_string_lossy().into_owned();
+                    env.insert(
+                        "PATH".into(),
+                        std::env::join_paths(std::iter::once(shim.clone()).chain(std::env::split_paths(&path)))?
+                            .to_string_lossy()
+                            .into_owned(),
+                    );
+                    let opener = shim.join(if cfg!(windows) { "open.cmd" } else { "open" }).to_string_lossy().into_owned();
                     env.insert("BROWSER".into(), opener.clone());
                     env.insert("GH_BROWSER".into(), opener);
                     env.insert("KYBERN_LOGIN_URL_FILE".into(), url_file.to_string_lossy().into_owned());

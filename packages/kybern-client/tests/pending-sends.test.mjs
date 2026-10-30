@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createPendingStore, settledPending, withPending } from "../src/pendingSends.ts";
+import { createPendingStore, isComposerOutbox, isWaitingOutbox, outboxThreadId, queuedPhase, settledPending, waitingLabel, withPending } from "../src/pendingSends.ts";
 
 const message = { parts: [{ type: "text", text: "Ship it" }] };
 const send = (id, delivery = "send") => ({ id, threadId: "thread", message, at: "2026-10-21T10:00:00.000Z", delivery, state: "sending" });
@@ -86,4 +86,34 @@ test("clear forgets every thread and notifies once, only when something was pend
   store.clear();
   assert.equal(calls, 2);
   assert.deepEqual(store.pendingFor("thread"), []);
+});
+
+test("a waiting send stays until its machine takes it: no timeout, and it can name the machine", async () => {
+  const store = createPendingStore();
+  store.add({ ...send("m1"), state: "sending" });
+  store.update("thread", "m1", { state: "waiting", machineId: "sat" });
+  const [waiting] = store.pendingFor("thread");
+  assert.equal(waiting.state, "waiting");
+  assert.equal(waiting.machineId, "sat");
+});
+
+test("outbox states map to what the person reads", () => {
+  assert.equal(waitingLabel("satyamas"), "Waiting for satyamas");
+  assert.deepEqual(queuedPhase({ state: "queued", attempts: 0 }, "satyamas"), { phase: "waiting", label: "Waiting for satyamas", attempts: 0 });
+  assert.equal(queuedPhase({ state: "sending", attempts: 3 }, "satyamas").phase, "waiting");
+  assert.equal(queuedPhase({ state: "delivered", attempts: 1 }, "satyamas").phase, "delivered");
+  assert.match(queuedPhase({ state: "expired", attempts: 20 }, "satyamas").error, /satyamas did not come back in time\. Retry/);
+  assert.match(queuedPhase({ state: "cancelled", attempts: 0 }, "satyamas").error, /cancelled/);
+  assert.equal(queuedPhase({ state: "failed", attempts: 1, last_error: "No checkout here." }, "satyamas").error, "No checkout here.");
+  assert.match(queuedPhase({ state: "failed", attempts: 1, last_error: " " }, "satyamas").error, /satyamas could not start the chat/);
+  assert.equal(isWaitingOutbox("queued"), true);
+  assert.equal(isWaitingOutbox("delivered"), false);
+});
+
+test("a composer send in the outbox names its thread", () => {
+  assert.equal(outboxThreadId({ kind: "thread_create", payload: { thread_id: "t9" } }), "t9");
+  assert.equal(outboxThreadId({ kind: "thread_send", payload: { thread_id: "t8" } }), "t8");
+  assert.equal(outboxThreadId({ kind: "delegate", payload: { thread_id: "t7" } }), undefined);
+  assert.equal(outboxThreadId({ kind: "thread_create", payload: null }), undefined);
+  assert.equal(isComposerOutbox({ kind: "fork" }), false);
 });

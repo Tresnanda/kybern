@@ -1,0 +1,183 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(PluginInstallRequest)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PluginInstallRequest",
+  "type": "object",
+  "properties": {
+    "operation_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "plugin": {
+      "$ref": "#/$defs/MachinePlugin"
+    },
+    "replaces": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "operation_id",
+    "plugin"
+  ],
+  "$defs": {
+    "MachinePlugin": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable within a harness; marketplace rows use `marketplace:NAME`.",
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        "kind": {
+          "$ref": "#/$defs/PluginKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "marketplace": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "description": "Public installer input only. Never a local path or a URL containing credentials.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Unknown for caches whose harness has no authoritative local state.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "resources": {
+          "description": "pi resource filters only, never arbitrary plugin options or credentials.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "default": {}
+        },
+        "contents": {
+          "$ref": "#/$defs/PluginContents"
+        },
+        "problem": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fingerprint": {
+          "description": "SHA-256 of the complete declaration the user reviewed.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "provider",
+        "kind",
+        "name",
+        "contents",
+        "fingerprint"
+      ]
+    },
+    "ProviderKind": {
+      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "opencode",
+        "pi",
+        "omp",
+        "cursor"
+      ]
+    },
+    "PluginKind": {
+      "type": "string",
+      "enum": [
+        "plugin",
+        "marketplace"
+      ]
+    },
+    "PluginContents": {
+      "type": "object",
+      "properties": {
+        "hooks": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "mcp_servers": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "commands": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "agents": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "skills": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "extensions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "npm_packages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "description": "Static declarations cannot describe all the code a package can execute.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "hooks",
+        "mcp_servers",
+        "commands",
+        "agents",
+        "skills",
+        "extensions",
+        "npm_packages",
+        "notes"
+      ]
+    }
+  }
+}

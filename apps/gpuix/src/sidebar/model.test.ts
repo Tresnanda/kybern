@@ -13,6 +13,13 @@ test('a child that finished, left and was re-woken by a message is listed again'
   expect([...dismissedChildren(nav)].sort()).toEqual(['b', 'gone'])
 })
 
+test('the child being viewed stays listed after it was dismissed here, a remote one too', () => {
+  const remote = { ...delegated('r', 'completed'), machineId: 'vps' } as unknown as Thread
+  const nav = { dismissed: { r: true } as Record<string, true>, children: { r: remote } }
+  expect([...dismissedChildren(nav)]).toEqual(['r'])
+  expect([...dismissedChildren(nav, 'r')]).toEqual([])
+})
+
 describe('buildRows in a space', () => {
   const project = (id: string, space_id: string | null) => ({ id, name: id, path: `/${id}`, is_git: false, brief_in_all_threads: false, space_id }) as unknown as Project
   const thread = (id: string, project_id: string) => ({ id, title: id, project_id, status: 'idle', updated_at: '2026-10-20T00:00:00Z', last_seq: 1, provider: { kind: 'claude-code', instance: 'default' } }) as unknown as Thread

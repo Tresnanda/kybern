@@ -1,4 +1,4 @@
-import { activeEnvironment, environmentKey, onEnvironmentChange } from './environment.ts'
+import { activeEnvironment, environmentKey } from './environment.ts'
 // A small per-environment JSON store for UI state the desktop keeps in
 // `localStorage` (sidebar width, dock width, project order, filters, drafts).
 // Keys mirror the desktop's names (`kybern.sidebar.width`, `kybern.dock.width`)
@@ -108,4 +108,3 @@ export function save(key: string, value: unknown) {
 /** Whether the store file exists yet (first launch has nothing to restore). */
 export const hasSavedState = () => existsSync(filePath())
 
-onEnvironmentChange(() => { flush(); data = null; file = null }, -80)

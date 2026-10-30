@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Query, State};
+use axum::extract::{ConnectInfo, FromRequestParts, Query, State};
+use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use futures::{SinkExt, StreamExt};
@@ -15,11 +16,26 @@ use serde_json::Value;
 use tokio::sync::{Mutex, mpsc};
 use uuid::Uuid;
 
-use crate::auth::{Principal, authenticate};
+use crate::auth::{Principal, PrincipalKind, authenticate, effective_scopes, principal_is_active};
+use crate::network::peers::{self, Direction, FrameSink, PeerLink};
+use crate::network::session::GRANT_PREFIX;
 use crate::state::AppState;
+
+/// The address a request came from, when the listener records it (`into_make_service_with_connect_info`).
+/// Never rejects: tests that serve the router without connection info get `None`.
+pub struct Peer(pub Option<std::net::SocketAddr>);
+
+impl<S: Send + Sync> FromRequestParts<S> for Peer {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        Ok(Peer(parts.extensions.get::<ConnectInfo<std::net::SocketAddr>>().map(|connection| connection.0)))
+    }
+}
 
 pub async fn upgrade(
     State(state): State<AppState>,
+    Peer(peer): Peer,
     headers: HeaderMap,
     Query(query): Query<HashMap<String, String>>,
     ws: WebSocketUpgrade,
@@ -27,12 +43,38 @@ pub async fn upgrade(
     if headers.contains_key(axum::http::header::ORIGIN) && crate::http::allowed_asset_origin(&headers).is_none() {
         return (StatusCode::FORBIDDEN, "origin cannot connect").into_response();
     }
-    let raw = headers
+    let header_token = headers
         .get(AUTH_HEADER)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer ")))
-        .map(str::to_string)
-        .or_else(|| query.get(AUTH_QUERY_PARAM).cloned());
+        .map(str::to_string);
+    // A session grant from another machine (design §3.3). It is accepted from the header only, from
+    // the address it was issued to, and only while that machine is a member. Device tokens are
+    // `kyb_` plus random base64url, so about one in 4096 of them also starts with the grant prefix:
+    // a token that is not a live grant is still tried as a device token.
+    let grant =
+        header_token.as_deref().filter(|token| token.starts_with(GRANT_PREFIX)).and_then(|token| state.network.grants.lookup(token));
+    if let Some(grant) = grant {
+        let from_origin = peer.is_some_and(|peer| peer.ip() == grant.origin_ip);
+        let member = state.network.membership().is_some_and(|membership| membership.is_member(&grant.machine_id));
+        if !from_origin || !member || !state.network.is_enabled() {
+            tracing::warn!(target: "kybern::network::session", machine = %grant.machine_id, from_origin, member, "refused a session socket");
+            return (StatusCode::UNAUTHORIZED, "invalid token").into_response();
+        }
+        let label = state
+            .network
+            .membership()
+            .and_then(|m| m.projection().entry(&grant.machine_id).map(|e| e.descriptor.name.clone()))
+            .unwrap_or_default();
+        let principal = Principal {
+            token_id: grant.id,
+            label,
+            scopes: grant.scopes.clone(),
+            kind: PrincipalKind::Machine { machine_id: grant.machine_id.clone(), origin_ip: grant.origin_ip },
+        };
+        return ws.on_upgrade(move |socket| run_machine(state, socket, principal));
+    }
+    let raw = header_token.or_else(|| query.get(AUTH_QUERY_PARAM).cloned());
     let authentication = if let Some(ticket) = query.get("ticket") {
         state.tickets.redeem(&state.store, ticket)
     } else if let Some(raw) = raw {
@@ -393,6 +435,9 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let (out_tx, mut out_rx) = mpsc::channel::<QueuedFrame>(64);
     let closed = tokio_util::sync::CancellationToken::new();
     let requests = Arc::new(tokio::sync::Semaphore::new(16));
+    // Terminal keystrokes are one ordered stream per connection: a task per request would let two writes pass each other
+    // (and a burst would hit the concurrency limit), so they queue here and run one at a time.
+    let (input_tx, mut input_rx) = mpsc::channel::<String>(INPUT_LANE_FRAMES);
     let ctx = Arc::new(ConnectionCtx {
         id: Uuid::now_v7(),
         principal,
@@ -411,14 +456,24 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     let mut account_logins = ctx.principal.has(Scope::OrchestrationRead).then(|| state.account_logins.subscribe());
     let mut session_imports = ctx.principal.has(Scope::OrchestrationRead).then(|| state.session_imports.subscribe());
     let mut projects = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_projects());
+    let mut outbox = ctx.principal.has(Scope::OrchestrationRead).then(|| state.network.subscribe_outbox());
+    let mut utility = ctx.principal.has(Scope::OrchestrationRead).then(|| state.network.subscribe_utility());
     let mut workspace_progress = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_workspace_progress());
     let mut spaces = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_spaces());
     let mut preview_requests = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.subscribe_preview_requests());
     let mut request_progress = ctx.principal.has(Scope::OrchestrationRead).then(|| state.orchestrator.requests().subscribe());
-    if !state.store.token_is_active(ctx.principal.token_id).unwrap_or(false) {
+    if !principal_is_active(&state, &ctx.principal) {
         return;
     }
     tracing::info!(conn = %ctx.id, label = %ctx.principal.label, "client connected");
+
+    let input_state = state.clone();
+    let input_ctx = ctx.clone();
+    let input_lane = tokio::spawn(async move {
+        while let Some(text) = input_rx.recv().await {
+            handle_text(&input_state, &input_ctx, &text).await;
+        }
+    });
 
     let writer_closed = closed.clone();
     let writer = tokio::spawn(async move {
@@ -437,12 +492,17 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
             _ = closed.cancelled() => break,
             notice = revoked.recv() => {
                 if matches!(notice, Ok(id) if id == ctx.principal.token_id)
-                    || !state.store.token_is_active(ctx.principal.token_id).unwrap_or(false)
+                    || !principal_is_active(&state, &ctx.principal)
                 { break; }
             }
             msg = stream.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
+                        if is_terminal_input(text.as_str()) {
+                            // Waiting here is the backpressure: the socket is read no faster than the PTY takes input.
+                            let _ = input_tx.send(text.as_str().to_string()).await;
+                            continue;
+                        }
                         let state = state.clone();
                         let ctx = ctx.clone();
                         // Bound producers as well as queued bytes. Do not make a
@@ -501,6 +561,32 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
                     // Each notification carries the whole list; the next one catches up.
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(_) => projects = None,
+                }
+            }
+            changed = async {
+                match outbox.as_mut() {
+                    Some(outbox) => outbox.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match changed {
+                    Ok(item) => { let _ = ctx.out.notify(kybern_protocol::OUTBOX_CHANGED_NOTIFICATION, item).await; }
+                    // A missed item shows the next time the list is read.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => outbox = None,
+                }
+            }
+            event = async {
+                match utility.as_mut() {
+                    Some(utility) => utility.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match event {
+                    Ok((method, params)) => { let _ = ctx.out.notify(method, params).await; }
+                    // Progress repeats and lists carry everything; a missed one is covered by the next.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => utility = None,
                 }
             }
             progress = async {
@@ -635,7 +721,84 @@ async fn run(state: AppState, socket: WebSocket, principal: Principal) {
     closed.cancel();
     drop(ctx);
     writer.abort();
+    input_lane.abort();
     tracing::info!("client disconnected");
+}
+
+/// A frame sink over a connection's outbox: what a [`PeerLink`] writes to on the accepting side.
+struct OutboxSink(Outbox);
+
+#[async_trait::async_trait]
+impl FrameSink for OutboxSink {
+    async fn send(&self, frame: Value) -> bool {
+        self.0.send(frame).await.is_ok()
+    }
+}
+
+/// Serve a session socket from another member (design §3.3): one JSON-RPC link used both ways. It
+/// is not a client connection: it takes no subscriptions and does not count as activity, so a quiet
+/// daemon can still exit while peers hold sessions to it.
+async fn run_machine(state: AppState, socket: WebSocket, principal: Principal) {
+    let PrincipalKind::Machine { machine_id, .. } = principal.kind.clone() else { return };
+    let (mut sink, mut stream) = socket.split();
+    let (out_tx, mut out_rx) = mpsc::channel::<QueuedFrame>(64);
+    let (ping_tx, mut ping_rx) = mpsc::channel::<()>(1);
+    let closed = tokio_util::sync::CancellationToken::new();
+    let out = Outbox { sender: out_tx, budget: Arc::new(tokio::sync::Semaphore::new(OUTBOX_BYTES)), closed: closed.clone() };
+    let link =
+        PeerLink::new(machine_id, Direction::Accepted, Some(principal.token_id), principal.scopes.clone(), Arc::new(OutboxSink(out)));
+    let writer_link = link.clone();
+    let writer_closed = closed.clone();
+    let writer = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = writer_link.closed() => break,
+                _ = writer_closed.cancelled() => break,
+                frame = out_rx.recv() => match frame {
+                    Some(frame) => if sink.send(Message::Text(frame.text.into())).await.is_err() { break },
+                    None => break,
+                },
+                ping = ping_rx.recv() => match ping {
+                    Some(()) => if sink.send(Message::Ping(Vec::new().into())).await.is_err() { break },
+                    None => break,
+                },
+            }
+        }
+        writer_link.close();
+        let _ = sink.close().await;
+    });
+    let timing = state.network.timing.clone();
+    let mut revoked = state.revoked_tokens.subscribe();
+    let mut beat = tokio::time::interval(timing.ping_every);
+    beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    peers::accept(&state, link.clone());
+    loop {
+        tokio::select! {
+            _ = state.shutdown.cancelled() => break,
+            _ = link.closed() => break,
+            _ = closed.cancelled() => break,
+            notice = revoked.recv() => {
+                if matches!(notice, Ok(id) if id == principal.token_id) { break; }
+            }
+            _ = beat.tick() => {
+                // Three missed pings, or a grant, membership or policy that no longer allows the session.
+                if link.idle_for() > timing.dead_after || !principal_is_active(&state, &principal) {
+                    tracing::info!(target: "kybern::network::session", machine = %link.machine_id, "closing a session that went quiet or lost its grant");
+                    break;
+                }
+                let _ = ping_tx.try_send(());
+            }
+            frame = stream.next() => match frame {
+                Some(Ok(Message::Text(text))) => peers::inbound(&state, &link, text.as_str()).await,
+                Some(Ok(Message::Close(_))) | None => break,
+                Some(Ok(_)) => link.touch(),
+                Some(Err(error)) => { tracing::debug!(%error, "peer socket read error"); break; }
+            }
+        }
+    }
+    closed.cancel();
+    peers::accepted_ended(&state, &link);
+    writer.abort();
 }
 
 /// What a client without `access:write` may see of a card's progress.
@@ -644,6 +807,15 @@ pub(crate) fn redact_progress(mut progress: kybern_protocol::RequestProgress) ->
     progress.user_code = None;
     progress.terminal = None;
     progress
+}
+
+/// Frames the ordered input lane carries: how many may wait for the PTY.
+const INPUT_LANE_FRAMES: usize = 1024;
+
+/// Whether a text frame is a `terminals.input` request (cheap substring test first; the parse only runs for candidates).
+fn is_terminal_input(text: &str) -> bool {
+    text.contains("terminals.input")
+        && serde_json::from_str::<Value>(text).is_ok_and(|v| v.get("method").and_then(Value::as_str) == Some("terminals.input"))
 }
 
 async fn handle_text(state: &AppState, ctx: &Arc<ConnectionCtx>, text: &str) {
@@ -659,7 +831,7 @@ async fn handle_text(state: &AppState, ctx: &Arc<ConnectionCtx>, text: &str) {
         ClientFrame::Request(r) => r,
         ClientFrame::Notification(_) => return,
     };
-    if !state.store.token_is_active(ctx.principal.token_id).unwrap_or(false) {
+    if !principal_is_active(state, &ctx.principal) {
         let _ = ctx
             .out
             .send(ServerFrame::Response(RpcResponse::err(req.id, RpcError::new(codes::UNAUTHORIZED, "Device access was revoked"))))
@@ -672,7 +844,9 @@ async fn handle_text(state: &AppState, ctx: &Arc<ConnectionCtx>, text: &str) {
     }
     let result = match scope_for(&req.method) {
         None => Err(RpcError::method_not_found(&req.method)),
-        Some(Some(scope)) if !ctx.principal.has(scope) => Err(RpcError::forbidden(scope.as_str())),
+        Some(Some(scope)) if !ctx.principal.has(scope) || !effective_scopes(state, &ctx.principal).contains(&scope) => {
+            Err(RpcError::forbidden(scope.as_str()))
+        }
         Some(_) => crate::rpc::dispatch(state, ctx, &req.method, req.params).await,
     };
     let resp = match result {

@@ -1,0 +1,277 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(OutboxItem)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OutboxItem",
+  "description": "One queued piece of work for another machine.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "operation_id": {
+      "description": "The key the target deduplicates on, so a delivery that is repeated runs once.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "target": {
+      "description": "The machine the work is for.",
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/OutboxKind"
+    },
+    "payload": {
+      "description": "The operation's parameters (a `peer.delegate` body for `delegate`)."
+    },
+    "origin": {
+      "description": "Who started the work, for agent work. Stamped by the daemon, never by a caller.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Origin"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "state": {
+      "$ref": "#/$defs/OutboxState"
+    },
+    "attempts": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "next_attempt_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "last_error": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "result": {
+      "description": "What the target answered, once delivered."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "id",
+    "operation_id",
+    "target",
+    "kind",
+    "payload",
+    "state",
+    "attempts",
+    "created_at",
+    "expires_at",
+    "updated_at"
+  ],
+  "$defs": {
+    "OutboxKind": {
+      "description": "What a queued item does when it is delivered (§6.4).",
+      "type": "string",
+      "enum": [
+        "thread_create",
+        "thread_send",
+        "delegate",
+        "files_push",
+        "settings_patch",
+        "secrets_put",
+        "fork",
+        "move",
+        "provision",
+        "skill_copy",
+        "plugin_install"
+      ]
+    },
+    "Origin": {
+      "description": "Where work that another machine started came from. Only a daemon sets it, and it never changes.",
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "machine_name": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "operation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "$ref": "#/$defs/OriginKind"
+        },
+        "permission_cap": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "hops": {
+          "description": "Machine ids, oldest first; at most one in v1.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "machine_id",
+        "machine_name",
+        "operation_id",
+        "kind",
+        "permission_cap"
+      ]
+    },
+    "OriginKind": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "composer"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "delegation"
+            }
+          },
+          "required": [
+            "kind",
+            "task_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "tool_call"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "fork"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "move"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "PermissionMode": {
+      "description": "The four permission modes.",
+      "oneOf": [
+        {
+          "description": "Every tool call that mutates or executes asks for approval.",
+          "type": "string",
+          "const": "supervised"
+        },
+        {
+          "description": "File edits proceed; shell and network still ask.",
+          "type": "string",
+          "const": "accept-edits"
+        },
+        {
+          "description": "The provider decides with its own safety heuristics; asks only when unsure.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Nothing asks. Sandboxing is the provider's problem.",
+          "type": "string",
+          "const": "full-access"
+        }
+      ]
+    },
+    "OutboxState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "delivered",
+            "cancelled"
+          ]
+        },
+        {
+          "description": "Waiting for the target, or for the next attempt.",
+          "type": "string",
+          "const": "queued"
+        },
+        {
+          "description": "A delivery is in flight.",
+          "type": "string",
+          "const": "sending"
+        },
+        {
+          "description": "A permanent error: the target was removed, refused the scope, or the project is gone.",
+          "type": "string",
+          "const": "failed"
+        },
+        {
+          "description": "The target did not return within the expiry; Retry queues it again.",
+          "type": "string",
+          "const": "expired"
+        }
+      ]
+    }
+  }
+}

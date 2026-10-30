@@ -11,21 +11,43 @@
 
 pub mod auth;
 pub mod event;
+pub mod fork;
+pub mod forward;
 pub mod integrations;
+pub mod login_broker;
 pub mod methods;
 pub mod model;
+pub mod move_thread;
+pub mod network;
+pub mod outbox;
+mod plugin_sync;
 pub mod process;
+pub mod provision;
 pub mod rpc;
+pub mod shared_state;
+pub mod skill_sync;
 pub mod thread_read;
 pub mod user_input;
+pub mod utilities;
 
 pub use auth::*;
 pub use event::*;
+pub use fork::*;
+pub use forward::*;
 pub use integrations::*;
+pub use login_broker::*;
 pub use model::*;
+pub use move_thread::*;
+pub use network::*;
+pub use outbox::*;
+pub use plugin_sync::*;
+pub use provision::*;
 pub use rpc::*;
+pub use shared_state::*;
+pub use skill_sync::*;
 pub use thread_read::*;
 pub use user_input::*;
+pub use utilities::*;
 
 /// Bumped on breaking wire changes.
 pub const PROTOCOL_VERSION: u32 = 1;

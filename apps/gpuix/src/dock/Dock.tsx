@@ -10,7 +10,7 @@ import { errorText } from '../nav/actions.ts'
 import { popAnimation } from '../kit/Pop.tsx'
 import { motion, useGpuix, type PublicInstance } from '@gpuix/react'
 import { useSidebarWidth, useWindowWidth } from '../shell/layout.ts'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { DOCK_ICONS } from './icons.ts'
 import { Icon } from '../icons.tsx'
@@ -23,7 +23,7 @@ import { useNav } from '../nav/store.ts'
 import { IconButton } from '../sidebar/rows.tsx'
 import { IconButton as KitIconButton } from '../kit/IconButton.tsx'
 import { PickerChip } from '../kit/PickerChip.tsx'
-import { getClient, useApp } from '../state.ts'
+import { threadClient, useApp } from '../state.ts'
 import { EASE_OUT, Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { Activity, isActiveTask, useRuntimeTasks } from './Activity.tsx'
 import { Agents } from './Agents.tsx'
@@ -40,6 +40,7 @@ import { pressTransform } from '../motion/press.ts'
 import { DURATION, EASE, enterTransform } from '../motion/kit.tsx'
 import { nextPresenceGeneration, presenceTransform } from '../motion/Presence.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
+import { TerminalOnMenu } from '../machines/TerminalOnMenu.tsx'
 import { leftSource } from '../drag/leave.ts'
 import { beginTabDrag, isDraggingTab, consumeTabDrag, endTabPending, setTabContext, TabSlot, trackTabDrag } from './reorder.tsx'
 import { chooseTab, closeTab, dockGeometry, finishDockDrag, moveDockDrag, setDock, startDockDrag, useDock, useDockDrag, type DockTab } from './store.ts'
@@ -58,7 +59,7 @@ const DOCK_EXIT_GUARD_MS = 420
  * panels here (terminal, browser, review) are reached from its + menu and the strip's own + menu.
  */
 const VIEWERS: { id: string; label: string; icon: string; open: (threadId: string) => unknown }[] = [
-  { id: 'terminal', label: 'New terminal', icon: DOCK_ICONS.terminal, open: async (threadId) => { const info = await getClient()!.call('terminals.create', { thread_id: threadId, cols: 100, rows: 24 }); openTab(threadId, { kind: 'terminal', id: info.id }) } },
+  { id: 'terminal', label: 'New terminal', icon: DOCK_ICONS.terminal, open: async (threadId) => { const info = await threadClient(threadId)!.call('terminals.create', { thread_id: threadId, cols: 100, rows: 24 }); openTab(threadId, { kind: 'terminal', id: info.id }) } },
   { id: 'preview', label: 'Browser', icon: DOCK_ICONS.preview, open: (threadId) => openTab(threadId, { kind: 'preview' }) },
   { id: 'review', label: 'Review', icon: N.pullRequest, open: (threadId) => openTab(threadId, { kind: 'review' }) },
 ]
@@ -187,7 +188,7 @@ function ThreadDock({ thread, width }: { thread: Thread; width: number }) {
         : tab === 'tasks' ? <TasksPane thread={thread} />
         : tab === 'activity' ? <Activity {...tasks} />
         : tab === 'changes' ? <DiffPane thread={thread} onStats={onStats} />
-        : tab === 'explorer' ? <Explorer key={thread.project_id} projectId={thread.project_id} width={width} />
+        : tab === 'explorer' ? <Explorer key={thread.project_id} projectId={thread.project_id} thread={thread} width={width} />
         : tab === 'project' && thread.coordinator_project_id ? <ProjectPane thread={thread} />
         : tab === 'map' && thread.coordinator_project_id ? <MapPane thread={thread} /> : null}
       </PaneEnter>}
@@ -253,7 +254,7 @@ function TabStrip({ threadId, width: _width, coordinator, activeTasks, stats }: 
       {threadId && <>
         <MenuSeparator />
         <MenuLabel>Open beside the chat</MenuLabel>
-        {VIEWERS.map((viewer) => <MenuItem key={viewer.id} id={`tab-${viewer.id}`} icon={viewer.icon} label={viewer.label} testId={`dock-open-${viewer.id}`} onSelect={() => void Promise.resolve().then(() => viewer.open(threadId)).catch((error) => toast.error(viewer.id === 'terminal' ? 'Unable to open a terminal' : `Unable to open ${viewer.label}`, { description: errorText(error) }))} />)}
+        {VIEWERS.map((viewer) => <Fragment key={viewer.id}><MenuItem id={`tab-${viewer.id}`} icon={viewer.icon} label={viewer.label} testId={`dock-open-${viewer.id}`} onSelect={() => void Promise.resolve().then(() => viewer.open(threadId)).catch((error) => toast.error(viewer.id === 'terminal' ? 'Unable to open a terminal' : `Unable to open ${viewer.label}`, { description: errorText(error) }))} />{viewer.id === 'terminal' && <TerminalOnMenu threadId={threadId} />}</Fragment>)}
       </>}
     </Menu>
     <Tip label="Collapse panel (⌘J)" side="top" size={28}><KitIconButton icon={N.panelRight} label="Collapse panel" onClick={() => setDock(threadId, { open: false, instant: false })} testId="dock-collapse" /></Tip>

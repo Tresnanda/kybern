@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use directories::BaseDirs;
-use kybern_protocol::{ProviderKind, SkillInfo, SkillScope};
+use kybern_protocol::{ProviderKind, SkillHome, SkillInfo, SkillScope};
 
 const MAX_DEPTH: usize = 10;
 const MAX_ENTRIES: usize = 10_000;
@@ -29,9 +29,9 @@ struct Budget {
 }
 
 #[derive(Default)]
-struct Frontmatter {
-    display_name: Option<String>,
-    description: Option<String>,
+pub(crate) struct Frontmatter {
+    pub(crate) display_name: Option<String>,
+    pub(crate) description: Option<String>,
     user_invocable: bool,
 }
 
@@ -164,6 +164,32 @@ fn roots(cwd: &Path, provider: ProviderKind, env: &BTreeMap<String, String>, hom
     roots
 }
 
+/// A harness's user skill folder (`SkillHome`), resolved the way [`roots`] resolves the user roots of the
+/// harness that owns it. `home` is the user's home folder; the variables come from `env`. Used by the skill
+/// copies between machines (`network/skill_sync.rs`), which only touch these folders.
+pub(crate) fn user_skill_home(home_kind: SkillHome, env: &BTreeMap<String, String>, home: &Path) -> Option<PathBuf> {
+    let var = |name: &str| env.get(name).map(|value| value.trim()).filter(|value| !value.is_empty());
+    // Relative overrides are taken from the home folder: the daemon has no project here.
+    let path = match home_kind {
+        SkillHome::Agents => home.join(".agents/skills"),
+        SkillHome::Claude => claude_config_dir(home, env, Some(home))?.join("skills"),
+        SkillHome::Codex => {
+            var("CODEX_HOME").map(|value| expand_home(Path::new(value), Some(home))).unwrap_or_else(|| home.join(".codex")).join("skills")
+        }
+        SkillHome::Cursor => home.join(".cursor/skills"),
+        SkillHome::Opencode => var("XDG_CONFIG_HOME")
+            .map(|value| expand_home(Path::new(value), Some(home)))
+            .unwrap_or_else(|| home.join(".config"))
+            .join("opencode/skills"),
+        SkillHome::Pi => pi_agent_dir(home, env, Some(home), ".pi/agent")?.join("skills"),
+        SkillHome::Omp => match kybern_drivers::omp_profile::resolve(env).ok().as_deref() {
+            Some(profile) if !profile.is_empty() => home.join(".omp/profiles").join(profile).join("agent/skills"),
+            _ => home.join(".omp/agent/skills"),
+        },
+    };
+    Some(if path.is_absolute() { path } else { home.join(path) })
+}
+
 fn pi_agent_dir(cwd: &Path, env: &BTreeMap<String, String>, home: Option<&Path>, fallback: &str) -> Option<PathBuf> {
     if let Some(value) = env.get("PI_CODING_AGENT_DIR").map(|value| value.trim()).filter(|value| !value.is_empty()) {
         let path = expand_home(Path::new(value), home);
@@ -268,7 +294,7 @@ fn effective_scope(path: &Path, fallback: SkillScope) -> SkillScope {
     }
 }
 
-fn parse_frontmatter(contents: &str) -> Frontmatter {
+pub(crate) fn parse_frontmatter(contents: &str) -> Frontmatter {
     let mut result = Frontmatter { user_invocable: true, ..Frontmatter::default() };
     let normalized = contents.replace("\r\n", "\n");
     let Some(rest) = normalized.strip_prefix("---\n") else { return result };

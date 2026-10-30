@@ -84,6 +84,7 @@ export const codes = {
   PROVIDER_UNAVAILABLE: -32010,
   PROVIDER_ERROR: -32011,
   THREAD_BUSY: -32012,
+  NOT_AVAILABLE: -32013,
 } as const;
 
 // ---- auth ----
@@ -94,7 +95,10 @@ export type Scope =
   | "terminal_operate"
   | "review_write"
   | "access_read"
-  | "access_write";
+  | "access_write"
+  | "network_read"
+  | "network_admin"
+  | MachineScope;
 
 /** Query parameter accepted as a fallback for clients that cannot set headers. */
 export const AUTH_QUERY_PARAM = "token";
@@ -219,6 +223,10 @@ export interface Project {
   worktree_copy?: string[];
   /** The user hid the "Add shared instructions" offer for this group. */
   instructions_offer_dismissed?: boolean;
+  /** What identifies this repository across machines; absent until the first Git refresh. A group's is its primary member's. */
+  repo?: RepoIdentity | null;
+  /** A group's members' identities, sorted. */
+  repos?: RepoIdentity[];
   created_at: DateTime;
   updated_at: DateTime;
 }
@@ -325,6 +333,19 @@ export interface Thread {
    * `worktree.path` and `cwd` are the container holding one worktree per member.
    */
   members?: ThreadMember[];
+  /**
+   * Set when another machine started this thread (a remote delegation). Only a daemon sets it,
+   * from the live session, and it never changes. Absent for work the user started here.
+   */
+  origin?: Origin | null;
+  /**
+   * Set on the hidden, read-only thread a machine keeps for one thread of another machine: it records
+   * that thread's forwarded tool calls. Never listed (see `isInboundThread`); reached from the calling
+   * tool row ("Ran on satyamas") and from Settings → Machines.
+   */
+  inbound?: InboundInfo | null;
+  /** Set while "Continue on…" moves this thread (`departing`: it takes no messages) and after it moved (`departed`: read-only, with a link). */
+  moved?: MoveInfo | null;
 }
 
 export type DelegationRole = "implementation" | "research" | "review" | "design" | "test" | "general";
@@ -1112,6 +1133,8 @@ export type TranscriptEntry =
       level: NoticeLevel;
       text: string;
       at: DateTime;
+      /** What the provider notice carried (a fork notice names its machine and thread). */
+      data?: JsonValue | null;
     }
   | {
       role: "reverted";
@@ -1147,7 +1170,31 @@ export type TranscriptEntry =
       from?: HarnessRef | null;
       to?: HarnessRef | null;
       at: DateTime;
+    }
+  | {
+      /** What a thread moved here with "Continue on…" said and did on its first machine. */
+      role: "history";
+      turn_id: TurnId;
+      seq: EventSeq;
+      from_machine: MachineId;
+      from_machine_name: string;
+      from_thread: ThreadId;
+      from_title: string;
+      items: HistoryItem[];
+      /** Older items left out to fit the size cap. */
+      omitted?: number;
+      at: DateTime;
     };
+
+export type HistoryRole = "user" | "assistant" | "tool" | "notice";
+/** One entry of the conversation a moved thread brings along. */
+export interface HistoryItem {
+  role: HistoryRole;
+  text: string;
+  at?: DateTime | null;
+  /** The tool's name, for `tool` items. */
+  tool?: string | null;
+}
 
 export interface Checkpoint {
   thread_id: ThreadId;
@@ -1345,7 +1392,8 @@ export type EventPayload =
       /** The refresh failed before the old session was released: it carries on with its context. */
       session_kept?: boolean;
     }
-  | { kind: "handoff_edited"; rotation_id: string; text: string };
+  | { kind: "handoff_edited"; rotation_id: string; text: string }
+  | { kind: "history_imported"; from_machine: MachineId; from_machine_name: string; from_thread: ThreadId; from_title: string; items: HistoryItem[]; omitted?: number };
 
 export interface SavedSession {
   provider: ProviderKind;
@@ -1521,6 +1569,12 @@ export interface DaemonInfo {
   data_dir: string;
   scopes: Scope[];
   started_at: DateTime;
+  /** This machine's id on the network, equal to `environment_id`. Absent from a daemon older than the network. */
+  machine_id?: string;
+  /** Version of the daemon-to-daemon protocol; absent or 0 from a daemon older than the network. */
+  network_protocol?: number;
+  /** Feature names this daemon supports, such as `network.v1`. See `NETWORK_FEATURES`. */
+  features?: string[];
 }
 
 /** What the daemon is holding open right now. */
@@ -1805,6 +1859,8 @@ export interface ThreadsListParams {
   include_subagents?: boolean;
   /** Only the direct subagent and delegated children of this thread (implies `include_subagents`). */
   parent_thread_id?: ThreadId;
+  /** Also return the hidden threads that record tool calls other machines made here; left out by default. */
+  include_inbound?: boolean;
 }
 
 export interface ThreadMessagesListParams {
@@ -2088,6 +2144,8 @@ export interface NotesListResult {
   notes: NoteSummary[];
   /** When categories were introduced. Uncategorized project notes created before it are `undated`. */
   history_since?: string | null;
+  /** Which machine each note came from and which were left out. Only when `machine` was given (S2). */
+  federation?: Federation | null;
 }
 
 /** Stale notes a project needs before the Coordinator offers to tidy them. */
@@ -2516,6 +2574,8 @@ export interface Settings {
   ask_deadlines?: AskDeadlineSettings;
   /** Folders outside a project the user allowed Preview to serve files from. */
   preview_allowed_folders?: string[];
+  /** Joining and staying joined to the machine network. Absent from a daemon older than the network. */
+  network?: NetworkSettings;
 }
 
 /** Limits for `kybern_agent_delegate`, read each time an agent delegates. */
@@ -2808,6 +2868,8 @@ export interface AccountSummary {
   directory?: string;
   managed: boolean;
   can_sign_out: boolean;
+  /** Set when this account signs in through the login broker (design §9.4). */
+  broker?: AccountBroker;
 }
 export type AccountLoginMode = "browser" | "paste" | "device_code" | "terminal";
 export type AccountLoginPhase = "starting" | "waiting" | "verifying" | "signed_in" | "failed" | "canceled";
@@ -2887,6 +2949,8 @@ export interface GitStatus {
   upstream?: string | null;
   remote_url?: string | null;
   pull_request?: PullRequest | null;
+  /** Why a folder that is a repository reads as not git, e.g. git refusing a folder another user owns. */
+  issue?: string | null;
   /** Group threads: one entry per member in project order, excluded ones too. The fields above are the primary's. */
   repos?: RepoGitStatus[];
 }
@@ -3287,6 +3351,973 @@ export interface QueuedMessage {
   message: UserMessage;
 }
 
+// ---- machine network (ADE-86; mirrors crates/kybern-protocol/src/network.rs) ----
+
+export const NETWORK_PROTOCOL = 1;
+export const NETWORK_CHANGED_NOTIFICATION = "network.changed";
+export const NETWORK_MACHINE_CHANGED_NOTIFICATION = "network.machine.changed";
+
+/** Feature names a daemon lists in `DaemonInfo.features` and `peer.presence`. */
+export const NETWORK_FEATURES = {
+  network: "network.v1",
+  relay: "relay.v1",
+  delegateRemote: "delegate.remote.v1",
+  toolsForward: "tools.forward.v1",
+  fork: "fork.v1",
+  move: "move.v1",
+  filesPush: "files.push.v1",
+  clipboard: "clipboard.v1",
+  ports: "ports.v1",
+  settingsFanout: "settings.fanout.v1",
+  notesFederated: "notes.federated.v1",
+  secretsStore: "secrets.store.v1",
+  loginBroker: "login.broker.v1",
+  update: "update.v1",
+  group: "group.v1",
+} as const;
+
+/** Scopes only a daemon-to-daemon grant carries, never a device token. */
+export type MachineScope =
+  | "machine_peer"
+  | "machine_relay"
+  | "machine_delegate"
+  | "machine_tools"
+  | "machine_terminals"
+  | "machine_files"
+  | "machine_clipboard"
+  | "machine_clipboard_auto"
+  | "machine_ports"
+  | "machine_settings"
+  | "machine_secrets"
+  | "machine_logins";
+
+/** The `settings.network` section. */
+export interface NetworkSettings {
+  /** "Connect to your other machines". Off until the user turns it on. */
+  enabled: boolean;
+  /** The fixed port the Tailscale listener binds; the daemon tries the next six when it is taken. */
+  port: number;
+}
+
+/** A machine's id: the daemon's `environment_id`. */
+export type MachineId = string;
+
+/** What makes two checkouts the same logical project on different machines. */
+export interface RepoIdentity {
+  /** The smallest hash in `git rev-list --max-parents=0 HEAD`. */
+  root_commit?: string | null;
+  /** Every root commit, sorted: checkouts sharing any one are the same repository. Absent from older daemons and shallow clones. */
+  root_commits?: string[];
+  /** The `origin` URL as `host/owner/repo`: lowercase, no scheme, user or `.git`. */
+  remote?: string | null;
+}
+
+/** One member repository of a group project, by name and identity. */
+export interface GroupRepo { name: string; repo: RepoIdentity }
+/** A member repository a group thread works in, and the commit that holds its work. */
+export interface GroupMemberWork {
+  /** The member's path in the sender's group folder ("." is the group folder's own repository). */
+  path: string;
+  name: string;
+  repo: RepoIdentity;
+  commit?: string | null;
+}
+/** What a group project's thread carries to another machine: the receiver needs a group of exactly `repos`. */
+export interface GroupWork { repos: GroupRepo[]; members: GroupMemberWork[] }
+
+/** What `projects.repo_identity` stores: a single project has `repo`; a group also has `repos`. */
+export interface ProjectRepoIdentity {
+  repo?: RepoIdentity | null;
+  repos?: RepoIdentity[];
+}
+
+export interface MachineDescriptor {
+  machine_id: MachineId;
+  name: string;
+  os: string;
+  /** Ed25519 public key, standard base64. */
+  signing_key: string;
+  /** X25519 public key, standard base64. */
+  sealing_key: string;
+  ts_node_id?: string | null;
+  ts_name?: string | null;
+  port?: number | null;
+}
+
+export type JoinVia = "auto" | "found" | "code" | "migrate";
+export type RemoveReason = "user" | "stolen" | "rejoin";
+
+export type OpKind =
+  | { kind: "genesis"; owner_login: string; tailnet: string; machine: MachineDescriptor }
+  | { kind: "add"; machine: MachineDescriptor; via: JoinVia }
+  | { kind: "remove"; machine_id: MachineId; ts_node_id?: string | null; reason: RemoveReason }
+  | { kind: "set"; key: string; value: JsonValue }
+  | { kind: "merge"; other_network_id: string; other_genesis: OpEnvelope }
+  /** A kind this build does not know: kept, verified and gossiped, otherwise ignored. */
+  | { kind: string };
+
+/** The signed JSON body of an operation, parsed. */
+export type OpBody = {
+  v: number;
+  network_id: string;
+  at: DateTime;
+  lamport: number;
+} & OpKind;
+
+/** An operation as stored and sent. `body` is the exact signed JSON text. */
+export interface OpEnvelope {
+  /** `sha256(body)`, lowercase hex. */
+  id: string;
+  body: string;
+  signer: MachineId;
+  /** Ed25519 signature, standard base64. */
+  signature: string;
+}
+
+export type MachineStatus = "online" | "relaying" | "offline" | "paused";
+
+export interface HarnessSummary {
+  kind: ProviderKind;
+  available: boolean;
+  signed_in?: boolean | null;
+  version?: string | null;
+}
+
+/** One member as Settings → Machines shows it. */
+export interface MachineCard {
+  machine_id: MachineId;
+  name: string;
+  os: string;
+  arch?: string | null;
+  ts_name?: string | null;
+  /** The machine's Ed25519 signing key, standard base64; a client pins it before it trusts a route. */
+  signing_key?: string | null;
+  status: MachineStatus;
+  is_self?: boolean;
+  version?: string | null;
+  network_protocol?: number;
+  features?: string[];
+  last_seen_at?: DateTime | null;
+  /** The member relaying to this machine when `status` is `relaying`. */
+  relay_via?: MachineId | null;
+  harnesses?: HarnessSummary[];
+  /** Capability name (`delegate`, `files`, ...) to whether the machine this card is served from may use it. */
+  allow?: Record<string, boolean>;
+  added_by?: MachineId | null;
+  added_via?: JoinVia | null;
+  added_at?: DateTime | null;
+}
+
+/** `add`: one click; `code`: enter the code shown on the machine; `merge`: it is in another network of the owner. */
+export type FoundAction = "add" | "code" | "merge";
+
+export interface FoundMachine {
+  /** Opaque id for `network.add` and `network.merge`. */
+  found_id: string;
+  name: string;
+  machine_id?: MachineId | null;
+  os?: string | null;
+  ts_name?: string | null;
+  version?: string | null;
+  action: FoundAction;
+  other_network_id?: string | null;
+}
+
+export interface TailscaleState {
+  installed: boolean;
+  running: boolean;
+  self_ip?: string | null;
+  self_name?: string | null;
+  tailnet?: string | null;
+  login_name?: string | null;
+  listening_port?: number | null;
+  lock_enabled?: boolean | null;
+  detail?: string | null;
+}
+
+/** Work waiting to reach machines that are offline or paused. */
+export interface OutboxSummary {
+  queued: number;
+  failed: number;
+}
+
+export interface BrokerInfo {
+  machine_id: MachineId;
+  name?: string | null;
+  reachable: boolean;
+}
+
+/** Everything Settings → Machines needs, in one call. */
+export interface NetworkStatus {
+  enabled: boolean;
+  /** Absent on a lone machine. */
+  network_id?: string | null;
+  self_machine: MachineCard;
+  /** Every member, this machine included. */
+  members: MachineCard[];
+  found: FoundMachine[];
+  outbox: OutboxSummary;
+  broker?: BrokerInfo | null;
+  tailscale: TailscaleState;
+  /** SHA-256 of the sorted operation ids. */
+  digest?: string | null;
+  /** This machine was removed from its network and can rejoin. */
+  removed?: boolean;
+  /** "Keep all machines on the same version": a member that sees a newer version updates itself when idle. */
+  follow_updates?: boolean;
+}
+
+export type RouteKind = "direct_tailnet" | "direct_advertised" | "ssh" | "relay";
+
+/** One way to reach a machine. Routes are tried in order. */
+export interface Route {
+  kind: RouteKind;
+  /** The base URL (`http`/`https`; the client derives `ws`/`wss`). */
+  url: string;
+  /** The member a `relay` route goes through. */
+  via?: MachineId | null;
+}
+
+export interface NetworkAddResult {
+  machine?: MachineCard | null;
+  /** The target could not verify the clicker; use `network.join` with its code. */
+  needs_code: boolean;
+}
+
+export interface NetworkCodeCreateResult {
+  /** Six digits. */
+  code: string;
+  expires_at: DateTime;
+  endpoints: string[];
+  /** `kybern://join?url=…&code=…&machine=<id>`. */
+  qr: string;
+}
+
+export interface NetworkRemoveParams {
+  machine_id: MachineId;
+  /** "This machine might be lost or stolen". */
+  stolen?: boolean;
+  /** Machines this one added that the user also removes. */
+  also_remove?: MachineId[];
+}
+
+export interface NetworkClientGrantResult {
+  /** A long-lived device token for the machine. */
+  token: string;
+  scopes: Scope[];
+  routes: Route[];
+  /** The machine's Ed25519 signing key, standard base64, from the membership set. */
+  signing_key?: string | null;
+}
+
+export interface NetworkUpdateAllResult {
+  started: MachineId[];
+  skipped: { machine_id: MachineId; reason: string }[];
+}
+
+/** `peer.update.start`: a member asks this machine to start its own self-update. */
+export interface PeerUpdateStartParams {
+  /** The version the caller wants this machine to reach. */
+  version?: string | null;
+}
+
+export interface PeerUpdateStartResult {
+  started: boolean;
+  /** Why not, for the Machines page. */
+  reason?: string | null;
+}
+
+export type DoctorStatus = "pass" | "warn" | "fail";
+
+export interface DoctorCheck {
+  /** A stable id such as `tailscale.running`. */
+  id: string;
+  status: DoctorStatus;
+  title: string;
+  next_step?: string | null;
+  /** The peer a per-peer check is about. */
+  machine_id?: MachineId | null;
+}
+
+export interface DoctorReport {
+  checks: DoctorCheck[];
+  generated_at: DateTime;
+}
+
+/** Per-machine data for the Machines page. Each machine serves it about itself. */
+export interface MachineInfo {
+  cpu?: { model: string; logical_cores: number } | null;
+  gpu?: string[];
+  mem?: { total_bytes: number } | null;
+  harnesses?: HarnessSummary[];
+  /** The identity of every project on the machine, for repo mapping. */
+  projects?: RepoIdentity[];
+}
+
+// peer.* : daemon to daemon.
+
+export interface PeerOpsSyncParams { digest: string; ids: string[] }
+export interface PeerOpsSyncResult { digest: string; ids: string[]; ops: OpEnvelope[] }
+export interface PeerPresence {
+  version: string;
+  network_protocol: number;
+  features: string[];
+  harnesses: HarnessSummary[];
+  load?: number | null;
+  battery?: number | null;
+  at: DateTime;
+}
+export type RelayStreamKind = "ws" | "http";
+export interface PeerRelayOpenParams {
+  stream_id: number;
+  kind: RelayStreamKind;
+  path: string;
+  method?: string | null;
+  headers?: [string, string][];
+}
+export interface PeerRelayDataParams { stream_id: number; data: string; credit?: number | null; text?: boolean }
+export interface PeerRelayCloseParams { stream_id: number; reason?: string | null }
+
+export type OriginKind =
+  | { kind: "composer" }
+  | { kind: "delegation"; task_id: string }
+  | { kind: "tool_call" }
+  | { kind: "fork" }
+  | { kind: "move" };
+
+/** Where work that another machine started came from. Only a daemon sets it, and it never changes. */
+export interface Origin {
+  machine_id: MachineId;
+  machine_name: string;
+  thread_id?: ThreadId | null;
+  operation_id: Uuid;
+  kind: OriginKind;
+  permission_cap: PermissionMode;
+  /** Machine ids, oldest first; at most one in v1. */
+  hops?: MachineId[];
+}
+
+// ---- shared state across machines (S1 settings fan-out, S2 federated notes and tasks; design §9) ----
+
+/** Ordered by `(at, lamport, machine_id)`: a later clock wins, the counter and then the machine id break ties. */
+export interface SettingsStamp {
+  at: string;
+  lamport: number;
+  machine_id: MachineId;
+}
+/** A field-level change to the shared settings; `null` clears an optional field. */
+export interface SettingsPatch {
+  stamp: SettingsStamp;
+  fields: Record<string, unknown>;
+}
+export interface PeerSettingsPatchResult {
+  applied: string[];
+  stale: string[];
+  unchanged: string[];
+  refused: Record<string, string>;
+}
+export interface PeerSettingsGetResult {
+  values: Record<string, unknown>;
+  stamps: Record<string, SettingsStamp>;
+}
+export type SettingsMachineState = "reported" | "offline" | "unsupported" | "unreachable";
+export interface SettingsMachineView {
+  id: MachineId;
+  name: string;
+  is_self: boolean;
+  state: SettingsMachineState;
+}
+export interface SettingsFieldValue {
+  machine_id: MachineId;
+  /** Absent when the machine did not report (offline, too old, no answer). */
+  value?: unknown;
+}
+export interface SettingsFieldView {
+  /** `default_provider`, `orchestration`, `providers.codex.model`, … */
+  path: string;
+  /** One entry per machine in `SettingsNetworkView.machines`, in the same order. */
+  values: SettingsFieldValue[];
+  /** The machines that reported do not all hold the same value: show **Mixed**. */
+  mixed: boolean;
+  /** Machines with a queued change for this field. */
+  pending: MachineId[];
+}
+/** `settings.network_view`. */
+export interface SettingsNetworkView {
+  machines: SettingsMachineView[];
+  fields: SettingsFieldView[];
+}
+export interface SettingsShareParams {
+  /** Field path to its new value. Only shared fields. */
+  fields: Record<string, unknown>;
+  /** Machine ids or names; every other member when absent. */
+  machines?: string[] | null;
+}
+export interface SettingsShareTarget {
+  machine_id: MachineId;
+  name: string;
+  state: "queued" | "unsupported";
+  outbox_id?: Uuid | null;
+}
+export interface SettingsShareResult {
+  stamp: SettingsStamp;
+  here: PeerSettingsPatchResult;
+  machines: SettingsShareTarget[];
+}
+
+/** The `machine` argument that reads every online machine. */
+export const MACHINE_ALL = "all";
+export interface NotesListParams {
+  /** `"all"`, or one machine's name or id. Absent: this machine only. */
+  machine?: string | null;
+}
+export interface TaskItemsListParams {
+  machine?: string | null;
+}
+/** The ids one machine contributed to a merged result, in the order it returned them. */
+export interface FederationSection {
+  machine_id: MachineId;
+  machine_name: string;
+  is_self: boolean;
+  ids: Uuid[];
+}
+export type SkipReason = "offline" | "paused" | "unsupported" | "refused" | "timed_out" | "failed";
+export interface FederationSkipped {
+  machine_id: MachineId;
+  machine_name: string;
+  reason: SkipReason;
+}
+export interface Federation {
+  sections: FederationSection[];
+  skipped: FederationSkipped[];
+  /** "satyamas offline; its notes are not included." */
+  footer?: string | null;
+}
+export type PeerFederatedReadParams =
+  | { read: "notes_list" }
+  | { read: "notes_search"; query: string; limit?: number | null }
+  | { read: "task_items_list" };
+export interface PeerFederatedReadResult {
+  notes_list?: NotesListResult | null;
+  notes_search?: { results: { id: NoteId; snippet: string }[] } | null;
+  task_items?: { tasks: TaskItem[] } | null;
+}
+
+// ---- machine utilities: sending files, forwarding ports (M4 / U1, U3; design §8.1, §8.3) ----
+
+/** A send is at most this many bytes, all files together. */
+export const MAX_PUSH_BYTES = 2 * 1024 * 1024 * 1024;
+export const FILES_PROGRESS_NOTIFICATION = "files.progress";
+export const FILES_RECEIVED_NOTIFICATION = "files.received";
+export const PORTS_CHANGED_NOTIFICATION = "ports.changed";
+
+/** Where a send lands on the other machine. */
+export type PushDest =
+  | { kind: "downloads" }
+  | { kind: "project"; project: string; subdir?: string | null }
+  /** A skill's folder in the target's skill homes (`skills.copy`). */
+  | { kind: "skill"; name: string; homes: SkillHome[]; hash: string; replaces?: string[] };
+
+export interface FilesSendParams {
+  project_id: ProjectId;
+  /** The file or folder, relative to the project root. */
+  path: string;
+  /** The target machine, by id or name. */
+  machine: string;
+  dest?: PushDest | null;
+}
+export interface FilesSendResult {
+  item: OutboxItem;
+  files: number;
+  bytes: number;
+  /** Entries left out of a folder: symlinks, .git, credential folders and env files. */
+  skipped: number;
+}
+export interface FilesProgress { item_id: Uuid; sent: number; total: number }
+export interface FilesReceived {
+  transfer_id: Uuid;
+  from_machine: MachineId;
+  from_name: string;
+  name: string;
+  files: number;
+  bytes: number;
+  dest_path: string;
+  at: DateTime;
+}
+export interface PushEntry { path: string; size: number; sha256: string; executable?: boolean }
+export interface PeerFilesBeginParams { transfer_id: Uuid; name: string; is_folder: boolean; dest: PushDest; entries: PushEntry[] }
+export interface PeerFilesBeginResult { offsets: number[]; complete?: boolean; dest_path?: string | null }
+export interface PeerFilesChunkParams { transfer_id: Uuid; index: number; offset: number; data: string }
+export interface PeerFilesFinishResult { dest_path: string; files: number; bytes: number; skill?: SkillLanded | null }
+
+// ---- user skills on every machine (ADE-86; skill_sync.rs) ----
+
+/** The largest skill a copy carries, all its files together. */
+export const MAX_SKILL_COPY_BYTES = 20 * 1024 * 1024;
+/** A harness's user skill folder. */
+export type SkillHome = "agents" | "claude" | "codex" | "cursor" | "opencode" | "pi" | "omp";
+export const SKILL_HOMES: readonly SkillHome[] = ["agents", "claude", "codex", "cursor", "opencode", "pi", "omp"];
+export interface SkillHomeInfo { home: SkillHome; path: string; exists: boolean }
+/** One copy of a skill: its folder in one home. */
+export interface SkillCopyInfo {
+  home: SkillHome;
+  path: string;
+  /** SHA-256 over the copied files' paths and contents; equal hashes are the same skill. Absent when it can't be copied. */
+  hash?: string | null;
+  size: number;
+  files: number;
+  /** A link to this skill's copy in another home: that copy, not another one. */
+  linked_to?: SkillHome | null;
+  is_link?: boolean;
+  /** What a copy leaves out: links, .git, node_modules, secret-looking files. */
+  skipped?: string[];
+  /** Why it can't be copied. */
+  problem?: string | null;
+}
+export interface MachineSkill { name: string; display_name?: string | null; description?: string | null; copies: SkillCopyInfo[] }
+export interface SkillInventory { homes: SkillHomeInfo[]; skills: MachineSkill[]; os?: string }
+export type SkillsMachineState = "reported" | "offline" | "unsupported" | "unreachable";
+export interface SkillsMachineView {
+  id: MachineId;
+  name: string;
+  is_self: boolean;
+  state: SkillsMachineState;
+  os?: string;
+  homes?: SkillHomeInfo[];
+  detail?: string | null;
+}
+export interface SkillOnMachine { machine_id: MachineId; copies: SkillCopyInfo[] }
+export interface SkillPending { machine_id: MachineId; outbox_id: Uuid; from: MachineId }
+export interface SkillNetworkEntry {
+  name: string;
+  display_name?: string | null;
+  description?: string | null;
+  /** The machines that have it, in `SkillsNetworkView.machines` order. */
+  machines: SkillOnMachine[];
+  /** Distinct hashes, most common first. */
+  versions: string[];
+  differs: boolean;
+  pending?: SkillPending[];
+}
+/** `skills.network_view`. */
+export interface SkillsNetworkView { machines: SkillsMachineView[]; skills: SkillNetworkEntry[] }
+export interface SkillCopyTarget {
+  machine: string;
+  /** Left empty: the homes it is in on the source. */
+  homes?: SkillHome[];
+  /** Hashes of the versions on this machine the user agreed to replace. */
+  replaces?: string[];
+}
+/** Plugin declarations cross machines; installed files and credentials never do. */
+export type PluginKind = "plugin" | "marketplace";
+export interface PluginContents { hooks: number; mcp_servers: number; commands: number; agents: number; skills: number; extensions: number; npm_packages: string[]; notes: string[] }
+export interface MachinePlugin { id: string; provider: ProviderKind; kind: PluginKind; name: string; marketplace: string | null; source: string | null; version: string | null; enabled: boolean | null; resources: Record<string, string[]>; contents: PluginContents; problem: string | null; fingerprint: string }
+export interface PluginInventory { plugins: MachinePlugin[]; warnings: string[]; jobs: PluginCopyJob[] }
+export interface PluginsMachineView { id: MachineId; name: string; is_self: boolean; state: SkillsMachineState; inventory: PluginInventory | null; detail: string | null }
+export interface PluginsNetworkView { machines: PluginsMachineView[] }
+export interface PluginCopyTarget { machine: MachineId; replaces: string | null }
+export interface PluginsCopyParams { provider: ProviderKind; id: string; from: MachineId | null; to: PluginCopyTarget[]; confirmed: string }
+export interface PluginInstallRequest { operation_id: string; plugin: MachinePlugin; replaces: string | null }
+export type PluginInstallState = "installed" | "already_there" | "configured" | "failed";
+export interface PluginInstallResult { state: PluginInstallState; message: string; actual: MachinePlugin | null }
+export interface PluginCopyOutcome { machine: MachineId; name: string; outbox_id: string | null; result: PluginInstallResult | null; error: string | null }
+export interface PluginsCopyResult { targets: PluginCopyOutcome[] }
+export interface PluginCopyJob { id: string; provider: ProviderKind; plugin_id: string; target: MachineId; state: OutboxState; result: PluginInstallResult | null; error: string | null }
+
+export interface SkillsCopyParams { name: string; from?: string | null; from_home?: SkillHome | null; to: SkillCopyTarget[] }
+export type SkillCopyState = "queued" | "done" | "unsupported" | "failed";
+export type SkillPlaceAction = "written" | "replaced" | "same" | "linked";
+export interface SkillPlaced { home: SkillHome; path: string; action: SkillPlaceAction; backup?: string | null }
+export interface SkillLanded { name: string; hash: string; placed: SkillPlaced[] }
+export interface SkillCopyOutcome {
+  machine_id: MachineId;
+  name: string;
+  state: SkillCopyState;
+  outbox_id?: Uuid | null;
+  placed?: SkillPlaced[];
+  error?: string | null;
+}
+export interface SkillsCopyResult {
+  source: MachineId;
+  name: string;
+  hash: string;
+  files: number;
+  bytes: number;
+  skipped?: string[];
+  targets: SkillCopyOutcome[];
+}
+export interface SkillCopyPayload { name: string; from_home: SkillHome; homes: SkillHome[]; replaces?: string[] }
+
+export interface PortsForwardParams { machine: string; remote_port: number; local_port?: number | null }
+export interface PortForward {
+  id: Uuid;
+  machine_id: MachineId;
+  machine_name: string;
+  remote_port: number;
+  local_port: number;
+  connections: number;
+  created_at: DateTime;
+}
+export interface PortsListResult { forwards: PortForward[] }
+export interface PeerPortsOpenParams { stream_id: number; port: number }
+
+// ---- the clipboard between machines (M4 / U2; design §8.2) ----
+
+/** The longest text one clipboard send or paste carries. */
+export const MAX_CLIPBOARD_BYTES = 1024 * 1024;
+export type ClipboardStore = "system" | "buffer";
+export interface ClipboardSetParams { machine?: string | null; text: string }
+export interface ClipboardSetResult { stored: ClipboardStore; bytes: number }
+export interface ClipboardGetParams { machine?: string | null }
+export interface ClipboardGetResult { text: string; source: ClipboardStore }
+export interface ClipboardStatus { backend: ClipboardStore; auto: boolean; skipped: number }
+
+// ---- remote delegation and the outbox (R1; design §6.2, §6.4) ----
+
+export const OUTBOX_CHANGED_NOTIFICATION = "outbox.changed";
+/** Days an outbox item waits for its machine before it expires (Retry queues it again). */
+export const OUTBOX_EXPIRY_DAYS = 7;
+
+export type OutboxKind =
+  | "thread_create"
+  | "thread_send"
+  | "delegate"
+  | "files_push"
+  | "settings_patch"
+  | "secrets_put"
+  | "fork"
+  | "move"
+  | "provision"
+  | "plugin_install"
+  | "skill_copy";
+export type OutboxState = "queued" | "sending" | "delivered" | "failed" | "expired" | "cancelled";
+
+/** One queued piece of work for another machine. */
+export interface OutboxItem {
+  id: Uuid;
+  /** The key the target deduplicates on, so a delivery that is repeated runs once. */
+  operation_id: Uuid;
+  /** The machine the work is for. */
+  target: MachineId;
+  kind: OutboxKind;
+  payload: unknown;
+  /** Who started the work, for agent work. Stamped by the daemon. */
+  origin?: Origin | null;
+  state: OutboxState;
+  attempts: number;
+  next_attempt_at?: DateTime | null;
+  last_error?: string | null;
+  /** What the target answered, once delivered. */
+  result?: unknown;
+  created_at: DateTime;
+  expires_at: DateTime;
+  updated_at: DateTime;
+}
+
+export interface OutboxOp {
+  kind: OutboxKind;
+  payload: unknown;
+  operation_id?: Uuid | null;
+}
+
+/** Where a delegation that runs on another machine stands, on the delegating machine. */
+export type RemoteChildState = "pending" | "running" | "completed" | "failed" | "cancelled" | "unreachable";
+
+export interface RemoteChild {
+  task_id: Uuid;
+  operation_id: Uuid;
+  parent_thread_id: ThreadId;
+  target: MachineId;
+  remote_thread_id?: ThreadId | null;
+  state: RemoteChildState;
+  /** Stop was asked for and the target has not confirmed it yet. */
+  stop_requested?: boolean;
+  last_seq: number;
+  title: string;
+  provider?: ProviderKind | null;
+  model?: string | null;
+  info: DelegationInfo;
+  created_at: DateTime;
+  updated_at: DateTime;
+}
+
+export interface PeerDelegateParams {
+  operation_id: Uuid;
+  task_id: Uuid;
+  origin: Origin;
+  parent_title: string;
+  task: string;
+  title?: string | null;
+  role?: DelegationRole;
+  provider?: ProviderKind | null;
+  model?: string | null;
+  effort?: string | null;
+  permission_mode: PermissionMode;
+  workspace?: DelegationWorkspace;
+  owns?: string[];
+  repo: RepoIdentity;
+  project?: string | null;
+  base_commit?: string | null;
+  /** A group project's delegation: its repositories and, for a worktree, each member's base commit. */
+  group?: GroupWork | null;
+}
+
+/** Run one Kybern agent tool for an agent on another machine (forwarded tools, design §6.3). */
+export interface PeerToolCallParams {
+  tool: string;
+  /** The tool's arguments, without `machine` and `project`. */
+  args?: unknown;
+  /** Where the call comes from. The target takes the machine from the session; `hops` must be exactly that machine. */
+  origin: Origin;
+  thread_title?: string;
+  /** The repository the calling thread works in, so the target finds its checkout of it. */
+  repo?: RepoIdentity | null;
+  /** One of the target's projects by name, id or path. */
+  project?: string | null;
+  deadline_ms?: number | null;
+}
+
+export interface PeerToolCallResult {
+  result: unknown;
+  /** The inbound thread that recorded the call. */
+  inbound_thread_id: ThreadId;
+}
+
+export interface PeerThreadArchiveInboundParams {
+  thread_id: ThreadId;
+}
+
+export interface PeerDelegateResult {
+  task_id: Uuid;
+  thread_id: ThreadId;
+  status: DelegationStatus;
+  permission_mode: PermissionMode;
+  project_name?: string | null;
+  branch?: string | null;
+}
+
+export interface PeerDelegationView {
+  task_id: Uuid;
+  thread_id: ThreadId;
+  title: string;
+  provider: ProviderKind;
+  model?: string | null;
+  role: DelegationRole;
+  workspace: DelegationWorkspace;
+  status: DelegationStatus;
+  result?: string | null;
+  error?: string | null;
+  files_touched?: string[];
+  base_commit?: string | null;
+  branch?: string | null;
+  head_commit?: string | null;
+  diffstat?: DiffStat | null;
+  started_at: DateTime;
+  completed_at?: DateTime | null;
+  last_seq: number;
+}
+
+export interface PeerGitBundleParams { operation_id: Uuid; offset: number; total: number; data: string }
+export interface PeerGitImportParams {
+  operation_id: Uuid;
+  total: number;
+  sha256: string;
+  commit: string;
+  repo: RepoIdentity;
+  project?: string | null;
+  /** A member of a group: the identities of the group's repositories. */
+  group_repos?: RepoIdentity[];
+}
+
+// Add a project to another machine (provisioning). A client calls `projects.provision*` on the SOURCE machine's
+// connection; the source daemon sends the repository and env files to the target itself.
+export const PROVISION_CHANGED_NOTIFICATION = "projects.provision.changed";
+/** `tool_name` of the card "os-kdi doesn't have kybern yet". `input` is a `ProvisionCardInput`. Answer
+ * `{ decision: "submit", response: { path, env_files } }` or deny. */
+export const PROJECT_PROVISION_TOOL = "kybern_project_provision";
+/** `data.needs` of a delegation, fork or move refused because the target has no checkout. */
+export const NEEDS_PROJECT = "project";
+export interface ProvisionMachine { id: MachineId; name: string; os: string; online: boolean }
+export interface ProvisionRepo { path: string; remote?: string | null; branch?: string | null }
+export interface ProvisionMember { path: string; target_path: string; present: boolean }
+export interface ProvisionExisting { project_id: ProjectId; name: string; path: string }
+export type PathState = "free" | "same_repo" | "not_empty" | "forbidden" | "unknown";
+export interface PathCheck { state: PathState; path: string; message: string }
+/** A git-ignored env file of the source project: its name and size only. */
+export interface EnvFileCandidate { path: string; size: number; selected: boolean }
+export interface ProjectsProvisionPlanParams { project_id: ProjectId; machine: string; path?: string | null }
+export interface ProvisionPlan {
+  project_id: ProjectId;
+  project_name: string;
+  kind?: ProjectKind;
+  source: ProvisionMachine;
+  target: ProvisionMachine;
+  repos: ProvisionRepo[];
+  /** The target's projects that already are this repository. */
+  existing?: ProvisionExisting[];
+  members?: ProvisionMember[];
+  suggested_path?: string | null;
+  target_home?: string | null;
+  path_check?: PathCheck | null;
+  env_files: EnvFileCandidate[];
+  /** Why it cannot be done, in a sentence that says what to do. */
+  blocked?: string | null;
+}
+export interface ProvisionChoice {
+  /** A folder on the target; `~` is its home. Omit for the proposed one. */
+  path?: string | null;
+  /** Env files to copy; omit for every detected one. */
+  env_files?: string[] | null;
+}
+export interface ProjectsProvisionParams extends ProvisionChoice { project_id: ProjectId; machine: string; operation_id?: Uuid | null }
+export type ProvisionPhase = "queued" | "cloning" | "sending" | "importing" | "copying_env" | "done" | "failed" | "cancelled";
+export interface ProvisionResult {
+  /** The project as the target registered it. */
+  project: Project;
+  env_written: string[];
+  env_kept: string[];
+  cloned_from_remote: boolean;
+}
+export interface ProvisionStatus {
+  operation_id: Uuid;
+  item_id: Uuid;
+  project_id: ProjectId;
+  project_name: string;
+  target: MachineId;
+  target_name: string;
+  path?: string | null;
+  phase: ProvisionPhase;
+  detail?: string | null;
+  bytes_sent?: number;
+  bytes_total?: number | null;
+  error?: string | null;
+  result?: ProvisionResult | null;
+  updated_at: string;
+}
+export interface ProvisionCardInput {
+  operation_id: Uuid;
+  plan: ProvisionPlan;
+  /** What waits for it: "delegate", "fork", "move" or "add". */
+  then: string;
+  reason?: string | null;
+}
+export interface PeerProvisionProbeParams { repos: RepoIdentity[]; members?: string[]; kind?: ProjectKind; name: string; path?: string | null }
+export interface PeerProvisionProbe { os: string; home?: string | null; existing?: ProvisionExisting[]; members?: ProvisionMember[]; suggested_path: string; path_check: PathCheck }
+export interface PeerProvisionPrepareParams {
+  operation_id: Uuid; path: string; rel: string; repo: RepoIdentity; remote_url?: string | null; branch?: string | null; commit: string;
+}
+export interface PeerProvisionPrepareResult {
+  state: "ready" | "existing" | "needs_bundle"; path: string; full?: boolean; cloned?: boolean; clone_error?: string | null;
+}
+export interface PeerProvisionImportParams {
+  operation_id: Uuid; transfer_id: Uuid; path: string; rel: string; total: number; sha256: string; branch?: string | null; commit: string; remote_url?: string | null;
+}
+export interface PeerProvisionFinishParams {
+  operation_id: Uuid; path: string; name: string; kind?: ProjectKind; members?: string[]; env_files?: { path: string; sealed: string }[]; cloned_from_remote?: boolean;
+}
+
+// Fork to a machine (F1, design §7.1).
+export interface ThreadsForkNoteResult { note: string }
+export interface ThreadsForkToMachineParams {
+  thread_id: ThreadId;
+  /** The target machine's name or id. */
+  machine: string;
+  /** Picks one of the target's projects when several have this repository. */
+  project?: string | null;
+  /** Also push the fork branch to origin. Off by default: the repository may be public. */
+  push_origin?: boolean;
+  /** The hand-off note the user edited; omit for the generated one. */
+  handoff_note?: string | null;
+  title?: string | null;
+  provider?: ProviderKind | null;
+  model?: string | null;
+  effort?: string | null;
+  permission_mode?: PermissionMode | null;
+  /** The target has no checkout yet: add the project there first (folder and env files), then go on. */
+  provision?: ProvisionChoice | null;
+  operation_id?: Uuid | null;
+}
+export interface ThreadsForkToMachineResult {
+  operation_id: Uuid;
+  /** The queued outbox item; its `result` is a PeerForkResult once delivered. */
+  item: OutboxItem;
+  target_name: string;
+  branch: string;
+  commit: string;
+  handoff_note: string;
+}
+export interface PeerForkParams {
+  operation_id: Uuid;
+  origin: Origin;
+  source_title: string;
+  handoff_note: string;
+  title?: string | null;
+  repo: RepoIdentity;
+  project?: string | null;
+  branch: string;
+  commit: string;
+  /** A group project's fork: every member's snapshot. */
+  group?: GroupWork | null;
+  provider: ProviderKind;
+  provider_chosen?: boolean;
+  model?: string | null;
+  effort?: string | null;
+  permission_mode: PermissionMode;
+}
+export interface PeerForkResult {
+  thread_id: ThreadId;
+  machine_id: MachineId;
+  project_name?: string | null;
+  branch: string;
+  provider: ProviderKind;
+}
+
+export interface InboundInfo { machine_id: MachineId; thread_id: ThreadId; title: string }
+export type MoveState = "departing" | "departed" | "arrived";
+/** A thread moved with "Continue on…" (design §7.2). */
+export interface MoveInfo {
+  state: MoveState;
+  peer: MachineId;
+  /** The target's name when the move started, for the banner while it is offline. */
+  peer_name?: string;
+  /** The thread that continues the work, once the target confirmed. */
+  peer_thread_id?: ThreadId | null;
+  /** While `departing`: when the lease ends unless it is renewed. */
+  lease_until?: DateTime | null;
+  operation_id: Uuid;
+  branch?: string | null;
+  commit?: string | null;
+  /** The commit went out and no answer came back: the target may or may not have the thread. */
+  uncertain?: boolean;
+}
+
+// Continue on another machine (F2, design §7.2).
+export interface ThreadsMoveToMachineParams {
+  thread_id: ThreadId;
+  /** The target machine's name or id. */
+  machine: string;
+  project?: string | null;
+  handoff_note?: string | null;
+  title?: string | null;
+  provider?: ProviderKind | null;
+  model?: string | null;
+  effort?: string | null;
+  permission_mode?: PermissionMode | null;
+  /** The target has no checkout yet: add the project there first (folder and env files), then go on. */
+  provision?: ProvisionChoice | null;
+  operation_id?: Uuid | null;
+}
+export interface ThreadsMoveToMachineResult {
+  operation_id: Uuid;
+  /** The queued outbox item; Retry and Keep here are `outbox.retry` and `outbox.cancel` on it. */
+  item: OutboxItem;
+  target_name: string;
+  handoff_note: string;
+}
+export type MoveAbandonOutcome = "released" | "completed" | "nothing";
+export interface ThreadsMoveAbandonParams { thread_id: ThreadId; force?: boolean }
+export interface ThreadsMoveAbandonResult { outcome: MoveAbandonOutcome }
+
 export interface Methods {
   "queue.add": [QueuedMessage, Record<string, never>];
   "queue.update": [QueuedMessage, Record<string, never>];
@@ -3296,7 +4327,7 @@ export interface Methods {
   "threads.steer": [QueuedMessage, ThreadsSendResult];
   "threads.notes.get": [{ thread_id: ThreadId }, ThreadNotes];
   "threads.notes.set": [{ thread_id: ThreadId; text: string; expected_revision: number }, ThreadNotes];
-  "notes.list": [Empty, NotesListResult];
+  "notes.list": [NotesListParams, NotesListResult];
   "notes.get": [{ id?: NoteId | null; thread_id?: ThreadId | null }, { note?: Note | null }];
   "notes.create": [NotesCreateParams, Note];
   "notes.update": [NotesUpdateParams, Note];
@@ -3305,11 +4336,14 @@ export interface Methods {
   "notes.delete": [{ id: NoteId }, NoteSummary];
   "notes.restore": [{ id: NoteId }, NoteSummary];
   "notes.purge": [{ id: NoteId }, Empty];
-  "notes.search": [{ query: string; limit?: number | null }, { results: { id: NoteId; snippet: string }[] }];
+  "notes.search": [
+    { query: string; limit?: number | null; machine?: string | null },
+    { results: { id: NoteId; snippet: string }[]; federation?: Federation | null },
+  ];
   "notes.tidy_offer": [{ project_id: ProjectId }, TidyOffer];
   "notes.tidy_snooze": [{ project_id: ProjectId }, TidyOffer];
   "notes.tidy_start": [{ project_id: ProjectId }, { thread_id: ThreadId; notes: number }];
-  "tasks.items.list": [Empty, { tasks: TaskItem[] }];
+  "tasks.items.list": [TaskItemsListParams, { tasks: TaskItem[]; federation?: Federation | null }];
   "tasks.items.get": [{ id?: TaskItemId | null; key?: string | null }, { task?: TaskItem | null }];
   "tasks.items.create": [TaskItemsCreateParams, TaskItem];
   "tasks.items.update": [TaskItemsUpdateParams, TaskItem];
@@ -3469,6 +4503,206 @@ export interface Methods {
   "github.pr.action": [PrActionParams, Empty];
   "threads.worktree.inspect": [WorktreeInspectParams, WorktreeInspectResult];
   "threads.worktree.remove": [WorktreeRemoveParams, WorktreeInspectResult];
+  "network.status": [Empty, NetworkStatus];
+  "network.set_enabled": [{ enabled: boolean }, NetworkStatus];
+  "network.add": [{ found_id: string }, NetworkAddResult];
+  "network.code.create": [Empty, NetworkCodeCreateResult];
+  "network.join": [{ code: string; address: string; migrate?: boolean }, MachineCard];
+  "network.remove": [NetworkRemoveParams, NetworkStatus];
+  "network.pause": [{ machine_id: MachineId; paused: boolean }, MachineCard];
+  "network.rename": [{ machine_id: MachineId; name: string }, MachineCard];
+  "network.merge": [{ found_id: string }, NetworkStatus];
+  "network.rejoin": [Empty, NetworkStatus];
+  "network.client_grant": [{ machine_id: MachineId; device_id: string }, NetworkClientGrantResult];
+  "network.routes": [{ machine_id: MachineId }, { routes: Route[] }];
+  "network.allow.set": [{ machine_id: MachineId; capability: string; allowed: boolean }, MachineCard];
+  "network.update_all": [Empty, NetworkUpdateAllResult];
+  "network.doctor": [{ machine_id?: MachineId | null }, DoctorReport];
+  "machines.info": [Empty, MachineInfo];
+  "network.follow_updates.set": [{ enabled: boolean }, NetworkStatus];
+  "peer.ops.sync": [PeerOpsSyncParams, PeerOpsSyncResult];
+  "peer.ops.push": [{ ops: OpEnvelope[] }, { accepted: number; rejected: number }];
+  "peer.presence": [PeerPresence, Empty];
+  "peer.client_token.mint": [{ device_id: string; label: string }, { sealed_token: string; scopes: Scope[] }];
+  "peer.device.revoke": [{ device_id: string }, Empty];
+  "peer.relay.open": [PeerRelayOpenParams, Empty];
+  "peer.relay.data": [PeerRelayDataParams, Empty];
+  "peer.relay.close": [PeerRelayCloseParams, Empty];
+  "peer.update.start": [PeerUpdateStartParams, PeerUpdateStartResult];
+  "outbox.list": [{ target?: MachineId | null; state?: OutboxState | null }, { items: OutboxItem[] }];
+  "outbox.retry": [{ id: Uuid }, OutboxItem];
+  "outbox.cancel": [{ id: Uuid }, OutboxItem];
+  "outbox.enqueue": [{ target: MachineId; operation: OutboxOp }, OutboxItem];
+  "peer.delegate": [PeerDelegateParams, PeerDelegateResult];
+  "peer.delegation.get": [{ task_id: Uuid; since_seq?: number | null; wait_ms?: number | null }, PeerDelegationView];
+  "peer.delegation.cancel": [{ task_id: Uuid }, PeerDelegationView];
+  "peer.git.bundle": [PeerGitBundleParams, { received: number }];
+  "peer.git.import": [PeerGitImportParams, { commit: string; imported_ref: string }];
+  "peer.thread.create": [ThreadsCreateParams, Thread];
+  "peer.thread.send": [ThreadsSendParams, ThreadsSendResult];
+  "threads.fork_note": [{ thread_id: ThreadId }, ThreadsForkNoteResult];
+  "threads.fork_to_machine": [ThreadsForkToMachineParams, ThreadsForkToMachineResult];
+  "peer.fork": [PeerForkParams, PeerForkResult];
+  "threads.move_to_machine": [ThreadsMoveToMachineParams, ThreadsMoveToMachineResult];
+  "threads.move_abandon": [ThreadsMoveAbandonParams, ThreadsMoveAbandonResult];
+  "projects.provision_plan": [ProjectsProvisionPlanParams, ProvisionPlan];
+  "projects.provision": [ProjectsProvisionParams, ProvisionStatus];
+  "projects.provision.status": [{ operation_id: Uuid }, ProvisionStatus];
+  "peer.provision.probe": [PeerProvisionProbeParams, PeerProvisionProbe];
+  "peer.provision.prepare": [PeerProvisionPrepareParams, PeerProvisionPrepareResult];
+  "peer.provision.chunk": [PeerGitBundleParams, { received: number }];
+  "peer.provision.import": [PeerProvisionImportParams, PeerProvisionPrepareResult];
+  "peer.provision.finish": [PeerProvisionFinishParams, ProvisionResult];
+  "peer.tool.call": [PeerToolCallParams, PeerToolCallResult];
+  "peer.thread.archive_inbound": [PeerThreadArchiveInboundParams, Empty];
+  "settings.network_view": [Empty, SettingsNetworkView];
+  "settings.share": [SettingsShareParams, SettingsShareResult];
+  "peer.settings.get": [Empty, PeerSettingsGetResult];
+  "peer.settings.patch": [SettingsPatch, PeerSettingsPatchResult];
+  "peer.federated.read": [PeerFederatedReadParams, PeerFederatedReadResult];
+  "peer.login.borrow": [PeerLoginBorrowParams, PeerLoginBorrowResult];
+  "peer.login.push": [PeerLoginPushParams, Empty];
+  "peer.login.release": [{ loan_id: string }, Empty];
+  "peer.login.status": [Empty, PeerLoginStatus];
+  "peer.login.release_all": [{ sign_out?: boolean }, { released: number; signed_out: ProviderKind[] }];
+  "peer.login.usage": [{ provider: ProviderKind; account?: string }, UsageLimitsResult];
+  "peer.secrets.put": [{ name: string; sealed: string }, Empty];
+  "login.broker.status": [Empty, LoginBrokerStatus];
+  "login.broker.bind": [LoginBrokerBindParams, LoginBrokerStatus];
+  "login.broker.set": [LoginBrokerSetParams, LoginBrokerSetResult];
+  "secrets.push": [SecretsPushParams, SecretsPushResult];
+  "files.send": [FilesSendParams, FilesSendResult];
+  "peer.files.begin": [PeerFilesBeginParams, PeerFilesBeginResult];
+  "peer.files.chunk": [PeerFilesChunkParams, { offset: number }];
+  "peer.files.finish": [{ transfer_id: Uuid }, PeerFilesFinishResult];
+  "peer.files.abort": [{ transfer_id: Uuid }, Empty];
+  "plugins.inventory": [Empty, PluginInventory];
+  "plugins.network_view": [Empty, PluginsNetworkView];
+  "plugins.copy": [PluginsCopyParams, PluginsCopyResult];
+  "peer.plugins.inventory": [Empty, PluginInventory];
+  "peer.plugins.copy": [PluginsCopyParams, PluginsCopyResult];
+  "peer.plugins.install": [PluginInstallRequest, PluginInstallResult];
+  "skills.inventory": [Empty, SkillInventory];
+  "skills.network_view": [Empty, SkillsNetworkView];
+  "skills.copy": [SkillsCopyParams, SkillsCopyResult];
+  "peer.skills.inventory": [Empty, SkillInventory];
+  "peer.skills.copy": [SkillsCopyParams, SkillsCopyResult];
+  "ports.forward": [PortsForwardParams, PortForward];
+  "ports.list": [Empty, PortsListResult];
+  "ports.stop": [{ id: Uuid }, PortsListResult];
+  "clipboard.set": [ClipboardSetParams, ClipboardSetResult];
+  "clipboard.get": [ClipboardGetParams, ClipboardGetResult];
+  "clipboard.status": [Empty, ClipboardStatus];
+  "peer.clipboard.set": [{ text: string }, ClipboardSetResult];
+  "peer.clipboard.get": [Empty, ClipboardGetResult];
+  "peer.clipboard.auto": [{ sealed: string }, Empty];
+  "peer.ports.open": [PeerPortsOpenParams, Empty];
+  "peer.ports.data": [PeerRelayDataParams, Empty];
+  "peer.ports.close": [PeerRelayCloseParams, Empty];
+}
+
+// ---- the login broker and pushed keys (ADE-86 S4; design §9.3 and §9.4) ----
+
+/** Where one harness' sign-in comes from on this machine. */
+export type BrokerLoginState = "lending" | "borrowing" | "broker_offline" | "broker_not_signed_in" | "broker_unsupported" | "not_used";
+export interface AccountBroker {
+  machine_id: MachineId;
+  /** "VPS": the name clients put in "Signs in through VPS". */
+  machine_name: string;
+  broker_account: string;
+  state: BrokerLoginState;
+  message?: string;
+}
+export interface LendableAccount {
+  provider: ProviderKind;
+  account: string;
+  name: string;
+  email?: string;
+  plan?: string;
+}
+export interface BrokerProviderStatus {
+  provider: ProviderKind;
+  state: BrokerLoginState;
+  /** The local account that signs in through the broker. */
+  local_account?: string;
+  broker_account?: string;
+  lendable: LendableAccount[];
+  /** The sentence to show ("Claude signs in through the VPS, which is offline · Sign in here instead"). */
+  message?: string;
+  sessions: number;
+}
+export interface BrokerLoanView {
+  loan_id: string;
+  machine_id: MachineId;
+  provider: ProviderKind;
+  account: string;
+  created_at: DateTime;
+  last_pushed_at?: DateTime;
+  last_error?: string;
+}
+export interface LoginBrokerStatus {
+  broker?: BrokerInfo;
+  is_broker: boolean;
+  providers: BrokerProviderStatus[];
+  loans: BrokerLoanView[];
+}
+export interface LoginBrokerBindParams {
+  provider: ProviderKind;
+  instance: string;
+  /** The broker's account to lend; absent unbinds. */
+  broker_account?: string | null;
+}
+export interface LoginBrokerSetParams {
+  /** The new broker; absent clears it. */
+  machine_id?: MachineId | null;
+  /** After the members re-borrowed, ask the old broker to sign out. Default true. */
+  sign_out_old?: boolean;
+}
+export interface LoginBrokerSetResult {
+  status: LoginBrokerStatus;
+  rebound: MachineId[];
+  offline: MachineId[];
+  old_signed_out: ProviderKind[];
+  note?: string;
+}
+export interface PeerLoginBorrowParams {
+  provider: ProviderKind;
+  account?: string;
+  loan_id?: string | null;
+}
+export interface PeerLoginBorrowResult {
+  loan_id: string;
+  sealed: string;
+  expires_at?: DateTime;
+  email?: string;
+  plan?: string;
+}
+export interface PeerLoginPushParams {
+  loan_id: string;
+  provider: ProviderKind;
+  sealed: string;
+  expires_at?: DateTime;
+}
+export interface PeerLoginStatus {
+  broker?: MachineId;
+  is_broker: boolean;
+  lendable: LendableAccount[];
+  borrowed_from: MachineId[];
+}
+export interface SecretsPushParams {
+  name: string;
+  /** Members to push to; empty or absent means every other member. */
+  machines?: MachineId[];
+}
+export type SecretsPushState = "delivered" | "queued" | "refused";
+export interface SecretsPushMachine {
+  machine_id: MachineId;
+  name: string;
+  state: SecretsPushState;
+  detail?: string;
+}
+export interface SecretsPushResult {
+  machines: SecretsPushMachine[];
 }
 
 export type MethodName = keyof Methods;

@@ -1,6 +1,5 @@
 import { pinChildThread } from '../tabs/Body.tsx'
 import { getState } from '../state.ts'
-import { onEnvironmentChange } from '../shell/environment.ts'
 // The Agents pane retains completed children (unlike the sidebar's temporary
 // ChildRow). Tree ordering, phases, result clamps and workspace copy are shared.
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -21,7 +20,7 @@ import { useDock } from './store.ts'
 import { Chevron } from '../sidebar/rows.tsx'
 import { Collapse, Rise, SwapOnChange } from '../motion/kit.tsx'
 import { Elapsed } from '../subagents/Elapsed.tsx'
-import { getClient } from '../state.ts'
+import { ownProjectId, threadClient } from '../state.ts'
 import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { ink, Label, modelLabel, ProviderMark, useTheme } from '../ui.tsx'
 import { DockEmpty, ErrorLine, Section } from './parts.tsx'
@@ -52,7 +51,7 @@ export function Agents({ thread }: { thread: Thread }) {
   const dockInstant = useDock(thread.id).instant || dockKeyboard
 
   useEffect(() => {
-    const client = getClient()
+    const client = threadClient(thread.id)
     if (!client) return
     let current = true
     let seeded = false
@@ -61,7 +60,7 @@ export function Agents({ thread }: { thread: Thread }) {
       if (event.kind === 'thread_archived') return previous.filter((th) => th.id !== event.thread_id)
       if (event.kind !== 'thread_created' && event.kind !== 'thread_updated') return previous
       const th = event.thread
-      if (th.project_id !== thread.project_id) return previous
+      if (th.project_id !== ownProjectId(thread)) return previous
       const old = previous.find((item) => item.id === th.id)
       if (old && old.last_seq > th.last_seq) return previous
       if (th.status === 'archived') return previous.filter((item) => item.id !== th.id)
@@ -73,7 +72,7 @@ export function Agents({ thread }: { thread: Thread }) {
       else setThreads((previous) => fold(previous, event))
     })
     setError(null)
-    void client.call('threads.list', { project_id: thread.project_id, include_subagents: true }).then((result) => {
+    void client.call('threads.list', { project_id: ownProjectId(thread), include_subagents: true }).then((result) => {
       if (!current) return
       const merged = pending.reduce(fold, result.threads)
       setThreads(merged)
@@ -87,7 +86,7 @@ export function Agents({ thread }: { thread: Thread }) {
       setLoaded(true)
     }, (e) => { if (current) { setError(errorText(e)); setLoaded(true) } })
     return () => { current = false; subscription.unsubscribe() }
-  }, [thread.id, thread.project_id, reload])
+  }, [thread.id, ownProjectId(thread), reload])
 
   const rows = useMemo(() => lineageRows(threads, thread.id, { expanded: tree }), [threads, thread.id, tree])
   const connectors = useMemo(() => flatTree(rows.map((row) => row.depth)), [rows])
@@ -119,11 +118,11 @@ export function Agents({ thread }: { thread: Thread }) {
     <ErrorLine error={error} retry={() => setReload((n) => n + 1)} />
     {!rows.length ? loaded && !error ? <DockEmpty lineage instant={dockInstant} icon={N.users} title="No agents yet" body="Ask the agent to delegate work to another agent; children appear here." /> : null : <>
       <Section label={lineageSummary(counts) || `${counts.total} ${counts.total === 1 ? 'agent' : 'agents'}`}>
-        {stoppable.length >= 2 && <Button variant="ghost" size="sm" danger disabled={busy} onClick={() => void run(() => Promise.all(stoppable.map((th) => getClient()!.call('threads.interrupt', { thread_id: th.id }))))}>Stop all</Button>}
+        {stoppable.length >= 2 && <Button variant="ghost" size="sm" danger disabled={busy} onClick={() => void run(() => Promise.all(stoppable.map((th) => threadClient(thread.id)!.call('threads.interrupt', { thread_id: th.id }))))}>Stop all</Button>}
       </Section>
       <div {...FILL_ISLAND} style={{ display: 'flex', flexGrow: 1, minHeight: 0 }}>
         <virtual-list testId="dock-agents-list" style={{ width: '100%', height: '100%' }}>
-          {rows.map((row, i) => <AgentRow key={row.thread.id} row={row} fresh={fresh.current.has(row.thread.id)} last={connectors[i]!.last} rails={railBits(connectors[i]!.continues)} detailOpen={!!detail[row.thread.id]} onToggleTree={toggleTree} onToggleDetail={toggleDetail} onRemove={setRemoving} />)}
+          {rows.map((row, i) => <AgentRow key={row.thread.id} row={row} fresh={fresh.current.has(row.thread.id)} last={connectors[i]!.last} rails={railBits(connectors[i]!.continues)} detailOpen={!!detail[row.thread.id]} owner={thread.id} onToggleTree={toggleTree} onToggleDetail={toggleDetail} onRemove={setRemoving} />)}
         </virtual-list>
       </div>
     </>}
@@ -131,7 +130,7 @@ export function Agents({ thread }: { thread: Thread }) {
       <DialogHeader title="Remove this worktree?" description={`${removing?.title || 'This agent'} left its worktree on disk because it has unmerged changes. Removing it deletes those files from ${osLabels().thisComputerInline}. The branch is deleted only if already merged.`} onClose={() => { if (!busy) setRemoving(null) }} />
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: 12 }}>
         <Button size="lg" disabled={busy} onClick={() => setRemoving(null)}>Cancel</Button>
-        <Button size="lg" variant="destructive" busy={busy} onClick={() => void run(async () => { if (removing) await getClient()!.call('delegations.worktree_remove', { thread_id: removing.id, force: true }); setRemoving(null) })}>{busy ? 'Removing…' : 'Remove worktree'}</Button>
+        <Button size="lg" variant="destructive" busy={busy} onClick={() => void run(async () => { if (removing) await threadClient(thread.id)!.call('delegations.worktree_remove', { thread_id: removing.id, force: true }); setRemoving(null) })}>{busy ? 'Removing…' : 'Remove worktree'}</Button>
       </div>
     </Dialog>}
   </>
@@ -152,8 +151,8 @@ function agentTree(depth: number, last: boolean, rails: number, open: boolean, t
   }
 }
 
-const AgentRow = memo(function AgentRow({ row, fresh, last, rails, detailOpen, onToggleTree, onToggleDetail, onRemove }: {
-  row: LineageRow<Thread>; fresh: boolean; last: boolean; rails: number; detailOpen: boolean
+const AgentRow = memo(function AgentRow({ row, fresh, last, rails, detailOpen, owner, onToggleTree, onToggleDetail, onRemove }: {
+  row: LineageRow<Thread>; fresh: boolean; last: boolean; rails: number; detailOpen: boolean; owner: string
   onToggleTree: (id: string, open: boolean) => void; onToggleDetail: (id: string) => void; onRemove: (thread: Thread) => void
 }) {
   const t = useTheme()
@@ -175,8 +174,9 @@ const AgentRow = memo(function AgentRow({ row, fresh, last, rails, detailOpen, o
   const stop = async () => {
     setBusy(true); setError(null)
     try {
-      if (thread.subagent) await getClient()!.call('tasks.stop', { thread_id: thread.id })
-      else await getClient()!.call('threads.interrupt', { thread_id: thread.id })
+      // Children live on their parent's machine.
+      if (thread.subagent) await threadClient(owner)!.call('tasks.stop', { thread_id: thread.id })
+      else await threadClient(owner)!.call('threads.interrupt', { thread_id: thread.id })
     } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
   }
   return <Rise kind="row" play={fresh}><div style={{ position: 'relative', paddingLeft: 6, paddingRight: 6, paddingBottom: 1 }}>
@@ -239,4 +239,3 @@ function TreeToggle({ open, onClick, testId }: { open: boolean; onClick: () => v
   </IconButton>
 }
 
-onEnvironmentChange(() => { choices.clear() })

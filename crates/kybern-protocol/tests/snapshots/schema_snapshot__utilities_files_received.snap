@@ -1,0 +1,53 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(FilesReceived)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FilesReceived",
+  "description": "Pushed to the receiver's clients when a send landed.",
+  "type": "object",
+  "properties": {
+    "transfer_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "from_machine": {
+      "type": "string"
+    },
+    "from_name": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "files": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "bytes": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "dest_path": {
+      "description": "Where it is on this machine.",
+      "type": "string"
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "transfer_id",
+    "from_machine",
+    "from_name",
+    "name",
+    "files",
+    "bytes",
+    "dest_path",
+    "at"
+  ]
+}

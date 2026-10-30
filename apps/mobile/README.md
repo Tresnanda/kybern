@@ -34,7 +34,7 @@ pnpm exec expo run:ios --configuration Release --device
 
 Connect using a pairing invitation from the desktop environment menu or an access
 token. `kybern://pair?...` invitations fill the connection sheet. Pairing credentials are saved in device secure storage as soon as the invitation
-is redeemed, so a failed live connection can be retried from Settings → Computers.
+is redeemed, so a failed live connection can be retried from Settings → Machines.
 Every live connection verifies the daemon identity before exposing its data.
 Manually entered access tokens are verified before saving.
 A physical phone needs a reachable computer address (for example, its Tailscale
@@ -60,9 +60,34 @@ xcrun devicectl device process launch --device <udid> --terminate-existing \
 xcrun devicectl device capture screenshot --device <udid> --destination shot.png
 ```
 
+## Machines
+
+One pairing reaches every machine on the user's network. The phone is a client, never
+a member: the computer it is paired with is its **primary** (the one `runtime.ts`
+holds the socket, event subscription and notes/tasks for), and every other machine is
+connected by the shared `MachineSet` (`packages/kybern-client/src/machines.ts`) through
+`src/machines/hub.ts`. The set verifies a member's Ed25519 identity document
+(`src/machines/proof.ts`, `@noble/curves`) before any token is sent, mints this device's
+token for each other member through `network.client_grant`, follows the network, and keeps
+each machine's last lists for "Offline · last seen".
+
+- Storage: records in SecureStore `kybern.ink.machines`, one token per machine in
+  `kybern.ink.token.<id>`, the machine the phone is at in `kybern.ink.active`, and the
+  bounded list cache in `kybern-machine-cache.json`. The first start after the update
+  migrates `kybern.ink.environments` (tokens move out of the JSON, the old item is deleted).
+- Lists: with two or more machines Home, Threads and the iPad sidebar read the merged
+  lists (`state/machineLists.ts`, `state/useLists.ts`); a thread's machine glyph shows only
+  for machines other than the one the phone is at, an offline machine's threads are greyed,
+  and the "All machines" filter lives in the Home title and the Threads menu. With one
+  machine nothing changes.
+- Requests: `rpc()` and `mutate()` route by `thread_id`/`project_id` to the machine that
+  owns it (or by an explicit machine id); a write refreshes the machine it went to.
+- Screen: Settings → Machines (`app/machines.tsx`): status, Pause, Remove (forget on this
+  phone, remove from the network, lost or stolen), Found on your tailnet · Add, Add by code.
+
 ## Workflows
 
-- Start, search, pin, archive, and resume conversations across saved computers.
+- Start, search, pin, archive, and resume conversations across every machine in your network (see Machines).
 - Choose projects, agents/accounts, models, effort, permissions, branches, and worktrees.
 - Stream replies, reasoning, tool output, images, code, and Markdown tables.
 - Attach files, mention project files, skills, and installed plugins, queue follow-ups, and interrupt turns.

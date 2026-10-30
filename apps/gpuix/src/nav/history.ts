@@ -1,4 +1,3 @@
-import { onEnvironmentChange } from '../shell/environment.ts'
 // Back and forward through the main views (`state/navHistory.ts` and
 // `state/navigation.ts`). The stack rules below are the desktop's, line for line:
 // its module type-imports the desktop store, which this app's typecheck cannot
@@ -254,9 +253,9 @@ export function useNavigationAvailability(): { canBack: boolean; canForward: boo
 // ---- the actions the panel, rail, palette and shortcuts share ----
 
 /** Open a thread on Home (a history step like any other). */
-export function openThread(id: string) {
+export function openThread(id: string, machineId?: string) {
   setNav({ page: 'home', settingsOpen: false })
-  if (getState().selectedId !== id) void selectThread(id)
+  if (getState().selectedId !== id) void selectThread(id, machineId)
 }
 
 /** `newThread()` (`state/nav.ts`): a project's draft, or a free chat. */
@@ -299,4 +298,3 @@ export function goPage(page: Page) {
   setNav({ page: 'home' })
 }
 
-onEnvironmentChange(() => { for (const stop of stops) stop(); stops = []; started = false; lastKey = null; restoring = false; nextMode = 'push'; booted = false }, -100)

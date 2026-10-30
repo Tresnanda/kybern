@@ -12,14 +12,14 @@ import { archiveThread } from '../nav/actions.ts'
 import { setNav } from '../nav/store.ts'
 import { launchBrowser } from '../preview/browser.ts'
 import { toast } from '../shell/toasts.tsx'
-import { getClient, useApp } from '../state.ts'
+import { threadClient, useApp, type StateThread } from '../state.ts'
 import { G } from './glyphs.ts'
 import { errorText, interruptThread } from './store.ts'
 import type { SlashCommand } from './Completion.tsx'
 
 const EMPTY: never[] = []
 
-export function useThreadCommands(thread: Thread | null, attach: () => void): SlashCommand[] {
+export function useThreadCommands(thread: StateThread | null, attach: () => void): SlashCommand[] {
   const nativeCommands = useApp(s => (thread && s.open.thread?.id === thread.id ? s.open.providerCommands : undefined) ?? EMPTY)
   const freeChat = !!thread && isFreeChatProject(thread.project_id)
   const canCompact = !!thread?.provider_session_id && (['codex', 'pi', 'omp', 'opencode'].includes(thread!.provider.kind) || nativeCommands.some(command => command.name === 'compact'))
@@ -27,7 +27,7 @@ export function useThreadCommands(thread: Thread | null, attach: () => void): Sl
     if (!thread) return []
     const panel = (tab: DockTab) => () => { setDock(thread.id, { open: true }); chooseTab(thread.id, tab) }
     const sessions = () => setNav({ sessions: { projectId: freeChat ? null : thread.project_id } })
-    const client = () => getClient()!
+    const client = () => threadClient(thread.id, thread.machineId)!
     const handlers: Record<ThreadCommandId, { icon: string; run: () => void }> = {
       resume: { icon: G.clock, run: sessions },
       sessions: { icon: G.clock, run: sessions },

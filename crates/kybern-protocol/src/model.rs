@@ -9,6 +9,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::event::NoticeLevel;
+use crate::network::{InboundInfo, MoveInfo, NetworkSettings, Origin, RepoIdentity};
 
 pub type ProjectId = Uuid;
 /// Daemon-owned neutral workspace used by chats that are not attached to a
@@ -296,6 +297,13 @@ pub struct Project {
     /// The user hid the "Add shared instructions" offer for this group.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub instructions_offer_dismissed: bool,
+    /// What identifies this repository across machines, refreshed with Git status. Absent until
+    /// the first refresh and for folders that are not repositories. For a group, the primary member's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<RepoIdentity>,
+    /// A group's members' identities, sorted. Empty for single projects.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repos: Vec<RepoIdentity>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -516,6 +524,20 @@ pub struct Thread {
     /// that holds one worktree per included member.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub members: Vec<ThreadMember>,
+    /// Set when another machine started this thread (a remote delegation, a forwarded call). Only a
+    /// daemon sets it, from the live session, and it never changes. Absent for work the user started here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
+    /// Set on the hidden, read-only thread a machine keeps for one thread of another machine: it records
+    /// that thread's forwarded tool calls (`peer.tool.call`). Written once and never changes. Clients
+    /// keep such threads out of lists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inbound: Option<Box<InboundInfo>>,
+    /// Set while "Continue on…" is moving this thread to another machine (`departing`: it refuses sends
+    /// until the target confirms) and after it moved (`departed`: read-only, with a link to the thread
+    /// that continues the work). Only the daemon writes it, and a stale copy of the thread never changes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moved: Option<MoveInfo>,
 }
 
 /// What the delegating agent asked this child to be.
@@ -718,6 +740,17 @@ pub enum ThreadMessagePurpose {
     Question,
     Reply,
     Warning,
+}
+
+impl Thread {
+    /// A delegated child another machine started here. Nothing on this machine is its parent, so `threads.list` lists it as a
+    /// thread of its own (`origin` names the thread on the other machine that delegated it) and clients nest it under that thread.
+    pub fn is_remote_child(&self) -> bool {
+        self.delegation.is_some()
+            && self.subagent.is_none()
+            && self.parent_thread_id.is_none()
+            && self.origin.as_ref().is_some_and(|origin| origin.thread_id.is_some())
+    }
 }
 
 impl ThreadMessagePurpose {
@@ -1894,6 +1927,7 @@ pub fn is_user_input_tool(tool_name: &str) -> bool {
             | COORDINATOR_BRIEF_TOOL
             | COORDINATOR_SETTINGS_TOOL
             | COORDINATOR_NOTES_TOOL
+            | crate::PROJECT_PROVISION_TOOL
             | "request_user_input"
             | "opencode_question"
             | crate::CURSOR_QUESTION_TOOL
@@ -2082,6 +2116,24 @@ impl ApprovalRequest {
                 });
                 if !valid {
                     return Err("Keep at least one change ticked, or decline.".into());
+                }
+            }
+            crate::PROJECT_PROVISION_TOOL => {
+                let path = response.get("path").and_then(Value::as_str).map(str::trim);
+                if !path.is_some_and(|path| !path.is_empty() && path.len() <= 4096 && !path.contains('\0')) {
+                    return Err("Choose a folder on that machine, or cancel.".into());
+                }
+                let known: Vec<&str> = self
+                    .input
+                    .pointer("/plan/env_files")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|file| file.get("path").and_then(Value::as_str))
+                    .collect();
+                let files = response.get("env_files").and_then(Value::as_array);
+                if !files.is_some_and(|files| files.iter().all(|file| file.as_str().is_some_and(|file| known.contains(&file)))) {
+                    return Err(invalid());
                 }
             }
             // Kybern's computer-use consent: `{"scope":"always"}` remembers the app.
@@ -2482,6 +2534,9 @@ pub enum TranscriptEntry {
         level: NoticeLevel,
         text: String,
         at: DateTime<Utc>,
+        /// What the provider notice carried (a fork notice names its machine and thread). Absent for plain notices.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        data: Option<Value>,
     },
     Reverted {
         turn_id: TurnId,
@@ -2527,6 +2582,24 @@ pub enum TranscriptEntry {
         to: Option<HarnessRef>,
         at: DateTime<Utc>,
     },
+    /// What a thread moved here with "Continue on…" said and did on its first machine.
+    History {
+        turn_id: TurnId,
+        #[serde(default)]
+        seq: EventSeq,
+        from_machine: crate::MachineId,
+        from_machine_name: String,
+        from_thread: ThreadId,
+        from_title: String,
+        items: Vec<crate::HistoryItem>,
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        omitted: u32,
+        at: DateTime<Utc>,
+    },
+}
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
 }
 
 /// Per-provider configuration in settings.json.
@@ -2595,6 +2668,8 @@ pub struct Settings {
     /// files from. Canonical absolute paths; a grant covers descendants.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preview_allowed_folders: Vec<String>,
+    /// Joining and staying joined to the machine network.
+    pub network: NetworkSettings,
 }
 
 /// Limits for questions that answer themselves after a deadline. Read each
@@ -2868,6 +2943,7 @@ impl Default for Settings {
             tell_agents_about_kybern: true,
             ask_deadlines: AskDeadlineSettings::default(),
             preview_allowed_folders: Vec::new(),
+            network: NetworkSettings::default(),
         }
     }
 }

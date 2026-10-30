@@ -62,9 +62,11 @@ export type Row =
 
 /** Rows that finished and left (or were dismissed). A child that works again (a delegated child re-woken by a message)
  *  comes back: a dismissal ends that child's last run, not the child. */
-export function dismissedChildren(nav: Pick<NavState, 'dismissed' | 'children'>): Set<string> {
+export function dismissedChildren(nav: Pick<NavState, 'dismissed' | 'children'>, selectedId?: string | null): Set<string> {
   const ids = new Set<string>()
   for (const id of Object.keys(nav.dismissed)) {
+    // The child being viewed stays listed, even if this window dismissed it earlier (a remote one finishes while another window holds it open).
+    if (id === selectedId) continue
     const child = nav.children[id]
     if (!child || !isChildWorking(child)) ids.add(id)
   }
@@ -203,7 +205,7 @@ export function buildRows(input: SidebarInput): Row[] {
 
       const shownChildren = visibleSubagentThreads(childrenByProject.get(project.id) ?? [], {
         selectedId: input.selectedId,
-        dismissed: dismissedChildren(nav),
+        dismissed: dismissedChildren(nav, input.selectedId),
         now: input.now,
       })
       const withChildren = new Set(shownChildren.map((t) => t.parent_thread_id))

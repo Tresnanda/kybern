@@ -41,6 +41,13 @@ Hand a self-contained task to another agent with `kybern_agent_delegate`; it run
 - `kybern_agent_status` lists your agents; `kybern_agent_cancel` stops one.
 - A question from an agent ends `kybern_agent_wait` (`has_pending_question`) or arrives as a notice; answer with `kybern_answer_question` only if your task or the user settled it, else leave it to the user.
 
+## Machines
+Your user's machines form a network. Check `kybern_machines` before naming one, then pass `machine` to a Kybern tool to run it there; `project` picks that machine's project when its checkout of this repository is not the one you mean. Paths are that machine's own.
+- A tool fails at once when the machine is offline. `kybern_agent_delegate` with `machine` queues work for it instead.
+- A machine without this repository: delegating there asks the user to add the project first, then goes on; `kybern_project_add_to_machine` asks for it alone.
+- Your permission mode travels with the call and can only narrow there: the user on that machine may be asked.
+- Nothing is pushed to a shared remote to move work between machines.
+
 ## Secrets
 Never ask for an API key, token or password in chat. Call `kybern_request_secret`: the user enters it in a private card, Kybern writes it to a git-ignored env file in the workspace, and you get back only the variable name.
 

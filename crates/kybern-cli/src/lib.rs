@@ -1,9 +1,16 @@
 mod accounts;
+mod continue_on;
 mod coordinator;
 mod credentials;
+mod fork;
+mod machines;
+mod outbox;
+mod plugin_sync;
 mod render;
 mod requests;
+mod skill_sync;
 mod spaces;
+mod utilities;
 
 use std::path::PathBuf;
 
@@ -249,6 +256,22 @@ enum Cmd {
         #[command(subcommand)]
         cmd: spaces::SpacesCmd,
     },
+    /// Your network of machines: list, add, remove, and check them.
+    Machines {
+        #[command(subcommand)]
+        cmd: machines::MachinesCmd,
+    },
+    /// Give another machine a copy of a thread's work: a hand-off note, its branch and your uncommitted changes.
+    Fork(fork::ForkArgs),
+    /// Move a thread to another machine: its work and conversation go there and this thread becomes read-only.
+    Continue(continue_on::ContinueArgs),
+    /// Give up a move that could not be confirmed, so the thread is yours again.
+    ContinueAbandon(continue_on::ContinueAbandonArgs),
+    /// Work waiting for machines that are offline.
+    Outbox {
+        #[command(subcommand)]
+        cmd: outbox::OutboxCmd,
+    },
     /// List threads.
     Threads {
         #[arg(long)]
@@ -464,11 +487,20 @@ enum Cmd {
     Git { thread: String },
     /// List a project's local branches, most recently committed first.
     Branches { project: String },
-    /// Find files in a project by fuzzy path match
+    /// Find files in a project by fuzzy path match, or send some to another machine.
+    #[command(args_conflicts_with_subcommands = true)]
     Files {
-        project: String,
+        #[command(subcommand)]
+        cmd: Option<utilities::FilesCmd>,
+        /// A project id.
+        project: Option<String>,
         #[arg(default_value = "")]
         query: String,
+    },
+    /// Forward ports of your other machines to this one.
+    Ports {
+        #[command(subcommand)]
+        cmd: utilities::PortsCmd,
     },
     /// Manage provider-owned plugins and connectors.
     Integrations {
@@ -490,9 +522,17 @@ enum Cmd {
         #[command(subcommand)]
         cmd: ArtifactsCmd,
     },
-    /// List skills available to an agent in a project.
+    /// List skills available to an agent in a project, or your user skills on every machine.
+    #[command(args_conflicts_with_subcommands = true)]
+    /// Compare and explicitly copy user plugins between machines.
+    Plugins {
+        #[command(subcommand)]
+        cmd: plugin_sync::PluginsCmd,
+    },
     Skills {
-        project: String,
+        #[command(subcommand)]
+        cmd: Option<skill_sync::SkillsCmd>,
+        project: Option<String>,
         #[arg(long, default_value = "codex")]
         provider: ProviderKind,
     },
@@ -601,6 +641,9 @@ enum NoteCmd {
         /// Show Recently deleted notes instead.
         #[arg(long)]
         deleted: bool,
+        /// Machine name or id, or `all` for every online machine. Default: this one.
+        #[arg(long)]
+        machine: Option<String>,
     },
     /// Print a note as markdown.
     Show { id: String },
@@ -646,7 +689,12 @@ enum NoteCmd {
     /// Bring a deleted note back.
     Restore { id: String },
     /// Find notes whose title or text contains the words.
-    Search { query: Vec<String> },
+    Search {
+        query: Vec<String>,
+        /// Machine name or id, or `all` for every online machine. Default: this one.
+        #[arg(long)]
+        machine: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -662,6 +710,9 @@ enum TaskCmd {
         /// Include done and canceled tasks.
         #[arg(long, short)]
         all: bool,
+        /// Machine name or id, or `all` for every online machine. Default: this one.
+        #[arg(long)]
+        machine: Option<String>,
     },
     /// Print a task, its linked notes and its runs.
     Show {
@@ -948,6 +999,29 @@ enum ProjectsCmd {
         project: String,
         /// A space id or name.
         space: String,
+    },
+    /// Add a project of this machine to another machine of the network: it clones there, or this machine sends it.
+    Provision {
+        /// A project id, name or path.
+        project: String,
+        /// The other machine's name or id.
+        machine: String,
+        /// The folder on that machine (`~` is its home). Omit for the one it proposes.
+        #[arg(long)]
+        path: Option<String>,
+        /// An env file to copy, relative to the project. Repeat for each; omit to copy every detected one.
+        #[arg(long = "env")]
+        env_files: Vec<String>,
+        /// Copy no env files.
+        #[arg(long, conflicts_with = "env_files")]
+        no_env: bool,
+        /// Only show what would happen: the proposed folder and the env files.
+        #[arg(long)]
+        plan: bool,
+    },
+    /// Show where adding a project to another machine stands.
+    ProvisionStatus {
+        operation_id: uuid::Uuid,
     },
     Remove {
         id: String,
@@ -1356,7 +1430,14 @@ pub async fn run() -> Result<()> {
         std::process::exit(code);
     }
     let ep = Endpoint::resolve(cli.url.clone(), cli.token.clone(), cli.data_dir.clone())?;
-    let client = Client::connect(&ep).await?;
+    let explicit = cli.url.is_some() || cli.data_dir.is_some() || std::env::var_os("KYBERN_URL").is_some();
+    let client = Client::connect(&ep).await.map_err(|error| {
+        if explicit {
+            error.context(format!("the daemon at {} did not answer; if it stopped for `kybern machines rejoin`, start it again", ep.url))
+        } else {
+            error
+        }
+    })?;
     let json = cli.json;
 
     match cli.cmd {
@@ -1656,6 +1737,28 @@ pub async fn run() -> Result<()> {
                     render::members(&status, project.iter().find(|p| p.id == project_id))
                 }
             }
+            ProjectsCmd::Provision { project, machine, path, env_files, no_env, plan } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                if plan {
+                    let result = client.call::<ProjectsProvisionPlan>(ProjectsProvisionPlanParams { project_id, machine, path }).await?;
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                } else {
+                    let env_files = if no_env { Some(Vec::new()) } else { (!env_files.is_empty()).then_some(env_files) };
+                    let result = client
+                        .call::<ProjectsProvision>(ProjectsProvisionParams {
+                            project_id,
+                            machine,
+                            choice: ProvisionChoice { path, env_files },
+                            operation_id: None,
+                        })
+                        .await?;
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                }
+            }
+            ProjectsCmd::ProvisionStatus { operation_id } => {
+                let result = client.call::<ProjectsProvisionStatusMethod>(ProjectsProvisionStatusParams { operation_id }).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
             ProjectsCmd::Map { project } => {
                 let project_id = resolve_project(&client, &project, false).await?;
                 let result = client.call::<ProjectsMap>(ProjectsMapParams { project_id }).await?;
@@ -1717,6 +1820,11 @@ pub async fn run() -> Result<()> {
             }
         },
         Cmd::Spaces { cmd } => spaces::run(&client, cmd, json).await?,
+        Cmd::Machines { cmd } => machines::run(&client, cmd, json).await?,
+        Cmd::Fork(args) => fork::run(&client, args, json).await?,
+        Cmd::Continue(args) => continue_on::run(&client, args, json).await?,
+        Cmd::ContinueAbandon(args) => continue_on::abandon(&client, args, json).await?,
+        Cmd::Outbox { cmd } => outbox::run(&client, cmd, json).await?,
         Cmd::Threads { project, archived } => {
             let project_id = match project {
                 Some(p) => Some(resolve_project(&client, &p, false).await?),
@@ -2243,7 +2351,10 @@ pub async fn run() -> Result<()> {
                 println!("revoked");
             }
         },
-        Cmd::Files { project, query } => {
+        Cmd::Ports { cmd } => utilities::run_ports(&client, cmd, json).await?,
+        Cmd::Files { cmd: Some(cmd), .. } => utilities::run_files(&client, cmd, json).await?,
+        Cmd::Files { cmd: None, project, query } => {
+            let project = project.ok_or_else(|| anyhow!("Name a project: kybern files <project> [query], or kybern files send --help"))?;
             let r = client.call::<FilesSearch>(FilesSearchParams { project_id: project.parse()?, query, limit: 30 }).await?;
             for f in &r.files {
                 println!("{f}");
@@ -2352,7 +2463,10 @@ pub async fn run() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }
         },
-        Cmd::Skills { project, provider } => {
+        Cmd::Plugins { cmd } => plugin_sync::run(&client, cmd, json).await?,
+        Cmd::Skills { cmd: Some(cmd), .. } => skill_sync::run(&client, cmd, json).await?,
+        Cmd::Skills { cmd: None, project, provider } => {
+            let project = project.ok_or_else(|| anyhow!("Name a project: kybern skills <project>, or kybern skills machines"))?;
             let project_id = resolve_project(&client, &project, false).await?;
             let r = client.call::<SkillsList>(SkillsListParams { project_id, provider, instance: None }).await?;
             if json {
@@ -2554,7 +2668,7 @@ async fn resolve_note(client: &Client, key: &str) -> Result<NoteId> {
     if let Ok(id) = key.parse::<NoteId>() {
         return Ok(id);
     }
-    let notes = client.call::<NotesList>(Empty {}).await?.notes;
+    let notes = client.call::<NotesList>(NotesListParams::default()).await?.notes;
     let mut matches = notes.iter().filter(|note| !key.is_empty() && note.id.to_string().starts_with(key));
     match (matches.next(), matches.next()) {
         (Some(note), None) => Ok(note.id),
@@ -2737,8 +2851,8 @@ fn print_import(job: &SessionsImportJob) {
 
 async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
     match cmd {
-        NoteCmd::List { deleted } => {
-            let mut result = client.call::<NotesList>(Empty {}).await?;
+        NoteCmd::List { deleted, machine } => {
+            let mut result = client.call::<NotesList>(NotesListParams { machine }).await?;
             result.notes.retain(|note| note.deleted_at.is_some() == deleted);
             if json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
@@ -2747,6 +2861,19 @@ async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
                     "{}",
                     if deleted { "No deleted notes." } else { "No notes yet. Create one with `kybern note new --title Ideas`." }
                 );
+            } else if let Some(federation) = &result.federation {
+                for section in &federation.sections {
+                    let notes: Vec<_> = result.notes.iter().filter(|note| section.ids.contains(&note.id)).cloned().collect();
+                    println!("{}{}", section.machine_name, if section.is_self { " (this machine)" } else { "" });
+                    if notes.is_empty() {
+                        println!("  No notes.");
+                    } else {
+                        render::notes(&notes);
+                    }
+                }
+                if let Some(footer) = &federation.footer {
+                    println!("{footer}");
+                }
             } else {
                 render::notes(&result.notes);
             }
@@ -2856,19 +2983,27 @@ async fn note_command(client: &Client, cmd: NoteCmd, json: bool) -> Result<()> {
                 println!("Restored{}.", if note.scope == NoteScope::Global && note.origin.is_some() { " as a global note" } else { "" });
             }
         }
-        NoteCmd::Search { query } => {
+        NoteCmd::Search { query, machine } => {
             let query = query.join(" ");
             if query.trim().is_empty() {
                 return Err(anyhow!("type something to search for, like `kybern note search release plan`"));
             }
-            let result = client.call::<NotesSearch>(NotesSearchParams { query, limit: None }).await?;
+            let result = client.call::<NotesSearch>(NotesSearchParams { query, limit: None, machine }).await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else if result.results.is_empty() {
                 println!("No matching notes.");
             }
             for hit in result.results.iter().filter(|_| !json) {
-                println!("{}  {}", hit.id, hit.snippet);
+                let machine = result
+                    .federation
+                    .as_ref()
+                    .and_then(|federation| federation.sections.iter().find(|section| section.ids.contains(&hit.id)))
+                    .map_or(String::new(), |section| format!("  [{}]", section.machine_name));
+                println!("{}{machine}  {}", hit.id, hit.snippet);
+            }
+            if let Some(footer) = result.federation.as_ref().and_then(|federation| federation.footer.as_ref()).filter(|_| !json) {
+                println!("{footer}");
             }
         }
     }
@@ -2903,12 +3038,12 @@ async fn resolve_task(client: &Client, key: &str) -> Result<TaskItem> {
 
 async fn task_command(client: &Client, cmd: TaskCmd, json: bool) -> Result<()> {
     match cmd {
-        TaskCmd::List { status, project, all } => {
+        TaskCmd::List { status, project, all, machine } => {
             let project_id = match &project {
                 Some(project) => Some(resolve_project(client, project, false).await?),
                 None => None,
             };
-            let mut tasks = client.call::<TaskItemsList>(Empty {}).await?.tasks;
+            let TaskItemsListResult { mut tasks, federation } = client.call::<TaskItemsList>(TaskItemsListParams { machine }).await?;
             tasks.retain(|task| {
                 project_id.is_none_or(|id| task.project_id == Some(id))
                     && match status {
@@ -2917,9 +3052,22 @@ async fn task_command(client: &Client, cmd: TaskCmd, json: bool) -> Result<()> {
                     }
             });
             if json {
-                println!("{}", serde_json::to_string_pretty(&TaskItemsListResult { tasks })?);
+                println!("{}", serde_json::to_string_pretty(&TaskItemsListResult { tasks, federation })?);
             } else if tasks.is_empty() {
                 println!("No tasks. Create one with `kybern task new \"Fix the login redirect\"`.");
+            } else if let Some(federation) = &federation {
+                for section in &federation.sections {
+                    let tasks: Vec<_> = tasks.iter().filter(|task| section.ids.contains(&task.id)).cloned().collect();
+                    println!("{}{}", section.machine_name, if section.is_self { " (this machine)" } else { "" });
+                    if tasks.is_empty() {
+                        println!("  No tasks.");
+                    } else {
+                        render::tasks(&tasks);
+                    }
+                }
+                if let Some(footer) = &federation.footer {
+                    println!("{footer}");
+                }
             } else {
                 render::tasks(&tasks);
             }

@@ -3,8 +3,10 @@
 // store, so the desktop and mobile clients share them.
 
 import { subagentPhase } from "./subagents.ts";
+import { findModel } from "./models.ts";
 import type {
   PendingRequestKind,
+  ProviderModel,
   AgentResultItem,
   ContentPart,
   DelegationInfo,
@@ -136,6 +138,24 @@ export function workspaceLabel(info: Pick<DelegationInfo, "workspace" | "worktre
   if (info.worktree_state === "kept") return "Worktree kept";
   if (info.worktree_state === "removed") return "Worktree removed";
   return "Own worktree";
+}
+
+/**
+ * A delegated row's second line: the model by its catalog name ("Sonnet 5.5", the composer picker's words, whether the child
+ * was given `sonnet` or `claude-sonnet-5-5`), then the workspace only when it says something (`Shared checkout` is the default).
+ * then the machine in words for a child on another machine ("on Windows PC"; the avatar's badge alone is only a letter).
+ * The role is left out: the title says what the child does.
+ */
+export function delegationMeta(
+  model: string | null | undefined,
+  kind: string | null | undefined,
+  providers: readonly { kind: string; models?: readonly Pick<ProviderModel, "id" | "resolved_id" | "variants" | "display_name">[] | null }[],
+  workspace: string | null | undefined,
+  machine?: string | null,
+): string {
+  const catalog = providers.find((provider) => provider.kind === kind)?.models ?? [];
+  const name = model ? findModel(catalog, model)?.display_name ?? model : null;
+  return [name, machine ? `on ${machine}` : null, workspace && workspace !== "Shared checkout" ? workspace : null].filter(Boolean).join(" · ");
 }
 
 export function canStopDelegation(thread: LineageThread): boolean {

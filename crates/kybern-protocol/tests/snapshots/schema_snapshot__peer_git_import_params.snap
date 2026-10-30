@@ -1,0 +1,81 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(PeerGitImportParams)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PeerGitImportParams",
+  "description": "`peer.git.import`: the bundle is complete; check it and import it into the checkout that matches\n`repo`, under `refs/kybern/incoming/<operation_id>`.",
+  "type": "object",
+  "properties": {
+    "operation_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "total": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "sha256": {
+      "description": "SHA-256 of the whole bundle, hex.",
+      "type": "string"
+    },
+    "commit": {
+      "description": "The commit the bundle is for.",
+      "type": "string"
+    },
+    "repo": {
+      "$ref": "#/$defs/RepoIdentity"
+    },
+    "project": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "group_repos": {
+      "description": "A member of a group project: the identities of the group's repositories. B imports into the checkout of\nthe group project made of exactly these repositories whose member is `repo`. `operation_id` then names\nthis member's transfer, not the whole operation.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RepoIdentity"
+      }
+    }
+  },
+  "required": [
+    "operation_id",
+    "total",
+    "sha256",
+    "commit",
+    "repo"
+  ],
+  "$defs": {
+    "RepoIdentity": {
+      "description": "What makes two checkouts the same logical project on different machines.",
+      "type": "object",
+      "properties": {
+        "root_commit": {
+          "description": "The smallest hash in `git rev-list --max-parents=0 HEAD`. Absent for a shallow clone, whose\n\"root\" is only where the history was cut.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root_commits": {
+          "description": "Every root commit, sorted. A repository with several roots (merged histories) matches a\ncheckout that shares any of them. Empty from a daemon that predates this field.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "remote": {
+          "description": "The `origin` URL normalized to `host/owner/repo`: lowercase, no scheme, user or `.git`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

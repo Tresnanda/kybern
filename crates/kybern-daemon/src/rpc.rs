@@ -11,7 +11,34 @@ use serde_json::Value;
 use crate::state::AppState;
 use crate::ws::ConnectionCtx;
 
+/// Every RPC method's handler. The match below is one large future (each arm's await state is
+/// laid out inline), so it lives on the heap: callers and tests keep a small stack frame.
 pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, params: Value) -> Result<Value, RpcError> {
+    Box::pin(dispatch_method(state, ctx, method, params)).await
+}
+
+/// Every RPC method's handler, in slices. One match over every method is one frame of well over
+/// a megabyte in an unoptimized build (nothing is shared between arms), and a test thread has
+/// two. Each part answers the methods it knows, and leaves the params in `slot` for the next part
+/// when the method is not its own; the last part reports an unknown method.
+async fn dispatch_method(state: &AppState, ctx: &ConnectionCtx, method: &str, params: Value) -> Result<Value, RpcError> {
+    let mut slot = Some(params);
+    macro_rules! try_parts {
+        ($($part:ident),+ ; $last:ident) => {{
+            $(
+                let result = $part(state, ctx, method, &mut slot).await;
+                if slot.is_none() {
+                    return result;
+                }
+            )+
+            $last(state, ctx, method, &mut slot).await
+        }};
+    }
+    try_parts!(dispatch_part_1, dispatch_part_2, dispatch_part_3, dispatch_part_4, dispatch_part_5, dispatch_part_6, dispatch_part_7, dispatch_part_8, dispatch_part_9, dispatch_part_10, dispatch_part_11, dispatch_part_12, dispatch_part_13, dispatch_part_14, dispatch_part_15, dispatch_part_utilities, dispatch_part_16; dispatch_part_17)
+}
+
+async fn dispatch_part_1(state: &AppState, ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
     match method {
         DaemonInfoMethod::NAME => {
             let info = DaemonInfo {
@@ -24,6 +51,9 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 data_dir: state.paths.root.display().to_string(),
                 scopes: ctx.principal.scopes.clone(),
                 started_at: state.started_at,
+                machine_id: state.environment_id.clone(),
+                network_protocol: NETWORK_PROTOCOL,
+                features: state.network.features(),
             };
             ok(info)
         }
@@ -87,6 +117,16 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: SessionsImportRef = parse(params)?;
             ok(state.session_imports.import_get(&p.job_id).ok_or_else(|| RpcError::not_found("import job"))?)
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_2(state: &AppState, ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         SessionsImportCancel::NAME => {
             let p: SessionsImportRef = parse(params)?;
             ok(state.session_imports.import_cancel(&p.job_id).ok_or_else(|| RpcError::not_found("import job"))?)
@@ -104,49 +144,7 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                         .ok_or_else(|| RpcError::not_found("project"))
                 })
                 .transpose()?;
-            let settings = state.settings.get();
-            let cache_key = serde_json::to_string(&(p.project_id, cwd.as_ref(), &settings.providers)).map_err(internal)?;
-            let providers = state
-                .provider_catalogs
-                .get_or_refresh(cache_key, p.force_refresh, || async move {
-                    let probes = ProviderKind::ALL.into_iter().map(|kind| {
-                        let driver = state.drivers.get(kind);
-                        let provider_settings =
-                            crate::settings::provider_settings(&settings, kind, cwd.as_deref().and_then(|p| p.to_str()));
-                        let context = kybern_drivers::ProbeContext {
-                            binary: provider_settings.binary.map(std::path::PathBuf::from),
-                            cwd: cwd.clone(),
-                            env: provider_settings.env,
-                        };
-                        async move {
-                            match driver {
-                                Some(driver) => {
-                                    let mut status = driver.probe_with_context(&context).await;
-                                    status.instances =
-                                        std::iter::once("default".to_string()).chain(provider_settings.accounts.keys().cloned()).collect();
-                                    status
-                                }
-                                None => ProviderStatus {
-                                    kind,
-                                    display_name: kind.display_name().to_string(),
-                                    available: false,
-                                    binary_path: None,
-                                    version: None,
-                                    unavailable_reason: Some("driver not implemented yet".into()),
-                                    supported_permission_modes: vec![],
-                                    supports_fork: false,
-                                    supports_model_switch: false,
-                                    supports_effort_switch: false,
-                                    supported_efforts: vec![],
-                                    models: vec![],
-                                    instances: vec![],
-                                },
-                            }
-                        }
-                    });
-                    futures::future::join_all(probes).await
-                })
-                .await;
+            let providers = crate::network::machine_info::provider_statuses(state, p.project_id, cwd, p.force_refresh).await;
             ok(ProvidersListResult { providers })
         }
         AccountsCreate::NAME => ok(crate::provider_accounts::create(state, parse(params)?).map_err(bad)?),
@@ -164,6 +162,16 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: AccountLoginInputParams = parse(params)?;
             ok(state.account_logins.input(&p.id, p.code).await.map_err(bad)?)
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_3(state: &AppState, _ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         AccountsLoginCancel::NAME => {
             let p: AccountLoginIdParams = parse(params)?;
             ok(state.account_logins.cancel(state, &p.id).await.map_err(bad)?)
@@ -212,6 +220,15 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: ProjectsBrowseParams = parse_or_default(params)?;
             ok(crate::files::browse_directories(p.path).await.map_err(bad)?)
         }
+        ProjectsProvisionPlan::NAME => {
+            let p: ProjectsProvisionPlanParams = parse(params)?;
+            ok(state.orchestrator.provision_plan(p.project_id, &p.machine, p.path).await?)
+        }
+        ProjectsProvision::NAME => ok(crate::network::provision::start(state, parse(params)?).await?),
+        ProjectsProvisionStatusMethod::NAME => {
+            let p: ProjectsProvisionStatusParams = parse(params)?;
+            ok(crate::network::provision::status(state, p.operation_id)?)
+        }
         ProjectsAdd::NAME => {
             let p: ProjectsAddParams = parse(params)?;
             match p.kind.unwrap_or_default() {
@@ -240,6 +257,16 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let p: ProjectsInstructionsCreateParams = parse(params)?;
             ok(state.orchestrator.create_group_instructions(p.project_id)?)
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_4(state: &AppState, _ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         ProjectsUpdate::NAME => {
             let p: ProjectsUpdateParams = parse(params)?;
             if let Some(space_id) = p.space_id {
@@ -303,6 +330,16 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             state.orchestrator.remove_project(p.project_id).map_err(note_err)?;
             ok(Empty {})
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_5(state: &AppState, _ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         ThreadsList::NAME => {
             let p: ThreadsListParams = parse_or_default(params)?;
             let mut threads = state.store.threads_list(p.project_id, p.include_archived).map_err(internal)?;
@@ -322,7 +359,13 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 threads
                     .retain(|thread| (thread.subagent.is_some() || thread.delegation.is_some()) && thread.parent_thread_id == Some(parent));
             } else if !p.include_subagents {
-                threads.retain(|thread| thread.subagent.is_none() && thread.delegation.is_none());
+                // A child another machine delegated here has no parent on this machine, so it lists as a thread of its own;
+                // clients nest it under the thread that started it (`Thread::origin`).
+                threads.retain(|thread| (thread.subagent.is_none() && thread.delegation.is_none()) || thread.is_remote_child());
+            }
+            // The hidden threads that record other machines' tool calls are opt-in too.
+            if !p.include_inbound {
+                threads.retain(|thread| thread.inbound.is_none());
             }
             let (own_pending, child_pending) = pending_request_kinds(&state.store).map_err(internal)?;
             let mut activity: Vec<ThreadActivitySummary> = threads
@@ -399,6 +442,16 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 .collect();
             ok(ThreadsReadResult { thread: page.thread, messages, next_before_seq: page.next_before_seq, through_seq: page.through_seq })
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_6(state: &AppState, _ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         ThreadsCreate::NAME => {
             let p: ThreadsCreateParams = parse(params)?;
             ok(state.orchestrator.create_thread(p).await.map_err(bad)?)
@@ -482,6 +535,16 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 stream_omitted: result.stream_omitted,
             })
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_7(state: &AppState, _ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         ThreadsUpdate::NAME => {
             let p: ThreadsUpdateParams = parse(params)?;
             let thread = state.orchestrator.update_session_fields(p).await.map_err(provider_err)?;
@@ -521,7 +584,8 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             .await
             .map_err(internal)?
             .map_err(note_err)?;
-            ok(NotesListResult { notes, history_since })
+            let p: NotesListParams = parse_or_default(params)?;
+            ok(crate::network::federated::notes_list(state, p.machine, NotesListResult { notes, history_since, federation: None }).await?)
         }
         NotesGet::NAME => {
             let (orchestrator, params) = (state.orchestrator.clone(), parse_or_default(params)?);
@@ -543,17 +607,36 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
         }
         NotesSearch::NAME => {
             let p: NotesSearchParams = parse(params)?;
+            let (p_machine, p_query, p_limit) = (p.machine.clone(), p.query.clone(), p.limit);
             let orchestrator = state.orchestrator.clone();
             let results = tokio::task::spawn_blocking(move || orchestrator.notes_search(&p.query, p.limit))
                 .await
                 .map_err(internal)?
                 .map_err(note_err)?;
-            ok(NotesSearchResult { results })
+            ok(crate::network::federated::notes_search(
+                state,
+                p_machine,
+                &p_query,
+                p_limit,
+                NotesSearchResult { results, federation: None },
+            )
+            .await?)
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_8(state: &AppState, ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         TaskItemsList::NAME => {
+            let p: TaskItemsListParams = parse_or_default(params)?;
             let orchestrator = state.orchestrator.clone();
             let tasks = tokio::task::spawn_blocking(move || orchestrator.task_items_list()).await.map_err(internal)?.map_err(task_err)?;
-            ok(TaskItemsListResult { tasks })
+            ok(crate::network::federated::task_items_list(state, p.machine, TaskItemsListResult { tasks, federation: None }).await?)
         }
         TaskItemsGet::NAME => {
             ok(TaskItemsGetResult { task: state.orchestrator.task_item_get(parse_or_default(params)?).map_err(task_err)? })
@@ -632,6 +715,16 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let params: NotesTidyParams = parse(params)?;
             ok(tokio::task::spawn_blocking(move || orchestrator.notes_tidy_offer(params)).await.map_err(internal)?.map_err(bad)?)
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_9(state: &AppState, _ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         NotesTidySnooze::NAME => {
             let orchestrator = state.orchestrator.clone();
             let params: NotesTidyParams = parse(params)?;
@@ -712,6 +805,16 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             let t = state.terminals.create(p.terminal_id, p.thread_id, cwd, p.cols, p.rows, p.command).map_err(internal)?;
             ok(t.info())
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_10(state: &AppState, ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         TerminalsList::NAME => {
             let p: TerminalsListParams = parse_or_default(params)?;
             ok(TerminalsListResult { terminals: state.terminals.list(p.thread_id) })
@@ -786,12 +889,30 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 .await
                 .map_err(bad)?)
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_11(state: &AppState, ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         SettingsUpdate::NAME => {
             let p: SettingsUpdateParams = parse(params)?;
             let updated = state.settings.set(p.settings).map_err(internal)?;
             state.orchestrator.usage().settings_changed();
             ok(updated)
         }
+        SettingsNetworkViewMethod::NAME => ok(crate::settings_share::network_view(state).await),
+        SettingsShare::NAME => ok(crate::settings_share::share(state, parse(params)?).await?),
+        PluginsInventory::NAME => ok(crate::plugins::inventory(state).await?),
+        PluginsNetworkViewMethod::NAME => ok(crate::network::plugin_sync::network_view(state).await?),
+        PluginsCopy::NAME => ok(crate::network::plugin_sync::copy(state, parse(params)?).await?),
+        SkillsInventoryMethod::NAME => ok(crate::network::skill_sync::inventory(state).await?),
+        SkillsNetworkViewMethod::NAME => ok(crate::network::skill_sync::network_view(state).await?),
+        SkillsCopy::NAME => ok(crate::network::skill_sync::copy(state, parse(params)?).await?),
         UsageSummary::NAME => {
             let p: UsageSummaryParams = parse_or_default(params)?;
             let rows = state.store.usage_summary(p.since, p.group_by).map_err(internal)?;
@@ -824,9 +945,14 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             if p.token_id == ctx.principal.token_id {
                 return Err(RpcError::invalid_params("a token cannot revoke itself"));
             }
+            let device = state.store.token_device(p.token_id).map_err(internal)?;
             state.store.token_revoke(p.token_id).map_err(internal)?;
             let _ = state.revoked_tokens.send(p.token_id);
             state.previews.revoke_principal(p.token_id);
+            // A device is revoked on every machine, not only the one it was revoked on (§3.4).
+            if let Some(device) = device {
+                crate::network::client_grant::revoke_device_everywhere(state, &device).await;
+            }
             ok(Empty {})
         }
         FilesSearch::NAME => {
@@ -858,6 +984,16 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 .await
                 .map_err(write_error)?)
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_12(state: &AppState, ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         ThreadFileRead::NAME => {
             let p: ThreadFileReadParams = parse(params)?;
             let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
@@ -935,6 +1071,16 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             crate::visuals::revoke(parse(params)?);
             ok(Empty {})
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_13(state: &AppState, _ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         PreviewProbe::NAME => {
             let p: PreviewProbeParams = parse(params)?;
             match crate::previews::probe::probe(&p.url).await {
@@ -1017,6 +1163,16 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             }
             ok(crate::github::status(std::path::Path::new(&t.cwd)).await.map_err(internal)?)
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_14(state: &AppState, _ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         GitBranches::NAME => {
             let p: GitBranchesParams = parse(params)?;
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
@@ -1098,6 +1254,16 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
                 repos: Vec::new(),
             })
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_15(state: &AppState, ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
         PrDetail::NAME => {
             let p: PrDetailParams = parse(params)?;
             let project = state.store.project_get(p.project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
@@ -1174,12 +1340,177 @@ pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, param
             events.truncate(limit as usize);
             ok(EventsRangeResult { events, has_more })
         }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+/// The machine utilities (M4): sending files, forwarding ports. Its own slice so a lane that adds methods
+/// elsewhere does not touch it.
+async fn dispatch_part_utilities(
+    state: &AppState,
+    _ctx: &ConnectionCtx,
+    method: &str,
+    slot: &mut Option<Value>,
+) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
+        FilesSend::NAME => ok(crate::network::files_push::send(state, parse(params)?)?),
+        ClipboardSet::NAME => ok(crate::network::clipboard::handle_set(state, parse(params)?).await?),
+        ClipboardGet::NAME => ok(crate::network::clipboard::handle_get(state, parse_or_default(params)?).await?),
+        ClipboardStatusMethod::NAME => ok(crate::network::clipboard::status(state)),
+        PortsForward::NAME => ok(crate::network::ports::forward(state, parse(params)?).await?),
+        PortsList::NAME => ok(crate::network::ports::list(state)),
+        PortsStop::NAME => {
+            let p: PortsStopParams = parse(params)?;
+            ok(crate::network::ports::stop(state, p.id)?)
+        }
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+async fn dispatch_part_16(state: &AppState, ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    match method {
+        // Remote delegation's outbox (R1).
+        OutboxList::NAME => ok(crate::network::outbox::list(state, parse_or_default(params)?)?),
+        OutboxRetry::NAME => ok(crate::network::outbox::retry(state, parse(params)?)?),
+        OutboxCancel::NAME => ok(crate::network::outbox::cancel(state, parse(params)?)?),
+        OutboxEnqueue::NAME => {
+            let p: OutboxEnqueueParams = parse(params)?;
+            if p.operation.kind == OutboxKind::Fork {
+                ok(crate::orchestrator::fork_machine::serve_fork_enqueue(state, p).await?)
+            } else if p.operation.kind == OutboxKind::Move {
+                ok(crate::orchestrator::move_thread::serve_move_enqueue(state, p).await?)
+            } else {
+                ok(crate::network::outbox::enqueue(state, p)?)
+            }
+        }
+        // Fork to a machine (F1): the hand-off note to edit, and the fork itself.
+        ThreadsForkNote::NAME => ok(state.orchestrator.fork_note(parse(params)?).await?),
+        ThreadsForkToMachine::NAME => ok(crate::orchestrator::fork_machine::serve_fork_to_machine(state, params).await?),
+        // Continue on another machine (F2): queue the move, and give up one whose outcome is unknown.
+        ThreadsMoveToMachine::NAME => ok(crate::orchestrator::move_thread::serve_move_to_machine(state, params).await?),
+        ThreadsMoveAbandon::NAME => ok(state.orchestrator.move_abandon(parse(params)?).await?),
+        // The machine network (N4). The logic is in `network/`; these arms parse and answer.
+        NetworkStatusMethod::NAME => ok(network_status(state).await?),
+        NetworkSetEnabled::NAME => {
+            let p: NetworkSetEnabledParams = parse(params)?;
+            crate::network::manage::set_enabled(state, p.enabled).await.map_err(JoinError::into_rpc)?;
+            ok(network_status(state).await?)
+        }
+        NetworkAdd::NAME => {
+            let p: NetworkFoundParams = parse(params)?;
+            ok(crate::network::join::add_found(state, &p.found_id).await.map_err(JoinError::into_rpc)?)
+        }
+        NetworkCodeCreate::NAME => ok(crate::network::join::create_code(state).await.map_err(JoinError::into_rpc)?),
+        NetworkJoin::NAME => {
+            let p: NetworkJoinParams = parse(params)?;
+            ok(crate::network::join::join_by_code(state, &p.code, &p.address, p.migrate).await.map_err(JoinError::into_rpc)?)
+        }
+        NetworkRemove::NAME => {
+            let p: NetworkRemoveParams = parse(params)?;
+            crate::network::removal::remove(state, &p.machine_id, p.stolen, &p.also_remove).await.map_err(JoinError::into_rpc)?;
+            ok(network_status(state).await?)
+        }
+        NetworkPause::NAME => {
+            let p: NetworkPauseParams = parse(params)?;
+            ok(crate::network::manage::pause(state, &p.machine_id, p.paused).await.map_err(JoinError::into_rpc)?)
+        }
+        NetworkRename::NAME => {
+            let p: NetworkRenameParams = parse(params)?;
+            ok(crate::network::manage::rename(state, &p.machine_id, &p.name).await.map_err(JoinError::into_rpc)?)
+        }
+        NetworkMerge::NAME => {
+            let p: NetworkFoundParams = parse(params)?;
+            crate::network::join::merge(state, &p.found_id).await.map_err(JoinError::into_rpc)?;
+            ok(network_status(state).await?)
+        }
+        NetworkRejoin::NAME => {
+            crate::network::manage::rejoin(state).await.map_err(JoinError::into_rpc)?;
+            ok(network_status(state).await?)
+        }
+        NetworkClientGrant::NAME => {
+            let p: NetworkClientGrantParams = parse(params)?;
+            ok(crate::network::client_grant::grant(state, &ctx.principal, p).await?)
+        }
+        NetworkRoutes::NAME => {
+            let p: NetworkRoutesParams = parse(params)?;
+            ok(NetworkRoutesResult { routes: crate::network::client_grant::routes(state, &p.machine_id).await })
+        }
+        NetworkAllowSet::NAME => {
+            let p: NetworkAllowSetParams = parse(params)?;
+            ok(crate::network::manage::allow(state, &p.machine_id, &p.capability, p.allowed).await.map_err(JoinError::into_rpc)?)
+        }
+        NetworkUpdateAll::NAME => ok(crate::network::updates::update_all(state).await),
+        NetworkFollowUpdatesSet::NAME => {
+            let p: NetworkFollowUpdatesParams = parse(params)?;
+            ok(crate::network::updates::set_follow(state, p.enabled).await.map_err(JoinError::into_rpc)?)
+        }
+        NetworkDoctor::NAME => {
+            let p: NetworkDoctorParams = parse_or_default(params)?;
+            ok(crate::network::doctor::report(state, p.machine_id.as_deref()).await)
+        }
+        MachinesInfo::NAME => ok(crate::network::machine_info::info(state).await),
+        // Daemon-to-daemon methods are answered on a session (`network::peers::dispatch`), never here.
+        PeerOpsSync::NAME
+        | PeerOpsPush::NAME
+        | PeerPresenceMethod::NAME
+        | PeerClientTokenMint::NAME
+        | PeerDeviceRevoke::NAME
+        | PeerRelayOpen::NAME
+        | PeerRelayData::NAME
+        | PeerRelayClose::NAME
+        | PeerUpdateStart::NAME => Err(RpcError::new(codes::NOT_AVAILABLE, format!("{method} is only available between machines."))),
+        _ => {
+            *slot = Some(params);
+            Err(RpcError::method_not_found(method))
+        }
+    }
+}
+
+/// The login broker and pushed keys (S4). The logic is in `network/broker.rs`; these arms parse and answer.
+async fn dispatch_part_17(state: &AppState, _ctx: &ConnectionCtx, method: &str, slot: &mut Option<Value>) -> Result<Value, RpcError> {
+    let params = slot.take().unwrap_or_default();
+    let broker = || {
+        state
+            .orchestrator
+            .login_broker()
+            .cloned()
+            .ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, "The machine network is unavailable on this machine."))
+    };
+    match method {
+        LoginBrokerStatusMethod::NAME => ok(broker()?.status(state).await),
+        LoginBrokerBind::NAME => ok(broker()?.bind(state, parse(params)?).await?),
+        LoginBrokerSet::NAME => ok(crate::network::broker::set_broker(state, parse(params)?).await?),
+        SecretsPush::NAME => ok(crate::network::broker::push_secret(state, parse(params)?).await?),
+        // Daemon-to-daemon methods are answered on a session (`network::peers::dispatch`), never here.
+        PeerLoginBorrow::NAME
+        | PeerLoginPush::NAME
+        | PeerLoginRelease::NAME
+        | PeerLoginStatusMethod::NAME
+        | PeerLoginReleaseAll::NAME
+        | PeerLoginUsage::NAME
+        | PeerSecretsPut::NAME => Err(RpcError::new(codes::NOT_AVAILABLE, format!("{method} is only available between machines."))),
         _ => Err(RpcError::method_not_found(method)),
     }
 }
 
 fn ok<T: Serialize>(v: T) -> Result<Value, RpcError> {
     serde_json::to_value(v).map_err(internal)
+}
+
+use crate::network::join::JoinError;
+
+async fn network_status(state: &AppState) -> Result<NetworkStatus, RpcError> {
+    crate::network::status::network_status(state)
+        .await
+        .ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, "The machine network is unavailable on this machine."))
 }
 
 fn parse<T: DeserializeOwned>(v: Value) -> Result<T, RpcError> {
@@ -1267,7 +1598,7 @@ fn provider_err(e: anyhow::Error) -> RpcError {
     RpcError::new(codes::PROVIDER_ERROR, e.to_string())
 }
 
-fn hostname() -> String {
+pub(crate) fn hostname() -> String {
     std::process::Command::new("hostname")
         .no_window()
         .output()

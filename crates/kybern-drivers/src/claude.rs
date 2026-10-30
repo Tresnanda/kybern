@@ -68,7 +68,13 @@ impl AgentDriver for ClaudeDriver {
         self.probe_context(context).await
     }
 
-    async fn one_shot(&self, cwd: &std::path::Path, prompt: &str, binary: Option<&PathBuf>) -> Result<String> {
+    async fn one_shot(
+        &self,
+        cwd: &std::path::Path,
+        prompt: &str,
+        binary: Option<&PathBuf>,
+        env: &std::collections::BTreeMap<String, String>,
+    ) -> Result<String> {
         let bin = resolve(ProviderKind::ClaudeCode, binary)?;
         let out = tokio::time::timeout(
             std::time::Duration::from_secs(60),
@@ -94,6 +100,7 @@ impl AgentDriver for ClaudeDriver {
                         "--",
                     ])
                     .arg(prompt)
+                    .envs(env)
                     .env_remove("NODE_OPTIONS")
                     .stdin(std::process::Stdio::null()),
             ),
@@ -203,8 +210,24 @@ impl AgentDriver for ClaudeDriver {
         // still turn them off.
         cmd.env("CLAUDE_CODE_ARTIFACT", "1");
         cmd.env("CLAUDE_CODE_ARTIFACT_AUTO_OPEN", "0");
-        for (k, v) in &config.env {
+        for (k, v) in config.env.iter().filter(|(k, _)| k.as_str() != crate::login_lend::BORROW_ENV) {
             cmd.env(k, v);
+        }
+        // A login another machine lent (design §9.4): the access token rides in this process' environment
+        // only. A named account blanks `CLAUDE_CODE_OAUTH_TOKEN`, so this comes after the loop.
+        let lent = crate::login_lend::source_of(&config.env);
+        let hotswap = lent.is_some() && config.env.get(crate::login_lend::CLAUDE_HOTSWAP_ENV).is_some_and(|value| value == "1");
+        if let Some(source) = &lent {
+            let login = source.current().await.map_err(DriverError::Protocol)?;
+            let env = crate::login_lend::claude_env(&login)
+                .ok_or_else(|| DriverError::Protocol("The broker lent a login Claude Code cannot use.".into()))?;
+            for (k, v) in env {
+                cmd.env(k, v);
+            }
+            if hotswap {
+                // Optional and undocumented: Claude asks the host for a new token on a 401 instead of failing the turn.
+                cmd.env("CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH", "1").env("CLAUDE_CODE_ENTRYPOINT", "claude-vscode");
+            }
         }
         tracing::info!(bin = %bin.display(), cwd = %config.cwd.display(), session_id, "spawning claude");
 
@@ -240,6 +263,13 @@ impl AgentDriver for ClaudeDriver {
             _native_mcp_config: native_mcp_config,
         });
 
+        if lent.is_some() {
+            let mut state = session.state.lock().await;
+            state.lent_login = true;
+            if hotswap {
+                state.login_source = lent.clone();
+            }
+        }
         // Initialize is optional; we send it for the command and model catalogs and to be a well-behaved client.
         session.send_control_nowait("initialize", json!({ "supportedDialogKinds": ["resume_return"], "hooks": {"PreToolUse": [{"matcher": null, "hookCallbackIds": [CHILD_MESSAGE_HOOK]}]} })).await?;
 
@@ -783,6 +813,11 @@ fn resolved_model_id(selector: &str, target: &str) -> String {
 
 #[derive(Default)]
 struct TurnState {
+    /// The lent login to answer `oauth_token_refresh` from, only when the optional hot swap is on.
+    login_source: Option<Arc<dyn crate::login_lend::LoginSource>>,
+    /// This process runs on a login another machine lent, so a turn that ends on a rejected token is a
+    /// failure the daemon can recover from (it borrows again, resumes and sends the message once more).
+    lent_login: bool,
     last_context: Option<(String, u64)>,
     /// Accumulated final text per API message id, so multi-block messages coalesce.
     text: HashMap<String, String>,
@@ -912,7 +947,7 @@ mod child_message_tests {
 
     #[tokio::test]
     async fn native_child_callback_routes_once_and_never_drains_root_or_another_child() {
-        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, mut rx) = mpsc::channel(32);
         let session = Arc::new(ClaudeSession {
             child: child.clone(),
@@ -963,7 +998,7 @@ mod child_message_tests {
 
     #[tokio::test]
     async fn failed_callback_write_keeps_pending_without_acknowledgment() {
-        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, mut rx) = mpsc::channel(4);
         let session = ClaudeSession {
             child: child.clone(),
@@ -1161,6 +1196,21 @@ impl ClaudeSession {
         let req = &v["request"];
         let subtype = req.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
         match subtype {
+            // The hot swap: a 401 with no refresh token of its own. Answer from a fresh borrow, and the same turn continues.
+            "oauth_token_refresh" => {
+                let source = self.state.lock().await.login_source.clone();
+                let answer = match source {
+                    Some(source) => match source.renew(crate::login_lend::RenewReason::Unauthorized).await {
+                        Ok(login) => match crate::login_lend::claude_env(&login) {
+                            Some(env) => Ok(json!({ "accessToken": env[0].1 })),
+                            None => Err("The broker lent a login Claude Code cannot use.".to_string()),
+                        },
+                        Err(reason) => Err(reason),
+                    },
+                    None => Err("This session has no lent login to renew.".to_string()),
+                };
+                let _ = self.respond_control(&request_id, answer).await;
+            }
             "can_use_tool" => {
                 let tool_name = req.get("tool_name").and_then(|s| s.as_str()).unwrap_or("tool").to_string();
                 let input = req.get("input").cloned().unwrap_or(Value::Null);
@@ -1590,7 +1640,16 @@ impl ClaudeSession {
             .and_then(|e| e.as_array())
             .map(|a| a.iter().filter_map(|e| e.as_str()).collect::<Vec<_>>().join("; "))
             .unwrap_or_default();
+        // Claude reports a rejected token as a result with `is_error` (subtype "success") whose text says why.
+        let rejected_login = v.get("is_error").and_then(Value::as_bool) == Some(true)
+            && self.state.lock().await.lent_login
+            && v.get("result")
+                .and_then(Value::as_str)
+                .is_some_and(|text| crate::login_lend::is_login_failure(ProviderKind::ClaudeCode, text));
         let ev = match subtype {
+            _ if rejected_login => {
+                DriverEvent::TurnFailed { error: v.get("result").and_then(Value::as_str).unwrap_or_default().to_string() }
+            }
             "success" => DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, usage, cost_usd, duration_ms, anchors },
             "error_max_turns" => DriverEvent::TurnCompleted { stop_reason: StopReason::MaxTurns, usage, cost_usd, duration_ms, anchors },
             _ if terminal == "aborted_streaming" || terminal == "aborted" => {
@@ -2034,7 +2093,7 @@ mod tests {
     #[tokio::test]
     async fn notification_result_does_not_finish_a_queued_user_request() {
         use super::*;
-        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, mut rx) = mpsc::channel(32);
         let session = Arc::new(ClaudeSession {
             child: child.clone(),
@@ -2121,7 +2180,7 @@ mod tests {
     #[tokio::test]
     async fn subagent_frames_become_origin_tagged_events_and_a_launch_prompt() {
         use super::*;
-        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, mut rx) = mpsc::channel(64);
         let session = Arc::new(ClaudeSession {
             child: child.clone(),
@@ -2183,7 +2242,7 @@ mod tests {
     #[tokio::test]
     async fn subagent_stream_deltas_follow_their_own_message_and_never_disturb_the_root() {
         use super::*;
-        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, mut rx) = mpsc::channel(64);
         let session = Arc::new(ClaudeSession {
             child: child.clone(),
@@ -2225,7 +2284,7 @@ mod tests {
     #[tokio::test]
     async fn questions_and_elicitation_keep_native_response_shapes() {
         use super::*;
-        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, mut rx) = mpsc::channel(8);
         let session = Arc::new(ClaudeSession {
             child: child.clone(),
@@ -2354,7 +2413,8 @@ mod tests {
         let binary = root.path().join("claude-fixture");
         std::fs::write(&binary, "#!/usr/bin/env python3\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n").unwrap();
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let out = super::ClaudeDriver::default().one_shot(root.path(), "Name this session", Some(&binary)).await.unwrap();
+        let out =
+            super::ClaudeDriver::default().one_shot(root.path(), "Name this session", Some(&binary), &Default::default()).await.unwrap();
         let args: Vec<String> = serde_json::from_str(&out).unwrap();
         assert_eq!(args[args.len() - 2..], ["--", "Name this session"]);
     }
@@ -2362,7 +2422,6 @@ mod tests {
     #[tokio::test]
     async fn session_start_resume_and_fork_scope_mcp_and_coordinator_bootstrap() {
         use crate::{AgentDriver, NativeToolDefinition, SessionConfig};
-        use std::os::unix::fs::PermissionsExt;
         for (resume, fork, enabled, coordinator, guide) in [
             (false, false, true, false, false),
             (false, false, true, true, false),
@@ -2375,9 +2434,7 @@ mod tests {
             (true, false, true, true, true),
         ] {
             let root = tempfile::tempdir().unwrap();
-            let binary = root.path().join("claude-fixture");
-            std::fs::write(&binary, "#!/usr/bin/env python3\nimport json,pathlib,sys\ntmp=pathlib.Path('argv.tmp')\ntmp.write_text(json.dumps(sys.argv[1:]))\ntmp.rename('argv.json')\nfor line in sys.stdin: pass\n").unwrap();
-            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let binary = crate::test_process::binary().to_path_buf();
             let bridge = NativeToolBridge {
                 server_name: "kybern".into(),
                 endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
@@ -2441,14 +2498,11 @@ mod tests {
     #[tokio::test]
     async fn a_lead_gets_only_the_read_only_builtins_and_everyone_else_loses_them_all_when_enforced() {
         use crate::{AgentDriver, SessionConfig};
-        use std::os::unix::fs::PermissionsExt;
         for (enforced, read_only, expected) in
             [(true, true, Some("Read,Grep,Glob,WebSearch,WebFetch,AskUserQuestion,Skill")), (true, false, Some("")), (false, true, None)]
         {
             let root = tempfile::tempdir().unwrap();
-            let binary = root.path().join("claude-fixture");
-            std::fs::write(&binary, "#!/usr/bin/env python3\nimport json,pathlib,sys\ntmp=pathlib.Path('argv.tmp')\ntmp.write_text(json.dumps(sys.argv[1:]))\ntmp.rename('argv.json')\nfor line in sys.stdin: pass\n").unwrap();
-            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let binary = crate::test_process::binary().to_path_buf();
             let bridge = NativeToolBridge {
                 server_name: "kybern".into(),
                 endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
@@ -2502,7 +2556,6 @@ mod tests {
     async fn full_access_launches_new_resumed_and_forked_sessions_with_bypass() {
         use crate::{AgentDriver, SessionConfig};
         use kybern_protocol::PermissionMode;
-        use std::os::unix::fs::PermissionsExt;
         for (mode, resume, fork) in [
             (PermissionMode::FullAccess, None, false),
             (PermissionMode::FullAccess, Some("native-session"), false),
@@ -2510,9 +2563,7 @@ mod tests {
             (PermissionMode::Supervised, Some("native-session"), false),
         ] {
             let root = tempfile::tempdir().unwrap();
-            let binary = root.path().join("claude-fixture");
-            std::fs::write(&binary, "#!/usr/bin/env python3\nimport json,pathlib,sys\ntmp=pathlib.Path('argv.tmp')\ntmp.write_text(json.dumps(sys.argv[1:]))\ntmp.rename('argv.json')\nfor line in sys.stdin: pass\n").unwrap();
-            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let binary = crate::test_process::binary().to_path_buf();
             let spawned = super::ClaudeDriver::default()
                 .spawn(SessionConfig {
                     cwd: root.path().into(),
@@ -2524,7 +2575,7 @@ mod tests {
                     resume_lacks_instructions: false,
                     fork,
                     rewind: None,
-                    binary: Some(binary),
+                    binary: Some(binary.clone()),
                     env: Default::default(),
                 })
                 .await
@@ -2553,7 +2604,7 @@ mod tests {
     #[tokio::test]
     async fn bypass_safety_checks_surface_as_ordinary_permission_requests() {
         use super::*;
-        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, mut rx) = mpsc::channel(8);
         let session = ClaudeSession {
             child: child.clone(),
@@ -2591,12 +2642,9 @@ mod tests {
     #[tokio::test]
     async fn sessions_enable_artifacts_unless_the_session_env_disables_them() {
         use crate::{AgentDriver, SessionConfig};
-        use std::os::unix::fs::PermissionsExt;
         for (env, expected) in [(None, "1"), (Some("0"), "0")] {
             let root = tempfile::tempdir().unwrap();
-            let binary = root.path().join("claude-fixture");
-            std::fs::write(&binary, "#!/usr/bin/env python3\nimport json,os,pathlib,sys\ntmp=pathlib.Path('env.tmp')\ntmp.write_text(json.dumps({k:os.environ.get(k) for k in ['CLAUDE_CODE_ARTIFACT','CLAUDE_CODE_ARTIFACT_AUTO_OPEN']}))\ntmp.rename('env.json')\nfor line in sys.stdin: pass\n").unwrap();
-            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let binary = crate::test_process::binary().to_path_buf();
             let spawned = super::ClaudeDriver::default()
                 .spawn(SessionConfig {
                     cwd: root.path().into(),
@@ -2655,7 +2703,7 @@ mod tests {
     #[tokio::test]
     async fn subagent_role_comes_from_the_launch_call_when_task_started_lacks_it() {
         use super::*;
-        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, mut rx) = mpsc::channel(64);
         let session = Arc::new(ClaudeSession {
             child: child.clone(),

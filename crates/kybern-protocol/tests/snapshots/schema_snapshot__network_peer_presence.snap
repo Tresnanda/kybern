@@ -1,0 +1,102 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(PeerPresence)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PeerPresence",
+  "description": "`peer.presence`: pushed on change and with the heartbeat.",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "string"
+    },
+    "network_protocol": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "features": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "harnesses": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/HarnessSummary"
+      },
+      "default": []
+    },
+    "load": {
+      "description": "1-minute load average divided by logical cores.",
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "float"
+    },
+    "battery": {
+      "description": "Percent, absent without a battery.",
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "float"
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "version",
+    "network_protocol",
+    "at"
+  ],
+  "$defs": {
+    "HarnessSummary": {
+      "description": "A harness on a machine, in the short form the Machines page shows.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "signed_in": {
+          "description": "Absent when the daemon cannot tell.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "available"
+      ]
+    },
+    "ProviderKind": {
+      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "opencode",
+        "pi",
+        "omp",
+        "cursor"
+      ]
+    }
+  }
+}

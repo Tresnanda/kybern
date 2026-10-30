@@ -126,12 +126,13 @@ async fn a_deadline_is_ignored_when_the_user_turned_deadlines_off_and_capped_oth
 async fn a_command_runs_in_a_terminal_after_an_approval_and_returns_its_tail() {
     let fixture = Fixture::on_disk();
     let (thread, live) = fixture.tool_thread(PermissionMode::Supervised).await;
-    let args = json!({"command":"printf 'one\\ntwo\\n'; exit 3","reason":"It may prompt"});
+    let command = if cfg!(windows) { "echo one; echo two; exit 3" } else { "printf 'one\\ntwo\\n'; exit 3" };
+    let args = json!({"command":command,"reason":"It may prompt"});
     let call = start_tool_call(&fixture, &thread, &live, "t1", "kybern_run_in_terminal", args.clone());
     let card = secret_card(&live).await;
     let (request, _) = fixture.store.approval_get(card).unwrap().unwrap();
     assert_eq!(request.tool_name, "Bash", "the usual command card asks first");
-    assert_eq!(request.input["command"], "printf 'one\\ntwo\\n'; exit 3");
+    assert_eq!(request.input["command"], command);
     fixture.orchestrator.respond_approval(card, ApprovalDecision::AllowOnce).await.unwrap();
     let result = tokio::time::timeout(Duration::from_secs(20), call).await.expect("the command exits").unwrap().unwrap();
     assert_eq!(result["status"], "exited");
@@ -162,8 +163,13 @@ async fn a_command_runs_in_a_terminal_after_an_approval_and_returns_its_tail() {
 async fn a_custom_sign_in_runs_in_a_terminal_and_finishes_when_the_check_passes() {
     let fixture = Fixture::on_disk();
     let (thread, live) = fixture.tool_thread(PermissionMode::Supervised).await;
-    let marker = fixture.root.join("signed-in");
-    let args = json!({"cli":"mytool","reason":"Publish the package","command":format!("touch '{}'", marker.display()),"verify":format!("test -f '{}'", marker.display())});
+    let marker = fixture.root.join("signed in");
+    let (command, verify) = if cfg!(windows) {
+        (format!("New-Item -ItemType File -Path '{}' | Out-Null", marker.display()), format!("if (Test-Path -LiteralPath '{}') {{ exit 0 }} else {{ exit 1 }}", marker.display()))
+    } else {
+        (format!("touch '{}'", marker.display()), format!("test -f '{}'", marker.display()))
+    };
+    let args = json!({"cli":"mytool","reason":"Publish the package","command":command,"verify":verify});
     let call = start_tool_call(&fixture, &thread, &live, "l1", "kybern_request_login", args);
     let card = secret_card(&live).await;
     let (request, _) = fixture.store.approval_get(card).unwrap().unwrap();
@@ -214,15 +220,14 @@ async fn declining_a_sign_in_tells_the_agent_not_to_ask_again() {
 #[tokio::test]
 async fn a_known_cli_is_checked_with_its_own_command() {
     let fixture = Fixture::on_disk();
-    let bin = fixture.root.join("gh");
-    std::fs::write(&bin, "#!/bin/sh\necho '  ✓ Logged in to github.com account Tester (keyring)'\n").unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    let bin = crate::test_support::script(
+        &fixture.root, "gh",
+        "#!/bin/sh\necho '  ✓ Logged in to github.com account Tester (keyring)'\n",
+        "@echo off\r\necho Logged in to github.com account Tester (keyring)\r\n",
+    );
     let checker = super::login_request::Checker::for_test(kybern_drivers::login_recipes::recipe("gh").unwrap(), bin.clone(), fixture.root.clone());
     assert_eq!(checker.signed_in().await, Some(Some("Tester".to_string())));
-    std::fs::write(&bin, "#!/bin/sh\nexit 1\n").unwrap();
+    crate::test_support::script(&fixture.root, "gh", "#!/bin/sh\nexit 1\n", "@exit /b 1\r\n");
     assert_eq!(checker.signed_in().await, None);
 }
 
@@ -284,7 +289,8 @@ async fn a_host_key_is_a_yes_or_no_and_github_is_sent_to_the_sign_in() {
 
     let stale = fixture.orchestrator.ask_prompt(thread.id, Uuid::now_v7(), "Password:".into(), std::process::id()).await;
     // A helper whose parent is not sudo, ssh or git (here: this test process) may not raise a card.
-    let mut child = std::process::Command::new("/bin/sleep").arg("5").spawn().unwrap();
+    let binary = crate::test_support::powershell_script(&fixture.root.join("fake-prompt"), "untrusted", "#!/bin/sh\nsleep 5\n", "Start-Sleep -Seconds 5");
+    let mut child = std::process::Command::new(binary).spawn().unwrap();
     let faked = fixture.orchestrator.ask_prompt(thread.id, live.session_instance_id, "[sudo] password for me: ".into(), child.id()).await;
     let _ = child.kill();
     let _ = child.wait();

@@ -3,7 +3,6 @@
 // scroll), and publishes which tile it hovers. Tiles draw their rings from that.
 import { useSyncExternalStore } from 'react'
 import type { NativeRenderer, PublicInstance } from '@gpuix/react'
-import { onEnvironmentChange } from '../shell/environment.ts'
 
 export interface DropRect { id: string; x: number; y: number; width: number; height: number }
 
@@ -65,4 +64,3 @@ export function useSpaceDrag<T>(select: (s: SpaceDrag) => T): T {
   return useSyncExternalStore((listener) => { listeners.add(listener); return () => { listeners.delete(listener) } }, () => select(drag))
 }
 
-onEnvironmentChange(() => { elements.clear(); rects = []; publishSpaceDrag({ active: false, target: null }) }, -50)

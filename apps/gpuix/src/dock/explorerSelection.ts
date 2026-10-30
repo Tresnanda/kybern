@@ -1,7 +1,7 @@
 import path from 'node:path'
 import { useSyncExternalStore } from 'react'
 import { getState } from '../state.ts'
-import { activeEnvironment, onEnvironmentLeaving } from '../shell/environment.ts'
+import { activeEnvironment } from '../shell/environment.ts'
 import { chooseTab, setDock } from './store.ts'
 export interface ExplorerContext { environmentId: string; revision: number; threadId: string; projectId: string; cwd: string; projectRoot: string }
 export interface ExplorerSelection extends ExplorerContext { path: string; ancestors: string[] }
@@ -37,4 +37,3 @@ export function takeExplorerSelection(threadId: string, projectId: string) {
   return request && context && sameExplorerContext(request, context) ? request : null
 }
 export function useExplorerSelection() { return useSyncExternalStore(l => { listeners.add(l); return () => { listeners.delete(l) } }, () => pending) }
-onEnvironmentLeaving(() => { pending = null; emit() })

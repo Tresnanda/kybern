@@ -7,6 +7,9 @@ import { NoteEditorBar } from '../notes/EditorBar.tsx'
 import { NotesHeaderActions, NotesHeaderTitle } from '../notes/Header.tsx'
 import { useNotes } from '../notes/store.ts'
 import { showDialog } from '../dialogs/store.ts'
+import { forkTargetsOf } from '../fork/targets.ts'
+import type { StateThread } from '../machines/merged.ts'
+import { MachinePill } from '../machines/ThreadMachine.tsx'
 import { ThreadContextChips } from '../coordinator/Header.tsx'
 import { latestRotation, refreshContext } from '../coordinator/rotation.ts'
 import { formatTokens, ROTATION_COPY } from '../../../../packages/kybern-client/src/rotation.ts'
@@ -30,7 +33,7 @@ import type { Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { Icon } from '../icons.tsx'
 import { Button } from '../kit/Button.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
-import { getClient, getState, set, useApp, usePaneAccess, focusPane, getFocusedPaneId } from '../state.ts'
+import { callThread, getState, set, useApp, usePaneAccess, focusPane, getFocusedPaneId } from '../state.ts'
 import { ink, Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { archiveThread, errorText, updateThread } from './actions.ts'
 import { N } from './glyphs.ts'
@@ -307,13 +310,21 @@ export const ThreadHeader = memo(function ThreadHeader({ leafId: given, size = '
           <Breadcrumb thread={thread} ancestors={ancestors} />
         ) : (
           <>
+            {/* Where this child sits: its main thread (a ghost button that goes back), a chevron, then its own title. */}
             {mainThread && size === 'md' && (
-              <HeaderChip testId="main-thread" onClick={() => openThread(mainThread.id)}>
-                <Icon source={N.arrowLeft} size={14} color={muted(t, 1)} />
-                <Label color={muted(t, 1)} truncate>
-                  Main thread
-                </Label>
-              </HeaderChip>
+              <>
+                <Tip label="Back to the main thread" side="bottom">
+                  <div style={{ display: 'flex', minWidth: 0, flexShrink: 1, pointerEvents: 'auto' }}>
+                    <HeaderChip testId="main-thread" onClick={() => openThread(mainThread.id)}>
+                      <ProviderMark kind={mainThread.provider.kind} size={12} />
+                      <Label color={t.textSecondary} truncate>
+                        {mainThread.title || 'Main thread'}
+                      </Label>
+                    </HeaderChip>
+                  </div>
+                </Tip>
+                <Icon source={N.chevronRight} size={12} color={ink(t, 0.32)} style={{ flexShrink: 0 }} />
+              </>
             )}
             {renaming ? (
               <>
@@ -343,6 +354,7 @@ export const ThreadHeader = memo(function ThreadHeader({ leafId: given, size = '
                 </div>
               </>
             )}
+            {!inSplit && !strip && <MachinePill machineId={(thread as StateThread).machineId} testId="header-machine" />}
             {size === 'md' && !inSplit && <ThreadContextChips thread={thread} />}
             {thread.coordinator_project_id && size === 'md' && !inSplit && (
               <Label color={muted(t, 0.6)} size={10} weight={500} style={{ flexShrink: 0 }}>
@@ -394,12 +406,14 @@ export const ThreadHeader = memo(function ThreadHeader({ leafId: given, size = '
               <MenuSeparator />
               <MenuItem id="parent" icon={N.backToParent} label="Open parent" shortcut={SHORTCUT.openParent} onSelect={() => thread.parent_thread_id && openThread(thread.parent_thread_id)} />
               {subagentPhase(thread.subagent.status) === 'working' && thread.subagent.capabilities?.stop !== false && (
-                <MenuItem id="stop" icon={N.stop} label="Stop" onSelect={() => void getClient()?.call('tasks.stop', { thread_id: thread.id }).catch(() => {})} />
+                <MenuItem id="stop" icon={N.stop} label="Stop" onSelect={() => void callThread(thread.id, 'tasks.stop', { thread_id: thread.id }).catch(() => {})} />
               )}
             </>
           )}
           {thread.worktree && !thread.subagent && <MenuItem id="cleanup" testId="header-worktree-cleanup" icon={N.worktree} label="Remove worktree…" onSelect={() => showDialog({ kind: 'worktree', threadId: thread.id })} />}
           {thread.coordinator_project_id && !thread.subagent && <><MenuSeparator /><RefreshContextItem thread={thread} /></>}
+          {!thread.subagent && forkTargetsOf(thread as StateThread).length > 0 && <MenuItem id="fork-machine" testId="header-fork-machine" icon={N.laptop} label="Fork to another machine…" onSelect={() => showDialog({ kind: 'fork', threadId: thread.id, ...((thread as StateThread).machineId ? { machineId: (thread as StateThread).machineId! } : {}) })} />}
+          {!thread.subagent && !thread.moved && forkTargetsOf(thread as StateThread).length > 0 && <MenuItem id="move-machine" testId="header-move-machine" icon={N.laptop} label="Continue on another machine…" onSelect={() => showDialog({ kind: 'move', threadId: thread.id, ...((thread as StateThread).machineId ? { machineId: (thread as StateThread).machineId! } : {}) })} />}
           {/* A subagent thread is read-only: it cannot be renamed, pinned or archived. */}
           {!thread.subagent && (
             <>

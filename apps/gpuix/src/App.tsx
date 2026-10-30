@@ -32,6 +32,7 @@ import { TasksSidebar } from './tasks/TasksSidebar.tsx'
 import { startPreview } from './shell/preview.ts'
 import { useTasksFeed } from './tasks/store.ts'
 import { NativeSubagentComposer } from './subagents/Composer.tsx'
+import { MoveBar } from './fork/MoveBar.tsx'
 import { SubagentBar, SubagentPageMotion } from './subagents/Page.tsx'
 import { Composer } from './Composer.tsx'
 import { PreviewIntegration } from './preview/Preview.tsx'
@@ -65,6 +66,7 @@ import { ResizeCaptureLayer } from './kit/Resize.tsx'
 import { ThemeFade } from './motion/themeFade.tsx'
 import { Toaster } from './shell/toasts.tsx'
 import { AppUpdateSurface } from './platform/UpdateSurface.tsx'
+import { NetworkIntroSurface } from './machines/NetworkIntro.tsx'
 import { TranscriptReleased } from './platform/TranscriptReleased.tsx'
 import { installWindowSurface, useTranscriptReleased } from './platform/surface.ts'
 import { useApp, usePaneAccess, usePaneCompact } from './state.ts'
@@ -256,6 +258,7 @@ function Workspace() {
       <WebPageUi />
       <Toaster />
       <AppUpdateSurface />
+      <NetworkIntroSurface />
       <SidebarDragLayer />
       <ResizeCaptureLayer />
       <DockResizeCapture />
@@ -382,7 +385,7 @@ function ThreadPage({ selectedId }: { selectedId: string }) {
           {!thread?.subagent && <ThreadRequests />}
           {!blocking && (
             <ErrorBoundary label="the composer" compact>
-              {thread?.subagent ? thread.provider.kind === 'claude-code' ? <NativeSubagentComposer key={thread.id} thread={thread} /> : <SubagentBar thread={thread} /> : <Composer thread={thread ?? listed} placeholderEnter={motion.placeholderEnter} />}
+              {thread?.moved ? <MoveBar thread={thread} {...((thread as { machineId?: string }).machineId ? { machineId: (thread as { machineId?: string }).machineId! } : {})} /> : thread?.subagent ? thread.provider.kind === 'claude-code' ? <NativeSubagentComposer key={thread.id} thread={thread} /> : <SubagentBar thread={thread} /> : <Composer thread={thread ?? listed} placeholderEnter={motion.placeholderEnter} />}
             </ErrorBoundary>
           )}
         </div>

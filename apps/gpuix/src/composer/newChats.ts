@@ -5,10 +5,8 @@
 import { useSyncExternalStore } from 'react'
 import { clientThreadIds, createNewChats, type NewChat } from '../../../../packages/kybern-client/src/newChat.ts'
 import type { ThreadId } from '../../../../packages/kybern-client/src/types.ts'
-import { onEnvironmentChange } from '../shell/environment.ts'
 
 export const newChats = createNewChats()
-onEnvironmentChange(() => newChats.clear())
 
 export function useNewChat(threadId: ThreadId | null | undefined): NewChat | undefined {
   return useSyncExternalStore(newChats.subscribe, () => newChats.get(threadId))

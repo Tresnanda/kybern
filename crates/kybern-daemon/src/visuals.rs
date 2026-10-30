@@ -443,6 +443,8 @@ mod tests {
     fn scratch_thread(store: &kybern_store::Store) -> Thread {
         let now = chrono::Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: uuid::Uuid::now_v7(),
             name: "Visual publish fixture".into(),
             path: "/scratch/visual-publish".into(),
@@ -504,6 +506,8 @@ mod tests {
         let store = kybern_store::Store::open_in_memory().unwrap();
         let now = chrono::Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: uuid::Uuid::now_v7(),
             name: "Visual read fixture".into(),
             path: "/scratch/visual-read".into(),

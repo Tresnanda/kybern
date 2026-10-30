@@ -1,0 +1,279 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(ProvisionPlan)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProvisionPlan",
+  "type": "object",
+  "properties": {
+    "project_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "project_name": {
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/ProjectKind",
+      "default": "single"
+    },
+    "source": {
+      "$ref": "#/$defs/ProvisionMachine"
+    },
+    "target": {
+      "$ref": "#/$defs/ProvisionMachine"
+    },
+    "repos": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ProvisionRepo"
+      }
+    },
+    "existing": {
+      "description": "The target's projects that already are this repository; non-empty means it is there already.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ProvisionExisting"
+      }
+    },
+    "members": {
+      "description": "Member paths and availability in the checked destination (groups only).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ProvisionMember"
+      }
+    },
+    "suggested_path": {
+      "description": "The folder the target proposes (`~/projects/kybern`, `D:\\code\\kybern`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "target_home": {
+      "description": "The target's home folder, when it answered.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "path_check": {
+      "description": "The check of `path` (the asked one, else the suggested one).",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PathCheck"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "env_files": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/EnvFileCandidate"
+      }
+    },
+    "blocked": {
+      "description": "Why it cannot be done at all, in a sentence that says what to do.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "project_id",
+    "project_name",
+    "source",
+    "target",
+    "repos",
+    "env_files"
+  ],
+  "$defs": {
+    "ProjectKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "single"
+          ]
+        },
+        {
+          "description": "A parent folder whose members are git repositories inside it.",
+          "type": "string",
+          "const": "group"
+        }
+      ]
+    },
+    "ProvisionMachine": {
+      "description": "A machine as the plan shows it.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "os": {
+          "description": "`macos`, `windows` or `linux`; empty when not known yet.",
+          "type": "string",
+          "default": ""
+        },
+        "online": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "online"
+      ]
+    },
+    "ProvisionRepo": {
+      "description": "One repository the provisioning sets up: the project itself, or one member of a group.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Where it goes inside the destination: `.` for the project folder itself.",
+          "type": "string"
+        },
+        "remote": {
+          "description": "`host/owner/repo` of its `origin`, when it has one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "branch": {
+          "description": "The branch the source has checked out (`None` when detached).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path"
+      ]
+    },
+    "ProvisionExisting": {
+      "description": "A project of the target that already is this repository.",
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_id",
+        "name",
+        "path"
+      ]
+    },
+    "ProvisionMember": {
+      "description": "A source member paired with a folder on the target. Existing checkouts stay untouched.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "target_path": {
+          "type": "string"
+        },
+        "present": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "target_path",
+        "present"
+      ]
+    },
+    "PathCheck": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/PathState"
+        },
+        "path": {
+          "description": "The folder as the target spells it (`~` expanded).",
+          "type": "string"
+        },
+        "message": {
+          "description": "A sentence for the sheet: \"Empty folder · will be created\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "path",
+        "message"
+      ]
+    },
+    "PathState": {
+      "description": "What a destination folder on the target holds.",
+      "oneOf": [
+        {
+          "description": "Missing or empty: it will be created and filled.",
+          "type": "string",
+          "const": "free"
+        },
+        {
+          "description": "Already a checkout of the same repository: it is registered as it is.",
+          "type": "string",
+          "const": "same_repo"
+        },
+        {
+          "description": "Holds other files: refused.",
+          "type": "string",
+          "const": "not_empty"
+        },
+        {
+          "description": "Not a place Kybern writes a project to (a root, the home folder, a system folder, not absolute).",
+          "type": "string",
+          "const": "forbidden"
+        },
+        {
+          "description": "The target is offline; it checks the folder when the work arrives.",
+          "type": "string",
+          "const": "unknown"
+        }
+      ]
+    },
+    "EnvFileCandidate": {
+      "description": "A git-ignored env or secret file of the source project. Only its name and size ever travel to a client.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Relative to the project folder, `/`-separated.",
+          "type": "string"
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "selected": {
+          "description": "Ticked by default.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "size",
+        "selected"
+      ]
+    }
+  }
+}

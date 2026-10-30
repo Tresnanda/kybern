@@ -82,6 +82,8 @@ struct Inner {
     /// asked about, so an idle window spawns nothing for them.
     account_gates: std::sync::Mutex<HashMap<AccountKey, Arc<tokio::sync::Mutex<()>>>>,
     changed: broadcast::Sender<UsageLimitsResult>,
+    /// Reads the limits of broker-bound accounts, once the network installed it.
+    bound: std::sync::Mutex<Option<Arc<dyn BoundUsage>>>,
     /// Where the last good limits are kept between runs.
     cache_file: PathBuf,
     persist_delay: std::sync::Mutex<Duration>,
@@ -90,6 +92,14 @@ struct Inner {
 }
 
 type AccountKey = (ProviderKind, String);
+
+/// Plan limits of an account that signs in through the login broker (S4): it has no login on this
+/// machine to read, so the broker that holds the real one reads them.
+#[async_trait::async_trait]
+pub trait BoundUsage: Send + Sync {
+    /// `None` when the account is not bound to the broker (read it locally).
+    async fn read(&self, kind: ProviderKind, instance: &str) -> Option<Result<(Vec<UsageLimit>, Option<String>), UsageUnread>>;
+}
 
 #[derive(Default)]
 struct State {
@@ -258,8 +268,14 @@ impl UsageMonitor {
                 gates: LIVE.into_iter().map(|kind| (kind, tokio::sync::Mutex::new(()))).collect(),
                 account_gates: Default::default(),
                 changed: broadcast::channel(64).0,
+                bound: std::sync::Mutex::new(None),
             }),
         }
+    }
+
+    /// Let broker-bound accounts read their limits from the broker.
+    pub fn set_bound_reader(&self, reader: Arc<dyn BoundUsage>) {
+        *self.inner.bound.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(reader);
     }
 
     fn identity(&self, kind: ProviderKind) -> String {
@@ -480,6 +496,12 @@ impl UsageMonitor {
     }
 
     async fn read_account(&self, kind: &ProviderKind, instance: &str) -> Result<(Vec<UsageLimit>, Option<String>), UsageUnread> {
+        let bound = self.inner.bound.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+        if let Some(bound) = bound
+            && let Some(read) = bound.read(*kind, instance).await
+        {
+            return read;
+        }
         let unavailable = |detail: &str| UsageUnread { reason: LimitsStale::Unavailable, retry_at: None, detail: detail.into() };
         let settings = self.inner.settings.get();
         let provider = settings.providers.get(kind).cloned().unwrap_or_default();
@@ -916,7 +938,11 @@ mod account_tests {
         let provider = settings.providers.entry(ProviderKind::Codex).or_default();
         provider.accounts.insert(
             "work".into(),
-            kybern_protocol::ProviderAccount { name: "Work".into(), directory: "/account-work".into(), ..Default::default() },
+            kybern_protocol::ProviderAccount {
+                name: "Work".into(),
+                directory: std::env::temp_dir().join("account-work").to_string_lossy().into_owned(),
+                ..Default::default()
+            },
         );
         provider.default_account = Some("work".into());
         monitor.inner.settings.set(settings).unwrap();
@@ -945,7 +971,11 @@ mod named_account_tests {
         let provider = settings.providers.entry(ProviderKind::ClaudeCode).or_default();
         provider.accounts.insert(
             "work".into(),
-            kybern_protocol::ProviderAccount { name: "Work".into(), directory: "/account-work".into(), ..Default::default() },
+            kybern_protocol::ProviderAccount {
+                name: "Work".into(),
+                directory: std::env::temp_dir().join("account-work").to_string_lossy().into_owned(),
+                ..Default::default()
+            },
         );
         monitor.inner.settings.set(settings).unwrap();
         monitor
@@ -1053,7 +1083,11 @@ mod persistence_tests {
     }
 
     fn work_account() -> kybern_protocol::ProviderAccount {
-        kybern_protocol::ProviderAccount { name: "Work".into(), directory: "/account-work".into(), ..Default::default() }
+        kybern_protocol::ProviderAccount {
+            name: "Work".into(),
+            directory: std::env::temp_dir().join("account-work").to_string_lossy().into_owned(),
+            ..Default::default()
+        }
     }
 
     #[test]

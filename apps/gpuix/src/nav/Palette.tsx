@@ -58,7 +58,13 @@ function PaletteDialog() {
   const t = useTheme()
   const { renderer } = useGpuix()
   const notes = useNotes((s) => s.notes)
-  const threads = useApp((s) => s.threads)
+  const listed = useApp((s) => s.threads)
+  // Agents other machines run for a thread here are not in the list but can be found and opened by title.
+  const childrenNav = useNav((s) => s.children)
+  const threads = useMemo(() => {
+    const remote = Object.values(childrenNav).filter((child): child is typeof child & { machineId: string } => !!(child as { machineId?: string }).machineId)
+    return remote.length ? [...listed, ...remote] : listed
+  }, [listed, childrenNav])
   const projects = useApp((s) => s.projects)
   const history = useNav((s) => s.history)
   const settingsOpen = useNav((s) => s.settingsOpen)
@@ -183,7 +189,7 @@ function PaletteDialog() {
             </div>
           </>
         ),
-        run: () => openThread(thread.id),
+        run: () => openThread(thread.id, (thread as { machineId?: string }).machineId),
       }))
     const taskItems: Item[] = [
       { id: 'task-new', label: 'New task', keywords: 'new task create todo add', group: 'Tasks', icon: <Icon source={N.plus} size={15} color={muted(t, 1)} />, run: () => { goPage('tasks'); quickAdd() } },

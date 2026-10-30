@@ -4,7 +4,11 @@ import { useGpuix, motion, type PublicInstance } from '@gpuix/react'
 import { Alert02Icon, LinkSquare02Icon, SmartPhone01Icon, PictureInPictureIcon } from '@hugeicons/core-free-icons'
 import { glyph, Icon, ICONS } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
-import { Menu, MenuItem, MenuSeparator } from '../nav/overlay.tsx'
+import { Menu, MenuItem, MenuLabel, MenuSeparator } from '../nav/overlay.tsx'
+import { portLabel } from '../../../../packages/kybern-client/src/machineUtilities.ts'
+import { usePorts } from './ports.ts'
+import { toast } from '../shell/toasts.tsx'
+import { errorText } from '../nav/actions.ts'
 import { IconButton } from '../kit/IconButton.tsx'
 import { Label, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import { revealTransform, SwapOnChange } from '../motion/kit.tsx'
@@ -16,6 +20,7 @@ import { webHost } from '../native/webview.ts'
 import { observeElementBounds } from '../native/layout.ts'
 import { useElementBounds } from '../native/layout-hooks.ts'
 import { getState } from '../state.ts'
+import { useForwardSources } from './PortForwardBar.tsx'
 import { activeEnvironment } from '../shell/environment.ts'
 import { copyText } from '../transcript/store.ts'
 import { canShowFileInExplorer, showFileInExplorer } from '../dock/explorerSelection.ts'
@@ -26,7 +31,7 @@ const deviceIcon = glyph(SmartPhone01Icon), floatIcon = glyph(PictureInPictureIc
 
 export function PreviewChrome({ threadId }: { threadId: string }) {
   const t = useTheme(), s = usePreview(threadId), entry = s.entries[s.index], environment = activeEnvironment()
-  const { renderer } = useGpuix(), input = useRef<PublicInstance | null>(null)
+  const { renderer } = useGpuix(), input = useRef<PublicInstance | null>(null), ports = usePorts(threadId), forwardFrom = useForwardSources()
   const [editing, setEditing] = useState(!entry), [draft, setDraft] = useState(''), [focus, setFocus] = useState(0), [hover, setHover] = useState(false)
   const bounds = useElementBounds('preview-chrome')?.rect, narrow = (bounds?.width ?? 480) < 360
   const thread = getState().threads.find(th => th.id === threadId), project = getState().projects.find(p => p.id === thread?.project_id)
@@ -76,6 +81,7 @@ export function PreviewChrome({ threadId }: { threadId: string }) {
     <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} style={{ display: 'flex', alignItems: 'center', flexGrow: 1, minWidth: 0, height: 28, gap: 6, paddingLeft: 8, paddingRight: 8, borderRadius: 8, backgroundColor: editing ? t.v('--color-background-elevated-secondary') : undefined, borderWidth: editing ? 1 : 0, borderColor: t.variant === 'dark' ? 'rgba(115, 115, 115, 0.45)' : 'rgba(163, 163, 163, 0.45)', hover: { backgroundColor: t.buttonSecondary } }}>
       <Icon source={s.load.phase === 'blocked' ? ICONS.shield : s.load.phase === 'waiting' || s.load.phase === 'error' ? warningIcon : entry?.kind === 'file' ? ICONS.file : N.globe} size={14} color={t.textSecondary} />
       {!editing && entry?.kind === 'server' && !environment.local && <Label color={t.textSecondary} size={10}>{environment.name}</Label>}
+      {!editing && entry?.machine && <Label color={t.textSecondary} size={10}>{`on ${entry.machine.name}`}</Label>}
       {editing ? <input ref={input} testId="preview-address" aria-label="Address" value={draft} placeholder="Enter a URL or file path" onChange={e => setDraft(e.value ?? '')} onSubmit={() => void submit()} onBlur={() => { if (!s.busy) cancel() }} onKeyDown={e => { if (e.key === 'escape') cancel() }} style={{ flexGrow: 1, minWidth: 0, height: 26, fontSize: 12, fontFamily: 'JetBrains Mono', color: t.text, backgroundColor: 'transparent' }} />
       : <div testId="preview-address-rest" role="button" aria-label="Address" tabIndex={0} onClick={start} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') start() }} style={{ display: 'flex', flexGrow: 1, minWidth: 0, overflow: 'hidden', alignItems: 'center', cursor: 'text' }}>
         {address?.segments.length ? address.segments.map((part, i) => <Label key={i} color={part.emphasis && !s.navigatedAway ? t.text : t.textSecondary} size={12} truncate style={{ flexShrink: part.emphasis ? 0 : 1, pointerEvents: 'none' }}>{part.text}</Label>) : <Label color={t.textSecondary} size={12} truncate>Enter a URL or file path</Label>}
@@ -93,6 +99,12 @@ export function PreviewChrome({ threadId }: { threadId: string }) {
         {entry.target?.kind === 'file' && entry.target.in_project && <MenuItem id="explorer" testId="preview-explorer" label="Show file in Explorer" icon={N.folder} disabled={!thread?.project_id || !canShowFileInExplorer(threadId, thread.project_id, explorerPath)} onSelect={showExplorer} />}
         <MenuSeparator />
         {entry.kind === 'server' && environment.local && <MenuItem id="proxy" testId="preview-proxy" checked={!!entry.proxy} label="Preview through Kybern" onSelect={() => setPreviewProxy(threadId, !entry.proxy)} />}
+        {environment.local && forwardFrom.length > 0 && <MenuItem id="forward" testId="preview-forward-open" label="Forward a port from…" icon={N.globe} onSelect={() => setPreview(threadId, { forwardOpen: true, forwardMachine: entry.machine?.id })} />}
+        {ports.forwards.length > 0 && <>
+          <MenuLabel>Forwarded ports</MenuLabel>
+          {ports.forwards.map(f => <MenuItem key={f.id} id={`port-${f.id}`} testId={`preview-port-${f.local_port}`} label={portLabel(f)} icon={N.x} onSelect={() => void ports.stop(f.id).catch(e => toast.error('Could not stop the forward', { description: errorText(e) }))} />)}
+          <MenuSeparator />
+        </>}
         <MenuItem id="close" testId="preview-close" label="Close page" icon={N.x} onSelect={() => closePreview(threadId)} />
       </Menu>
     </div>}

@@ -21,6 +21,7 @@ import {
   subagentStatusSegments,
   subagentTokenCount,
   subagentTypeLabel,
+  isInboundThread,
   isSubagentThread,
   subagentPhase,
   visibleSubagentThreads,
@@ -36,6 +37,15 @@ test("subagent threads are recognised and filtered out of user lists", () => {
   assert.deepEqual(withoutSubagents([user, child]), [user]);
   const same = [user];
   assert.equal(withoutSubagents(same), same, "nothing to remove keeps the array identity");
+});
+
+test("inbound threads are the hidden record of another machine's forwarded tool calls", () => {
+  const inbound = { id: "c", inbound: { machine_id: "m1", thread_id: "t1", title: "Parent on the Mac" } };
+  assert.equal(isInboundThread(inbound), true);
+  assert.equal(isInboundThread({ id: "a" }), false);
+  assert.equal(isInboundThread({ id: "a", inbound: null }), false);
+  assert.equal(isInboundThread(undefined), false);
+  assert.equal(isSubagentThread(inbound), false, "an inbound thread is not a subagent");
 });
 
 test("task states collapse into working, done, failed and stopped", () => {

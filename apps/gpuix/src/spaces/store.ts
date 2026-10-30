@@ -5,9 +5,8 @@ import { useSyncExternalStore } from 'react'
 import { RpcCallError } from '../../../../packages/kybern-client/src/client.ts'
 import { SPACES_CHANGED_NOTIFICATION, type Project, type Space, type SpaceColor, type SpaceId, type SpaceLogo } from '../../../../packages/kybern-client/src/types.ts'
 import { SPACE_COPY } from '../../../../packages/kybern-client/src/spaces.ts'
-import { onEnvironmentChange } from '../shell/environment.ts'
 import { toast } from '../shell/toasts.tsx'
-import { getClient, getState, refreshLists, set } from '../state.ts'
+import { getClient, getState, refreshLists, set, setForeignSpace } from '../state.ts'
 import { getNav, setNav } from '../nav/store.ts'
 import { markSpaceCreated } from './ui.ts'
 
@@ -23,6 +22,9 @@ let state: SpacesState = { supported: null, spaces: [] }
 const listeners = new Set<() => void>()
 
 export const getSpaces = () => state
+
+// Another machine's projects have no space here: they are listed in the default space (`state.ts`).
+setForeignSpace(() => state.supported ? (state.spaces[0]?.id ?? null) : null)
 
 /** Replace the state wholesale (tests and automation). */
 export const setSpacesState = (next: SpacesState) => setSpaces(next)
@@ -161,4 +163,3 @@ export async function moveProjectToSpace(project: Pick<Project, 'id' | 'name'>, 
   return true
 }
 
-onEnvironmentChange(() => { stopNotifications = undefined; setSpaces({ supported: null, spaces: [] }) }, -50)

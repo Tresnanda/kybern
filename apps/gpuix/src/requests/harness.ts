@@ -1,8 +1,9 @@
 import { connectStdio } from '@gpuix/react/automation'
 import { spawn } from 'node:child_process'
-import { realpathSync } from 'node:fs'
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
+import { INTRO_FILE } from '../machines/intro.ts'
 
 /** A GPUIX launch must never resolve the user's real `~/.kybern`: startup restarts a
  * daemon whose binary looks newer, which killed every running agent once. Aborts
@@ -28,7 +29,13 @@ export async function launchFixture(entry: string, env: Record<string, string>, 
   assertScratchEnv(env)
   // Without a client config dir GPUIX would read the desktop's saved environments and write its own prefs under ~/Library.
   const clientDir = process.env.KYBERN_CLIENT_CONFIG_DIR ?? path.join(path.resolve(({ ...process.env, ...env }).KYBERN_DATA_DIR!), 'client-config')
-  const child = spawn('bun', [entry], { env: { KYBERN_CLIENT_CONFIG_DIR: clientDir, ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'] })
+  const childEnv: Record<string, string | undefined> & { KYBERN_CLIENT_CONFIG_DIR: string } = { KYBERN_CLIENT_CONFIG_DIR: clientDir, ...process.env, ...env }
+  // The machine network's one-time intro would cover whatever a check drives: answer it "Not now" unless the launch asks for it.
+  const intro = path.join(childEnv.KYBERN_CLIENT_CONFIG_DIR, INTRO_FILE)
+  if (!childEnv.KYBERN_NETWORK_INTRO && !existsSync(intro)) {
+    try { mkdirSync(path.dirname(intro), { recursive: true }); writeFileSync(intro, JSON.stringify({ choice: 'later' })) } catch {}
+  }
+  const child = spawn('bun', [entry], { env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] })
   let stderr = ''
   const frames:number[]=[]
   let frameRemainder=''

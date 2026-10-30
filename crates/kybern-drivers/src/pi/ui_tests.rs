@@ -11,7 +11,7 @@ struct UiHarness {
 
 impl UiHarness {
     fn new(event_capacity: usize) -> Self {
-        let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+        let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
         let (events, receiver) = mpsc::channel(event_capacity);
         let session = Arc::new(PiSession {
             flavor: Flavor::Pi,

@@ -15,7 +15,7 @@ import { Icon } from '../icons.tsx'
 import { menuFileIcons } from '../native/diff-file-icons.ts'
 import { fileIconColors } from '../native/file-icon-colors.ts'
 import { useGlass } from '../platform/glass.ts'
-import { getClient, usePaneAccess } from '../state.ts'
+import { threadClient, usePaneAccess } from '../state.ts'
 import { openTabFromPane } from '../tabs/open.ts'
 import { isImageFile, resolveWorkspaceFile, underWorkspace } from './fileLinks.ts'
 import { ThreadImagePreview } from './ThreadImage.tsx'
@@ -197,7 +197,7 @@ function FileChip({ path, threadId, failed }: { path: string; threadId: ThreadId
     if (isImageFile(path)) { setImage(true); return }
     try {
       const cwd = pane.get().open.thread?.cwd
-      const relative = underWorkspace(path, cwd) ?? await resolveWorkspaceFile(getClient(), threadId, path) ?? (path.startsWith('/') ? null : path)
+      const relative = underWorkspace(path, cwd) ?? await resolveWorkspaceFile(threadClient(threadId), threadId, path) ?? (path.startsWith('/') ? null : path)
       if (!relative) throw new Error(`${basename(path)} is outside this thread's workspace. Ask the agent to copy it into the workspace.`)
       openTabFromPane(pane.id, { kind: 'file', path: relative, root: 'thread' })
     } catch (e) { reportError('Unable to open the file', e) }

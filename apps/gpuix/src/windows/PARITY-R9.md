@@ -5,23 +5,14 @@ any environment, §27.10 preview loopback relay against a real remote environmen
 `apps/desktop/src-tauri/src/{environments,remote,preview_relay}.rs`, `views/EnvironmentSwitcher.tsx`,
 `state/environments.ts`, `lib/environments.ts`.
 
-## One window per environment
+## Windows (changed by ADE-90 / N6)
 
-A window is a process. The renderer keeps its single window, scroll/list handles and key routing in
-thread-locals, and every app store is module state. That is what one Tauri webview's JS realm is, so a process per
-window keeps the desktop's isolation without rewriting every store. `windows/registry.ts`:
-
-- every window claims `<client config>/gpuix-windows/<pid>.json` (environment, Unix socket) and rewrites the
-  claim when it switches environments;
-- "Open in a new window" focuses the window that already shows that environment, asking it over its socket
-  (it de-miniaturizes and makes itself key; under `GPUIX_BACKGROUND` it only orders itself front). Otherwise it
-  spawns `main.tsx` pinned by `KYBERN_GPUIX_ENVIRONMENT` and claims the child's pid at once, so a second click
-  waits for that window instead of opening another. Claims of exited processes are dropped when read. There are
-  no timers: the socket only wakes on a request;
-- every window is titled "<environment> — Kybern" and retitled on switches (desktop `selectEnvironment`).
-
-The desktop opens another window on every click. Focusing the existing one follows the #108 item ("one per
-environment").
+A window is a process, as before (`windows/registry.ts`): the renderer keeps its window, scroll/list handles and key
+routing in thread-locals, and every app store is module state. What changed: a window no longer belongs to an
+environment. The machine switch, its store reset and "Open in a new window" per environment were removed (design
+`machine-network.md` §5.2); every window shows the machines of the same network through the machine set, and the
+registry only keeps what the updater needs (`quitOtherWindows`) and focus requests between windows. Titles are
+"<this machine> — Kybern". The remote9 window check (`remote9-windows.ts`) went with the feature.
 
 Credentials: `environments/credentials.ts` uses the desktop's Keychain service. Checks set
 `KYBERN_GPUIX_KEYCHAIN_SERVICE=kybern-gpuix-test-…`, which is accepted only with a scratch client config, so they

@@ -11,7 +11,6 @@ mock.module('../src/native/visibility.ts', () => ({
     return () => visibility.delete(listener)
   },
 }))
-mock.module('../src/shell/environment.ts', () => ({ onEnvironmentChange: () => () => {} }))
 mock.module('react', () => ({ useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) => snapshot() }))
 const store = await import('../src/environment/store.ts')
 store.openEnvironmentPanel('first', false)

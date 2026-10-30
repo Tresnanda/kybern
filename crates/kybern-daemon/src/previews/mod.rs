@@ -326,7 +326,8 @@ fn has_entry_extension(input: &str) -> bool {
 }
 
 fn looks_like_path(input: &str) -> bool {
-    input.starts_with('/')
+    Path::new(input).is_absolute()
+        || input.starts_with('/')
         || input.starts_with('~')
         || input.starts_with("./")
         || input.starts_with("../")
@@ -358,7 +359,16 @@ fn file_url_path(input: &str) -> Result<String, PreviewError> {
         return Err(PreviewError::invalid_address());
     }
     let path = path.split(['?', '#']).next().unwrap_or(path);
-    percent_decode(path).ok_or_else(PreviewError::invalid_address)
+    let decoded = percent_decode(path).ok_or_else(PreviewError::invalid_address)?;
+    if cfg!(windows) {
+        // `file:///C:/a` names `C:\a`; the URL parser knows the drive and UNC forms.
+        return reqwest::Url::parse(input)
+            .map_err(|_| PreviewError::invalid_address())?
+            .to_file_path()
+            .map(|path| path.to_string_lossy().into_owned())
+            .map_err(|_| PreviewError::invalid_address());
+    }
+    Ok(decoded)
 }
 
 fn expand_home(raw: &str, policy: &GrantPolicy) -> Option<PathBuf> {
@@ -535,8 +545,8 @@ pub async fn open(
         let host = reqwest::Url::parse(url).ok().and_then(|url| url.host_str().map(str::to_owned)).unwrap_or_default();
         // The proxy only ever reaches loopback on the daemon host.
         if is_loopback_host(&host) {
-            // Never a proxy into the daemon's own HTTP API.
-            if *port == state.port.load(std::sync::atomic::Ordering::Relaxed) {
+            // Never a proxy into the daemon's own HTTP API, on any listener it holds.
+            if crate::network::ports::own_ports(state).contains(port) {
                 return Err(PreviewError::invalid_address());
             }
             if proxy::listener_addr(*port).await.is_none() {

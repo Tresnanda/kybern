@@ -1972,7 +1972,7 @@ mod tests {
     #[tokio::test]
     async fn manual_compaction_waits_for_native_response_for_both_flavors() {
         for flavor in [Flavor::Pi, Flavor::Omp] {
-            let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+            let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
             let (events, mut rx) = mpsc::channel(8);
             let session = Arc::new(PiSession {
                 flavor,
@@ -2037,7 +2037,7 @@ mod tests {
     async fn extension_dialogs_round_trip_for_pi_and_omp() {
         use super::*;
         for flavor in [Flavor::Pi, Flavor::Omp] {
-            let child = Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap());
+            let child = Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap());
             let (events, mut rx) = mpsc::channel(8);
             let session = Arc::new(PiSession {
                 flavor,
@@ -2197,7 +2197,7 @@ mod tests {
     #[tokio::test]
     async fn omp_content_boundaries_keep_progress_out_of_the_final_answer() {
         let (events, mut rx) = mpsc::channel(64);
-        let session = omp_session(Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap()), events, State::default());
+        let session = omp_session(Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap()), events, State::default());
         session.handle_frame(json!({"type":"message_start","message":{"role":"assistant"}})).await;
         for (index, text) in [(0, "Checking files."), (3, "Done.\n\nAll checks pass.")] {
             session
@@ -2293,7 +2293,7 @@ mod tests {
     #[tokio::test]
     async fn omp_async_result_completes_an_auto_backgrounded_bash_task_once() {
         let (events, mut rx) = mpsc::channel(32);
-        let session = omp_session(Arc::new(NdjsonChild::spawn(Command::new("cat")).unwrap()), events, State::default());
+        let session = omp_session(Arc::new(NdjsonChild::spawn(crate::test_process::echo()).unwrap()), events, State::default());
         let call = "call-4e35|fc_tmp_9iz";
         session
             .handle_frame(
@@ -2341,23 +2341,7 @@ mod tests {
 
     #[tokio::test]
     async fn omp_turn_end_settles_jobs_omp_no_longer_runs() {
-        let mut command = Command::new("sh");
-        command.arg("-c").arg(
-            r#"
-printf '%s\n' '{"type":"agent_end","isTerminal":true}'
-delivery='{"role":"custom","customType":"async-result","content":"<system-notice>\nBackground job bg_7 has completed. Resume your work using the result below.\nnope\nCommand exited with code 1\n</system-notice>","details":{"jobs":[{"jobId":"bg_7","type":"bash","durationMs":900}]}}'
-while IFS= read -r line; do
-  id=${line#*\"id\":\"}
-  id=${id%%\"*}
-  case "$line" in
-    *'"type":"get_branch_messages"'*) printf '{"id":"%s","type":"response","success":true,"data":{"messages":[{"entryId":"entry-1"}]}}\n' "$id" ;;
-    *'"type":"get_state"'*) printf '{"id":"%s","type":"response","success":true,"data":{"hasPendingAsyncWork":false}}\n' "$id" ;;
-    *'"type":"get_messages"'*) printf '{"id":"%s","type":"response","success":true,"data":{"messages":[%s]}}\n' "$id" "$delivery" ;;
-    *) printf '{"id":"%s","type":"response","success":false,"error":"unsupported"}\n' "$id" ;;
-  esac
-done
-"#,
-        );
+        let command = crate::test_process::omp();
         let (events, mut rx) = mpsc::channel(32);
         let mut state = State { active: true, ..State::default() };
         state.background_jobs.insert("bg_7".into(), "tool:call-7".into());
@@ -2399,17 +2383,7 @@ done
 
     #[tokio::test]
     async fn omp_terminal_frame_completes_while_anchor_response_is_read() {
-        let mut command = Command::new("sh");
-        command.arg("-c").arg(
-            r#"
-printf '%s\n' '{"type":"agent_end","isTerminal":true}'
-IFS= read -r line
-id=${line#*\"id\":\"}
-id=${id%%\"*}
-printf '{"id":"%s","type":"response","command":"get_branch_messages","success":true,"data":{"messages":[{"entryId":"entry-1"}]}}\n' "$id"
-cat >/dev/null
-"#,
-        );
+        let command = crate::test_process::omp();
         let child = Arc::new(NdjsonChild::spawn(command).expect("spawn fake omp"));
         let (events, mut rx) = mpsc::channel(8);
         let session = Arc::new(PiSession {

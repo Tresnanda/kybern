@@ -3,10 +3,11 @@
 // Listeners hear only state changes (dirty, saving, a conflict), never keystrokes: the text itself is read on demand.
 import { useSyncExternalStore } from 'react'
 import type { FilesReadResult } from '../../../../packages/kybern-client/src/types.ts'
-import { getClient } from '../state.ts'
+import { getState, ownProjectId, projectClient, threadClient } from '../state.ts'
 
 /** Where a file is read and saved: a project (`files.*`) or a thread's workspace (`threads.files.*`). */
-export type FileRoot = { projectId: string } | { threadId: string }
+/** A project root names the thread that shows it (`threadId`), so its RPCs reach the machine that owns the project. */
+export type FileRoot = { projectId: string; threadId?: string } | { threadId: string }
 export const bufferOwner = (root: FileRoot) => 'projectId' in root ? `p:${root.projectId}` : `t:${root.threadId}`
 export const bufferKey = (root: FileRoot, path: string) => `${bufferOwner(root)}\0${path}`
 
@@ -115,11 +116,18 @@ export function keepMine(key: string) {
   patch(key, { base: buffer.conflict.content, version: buffer.conflict.version, dirty: buffer.text !== buffer.conflict.content, conflict: null })
 }
 
-export function readFile(root: FileRoot, path: string, ifVersion?: string | null): Promise<FilesReadResult> {
-  const client = getClient()!
+/** The client and the project id as that machine knows it (a thread's project row is the merged one for threads of other machines). */
+function route(root: { projectId: string; threadId?: string }) {
+  const thread = root.threadId ? getState().threads.find(t => t.id === root.threadId) : undefined
+  return { client: (thread ? threadClient(thread.id) : projectClient(root.projectId))!, projectId: thread ? ownProjectId(thread) : root.projectId }
+}
+
+// async: an offline machine rejects instead of throwing at the caller.
+export async function readFile(root: FileRoot, path: string, ifVersion?: string | null): Promise<FilesReadResult> {
+  const client = 'projectId' in root ? route(root).client : threadClient(root.threadId)!
   const if_version = ifVersion ?? undefined
   return 'projectId' in root
-    ? client.call('files.read', { project_id: root.projectId, path, max_bytes: EDITABLE_BYTES, if_version })
+    ? client.call('files.read', { project_id: route(root).projectId, path, max_bytes: EDITABLE_BYTES, if_version })
     : client.call('threads.files.read', { thread_id: root.threadId, path, max_bytes: EDITABLE_BYTES, if_version })
 }
 
@@ -130,11 +138,11 @@ export async function saveBuffer(key: string): Promise<boolean> {
   if (!buffer || buffer.saving || buffer.conflict) return false
   const text = buffer.text
   patch(key, { saving: true, error: null })
-  const client = getClient()!
   const params = { path: buffer.path, content: text, expected_version: buffer.version ?? undefined }
   try {
+    const client = 'projectId' in buffer.root ? route(buffer.root).client : threadClient(buffer.root.threadId)!
     const saved = 'projectId' in buffer.root
-      ? await client.call('files.write', { project_id: buffer.root.projectId, ...params })
+      ? await client.call('files.write', { project_id: route(buffer.root).projectId, ...params })
       : await client.call('threads.files.write', { thread_id: buffer.root.threadId, ...params })
     const now = buffers.get(key)
     patch(key, { saving: false, base: text, version: saved.version, dirty: !!now && now.text !== text })

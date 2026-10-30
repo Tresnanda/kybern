@@ -1,0 +1,462 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(NetworkStatus)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NetworkStatus",
+  "description": "Everything Settings → Machines needs, in one call.",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "description": "The master toggle (\"Connect to your other machines\").",
+      "type": "boolean"
+    },
+    "network_id": {
+      "description": "Absent on a lone machine: the first membership operation sets it.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "self_machine": {
+      "$ref": "#/$defs/MachineCard"
+    },
+    "members": {
+      "description": "Every member, this machine included.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/MachineCard"
+      }
+    },
+    "found": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/FoundMachine"
+      }
+    },
+    "outbox": {
+      "$ref": "#/$defs/OutboxSummary"
+    },
+    "broker": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BrokerInfo"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "tailscale": {
+      "$ref": "#/$defs/TailscaleState"
+    },
+    "digest": {
+      "description": "The membership set's digest: the SHA-256 of the sorted operation ids.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "removed": {
+      "description": "This machine was removed from its network and can rejoin.",
+      "type": "boolean"
+    },
+    "follow_updates": {
+      "description": "\"Keep all machines on the same version\": the `follow_updates` register. A member that sees a\nnewer version on another member updates itself when it is idle.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "enabled",
+    "self_machine",
+    "members",
+    "found",
+    "outbox",
+    "tailscale"
+  ],
+  "$defs": {
+    "MachineCard": {
+      "description": "One member as Settings → Machines shows it.",
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "os": {
+          "type": "string"
+        },
+        "arch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ts_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "signing_key": {
+          "description": "The machine's Ed25519 signing key, standard base64. A client pins it, so a route can only\nattach to this machine by proving that key (§3.2).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/MachineStatus"
+        },
+        "is_self": {
+          "description": "This daemon.",
+          "type": "boolean",
+          "default": false
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "network_protocol": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 0
+        },
+        "features": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "last_seen_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "relay_via": {
+          "description": "The member relaying to this machine when `status` is `relaying`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "harnesses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HarnessSummary"
+          }
+        },
+        "allow": {
+          "description": "Capabilities this machine lets the machine this card is served from use (`allow.*` registers).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          }
+        },
+        "added_by": {
+          "description": "\"Added by <machine>\": the signer of the machine's `add` operation.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "added_via": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JoinVia"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "added_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "machine_id",
+        "name",
+        "os",
+        "status"
+      ]
+    },
+    "MachineStatus": {
+      "description": "Whether a machine can be reached right now.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "online",
+            "offline"
+          ]
+        },
+        {
+          "description": "Only a relay route works.",
+          "type": "string",
+          "const": "relaying"
+        },
+        {
+          "description": "Paused by the owner: ops still sync, nothing else opens.",
+          "type": "string",
+          "const": "paused"
+        }
+      ]
+    },
+    "HarnessSummary": {
+      "description": "A harness on a machine, in the short form the Machines page shows.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "signed_in": {
+          "description": "Absent when the daemon cannot tell.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "available"
+      ]
+    },
+    "ProviderKind": {
+      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "opencode",
+        "pi",
+        "omp",
+        "cursor"
+      ]
+    },
+    "JoinVia": {
+      "description": "How a machine was added.",
+      "oneOf": [
+        {
+          "description": "Same Tailscale user, no clicks.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "\"Found on your tailnet · Add\".",
+          "type": "string",
+          "const": "found"
+        },
+        {
+          "description": "Six-digit code or QR.",
+          "type": "string",
+          "const": "code"
+        },
+        {
+          "description": "A saved environment became a member.",
+          "type": "string",
+          "const": "migrate"
+        }
+      ]
+    },
+    "FoundMachine": {
+      "description": "A machine that answered the well-known endpoint but is not a member.",
+      "type": "object",
+      "properties": {
+        "found_id": {
+          "description": "Opaque id for `network.add` and `network.merge`. It is the Tailscale node id.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "machine_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "os": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ts_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "action": {
+          "$ref": "#/$defs/FoundAction"
+        },
+        "other_network_id": {
+          "description": "Set when the machine is in another network of the owner.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "found_id",
+        "name",
+        "action"
+      ]
+    },
+    "FoundAction": {
+      "description": "What to do with a machine found on the tailnet that is not a member.",
+      "oneOf": [
+        {
+          "description": "One click joins it.",
+          "type": "string",
+          "const": "add"
+        },
+        {
+          "description": "The target cannot verify the clicker; the user enters the code shown on it.",
+          "type": "string",
+          "const": "code"
+        },
+        {
+          "description": "It is in another network of the same owner.",
+          "type": "string",
+          "const": "merge"
+        }
+      ]
+    },
+    "OutboxSummary": {
+      "description": "Work waiting to reach machines that are offline or paused.",
+      "type": "object",
+      "properties": {
+        "queued": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "queued",
+        "failed"
+      ]
+    },
+    "BrokerInfo": {
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reachable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "machine_id",
+        "reachable"
+      ]
+    },
+    "TailscaleState": {
+      "description": "What the daemon knows about Tailscale.",
+      "type": "object",
+      "properties": {
+        "installed": {
+          "type": "boolean"
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "self_ip": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "self_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tailnet": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "login_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "listening_port": {
+          "description": "The network port the Tailscale listener holds, once bound.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "lock_enabled": {
+          "description": "Tailnet lock is on; the doctor recommends it.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "detail": {
+          "description": "Why the state is what it is, when it is not running.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "installed",
+        "running"
+      ]
+    }
+  }
+}

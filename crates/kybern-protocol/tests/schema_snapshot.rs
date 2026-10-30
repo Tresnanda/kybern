@@ -323,3 +323,223 @@ fn group_project_wire_shape_is_stable() {
     assert!(pr.commit_first && !pr.draft && pr.repos.is_none());
     assert_eq!(PrCreateGroup::NAME, "github.pr.create_group");
 }
+
+#[test]
+fn network_schemas_are_stable() {
+    insta::assert_json_snapshot!("network_status", schema_for!(NetworkStatus));
+    insta::assert_json_snapshot!("network_op_body", schema_for!(OpBody));
+    insta::assert_json_snapshot!("network_op_envelope", schema_for!(OpEnvelope));
+    insta::assert_json_snapshot!("network_machine_card", schema_for!(MachineCard));
+    insta::assert_json_snapshot!("network_found_machine", schema_for!(FoundMachine));
+    insta::assert_json_snapshot!("network_route", schema_for!(Route));
+    insta::assert_json_snapshot!("network_peer_presence", schema_for!(PeerPresence));
+    insta::assert_json_snapshot!("network_origin", schema_for!(Origin));
+    insta::assert_json_snapshot!("network_move_info", schema_for!(MoveInfo));
+    insta::assert_json_snapshot!("network_repo_identity", schema_for!(ProjectRepoIdentity));
+    insta::assert_json_snapshot!("network_machine_info", schema_for!(MachineInfo));
+    insta::assert_json_snapshot!("network_doctor_report", schema_for!(DoctorReport));
+}
+
+#[test]
+fn machine_utility_schemas_are_stable() {
+    insta::assert_json_snapshot!("utilities_files_send_params", schema_for!(FilesSendParams));
+    insta::assert_json_snapshot!("utilities_files_push_payload", schema_for!(FilesPushPayload));
+    insta::assert_json_snapshot!("utilities_peer_files_begin_params", schema_for!(PeerFilesBeginParams));
+    insta::assert_json_snapshot!("utilities_peer_files_begin_result", schema_for!(PeerFilesBeginResult));
+    insta::assert_json_snapshot!("utilities_peer_files_chunk_params", schema_for!(PeerFilesChunkParams));
+    insta::assert_json_snapshot!("utilities_files_progress", schema_for!(FilesProgress));
+    insta::assert_json_snapshot!("utilities_files_received", schema_for!(FilesReceived));
+    insta::assert_json_snapshot!("utilities_port_forward", schema_for!(PortForward));
+    insta::assert_json_snapshot!("utilities_peer_ports_open_params", schema_for!(PeerPortsOpenParams));
+}
+
+#[test]
+fn skill_sync_schemas_are_stable() {
+    insta::assert_json_snapshot!("skills_inventory", schema_for!(SkillInventory));
+    insta::assert_json_snapshot!("skills_network_view", schema_for!(SkillsNetworkView));
+    insta::assert_json_snapshot!("skills_copy_params", schema_for!(SkillsCopyParams));
+    insta::assert_json_snapshot!("skills_copy_result", schema_for!(SkillsCopyResult));
+    insta::assert_json_snapshot!("skills_copy_payload", schema_for!(SkillCopyPayload));
+    insta::assert_json_snapshot!("skills_landed", schema_for!(SkillLanded));
+    insta::assert_json_snapshot!("skills_conflict", schema_for!(SkillConflict));
+}
+
+#[test]
+fn skill_homes_name_their_folders_and_readers() {
+    for home in SkillHome::ALL {
+        assert_eq!(serde_json::to_value(home).unwrap(), home.as_str());
+        assert_eq!(SkillHome::parse(home.as_str()), Some(home));
+        assert!(home.usual_path().starts_with("~/.") && home.usual_path().ends_with("skills"));
+        assert!(!home.readers().is_empty());
+    }
+    // Every harness reads at least one home, and the cross-agent folder reaches more than one.
+    for provider in ProviderKind::ALL {
+        assert!(SkillHome::ALL.iter().any(|home| home.readers().contains(&provider)), "{provider} reads no home");
+    }
+    assert!(SkillHome::Agents.readers().len() > 1);
+    assert_eq!(
+        serde_json::to_value(PushDest::Skill { name: "x".into(), homes: vec![SkillHome::Agents], hash: "h".into(), replaces: vec![] })
+            .unwrap()["kind"],
+        "skill"
+    );
+}
+
+fn machine(id: &str) -> MachineDescriptor {
+    MachineDescriptor {
+        machine_id: id.into(),
+        name: "satyamas".into(),
+        os: "windows".into(),
+        signing_key: "c2ln".into(),
+        sealing_key: "c2VhbA==".into(),
+        ts_node_id: Some("nABC".into()),
+        ts_name: None,
+        port: None,
+    }
+}
+
+#[test]
+fn an_operation_body_flattens_its_kind_and_keeps_unknown_kinds() {
+    let body = OpBody {
+        v: OP_VERSION,
+        network_id: "net".into(),
+        at: "2026-10-28T10:00:00Z".parse().unwrap(),
+        lamport: 3,
+        op: OpKind::Add { machine: machine("m2"), via: JoinVia::Found },
+    };
+    let json = serde_json::to_value(&body).unwrap();
+    assert_eq!((json["kind"].as_str(), json["via"].as_str(), json["lamport"].as_u64()), (Some("add"), Some("found"), Some(3)));
+    assert_eq!(json["machine"]["machine_id"], "m2");
+    assert!(json["machine"].get("ts_name").is_none(), "absent options are omitted");
+    assert_eq!(serde_json::from_value::<OpBody>(json).unwrap(), body);
+
+    let set = OpBody { op: OpKind::Set { key: "machine.m2.paused".into(), value: serde_json::json!(true) }, ..body.clone() };
+    assert_eq!(serde_json::from_str::<OpBody>(&serde_json::to_string(&set).unwrap()).unwrap(), set);
+    let remove = OpBody { op: OpKind::Remove { machine_id: "m2".into(), ts_node_id: None, reason: RemoveReason::Stolen }, ..body };
+    assert_eq!(serde_json::to_value(&remove).unwrap()["reason"], "stolen");
+
+    // A kind from a newer build parses as Unknown instead of failing, so it can be kept and gossiped.
+    let future =
+        serde_json::json!({"v": 2, "network_id": "net", "at": "2026-10-28T10:00:00Z", "lamport": 9, "kind": "rotate_key", "extra": 1});
+    let parsed: OpBody = serde_json::from_value(future).unwrap();
+    assert_eq!((parsed.op, parsed.lamport), (OpKind::Unknown, 9));
+}
+
+#[test]
+fn machine_scopes_are_kept_out_of_client_tokens() {
+    assert!(Scope::ALL.contains(&Scope::NetworkAdmin) && Scope::ALL.contains(&Scope::NetworkRead));
+    assert!(Scope::CLIENT.contains(&Scope::NetworkRead) && !Scope::CLIENT.contains(&Scope::NetworkAdmin));
+    for scope in Scope::MACHINE {
+        assert!(scope.is_machine() && !Scope::ALL.contains(&scope) && !Scope::CLIENT.contains(&scope), "{scope}");
+        assert!(scope.as_str().starts_with("machine:"));
+    }
+    assert!(!Scope::MACHINE_DEFAULT.contains(&Scope::MachineClipboardAuto));
+    assert_eq!(Scope::MACHINE_DEFAULT.len() + 1, Scope::MACHINE.len());
+    assert_eq!(Scope::from_capability("delegate"), Some(Scope::MachineDelegate));
+    assert_eq!(Scope::from_capability("clipboard_auto"), Some(Scope::MachineClipboardAuto));
+    assert_eq!((Scope::from_capability("peer"), Scope::from_capability("nope")), (None, None));
+    assert_eq!(serde_json::to_value(Scope::MachineClipboardAuto).unwrap(), "machine_clipboard_auto");
+    assert_eq!(serde_json::to_value(Scope::NetworkRead).unwrap(), "network_read");
+}
+
+#[test]
+fn every_network_method_has_a_scope_and_peer_methods_need_a_machine_scope() {
+    for method in METHODS.iter().filter(|m| m.name.starts_with("network.") || m.name.starts_with("machines.")) {
+        assert!(matches!(method.scope, Some(Scope::NetworkRead | Scope::NetworkAdmin)), "{}", method.name);
+    }
+    let peers: Vec<_> = METHODS.iter().filter(|m| m.name.starts_with("peer.")).collect();
+    // Eight from N1; later packages add theirs (R1: delegate, delegation.get/cancel, git.bundle/import).
+    assert!(peers.len() >= 8);
+    assert!(peers.iter().all(|m| m.scope.is_some_and(Scope::is_machine)));
+    assert_eq!(NetworkStatusMethod::NAME, "network.status");
+    assert_eq!(NETWORK_CHANGED_NOTIFICATION, "network.changed");
+    assert_eq!(NETWORK_MACHINE_CHANGED_NOTIFICATION, "network.machine.changed");
+}
+
+#[test]
+fn an_older_daemon_info_and_project_still_parse_and_the_network_defaults_to_off() {
+    let old: DaemonInfo = serde_json::from_value(serde_json::json!({
+        "version": "0.18.0", "protocol_version": 1, "environment_id": "e", "hostname": "h", "os": "macos", "arch": "aarch64",
+        "data_dir": "/d", "scopes": ["orchestration_read"], "started_at": "2026-10-28T10:00:00Z"
+    }))
+    .unwrap();
+    assert_eq!((old.machine_id.as_str(), old.network_protocol, old.features.len()), ("", 0, 0));
+    let settings: Settings = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert_eq!(settings.network, NetworkSettings { enabled: false, port: DEFAULT_PORT });
+    // A settings file from before the default changed, saved with the network on, keeps it on.
+    let saved: Settings = serde_json::from_value(serde_json::json!({ "network": { "enabled": true } })).unwrap();
+    assert_eq!(saved.network, NetworkSettings { enabled: true, port: DEFAULT_PORT });
+    assert_eq!(NETWORK_PROTOCOL, 1);
+    assert_eq!(features::ALL.len(), 18);
+}
+
+#[test]
+fn outbox_and_remote_delegation_schemas_are_stable() {
+    insta::assert_json_snapshot!("outbox_item", schema_for!(OutboxItem));
+    insta::assert_json_snapshot!("outbox_op", schema_for!(OutboxOp));
+    insta::assert_json_snapshot!("outbox_remote_child", schema_for!(RemoteChild));
+    insta::assert_json_snapshot!("peer_delegate_params", schema_for!(PeerDelegateParams));
+    insta::assert_json_snapshot!("peer_delegate_result", schema_for!(PeerDelegateResult));
+    insta::assert_json_snapshot!("peer_delegation_view", schema_for!(PeerDelegationView));
+    insta::assert_json_snapshot!("peer_git_bundle_params", schema_for!(PeerGitBundleParams));
+    insta::assert_json_snapshot!("peer_git_import_params", schema_for!(PeerGitImportParams));
+}
+
+#[test]
+fn outbox_states_and_kinds_use_the_names_the_tables_check() {
+    for (state, name) in [
+        (OutboxState::Queued, "queued"),
+        (OutboxState::Sending, "sending"),
+        (OutboxState::Delivered, "delivered"),
+        (OutboxState::Failed, "failed"),
+        (OutboxState::Expired, "expired"),
+        (OutboxState::Cancelled, "cancelled"),
+    ] {
+        assert_eq!(serde_json::to_value(state).unwrap(), name);
+        assert_eq!(state.as_str(), name);
+    }
+    for kind in [
+        OutboxKind::ThreadCreate,
+        OutboxKind::ThreadSend,
+        OutboxKind::Delegate,
+        OutboxKind::FilesPush,
+        OutboxKind::SettingsPatch,
+        OutboxKind::SecretsPut,
+        OutboxKind::Fork,
+        OutboxKind::Move,
+        OutboxKind::Provision,
+        OutboxKind::SkillCopy,
+        OutboxKind::PluginInstall,
+    ] {
+        assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
+    }
+    assert!(OutboxState::Expired.is_settled() && !OutboxState::Sending.is_settled());
+    assert_eq!(OUTBOX_EXPIRY_DAYS, 7);
+}
+
+#[test]
+fn remote_child_states_map_to_the_status_the_tools_show() {
+    assert_eq!(RemoteChildState::Pending.delegation_status(), DelegationStatus::Running);
+    assert_eq!(RemoteChildState::Unreachable.delegation_status(), DelegationStatus::Failed);
+    assert_eq!(RemoteChildState::Cancelled.delegation_status(), DelegationStatus::Cancelled);
+    assert!(!RemoteChildState::Running.is_terminal() && RemoteChildState::Completed.is_terminal());
+    assert_eq!(serde_json::to_value(RemoteChildState::Unreachable).unwrap(), "unreachable");
+}
+
+#[test]
+fn plugin_declarations_and_confirmations_are_stable() {
+    insta::assert_json_snapshot!("plugin_inventory", schema_for!(PluginInventory));
+    insta::assert_json_snapshot!("plugins_copy_params", schema_for!(PluginsCopyParams));
+    insta::assert_json_snapshot!("plugin_install_request", schema_for!(PluginInstallRequest));
+}
+
+#[test]
+fn provision_member_plans_are_stable() {
+    insta::assert_json_snapshot!("provision_plan", schema_for!(ProvisionPlan));
+    insta::assert_json_snapshot!("provision_probe", schema_for!(PeerProvisionProbe));
+    let older: PeerProvisionProbe = serde_json::from_value(serde_json::json!({
+        "os": "linux", "suggested_path": "/home/me/group",
+        "path_check": { "state": "free", "path": "/home/me/group", "message": "New folder" }
+    }))
+    .unwrap();
+    assert!(older.members.is_empty(), "older peers do not report member mappings");
+}

@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -38,7 +39,8 @@ impl broadcast::RetainedSize for Arc<TerminalEvent> {
 pub struct Terminal {
     command: Option<Vec<String>>,
     pub info: Mutex<TerminalInfo>,
-    master: Mutex<Box<dyn MasterPty + Send>>,
+    /// Taken (closed) once the process has exited and its output is drained.
+    master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     writer: Mutex<Box<dyn Write + Send>>,
     scrollback: Mutex<VecDeque<u8>>,
     pub events: broadcast::Sender<Arc<TerminalEvent>>,
@@ -47,6 +49,8 @@ pub struct Terminal {
     last_activity: Mutex<Instant>,
     /// When the process ended; the record is purged after `EXITED_RETENTION`.
     exited_at: Mutex<Option<Instant>>,
+    /// Set by the first `finish`, so the reader and the exit watcher record one exit.
+    finished: AtomicBool,
 }
 
 /// One pseudo-terminal the daemon closed because nothing was using it.
@@ -135,13 +139,14 @@ impl TerminalManager {
                 exit_code: None,
                 created_at: Utc::now(),
             }),
-            master: Mutex::new(pair.master),
+            master: Mutex::new(Some(pair.master)),
             writer: Mutex::new(writer),
             scrollback: Mutex::new(VecDeque::with_capacity(SCROLLBACK_CAP)),
             events,
             child: Mutex::new(child),
             last_activity: Mutex::new(Instant::now()),
             exited_at: Mutex::new(None),
+            finished: AtomicBool::new(false),
         });
         self.terminals.lock().unwrap().insert(id, terminal.clone());
         self.issued_ids.lock().unwrap().insert(id);
@@ -152,10 +157,21 @@ impl TerminalManager {
             .name(format!("pty-{id}"))
             .spawn(move || {
                 let mut buf = [0u8; 8192];
+                #[cfg(windows)]
+                let mut cursor = InitialCursorReport::default();
                 loop {
                     match reader.read(&mut buf) {
                         Ok(0) => break,
                         Ok(n) => {
+                            #[cfg(windows)]
+                            let chunk = {
+                                let (chunk, answer) = cursor.push(&buf[..n]);
+                                if answer {
+                                    let _ = t.write(b"\x1b[1;1R");
+                                }
+                                chunk
+                            };
+                            #[cfg(not(windows))]
                             let chunk = buf[..n].to_vec();
                             t.touch();
                             {
@@ -176,17 +192,18 @@ impl TerminalManager {
                     }
                 }
                 let code = t.child.lock().unwrap().wait().ok().map(|s| s.exit_code() as i32);
-                {
-                    let mut info = t.info.lock().unwrap();
-                    info.alive = false;
-                    info.exit_code = code;
-                }
-                *t.exited_at.lock().unwrap() = Some(Instant::now());
-                let _ = t.events.send(Arc::new(TerminalEvent::Exited(code)));
                 // The record stays listed for `EXITED_RETENTION` so clients can
                 // read the exit; the maintenance sweep purges it.
+                t.finish(code);
             })
             .context("spawn pty reader thread")?;
+
+        // Windows (ConPTY): the output pipe stays open after the shell exits until the
+        // pseudoconsole is closed, so the reader never sees EOF. Watch the process itself.
+        if cfg!(windows) {
+            let t = terminal.clone();
+            std::thread::Builder::new().name(format!("pty-wait-{id}")).spawn(move || t.watch_exit()).context("spawn pty exit watcher")?;
+        }
 
         Ok(terminal)
     }
@@ -277,11 +294,55 @@ impl Terminal {
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> Result<()> {
-        self.master.lock().unwrap().resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })?;
+        if let Some(master) = self.master.lock().unwrap().as_ref() {
+            master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })?;
+        }
         let mut info = self.info.lock().unwrap();
         info.cols = cols;
         info.rows = rows;
         Ok(())
+    }
+
+    /// Record the process exit once: mark the terminal dead, stamp the retention
+    /// clock and tell subscribers. Later calls do nothing.
+    fn finish(&self, code: Option<i32>) {
+        if self.finished.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        {
+            let mut info = self.info.lock().unwrap();
+            info.alive = false;
+            info.exit_code = code;
+        }
+        *self.exited_at.lock().unwrap() = Some(Instant::now());
+        let _ = self.events.send(Arc::new(TerminalEvent::Exited(code)));
+    }
+
+    /// Wait for the process to end, let the reader drain what it wrote, then close the
+    /// master so a reader blocked on an open pipe returns, and record the exit.
+    fn watch_exit(&self) {
+        let code = loop {
+            if self.finished.load(Ordering::SeqCst) {
+                return;
+            }
+            match self.child.lock().unwrap().try_wait() {
+                Ok(Some(status)) => break Some(status.exit_code() as i32),
+                Ok(None) => {}
+                Err(_) => break None,
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        // Output the shell wrote before exiting is still in the pipe: wait for it to go quiet.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let seen = self.last_activity();
+            std::thread::sleep(Duration::from_millis(150));
+            if self.last_activity() == seen || Instant::now() >= deadline {
+                break;
+            }
+        }
+        self.finish(code);
+        drop(self.master.lock().unwrap().take());
     }
 
     pub fn info(&self) -> TerminalInfo {
@@ -302,7 +363,7 @@ impl Terminal {
         #[cfg(unix)]
         {
             let shell = self.child.lock().unwrap().process_id()?;
-            let leader = self.master.lock().unwrap().process_group_leader()?;
+            let leader = self.master.lock().unwrap().as_ref()?.process_group_leader()?;
             Some(u32::try_from(leader).ok() == Some(shell))
         }
         // portable-pty has no process-group query on Windows.
@@ -366,8 +427,70 @@ fn plain_windows_path(path: &str) -> String {
     }
 }
 
+// portable-pty enables ConPTY's INHERIT_CURSOR flag. Every terminal here starts
+// with a fresh, empty screen, so the host can answer its initial position request
+// before any client attaches. Consume that request so a renderer cannot reply twice.
+// Only ConPTY's startup preamble is searched: a later request from the shell or a
+// TUI passes through to the attached renderer untouched.
+#[cfg(any(windows, test))]
+#[derive(Default)]
+struct InitialCursorReport {
+    pending: Vec<u8>,
+    seen: usize,
+    answered: bool,
+}
+
+#[cfg(any(windows, test))]
+impl InitialCursorReport {
+    const PREAMBLE: usize = 256;
+
+    fn push(&mut self, bytes: &[u8]) -> (Vec<u8>, bool) {
+        const QUERY: &[u8] = b"\x1b[6n";
+        if self.answered {
+            return (bytes.to_vec(), false);
+        }
+        self.seen += bytes.len();
+        self.pending.extend_from_slice(bytes);
+        if let Some(index) = self.pending.windows(QUERY.len()).position(|part| part == QUERY)
+            && self.seen - self.pending.len() + index < Self::PREAMBLE
+        {
+            self.pending.drain(index..index + QUERY.len());
+            self.answered = true;
+            return (std::mem::take(&mut self.pending), true);
+        }
+        if self.seen >= Self::PREAMBLE {
+            self.answered = true;
+            return (std::mem::take(&mut self.pending), false);
+        }
+        let keep = (1..QUERY.len()).rev().find(|&len| self.pending.ends_with(&QUERY[..len])).unwrap_or(0);
+        let tail = self.pending.split_off(self.pending.len() - keep);
+        (std::mem::replace(&mut self.pending, tail), false)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_initial_cursor_request_is_answered_once_even_across_reads() {
+        for split in 0..=4 {
+            let mut cursor = InitialCursorReport::default();
+            assert_eq!(cursor.push(b"ready"), (b"ready".to_vec(), false));
+            let query = b"\x1b[6n";
+            let first = cursor.push(&query[..split]);
+            let second = cursor.push(&query[split..]);
+            assert!(first.0.is_empty() && second.0.is_empty());
+            assert_eq!(usize::from(first.1) + usize::from(second.1), 1);
+            assert_eq!(cursor.push(b"prompt\x1b[6n"), (b"prompt\x1b[6n".to_vec(), false));
+        }
+        let mut cursor = InitialCursorReport::default();
+        assert_eq!(cursor.push(b"before\x1b[6nAfter"), (b"beforeAfter".to_vec(), true));
+        // A request after the startup preamble belongs to the renderer.
+        let mut cursor = InitialCursorReport::default();
+        let output = vec![b'x'; InitialCursorReport::PREAMBLE];
+        assert_eq!(cursor.push(&output), (output.clone(), false));
+        assert_eq!(cursor.push(b"\x1b[6n"), (b"\x1b[6n".to_vec(), false));
+    }
+
     #[test]
     fn verbatim_windows_paths_become_plain_for_the_shell() {
         use super::plain_windows_path;
@@ -403,6 +526,7 @@ mod tests {
         manager.close(terminal.info().id).unwrap();
     }
 
+    #[cfg(unix)]
     fn wait_until(check: impl Fn() -> bool) -> bool {
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
@@ -443,6 +567,36 @@ mod tests {
         assert_eq!(released.len(), 1);
         assert_eq!(released[0].id, terminal.info().id);
         assert!(manager.get(terminal.info().id).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exit_is_recorded_once_and_late_finishes_are_ignored() {
+        let manager = TerminalManager::default();
+        let terminal = manager
+            .create(
+                None,
+                None,
+                std::env::temp_dir().display().to_string(),
+                80,
+                24,
+                Some(vec!["/bin/sh".into(), "-c".into(), "exit 4".into()]),
+            )
+            .unwrap();
+        let (mut events, _) = terminal.subscribe_output(false);
+        assert!(wait_until(|| !terminal.info().alive), "command did not exit");
+        // The exit watcher Windows runs lands on the same path after the reader.
+        terminal.finish(Some(9));
+        terminal.watch_exit();
+        assert_eq!(terminal.info().exit_code, Some(4));
+        let mut exits = 0;
+        while let Ok(event) = events.try_recv() {
+            if matches!(event.as_ref(), TerminalEvent::Exited(_)) {
+                exits += 1;
+            }
+        }
+        assert!(exits <= 1, "Exited sent {exits} times");
+        assert!(terminal.resize(100, 30).is_ok());
     }
 
     #[cfg(unix)]

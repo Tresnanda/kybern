@@ -1,0 +1,389 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(PeerDelegateParams)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PeerDelegateParams",
+  "description": "`peer.delegate`: A asks B to run a delegated child. Everything but `repo` and `project` was\nresolved on A; B checks the origin against the session's machine and clamps the permission mode.",
+  "type": "object",
+  "properties": {
+    "operation_id": {
+      "description": "A's operation id. B namespaces it by the origin before it deduplicates.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "task_id": {
+      "description": "The id both machines use for this delegation (`kybern_agent_status` shows it).",
+      "type": "string",
+      "format": "uuid"
+    },
+    "origin": {
+      "$ref": "#/$defs/Origin"
+    },
+    "parent_title": {
+      "description": "The parent thread's title on A, for the child's brief.",
+      "type": "string"
+    },
+    "task": {
+      "type": "string"
+    },
+    "title": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "role": {
+      "$ref": "#/$defs/DelegationRole",
+      "default": "general"
+    },
+    "provider": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "model": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "effort": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "permission_mode": {
+      "description": "Already resolved against the parent's mode on A; B can only lower it.",
+      "$ref": "#/$defs/PermissionMode"
+    },
+    "workspace": {
+      "$ref": "#/$defs/DelegationWorkspace",
+      "default": "shared"
+    },
+    "owns": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "repo": {
+      "description": "The repository the parent works in, to find the matching checkout on B.",
+      "$ref": "#/$defs/RepoIdentity"
+    },
+    "project": {
+      "description": "Picks one of B's projects when more than one matches `repo`: an id, a name or a path.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "base_commit": {
+      "description": "Worktree: the commit B seeds its worktree from (A's snapshot of the parent's changes).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "group": {
+      "description": "A group project's delegation: its repositories and, for a worktree, each member's base commit.\n`repo` and `base_commit` are then the first member's.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GroupWork"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "operation_id",
+    "task_id",
+    "origin",
+    "parent_title",
+    "task",
+    "permission_mode",
+    "repo"
+  ],
+  "$defs": {
+    "Origin": {
+      "description": "Where work that another machine started came from. Only a daemon sets it, and it never changes.",
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "machine_name": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "operation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "$ref": "#/$defs/OriginKind"
+        },
+        "permission_cap": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "hops": {
+          "description": "Machine ids, oldest first; at most one in v1.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "machine_id",
+        "machine_name",
+        "operation_id",
+        "kind",
+        "permission_cap"
+      ]
+    },
+    "OriginKind": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "composer"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "delegation"
+            }
+          },
+          "required": [
+            "kind",
+            "task_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "tool_call"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "fork"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "move"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "PermissionMode": {
+      "description": "The four permission modes.",
+      "oneOf": [
+        {
+          "description": "Every tool call that mutates or executes asks for approval.",
+          "type": "string",
+          "const": "supervised"
+        },
+        {
+          "description": "File edits proceed; shell and network still ask.",
+          "type": "string",
+          "const": "accept-edits"
+        },
+        {
+          "description": "The provider decides with its own safety heuristics; asks only when unsure.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Nothing asks. Sandboxing is the provider's problem.",
+          "type": "string",
+          "const": "full-access"
+        }
+      ]
+    },
+    "DelegationRole": {
+      "description": "What the delegating agent asked this child to be.",
+      "type": "string",
+      "enum": [
+        "implementation",
+        "research",
+        "review",
+        "design",
+        "test",
+        "general"
+      ]
+    },
+    "ProviderKind": {
+      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "opencode",
+        "pi",
+        "omp",
+        "cursor"
+      ]
+    },
+    "DelegationWorkspace": {
+      "description": "Where a delegated child works.",
+      "oneOf": [
+        {
+          "description": "The parent's checkout and branch.",
+          "type": "string",
+          "const": "shared"
+        },
+        {
+          "description": "Its own git worktree on `kybern/<child-id>`, seeded from the parent's\ncurrent uncommitted state.",
+          "type": "string",
+          "const": "worktree"
+        }
+      ]
+    },
+    "RepoIdentity": {
+      "description": "What makes two checkouts the same logical project on different machines.",
+      "type": "object",
+      "properties": {
+        "root_commit": {
+          "description": "The smallest hash in `git rev-list --max-parents=0 HEAD`. Absent for a shallow clone, whose\n\"root\" is only where the history was cut.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root_commits": {
+          "description": "Every root commit, sorted. A repository with several roots (merged histories) matches a\ncheckout that shares any of them. Empty from a daemon that predates this field.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "remote": {
+          "description": "The `origin` URL normalized to `host/owner/repo`: lowercase, no scheme, user or `.git`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "GroupWork": {
+      "description": "What a group project's thread carries to another machine instead of a single repository.\n\nThe receiver looks for a group project made of exactly `repos` (the same rule clients merge by), then\nmaps every member of `members` to its checkout there by repository identity. A partial match is\nrefused with the missing repositories named: nothing is transferred half way.",
+      "type": "object",
+      "properties": {
+        "repos": {
+          "description": "Every repository of the sender's group project.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GroupRepo"
+          }
+        },
+        "members": {
+          "description": "The members the thread works in (all of them unless a worktree chat left some out).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GroupMemberWork"
+          }
+        }
+      },
+      "required": [
+        "repos",
+        "members"
+      ]
+    },
+    "GroupRepo": {
+      "description": "One member repository of a group project, named as its people know it.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "repo": {
+          "$ref": "#/$defs/RepoIdentity"
+        }
+      },
+      "required": [
+        "name",
+        "repo"
+      ]
+    },
+    "GroupMemberWork": {
+      "description": "A member repository a group thread works in, and the commit that holds its work.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "The member's path in the sender's group folder (\".\" is the group folder's own repository).",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "repo": {
+          "$ref": "#/$defs/RepoIdentity"
+        },
+        "commit": {
+          "description": "The snapshot of the member's work (a fork or move: its branch and uncommitted changes; a worktree\ndelegation: the base). `None` when the receiver needs no commit (a shared workspace).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "name",
+        "repo"
+      ]
+    }
+  }
+}

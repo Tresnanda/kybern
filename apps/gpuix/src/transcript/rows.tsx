@@ -8,11 +8,15 @@ import { SentToRow } from './Messages.tsx'
 import { openThread } from '../nav/history.ts'
 import { pickRecordText, pickRequestInput } from '../../../../packages/kybern-client/src/pickRequest.ts'
 import { secretRequestInput, secretOutcomeLine, secretPartsText } from '../../../../packages/kybern-client/src/secretRequest.ts'
+import { provisionCardInput, provisionRecordText } from '../../../../packages/kybern-client/src/provision.ts'
 import { answerRowText, visualAnswerInput } from '../../../../packages/kybern-client/src/visualAnswer.ts'
 import { coordinatorCardLine, cardPartsText } from '../../../../packages/kybern-client/src/coordinatorCards.ts'
 import { recordText, requestRecord } from '../../../../packages/kybern-client/src/requestCards.ts'
 import { RequestRecordRow } from './RequestRecord.tsx'
 import { SignInChip } from './SignInChip.tsx'
+import { ForkOpen } from './ForkNotice.tsx'
+import { HistoryRow } from './HistoryBlock.tsx'
+import { forkNotice, forkNoticeText } from '../../../../packages/kybern-client/src/forkMachine.ts'
 import type { LoginRecipe } from '../../../../packages/kybern-client/src/loginRecipes.ts'
 // Work rows inside a turn (`views/Transcript.tsx` WorkRows → ToolRow/WorkRow):
 // tool calls with their expandable result, the work between two pieces of
@@ -69,8 +73,12 @@ export function launchThread(block: Block, ctx: RowContext): Thread | undefined 
   if (block.kind === 'runtime_task') return findSubagentFor(ctx.children, { toolCallId: block.task.tool_call_id, taskId: block.task.id })
   if (block.kind !== 'tool') return undefined
   if (isDelegationLaunchBlock(block)) {
-    const id = parseDelegateResult(block.output)?.threadId
-    if (id) return ctx.children.find((thread) => thread.id === id)
+    const parsed = parseDelegateResult(block.output)
+    if (parsed?.threadId) return ctx.children.find((thread) => thread.id === parsed.threadId)
+    // A child on another machine, added there first, has no thread id in the result: its task id finds it, so the row follows it
+    // to Done instead of staying on "Working".
+    const byTask = parsed?.taskId ? ctx.children.find((thread) => thread.delegation?.task_id === parsed.taskId) : undefined
+    if (byTask) return byTask
     const operationId = block.isError ? null : parseDelegateInput(block.call.input).operationId
     return operationId ? ctx.children.find((thread) => thread.delegation?.operation_id === operationId) : undefined
   }
@@ -145,6 +153,8 @@ export function approvalRowText(approval: ApprovalRequest, decision: ApprovalDec
   if (auto) return `Allowed by Full access — ${approval.summary || approval.tool_name}`
   const secret = secretRequestInput(approval)
   if (secret) return secretPartsText(secretOutcomeLine(secret, decision, live))
+  const provision = provisionCardInput(approval)
+  if (provision) return provisionRecordText(provision, decision)
   const asked = visualAnswerInput(approval)
   if (asked) return answerRowText(asked.title, decision)
   const pick = pickRequestInput(approval)
@@ -400,16 +410,23 @@ export const WorkRow = memo(function WorkRow({
         </div>
       )
     }
-    case 'notice':
+    case 'notice': {
+      // A fork notice ("Forked to satyamas") offers the new thread beside its words.
+      const fork = block.data ? forkNotice(block.data) : null
+      const open = fork?.threadId ? fork : null
       return (
         <div paintTransform={tree.rise} style={{ position: 'relative', display: 'flex', alignItems: 'flex-start', gap: 8, paddingTop: 4, paddingBottom: 4, minWidth: 0 }}>
           <RowIcon box={20} size={16} source={T.alert} color={block.level === 'error' ? t.red : muted(t)} />
           <Para color={block.level === 'error' ? t.red : muted(t)} lineHeight={ROW_LINE} selectable style={{ flexGrow: 1 }}>
-            {block.text}
+            {fork ? forkNoticeText(fork, block.text) : block.text}
           </Para>
+          {open && <div style={{ display: 'flex', alignItems: 'center', height: ROW_LINE }}><ForkOpen machineId={open.machineId} threadId={open.threadId!} machineName={open.machineName} /></div>}
           {tree.lines}
         </div>
       )
+    }
+    case 'history':
+      return <HistoryRow block={block} />
     case 'user':
       // A message sent mid-turn sits between work rows with a bubble's breathing room.
       return <MidTurnMessage parts={block.message.parts} at={block.at} />

@@ -43,10 +43,16 @@ pub struct Inner {
     pub account_logins: crate::account_login::AccountLogins,
     /// First-run scan and bulk import of saved harness sessions.
     pub session_imports: crate::session_import::SessionImports,
+    /// Where this machine's user skill folders are (ADE-86 skill copies).
+    pub plugin_runtime: crate::plugins::PluginRuntime,
+    pub skill_homes: crate::network::skill_sync::SkillHomes,
     /// Preview file and proxy tickets (ADE-34).
     pub previews: Arc<crate::previews::tickets::PreviewTickets>,
     /// Started by the desktop app, whose bundle owns this binary.
     pub desktop_managed: std::sync::atomic::AtomicBool,
+    /// This state belongs to a `kybernd` process (`run`), not to a test harness: the process may be
+    /// ended outright when a graceful shutdown that it asked for hangs.
+    pub process_owned: std::sync::atomic::AtomicBool,
     /// A newer binary is in place; hand over to it after the graceful shutdown.
     pub restart_pending: std::sync::atomic::AtomicBool,
     pub pairing: Pairing,
@@ -54,6 +60,9 @@ pub struct Inner {
     pub revoked_tokens: broadcast::Sender<uuid::Uuid>,
     pub listen_addr: std::sync::RwLock<Option<std::net::SocketAddr>>,
     pub exposure: crate::exposure::Exposure,
+    /// The machine network: this machine's identity and membership, and discovery and sessions with
+    /// the other members (ADE-86).
+    pub network: Arc<crate::network::Network>,
     pub advertised_urls: std::sync::RwLock<Vec<String>>,
     pub port: std::sync::atomic::AtomicU16,
     pub bootstrap_token: String,
@@ -88,7 +97,44 @@ impl AppState {
     /// handshake binds its socket after this step, then recovery completes
     /// before axum begins accepting requests.
     pub fn initialize(paths: &Paths) -> Result<Self> {
-        let store = Store::open(&paths.db)?;
+        Self::initialize_with(paths, crate::network::tailscale::from_env(), crate::network::Timing::default())
+    }
+
+    /// [`AppState::initialize`] with the Tailscale seam and the network's intervals chosen by the
+    /// caller: the multi-daemon harness passes a fixture-driven fake and short intervals.
+    pub fn initialize_with(paths: &Paths, tailscale: Arc<dyn crate::network::Tailscale>, timing: crate::network::Timing) -> Result<Self> {
+        Self::initialize_with_drivers(paths, tailscale, timing, DriverRegistry::with_cache_dir(&paths.root.join("cache")))
+    }
+
+    /// [`AppState::initialize_with`] with the harness drivers chosen by the caller (the multi-daemon
+    /// harness registers scripted ones).
+    pub fn initialize_with_drivers(
+        paths: &Paths,
+        tailscale: Arc<dyn crate::network::Tailscale>,
+        timing: crate::network::Timing,
+        drivers: DriverRegistry,
+    ) -> Result<Self> {
+        Self::initialize_with_store(paths, tailscale, timing, drivers, Store::open(&paths.db)?)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn initialize_in_memory(paths: &Paths) -> Result<Self> {
+        Self::initialize_with_store(
+            paths,
+            crate::network::tailscale::from_env(),
+            crate::network::Timing::default(),
+            DriverRegistry::with_cache_dir(&paths.root.join("cache")),
+            Store::open_in_memory()?,
+        )
+    }
+
+    fn initialize_with_store(
+        paths: &Paths,
+        tailscale: Arc<dyn crate::network::Tailscale>,
+        timing: crate::network::Timing,
+        drivers: DriverRegistry,
+        store: Store,
+    ) -> Result<Self> {
         let bootstrap_token = crate::auth::ensure_bootstrap(&store, &paths.token_file)?;
         let environment_id = match store.meta_get("environment_id")? {
             Some(id) => id,
@@ -99,18 +145,36 @@ impl AppState {
             }
         };
         let (events, _) = crate::bounded_broadcast::channel(8192, 8 * 1024 * 1024);
-        let drivers = DriverRegistry::with_cache_dir(&paths.root.join("cache"));
+        // Secret store (S3): move plaintext provider keys out of settings.json before it is read.
+        crate::secret_store::start(&paths.root, &paths.settings, &store);
         let settings = SettingsStore::load(&paths.settings)?;
+        settings.attach_stamps(store.clone());
         let harness_updates = crate::harness_updates::HarnessUpdates::new(&store)?;
         let daemon_updates = crate::self_update::DaemonUpdates::new(&store)?;
         let terminals = TerminalManager::default();
         let native_tools = crate::native_tools_mcp::NativeToolsGateway::default();
         let previews = Arc::new(crate::previews::tickets::PreviewTickets::new());
+        // The network comes first: remote delegation reaches other machines through it.
+        let network = Arc::new(crate::network::Network::new(&paths.root, &store, &environment_id, tailscale, timing));
+        let shutdown = CancellationToken::new();
+        let hub = crate::network::outbox::NetworkHub::new(network.clone(), shutdown.clone());
+        // The login broker (S4) calls other machines through the same hub.
+        let login_broker = crate::network::broker::LoginBroker::new(hub.clone(), network.clone(), store.clone());
         let orchestrator = Orchestrator::new(store.clone(), drivers.clone(), events.clone(), paths.clone(), settings.clone())
             .with_terminal_manager(terminals.clone())
             .with_previews(previews.clone())
-            .with_native_tools(native_tools.clone());
+            .with_native_tools(native_tools.clone())
+            .with_remote_hub(hub)
+            .with_login_broker(login_broker.clone());
+        orchestrator.usage().set_bound_reader(login_broker);
         let provider_catalogs = orchestrator.provider_catalog_cache();
+        network.set_enabled(settings.get().network.enabled);
+        let revoked_tokens = broadcast::channel(128).0;
+        network.attach_revocations(revoked_tokens.clone());
+        // A device revoked while this daemon was down, but already in its operation set, stays revoked.
+        network.revoke_revoked_devices();
+        // Clients paired before the network existed hold the network scopes too (N4).
+        crate::access::upgrade_paired_tokens(&store);
         Ok(Self {
             inner: Arc::new(Inner {
                 paths: paths.clone(),
@@ -130,20 +194,24 @@ impl AppState {
                 account_identities: Default::default(),
                 account_logins: Default::default(),
                 session_imports: Default::default(),
+                skill_homes: Default::default(),
+                plugin_runtime: Default::default(),
                 previews,
                 desktop_managed: std::sync::atomic::AtomicBool::new(false),
+                process_owned: std::sync::atomic::AtomicBool::new(false),
                 restart_pending: std::sync::atomic::AtomicBool::new(false),
                 pairing: Pairing::default(),
                 tickets: crate::access::Tickets::default(),
-                revoked_tokens: broadcast::channel(128).0,
+                revoked_tokens,
                 listen_addr: std::sync::RwLock::new(None),
                 exposure: Default::default(),
+                network,
                 advertised_urls: std::sync::RwLock::new(vec![]),
                 port: std::sync::atomic::AtomicU16::new(0),
                 bootstrap_token,
                 environment_id,
                 started_at: Utc::now(),
-                shutdown: CancellationToken::new(),
+                shutdown,
                 connections: std::sync::atomic::AtomicUsize::new(0),
                 idle_since: std::sync::RwLock::new(None),
                 on_battery: std::sync::RwLock::new(None),

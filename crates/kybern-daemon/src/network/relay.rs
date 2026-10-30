@@ -1,0 +1,1084 @@
+//! The relay (design §3.4): a client that cannot reach machine B directly reaches it through member
+//! M, over the session M already holds with B.
+//!
+//! * `GET /relay/{machine_id}/ws` upgrades to a WebSocket and `ANY /relay/{machine_id}/http/{*path}`
+//!   carries one HTTP request (previews, assets, uploads, the well-known check).
+//! * M authenticates the caller with a device token that has `orchestration:read`, sent in
+//!   `X-Kybern-Relay-Auth: Bearer …` (the `Authorization` header belongs to B, see below). It then
+//!   opens a **stream** on its session with B: `peer.relay.open`, then `peer.relay.data` frames in
+//!   both directions and `peer.relay.close`. Frames are JSON notifications carrying base64 data; a
+//!   per-stream credit window of 256 KiB keeps one transfer from starving the session.
+//! * The caller's own `Authorization`, ticket and `Host` travel end to end. B opens a local
+//!   connection to its own listener with them, so B authenticates the **client's device token** and
+//!   sees the device as the principal, never M. M strips its own header.
+//! * Limits: 32 streams per client, 256 per daemon, and a stream with no traffic for 30 s closes,
+//!   except the main `/ws` stream, which follows the session's heartbeat.
+//!
+//! For an HTTP stream the first text frame from B is the response head, `{"status":200,"headers":[[k,v]]}`;
+//! binary frames after it are the body, and an empty text frame from M ends the request body.
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use axum::body::Body;
+use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{FromRequestParts, Path, Request, State};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as B64;
+use futures::{SinkExt, StreamExt};
+use kybern_protocol::methods::{Method, PeerRelayClose, PeerRelayData, PeerRelayOpen};
+use kybern_protocol::*;
+use serde_json::{Value, json};
+use tokio::sync::{Notify, mpsc};
+use tokio_tungstenite::tungstenite::Message as WsMessage;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::{HeaderName as TName, HeaderValue as TValue};
+use tokio_util::sync::CancellationToken;
+
+use super::peers::{Direction, PeerLink};
+use crate::auth::Principal;
+use crate::state::AppState;
+
+const TARGET: &str = "kybern::network::relay";
+/// The credit window of a stream in bytes (§3.4).
+pub const WINDOW: i64 = 256 * 1024;
+/// What a frame costs of the window at least. The window counts bytes but the receiving queue counts frames, so a burst of
+/// one-byte frames (keystrokes, a chatty socket) would fill the queue long before the bytes ran out and end the stream as an
+/// overrun. With this floor the window holds at most `WINDOW / MIN_FRAME_COST` (128) frames, half of the queue.
+pub(super) const MIN_FRAME_COST: usize = 2048;
+/// The part of the window a frame of `len` bytes takes, and the credit its receiver returns.
+pub(super) const fn frame_cost(len: usize) -> usize {
+    if len < MIN_FRAME_COST { MIN_FRAME_COST } else { len }
+}
+pub const MAX_STREAMS_PER_CLIENT: usize = 32;
+pub const MAX_STREAMS_PER_DAEMON: usize = 256;
+/// Request bodies and response bodies are cut into pieces of this size.
+const CHUNK: usize = 16 * 1024;
+const OPEN_TIMEOUT: Duration = Duration::from_secs(15);
+pub const RELAY_AUTH_HEADER: &str = "x-kybern-relay-auth";
+
+// ---- streams ----
+
+/// A frame for the local consumer of a stream.
+#[derive(Debug)]
+pub enum Chunk {
+    Text(Vec<u8>),
+    Binary(Vec<u8>),
+    /// The other side closed the stream.
+    End,
+}
+
+/// Bytes a sender may still put on a stream. A message larger than the window is allowed once the
+/// balance is positive and leaves it in debt, so a WebSocket message is never split.
+pub(super) struct Credit {
+    balance: AtomicI64,
+    changed: Notify,
+}
+
+impl Credit {
+    fn new() -> Self {
+        Self { balance: AtomicI64::new(WINDOW), changed: Notify::new() }
+    }
+
+    pub(super) fn add(&self, bytes: i64) {
+        self.balance.fetch_add(bytes, Ordering::SeqCst);
+        self.changed.notify_waiters();
+    }
+
+    pub(super) async fn take(&self, bytes: usize, cancel: &CancellationToken) -> bool {
+        loop {
+            let notified = self.changed.notified();
+            tokio::pin!(notified);
+            // Register interest before checking, so a grant between check and wait is not lost.
+            notified.as_mut().enable();
+            if self.balance.load(Ordering::SeqCst) > 0 {
+                self.balance.fetch_sub(bytes as i64, Ordering::SeqCst);
+                return true;
+            }
+            tokio::select! {
+                _ = cancel.cancelled() => return false,
+                _ = notified => {}
+            }
+        }
+    }
+}
+
+/// What a stream carries. Its frames travel under that kind's method names only, so a frame sent under the other
+/// kind's names (`peer.ports.data` for a relay stream, which `machine:peer` alone allows) is not delivered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamKind {
+    Relay,
+    Ports,
+}
+
+/// One relayed stream, as the side that owns its local end sees it.
+pub struct Stream {
+    pub id: u64,
+    kind: StreamKind,
+    /// On the machine that serves the stream (it took `peer.relay.open` or `peer.ports.open`), the capability the
+    /// other side needs to keep it: when the member is paused or the capability is turned off, the stream ends.
+    serves: Option<Scope>,
+    incoming: mpsc::Sender<Chunk>,
+    pub(super) credit: Credit,
+    pub(super) cancel: CancellationToken,
+    activity: Mutex<Instant>,
+}
+
+impl Stream {
+    pub(super) fn touch(&self) {
+        *self.activity.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Instant::now();
+    }
+
+    fn idle_for(&self) -> Duration {
+        self.activity.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).elapsed()
+    }
+}
+
+/// The streams of one session. Ids are odd for streams the dialer opens and even for the other
+/// direction, so the two roles of one session never collide.
+pub struct LinkRelays {
+    streams: Mutex<HashMap<u64, Arc<Stream>>>,
+    next: AtomicU64,
+}
+
+impl LinkRelays {
+    pub fn new(direction: Direction) -> Self {
+        Self { streams: Mutex::new(HashMap::new()), next: AtomicU64::new(if direction == Direction::Dialed { 1 } else { 2 }) }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<u64, Arc<Stream>>> {
+        self.streams.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// A new stream with a fresh id, and the receiver for the frames the other side sends it. `serves` is the
+    /// capability the other side needs for a stream this machine serves; `None` for one it opened.
+    pub(super) fn create(&self, id: Option<u64>, kind: StreamKind, serves: Option<Scope>) -> Option<(Arc<Stream>, mpsc::Receiver<Chunk>)> {
+        let id = id.unwrap_or_else(|| self.next.fetch_add(2, Ordering::Relaxed));
+        let (tx, rx) = mpsc::channel(256);
+        let stream = Arc::new(Stream {
+            id,
+            kind,
+            serves,
+            incoming: tx,
+            credit: Credit::new(),
+            cancel: CancellationToken::new(),
+            activity: Mutex::new(Instant::now()),
+        });
+        let mut streams = self.lock();
+        if streams.contains_key(&id) {
+            return None;
+        }
+        streams.insert(id, stream.clone());
+        Some((stream, rx))
+    }
+
+    fn get(&self, id: u64, kind: StreamKind) -> Option<Arc<Stream>> {
+        self.lock().get(&id).filter(|stream| stream.kind == kind).cloned()
+    }
+
+    pub(super) fn remove(&self, id: u64) {
+        if let Some(stream) = self.lock().remove(&id) {
+            stream.cancel.cancel();
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.lock().len()
+    }
+
+    /// End the streams this machine serves whose capability the other side no longer has (paused, or turned off).
+    /// Returns how many ended.
+    pub fn close_unpermitted(&self, scopes: &[Scope]) -> usize {
+        let ended: Vec<_> = {
+            let mut streams = self.lock();
+            let ids: Vec<u64> = streams
+                .values()
+                .filter(|stream| stream.serves.is_some_and(|scope| !scopes.contains(&scope)))
+                .map(|stream| stream.id)
+                .collect();
+            ids.into_iter().filter_map(|id| streams.remove(&id)).collect()
+        };
+        for stream in &ended {
+            stream.cancel.cancel();
+            let _ = stream.incoming.try_send(Chunk::End);
+        }
+        ended.len()
+    }
+
+    /// The session ended: every stream on it ends.
+    pub fn close_all(&self) {
+        let streams: Vec<_> = self.lock().drain().map(|(_, stream)| stream).collect();
+        for stream in streams {
+            stream.cancel.cancel();
+            let _ = stream.incoming.try_send(Chunk::End);
+        }
+    }
+}
+
+impl Default for LinkRelays {
+    fn default() -> Self {
+        Self::new(Direction::Dialed)
+    }
+}
+
+/// Counts open streams against the limits.
+#[derive(Default)]
+pub struct RelayHub {
+    total: Arc<AtomicUsize>,
+    per_client: Arc<Mutex<HashMap<String, usize>>>,
+}
+
+/// Holds one stream's place under the limits until dropped.
+pub struct Slot {
+    total: Arc<AtomicUsize>,
+    per_client: Arc<Mutex<HashMap<String, usize>>>,
+    client: String,
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.total.fetch_sub(1, Ordering::SeqCst);
+        let mut clients = self.per_client.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(count) = clients.get_mut(&self.client) {
+            *count -= 1;
+            if *count == 0 {
+                clients.remove(&self.client);
+            }
+        }
+    }
+}
+
+impl RelayHub {
+    /// A place for a stream of `client`, or `None` over a limit.
+    pub fn acquire(&self, client: &str) -> Option<Slot> {
+        let mut clients = self.per_client.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if self.total.load(Ordering::SeqCst) >= MAX_STREAMS_PER_DAEMON
+            || clients.get(client).copied().unwrap_or(0) >= MAX_STREAMS_PER_CLIENT
+        {
+            return None;
+        }
+        self.total.fetch_add(1, Ordering::SeqCst);
+        *clients.entry(client.to_string()).or_default() += 1;
+        Some(Slot { total: self.total.clone(), per_client: self.per_client.clone(), client: client.to_string() })
+    }
+
+    pub fn open_streams(&self) -> usize {
+        self.total.load(Ordering::SeqCst)
+    }
+}
+
+// ---- data frames ----
+
+/// Send `bytes` on a stream, waiting for credit. `false` when the stream or the session ended.
+async fn send_data(link: &PeerLink, stream: &Stream, bytes: &[u8], text: bool) -> bool {
+    if !stream.credit.take(frame_cost(bytes.len()), &stream.cancel).await {
+        return false;
+    }
+    stream.touch();
+    let params = PeerRelayDataParams { stream_id: stream.id, data: B64.encode(bytes), credit: None, text };
+    link.notify(PeerRelayData::NAME, serde_json::to_value(params).unwrap_or(Value::Null)).await
+}
+
+/// Send `bytes` cut into pieces (HTTP bodies); WebSocket messages go whole through [`send_data`].
+async fn send_chunks(link: &PeerLink, stream: &Stream, bytes: &[u8], text: bool) -> bool {
+    for piece in bytes.chunks(CHUNK) {
+        if !send_data(link, stream, piece, text).await {
+            return false;
+        }
+    }
+    true
+}
+
+/// Tell the other side it may send `bytes` more.
+async fn grant(link: &PeerLink, stream: &Stream, bytes: usize) {
+    let bytes = frame_cost(bytes);
+    let params =
+        PeerRelayDataParams { stream_id: stream.id, data: String::new(), credit: Some(bytes.min(u32::MAX as usize) as u32), text: false };
+    let _ = link.notify(PeerRelayData::NAME, serde_json::to_value(params).unwrap_or(Value::Null)).await;
+}
+
+async fn send_close(link: &PeerLink, stream_id: u64, reason: Option<&str>) {
+    let params = PeerRelayCloseParams { stream_id, reason: reason.map(str::to_string) };
+    let _ = link.notify(PeerRelayClose::NAME, serde_json::to_value(params).unwrap_or(Value::Null)).await;
+}
+
+/// `peer.relay.data` and `peer.ports.data`: a frame for a stream of that kind, or credit, or both.
+pub async fn handle_data(link: &Arc<PeerLink>, params: PeerRelayDataParams, kind: StreamKind) -> Result<Value, RpcError> {
+    let Some(stream) = link.relays.get(params.stream_id, kind) else { return Ok(json!({})) };
+    if let Some(credit) = params.credit {
+        stream.credit.add(credit as i64);
+    }
+    if params.data.is_empty() && !params.text {
+        return Ok(json!({}));
+    }
+    stream.touch();
+    let bytes = B64.decode(params.data.as_bytes()).map_err(|_| RpcError::invalid_params("data is not base64"))?;
+    let chunk = if params.text { Chunk::Text(bytes) } else { Chunk::Binary(bytes) };
+    match stream.incoming.try_send(chunk) {
+        Ok(()) => {}
+        // The local consumer is gone (a GET has no request body to receive): nothing to deliver.
+        Err(mpsc::error::TrySendError::Closed(_)) => {}
+        // The sender honours the window, so a full queue is a peer that does not: end the stream.
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            tracing::warn!(target: TARGET, stream = stream.id, "a relayed stream overran its window; closing it");
+            link.relays.remove(stream.id);
+        }
+    }
+    Ok(json!({}))
+}
+
+/// `peer.relay.close` and `peer.ports.close`: the other side ended a stream of that kind.
+pub fn handle_close(link: &Arc<PeerLink>, params: PeerRelayCloseParams, kind: StreamKind) -> Result<Value, RpcError> {
+    if let Some(stream) = link.relays.get(params.stream_id, kind) {
+        let _ = stream.incoming.try_send(Chunk::End);
+        stream.cancel.cancel();
+        link.relays.remove(params.stream_id);
+    }
+    Ok(json!({}))
+}
+
+// ---- header rules ----
+
+/// Headers that describe one hop, not the request. They never cross a relay.
+fn hop_by_hop(name: &str) -> bool {
+    matches!(
+        name,
+        "connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+            | "content-length"
+            | "forwarded"
+            | "x-forwarded-for"
+            | "x-forwarded-host"
+            | "x-forwarded-proto"
+    ) || name.starts_with("sec-websocket-")
+        || name == RELAY_AUTH_HEADER
+}
+
+fn forwarded_headers(headers: &HeaderMap) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter(|(name, _)| !hop_by_hop(name.as_str()))
+        .filter_map(|(name, value)| Some((name.as_str().to_string(), value.to_str().ok()?.to_string())))
+        .collect()
+}
+
+/// Paths a relay never reaches: anything but an origin-relative path, other relays (no onward hops) and the
+/// session handshake. See [`local_url`].
+fn path_refused(path: &str) -> bool {
+    local_url("http", std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 1)), path).is_none()
+}
+
+/// The URL B opens on its own listener at `addr` for a relayed `path` (with its query), or `None` when the path
+/// is refused. The path must be origin-relative (one leading `/`, no backslash, fragment or control character),
+/// so it can never turn the daemon's address into user-info and name another host or port; the parsed URL is
+/// checked to still point at `addr`. The deny list runs on the path the URL parser normalized (dot segments,
+/// `%2e` included), percent-decoded once more, because that is what the listener routes on.
+fn local_url(scheme: &str, addr: std::net::SocketAddr, path: &str) -> Option<reqwest::Url> {
+    if !path.starts_with('/') || path.starts_with("//") || path.chars().any(|c| c == '\\' || c == '#' || c == ' ' || c.is_control()) {
+        return None;
+    }
+    let url = reqwest::Url::parse(&format!("{scheme}://{addr}{path}")).ok()?;
+    let host = match addr.ip() {
+        std::net::IpAddr::V4(ip) => ip.to_string(),
+        std::net::IpAddr::V6(ip) => format!("[{ip}]"),
+    };
+    if url.host_str() != Some(host.as_str())
+        || url.port_or_known_default() != Some(addr.port())
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return None;
+    }
+    let decoded = percent_decoded(url.path());
+    let mut segments = decoded.split('/').filter(|segment| !segment.is_empty());
+    if decoded.split('/').any(|segment| segment == "." || segment == "..") {
+        return None;
+    }
+    let first = segments.next().unwrap_or_default().to_ascii_lowercase();
+    if first == "relay" || first == "network" {
+        return None;
+    }
+    Some(url)
+}
+
+/// `text` with each `%XX` replaced by its byte; anything else is kept as it is.
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        let hex = |byte: u8| (byte as char).to_digit(16);
+        if bytes[at] == b'%'
+            && let (Some(high), Some(low)) = (bytes.get(at + 1).and_then(|b| hex(*b)), bytes.get(at + 2).and_then(|b| hex(*b)))
+        {
+            out.push((high * 16 + low) as u8);
+            at += 3;
+        } else {
+            out.push(bytes[at]);
+            at += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+// ---- M: the relay endpoint ----
+
+fn refuse(status: StatusCode, message: impl Into<String>) -> Response {
+    (status, message.into()).into_response()
+}
+
+/// Authenticate the caller to this relay member. The refusal is the HTTP response to send.
+#[allow(clippy::result_large_err)]
+fn caller(state: &AppState, headers: &HeaderMap) -> Result<Principal, Response> {
+    let raw = |value: &HeaderValue| {
+        value.to_str().ok().and_then(|text| text.strip_prefix("Bearer ").or_else(|| text.strip_prefix("bearer "))).map(str::to_string)
+    };
+    let candidates = [headers.get(RELAY_AUTH_HEADER).and_then(raw), headers.get(header::AUTHORIZATION).and_then(raw)];
+    for token in candidates.into_iter().flatten() {
+        if let Ok(Some(principal)) = crate::auth::authenticate(&state.store, &token) {
+            return if principal.has(Scope::OrchestrationRead) {
+                Ok(principal)
+            } else {
+                Err(refuse(StatusCode::FORBIDDEN, "this token cannot use the relay"))
+            };
+        }
+    }
+    Err(refuse(StatusCode::UNAUTHORIZED, "the relay needs a device token for this machine in X-Kybern-Relay-Auth"))
+}
+
+/// The link to the target, or the refusal to send.
+#[allow(clippy::result_large_err)]
+fn route(state: &AppState, target: &str) -> Result<Arc<PeerLink>, Response> {
+    let network = &state.network;
+    let Some(membership) = network.membership() else {
+        return Err(refuse(StatusCode::SERVICE_UNAVAILABLE, "the machine network is unavailable"));
+    };
+    if !network.is_enabled() {
+        return Err(refuse(StatusCode::NOT_FOUND, "the machine network is turned off on this machine"));
+    }
+    if target == membership.machine_id() {
+        return Err(refuse(StatusCode::BAD_REQUEST, "this is the machine you are talking to; connect to it directly"));
+    }
+    if !membership.is_member(target) {
+        return Err(refuse(StatusCode::NOT_FOUND, "that machine is not in this network"));
+    }
+    network.peers.link(target).ok_or_else(|| refuse(StatusCode::BAD_GATEWAY, "this machine has no open session to that machine"))
+}
+
+fn open_error(error: RpcError) -> Response {
+    let status = match error.code {
+        codes::UNAUTHORIZED => StatusCode::UNAUTHORIZED,
+        codes::FORBIDDEN => StatusCode::FORBIDDEN,
+        codes::NOT_FOUND => StatusCode::NOT_FOUND,
+        _ => error
+            .data
+            .as_ref()
+            .and_then(|data| data["status"].as_u64())
+            .and_then(|status| StatusCode::from_u16(status as u16).ok())
+            .unwrap_or(StatusCode::BAD_GATEWAY),
+    };
+    refuse(status, error.message)
+}
+
+/// A carrier for the WebSocket subprotocols a client offered; `sec-websocket-*` headers are per hop, so
+/// they travel under this name and B offers them to the server it connects to.
+const PROTOCOLS_HEADER: &str = "x-kybern-ws-protocols";
+
+fn requested_protocols(headers: &HeaderMap) -> Vec<String> {
+    headers
+        .get_all("sec-websocket-protocol")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(|protocol| protocol.trim().to_string())
+        .filter(|protocol| !protocol.is_empty())
+        .collect()
+}
+
+fn is_websocket_upgrade(headers: &HeaderMap) -> bool {
+    headers.get(header::UPGRADE).and_then(|value| value.to_str().ok()).is_some_and(|value| value.eq_ignore_ascii_case("websocket"))
+}
+
+/// `GET /relay/{machine_id}/ws`.
+pub async fn serve_ws(
+    State(state): State<AppState>,
+    Path(target): Path<String>,
+    headers: HeaderMap,
+    raw_query: axum::extract::RawQuery,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let path = match raw_query.0 {
+        Some(query) => format!("/ws?{query}"),
+        None => "/ws".to_string(),
+    };
+    relay_ws(&state, &target, &headers, path, ws).await
+}
+
+/// Open a relayed WebSocket to `path` on `target`: `/ws` for a client's connection, or any path of the
+/// target for a page that opens a socket through `/relay/{machine_id}/http/…` (a preview's HMR).
+async fn relay_ws(state: &AppState, target: &str, headers: &HeaderMap, path: String, ws: WebSocketUpgrade) -> Response {
+    let principal = match caller(state, headers) {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    let link = match route(state, target) {
+        Ok(link) => link,
+        Err(response) => return response,
+    };
+    let Some(slot) = state.network.relays.acquire(&principal.token_id.to_string()) else {
+        return refuse(StatusCode::TOO_MANY_REQUESTS, "too many relayed connections");
+    };
+    let Some((stream, incoming)) = link.relays.create(None, StreamKind::Relay, None) else {
+        return refuse(StatusCode::INTERNAL_SERVER_ERROR, "stream id clash");
+    };
+    let protocols = requested_protocols(headers);
+    let mut forwarded = forwarded_headers(headers);
+    if !protocols.is_empty() {
+        forwarded.push((PROTOCOLS_HEADER.to_string(), protocols.join(", ")));
+    }
+    let open = PeerRelayOpenParams { stream_id: stream.id, kind: RelayStreamKind::Ws, path, method: None, headers: forwarded };
+    let opened = tokio::time::timeout(OPEN_TIMEOUT, link.call::<PeerRelayOpen>(open)).await;
+    match opened {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => {
+            link.relays.remove(stream.id);
+            return open_error(error);
+        }
+        Err(_) => {
+            link.relays.remove(stream.id);
+            return refuse(StatusCode::GATEWAY_TIMEOUT, "the machine did not open the relayed connection in time");
+        }
+    }
+    tracing::debug!(target: TARGET, machine = %target, stream = stream.id, "relaying a WebSocket");
+    ws.protocols(protocols).on_upgrade(move |socket| async move {
+        pump_client_ws(link, stream, incoming, socket).await;
+        drop(slot);
+    })
+}
+
+/// Client socket on M's side: client frames go to B as stream data, B's frames go to the client.
+async fn pump_client_ws(link: Arc<PeerLink>, stream: Arc<Stream>, mut incoming: mpsc::Receiver<Chunk>, socket: WebSocket) {
+    let (mut sink, mut source) = socket.split();
+    loop {
+        // Frames already queued for the client go out before a close is honoured.
+        tokio::select! {
+            biased;
+            chunk = incoming.recv() => match chunk {
+                Some(Chunk::Text(bytes)) => {
+                    let size = bytes.len();
+                    let Ok(text) = String::from_utf8(bytes) else { break };
+                    if sink.send(Message::Text(text.into())).await.is_err() { break }
+                    grant(&link, &stream, size).await;
+                }
+                Some(Chunk::Binary(bytes)) => {
+                    let size = bytes.len();
+                    if sink.send(Message::Binary(bytes.into())).await.is_err() { break }
+                    grant(&link, &stream, size).await;
+                }
+                Some(Chunk::End) | None => break,
+            },
+            frame = source.next() => match frame {
+                Some(Ok(Message::Text(text))) => if !send_data(&link, &stream, text.as_bytes(), true).await { break },
+                Some(Ok(Message::Binary(bytes))) => if !send_data(&link, &stream, &bytes, false).await { break },
+                Some(Ok(Message::Close(_))) | None => break,
+                Some(Ok(_)) => {}
+                Some(Err(_)) => break,
+            },
+            _ = stream.cancel.cancelled() => break,
+            _ = link.closed() => break,
+        }
+    }
+    let _ = sink.send(Message::Close(Some(CloseFrame { code: 1000, reason: "".into() }))).await;
+    send_close(&link, stream.id, None).await;
+    link.relays.remove(stream.id);
+}
+
+/// `ANY /relay/{machine_id}/http/{*path}`.
+pub async fn serve_http(State(state): State<AppState>, Path((target, path)): Path<(String, String)>, request: Request) -> Response {
+    let (mut parts, body) = request.into_parts();
+    // A page loaded through the relay opens its WebSockets (a dev server's hot reload) the same way.
+    if is_websocket_upgrade(&parts.headers) {
+        let path = format!("/{path}");
+        if path_refused(&path) {
+            return refuse(StatusCode::FORBIDDEN, "the relay does not carry this path");
+        }
+        let target_path = match parts.uri.query() {
+            Some(query) => format!("{path}?{query}"),
+            None => path,
+        };
+        let ws = match WebSocketUpgrade::from_request_parts(&mut parts, &state).await {
+            Ok(ws) => ws,
+            Err(rejection) => return rejection.into_response(),
+        };
+        return relay_ws(&state, &target, &parts.headers, target_path, ws).await;
+    }
+    let principal = match caller(&state, &parts.headers) {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    let link = match route(&state, &target) {
+        Ok(link) => link,
+        Err(response) => return response,
+    };
+    let path = format!("/{path}");
+    if path_refused(&path) {
+        return refuse(StatusCode::FORBIDDEN, "the relay does not carry this path");
+    }
+    let Some(slot) = state.network.relays.acquire(&principal.token_id.to_string()) else {
+        return refuse(StatusCode::TOO_MANY_REQUESTS, "too many relayed connections");
+    };
+    let Some((stream, mut incoming)) = link.relays.create(None, StreamKind::Relay, None) else {
+        return refuse(StatusCode::INTERNAL_SERVER_ERROR, "stream id clash");
+    };
+    let target_path = match parts.uri.query() {
+        Some(query) => format!("{path}?{query}"),
+        None => path,
+    };
+    let open = PeerRelayOpenParams {
+        stream_id: stream.id,
+        kind: RelayStreamKind::Http,
+        path: target_path,
+        method: Some(parts.method.to_string()),
+        headers: forwarded_headers(&parts.headers),
+    };
+    match tokio::time::timeout(OPEN_TIMEOUT, link.call::<PeerRelayOpen>(open)).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => {
+            link.relays.remove(stream.id);
+            return open_error(error);
+        }
+        Err(_) => {
+            link.relays.remove(stream.id);
+            return refuse(StatusCode::GATEWAY_TIMEOUT, "the machine did not open the relayed request in time");
+        }
+    }
+
+    // The request body flows to B while the response head is awaited.
+    let body_link = link.clone();
+    let body_stream = stream.clone();
+    tokio::spawn(async move {
+        let mut data = body.into_data_stream();
+        while let Some(piece) = data.next().await {
+            let Ok(piece) = piece else { break };
+            if !send_chunks(&body_link, &body_stream, &piece, false).await {
+                return;
+            }
+        }
+        // An empty text frame ends the request body.
+        let _ = send_data(&body_link, &body_stream, &[], true).await;
+    });
+
+    let idle = state.network.timing.relay_idle;
+    let head = loop {
+        match tokio::time::timeout(idle, incoming.recv()).await {
+            Ok(Some(Chunk::Text(bytes))) => {
+                grant(&link, &stream, bytes.len()).await;
+                break serde_json::from_slice::<Value>(&bytes).ok();
+            }
+            Ok(Some(Chunk::Binary(_))) => continue,
+            Ok(Some(Chunk::End)) | Ok(None) | Err(_) => break None,
+        }
+    };
+    let Some(head) = head else {
+        send_close(&link, stream.id, Some("no response")).await;
+        link.relays.remove(stream.id);
+        return refuse(StatusCode::BAD_GATEWAY, "the machine did not answer the relayed request");
+    };
+    let status = head["status"].as_u64().and_then(|status| StatusCode::from_u16(status as u16).ok()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let (tx, rx) = mpsc::channel::<Result<Vec<u8>, std::io::Error>>(32);
+    let pump_link = link.clone();
+    let pump_stream = stream.clone();
+    tokio::spawn(async move {
+        loop {
+            // Body already received is delivered before a cancellation is honoured.
+            let chunk = tokio::select! {
+                biased;
+                chunk = tokio::time::timeout(idle, incoming.recv()) => chunk,
+                _ = pump_stream.cancel.cancelled() => break,
+            };
+            match chunk {
+                Ok(Some(Chunk::Binary(bytes))) => {
+                    let size = bytes.len();
+                    if tx.send(Ok(bytes)).await.is_err() {
+                        break;
+                    }
+                    grant(&pump_link, &pump_stream, size).await;
+                }
+                Ok(Some(Chunk::Text(_))) => {}
+                Ok(Some(Chunk::End)) | Ok(None) => break,
+                Err(_) => {
+                    let _ = tx.send(Err(std::io::Error::other("the relayed response went idle"))).await;
+                    break;
+                }
+            }
+        }
+        send_close(&pump_link, pump_stream.id, None).await;
+        pump_link.relays.remove(pump_stream.id);
+        drop(slot);
+    });
+    let mut response = Response::new(Body::from_stream(tokio_stream_from(rx)));
+    *response.status_mut() = status;
+    for pair in head["headers"].as_array().into_iter().flatten() {
+        let (Some(name), Some(value)) = (pair[0].as_str(), pair[1].as_str()) else { continue };
+        if let (Ok(name), Ok(value)) = (HeaderName::from_bytes(name.as_bytes()), HeaderValue::from_str(value)) {
+            response.headers_mut().append(name, value);
+        }
+    }
+    response
+}
+
+fn tokio_stream_from(
+    mut rx: mpsc::Receiver<Result<Vec<u8>, std::io::Error>>,
+) -> impl futures::Stream<Item = Result<Vec<u8>, std::io::Error>> {
+    futures::stream::poll_fn(move |cx| rx.poll_recv(cx))
+}
+
+// ---- B: the local end ----
+
+/// Where B reaches its own listener: its primary address with a wildcard mapped to loopback.
+fn local_addr(state: &AppState) -> Result<std::net::SocketAddr, RpcError> {
+    let mut addr = (*state.listen_addr.read().unwrap_or_else(|poisoned| poisoned.into_inner()))
+        .ok_or_else(|| RpcError::internal("the daemon is still starting"))?;
+    if addr.ip().is_unspecified() {
+        addr.set_ip(if addr.is_ipv4() { std::net::Ipv4Addr::LOCALHOST.into() } else { std::net::Ipv6Addr::LOCALHOST.into() });
+    }
+    Ok(addr)
+}
+
+/// `peer.relay.open`: open the local end of a stream M asked for.
+pub async fn handle_open(state: &AppState, link: &Arc<PeerLink>, params: PeerRelayOpenParams) -> Result<Value, RpcError> {
+    let addr = local_addr(state)?;
+    let scheme = match params.kind {
+        RelayStreamKind::Ws => "ws",
+        RelayStreamKind::Http => "http",
+    };
+    let Some(url) = local_url(scheme, addr, &params.path) else {
+        return Err(RpcError::new(codes::FORBIDDEN, "the relay does not carry this path"));
+    };
+    let slot = state
+        .network
+        .relays
+        .acquire(&format!("inbound:{}", link.machine_id))
+        .ok_or_else(|| RpcError::new(codes::CONFLICT, "too many relayed connections on this machine"))?;
+    let (stream, incoming) = link
+        .relays
+        .create(Some(params.stream_id), StreamKind::Relay, Some(Scope::MachineRelay))
+        .ok_or_else(|| RpcError::invalid_params("that stream id is in use"))?;
+    let result = match params.kind {
+        RelayStreamKind::Ws => open_local_ws(state, link, &stream, incoming, url, &params, slot).await,
+        RelayStreamKind::Http => open_local_http(link, &stream, incoming, url, params, slot).await,
+    };
+    if result.is_err() {
+        link.relays.remove(stream.id);
+    }
+    result.map(|()| json!({}))
+}
+
+fn status_error(status: u16, message: String) -> RpcError {
+    let code = match status {
+        401 => codes::UNAUTHORIZED,
+        403 => codes::FORBIDDEN,
+        404 => codes::NOT_FOUND,
+        _ => codes::INTERNAL_ERROR,
+    };
+    RpcError::new(code, message).with_data(json!({ "status": status }))
+}
+
+async fn open_local_ws(
+    _state: &AppState,
+    link: &Arc<PeerLink>,
+    stream: &Arc<Stream>,
+    mut incoming: mpsc::Receiver<Chunk>,
+    url: reqwest::Url,
+    params: &PeerRelayOpenParams,
+    slot: Slot,
+) -> Result<(), RpcError> {
+    let mut request = url.as_str().into_client_request().map_err(RpcError::internal)?;
+    for (name, value) in &params.headers {
+        if name == PROTOCOLS_HEADER {
+            if let Ok(value) = TValue::from_str(value) {
+                request.headers_mut().insert("sec-websocket-protocol", value);
+            }
+            continue;
+        }
+        if matches!(name.as_str(), "host" | "content-type" | "accept-encoding") || hop_by_hop(name) {
+            continue;
+        }
+        if let (Ok(name), Ok(value)) = (TName::from_bytes(name.as_bytes()), TValue::from_str(value)) {
+            request.headers_mut().insert(name, value);
+        }
+    }
+    let (socket, _) = match tokio_tungstenite::connect_async(request).await {
+        Ok(connected) => connected,
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+            let status = response.status().as_u16();
+            return Err(status_error(status, format!("the machine refused the connection ({status})")));
+        }
+        Err(error) => return Err(RpcError::internal(format!("could not open the local connection: {error}"))),
+    };
+    let (mut sink, mut source) = socket.split();
+    let link = link.clone();
+    let stream = stream.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                biased;
+                chunk = incoming.recv() => match chunk {
+                    Some(Chunk::Text(bytes)) => {
+                        let size = bytes.len();
+                        let Ok(text) = String::from_utf8(bytes) else { break };
+                        if sink.send(WsMessage::Text(text.into())).await.is_err() { break }
+                        grant(&link, &stream, size).await;
+                    }
+                    Some(Chunk::Binary(bytes)) => {
+                        let size = bytes.len();
+                        if sink.send(WsMessage::Binary(bytes.into())).await.is_err() { break }
+                        grant(&link, &stream, size).await;
+                    }
+                    Some(Chunk::End) | None => break,
+                },
+                frame = source.next() => match frame {
+                    Some(Ok(WsMessage::Text(text))) => if !send_data(&link, &stream, text.as_bytes(), true).await { break },
+                    Some(Ok(WsMessage::Binary(bytes))) => if !send_data(&link, &stream, &bytes, false).await { break },
+                    Some(Ok(WsMessage::Close(_))) | None => break,
+                    Some(Ok(_)) => {}
+                    Some(Err(_)) => break,
+                },
+                _ = stream.cancel.cancelled() => break,
+                _ = link.closed() => break,
+            }
+        }
+        let _ = sink.close().await;
+        send_close(&link, stream.id, None).await;
+        link.relays.remove(stream.id);
+        drop(slot);
+    });
+    Ok(())
+}
+
+async fn open_local_http(
+    link: &Arc<PeerLink>,
+    stream: &Arc<Stream>,
+    mut incoming: mpsc::Receiver<Chunk>,
+    url: reqwest::Url,
+    params: PeerRelayOpenParams,
+    slot: Slot,
+) -> Result<(), RpcError> {
+    let method = params.method.as_deref().unwrap_or("GET");
+    let method = reqwest::Method::from_bytes(method.as_bytes()).map_err(|_| RpcError::invalid_params("bad method"))?;
+    let client = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).build().map_err(RpcError::internal)?;
+    let mut request = client.request(method.clone(), url);
+    for (name, value) in &params.headers {
+        if hop_by_hop(name) {
+            continue;
+        }
+        // `Host` is kept: the well-known proof covers the host the client asked for.
+        request = request.header(name, value);
+    }
+    let has_body = !matches!(method, reqwest::Method::GET | reqwest::Method::HEAD | reqwest::Method::OPTIONS);
+    let link = link.clone();
+    let stream = stream.clone();
+    tokio::spawn(async move {
+        let (body_tx, body_rx) = mpsc::channel::<Result<Vec<u8>, std::io::Error>>(32);
+        let request = if has_body { request.body(reqwest::Body::wrap_stream(tokio_stream_from(body_rx))) } else { request };
+        // Request body: stream data from M into the local request until the empty text frame.
+        let feed_link = link.clone();
+        let feed_stream = stream.clone();
+        let feed = tokio::spawn(async move {
+            loop {
+                let chunk = tokio::select! {
+                    biased;
+                    chunk = incoming.recv() => chunk,
+                    _ = feed_stream.cancel.cancelled() => return,
+                };
+                match chunk {
+                    Some(Chunk::Binary(bytes)) => {
+                        let size = bytes.len();
+                        if body_tx.send(Ok(bytes)).await.is_err() {
+                            return;
+                        }
+                        grant(&feed_link, &feed_stream, size).await;
+                    }
+                    Some(Chunk::Text(_)) => return, // end of body
+                    Some(Chunk::End) | None => {
+                        let _ = body_tx.send(Err(std::io::Error::other("the request was cancelled"))).await;
+                        return;
+                    }
+                }
+            }
+        });
+        let response = if has_body {
+            request.send().await
+        } else {
+            feed.abort();
+            request.send().await
+        };
+        match response {
+            Ok(response) => {
+                let headers: Vec<Value> = response
+                    .headers()
+                    .iter()
+                    .filter(|(name, _)| !hop_by_hop(name.as_str()))
+                    .filter_map(|(name, value)| Some(json!([name.as_str(), value.to_str().ok()?])))
+                    .collect();
+                let head = json!({ "status": response.status().as_u16(), "headers": headers });
+                if send_data(&link, &stream, head.to_string().as_bytes(), true).await {
+                    let mut body = response.bytes_stream();
+                    while let Some(piece) = body.next().await {
+                        let Ok(piece) = piece else { break };
+                        if !send_chunks(&link, &stream, &piece, false).await {
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                let head = json!({ "status": 502, "headers": [] });
+                tracing::debug!(target: TARGET, %error, "the local request of a relayed stream failed");
+                let _ = send_data(&link, &stream, head.to_string().as_bytes(), true).await;
+            }
+        }
+        send_close(&link, stream.id, None).await;
+        link.relays.remove(stream.id);
+        drop(slot);
+    });
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hop_by_hop_headers_and_the_relay_header_never_cross() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", HeaderValue::from_static("Bearer b-token"));
+        headers.insert(RELAY_AUTH_HEADER, HeaderValue::from_static("Bearer m-token"));
+        headers.insert("connection", HeaderValue::from_static("upgrade"));
+        headers.insert("sec-websocket-key", HeaderValue::from_static("x"));
+        headers.insert("host", HeaderValue::from_static("100.64.0.1:4173"));
+        headers.insert("x-forwarded-for", HeaderValue::from_static("1.2.3.4"));
+        let forwarded: Vec<String> = forwarded_headers(&headers).into_iter().map(|(name, _)| name).collect();
+        assert!(forwarded.contains(&"authorization".to_string()), "the client's own credential travels end to end");
+        assert!(forwarded.contains(&"host".to_string()), "the proof covers the host the client asked for");
+        assert!(!forwarded.iter().any(|name| name == RELAY_AUTH_HEADER
+            || name == "connection"
+            || name.starts_with("sec-websocket")
+            || name == "x-forwarded-for"));
+    }
+
+    #[test]
+    fn the_relay_carries_no_onward_hops_and_no_handshakes() {
+        assert!(path_refused("/relay/abc/ws"));
+        assert!(path_refused("/network/session"));
+        assert!(!path_refused("/ws"));
+        assert!(!path_refused("/.well-known/kybern/machine"));
+        assert!(!path_refused("/preview-files/t/index.html"));
+    }
+
+    #[test]
+    fn a_relayed_path_stays_on_the_daemon_and_is_checked_after_normalization() {
+        let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 4199));
+        // Concatenated, this would make the daemon's address user-info and connect to port 8080.
+        let naive = reqwest::Url::parse(&format!("http://{addr}@127.0.0.1:8080/admin")).unwrap();
+        assert_eq!(naive.port(), Some(8080), "the parser reqwest uses reads the authority this way");
+        for path in [
+            "@127.0.0.1:8080/admin",
+            ":8080/admin",
+            "//127.0.0.1:8080/admin",
+            "/\\127.0.0.1:8080/admin",
+            "/ok/../network/session",
+            "/ok/%2e%2e/network/session",
+            "/ok/.%2E/relay/abc/ws",
+            "/%6Eetwork/session",
+            "/Network/session",
+            "/x/..%2Fnetwork/session",
+            "/ws#frag",
+            "",
+        ] {
+            assert!(path_refused(path), "{path:?} is refused");
+            assert!(local_url("http", addr, path).is_none(), "{path:?} gets no URL");
+        }
+        for path in ["/ws?token=abc", "/preview-files/t/index.html", "/.well-known/kybern/machine", "/api/x?q=a@b:c"] {
+            let url = local_url("http", addr, path).unwrap_or_else(|| panic!("{path:?} is carried"));
+            assert_eq!((url.host_str(), url.port()), (Some("127.0.0.1"), Some(4199)));
+        }
+        let ws = local_url("ws", std::net::SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, 4199)), "/ws").unwrap();
+        assert_eq!(ws.as_str(), "ws://[::1]:4199/ws");
+    }
+
+    #[test]
+    fn stream_ids_do_not_collide_between_the_two_directions() {
+        let dialer = LinkRelays::new(Direction::Dialed);
+        let acceptor = LinkRelays::new(Direction::Accepted);
+        let (a, _) = dialer.create(None, StreamKind::Relay, None).unwrap();
+        let (b, _) = dialer.create(None, StreamKind::Ports, None).unwrap();
+        let (c, _) = acceptor.create(None, StreamKind::Relay, None).unwrap();
+        assert_eq!((a.id, b.id, c.id), (1, 3, 2));
+        assert!(dialer.create(Some(1), StreamKind::Ports, None).is_none(), "an id in use is refused");
+        assert!(
+            dialer.get(1, StreamKind::Ports).is_none() && dialer.get(1, StreamKind::Relay).is_some(),
+            "a frame of the other kind finds nothing"
+        );
+    }
+
+    #[test]
+    fn a_withdrawn_capability_ends_the_streams_served_for_it_and_nothing_else() {
+        let relays = LinkRelays::new(Direction::Accepted);
+        let (port, _port_rx) = relays.create(Some(11), StreamKind::Ports, Some(Scope::MachinePorts)).unwrap();
+        let (relay, _relay_rx) = relays.create(Some(13), StreamKind::Relay, Some(Scope::MachineRelay)).unwrap();
+        let (own, _own_rx) = relays.create(None, StreamKind::Ports, None).unwrap();
+        assert_eq!(relays.close_unpermitted(&[Scope::MachinePeer, Scope::MachinePorts, Scope::MachineRelay]), 0);
+        // Ports turned off: the port stream it serves ends; the relay and the stream this side opened stay.
+        assert_eq!(relays.close_unpermitted(&[Scope::MachinePeer, Scope::MachineRelay]), 1);
+        assert!(port.cancel.is_cancelled() && !relay.cancel.is_cancelled() && !own.cancel.is_cancelled());
+        // Paused: only machine:peer is left.
+        assert_eq!(relays.close_unpermitted(&[Scope::MachinePeer]), 1);
+        assert!(relay.cancel.is_cancelled() && !own.cancel.is_cancelled());
+        assert_eq!(relays.len(), 1);
+    }
+
+    #[test]
+    fn streams_are_counted_against_per_client_and_daemon_limits() {
+        let hub = RelayHub::default();
+        let slots: Vec<_> = (0..MAX_STREAMS_PER_CLIENT).map(|_| hub.acquire("c1").unwrap()).collect();
+        assert!(hub.acquire("c1").is_none());
+        let others: Vec<_> =
+            (0..(MAX_STREAMS_PER_DAEMON - MAX_STREAMS_PER_CLIENT)).map(|i| hub.acquire(&format!("o{}", i / 10)).unwrap()).collect();
+        assert!(hub.acquire("fresh").is_none(), "the daemon limit holds");
+        drop(slots);
+        assert!(hub.acquire("c1").is_some());
+        drop(others);
+        assert_eq!(hub.open_streams(), 0);
+    }
+
+    #[tokio::test]
+    async fn credit_blocks_a_sender_until_the_receiver_grants_more_and_stops_on_cancel() {
+        let credit = Arc::new(Credit::new());
+        let cancel = CancellationToken::new();
+        // A message larger than the window goes through once and leaves a debt.
+        assert!(credit.take(WINDOW as usize + 1000, &cancel).await);
+        let waiting = {
+            let credit = credit.clone();
+            let cancel = cancel.clone();
+            tokio::spawn(async move { credit.take(10, &cancel).await })
+        };
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(!waiting.is_finished(), "in debt, the next send waits");
+        credit.add(2000);
+        assert!(waiting.await.unwrap());
+        assert!(credit.take(5000, &cancel).await, "990 bytes left, so one more goes and leaves a debt");
+        cancel.cancel();
+        assert!(!credit.take(WINDOW as usize, &cancel).await, "a cancelled stream stops waiting for credit");
+    }
+}

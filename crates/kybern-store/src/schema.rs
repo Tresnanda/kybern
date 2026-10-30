@@ -586,6 +586,138 @@ const MIGRATIONS: &[&str] = &[
       ON CONFLICT(key) DO NOTHING;
     COMMIT;
     ",
+    // v32: the machine network. Membership operations are an append-only signed set; `network_machines`
+    // caches peer descriptors and presence (rebuilt from the operations and live presence).
+    // `projects.repo_identity` is JSON `ProjectRepoIdentity`; `tokens.device_id` ties a device
+    // token to the client device so revoking the device revokes it on every machine.
+    "
+    BEGIN;
+    CREATE TABLE network_ops (
+      id TEXT PRIMARY KEY,
+      body BLOB NOT NULL,
+      signer TEXT NOT NULL,
+      signature BLOB NOT NULL,
+      kind TEXT NOT NULL,
+      lamport INTEGER NOT NULL,
+      received_at TEXT NOT NULL
+    );
+    CREATE INDEX network_ops_order ON network_ops(lamport, received_at, id);
+    CREATE TABLE network_machines (
+      machine_id TEXT PRIMARY KEY,
+      descriptor TEXT NOT NULL,
+      presence TEXT,
+      last_seen_at TEXT
+    );
+    ALTER TABLE projects ADD COLUMN repo_identity TEXT;
+    ALTER TABLE tokens ADD COLUMN device_id TEXT;
+    ALTER TABLE tokens ADD COLUMN issued_via TEXT;
+    CREATE INDEX tokens_device ON tokens(device_id);
+    COMMIT;
+    ",
+    // Secret store (S3, design §9.3, §4.4 "v35 (M5)"; numbered here in merge order). `secrets` holds
+    // named values encrypted with XChaCha20-Poly1305 under the machine's data key: `ciphertext` is
+    // the AEAD output, `nonce` the 24-byte nonce, `key_version` the data key that sealed it, and
+    // `source` is `local` or `pushed:<machine_id>`. The store only keeps bytes; the daemon encrypts.
+    "
+    BEGIN;
+    CREATE TABLE secrets (
+      name TEXT PRIMARY KEY,
+      ciphertext BLOB NOT NULL,
+      nonce BLOB NOT NULL,
+      key_version INTEGER NOT NULL,
+      source TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    COMMIT;
+    ",
+    // Remote delegation and the outbox (R1, design §4.4 "v33 (M2)"; numbered here in merge order).
+    // `outbox` is the visible queue of work for machines that are offline; a delivery repeats under
+    // its `operation_id`, which the target deduplicates. `threads.origin` records which machine
+    // started a thread (JSON `Origin`, written once); `threads.inbound` is the column for inbound
+    // audit threads. `remote_children` is the delegating machine's row for a child that runs
+    // elsewhere, written before anything is sent.
+    "
+    BEGIN;
+    CREATE TABLE outbox (
+      id TEXT PRIMARY KEY,
+      operation_id TEXT NOT NULL UNIQUE,
+      target TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      origin TEXT,
+      state TEXT NOT NULL CHECK (state IN ('queued','sending','delivered','failed','expired','cancelled')),
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_attempt_at TEXT,
+      last_error TEXT,
+      result TEXT,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX outbox_due ON outbox(state, next_attempt_at);
+    ALTER TABLE threads ADD COLUMN origin TEXT;
+    ALTER TABLE threads ADD COLUMN inbound TEXT;
+    CREATE TABLE remote_children (
+      task_id TEXT PRIMARY KEY,
+      operation_id TEXT NOT NULL UNIQUE,
+      parent_thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+      target TEXT NOT NULL,
+      remote_thread_id TEXT,
+      status TEXT NOT NULL,
+      stop_requested INTEGER NOT NULL DEFAULT 0,
+      last_seq INTEGER NOT NULL DEFAULT 0,
+      title TEXT NOT NULL DEFAULT '',
+      provider TEXT,
+      model TEXT,
+      info TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX remote_children_parent ON remote_children(parent_thread_id);
+    CREATE INDEX remote_children_active ON remote_children(status) WHERE status IN ('pending','running');
+    COMMIT;
+    ",
+    // Login broker loans (S4, design §9.4; numbered here in merge order). One row per loan, on both ends:
+    // the broker's `lender` rows say whom to push a rotated token to; a borrower's `borrower` rows say which
+    // broker it must release from and re-borrow from when the register moves. **No token is ever stored**:
+    // the broker re-reads its credential, a borrower borrows again after a restart.
+    "
+    BEGIN;
+    CREATE TABLE broker_loans (
+      loan_id TEXT PRIMARY KEY,
+      role TEXT NOT NULL CHECK (role IN ('lender','borrower')),
+      peer TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      account TEXT NOT NULL,
+      local_instance TEXT,
+      generation INTEGER NOT NULL DEFAULT 0,
+      expires_at TEXT,
+      last_pushed_at TEXT,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      released_at TEXT
+    );
+    CREATE INDEX broker_loans_open ON broker_loans(role, provider) WHERE released_at IS NULL;
+    COMMIT;
+    ",
+    // Continue on another machine (F2, design §7.2, §4.4 "v34 (M3)"; numbered here in merge order).
+    // `threads.moved` is JSON `MoveInfo`: the lease while the thread departs and, once the target
+    // confirmed, the link to the thread that continues the work. Only the move code writes it
+    // (`thread_set_moved`); a thread upsert never touches it.
+    "
+    BEGIN;
+    ALTER TABLE threads ADD COLUMN moved TEXT;
+    CREATE INDEX threads_moving ON threads(id) WHERE moved IS NOT NULL;
+    COMMIT;
+    ",
+    // Client token ancestry (machine network review). `tokens.issued_lineage` is a JSON array of every
+    // machine a network-minted token's authority passed through before `issued_via`, so removing any of
+    // them revokes it, however many hops or self-grants later it was minted.
+    "
+    BEGIN;
+    ALTER TABLE tokens ADD COLUMN issued_lineage TEXT;
+    COMMIT;
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

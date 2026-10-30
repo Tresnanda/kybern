@@ -4,7 +4,6 @@ import { addWindowKeyHandler } from '../nav/keys.ts'
 import { watchPointerRelease } from '../split/release.ts'
 import { cls, getObjc, nsApp, sel } from '../native/objc.ts'
 import { webHost } from '../native/webview.ts'
-import { onEnvironmentLeaving } from '../shell/environment.ts'
 
 let drag: { move(event: EventPayload): void; cursor: 'col-resize' | 'row-resize' | 'nwse-resize' | 'nesw-resize' } | null = null
 const listeners = new Set<() => void>()
@@ -31,4 +30,3 @@ export function PreviewResizeCapture() {
   const move = (event: EventPayload) => { if (event.pressedButton !== 0) { end(); return } current.move(event) }
   return <div testId="preview-resize-capture" onMouseMove={move} onMouseUp={event => { current.move(event); end() }} onMouseDownOutside={end} style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', cursor: current.cursor, userSelect: 'none', pointerEvents: 'auto' }} />
 }
-onEnvironmentLeaving(end)

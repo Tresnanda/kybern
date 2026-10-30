@@ -9,8 +9,9 @@ import { memo } from "react";
 import { View } from "react-native";
 import { attentionSignals, dismissAttention, markRead, markUnread, useListState } from "../state/listState";
 import { count } from "../state/format";
-import { PROVIDER_DISPLAY_NAME, type Thread } from "../state/protocol";
-import { errorText, refresh, rpc, threadHasActivity, useApp } from "../state/runtime";
+import { PROVIDER_DISPLAY_NAME, type Thread, type ThreadActivitySummary } from "../state/protocol";
+import type { ThreadMachine } from "../state/machineLists";
+import { errorText, mutate, refresh, threadHasActivity, useApp } from "../state/runtime";
 import type { StatusPhase } from "../state/status";
 import { relativeTime, type ThreadRow } from "../state/threadList";
 import { DisclosureRow, ListRow, rowInset, type SwipeAction } from "../ui/List";
@@ -20,6 +21,8 @@ import { ProviderMark } from "../ui/ProviderMark";
 import { StatusGlyph } from "../ui/TaskGlyphs";
 import { radius, space, useTheme } from "../ui/theme";
 import { showToast } from "../ui/Toast";
+import { MachineGlyph } from "./MachineGlyph";
+import { originLabel } from "../../../../packages/kybern-client/src/forkMachine";
 import { threadMenuItems } from "./threadActions";
 
 const untitled = (thread: Thread) => thread.title.trim() || "Untitled thread";
@@ -74,6 +77,10 @@ export type ThreadRowContext = {
   variant: "list" | "sidebar";
   activeId?: string;
   projectName: (projectId: string) => string;
+  /** Where a thread lives, with more than one machine; its glyph and greyed state follow. */
+  machine?: (threadId: string) => ThreadMachine | undefined;
+  /** Live work of every machine's threads. Without it the computer's own activity is used. */
+  activity?: readonly ThreadActivitySummary[];
   onToggleChildren: (threadId: string, open: boolean) => void;
   onError?: (message: string) => void;
 };
@@ -114,6 +121,7 @@ function ThreadListRowView({
   const list = useListState();
   const { thread, depth, childCount, open: childrenOpen, child } = row;
   const indent = Math.min(depth, 2) * space.lg;
+  const home = ctx.machine?.(thread.id);
   const agent = PROVIDER_DISPLAY_NAME[thread.provider.kind] ?? thread.provider.kind;
   const fail = (e: unknown) => ctx.onError?.(errorText(e));
 
@@ -136,7 +144,7 @@ function ThreadListRowView({
   } else {
     const attention = threadAttention(thread, attentionSignals(list));
     badge = attention.badge;
-    const running = threadHasActivity(thread, app.activity);
+    const running = threadHasActivity(thread, ctx.activity ?? app.activity);
     const waiting = attention.kind === "blocked" || thread.status === "awaiting-approval";
     const failed = attention.kind === "failed";
     const word = waiting ? null : running ? "Working" : failed ? "Failed" : null;
@@ -150,13 +158,17 @@ function ThreadListRowView({
       <AgentMark thread={thread} unread={attention.unread} />
     );
     const parts = ctx.variant === "list" ? [ctx.projectName(thread.project_id), agent] : [agent];
+    // A thread another machine started by a fork or a delegation says where it came from.
+    const from = originLabel(thread);
+    if (from) parts.push(from);
+    if (home?.offline) parts.push("Offline");
     if (word) parts.push(word);
     subtitle = parts.join(" · ");
-    label = [untitled(thread), subtitle, badge, attention.unread ? "Unread" : "", thread.pinned ? "Pinned" : ""]
+    label = [untitled(thread), subtitle, home?.showGlyph ? `On ${home.name}` : "", badge, attention.unread ? "Unread" : "", thread.pinned ? "Pinned" : ""]
       .filter(Boolean)
       .join(", ");
 
-    menu.push(...threadMenuItems(thread, { refresh, onError: ctx.onError }));
+    menu.push(...threadMenuItems(thread, { refresh: () => refresh(home?.machineId), onError: ctx.onError }));
     if (thread.status !== "archived")
       menu.splice(1, 0, attention.unread
         ? { title: "Mark as read", icon: "checkmark.circle", onPress: () => markRead(thread.id) }
@@ -173,7 +185,7 @@ function ThreadListRowView({
             tone: "accent",
             full: true,
             onPress: () => {
-              void rpc("threads.update", { thread_id: thread.id, pinned: !thread.pinned }).then(refresh).catch(fail);
+              void mutate("threads.update", { thread_id: thread.id, pinned: !thread.pinned }).catch(fail);
             },
           },
         ],
@@ -184,11 +196,8 @@ function ThreadListRowView({
             tone: "neutral",
             full: true,
             onPress: () => {
-              void rpc("threads.archive", { thread_id: thread.id })
-                .then(() => {
-                  showToast("Thread archived");
-                  return refresh();
-                })
+              void mutate("threads.archive", { thread_id: thread.id })
+                .then(() => showToast("Thread archived"))
                 .catch(fail);
             },
           },
@@ -204,7 +213,15 @@ function ThreadListRowView({
         subtitleLines={1}
         leading={leading}
         meta={child ? undefined : relativeTime(thread.updated_at)}
-        trailing={badge ? <AttentionBadge text={badge} /> : undefined}
+        trailing={
+          badge || home?.showGlyph ? (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+              {badge ? <AttentionBadge text={badge} /> : null}
+              {home?.showGlyph ? <MachineGlyph glyph={home.glyph} /> : null}
+            </View>
+          ) : undefined
+        }
+        dimmed={home?.offline}
         selected={ctx.activeId === thread.id}
         label={label}
         onPress={() => open(thread, ctx.variant)}

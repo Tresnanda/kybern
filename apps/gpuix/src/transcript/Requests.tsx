@@ -13,6 +13,8 @@ import { briefProposalInput, leadGitCardInput, noteChangesProposalInput, setting
 import type { ApprovalRequest, ThreadId } from '../../../../packages/kybern-client/src/types.ts'
 import { PanelEnter, PanelPresence } from '../requests/Panel.tsx'
 import { SecretRequestPanel } from '../requests/Secret.tsx'
+import { ProvisionRequestPanel } from '../requests/Provision.tsx'
+import { provisionCardInput } from '../../../../packages/kybern-client/src/provision.ts'
 import { isVisualAnswerCard, useVisualAnswerStub, VisualAnswerStub } from '../requests/VisualAnswer.tsx'
 import { PickRequestPanel } from '../requests/Pick.tsx'
 import { ActivityPanels, useRequestActivity } from '../requests/Activity.tsx'
@@ -56,7 +58,7 @@ const takesComposer = (a: ApprovalRequest, phase?: string) => (isUserInput(a) &&
  *  a choice card and keeps the composer), the Coordinator's proposals, and the sign-in card while it takes a pasted code. */
 const closedPick = (a: ApprovalRequest) => { const pick = pickRequestInput(a); return !!pick && !isElementPick(pick.kind) }
 const ownForm = (a: ApprovalRequest, phase?: string) =>
-  !!secretRequestInput(a) || !!promptRequestInput(a) || closedPick(a) || !!briefProposalInput(a) || !!settingsProposalInput(a) || !!noteChangesProposalInput(a) || (phase === 'paste_code' && !!loginRequestInput(a))
+  !!secretRequestInput(a) || !!provisionCardInput(a) || !!promptRequestInput(a) || closedPick(a) || !!briefProposalInput(a) || !!settingsProposalInput(a) || !!noteChangesProposalInput(a) || (phase === 'paste_code' && !!loginRequestInput(a))
 
 /** The open thread's pending approval or question, or nothing. */
 export function ThreadRequests() {
@@ -183,6 +185,8 @@ function ApprovalRequestCard({ threadId, approval, count }: { threadId: ThreadId
   if (pick) return <PickRequestPanel approval={approval} input={pick} count={count} />
   const secret = secretRequestInput(approval)
   if (secret) return <SecretRequestPanel approval={approval} input={secret} count={count} />
+  const provision = provisionCardInput(approval)
+  if (provision) return <ProvisionRequestPanel approval={approval} input={provision} count={count} threadId={threadId} />
   if (briefProposalInput(approval) || settingsProposalInput(approval) || noteChangesProposalInput(approval) || leadGitCardInput(approval)) return <CoordinatorCard approval={approval} count={count} />
   const login = loginRequestInput(approval)
   if (login) return <LoginRequestPanel approval={approval} input={login} count={count} threadId={threadId} />

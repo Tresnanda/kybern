@@ -6,12 +6,18 @@ import { KeyboardStickyView } from "react-native-keyboard-controller";
 import Animated, { FadeIn, ReduceMotion } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Composer } from "../src/features/Composer";
-import { ComputerSwitcher } from "../src/features/ComputerSwitcher";
+import { MachineTitle } from "../src/features/MachineFilter";
+import { MachineChip } from "../src/features/MachineChip";
+import { MachineGlyph } from "../src/features/MachineGlyph";
 import { SpaceSwitcher } from "../src/features/Spaces";
 import { setDraft, useDraft } from "../src/state/draft";
 import { plural } from "../src/state/format";
 import { isFreeChatProject, type Thread, type UserMessage } from "../src/state/protocol";
 import { ensureThread, refresh, rpc, startNewChat, supportsOptimisticCreate, useApp } from "../src/state/runtime";
+import { useLists } from "../src/state/useLists";
+import { useMachineTarget, pickMachine } from "../src/state/machineTarget";
+import { useProviders } from "../src/state/machineProviders";
+import { queueNewChat } from "../src/state/outbox";
 import { newThreadId } from "../src/state/ids";
 import { groupCreateFields, supportsWorktree } from "../src/state/groups";
 import { useInSpace, useSpaceProjects } from "../src/state/spaces";
@@ -105,6 +111,7 @@ function FooterChip({
 
 function HomeScreen() {
   const app = useApp();
+  const lists = useLists();
   const draft = useDraft();
   const { colors } = useTheme();
   const { width } = useWindowDimensions();
@@ -147,18 +154,23 @@ function HomeScreen() {
     spaceProjects.find((p) => !isFreeChatProject(p.id)) ??
     spaceProjects[0];
   const workspaceLabel = draft.worktree ? "Worktree" : "This checkout";
-  const recent = useMemo(() => continueThreads(app.threads, project?.id), [app.threads, project?.id]);
-  const active = app.threads.filter((t) =>
-    threadHasActivity(t, app.activity),
+  // Where the thread runs (`state/machineTarget.ts`): the last machine used for the project, else the one the phone is at.
+  const target = useMachineTarget(project);
+  const chosenMachine = target.remote ? target.chosen : undefined;
+  // The agents follow the machine: another machine's come from that machine.
+  const providers = useProviders(chosenMachine ? { machineId: chosenMachine.machineId, reachable: target.reachable } : undefined);
+  const recent = useMemo(() => continueThreads(lists.threads, project?.id), [lists.threads, project?.id]);
+  const active = lists.threads.filter((t) =>
+    threadHasActivity(t, lists.activity),
   ).length;
   useEffect(() => {
     if (project && project.id !== draft.projectId)
       setDraft({ projectId: project.id });
     if (
-      app.providers.length &&
-      !app.providers.some((p) => p.kind === draft.provider && p.available)
+      providers.length &&
+      !providers.some((p) => p.kind === draft.provider && p.available)
     ) {
-      const first = app.providers.find((p) => p.available);
+      const first = providers.find((p) => p.available);
       if (first)
         setDraft({
           provider: first.kind,
@@ -169,30 +181,51 @@ function HomeScreen() {
             ? draft.permission : first.supported_permission_modes[0] ?? "supervised",
         });
     }
-    const selected = app.providers.find((p) => p.kind === draft.provider && p.available);
+    const selected = providers.find((p) => p.kind === draft.provider && p.available);
     if (selected && !selected.supported_permission_modes.includes(draft.permission)) {
       setDraft({ permission: selected.supported_permission_modes[0] ?? "supervised" });
     }
-  }, [project?.id, app.providers, draft.projectId, draft.provider, draft.permission]);
+  }, [project?.id, providers, draft.projectId, draft.provider, draft.permission]);
   async function send(message: UserMessage) {
     if (!project) throw new Error("Add a project before starting a thread.");
     const provider = { kind: draft.provider, instance: draft.instance };
-    const worktree = draft.worktree && supportsWorktree(project);
+    // The checkout on the chosen machine; the machine that owns the project instance gets the request.
+    const chosen = chosenMachine?.project ?? project;
+    const worktree = draft.worktree && supportsWorktree(chosen);
     const params = {
-      project_id: project.id,
+      project_id: chosen.id,
       provider,
       permission_mode: draft.permission,
       use_worktree: worktree,
       ...(draft.model ? { model: draft.model } : {}),
       ...(draft.effort ? { effort: draft.effort } : {}),
       // A group names a base branch per repository instead.
-      ...(draft.baseBranch && !isGroupProject(project) ? { base_branch: draft.baseBranch } : {}),
-      ...groupCreateFields(project, draft, worktree),
+      ...(draft.baseBranch && !isGroupProject(chosen) ? { base_branch: draft.baseBranch } : {}),
+      ...groupCreateFields(chosen, draft, worktree),
     };
-    if (!supportsOptimisticCreate()) {
-      // An older daemon names the thread itself: wait for it, then open that thread.
+    if (target.show && target.chosen) pickMachine(target.key, target.chosen.machineId);
+    if (chosenMachine && !target.reachable) {
+      // The machine is away: the thread is ours, shown at once, and its create waits in the outbox ("Waiting for satyamas").
+      const threadId = newThreadId();
+      const messageId = newThreadId();
+      startNewChat(
+        {
+          threadId,
+          messageId,
+          message,
+          worktree,
+          machineId: chosenMachine.machineId,
+          machineName: chosenMachine.name,
+          thread: optimisticThread({ id: threadId, projectId: project.id, provider, model: draft.model || null, effort: draft.effort || null, permissionMode: draft.permission, message }),
+        },
+        (first, id) => queueNewChat(chosenMachine.machineId, { ...params, message: first, thread_id: threadId, message_id: id }),
+      );
+      return { threadId, messageId };
+    }
+    if (chosenMachine || !supportsOptimisticCreate()) {
+      // Another machine (or an older daemon) names the thread itself: wait for it, read that machine's list, then open the thread.
       const thread = await rpc("threads.create", { ...params, message });
-      void refresh();
+      await refresh(chosenMachine?.machineId).catch(() => {});
       await ensureThread(thread.id).catch(() => {});
       return { threadId: thread.id };
     }
@@ -266,7 +299,7 @@ function HomeScreen() {
             />
           </View>
           <View style={{ flexShrink: 1, alignItems: "center" }}>
-            <ComputerSwitcher />
+            <MachineTitle />
           </View>
           <View style={{ flex: 1, minWidth: HEADER_SIDE, flexDirection: "row", justifyContent: "flex-end", gap: space.sm }}>
             <IconButton
@@ -347,10 +380,13 @@ function HomeScreen() {
                   first
                 />
                 {recent.map((thread, index) => {
-                  const working = threadHasActivity(thread, app.activity);
+                  const working = threadHasActivity(thread, lists.activity);
+                  const home = lists.machineOfThread(thread.id);
                   return (
                     <ListRow
                       key={thread.id}
+                      dimmed={home?.offline}
+                      trailing={home?.showGlyph ? <MachineGlyph glyph={home.glyph} /> : undefined}
                       title={thread.title || "Untitled thread"}
                       meta={
                         thread.status === "awaiting-approval"
@@ -413,6 +449,7 @@ function HomeScreen() {
                   chevron={!!project}
                   onPress={() => router.push(connected ? "/project-picker" : "/connect")}
                 />
+                {connected ? <MachineChip target={target} /> : null}
                 {connected && supportsWorktree(project) && (
                   <FooterChip
                     icon="arrow.triangle.branch"

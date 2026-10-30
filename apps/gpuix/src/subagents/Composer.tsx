@@ -4,7 +4,7 @@ import { subagentThreadPhase } from '../../../../packages/kybern-client/src/suba
 import { ComposerView } from '../Composer.tsx'
 import { useComposer } from '../composer/store.ts'
 import { activeEnvironment } from '../shell/environment.ts'
-import { getClient, useApp, usePaneAccess } from '../state.ts'
+import { threadClient, useApp, usePaneAccess } from '../state.ts'
 import { Para, muted } from '../transcript/kit.tsx'
 import { Button } from '../kit/Button.tsx'
 import { errorText, reportError } from '../transcript/store.ts'
@@ -26,7 +26,9 @@ export function NativeSubagentComposer({ thread }: { thread: Thread }) {
     if (pane.frozen) return
     let alive = true
     const owner = activeEnvironment()
-    const client = getClient(); if (!client) return
+    let client: ReturnType<typeof threadClient> = null
+    try { client = threadClient(thread.id) } catch { /* that machine is offline */ }
+    if (!client) return
     void client.call('subagents.messages', { thread_id: thread.id }).then(messages => { if (alive && owner === activeEnvironment()) { setSaved(messages); setError('') } }).catch(e => { if (alive && owner === activeEnvironment()) setError(errorText(e)) })
     return () => { alive = false }
   }, [thread.id, thread.status, pane.frozen])
@@ -41,7 +43,7 @@ export function NativeSubagentComposer({ thread }: { thread: Thread }) {
   }, [saved, updates])
   const send = async (message: UserMessage) => {
     const owner = activeEnvironment()
-    const client = getClient()!
+    const client = threadClient(thread.id)!
     const fingerprint = JSON.stringify([thread.id, message])
     if (attempt.current?.fingerprint !== fingerprint) attempt.current = { fingerprint, id: crypto.randomUUID() }
     const result = await client.call('subagents.send', { thread_id: thread.id, id: attempt.current.id, message })
@@ -52,7 +54,7 @@ export function NativeSubagentComposer({ thread }: { thread: Thread }) {
   }
   const forward = async (message: SubagentMessage) => {
     const owner = activeEnvironment()
-    const client = getClient()!
+    const client = threadClient(thread.id)!
     setForwarding(message.id)
     try {
       const result = await client.call('subagents.send_to_parent', { thread_id: thread.id, message_id: message.id })

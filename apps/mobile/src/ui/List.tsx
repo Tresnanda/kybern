@@ -403,6 +403,8 @@ export type ListRowProps = {
   selected?: boolean;
   destructive?: boolean;
   disabled?: boolean;
+  /** Greyed but still pressable: a machine that is offline and shown from its cache. */
+  dimmed?: boolean;
   onPress?: () => void;
   /** Accessible name when the title alone says too little. */
   label?: string;
@@ -433,6 +435,7 @@ export function ListRow(props: ListRowProps) {
     selected,
     destructive,
     disabled,
+    dimmed,
     onPress,
     label,
     menu,
@@ -489,6 +492,7 @@ export function ListRow(props: ListRowProps) {
         minHeight: 44,
         paddingVertical: subtitle ? 10 : 11,
         paddingHorizontal: space.lg,
+        ...(dimmed ? { opacity: 0.55 } : null),
       }}
     >
       {lead}

@@ -3,7 +3,9 @@ import { connect as connectTLS, checkServerIdentity } from 'node:tls'
 
 /** The desktop's preview_relay.rs transport: a ticket owns an isolated loopback
  * origin so root-relative assets and WebSocket upgrades reach the proxy. */
-export function rewriteRelayHead(head: string, authority: string, prefix: string, port: number): string {
+/** `extra` headers are added to every forwarded request: a page that reaches another machine through the one you are paired
+ * with sends that member's device token in `X-Kybern-Relay-Auth`, so the page itself never holds it. */
+export function rewriteRelayHead(head: string, authority: string, prefix: string, port: number, extra: readonly (readonly [string, string])[] = []): string {
   if (Buffer.byteLength(head, 'latin1') > 65536) throw Error('431 Request Header Fields Too Large')
   const lines = head.split('\r\n'), request = lines.shift()!.split(' ')
   if (request.length !== 3 || request[0] === 'CONNECT' || !request[1].startsWith('/') || request[1].startsWith('//') || !/^HTTP\/1\.[01]$/.test(request[2])) throw Error('405 Method Not Allowed')
@@ -15,13 +17,18 @@ export function rewriteRelayHead(head: string, authority: string, prefix: string
   const host = headers.filter(([name]) => name === 'host')
   if (host.length !== 1 || ![`127.0.0.1:${port}`, `localhost:${port}`].includes(host[0][1].toLowerCase())) throw Error('421 Misdirected Request')
   const upgrade = headers.some(([name, value]) => name === 'upgrade' && value.toLowerCase() === 'websocket')
-  const kept = headers.filter(([name]) => !['host', 'connection', 'keep-alive', 'proxy-authorization', 'proxy-connection'].includes(name))
-  return `${request[0]} ${prefix}${request[1]} ${request[2]}\r\nHost: ${authority}\r\nConnection: ${upgrade ? 'Upgrade' : 'close'}\r\n${kept.map(([name, value]) => `${name}: ${value}\r\n`).join('')}\r\n`
+  const kept = headers.filter(([name]) => !['host', 'connection', 'keep-alive', 'proxy-authorization', 'proxy-connection', 'x-kybern-relay-auth'].includes(name))
+  return `${request[0]} ${prefix}${request[1]} ${request[2]}\r\nHost: ${authority}\r\nConnection: ${upgrade ? 'Upgrade' : 'close'}\r\n${kept.map(([name, value]) => `${name}: ${value}\r\n`).join('')}${extra.map(([name, value]) => `${name}: ${value}\r\n`).join('')}\r\n`
 }
 
-export async function openRelay(upstream: string, daemon: string, options?: { ca?: string | Buffer; onWebSocketFailure?: () => void }): Promise<{ url: string; close(): void }> {
+/** A ticket on the daemon itself, or on another machine of the network through the daemon you are paired with
+ * (`/relay/<machine>/http/preview-proxy/<ticket>`, with `relayAuth` as the device token that daemon knows you by). */
+export const RELAY_TICKET_PATH = /^(?:\/relay\/[A-Za-z0-9_-]+\/http)?\/preview-proxy\/[A-Za-z0-9_-]+\/?$/
+
+export async function openRelay(upstream: string, daemon: string, options?: { ca?: string | Buffer; relayAuth?: string; onWebSocketFailure?: () => void }): Promise<{ url: string; close(): void }> {
   const target = new URL(upstream), endpoint = new URL(daemon)
-  if (target.origin !== endpoint.origin || endpoint.username || endpoint.password || !['http:', 'https:'].includes(target.protocol) || target.username || target.password || target.search || target.hash || !/^\/preview-proxy\/[A-Za-z0-9_-]+\/?$/.test(target.pathname)) throw Error('The preview relay must target the configured daemon ticket.')
+  if (target.origin !== endpoint.origin || endpoint.username || endpoint.password || !['http:', 'https:'].includes(target.protocol) || target.username || target.password || target.search || target.hash || !RELAY_TICKET_PATH.test(target.pathname)) throw Error('The preview relay must target the configured daemon ticket.')
+  const extra: [string, string][] = options?.relayAuth && target.pathname.startsWith('/relay/') ? [['x-kybern-relay-auth', `Bearer ${options.relayAuth}`]] : []
   const prefix = target.pathname.replace(/\/$/, ''), sockets = new Set<Socket>()
   const hostname = target.hostname.replace(/^\[|\]$/g, ''), secure = target.protocol === 'https:'
   const server = createServer(client => {
@@ -33,7 +40,7 @@ export async function openRelay(upstream: string, daemon: string, options?: { ca
       if (end < 0) { if (pending.length > 65536) client.destroy(); return }
       client.pause(); client.removeListener('data', read)
       let head: string
-      try { head = rewriteRelayHead(pending.subarray(0, end + 4).toString('latin1'), target.host, prefix, (server.address() as { port: number }).port) }
+      try { head = rewriteRelayHead(pending.subarray(0, end + 4).toString('latin1'), target.host, prefix, (server.address() as { port: number }).port, extra) }
       catch (error) { client.end(`HTTP/1.1 ${error instanceof Error ? error.message : '400 Bad Request'}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`); return }
       const connection = { host: hostname, port: Number(target.port) || (secure ? 443 : 80) }
       // Wait for certificate + hostname validation before any page bytes leave.

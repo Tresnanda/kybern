@@ -14,11 +14,13 @@ kybern-drivers.workspace = true
 kybern-git.workspace = true
 kybern-client.workspace = true
 anyhow.workspace = true
+async-trait.workspace = true
 axum.workspace = true
 base64.workspace = true
 chrono.workspace = true
 clap.workspace = true
 directories.workspace = true
+ed25519-dalek = "=3.0.0"
 futures.workspace = true
 libc.workspace = true
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
@@ -35,10 +37,14 @@ tokio-tungstenite.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+x25519-dalek = { version = "=3.0.0", features = ["static_secrets"] }
+chacha20poly1305 = { version = "=0.11.0", default-features = false, features = ["alloc"] }
+zeroize = "=1.9.0"
+semver = "=1.0.28"
+toml_edit = { version = "=0.25.13", default-features = false, features = ["parse", "display"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Registry"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Registry"] }
 
 [dev-dependencies]
-async-trait.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

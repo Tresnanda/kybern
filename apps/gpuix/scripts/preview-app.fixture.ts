@@ -3,12 +3,9 @@ import { appendFileSync } from 'node:fs'
 import { getState, selectThread } from '../src/state.ts'
 import { showPreview, openPreview } from '../src/preview/store.ts'
 import { webHost } from '../src/native/webview.ts'
-import { addWindowKeyHandler } from '../src/nav/keys.ts'
-import { activeEnvironment, switchEnvironment } from '../src/shell/environment.ts'
 const output = process.env.KYBERN_PREVIEW_EVENTS!, thread = process.env.KYBERN_GPUIX_THREAD!, target = process.env.KYBERN_PREVIEW_TARGET!
 if (!process.env.KYBERN_DATA_DIR?.includes('gpuix-scratch/round5/preview')) throw Error('Preview fixture requires its own scratch daemon')
 webHost.subscribe(event => appendFileSync(output, JSON.stringify(event) + '\n'))
-addWindowKeyHandler(event => { if (event.key === 'e' && event.modifiers?.ctrl && event.modifiers.alt) { switchEnvironment(activeEnvironment()); return true } })
 const deadline = Date.now() + 20000
 while (!getState().listsLoaded || getState().status !== 'open') { if (Date.now() > deadline) throw Error('Preview fixture connection timed out'); await Bun.sleep(30) }
 await selectThread(thread)

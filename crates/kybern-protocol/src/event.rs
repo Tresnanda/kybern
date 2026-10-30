@@ -291,6 +291,23 @@ pub enum EventPayload {
         rotation_id: String,
         text: String,
     },
+    /// A thread moved here with "Continue on…" brought the conversation it had on another machine
+    /// (design §7.2): the visible messages and tool call summaries, no large outputs. Clients show it
+    /// as a collapsed "Earlier on <machine>" block before the first turn.
+    HistoryImported {
+        from_machine: crate::MachineId,
+        from_machine_name: String,
+        from_thread: ThreadId,
+        from_title: String,
+        items: Vec<crate::HistoryItem>,
+        /// Older items left out to fit the size cap.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        omitted: u32,
+    },
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 impl EventPayload {
@@ -349,6 +366,7 @@ impl EventPayload {
             Self::ContextRotationStarted { .. } => "context_rotation_started",
             Self::ContextRotated { .. } => "context_rotated",
             Self::HandoffEdited { .. } => "handoff_edited",
+            Self::HistoryImported { .. } => "history_imported",
         }
     }
 }
@@ -447,6 +465,14 @@ mod kind_tests {
                 session_kept: false,
             },
             EventPayload::HandoffEdited { rotation_id: "r1".into(), text: "## Goals".into() },
+            EventPayload::HistoryImported {
+                from_machine: "m-1".into(),
+                from_machine_name: "Mac".into(),
+                from_thread: ThreadId::nil(),
+                from_title: "Fix login".into(),
+                items: vec![crate::HistoryItem { role: crate::HistoryRole::User, text: "hi".into(), at: None, tool: None }],
+                omitted: 0,
+            },
             EventPayload::ThreadMessageHeld {
                 message: ThreadMessageRecord {
                     id: MessageId::nil(),

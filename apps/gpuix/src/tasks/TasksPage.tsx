@@ -17,6 +17,9 @@ import { Menu, MenuItem, MenuSeparator } from '../nav/overlay.tsx'
 import { useCurrentSpaceId, useSpaceProjects } from '../spaces/current.ts'
 import { inSpace } from '../../../../packages/kybern-client/src/spaces.ts'
 import { useApp } from '../state.ts'
+import { useMachines } from '../machines/index.ts'
+import { foreignOwner } from '../machines/federated.ts'
+import { footerOf } from '../../../../packages/kybern-client/src/sharedState.ts'
 import { selectOwnsEscape } from '../settings/controls.tsx'
 import { pickerOwnsEscape } from '../composer/Menu.tsx'
 import { Button } from '../kit/Button.tsx'
@@ -45,6 +48,7 @@ import {
   prefs,
   quickAdd,
   refreshTasks,
+  setAllMachines,
   setTasks,
   taskState,
   useTasks,
@@ -58,7 +62,8 @@ export function TasksPage() {
   const projects = useSpaceProjects()
   const spaceId = useCurrentSpaceId()
   // Tasks of other spaces' projects stay out; global tasks show everywhere.
-  const all = useMemo(() => Object.values(s.tasks).filter((task) => inSpace(task.project_id, everyProject, spaceId)), [s.tasks, everyProject, spaceId])
+  // A task of another machine names that machine's project, which this machine may not list: it stays.
+  const all = useMemo(() => Object.values(s.tasks).filter((task) => foreignOwner('tasks', task.id) || inSpace(task.project_id, everyProject, spaceId)), [s.tasks, everyProject, spaceId])
   const visible = useMemo(
     () =>
       searchTasks(
@@ -212,7 +217,12 @@ export function TasksPage() {
   const [dockHeight, setDockHeight] = useState(150)
   const room = dockRoom(g.on, dockHeight)
   const foot = footVisible({ selected: selected.length, composer: !!s.composer, showHints: s.prefs.showHints })
-  const projectName = (task: { project_id?: string | null }) => projects.find((p) => p.id === task.project_id)?.name ?? 'Global'
+  // A task of another machine says which one ("satyamas · Global"): task keys count up per machine, so two can share one.
+  const projectName = (task: { id?: string; project_id?: string | null }) => {
+    const name = projects.find((p) => p.id === task.project_id)?.name ?? 'Global'
+    const owner = foreignOwner('tasks', task.id)
+    return owner ? `${owner.name} · ${name}` : name
+  }
   return (
     <div testId="page-tasks" style={{ position: 'relative', display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, width: '100%' }}>
       {task ? (
@@ -233,6 +243,7 @@ export function TasksPage() {
               </Button>
             </div>
           )}
+          {s.allMachines && footerOf(s.federation, 'tasks') && <div testId="tasks-federation-footer" style={{ paddingLeft: 20, paddingRight: 20, paddingTop: 8, paddingBottom: 8 }}><Label color={t.textTertiary} size={12} lineHeight={18}>{footerOf(s.federation, 'tasks')!}</Label></div>}
           {!s.loaded ? (
             <div style={{ padding: 32 }}>
               <Label color={t.textSecondary}>Loading tasks…</Label>
@@ -319,7 +330,9 @@ function Hints({ selecting }: { selecting: boolean }) {
 
 export function DisplayMenu({ trigger }: { trigger?: () => React.ReactNode } = {}) {
   const t = useTheme(),
-    p = useTasks((s) => s.prefs)
+    p = useTasks((s) => s.prefs),
+    allMachines = useTasks((s) => s.allMachines),
+    machineCount = useMachines().length
   return (
     <Menu
       testId="task-display"
@@ -351,6 +364,7 @@ export function DisplayMenu({ trigger }: { trigger?: () => React.ReactNode } = {
         />
       ))}
       <MenuSeparator />
+      {machineCount > 1 && <MenuItem id="all-machines" testId="task-all-machines" label="Tasks of all machines" checked={allMachines} keepOpen onSelect={() => setAllMachines(!allMachines)} />}
       {(
         [
           { key: 'showDone', label: 'Show done' },

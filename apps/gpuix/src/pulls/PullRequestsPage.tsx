@@ -3,13 +3,13 @@ import { Icon } from '../icons.tsx'
 import { ResizeHandle, useResize } from '../kit/Resize.tsx'
 import { SpinIcon } from '../kit/Spin.tsx'
 import { N } from '../nav/glyphs.ts'
-import { onEnvironmentChange } from '../shell/environment.ts'
 import { useGpuix, type PublicInstance } from '@gpuix/react'
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { mapWithConcurrency } from '@/lib/workload'
 import { classifyPrError } from '@/state/prReviewModel'
 import type { Project, PullRequest } from '../../../../packages/kybern-client/src/types.ts'
-import { getClient, useApp } from '../state.ts'
+import { useApp } from '../state.ts'
+import { prCall } from './client.ts'
 import { useSpaceProjects } from '../spaces/current.ts'
 import { addWindowKeyHandler } from '../nav/keys.ts'
 import { useNav } from '../nav/store.ts'
@@ -87,7 +87,7 @@ export function PullRequestsPage() {
         let loaded: Loaded
         if (revision === 0 && cached && cached.until > Date.now()) loaded = cached
         else {
-          const result = await getClient()!.call('github.pr.list', { project_id: project.id, state: filter, limit: 30 })
+          const result = await prCall(project.id, 'github.pr.list', { project_id: project.id, state: filter, limit: 30 })
           // A group project's members that couldn't be listed don't hide the others.
           const errors = (result.repos ?? []).flatMap(m => m.error && !m.skipped && classifyPrError(m.error) !== 'no-remote' ? [`${project.name} / ${m.name}: ${m.error}`] : [])
           loaded = { rows: result.pull_requests, errors }
@@ -164,4 +164,3 @@ export function PullRequestsPage() {
   </div>
 }
 
-onEnvironmentChange(() => { cache.clear(); lastSelection = null })

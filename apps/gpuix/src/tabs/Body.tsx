@@ -7,7 +7,7 @@ import { useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useGpuixRequired, type PublicInstance } from '@gpuix/react'
 import type { TerminalInfo, Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { subagentThreadPhase } from '../../../../packages/kybern-client/src/subagents.ts'
-import { closePaneState, createPane, getClient, PaneProvider, selectPaneThread, useApp } from '../state.ts'
+import { closePaneState, createPane, PaneProvider, selectPaneThread, threadClient, useApp } from '../state.ts'
 import { getGroup, updateGroup, useGroup } from '../split/store.ts'
 import { observeElementBounds } from '../native/layout.ts'
 import { ErrorBoundary } from '../shell/ErrorBoundary.tsx'
@@ -24,6 +24,7 @@ import { DiffPane } from '../dock/Diff.tsx'
 import { ReviewPane } from '../dock/Review.tsx'
 import { ArtifactTab } from '../dock/Artifacts.tsx'
 import { Screen } from '../terminal/Terminal.tsx'
+import { clientFor, useMachines } from '../machines/index.ts'
 import { PreviewPane } from '../preview/Preview.tsx'
 import { Detail } from '../pulls/PrDetail.tsx'
 import { goPage } from '../nav/history.ts'
@@ -90,7 +91,7 @@ function TabBody({ leafId, threadId, tab, children }: { leafId: string; threadId
   switch (tab.kind) {
     case 'chat': return children
     // Switching tabs is instant (spec §1.5): no pane entrance on the content.
-    case 'file': return <FileViewer key={tabKey(tab)} {...(tab.root === 'project' ? { projectId: thread?.project_id } : { threadId })} path={tab.path} line={tab.line} instant />
+    case 'file': return <FileViewer key={tabKey(tab)} {...(tab.root === 'project' ? { projectId: thread?.project_id, threadId } : { threadId })} path={tab.path} line={tab.line} instant />
     case 'diff': return thread ? <DiffPane key={tab.path ?? '*'} thread={thread} mode="all" path={tab.path} /> : <LoadingLines />
     case 'terminal': return <TerminalTab leafId={leafId} threadId={threadId} tab={tab} />
     case 'preview': return <PreviewPane threadId={threadId} />
@@ -117,19 +118,29 @@ function Measured({ children }: { children: (width: number) => ReactNode }) {
 
 /** One terminal session. A session that is gone (the daemon restarted) offers a fresh shell in the same tab. */
 function TerminalTab({ leafId, threadId, tab }: { leafId: string; threadId: string; tab: Extract<Tab, { kind: 'terminal' }> }) {
-  const connected = useApp((s) => s.status === 'open')
+  const open = useApp((s) => s.status === 'open')
+  // A terminal on another machine follows that machine's connection (it is listed from, and restarted on, that machine).
+  const machineId = tab.machineId
+  const machine = useMachines().find((m) => m.machineId === machineId)
+  const connected = machineId ? !!machine && !machine.offline : open
   const [info, setInfo] = useState<TerminalInfo | 'missing' | null>(null)
   const key = tabKey(tab)
   useEffect(() => {
-    if (!connected) return
+    if (!connected) { if (machineId) setInfo('missing'); return }
     let live = true
     setInfo(null)
-    void getClient()!.call('terminals.list', { thread_id: threadId }).then((result) => { if (live) setInfo(result.terminals.find((t) => t.id === tab.id) ?? 'missing') }, () => { if (live) setInfo('missing') })
+    // A machine that cannot be reached right now shows the ended state; the tab comes back when the machine does.
+    try {
+      const client = machineId ? clientFor(machineId) : threadClient(threadId)!
+      void client.call('terminals.list', machineId ? {} : { thread_id: threadId }).then((result) => { if (live) setInfo(result.terminals.find((t) => t.id === tab.id) ?? 'missing') }, () => { if (live) setInfo('missing') })
+    } catch { setInfo('missing') }
     return () => { live = false }
-  }, [threadId, tab.id, connected])
+  }, [threadId, tab.id, connected, machineId])
   const restart = async () => {
-    const created = await getClient()!.call('terminals.create', { thread_id: threadId, cols: 100, rows: 24 })
-    updateGroup(leafId, (g) => ({ ...g, tabs: g.tabs.map((t) => tabKey(t) === key ? { kind: 'terminal', id: created.id } : t), active: `terminal:${created.id}` }))
+    const created = machineId
+      ? await clientFor(machineId).call('terminals.create', { cols: 100, rows: 24 })
+      : await threadClient(threadId)!.call('terminals.create', { thread_id: threadId, cols: 100, rows: 24 })
+    updateGroup(leafId, (g) => ({ ...g, tabs: g.tabs.map((t) => tabKey(t) === key ? { kind: 'terminal', id: created.id, ...(machineId ? { machineId } : {}) } : t), active: `terminal:${created.id}` }))
   }
   if (info === null) return <LoadingLines testId="terminal-tab-loading" />
   if (info === 'missing') return (
@@ -137,13 +148,13 @@ function TerminalTab({ leafId, threadId, tab }: { leafId: string; threadId: stri
       <EmptyHeader play={false}>
         <EmptyMedia variant="icon" icon={DOCK_ICONS.terminal} />
         <EmptyTitle>This terminal has ended</EmptyTitle>
-        <EmptyDescription>Its shell is no longer running. Start a new one in this tab.</EmptyDescription>
+        <EmptyDescription>{machineId && connected === false ? `${machine?.name ?? 'That machine'} is offline. Its shell may still be running; reopen this tab when it is back.` : 'Its shell is no longer running. Start a new one in this tab.'}</EmptyDescription>
       </EmptyHeader>
       <EmptyContent><Button size="sm" testId="terminal-tab-restart" onClick={() => void restart().catch((error) => toast.error('Unable to start a terminal', { description: errorText(error) }))}>Start a new terminal</Button></EmptyContent>
     </Empty>
   )
   return <div testId="terminal-tab" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0, overflow: 'hidden' }}>
-    <Screen key={info.id} info={info} width={800}
+    <Screen key={info.id} info={info} threadId={threadId} {...(machineId ? { machineId } : {})} width={800}
       onTitle={(title) => { if (title !== tab.title && !tab.cli) updateGroup(leafId, (g) => ({ ...g, tabs: g.tabs.map((t) => tabKey(t) === key ? { ...tab, title } : t) })) }}
       onExit={() => closeTabAction(leafId, key)} />
   </div>

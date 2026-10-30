@@ -10,6 +10,7 @@ fn group_git(dir: &std::path::Path, args: &[&str]) -> String {
 fn group_member_repo(dir: &std::path::Path, file: &str) {
     std::fs::create_dir_all(dir).unwrap();
     group_git(dir, &["init", "-q"]);
+    group_git(dir, &["config", "core.autocrlf", "false"]);
     group_git(dir, &["symbolic-ref", "HEAD", "refs/heads/main"]);
     group_git(dir, &["config", "user.name", "Group Test"]);
     group_git(dir, &["config", "user.email", "group@example.com"]);
@@ -50,6 +51,8 @@ impl Group {
         }
         let now = chrono::Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: "acme".into(),
             path: folder.to_string_lossy().into_owned(),
@@ -340,6 +343,8 @@ async fn local_branch_switches_are_all_or_nothing() {
     let _ = std::fs::remove_dir_all(&group.fixture.root);
 }
 
+// Successful cleanup requires the lsof or /proc process-ownership backend.
+#[cfg(unix)]
 #[tokio::test]
 async fn group_worktree_cleanup_saves_each_member_and_restores_the_container() {
     let group = Group::new(false);

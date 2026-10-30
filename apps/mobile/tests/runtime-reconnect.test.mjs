@@ -3,22 +3,18 @@ import { existsSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { nativeModuleSource, seedSecure } from "./native-mocks.mjs";
 import { PROTOCOL_VERSION } from "../../../packages/kybern-client/src/types.ts";
 const saved = JSON.stringify({ environments: [{ id: "host", name: "Test host", url: "ws://localhost/ws", token: "fixture", environmentId: "host" }], activeId: "host" });
-globalThis.reconnectSaved = saved;
+// The saved computers of earlier versions: the first start migrates them.
+seedSecure({ "kybern.ink.environments": saved });
 const unsubscribers = [];
 globalThis.reconnectSubscribe = (subscribe, getSnapshot) => {
   unsubscribers.push(subscribe(() => {}));
   return getSnapshot();
 };
 registerHooks({ resolve(specifier, context, next) {
-  const source = specifier === "react-native"
-    ? 'export const Platform = { OS: "android" }; export const AppState = { addEventListener() {} };'
-    : specifier === "expo-secure-store"
-      ? 'export const WHEN_UNLOCKED_THIS_DEVICE_ONLY = "test"; export async function setItemAsync() {} export async function getItemAsync() { return globalThis.reconnectSaved; }'
-      : specifier === "react"
-        ? 'export const useCallback = fn => fn; export const useEffect = () => {}; export const useSyncExternalStore = (...args) => globalThis.reconnectSubscribe(...args);'
-        : null;
+  const source = nativeModuleSource(specifier);
   if (source) return { shortCircuit: true, url: `data:text/javascript,${encodeURIComponent(source)}` };
   const url = specifier.startsWith(".") && context.parentURL ? new URL(specifier, context.parentURL) : null;
   if (url?.protocol === "file:" && !/\.[a-z]+$/i.test(url.pathname) && existsSync(fileURLToPath(url) + ".ts")) return { shortCircuit: true, url: url.href + ".ts" };
@@ -65,7 +61,7 @@ const tick = () => new Promise(setImmediate);
 test("mobile keeps the workspace responsive and catches up cached threads without another snapshot", async (t) => {
   const previousSocket = globalThis.WebSocket;
   globalThis.WebSocket = Socket;
-  t.after(() => { unsubscribers.forEach(fn => fn()); runtime.connect(null); globalThis.WebSocket = previousSocket; });
+  t.after(() => { unsubscribers.forEach(fn => fn()); runtime.connect(null); runtime.resetMachineHub(); globalThis.WebSocket = previousSocket; });
   await runtime.boot();
   runtime.useThread("thread");
   sockets[0].open(); await tick(); sockets[0].subscribe("initial"); await tick(); sockets[0].ready(); await tick();

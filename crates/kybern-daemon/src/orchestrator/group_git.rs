@@ -526,17 +526,19 @@ impl Orchestrator {
     /// worktree per included member of `members` on `kybern/<thread-id>`, at the
     /// member's path, added from its `source_path`. `starts` gives a member's
     /// fork point (a branch or commit; its HEAD otherwise). On any failure
-    /// everything created so far is removed.
+    /// everything created so far is removed. The branch is `kybern/<thread-id>` unless `branch` names
+    /// another (a fork or move uses the branch it carried).
     pub(super) async fn create_group_workspace(
         &self,
         project: &Project,
         thread_id: ThreadId,
         mut members: Vec<ThreadMember>,
         starts: &BTreeMap<String, String>,
+        branch: Option<&str>,
     ) -> Result<(WorktreeInfo, Vec<ThreadMember>)> {
         ensure!(members.iter().any(|m| m.included), "Choose at least one available repository for this chat.");
         let id = thread_id.to_string();
-        let branch = format!("kybern/{id}");
+        let branch = branch.map_or_else(|| format!("kybern/{id}"), str::to_string);
         let container = self.worktree_dir(project, &id);
         ensure!(!container.exists(), "{} already exists. Remove it, or start the chat again.", container.display());
         std::fs::create_dir_all(container.parent().unwrap())?;

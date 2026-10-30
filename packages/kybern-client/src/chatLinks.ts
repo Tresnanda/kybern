@@ -1,9 +1,13 @@
+import { parseThreadLink } from "./forkMachine.ts";
+
 /** Chat destinations are resolved on the connected computer, never by the OS URL opener. */
 export type ChatLink =
   | { kind: "external"; url: string }
   | { kind: "file"; path: string; line?: number }
   | { kind: "anchor"; id: string }
   | { kind: "kybern"; target: KybernRefTarget; id: string }
+  /** `kybern://thread/<machine>/<thread>`: a thread, on the machine that holds it (absent: the one the reader is on). */
+  | { kind: "thread"; threadId: string; machineId?: string }
   | { kind: "unsupported" };
 
 /** What a `kybern://<target>/<id>` reference points at: a note or a task of the connected computer. */
@@ -73,6 +77,8 @@ export function chatLink(href: string, basePath?: string): ChatLink {
   if (/^(https?:\/\/|mailto:)/i.test(value)) return { kind: "external", url: value };
   const reference = kybernRef(value);
   if (reference) return { kind: "kybern", ...reference };
+  const thread = parseThreadLink(value);
+  if (thread) return { kind: "thread", threadId: thread.threadId, ...(thread.machineId ? { machineId: thread.machineId } : {}) };
   if (value.startsWith("#")) {
     try { return { kind: "anchor", id: decodeURIComponent(value.slice(1)) }; }
     catch { return { kind: "unsupported" }; }

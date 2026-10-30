@@ -13,6 +13,8 @@ async fn ordinary_worktree_fixture() -> (Fixture, Thread) {
     (fixture, thread)
 }
 
+// Successful cleanup requires the lsof or /proc process-ownership backend.
+#[cfg(unix)]
 #[tokio::test]
 async fn ordinary_cleanup_requires_confirmation_and_restores_dirty_source_on_its_branch() {
     let (fixture, thread) = ordinary_worktree_fixture().await;
@@ -36,6 +38,8 @@ async fn ordinary_cleanup_requires_confirmation_and_restores_dirty_source_on_its
     assert!(fixture.store.events_for_thread(thread.id).unwrap().iter().any(|e| matches!(e.payload, EventPayload::WorktreeRestored { .. })));
 }
 
+// Successful cleanup requires the lsof or /proc process-ownership backend.
+#[cfg(unix)]
 #[tokio::test]
 async fn ordinary_cleanup_keeps_unmerged_branch_and_only_deletes_merged_branch() {
     let (fixture, thread) = ordinary_worktree_fixture().await;
@@ -63,6 +67,8 @@ async fn ordinary_cleanup_keeps_unmerged_branch_and_only_deletes_merged_branch()
     assert_eq!(std::fs::read_to_string(path.join("tracked.txt")).unwrap(), "committed work\n");
 }
 
+// Inspection requires the lsof or /proc process-ownership backend.
+#[cfg(unix)]
 #[tokio::test]
 async fn ordinary_cleanup_protects_shared_owners_running_turns_and_ignored_files_even_with_force() {
     let (fixture, mut thread) = ordinary_worktree_fixture().await;
@@ -87,6 +93,8 @@ async fn ordinary_cleanup_protects_shared_owners_running_turns_and_ignored_files
     assert_eq!(std::fs::read_to_string(path.join("important-ignored.txt")).unwrap(), "must not disappear");
 }
 
+// Successful cleanup requires the lsof or /proc process-ownership backend.
+#[cfg(unix)]
 #[tokio::test]
 async fn ordinary_cleanup_automatic_is_opt_in_and_missing_external_folders_do_not_switch_to_main() {
     let (fixture, mut thread) = ordinary_worktree_fixture().await;
@@ -107,6 +115,8 @@ async fn ordinary_cleanup_automatic_is_opt_in_and_missing_external_folders_do_no
     assert!(!PathBuf::from(external.cwd).exists());
 }
 
+// Inspection requires the lsof or /proc process-ownership backend.
+#[cfg(unix)]
 #[tokio::test]
 async fn ordinary_cleanup_protects_live_terminals_and_os_processes() {
     let (mut fixture, thread) = ordinary_worktree_fixture().await;
@@ -163,6 +173,8 @@ fn checkout_transition_is_bounded_provider_only_context_and_retries_until_delive
     assert!(cleared.is_none());
 }
 
+// Successful cleanup requires the lsof or /proc process-ownership backend.
+#[cfg(unix)]
 #[tokio::test]
 async fn cleanup_closes_an_idle_agent_before_rechecking_external_process_ownership() {
     let (fixture, thread) = ordinary_worktree_fixture().await;
@@ -217,6 +229,8 @@ fn record_pr_receipt(fixture: &Fixture, thread: &Thread, number: u64, head: &str
         .unwrap();
 }
 
+// Repair preparation requires the lsof or /proc process-ownership backend.
+#[cfg(unix)]
 #[tokio::test]
 async fn repair_preparation_keeps_proven_local_commits_staged_dirty_and_ignored_source() {
     let (fixture, thread) = ordinary_worktree_fixture().await;
@@ -323,6 +337,8 @@ async fn partial_checkout_receipt_saves_actual_branch_and_head_but_cannot_author
     assert!(serde_json::to_string(&context).unwrap().contains("PR identity was not verified"));
 }
 
+// Successful cleanup requires the lsof or /proc process-ownership backend.
+#[cfg(unix)]
 #[tokio::test]
 async fn worktree_removal_waits_for_a_running_after_snapshot() {
     let (fixture, thread) = ordinary_worktree_fixture().await;
@@ -341,6 +357,8 @@ async fn worktree_removal_waits_for_a_running_after_snapshot() {
     assert!(!removed.exists && !path.exists());
 }
 
+// Successful cleanup requires the lsof or /proc process-ownership backend.
+#[cfg(unix)]
 #[tokio::test]
 async fn renaming_the_project_keeps_its_worktrees_removable_and_restorable() {
     let (mut fixture, thread) = ordinary_worktree_fixture().await;
@@ -395,4 +413,22 @@ async fn a_worktree_that_fails_half_way_can_be_created_again_with_the_same_id() 
     run_git(&fixture.root, &["config", "--unset", "core.hooksPath"]);
     let wt = fixture.orchestrator.create_worktree(&fixture.project, thread.id, None).await.unwrap();
     assert_eq!(Repo::new(&wt.path).current_branch().await, Some(format!("kybern/{}", thread.id)));
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn worktree_cleanup_refuses_removal_without_process_ownership_support() {
+    let (fixture, mut thread) = ordinary_worktree_fixture().await;
+    let error = fixture.orchestrator.worktree_remove(methods::WorktreeRemoveParams {
+        thread_id: thread.id, force: true, delete_branch: false,
+    }).await.unwrap_err();
+    assert!(error.to_string().contains("process ownership checks"), "{error}");
+    assert!(PathBuf::from(&thread.cwd).exists());
+    thread.status = ThreadStatus::Archived;
+    fixture.store.thread_upsert(&thread).unwrap();
+    let mut settings = fixture.orchestrator.inner.settings.get();
+    settings.automatic_worktree_cleanup = true;
+    fixture.orchestrator.inner.settings.set(settings).unwrap();
+    fixture.orchestrator.cleanup_eligible_worktrees().await;
+    assert!(PathBuf::from(&thread.cwd).exists());
 }

@@ -1128,6 +1128,8 @@ mod tests {
     fn project(store: &Store, name: &str) -> Project {
         let now = Utc::now();
         let project = Project {
+            repo: None,
+            repos: Vec::new(),
             id: Uuid::now_v7(),
             name: name.into(),
             path: format!("/tmp/{}", Uuid::now_v7()),
@@ -1168,6 +1170,9 @@ mod tests {
             last_seq: 0,
             parent_thread_id: None,
             coordinator_project_id: None,
+            origin: None,
+            inbound: None,
+            moved: None,
             subagent: None,
             delegation: None,
             members: Vec::new(),

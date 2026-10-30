@@ -12,7 +12,6 @@ import {
   type ThreadId,
   type ThreadsWorkspaceProgress,
 } from '../../../../packages/kybern-client/src/types.ts'
-import { onEnvironmentChange } from '../shell/environment.ts'
 import { getClient, getState, refreshLists, set } from '../state.ts'
 import { useNav } from '../nav/store.ts'
 
@@ -122,10 +121,3 @@ export function useWorkspaceProgress(threadId: ThreadId | null | undefined): Thr
   )
 }
 
-onEnvironmentChange(() => {
-  statuses = {}
-  progress = {}
-  inflight.clear()
-  for (const listener of statusListeners) listener()
-  for (const listener of progressListeners) listener()
-})

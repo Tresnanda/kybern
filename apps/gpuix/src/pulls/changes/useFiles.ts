@@ -4,7 +4,8 @@
 // patch is loaded from its page when it is selected (`usePatch`).
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PrFile } from '../../../../../packages/kybern-client/src/types.ts'
-import { getClient, useApp } from '../../state.ts'
+import { useApp } from '../../state.ts'
+import { prCall } from '../client.ts'
 import type { FileMeta } from './model.ts'
 
 /** Pages fetched before pausing at a "Load more files" row (1,500 files). GitHub itself stops at 3,000. */
@@ -23,7 +24,7 @@ const pages = new Map<string, PrFile[]>()
 const remember = <V,>(map: Map<string, V>, key: string, value: V, max: number) => { map.delete(key); map.set(key, value); while (map.size > max) map.delete(map.keys().next().value as string) }
 
 async function fetchPage(projectId: string, number: number, repo: string | undefined, page: number) {
-  return getClient()!.call('github.pr.page', { project_id: projectId, number, kind: 'files', page, ...(repo ? { repo } : {}) })
+  return prCall(projectId, 'github.pr.page', { project_id: projectId, number, kind: 'files', page, ...(repo ? { repo } : {}) })
 }
 
 export function useChangedFiles(projectId: string, number: number, repo: string | undefined, revision: number, head: string | undefined) {

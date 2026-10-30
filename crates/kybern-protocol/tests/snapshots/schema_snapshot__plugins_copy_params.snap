@@ -1,0 +1,71 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(PluginsCopyParams)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PluginsCopyParams",
+  "type": "object",
+  "properties": {
+    "provider": {
+      "$ref": "#/$defs/ProviderKind"
+    },
+    "id": {
+      "type": "string"
+    },
+    "from": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "to": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PluginCopyTarget"
+      }
+    },
+    "confirmed": {
+      "description": "Required; clients send the fingerprint only after showing contents and confirming installation.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "provider",
+    "id",
+    "to",
+    "confirmed"
+  ],
+  "$defs": {
+    "ProviderKind": {
+      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "opencode",
+        "pi",
+        "omp",
+        "cursor"
+      ]
+    },
+    "PluginCopyTarget": {
+      "type": "object",
+      "properties": {
+        "machine": {
+          "type": "string"
+        },
+        "replaces": {
+          "description": "Only this reviewed target declaration may be replaced. A concurrent edit fails closed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "machine"
+      ]
+    }
+  }
+}

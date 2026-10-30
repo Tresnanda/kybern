@@ -11,7 +11,7 @@ import { visualLink } from '../../../../packages/kybern-client/src/visuals.ts'
 import { artifactView, publishArtifactPrompt, type ArtifactView } from '../../../../packages/kybern-client/src/artifacts.ts'
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import type { ArtifactTool, FilesReadResult, Thread } from '../../../../packages/kybern-client/src/types.ts'
-import { getClient } from '../state.ts'
+import { threadClient } from '../state.ts'
 import { launchBrowser } from '../preview/browser.ts'
 import { openUrl } from '../pulls/PrStates.tsx'
 import { cachedMarkdownTheme } from '../transcript/kit.tsx'
@@ -39,13 +39,13 @@ export function ArtifactsPane({ thread }: { thread: Thread }) {
   useEffect(() => {
     let alive = true
     setBusy(true)
-    void getClient()!.call('threads.artifacts.list', { thread_id: thread.id }).then(result => { if (alive) { setItems(result.artifacts); setBefore(result.next_before_seq); setError(null) } }, e => { if (alive) setError(String(e)) }).finally(() => { if (alive) setBusy(false) })
+    void threadClient(thread.id)!.call('threads.artifacts.list', { thread_id: thread.id }).then(result => { if (alive) { setItems(result.artifacts); setBefore(result.next_before_seq); setError(null) } }, e => { if (alive) setError(String(e)) }).finally(() => { if (alive) setBusy(false) })
     return () => { alive = false }
   }, [thread.id, thread.status, refresh])
   const older = async () => {
     if (before === null || busy) return
     setBusy(true)
-    try { const result = await getClient()!.call('threads.artifacts.list', { thread_id: thread.id, before_seq: before }); setItems(old => [...old, ...result.artifacts.filter(a => !old.some(b => a.seq === b.seq))]); setBefore(result.next_before_seq) }
+    try { const result = await threadClient(thread.id)!.call('threads.artifacts.list', { thread_id: thread.id, before_seq: before }); setItems(old => [...old, ...result.artifacts.filter(a => !old.some(b => a.seq === b.seq))]); setBefore(result.next_before_seq) }
     catch (e) { setError(String(e)) } finally { setBusy(false) }
   }
   const publish = async (artifact: Pick<ArtifactView, 'path' | 'url'>) => {
@@ -53,7 +53,7 @@ export function ArtifactsPane({ thread }: { thread: Thread }) {
     setBusy(true); setError(null)
     try {
       const message = { parts: [{ type: 'text' as const, text: publishArtifactPrompt(artifact) }] }
-      const client = getClient()!
+      const client = threadClient(thread.id)!
       if (thread.status === 'running' || thread.status === 'awaiting-approval') {
         await client.call('queue.add', { id: crypto.randomUUID(), thread_id: thread.id, message })
         setNotice('Publishing capability check queued.')
@@ -86,7 +86,7 @@ function useArtifactFile(threadId: string, path: string) {
   useEffect(() => {
     let alive = true
     setFile(null); setError(null); setUrl(null)
-    const client = getClient()!
+    const client = threadClient(threadId)!
     void client.call('threads.artifacts.read', { thread_id: threadId, path: path }).then(async result => {
       if (result.binary || result.truncated) throw new Error('This file is binary or larger than 1 MB. Open the hosted artifact instead.')
       if (!alive) return
@@ -101,7 +101,7 @@ function useArtifactFile(threadId: string, path: string) {
 
 /** Open the artifact's page in the default browser with a fresh preview ticket (single use, 60 s: "open again" asks for another). */
 async function openArtifactInBrowser(threadId: string, path: string) {
-  const client = getClient()
+  const client = threadClient(threadId)
   if (!client) throw Error('Kybern is not connected. Reconnect, then open the artifact again.')
   const preview = await client.call('threads.artifacts.preview', { thread_id: threadId, path })
   await launchBrowser(`${httpBase(client.endpoint.url)}/artifact-preview/${encodeURIComponent(preview.ticket)}`)

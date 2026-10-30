@@ -20,7 +20,6 @@ import { DragGhost, type Settle } from '../drag/Ghost.tsx'
 import { createVelocityTracker } from '../drag/velocity.ts'
 import { watchPointerRelease } from './release.ts'
 import { cls, getObjc, nsApp, sel } from '../native/objc.ts'
-import { onEnvironmentChange } from '../shell/environment.ts'
 import { EASE } from '../motion/tokens.ts'
 import { Presence } from '../motion/Presence.tsx'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
@@ -122,7 +121,6 @@ function cancel() {
   stopReleaseWatch?.(); stopReleaseWatch = undefined
   pending = null; stopSelection?.(); stopSelection = undefined; publish(null)
 }
-onEnvironmentChange(() => { cancel(); suppressedThread = null; for (const id of [...bounds.keys()]) setBounds(id, null) })
 
 export function SplitWorkspace({ children }: { children: ReactNode }) {
   const root = useSplitRoot()

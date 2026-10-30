@@ -785,7 +785,7 @@ impl Orchestrator {
             cwd.to_string_lossy().into_owned(),
             100,
             30,
-            Some(vec![crate::cli_login::shell(), "-lc".into(), command.clone()]),
+            Some(crate::cli_login::shell_command(&command)),
             &env,
         )?;
         let hub = self.requests().clone();

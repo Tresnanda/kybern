@@ -1,4 +1,3 @@
-import { onEnvironmentChange } from './environment.ts'
 // The thread panel's width (`App.tsx:170-183` in the desktop): resizable by drag
 // between 208 and 480px, saved under the desktop's own key, and on a narrow
 // window it gives way before the dock does. The content column keeps room for
@@ -97,4 +96,3 @@ export function setSidebarDragging(next: boolean) {
 
 export const storedSidebarWidth = () => stored
 
-onEnvironmentChange(() => { const value = Number(load(KEY, SIDEBAR_DEFAULT)); stored = Number.isFinite(value) ? clamp(value) : SIDEBAR_DEFAULT; dragging = false; emit() })

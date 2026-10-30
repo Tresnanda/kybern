@@ -3,7 +3,7 @@
 // per burst of rows) and cached, so an answer renders as plain code first and
 // upgrades to file links once; streaming text never asks.
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
-import { getClient } from '../state.ts'
+import { threadClient } from '../state.ts'
 
 const MAX_THREADS = 24
 const MAX_PATHS = 2000
@@ -57,7 +57,8 @@ function flush() {
 }
 
 async function resolve(threadId: string, paths: string[]) {
-  const client = getClient()
+  let client: ReturnType<typeof threadClient>
+  try { client = threadClient(threadId) } catch { return } // that machine is offline: the spans stay code
   if (!client) return
   const keys = paths.map(path => `${threadId}\n${path}`)
   for (const key of keys) asking.add(key)

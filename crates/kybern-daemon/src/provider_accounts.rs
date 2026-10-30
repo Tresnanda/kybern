@@ -36,22 +36,19 @@ pub fn resolve(settings: &ProviderSettings, project: Option<&str>, explicit: Opt
         .to_string()
 }
 
+/// The environment a provider process gets. Credential values saved in the secret store
+/// (`kybern-secret:` references, design §9.3) are replaced by their values here, so this is the
+/// result to spawn with, never to save or send to a client.
 pub fn environment(settings: &ProviderSettings, kind: ProviderKind, instance: &str) -> Result<BTreeMap<String, String>> {
-    let mut env = settings.env.clone();
-    if instance == "default" {
-        return Ok(env);
-    }
-    let account = settings
-        .accounts
-        .get(instance)
-        .ok_or_else(|| anyhow!("Account '{instance}' is unavailable. Choose another account in Settings."))?;
-    let dir = PathBuf::from(&account.directory);
-    ensure!(dir.is_absolute(), "Account directory must be absolute.");
-    let path = |child: &str| dir.join(child).to_string_lossy().to_string();
-    // A named native account must not be silently replaced by the regular
-    // process/global provider API key. Empty overrides also suppress inherited
-    // keys for native probes and PTY sign-in without altering the user's shell.
-    let credentials: &[&str] = match kind {
+    let mut env = build_environment(settings, kind, instance)?;
+    crate::secret_store::resolve_env(&mut env);
+    Ok(env)
+}
+
+/// Environment variables that carry a provider's API credentials. A named native account
+/// suppresses them, and the secret store keeps their values out of `settings.json`.
+pub fn credential_keys(kind: ProviderKind) -> &'static [&'static str] {
+    match kind {
         ProviderKind::ClaudeCode => &["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
         ProviderKind::Codex => &["OPENAI_API_KEY", "CODEX_API_KEY"],
         ProviderKind::Cursor => &["CURSOR_API_KEY"],
@@ -69,7 +66,25 @@ pub fn environment(settings: &ProviderSettings, kind: ProviderKind, instance: &s
             "TOGETHER_API_KEY",
             "DEEPSEEK_API_KEY",
         ],
-    };
+    }
+}
+
+fn build_environment(settings: &ProviderSettings, kind: ProviderKind, instance: &str) -> Result<BTreeMap<String, String>> {
+    let mut env = settings.env.clone();
+    if instance == "default" {
+        return Ok(env);
+    }
+    let account = settings
+        .accounts
+        .get(instance)
+        .ok_or_else(|| anyhow!("Account '{instance}' is unavailable. Choose another account in Settings."))?;
+    let dir = PathBuf::from(&account.directory);
+    ensure!(dir.is_absolute(), "Account directory must be absolute.");
+    let path = |child: &str| dir.join(child).to_string_lossy().to_string();
+    // A named native account must not be silently replaced by the regular
+    // process/global provider API key. Empty overrides also suppress inherited
+    // keys for native probes and PTY sign-in without altering the user's shell.
+    let credentials = credential_keys(kind);
     for key in credentials {
         env.insert((*key).into(), String::new());
     }
@@ -117,7 +132,7 @@ pub fn validate(settings: &Settings) -> Result<()> {
             }
         }
         for id in provider.default_account.iter().chain(provider.project_accounts.values()) {
-            environment(provider, *kind, id)?;
+            build_environment(provider, *kind, id)?;
         }
     }
     Ok(())
@@ -268,13 +283,32 @@ fn summarize(
         can_sign_out: named
             && matches!(status, AccountStatus::SignedIn | AccountStatus::NeedsSignIn)
             && matches!(kind, ProviderKind::ClaudeCode | ProviderKind::Codex | ProviderKind::Cursor),
+        broker: None,
     }
+}
+
+/// An account that signs in through the login broker is signed in as far as this machine is concerned
+/// while the broker answers; the harness' own probe (an empty folder) says nothing about it.
+fn through_broker(state: &AppState, summary: &mut AccountSummary) {
+    let Some(view) =
+        state.orchestrator.login_broker().and_then(|broker| broker.account_view(summary.provider.kind, &summary.provider.instance))
+    else {
+        return;
+    };
+    summary.status = match view.state {
+        BrokerLoginState::Borrowing | BrokerLoginState::Lending => AccountStatus::SignedIn,
+        _ => AccountStatus::NeedsSignIn,
+    };
+    summary.can_sign_out = false;
+    summary.broker = Some(view);
 }
 
 async fn summary_for(state: &AppState, kind: ProviderKind, instance: &str, refresh: bool) -> AccountSummary {
     let provider_instance = ProviderInstance { kind, instance: instance.to_string() };
     let probed = state.account_identities.probe(state, &provider_instance, refresh).await;
-    summarize(state, &state.settings.get(), kind, instance, probed)
+    let mut summary = summarize(state, &state.settings.get(), kind, instance, probed);
+    through_broker(state, &mut summary);
+    summary
 }
 
 /// Every account with its identity and sign-in state. Identity probes are
@@ -465,13 +499,17 @@ mod tests {
         assert_eq!(resolve(&p, Some("/project"), None), "project");
         assert_eq!(resolve(&p, None, None), "work");
         assert_eq!(environment(&p, ProviderKind::ClaudeCode, "default").unwrap(), p.env);
-        p.accounts.insert("work".into(), ProviderAccount { name: "Work".into(), directory: "/isolated".into(), ..Default::default() });
+        let isolated = std::env::temp_dir().join("isolated");
+        p.accounts.insert(
+            "work".into(),
+            ProviderAccount { name: "Work".into(), directory: isolated.to_string_lossy().into_owned(), ..Default::default() },
+        );
         let claude = environment(&p, ProviderKind::ClaudeCode, "work").unwrap();
-        assert_eq!(claude["CLAUDE_CONFIG_DIR"], "/isolated");
+        assert_eq!(Path::new(&claude["CLAUDE_CONFIG_DIR"]), isolated);
         assert!(!claude.contains_key("HOME"));
         let cursor = environment(&p, ProviderKind::Cursor, "work").unwrap();
-        assert_eq!(cursor["KYBERN_CURSOR_AUTH_FILE"], "/isolated/auth.json");
-        assert_eq!(cursor["KYBERN_CURSOR_STATE_DIR"], "/isolated/sessions");
+        assert_eq!(Path::new(&cursor["KYBERN_CURSOR_AUTH_FILE"]), isolated.join("auth.json"));
+        assert_eq!(Path::new(&cursor["KYBERN_CURSOR_STATE_DIR"]), isolated.join("sessions"));
         assert!(environment(&p, ProviderKind::Codex, "missing").is_err());
     }
 }
@@ -486,7 +524,11 @@ mod native_environment_tests {
         provider.env.insert("OMP_PROFILE".into(), "regular-profile".into());
         provider.accounts.insert(
             "work".into(),
-            ProviderAccount { name: "Work".into(), directory: "/scratch-work-account".into(), ..Default::default() },
+            ProviderAccount {
+                name: "Work".into(),
+                directory: std::env::temp_dir().join("scratch-work-account").to_string_lossy().into_owned(),
+                ..Default::default()
+            },
         );
         for (kind, expected) in [
             (ProviderKind::ClaudeCode, "CLAUDE_CONFIG_DIR=/scratch-work-account"),
@@ -497,9 +539,12 @@ mod native_environment_tests {
             (ProviderKind::Opencode, "XDG_DATA_HOME=/scratch-work-account/data"),
         ] {
             let named = environment(&provider, kind, "work").unwrap();
-            let output = std::process::Command::new("/usr/bin/env").env_clear().envs(&named).output().unwrap();
+            let output = crate::test_support::environment_command().env_clear().envs(&named).output().unwrap();
             let captured = String::from_utf8(output.stdout).unwrap();
-            assert!(captured.lines().any(|line| line == expected), "{kind}: {captured}");
+            let (key, suffix) = expected.split_once("=/scratch-work-account").unwrap();
+            let wanted = std::env::temp_dir().join("scratch-work-account").join(suffix.trim_start_matches('/'));
+            let actual = captured.lines().find_map(|line| line.strip_prefix(&format!("{key}="))).unwrap();
+            assert_eq!(Path::new(actual), wanted, "{kind}");
             assert!(captured.contains("HOME=/regular-home-sentinel"));
             assert_eq!(environment(&provider, kind, "default").unwrap(), provider.env);
             if kind == ProviderKind::Omp {
@@ -514,10 +559,14 @@ mod native_environment_tests {
         provider.env.insert("CURSOR_API_KEY".into(), "regular-cli-sentinel".into());
         provider.accounts.insert(
             "work".into(),
-            ProviderAccount { name: "Work".into(), directory: "/scratch-work-account".into(), ..Default::default() },
+            ProviderAccount {
+                name: "Work".into(),
+                directory: std::env::temp_dir().join("scratch-work-account").to_string_lossy().into_owned(),
+                ..Default::default()
+            },
         );
         let named = environment(&provider, ProviderKind::Cursor, "work").unwrap();
-        let output = std::process::Command::new("/usr/bin/env")
+        let output = crate::test_support::environment_command()
             .env_clear()
             .env("CURSOR_API_KEY", "inherited-cli-sentinel")
             .envs(&named)
@@ -526,7 +575,8 @@ mod native_environment_tests {
         let captured = String::from_utf8(output.stdout).unwrap();
         assert!(!captured.contains("regular-cli-sentinel"));
         assert!(!captured.contains("inherited-cli-sentinel"));
-        assert!(captured.contains("KYBERN_CURSOR_AUTH_FILE=/scratch-work-account/auth.json"));
+        let actual = captured.lines().find_map(|line| line.strip_prefix("KYBERN_CURSOR_AUTH_FILE=")).unwrap();
+        assert_eq!(Path::new(actual), std::env::temp_dir().join("scratch-work-account/auth.json"));
         assert_eq!(environment(&provider, ProviderKind::Cursor, "default").unwrap()["CURSOR_API_KEY"], "regular-cli-sentinel");
     }
 }
@@ -534,8 +584,6 @@ mod native_environment_tests {
 #[cfg(test)]
 mod management_tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
-
     const FAKE_CLAUDE: &str = r#"#!/bin/sh
 case "$1 $2" in
 "auth status")
@@ -564,13 +612,31 @@ exit 2
     fn fixture() -> Fixture {
         let root = std::env::temp_dir().join(format!("kybern-accounts-test-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(root.join("bin")).unwrap();
-        std::fs::write(root.join("bin/claude"), FAKE_CLAUDE).unwrap();
-        std::fs::set_permissions(root.join("bin/claude"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let binary = crate::test_support::powershell_script(
+            &root.join("bin"),
+            "claude",
+            FAKE_CLAUDE,
+            r#"
+$dir = $env:CLAUDE_CONFIG_DIR
+if ($args[0] -eq 'auth' -and $args[1] -eq 'status') {
+    if (Test-Path "$dir/.signed-in") {
+        @{ loggedIn = $true; authMethod = 'claude.ai'; email = ([IO.File]::ReadAllText([IO.Path]::Combine($dir, '.signed-in'))); subscriptionType = 'max'; orgName = 'Org' } | ConvertTo-Json -Compress
+        exit 0
+    }
+    '{"loggedIn":false}'
+    exit 1
+}
+if ($args[0] -eq 'auth' -and $args[1] -eq 'logout') {
+    Remove-Item -Force -ErrorAction SilentlyContinue "$dir/.signed-in"
+    exit 0
+}
+exit 2
+"#,
+        );
         let paths = crate::config::Paths::resolve(Some(root.join("data"))).unwrap();
         let state = AppState::initialize(&paths).unwrap();
         let mut settings = state.settings.get();
-        settings.providers.entry(ProviderKind::ClaudeCode).or_default().binary =
-            Some(root.join("bin/claude").to_string_lossy().into_owned());
+        settings.providers.entry(ProviderKind::ClaudeCode).or_default().binary = Some(binary.to_string_lossy().into_owned());
         state.settings.set(settings).unwrap();
         Fixture { state, root }
     }

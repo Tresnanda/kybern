@@ -99,8 +99,9 @@ try {
     await check('plus', 'composer-plus', 'composer-plus-menu')
   }
   if (args.includes('--draft')) {
-    await press('environment-switcher')
-    await press('environment-add')
+    await press('rail-settings')
+    await press('settings-tab-machines')
+    await press('machines-add-ssh')
     await app.getByTestId('environment-machine').waitFor()
     await press('environment-tab-address')
     await app.getByTestId('environment-address').waitFor()

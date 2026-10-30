@@ -20,6 +20,7 @@ fn no_repository() -> GitStatus {
         upstream: None,
         remote_url: None,
         pull_request: None,
+        issue: None,
         repos: Vec::new(),
     }
 }

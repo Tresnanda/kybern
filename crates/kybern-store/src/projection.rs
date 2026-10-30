@@ -431,7 +431,7 @@ fn apply_transcript_event(
                 out.push(TranscriptEntry::User { id: *message_id, turn_id, seq: ev.seq, message: message.clone(), at: ev.at });
             }
             EventPayload::SessionImported { .. } => {
-                out.push(TranscriptEntry::Notice { turn_id: last_turn_id_value.unwrap_or_default(), seq: ev.seq, at: ev.at, level: NoticeLevel::Info, text: "Session resumed. Earlier messages are shown above.".into() });
+                out.push(TranscriptEntry::Notice { turn_id: last_turn_id_value.unwrap_or_default(), seq: ev.seq, at: ev.at, level: NoticeLevel::Info, text: "Session resumed. Earlier messages are shown above.".into(), data: None });
             }
             EventPayload::TurnResumed => {
                 let Some(turn_id) = turn_id else { continue };
@@ -736,12 +736,18 @@ fn apply_transcript_event(
             }
             EventPayload::SessionTransitioned { text, .. } => {
                 if let Some(turn_id) = turn_id.or(last_turn_id_value) {
-                    out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: NoticeLevel::Info, text: text.clone(), at: ev.at });
+                    out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: NoticeLevel::Info, text: text.clone(), at: ev.at, data: None });
                 }
             }
-            EventPayload::ProviderNotice { level, text, .. } => {
-                let Some(turn_id) = turn_id else { continue };
-                out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: *level, text: text.clone(), at: ev.at });
+            EventPayload::ProviderNotice { level, text, data } => {
+                // A fork or move notice is written to an idle source thread, between turns: it belongs to the last one.
+                let fork = data
+                    .as_ref()
+                    .and_then(|data| data.get("kind"))
+                    .and_then(|kind| kind.as_str())
+                    .is_some_and(|kind| kind.starts_with("fork") || kind.starts_with("move"));
+                let Some(turn_id) = turn_id.or(if fork { last_turn_id_value } else { None }) else { continue };
+                out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: *level, text: text.clone(), at: ev.at, data: data.clone() });
             }
             EventPayload::WorkspaceReverted { commit, .. } => {
                 let Some(turn_id) = turn_id else { continue };
@@ -755,7 +761,7 @@ fn apply_transcript_event(
             EventPayload::ProviderSessionReleased { reason } => {
                 // Releases happen between turns; show them under the last one.
                 let (Some(turn_id), Some(text)) = (turn_id.or(last_turn_id_value), reason.notice_text()) else { continue };
-                out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: NoticeLevel::Info, text: text.into(), at: ev.at });
+                out.push(TranscriptEntry::Notice { turn_id, seq: ev.seq, level: NoticeLevel::Info, text: text.into(), at: ev.at, data: None });
             }
             EventPayload::ContextRotationStarted { rotation_id, reason, used_tokens, window_tokens } => {
                 out.push(TranscriptEntry::Rotation {
@@ -813,6 +819,19 @@ fn apply_transcript_event(
                     *handoff = Some(text.clone());
                     *edited = true;
                 }
+            }
+            EventPayload::HistoryImported { from_machine, from_machine_name, from_thread, from_title, items, omitted } => {
+                out.push(TranscriptEntry::History {
+                    turn_id: TurnId::nil(),
+                    seq: ev.seq,
+                    from_machine: from_machine.clone(),
+                    from_machine_name: from_machine_name.clone(),
+                    from_thread: *from_thread,
+                    from_title: from_title.clone(),
+                    items: items.clone(),
+                    omitted: *omitted,
+                    at: ev.at,
+                });
             }
             EventPayload::ProviderSessionBound { session_id, .. } => {
                 roots.insert((ev.thread_id, session_id.clone()));
@@ -1741,6 +1760,7 @@ mod reconciliation_allocation_tests {
                 level: NoticeLevel::Info,
                 text: "separator".into(),
                 at: "2026-09-17T00:00:00Z".parse().unwrap(),
+                data: None,
             });
         }
         (out, indices)
@@ -1885,6 +1905,109 @@ mod rotation_tests {
         let pending: Vec<bool> =
             rows.iter().filter_map(|row| if let TranscriptEntry::Rotation { pending, .. } = row { Some(*pending) } else { None }).collect();
         assert_eq!(pending, vec![false, true]);
+    }
+
+    #[test]
+    fn imported_history_is_one_block_before_the_first_turn_and_move_notices_keep_their_data() {
+        let turn = TurnId::from_u128(7);
+        let items = vec![
+            HistoryItem { role: HistoryRole::User, text: "Fix the login".into(), at: None, tool: None },
+            HistoryItem { role: HistoryRole::Tool, text: "Bash: cargo test".into(), at: None, tool: Some("Bash".into()) },
+        ];
+        let data = serde_json::json!({ "kind": "move", "machine_id": "m-2", "thread_id": "t-9" });
+        let events = vec![
+            event(
+                1,
+                None,
+                EventPayload::HistoryImported {
+                    from_machine: "m-1".into(),
+                    from_machine_name: "Mac".into(),
+                    from_thread: ThreadId::from_u128(3),
+                    from_title: "Fix login".into(),
+                    items: items.clone(),
+                    omitted: 4,
+                },
+            ),
+            event(
+                2,
+                Some(turn),
+                EventPayload::TurnStarted { message_id: MessageId::from_u128(1), message: UserMessage::text("Pick it up") },
+            ),
+            event(
+                3,
+                Some(turn),
+                EventPayload::TurnCompleted {
+                    stop_reason: StopReason::Completed,
+                    usage: Usage::default(),
+                    cost_usd: None,
+                    duration_ms: 1,
+                    terminal_message_id: None,
+                },
+            ),
+            event(
+                4,
+                None,
+                EventPayload::ProviderNotice {
+                    level: NoticeLevel::Info,
+                    text: "Continued on satyamas · open".into(),
+                    data: Some(data.clone()),
+                },
+            ),
+        ];
+        let rows = project_transcript(&events);
+        let TranscriptEntry::History { seq, from_machine_name, from_thread, from_title, items: carried, omitted, .. } = &rows[0] else {
+            panic!("the history comes first: {rows:?}");
+        };
+        assert_eq!(
+            (*seq, from_machine_name.as_str(), *from_thread, from_title.as_str(), *omitted),
+            (1, "Mac", ThreadId::from_u128(3), "Fix login", 4)
+        );
+        assert_eq!(carried, &items);
+        assert!(matches!(rows[1], TranscriptEntry::User { .. }));
+        let notices: Vec<_> =
+            rows.iter().filter(|row| matches!(row, TranscriptEntry::Notice { data: Some(found), .. } if *found == data)).collect();
+        assert_eq!(notices.len(), 1, "a move notice written between turns lands under the last one: {rows:?}");
+    }
+
+    #[test]
+    fn a_fork_notice_between_turns_keeps_its_data_and_lands_under_the_last_turn() {
+        let turn = TurnId::from_u128(7);
+        let completed = |seq| {
+            event(
+                seq,
+                Some(turn),
+                EventPayload::TurnCompleted {
+                    stop_reason: StopReason::Completed,
+                    usage: Usage::default(),
+                    cost_usd: None,
+                    duration_ms: 1,
+                    terminal_message_id: None,
+                },
+            )
+        };
+        let notice =
+            |seq, text: &str, data| event(seq, None, EventPayload::ProviderNotice { level: NoticeLevel::Info, text: text.into(), data });
+        let data = serde_json::json!({ "kind": "fork", "machine_id": "m-2", "machine_name": "satyamas", "thread_id": "t-9" });
+        let events = vec![
+            event(1, Some(turn), EventPayload::TurnStarted { message_id: MessageId::from_u128(1), message: UserMessage::text("hi") }),
+            completed(2),
+            notice(3, "Forked to satyamas · open", Some(data.clone())),
+            // Other notices written between turns stay out of the transcript, as before.
+            notice(4, "Something else", Some(serde_json::json!({ "kind": "other" }))),
+            notice(5, "Plain", None),
+        ];
+        let rows = project_transcript(&events);
+        let notices: Vec<_> = rows
+            .iter()
+            .filter_map(|row| {
+                if let TranscriptEntry::Notice { turn_id, text, data, .. } = row {
+                    Some((*turn_id, text.clone(), data.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(notices, vec![(turn, "Forked to satyamas · open".to_string(), Some(data))]);
     }
 
     #[test]

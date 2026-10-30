@@ -1,4 +1,4 @@
-import { activeEnvironment, onEnvironmentChange } from '../shell/environment.ts'
+import { activeEnvironment } from '../shell/environment.ts'
 import { DeferredReads } from '../shell/deferredReads.ts'
 import { startupMark } from '../perf/startup.ts'
 import { memoryStep } from '../perf/memoryLog.ts'
@@ -14,7 +14,7 @@ import { prependThreadHistory, type Block } from '../../../../packages/kybern-cl
 import { EARLIER_HISTORY_PAGE, historyPageShowedNothing, historyTop } from '../../../../packages/kybern-client/src/historyPaging.ts'
 import type { ApprovalDecision, Diff, Thread, ThreadEvent, ThreadId, TurnId } from '../../../../packages/kybern-client/src/types.ts'
 import { useNav } from '../nav/store.ts'
-import { getClient, getThreadSession, primeThreadHistory, takeThreadHistory, reloadPaneThread, getThreadOpen, setThreadOpen, getFocusedPaneId, getPane, getPaneState, onThreadEvent, subscribe, useApp, usePaneAccess, usePaneId } from '../state.ts'
+import { threadClient, getPaneIds, getThreadSession, primeThreadHistory, takeThreadHistory, reloadPaneThread, getThreadOpen, setThreadOpen, getFocusedPaneId, getPane, getPaneState, onThreadEvent, subscribe, useApp, usePaneAccess, usePaneId } from '../state.ts'
 import { readClipboardText as readSystemClipboardText, writeClipboardText } from '../platform/os.ts'
 
 export type ToolBlock = Extract<Block, { kind: 'tool' }>
@@ -26,10 +26,18 @@ export function errorText(error: unknown): string {
   return String(error)
 }
 
-function rpc() {
-  const client = getClient()
+function rpc(threadId?: ThreadId) {
+  const client = threadClient(threadId)
   if (!client) throw new Error('Not connected')
   return client
+}
+/** The client a stale guard compares: the owner of `threadId`, or null while that machine cannot be reached. */
+function liveClient(threadId: ThreadId) {
+  try { return threadClient(threadId) } catch { return null }
+}
+/** The thread an approval belongs to, read from the panes that show it (the machine it must be answered on). */
+function approvalThread(id: string): ThreadId | undefined {
+  for (const paneId of getPaneIds()) { const found = getPaneState(paneId).open.pendingApprovals.find(a => a.id === id); if (found) return found.thread_id }
 }
 
 // ---- row state (`useTranscriptRowState`) ----
@@ -98,15 +106,15 @@ export function readClipboardText(): Promise<string> {
 // ---- approvals and questions ----
 
 export async function respondApproval(id: string, decision: ApprovalDecision) {
-  await rpc().call('approvals.respond', { approval_id: id, ...decision })
+  await rpc(approvalThread(id)).call('approvals.respond', { approval_id: id, ...decision })
 }
 
 export async function interrupt(threadId: ThreadId) {
-  await rpc().call('threads.interrupt', { thread_id: threadId })
+  await rpc(threadId).call('threads.interrupt', { thread_id: threadId })
 }
 
 export async function answerQuestions(threadId: ThreadId, requestId: string, answers: string[]) {
-  await rpc().call('threads.answer', { thread_id: threadId, request_id: requestId, answers })
+  await rpc(threadId).call('threads.answer', { thread_id: threadId, request_id: requestId, answers })
 }
 
 /** Surface errors from an action that has no inline place to show them. */
@@ -132,7 +140,7 @@ export async function hydrateToolOutput(threadId: ThreadId, block: ToolBlock) {
   const session = getThreadSession(threadId)
   const owner = activeEnvironment()
   try {
-    const result = await rpc().call('threads.tool_output', {
+    const result = await rpc(threadId).call('threads.tool_output', {
       thread_id: threadId,
       tool_call_id: block.call.id,
       start_seq: block.seq,
@@ -175,12 +183,12 @@ const diffReads = new DeferredReads(4)
 export function useTurnDiff(threadId: ThreadId, turnId: TurnId, enabled: boolean): Diff | undefined {
   useSyncExternalStore(diffCell.subscribe, diffCell.get)
   const key = `${threadId}:${turnId}`
-  const client = getClient()
+  const client = liveClient(threadId)
   if (enabled && client && !diffs.has(key) && !diffLoads.has(key)) {
     diffLoads.add(key)
     const owner = activeEnvironment()
     const session = getThreadSession(threadId)
-    const valid = () => owner === activeEnvironment() && client === getClient() && session === getThreadSession(threadId)
+    const valid = () => owner === activeEnvironment() && client === liveClient(threadId) && session === getThreadSession(threadId)
     // A fast thread switch used to stack another 30 metadata reads on the
     // startup burst and exhaust the daemon's request lane. Newest queued rows
     // go first; closed sessions never issue their queued reads.
@@ -197,7 +205,7 @@ export function useTurnDiff(threadId: ThreadId, turnId: TurnId, enabled: boolean
 }
 
 export function loadFileDiff(threadId: ThreadId, path: string, turnId: TurnId): Promise<Diff> {
-  return rpc().call('threads.diff', { thread_id: threadId, turn_id: turnId, include_patch: true, path })
+  return rpc(threadId).call('threads.diff', { thread_id: threadId, turn_id: turnId, include_patch: true, path })
 }
 
 /** The card's file row is the header (`FileDiffBody` has none), so the native
@@ -229,7 +237,7 @@ export async function revertTo(threadId: ThreadId, turnId: TurnId) {
   const paneId = getFocusedPaneId()
   const generation = getPane(paneId)?.generation
   const owner = activeEnvironment()
-  await rpc().call('threads.revert', { thread_id: threadId, turn_id: turnId })
+  await rpc(threadId).call('threads.revert', { thread_id: threadId, turn_id: turnId })
   if (owner !== activeEnvironment()) return
   for (const key of [...diffs.keys()]) if (key.startsWith(`${threadId}:`)) diffs.delete(key)
   for (const key of [...patches.keys()]) if (key.startsWith(`${threadId}:`)) patches.delete(key)
@@ -263,15 +271,15 @@ export function loadEarlier(paneId = getFocusedPaneId()): Promise<boolean> {
   const base = getThreadOpen(threadId)
   if (!base?.loaded || base.nextBeforeSeq == null || base.loadingEarlier) return Promise.resolve(false)
   const cursor = base.nextBeforeSeq
-  const owner = activeEnvironment(), client = getClient(), session = getThreadSession(threadId)
+  const owner = activeEnvironment(), client = liveClient(threadId), session = getThreadSession(threadId)
   const events: ThreadEvent[] = []
   const stop = onThreadEvent((id, event) => { if (id === threadId) events.push(event) })
   const error = errorFor(threadId)
   error.set(null)
   setThreadOpen(threadId, { ...base, loadingEarlier: true })
-  const valid = (): boolean => owner === activeEnvironment() && client === getClient() && earlierLoads.get(threadId) === pendingLoad && getThreadSession(threadId) === session && !!getThreadOpen(threadId)
+  const valid = (): boolean => owner === activeEnvironment() && client === liveClient(threadId) && earlierLoads.get(threadId) === pendingLoad && getThreadSession(threadId) === session && !!getThreadOpen(threadId)
   const prefetched = takeThreadHistory(threadId, base)
-  const request = () => rpc().call('threads.get', {
+  const request = () => rpc(threadId).call('threads.get', {
     thread_id: threadId, include_tool_output: false, defer_tool_stream: true,
     ...EARLIER_HISTORY_PAGE, before_seq: cursor, through_seq: base.lastSeq,
   })
@@ -403,7 +411,7 @@ export function useChildThreads(parentId: ThreadId, enabled: boolean): Thread[] 
     if (current && Date.now() - current.at < CHILDREN_STALE_MS) return
     childLoads.add(parentId)
     const owner = activeEnvironment()
-    rpc()
+    rpc(parentId)
       .call('threads.list', { parent_thread_id: parentId })
       .then((result) => { if (owner === activeEnvironment()) childThreads.set(parentId, { at: Date.now(), threads: result.threads }) })
       .catch(() => {})
@@ -420,4 +428,3 @@ export function useChildThreads(parentId: ThreadId, enabled: boolean): Thread[] 
   }, [cached, live, parentId])
 }
 
-onEnvironmentChange(() => { resetRowState(); diffs.clear(); diffLoads.clear(); hydrating.clear(); childThreads.clear(); childLoads.clear(); earlierLoads.clear(); earlierErrors.clear(); clearTimeout(actionErrorTimer); actionError.set(null); earlierError.set(null); })

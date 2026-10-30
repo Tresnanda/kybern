@@ -36,7 +36,12 @@ import { N } from '../nav/glyphs.ts'
 import { newThread, openThread } from '../nav/history.ts'
 import { ContextMenu, Menu, MenuItem, MenuLabel, MenuSeparator, muted, Tip } from '../nav/overlay.tsx'
 import { DEFAULT_FILTER, getNav, setNav, useNav } from '../nav/store.ts'
-import { getClient, getState, toggleProject as toggleProjectState } from '../state.ts'
+import { callThread, getState, toggleProject as toggleProjectState, type StateThread } from '../state.ts'
+import { glyphOfMachine, machineHub } from '../machines/index.ts'
+import { MachineBadge } from './MachineBadge.tsx'
+import { forkTargetsOf } from '../fork/targets.ts'
+import { canProvision } from '../provision/targets.ts'
+import { PROVISION_COPY } from '../../../../packages/kybern-client/src/provision.ts'
 import { ink, Label, ProviderMark, useTheme } from '../ui.tsx'
 import { raisedFill, useGlass } from '../platform/glass.ts'
 import type { Theme } from '../theme.ts'
@@ -489,6 +494,7 @@ export const ProjectHeader = memo(function ProjectHeader({
             </>
           )}
           <MoveToSpaceMenu project={project} />
+          {canProvision(project.id) && <MenuItem id="provision" testId="project-menu-provision" icon={N.laptop} label={PROVISION_COPY.menu} onSelect={() => showDialog({ kind: 'provision', projectId: project.id })} />}
           <MenuSeparator />
           <MenuItem
             id="remove"
@@ -541,6 +547,10 @@ export const ThreadRow = memo(function ThreadRow({
   const [renaming, setRenaming] = useState(false)
   useSidebarRowLease(renaming)
   const [title, setTitle] = useState(thread.title)
+  // A thread another machine owns: its glyph, and greyed while that machine is offline (design §5.2). The machine the user is at has neither.
+  const remote = thread as StateThread
+  const machineGlyph = remote.machineId ? glyphOfMachine(remote.machineId) : undefined
+  const machineName = remote.machineId ? machineHub().set.displayName(remote.machineId) : undefined
   const splitRoot = useSplitRoot(), focusedPane = useFocusedPane()
   const inSplit = collectThreadPanes(splitRoot).some((pane) => pane.threadId === thread.id)
   const { renderer } = useGpuix()
@@ -581,6 +591,7 @@ export const ThreadRow = memo(function ThreadRow({
             cursor: 'pointer',
             userSelect: 'none',
             ...(selected ? { backgroundColor: accentActive(t) } : reveal ? { backgroundColor: accent(t) } : {}),
+            ...(remote.offline ? { opacity: 0.5 } : {}),
             ...pressRow(t, selected ? accentActive(t) : accent(t)),
           }}
         >
@@ -610,13 +621,15 @@ export const ThreadRow = memo(function ThreadRow({
               </TitleSwap>
             )}
             {hasDraft && !renaming && <DraftMarker />}
+            {/* The title keeps its room: with the pin and archive buttons showing, the badge is what gets cut (ellipsis). */}
             {badge && (
-              <Label color={amberText(t)} size={10} weight={500} style={{ flexShrink: 0 }} paintAnimation={pendingPop ? popAnimation() : undefined}>
+              <Label color={amberText(t)} size={10} weight={500} truncate style={{ flexShrink: 8, minWidth: 0 }} paintAnimation={pendingPop ? popAnimation() : undefined}>
                 {badge}
               </Label>
             )}
           </div>
           {thread.worktree && <Icon source={N.worktree} size={12} color={muted(t, 0.55)} />}
+          {machineGlyph && <MachineBadge glyph={machineGlyph} name={machineName} testId={`machine-${thread.id}`} />}
           {/* The trailing padding, less the row's 8px gap. */}
           <PadTween width={(reveal ? ACTIONS_PAD : hasGlyph || thread.pinned ? 28 : 8) - 8} />
         </div>
@@ -683,6 +696,8 @@ export const ThreadRow = memo(function ThreadRow({
             onSelect={() => void updateThread(thread.id, { pinned: !thread.pinned })}
           />
           <MenuItem id="handoff" icon={N.handoff} label="Hand off to another agent" onSelect={() => setNav({ handoff: { threadId: thread.id, target: null } })} />
+          {forkTargetsOf(remote).length > 0 && <MenuItem id="fork-machine" icon={N.laptop} label="Fork to another machine…" onSelect={() => showDialog({ kind: 'fork', threadId: thread.id, ...(remote.machineId ? { machineId: remote.machineId } : {}) })} />}
+          {!thread.moved && forkTargetsOf(remote).length > 0 && <MenuItem id="move-machine" icon={N.laptop} label="Continue on another machine…" onSelect={() => showDialog({ kind: 'move', threadId: thread.id, ...(remote.machineId ? { machineId: remote.machineId } : {}) })} />}
           <MenuSeparator />
           <MenuItem id="right" icon={N.splitRight} label="Open to the right" disabled={!canOpenInSplit(thread.id, 'horizontal')} onSelect={() => { openThreadInSplit(thread.id, 'horizontal') }} />
           <MenuItem id="below" icon={N.splitDown} label="Open below" disabled={!canOpenInSplit(thread.id, 'vertical')} onSelect={() => { openThreadInSplit(thread.id, 'vertical') }} />
@@ -736,6 +751,10 @@ export const ChildRow = memo(function ChildRow({
   const { renderer } = useGpuix()
   const rowRef = useRef<PublicInstance | null>(null)
   const info = (thread.subagent ?? thread.delegation)!
+  // A child another machine runs wears that machine's glyph, as a top-level thread row does.
+  const machineId = (thread as StateThread).machineId
+  const machineGlyph = machineId ? glyphOfMachine(machineId) : undefined
+  const machineName = machineId ? machineHub().set.displayName(machineId) : undefined
   const delegated = !thread.subagent
   const phase = rowPhase(thread)
   const working = phase === 'working'
@@ -793,12 +812,14 @@ export const ChildRow = memo(function ChildRow({
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexGrow: 1, minWidth: 0 }}>
             {/* A little quieter than its parent, so the parent stays dominant. */}
             <MarqueeLabel hover={hover} text={thread.title || (delegated ? 'Agent' : 'Subagent')} color={selected ? t.text : ink(t, 0.82)} />
+            {/* The title keeps its room: with the pin and archive buttons showing, the badge is what gets cut (ellipsis). */}
             {badge && (
-              <Label color={amberText(t)} size={10} weight={500} style={{ flexShrink: 0 }} paintAnimation={pendingPop ? popAnimation() : undefined}>
+              <Label color={amberText(t)} size={10} weight={500} truncate style={{ flexShrink: 8, minWidth: 0 }} paintAnimation={pendingPop ? popAnimation() : undefined}>
                 {badge}
               </Label>
             )}
           </div>
+          {machineGlyph && <MachineBadge glyph={machineGlyph} name={machineName} testId={`machine-${thread.id}`} />}
         </div>
         {childCount > 0 && (
           <ChildToggle
@@ -836,10 +857,10 @@ export const ChildRow = memo(function ChildRow({
           <MenuItem id="open" label="Open" onSelect={() => openThread(thread.id)} />
           <MenuItem id="parent" icon={N.backToParent} label="Open parent" onSelect={() => thread.parent_thread_id && openThread(thread.parent_thread_id)} />
           {working && !delegated && thread.subagent?.capabilities?.stop !== false && (
-            <MenuItem id="stop" icon={N.stop} label="Stop" onSelect={() => void getClient()?.call('tasks.stop', { thread_id: thread.id }).catch(() => {})} />
+            <MenuItem id="stop" icon={N.stop} label="Stop" onSelect={() => void callThread(thread.id, 'tasks.stop', { thread_id: thread.id }).catch(() => {})} />
           )}
           {canStopDelegation(thread) && (
-            <MenuItem id="stop-delegated" icon={N.stop} label="Stop" onSelect={() => void getClient()?.call('threads.interrupt', { thread_id: thread.id }).catch(() => {})} />
+            <MenuItem id="stop-delegated" icon={N.stop} label="Stop" onSelect={() => void callThread(thread.id, 'threads.interrupt', { thread_id: thread.id }).catch(() => {})} />
           )}
           {delegated && <MenuItem id="archive" icon={N.archive} label="Archive" onSelect={() => void archiveThread(thread.id)} />}
         </ContextMenu>

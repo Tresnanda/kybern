@@ -73,6 +73,8 @@ type Row =
 type Block = { key: string; label: string | null; icon?: ProviderKind; rows: Row[] }
 
 export interface ModelPickerProps {
+  /** The thread runs on another machine: its tabs list only the agents installed there and mark the signed-out ones. */
+  machineName?: string
   provider: ProviderInstance
   providers: ProviderStatus[]
   instances?: Partial<Record<ProviderKind, string>>
@@ -96,6 +98,10 @@ export interface ModelPickerProps {
   label: (color: string) => ReactNode
   /** The trigger's lead where the provider mark is not enough (the account dot over the mark); defaults to the mark. */
   lead?: ReactNode
+  /** Where the panel opens; the composer's opens upward. */
+  side?: 'top' | 'bottom'
+  /** The panel's layer; one inside a dialog sits above the dialog's (`nav/overlay.tsx`). */
+  priority?: number
 }
 
 export function ModelPicker(props: ModelPickerProps) {
@@ -146,11 +152,12 @@ export function ModelPicker(props: ModelPickerProps) {
       {open && (
         // The desktop popover's open (`ModelPicker.tsx:129`): 250 ms smooth-out fade from the trigger.
         <PopupLayer
-          side="top"
+          side={props.side ?? 'top'}
           align="end"
           sideOffset={6}
           collisionPadding={8}
           testId="model-picker-panel"
+          {...(props.priority !== undefined ? { priority: props.priority } : {})}
           onMouseDownOutside={() => {
             dismissedByOutside.current = true
             queueMicrotask(() => {
@@ -186,6 +193,7 @@ function ModelPickerPanel({
   accountInstance,
   onAccountChange,
   onReload,
+  machineName,
   close,
 }: ModelPickerProps & { close: () => void }) {
   const t = useTheme()
@@ -338,8 +346,9 @@ function ModelPickerPanel({
         current: { kind: provider.kind, instance: accountInstance ?? provider.instance },
         canPickProvider,
         starredView: showFavorites,
+        ...(machineName ? { machineName } : {}),
       }),
-    [accountInstance, accounts, canPickProvider, provider.kind, provider.instance, providers, showFavorites],
+    [accountInstance, accounts, canPickProvider, machineName, provider.kind, provider.instance, providers, showFavorites],
   )
   const follow = followLine({ accounts, current: { kind: provider.kind, instance: accountInstance ?? provider.instance }, followsDefaults: accountFollowsDefaults })
 
@@ -530,7 +539,7 @@ function Tabs({
           active={tabs.find((tab) => tab.selected)?.key ?? null}
           items={tabs.map((tab): TabsItem => tab.type === 'starred'
             ? { key: tab.key, label: 'Starred', iconOnly: true, testId: `model-tab-${tab.key}`, iconNode: <Icon source={tab.selected ? G.starFilled : G.star} size={14} color={tab.selected ? yellow : t.textSecondary} /> }
-            : { key: tab.key, label: tab.label || PROVIDER_LABEL[tab.kind as keyof typeof PROVIDER_LABEL] || tab.kind, iconOnly: !tab.label, mark: tab.kind, testId: `model-tab-${tab.key}`, disabled: tab.disabled || (busy && !tab.selected), ...(tab.needsSignIn ? { tooltip: 'Sign in to use this account' } : tab.notSetUp ? { tooltip: 'Set up this agent to use it' } : {}) })}
+            : { key: tab.key, label: tab.label || PROVIDER_LABEL[tab.kind as keyof typeof PROVIDER_LABEL] || tab.kind, iconOnly: !tab.label, mark: tab.kind, testId: `model-tab-${tab.key}`, disabled: tab.disabled || (busy && !tab.selected), ...(tab.needsSignIn ? { tooltip: tab.signedOutOn ? tab.tooltip : 'Sign in to use this account' } : tab.notSetUp ? { tooltip: 'Set up this agent to use it' } : {}) })}
           onSelect={(key) => { const tab = tabs.find((x) => x.key === key); if (!tab) return; if (tab.type === 'starred') onStarred(); else if (!tab.disabled) onAccount(tab) }} />
       </div>
       {canReload && (
