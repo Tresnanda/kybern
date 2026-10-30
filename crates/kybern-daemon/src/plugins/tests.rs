@@ -305,3 +305,25 @@ fn malformed_configs_never_become_an_empty_inventory_or_leak_their_contents() {
     assert!(inv.warnings.iter().any(|w| w.starts_with("opencode:")));
     assert!(!serde_json::to_string(&inv).unwrap().contains("never-send"));
 }
+
+#[test]
+fn credential_urls_never_leave_inventory_even_as_names_and_public_pi_git_is_copyable() {
+    let dir = TempDir::new("plugin-credential-source");
+    let ctx = context(&dir);
+    for provider in [ProviderKind::Pi, ProviderKind::Opencode] {
+        let (path, key) = if provider == ProviderKind::Pi {
+            (".pi/agent/settings.json", "packages")
+        } else {
+            (".config/opencode/opencode.json", "plugin")
+        };
+        put(&ctx.home, path, &json!({key:["git:https://user:never-send@host/repo", "https://user:never-send@host/repo"]}).to_string());
+    }
+    let inv = inventory::read(&ctx);
+    assert_eq!(inv.plugins.len(), 4);
+    assert!(inv.plugins.iter().all(|p| p.source.is_none() && p.problem.is_some()));
+    assert!(!serde_json::to_string(&inv).unwrap().contains("never-send"));
+    put(&ctx.home, ".pi/agent/settings.json", r#"{"packages":["git:github.com/acme/review@v1"]}"#);
+    let p = inventory::read(&ctx).plugins.into_iter().find(|p| p.provider == ProviderKind::Pi).unwrap();
+    assert_eq!(p.source.as_deref(), Some("git:github.com/acme/review@v1"));
+    install::validate(&p).unwrap();
+}

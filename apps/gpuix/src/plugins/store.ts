@@ -1,6 +1,6 @@
 // The plugins on every machine (ADE-86): `plugins.network_view` read from the machine the user is at, which asks the other
 // members. Read while Settings → Plugins shows it, and again when the outbox or a machine changes. Copies go to the same
-// daemon (`plugins.copy`), which forwards one to the machine that sends the skill.
+// daemon (`plugins.copy`), which forwards one to the machine that sends the plugin declaration.
 import { useEffect, useSyncExternalStore } from 'react'
 import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 import { NETWORK_MACHINE_CHANGED_NOTIFICATION, OUTBOX_CHANGED_NOTIFICATION, type PluginsCopyParams, type PluginsCopyResult, type PluginsNetworkView } from '../../../../packages/kybern-client/src/types.ts'

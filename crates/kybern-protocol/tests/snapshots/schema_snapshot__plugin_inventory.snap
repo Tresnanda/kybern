@@ -1,0 +1,298 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(PluginInventory)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PluginInventory",
+  "type": "object",
+  "properties": {
+    "jobs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PluginCopyJob"
+      },
+      "default": []
+    },
+    "plugins": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/MachinePlugin"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "plugins",
+    "warnings"
+  ],
+  "$defs": {
+    "PluginCopyJob": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "provider": {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        "plugin_id": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/OutboxState"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginInstallResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "provider",
+        "plugin_id",
+        "target",
+        "state"
+      ]
+    },
+    "ProviderKind": {
+      "description": "Coding agent backends the daemon can drive. Each has its own native driver.",
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "opencode",
+        "pi",
+        "omp",
+        "cursor"
+      ]
+    },
+    "OutboxState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "delivered",
+            "cancelled"
+          ]
+        },
+        {
+          "description": "Waiting for the target, or for the next attempt.",
+          "type": "string",
+          "const": "queued"
+        },
+        {
+          "description": "A delivery is in flight.",
+          "type": "string",
+          "const": "sending"
+        },
+        {
+          "description": "A permanent error: the target was removed, refused the scope, or the project is gone.",
+          "type": "string",
+          "const": "failed"
+        },
+        {
+          "description": "The target did not return within the expiry; Retry queues it again.",
+          "type": "string",
+          "const": "expired"
+        }
+      ]
+    },
+    "PluginInstallResult": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/PluginInstallState"
+        },
+        "message": {
+          "type": "string"
+        },
+        "actual": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MachinePlugin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "message"
+      ]
+    },
+    "PluginInstallState": {
+      "type": "string",
+      "enum": [
+        "installed",
+        "already_there",
+        "configured",
+        "failed"
+      ]
+    },
+    "MachinePlugin": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable within a harness; marketplace rows use `marketplace:NAME`.",
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/ProviderKind"
+        },
+        "kind": {
+          "$ref": "#/$defs/PluginKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "marketplace": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "description": "Public installer input only. Never a local path or a URL containing credentials.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Unknown for caches whose harness has no authoritative local state.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "resources": {
+          "description": "pi resource filters only, never arbitrary plugin options or credentials.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "default": {}
+        },
+        "contents": {
+          "$ref": "#/$defs/PluginContents"
+        },
+        "problem": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fingerprint": {
+          "description": "SHA-256 of the complete declaration the user reviewed.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "provider",
+        "kind",
+        "name",
+        "contents",
+        "fingerprint"
+      ]
+    },
+    "PluginKind": {
+      "type": "string",
+      "enum": [
+        "plugin",
+        "marketplace"
+      ]
+    },
+    "PluginContents": {
+      "type": "object",
+      "properties": {
+        "hooks": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "mcp_servers": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "commands": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "agents": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "skills": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "extensions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "npm_packages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "description": "Static declarations cannot describe all the code a package can execute.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "hooks",
+        "mcp_servers",
+        "commands",
+        "agents",
+        "skills",
+        "extensions",
+        "npm_packages",
+        "notes"
+      ]
+    }
+  }
+}

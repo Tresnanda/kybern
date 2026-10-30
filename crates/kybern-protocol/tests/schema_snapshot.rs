@@ -469,7 +469,7 @@ fn an_older_daemon_info_and_project_still_parse_and_the_network_defaults_to_off(
     let saved: Settings = serde_json::from_value(serde_json::json!({ "network": { "enabled": true } })).unwrap();
     assert_eq!(saved.network, NetworkSettings { enabled: true, port: DEFAULT_PORT });
     assert_eq!(NETWORK_PROTOCOL, 1);
-    assert_eq!(features::ALL.len(), 17);
+    assert_eq!(features::ALL.len(), 18);
 }
 
 #[test]
@@ -508,6 +508,7 @@ fn outbox_states_and_kinds_use_the_names_the_tables_check() {
         OutboxKind::Move,
         OutboxKind::Provision,
         OutboxKind::SkillCopy,
+        OutboxKind::PluginInstall,
     ] {
         assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
     }
@@ -522,4 +523,11 @@ fn remote_child_states_map_to_the_status_the_tools_show() {
     assert_eq!(RemoteChildState::Cancelled.delegation_status(), DelegationStatus::Cancelled);
     assert!(!RemoteChildState::Running.is_terminal() && RemoteChildState::Completed.is_terminal());
     assert_eq!(serde_json::to_value(RemoteChildState::Unreachable).unwrap(), "unreachable");
+}
+
+#[test]
+fn plugin_declarations_and_confirmations_are_stable() {
+    insta::assert_json_snapshot!("plugin_inventory", schema_for!(PluginInventory));
+    insta::assert_json_snapshot!("plugins_copy_params", schema_for!(PluginsCopyParams));
+    insta::assert_json_snapshot!("plugin_install_request", schema_for!(PluginInstallRequest));
 }

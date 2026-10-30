@@ -45,9 +45,12 @@ async fn plugin_list_a_to_b_then_remote_b_to_c_and_offline_frozen_copy() {
     }
     seed(&homes.path().join(a.id()), "1.0.0");
     let ac = client(&a).await;
+    assert!(a.state.network.features().iter().any(|f| f == features::PLUGINS_SYNC_V1));
     let p = crate::plugins::inventory(&a.state).await.unwrap().plugins[0].clone();
     let result = ac.call::<PluginsCopy>(request(&p, None, b.id())).await.unwrap();
+    assert!(result.targets[0].error.is_none(), "{:?}", result.targets[0]);
     let item = sent(&a, result.targets[0].outbox_id.unwrap()).await;
+    assert_eq!(item.state, OutboxState::Delivered, "{:?}", item.last_error);
     let r: PluginInstallResult = serde_json::from_value(item.result.unwrap()).unwrap();
     assert_eq!(r.state, PluginInstallState::Configured, "{}", r.message);
     let view = ac.call::<PluginsNetworkViewMethod>(Empty {}).await.unwrap();

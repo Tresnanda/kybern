@@ -119,6 +119,14 @@ pub(super) fn npm_spec(value: &str) -> bool {
         && value.chars().all(|c| c.is_ascii_alphanumeric() || "@/._-+^~*".contains(c))
         && name.split('/').count() == if name.starts_with('@') { 2 } else { 1 }
 }
+pub(super) fn pi_git_source(value: &str) -> bool {
+    let uri = value.strip_prefix("git:").unwrap_or(value);
+    if uri.contains("://") || uri.starts_with("git@") {
+        portable_source(uri)
+    } else {
+        value.starts_with("git:") && portable_source(&format!("https://{uri}"))
+    }
+}
 pub(super) fn package_name(value: &str) -> &str {
     let value = value.strip_prefix("npm:").unwrap_or(value);
     value.rfind('@').filter(|i| *i > 0).map(|i| &value[..i]).unwrap_or(value)

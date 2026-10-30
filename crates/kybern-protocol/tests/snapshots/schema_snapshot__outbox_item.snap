@@ -101,7 +101,8 @@ expression: schema_for!(OutboxItem)
         "fork",
         "move",
         "provision",
-        "skill_copy"
+        "skill_copy",
+        "plugin_install"
       ]
     },
     "Origin": {

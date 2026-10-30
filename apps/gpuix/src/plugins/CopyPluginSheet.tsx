@@ -90,10 +90,11 @@ export function CopyPluginSheet({view, rows, targetId, close, inline = false}: {
         <Field label="To">{targets.map(m => {
           const existing = plans.map(p => m.inventory?.plugins.find(v => pluginKey(v) === pluginKey(p.plugin))).filter(Boolean)
           const different = existing.some(p => plans.some(plan => pluginKey(plan.plugin) === pluginKey(p!) && plan.plugin.fingerprint !== p!.fingerprint))
+          const unknown = !m.inventory || plans.some(p => m.inventory!.warnings.some(w => w.startsWith(p.plugin.provider)))
           return <div key={m.id} style={{display: 'flex', alignItems: 'center', gap: 10, paddingTop: 6, paddingBottom: 6}}>
             <Checkbox testId={`plugin-to-${m.id}`} aria-label={`Copy to ${m.name}`} checked={chosen.has(m.id)} onCheckedChange={on => toggle(m.id, on)} />
             <MachineBadge glyph={glyphOfMachine(m.id)} size={18} />
-            <div style={{display: 'flex', flexDirection: 'column', gap: 3}}><Label color={t.text} size={14}>{m.name}</Label><Hint>{m.state === 'offline' ? 'Offline · installs when it returns' : different ? `Different · ${existing.map(p => `${p!.version ?? 'unknown version'}, ${enabledText(p!)}`).join('; ')}` : existing.length ? 'Already has this declaration' : 'Missing'}</Hint></div>
+            <div style={{display: 'flex', flexDirection: 'column', gap: 3}}><Label color={t.text} size={14}>{m.name}</Label><Hint>{m.state === 'offline' ? 'Offline · installs when it returns' : unknown ? 'Unknown · fix the inventory warning on this machine' : different ? `Different · ${existing.map(p => `${p!.version ?? 'unknown version'}, ${enabledText(p!)}`).join('; ')}` : existing.length ? 'Already has this declaration' : 'Missing'}</Hint></div>
           </div>
         })}</Field>
         {differs && <div style={{display: 'flex', gap: 10, alignItems: 'center'}}><Checkbox testId="plugin-replace" aria-label="Replace the different declarations shown" checked={replace} onCheckedChange={setReplace} /><Hint>Replace the different versions and enabled states shown above.</Hint></div>}

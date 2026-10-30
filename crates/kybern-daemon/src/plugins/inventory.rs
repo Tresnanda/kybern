@@ -264,10 +264,26 @@ fn packages(ctx: &Context, provider: ProviderKind) -> Result<Vec<MachinePlugin>,
         let spec = s.strip_prefix("npm:").unwrap_or(s);
         let name = package_name(spec);
         let local = s.starts_with(['.', '/', '~']) || s.starts_with("file:");
-        let display = if local { Path::new(s).file_name().and_then(|n| n.to_str()).unwrap_or("local") } else { name };
-        let mut item = base(provider, &if local { format!("local:{display}") } else { name.to_string() }, PluginKind::Plugin);
-        item.name = display.to_string();
         let npm = npm_spec(spec);
+        let git = pi && pi_git_source(s);
+        // A rejected URL can include credentials even in its apparent package name. Do not send
+        // any part of it as a name/id; the opaque identity only keeps separate rows stable.
+        let display = if local {
+            Path::new(s).file_name().and_then(|n| n.to_str()).unwrap_or("local")
+        } else if npm || git {
+            name
+        } else {
+            "Uncopyable package"
+        };
+        let id = if local {
+            format!("local:{display}")
+        } else if npm || git {
+            name.to_string()
+        } else {
+            format!("unavailable:{:x}", Sha256::digest(s.as_bytes()))
+        };
+        let mut item = base(provider, &id, PluginKind::Plugin);
+        item.name = display.to_string();
         if npm {
             let pkgroot = if pi { root.join("npm/node_modules") } else { root.join("node_modules") };
             let pkg = json(&pkgroot.join(name).join("package.json"))?;
@@ -280,13 +296,8 @@ fn packages(ctx: &Context, provider: ProviderKind) -> Result<Vec<MachinePlugin>,
             source(&mut item, Some(&pinned), true);
             item.contents = contents(&pkgroot.join(name));
             item.contents.npm_packages.insert(0, name.into());
-        } else if pi && (s.starts_with("git:") || s.starts_with("https://")) {
-            let uri = s.strip_prefix("git:").unwrap_or(s);
-            if portable_source(uri) || portable_source(&format!("https://{uri}")) {
-                item.source = Some(s.into());
-            } else {
-                source(&mut item, None, false);
-            }
+        } else if git {
+            item.source = Some(s.into());
         } else {
             source(&mut item, None, false);
         }

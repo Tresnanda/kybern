@@ -20,11 +20,7 @@ pub(super) fn validate(p: &MachinePlugin) -> Result<(), String> {
         portable_source(source)
     } else {
         match p.provider {
-            ProviderKind::Pi => {
-                npm_spec(source)
-                    || source.strip_prefix("git:").is_some_and(|s| portable_source(s) || portable_source(&format!("https://{s}")))
-                    || source.starts_with("https://") && portable_source(source)
-            }
+            ProviderKind::Pi => npm_spec(source) || pi_git_source(source),
             ProviderKind::Omp | ProviderKind::Opencode => npm_spec(source),
             _ => false,
         }

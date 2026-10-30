@@ -333,6 +333,7 @@ impl Network {
             features::GROUP_V1.to_string(),
             features::PROVISION_V1.to_string(),
             features::SKILLS_SYNC_V1.to_string(),
+            features::PLUGINS_SYNC_V1.to_string(),
         ]
     }
 

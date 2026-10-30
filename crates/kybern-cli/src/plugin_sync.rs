@@ -39,10 +39,15 @@ fn machine<'a>(view: &'a PluginsNetworkView, q: &str) -> Result<&'a PluginsMachi
 fn detail(p: &MachinePlugin) -> String {
     let c = &p.contents;
     format!(
-        "{} · {} · {} · {} hooks, {} MCP servers, {} commands, {} agents, {} skills, {} extensions · npm: {}{}",
+        "{} · {} · {} · {} · {} hooks, {} MCP servers, {} commands, {} agents, {} skills, {} extensions · npm: {}{}",
         p.provider.as_str(),
         p.source.as_deref().unwrap_or("no portable source"),
         p.version.as_deref().unwrap_or("unknown version"),
+        match p.enabled {
+            Some(true) => "Enabled",
+            Some(false) => "Disabled",
+            None => "State unknown",
+        },
         c.hooks,
         c.mcp_servers,
         c.commands,
@@ -179,6 +184,16 @@ pub async fn run(client: &Client, cmd: PluginsCmd, json_output: bool) -> Result<
                             r.provider == request.provider && r.id == request.id && r.to[0].machine == request.to[0].machine
                         }) {
                             eprintln!("{} → {}: {}\n  {}", p.id, target.name, detail(p), p.contents.notes.join("; "));
+                            if !p.resources.is_empty() {
+                                eprintln!("  Resource filters: {}", serde_json::to_string(&p.resources)?);
+                            }
+                            if let Some(existing) = existing.filter(|v| v.fingerprint != p.fingerprint) {
+                                eprintln!(
+                                    "  Target differs: {}\n  {}",
+                                    detail(existing),
+                                    if replace { "Replace this reviewed declaration" } else { "Add --replace to authorize replacement" }
+                                );
+                            }
                             plans.push(request);
                         }
                     }

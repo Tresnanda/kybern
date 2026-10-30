@@ -269,6 +269,12 @@ expression: names
 - peer.ports.open
 - peer.ports.data
 - peer.ports.close
+- plugins.inventory
+- plugins.network_view
+- plugins.copy
+- peer.plugins.inventory
+- peer.plugins.copy
+- peer.plugins.install
 - skills.inventory
 - skills.network_view
 - skills.copy
