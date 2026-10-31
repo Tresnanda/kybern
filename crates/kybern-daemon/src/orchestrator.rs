@@ -2066,6 +2066,7 @@ impl Orchestrator {
         let (_admission, current, selected_target, selected_mode) = loop {
             let admission = self.session_admission(thread_id).await.lock_owned().await;
             let current = self.inner.store.thread_get(thread_id)?.ok_or_else(|| anyhow!("Thread not found."))?;
+            let current = self.migrate_cursor_model(current)?;
             if current.subagent.is_some() {
                 return Err(anyhow!(subagents::READ_ONLY_ERROR));
             }
@@ -5317,6 +5318,56 @@ mod tests {
         assert_eq!(background.kind, RuntimeTaskKind::Process);
         assert!(background.backgrounded);
         assert!(!background.capabilities.stop);
+    }
+
+    #[test]
+    fn cursor_legacy_model_migration_uses_only_the_cached_account_and_preserves_past_events() {
+        use base64::Engine;
+        let fixture = Fixture::new();
+        let mut thread = fixture.thread_with_provider(ThreadStatus::Idle, ProviderKind::Cursor);
+        thread.model = Some("cursor-grok-4.5-high".into());
+        fixture.store.thread_upsert(&thread).unwrap();
+        fixture
+            .orchestrator
+            .emit(thread.id, None, EventPayload::TurnFailed { error: "original old model cursor-grok-4.5-high".into() })
+            .unwrap();
+        let before = fixture.store.events_for_thread(thread.id).unwrap();
+        // No discovery or mutation if this daemon has no cached catalog.
+        assert_eq!(fixture.orchestrator.migrate_cursor_model(thread.clone()).unwrap().model, thread.model);
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&json!({"id":"grok-4.5","params":[],"effortParam":"effort","effortValues":["low","high"]})).unwrap(),
+        );
+        let model: ProviderModel = serde_json::from_value(
+            json!({"id":format!("cursor-model:{encoded}"),"resolved_id":"grok-4.5","display_name":"Grok 4.5","efforts":["low","high"]}),
+        )
+        .unwrap();
+        let status = ProviderStatus {
+            kind: ProviderKind::Cursor,
+            display_name: "Cursor".into(),
+            available: true,
+            binary_path: None,
+            version: None,
+            unavailable_reason: None,
+            supported_permission_modes: vec![PermissionMode::Auto],
+            supports_fork: false,
+            supports_model_switch: true,
+            supports_effort_switch: true,
+            supported_efforts: vec!["high".into()],
+            models: vec![model],
+            instances: vec!["default".into()],
+        };
+        fixture.orchestrator.inner.provider_catalogs.remember(&thread.project_id.to_string(), &[status]);
+        let mut other_account = thread.clone();
+        other_account.provider.instance = "work".into();
+        assert_eq!(fixture.orchestrator.migrate_cursor_model(other_account).unwrap().model, thread.model);
+        let migrated = fixture.orchestrator.migrate_cursor_model(thread).unwrap();
+        assert!(migrated.model.as_deref().unwrap().starts_with("cursor-model:"));
+        assert_eq!(migrated.effort.as_deref(), Some("high"));
+        let after = fixture.store.events_for_thread(migrated.id).unwrap();
+        assert_eq!(serde_json::to_value(&after[..before.len()]).unwrap(), serde_json::to_value(&before).unwrap());
+        assert_eq!(after.len(), before.len() + 1);
+        let repeated = fixture.orchestrator.migrate_cursor_model(migrated).unwrap();
+        assert_eq!(fixture.store.events_for_thread(repeated.id).unwrap().len(), after.len());
     }
 
     #[tokio::test]
