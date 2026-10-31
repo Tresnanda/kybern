@@ -25,8 +25,12 @@ repo=https://github.com/Tresnanda/gpuix.git
 # forks' `next` and `kybern` branches.
 # ade96-diff-scroll: exact native diff anchors through the existing list APIs,
 # including cached restores and lifecycle cleanup; no zed change.
-commit=b99f89d2efb1ae24a9714a5de1cb20f1b43d63f2
+# `kick-deadlock` (ADE-110): that plus the drawable gate's kick flushing CA transactions on a later
+# main-queue turn instead of inside a draw that holds the window lock (0.20.4 deadlocked in
+# resetCursorRects), AppKit display-cycle callbacks that defer instead of waiting on that lock, and
+# the kick-reentry/flush-in-draw faults, until merged into `kybern`.
+commit=9fd7417117bb70c713cc2a44ee46bd521422c51f
 # The zed submodule commit `commit` records; update.sh refuses a checkout that differs.
-zed=9bededa33fd6cb33607fa4c2514bbc4f838bc974
+zed=a2275d84c575f48d149e8f1768248c843fc66040
 # The upstream tag `commit` is based on. It must be `@gpuix/native@<VERSION>`.
 upstream=@gpuix/native@0.11.0
