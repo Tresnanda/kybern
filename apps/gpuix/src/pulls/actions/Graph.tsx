@@ -10,7 +10,7 @@
 // Motion (native stroke animation, no render or layout per frame):
 // - edges into running jobs flow: dashes move along them at one 10-unit period per 1200 ms, linear, for six periods (a 7.2 s
 //   draw from offset 60 to 0), then rest solid. Only while the graph is painted in a visible window and the pane is shown
-//   (`useLoopRunning`); a return restarts it.
+//   (`useLoopRunning`); a return restarts it. A layer larger than `FLOW_MAX_AREA` (a wide fan-out) rests solid at once.
 // - an edge that becomes solid while you watch (its job finished) draws in, 300 ms ease-out.
 // - the failure path draws in once, 350 ms, when the run fails while you watch.
 // - status glyphs cross-fade (`SwapOnChange`). Reduce Motion: no flow and no draws; the glyph fades stay.
@@ -35,6 +35,12 @@ export const ROW_GAP = 8
 export const measureName = (text: string) => text.length * 6.9
 
 const FLOW = { dash: 5, loops: 6, periodMs: 1200 }
+/**
+ * The largest flow layer (pt²) that moves. The native stroke animation rasterizes its SVG every frame: kybern's CI (two running
+ * checks, ~120 × 90 pt) costs little, a 40-job fan-out (~260 × 760 pt) held the CPU at 100% and the frame rate at 38 fps
+ * (verify.actions-perf.ts), so a layer past this rests solid amber instead.
+ */
+const FLOW_MAX_AREA = 40_000
 const DRAW_DONE_MS = 300
 const DRAW_FAIL_MS = 350
 const edgeKey = (e: { from: number; to: number }) => `${e.from}>${e.to}`
@@ -113,7 +119,7 @@ export function PipelineGraph({ graph, layout, selected, onSelect, usual, live, 
     return { full, quiet, warm, hot, flowing, flowBox: flowing.length ? bounds(flowing) : null }
   }, [layout, drawing, t.variant])
   const flowKey = layers.flowing.map(edgeKey).join(',')
-  const flow = layers.flowBox && loop.running
+  const flow = layers.flowBox && loop.running && layers.flowBox[2] * layers.flowBox[3] <= FLOW_MAX_AREA
     ? { kind: 'stroke', cycleMs: FLOW.periodMs * FLOW.loops, delayMs: 0, dash: FLOW.dash, ease: [...EASE.linear], from: FLOW.dash * 2 * FLOW.loops, to: 0 }
     : undefined
 

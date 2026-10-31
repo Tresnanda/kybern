@@ -5,7 +5,7 @@
 // all while the window is hidden (`refreshDelay`). Every list read also feeds the finished-run notices (`watch.ts`).
 import { PlayIcon } from '@hugeicons/core-free-icons'
 import { useGpuix } from '@gpuix/react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Profiler, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { isActive, refreshDelay, repoKey, type ActionsRepo } from '../../../../../packages/kybern-client/src/actions.ts'
 import { filterGroups, groupRuns, usualDuration } from '../../../../../packages/kybern-client/src/actionsPipeline.ts'
 import type { ActionsRunsResult, ActionsWorkflowsResult, Project } from '../../../../../packages/kybern-client/src/types.ts'
@@ -64,7 +64,17 @@ export function useWindowVisible() {
   return visible
 }
 
+/** `KYBERN_ACTIONS_PROFILE=1` (the performance check, `verify.actions-perf.ts`): each commit of the tab's tree on stderr. */
+const PROFILE = process.env.KYBERN_ACTIONS_PROFILE === '1'
+const profiled = (node: ReactNode) => PROFILE
+  ? <Profiler id="actions" onRender={(_, phase, actual) => console.error(`[actions-commit] ${phase} ${actual.toFixed(2)}`)}>{node}</Profiler>
+  : node
+
 export function ActionsPage() {
+  return profiled(<ActionsTab />)
+}
+
+function ActionsTab() {
   const t = useTheme()
   const { renderer } = useGpuix()
   const projects = useSpaceProjects()
