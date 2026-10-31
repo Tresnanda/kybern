@@ -30,7 +30,11 @@ test('daemon plan: older and newer apps, same and other protocols', () => {
   expect(daemonPlan(running, '0.10.0', 1)).toBe('keep')
   expect(daemonPlan(running, '0.10.1')).toBe('restart')
   expect(daemonPlan(running, '0.9.9')).toBe('newer-daemon')
-  expect(daemonPlan(running, '0.10.0-beta.1')).toBe('keep')
+  // Versions order as semver: a release is newer than its prereleases, and dev builds order by their number.
+  expect(daemonPlan(running, '0.10.0-beta.1')).toBe('newer-daemon')
+  expect(daemonPlan({ ...info, version: '0.11.0-dev.2' }, '0.11.0-dev.3')).toBe('restart')
+  expect(daemonPlan({ ...info, version: '0.11.0-dev.10' }, '0.11.0-dev.9')).toBe('newer-daemon')
+  expect(daemonPlan({ ...info, version: '0.11.0-dev.3' }, '0.11.0')).toBe('restart')
   // The protocol decides first: a newer daemon protocol is never restarted away; an older one is always replaced.
   expect(daemonPlan({ ...running, protocol_version: 2 }, '0.10.0')).toBe('newer-protocol')
   expect(daemonPlan({ ...running, protocol_version: 2 }, '0.11.0')).toBe('newer-protocol')

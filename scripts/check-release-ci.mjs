@@ -8,6 +8,14 @@ import { resolve } from 'node:path'
 // bookkeeping jobs are not listed; the run's own conclusion already covers them.
 export const requiredJobs = ['rustfmt', 'clippy + test (ubuntu-24.04)', 'clippy + test (macos-15)', 'cargo check (windows-latest)', 'release checks', 'gpuix (typecheck + test)']
 
+// A dev release (`vX.Y.Z-dev.N`) ships to Dev installs first, so it needs only main's latest CI for the tagged
+// commit to have passed: that run may be filtered (`scripts/ci-paths.mjs`) and skip jobs. Every other tag, stable
+// releases and other prereleases alike, needs the full suite on that commit.
+export const isDevTag = (tag) => /^v\d+\.\d+\.\d+-dev\.\d+$/.test(tag ?? '')
+
+/** Whether a successful run qualifies `tag`: always for a dev release, otherwise only when every required job passed. */
+export const qualifies = (tag, jobs) => isDevTag(tag) || verifyJobs(jobs)
+
 export function assessCI(runs, sha) {
   // PR checks may test a merge ref. Require this exact commit from main.
   const run = runs.filter(run => run.head_sha === sha && ['push', 'workflow_dispatch'].includes(run.event) && run.head_branch === 'main')
@@ -26,6 +34,8 @@ const api = (endpoint) => JSON.parse(execFileSync('gh', ['api', endpoint], { enc
 async function main() {
   const sha = process.argv[2] ?? execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
   const repo = process.env.GITHUB_REPOSITORY ?? 'Tresnanda/kybern'
+  // The tag the release workflow runs for; locally, pass it as RELEASE_TAG.
+  const tag = process.env.RELEASE_TAG ?? (process.env.GITHUB_REF_TYPE === 'tag' ? process.env.GITHUB_REF_NAME : undefined)
   if (!/^[0-9a-f]{40}$/.test(sha) || !/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error('Invalid release commit or repository.')
   const deadline = Date.now() + 90 * 60_000
   for (;;) {
@@ -33,8 +43,12 @@ async function main() {
     console.log(`${sha}: ${result.reason}${result.run ? ` ${result.run.html_url}` : ''}`)
     if (result.state === 'failed') throw new Error('Release blocked: exact-commit CI did not pass.')
     if (result.state === 'success') {
+      if (isDevTag(tag)) {
+        console.log(`Dev release gate passed for ${tag}: main's latest CI for this commit succeeded.`)
+        return
+      }
       const jobs = api(`repos/${repo}/actions/runs/${result.run.id}/attempts/${result.run.run_attempt}/jobs?per_page=100`).jobs
-      if (!verifyJobs(jobs)) throw new Error('Release blocked: required CI jobs are missing, skipped, or unsuccessful. Run CI manually on main at the release commit (gh workflow run ci.yml --ref main), wait for it to pass, then retry the release gate.')
+      if (!qualifies(tag, jobs)) throw new Error('Release blocked: required CI jobs are missing, skipped, or unsuccessful. Run CI manually on main at the release commit (gh workflow run ci.yml --ref main), wait for it to pass, then retry the release gate.')
       console.log('Release CI gate passed.')
       return
     }

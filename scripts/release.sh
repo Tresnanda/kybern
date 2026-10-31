@@ -3,6 +3,12 @@
 #
 # Usage: scripts/release.sh <version>        e.g. scripts/release.sh 0.2.0
 #        scripts/release.sh <version> --no-push   stop after the local commit and tag
+#        scripts/release.sh <version> --allow-unshipped   a stable version main has not shipped on Dev
+#
+# Two update tracks (RELEASING.md): a dev release `X.Y.Z-dev.N` goes to Dev
+# installs as a GitHub prerelease with latest-dev.json; a stable `X.Y.Z`
+# promotes what already shipped on Dev, so main must match the newest dev tag
+# apart from version lines and CHANGELOG.md.
 #
 # Pushing the tag starts .github/workflows/release.yml: dist builds kybernd and
 # kybern once for every target, desktop.yml bundles those binaries into
@@ -15,9 +21,11 @@ cd "$ROOT"
 
 VERSION="${1:-}"
 PUSH=1
+ALLOW_UNSHIPPED=0
 for arg in "${@:2}"; do
   case "$arg" in
     --no-push) PUSH=0 ;;
+    --allow-unshipped) ALLOW_UNSHIPPED=1 ;;
     *) echo "unknown option $arg" >&2; exit 2 ;;
   esac
 done
@@ -38,6 +46,28 @@ fi
 if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
   echo "tag $TAG already exists" >&2
   exit 1
+fi
+
+# A stable release promotes a build that Dev installs already run.
+if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$ALLOW_UNSHIPPED" == "0" ]]; then
+  # Every listed tag is vX.Y.Z-dev.N, which version sort orders (dev.10 after dev.9).
+  DEV_TAG="$(git tag --list 'v*-dev.*' --sort=-v:refname | head -1)"
+  if [[ -z "$DEV_TAG" ]]; then
+    echo "no dev release to promote; cut one first (scripts/release.sh $VERSION-dev.1) or pass --allow-unshipped" >&2
+    exit 1
+  fi
+  UNSHIPPED="$(
+    git diff --name-only "$DEV_TAG" HEAD -- . ':(exclude)Cargo.toml' ':(exclude)Cargo.lock' ':(exclude)CHANGELOG.md'
+    # In the manifests only version lines may differ; a dependency change did not ship either.
+    git diff -U0 "$DEV_TAG" HEAD -- Cargo.toml Cargo.lock | grep -E '^[-+][^-+]' | grep -vE '^[-+]version = "' | sed 's/^/  /' || true
+  )"
+  if [[ -n "$UNSHIPPED" ]]; then
+    echo "main has changes that did not ship in $DEV_TAG:" >&2
+    echo "$UNSHIPPED" >&2
+    echo "cut a dev release from this commit first, or pass --allow-unshipped" >&2
+    exit 1
+  fi
+  echo "==> promoting $DEV_TAG to the stable track"
 fi
 
 CURRENT="$(grep -m1 '^version = ' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"

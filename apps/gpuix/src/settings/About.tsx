@@ -1,15 +1,17 @@
 // Settings › About (desktop `SettingsScreen.tsx` `About`, `AppUpdateRow`,
-// `CommandLineRow`): the app version with its update action, the connected
-// daemon, and the bundled `kybern` command (`platform/cli.ts`).
+// `CommandLineRow`): the app version with its update action, the update track,
+// the connected daemon, and the bundled `kybern` command (`platform/cli.ts`).
 import { useEffect, useState } from 'react'
 import { Label, useTheme } from '../ui.tsx'
 import { toast } from '../shell/toasts.tsx'
-import { canCheckForUpdates, checkForAppUpdate, installAppUpdate, manualUpdateText, useAppUpdate } from '../platform/update.ts'
+import { canCheckForUpdates, checkForAppUpdate, installAppUpdate, manualUpdateText, updateTrackChanged, useAppUpdate, type UpdateTrack } from '../platform/update.ts'
 import { CopyUpdateCommand } from '../platform/UpdateSurface.tsx'
 import { cliStatus, installCli, managedCliCopy, removeOtherCli, uninstallCli, type CliStatus } from '../platform/cli.ts'
 import { Row, Section } from './controls.tsx'
 import { Button } from '../kit/Button.tsx'
+import { Segmented } from '../kit/Segmented.tsx'
 import { useResource } from './resource.ts'
+import { latestSettings, updateSettings, useSettings } from './store.ts'
 
 type Line = { text: string; tone?: 'muted' | 'warning' | 'error' }
 
@@ -43,11 +45,40 @@ function AppUpdateRow() {
   </DetailRow>
 }
 
+const TRACK_OPTIONS = [{ value: 'stable', label: 'Stable' }, { value: 'dev', label: 'Dev' }] as const
+
+/** A version with a prerelease part (`0.21.0-dev.2`) is a dev build. */
+const isDevBuild = (version: string | null) => !!version && /^v?\d+\.\d+\.\d+-/.test(version)
+
+/**
+ * The daemon's `update_track` setting (shared across the machine network): this app and every daemon that updates
+ * itself read it. Leaving Dev never downgrades; the status line says so.
+ */
+function UpdateTrackRow() {
+  const { settings, saving } = useSettings()
+  const appVersion = useAppUpdate(s => s.appVersion)
+  if (!settings) return null
+  const track: UpdateTrack = settings.update_track === 'dev' ? 'dev' : 'stable'
+  const status = track === 'dev' ? 'Switching back to Stable keeps this version until a stable release is newer.'
+    : isDevBuild(appVersion) ? `Kybern stays on ${appVersion} until a stable release is newer.`
+    : undefined
+  const choose = (value: string) => {
+    const next = value === 'dev' ? 'dev' : 'stable'
+    if (next === track) return
+    // Look again only once the daemon saved it; a failed save shows its error and leaves the track as it was.
+    void updateSettings({ update_track: next }).then(() => { if (latestSettings()?.update_track === next) updateTrackChanged(next) })
+  }
+  return <Row title="Update track" description="Dev gets new features first and may have rough edges. Stable gets them once they have settled." status={status} shared="update_track">
+    <Segmented testId="about-update-track" aria-label="Update track" options={TRACK_OPTIONS} value={track} busy={saving} onChange={choose} />
+  </Row>
+}
+
 export function About() {
   const info = useResource('daemon.info', {})
   return <>
     <Section title="About">
       <AppUpdateRow />
+      <UpdateTrackRow />
       <Row title="Daemon" description={info.data?.version ?? '…'} />
       <Row title="Protocol" description={info.data ? String(info.data.protocol_version) : '…'} />
       <Row title="Host" description={info.data ? `${info.data.hostname} · ${info.data.os} ${info.data.arch}` : '…'} />

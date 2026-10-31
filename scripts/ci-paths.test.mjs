@@ -91,7 +91,11 @@ test('main compares the entire push, fetches a shallow base, and runs full check
   renameSync(join(repo, 'crates/old.rs'), join(repo, 'archived.txt'))
   const renamed = commit('move code out of crates')
   assert.deepEqual(jobs(head, renamed), { ...none, rust: true })
+  write('Cargo.toml', manifest('1.0.1-dev.1'))
+  const dev = commit('dev release')
+  // A dev release needs only main's latest CI on its commit to pass, so its bump runs the affected jobs.
+  assert.deepEqual(jobs(renamed, dev), { ...none, rust: true, release: true })
   write('Cargo.toml', manifest('1.0.1'))
   const release = commit('release')
-  assert.deepEqual(jobs(renamed, release), all)
+  assert.deepEqual(jobs(dev, release), all)
 })

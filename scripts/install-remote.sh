@@ -50,7 +50,8 @@ if [ "$INSTALL" = 1 ]; then
     VERSION=$(curl --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 60 -fsSL https://github.com/Tresnanda/kybern/releases/latest/download/latest.json | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' | head -1)
   fi
   VERSION=${VERSION#v}
-  printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || fail 'Choose a published Kybern release version, for example 0.19.0.'
+  # A dev release (X.Y.Z-dev.N) installs too: a desktop on the Dev track sets up its machines at its own version.
+  printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-dev\.[0-9]+)?$' || fail 'Choose a published Kybern release version, for example 0.19.0 or 0.20.0-dev.1.'
   case "$(uname -m)" in x86_64|amd64) ARCH=x86_64;; arm64|aarch64) ARCH=aarch64;; *) fail 'No published build for this processor. Install Kybern from source.';; esac
   ARCHIVE="kybern-$ARCH-$PLATFORM.tar.xz"
   BASE="https://github.com/Tresnanda/kybern/releases/download/v$VERSION"

@@ -1,0 +1,55 @@
+# Publishes a dev release's updater feed where Dev installs read it.
+#
+# release.yml (dist) calls this after `announce`, once the GitHub Release
+# exists. A dev release (`vX.Y.Z-dev.N`) is a GitHub prerelease, which
+# `releases/latest` skips, so its `latest-dev.json` (scripts/updater-manifest.mjs)
+# is copied to the rolling `dev-feed` prerelease, created on first use:
+# https://github.com/Tresnanda/kybern/releases/download/dev-feed/latest-dev.json
+# is the desktop's `devEndpoints` (apps/gpuix/src/platform/updater.json) and the
+# daemon's dev feed (crates/kybern-daemon/src/self_update.rs). Stable releases
+# leave it alone: Dev installs read latest.json as well and take the newer.
+# The `dev-feed` tag does not match release.yml's version-tag trigger.
+name: Dev feed
+
+on:
+  workflow_call:
+    inputs:
+      # dist's plan; unused, dist passes it to every custom job.
+      plan:
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.event_name == 'push' && github.ref_type == 'tag' && contains(github.ref_name, '-dev.')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Copy latest-dev.json to the dev-feed release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$ ]]; then echo "$TAG is not a dev release"; exit 0; fi
+          mkdir -p feed current
+          gh release download "$TAG" --pattern latest-dev.json --dir feed
+          jq -e --arg version "${TAG#v}" '.version == $version' feed/latest-dev.json >/dev/null \
+            || { echo "latest-dev.json of $TAG names another version" >&2; exit 1; }
+          if ! gh release view dev-feed >/dev/null 2>&1; then
+            gh release create dev-feed --prerelease --target "$GITHUB_SHA" --title "Dev update feed" \
+              --notes "Holds latest-dev.json, the update feed of Kybern's Dev track; every dev release replaces it. Install a build from its vX.Y.Z-dev.N release instead."
+          fi
+          # Never move the feed backwards: re-running an older dev release leaves a newer feed in place.
+          # Both are X.Y.Z-dev.N, which version sort orders correctly (dev.10 after dev.9).
+          if gh release download dev-feed --pattern latest-dev.json --dir current 2>/dev/null; then
+            current="$(jq -r .version current/latest-dev.json)"
+            newest="$(printf '%s\n%s\n' "$current" "${TAG#v}" | sort -V | tail -1)"
+            if [ "$current" != "${TAG#v}" ] && [ "$newest" = "$current" ]; then echo "dev-feed already announces $current"; exit 0; fi
+          fi
+          gh release upload dev-feed feed/latest-dev.json --clobber
+          echo "dev-feed now announces ${TAG#v}"

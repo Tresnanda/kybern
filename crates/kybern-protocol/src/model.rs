@@ -2650,6 +2650,8 @@ pub struct Settings {
     /// Check the release feed daily and replace this daemon when idle. Opt-in
     /// per environment; ignored for a daemon the desktop app manages.
     pub auto_update_daemon: bool,
+    /// Which releases the desktop app and a self-updating daemon move to.
+    pub update_track: UpdateTrack,
     /// How the daemon trims CPU and memory while nothing needs it.
     pub background: BackgroundSettings,
     /// Which networks other devices can reach this daemon on.
@@ -2670,6 +2672,18 @@ pub struct Settings {
     pub preview_allowed_folders: Vec<String>,
     /// Joining and staying joined to the machine network.
     pub network: NetworkSettings,
+}
+
+/// The release line updates come from. Every release reaches Dev first as a
+/// `vX.Y.Z-dev.N` prerelease; Stable gets a version later, once it has shipped
+/// on Dev. A machine never moves to an older version: after switching from Dev
+/// to Stable it keeps its dev build until a stable release is newer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateTrack {
+    #[default]
+    Stable,
+    Dev,
 }
 
 /// Limits for questions that answer themselves after a deadline. Read each
@@ -2936,6 +2950,7 @@ impl Default for Settings {
             notifications: true,
             auto_update_harnesses: false,
             auto_update_daemon: false,
+            update_track: UpdateTrack::Stable,
             background: BackgroundSettings::default(),
             access: AccessSettings::default(),
             computer_use: ComputerUseSettings::default(),

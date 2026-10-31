@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 // Write dist/latest.json, the static manifest the Kybern GPUIX updater polls
-// (the endpoint in apps/gpuix/src/platform/updater.json).
+// (the endpoint in apps/gpuix/src/platform/updater.json). A dev release
+// (`X.Y.Z-dev.N`, or any version with a prerelease part) writes
+// dist/latest-dev.json instead: the release is a GitHub prerelease, which
+// `releases/latest` skips, and .github/workflows/dev-feed.yml copies the file to
+// the rolling `dev-feed` release that Dev installs read (`devEndpoints`).
 //
 // Usage: node scripts/updater-manifest.mjs [--tag vX.Y.Z] [--repo owner/name]
 //        [--notes-file path/to/release-notes.md] [--dist dir]
@@ -58,11 +62,13 @@ if (Object.keys(platforms).length === 0) {
   process.exit(1)
 }
 
+// A prerelease must never be served as the stable feed, even by a release whose assets someone renamed.
+const feed = /^\d+\.\d+\.\d+-/.test(version) ? "latest-dev.json" : "latest.json"
 const manifest = {
   version,
   notes: releaseNotes || `Release notes: https://github.com/${repo}/releases/tag/${tag}`,
   pub_date: new Date().toISOString(),
   platforms,
 }
-writeFileSync(join(dist, "latest.json"), `${JSON.stringify(manifest, null, 2)}\n`)
-console.log(`wrote dist/latest.json for ${version}: ${Object.keys(platforms).join(", ")}`)
+writeFileSync(join(dist, feed), `${JSON.stringify(manifest, null, 2)}\n`)
+console.log(`wrote dist/${feed} for ${version}: ${Object.keys(platforms).join(", ")}`)

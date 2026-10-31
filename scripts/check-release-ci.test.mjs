@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { assessCI, requiredJobs, verifyJobs } from './check-release-ci.mjs'
+import { assessCI, isDevTag, qualifies, requiredJobs, verifyJobs } from './check-release-ci.mjs'
 const sha = 'a'.repeat(40)
 const run = { id: 1, head_sha: sha, head_branch: 'main', event: 'push', run_number: 1, run_attempt: 1, status: 'completed', conclusion: 'success' }
 test('only an exact main push or manual run qualifies', () => {
@@ -26,6 +26,19 @@ test('every required job must complete successfully', () => {
       assert.equal(verifyJobs(jobs.map(job => job.name === name ? { ...job, conclusion } : job)), false, `${name}: ${conclusion}`)
     }
   }
+})
+
+test('a dev tag needs main CI on its commit to have passed, not the full suite', () => {
+  for (const tag of ['v0.21.0-dev.1', 'v1.2.3-dev.10']) assert.equal(isDevTag(tag), true, tag)
+  for (const tag of ['v0.21.0', 'v0.21.0-rc.1', 'v0.21.0-dev', 'v0.21.0-dev.x', '0.21.0-dev.1', undefined]) assert.equal(isDevTag(tag), false, String(tag))
+  // A filtered main run skips jobs: enough for a dev release, never for a stable one.
+  const filtered = requiredJobs.map(name => ({ name, status: 'completed', conclusion: name === 'gpuix (typecheck + test)' ? 'skipped' : 'success' }))
+  assert.equal(qualifies('v0.21.0-dev.1', filtered), true)
+  assert.equal(qualifies('v0.21.0', filtered), false)
+  assert.equal(qualifies('v0.21.0-rc.1', filtered), false)
+  // The run itself still has to succeed, and still has to be main's run for that exact commit.
+  assert.equal(assessCI([{ ...run, conclusion: 'failure' }], sha).state, 'failed')
+  assert.equal(assessCI([{ ...run, head_branch: 'feature' }], sha).state, 'waiting')
 })
 
 async function releaseJobs() {
@@ -143,4 +156,23 @@ test('actions in the GPUIX workflows are pinned to a commit, setup-python includ
     const workflow = readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), 'utf8')
     for (const [, action] of workflow.matchAll(/uses: (actions\/setup-python@\S+)/g)) assert.match(action, /@[0-9a-f]{40}$/, `${file}: ${action}`)
   }
+})
+
+test('a dev release publishes its feed to the rolling dev-feed release after the release exists', async () => {
+  const { readFileSync } = await import('node:fs')
+  const release = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8')
+  const job = release.split('\n  custom-dev-feed:\n')[1]
+  assert.ok(job, 'release.yml has no custom-dev-feed job')
+  assert.match(job, /needs:\n\s+- plan\n\s+- announce\n/)
+  assert.match(job, /uses: \.\/\.github\/workflows\/dev-feed\.yml/)
+  const feed = readFileSync(new URL('../.github/workflows/dev-feed.yml', import.meta.url), 'utf8')
+  // Only a dev tag touches the feed, and the feed is the URL the desktop and daemon read.
+  assert.match(feed, /if: github\.event_name == 'push' && github\.ref_type == 'tag' && contains\(github\.ref_name, '-dev\.'\)/)
+  assert.match(feed, /gh release upload dev-feed feed\/latest-dev\.json --clobber/)
+  const updater = JSON.parse(readFileSync(new URL('../apps/gpuix/src/platform/updater.json', import.meta.url), 'utf8'))
+  assert.deepEqual(updater.devEndpoints, ['https://github.com/Tresnanda/kybern/releases/download/dev-feed/latest-dev.json'])
+  const daemon = readFileSync(new URL('../crates/kybern-daemon/src/self_update.rs', import.meta.url), 'utf8')
+  assert.match(daemon, /releases\/download\/dev-feed\/latest-dev\.json/)
+  // desktop.yml hands either feed file to the release.
+  assert.match(readFileSync(new URL('../.github/workflows/desktop.yml', import.meta.url), 'utf8'), /cp dist\/kybern-\* dist\/latest\*\.json release\//)
 })
