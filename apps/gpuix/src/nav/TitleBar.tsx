@@ -40,6 +40,7 @@ import { N } from './glyphs.ts'
 import { goBack, goForward, newThread, openThread, useNavigationAvailability } from './history.ts'
 import { Menu, MenuItem, MenuSeparator, muted, Tip } from './overlay.tsx'
 import { getNav, setNav, useNav } from './store.ts'
+import { parentMachineOf } from './remoteChildren.ts'
 import { providerLabel } from '../sidebar/model.ts'
 import { useSidebarDragging, useSidebarWidth } from '../shell/layout.ts'
 import { drawerSlide, fadeTo } from '../shell/motion.ts'
@@ -404,7 +405,7 @@ export const ThreadHeader = memo(function ThreadHeader({ leafId: given, size = '
           {thread.subagent && (
             <>
               <MenuSeparator />
-              <MenuItem id="parent" icon={N.backToParent} label="Open parent" shortcut={SHORTCUT.openParent} onSelect={() => thread.parent_thread_id && openThread(thread.parent_thread_id)} />
+              <MenuItem id="parent" icon={N.backToParent} label="Open parent" shortcut={SHORTCUT.openParent} onSelect={() => thread.parent_thread_id && openThread(thread.parent_thread_id, parentMachineOf(thread))} />
               {subagentPhase(thread.subagent.status) === 'working' && thread.subagent.capabilities?.stop !== false && (
                 <MenuItem id="stop" icon={N.stop} label="Stop" onSelect={() => void callThread(thread.id, 'tasks.stop', { thread_id: thread.id }).catch(() => {})} />
               )}

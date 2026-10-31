@@ -36,6 +36,7 @@ import { N } from '../nav/glyphs.ts'
 import { newThread, openThread } from '../nav/history.ts'
 import { ContextMenu, Menu, MenuItem, MenuLabel, MenuSeparator, muted, Tip } from '../nav/overlay.tsx'
 import { DEFAULT_FILTER, getNav, setNav, useNav } from '../nav/store.ts'
+import { parentMachineOf } from '../nav/remoteChildren.ts'
 import { callThread, getState, toggleProject as toggleProjectState, type StateThread } from '../state.ts'
 import { glyphOfMachine, machineHub } from '../machines/index.ts'
 import { MachineBadge } from './MachineBadge.tsx'
@@ -791,7 +792,7 @@ export const ChildRow = memo(function ChildRow({
           onMouseMove={trackThreadDrag}
           onMouseUp={finishSplitDrag}
           onAuxClick={menu.onAuxClick}
-          onClick={() => { if (!consumeThreadDrag(thread.id)) openThread(thread.id) }}
+          onClick={() => { if (!consumeThreadDrag(thread.id)) openThread(thread.id, machineId) }}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -854,8 +855,8 @@ export const ChildRow = memo(function ChildRow({
       <TreeLines shape={tree} />
       {menu.at && (
         <ContextMenu at={menu.at} onClose={menu.close} testId="child-menu">
-          <MenuItem id="open" label="Open" onSelect={() => openThread(thread.id)} />
-          <MenuItem id="parent" icon={N.backToParent} label="Open parent" onSelect={() => thread.parent_thread_id && openThread(thread.parent_thread_id)} />
+          <MenuItem id="open" label="Open" onSelect={() => openThread(thread.id, machineId)} />
+          <MenuItem id="parent" icon={N.backToParent} label="Open parent" onSelect={() => thread.parent_thread_id && openThread(thread.parent_thread_id, parentMachineOf(thread))} />
           {working && !delegated && thread.subagent?.capabilities?.stop !== false && (
             <MenuItem id="stop" icon={N.stop} label="Stop" onSelect={() => void callThread(thread.id, 'tasks.stop', { thread_id: thread.id }).catch(() => {})} />
           )}

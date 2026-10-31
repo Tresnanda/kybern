@@ -7,6 +7,7 @@ import type { EnvironmentProfile } from '../environments/registry.ts'
 import { MachineHub } from '../machines/hub.ts'
 import { recordsFromRegistry } from '../machines/records.ts'
 import { RemoteLive, activityMaps, withRemote } from './remoteLive.ts'
+import { RemoteChildStore } from './remoteChildren.ts'
 
 const project = (id: string): Project => ({ id, name: id, path: `/w/${id}`, is_git: true, brief_in_all_threads: false, repo: { root_commit: 'root' }, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z' }) as unknown as Project
 const thread = (id: string, status: string, last_seq: number, extra: Record<string, unknown> = {}): Thread => ({ id, project_id: 'p1', title: id, status, pinned: false, last_seq, updated_at: '2026-10-02T00:00:00Z', ...extra }) as unknown as Thread
@@ -17,6 +18,9 @@ class Daemon {
   endpoint = { url: 'ws://fake/ws', token: 'tok' }
   streams: { handler: (event: unknown) => void; open: boolean }[] = []
   lists: { threads: Thread[]; activity?: unknown[] } = { threads: [] }
+  /** Children by parent, as `threads.list { parent_thread_id }` answers. */
+  children: Record<string, Thread[]> = {}
+  childReads: string[] = []
   reads = 0
   private statuses = new Set<(status: string) => void>()
   constructor(readonly machineId: string) { this.info = { environment_id: machineId, machine_id: machineId, version: '0.19.0', features: [] } }
@@ -26,12 +30,13 @@ class Daemon {
   onStatus(fn: (status: string) => void) { this.statuses.add(fn); return () => { this.statuses.delete(fn) } }
   onNotification() { return () => {} }
   async checkConnection() {}
-  async call(method: string) {
+  async call(method: string, params?: { parent_thread_id?: string }) {
     if (method === 'projects.list') return { projects: [project('p1')] }
+    if (method === 'threads.list' && params?.parent_thread_id) { this.childReads.push(params.parent_thread_id); return { threads: this.children[params.parent_thread_id] ?? [] } }
     if (method === 'threads.list') { this.reads++; return { threads: this.lists.threads, activity: this.lists.activity } }
     throw new Error(`no handler for ${method}`)
   }
-  callRaw(method: string) { return this.call(method) }
+  callRaw(method: string, params?: { parent_thread_id?: string }) { return this.call(method, params) }
   subscribeEvents(_: unknown, handler: (event: unknown) => void) {
     const stream = { handler, open: true }
     this.streams.push(stream)
@@ -71,8 +76,10 @@ async function setup(options: { remote?: boolean; selected?: { id: string; machi
   await settle()
   let unread: Record<string, true> = {}
   let published = 0
+  const children = new RemoteChildStore()
   const live = new RemoteLive({
     hub,
+    children,
     state: () => {
       const remoteThreads = hub.view().threads.all.filter((t) => t.machineId === 'vps-1').map((t) => ({ id: t.thread.id, machineId: 'vps-1' }))
       return { threads: [{ id: 'shared' }, ...remoteThreads], selectedId: options.selected?.id ?? null, ...(options.selected?.machineId ? { selectedMachineId: options.selected.machineId } : {}) }
@@ -86,7 +93,7 @@ async function setup(options: { remote?: boolean; selected?: { id: string; machi
   lives.push(live)
   live.start()
   const statusOf = (id: string) => hub.view().threads.byKey.get(scopedKey('vps-1', id))?.thread.status
-  return { mac, vps, hub, live, statusOf, unread: () => unread, published: () => published, runTimers: () => timers.splice(0).forEach((fn) => fn()) }
+  return { mac, vps, hub, live, children, statusOf, unread: () => unread, published: () => published, runTimers: () => timers.splice(0).forEach((fn) => fn()) }
 }
 
 test('a remote thread that finished its turn stops showing as working', async () => {
@@ -175,4 +182,58 @@ test('activity maps and the merge with local entries', () => {
   const local = { a: 'working' } as never
   expect(withRemote(local, {})).toBe(local)
   expect(withRemote(local, { a: 'monitoring', c: 'working' } as never)).toEqual({ a: 'working', c: 'working' })
+})
+
+// ADE-107: the children of a thread on another machine live on that machine, which leaves them out of its `threads.list`.
+const delegated = (id: string, last_seq: number, extra: Record<string, unknown> = {}) =>
+  thread(id, 'running', last_seq, { parent_thread_id: 'r1', delegation: { status: 'running', started_at: '2026-10-02T00:00:00Z' }, ...extra })
+const childIds = (children: RemoteChildStore, machineId = 'vps-1') => (children.get().get(machineId) ?? []).map((t) => [t.id, t.status])
+
+test('an agent started by a remote thread reads that thread’s children from its own machine', async () => {
+  const { mac, vps, children } = await setup()
+  vps.children.r1 = [delegated('c1', 3), delegated('c2', 4)]
+  vps.emit({ kind: 'runtime_task_started', seq: 5, thread_id: 'r1', task: { id: 'task-1', kind: 'agent' } })
+  await settle()
+  expect(vps.childReads).toEqual(['r1'])
+  expect(mac.childReads).toEqual([])
+  expect(childIds(children)).toEqual([['c1', 'running'], ['c2', 'running']])
+})
+
+test('a remote thread with children at work reads them when its machine’s lists arrive', async () => {
+  const { vps, children, runTimers } = await setup()
+  vps.children.r1 = [delegated('c1', 3)]
+  vps.lists.threads = [thread('r1', 'running', 5)]
+  vps.lists.activity = [{ thread_id: 'r1', state: 'working', active_agents: 0, active_processes: 0, active_monitors: 0, active_children: 1 }]
+  vps.emit({ kind: 'approval_requested', seq: 6, thread_id: 'r1' })
+  runTimers()
+  await settle()
+  expect(childIds(children)).toEqual([['c1', 'running']])
+})
+
+test('remote children follow their machine’s events, survive its list reads, and leave when archived or when the machine goes', async () => {
+  const { vps, hub, live, children, runTimers } = await setup()
+  vps.children.r1 = [delegated('c1', 3)]
+  await live.loadChildren('vps-1', 'r1')
+  vps.emit({ kind: 'thread_updated', seq: 7, thread: delegated('c1', 7, { status: 'idle' }) })
+  vps.emit({ kind: 'thread_created', seq: 8, thread: delegated('c2', 8) })
+  expect(childIds(children)).toEqual([['c1', 'idle'], ['c2', 'running']])
+  // The machine's next list read leaves its children out; they stay.
+  vps.emit({ kind: 'runtime_task_updated', seq: 9, thread_id: 'r1', task: { id: 'task-1', kind: 'process' } })
+  runTimers()
+  await hub.refreshMachineLists('vps-1')
+  await settle()
+  expect(childIds(children)).toEqual([['c1', 'idle'], ['c2', 'running']])
+  // An older update changes nothing; an archived child leaves and a late update does not bring it back.
+  vps.emit({ kind: 'thread_updated', seq: 4, thread: delegated('c1', 4) })
+  vps.emit({ kind: 'thread_archived', seq: 10, thread_id: 'c2' })
+  vps.emit({ kind: 'thread_updated', seq: 11, thread: delegated('c2', 11) })
+  expect(childIds(children)).toEqual([['c1', 'idle']])
+  children.dropMachine('vps-1')
+  expect(children.get().size).toBe(0)
+})
+
+test('with one machine no child is read', async () => {
+  const single = await setup({ remote: false })
+  expect(await single.live.loadChildren('mac-1', 'shared')).toBeUndefined()
+  expect(single.children.get().size).toBe(0)
 })

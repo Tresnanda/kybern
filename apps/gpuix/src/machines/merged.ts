@@ -15,7 +15,7 @@
 // machine leaves every other row the same object.
 import { logicalSpace, prepareSpacePlacements } from '../../../../packages/kybern-client/src/spacePlacements.ts'
 import { isChildThread, isInboundThread, isRemoteChildThread } from '../../../../packages/kybern-client/src/subagents.ts'
-import type { MachineThread, MergedThread } from '../../../../packages/kybern-client/src/machineMerge.ts'
+import { scopedKey, type MachineThread, type MergedThread } from '../../../../packages/kybern-client/src/machineMerge.ts'
 import type { MergedView } from '../../../../packages/kybern-client/src/machines.ts'
 import { FREE_CHAT_PROJECT_ID, isFreeChatProject, type MachineId, type Project, type Thread } from '../../../../packages/kybern-client/src/types.ts'
 
@@ -36,7 +36,8 @@ export interface MergedLists {
   threads: StateThread[]
   /**
    * Delegated children other machines run for a thread, ready for `nav.children`: `parent_thread_id` names the thread that
-   * delegated them (their `origin`), so the transcript's launch card and the sidebar find them like a local child.
+   * delegated them (their `origin`), so the transcript's launch card and the sidebar find them like a local child. With them,
+   * the subagents and delegated children of other machines' threads on those machines (`MergeInput.children`).
    */
   children: StateThread[]
   /** Machines that have a checkout of a listed project, by the listed project's id. */
@@ -48,6 +49,8 @@ export interface MergeInput {
   localProjects: readonly Project[]
   /** The space remote-only projects are listed in (the default space), or null. */
   spaceOfForeign: () => string | null
+  /** Children of other machines' threads on their own machine (`nav/remoteChildren.ts` `RemoteChildStore`). */
+  children?: ReadonlyMap<MachineId, readonly Thread[]>
 }
 
 export class ListMerger {
@@ -94,6 +97,21 @@ export class ListMerger {
       if (isInboundThread(thread) || thread.status === 'archived') continue
       if (isRemoteChildThread(thread)) children.push(this.remap(merged, shown.get(merged.projectKey) ?? thread.project_id))
       else if (!isChildThread(thread)) threads.push(this.remap(merged, shown.get(merged.projectKey) ?? thread.project_id))
+    }
+    if (input.children?.size) {
+      // Listed under the project row their own project is shown in, like the machine's other threads.
+      const projectOf = new Map<string, string>()
+      for (const logical of view.projects) for (const instance of logical.instances) projectOf.set(scopedKey(instance.machineId, instance.project.id), logical.key)
+      for (const [machineId, list] of input.children) {
+        const machine = view.machines.find((summary) => summary.machineId === machineId)
+        if (!machine || machine.isLocal) continue
+        for (const thread of list) {
+          if (thread.status === 'archived' || isInboundThread(thread)) continue
+          const projectKey = projectOf.get(scopedKey(machineId, thread.project_id)) ?? `local:${machineId}:${thread.project_id}`
+          const merged: MergedThread = { key: scopedKey(machineId, thread.id), machineId, thread, projectKey, offline: machine.offline, ...(machine.offline && machine.lastSeenAt !== undefined ? { lastSeenAt: machine.lastSeenAt } : {}) }
+          children.push(this.remap(merged, shown.get(projectKey) ?? thread.project_id))
+        }
+      }
     }
     return { projects, threads, children, machinesOf }
   }

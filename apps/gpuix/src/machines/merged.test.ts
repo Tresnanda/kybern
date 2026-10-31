@@ -6,6 +6,7 @@ import { FREE_CHAT_PROJECT_ID, type Project, type Thread } from '../../../../pac
 import { setSpacePlacements, spaceProject } from '../../../../packages/kybern-client/src/spacePlacements.ts'
 beforeEach(() => setSpacePlacements([]))
 import { ListMerger, byPinnedThenNewest, ownProjectOf } from './merged.ts'
+import { underParents } from '../nav/remoteChildren.ts'
 
 const project = (id: string, name: string, root: string | null, extra: Partial<Project> = {}): Project => ({ id, name, path: `/w/${name}`, is_git: true, brief_in_all_threads: false, repo: root ? { root_commit: root } : null, space_id: 's-mac', created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z', ...extra }) as Project
 const thread = (id: string, project_id: string, updated_at: string, extra: Record<string, unknown> = {}): Thread => ({ id, project_id, title: id, status: 'idle', pinned: false, updated_at, ...extra }) as unknown as Thread
@@ -110,4 +111,42 @@ test('a remote-only project retains a replicated Space after a refresh while its
   const first = merger.merge({ view: v, localProjects: [], spaceOfForeign: () => 'personal' })
   expect(first.projects[0]?.space_id).toBe('work')
   expect(merger.merge({ view: v, localProjects: [], spaceOfForeign: () => 'personal' }).projects[0]).toBe(first.projects[0]!)
+})
+
+test('the children of a remote thread carry their machine and are listed under the merged project row (ADE-107)', () => {
+  const localProjects = [project('p-mac', 'kybern', 'r1')]
+  const remoteProjects = [project('p-vps', 'kybern', 'r1'), project('p-site', 'site', 'r2')]
+  const parent = thread('parent-1', 'p-vps', '2026-10-02T00:00:00Z')
+  const child = thread('c1', 'p-vps', '2026-10-03T00:00:00Z', { parent_thread_id: 'parent-1', delegation: { status: 'running', started_at: '2026-10-03T00:00:00Z' } })
+  const sub = thread('s1', 'p-site', '2026-10-03T00:00:00Z', { parent_thread_id: 'other', subagent: { status: 'running' } })
+  const merger = new ListMerger()
+  const input = { view: view({ projects: localProjects, threads: [] }, { projects: remoteProjects, threads: [parent] }), localProjects, spaceOfForeign: space, children: new Map([['vps', [child, sub]], ['mac', [thread('ignored', 'p-mac', '2026-10-03T00:00:00Z', { parent_thread_id: 'x', delegation: {} })]]]) }
+  const lists = merger.merge(input)
+  expect(lists.threads.map((t) => [t.id, t.project_id])).toEqual([['parent-1', 'p-mac']])
+  expect(lists.children.map((t) => [t.id, t.parent_thread_id, t.project_id, t.ownProjectId, t.machineId])).toEqual([['c1', 'parent-1', 'p-mac', 'p-vps', 'vps'], ['s1', 'other', 'p-site', undefined, 'vps']])
+  // Unchanged children keep their identity, so `nav.children` does not change.
+  expect(merger.merge(input).children[0]).toBe(lists.children[0])
+})
+
+test('a child nests under its parent on another machine, whichever machine runs it, and keeps its own machine (ADE-107)', () => {
+  // The user is at the Mac; the parent is on instabox. Its children run on instabox itself, on the Mac, and on a third machine.
+  const projects = new Map([['mac', [project('p-mac', 'kybern', 'r1')]], ['insta', [project('p-insta', 'kybern', 'r1')]], ['sat', [project('p-sat', 'other', 'r9')]]])
+  const order = ['mac', 'insta', 'sat']
+  const logical = mergeProjects(projects, { localMachineId: 'mac', machineOrder: order, offline: new Set() })
+  const delegated = (id: string, project_id: string, extra: Record<string, unknown>) => thread(id, project_id, '2026-10-03T00:00:00Z', { delegation: { status: 'running', started_at: '2026-10-03T00:00:00Z' }, ...extra })
+  const fromInsta = { machine_id: 'insta', thread_id: 'parent' }
+  const onSat = delegated('c-sat', 'p-sat', { origin: fromInsta })
+  const threads = mergeThreads(new Map([['mac', []], ['insta', [thread('parent', 'p-insta', '2026-10-02T00:00:00Z')]], ['sat', [onSat]]]), logical, {})
+  const merged: MergedView = { version: 1, machines: order.map((machineId) => ({ machineId, isLocal: machineId === 'mac' })) as never, projects: logical, threads, showGlyphs: true }
+  const onInsta = delegated('c-insta', 'p-insta', { parent_thread_id: 'parent' })
+  const onMac = delegated('c-mac', 'p-mac', { origin: fromInsta })
+  const lists = new ListMerger().merge({ view: merged, localProjects: projects.get('mac')!, spaceOfForeign: space, children: new Map([['insta', [onInsta]]]) })
+  // What `state.ts` does with the merge and the children another machine's threads started on the Mac.
+  const children = underParents([...lists.children, onMac], lists.threads, 'mac')
+  expect(lists.threads.map((t) => [t.id, t.project_id, t.machineId])).toEqual([['parent', 'p-mac', 'insta']])
+  expect(children.map((t) => [t.id, t.parent_thread_id, t.project_id, t.machineId])).toEqual([
+    ['c-sat', 'parent', 'p-mac', 'sat'],
+    ['c-insta', 'parent', 'p-mac', 'insta'],
+    ['c-mac', 'parent', 'p-mac', undefined],
+  ])
 })
