@@ -43,6 +43,7 @@ export function modelSelection(selector, effort) {
     // Old catalogs copied this hidden, constant SDK default into every Opus
     // selector. It was never a user choice. Keep all explicit context/fast values.
     const params = parsed.params.filter((p) => !(p.id === "cyber" && p.value === "false") &&
+      !parsed.defaultParams?.some((value) => value.id === p.id && value.value === p.value) &&
       (!effort || !EFFORT_PARAMS.has(p.id))).map((p) => ({ ...p }));
     if (effort) {
       if (!EFFORT_PARAMS.has(effortParam) || (parsed.effortValues && !parsed.effortValues.includes(effort))) {
@@ -133,9 +134,11 @@ export function modelCatalog(models) {
       const defaultEffort = group.efforts.includes("medium") ? "medium" : group.efforts[0];
       // Only traits different from the native default are explicit choices.
       // Constant hidden SDK parameters (e.g. cyber=false) have no picker control.
-      const explicit = group.params.filter((p) => parameters.some((parameter) => parameter.id === p.id) &&
-        initial.params.find((value) => value.id === p.id)?.value !== p.value);
-      const selection = { id: model.id, params: explicit,
+      const defaultParams = group.params.filter((p) => !parameters.some((parameter) => parameter.id === p.id) ||
+        initial.params.find((value) => value.id === p.id)?.value === p.value);
+      // Keep full params in the opaque ID so existing clients still recognize
+      // saved selectors. defaultParams records what Kybern inferred, not chose.
+      const selection = { id: model.id, params: group.params, defaultParams,
         ...(group.effortParam ? { effortParam: group.effortParam, effortValues: group.efforts, defaultEffort } : {}) };
       const values = {};
       for (const { id } of parameters) values[id] = group.params.find((p) => p.id === id)?.value ?? absent(id);

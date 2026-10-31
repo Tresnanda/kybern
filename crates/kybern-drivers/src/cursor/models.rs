@@ -35,7 +35,7 @@ pub fn legacy_model_selection(selected: &str, models: &[ProviderModel]) -> Optio
         json!({"id": id, "params": []})
     };
     // The old ID contains no context or fast choice. Do not copy native defaults.
-    selection["params"] = json!([]);
+    selection["defaultParams"] = selection["params"].clone();
     let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&selection).ok()?);
     Some((format!("cursor-model:{encoded}"), effort))
 }
@@ -62,7 +62,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(selection["id"], "grok-4.5");
-        assert_eq!(selection["params"], json!([]));
+        assert_eq!(selection["params"], json!([{"id":"fast","value":"true"}]));
+        assert_eq!(selection["defaultParams"], selection["params"]);
         for id in ["cursor-grok-4.5-max", "cursor-grok-4.7-high", "cursor-grok-4.5-high-fast", "grok-4.5-high"] {
             assert!(legacy_model_selection(id, std::slice::from_ref(&model)).is_none(), "{id}");
         }
