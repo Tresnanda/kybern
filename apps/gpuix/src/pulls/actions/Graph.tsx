@@ -16,7 +16,7 @@
 // - status glyphs cross-fade (`SwapOnChange`). Reduce Motion: no flow and no draws; the glyph fades stay.
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { runWord, type RunBucket } from '../../../../../packages/kybern-client/src/actions.ts'
-import { duration, jobProgress, nodeTime, seconds, waitsFor, type GraphLayout, type JobGraph, type PlacedEdge } from '../../../../../packages/kybern-client/src/actionsPipeline.ts'
+import { duration, isPlaceholder, jobProgress, nodeTime, seconds, waitsFor, type GraphLayout, type JobGraph, type PlacedEdge } from '../../../../../packages/kybern-client/src/actionsPipeline.ts'
 import type { WorkflowJob } from '../../../../../packages/kybern-client/src/types.ts'
 import { RADIUS } from '../../kit/controls.ts'
 import { toneColor } from '../../kit/tone.ts'
@@ -32,7 +32,7 @@ import { LiveClock } from './LiveClock.tsx'
 export const NODE_HEIGHT = 32
 export const ROW_GAP = 8
 /** An estimate of a 13 px SF Pro label's width, for column widths. */
-export const measureName = (text: string) => text.length * 6.9
+export const measureName = (text: string) => text.length * 7.3
 
 const FLOW = { dash: 5, loops: 6, periodMs: 1200 }
 /**
@@ -158,9 +158,11 @@ const JobNode = memo(function JobNode({ job, bucket, width, selected, waits, not
     return s === null ? '' : duration(s)
   })()
   const timeColor = tint ?? t.textTertiary
-  return <div testId={`actions-node-${job.id}`} role="button" tabIndex={0} aria-current={selected ? 'true' : undefined}
+  // A job GitHub hasn't created yet has nothing to open.
+  const ghost = isPlaceholder(job)
+  return <div testId={`actions-node-${ghost ? `waiting-${job.name}` : job.id}`} role={ghost ? undefined : 'button'} tabIndex={ghost ? -1 : 0} aria-current={selected ? 'true' : undefined}
     aria-label={`${job.name}, ${runWord(job)}${waits ? `, ${note.toLowerCase()}` : ''}`}
-    onClick={() => onSelect(job.id)} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onSelect(job.id) }}
+    onClick={() => { if (!ghost) onSelect(job.id) }} onKeyDown={e => { if (!ghost && (e.key === 'enter' || e.key === 'space')) onSelect(job.id) }}
     style={{
       ...row, position: 'relative', overflow: 'hidden', width, height: NODE_HEIGHT, gap: 8, paddingLeft: 10, paddingRight: 11, borderRadius: RADIUS.md,
       borderWidth: selected ? 1.5 : 1, borderColor: edge, borderStyle: muted ? 'dashed' : 'solid',

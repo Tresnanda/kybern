@@ -102,7 +102,7 @@ export function RunDetail({ target, runId, listed, reference, usual, width, heig
 
   const jobs = detail?.jobs ?? []
   const job = jobs.find(j => j.id === jobId) ?? firstJob(jobs)
-  const graph = useMemo(() => buildGraph(jobs, detail?.workflow_jobs), [detail])
+  const graph = useMemo(() => buildGraph(jobs, detail?.workflow_jobs, { running: !!detail && isActive(detail.run) }), [detail])
   const inner = Math.max(240, width - PAD * 2)
   const layout = useMemo(() => {
     const cols = Math.max(1, graph.columns)

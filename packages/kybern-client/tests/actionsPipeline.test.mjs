@@ -10,6 +10,7 @@ import {
   filterGroups,
   groupRuns,
   headlineStep,
+  isPlaceholder,
   isTag,
   jobProgress,
   jobTimes,
@@ -159,6 +160,18 @@ test("running edges flow, waiting ones wait, and the header counts done jobs", (
   assert.equal(nodeTime(graph, graph.nodes.find(n => n.job.id === ci)), "Waits for 2 jobs", "the two running checks; the finished ones don't count");
   assert.ok(columnWidths(graph, t => t.length * 7)[2] > 128, "the gate's column fits its name and what it waits for");
   assert.equal(runSummary({ status: "completed" }, buildGraph([job("changes"), job("release checks", "completed", "skipped")], CI), null), "1 job passed, 1 skipped");
+});
+
+test("while a run runs, a gate GitHub hasn't created yet waits on the graph", () => {
+  const jobs = [job("changes"), job("rustfmt"), job("clippy + test (macos-15)", "in_progress"), job("clippy + test (ubuntu-24.04)"), job("cargo check (windows-latest)"), job("release checks"), job("gpuix (typecheck + test)", "completed", "skipped")];
+  const graph = buildGraph(jobs, CI, { running: true });
+  const gate = graph.nodes.find(n => isPlaceholder(n.job));
+  assert.deepEqual([gate.job.name, gate.column, gate.bucket], ["CI", 2, "queued"]);
+  assert.equal(nodeTime(graph, gate), "Waits for 1 job");
+  assert.equal(graph.edges.filter(e => e.to === gate.job.id).length, 6);
+  assert.equal(buildGraph(jobs, CI).nodes.length, 7, "a finished run draws only what ran");
+  // A matrix job's names aren't known before GitHub creates them.
+  assert.equal(buildGraph([job("changes")], CI, { running: true }).nodes.filter(n => isPlaceholder(n.job)).map(n => n.job.name).join(), "rustfmt,cargo check (windows-latest),release checks,gpuix (typecheck + test)");
 });
 
 test("geometry: columns left to right, centred, S-curves between edges", () => {

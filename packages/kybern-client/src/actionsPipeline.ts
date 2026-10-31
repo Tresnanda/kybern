@@ -138,16 +138,32 @@ function edgeKind(from: RunBucket, to: RunBucket): Pick<GraphEdge, "kind" | "hot
   return { kind: "done" }
 }
 
-/** The jobs of one run on their workflow's `needs` graph, or in run order when that can't be done faithfully. */
-export function buildGraph(jobs: readonly WorkflowJob[], specs: readonly WorkflowJobSpec[] | undefined): JobGraph {
-  const { matched, complete } = matchEach(jobs, specs ?? [])
+/** A declared job GitHub hasn't created yet, drawn waiting: its id is negative, it has no steps, log or link. */
+export const isPlaceholder = (job: Pick<WorkflowJob, "id">) => job.id < 0
+
+/**
+ * The jobs of one run on their workflow's `needs` graph, or in run order when that can't be done faithfully. `running`: the run
+ * is in progress, so a declared job GitHub hasn't created yet (it creates a gate like `CI` only once its needs are done) is
+ * drawn waiting, when its name is known (no matrix, no reusable workflow) and everything it needs is on the graph.
+ */
+export function buildGraph(given: readonly WorkflowJob[], specs: readonly WorkflowJobSpec[] | undefined, { running = false } = {}): JobGraph {
+  const { matched, complete } = matchEach(given, specs ?? [])
   const depth = specs?.length ? depths(specs) : null
   const byId = new Map((specs ?? []).map(s => [s.id, s]))
   const present = new Set(matched.values())
+  const jobs = [...given]
+  if (running && complete && depth && specs) {
+    specs.forEach((spec, i) => {
+      const name = spec.name || spec.id
+      if (present.has(spec.id) || spec.uses || spec.matrix || name.includes("${{") || !(spec.needs ?? []).every(n => present.has(n))) return
+      const job: WorkflowJob = { id: -(i + 1), name, status: "queued", conclusion: "", url: "", steps: [] }
+      jobs.push(job); matched.set(job.id, spec.id); present.add(spec.id)
+    })
+  }
   const nodes: GraphNode[] = []
   const placedGraph = complete && !!depth && !!specs?.length
   if (!placedGraph) {
-    jobs.forEach((job, row) => nodes.push({ job, bucket: runBucket(job), column: 0, row }))
+    given.forEach((job, row) => nodes.push({ job, bucket: runBucket(job), column: 0, row }))
   } else {
     const order = new Map(specs.map((s, i) => [s.id, i]))
     // Columns that hold no job (a gated job that never ran) close up.
