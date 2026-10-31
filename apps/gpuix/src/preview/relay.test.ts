@@ -119,3 +119,16 @@ test('HTTPS relay validates trust and hostname before forwarding HTTP, assets, c
     } finally { relays.forEach(relay => relay.close()); peers.forEach(socket => socket.destroy()); await new Promise<void>(resolve => upstream.close(() => resolve())) }
   } finally { rmSync(dir, { recursive: true, force: true }) }
 }, 15000)
+
+test('a single-page ticket (artifact preview, visual frame) is reachable only at the root of its origin (ADE-109)', () => {
+  const head = (line: string) => `${line} HTTP/1.1\r\nHost: 127.0.0.1:5321\r\n\r\n`
+  expect(rewriteRelayHead(head('GET /'), '100.64.0.2:4190', '/relay/m-1/http/visual-frame/V1', 5321, [['x-kybern-relay-auth', 'Bearer device']], true)).toStartWith('GET /relay/m-1/http/visual-frame/V1 HTTP/1.1\r\nHost: 100.64.0.2:4190')
+  expect(rewriteRelayHead(head('GET /?a=1'), 'daemon:9', '/artifact-preview/A1', 5321, [], true)).toStartWith('GET /artifact-preview/A1?a=1 HTTP/1.1')
+  for (const line of ['GET /favicon.ico', 'GET /assets/x.js', 'GET //']) expect(() => rewriteRelayHead(head(line), 'daemon:9', '/visual-frame/V1', 5321, [], true)).toThrow(/^40[45]/)
+  expect(() => rewriteRelayHead('GET / HTTP/1.1\r\nHost: 127.0.0.1:5321\r\nUpgrade: websocket\r\n\r\n', 'daemon:9', '/visual-frame/V1', 5321, [], true)).toThrow('404')
+})
+
+test('the relay opens single-page tickets on the daemon or through a member, and nothing beside them', async () => {
+  for (const path of ['/visual-frame/V1', '/artifact-preview/A1', '/relay/m-1/http/visual-frame/V1', '/relay/m-1/http/artifact-preview/A1']) (await openRelay(`http://127.0.0.1:9${path}`, 'http://127.0.0.1:9')).close()
+  for (const path of ['/visual-frame/V1/', '/visual-frame/V1/x', '/artifact-preview/', '/assets/a1', '/relay/m-1/http/assets/a1']) await expect(openRelay(`http://127.0.0.1:9${path}`, 'http://127.0.0.1:9')).rejects.toThrow('configured daemon')
+})

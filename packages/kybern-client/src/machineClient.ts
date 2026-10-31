@@ -7,7 +7,9 @@ import {
   ConnectionClosedError,
   KybernClient,
   type ConnectionStatus,
+  type DaemonPage,
   type EventHandler,
+  type PageOptions,
   type ReplayState,
   type Subscription,
 } from "./client.ts";
@@ -16,7 +18,7 @@ import type { EventsSubscribeParams, MethodName, ParamsOf, ResultOf } from "./ty
 /** What the machine set needs from a connection; `KybernClient` is one. */
 export type MachineClient = Pick<
   KybernClient,
-  "connect" | "close" | "status" | "failure" | "info" | "endpoint" | "onStatus" | "onNotification" | "call" | "callRaw" | "fetch" | "subscribeEvents" | "checkConnection"
+  "connect" | "close" | "status" | "failure" | "info" | "endpoint" | "onStatus" | "onNotification" | "call" | "callRaw" | "fetch" | "openPage" | "subscribeEvents" | "checkConnection"
 >;
 
 /** The machine cannot be reached now. `cached` says whether its last lists are still available. */
@@ -46,7 +48,7 @@ type StatusHandler = (status: ConnectionStatus, detail?: string) => void;
 /**
  * A `KybernClient` that delegates to whichever connection the machine set has
  * open for one machine. Its `endpoint` carries no address and no token, so
- * nothing that holds it can read a credential; `fetch` reaches the machine's
+ * nothing that holds it can read a credential; `fetch` and `openPage` reach the machine's
  * HTTP routes through the connection instead. `connect` and `close` do
  * nothing: the machine set owns the lifecycle.
  */
@@ -144,6 +146,13 @@ export class MachineClientProxy extends KybernClient {
       this.requests.delete(controller);
       outer?.removeEventListener("abort", forward);
     }
+  }
+
+  /** `KybernClient.openPage` on the attached connection; rejects with `OfflineError` while the machine is offline. */
+  override async openPage(path: string, options: PageOptions = {}): Promise<DaemonPage> {
+    const inner = this.inner;
+    if (!inner) throw this.offline();
+    return inner.openPage(path, options);
   }
 
   private offline(): OfflineError {

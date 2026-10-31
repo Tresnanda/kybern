@@ -16,7 +16,7 @@
 // and the rest of the network, learned from the primary when the daemon is a
 // member). The app keeps opening its own socket to the machine the user is at.
 import { KybernClient, type Subscription } from '../../../../packages/kybern-client/src/client.ts'
-import { normalizeDaemonUrl } from '../../../../packages/kybern-client/src/address.ts'
+import { httpBase, normalizeDaemonUrl } from '../../../../packages/kybern-client/src/address.ts'
 import { MachineCache } from '../../../../packages/kybern-client/src/machineCache.ts'
 import {
   MachineSet,
@@ -36,6 +36,7 @@ import { MachineClientProxy } from '../../../../packages/kybern-client/src/machi
 import { NETWORK_FEATURES, type MachineId, type NetworkStatus, type Project, type Thread, type ThreadActivitySummary, type ThreadEvent } from '../../../../packages/kybern-client/src/types.ts'
 import { verifyMachineProof } from './proof.ts'
 import { createGpuixSocket } from './socket.ts'
+import { openRelay } from '../preview/relay.ts'
 import { isLegacyMachineId } from './records.ts'
 
 export interface PrimaryProfile { id: string; name: string }
@@ -354,7 +355,8 @@ export class MachineHub {
     const socket: SocketFactory = http.headers ? (url, bearer) => createGpuixSocket(url, bearer, http.headers) : createGpuixSocket
     return new KybernClient(
       { url: normalizeDaemonUrl(route.url), token, ...(legacy ? {} : { environmentId: record.machineId }) },
-      { createSocket: socket, http, ...(legacy ? {} : { expectedEnvironmentId: record.machineId }) },
+      // Its pages (artifact previews, visual frames, Preview) load from a loopback relay that adds the member's token itself.
+      { createSocket: socket, http, pageRelay: (upstream, options) => openRelay(upstream, httpBase(route.url), { ...options, relayAuth: relayToken }), ...(legacy ? {} : { expectedEnvironmentId: record.machineId }) },
     )
   }
 
