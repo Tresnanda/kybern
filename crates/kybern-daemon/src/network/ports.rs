@@ -564,7 +564,18 @@ mod tests {
         assert!(next.local_addr().unwrap().port() > port);
         drop(reserved);
         let same = bind_local(port, None).await.unwrap();
-        assert_eq!(same.local_addr().unwrap().port(), port);
+        // Tests running alongside bind ephemeral ports too, so one may take the freed port first.
+        let mut kept = same.local_addr().unwrap().port() == port;
+        for _ in 0..10 {
+            if kept {
+                break;
+            }
+            let free = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+            let port = free.local_addr().unwrap().port();
+            drop(free);
+            kept = bind_local(port, None).await.unwrap().local_addr().unwrap().port() == port;
+        }
+        assert!(kept, "a free remote port number is kept locally");
     }
 
     #[test]
