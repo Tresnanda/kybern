@@ -13,7 +13,12 @@ that release builds restore. Publishing is a separate action.
 The tag-triggered release workflow requires successful main CI for the exact
 tagged commit, including all six jobs `scripts/check-release-ci.mjs` lists
 (`requiredJobs`: rustfmt, clippy + test on Linux and macOS, Windows cargo check,
-release checks, and gpuix). It waits for an in-progress run and blocks
+release checks, and gpuix). A push that changes `[workspace.package].version` runs the full suite
+automatically. For a release candidate without a version change, run
+`gh workflow run ci.yml --ref main` while `main` points at that candidate and
+wait for it to pass before tagging. A manual run qualifies only for its exact
+commit on `main`; a later commit's checks never qualify an older tag.
+The gate waits for an in-progress run and blocks
 publication on failures, skipped jobs, missing results, or timeout. Publication
 also requires both macOS GPUIX bundles to succeed (the Linux and Windows
 bundles are betas whose failure only leaves their `latest.json` entry out). Only the publishing `host` job
@@ -21,10 +26,13 @@ waits for that gate; the daemon archives and desktop bundles build while CI
 finishes. Renaming or adding a job in `ci.yml` means updating `requiredJobs`
 and its test in the same change.
 
-Pull requests run only the CI jobs their files can affect (the `changes` job in
-`ci.yml` lists the paths): a GPUIX-only change skips the Rust jobs,
-and a push to `main` always runs everything. A new push to a pull request cancels
-its running checks; `main` runs are never cancelled. The `CI` job is red if any
+Pull requests and ordinary pushes to `main` run only the CI jobs their files
+can affect (`scripts/ci-paths.mjs` lists the paths): a GPUIX-only change skips
+the Rust jobs, and a docs-only change skips all test jobs. Main compares both
+ends of the whole push, including deleted and renamed files. Version bumps on
+main, manual runs, changes to CI selection/setup, and unavailable or incomplete
+change lists run the full suite. A new push to a pull request cancels its running
+checks; `main` runs are never cancelled. The `CI` job is red if any
 job failed and green when the skipped ones were not needed, so it is the one
 check a branch protection rule has to require.
 
@@ -33,7 +41,9 @@ cache saved under a tag cannot be restored by the next tag, and the repository's
 cache storage is limited): `dist-cache.yml` builds the dist archives on a
 `main` push that changes their dependencies, `gpuix-addon.yml` builds the
 patched GPUIX native addon (both also run weekly, because GitHub deletes a
-cache after seven days without use).
+cache after seven days without use). `gpuix-wpe.yml` also preserves its
+input-triggered and weekly warmer. Affected Rust and GPUIX checks on `main`
+continue saving their Rust and pnpm caches; PR runs only restore them.
 
 `latest.json` lists only the `-gpuix` keys (`darwin-aarch64-gpuix`,
 `darwin-x86_64-gpuix`, `windows-x86_64-gpuix`, `linux-x86_64-gpuix`). The plain

@@ -161,7 +161,8 @@ native module" in `apps/gpuix/native/README.md` first.
   Tests written for macOS shortcuts set `setKeyPlatform('darwin')` from
   `src/platform/keys.ts`; off-macOS cases set their platform themselves.
 - PR CI runs `cargo check --workspace --all-targets` on `windows-latest`
-  when Rust inputs change; every main push runs it too. Warnings fail the
+  when Rust inputs change, on PRs and ordinary main pushes; release version
+  bumps and manual full CI runs always include it. Warnings fail the
   check, and test code is checked without running Windows tests. Full Windows
   builds run in `GPUIX platforms` and in the release. Grep new daemon code for
   Unix-only APIs (`os::unix`, `libc::`, `/proc/`) without a `cfg` gate before tagging.
@@ -253,8 +254,10 @@ first separating the workflows. Breaking protocol changes require a coordinated
 Release order:
 1. Bump versions and the CHANGELOG in the PR.
 2. Merge it.
-3. Wait for main's CI to pass on that exact commit; the release gate
-   (`scripts/check-release-ci.mjs`) refuses anything else.
+3. Wait for the full CI suite on that exact main commit; version bumps run it
+   automatically. Otherwise dispatch `gh workflow run ci.yml --ref main` while
+   main points at the candidate. The release gate (`scripts/check-release-ci.mjs`)
+   rejects filtered runs with skipped jobs and checks for a different commit.
 4. Wait for main's WPE run if the recipe changed.
 5. Push an annotated `vX.Y.Z` tag.
 
