@@ -1,5 +1,4 @@
 <p align="center">
-  <!-- BANNER PLACEHOLDER: Replace or add banner image (e.g. assets/readme/banner.png) when ready -->
   <a href="https://github.com/Tresnanda/kybern">
     <img src="assets/kybern-logo.svg" alt="Kybern Logo" width="120">
   </a>
@@ -225,7 +224,7 @@ For more details on testing and contributing, see [CONTRIBUTING.md](CONTRIBUTING
 ## Architecture & Privacy
 
 Kybern follows a strict **local-first** architecture:
-- **Zero Cloud Relay:** The desktop app (`kybern-gpuix`) communicates directly with the local daemon (`kybernd`) over loopback WebSockets.
+- **No Cloud Relay:** All traffic stays on your own machines and private network. The app talks directly to your local daemon or connects across your machines over Tailscale (or your own peer relay), with zero third-party cloud servers in between.
 - **Data Privacy:** Your transcripts, git checkpoints, and configurations remain on your machine in `~/.kybern`. No tracking, telemetry, or third-party analytics are bundled.
 - **Secret Safety:** API keys requested through `kybern_request_secret` are written directly to your project's git-ignored `.env` file, bypassing chat context entirely.
 
