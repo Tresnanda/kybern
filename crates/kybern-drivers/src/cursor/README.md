@@ -1,6 +1,6 @@
 # Cursor local SDK driver
 
-New Cursor sessions use official `@cursor/sdk` **1.0.35**, exact-pinned with an
+New Cursor sessions use official `@cursor/sdk` **1.2.0**, exact-pinned with an
 npm lockfile. Rust embeds `sdk/host.mjs` and owns one Node process per session.
 The SDK itself stays on disk so its lazy chunks, sandbox helper, ripgrep, and
 native tree-sitter modules remain available. The host’s `argv[1]` is located
@@ -9,10 +9,30 @@ path. Resolving the JavaScript package alone is insufficient.
 
 The implementation follows [T3’s Cursor adapter at 8ed276c](https://github.com/pingdotgg/t3code/blob/8ed276c246b624631e7d39241ebfd22d8314cb68/apps/server/src/orchestration-v2/Adapters/CursorAdapterV2.ts)
 and its [SDK lifecycle service](https://github.com/pingdotgg/t3code/blob/8ed276c246b624631e7d39241ebfd22d8314cb68/apps/server/src/orchestration-v2/Adapters/CursorAgentSdk.ts).
-That nightly pins SDK 1.0.31. Kybern uses 1.0.35, checked against the installed
+That nightly pins SDK 1.0.31. Kybern uses 1.2.0 with zod 4.6.7, checked against the installed
 public types and [Cursor’s official SDK documentation](https://cursor.com/docs/sdk/typescript).
 The official SDK Bridge was evaluated, but this small isolated host retains the
 SDK’s native browser authentication and model catalog APIs directly.
+
+## Model selections
+
+Selectors carry the model ID and explicit trait choices. Native catalog defaults
+are displayed by the existing picker but are not filled into requests. An unset
+effort stays unset. Hidden `cyber=false` copied by older catalogs is discarded;
+explicit context and fast values in saved selectors remain intact. Registry
+errors name the model and requested settings and tell the user what to change.
+There is no fallback to a smaller context or a different fast mode.
+
+At thread open, the daemon translates pre-SDK IDs such as
+`cursor-grok-4.5-high` using the project's cached default-account catalog. It
+preserves the exact model and explicit effort, leaves saved transcript events
+intact, and leaves unknown or non-default-account IDs unchanged.
+
+Validated on macOS arm64, 2026-10-31, using the existing SDK login and isolated
+JSONL state: create/resume accepted Grok 4.7 (context=500k, fast=true,
+reasoning_effort=xhigh), Sonnet 5.5 (context=1m), Opus 5.5 (context=1m), and
+GPT-5.6 Sol (context=1m). No prompt was sent by these variant checks.
+`npm audit signatures` verified all eight installed package signatures.
 
 ## Permission contract
 
@@ -67,7 +87,7 @@ The SDK polls Cursor until the browser finishes, so this works for remote
 daemons. Both refresh the provider catalog when they finish.
 
 Node 22.13+ and npm are runtime prerequisites. The default SDK cache is
-`~/.kybern/cache/cursor-sdk/1.0.35`. Debug builds can reuse `sdk/node_modules`.
+`~/.kybern/cache/cursor-sdk/1.2.0`. Debug builds can reuse `sdk/node_modules`.
 `KYBERN_CURSOR_SDK_DIR`, `KYBERN_CURSOR_NODE`, `KYBERN_CURSOR_AUTH_FILE`, and
 `KYBERN_CURSOR_STATE_DIR` support isolated setup/testing; `CURSOR_API_KEY` takes
 precedence over the saved SDK login. The provider binary setting is reserved

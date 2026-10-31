@@ -19,13 +19,21 @@ pub fn resolve(kind: ProviderKind, override_path: Option<&PathBuf>) -> Result<Pa
 
 /// Run `<bin> --version` and return the first line, trimmed.
 pub async fn version_of(bin: &Path, args: &[&str]) -> Option<String> {
-    let out = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        crate::process_tree::output(tokio::process::Command::new(bin).no_window().args(args)),
-    )
-    .await
-    .ok()?
-    .ok()?;
+    let run = async {
+        // Linux refuses to run a file that a freshly forked child of another
+        // thread still holds open for writing (ETXTBSY) until that child execs,
+        // e.g. a harness just installed or updated. Retry briefly.
+        for _ in 0..25 {
+            match crate::process_tree::output(tokio::process::Command::new(bin).no_window().args(args)).await {
+                Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await
+                }
+                result => return result,
+            }
+        }
+        crate::process_tree::output(tokio::process::Command::new(bin).no_window().args(args)).await
+    };
+    let out = tokio::time::timeout(std::time::Duration::from_secs(10), run).await.ok()?.ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
     let line = text.lines().next()?.trim();
     if line.is_empty() { None } else { Some(line.to_string()) }

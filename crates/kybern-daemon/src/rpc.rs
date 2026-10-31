@@ -494,6 +494,7 @@ async fn dispatch_part_6(state: &AppState, _ctx: &ConnectionCtx, method: &str, s
                 return Err(RpcError::invalid_params("use transcript_limit 1..500 and nonnegative history cursors"));
             }
             let mut thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
+            thread = state.orchestrator.migrate_cursor_model(thread).map_err(internal)?;
             let through_seq = p.through_seq.map_or(thread.last_seq, |seq| seq.min(thread.last_seq));
             thread.last_seq = through_seq;
             let id = p.thread_id;
