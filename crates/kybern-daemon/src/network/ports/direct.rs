@@ -134,11 +134,7 @@ pub async fn prepare(state: &AppState, link: &Arc<PeerLink>, request: PeerPortsP
                     tokio::spawn(async move {
                         let _slot = slot;
                         active.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        tokio::select! {
-                            _ = serving.cancel.cancelled() => {},
-                            _ = serving.link.closed() => {},
-                            _ = transfer(&state, &serving.link, socket, source.ip(), &node, &token_hash, request.port) => {},
-                        }
+                        transfer(&state, &serving, socket, source.ip(), &node, &token_hash, request.port).await;
                         active.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     });
                 }
@@ -150,7 +146,8 @@ pub async fn prepare(state: &AppState, link: &Arc<PeerLink>, request: PeerPortsP
     Ok(PeerPortsPrepareResult { direct: Some(PeerPortsDirect { port, token }) })
 }
 
-async fn transfer(state: &AppState, link: &PeerLink, mut socket: TcpStream, source: IpAddr, node: &str, token_hash: &str, port: u16) {
+async fn transfer(state: &AppState, serving: &Serving, mut socket: TcpStream, source: IpAddr, node: &str, token_hash: &str, port: u16) {
+    let link = &serving.link;
     let handshake = async {
         let mut token = [0u8; 64];
         socket.read_exact(&mut token).await.ok()?;
@@ -165,7 +162,18 @@ async fn transfer(state: &AppState, link: &PeerLink, mut socket: TcpStream, sour
         let upstream = super::connect_loopback(port).await.ok()?;
         Some(upstream)
     };
-    let Ok(Some(mut upstream)) = tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake).await else {
+    let ended = async {
+        tokio::select! {
+            _ = serving.cancel.cancelled() => {},
+            _ = link.closed() => {},
+        }
+    };
+    tokio::pin!(ended);
+    let upstream = tokio::select! {
+        _ = &mut ended => return,
+        upstream = tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake) => upstream,
+    };
+    let Ok(Some(mut upstream)) = upstream else {
         return;
     };
     let _ = socket.set_nodelay(true);
@@ -173,7 +181,11 @@ async fn transfer(state: &AppState, link: &PeerLink, mut socket: TcpStream, sour
     if socket.write_all(&[1]).await.is_err() {
         return;
     }
-    let _ = tokio::io::copy_bidirectional(&mut socket, &mut upstream).await;
+    tokio::select! {
+        _ = tokio::io::copy_bidirectional(&mut socket, &mut upstream) => {},
+        // A reset, not an end: a plain FIN reads as a half-close, and the client would keep its side open.
+        _ = &mut ended => { let _ = socket.set_zero_linger(); },
+    }
 }
 
 pub async fn connect(network: &Network, address: SocketAddr, endpoint: &PeerPortsDirect) -> Option<TcpStream> {
