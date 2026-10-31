@@ -3,6 +3,7 @@ import { KybernClient, type Endpoint } from '../../../../packages/kybern-client/
 import { httpBase, normalizeDaemonUrl, parsePairingInvitation } from '../../../../packages/kybern-client/src/address.ts'
 import { machineHub } from '../machines/index.ts'
 import { desktopVersion } from '../shell/daemon.ts'
+import { enableUnconfigured } from '../machines/setup.ts'
 
 /** Verify protocol and environment identity with the same transport as the workspace. */
 export async function verifyEndpoint(endpoint: Endpoint) {
@@ -65,6 +66,17 @@ export async function saveMachine(input: { id?: string; name: string; address: s
   return { machineId: expected, name }
 }
 
+// Several saved aliases can point at the same host. Serialize pairing by verified identity.
+const pairing = new Map<string, Promise<unknown>>()
+async function pairOnce<T>(identity: string, action: () => Promise<T>): Promise<T> {
+  const previous = pairing.get(identity)
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  pairing.set(identity, held)
+  try { await previous?.catch(() => {}); return await action() }
+  finally { release(); if (pairing.get(identity) === held) pairing.delete(identity) }
+}
+
 /** Native-independent SSH lifecycle; the same endpoint/pairing checks as address connections. */
 export async function setupSshEnvironment(input: BootstrapInput, report: (progress: BootstrapProgress) => void, signal?: AbortSignal) {
   const withClient = async <T>(port: number, token: string, action: (client: KybernClient) => Promise<T>) => {
@@ -83,9 +95,21 @@ export async function setupSshEnvironment(input: BootstrapInput, report: (progre
     version, signal, run: plan => runSsh(plan, signal), tunnel: ensureSshTunnel, stop: stopSshTunnel,
     info: (port, token) => verifyEndpoint({ url: `ws://127.0.0.1:${port}/ws`, token }),
     shutdown: (port, token) => withClient(port, token, client => client.call('daemon.shutdown', {})).then(() => {}),
-    pair: async (port, token, next, ssh, identity) => {
+    pair: async (port, token, next, ssh, identity) => pairOnce(identity, async () => {
+      if (input.expectedIdentity && input.expectedIdentity !== identity) throw Error('This SSH connection belongs to a different machine. Verify the address and add it separately.')
+      const network = input.network_setup ? await withClient(port, token, async client => {
+        signal?.throwIfAborted()
+        return enableUnconfigured(client, signal)
+      }) : undefined
+      const existing = machineHub().set.connection(identity)
+      if (existing || network?.enabled === false) {
+        if (next.id) stopSshTunnel(next.id)
+        return { machineId: identity, name: existing?.record.name ?? next.name, networkEnabled: network?.enabled }
+      }
+      signal?.throwIfAborted()
       const invitation = await withClient(port, token, client => client.call('access.pairing.create', { label: `Kybern desktop · ${next.name}` }))
-      return saveMachine({ id: next.id, name: next.name, address: `ws://127.0.0.1:${port}/ws`, code: invitation.code, expectedIdentity: identity, ssh })
-    },
+      const saved = await saveMachine({ id: next.id, name: next.name, address: `ws://127.0.0.1:${port}/ws`, code: invitation.code, expectedIdentity: identity, ssh })
+      return { ...saved, networkEnabled: network?.enabled }
+    }),
   })
 }

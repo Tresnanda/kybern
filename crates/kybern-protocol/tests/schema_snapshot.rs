@@ -464,10 +464,10 @@ fn an_older_daemon_info_and_project_still_parse_and_the_network_defaults_to_off(
     .unwrap();
     assert_eq!((old.machine_id.as_str(), old.network_protocol, old.features.len()), ("", 0, 0));
     let settings: Settings = serde_json::from_value(serde_json::json!({})).unwrap();
-    assert_eq!(settings.network, NetworkSettings { enabled: false, port: DEFAULT_PORT });
+    assert_eq!(settings.network, NetworkSettings { configured: false, enabled: false, port: DEFAULT_PORT });
     // A settings file from before the default changed, saved with the network on, keeps it on.
     let saved: Settings = serde_json::from_value(serde_json::json!({ "network": { "enabled": true } })).unwrap();
-    assert_eq!(saved.network, NetworkSettings { enabled: true, port: DEFAULT_PORT });
+    assert_eq!(saved.network, NetworkSettings { configured: true, enabled: true, port: DEFAULT_PORT });
     assert_eq!(NETWORK_PROTOCOL, 1);
     assert_eq!(features::ALL.len(), 18);
 }
@@ -542,4 +542,20 @@ fn provision_member_plans_are_stable() {
     }))
     .unwrap();
     assert!(older.members.is_empty(), "older peers do not report member mappings");
+}
+
+#[test]
+fn network_setup_preserves_legacy_choices_and_roundtrips_new_defaults() {
+    let fresh = NetworkSettings::default();
+    assert!(!fresh.configured);
+    assert_eq!(serde_json::from_value::<NetworkSettings>(serde_json::to_value(&fresh).unwrap()).unwrap(), fresh);
+    for enabled in [false, true] {
+        let old: NetworkSettings = serde_json::from_value(serde_json::json!({"enabled": enabled})).unwrap();
+        assert!(old.configured, "legacy choices are never overridden automatically");
+        assert_eq!(old.enabled, enabled);
+    }
+    let absent: Settings = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert!(!absent.network.configured);
+    let params: NetworkSetEnabledParams = serde_json::from_value(serde_json::json!({"enabled": true})).unwrap();
+    assert!(!params.only_if_unconfigured);
 }

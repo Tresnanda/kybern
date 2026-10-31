@@ -25,7 +25,7 @@ describe('SSH setup process boundary', () => {
     expect(f.plans[0]!.args).not.toContain('fixture-bootstrap')
     expect(f.plans[0]!.stdin).toContain(String.raw`'/scratch/with '\'' quote'`)
     expect(f.paired[0]).toEqual([12345, 'fixture-bootstrap', expect.objectContaining({id:'fixture-id'}), expect.objectContaining({target:'deploy@fixture',port:2222,local_port:12345}), 'fixture-environment'])
-    expect(f.progress.map(p => `${p.step}:${p.state}`)).toEqual(['connect:running','connect:done','install:running','install:done','start:running','start:done','pair:running','pair:done'])
+    expect(f.progress.map(p => `${p.step}:${p.state}`)).toEqual(['connect:running','connect:done','install:done','start:running','start:done','pair:running','pair:done'])
   })
   test('installs a missing daemon and waits for a reachable daemon before pairing', async () => {
     const f = fixture(); let probes = 0, checks = 0
@@ -66,5 +66,46 @@ describe('SSH setup process boundary', () => {
       for (let i=0;i<100;i++) { try { process.kill(pid,0); await Bun.sleep(10) } catch { break } }
       expect(() => process.kill(pid,0)).toThrow()
     } finally { if (previous === undefined) delete process.env.KYBERN_SSH; else process.env.KYBERN_SSH=previous; await rm(dir,{recursive:true,force:true}) }
+  })
+})
+
+
+describe('trusted network SSH setup', () => {
+  test('automatic probing never installs or updates a missing daemon', async () => {
+    const f = fixture(); f.deps.run = async plan => { f.plans.push(plan); return 'os=Linux\narch=aarch64\ncurl=1\n' }
+    await expect(bootstrapSsh({ name: 'Fixture', target: 'fixture', network_setup: 'connect' }, f.report, f.deps)).rejects.toThrow('Install and connect')
+    expect(f.plans).toHaveLength(1)
+    expect(f.plans[0]!.args).toContain('StrictHostKeyChecking=yes')
+    expect(f.paired).toHaveLength(0)
+  })
+  test('an old installed daemon is connected without a silent upgrade', async () => {
+    const f = fixture(); f.deps.version = '9.0.0'
+    await bootstrapSsh({ name: 'Fixture', target: 'fixture', network_setup: 'connect' }, f.report, f.deps)
+    expect(f.plans).toHaveLength(1)
+    expect(f.paired).toHaveLength(1)
+  })
+  test('Install and connect pins the release, verifies checksums, starts a service before pairing', async () => {
+    const f = fixture(); let probes = 0
+    f.deps.run = async plan => {
+      f.plans.push(plan)
+      if (plan.stdin?.includes("printf 'os=")) return ++probes === 1 ? 'os=Linux\narch=aarch64\ncurl=1\n' : machine
+      return ''
+    }
+    await bootstrapSsh({ name: 'Fixture', target: 'fixture', network_setup: 'install' }, f.report, f.deps)
+    const installation = f.plans.find(plan => plan.stdin?.includes("set -- --version '0.9.1'"))!
+    expect(installation.stdin).toContain('$BASE/$ARCHIVE.sha256')
+    expect(installation.stdin).toContain('[ "$EXPECTED" = "$ACTUAL" ]')
+    expect(f.plans.some(plan => plan.stdin?.includes('set -- --service-only --port 4173'))).toBe(true)
+    expect(f.plans.some(plan => plan.stdin?.includes('nohup kybernd'))).toBe(false)
+    expect(f.paired).toHaveLength(1)
+  })
+  test('Windows provides a precise setup blocker without executing the Unix installer', async () => {
+    const f = fixture(); f.deps.run = async plan => { f.plans.push(plan); return 'os=Windows_NT\narch=AMD64\n' }
+    await expect(bootstrapSsh({ name: 'Fixture', target: 'fixture', network_setup: 'install' }, f.report, f.deps)).rejects.toThrow('kybern-installer.ps1')
+    expect(f.plans).toHaveLength(1); expect(f.paired).toHaveLength(0)
+  })
+  test('a pre-aborted SSH process does not wait or throw a timer initialization error', async () => {
+    const abort = new AbortController(); abort.abort()
+    await expect(runSsh({ command: 'ssh', args: [], timeoutMs: 100 }, abort.signal)).rejects.toThrow('canceled')
   })
 })

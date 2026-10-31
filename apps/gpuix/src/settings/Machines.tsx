@@ -34,6 +34,7 @@ import { machineGlyph } from '../../../../packages/kybern-client/src/machineMerg
 import { openIntro, tailscaleNote } from '../machines/intro.ts'
 import { TAILSCALE_DOWNLOAD } from '../machines/NetworkIntro.tsx'
 import { openUrl } from '../pulls/PrStates.tsx'
+import { MachineSetupSection } from '../machines/MachineSetup.tsx'
 
 export function Machines() {
   const t = useTheme()
@@ -65,6 +66,7 @@ export function Machines() {
     </Section>
     {!net.unavailable && machines.length > 1 && <ClipboardAuto machineId={machines.find((machine) => machine.isLocal)?.machineId} />}
     {net.unavailable && <Section title="Your network"><Row title="Update this machine's daemon" description="It is older than your network features, so other machines can't be found from here yet. Update Kybern, then come back." /></Section>}
+    {!net.unavailable && status?.enabled && <MachineSetupSection />}
     {!net.unavailable && <TailnetSection found={found} tailscale={status?.tailscale} busy={net.busy} />}
     {!net.unavailable && <AddByCode busy={net.busy === 'join'} />}
     {!net.unavailable && <Outbox items={net.outbox} machines={cards} />}

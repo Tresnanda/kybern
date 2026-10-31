@@ -234,7 +234,7 @@ function OnStepView() {
     <div paintTransform={riseTransform({ y: 8, duration: 0.4 })} style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 24, paddingRight: 24, paddingTop: 20, paddingBottom: 4 }}>
       <Label color={muted(t, 1)} size={12} lineHeight={16} weight={500}>Machines</Label>
       <Label color={t.text} size={20} lineHeight={26} weight={500}>{joined ? `${joined + 1} machines are connected` : 'Your network is on'}</Label>
-      <Label color={muted(t, 1)} size={14} lineHeight={22}>{joined ? 'To add another computer, turn this on in Kybern there. Any computer signed in to the same Tailscale account joins by itself.' : 'Turn it on in Kybern on your other computers too. Those signed in to the same Tailscale account then join by themselves, no code needed.'}</Label>
+      <Label color={muted(t, 1)} size={14} lineHeight={22}>{'Kybern checks your saved pairing and SSH connections. Machines that have never been configured turn on and join over Tailscale; machines you switched off stay off. Open Machines to install Kybern where it is missing or retry a connection.'}</Label>
     </div>
     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, paddingLeft: 24, paddingRight: 24, paddingTop: 20, paddingBottom: 20, flexShrink: 0 }}>
       <Button size="lg" variant="ghost" testId="network-intro-settings" onClick={openMachines}>Open Machines</Button>

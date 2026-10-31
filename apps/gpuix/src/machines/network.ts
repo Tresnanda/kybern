@@ -29,32 +29,34 @@ const listeners = new Set<() => void>()
 const emit = (patch: Partial<NetworkState>) => { state = { ...state, ...patch }; for (const listener of listeners) listener() }
 export const getNetwork = () => state
 /** Tests: forget everything. */
-export function resetNetwork() { state = { status: null, unavailable: false, error: '', infos: {}, busy: null, outbox: [], updated: null, doctor: null }; reading = false; again = false }
+export function resetNetwork() { state = { status: null, unavailable: false, error: '', infos: {}, busy: null, outbox: [], updated: null, doctor: null }; reading = undefined; again = false }
 
 const text = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
-let reading = false
+let reading: Promise<void> | undefined
 let again = false
 /** Read `network.status` from the machine the user is at. Reads that arrive during a read fold into one rerun. */
 export async function refreshNetwork(): Promise<void> {
-  const client = getClient()
-  if (!client || client.status !== 'open') return
-  if (reading) { again = true; return }
-  reading = true
-  try {
+  if (reading) { again = true; return reading }
+  const run = (async () => {
     do {
       again = false
+      const client = getClient()
+      if (!client || client.status !== 'open') return
       try {
         const status = await client.call('network.status', {})
-        if (getClient() !== client) return
+        if (getClient() !== client) { again = true; continue }
         emit({ status, unavailable: false, error: '' })
       } catch (error) {
-        if (getClient() !== client) return
+        if (getClient() !== client) { again = true; continue }
         // Method not found: a daemon older than the network.
         emit({ unavailable: /not found|unknown method|-32601/i.test(text(error)), error: text(error) })
       }
     } while (again)
-  } finally { reading = false }
+  })()
+  const pending = run.finally(() => { if (reading === pending) reading = undefined })
+  reading = pending
+  return pending
 }
 
 /** The work that has not reached its machine yet (queued, sending, failed or expired). */
@@ -106,7 +108,7 @@ async function act<T>(key: string, run: (client: NonNullable<ReturnType<typeof g
     const result = await run(client)
     await refreshNetwork()
     // The set learns who joined or left from any member.
-    void machineHub().set.syncMembers().catch(() => {})
+    await machineHub().set.syncMembers()
     return result
   } catch (error) {
     emit({ error: text(error) })
@@ -121,7 +123,13 @@ export const joinByCode = (code: string, address: string, migrate = false) => ac
 export const pauseMachine = (machineId: MachineId, paused: boolean) => act(machineId, (c) => c.call('network.pause', { machine_id: machineId, paused }))
 export const renameMachine = (machineId: MachineId, name: string) => act(machineId, (c) => c.call('network.rename', { machine_id: machineId, name }))
 export const removeFromNetwork = (params: NetworkRemoveParams) => act(params.machine_id, (c) => c.call('network.remove', params))
-export const setNetworkEnabled = (enabled: boolean) => act('enabled', (c) => c.call('network.set_enabled', { enabled }))
+export const setNetworkEnabled = (enabled: boolean) => act('enabled', async (c) => {
+  const setup = await import('./setupRuntime.ts')
+  if (!enabled) setup.cancelMachineSetup()
+  const result = await c.call('network.set_enabled', { enabled })
+  if (enabled) setup.startMachineSetup()
+  return result
+})
 export const updateAllMachines = (): Promise<NetworkUpdateAllResult> => act('update', async (c) => { const updated = await c.call('network.update_all', {}); emit({ updated }); return updated })
 /** "Keep all machines on the same version": a member that sees a newer version updates itself when idle. */
 export const setFollowUpdates = (enabled: boolean) => act('follow', (c) => c.call('network.follow_updates.set', { enabled }))

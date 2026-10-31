@@ -3,8 +3,9 @@
 //
 // A logical project is every machine's checkout of one repository (`machineMerge.ts`). The picker lists each machine in the
 // network: those with a checkout can be chosen, online or not (an offline one queues the send), and those without one are
-// disabled with the reason. A free chat has no project, so every machine counts as having it.
+// offered setup on desktop before they can become the send target. A free chat has no project, so every machine counts as having it.
 
+import { completeProvisionProject } from "./provision.ts";
 import type { LogicalProject, ProjectInstance } from "./machineMerge.ts";
 import type { MachineSummary } from "./machines.ts";
 import type { MachineId, OutboxOp, Project, ProjectId, ThreadsCreateParams } from "./types.ts";
@@ -39,16 +40,17 @@ export interface ChoicesInput {
   machines: readonly Pick<MachineSummary, "machineId" | "name" | "status" | "isLocal">[];
   /** The logical project the thread starts in; `null` for a free chat. */
   project: Pick<LogicalProject, "instances"> | null;
+  sourceProject?: Project;
 }
 
 /** The picker's rows in machine order (the machine you are at first, the app's own order after). */
-export function machineChoices({ machines, project }: ChoicesInput): MachineChoice[] {
+export function machineChoices({ machines, project, sourceProject = project?.instances[0]?.project }: ChoicesInput): MachineChoice[] {
   const byMachine = new Map<MachineId, ProjectInstance>((project?.instances ?? []).map((instance) => [instance.machineId, instance]));
   const rows = machines.map((machine): MachineChoice => {
     const reachable = machineReachable(machine.status);
     const instance = byMachine.get(machine.machineId);
-    if (project && !instance) {
-      return { machineId: machine.machineId, name: machine.name, isLocal: machine.isLocal, state: "no-checkout", selectable: false, detail: `No checkout on ${machine.name}` };
+    if (project && (!instance || !completeProvisionProject(sourceProject, instance.project))) {
+      return { machineId: machine.machineId, name: machine.name, isLocal: machine.isLocal, state: "no-checkout", selectable: false, detail: instance ? "Missing repositories · add to this machine…" : "No checkout · add to this machine…" };
     }
     return {
       machineId: machine.machineId,
@@ -64,12 +66,12 @@ export function machineChoices({ machines, project }: ChoicesInput): MachineChoi
 }
 
 /**
- * The chip shows only when there is a choice: a project that exists on more than one machine, or a free chat with more
- * than one machine online. With one machine (or one checkout) nothing changes in the composer.
+ * Projects show the chip whenever several machines are known, including those that need setup.
+ * Free chats retain their existing rule: more than one machine online.
  */
 export function showMachinePicker(choices: readonly MachineChoice[], project: unknown | null): boolean {
   const usable = choices.filter((choice) => choice.selectable);
-  if (project) return usable.length > 1;
+  if (project) return choices.length > 1;
   return usable.filter((choice) => choice.state === "online").length > 1;
 }
 

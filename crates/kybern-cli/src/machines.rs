@@ -66,7 +66,11 @@ pub enum MachinesCmd {
         machine: Option<String>,
     },
     /// Turn on Connect to your other machines.
-    Enable,
+    Enable {
+        /// Enable only if this machine has never chosen on or off (trusted setup).
+        #[arg(long)]
+        if_unconfigured: bool,
+    },
     /// Turn off Connect to your other machines. Membership is kept.
     Disable,
     /// This machine was removed: make a new identity so another machine can add it again.
@@ -267,6 +271,14 @@ pub fn render_status(status: &NetworkStatus, with_tailscale: bool) {
             card.added_via.map(|via| format!("  (added by {via:?})").to_lowercase()).unwrap_or_default()
         );
     }
+    for candidate in &status.setup_candidates {
+        println!(
+            "  {} ({}) — {}. Open Settings → Machines to connect with saved access or install Kybern.",
+            candidate.name,
+            candidate.address,
+            if candidate.online { "Kybern has not advertised a network" } else { "offline on Tailscale" }
+        );
+    }
     if !status.found.is_empty() {
         println!("\nFound on your tailnet:");
         for machine in &status.found {
@@ -434,9 +446,17 @@ pub async fn run(client: &Client, cmd: MachinesCmd, json: bool) -> Result<()> {
                 std::process::exit(1);
             }
         }
-        MachinesCmd::Enable | MachinesCmd::Disable => {
-            let enabled = matches!(cmd, MachinesCmd::Enable);
-            let after = client.call::<NetworkSetEnabled>(NetworkSetEnabledParams { enabled }).await?;
+        MachinesCmd::Enable { .. } | MachinesCmd::Disable => {
+            let enabled = matches!(cmd, MachinesCmd::Enable { .. });
+            let only_if_unconfigured = matches!(cmd, MachinesCmd::Enable { if_unconfigured: true });
+            // Old daemons ignore unknown parameters. Never send a guarded request until
+            // the daemon advertises that it understands the configured/off distinction.
+            if only_if_unconfigured && client.call::<NetworkStatusMethod>(Empty {}).await?.configured.is_none() {
+                anyhow::bail!(
+                    "Update Kybern on this machine before using --if-unconfigured; this daemon cannot preserve an earlier off choice."
+                );
+            }
+            let after = client.call::<NetworkSetEnabled>(NetworkSetEnabledParams { enabled, only_if_unconfigured }).await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&after)?)
             } else {

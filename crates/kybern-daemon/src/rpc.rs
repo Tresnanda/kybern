@@ -1401,7 +1401,7 @@ async fn dispatch_part_16(state: &AppState, ctx: &ConnectionCtx, method: &str, s
         NetworkStatusMethod::NAME => ok(network_status(state).await?),
         NetworkSetEnabled::NAME => {
             let p: NetworkSetEnabledParams = parse(params)?;
-            crate::network::manage::set_enabled(state, p.enabled).await.map_err(JoinError::into_rpc)?;
+            crate::network::manage::set_enabled_guarded(state, p.enabled, p.only_if_unconfigured).await.map_err(JoinError::into_rpc)?;
             ok(network_status(state).await?)
         }
         NetworkAdd::NAME => {

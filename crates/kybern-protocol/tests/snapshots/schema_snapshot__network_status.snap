@@ -8,6 +8,20 @@ expression: schema_for!(NetworkStatus)
   "description": "Everything Settings → Machines needs, in one call.",
   "type": "object",
   "properties": {
+    "configured": {
+      "description": "Present on daemons that support guarded setup. Missing means the client must not auto-enable.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "setup_candidates": {
+      "description": "Tailnet devices that have not advertised Kybern. Discovery does not grant shell access.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NetworkSetupCandidate"
+      }
+    },
     "enabled": {
       "description": "The master toggle (\"Connect to your other machines\").",
       "type": "boolean"
@@ -76,6 +90,30 @@ expression: schema_for!(NetworkStatus)
     "tailscale"
   ],
   "$defs": {
+    "NetworkSetupCandidate": {
+      "description": "A discovery hint only. A saved pairing or separately trusted SSH connection is needed for setup.",
+      "type": "object",
+      "properties": {
+        "node_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "address": {
+          "type": "string"
+        },
+        "online": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "node_id",
+        "name",
+        "address",
+        "online"
+      ]
+    },
     "MachineCard": {
       "description": "One member as Settings → Machines shows it.",
       "type": "object",

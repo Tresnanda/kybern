@@ -52,7 +52,7 @@ export function LandingTray({ projectId, useWorktree, task, onRemoveTask, still 
 }) {
   const t = useTheme()
   const everyProject = useApp((s) => s.projects)
-  const project = projectId ? everyProject.find((p) => p.id === projectId) : undefined
+  const project = remote?.project ?? (projectId ? everyProject.find((p) => p.id === projectId) : undefined)
   // A group's folder is often not a repository itself, but every member is: worktree mode works, and the branch chip
   // speaks for the members (`GroupTray.tsx`).
   const group = isGroupProject(project)
@@ -76,8 +76,8 @@ export function LandingTray({ projectId, useWorktree, task, onRemoveTask, still 
         </Presence>
       )}
       {project && <WorkspaceChip useWorktree={useWorktree} isGit={isGit || group} checkoutHint={parentPath(project.path)} />}
-      {project && group && <GroupBranchChip project={project} useWorktree={useWorktree} still={still} />}
-      {project && group && useWorktree && <ReposChip project={project} still={still} />}
+      {project && group && <GroupBranchChip project={project} choiceProjectId={projectId ?? project.id} machineId={branchMachine} useWorktree={useWorktree} still={still} />}
+      {project && group && useWorktree && <ReposChip project={project} choiceProjectId={projectId ?? project.id} machineId={branchMachine} still={still} />}
       {project && isGit && !group && branchProjectId && <BranchChip projectId={branchProjectId} machineId={branchMachine} useWorktree={useWorktree} />}
     </TrayFrame>
   )

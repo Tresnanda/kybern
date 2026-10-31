@@ -3393,6 +3393,8 @@ export type MachineScope =
 
 /** The `settings.network` section. */
 export interface NetworkSettings {
+  /** Missing on older daemons; an old saved off switch is preserved. */
+  configured?: boolean;
   /** "Connect to your other machines". Off until the user turns it on. */
   enabled: boolean;
   /** The fixed port the Tailscale listener binds; the daemon tries the next six when it is taken. */
@@ -3548,7 +3550,18 @@ export interface BrokerInfo {
 }
 
 /** Everything Settings → Machines needs, in one call. */
+export interface NetworkSetupCandidate {
+  node_id: string;
+  name: string;
+  address: string;
+  online: boolean;
+}
+
 export interface NetworkStatus {
+  /** Guarded setup is supported only when this field is present. */
+  configured?: boolean | null;
+  /** Discovery hints only, never authorization to run SSH commands. */
+  setup_candidates?: NetworkSetupCandidate[];
   enabled: boolean;
   /** Absent on a lone machine. */
   network_id?: string | null;
@@ -4504,7 +4517,7 @@ export interface Methods {
   "threads.worktree.inspect": [WorktreeInspectParams, WorktreeInspectResult];
   "threads.worktree.remove": [WorktreeRemoveParams, WorktreeInspectResult];
   "network.status": [Empty, NetworkStatus];
-  "network.set_enabled": [{ enabled: boolean }, NetworkStatus];
+  "network.set_enabled": [{ enabled: boolean; only_if_unconfigured?: boolean }, NetworkStatus];
   "network.add": [{ found_id: string }, NetworkAddResult];
   "network.code.create": [Empty, NetworkCodeCreateResult];
   "network.join": [{ code: string; address: string; migrate?: boolean }, MachineCard];

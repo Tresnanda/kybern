@@ -282,6 +282,22 @@ test('a saved environment’s stand-in record keeps its routes and place when it
   expect(hub.localMachineId).toBe('box-1')
 })
 
+test('a saved SSH profile survives discovery creating the canonical row before it answers as primary', async () => {
+  const ssh = { target: 'me@box', remote_port: 4173, local_port: 5555 }
+  const records = recordsFromRegistry({ selected_id: 'box', environments: [saved('box', { ssh })] }, local)
+  Object.assign(records.find((record) => record.legacyProfileId === 'box')!, { ssh })
+  records.push({ machineId: 'box-1', name: 'Box', member: true, signingKey: 'network-pin', routes: [] })
+  const { hub } = makeHub([], { records: () => records })
+  await openPrimary(hub, new FakeDaemon('box-1'), { id: 'box', name: 'box' })
+  const box = hub.set.connection('box-1')!
+  expect(hub.connections().filter((c) => c.record.machineId.includes('box'))).toHaveLength(1)
+  expect(box.record.legacyProfileId).toBe('box')
+  expect(box.record.routes).toEqual([{ kind: 'ssh', url: 'http://127.0.0.1:5555' }])
+  expect(box.record.signingKey).toBe('network-pin')
+  expect((box.record as typeof box.record & { ssh: typeof ssh }).ssh).toEqual(ssh)
+  expect(hub.localMachineId).toBe('box-1')
+})
+
 test('the activity the app read with the primary’s threads reaches the set with the lists', async () => {
   const { hub } = makeHub()
   const daemon = new FakeDaemon('mac-1')

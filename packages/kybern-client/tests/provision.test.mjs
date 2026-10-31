@@ -88,3 +88,15 @@ test("partial groups name their availability and offer only the missing reposito
   assert.equal(partialGroupDetail({ ...plan, members: [] }), null);
   assert.equal(provisionAddLabel({ ...plan, members: [] }), "Add to os-kdi");
 });
+
+
+test("bulk setup excludes complete groups, keeps partial and offline targets", async () => {
+  const { completeProvisionProject } = await import("../src/provision.ts");
+  const source = { kind: "group", repos: [{ root_commit: "api" }, { root_commit: "web" }], members: [{ path: "api", status: "ok" }, { path: "web", status: "ok" }] };
+  const partial = { ...source, members: [{ path: "api", status: "ok" }, { path: "web", status: "not_git" }] };
+  const having = new Set([["source", source], ["full", source], ["partial", partial]].filter(([, project]) => completeProvisionProject(source, project)).map(([id]) => id));
+  const targets = provisionTargets(["source", "full", "partial", "offline"].map((machineId) => ({ machineId, machineName: machineId, online: machineId !== "offline" })), having, "source").filter((target) => !target.has);
+  assert.deepEqual(targets.map((target) => target.machineId), ["partial", "offline"]);
+  assert.equal(completeProvisionProject(source, undefined), false);
+  assert.equal(completeProvisionProject(source, { ...source, repos: [{ root_commit: "other" }] }), false);
+});

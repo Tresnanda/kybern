@@ -4,12 +4,21 @@ import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { createServer, connect } from 'node:net'
 import path from 'node:path'
-import { bootstrapPlan, compareVersions, parseSshTarget, sshConfigHosts, tunnelPlan, type CommandPlan, type SshConfig } from '../shell/platform.ts'
+import { bootstrapPlan, networkBootstrapPlan, compareVersions, parseSshTarget, sshConfigHosts, tunnelPlan, type CommandPlan, type SshConfig } from '../shell/platform.ts'
 import type { EnvironmentProfile } from './registry.ts'
 
 export type BootstrapStep = 'connect' | 'install' | 'start' | 'pair'
 export interface BootstrapProgress { step: BootstrapStep; state: 'running' | 'done' | 'failed'; detail?: string }
-export interface BootstrapInput { id?: string; name: string; target: string; data_dir?: string }
+export interface BootstrapInput {
+  id?: string; name: string; target: string; data_dir?: string
+  /** Network setup only probes/connects automatically; installing requires an explicit button. */
+  network_setup?: 'connect' | 'install'
+  expectedIdentity?: string
+}
+export class MissingDaemon extends Error {
+  constructor() { super('Kybern is not installed. Choose Install and connect to install its daemon and CLI.'); this.name = 'MissingDaemon' }
+}
+export interface BootstrapResult { machineId: string; name: string; networkEnabled?: boolean }
 export type SavedSsh = NonNullable<EnvironmentProfile['ssh']>
 export const toConfig = (ssh: SavedSsh): SshConfig => ({ target: ssh.target, port: ssh.port, remotePort: ssh.remote_port, localPort: ssh.local_port, dataDir: ssh.data_dir ?? undefined })
 const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
@@ -20,6 +29,7 @@ export async function listSshHosts(file = path.join(homedir(), '.ssh/config')) {
 /** `explain_ssh_failure` in remote.rs, word for word. */
 export function explain(target: string, code: number | null, stderr: string) {
   const host = target.split('@').at(-1) ?? target, detail = stderr.trim()
+  if (/sh.*(not found|not recognized)|not recognized.*sh/i.test(detail)) return 'This SSH account uses a Windows shell. Install Kybern with the release’s kybern-installer.ps1, configure a persistent Windows service, then add its pairing invitation. Automatic Windows SSH installation is not supported.'
   if (detail.includes('Permission denied')) return `SSH could not sign in to ${target} without a password. Copy your key there with \`ssh-copy-id ${target}\` or load it in ssh-agent, then try again`
   if (/Could not resolve hostname|Name or service not known/.test(detail)) return `Unable to resolve ${host}. Check the address`
   if (/REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed/.test(detail)) return `The SSH host key for ${host} changed. Verify the machine, then remove its old entry from ~/.ssh/known_hosts`
@@ -31,16 +41,18 @@ export function explain(target: string, code: number | null, stderr: string) {
 }
 /** Bounded stdout/stderr, timeout and process-owned cleanup. stdout may hold the bootstrap token. */
 export function runSsh(plan: CommandPlan, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) return Promise.reject(Error('SSH setup was canceled.'))
   const target = plan.args.at(-2) ?? 'the machine'
   return new Promise((resolve, reject) => {
     const child = spawn(process.env.KYBERN_SSH ?? plan.command, plan.args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
     let output = '', detail = '', overflow = false, settled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
     const finish = (error: Error | null) => { if (settled) return; settled = true; signal?.removeEventListener('abort', abort); clearTimeout(timer); if (error) reject(error); else resolve(output) }
     const abort = () => { child.kill('SIGTERM'); finish(Error('SSH setup was canceled.')) }
     signal?.addEventListener('abort', abort, { once: true })
-    if (signal?.aborted) abort()
+    if (signal?.aborted) { abort(); return }
     const timeoutMs = plan.timeoutMs ?? 45000
-    const timer = setTimeout(() => { child.kill('SIGTERM'); finish(Error(`${target} did not answer within ${Math.round(timeoutMs / 1000)} seconds`)) }, timeoutMs)
+    timer = setTimeout(() => { child.kill('SIGTERM'); finish(Error(`${target} did not answer within ${Math.round(timeoutMs / 1000)} seconds`)) }, timeoutMs)
     child.stdout.on('data', chunk => { output += String(chunk); if (output.length > 1024 * 1024) { overflow = true; child.kill() } })
     child.stderr.on('data', chunk => { detail = (detail + String(chunk)).slice(-8192) })
     child.once('error', () => finish(Error('Start ssh; install OpenSSH and make sure `ssh` is on PATH')))
@@ -147,7 +159,7 @@ export interface BootstrapDependencies {
   stop: typeof stopSshTunnel
   info: (port: number, token: string) => Promise<{ version: string; hostname: string; environment_id: string }>
   shutdown: (port: number, token: string) => Promise<void>
-  pair: (port: number, token: string, input: BootstrapInput, ssh: SavedSsh, identity: string) => Promise<{ machineId: string; name: string }>
+  pair: (port: number, token: string, input: BootstrapInput, ssh: SavedSsh, identity: string) => Promise<BootstrapResult>
   version: string
   signal?: AbortSignal
   sleep?: typeof delay
@@ -158,7 +170,9 @@ export async function bootstrapSsh(input: BootstrapInput, report: (progress: Boo
   const target = parseSshTarget(input.target), id = input.id ?? crypto.randomUUID()
   const ssh: SavedSsh = { ...target, remote_port: 4173, local_port: 0, data_dir: input.data_dir?.trim() || undefined }
   const config = () => toConfig(ssh)
-  const plans = () => bootstrapPlan({ ...config(), localPort: ssh.local_port || 1 }, process.env.KYBERN_REMOTE_INSTALL_URL)
+  const plans = () => input.network_setup
+    ? networkBootstrapPlan({ ...config(), localPort: ssh.local_port || 1 }, deps.version)
+    : bootstrapPlan({ ...config(), localPort: ssh.local_port || 1 }, process.env.KYBERN_REMOTE_INSTALL_URL)
   const sleep = deps.sleep ?? delay
   let step: BootstrapStep = 'connect'
   const progress = (state: BootstrapProgress['state'], detail?: string) => { if (state !== 'failed') deps.signal?.throwIfAborted(); report({ step, state, detail }) }
@@ -167,11 +181,16 @@ export async function bootstrapSsh(input: BootstrapInput, report: (progress: Boo
   deps.signal?.addEventListener('abort', abort, { once: true })
   try {
     progress('running'); let machine = await probe(); progress('done', `${machine.os ?? ''} ${machine.arch ?? ''}`.trim())
-    step = 'install'; progress('running')
-    const outdated = !!machine.version && compareVersions(machine.version, deps.version) < 0
+    if (input.network_setup && !['Linux', 'Darwin'].includes(machine.os ?? '')) throw Error('Automatic SSH setup supports Linux and macOS. On Windows, install kybern-installer.ps1 from the release page, configure a persistent service, then add its pairing invitation.')
+    if (input.network_setup === 'connect' && !machine.kybernd) throw new MissingDaemon()
+    step = 'install'
+    let installed = false
+    const outdated = !input.network_setup && !!machine.version && compareVersions(machine.version, deps.version) < 0
     if (!machine.kybernd || outdated) {
+      progress('running')
       if (machine.curl !== '1') throw Error(`curl is not installed on ${ssh.target}; install it and try again`)
       await deps.run(plans().installIfMissingOrOlder)
+      installed = true
       const previous = machine; machine = await probe()
       if (!machine.kybernd) throw Error(`The installer finished but kybernd is not on PATH for non-interactive shells on ${ssh.target}`)
       if (outdated && previous.token && previous.port) {
@@ -185,15 +204,19 @@ export async function bootstrapSsh(input: BootstrapInput, report: (progress: Boo
           }
         } finally { deps.stop(id) }
       }
+      deps.signal?.throwIfAborted()
       progress('done', outdated ? `Updated kybernd ${previous.version ?? '?'} to ${machine.version ?? ''}` : `Installed kybernd ${machine.version ?? ''}`.trim())
     } else progress('done', `kybernd ${machine.version ?? ''} is installed`.trim())
-    step = 'start'; progress('running'); ssh.remote_port = Number(machine.port) || 4173
+    step = 'start'; progress('running', 'Checking daemon service'); ssh.remote_port = Number(machine.port) || 4173
     // Like remote.rs, a tunnel that cannot open fails the step; only an unanswered daemon falls through to starting it.
-    const reachable = async () => { if (!machine.token || !machine.port) return null; ssh.remote_port = Number(machine.port); const port = await deps.tunnel(id, ssh); try { return await deps.info(port, machine.token) } catch { deps.stop(id); return null } }
+    const reachable = async () => { deps.signal?.throwIfAborted(); if (!machine.token || !machine.port) return null; ssh.remote_port = Number(machine.port); const port = await deps.tunnel(id, ssh); try { return await deps.info(port, machine.token) } catch { deps.stop(id); return null } }
+    // A newly installed daemon always gets a persistent service, even if a process
+    // happened to answer during installation. Never report nohup as persistent setup.
+    if (installed && input.network_setup) { progress('running'); await deps.run(plans().startIfUnreachable) }
     let info = await reachable()
     if (!info) {
-      deps.stop(id); await deps.run(plans().startIfUnreachable)
-      for (let attempt = 0; attempt < 30 && !info; attempt++) { await sleep(1000); machine = await probe(); info = await reachable() }
+      deps.stop(id); progress('running'); await deps.run(plans().startIfUnreachable)
+      for (let attempt = 0; attempt < 30 && !info; attempt++) { await sleep(1000); deps.signal?.throwIfAborted(); machine = await probe(); info = await reachable() }
     }
     if (!info || !machine.token) throw Error(`kybernd did not start on ${ssh.target}. Check ${ssh.data_dir ?? '~/.kybern'}/daemon.log there`)
     progress('done', `kybernd ${info.version} on ${info.hostname}`)

@@ -396,9 +396,24 @@ pub struct BrokerInfo {
     pub reachable: bool,
 }
 
+/// A discovery hint only. A saved pairing or separately trusted SSH connection is needed for setup.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkSetupCandidate {
+    pub node_id: String,
+    pub name: String,
+    pub address: String,
+    pub online: bool,
+}
+
 /// Everything Settings → Machines needs, in one call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct NetworkStatus {
+    /// Present on daemons that support guarded setup. Missing means the client must not auto-enable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configured: Option<bool>,
+    /// Tailnet devices that have not advertised Kybern. Discovery does not grant shell access.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub setup_candidates: Vec<NetworkSetupCandidate>,
     /// The master toggle ("Connect to your other machines").
     pub enabled: bool,
     /// Absent on a lone machine: the first membership operation sets it.
@@ -455,6 +470,9 @@ pub struct Route {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NetworkSetEnabledParams {
     pub enabled: bool,
+    /// Trusted setup may enable a never-configured machine, but must preserve an explicit choice.
+    #[serde(default)]
+    pub only_if_unconfigured: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -851,9 +869,11 @@ pub struct MoveInfo {
 // N1: §3.1 names `settings.network.port` and the master toggle but gives no struct. `enabled` is off
 // until the user turns it on (the desktop's network intro, Settings → Machines or `kybern machines
 // enable`); a settings file that already says `true` keeps it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(default)]
 pub struct NetworkSettings {
+    /// A user has chosen on or off. Old saved switches are conservatively treated as choices.
+    pub configured: bool,
     /// "Connect to your other machines".
     pub enabled: bool,
     /// The fixed port the Tailscale listener binds. When taken, the daemon tries the next six.
@@ -862,7 +882,26 @@ pub struct NetworkSettings {
 
 impl Default for NetworkSettings {
     fn default() -> Self {
-        Self { enabled: false, port: crate::DEFAULT_PORT }
+        Self { configured: false, enabled: false, port: crate::DEFAULT_PORT }
+    }
+}
+
+// A missing network section is new; a legacy saved `enabled: false` could be deliberate.
+// Keeping `configured: false` in newly serialized defaults makes that distinction durable.
+impl<'de> Deserialize<'de> for NetworkSettings {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Saved {
+            enabled: Option<bool>,
+            configured: Option<bool>,
+            port: Option<u16>,
+        }
+        let saved = Saved::deserialize(deserializer)?;
+        Ok(Self {
+            configured: saved.configured.unwrap_or(saved.enabled.is_some()),
+            enabled: saved.enabled.unwrap_or(false),
+            port: saved.port.unwrap_or(crate::DEFAULT_PORT),
+        })
     }
 }
 

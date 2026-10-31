@@ -14,46 +14,64 @@ import {
   uncommittedHint,
   worktreeBranchCaption,
 } from '../../../../packages/kybern-client/src/groups.ts'
-import type { GitBranchesResult, Project } from '../../../../packages/kybern-client/src/types.ts'
+import type { GitBranchesResult, Project, ProjectsMembersStatusResult } from '../../../../packages/kybern-client/src/types.ts'
 import { Checkbox } from '../kit/Checkbox.tsx'
 import { PickerChip } from '../kit/PickerChip.tsx'
 import { tildify } from '../groups/model.ts'
 import { loadMemberStatus, useMemberStatus } from '../groups/store.ts'
-import { availableMembers, branchOf, choiceFor, includedMembers, toggleMember, type GroupChoice } from '../groups/tray.ts'
+import { availableMembers, branchOf, includedMembers, mappedGroupChoice, toggleMember, type GroupChoice } from '../groups/tray.ts'
 import { Icon } from '../icons.tsx'
 import { N } from '../nav/glyphs.ts'
 import { Menu, MenuItem, MenuLabel, MenuSeparator, MenuSub } from '../nav/overlay.tsx'
 import { activeEnvironment } from '../shell/environment.ts'
-import { projectClient } from '../state.ts'
+import { projectClient, usePaneId } from '../state.ts'
 import { FONT_MONO } from '../theme.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { G } from './glyphs.ts'
 import { muted, PickerItem, PickerLabel, PickerMenu } from './Menu.tsx'
+import { useMachineTarget } from './machineTarget.ts'
+import { groupPathsKey } from './groupPaths.ts'
 import { patchDraft, useComposer } from './store.ts'
 
 /** The draft's group choice for this project (a fresh one when the draft holds another project's). */
-export function useGroupChoice(projectId: string): GroupChoice {
+export function useGroupChoice(projectId: string, machineId?: string) {
+  const paneId = usePaneId()
   const stored = useComposer((d) => d.draft.group)
-  return choiceFor(stored, projectId)
+  const target = useMachineTarget(projectId)
+  const paths = useComposer((d) => machineId ? d.draft.groupPaths?.[groupPathsKey(target.key, projectId, machineId)] : undefined)
+  const choice = mappedGroupChoice(stored, projectId, paths)
+  const save = (next: GroupChoice) => {
+    const inverse = paths ? Object.fromEntries(Object.entries(paths).map(([from, to]) => [to, from])) : undefined
+    patchDraft({ group: mappedGroupChoice(next, projectId, inverse) }, paneId)
+  }
+  return { choice, save, ready: target.groupPathsReady !== false, error: target.groupPathsError }
 }
-
-const setChoice = (choice: GroupChoice) => patchDraft({ group: choice })
 
 /** Load the members' branches and dirty counts once the tray shows a group. */
-export function useGroupStatus(projectId: string, still: boolean) {
-  useEffect(() => { if (!still) void loadMemberStatus(projectId) }, [projectId, still])
-  return useMemberStatus(projectId)
+export function useGroupStatus(projectId: string, still: boolean, machineId?: string) {
+  const local = useMemberStatus(machineId ? null : projectId)
+  const [remote, setRemote] = useState<ProjectsMembersStatusResult | null>(null)
+  useEffect(() => {
+    setRemote(null)
+    if (still) return
+    if (!machineId) { void loadMemberStatus(projectId); return }
+    let live = true
+    try { void projectClient(projectId, machineId)?.call('projects.members.status', { project_id: projectId }).then((next) => { if (live) setRemote(next) }, () => {}) } catch { /* Offline: member names remain available. */ }
+    return () => { live = false }
+  }, [projectId, still, machineId])
+  return machineId ? remote : local
 }
 
-export function GroupBranchChip({ project, useWorktree, still = false }: { project: Project; useWorktree: boolean; still?: boolean }) {
+export function GroupBranchChip({ project, useWorktree, still = false, machineId, choiceProjectId = project.id }: { project: Project; useWorktree: boolean; still?: boolean; machineId?: string; choiceProjectId?: string }) {
   const t = useTheme()
-  const status = useGroupStatus(project.id, still)
-  const choice = useGroupChoice(project.id)
+  const status = useGroupStatus(project.id, still, machineId)
+  const { choice, save, ready, error } = useGroupChoice(choiceProjectId, machineId)
   const included = includedMembers(project, choice, useWorktree)
   const primary = included[0]
   const missing = (project.members ?? []).filter((m) => m.status !== 'ok')
   const { label, extra } = branchChipLabel(primary ? branchOf(choice, primary.path, status?.members) : null, included.length - 1)
-  const folder = activeEnvironment().local ? tildify(project.path, homedir()) : project.path
+  const folder = !machineId && activeEnvironment().local ? tildify(project.path, homedir()) : project.path
+  if (!ready) return <PickerChip bare disabled label={error ?? 'Matching repositories…'}>Matching repositories…</PickerChip>
   return (
     <Menu
       testId="tray-branch"
@@ -90,7 +108,7 @@ export function GroupBranchChip({ project, useWorktree, still = false }: { proje
             maxHeight={320}
             trailing={branch ? <><Icon source={G.branch} size={12} color={muted(t, 0.6)} /><Label color={muted(t, 0.7)} size={12} truncate>{branch}</Label></> : undefined}
           >
-            <BranchList project={project} repo={member.path} selected={branch} onPick={(name) => setChoice({ ...choice, baseBranches: { ...choice.baseBranches, [member.path]: name } })} />
+            <BranchList project={project} machineId={machineId} repo={member.path} selected={branch} onPick={(name) => save({ ...choice, baseBranches: { ...choice.baseBranches, [member.path]: name } })} />
           </MenuSub>
         )
       })}
@@ -106,16 +124,16 @@ export function GroupBranchChip({ project, useWorktree, still = false }: { proje
 }
 
 /** One repository's branches (`git.branches { repo }`), loaded when its submenu opens. */
-function BranchList({ project, repo, selected, onPick }: { project: Project; repo: string; selected: string | null; onPick: (name: string) => void }) {
+function BranchList({ project, repo, selected, onPick, machineId }: { project: Project; machineId?: string; repo: string; selected: string | null; onPick: (name: string) => void }) {
   const t = useTheme()
   const [branches, setBranches] = useState<GitBranchesResult | null>(null)
   useEffect(() => {
-    const client = projectClient(project.id)
+    const client = projectClient(project.id, machineId)
     if (!client) return
     let live = true
     client.call('git.branches', { project_id: project.id, repo }).then((result) => { if (live) setBranches(result) }, () => { if (live) setBranches({ current: null, branches: [] }) })
     return () => { live = false }
-  }, [project.id, repo])
+  }, [project.id, repo, machineId])
   if (!branches) return <div style={{ display: 'flex', paddingLeft: 8, paddingRight: 8, paddingTop: 4, paddingBottom: 4 }}><Label color={t.textSecondary} size={13}>Loading branches…</Label></div>
   if (!branches.branches.length) return <div style={{ display: 'flex', paddingLeft: 8, paddingRight: 8, paddingTop: 4, paddingBottom: 4 }}><Label color={t.textSecondary} size={13}>No branches yet. Make a first commit.</Label></div>
   return (
@@ -128,18 +146,19 @@ function BranchList({ project, repo, selected, onPick }: { project: Project; rep
 }
 
 /** Worktree mode: which repositories this chat gets. */
-export function ReposChip({ project, still = false }: { project: Project; still?: boolean }) {
+export function ReposChip({ project, still = false, machineId, choiceProjectId = project.id }: { project: Project; still?: boolean; machineId?: string; choiceProjectId?: string }) {
   const t = useTheme()
-  const status = useGroupStatus(project.id, still)
-  const choice = useGroupChoice(project.id)
+  const status = useGroupStatus(project.id, still, machineId)
+  const { choice, save, ready, error } = useGroupChoice(choiceProjectId, machineId)
   const available = availableMembers(project)
   const included = includedMembers(project, choice, true)
   const deselected = available.filter((m) => !included.includes(m))
   const absolute = (path: string) => (path === '.' ? project.path : `${project.path}/${path}`)
-  const local = activeEnvironment().local
+  const local = !machineId && activeEnvironment().local
   const footer = included.length === 1 && available.length > 1 ? GROUP_COPY.lastRepository
     : deselected.length ? deselectedNote(deselected, (m) => (local ? tildify(absolute(m.path), homedir()) : absolute(m.path)))
     : GROUP_COPY.reposMenuFooter
+  if (!ready) return <PickerChip bare disabled label={error ?? 'Matching repositories…'}>Matching repositories…</PickerChip>
   return (
     <PickerMenu
       testId="tray-repos"
@@ -156,7 +175,7 @@ export function ReposChip({ project, still = false }: { project: Project; still?
         const dirty = uncommittedHint(status?.members.find((m) => m.path === member.path)?.dirty_files ?? 0)
         const branch = branchOf(choice, member.path, status?.members)
         return (
-          <PickerItem key={member.path} id={member.path} testId={`tray-repos-${member.path}`} keepOpen disabled={last} onSelect={() => setChoice(toggleMember(project, choice, member.path))} style={{ alignItems: 'flex-start', paddingTop: 5, paddingBottom: 5, opacity: 1 }}>
+          <PickerItem key={member.path} id={member.path} testId={`tray-repos-${member.path}`} keepOpen disabled={last} onSelect={() => save(toggleMember(project, choice, member.path))} style={{ alignItems: 'flex-start', paddingTop: 5, paddingBottom: 5, opacity: 1 }}>
             <div style={{ display: 'flex', paddingTop: 2 }}><Checkbox checked={on} disabled={last} aria-label={member.name} style={{ pointerEvents: 'none' }} /></div>
             <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}>
               <Label color={t.text} lineHeight={20} truncate>{member.name}</Label>

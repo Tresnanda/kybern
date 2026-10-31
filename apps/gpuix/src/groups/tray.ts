@@ -49,3 +49,12 @@ export function groupCreateParams(project: Pick<Project, 'members'>, choice: Gro
   if (Object.keys(branches).length) params.base_branches = branches
   return params
 }
+
+
+/** Keep the draft in the original group's names while a provisioned group may use different target folders. */
+export function mappedGroupChoice(choice: GroupChoice | null | undefined, projectId: ProjectId, paths?: Record<string, string>): GroupChoice {
+  const original = choiceFor(choice, projectId)
+  if (!paths) return original
+  return { ...original, members: original.members?.map((path) => paths[path] ?? path) ?? null,
+    baseBranches: Object.fromEntries(Object.entries(original.baseBranches).map(([path, branch]) => [paths[path] ?? path, branch])) }
+}

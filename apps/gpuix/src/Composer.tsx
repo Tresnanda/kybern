@@ -91,6 +91,7 @@ import { accountLead, ModelPicker, ModelTriggerLabel } from './composer/ModelPic
 import { PermissionPicker } from './composer/PermissionPicker.tsx'
 import { MachinePicker } from './composer/MachinePicker.tsx'
 import { chooseMachine, useMachineLists, useMachineTarget } from './composer/machineTarget.ts'
+import { groupPathsKey } from './composer/groupPaths.ts'
 import { Leave, Pop, SwapOnChange, useLeavingList } from './composer/motion.tsx'
 import { Rise } from './motion/kit.tsx'
 import { useNativeWindowSize } from './native/layout-hooks.ts'
@@ -131,7 +132,7 @@ import {
 import { alreadyAttachedText, contentHash, newFiles } from './composer/attached.ts'
 import { isGroupProject } from '../../../packages/kybern-client/src/groups.ts'
 import { canSteer } from '../../../packages/kybern-client/src/steering.ts'
-import { choiceFor, groupCreateParams } from './groups/tray.ts'
+import { choiceFor, groupCreateParams, mappedGroupChoice } from './groups/tray.ts'
 
 export const COMPOSER_RADIUS = 19.2
 const DEFAULT_PLACEHOLDER = 'Ask anything, @ to mention, $ skills, or / commands'
@@ -272,7 +273,7 @@ export function useDraftTarget(stayLocal = false) {
   const listed = projectId ? projects.find((p) => p.id === projectId) : undefined
   // Where the chat runs (`composer/machineTarget.ts`): with one machine this is the machine you are at, at no cost. A project that
   // only another machine has runs there. A Coordinator or a task's run stays on the machine you are at.
-  const machine = useMachineTarget(projectId ?? null, !stayLocal && !(listed && isGroupProject(listed)))
+  const machine = useMachineTarget(projectId ?? null, !stayLocal)
   const { providers, settings, accounts, loading: listsLoading, loaded: listsLoaded } = useMachineLists(machine.machineId)
   // The checkout the lists follow: the chosen machine's own (its path keys that machine's project accounts).
   const project = machine.remote && machine.chosen?.project ? machine.chosen.project : listed
@@ -284,13 +285,13 @@ export function useDraftTarget(stayLocal = false) {
       return (project ? config?.project_accounts?.[project.path] : undefined) ?? config?.default_account ?? 'default'
     }
     if (stored && available.some((p) => p.kind === stored.kind)) {
-      if (stored.pinAccount || stored.instance !== 'default') return stored
+      if ((stored.pinAccount || stored.instance !== 'default') && (!machine.remote || stored.instance === 'default' || accounts.some((account) => account.provider.kind === stored.kind && account.provider.instance === stored.instance))) return stored
       return { kind: stored.kind, instance: instanceFor(stored.kind) }
     }
     const pick = available.find((p) => p.kind === settings?.default_provider) ?? available[0]
     return pick ? { kind: pick.kind, instance: instanceFor(pick.kind) } : null
-  }, [draft.provider, available, settings, project])
-  const pinAccount = !!draft.provider && (draft.provider.pinAccount ?? draft.provider.instance !== 'default')
+  }, [draft.provider, available, settings, project, accounts, machine.remote])
+  const pinAccount = !!draft.provider && provider?.kind === draft.provider.kind && provider?.instance === draft.provider.instance && (draft.provider.pinAccount ?? draft.provider.instance !== 'default')
   const preferred = draft.mode ?? settings?.default_permission_mode ?? 'supervised'
   const status = provider ? available.find((p) => p.kind === provider.kind) : undefined
   const mode: PermissionMode = status && !status.supported_permission_modes.includes(preferred) ? status.supported_permission_modes[0] ?? preferred : preferred
@@ -321,6 +322,9 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
   }, [status])
   const coordinator = useApp(s => s.draft.purpose === 'coordinator')
   const { projectId, project, machine, providers, accounts, listsLoading: loading, provider, pinAccount, mode, useWorktree, choice, draft } = useDraftTarget(coordinator || !!extras.task)
+  // An unedited group spans every target member without needing to translate any source paths, even offline.
+  const groupNeedsMapping = machine.groupPathsReady === false && draft.group?.projectId === projectId &&
+    (draft.group.members !== null || Object.keys(draft.group.baseBranches).length > 0)
 
   return (
     <ComposerView
@@ -334,32 +338,32 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
       onEmptyDown={extras.onEmptyDown}
       focusRef={extras.focusRef}
       mode={mode}
-      onModeChange={(m) => patchDraft({ mode: m })}
+      onModeChange={(m) => patchDraft({ mode: m }, pane.id)}
       provider={provider}
       providers={providers}
       accounts={accounts}
       model={choice?.model}
       effort={choice?.effort}
       onModelChange={async (model, effort) => {
-        if (provider) patchDraft({ models: { ...getData(pane.id).draft.models, [provider.kind]: { model, effort } } })
+        if (provider) patchDraft({ models: { ...getData(pane.id).draft.models, [provider.kind]: { model, effort } } }, pane.id)
       }}
       onProviderChange={async (next, nextChoice) => {
         const models = nextChoice ? { ...getData(pane.id).draft.models, [next.kind]: nextChoice } : getData(pane.id).draft.models
-        const nextStatus = getData().providers.find((item) => item.kind === next.kind)
+        const nextStatus = providers.find((item) => item.kind === next.kind)
         const keepMode = !nextStatus || nextStatus.supported_permission_modes.includes(mode)
         patchDraft({
           provider: { ...next, pinAccount: nextChoice?.pinAccount ?? next.instance !== 'default' },
           models,
           ...(keepMode ? {} : { mode: nextStatus!.supported_permission_modes.includes('supervised') ? 'supervised' : nextStatus!.supported_permission_modes[0] ?? mode }),
-        })
+        }, pane.id)
       }}
       catalogLoading={loading}
       onReloadModels={(force) => machine.machineId ? loadMachineLists(machine.machineId, force, machine.chosen?.projectId) : loadProviders(force, projectId ?? undefined).then(() => {})}
       machinePicker={machine.show ? <MachinePicker target={machine} /> : undefined}
       uploadMachine={machine.remote && machine.reachable ? machine.machineId : undefined}
       agentsOn={machine.remote ? machine.chosen?.name : undefined}
-      sendDisabled={!provider || (coordinator && !projectId)}
-      sendDisabledReason={!provider ? machine.remote && !machine.reachable ? `${machine.chosen?.name} is offline and its agents have not been seen yet.` : 'Choose an available agent before sending.' : coordinator && !projectId ? 'Choose a project for the Coordinator.' : undefined}
+      sendDisabled={!provider || groupNeedsMapping || (coordinator && !projectId)}
+      sendDisabledReason={groupNeedsMapping ? machine.groupPathsError ?? 'Matching repositories on the selected machine…' : !provider ? machine.remote && !machine.reachable ? `${machine.chosen?.name} is offline and its agents have not been seen yet.` : 'Choose an available agent before sending.' : coordinator && !projectId ? 'Choose a project for the Coordinator.' : undefined}
       onSend={async (message, _delivery, snapshot) => {
         if (!provider) return
         // A new chat is made on the machine the user is at, or on the one the machine chip names (`composer/machineTarget.ts`).
@@ -474,6 +478,7 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
             effort: choice?.effort,
             use_worktree: useWorktree && !freeChat,
             ...(draft.baseBranch ? { base_branch: draft.baseBranch } : {}),
+            ...(project && isGroupProject(project) ? groupCreateParams(project, mappedGroupChoice(draft.group, projectId!, draft.groupPaths?.[groupPathsKey(machine.key, projectId!, target.machineId)]), useWorktree) : {}),
             message: first,
             thread_id: threadId,
             message_id: messageId,

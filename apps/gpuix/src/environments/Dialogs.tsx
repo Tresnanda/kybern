@@ -24,7 +24,7 @@ import { IconButton } from '../kit/IconButton.tsx'
 import { TextField } from '../kit/Field.tsx'
 import { Spinner } from '../shell/Connection.tsx'
 
-type Screen = { kind: 'add' | 'pair' }
+type Screen = { kind: 'add' | 'pair'; target?: string; name?: string }
 let screen: Screen | null = null
 const listeners = new Set<() => void>()
 export function showEnvironmentDialog(next: Screen | null) { screen = next; for (const listener of listeners) listener() }
@@ -33,17 +33,17 @@ export function EnvironmentDialogs() {
   if (!value) return null
   const close = () => showEnvironmentDialog(null)
   return <Dialog onClose={close} width={512} testId="environment-dialog">
-    {value.kind === 'add' ? <EnvironmentForm close={close} /> : <DeviceAccess close={close} />}
+    {value.kind === 'add' ? <EnvironmentForm close={close} target={value.target} name={value.name} /> : <DeviceAccess close={close} />}
   </Dialog>
 }
 
-function EnvironmentForm({ close }: { close: () => void }) {
+function EnvironmentForm({ close, target, name }: { close: () => void; target?: string; name?: string }) {
   const initialMode = 'ssh'
   const [selection, setSelection] = useState({ mode: initialMode, previous: initialMode, keyboard: false })
   const [busy, setBusy] = useState(false)
   const { mode } = selection
   const chooser = <EnvironmentChooser {...selection} busy={busy} onChange={(next, keyboard) => setSelection({ mode: next, previous: mode, keyboard })} />
-  return mode === 'ssh' ? <SshForm close={close} chooser={chooser} busy={busy} setBusy={setBusy} /> : <AddressForm close={close} chooser={chooser} busy={busy} setBusy={setBusy} />
+  return mode === 'ssh' ? <SshForm initialTarget={target} initialName={name} close={close} chooser={chooser} busy={busy} setBusy={setBusy} /> : <AddressForm close={close} chooser={chooser} busy={busy} setBusy={setBusy} />
 }
 /** The desktop's `t-tabs` sliding pill: 478px track, 4px padding, two 233px tabs of 31.5px. */
 function EnvironmentChooser({ mode, previous, keyboard, busy, onChange }: { mode: string; previous: string; keyboard: boolean; busy: boolean; onChange: (mode: string, keyboard: boolean) => void }) {
@@ -55,10 +55,10 @@ function EnvironmentChooser({ mode, previous, keyboard, busy, onChange }: { mode
   </div>
 }
 const BOOTSTRAP_STEPS: { id: BootstrapStep; label: string }[] = [{ id: 'connect', label: 'Connect over SSH' }, { id: 'install', label: 'Install kybernd' }, { id: 'start', label: 'Start the daemon' }, { id: 'pair', label: 'Pair this device' }]
-function SshForm({ close, chooser, busy, setBusy }: { close: () => void; chooser: ReactNode; busy: boolean; setBusy: (busy: boolean) => void }) {
+function SshForm({ close, chooser, busy, setBusy, initialTarget, initialName }: { close: () => void; chooser: ReactNode; busy: boolean; setBusy: (busy: boolean) => void; initialTarget?: string; initialName?: string }) {
   const t = useTheme()
-  const [name, setName] = useState('')
-  const [target, setTarget] = useState('')
+  const [name, setName] = useState(initialName ?? '')
+  const [target, setTarget] = useState(initialTarget ?? '')
   const [dataDir, setDataDir] = useState('')
   const [hosts, setHosts] = useState<string[]>([])
   const [advanced, setAdvanced] = useState(false)
