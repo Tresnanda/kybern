@@ -7,6 +7,7 @@ import { queueSend, watchOutbox } from './outbox.ts'
 import type { NewChatCreate, QueuedCreate } from '../../../../packages/kybern-client/src/newChat.ts'
 import { queuedCreate, type MachineChoice } from '../../../../packages/kybern-client/src/machineTarget.ts'
 import { OfflineError } from '../../../../packages/kybern-client/src/machines.ts'
+import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 // Composer data and actions: the agent catalog, settings and accounts, the open
 // thread's next-message target, queued follow-ups, and the home screen's draft
 // choices. Every RPC here is the one the desktop uses (`state/rpc.ts`,
@@ -189,7 +190,7 @@ export function ensureLoaded() {
   })
   // Like the desktop's provider cache: paint the last catalog at once, since
   // `providers.list` probes every agent CLI and can take seconds.
-  const cached = readProviderCache(client.endpoint.url)
+  const cached = readProviderCache(providerCacheKey(client))
   if (cached && !data.providers.length) patch({ providers: cached })
   void loadProviders(false).catch(() => {})
   void client.call('settings.get', {}).then((settings) => { if (localClient() === client) patch({ settings }) }).catch(() => {})
@@ -216,7 +217,7 @@ export function loadProviders(force: boolean, projectId?: ProjectId): Promise<Pr
     .then((r) => {
       if (owner() !== client) return r.providers
       patch({ providers: r.providers })
-      if (!projectId) writeProviderCache(client.endpoint.url, r.providers)
+      if (!projectId) writeProviderCache(providerCacheKey(client), r.providers)
       return r.providers
     })
     .finally(() => {
@@ -229,20 +230,28 @@ export function loadProviders(force: boolean, projectId?: ProjectId): Promise<Pr
 }
 
 const CACHE_DIR = gpuixCacheDir('cache')
-const cacheFile = (url: string) => path.join(CACHE_DIR, `providers-${url.replace(/[^a-z0-9]+/gi, '_')}.json`)
+const cacheFile = (key: string) => path.join(CACHE_DIR, `providers-${key.replace(/[^a-z0-9]+/gi, '_')}.json`)
 
-function readProviderCache(url: string): ProviderStatus[] | null {
+/** One catalog per machine, by its id: another machine's client has no address (ADE-109), and a tunnel's address changes. */
+export function providerCacheKey(client: Pick<KybernClient, 'info' | 'endpoint'>): string | null {
+  const id = client.info?.machine_id ?? client.info?.environment_id ?? client.endpoint.environmentId
+  return id ? `machine-${id}` : null
+}
+
+function readProviderCache(key: string | null): ProviderStatus[] | null {
+  if (!key) return null
   try {
-    return JSON.parse(readFileSync(cacheFile(url), 'utf8')) as ProviderStatus[]
+    return JSON.parse(readFileSync(cacheFile(key), 'utf8')) as ProviderStatus[]
   } catch {
     return null
   }
 }
 
-function writeProviderCache(url: string, providers: ProviderStatus[]) {
+function writeProviderCache(key: string | null, providers: ProviderStatus[]) {
+  if (!key) return
   try {
     mkdirSync(CACHE_DIR, { recursive: true })
-    writeFileSync(cacheFile(url), JSON.stringify(providers))
+    writeFileSync(cacheFile(key), JSON.stringify(providers))
   } catch {
     // A cache miss only costs the first paint.
   }
