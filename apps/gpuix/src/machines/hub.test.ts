@@ -2,7 +2,7 @@
 // merged and routed by machine. No sockets, no daemon.
 import { afterEach, expect, test } from 'bun:test'
 import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
-import { OfflineError } from '../../../../packages/kybern-client/src/machines.ts'
+import { OfflineError, type MachineTransport } from '../../../../packages/kybern-client/src/machines.ts'
 import type { Project, Thread } from '../../../../packages/kybern-client/src/types.ts'
 import type { EnvironmentProfile } from '../environments/registry.ts'
 import { MachineHub, type MachineHubOptions } from './hub.ts'
@@ -398,4 +398,21 @@ test('a machine that is removed closes its event stream', async () => {
   // The removed machine's connection may still be draining: it is not heard.
   vps.emit({ kind: 'thread_updated', seq: 2 })
   expect(events).toEqual(['thread_updated'])
+})
+
+test("the app's own connection to a relayed machine sends the member's token on HTTP too (ADE-108)", async () => {
+  const seen: { path: string; auth: string | null; relay: string | null }[] = []
+  const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) { seen.push({ path: new URL(request.url).pathname, auth: request.headers.get('authorization'), relay: request.headers.get('x-kybern-relay-auth') }); return new Response('ok') } })
+  try {
+    const hub = new MachineHub({ records: () => [] })
+    const create = (hub as unknown as { createClient: (args: Parameters<MachineTransport['createClient']>[0]) => KybernClient }).createClient.bind(hub)
+    const record = { machineId: 'instabox', name: 'instabox', routes: [], member: true }
+    const member = `http://127.0.0.1:${server.port}`
+    await create({ record, route: { kind: 'relay', url: `${member}/relay/instabox`, via: 'mac' }, token: 'tok-instabox', relayToken: 'tok-mac' }).fetch('/assets/a1')
+    await create({ record, route: { kind: 'direct_tailnet', url: member }, token: 'tok-instabox' }).fetch('/assets/a1')
+    expect(seen).toEqual([
+      { path: '/relay/instabox/http/assets/a1', auth: 'Bearer tok-instabox', relay: 'Bearer tok-mac' },
+      { path: '/assets/a1', auth: 'Bearer tok-instabox', relay: null },
+    ])
+  } finally { server.stop(true) }
 })

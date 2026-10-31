@@ -21,6 +21,7 @@ import { MachineCache } from '../../../../packages/kybern-client/src/machineCach
 import {
   MachineSet,
   UnknownMachineError,
+  routeHttp,
   type Clock,
   type CredentialStore,
   type MachineConnection,
@@ -29,6 +30,7 @@ import {
   type MachineStore,
   type MachineTransport,
   type MergedView,
+  type SocketFactory,
 } from '../../../../packages/kybern-client/src/machines.ts'
 import { MachineClientProxy } from '../../../../packages/kybern-client/src/machineClient.ts'
 import { NETWORK_FEATURES, type MachineId, type NetworkStatus, type Project, type Thread, type ThreadActivitySummary, type ThreadEvent } from '../../../../packages/kybern-client/src/types.ts'
@@ -344,12 +346,15 @@ export class MachineHub {
   }
 
   private createClient(args: Parameters<MachineTransport['createClient']>[0]) {
-    const { record, route, token } = args
+    const { record, route, token, relayToken } = args
     if (this.options.transport?.createClient) return this.options.transport.createClient(args)
     const legacy = isLegacyMachineId(record.machineId)
+    // A relay route sends the member's own token beside the target's, on the socket and on HTTP.
+    const http = routeHttp(route, relayToken)
+    const socket: SocketFactory = http.headers ? (url, bearer) => createGpuixSocket(url, bearer, http.headers) : createGpuixSocket
     return new KybernClient(
       { url: normalizeDaemonUrl(route.url), token, ...(legacy ? {} : { environmentId: record.machineId }) },
-      { createSocket: createGpuixSocket, ...(legacy ? {} : { expectedEnvironmentId: record.machineId }) },
+      { createSocket: socket, http, ...(legacy ? {} : { expectedEnvironmentId: record.machineId }) },
     )
   }
 

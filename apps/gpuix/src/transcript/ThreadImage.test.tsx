@@ -7,7 +7,8 @@ import path from 'node:path'
 let requests = 0
 const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch() { requests++; return new Response('missing', { status: 404 }) } })
 const real = await import('../state.ts')
-const fake = { endpoint: { url: `ws://127.0.0.1:${server.port}/ws`, token: 'test' } }
+const { KybernClient } = await import('../../../../packages/kybern-client/src/client.ts')
+const fake = new KybernClient({ url: `ws://127.0.0.1:${server.port}/ws`, token: 'test' })
 mock.module('../state.ts', () => ({ ...real, getClient: () => fake, threadClient: () => fake }))
 mock.module('../native/visibility.ts', () => ({ isWindowVisible: () => true, onWindowVisibility: () => () => {} }))
 const { ThreadImage } = await import('./ThreadImage.tsx')

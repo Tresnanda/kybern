@@ -1,4 +1,3 @@
-import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import { homeClient, sharesHome, watchGlobalNotesHome } from './home.ts'
 import { useEffect, useSyncExternalStore } from 'react'
 import type { Federation, Note, NoteSummary } from '../../../../packages/kybern-client/src/types.ts'
@@ -145,11 +144,11 @@ export async function moveNote(id: string, projectId?: string) {
   let body = note.body
   const assets = [...new Set([...body.matchAll(/!\[(?:\\.|[^\]])*\]\(kybern:\/\/asset\/([a-f\d-]{36})\)/gi)].map((match) => match[1]!))]
   for (const id of assets) {
-    const response = await fetch(`${httpBase(source.endpoint.url)}/assets/${id}`, { headers: { authorization: `Bearer ${source.endpoint.token}` } })
+    const response = await source.fetch(`/assets/${id}`)
     if (!response.ok) throw Error('Couldn’t copy a note image. The original note has not moved.')
     const image = await response.blob()
     if (image.size > 12 * 1024 * 1024 || !image.type.startsWith('image/')) throw Error('This image cannot be copied here. The original note has not moved.')
-    const uploaded = await fetch(`${httpBase(target.endpoint.url)}/assets`, { method: 'POST', headers: { authorization: `Bearer ${target.endpoint.token}`, 'content-type': image.type, 'x-kybern-filename': 'note-image' }, body: image })
+    const uploaded = await target.fetch('/assets', { method: 'POST', headers: { 'content-type': image.type, 'x-kybern-filename': 'note-image' }, body: image })
     if (!uploaded.ok) throw Error('Couldn’t copy a note image. The original note has not moved.')
     const asset = await uploaded.json() as { id: string }
     body = body.replaceAll(`kybern://asset/${id}`, `kybern://asset/${asset.id}`)

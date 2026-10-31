@@ -46,7 +46,7 @@ export function TitleField({ value, saved, onChange, onCommit, onEnter }: { valu
 export function DescriptionEditor({ value, epoch, onChange, onCommit, onExit, onFocus, focus = false }: { value: string; epoch: number; onChange: (value: string) => void; onCommit: () => void; onExit: () => void; onFocus?: () => void; focus?: boolean }) {
   const t = useTheme()
   const editor = useRef<RichEditorHandle>(null)
-  const images = useMemo<ImageHome>(() => ({ endpoint: () => getClient()?.endpoint ?? null }), [])
+  const images = useMemo<ImageHome>(() => ({ client: () => getClient() }), [])
   useEffect(() => { if (focus) editor.current?.focus() }, [focus])
   return (
     <div testId="task-desc" style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>

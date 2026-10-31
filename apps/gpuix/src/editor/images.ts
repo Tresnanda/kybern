@@ -2,10 +2,10 @@
 // that keeps the note (assets need its token), decoded natively once, and shared
 // by every editor that shows it (`setRichEditorImage`). Adding an image uploads
 // the file to that daemon first, like the desktop's `noteImage.ts`.
-import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
+import type { KybernClient } from '../../../../packages/kybern-client/src/client.ts'
 
-/** Where a document's images live: the client of the daemon that keeps it. */
-export interface ImageHome { endpoint: () => { url: string; token: string } | null }
+/** Where a document's images live: the client of the daemon that keeps it (`fetch` holds its address and token). */
+export interface ImageHome { client: () => Pick<KybernClient, 'fetch'> | null }
 
 const MAX_BYTES = 12 * 1024 * 1024
 const loaded = new Map<string, Promise<void>>()
@@ -27,9 +27,9 @@ export function loadEditorImage(renderer: unknown, home: ImageHome | null, src: 
     try {
       let bytes: ArrayBuffer
       if (src.startsWith('kybern://asset/')) {
-        const endpoint = home?.endpoint()
-        if (!endpoint) throw Error('Images are unavailable here')
-        const response = await fetch(`${httpBase(endpoint.url)}/assets/${encodeURIComponent(src.slice('kybern://asset/'.length))}`, { headers: { authorization: `Bearer ${endpoint.token}` } })
+        const client = home?.client()
+        if (!client) throw Error('Images are unavailable here')
+        const response = await client.fetch(`/assets/${encodeURIComponent(src.slice('kybern://asset/'.length))}`)
         if (!response.ok) throw Error(`Image unavailable (${response.status})`)
         bytes = await response.arrayBuffer()
       } else if (/^https?:\/\//i.test(src)) {
@@ -61,15 +61,15 @@ export function loadEditorImage(renderer: unknown, home: ImageHome | null, src: 
 
 /** Upload image files to the document's daemon; returns their `kybern://asset/` addresses. */
 export async function uploadEditorImages(home: ImageHome, paths: string[]): Promise<{ src: string; alt: string }[]> {
-  const endpoint = home.endpoint()
-  if (!endpoint) throw Error('Reconnect to add images.')
+  const client = home.client()
+  if (!client) throw Error('Reconnect to add images.')
   const out: { src: string; alt: string }[] = []
   for (const path of paths) {
     const file = Bun.file(path)
     const type = file.type.startsWith('image/') ? file.type : 'image/png'
     if (file.size > MAX_BYTES) throw Error('Choose an image smaller than 12 MB.')
     const name = path.split('/').pop() ?? 'Image'
-    const response = await fetch(`${httpBase(endpoint.url)}/assets`, { method: 'POST', headers: { authorization: `Bearer ${endpoint.token}`, 'content-type': type, 'x-kybern-filename': encodeURIComponent(name) }, body: await file.arrayBuffer() })
+    const response = await client.fetch('/assets', { method: 'POST', headers: { 'content-type': type, 'x-kybern-filename': encodeURIComponent(name) }, body: await file.arrayBuffer() })
     if (!response.ok) throw Error(`Upload failed (${response.status})`)
     const asset = await response.json() as { id: string }
     // Pasted images arrive as temporary files; their name says nothing.

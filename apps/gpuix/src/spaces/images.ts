@@ -2,7 +2,6 @@
 // kept as `data:` URIs by asset id. Derived assets never change, so there is no invalidation;
 // at most 50 spaces of ~20 KB each. Cleared when the environment changes.
 import { useEffect, useSyncExternalStore } from 'react'
-import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import { getClient } from '../state.ts'
 
 const sources = new Map<string, string>()
@@ -18,7 +17,7 @@ async function load(assetId: string) {
   if (!owner || loading.has(assetId)) return
   loading.add(assetId)
   try {
-    const response = await fetch(`${httpBase(owner.endpoint.url)}/assets/${encodeURIComponent(assetId)}`, { headers: { authorization: `Bearer ${owner.endpoint.token}` } })
+    const response = await owner.fetch(`/assets/${encodeURIComponent(assetId)}`)
     const media = response.headers.get('content-type')?.split(';')[0]
     if (!response.ok || !media?.startsWith('image/')) throw Error('Image unavailable')
     const data = await response.arrayBuffer()

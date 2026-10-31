@@ -2,7 +2,6 @@
 // transparent background, with the boxes of its controls (`threads.visuals.snapshot`). The PNGs reach the native <img>
 // as cached files (`imageFiles.ts`). One request per picture: the figure, its tab and a remount share it.
 import { useEffect, useState } from 'react'
-import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import type { HtmlSnapshotResult, JsonValue, VisualControl } from '../../../../packages/kybern-client/src/types.ts'
 import type { VisualTheme } from '../../../../packages/kybern-client/src/visuals.ts'
 import { threadClient } from '../state.ts'
@@ -27,7 +26,7 @@ const loading = new Map<string, Promise<Picture>>()
 async function fetchPng(threadId: string, visualId: string, file: string): Promise<string> {
   const client = threadClient(threadId)
   if (!client) throw Error('Kybern is not connected.')
-  const response = await fetch(`${httpBase(client.endpoint.url)}/threads/${encodeURIComponent(threadId)}/visuals/${encodeURIComponent(visualId)}/snapshot/${file}`, { headers: { authorization: `Bearer ${client.endpoint.token}` } })
+  const response = await client.fetch(`/threads/${encodeURIComponent(threadId)}/visuals/${encodeURIComponent(visualId)}/snapshot/${file}`)
   if (!response.ok) throw Error(`The picture did not load (${response.status}).`)
   return storeImageBytes(new Uint8Array(await response.arrayBuffer()), 'image/png')
 }
