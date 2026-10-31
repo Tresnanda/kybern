@@ -2848,6 +2848,325 @@ pub struct PrActionParams {
     pub admin: bool,
 }
 method!(PrAction, "github.pr.action", Some(Scope::OrchestrationOperate), PrActionParams, Empty);
+
+// GitHub Actions through `gh` (ADE-97): workflow runs on every branch, their jobs and steps, bounded
+// job logs, reruns, cancel and `workflow_dispatch`. Group projects name the member in `repo`.
+
+/// One workflow run, as GitHub's REST API reports it.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkflowRun {
+    pub id: u64,
+    /// The run's number within its workflow (`#695`).
+    pub number: u64,
+    pub attempt: u32,
+    /// The workflow's name (`CI`).
+    pub workflow_name: String,
+    pub workflow_id: u64,
+    /// The workflow file, `.github/workflows/ci.yml`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub workflow_path: String,
+    /// The commit title or the dispatch's run name.
+    pub title: String,
+    /// The branch or tag the run is on.
+    pub head_branch: String,
+    pub head_sha: String,
+    /// push | pull_request | workflow_dispatch | schedule | …
+    pub event: String,
+    /// queued | in_progress | completed | waiting | requested | pending
+    pub status: String,
+    /// success | failure | cancelled | skipped | timed_out | action_required | neutral | stale | startup_failure;
+    /// empty until the run completes.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub conclusion: String,
+    pub url: String,
+    /// RFC 3339.
+    pub created_at: String,
+    /// RFC 3339; the current attempt's start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    /// RFC 3339.
+    pub updated_at: String,
+    /// Who started this attempt (a rerun names the person who reran it).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub actor: String,
+    /// Pull request numbers this run belongs to (in this repository).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pull_requests: Vec<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ActionsRunsParams {
+    pub project_id: ProjectId,
+    /// Group projects: the member repository. Required for a group project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    /// A workflow's id or file name (`ci.yml`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// A status (queued, in_progress, completed, …) or a conclusion (success, failure, …).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<String>,
+    #[serde(default = "default_actions_page")]
+    pub page: u32,
+    /// 1–100.
+    #[serde(default = "default_actions_per_page")]
+    pub per_page: u32,
+    /// Pages to read from `page` on, 1–5, so a branch-grouped list holds enough runs; `has_more` speaks for the last.
+    #[serde(default = "default_actions_page")]
+    pub pages: u32,
+    /// Also name each branch's pull request (`pulls`): one `gh pr list` per refresh, kept for a minute.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pulls: bool,
+}
+fn default_actions_page() -> u32 {
+    1
+}
+fn default_actions_per_page() -> u32 {
+    30
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ActionsRunsResult {
+    pub runs: Vec<WorkflowRun>,
+    /// Runs matching the filters in all.
+    pub total_count: u64,
+    pub page: u32,
+    pub has_more: bool,
+    /// The signed-in `gh` account, so clients can tell runs the user started. None when `gh` did not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewer: Option<String>,
+    /// With `pulls`: the latest pull request of each head branch (the 100 most recent, any state).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pulls: Vec<BranchPull>,
+}
+/// A head branch and its most recent pull request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BranchPull {
+    pub branch: String,
+    pub number: u64,
+    /// OPEN | CLOSED | MERGED
+    pub state: String,
+}
+method!(ActionsRuns, "github.actions.runs", Some(Scope::OrchestrationRead), ActionsRunsParams, ActionsRunsResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkflowStep {
+    pub number: u32,
+    pub name: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub conclusion: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkflowJob {
+    pub id: u64,
+    pub name: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub conclusion: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
+    pub url: String,
+    /// The runner's labels (`ubuntu-latest`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+    pub steps: Vec<WorkflowStep>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ActionsRunParams {
+    pub project_id: ProjectId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    pub run_id: u64,
+    /// An earlier attempt to read instead of the latest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u32>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ActionsRunResult {
+    /// The run as of the attempt read (`attempt`, else the latest).
+    pub run: WorkflowRun,
+    /// That attempt's jobs, in GitHub's order (first 100).
+    pub jobs: Vec<WorkflowJob>,
+    /// The jobs the workflow file declares at the run's commit, for the job graph; empty when the file can't be read
+    /// (a dynamic workflow, a fork's commit) and the client lays the jobs out in run order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workflow_jobs: Vec<WorkflowJobSpec>,
+    /// Every attempt's outcome, oldest first, when the run has more than one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attempts: Vec<RunAttempt>,
+}
+/// One job of a workflow file: what the job graph needs to place GitHub's jobs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WorkflowJobSpec {
+    /// The key under `jobs:`.
+    pub id: String,
+    /// `name:` as written, `${{ }}` expressions included; empty when unset (GitHub then names the job by its id).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub needs: Vec<String>,
+    /// `strategy.matrix`'s keys (`include`/`exclude` left out); empty for a matrix built by an expression. None without a matrix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matrix: Option<Vec<String>>,
+    /// A reusable workflow the job calls; its jobs report as `<caller> / <callee>`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub uses: String,
+    /// The job has an `if:` condition.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub conditional: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RunAttempt {
+    pub attempt: u32,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub conclusion: String,
+}
+method!(ActionsRun, "github.actions.run", Some(Scope::OrchestrationRead), ActionsRunParams, ActionsRunResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ActionsLogParams {
+    pub project_id: ProjectId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    pub job_id: u64,
+    /// First line to return, 0-based.
+    #[serde(default)]
+    pub offset: u32,
+    /// Lines to return, 1–2000.
+    #[serde(default = "default_actions_log_limit")]
+    pub limit: u32,
+    /// Instead of `offset`: the lines around the job's errors (or its tail), bounded for an agent prompt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub excerpt: bool,
+}
+fn default_actions_log_limit() -> u32 {
+    500
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ActionsLogResult {
+    /// False while the job runs: GitHub publishes a job's log when it finishes.
+    pub available: bool,
+    /// The lines from `offset`, without GitHub's timestamps. ANSI codes are kept for the client to map.
+    pub lines: Vec<String>,
+    pub offset: u32,
+    pub total_lines: u32,
+    /// 0-based lines GitHub marked `##[error]` (first 50).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub error_lines: Vec<u32>,
+    /// A line longer than 4 KiB was cut.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clipped: bool,
+}
+method!(ActionsLog, "github.actions.log", Some(Scope::OrchestrationRead), ActionsLogParams, ActionsLogResult);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Workflow {
+    pub id: u64,
+    pub name: String,
+    /// `.github/workflows/ci.yml`
+    pub path: String,
+    /// active | disabled_manually | disabled_inactivity | …
+    pub state: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ActionsWorkflowsParams {
+    pub project_id: ProjectId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ActionsWorkflowsResult {
+    pub workflows: Vec<Workflow>,
+    /// The repository's default branch, where a dispatch runs unless told otherwise.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub default_branch: String,
+}
+method!(ActionsWorkflows, "github.actions.workflows", Some(Scope::OrchestrationRead), ActionsWorkflowsParams, ActionsWorkflowsResult);
+
+/// One `workflow_dispatch` input.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct WorkflowInput {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub default: String,
+    /// string | boolean | choice | number | environment
+    pub kind: String,
+    /// `choice` only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ActionsWorkflowParams {
+    pub project_id: ProjectId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    /// A workflow's id or file name.
+    pub workflow: String,
+    /// Read the workflow file at this branch. Default: the repository's default branch.
+    #[serde(rename = "ref", default, skip_serializing_if = "Option::is_none")]
+    pub git_ref: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ActionsWorkflowResult {
+    /// The file has a `workflow_dispatch` trigger, so it can be started by hand.
+    pub dispatchable: bool,
+    pub inputs: Vec<WorkflowInput>,
+}
+method!(ActionsWorkflow, "github.actions.workflow", Some(Scope::OrchestrationRead), ActionsWorkflowParams, ActionsWorkflowResult);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionsActionKind {
+    /// Run every job again.
+    Rerun,
+    /// Run the failed jobs (and what they need) again.
+    RerunFailed,
+    /// Run one job (`job_id`) again.
+    RerunJob,
+    Cancel,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ActionsActionParams {
+    pub project_id: ProjectId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    pub action: ActionsActionKind,
+    pub run_id: u64,
+    /// `rerun_job` only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<u64>,
+}
+method!(ActionsAction, "github.actions.action", Some(Scope::OrchestrationOperate), ActionsActionParams, Empty);
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ActionsDispatchParams {
+    pub project_id: ProjectId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    /// A workflow's id or file name.
+    pub workflow: String,
+    /// The branch or tag to run on.
+    #[serde(rename = "ref")]
+    pub git_ref: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub inputs: BTreeMap<String, String>,
+}
+method!(ActionsDispatch, "github.actions.dispatch", Some(Scope::OrchestrationOperate), ActionsDispatchParams, Empty);
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorktreeInspectParams {
     pub thread_id: ThreadId,
@@ -4493,6 +4812,13 @@ registry!(
     PrDetail,
     PrPage,
     PrAction,
+    ActionsRuns,
+    ActionsRun,
+    ActionsLog,
+    ActionsWorkflows,
+    ActionsWorkflow,
+    ActionsAction,
+    ActionsDispatch,
     WorktreeInspect,
     WorktreeRemove,
     FilesSearch,

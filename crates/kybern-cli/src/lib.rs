@@ -584,6 +584,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: PrCmd,
     },
+    /// GitHub Actions workflow runs via the GitHub CLI.
+    Actions {
+        #[command(subcommand)]
+        cmd: ActionsCmd,
+    },
     /// Terminals owned by the daemon.
     Terminal {
         #[command(subcommand)]
@@ -1062,6 +1067,85 @@ async fn pr_simple_action(
         })
         .await?;
     Ok(())
+}
+
+#[derive(Subcommand)]
+enum ActionsCmd {
+    /// List workflow runs on any branch, newest first.
+    Runs {
+        project: String,
+        /// A workflow id or file name (ci.yml).
+        #[arg(long)]
+        workflow: Option<String>,
+        #[arg(long)]
+        branch: Option<String>,
+        /// A status or conclusion: in_progress, failure, success, …
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long, default_value = "1")]
+        page: u32,
+        /// Member repository of a group project.
+        #[arg(long)]
+        repo: Option<String>,
+    },
+    /// A run with its jobs and steps, and the jobs its workflow file declares.
+    View {
+        project: String,
+        run: u64,
+        /// An earlier attempt.
+        #[arg(long)]
+        attempt: Option<u32>,
+        #[arg(long)]
+        repo: Option<String>,
+    },
+    /// Print one page of a finished job's log (--excerpt: the lines around its errors).
+    Log {
+        project: String,
+        job: u64,
+        #[arg(long, default_value = "0")]
+        offset: u32,
+        #[arg(long, default_value = "500")]
+        limit: u32,
+        #[arg(long)]
+        excerpt: bool,
+        #[arg(long)]
+        repo: Option<String>,
+    },
+    /// List the repository's workflows.
+    Workflows {
+        project: String,
+        #[arg(long)]
+        repo: Option<String>,
+    },
+    /// Run a run's jobs again (--failed: only the failed ones; --job: one job).
+    Rerun {
+        project: String,
+        run: u64,
+        #[arg(long, conflicts_with = "job")]
+        failed: bool,
+        #[arg(long)]
+        job: Option<u64>,
+        #[arg(long)]
+        repo: Option<String>,
+    },
+    /// Cancel a run.
+    Cancel {
+        project: String,
+        run: u64,
+        #[arg(long)]
+        repo: Option<String>,
+    },
+    /// Start a workflow_dispatch workflow: `-f checks=all` per input.
+    Dispatch {
+        project: String,
+        workflow: String,
+        #[arg(long = "ref")]
+        git_ref: String,
+        #[arg(short = 'f', long = "field")]
+        fields: Vec<String>,
+        #[arg(long)]
+        repo: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2570,6 +2654,88 @@ pub async fn run() -> Result<()> {
             let r = client.call::<GitCommit>(GitCommitParams { thread_id: thread.parse()?, message }).await?;
             println!("{}  {}", &r.commit[..10], r.message.lines().next().unwrap_or(""));
         }
+        Cmd::Actions { cmd } => match cmd {
+            ActionsCmd::Runs { project, workflow, branch, status, page, repo } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                let r = client
+                    .call::<ActionsRuns>(ActionsRunsParams {
+                        project_id,
+                        repo,
+                        workflow,
+                        branch,
+                        status,
+                        event: None,
+                        page,
+                        per_page: 30,
+                        pages: 1,
+                        pulls: false,
+                    })
+                    .await?;
+                for run in r.runs {
+                    let state = if run.conclusion.is_empty() { run.status } else { run.conclusion };
+                    println!("{}  {state:<11}  {}  #{}  {}  ({})", run.id, run.workflow_name, run.number, run.title, run.head_branch);
+                }
+                if r.has_more {
+                    eprintln!("more: --page {}", page + 1);
+                }
+            }
+            ActionsCmd::View { project, run, attempt, repo } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                let r = client.call::<ActionsRun>(ActionsRunParams { project_id, repo, run_id: run, attempt }).await?;
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            }
+            ActionsCmd::Log { project, job, offset, limit, excerpt, repo } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                let r = client.call::<ActionsLog>(ActionsLogParams { project_id, repo, job_id: job, offset, limit, excerpt }).await?;
+                if !r.available {
+                    eprintln!("The job is still running; its log appears when it finishes.");
+                }
+                for line in &r.lines {
+                    println!("{line}");
+                }
+                let end = r.offset + r.lines.len() as u32;
+                if end < r.total_lines {
+                    eprintln!("lines {}-{end} of {}: --offset {end} for more", r.offset, r.total_lines);
+                }
+            }
+            ActionsCmd::Workflows { project, repo } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                let r = client.call::<ActionsWorkflows>(ActionsWorkflowsParams { project_id, repo }).await?;
+                for w in r.workflows {
+                    println!("{}  {}  {}  {}", w.id, w.name, w.path, w.state);
+                }
+            }
+            ActionsCmd::Rerun { project, run, failed, job, repo } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                let action = match (job, failed) {
+                    (Some(_), _) => ActionsActionKind::RerunJob,
+                    (None, true) => ActionsActionKind::RerunFailed,
+                    (None, false) => ActionsActionKind::Rerun,
+                };
+                client.call::<ActionsAction>(ActionsActionParams { project_id, repo, action, run_id: run, job_id: job }).await?;
+            }
+            ActionsCmd::Cancel { project, run, repo } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                client
+                    .call::<ActionsAction>(ActionsActionParams {
+                        project_id,
+                        repo,
+                        action: ActionsActionKind::Cancel,
+                        run_id: run,
+                        job_id: None,
+                    })
+                    .await?;
+            }
+            ActionsCmd::Dispatch { project, workflow, git_ref, fields, repo } => {
+                let project_id = resolve_project(&client, &project, false).await?;
+                let mut inputs = std::collections::BTreeMap::new();
+                for field in fields {
+                    let (name, value) = field.split_once('=').ok_or_else(|| anyhow::anyhow!("Write each input as name=value: {field}"))?;
+                    inputs.insert(name.to_owned(), value.to_owned());
+                }
+                client.call::<ActionsDispatch>(ActionsDispatchParams { project_id, repo, workflow, git_ref, inputs }).await?;
+            }
+        },
         Cmd::Pr { cmd } => match cmd {
             PrCmd::View { project, number, repo } => {
                 let project_id = resolve_project(&client, &project, false).await?;

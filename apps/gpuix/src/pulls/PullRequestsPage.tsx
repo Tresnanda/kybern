@@ -16,7 +16,10 @@ import { useSpaceProjects } from '../spaces/current.ts'
 import { addWindowKeyHandler } from '../nav/keys.ts'
 import { useNav } from '../nav/store.ts'
 import { Label, useTheme } from '../ui.tsx'
-import { column, Header, row } from '../usage/controls.tsx'
+import { column, row } from '../usage/controls.tsx'
+import { PullsHeader } from './PullsTabs.tsx'
+import { usePullsTab } from './actions/store.ts'
+import { ActionsPage } from './actions/ActionsPage.tsx'
 import { Button } from '../kit/Button.tsx'
 import { IconButton } from '../kit/IconButton.tsx'
 import { SearchField } from '../kit/SearchField.tsx'
@@ -41,7 +44,13 @@ const refOf = (projectId: string, number: number, repo?: string) => `${projectId
 /** The repositories chosen per group project, kept across launches (`list/model.ts`, bounded). */
 const REPO_MEMORY_KEY = 'pulls.repos'
 
+/** The page's two tabs: pull requests, and the repository's Actions runs (ADE-97). */
 export function PullRequestsPage() {
+  const tab = usePullsTab(s => s.tab)
+  return tab === 'actions' ? <ActionsPage /> : <PullRequestsList />
+}
+
+function PullRequestsList() {
   const t = useTheme()
   const { renderer } = useGpuix()
   const projects = useSpaceProjects()
@@ -137,7 +146,7 @@ export function PullRequestsPage() {
   const failure = data?.rows.length ? undefined : data?.errors.find(e => ['gh-missing', 'gh-auth'].includes(classifyPrError(e)))
   return <div {...PR_SCROLL_LAYOUT} testId="page-pulls" onMouseMove={measure} style={{ display: 'flex', flexGrow: 1, minHeight: 0, minWidth: 0 }}>
     {(wide || !selection) && <div style={{ ...column, width: wide ? list.width : '100%', flexShrink: 0, position: 'relative', borderRightWidth: wide ? 1 : 0, borderColor: t.border }}>
-      <Header title="Pull requests"><ProjectFilter projects={projects.filter(hasPullRequests)} scope={scope} remembered={remembered} counts={counts} onChange={changeScope} /><IconButton testId="pr-refresh" icon={N.refresh} label="Refresh" disabled={pending} onClick={() => refresh(n => n + 1)}><SwapOnChange kind="icon" active={pending ? 'busy' : 'idle'} style={{ width: 16, height: 16 }}>{pending ? <SpinIcon testId="pr-refresh-spinner" source={N.refresh} size={16} color={t.iconSecondary}/> : <Icon source={N.refresh} size={16} color={t.iconSecondary}/>}</SwapOnChange></IconButton></Header>
+      <PullsHeader><ProjectFilter projects={projects.filter(hasPullRequests)} scope={scope} remembered={remembered} counts={counts} onChange={changeScope} /><IconButton testId="pr-refresh" icon={N.refresh} label="Refresh" disabled={pending} onClick={() => refresh(n => n + 1)}><SwapOnChange kind="icon" active={pending ? 'busy' : 'idle'} style={{ width: 16, height: 16 }}>{pending ? <SpinIcon testId="pr-refresh-spinner" source={N.refresh} size={16} color={t.iconSecondary}/> : <Icon source={N.refresh} size={16} color={t.iconSecondary}/>}</SwapOnChange></IconButton></PullsHeader>
       <div style={{ ...column, gap: 8, paddingLeft: 12, paddingRight: 12, paddingTop: 2, paddingBottom: 10 }}>
         {scopeProject && isGroup(scopeProject) && <RepoChips project={scopeProject} scope={scope} onChange={changeScope} />}
         <div style={{ ...row, gap: 6 }}>

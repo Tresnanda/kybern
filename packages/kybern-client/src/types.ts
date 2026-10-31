@@ -3192,6 +3192,87 @@ export interface PrActionParams { project_id: ProjectId; number: number; action:
   /** `merge`: bypass branch protection ("Merge anyway"); GitHub refuses unless the account may. */
   admin?: boolean
 }
+
+// GitHub Actions (ADE-97): workflow runs, jobs and steps, bounded job logs, reruns, cancel and dispatch.
+/** One workflow run. `status`: queued | in_progress | completed | waiting | requested | pending. `conclusion` is empty until it completes. */
+export interface WorkflowRun {
+  id: number
+  /** The run's number within its workflow. */
+  number: number
+  attempt: number
+  workflow_name: string
+  workflow_id: number
+  /** `.github/workflows/ci.yml` */
+  workflow_path?: string
+  /** The commit title or the dispatch's run name. */
+  title: string
+  /** The branch or tag. */
+  head_branch: string
+  head_sha: string
+  event: string
+  status: string
+  conclusion?: string
+  url: string
+  created_at: DateTime
+  started_at?: DateTime
+  updated_at: DateTime
+  /** Who started this attempt. */
+  actor?: string
+  pull_requests?: number[]
+}
+/** `workflow`: an id or file name. `status`: a status or a conclusion (in_progress, failure, …). */
+/** `pages`: pages to read from `page` on (1–5). `pulls`: also name each branch's pull request. */
+export interface ActionsRunsParams { project_id: ProjectId; repo?: string; workflow?: string; branch?: string; status?: string; event?: string; page?: number; per_page?: number; pages?: number; pulls?: boolean }
+export interface ActionsRunsResult {
+  runs: WorkflowRun[]
+  total_count: number
+  page: number
+  has_more: boolean
+  /** The signed-in `gh` account. */
+  viewer?: string
+  /** With `pulls`: each head branch's latest pull request. */
+  pulls?: BranchPull[]
+}
+/** `state`: OPEN | CLOSED | MERGED */
+export interface BranchPull { branch: string; number: number; state: string }
+export interface WorkflowStep { number: number; name: string; status: string; conclusion?: string; started_at?: DateTime; completed_at?: DateTime }
+export interface WorkflowJob { id: number; name: string; status: string; conclusion?: string; started_at?: DateTime; completed_at?: DateTime; url: string; labels?: string[]; steps: WorkflowStep[] }
+/** `attempt`: an earlier attempt instead of the latest. */
+export interface ActionsRunParams { project_id: ProjectId; repo?: string; run_id: number; attempt?: number }
+export interface ActionsRunResult {
+  run: WorkflowRun
+  jobs: WorkflowJob[]
+  /** The jobs the workflow file declares at the run's commit; absent when it can't be read. */
+  workflow_jobs?: WorkflowJobSpec[]
+  /** Every attempt's outcome, oldest first, when there was more than one. */
+  attempts?: RunAttempt[]
+}
+/** One job of a workflow file. `name` keeps its `${{ }}` expressions; `matrix` lists the matrix's keys (empty for one built by an expression). */
+export interface WorkflowJobSpec { id: string; name?: string; needs?: string[]; matrix?: string[]; uses?: string; conditional?: boolean }
+export interface RunAttempt { attempt: number; status: string; conclusion?: string }
+/** `excerpt`: instead of `offset`, the lines around the job's errors (or its tail), bounded for an agent prompt. */
+export interface ActionsLogParams { project_id: ProjectId; repo?: string; job_id: number; offset?: number; limit?: number; excerpt?: boolean }
+export interface ActionsLogResult {
+  /** False while the job runs: GitHub publishes the log when it finishes. */
+  available: boolean
+  /** Without timestamps; ANSI codes kept for the client to map. */
+  lines: string[]
+  offset: number
+  total_lines: number
+  /** 0-based `##[error]` lines (first 50). */
+  error_lines?: number[]
+  clipped?: boolean
+}
+export interface Workflow { id: number; name: string; path: string; state: string }
+export interface ActionsWorkflowsParams { project_id: ProjectId; repo?: string }
+export interface ActionsWorkflowsResult { workflows: Workflow[]; default_branch?: string }
+/** `kind`: string | boolean | choice | number | environment. */
+export interface WorkflowInput { name: string; description?: string; required?: boolean; default?: string; kind: string; options?: string[] }
+export interface ActionsWorkflowParams { project_id: ProjectId; repo?: string; workflow: string; ref?: string }
+export interface ActionsWorkflowResult { dispatchable: boolean; inputs: WorkflowInput[] }
+export type ActionsActionKind = "rerun" | "rerun_failed" | "rerun_job" | "cancel"
+export interface ActionsActionParams { project_id: ProjectId; repo?: string; action: ActionsActionKind; run_id: number; job_id?: number }
+export interface ActionsDispatchParams { project_id: ProjectId; repo?: string; workflow: string; ref: string; inputs?: Record<string, string> }
 export interface WorktreeInspectParams { thread_id: ThreadId }
 export interface WorktreeInspectResult { path: string; branch: string; exists: boolean; clean: boolean; merged: boolean; ignored_files: number; blockers: string[]; eligible: boolean }
 export interface WorktreeRemoveParams { thread_id: ThreadId; force?: boolean; delete_branch?: boolean }
@@ -4531,6 +4612,13 @@ export interface Methods {
   "github.pr.detail": [PrDetailParams, PrDetailResult];
   "github.pr.page": [PrPageParams, PrPageResult];
   "github.pr.action": [PrActionParams, Empty];
+  "github.actions.runs": [ActionsRunsParams, ActionsRunsResult];
+  "github.actions.run": [ActionsRunParams, ActionsRunResult];
+  "github.actions.log": [ActionsLogParams, ActionsLogResult];
+  "github.actions.workflows": [ActionsWorkflowsParams, ActionsWorkflowsResult];
+  "github.actions.workflow": [ActionsWorkflowParams, ActionsWorkflowResult];
+  "github.actions.action": [ActionsActionParams, Empty];
+  "github.actions.dispatch": [ActionsDispatchParams, Empty];
   "threads.worktree.inspect": [WorktreeInspectParams, WorktreeInspectResult];
   "threads.worktree.remove": [WorktreeRemoveParams, WorktreeInspectResult];
   "network.status": [Empty, NetworkStatus];
