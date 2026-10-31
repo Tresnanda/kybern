@@ -454,7 +454,17 @@ async fn a_dev_server_on_the_other_machine_is_previewed_from_here_through_a_forw
         loop {
             let Ok((mut socket, _)) = dev.accept().await else { return };
             tokio::spawn(async move {
-                use tokio::io::AsyncWriteExt;
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                // Answer after the request, as a server does: over the direct path an early answer reaches
+                // the client before it has sent anything.
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 1024];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match socket.read(&mut buffer).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(read) => request.extend_from_slice(&buffer[..read]),
+                    }
+                }
                 let _ = socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").await;
             });
         }

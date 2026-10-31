@@ -545,8 +545,7 @@ async fn open_echo_connection(a: &Node, b: &Node, client: &Client, remote_port: 
     let mut got = [0u8; 4];
     tokio::time::timeout(Duration::from_secs(10), socket.read_exact(&mut got)).await.expect("no echo").unwrap();
     assert_eq!(&got, b"ping");
-    eventually("b serves the stream", WAIT, || b.state.network.relays.open_streams() == 1 && a.state.network.relays.open_streams() == 1)
-        .await;
+    assert_eq!(client_connections(a), 1);
     socket
 }
 
@@ -921,4 +920,40 @@ async fn the_universal_clipboard_is_off_until_both_machines_opt_in_and_it_never_
     eventually("a sees b opted out", WAIT, || a.membership().projection().allowed(&b.id()).get("clipboard_auto") == Some(&false)).await;
     tick(&a.state).await;
     assert_eq!(b.state.network.clipboard.memory_for_test().as_deref(), Some("a sentence copied on a"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_machines_forward_one_server_independently_and_old_peers_keep_the_stream_transport() {
+    let Some(cluster) = Cluster::new(&[NodeSpec::owner("a"), NodeSpec::owner("b"), NodeSpec::owner("c")]) else {
+        return;
+    };
+    let a = cluster.start("a", true).await;
+    let b = cluster.start("b", true).await;
+    let c = cluster.start("c", true).await;
+    cluster.form(&a, &[&b, &c], JoinVia::Auto).await;
+    eventually("both clients have the server presence", WAIT, || {
+        linked(&a, &b) && linked(&c, &b) && [&a, &c].iter().all(|node| node.state.network.peers.status(&b.id()).presence.is_some())
+    })
+    .await;
+    let port = echo_server().await;
+    let ca = admin(&a).await;
+    let cc = admin(&c).await;
+    let mut first = open_echo_connection(&a, &b, &ca, port).await;
+    let mut second = open_echo_connection(&c, &b, &cc, port).await;
+    assert_eq!(b.state.network.peers.link(&a.id()).unwrap().relays.len(), 0, "raw TCP must bypass the multiplexed streams");
+    let forward = ca.call::<PortsList>(Empty {}).await.unwrap().forwards.remove(0);
+    ca.call::<PortsStop>(PortsStopParams { id: forward.id }).await.unwrap();
+    assert_connection_ends(&mut first).await;
+    second.write_all(b"live").await.unwrap();
+    let mut reply = [0; 4];
+    second.read_exact(&mut reply).await.unwrap();
+    assert_eq!(&reply, b"live");
+    // A 0.20.x presence lacks ports.direct.v1. The unchanged stream path must still work.
+    let mut old = b.state.network.presence();
+    old.version = "0.20.4".into();
+    old.features.retain(|f| f != features::PORTS_DIRECT_V1);
+    a.state.network.peers.set_presence(&b.id(), old);
+    let _legacy = open_echo_connection(&a, &b, &ca, port).await;
+    assert_eq!(a.state.network.relays.open_streams(), 1);
+    assert_eq!(b.state.network.peers.link(&a.id()).unwrap().relays.len(), 1);
 }

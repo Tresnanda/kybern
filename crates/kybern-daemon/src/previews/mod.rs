@@ -551,7 +551,7 @@ pub async fn open(
             if crate::network::ports::own_ports(state).contains(port) {
                 return Err(PreviewError::invalid_address());
             }
-            if proxy::listener_addr(*port).await.is_none() {
+            if !is_forwarded_port(state, *port) && proxy::listener_addr(*port).await.is_none() {
                 return Err(PreviewError { code: "not_found", message: "Nothing is listening on that port yet.".into() });
             }
             let ticket = state.previews.mint(tickets::TicketKind::Proxy { port: *port }, thread.id, principal);
@@ -560,6 +560,11 @@ pub async fn open(
         }
     }
     Ok(result)
+}
+
+// The forward already owns its local listener. Probing it opens an unnecessary remote TCP stream.
+fn is_forwarded_port(state: &crate::state::AppState, port: u16) -> bool {
+    state.network.ports.views().iter().any(|forward| forward.local_port == port)
 }
 
 /// The daemon's loopback proxy speaks HTTP. Keep direct HTTPS intact, but never mint a ticket
@@ -600,7 +605,7 @@ pub async fn open_server(
     };
     if params.proxy {
         require_http_proxy(&url)?;
-        if proxy::listener_addr(port).await.is_none() {
+        if !is_forwarded_port(state, port) && proxy::listener_addr(port).await.is_none() {
             return Err(PreviewError { code: "not_found", message: "Nothing is listening on that port yet.".into() });
         }
         let ticket = state.previews.mint_server(port, principal);

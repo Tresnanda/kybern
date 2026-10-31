@@ -34,6 +34,7 @@ pub mod features {
     pub const MOVE_V1: &str = "move.v1";
     pub const FILES_PUSH_V1: &str = "files.push.v1";
     pub const CLIPBOARD_V1: &str = "clipboard.v1";
+    pub const PORTS_DIRECT_V1: &str = "ports.direct.v1";
     pub const PORTS_V1: &str = "ports.v1";
     pub const SETTINGS_FANOUT_V1: &str = "settings.fanout.v1";
     pub const NOTES_FEDERATED_V1: &str = "notes.federated.v1";
@@ -52,7 +53,7 @@ pub mod features {
     pub const SKILLS_SYNC_V1: &str = "skills.sync.v1";
 
     /// Every feature the network design names, in design order.
-    pub const ALL: [&str; 19] = [
+    pub const ALL: [&str; 20] = [
         NETWORK_V1,
         SPACES_SYNC_V1,
         RELAY_V1,
@@ -63,6 +64,7 @@ pub mod features {
         FILES_PUSH_V1,
         CLIPBOARD_V1,
         PORTS_V1,
+        PORTS_DIRECT_V1,
         SETTINGS_FANOUT_V1,
         NOTES_FEDERATED_V1,
         SECRETS_STORE_V1,

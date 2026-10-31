@@ -36,10 +36,13 @@ const HOP_BY_HOP: [&str; 8] =
 /// The loopback address a dev server on `port` answers on, if it is listening.
 /// `previews.open` calls this when minting a proxy ticket.
 pub async fn listener_addr(port: u16) -> Option<SocketAddr> {
+    loopback_socket(port).await?.peer_addr().ok()
+}
+
+async fn loopback_socket(port: u16) -> Option<TcpStream> {
     for ip in [IpAddr::V4(Ipv4Addr::LOCALHOST), IpAddr::V6(Ipv6Addr::LOCALHOST)] {
-        let addr = SocketAddr::new(ip, port);
-        if matches!(tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addr)).await, Ok(Ok(_))) {
-            return Some(addr);
+        if let Ok(Ok(socket)) = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(SocketAddr::new(ip, port))).await {
+            return Some(socket);
         }
     }
     None
@@ -51,6 +54,7 @@ fn client() -> &'static reqwest::Client {
         reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
+            .resolve_to_addrs("localhost", &[SocketAddr::from((Ipv4Addr::LOCALHOST, 0)), SocketAddr::from((Ipv6Addr::LOCALHOST, 0))])
             .connect_timeout(CONNECT_TIMEOUT)
             .read_timeout(IDLE_TIMEOUT)
             .build()
@@ -232,16 +236,13 @@ pub async fn handle(tickets: &super::tickets::PreviewTickets, request: Request, 
 
 async fn forward(request: Request, port: u16, target: String, is_secret: IsSecret<'_>) -> Response {
     let target = filter_query(&target, is_secret);
-    let Some(addr) = listener_addr(port).await else { return plain(StatusCode::BAD_GATEWAY, "The server isn't answering.") };
-    let host = match addr.ip() {
-        IpAddr::V4(ip) => ip.to_string(),
-        IpAddr::V6(ip) => format!("[{ip}]"),
-    };
+    // Resolve this fixed name exclusively to loopback; the request itself connects once.
+    let host = "localhost";
     // The target always starts with `/`, so it cannot change the authority.
     let Ok(url) = reqwest::Url::parse(&format!("http://{host}:{port}{target}")) else {
         return plain(StatusCode::BAD_REQUEST, "bad request");
     };
-    if url.port() != Some(port) || url.host_str() != Some(host.as_str()) {
+    if url.port() != Some(port) || url.host_str() != Some(host) {
         return plain(StatusCode::BAD_REQUEST, "bad request");
     }
     let (parts, body) = request.into_parts();
@@ -290,16 +291,12 @@ fn close_reason(code: u16, reason: &'static str) -> Message {
 
 async fn pump(mut client: WebSocket, port: u16, target: String, protocols: Vec<String>, app_headers: HeaderMap) {
     use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest as _};
-    let Some(addr) = listener_addr(port).await else {
+    let Some(socket) = loopback_socket(port).await else {
         let _ = client.send(close_reason(1011, "upstream unavailable")).await;
         return;
     };
-    let host = match addr.ip() {
-        IpAddr::V4(ip) => ip.to_string(),
-        IpAddr::V6(ip) => format!("[{ip}]"),
-    };
     let upstream = async {
-        let mut request = format!("ws://{host}:{port}{target}").into_client_request().ok()?;
+        let mut request = format!("ws://localhost:{port}{target}").into_client_request().ok()?;
         let headers = request.headers_mut();
         headers.insert(header::HOST, HeaderValue::from_str(&format!("localhost:{port}")).ok()?);
         headers.insert(header::ORIGIN, HeaderValue::from_str(&format!("http://localhost:{port}")).ok()?);
@@ -311,7 +308,7 @@ async fn pump(mut client: WebSocket, port: u16, target: String, protocols: Vec<S
         if !protocols.is_empty() {
             headers.insert("sec-websocket-protocol", HeaderValue::from_str(&protocols.join(", ")).ok()?);
         }
-        tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(request)).await.ok()?.ok()
+        tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::client_async(request, socket)).await.ok()?.ok()
     };
     let Some((upstream, _)) = upstream.await else {
         let _ = client.send(close_reason(1011, "upstream unavailable")).await;

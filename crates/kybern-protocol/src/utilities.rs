@@ -197,7 +197,7 @@ pub struct PortsForwardParams {
     /// The target machine, by id or name.
     pub machine: String,
     pub remote_port: u16,
-    /// A port to bind here; any free port when left out.
+    /// A port to bind here; the remote port, or the next free port, when left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_port: Option<u16>,
 }
@@ -229,6 +229,33 @@ pub struct PortsStopParams {
 pub struct PeerPortsOpenParams {
     pub stream_id: u64,
     pub port: u16,
+}
+
+/// Authorize a forward without connecting to the destination service.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerPortsPrepareParams {
+    pub forward_id: Uuid,
+    pub port: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerPortsPrepareResult {
+    /// Absent when the existing WebSocket stream transport must be used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct: Option<PeerPortsDirect>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerPortsDirect {
+    /// Port on the serving machine's Tailscale address. The address is resolved from membership.
+    pub port: u16,
+    /// Per-forward credential, sent as 64 ASCII bytes before application traffic.
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerPortsReleaseParams {
+    pub forward_id: Uuid,
 }
 
 // ---- clipboard (M4 / U2, design §8.2) ----

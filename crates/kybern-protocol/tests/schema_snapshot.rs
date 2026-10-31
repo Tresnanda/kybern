@@ -351,6 +351,9 @@ fn machine_utility_schemas_are_stable() {
     insta::assert_json_snapshot!("utilities_files_received", schema_for!(FilesReceived));
     insta::assert_json_snapshot!("utilities_port_forward", schema_for!(PortForward));
     insta::assert_json_snapshot!("utilities_peer_ports_open_params", schema_for!(PeerPortsOpenParams));
+    insta::assert_json_snapshot!("utilities_peer_ports_prepare_params", schema_for!(PeerPortsPrepareParams));
+    insta::assert_json_snapshot!("utilities_peer_ports_prepare_result", schema_for!(PeerPortsPrepareResult));
+    insta::assert_json_snapshot!("utilities_peer_ports_release_params", schema_for!(PeerPortsReleaseParams));
 }
 
 #[test]
@@ -469,7 +472,7 @@ fn an_older_daemon_info_and_project_still_parse_and_the_network_defaults_to_off(
     let saved: Settings = serde_json::from_value(serde_json::json!({ "network": { "enabled": true } })).unwrap();
     assert_eq!(saved.network, NetworkSettings { configured: true, enabled: true, port: DEFAULT_PORT });
     assert_eq!(NETWORK_PROTOCOL, 1);
-    assert_eq!(features::ALL.len(), 19);
+    assert_eq!(features::ALL.len(), 20);
 }
 
 #[test]

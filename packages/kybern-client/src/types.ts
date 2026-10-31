@@ -3976,6 +3976,10 @@ export interface PortForward {
   created_at: DateTime;
 }
 export interface PortsListResult { forwards: PortForward[] }
+export interface PeerPortsPrepareParams { forward_id: string; port: number }
+export interface PeerPortsDirect { port: number; token: string }
+export interface PeerPortsPrepareResult { direct?: PeerPortsDirect }
+export interface PeerPortsReleaseParams { forward_id: string }
 export interface PeerPortsOpenParams { stream_id: number; port: number }
 
 // ---- the clipboard between machines (M4 / U2; design §8.2) ----
@@ -4617,6 +4621,8 @@ export interface Methods {
   "peer.clipboard.set": [{ text: string }, ClipboardSetResult];
   "peer.clipboard.get": [Empty, ClipboardGetResult];
   "peer.clipboard.auto": [{ sealed: string }, Empty];
+  "peer.ports.prepare": [PeerPortsPrepareParams, PeerPortsPrepareResult];
+  "peer.ports.release": [PeerPortsReleaseParams, Empty];
   "peer.ports.open": [PeerPortsOpenParams, Empty];
   "peer.ports.data": [PeerRelayDataParams, Empty];
   "peer.ports.close": [PeerRelayCloseParams, Empty];

@@ -335,6 +335,7 @@ impl Network {
             features::UPDATE_V1.to_string(),
             features::FILES_PUSH_V1.to_string(),
             features::PORTS_V1.to_string(),
+            features::PORTS_DIRECT_V1.to_string(),
             features::CLIPBOARD_V1.to_string(),
             features::GROUP_V1.to_string(),
             features::PROVISION_V1.to_string(),

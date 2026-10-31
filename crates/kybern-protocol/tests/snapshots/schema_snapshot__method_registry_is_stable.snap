@@ -270,6 +270,8 @@ expression: names
 - peer.clipboard.set
 - peer.clipboard.get
 - peer.clipboard.auto
+- peer.ports.prepare
+- peer.ports.release
 - peer.ports.open
 - peer.ports.data
 - peer.ports.close

@@ -1,0 +1,44 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(PeerPortsPrepareResult)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PeerPortsPrepareResult",
+  "type": "object",
+  "properties": {
+    "direct": {
+      "description": "Absent when the existing WebSocket stream transport must be used.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PeerPortsDirect"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "PeerPortsDirect": {
+      "type": "object",
+      "properties": {
+        "port": {
+          "description": "Port on the serving machine's Tailscale address. The address is resolved from membership.",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "token": {
+          "description": "Per-forward credential, sent as 64 ASCII bytes before application traffic.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "port",
+        "token"
+      ]
+    }
+  }
+}

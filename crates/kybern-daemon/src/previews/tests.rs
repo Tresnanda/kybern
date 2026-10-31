@@ -490,11 +490,14 @@ async fn device_server_proxy_preserves_forwarded_page_assets_and_hot_reload_with
     let dev_task = tokio::spawn(async move { axum::serve(dev, app).await.unwrap() });
     let forward = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = forward.local_addr().unwrap().port();
+    let connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let accepted = connections.clone();
     let forward_task = tokio::spawn(async move {
         loop {
             let Ok((mut socket, _)) = forward.accept().await else {
                 break;
             };
+            accepted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             tokio::spawn(async move {
                 if let Ok(mut target) = tokio::net::TcpStream::connect(("127.0.0.1", dev_port)).await {
                     let _ = tokio::io::copy_bidirectional(&mut socket, &mut target).await;
@@ -513,7 +516,9 @@ async fn device_server_proxy_preserves_forwarded_page_assets_and_hot_reload_with
     let base = format!("http://{primary_addr}{}", result.path.unwrap().trim_end_matches('/'));
     let http = reqwest::Client::builder().no_proxy().build().unwrap();
     assert_eq!(http.get(format!("{base}/app")).send().await.unwrap().text().await.unwrap(), "<script src='/asset.js'></script>");
+    assert_eq!(connections.load(std::sync::atomic::Ordering::Relaxed), 2, "one initial listener check and one real HTTP connection");
     assert_eq!(http.get(format!("{base}/asset.js")).send().await.unwrap().text().await.unwrap(), "window.loaded = true");
+    let before_upgrade = connections.load(std::sync::atomic::Ordering::Relaxed);
     let mut request = format!("{}/hmr", base.replace("http://", "ws://")).into_client_request().unwrap();
     request.headers_mut().insert("sec-websocket-protocol", "vite-hmr".parse().unwrap());
     let (mut socket, response) = tokio_tungstenite::connect_async(request).await.unwrap();
@@ -521,6 +526,11 @@ async fn device_server_proxy_preserves_forwarded_page_assets_and_hot_reload_with
     socket.send(Message::Text("update".into())).await.unwrap();
     let response = tokio::time::timeout(std::time::Duration::from_secs(5), socket.next()).await.unwrap().unwrap().unwrap();
     assert_eq!(response, Message::Text("update".into()));
+    assert_eq!(
+        connections.load(std::sync::atomic::Ordering::Relaxed),
+        before_upgrade + 1,
+        "an upgrade must reuse its actual socket instead of probing first"
+    );
     socket.close(None).await.unwrap();
     primary_task.abort();
     forward_task.abort();
