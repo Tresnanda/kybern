@@ -72,7 +72,8 @@ async fn turning_a_capability_back_on_reaches_a_live_session_within_seconds() {
     // Back on: before the fix this waited for the grant to be replaced, up to its whole life.
     allow_files(&b, true).await;
     eventually("files usable again", SOON, || usable(&b, &a, Scope::MachineFiles)).await;
-    assert!(linked(&a, &b), "the sessions are back");
+    // `b` registers the session on the upgrade, `a` once it reads the answer: a moment apart.
+    eventually("the sessions are back", WAIT, || linked(&a, &b)).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
