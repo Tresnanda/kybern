@@ -20,7 +20,7 @@ import { useDock } from './store.ts'
 import { Chevron } from '../sidebar/rows.tsx'
 import { Collapse, Rise, SwapOnChange } from '../motion/kit.tsx'
 import { Elapsed } from '../subagents/Elapsed.tsx'
-import { ownProjectId, threadClient } from '../state.ts'
+import { machineOfThreadId, ownProjectId, threadClient } from '../state.ts'
 import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { ink, Label, modelLabel, ProviderMark, useTheme } from '../ui.tsx'
 import { DockEmpty, ErrorLine, Section } from './parts.tsx'
@@ -76,7 +76,9 @@ export function Agents({ thread }: { thread: Thread }) {
       if (!current) return
       const merged = pending.reduce(fold, result.threads)
       setThreads(merged)
-      // Reuse navigation's child cache so Open and breadcrumbs resolve immediately.
+      // Reuse navigation's child cache so Open and breadcrumbs resolve immediately. Another machine's children come with
+      // their machine and listed project from `remoteLive.ts`; these are its own copies.
+      if (machineOfThreadId(thread.id)) { seeded = true; setLoaded(true); return }
       const children = { ...getNav().children }
       for (const child of merged) {
         if (child.parent_thread_id && (!children[child.id] || children[child.id]!.last_seq <= child.last_seq)) children[child.id] = child
@@ -221,7 +223,7 @@ const AgentRow = memo(function AgentRow({ row, fresh, last, rails, detailOpen, o
       {!!info?.conflicts?.length && <Label color={t.warning} size={11}>{`${info.conflicts.length} ownership conflicts · open the thread for details`}</Label>}
       <ErrorLine error={error} />
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-        <Button size="sm" onClick={() => openThread(thread.id)}>Open</Button>
+        <Button size="sm" onClick={() => openThread(thread.id, machineOfThreadId(owner))}>Open</Button>
         <Button size="sm" testId={`dock-agent-pin-${thread.id}`} onClick={() => { const host = getState().selectedId ?? thread.parent_thread_id; if (host) pinChildThread(host, thread) }}>Pin as tab</Button>
         {(canStopDelegation(thread) || (thread.subagent && state.phase === 'working' && thread.subagent.capabilities?.stop !== false)) && <Button size="sm" danger busy={busy} onClick={() => void stop()}>{busy ? 'Stopping…' : 'Stop'}</Button>}
         {canRemoveWorktree(info) && <Button size="sm" danger onClick={() => onRemove(thread)}>Remove worktree</Button>}

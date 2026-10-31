@@ -14,7 +14,7 @@ import { prependThreadHistory, type Block } from '../../../../packages/kybern-cl
 import { EARLIER_HISTORY_PAGE, historyPageShowedNothing, historyTop } from '../../../../packages/kybern-client/src/historyPaging.ts'
 import type { ApprovalDecision, Diff, Thread, ThreadEvent, ThreadId, TurnId } from '../../../../packages/kybern-client/src/types.ts'
 import { useNav } from '../nav/store.ts'
-import { threadClient, getPaneIds, getThreadSession, primeThreadHistory, takeThreadHistory, reloadPaneThread, getThreadOpen, setThreadOpen, getFocusedPaneId, getPane, getPaneState, onThreadEvent, subscribe, useApp, usePaneAccess, usePaneId } from '../state.ts'
+import { machineOfThreadId, threadClient, getPaneIds, getThreadSession, primeThreadHistory, takeThreadHistory, reloadPaneThread, getThreadOpen, setThreadOpen, getFocusedPaneId, getPane, getPaneState, onThreadEvent, subscribe, useApp, usePaneAccess, usePaneId } from '../state.ts'
 import { readClipboardText as readSystemClipboardText, writeClipboardText } from '../platform/os.ts'
 
 export type ToolBlock = Extract<Block, { kind: 'tool' }>
@@ -411,9 +411,11 @@ export function useChildThreads(parentId: ThreadId, enabled: boolean): Thread[] 
     if (current && Date.now() - current.at < CHILDREN_STALE_MS) return
     childLoads.add(parentId)
     const owner = activeEnvironment()
+    // The children are on the parent's machine: they open there (`openThread(child.id, child.machineId)`).
+    const machineId = machineOfThreadId(parentId)
     rpc(parentId)
       .call('threads.list', { parent_thread_id: parentId })
-      .then((result) => { if (owner === activeEnvironment()) childThreads.set(parentId, { at: Date.now(), threads: result.threads }) })
+      .then((result) => { if (owner === activeEnvironment()) childThreads.set(parentId, { at: Date.now(), threads: machineId ? result.threads.map((child) => ({ ...child, machineId })) : result.threads }) })
       .catch(() => {})
       .finally(() => {
         if (owner !== activeEnvironment()) return

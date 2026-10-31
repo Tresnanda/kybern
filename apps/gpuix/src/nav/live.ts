@@ -17,7 +17,7 @@ import { environmentKey } from '../shell/environment.ts'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
-import { isChildThread } from '../../../../packages/kybern-client/src/subagents.ts'
+import { isChildThread, isRemoteChildThread } from '../../../../packages/kybern-client/src/subagents.ts'
 import { isChildWorking } from '../../../../packages/kybern-client/src/delegations.ts'
 import {
   USAGE_LIMITS_CHANGED_NOTIFICATION,
@@ -27,13 +27,14 @@ import {
   type ThreadId,
   type UsageLimitsResult,
 } from '../../../../packages/kybern-client/src/types.ts'
-import { getClient, getState, onThreadActivity, set, subscribe } from '../state.ts'
+import { forgetOriginChild, getClient, getState, noteOriginChild, onThreadActivity, set, subscribe } from '../state.ts'
 import { DEFAULT_FILTER, getNav, setNav, subscribeNav, type NavState } from './store.ts'
 import { followSpaces, loadSpaces } from '../spaces/store.ts'
 import { followWorkspaceProgress } from '../groups/store.ts'
 import { gpuixConfigDir } from '../platform/os.ts'
 import { machineHub } from '../machines/index.ts'
 import { RemoteLive, activityMaps, withRemote } from './remoteLive.ts'
+import { remoteChildStore } from './remoteChildren.ts'
 
 const LIMITS_POLL_MS = 60_000
 const ACTIVITY_DEBOUNCE_MS = 600
@@ -58,6 +59,8 @@ function upsertThread(thread: Thread) {
   if (thread.status === 'archived') archived.add(thread.id)
   else if (archived.has(thread.id)) return
   if (isChildThread(thread)) {
+    // A child a thread of another machine started here is nested under that thread with the merged lists (`state.ts`).
+    if (isRemoteChildThread(thread) && noteOriginChild(thread)) return
     const children = getNav().children
     const current = children[thread.id]
     if (thread.status === 'archived') {
@@ -110,6 +113,7 @@ function onEvent(event: ThreadEvent) {
       return upsertThread(event.thread)
     case 'thread_archived': {
       archived.add(event.thread_id)
+      forgetOriginChild(event.thread_id)
       const threads = getState().threads
       if (threads.some((t) => t.id === event.thread_id && !t.machineId)) set({ threads: threads.filter((t) => t.id !== event.thread_id || t.machineId) })
       if (getNav().children[event.thread_id]) {
@@ -320,6 +324,7 @@ export function startLive() {
   stops.push(() => events.unsubscribe())
   remote = new RemoteLive({
     hub: machineHub(),
+    children: remoteChildStore,
     state: getState,
     unread: () => getNav().unread,
     setUnread: (unread) => setNav({ unread }),
@@ -327,6 +332,15 @@ export function startLive() {
   })
   remote.start()
   stops.push(() => { remote?.stop(); remote = undefined; localActivity = {}; localPending = {} })
+  // An open thread of another machine reads its children there, so its sidebar rows and launch cards can open them.
+  let opened = ''
+  stops.push(subscribe(() => {
+    const { selectedId, selectedMachineId } = getState()
+    const key = selectedId && selectedMachineId ? `${selectedMachineId}/${selectedId}` : ''
+    if (key === opened) return
+    opened = key
+    if (key) void remote?.loadChildren(selectedMachineId!, selectedId!)
+  }))
   stops.push(followSpaces())
   stops.push(followWorkspaceProgress())
   stops.push(client.onNotification(USAGE_LIMITS_CHANGED_NOTIFICATION, (params) => applyLimits(params as UsageLimitsResult)))

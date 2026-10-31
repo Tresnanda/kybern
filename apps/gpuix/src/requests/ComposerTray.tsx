@@ -24,7 +24,7 @@ import { Dim, Leave, useLeavingList } from '../composer/motion.tsx'
 import { SECTION_LABEL, SectionLabel } from '../composer/Menu.tsx'
 import { canSteer } from '../../../../packages/kybern-client/src/steering.ts'
 import { removeQueued, steerQueued } from '../composer/store.ts'
-import { useApp } from '../state.ts'
+import { useApp, type StateThread } from '../state.ts'
 import { Chevron } from '../motion/Chevron.tsx'
 import { Collapse, Rise, SwapOnChange, revealTransform } from '../motion/kit.tsx'
 import { openThread } from '../nav/history.ts'
@@ -359,7 +359,7 @@ const SubagentRow = memo(function SubagentRow({ thread }: { thread: Thread }) {
     <Dim dimmed={phase === 'done' || phase === 'stopped'} level={0.7}>
       <SubagentHover thread={thread}>
         <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}>
-          <Row testId={`subagent-open-${thread.id}`} onOpen={() => openThread(thread.id)} glyph={<StatusGlyph phase={phase} working={<ProviderMark kind={thread.provider.kind} size={14} />} />} actions={actions} trailing={span && <Clock startedAt={span.startedAt} endedAt={span.endedAt} />}>
+          <Row testId={`subagent-open-${thread.id}`} onOpen={() => openThread(thread.id, (thread as StateThread).machineId)} glyph={<StatusGlyph phase={phase} working={<ProviderMark kind={thread.provider.kind} size={14} />} />} actions={actions} trailing={span && <Clock startedAt={span.startedAt} endedAt={span.endedAt} />}>
             <Title keep={!!failure}>{thread.title || 'Subagent'}</Title>
             {failure ? <Meta color={t.red} shrink>{failure.text}</Meta> : type && <Meta>{type}</Meta>}
           </Row>
@@ -391,7 +391,7 @@ const HelperRow = memo(function HelperRow({ thread }: { thread: Thread }) {
   const waiting = useNav((s) => s.pending[thread.id]?.own) === 'question' ? 'Needs input' : 'Needs approval'
   const amber = t.variant === 'dark' ? '#fcd34d' : '#d97706'
   return (
-    <Row testId={`helper-${thread.id}`} onOpen={() => openThread(thread.id)}
+    <Row testId={`helper-${thread.id}`} onOpen={() => openThread(thread.id, (thread as StateThread).machineId)}
       glyph={thread.status === 'running' ? <ProviderMark kind={thread.provider.kind} size={14} /> : approval ? <Icon source={G.hand} size={14} color={amber} /> : thread.status === 'failed' ? <Icon source={T.alert} size={14} color={t.red} /> : <Icon source={T.check} size={14} color={ink(t, 0.45)} />}>
       <Title>{thread.title || 'Untitled'}</Title>
       <Meta color={approval ? amber : thread.status === 'failed' ? t.red : undefined}>{thread.status === 'running' ? 'Helper' : approval ? waiting : thread.status === 'failed' ? 'Failed' : 'Helper · idle'}</Meta>
