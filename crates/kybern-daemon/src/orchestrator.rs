@@ -101,7 +101,9 @@ impl Orchestrator {
     /// On open, upgrade old Cursor picker IDs from the cached account catalog.
     /// Only thread fields change; saved transcript events retain their original text.
     pub(crate) fn migrate_cursor_model(&self, thread: Thread) -> Result<Thread> {
-        if thread.provider.kind != ProviderKind::Cursor || !thread.model.as_deref().is_some_and(|model| model.starts_with("cursor-")) {
+        if thread.provider.kind != ProviderKind::Cursor
+            || !thread.model.as_deref().is_some_and(|model| model.starts_with("cursor-") && !model.starts_with("cursor-model:"))
+        {
             return Ok(thread);
         }
         let settings = self.inner.settings.get();
