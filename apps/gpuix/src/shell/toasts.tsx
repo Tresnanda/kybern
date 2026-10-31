@@ -1,6 +1,5 @@
 import { Button } from '../kit/Button.tsx'
-import { useComposerCardRects } from '../composer/height.ts'
-import { toastPosition } from './toastPlacement.ts'
+import { NOTIFICATION_INSET } from './toastPlacement.ts'
 // Toasts (issue #108 §23): the desktop's sonner `Toaster` at the bottom right
 // (`components/ui/sonner.tsx`, `views/AppUpdate.tsx`), on GPUIX.
 //
@@ -9,7 +8,7 @@ import { toastPosition } from './toastPlacement.ts'
 //   toast.dismiss(id)
 //
 // Geometry follows sonner: 356px wide, 16px padding, 14px between toasts, 16px
-// from the window corner (lifted only where it overlaps a composer), three visible (the newest), the popover surface with
+// from the window corner (over the composer when they meet), three visible (the newest), the popover surface with
 // its 1px border, 13px text, a 16px icon, and an ink action pill (24px, 4px
 // radius, 12px/500). A toast times out after 4 s unless `duration` says
 // otherwise (`Infinity` stays until dismissed: approvals). The timer stops while
@@ -216,7 +215,6 @@ export function Toaster() {
 
 function ToastStack({ list }: { list: readonly Item[] }) {
   const size = useWindowSize({ intervalMs: 250 })
-  const composers = useComposerCardRects()
   useEffect(() => {
     // Timers pause while the window is hidden (covered, minimized, another Space).
     hidden = !isWindowVisible()
@@ -245,10 +243,8 @@ function ToastStack({ list }: { list: readonly Item[] }) {
   // peeking above it, narrower by 5% per step (the cards carry no content there).
   const live = placed.filter((p) => !p.item.leaving)
   const collapsed = !hovered && live.length > 1
-  const stackHeight = collapsed
-    ? live[0]!.item.height + PEEK * (live.length - 1)
-    : Math.max(...placed.map(({ item, lift }) => item.height + lift))
-  const { x, y: base } = toastPosition(size, WIDTH, stackHeight, composers)
+  const x = size.width - NOTIFICATION_INSET
+  const base = size.height - NOTIFICATION_INSET
   const layers: Layer[] = placed.map(({ item, lift: above }) => {
     if (!collapsed || item.leaving) return { key: item.key, item, step: 0, x, y: base - above, lift: above, height: item.height }
     const step = live.findIndex((p) => p.item === item)
