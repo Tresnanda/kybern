@@ -48,7 +48,7 @@ export function openLink(href: string, _noteId?: string) {
 }
 /** Where a note's images are kept: the daemon that keeps the note. */
 export function noteImageHome(id: string): ImageHome {
-  return { endpoint: () => { try { return rpc(id).endpoint } catch { return null } } }
+  return { client: () => { try { return rpc(id) } catch { return null } } }
 }
 /** `.note-outline` sits 120px below the scroll top as its reading line. */
 const READING_LINE = 120

@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import { threadClient, useApp } from '../state.ts'
 import { activeEnvironment, useEnvironment } from '../shell/environment.ts'
 import { Label, useTheme } from '../ui.tsx'
@@ -25,7 +24,7 @@ export function AttachmentImage({ assetId, name }: { assetId: string; name: stri
     setImage({ key })
     if (!owner) return
     void (async () => {
-      const response = await fetch(`${httpBase(owner.endpoint.url)}/assets/${encodeURIComponent(assetId)}`, { headers: { authorization: `Bearer ${owner.endpoint.token}` }, signal: abort.signal })
+      const response = await owner.fetch(`/assets/${encodeURIComponent(assetId)}`, { signal: abort.signal })
       if (!response.ok) throw Error('Image unavailable')
       const media = response.headers.get('content-type')?.split(';')[0]
       if (!media?.startsWith('image/')) throw Error('Image unavailable')

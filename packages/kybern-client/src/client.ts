@@ -62,6 +62,11 @@ export interface ClientOptions {
   probeAuth?: () => Promise<"rejected" | "accepted" | "unknown">;
   requestTimeoutMs?: number;
   heartbeatMs?: number;
+  /**
+   * Where `fetch` sends HTTP requests, when it is not the socket address's own base: a relay route
+   * reaches the target under the member's `/relay/<id>/http`, and needs the member's own `headers`.
+   */
+  http?: { base: string; headers?: Record<string, string> };
 }
 type Pending = {
   resolve: (value: unknown) => void;
@@ -189,6 +194,25 @@ export class KybernClient {
     // Configuration/installation changes must be visible on the next open.
     if (method === "settings.update" || method === "integrations.change") this.skills.clear();
     return this.callRaw(method, params) as Promise<ResultOf<M>>;
+  }
+
+  /**
+   * An authenticated HTTP request to one of this machine's routes (`/assets`, `/threads/…`), on the
+   * route this client is connected through. `path` is relative to the daemon; the address and the
+   * token stay in the client.
+   */
+  fetch(path: string, init: RequestInit = {}): Promise<Response> {
+    if (!path.startsWith("/") || path.startsWith("//"))
+      return Promise.reject(new Error("A daemon request needs a path that starts with /"));
+    const http = this.options.http;
+    const headers = new Headers(init.headers);
+    for (const [name, value] of Object.entries(http?.headers ?? {})) headers.set(name, value);
+    headers.set("authorization", `Bearer ${this.endpoint.token}`);
+    try {
+      return fetch(`${http?.base ?? httpBase(this.endpoint.url)}${path}`, { ...init, headers, redirect: "error" });
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 
   callRaw(

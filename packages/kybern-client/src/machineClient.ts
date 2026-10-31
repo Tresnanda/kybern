@@ -16,7 +16,7 @@ import type { EventsSubscribeParams, MethodName, ParamsOf, ResultOf } from "./ty
 /** What the machine set needs from a connection; `KybernClient` is one. */
 export type MachineClient = Pick<
   KybernClient,
-  "connect" | "close" | "status" | "failure" | "info" | "endpoint" | "onStatus" | "onNotification" | "call" | "callRaw" | "subscribeEvents" | "checkConnection"
+  "connect" | "close" | "status" | "failure" | "info" | "endpoint" | "onStatus" | "onNotification" | "call" | "callRaw" | "fetch" | "subscribeEvents" | "checkConnection"
 >;
 
 /** The machine cannot be reached now. `cached` says whether its last lists are still available. */
@@ -46,7 +46,8 @@ type StatusHandler = (status: ConnectionStatus, detail?: string) => void;
 /**
  * A `KybernClient` that delegates to whichever connection the machine set has
  * open for one machine. Its `endpoint` carries no address and no token, so
- * nothing that holds it can read a credential. `connect` and `close` do
+ * nothing that holds it can read a credential; `fetch` reaches the machine's
+ * HTTP routes through the connection instead. `connect` and `close` do
  * nothing: the machine set owns the lifecycle.
  */
 export class MachineClientProxy extends KybernClient {
@@ -58,12 +59,16 @@ export class MachineClientProxy extends KybernClient {
   /** Notification methods already hooked on the attached connection. */
   private readonly hooked = new Set<string>();
   private readonly routedIsCached: () => boolean;
+  private readonly routedName: () => string;
+  /** HTTP requests in flight on the attached connection; a route change aborts them. */
+  private readonly requests = new Set<AbortController>();
   private id: string;
 
-  constructor(machineId: string, isCached: () => boolean = () => false) {
+  constructor(machineId: string, isCached: () => boolean = () => false, name: () => string = () => "This machine") {
     super({ url: "", token: "", environmentId: machineId });
     this.id = machineId;
     this.routedIsCached = isCached;
+    this.routedName = name;
   }
 
   get machineId(): string {
@@ -116,6 +121,35 @@ export class MachineClientProxy extends KybernClient {
     return this.inner.callRaw(method, params, timeoutMs);
   }
 
+  /**
+   * `KybernClient.fetch` on the attached connection: direct, or through the relay member with its
+   * headers. Rejects with `OfflineError` while the machine is offline, and when the connection
+   * changes before the response arrives (the request may not have reached the machine).
+   */
+  override async fetch(path: string, init: RequestInit = {}): Promise<Response> {
+    const inner = this.inner;
+    if (!inner) throw this.offline();
+    const controller = new AbortController();
+    const outer = init.signal;
+    const forward = () => controller.abort(outer?.reason);
+    if (outer?.aborted) forward();
+    else outer?.addEventListener("abort", forward, { once: true });
+    this.requests.add(controller);
+    try {
+      return await inner.fetch(path, { ...init, signal: controller.signal });
+    } catch (error) {
+      if (this.inner !== inner && !outer?.aborted) throw this.offline();
+      throw error;
+    } finally {
+      this.requests.delete(controller);
+      outer?.removeEventListener("abort", forward);
+    }
+  }
+
+  private offline(): OfflineError {
+    return new OfflineError(this.machineId, this.routedIsCached(), `${this.routedName()} is offline. Try again when it reconnects.`);
+  }
+
   override async checkConnection(): Promise<void> {
     await this.inner?.checkConnection();
   }
@@ -152,6 +186,10 @@ export class MachineClientProxy extends KybernClient {
    * the connection it replaced.
    */
   attach(next: MachineClient | undefined): void {
+    if (next !== this.inner) {
+      for (const request of this.requests) request.abort(this.offline());
+      this.requests.clear();
+    }
     for (const off of this.detachInner) off();
     this.detachInner = [];
     this.hooked.clear();

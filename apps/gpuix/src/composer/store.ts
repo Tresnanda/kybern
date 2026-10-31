@@ -19,7 +19,6 @@ import path from 'node:path'
 import { useRef, useSyncExternalStore } from 'react'
 import { clientFor } from '../machines/index.ts'
 import { localClient, threadClient, projectClient, machineOfThreadId, getState, refreshLists, selectPaneThread, getFocusedPaneId, getPane, getPaneState, setPane, usePaneAccess, useApp } from '../state.ts'
-import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import type { MentionPart } from '../../../../packages/kybern-client/src/userInput.ts'
 import type {
   AccountSummary,
@@ -576,9 +575,9 @@ export async function loadBranches(projectId: ProjectId, machineId?: MachineId) 
 
 // ---- attachments ----
 
-function assetsEndpoint(threadId?: ThreadId, machineId?: MachineId): { base: string; token: string } {
-  const { url, token } = (machineId ? clientFor(machineId) : rpc(threadId)).endpoint
-  return { base: httpBase(url), token }
+/** The client of the machine an attachment goes to: another machine's reaches it on its current route (`fetch`). */
+function assetsOwner(threadId?: ThreadId, machineId?: MachineId) {
+  return machineId ? clientFor(machineId) : rpc(threadId)
 }
 
 export interface UploadedAsset {
@@ -597,11 +596,9 @@ export async function uploadPath(path: string, threadId?: ThreadId, machineId?: 
 
 /** Clipboard images use the same upload contract as files, without a temporary file. */
 export async function uploadBytes(name: string, mediaType: string, bytes: ArrayBuffer | Uint8Array, threadId?: ThreadId, machineId?: MachineId): Promise<UploadedAsset> {
-  const { base, token } = assetsEndpoint(threadId, machineId)
-  const response = await fetch(`${base}/assets`, {
+  const response = await assetsOwner(threadId, machineId).fetch('/assets', {
     method: 'POST',
     headers: {
-      authorization: `Bearer ${token}`,
       origin: 'tauri://localhost',
       'content-type': mediaType,
       'x-kybern-filename': name,

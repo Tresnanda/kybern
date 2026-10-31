@@ -56,7 +56,7 @@ function QuickNote() {
   const k = notesTokens(t)
   const body = useRef<RichEditorHandle>(null)
   const [initialBody] = useState(draft.body)
-  const quickImages = useMemo<ImageHome>(() => ({ endpoint: () => getClient()?.endpoint ?? null }), [])
+  const quickImages = useMemo<ImageHome>(() => ({ client: () => getClient() }), [])
   const scope = everyProject.find((p) => p.id === draft.project)?.name ?? 'Global'
   const discard = () => { save(QUICK_KEY, undefined); setNotes({ quick: false }) }
   // `.quick-note` (notes.css): 576px card, 16/20/14 padding, scope row, 18.3px title, 16.15/25.85 body, 28px foot.

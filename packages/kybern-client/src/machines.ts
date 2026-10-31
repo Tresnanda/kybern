@@ -159,6 +159,16 @@ export function relayHeadersFor(relayToken: string | undefined): Record<string, 
 }
 
 /**
+ * How a client on `route` reaches the machine's HTTP routes: directly at the route's base, or through
+ * the relay member under `/relay/<id>/http` with the member's own token beside the target's.
+ */
+export function routeHttp(route: Route, relayToken?: string): { base: string; headers?: Record<string, string> } {
+  if (route.kind !== "relay") return { base: httpBase(route.url) };
+  const headers = relayHeadersFor(relayToken);
+  return { base: `${httpBase(route.url)}/http`, ...(headers ? { headers } : {}) };
+}
+
+/**
  * Ask the machine whether it accepts `token`, with the `POST /session` a browser socket would make.
  * A native socket refused at the upgrade shows no status, so this is how a revoked token is told
  * from a machine that is merely down. On a relay route a refusal that names the relay is the relay
@@ -207,6 +217,7 @@ export function kybernClientFactory(createSocket?: SocketFactory, base: ClientOp
       {
         ...base,
         expectedEnvironmentId: record.machineId,
+        http: routeHttp(route, relayToken),
         ...(socket ? { createSocket: socket, probeAuth: () => probeAuth(url, token, relayHeaders, route.kind === "relay") } : {}),
       },
     );
@@ -1020,7 +1031,7 @@ export class MachineSet {
   private createSlot(record: MachineRecord): Slot {
     const slot: Slot = {
       record,
-      proxy: new MachineClientProxy(record.machineId, () => this.hasCache(slot)),
+      proxy: new MachineClientProxy(record.machineId, () => this.hasCache(slot), () => this.displayName(slot.record.machineId)),
       status: record.paused ? "paused" : "offline",
       gen: 0,
       failures: 0,
