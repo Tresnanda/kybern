@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createHost, modelCatalog, modelSelection, runtimePolicy, errorText } from "./host.mjs";
+import { createHost, modelCatalog, modelSelection, runtimePolicy, errorText, modelError } from "./host.mjs";
 
 function fixture({ duringStart, failStart } = {}) {
   const terminal = Promise.withResolvers();
@@ -40,7 +40,7 @@ test("sandbox approval policy is explicit; model variants retain parameters", ()
   assert.throws(() => runtimePolicy("supervised"), /no interactive approvals/);
   assert.throws(() => runtimePolicy("accept-edits"));
   const models = modelCatalog([{ id: "m", variants: [{ displayName: "Thinking", params: [{ id: "thinking", value: "on" }] }] }]);
-  assert.deepEqual(modelSelection(models[1].id), { id: "m", params: [{ id: "thinking", value: "on" }] });
+  assert.deepEqual(modelSelection(models[1].id), { id: "m" });
   assert.equal(errorText(new Error("secret failed"), ["secret"]), "[redacted] failed");
 });
 
@@ -130,7 +130,7 @@ test("variants fold into one row with structured traits", () => {
   assert.deepEqual(row.variants[1].params, { context: "1000000", zdr: "false" });
   assert.deepEqual(row.variants[2].params, { context: "default", zdr: "true" });
   assert.deepEqual(modelSelection(row.id, "high"), { id: "gpt", params: [{ id: "reasoning_effort", value: "high" }] });
-  assert.deepEqual(modelSelection(row.variants[1].id), { id: "gpt", params: [{ id: "context", value: "1000000" }, { id: "reasoning_effort", value: "high" }] });
+  assert.deepEqual(modelSelection(row.variants[1].id), { id: "gpt", params: [{ id: "context", value: "1000000" }] });
   assert.throws(() => modelSelection(row.id, "max"), /does not offer/);
   assert.deepEqual(modelSelection(`cursor-model:${Buffer.from(JSON.stringify({id: "gpt", params: [{id: "reason_effort", value: "low"}]})).toString("base64url")}`),
     {id: "gpt", params: [{id: "reason_effort", value: "low"}]});
@@ -200,4 +200,25 @@ test("the effort control reaches native sends and survives permission changes", 
   await f.host.request({type:"send",message:{text:"hello"}});
   assert.deepEqual(f.calls.find((c) => c[0] === "send")[2].model.params, [{id:"reason_effort",value:"low"}]);
   await f.host.close();
+});
+
+
+test("native defaults never become chosen effort, context, fast or hidden cyber settings", () => {
+  const [, row] = modelCatalog([{ id: "opus", variants: [
+    { isDefault: true, params: [{id:"cyber",value:"false"},{id:"context",value:"300k"},{id:"fast",value:"false"},{id:"effort",value:"medium"}] },
+    { params: [{id:"cyber",value:"false"},{id:"context",value:"1m"},{id:"fast",value:"false"},{id:"effort",value:"medium"}] },
+  ] }]);
+  assert.deepEqual(modelSelection(row.id), {id:"opus"});
+  assert.deepEqual(modelSelection(row.variants[1].id), {id:"opus",params:[{id:"context",value:"1m"}]});
+  const legacy = `cursor-model:${Buffer.from(JSON.stringify({id:"opus",params:[{id:"cyber",value:"false"},{id:"context",value:"1m"},{id:"fast",value:"false"}],effortParam:"effort",defaultEffort:"medium"})).toString("base64url")}`;
+  assert.deepEqual(modelSelection(legacy), {id:"opus",params:[{id:"context",value:"1m"},{id:"fast",value:"false"}]});
+});
+
+test("registry errors name the model and explicit values without downgrading the selection", () => {
+  const model={id:"grok-4.7",params:[{id:"context",value:"500k"},{id:"fast",value:"true"},{id:"reasoning_effort",value:"xhigh"}]};
+  const error=modelError(new Error('Invalid parameters for registry model'),model);
+  assert.match(error.message,/grok-4.7.*context=500k.*fast=true.*reasoning_effort=xhigh/);
+  assert.match(error.message,/Change.*setting/);
+  const auth=new Error("Unauthorized");
+  assert.equal(modelError(auth,model),auth);
 });

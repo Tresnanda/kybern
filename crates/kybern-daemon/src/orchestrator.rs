@@ -98,6 +98,36 @@ impl Orchestrator {
         self.inner.provider_catalogs.clone()
     }
 
+    /// On open, upgrade old Cursor picker IDs from the cached account catalog.
+    /// Only thread fields change; saved transcript events retain their original text.
+    pub(crate) fn migrate_cursor_model(&self, thread: Thread) -> Result<Thread> {
+        if thread.provider.kind != ProviderKind::Cursor || !thread.model.as_deref().is_some_and(|model| model.starts_with("cursor-")) {
+            return Ok(thread);
+        }
+        let settings = self.inner.settings.get();
+        let provider = settings.providers.get(&ProviderKind::Cursor).cloned().unwrap_or_default();
+        let project = self.inner.store.project_get(thread.project_id)?.ok_or_else(|| anyhow!("project not found"))?;
+        // Last-known catalogs describe the project's default account only.
+        if thread.provider.instance != crate::provider_accounts::resolve(&provider, Some(&project.path), None) {
+            return Ok(thread);
+        }
+        let Some((statuses, _)) = self.inner.provider_catalogs.last_known(&thread.project_id.to_string()) else { return Ok(thread) };
+        let Some(status) = statuses.iter().find(|status| status.kind == ProviderKind::Cursor) else { return Ok(thread) };
+        let Some((model, effort)) = kybern_drivers::cursor::legacy_model_selection(thread.model.as_deref().unwrap(), &status.models) else {
+            return Ok(thread);
+        };
+        let _updates = self.inner.thread_updates.lock().map_err(|_| anyhow!("thread update lock poisoned"))?;
+        let mut current = self.inner.store.thread_get(thread.id)?.ok_or_else(|| anyhow!("thread not found"))?;
+        if current.model != thread.model {
+            return Ok(current);
+        }
+        current.model = Some(model);
+        if current.effort.is_none() {
+            current.effort = effort;
+        }
+        self.write_thread_update(current, true)
+    }
+
     async fn cached_provider_statuses(&self, project_id: ProjectId) -> Result<Option<Vec<ProviderStatus>>> {
         let project = self.inner.store.project_get(project_id)?.ok_or_else(|| anyhow!("project not found"))?;
         let cwd = PathBuf::from(project.path);
@@ -3547,6 +3577,8 @@ impl Orchestrator {
     }
 
     async fn ensure_session(&self, thread: &Thread) -> Result<(Arc<LiveSession>, bool)> {
+        let migrated = self.migrate_cursor_model(thread.clone())?;
+        let thread = &migrated;
         let expected = self.session_identity(thread)?;
         let current = self.inner.sessions.lock().await.get(&thread.id).cloned();
         if let Some(live) = current {

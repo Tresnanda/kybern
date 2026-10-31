@@ -4,7 +4,9 @@
 //! with the CLI that created them. We never reinterpret a CLI conversation as
 //! an SDK agent or silently replace a missing conversation with an empty one.
 mod acp;
+mod models;
 mod runtime;
+pub use models::legacy_model_selection;
 mod stream;
 pub mod usage;
 
