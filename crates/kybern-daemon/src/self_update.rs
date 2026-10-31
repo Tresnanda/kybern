@@ -124,6 +124,7 @@ pub(crate) struct Feeds {
 }
 
 impl Feeds {
+    #[cfg(not(test))]
     fn github() -> Self {
         Self {
             stable: format!("https://github.com/{REPO}/releases/latest/download/dist-manifest.json"),
