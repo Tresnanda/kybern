@@ -1,16 +1,17 @@
-//! Cursor's official local SDK, isolated in a Node helper owned by the session.
+//! Cursor's official local SDK, isolated in one supervised Node host per account.
 //!
 //! New session IDs are namespaced so existing ACP sessions continue to resume
 //! with the CLI that created them. We never reinterpret a CLI conversation as
 //! an SDK agent or silently replace a missing conversation with an empty one.
 mod acp;
 mod models;
+mod pool;
 mod runtime;
 pub use models::legacy_model_selection;
 mod stream;
 pub mod usage;
 
-pub(crate) use runtime::Connection;
+pub(crate) use pool::Connection;
 pub use runtime::{
     SDK_VERSION, auth_status, install, installed, login_command, node_version, npm_available, setup_command, setup_error, sign_out,
 };
@@ -51,8 +52,10 @@ fn validate_mode(mode: PermissionMode) -> Result<()> {
     }
 }
 
-fn mcp_servers(bridge: Option<&NativeToolBridge>) -> Result<Value> {
-    let Some(bridge) = bridge else { return Ok(json!({})) };
+/// The authenticated per-thread MCP endpoint, which the host serves to its
+/// agent as SDK custom tools (see `kybernTools` in `sdk/host.mjs`).
+fn native_tools(bridge: Option<&NativeToolBridge>) -> Result<Value> {
+    let Some(bridge) = bridge else { return Ok(Value::Null) };
     bridge.validate()?;
     // Same boundary as T3: use the authenticated per-thread MCP endpoint.
     // Do not pretend tool discovery alone enforces a coordinator's restrictions.
@@ -63,9 +66,7 @@ fn mcp_servers(bridge: Option<&NativeToolBridge>) -> Result<Value> {
         bridge.endpoint.as_ref().ok_or_else(|| DriverError::Unsupported("Cursor SDK tools require a daemon MCP endpoint".into()))?;
     let authorization =
         bridge.authorization.as_ref().ok_or_else(|| DriverError::Unsupported("Cursor SDK tools require a scoped MCP capability".into()))?;
-    Ok(
-        json!({bridge.server_name.clone(): {"type": "http", "url": endpoint, "headers": {"Authorization": format!("Bearer {authorization}")}}}),
-    )
+    Ok(json!({"url": endpoint, "authorization": format!("Bearer {authorization}")}))
 }
 
 #[async_trait]
@@ -138,7 +139,7 @@ impl AgentDriver for CursorDriver {
             return Err(DriverError::Unsupported("Cursor SDK does not expose native conversation forks or rollback".into()));
         }
         validate_mode(config.permission_mode)?;
-        let servers = mcp_servers(config.native_tool_bridge.as_ref())?;
+        let tools = native_tools(config.native_tool_bridge.as_ref())?;
         let context = ProbeContext { binary: config.binary.clone(), cwd: Some(config.cwd.clone()), env: config.env.into_iter().collect() };
         let (connection, events) = Connection::spawn(&context)?;
         let agent_id = config.resume_session_id.as_deref().map(sdk_id).transpose()?;
@@ -147,7 +148,7 @@ impl AgentDriver for CursorDriver {
                 "open",
                 json!({
                     "cwd": config.cwd, "model": config.model, "effort": config.effort, "mode": config.permission_mode,
-                    "agentId": agent_id, "mcpServers": servers,
+                    "agentId": agent_id, "nativeTools": tools,
                 }),
             )
             .await?;

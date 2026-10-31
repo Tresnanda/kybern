@@ -1,16 +1,19 @@
 use kybern_protocol::process::NoWindow;
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(all(test, unix))]
+use serde_json::json;
 use tokio::process::Command;
-use tokio::sync::{Mutex, mpsc, oneshot};
+#[cfg(all(test, unix))]
+use tokio::sync::mpsc;
 
-use crate::ndjson::{NdjsonChild, SessionLifetime};
-use crate::{DriverError, DriverEvent, ProbeContext, Result};
+#[cfg(all(test, unix))]
+use super::Connection;
+#[cfg(all(test, unix))]
+use crate::DriverEvent;
+use crate::{DriverError, ProbeContext, Result};
 
 pub const SDK_VERSION: &str = "1.2.0";
 const NODE_MINIMUM: &str = "22.13";
@@ -18,7 +21,6 @@ const SETUP_HINT: &str = "Install it in Settings → Agent providers, or run `ky
 const HOST: &str = include_str!("sdk/host.mjs");
 const PACKAGE: &str = include_str!("sdk/package.json");
 const LOCK: &str = include_str!("sdk/package-lock.json");
-type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<std::result::Result<Value, String>>>>>;
 
 fn env(context: &ProbeContext, name: &str) -> Option<String> {
     context.env.get(name).cloned().or_else(|| std::env::var(name).ok()).filter(|s| !s.is_empty())
@@ -69,7 +71,7 @@ pub fn setup_command(context: &ProbeContext, action: &str) -> Result<Command> {
     command(context, action)
 }
 
-fn command(context: &ProbeContext, mode: &str) -> Result<Command> {
+pub(super) fn command(context: &ProbeContext, mode: &str) -> Result<Command> {
     let sdk = sdk_dir(context)?;
     let mut cmd = Command::new(node(context)?).no_window();
     // The SDK locates its platform helpers by walking up from argv[1], not
@@ -92,11 +94,12 @@ pub(super) async fn probe(context: &ProbeContext) -> Result<(PathBuf, Value)> {
     if !output.status.success() {
         return Err(DriverError::Protocol(diagnostic(&output.stderr)));
     }
-    let value = serde_json::from_slice(&output.stdout).map_err(|e| DriverError::Protocol(format!("Cursor SDK probe: {e}")))?;
+    let value: Value = serde_json::from_slice(&output.stdout).map_err(|e| DriverError::Protocol(format!("Cursor SDK probe: {e}")))?;
+    super::pool::update_catalog(context, value["models"].clone());
     Ok((binary, value))
 }
 
-fn diagnostic(bytes: &[u8]) -> String {
+pub(super) fn diagnostic(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes);
     if text.contains("ENOENT") || text.contains("Cannot find module") {
         return format!("Cursor’s SDK isn’t installed. {SETUP_HINT}");
@@ -240,108 +243,6 @@ pub fn login_command(context: &ProbeContext) -> Result<Command> {
 /// The SDK's error text for a failed setup process, without credentials.
 pub fn setup_error(stderr: &[u8]) -> String {
     diagnostic(stderr)
-}
-
-pub(crate) struct Connection {
-    child: Arc<NdjsonChild>,
-    pending: Pending,
-    events: mpsc::Sender<DriverEvent>,
-    ended: Arc<AtomicBool>,
-    _lifetime: SessionLifetime,
-}
-
-impl Connection {
-    pub(crate) fn spawn(context: &ProbeContext) -> Result<(Self, mpsc::Receiver<DriverEvent>)> {
-        let child = Arc::new(NdjsonChild::spawn(command(context, "stdio")?)?);
-        let mut lifetime = SessionLifetime::new(child.clone());
-        let pending: Pending = Arc::default();
-        let (events, receiver) = mpsc::channel(1024);
-        let reader_child = child.clone();
-        let reader_pending = pending.clone();
-        let reader_events = events.clone();
-        let ended = Arc::new(AtomicBool::new(false));
-        let reader_ended = ended.clone();
-        lifetime.track(tokio::spawn(async move {
-            let mut stream = super::stream::Stream::default();
-            while let Some(value) = reader_child.lines.lock().await.recv().await {
-                if let Some(id) = value["id"].as_str() {
-                    if let Some(tx) = reader_pending.lock().await.remove(id) {
-                        let result = match value["error"].as_str() {
-                            Some(error) => Err(error.to_string()),
-                            None => Ok(value["result"].clone()),
-                        };
-                        let _ = tx.send(result);
-                    }
-                } else {
-                    for event in stream.handle(&value) {
-                        if reader_events.send(event).await.is_err() {
-                            break;
-                        }
-                    }
-                }
-            }
-            let mut stderr = Vec::new();
-            while let Ok(line) = reader_child.stderr.lock().await.try_recv() {
-                stderr.push(line);
-            }
-            let error = diagnostic(stderr.join("\n").as_bytes());
-            let mut pending = reader_pending.lock().await;
-            reader_ended.store(true, Ordering::Release);
-            for (_, tx) in pending.drain() {
-                let _ = tx.send(Err(error.clone()));
-            }
-            drop(pending);
-            for event in stream.exited() {
-                let _ = reader_events.send(event).await;
-            }
-            let code = match tokio::time::timeout(Duration::from_secs(5), reader_child.wait()).await {
-                Ok(code) => code,
-                Err(_) => {
-                    reader_child.kill().await;
-                    None
-                }
-            };
-            let _ = reader_events.send(DriverEvent::Exited { code, error: (code != Some(0)).then_some(error) }).await;
-        }));
-        Ok((Self { child, pending, events, ended, _lifetime: lifetime }, receiver))
-    }
-
-    pub(crate) async fn call(&self, operation: &str, mut params: Value) -> Result<Value> {
-        let id = uuid::Uuid::new_v4().to_string();
-        let (tx, rx) = oneshot::channel();
-        let mut pending = self.pending.lock().await;
-        if self.ended.load(Ordering::Acquire) {
-            return Err(DriverError::ProcessExited("Cursor SDK host closed; send again to resume".into()));
-        }
-        pending.insert(id.clone(), tx);
-        drop(pending);
-        params["id"] = json!(id);
-        params["type"] = json!(operation);
-        if let Err(error) = self.child.write(&params).await {
-            self.pending.lock().await.remove(&id);
-            return Err(error);
-        }
-        match tokio::time::timeout(Duration::from_secs(if operation == "close" { 5 } else { 60 }), rx).await {
-            Ok(Ok(Ok(value))) => Ok(value),
-            Ok(Ok(Err(error))) => Err(DriverError::Protocol(error)),
-            Ok(Err(_)) => Err(DriverError::ProcessExited("Cursor SDK host closed".into())),
-            Err(_) => {
-                self.pending.lock().await.remove(&id);
-                // Admission may have succeeded. Retire this host rather than
-                // leave an invisible run or retry the prompt twice.
-                self.child.kill().await;
-                Err(DriverError::Protocol(format!("Cursor SDK {operation} timed out. Send again to resume the saved conversation.")))
-            }
-        }
-    }
-    pub(crate) async fn emit(&self, event: DriverEvent) {
-        let _ = self.events.send(event).await;
-    }
-    pub(crate) async fn close(&self) -> Result<()> {
-        let result = self.call("close", json!({})).await;
-        self.child.close().await;
-        result.map(|_| ())
-    }
 }
 
 #[cfg(all(test, unix))]

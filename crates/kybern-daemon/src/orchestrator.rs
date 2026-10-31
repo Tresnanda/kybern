@@ -3704,6 +3704,18 @@ impl Orchestrator {
         let instructions_unconfirmed = thread.provider.kind == ProviderKind::Cursor
             && (thread.provider_session_id.is_none() || resume_lacks_instructions)
             && native_tool_bridge.as_ref().is_some_and(|bridge| bridge.provider_instructions().is_some());
+        // Cursor's account host reuses the daemon catalog; old entries lacking
+        // native max-mode metadata deliberately fall back to one SDK discovery.
+        if thread.provider.kind == ProviderKind::Cursor
+            && let Some((statuses, _)) = self.inner.provider_catalogs.last_known(&thread.project_id.to_string())
+            && let Some(status) = statuses.iter().find(|status| status.kind == ProviderKind::Cursor)
+        {
+            let settings = self.inner.settings.get();
+            let provider = settings.providers.get(&ProviderKind::Cursor).cloned().unwrap_or_default();
+            if thread.provider.instance == crate::provider_accounts::resolve(&provider, Some(&project.path), None) {
+                provider_settings.env.insert("KYBERN_CURSOR_CATALOG".into(), serde_json::to_string(&status.models)?);
+            }
+        }
         let config = SessionConfig {
             cwd: PathBuf::from(&thread.cwd),
             model: thread.model.clone(),
