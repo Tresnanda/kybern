@@ -3216,7 +3216,8 @@ export interface WorkflowRun {
   pull_requests?: number[]
 }
 /** `workflow`: an id or file name. `status`: a status or a conclusion (in_progress, failure, …). */
-export interface ActionsRunsParams { project_id: ProjectId; repo?: string; workflow?: string; branch?: string; status?: string; event?: string; page?: number; per_page?: number }
+/** `pages`: pages to read from `page` on (1–5). `pulls`: also name each branch's pull request. */
+export interface ActionsRunsParams { project_id: ProjectId; repo?: string; workflow?: string; branch?: string; status?: string; event?: string; page?: number; per_page?: number; pages?: number; pulls?: boolean }
 export interface ActionsRunsResult {
   runs: WorkflowRun[]
   total_count: number
@@ -3224,11 +3225,26 @@ export interface ActionsRunsResult {
   has_more: boolean
   /** The signed-in `gh` account. */
   viewer?: string
+  /** With `pulls`: each head branch's latest pull request. */
+  pulls?: BranchPull[]
 }
+/** `state`: OPEN | CLOSED | MERGED */
+export interface BranchPull { branch: string; number: number; state: string }
 export interface WorkflowStep { number: number; name: string; status: string; conclusion?: string; started_at?: DateTime; completed_at?: DateTime }
 export interface WorkflowJob { id: number; name: string; status: string; conclusion?: string; started_at?: DateTime; completed_at?: DateTime; url: string; labels?: string[]; steps: WorkflowStep[] }
-export interface ActionsRunParams { project_id: ProjectId; repo?: string; run_id: number }
-export interface ActionsRunResult { run: WorkflowRun; jobs: WorkflowJob[] }
+/** `attempt`: an earlier attempt instead of the latest. */
+export interface ActionsRunParams { project_id: ProjectId; repo?: string; run_id: number; attempt?: number }
+export interface ActionsRunResult {
+  run: WorkflowRun
+  jobs: WorkflowJob[]
+  /** The jobs the workflow file declares at the run's commit; absent when it can't be read. */
+  workflow_jobs?: WorkflowJobSpec[]
+  /** Every attempt's outcome, oldest first, when there was more than one. */
+  attempts?: RunAttempt[]
+}
+/** One job of a workflow file. `name` keeps its `${{ }}` expressions; `matrix` lists the matrix's keys (empty for one built by an expression). */
+export interface WorkflowJobSpec { id: string; name?: string; needs?: string[]; matrix?: string[]; uses?: string; conditional?: boolean }
+export interface RunAttempt { attempt: number; status: string; conclusion?: string }
 /** `excerpt`: instead of `offset`, the lines around the job's errors (or its tail), bounded for an agent prompt. */
 export interface ActionsLogParams { project_id: ProjectId; repo?: string; job_id: number; offset?: number; limit?: number; excerpt?: boolean }
 export interface ActionsLogResult {

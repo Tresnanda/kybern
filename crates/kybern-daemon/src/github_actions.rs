@@ -27,6 +27,13 @@ const CACHED_LOGS: usize = 24;
 const EXCERPT_LINES: usize = 100;
 const EXCERPT_BYTES: usize = 12 * 1024;
 const MAX_ERROR_LINES: usize = 50;
+/// Pages one runs read may take (`ActionsRunsParams::pages`).
+const MAX_PAGES: u32 = 5;
+const PULLS_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+/// Workflow files (per commit) whose jobs are kept.
+const CACHED_WORKFLOW_FILES: usize = 128;
+/// Attempts an attempt switcher offers: the latest and the ones before it.
+const MAX_ATTEMPTS: u32 = 6;
 
 fn text(v: &Value, key: &str) -> String {
     v.get(key).and_then(Value::as_str).unwrap_or_default().to_owned()
@@ -123,6 +130,7 @@ pub(crate) fn parse_runs(v: &Value, page: u32, per_page: u32) -> ActionsRunsResu
         total_count,
         page,
         viewer: None,
+        pulls: Vec::new(),
     }
 }
 
@@ -183,33 +191,161 @@ async fn viewer(gh: &str, cwd: &Path) -> Option<String> {
 
 pub async fn runs(gh: &str, cwd: &Path, p: &ActionsRunsParams) -> Result<ActionsRunsResult> {
     let per_page = p.per_page.clamp(1, 100);
-    let page = p.page.max(1);
-    let mut endpoint = match p.workflow.as_deref().filter(|w| !w.is_empty()) {
+    let first = p.page.max(1);
+    let pages = p.pages.clamp(1, MAX_PAGES);
+    let mut query = String::new();
+    for (key, value) in [("branch", &p.branch), ("status", &p.status), ("event", &p.event)] {
+        if let Some(value) = value.as_deref().filter(|v| !v.is_empty()) {
+            query.push_str(&format!("&{key}={}", encode(value)));
+        }
+    }
+    let base = match p.workflow.as_deref().filter(|w| !w.is_empty()) {
         Some(w) => format!("repos/{{owner}}/{{repo}}/actions/workflows/{}/runs", validate_workflow(w)?),
         None => "repos/{owner}/{repo}/actions/runs".to_owned(),
     };
-    endpoint.push_str(&format!("?per_page={per_page}&page={page}"));
-    for (key, value) in [("branch", &p.branch), ("status", &p.status), ("event", &p.event)] {
-        if let Some(value) = value.as_deref().filter(|v| !v.is_empty()) {
-            endpoint.push_str(&format!("&{key}={}", encode(value)));
+    let reads = (first..first + pages).map(|page| {
+        let endpoint = format!("{base}?per_page={per_page}&page={page}{query}");
+        async move { api(gh, cwd, &endpoint).await }
+    });
+    let (listed, viewer, pulls) = tokio::join!(futures::future::join_all(reads), viewer(gh, cwd), async {
+        if p.pulls { branch_pulls(gh, cwd).await } else { Vec::new() }
+    });
+    let mut result = ActionsRunsResult { runs: Vec::new(), total_count: 0, page: first, has_more: false, viewer, pulls };
+    let mut seen = std::collections::HashSet::new();
+    for (i, page) in listed.into_iter().enumerate() {
+        let page = parse_runs(&page.map_err(friendly)?, first + i as u32, per_page);
+        result.total_count = page.total_count;
+        result.page = page.page;
+        result.has_more = page.has_more;
+        // A run that started between two page reads shifts the pages: keep each run once.
+        result.runs.extend(page.runs.into_iter().filter(|r| seen.insert(r.id)));
+        if !result.has_more {
+            break;
         }
     }
-    let (listed, viewer) = tokio::join!(api(gh, cwd, &endpoint), viewer(gh, cwd));
-    let mut result = parse_runs(&listed.map_err(friendly)?, page, per_page);
-    result.viewer = viewer;
     Ok(result)
 }
 
-pub async fn run_detail(gh: &str, cwd: &Path, run_id: u64) -> Result<ActionsRunResult> {
+/// The latest pull request of each head branch, from one `gh pr list` kept for `PULLS_TTL` per checkout.
+async fn branch_pulls(gh: &str, cwd: &Path) -> Vec<BranchPull> {
+    type Cache = Mutex<HashMap<(String, PathBuf), (std::time::Instant, Vec<BranchPull>)>>;
+    static PULLS: OnceLock<Cache> = OnceLock::new();
+    let cache = PULLS.get_or_init(Default::default);
+    let key = (gh.to_owned(), cwd.to_path_buf());
+    if let Some((at, pulls)) = cache.lock().ok().and_then(|m| m.get(&key).cloned())
+        && at.elapsed() < PULLS_TTL
+    {
+        return pulls;
+    }
+    let Ok(out) = run(cwd, gh, &["pr", "list", "--state", "all", "--limit", "100", "--json", "number,headRefName,state"]).await else {
+        return Vec::new();
+    };
+    let pulls = parse_branch_pulls(&serde_json::from_str(&out).unwrap_or_default());
+    if let Ok(mut map) = cache.lock() {
+        if map.len() > 32 {
+            map.clear();
+        }
+        map.insert(key, (std::time::Instant::now(), pulls.clone()));
+    }
+    pulls
+}
+
+/// `gh pr list`'s rows, newest first, as one pull request per branch (the newest).
+pub(crate) fn parse_branch_pulls(v: &Value) -> Vec<BranchPull> {
+    let mut seen = std::collections::HashSet::new();
+    v.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|pr| {
+            Some(BranchPull { branch: opt_text(pr, "headRefName")?, number: pr.get("number")?.as_u64()?, state: text(pr, "state") })
+        })
+        .filter(|pr| seen.insert(pr.branch.clone()))
+        .collect()
+}
+
+pub async fn run_detail(gh: &str, cwd: &Path, run_id: u64, attempt: Option<u32>) -> Result<ActionsRunResult> {
     ensure!(run_id > 0, "Choose a workflow run.");
-    let (run_endpoint, jobs_endpoint) = (
-        format!("repos/{{owner}}/{{repo}}/actions/runs/{run_id}"),
-        format!("repos/{{owner}}/{{repo}}/actions/runs/{run_id}/jobs?per_page=100&filter=latest"),
-    );
+    let base = format!("repos/{{owner}}/{{repo}}/actions/runs/{run_id}");
+    let (run_endpoint, jobs_endpoint) = match attempt.filter(|a| *a > 0) {
+        Some(a) => (format!("{base}/attempts/{a}"), format!("{base}/attempts/{a}/jobs?per_page=100")),
+        None => (base.clone(), format!("{base}/jobs?per_page=100&filter=latest")),
+    };
     let (run, jobs) = tokio::join!(api(gh, cwd, &run_endpoint), api(gh, cwd, &jobs_endpoint));
     let run = parse_run(&run.map_err(friendly)?).ok_or_else(|| anyhow!("GitHub returned no workflow run {run_id}."))?;
     let jobs = jobs.map_err(friendly)?.get("jobs").and_then(Value::as_array).into_iter().flatten().filter_map(parse_job).collect();
-    Ok(ActionsRunResult { run, jobs })
+    let (workflow_jobs, attempts) = tokio::join!(workflow_jobs(gh, cwd, &run.workflow_path, &run.head_sha), attempts(gh, cwd, &run));
+    Ok(ActionsRunResult { run, jobs, workflow_jobs, attempts })
+}
+
+/// The jobs a workflow file declares at `sha`, read once per file and commit (a commit's file never changes). A file
+/// that can't be read (a dynamic workflow such as CodeQL's, a fork's commit) gives none, so the client lays the jobs out in run order.
+async fn workflow_jobs(gh: &str, cwd: &Path, path: &str, sha: &str) -> Vec<WorkflowJobSpec> {
+    type Cache = Mutex<HashMap<(PathBuf, String, String), Vec<WorkflowJobSpec>>>;
+    static FILES: OnceLock<Cache> = OnceLock::new();
+    let ok = path.starts_with(".github/workflows/")
+        && !path.contains("..")
+        && path.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '/'))
+        && !sha.is_empty()
+        && sha.chars().all(|c| c.is_ascii_hexdigit());
+    if !ok {
+        return Vec::new();
+    }
+    let cache = FILES.get_or_init(Default::default);
+    let key = (cwd.to_path_buf(), path.to_owned(), sha.to_owned());
+    if let Some(jobs) = cache.lock().ok().and_then(|m| m.get(&key).cloned()) {
+        return jobs;
+    }
+    let Ok(file) = api(gh, cwd, &format!("repos/{{owner}}/{{repo}}/contents/{path}?ref={sha}")).await else { return Vec::new() };
+    let Some(yaml) = decode_content(&file) else { return Vec::new() };
+    let jobs = parse_jobs(&yaml);
+    if let Ok(mut map) = cache.lock() {
+        if map.len() >= CACHED_WORKFLOW_FILES {
+            map.clear();
+        }
+        map.insert(key, jobs.clone());
+    }
+    jobs
+}
+
+/// A contents response's file: base64 with line breaks.
+pub(crate) fn decode_content(file: &Value) -> Option<String> {
+    use base64::Engine as _;
+    let encoded: String = file.get("content")?.as_str()?.chars().filter(|c| !c.is_whitespace()).collect();
+    String::from_utf8(base64::engine::general_purpose::STANDARD.decode(encoded).ok()?).ok()
+}
+
+/// Every attempt's outcome when there was more than one: the earlier ones never change, so each is read once.
+async fn attempts(gh: &str, cwd: &Path, run: &WorkflowRun) -> Vec<RunAttempt> {
+    type Cache = Mutex<HashMap<(PathBuf, u64, u32), RunAttempt>>;
+    static ATTEMPTS: OnceLock<Cache> = OnceLock::new();
+    if run.attempt <= 1 {
+        return Vec::new();
+    }
+    let cache = ATTEMPTS.get_or_init(Default::default);
+    let latest = run.attempt;
+    let first = latest.saturating_sub(MAX_ATTEMPTS - 1).max(1);
+    let reads = (first..latest).map(|a| {
+        let key = (cwd.to_path_buf(), run.id, a);
+        async move {
+            if let Some(known) = cache.lock().ok().and_then(|m| m.get(&key).cloned()) {
+                return Some(known);
+            }
+            let v = api(gh, cwd, &format!("repos/{{owner}}/{{repo}}/actions/runs/{}/attempts/{a}", key.1)).await.ok()?;
+            let attempt = RunAttempt { attempt: a, status: text(&v, "status"), conclusion: text(&v, "conclusion") };
+            if attempt.status == "completed"
+                && let Ok(mut map) = cache.lock()
+            {
+                if map.len() > 256 {
+                    map.clear();
+                }
+                map.insert(key, attempt.clone());
+            }
+            Some(attempt)
+        }
+    });
+    let mut out: Vec<RunAttempt> = futures::future::join_all(reads).await.into_iter().flatten().collect();
+    out.push(RunAttempt { attempt: latest, status: run.status.clone(), conclusion: run.conclusion.clone() });
+    out
 }
 
 pub async fn workflows(gh: &str, cwd: &Path) -> Result<ActionsWorkflowsResult> {
@@ -364,6 +500,92 @@ pub(crate) fn parse_dispatch(yaml: &str) -> ActionsWorkflowResult {
     }
     result.inputs.extend(current);
     result
+}
+
+// ---- the job graph ----
+
+/// An inline list (`[a, "b"]`) or a single value.
+fn inline_list(value: &str) -> Vec<String> {
+    let v = value.trim();
+    if v.starts_with('[') {
+        return v.trim_matches(['[', ']']).split(',').map(unquote).filter(|s| !s.is_empty()).collect();
+    }
+    let v = unquote(v);
+    if v.is_empty() { Vec::new() } else { vec![v] }
+}
+
+/// The jobs a workflow file declares: id, `name`, `needs` (a string or a list), `strategy.matrix`'s keys, `uses` and
+/// whether an `if:` gates it. The subset of YAML workflow files use for them; anything deeper (steps, block scalars) is
+/// skipped by indentation.
+pub(crate) fn parse_jobs(yaml: &str) -> Vec<WorkflowJobSpec> {
+    let lines: Vec<(usize, &str)> = yaml.lines().filter_map(yaml_line).collect();
+    let Some(at) = lines.iter().position(|(indent, c)| *indent == 0 && key_value(c).is_some_and(|(k, v)| k == "jobs" && v.is_empty()))
+    else {
+        return Vec::new();
+    };
+    let body: Vec<(usize, &str)> = lines[at + 1..].iter().take_while(|(indent, _)| *indent > 0).copied().collect();
+    let Some(job_indent) = body.first().map(|(i, _)| *i) else { return Vec::new() };
+    let mut jobs = Vec::new();
+    let mut i = 0;
+    while i < body.len() {
+        let (indent, content) = body[i];
+        i += 1;
+        if indent != job_indent || content.starts_with("- ") {
+            continue;
+        }
+        let Some((id, _)) = key_value(content) else { continue };
+        let block: Vec<(usize, &str)> = body[i..].iter().take_while(|(n, _)| *n > job_indent).copied().collect();
+        i += block.len();
+        jobs.push(parse_job_block(id, &block));
+    }
+    jobs
+}
+
+fn parse_job_block(id: String, block: &[(usize, &str)]) -> WorkflowJobSpec {
+    let mut job = WorkflowJobSpec { id, ..Default::default() };
+    let Some(field_indent) = block.first().map(|(i, _)| *i) else { return job };
+    // The lines under the field at `at`.
+    let under = |at: usize| block[at + 1..].iter().take_while(|(n, _)| *n > field_indent).copied().collect::<Vec<_>>();
+    for (at, (indent, content)) in block.iter().enumerate() {
+        if *indent != field_indent {
+            continue;
+        }
+        let Some((key, value)) = key_value(content) else { continue };
+        match key.as_str() {
+            "name" => job.name = unquote(&value),
+            "uses" => job.uses = unquote(&value),
+            "if" => job.conditional = true,
+            "needs" if !value.is_empty() => job.needs = inline_list(&value),
+            "needs" => {
+                job.needs = under(at).iter().filter_map(|(_, c)| c.strip_prefix("- ")).map(unquote).filter(|s| !s.is_empty()).collect();
+            }
+            "strategy" => {
+                let strategy = under(at);
+                let Some(matrix_indent) = strategy.first().map(|(i, _)| *i) else { continue };
+                let Some(m) = strategy.iter().position(|(n, c)| *n == matrix_indent && key_value(c).is_some_and(|(k, _)| k == "matrix"))
+                else {
+                    continue;
+                };
+                let (_, matrix_value) = key_value(strategy[m].1).unwrap_or_default();
+                let keys = if matrix_value.is_empty() {
+                    let rows: Vec<(usize, &str)> = strategy[m + 1..].iter().take_while(|(n, _)| *n > matrix_indent).copied().collect();
+                    let key_indent = rows.first().map(|(i, _)| *i).unwrap_or_default();
+                    rows.iter()
+                        .filter(|(n, c)| *n == key_indent && !c.starts_with("- "))
+                        .filter_map(|(_, c)| key_value(c).map(|(k, _)| k))
+                        .filter(|k| k != "include" && k != "exclude")
+                        .collect()
+                } else if matrix_value.starts_with('{') && matrix_value != "{}" && !matrix_value.starts_with("${{") {
+                    matrix_value.trim_matches(['{', '}']).split(',').filter_map(|kv| kv.split_once(':')).map(|(k, _)| unquote(k)).collect()
+                } else {
+                    Vec::new()
+                };
+                job.matrix = Some(keys);
+            }
+            _ => {}
+        }
+    }
+    job
 }
 
 // ---- job logs ----
@@ -747,6 +969,114 @@ jobs:
         assert!(parse_dispatch("on:\n  workflow_dispatch:\n").inputs.is_empty());
     }
 
+    fn spec(jobs: &[WorkflowJobSpec], id: &str) -> WorkflowJobSpec {
+        jobs.iter().find(|j| j.id == id).cloned().unwrap_or_else(|| panic!("no job {id}"))
+    }
+
+    #[test]
+    fn jobs_and_needs_from_kyberns_ci() {
+        let jobs = parse_jobs(include_str!("../../../.github/workflows/ci.yml"));
+        let ids: Vec<_> = jobs.iter().map(|j| j.id.as_str()).collect();
+        assert_eq!(ids, ["changes", "fmt", "check", "windows-check", "release", "gpuix", "ci"]);
+        assert_eq!(spec(&jobs, "changes").needs, Vec::<String>::new());
+        let check = spec(&jobs, "check");
+        assert_eq!(
+            (check.name.as_str(), check.needs.clone(), check.conditional),
+            ("clippy + test (${{ matrix.os }})", vec!["changes".to_owned()], true)
+        );
+        assert_eq!(check.matrix, Some(vec!["os".to_owned()]));
+        assert_eq!(spec(&jobs, "fmt").name, "rustfmt");
+        assert_eq!(spec(&jobs, "fmt").matrix, None);
+        let ci = spec(&jobs, "ci");
+        assert_eq!(ci.name, "CI");
+        assert_eq!(ci.needs, ["changes", "fmt", "check", "windows-check", "release", "gpuix"]);
+    }
+
+    #[test]
+    fn jobs_from_kyberns_release_and_platforms_workflows() {
+        let release = parse_jobs(include_str!("../../../.github/workflows/release.yml"));
+        let ids: Vec<_> = release.iter().map(|j| j.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["plan", "build-local-artifacts", "custom-release-ci", "build-global-artifacts", "custom-desktop", "host", "announce"]
+        );
+        let local = spec(&release, "build-local-artifacts");
+        assert_eq!(local.name, "build-local-artifacts (${{ join(matrix.targets, ', ') }})");
+        assert_eq!((local.needs.clone(), local.matrix.clone()), (vec!["plan".to_owned()], Some(vec![])), "a matrix built by an expression");
+        assert_eq!(spec(&release, "custom-release-ci").uses, "./.github/workflows/release-ci.yml");
+        assert_eq!(spec(&release, "custom-desktop").needs, ["plan", "build-local-artifacts"]);
+        assert_eq!(
+            spec(&release, "host").needs,
+            ["plan", "build-local-artifacts", "custom-release-ci", "build-global-artifacts", "custom-desktop"]
+        );
+        assert_eq!(spec(&release, "announce").needs, ["plan", "host"]);
+
+        let platforms = parse_jobs(include_str!("../../../.github/workflows/gpuix-platforms.yml"));
+        let ids: Vec<_> = platforms.iter().map(|j| j.id.as_str()).collect();
+        assert_eq!(ids, ["plan", "wpe", "checks"]);
+        assert_eq!(spec(&platforms, "wpe").uses, "./.github/workflows/gpuix-wpe.yml");
+        let checks = spec(&platforms, "checks");
+        assert_eq!((checks.name.as_str(), checks.needs.clone()), ("${{ matrix.id }}", vec!["plan".to_owned(), "wpe".to_owned()]));
+        assert_eq!(checks.matrix, Some(vec![]), "include: is not a key");
+    }
+
+    #[test]
+    fn job_fields_in_their_other_forms() {
+        let yaml = r#"
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - name: not a job name
+        run: |
+          needs: not-a-need
+  "b":
+    needs:
+      - a
+      - 'c'
+    strategy:
+      fail-fast: false
+      matrix: { os: [x, y], node: [1] }
+  c:
+    needs: [a]
+    strategy:
+      matrix:
+        os: [x]
+        include:
+          - os: z
+            extra: 1
+"#;
+        let jobs = parse_jobs(yaml);
+        assert_eq!(jobs.len(), 3);
+        assert_eq!((jobs[0].name.as_str(), jobs[0].needs.len()), ("", 0));
+        assert_eq!(jobs[1].id, "b");
+        assert_eq!(jobs[1].needs, ["a", "c"]);
+        assert_eq!(jobs[1].matrix, Some(vec!["os".to_owned(), "node".to_owned()]));
+        assert_eq!(jobs[2].matrix, Some(vec!["os".to_owned()]));
+        assert!(parse_jobs("on: push\n").is_empty());
+    }
+
+    #[test]
+    fn contents_and_pull_requests_decode() {
+        let file = json!({"content": "am9iczoK\nICBhOgo=\n", "encoding": "base64"});
+        assert_eq!(decode_content(&file).as_deref(), Some("jobs:\n  a:\n"));
+        assert_eq!(decode_content(&json!({"content": "%%%"})), None);
+        let pulls = parse_branch_pulls(&json!([
+            {"number": 171, "headRefName": "feat/x", "state": "OPEN"},
+            {"number": 150, "headRefName": "feat/x", "state": "CLOSED"},
+            {"number": 169, "headRefName": "docs/readme", "state": "MERGED"},
+            {"number": 1},
+        ]));
+        assert_eq!(
+            pulls,
+            vec![
+                BranchPull { branch: "feat/x".into(), number: 171, state: "OPEN".into() },
+                BranchPull { branch: "docs/readme".into(), number: 169, state: "MERGED".into() },
+            ]
+        );
+    }
+
     #[test]
     fn log_lines_lose_timestamps_and_stay_bounded() {
         assert_eq!(clean_line("\u{feff}2026-10-31T15:37:57.1234567Z ##[group]Run cargo test\n").0, "##[group]Run cargo test");
@@ -814,6 +1144,8 @@ case "$*" in
   *"actions/jobs/9/logs") printf '2026-10-31T00:00:00.0000000Z one\n2026-10-31T00:00:00.0000000Z ##[error]boom\n2026-10-31T00:00:00.0000000Z three\n' ;;
   *"actions/jobs/9") echo '{{"id":9,"status":"completed"}}' ;;
   *"actions/jobs/10") echo '{{"id":10,"status":"in_progress"}}' ;;
+  *"contents/.github/workflows/ci.yml?ref=abc") echo '{{"content":"am9iczoKICBhOgo=","encoding":"base64"}}' ;;
+  "pr list"*) echo '[{{"number":7,"headRefName":"main","state":"OPEN"}}]' ;;
   *"actions/workflows?"*) echo '{{"workflows":[{{"id":3,"name":"CI","path":".github/workflows/ci.yml","state":"active"}}]}}' ;;
   "repo view"*) echo main ;;
   "workflow view ci.yml --yaml"*) printf 'on:\n  workflow_dispatch:\n    inputs:\n      checks:\n        default: all\n' ;;
@@ -843,13 +1175,17 @@ esac
         let id = project.id;
 
         let runs: ActionsRunsResult = serde_json::from_value(
-            call(ActionsRuns::NAME, json!({"project_id": id, "branch": "feat/x", "status": "failure"})).await.unwrap(),
+            call(ActionsRuns::NAME, json!({"project_id": id, "branch": "feat/x", "status": "failure", "pulls": true})).await.unwrap(),
         )
         .unwrap();
         assert_eq!((runs.runs.len(), runs.viewer.as_deref()), (1, Some("ana")));
+        assert_eq!(runs.pulls[0].number, 7);
         let detail: ActionsRunResult =
             serde_json::from_value(call(ActionsRun::NAME, json!({"project_id": id, "run_id": 5})).await.unwrap()).unwrap();
         assert_eq!(detail.jobs[0].steps[0].name, "cargo test");
+        assert_eq!(detail.workflow_jobs[0].id, "a", "the workflow file at the run's commit");
+        assert!(detail.attempts.is_empty(), "one attempt");
+        call(ActionsRun::NAME, json!({"project_id": id, "run_id": 5})).await.unwrap();
 
         let page: ActionsLogResult =
             serde_json::from_value(call(ActionsLog::NAME, json!({"project_id": id, "job_id": 9, "offset": 1, "limit": 5})).await.unwrap())
@@ -895,6 +1231,7 @@ esac
             assert!(calls.contains(expected), "{expected:?} in {calls}");
         }
         assert_eq!(calls.matches("actions/jobs/9/logs").count(), 1, "the second read comes from the cache");
+        assert_eq!(calls.matches("contents/.github/workflows/ci.yml?ref=abc").count(), 1, "a commit's workflow file is read once");
         let _ = std::fs::remove_dir_all(root);
     }
 }

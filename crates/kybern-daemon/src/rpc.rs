@@ -1556,7 +1556,7 @@ pub(crate) async fn actions_call(state: &AppState, gh: &str, method: &str, param
         }
         ActionsRun::NAME => {
             let p: ActionsRunParams = parse(params)?;
-            ok(actions::run_detail(gh, &dir(state, p.project_id, p.repo.as_deref())?, p.run_id).await.map_err(bad)?)
+            ok(actions::run_detail(gh, &dir(state, p.project_id, p.repo.as_deref())?, p.run_id, p.attempt).await.map_err(bad)?)
         }
         ActionsLog::NAME => {
             let p: ActionsLogParams = parse(params)?;

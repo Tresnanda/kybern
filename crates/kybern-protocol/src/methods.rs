@@ -2915,6 +2915,12 @@ pub struct ActionsRunsParams {
     /// 1–100.
     #[serde(default = "default_actions_per_page")]
     pub per_page: u32,
+    /// Pages to read from `page` on, 1–5, so a branch-grouped list holds enough runs; `has_more` speaks for the last.
+    #[serde(default = "default_actions_page")]
+    pub pages: u32,
+    /// Also name each branch's pull request (`pulls`): one `gh pr list` per refresh, kept for a minute.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pulls: bool,
 }
 fn default_actions_page() -> u32 {
     1
@@ -2932,6 +2938,17 @@ pub struct ActionsRunsResult {
     /// The signed-in `gh` account, so clients can tell runs the user started. None when `gh` did not say.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub viewer: Option<String>,
+    /// With `pulls`: the latest pull request of each head branch (the 100 most recent, any state).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pulls: Vec<BranchPull>,
+}
+/// A head branch and its most recent pull request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BranchPull {
+    pub branch: String,
+    pub number: u64,
+    /// OPEN | CLOSED | MERGED
+    pub state: String,
 }
 method!(ActionsRuns, "github.actions.runs", Some(Scope::OrchestrationRead), ActionsRunsParams, ActionsRunsResult);
 
@@ -2970,12 +2987,50 @@ pub struct ActionsRunParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
     pub run_id: u64,
+    /// An earlier attempt to read instead of the latest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u32>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ActionsRunResult {
+    /// The run as of the attempt read (`attempt`, else the latest).
     pub run: WorkflowRun,
-    /// The latest attempt's jobs, in GitHub's order (first 100).
+    /// That attempt's jobs, in GitHub's order (first 100).
     pub jobs: Vec<WorkflowJob>,
+    /// The jobs the workflow file declares at the run's commit, for the job graph; empty when the file can't be read
+    /// (a dynamic workflow, a fork's commit) and the client lays the jobs out in run order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workflow_jobs: Vec<WorkflowJobSpec>,
+    /// Every attempt's outcome, oldest first, when the run has more than one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attempts: Vec<RunAttempt>,
+}
+/// One job of a workflow file: what the job graph needs to place GitHub's jobs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WorkflowJobSpec {
+    /// The key under `jobs:`.
+    pub id: String,
+    /// `name:` as written, `${{ }}` expressions included; empty when unset (GitHub then names the job by its id).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub needs: Vec<String>,
+    /// `strategy.matrix`'s keys (`include`/`exclude` left out); empty for a matrix built by an expression. None without a matrix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matrix: Option<Vec<String>>,
+    /// A reusable workflow the job calls; its jobs report as `<caller> / <callee>`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub uses: String,
+    /// The job has an `if:` condition.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub conditional: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RunAttempt {
+    pub attempt: u32,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub conclusion: String,
 }
 method!(ActionsRun, "github.actions.run", Some(Scope::OrchestrationRead), ActionsRunParams, ActionsRunResult);
 

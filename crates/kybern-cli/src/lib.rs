@@ -1088,10 +1088,13 @@ enum ActionsCmd {
         #[arg(long)]
         repo: Option<String>,
     },
-    /// A run with its jobs and steps.
+    /// A run with its jobs and steps, and the jobs its workflow file declares.
     View {
         project: String,
         run: u64,
+        /// An earlier attempt.
+        #[arg(long)]
+        attempt: Option<u32>,
         #[arg(long)]
         repo: Option<String>,
     },
@@ -2655,7 +2658,18 @@ pub async fn run() -> Result<()> {
             ActionsCmd::Runs { project, workflow, branch, status, page, repo } => {
                 let project_id = resolve_project(&client, &project, false).await?;
                 let r = client
-                    .call::<ActionsRuns>(ActionsRunsParams { project_id, repo, workflow, branch, status, event: None, page, per_page: 30 })
+                    .call::<ActionsRuns>(ActionsRunsParams {
+                        project_id,
+                        repo,
+                        workflow,
+                        branch,
+                        status,
+                        event: None,
+                        page,
+                        per_page: 30,
+                        pages: 1,
+                        pulls: false,
+                    })
                     .await?;
                 for run in r.runs {
                     let state = if run.conclusion.is_empty() { run.status } else { run.conclusion };
@@ -2665,9 +2679,9 @@ pub async fn run() -> Result<()> {
                     eprintln!("more: --page {}", page + 1);
                 }
             }
-            ActionsCmd::View { project, run, repo } => {
+            ActionsCmd::View { project, run, attempt, repo } => {
                 let project_id = resolve_project(&client, &project, false).await?;
-                let r = client.call::<ActionsRun>(ActionsRunParams { project_id, repo, run_id: run }).await?;
+                let r = client.call::<ActionsRun>(ActionsRunParams { project_id, repo, run_id: run, attempt }).await?;
                 println!("{}", serde_json::to_string_pretty(&r)?);
             }
             ActionsCmd::Log { project, job, offset, limit, excerpt, repo } => {
