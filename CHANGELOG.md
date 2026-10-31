@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.20.3
+
+<!-- kybern-release-title: Open remote terminals with the mouse -->
+<!-- kybern-release-summary: The New terminal on… submenu stays open when clicked, so you can select another machine and open its terminal in the current thread. -->
+
+- Fixes the “New terminal on…” machine submenu closing immediately after a mouse click. You can select a machine and open its terminal in the current thread without using the keyboard workaround.
+
 ## 0.20.2
 
 <!-- kybern-release-title: Machine setup finishes without an extra retry -->
