@@ -508,12 +508,16 @@ async fn a_live_session_is_refused_at_use_time_after_removal_or_pause() {
     let refused = link.call::<PeerRelayOpen>(relay).await.unwrap_err();
     assert_eq!(refused.code, codes::FORBIDDEN, "{refused:?}");
 
-    // Removed (kept on the listener only, with no drop_machine): every call on the live socket is refused.
+    // Removed (kept on the listener only, with no drop_machine): every call is refused. The
+    // listener's periodic membership check may close the socket before this request reaches it.
     let removal = listener.membership().remove(&dialer.id(), RemoveReason::User).unwrap();
     let _ = removal;
     let refused = link.call::<PeerOpsSync>(sync()).await.unwrap_err();
-    assert_eq!(refused.code, codes::FORBIDDEN, "{refused:?}");
-    // The socket is closed by the listener's own use-time check on its next beat.
+    assert!(
+        refused.code == codes::FORBIDDEN || (refused.code == codes::INTERNAL_ERROR && link.is_closed()),
+        "removal must forbid the call or close its session: {refused:?}"
+    );
+    // Even if the request won that race and got FORBIDDEN, the next beat closes the socket.
     eventually("the listener closes the socket", WAIT, || link.is_closed() || listener.state.network.peers.link(&dialer.id()).is_none())
         .await;
 }
