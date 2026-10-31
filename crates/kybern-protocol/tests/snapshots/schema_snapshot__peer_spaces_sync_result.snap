@@ -1,0 +1,59 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(PeerSpacesSyncResult)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PeerSpacesSyncResult",
+  "type": "object",
+  "properties": {
+    "digest": {
+      "type": "string"
+    },
+    "ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "fields": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/OpEnvelope"
+      }
+    }
+  },
+  "required": [
+    "digest",
+    "ids",
+    "fields"
+  ],
+  "$defs": {
+    "OpEnvelope": {
+      "description": "An operation as it is stored and sent.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "`sha256(body)` as lowercase hex; the primary key.",
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "signer": {
+          "type": "string"
+        },
+        "signature": {
+          "description": "`ed25519(signer, OP_SIGNATURE_DOMAIN || body)`, standard base64.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "body",
+        "signer",
+        "signature"
+      ]
+    }
+  }
+}

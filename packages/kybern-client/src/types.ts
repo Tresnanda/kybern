@@ -1610,7 +1610,7 @@ export interface ProjectsChangedNotification {
 export interface ProjectsAddParams {
   path: string;
   name?: string;
-  /** The space for a new project; the first space when absent. An existing path is returned unchanged. */
+  /** The space for a new project; the default space when absent. An existing path is returned unchanged. */
   space_id?: SpaceId;
   /** `group` adds a group project; `members` is then required. */
   kind?: ProjectKind;
@@ -1819,6 +1819,7 @@ export interface ThreadsWorkspaceProgress {
 
 export interface SpacesListResult {
   spaces: Space[];
+  placements?: SpacePlacement[];
 }
 export interface SpacesCreateParams {
   name: string;
@@ -2017,6 +2018,8 @@ export type PreviewTargetInfo =
   | { kind: "server"; url: string; port: number }
   | { kind: "external"; url: string };
 export interface PreviewFolderRequest { folder: string; grantable: boolean }
+/** Server-only opening on the serving daemon; never opens files or grants folders. */
+export interface PreviewServerOpenParams { url: string; proxy?: boolean }
 export interface PreviewOpenResult {
   target: PreviewTargetInfo;
   ticket?: string;
@@ -3360,6 +3363,7 @@ export const NETWORK_MACHINE_CHANGED_NOTIFICATION = "network.machine.changed";
 /** Feature names a daemon lists in `DaemonInfo.features` and `peer.presence`. */
 export const NETWORK_FEATURES = {
   network: "network.v1",
+  spacesSync: "spaces.sync.v1",
   relay: "relay.v1",
   delegateRemote: "delegate.remote.v1",
   toolsForward: "tools.forward.v1",
@@ -4417,6 +4421,7 @@ export interface Methods {
   "threads.visuals.read": [{ thread_id: ThreadId; visual_id: Uuid; max_bytes?: number | null }, { html: string; truncated?: boolean }];
   "threads.visuals.frame": [{ thread_id: ThreadId; visual_id: Uuid; max_bytes?: number | null }, { ticket: string }];
   "threads.visuals.revoke": [{ thread_id: ThreadId; ticket: string }, Record<string, never>];
+  "previews.server.open": [PreviewServerOpenParams, PreviewOpenResult];
   "previews.open": [{ thread_id: ThreadId; target: string; allow_folder?: boolean; proxy?: boolean }, PreviewOpenResult];
   "previews.close": [{ ticket: string }, Record<string, never>];
   "previews.probe": [{ url: string }, PreviewProbeResult];
@@ -4443,6 +4448,9 @@ export interface Methods {
   "projects.map": [{ project_id: ProjectId }, ProjectsMapResult];
   "projects.instructions.create": [{ project_id: ProjectId }, ProjectsInstructionsCreateResult];
   "spaces.list": [Empty, SpacesListResult];
+  "spaces.place": [SpacesPlaceParams, SpacesListResult];
+  "peer.spaces.sync": [PeerSpacesSyncParams, PeerSpacesSyncResult];
+  "peer.spaces.logo": [PeerSpaceLogoParams, PeerSpaceLogoResult];
   "spaces.create": [SpacesCreateParams, Space];
   "spaces.update": [SpacesUpdateParams, Space];
   "spaces.delete": [SpacesDeleteParams, SpacesDeleteResult];
@@ -4773,3 +4781,34 @@ export interface SubagentMessage {
   updated_at: string;
 }
 export interface SubagentMessageActionParams { thread_id: ThreadId; message_id: MessageId; }
+
+
+/** The repository identity of a project whose Space is replicated. */
+export interface SpaceProject {
+  machine_id: MachineId;
+  project_id: ProjectId;
+  previous_machine_ids?: MachineId[];
+  kind?: ProjectKind;
+  repo?: RepoIdentity | null;
+  repos?: RepoIdentity[];
+}
+export interface SpacePlacement {
+  project: SpaceProject;
+  space_id: SpaceId;
+  lamport: number;
+  signer: string;
+  op_id: string;
+}
+export interface SpacesPlaceParams { project: SpaceProject; space_id: SpaceId }
+export interface SpaceField {
+  network_id: string;
+  lamport: number;
+  entity: string;
+  field: string;
+  value: unknown;
+  at: string;
+}
+export interface PeerSpacesSyncParams { digest: string; ids?: string[]; fields?: OpEnvelope[] }
+export interface PeerSpacesSyncResult { digest: string; ids: string[]; fields: OpEnvelope[] }
+export interface PeerSpaceLogoParams { hash: string }
+export interface PeerSpaceLogoResult { data: string }

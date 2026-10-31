@@ -6,13 +6,14 @@
 //
 // - A project that exists on several machines is one row: the local checkout when
 //   the user has one, else the first machine's. Projects only another machine has
-//   are listed as they are, with the space of the default space.
+//   use their replicated placement, falling back to the default space.
 // - A thread of another machine is listed under that row: its `project_id` becomes
 //   the row's project, `ownProjectId` keeps its own, and `machineId` names its owner.
 //   Everything that looks a project up by `thread.project_id` keeps working.
 //
 // Remapped objects are memoized per source object, so a refresh that changed one
 // machine leaves every other row the same object.
+import { logicalSpace, prepareSpacePlacements } from '../../../../packages/kybern-client/src/spacePlacements.ts'
 import { isChildThread, isInboundThread, isRemoteChildThread } from '../../../../packages/kybern-client/src/subagents.ts'
 import type { MachineThread, MergedThread } from '../../../../packages/kybern-client/src/machineMerge.ts'
 import type { MergedView } from '../../../../packages/kybern-client/src/machines.ts'
@@ -55,8 +56,9 @@ export class ListMerger {
 
   merge(input: MergeInput): MergedLists {
     const { view, localProjects } = input
+    prepareSpacePlacements(view.projects)
     const local = view.machines.find((machine) => machine.isLocal)?.machineId
-    const space = input.spaceOfForeign()
+    const defaultSpace = input.spaceOfForeign()
     const localIds = new Set(localProjects.map((project) => project.id))
     const machinesOf = new Map<string, MachineId[]>()
     const shown = new Map<string, string>()   // logical key -> listed project id
@@ -72,6 +74,7 @@ export class ListMerger {
       // Free chat is every machine's; a remote one is listed with the local "Chats".
       if (logical.instances.every((instance) => isFreeChatProject(instance.project.id))) { shown.set(logical.key, FREE_CHAT_PROJECT_ID); continue }
       const primary = logical.primary.project
+      const space = logicalSpace(logical, defaultSpace)
       let entry = this.foreignProjects.get(primary)
       if (!entry || entry.space !== space) {
         entry = { space, project: space === null ? primary : { ...primary, space_id: space } }

@@ -77,7 +77,8 @@ const scenarios: Scenario[] = [
   {
     name: 'browser', ui: { 'kybern.split-view.v2': { version: 2, root: leaf('main', main.id), focusedPaneId: 'main', groups: { main: group(main.id, [{ tab: { kind: 'preview' }, key: 'preview' }], 'preview') } } },
     drive: async (app) => {
-      const server = await app.getByTestId(`preview-server-${PREVIEW_PORT}`)
+      const info = await client.call('daemon.info', {})
+      const server = await app.getByTestId(`preview-server-${info.machine_id || info.environment_id}-${PREVIEW_PORT}`)
       for (let i = 0; i < 40 && !(await server.count()); i++) await Bun.sleep(250)
       if (await server.count()) { await server.click(); await Bun.sleep(2500) }
     },

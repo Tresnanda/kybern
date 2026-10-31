@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 
 use crate::integrations::*;
+use crate::space_sync::*;
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -710,7 +711,7 @@ pub struct ProjectsAddParams {
     pub path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// The space for a new project; the first space when absent. An existing
+    /// The space for a new project; the default space when absent. An existing
     /// path is returned unchanged (it is not moved).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub space_id: Option<SpaceId>,
@@ -1019,6 +1020,8 @@ pub struct ProjectsChangedNotification {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SpacesListResult {
     pub spaces: Vec<Space>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub placements: Vec<SpacePlacement>,
 }
 method!(SpacesList, "spaces.list", Some(Scope::OrchestrationRead), Empty, SpacesListResult);
 
@@ -1062,6 +1065,10 @@ pub struct SpacesReorderParams {
     pub space_ids: Vec<SpaceId>,
 }
 method!(SpacesReorder, "spaces.reorder", Some(Scope::OrchestrationOperate), SpacesReorderParams, SpacesListResult);
+
+method!(SpacesPlace, "spaces.place", Some(Scope::OrchestrationOperate), SpacesPlaceParams, SpacesListResult);
+method!(PeerSpacesSync, "peer.spaces.sync", Some(Scope::MachinePeer), PeerSpacesSyncParams, PeerSpacesSyncResult);
+method!(PeerSpaceLogo, "peer.spaces.logo", Some(Scope::MachinePeer), PeerSpaceLogoParams, PeerSpaceLogoResult);
 
 pub const SPACES_CHANGED_NOTIFICATION: &str = "spaces.changed";
 
@@ -3336,6 +3343,16 @@ pub struct PreviewOpenResult {
 }
 method!(PreviewOpen, "previews.open", Some(Scope::OrchestrationOperate), PreviewOpenParams, PreviewOpenResult);
 
+/// Open a loopback dev server on the serving daemon, independent of any thread's machine.
+/// This cannot open files or grant access to folders. Proxy tickets belong to the calling device.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewServerOpenParams {
+    pub url: String,
+    #[serde(default)]
+    pub proxy: bool,
+}
+method!(PreviewServerOpen, "previews.server.open", Some(Scope::OrchestrationOperate), PreviewServerOpenParams, PreviewOpenResult);
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PreviewCloseParams {
     pub ticket: String,
@@ -4374,6 +4391,9 @@ registry!(
     SpacesUpdate,
     SpacesDelete,
     SpacesReorder,
+    SpacesPlace,
+    PeerSpacesSync,
+    PeerSpaceLogo,
     ThreadsList,
     ThreadsSearch,
     ThreadsRead,
@@ -4489,6 +4509,7 @@ registry!(
     HtmlRevoke,
     HtmlSnapshot,
     PreviewOpen,
+    PreviewServerOpen,
     PreviewClose,
     PreviewProbe,
     PreviewServersList,

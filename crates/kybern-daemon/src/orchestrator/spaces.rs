@@ -130,7 +130,7 @@ impl Orchestrator {
         self.inner.store.space_get(space_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("space"))
     }
 
-    /// Delete a space; its projects move to the space above (the next one for the first).
+    /// Delete a space; its projects resolve to the default.
     pub fn delete_space(&self, space_id: SpaceId) -> Result<SpacesDeleteResult, RpcError> {
         let _guard = self.inner.space_writes.lock().unwrap_or_else(|e| e.into_inner());
         let (moved_to, moved_projects) = self.inner.store.space_delete_moving(space_id).map_err(store_error)?;

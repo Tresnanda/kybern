@@ -114,3 +114,26 @@ test("machine sentences", () => {
   assert.equal(machinesSummary(["online", "online", "offline", "online"]), "4 machines · 1 offline");
   assert.equal(machinesSummary(["online"]), "1 machine");
 });
+
+
+test("remote-only placement updates notify with a stable hub view and unchanged rail", async () => {
+  const { setSpacePlacements, spaceProject, getSpacePlacementVersion, subscribeSpacePlacements } = await import("../../../packages/kybern-client/src/spacePlacements.ts");
+  const { set } = await twoMachines();
+  const view = set.merged();
+  const remote = view.projects.find((p) => p.primary.project.id === "w10").primary;
+  const rail = [{ id:"personal", name:"Personal", is_default:true }, { id:"work", name:"Work", is_default:false }];
+  const p = spaceProject(remote.machineId, remote.project);
+  setSpacePlacements(rail, [{project:p,space_id:"personal",lamport:1,signer:"mac",op_id:"one"}]);
+  let observed = buildLists(view, local);
+  const previousVersion = getSpacePlacementVersion();
+  const stop = subscribeSpacePlacements(() => { observed = buildLists(view, local); });
+  try {
+    setSpacePlacements(rail, [{project:p,space_id:"work",lamport:2,signer:"mac",op_id:"two"}]);
+    assert.equal(set.merged(), view, "no hub refresh is required");
+    assert.ok(getSpacePlacementVersion() > previousVersion);
+    assert.equal(observed.projects.find((project) => project.id === "w10").space_id, "work");
+    const version = getSpacePlacementVersion();
+    setSpacePlacements(rail, [{project:p,space_id:"work",lamport:2,signer:"mac",op_id:"two"}]);
+    assert.equal(getSpacePlacementVersion(), version, "the subsequent identical notification does not undo or invalidate the move");
+  } finally { stop(); setSpacePlacements([]); }
+});

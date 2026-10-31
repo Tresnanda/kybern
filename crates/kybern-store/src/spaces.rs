@@ -72,9 +72,7 @@ impl Store {
         })
     }
 
-    /// Delete a space, moving its projects to the space directly above it (or
-    /// the next one when it is the first). Returns that space and how many
-    /// projects moved.
+    /// Delete a space, moving its projects to the default space.
     pub fn space_delete_moving(&self, id: SpaceId) -> Result<(SpaceId, u32)> {
         self.with(|c| {
             let tx = c.unchecked_transaction()?;
@@ -86,7 +84,7 @@ impl Store {
             if spaces[index].is_default {
                 return Err(SpaceError::DefaultSpace.into());
             }
-            let target = if index == 0 { spaces[1].id } else { spaces[index - 1].id };
+            let target = spaces.iter().find(|space| space.is_default).ok_or(SpaceError::NotFound("default space"))?.id;
             let moved = tx.execute("UPDATE projects SET space_id = ?1 WHERE space_id = ?2", params![target.to_string(), id.to_string()])?;
             tx.execute("DELETE FROM spaces WHERE id = ?1", [id.to_string()])?;
             let remaining: Vec<SpaceId> = spaces.iter().map(|s| s.id).filter(|s| *s != id).collect();
@@ -345,11 +343,11 @@ mod tests {
     }
 
     #[test]
-    fn project_insert_lands_in_the_first_space_or_the_named_one() {
+    fn project_insert_lands_in_the_default_space_or_the_named_one() {
         let (store, spaces) = store_with_spaces(&["Work", "Home"]);
         let a = project("/a", None);
         store.project_insert(&a).unwrap();
-        assert_eq!(store.project_get(a.id).unwrap().unwrap().space_id, Some(spaces[0].id));
+        assert_eq!(store.project_get(a.id).unwrap().unwrap().space_id, Some(spaces[1].id));
         let b = project("/b", Some(spaces[1].id));
         store.project_insert(&b).unwrap();
         assert_eq!(store.project_get(b.id).unwrap().unwrap().space_id, Some(spaces[1].id));
@@ -357,25 +355,18 @@ mod tests {
     }
 
     #[test]
-    fn delete_moves_projects_up_and_renumbers() {
+    fn delete_moves_projects_to_default_even_when_it_is_not_a_neighbor() {
         let (store, spaces) = store_with_spaces(&["One", "Two", "Three"]);
         let mid = project("/mid", Some(spaces[1].id));
-        let last = project("/last", Some(spaces[2].id));
         store.project_insert(&mid).unwrap();
-        store.project_insert(&last).unwrap();
-        // Middle: projects go to the space above.
-        assert_eq!(store.space_delete_moving(spaces[1].id).unwrap(), (spaces[0].id, 1));
-        assert_eq!(store.project_get(mid.id).unwrap().unwrap().space_id, Some(spaces[0].id));
-        let left = store.spaces_list().unwrap();
-        assert_eq!(left.iter().map(|s| (s.id, s.position)).collect::<Vec<_>>(), vec![(spaces[0].id, 0), (spaces[2].id, 1)]);
-        // First: projects go to the next space.
-        assert_eq!(store.space_delete_moving(spaces[0].id).unwrap(), (spaces[2].id, 1));
+        assert_eq!(store.space_delete_moving(spaces[1].id).unwrap(), (spaces[2].id, 1));
         assert_eq!(store.project_get(mid.id).unwrap().unwrap().space_id, Some(spaces[2].id));
-        // The only space cannot go.
-        let err = store.space_delete_moving(spaces[2].id).unwrap_err();
-        assert_eq!(err.downcast_ref::<SpaceError>(), Some(&SpaceError::OnlySpace));
-        let err = store.space_delete_moving(Uuid::now_v7()).unwrap_err();
-        assert_eq!(err.downcast_ref::<SpaceError>(), Some(&SpaceError::NotFound("space")));
+        assert_eq!(store.space_delete_moving(spaces[0].id).unwrap(), (spaces[2].id, 0));
+        assert_eq!(store.space_delete_moving(spaces[2].id).unwrap_err().downcast_ref::<SpaceError>(), Some(&SpaceError::OnlySpace));
+        assert_eq!(
+            store.space_delete_moving(Uuid::now_v7()).unwrap_err().downcast_ref::<SpaceError>(),
+            Some(&SpaceError::NotFound("space"))
+        );
     }
 
     #[test]

@@ -260,31 +260,125 @@ pub fn frame_ancestors(csp: &str) -> Option<&str> {
         .find(|directive| directive.split_ascii_whitespace().next().is_some_and(|name| name.eq_ignore_ascii_case("frame-ancestors")))
 }
 
+/// A small HTML tag scanner: comments and quoted attributes cannot introduce tags.
+/// Raw-text/RCDATA elements are skipped by `html_title`, just as the browser tokenizer does.
+fn html_tag<'a>(html: &'a str, lower: &'a str, mut from: usize) -> Option<(usize, usize, &'a str, bool)> {
+    let bytes = lower.as_bytes();
+    while let Some(found) = lower[from..].find('<') {
+        let start = from + found;
+        if lower[start..].starts_with("<!--") {
+            let rest = &lower[start + 4..];
+            let close = [rest.find("-->").map(|i| i + 3), rest.find("--!>").map(|i| i + 4)].into_iter().flatten().min()?;
+            from = start + 4 + close;
+            continue;
+        }
+        let closing = bytes.get(start + 1) == Some(&b'/');
+        let name_start = start + if closing { 2 } else { 1 };
+        let mut name_end = name_start;
+        while bytes.get(name_end).is_some_and(u8::is_ascii_alphanumeric) {
+            name_end += 1;
+        }
+        if name_end == name_start || !bytes.get(name_end).is_some_and(|b| b.is_ascii_whitespace() || matches!(b, b'/' | b'>')) {
+            // Declarations are consumed as a whole; text `<` is not a tag opener.
+            if matches!(bytes.get(start + 1), Some(b'!' | b'?')) {
+                from = start + lower[start..].find('>')? + 1;
+            } else {
+                from = start + 1;
+            }
+            continue;
+        }
+        let mut quote = None;
+        for (offset, byte) in html.as_bytes()[name_end..].iter().copied().enumerate() {
+            if let Some(q) = quote {
+                if byte == q {
+                    quote = None;
+                }
+            } else if matches!(byte, b'\'' | b'"') {
+                quote = Some(byte);
+            } else if byte == b'>' {
+                return Some((start, name_end + offset + 1, &lower[name_start..name_end], closing));
+            }
+        }
+        return None;
+    }
+    None
+}
+
 fn html_title(html: &str) -> Option<String> {
     let lower = html.to_ascii_lowercase();
     let mut from = 0;
-    while let Some(found) = lower[from..].find("<title") {
-        let start = from + found;
-        let after = lower.as_bytes().get(start + 6).copied();
-        if !matches!(after, Some(b'>' | b' ' | b'\t' | b'\n' | b'\r')) {
-            from = start + 6;
+    let mut inert = Vec::new();
+    while let Some((_, end, name, closing)) = html_tag(html, &lower, from) {
+        from = end;
+        if closing {
+            if inert.last().is_some_and(|last| *last == name) {
+                inert.pop();
+            }
             continue;
         }
-        let open = start + lower[start..].find('>')? + 1;
-        let close = open + lower[open..].find("</title")?;
-        let title = decode_entities(html[open..close].split_whitespace().collect::<Vec<_>>().join(" ").as_str());
-        return (!title.is_empty()).then(|| title.chars().take(200).collect());
+        if matches!(name, "template" | "svg" | "math") {
+            inert.push(name);
+        }
+        if name == "plaintext" {
+            return None;
+        }
+        if matches!(name, "title" | "script" | "style" | "textarea" | "xmp" | "iframe" | "noembed" | "noframes") {
+            // Inside these elements `<title>` is text, even inside JavaScript strings.
+            let needle = format!("</{name}");
+            let mut search = end;
+            let close = loop {
+                let start = search + lower[search..].find(&needle)?;
+                let boundary = start + needle.len();
+                if lower.as_bytes().get(boundary).is_some_and(|b| b.is_ascii_whitespace() || matches!(b, b'/' | b'>')) {
+                    break start;
+                }
+                search = boundary;
+            };
+            if name == "title" && inert.is_empty() {
+                let decoded = decode_entities(&html[end..close]);
+                let title = decoded.split_whitespace().collect::<Vec<_>>().join(" ");
+                return (!title.is_empty()).then(|| title.chars().take(200).collect());
+            }
+            from = close;
+        }
     }
     None
 }
 
 fn decode_entities(text: &str) -> String {
-    text.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&#x27;", "'")
-        .replace("&amp;", "&")
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find('&') {
+        out.push_str(&rest[..start]);
+        rest = &rest[start..];
+        let decoded = rest.find(';').filter(|end| *end <= 12).and_then(|end| {
+            let entity = &rest[1..end];
+            let value = match entity {
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" | "#39" => Some('\''),
+                "amp" => Some('&'),
+                "nbsp" => Some(' '),
+                _ => entity
+                    .strip_prefix("#x")
+                    .or_else(|| entity.strip_prefix("#X"))
+                    .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+                    .or_else(|| entity.strip_prefix('#').and_then(|number| number.parse().ok()))
+                    .and_then(char::from_u32),
+            }?;
+            Some((end, value))
+        });
+        if let Some((end, value)) = decoded {
+            out.push(value);
+            rest = &rest[end + 1..];
+        } else {
+            out.push('&');
+            rest = &rest[1..];
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 fn html_icon_href(html: &str) -> Option<String> {
@@ -362,7 +456,7 @@ pub async fn favicon_data_url(page_url: &str, href: Option<&str>, addr: SocketAd
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
@@ -517,6 +611,21 @@ mod tests {
         ] {
             assert!(!is_local_or_private_ip(no.parse().unwrap()), "{no}");
         }
+    }
+
+    #[test]
+    fn title_ignores_comment_script_and_attribute_decoys() {
+        let html = r#"<!doctype html><!-- do not parse <title> tags. --> <title data-sm>OpenCode</title>"#;
+        assert_eq!(html_title(html).as_deref(), Some("OpenCode"));
+        let html = r#"<script>const s = '<title>wrong</title>'; const t = '</scriptx>';</script>
+            <style>/* <title>wrong</title> */</style><meta data-note="<title>wrong</title>">
+            <template><title>wrong</title></template><svg><title>wrong</title></svg>
+            <TITLE data-label='>'> A &amp; B &#x1f680; &#169; &nbsp; C </TITLE>"#;
+        assert_eq!(html_title(html).as_deref(), Some("A & B 🚀 © C"));
+        assert_eq!(html_title("<!-- <title>decoy</title>"), None);
+        assert_eq!(html_title("<script>const s = '<title>decoy</title>'"), None);
+        assert_eq!(html_title("<textarea><title>decoy</title></textarea><title>Real</title>").as_deref(), Some("Real"));
+        assert_eq!(html_title("<title>cut off"), None);
     }
 
     #[test]

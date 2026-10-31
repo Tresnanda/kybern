@@ -1,0 +1,259 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(SpacesListResult)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SpacesListResult",
+  "type": "object",
+  "properties": {
+    "spaces": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Space"
+      }
+    },
+    "placements": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SpacePlacement"
+      }
+    }
+  },
+  "required": [
+    "spaces"
+  ],
+  "$defs": {
+    "Space": {
+      "description": "A group of projects (work, personal…). Every project except free chat is in exactly one.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "description": "1–32 characters, trimmed; unique ignoring case.",
+          "type": "string"
+        },
+        "color": {
+          "description": "The swatch behind initials and icons, and the fill while an image loads.",
+          "$ref": "#/$defs/SpaceColor"
+        },
+        "logo": {
+          "$ref": "#/$defs/SpaceLogo"
+        },
+        "position": {
+          "description": "0-based order in the rail.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "is_default": {
+          "description": "Exactly one space is the default. It can be renamed and restyled but not deleted.",
+          "type": "boolean",
+          "default": false
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "color",
+        "logo",
+        "position",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "SpaceColor": {
+      "type": "string",
+      "enum": [
+        "blue",
+        "green",
+        "purple",
+        "pink",
+        "teal",
+        "amber",
+        "red",
+        "graphite"
+      ]
+    },
+    "SpaceLogo": {
+      "oneOf": [
+        {
+          "description": "The name's initials on the colour.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "initials"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "A glyph from the client's curated set, on the colour. `icon` is a slug\n(`^[a-z0-9][a-z0-9-]{0,31}$`); clients that do not know it draw initials.",
+          "type": "object",
+          "properties": {
+            "icon": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "icon"
+            }
+          },
+          "required": [
+            "kind",
+            "icon"
+          ]
+        },
+        {
+          "description": "A square 128×128 PNG the daemon derived from an upload (`GET /assets/{id}`).",
+          "type": "object",
+          "properties": {
+            "asset_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "kind": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "required": [
+            "kind",
+            "asset_id"
+          ]
+        }
+      ]
+    },
+    "SpacePlacement": {
+      "description": "A resolved logical placement. Clocks also let clients resolve a newly learned repository identity.",
+      "type": "object",
+      "properties": {
+        "project": {
+          "$ref": "#/$defs/SpaceProject"
+        },
+        "space_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "lamport": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "signer": {
+          "type": "string"
+        },
+        "op_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "project",
+        "space_id",
+        "lamport",
+        "signer",
+        "op_id"
+      ]
+    },
+    "SpaceProject": {
+      "description": "A project reference carries repository identity so placements also work without a local checkout.",
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "previous_machine_ids": {
+          "description": "Local folder identities this machine replaced when leaving and rejoining.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kind": {
+          "$ref": "#/$defs/ProjectKind",
+          "default": "single"
+        },
+        "repo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RepoIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "repos": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RepoIdentity"
+          }
+        }
+      },
+      "required": [
+        "machine_id",
+        "project_id"
+      ]
+    },
+    "ProjectKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "single"
+          ]
+        },
+        {
+          "description": "A parent folder whose members are git repositories inside it.",
+          "type": "string",
+          "const": "group"
+        }
+      ]
+    },
+    "RepoIdentity": {
+      "description": "What makes two checkouts the same logical project on different machines.",
+      "type": "object",
+      "properties": {
+        "root_commit": {
+          "description": "The smallest hash in `git rev-list --max-parents=0 HEAD`. Absent for a shallow clone, whose\n\"root\" is only where the history was cut.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root_commits": {
+          "description": "Every root commit, sorted. A repository with several roots (merged histories) matches a\ncheckout that shares any of them. Empty from a daemon that predates this field.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "remote": {
+          "description": "The `origin` URL normalized to `host/owner/repo`: lowercase, no scheme, user or `.git`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

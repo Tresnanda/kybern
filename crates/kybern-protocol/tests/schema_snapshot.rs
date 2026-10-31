@@ -469,7 +469,7 @@ fn an_older_daemon_info_and_project_still_parse_and_the_network_defaults_to_off(
     let saved: Settings = serde_json::from_value(serde_json::json!({ "network": { "enabled": true } })).unwrap();
     assert_eq!(saved.network, NetworkSettings { configured: true, enabled: true, port: DEFAULT_PORT });
     assert_eq!(NETWORK_PROTOCOL, 1);
-    assert_eq!(features::ALL.len(), 18);
+    assert_eq!(features::ALL.len(), 19);
 }
 
 #[test]
@@ -558,4 +558,14 @@ fn network_setup_preserves_legacy_choices_and_roundtrips_new_defaults() {
     assert!(!absent.network.configured);
     let params: NetworkSetEnabledParams = serde_json::from_value(serde_json::json!({"enabled": true})).unwrap();
     assert!(!params.only_if_unconfigured);
+}
+
+#[test]
+fn spaces_sync_contract_is_stable() {
+    insta::assert_json_snapshot!("spaces_place_params", schema_for!(SpacesPlaceParams));
+    insta::assert_json_snapshot!("spaces_list_result", schema_for!(SpacesListResult));
+    insta::assert_json_snapshot!("peer_spaces_sync_params", schema_for!(PeerSpacesSyncParams));
+    insta::assert_json_snapshot!("peer_spaces_sync_result", schema_for!(PeerSpacesSyncResult));
+    insta::assert_json_snapshot!("peer_space_logo_params", schema_for!(PeerSpaceLogoParams));
+    insta::assert_json_snapshot!("peer_space_logo_result", schema_for!(PeerSpaceLogoResult));
 }

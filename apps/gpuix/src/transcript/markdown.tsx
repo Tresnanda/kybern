@@ -1,3 +1,4 @@
+import { knownPullTarget } from '../pulls/OpenPullRequest.tsx'
 import { openTabFromPane } from '../tabs/open.ts'
 import { resolveWorkspaceFile } from './fileLinks.ts'
 import { useTranscriptRowLease } from './Window.tsx'
@@ -265,22 +266,16 @@ export const Prose = memo(function Prose({ text }: { text: string }) {
   const [image, setImage] = useState<string | null>(null)
   const open = async (href: string) => {
     const link = chatLink(href)
-    const client = threadClient(threadId, pane.get().selectedMachineId)
-    if (!client) return
     // An image link (or an inline image native Markdown paints as a link) opens the image, wherever its folder is.
     if (localImageLink(href) || (link.kind === 'file' && /\.(?:png|jpe?g|gif|webp|avif)$/i.test(link.path))) { setImage(href); return }
     try {
       if (link.kind === 'external') {
-        // A pull request of this thread's own repository opens as a tab; any other link goes to the browser.
-        const pr = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/.exec(link.url)
-        const thread = pane.get().open.thread
-        if (pr && thread) {
-          const git = await client.call('git.status', { thread_id: thread.id }).catch(() => null)
-          const repo = git?.remote_url && /[:/]([^/:]+\/[^/]+?)(?:\.git)?$/.exec(git.remote_url)?.[1]
-          if (repo && repo.toLowerCase() === pr[1]!.toLowerCase() && openTabFromPane(pane.id, { kind: 'pr', projectId: thread.project_id, number: Number(pr[2]) })) return
-        }
+        const target = await knownPullTarget(link.url)
+        if (target && openTabFromPane(pane.id, {kind:'pr', ...target})) return
         openTarget(link.url).catch(e => reportError('Unable to open link', e)); return
       }
+      const client = threadClient(threadId, pane.get().selectedMachineId)
+      if (!client) return
       // From inside a thread, files, notes and tasks open as permanent tabs beside the chat (ADE-54); the page is a click away.
       if (link.kind === 'file') {
         const threadId = pane.get().selectedId

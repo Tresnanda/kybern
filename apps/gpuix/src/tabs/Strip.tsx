@@ -1,6 +1,7 @@
 // One group's tab strip: the chat (provider mark + thread title, pinned first) and the documents opened beside it. In the
 // thread header (46 px, `md`) or, for the lower groups of a split, a 32 px row (`sm`). The + menu opens what has no list of its
 // own in the dock: a terminal (or an agent CLI), the browser preview, Review, and all changes.
+import { OpenPullRequest } from '../pulls/OpenPullRequest.tsx'
 import { terminalTabLabel } from '../terminal/title.ts'
 import { toast } from '../shell/toasts.tsx'
 import { errorText } from '../nav/actions.ts'
@@ -69,7 +70,7 @@ export function useTabItems(threadId: string | null, tabs: Tab[], preview: strin
         return tab.cli ? { ...common, label: tab.title || 'Terminal', mark: tab.cli } : { ...common, label: terminalTabLabel(tab.title), icon: DOCK_ICONS.terminal }
       case 'preview': return { ...common, label: page || 'Browser', icon: ICONS.browser, tooltip: page ? `Browser · ${page}` : 'Browser' }
       case 'review': return { ...common, label: 'Review', icon: N.pullRequest }
-      case 'pr': return { ...common, label: `#${tab.number}${tab.title ? ` ${tab.title}` : ''}`, icon: N.pullRequest }
+      case 'pr': return { ...common, label: `#${tab.number}${tab.title ? ` ${tab.title}` : ''}`, icon: N.pullRequest, tooltip: `${tab.repo ? `${tab.repo} · ` : ''}#${tab.number}${tab.title ? ` ${tab.title}` : ''}` }
       case 'note': return { ...common, label: notes.find((n) => n.id === tab.id)?.title || tab.title || 'Note', icon: N.note }
       case 'task': { const task = tasks[tab.id]; return { ...common, label: task ? `${task.key} ${task.title}` : tab.title || 'Task', icon: N.tasks } }
       case 'visual': return { ...common, label: tab.title || 'Visual', icon: DOCK_ICONS.preview }
@@ -132,6 +133,7 @@ function AddMenu({ leafId, threadId, size }: { leafId: string; threadId: string;
   const t = useTheme()
   const providers = useNav((s) => s.providers)
   const thread = useThreadRecord(threadId)
+  const [pullPicker, setPullPicker] = useState(false)
   const box = size === 'md' ? 24 : 20
   const terminal = async (command?: string[], cli?: string) => {
     try {
@@ -142,6 +144,7 @@ function AddMenu({ leafId, threadId, size }: { leafId: string; threadId: string;
   const clis = providers.filter((p) => p.available && p.binary_path)
   if (thread?.subagent) return null
   return (
+    <>
     <Menu align="start" minWidth={216} testId={`tabs-add-${leafId}`} trigger={(open) => (
       <div role="button" aria-label="Open a tab" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: box, height: box, marginLeft: 2, borderRadius: 6, flexShrink: 0, cursor: 'pointer', ...(open ? { backgroundColor: ink(t, 0.08) } : {}), hover: { backgroundColor: ink(t, 0.06) } }}>
         <Icon source={N.plus} size={14} color={t.textSecondary} />
@@ -153,8 +156,11 @@ function AddMenu({ leafId, threadId, size }: { leafId: string; threadId: string;
       <MenuSeparator />
       <MenuItem id="preview" testId="tabs-add-preview" icon={ICONS.browser} label="Browser" shortcut="⌘L" onSelect={() => openTab(threadId, { kind: 'preview' }, { leaf: leafId })} />
       <MenuItem id="changes" testId="tabs-add-changes" icon={DOCK_ICONS.changes} label="All changes" onSelect={() => openTab(threadId, { kind: 'diff' }, { leaf: leafId })} />
+      <MenuItem id="pull-request" testId="tabs-add-pr" icon={N.pullRequest} label="Open pull request…" onSelect={() => setPullPicker(true)} />
       <MenuItem id="review" testId="tabs-add-review" icon={N.pullRequest} label="Review" onSelect={() => openTab(threadId, { kind: 'review' }, { leaf: leafId })} />
     </Menu>
+    {pullPicker && <OpenPullRequest onClose={() => setPullPicker(false)} onOpen={target => openTab(threadId, { kind: 'pr', ...target }, { leaf: leafId })} />}
+    </>
   )
 }
 

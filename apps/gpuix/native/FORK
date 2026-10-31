@@ -23,7 +23,9 @@ repo=https://github.com/Tresnanda/gpuix.git
 # Background Metal drawable acquisition keeps AppKit/JS responsive even when
 # nextDrawable waits below the gate's tracked queue limit. Integrated into both
 # forks' `next` and `kybern` branches.
-commit=9eeb1ee18414b7e8f8d5d208dc62f8b2d25a07f0
+# ade96-diff-scroll: exact native diff anchors through the existing list APIs,
+# including cached restores and lifecycle cleanup; no zed change.
+commit=b99f89d2efb1ae24a9714a5de1cb20f1b43d63f2
 # The zed submodule commit `commit` records; update.sh refuses a checkout that differs.
 zed=9bededa33fd6cb33607fa4c2514bbc4f838bc974
 # The upstream tag `commit` is based on. It must be `@gpuix/native@<VERSION>`.

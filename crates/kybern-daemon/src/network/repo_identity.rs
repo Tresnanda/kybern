@@ -121,6 +121,7 @@ pub async fn run(state: AppState) {
         match state.store.projects_list() {
             Ok(projects) => {
                 if refresh_all(&state.store, projects).await {
+                    super::spaces::reconcile(&state).await;
                     state.orchestrator.publish_projects();
                 }
             }

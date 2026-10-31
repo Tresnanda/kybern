@@ -718,6 +718,19 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE tokens ADD COLUMN issued_lineage TEXT;
     COMMIT;
     ",
+    // Spaces replicas are scoped to a network, never written to network_ops.
+    "
+    CREATE TABLE network_space_fields (
+      id TEXT PRIMARY KEY,
+      network_id TEXT NOT NULL,
+      envelope TEXT NOT NULL
+    );
+    CREATE INDEX network_space_fields_network ON network_space_fields(network_id);
+    CREATE TABLE network_space_logos (
+      hash TEXT PRIMARY KEY,
+      bytes BLOB NOT NULL
+    );
+    ",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<()> {

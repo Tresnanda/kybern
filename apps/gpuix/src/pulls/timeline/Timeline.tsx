@@ -5,7 +5,7 @@ import {
   CheckmarkCircle02Icon, Comment01Icon, File01Icon, GitCommitIcon, GitMergeIcon, GitPullRequestClosedIcon, GitPullRequestDraftIcon,
   GitPullRequestIcon, Message01Icon, MessageEdit01Icon, Refresh01Icon, UserAdd01Icon,
 } from '@hugeicons/core-free-icons'
-import { memo, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import { relativeTime } from '@/lib/format'
 import { toggleReviewFinding } from '@/state/prReviewModel'
 import type { PrTimelineEvent } from '../../../../../packages/kybern-client/src/types.ts'
@@ -24,6 +24,8 @@ import { openUrl, PrLoading, Problem } from '../PrStates.tsx'
 import type { Review } from '../useReview.ts'
 import { Avatar } from '../../kit/Avatar.tsx'
 import { findingFor, filterCounts, reviewFindings, reviewVerb, shortSha, timelineItems, TIMELINE_FILTERS, type Finding, type TimelineFilter, type TimelineItem } from './model.ts'
+import { useReadingPosition } from '../useReadingPosition.ts'
+import { readView, saveView } from '../viewState.ts'
 import { useTimeline } from './useTimeline.ts'
 
 const DOT = {
@@ -34,11 +36,14 @@ const DOT = {
 const MAX_WIDTH = 780
 const COMMITS_SHOWN = 6
 
-export function Timeline({ projectId, number, repo, review, onSend }: { projectId: string; number: number; repo?: string; review: Review; onSend: () => void }) {
+export function Timeline({ projectId, number, repo, review, onSend, viewKey }: { viewKey?: string; projectId: string; number: number; repo?: string; review: Review; onSend: () => void }) {
   const t = useTheme()
-  const [filter, setFilter] = useState<TimelineFilter>('all')
-  const [inline, setInline] = useState(true)
-  const { events: loaded, hasMore, loading, error, more, full } = useTimeline(projectId, number, repo, review.revision, review.detail?.head_sha)
+  const [filter, setFilter] = useState<TimelineFilter>(() => { const value = viewKey ? readView(viewKey).filter : 'all'; return TIMELINE_FILTERS.some(f => f.value === value) ? value as TimelineFilter : 'all' })
+  const [inline, setInline] = useState(() => viewKey ? readView(viewKey).inline : true)
+  const [restorePages] = useState(() => viewKey ? readView(viewKey).timelinePages : 1)
+  const { events: loaded, hasMore, loading, error, more, full, page, restoring } = useTimeline(projectId, number, repo, review.revision, review.detail?.head_sha, restorePages)
+  useEffect(() => { if (viewKey && page > readView(viewKey).timelinePages) saveView(viewKey, { timelinePages: page }) }, [viewKey, page])
+  const scroll = useReadingPosition(viewKey, `timeline:${filter}`, (loaded.length > 0 || !loading) && !restoring)
   // Send to agent checks the pull request out into a chat, which member pull requests can't do yet.
   const selectable = !repo
   const pr = review.detail?.pull_request
@@ -56,11 +61,11 @@ export function Timeline({ projectId, number, repo, review, onSend }: { projectI
   }
   return <div testId="pr-timeline" style={{ ...column, flexGrow: 1, minHeight: 0 }}>
     <div style={{ ...row, gap: 8, paddingLeft: 24, paddingRight: 24, paddingTop: 16, paddingBottom: 10, flexShrink: 0 }}>
-      <Segmented size="sm" aria-label="Timeline filter" value={filter} options={TIMELINE_FILTERS.map(f => ({ value: f.value, label: f.label, ...(review.detail?.timeline_counts || loaded.length ? { count: counts[f.value] } : {}) }))} onChange={v => setFilter(v as TimelineFilter)} tone="neutral" testId="pr-timeline-filter" />
+      <Segmented size="sm" aria-label="Timeline filter" value={filter} options={TIMELINE_FILTERS.map(f => ({ value: f.value, label: f.label, ...(review.detail?.timeline_counts || loaded.length ? { count: counts[f.value] } : {}) }))} onChange={v => { setFilter(v as TimelineFilter); if (viewKey) saveView(viewKey, { filter: v }) }} tone="neutral" testId="pr-timeline-filter" />
       <div style={{ flexGrow: 1 }} />
-      <PickerChip size="sm" quiet chevron={false} selected={inline} neutral testId="pr-timeline-inline" onClick={() => setInline(!inline)}>Inline comments</PickerChip>
+      <PickerChip size="sm" quiet chevron={false} selected={inline} neutral testId="pr-timeline-inline" onClick={() => { setInline(!inline); if (viewKey) saveView(viewKey, { inline: !inline }) }}>Inline comments</PickerChip>
     </div>
-    {error && !loaded.length ? <div style={{ padding: 24 }}><Problem error={error} refresh={review.refresh} /></div> : <virtual-list {...PR_SCROLL_LAYOUT} testId="pr-timeline-entries" estimatedItemHeight={96} style={{ flexGrow: 1, minHeight: 0 }}>
+    {error && !loaded.length ? <div style={{ padding: 24 }}><Problem error={error} refresh={review.refresh} /></div> : <virtual-list ref={scroll} {...PR_SCROLL_LAYOUT} testId="pr-timeline-entries" estimatedItemHeight={96} style={{ flexGrow: 1, minHeight: 0 }}>
       {!pr || (loading && !loaded.length) ? <div key="loading" style={{ padding: 24 }}><PrLoading label="Loading timeline…" rows={5} /></div> : items.length === 0 ? <div key="empty" style={{ padding: 24 }}><Label color={t.textSecondary} size={13}>{filter === 'all' ? 'Nothing has happened on this pull request yet.' : `No ${filter} ${hasMore ? 'in what has loaded so far.' : 'on this pull request.'}`}</Label></div> : items.map((item, i) => <TimelineRow key={item.id} item={item} last={i === items.length - 1 && !hasMore && !full} inline={inline} selectable={selectable} selected={selected} onToggle={toggle} onAddress={selectable ? select : undefined} />)}
       {pr && <div key="more" style={{ ...row, gap: 8, paddingLeft: 24, paddingRight: 24, paddingBottom: 24, paddingTop: 4 }}>
         {error && <Label color={t.warning} size={12}>{error.slice(0, 160)}</Label>}

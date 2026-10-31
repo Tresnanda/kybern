@@ -25,6 +25,7 @@ pub const WELL_KNOWN_PROOF_DOMAIN: &str = "kybern-wk-v1\0";
 
 /// Feature names a daemon lists in `DaemonInfo.features` and `peer.presence`.
 pub mod features {
+    pub const SPACES_SYNC_V1: &str = "spaces.sync.v1";
     pub const NETWORK_V1: &str = "network.v1";
     pub const RELAY_V1: &str = "relay.v1";
     pub const DELEGATE_REMOTE_V1: &str = "delegate.remote.v1";
@@ -51,8 +52,9 @@ pub mod features {
     pub const SKILLS_SYNC_V1: &str = "skills.sync.v1";
 
     /// Every feature the network design names, in design order.
-    pub const ALL: [&str; 18] = [
+    pub const ALL: [&str; 19] = [
         NETWORK_V1,
+        SPACES_SYNC_V1,
         RELAY_V1,
         DELEGATE_REMOTE_V1,
         TOOLS_FORWARD_V1,

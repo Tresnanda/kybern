@@ -405,3 +405,124 @@ fn thread_roots_covering_home_or_data_are_not_served_whole() {
     assert!(!pol.servable_thread_root(&home.0.join("Library/Application Support")));
     assert!(pol.servable_thread_root(&home.0.join("Documents")));
 }
+
+#[tokio::test]
+async fn device_server_preview_needs_no_thread_and_preserves_proxy_boundaries() {
+    use kybern_protocol::methods::PreviewServerOpenParams;
+    let dir = Dir::new();
+    let paths = crate::config::Paths::resolve(Some(dir.0.clone())).unwrap();
+    let state = crate::state::AppState::initialize_in_memory(&paths).unwrap();
+    let device = Uuid::new_v4();
+    for url in [
+        "file:///tmp/a.html",
+        "/tmp/a.html",
+        "https://example.com",
+        "http://192.168.1.1",
+        "http://169.254.169.254",
+        "http://user:pass@localhost:5173",
+        "http://localhost:0",
+        "ftp://localhost",
+    ] {
+        assert!(open_server(&state, device, &PreviewServerOpenParams { url: url.into(), proxy: true }).await.is_err(), "{url}");
+    }
+    let port = probe::tests::serve("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n<title>App</title>").await;
+    state.port.store(port, std::sync::atomic::Ordering::Relaxed);
+    assert!(open_server(&state, device, &PreviewServerOpenParams { url: format!("http://localhost:{port}"), proxy: true }).await.is_err());
+    state.port.store(0, std::sync::atomic::Ordering::Relaxed);
+    let result =
+        open_server(&state, device, &PreviewServerOpenParams { url: format!("http://localhost:{port}/app?q=1#hash"), proxy: true })
+            .await
+            .unwrap();
+    assert!(result.needs_permission.is_none());
+    let ticket = result.ticket.unwrap();
+    let info = state.previews.lookup(&ticket).unwrap();
+    assert_eq!(info.thread_id, None);
+    assert_eq!(info.principal, Some(device));
+    assert_eq!(info.kind, tickets::TicketKind::Proxy { port });
+    assert!(result.path.unwrap().starts_with("/preview-proxy/"));
+    assert_eq!(state.previews.revoke_thread(Uuid::new_v4()), 0);
+    assert_eq!(state.previews.revoke_principal(device), 1);
+    assert!(state.previews.lookup(&ticket).is_none());
+    let direct =
+        open_server(&state, device, &PreviewServerOpenParams { url: format!("http://localhost:{port}/app"), proxy: false }).await.unwrap();
+    assert!(direct.ticket.is_none() && direct.path.is_none());
+    let https = format!("https://localhost:{port}/app?q=1#hash");
+    let refused = open_server(&state, device, &PreviewServerOpenParams { url: https.clone(), proxy: true }).await.unwrap_err();
+    assert_eq!(refused.code, "unsupported_proxy");
+    assert!(refused.message.contains("HTTP port"));
+    let direct = open_server(&state, device, &PreviewServerOpenParams { url: https.clone(), proxy: false }).await.unwrap();
+    assert_eq!(direct.target, PreviewTargetInfo::Server { url: https, port });
+    assert!(direct.ticket.is_none() && direct.path.is_none());
+}
+
+/// A remote-environment client consumes the primary's HTTP ticket, while the server lives behind
+/// a separate loopback TCP forward. Neither the forward nor ticket needs a thread on the primary.
+#[tokio::test]
+async fn device_server_proxy_preserves_forwarded_page_assets_and_hot_reload_without_a_thread() {
+    use axum::{
+        Router,
+        extract::ws::{Message as AxumMessage, WebSocketUpgrade},
+        routing::{any, get},
+    };
+    use futures::{SinkExt, StreamExt};
+    use kybern_protocol::methods::PreviewServerOpenParams;
+    use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
+    let dir = Dir::new();
+    let paths = crate::config::Paths::resolve(Some(dir.0.clone())).unwrap();
+    let state = crate::state::AppState::initialize_in_memory(&paths).unwrap();
+    let dev = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dev_port = dev.local_addr().unwrap().port();
+    let app = Router::new()
+        .route("/app", get(|| async { "<script src='/asset.js'></script>" }))
+        .route("/asset.js", get(|| async { "window.loaded = true" }))
+        .route(
+            "/hmr",
+            get(|ws: WebSocketUpgrade| async {
+                ws.protocols(["vite-hmr"]).on_upgrade(|mut socket| async move {
+                    while let Some(Ok(AxumMessage::Text(text))) = socket.recv().await {
+                        if socket.send(AxumMessage::Text(text)).await.is_err() {
+                            break;
+                        }
+                    }
+                })
+            }),
+        );
+    let dev_task = tokio::spawn(async move { axum::serve(dev, app).await.unwrap() });
+    let forward = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = forward.local_addr().unwrap().port();
+    let forward_task = tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = forward.accept().await else {
+                break;
+            };
+            tokio::spawn(async move {
+                if let Ok(mut target) = tokio::net::TcpStream::connect(("127.0.0.1", dev_port)).await {
+                    let _ = tokio::io::copy_bidirectional(&mut socket, &mut target).await;
+                }
+            });
+        }
+    });
+    let primary = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let primary_addr = primary.local_addr().unwrap();
+    state.port.store(primary_addr.port(), std::sync::atomic::Ordering::Relaxed);
+    let result = open_server(&state, Uuid::new_v4(), &PreviewServerOpenParams { url: format!("http://localhost:{port}/app"), proxy: true })
+        .await
+        .unwrap();
+    let proxy = Router::new().route("/preview-proxy/{ticket}/{*path}", any(proxy::serve)).with_state(state.clone());
+    let primary_task = tokio::spawn(async move { axum::serve(primary, proxy).await.unwrap() });
+    let base = format!("http://{primary_addr}{}", result.path.unwrap().trim_end_matches('/'));
+    let http = reqwest::Client::builder().no_proxy().build().unwrap();
+    assert_eq!(http.get(format!("{base}/app")).send().await.unwrap().text().await.unwrap(), "<script src='/asset.js'></script>");
+    assert_eq!(http.get(format!("{base}/asset.js")).send().await.unwrap().text().await.unwrap(), "window.loaded = true");
+    let mut request = format!("{}/hmr", base.replace("http://", "ws://")).into_client_request().unwrap();
+    request.headers_mut().insert("sec-websocket-protocol", "vite-hmr".parse().unwrap());
+    let (mut socket, response) = tokio_tungstenite::connect_async(request).await.unwrap();
+    assert_eq!(response.headers().get("sec-websocket-protocol").unwrap(), "vite-hmr");
+    socket.send(Message::Text("update".into())).await.unwrap();
+    let response = tokio::time::timeout(std::time::Duration::from_secs(5), socket.next()).await.unwrap().unwrap().unwrap();
+    assert_eq!(response, Message::Text("update".into()));
+    socket.close(None).await.unwrap();
+    primary_task.abort();
+    forward_task.abort();
+    dev_task.abort();
+}

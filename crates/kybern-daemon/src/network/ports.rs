@@ -40,6 +40,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 /// A TCP read is cut into frames of this size.
 const READ_CHUNK: usize = 16 * 1024;
 
+#[cfg(test)]
+#[path = "../previews/network_tests.rs"]
+mod preview_rpc_tests;
+
 // ---- this machine: the forwards ----
 
 struct Forward {

@@ -68,11 +68,11 @@ test('spaceOfProject', () => {
   expect(spaceOfProject(projects, FREE_CHAT_PROJECT_ID)).toBeNull()
 })
 
-test('deleteTarget is the space above, or the next for the first', () => {
-  const spaces = [space('a'), space('b'), space('c')]
-  expect(deleteTarget(spaces, 'a')?.id).toBe('b')
-  expect(deleteTarget(spaces, 'b')?.id).toBe('a')
-  expect(deleteTarget(spaces, 'c')?.id).toBe('b')
+test('deleteTarget is the default regardless of rail order', () => {
+  const spaces = [space('a'), space('b'), { ...space('c'), is_default: true }]
+  expect(deleteTarget(spaces, 'a')?.id).toBe('c')
+  expect(deleteTarget(spaces, 'b')?.id).toBe('c')
+  expect(deleteTarget(spaces, 'c')).toBeNull()
   expect(deleteTarget([space('a')], 'a')).toBeNull()
   expect(deleteTarget(spaces, 'zzz')).toBeNull()
 })

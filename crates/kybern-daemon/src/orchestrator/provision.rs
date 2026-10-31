@@ -823,12 +823,17 @@ impl Orchestrator {
         }
     }
 
-    /// A delivery the target refused because it has no checkout: wait while a provisioning for it is queued.
+    /// Wait for provisioning, including an acknowledgement that overtook a missing-checkout reply.
     pub(crate) fn remote_refusal(&self, item: &OutboxItem, error: &RpcError) -> Delivery {
         let needs_project = error.data.as_ref().and_then(|data| data.get("needs")).and_then(Value::as_str) == Some(NEEDS_PROJECT);
         if needs_project {
             let name = self.machine_name(&item.target);
-            if self.inner.store.outbox_provision_pending(&item.target).unwrap_or(false) {
+            // Provision and delegation are delivered concurrently. The target can reject the
+            // delegation before registering the clone, yet its reply can arrive after provisioning
+            // settled. Retry that stale refusal once; the next claim gets a later updated_at.
+            if self.inner.store.outbox_provision_pending(&item.target).unwrap_or(false)
+                || self.inner.store.outbox_provision_completed_since(&item.target, item.updated_at).unwrap_or(false)
+            {
                 return Delivery::Retry(format!("Waiting for the project to be added to {name}"));
             }
             return Delivery::Failed(error.message.clone());

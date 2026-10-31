@@ -10,10 +10,10 @@ import { activeEnvironment } from '../shell/environment.ts'
 import { recordRecent, recentsKeyForThread } from './recents.ts'
 import { browserAddress, currentAddress } from './address.ts'
 import { webHost } from '../native/webview.ts'
-import { forwardedAddress, forwardPort, type RemoteServer } from './remote.ts'
+import { addressPath, forwardedAddress, forwardPort, sourceAddress, type RemoteServer } from './remote.ts'
 export type PreviewLoad = { phase: 'idle' | 'resolving' | 'ready' | 'external' } | { phase: 'waiting'; error: 'connection_refused' | 'timed_out'; startedAt: number } | { phase: 'blocked'; header: string; value: string } | { phase: 'error'; error?: string; status?: number; message?: string } | { phase: 'not-found'; name: string } | { phase: 'relay-failed' }
 export interface Entry { target?: PreviewTargetInfo; proxy?: boolean; query?: string; address: string; url: string; frameUrl?: string; closeRelay?: () => void; title: string; ticket?: string; kind: 'file' | 'server' | 'external'; /** A dev server on another machine, shown through a forward of its port. */ machine?: RemoteServer; releaseTicket?: () => void; released?: boolean }
-export interface PreviewState { entries: Entry[]; load: PreviewLoad; loading: boolean; wsFailed?: boolean; wsNoticeDismissed?: boolean; attemptedAddress?: string; navigatedAway?: boolean; index: number; floating: boolean; busy: boolean; error: string | null; permission?: { address: string; folder: string; grantable: boolean }; opened?: boolean; /** The machine whose servers the empty Browser lists (this machine when unset). */ serversOn?: string; /** The "Forward a port" strip is open. */ forwardOpen?: boolean; forwardMachine?: string; device: boolean; width: number; height: number; preset: string | null; bridge?: { back: number; forward: number }; pageTitle?: string; pagePath?: string; focusAddress?: number }
+export interface PreviewState { entries: Entry[]; load: PreviewLoad; loading: boolean; wsFailed?: boolean; wsNoticeDismissed?: boolean; attemptedAddress?: string; attemptedMachine?: RemoteServer; navigatedAway?: boolean; index: number; floating: boolean; busy: boolean; error: string | null; permission?: { address: string; folder: string; grantable: boolean }; opened?: boolean; /** The machine whose servers the empty Browser lists (all machines when unset). */ serversOn?: string; /** The "Forward a port" strip is open. */ forwardOpen?: boolean; forwardMachine?: string; device: boolean; width: number; height: number; preset: string | null; bridge?: { back: number; forward: number }; pageTitle?: string; pagePath?: string; focusAddress?: number }
 const empty: PreviewState = { entries: [], load: { phase: 'idle' }, loading: false, index: -1, floating: false, opened: false, busy: false, error: null, device: false, width: 390, height: 844, preset: 'iphone-12-pro' }
 const sessions = new Map<string, PreviewState>(), generations = new Map<string, number>()
 let nextGeneration = 0
@@ -62,12 +62,15 @@ export async function openPreview(id: string, raw: string, allowFolder = false, 
   const address = target.kind === 'search' ? `https://www.google.com/search?q=${encodeURIComponent(target.query)}` : target.kind === 'file' ? target.path : target.url
   const generation = ++nextGeneration; generations.set(id, generation)
   const before = previewState(id), old = before.entries[before.index]
-  const proxy = !via && (!activeEnvironment().local || (options.proxy ?? (replace && old?.kind === 'server' ? old.proxy : false)))
-  setPreview(id, { busy: !options.retry, attemptedAddress: address, loading: !options.retry, error: null, permission: undefined, load: options.retry && before.load.phase === 'waiting' ? before.load : { phase: 'resolving' } })
+  const proxy = !activeEnvironment().local || (options.proxy ?? (replace && old?.kind === 'server' ? old.proxy : false))
+  setPreview(id, { busy: !options.retry, attemptedAddress: address, attemptedMachine: machine, loading: !options.retry, error: null, permission: undefined, load: options.retry && before.load.phase === 'waiting' ? before.load : { phase: 'resolving' } })
   let pendingEntry: Entry | undefined
   try {
     // A forwarded page is reached from this machine, so this machine's daemon probes and serves it.
     const client = (via ? localClient() : threadClient(id))!
+    if (target.kind === 'server' && proxy && new URL(address).protocol === 'https:') {
+      throw Object.assign(new Error("HTTPS servers cannot be proxied yet. Use the server's HTTP port, or open its HTTPS address directly on that machine."), { data: { code: 'unsupported_proxy' } })
+    }
     let load: PreviewLoad = { phase: target.kind === 'external' || target.kind === 'search' ? 'external' : 'ready' }
     let title: string | undefined
     if (target.kind === 'server' && !(proxy && activeEnvironment().local)) {
@@ -82,7 +85,8 @@ export async function openPreview(id: string, raw: string, allowFolder = false, 
       } else if (probe.blocked_by && !proxy) load = { phase: 'blocked', ...probe.blocked_by }
     }
     const result: PreviewOpenResult = load.phase === 'ready' || load.phase === 'external'
-      ? await client.call('previews.open', { thread_id: id, target: address, proxy, ...(allowFolder ? { allow_folder: true } : {}) })
+      ? via ? await client.call('previews.server.open', { url: address, proxy })
+        : await client.call('previews.open', { thread_id: id, target: address, proxy, ...(allowFolder ? { allow_folder: true } : {}) })
       : { target: { kind: 'server', url: address, port: Number(new URL(address).port) || 80 } }
     if (generations.get(id) !== generation) { if (result.ticket) await client.call('previews.close', { ticket: result.ticket }); return }
     if (result.needs_permission) { setPreview(id, { busy: false, loading: false, load: { phase: 'idle' }, permission: { address, ...result.needs_permission } }); return false }
@@ -100,18 +104,27 @@ export async function openPreview(id: string, raw: string, allowFolder = false, 
     }
     commitEntry(id, entry, replace, load)
     pendingEntry = undefined
-    // A forwarded address lives only as long as its forward, so it is not kept as a recent.
-    if (entry.kind !== 'external' && !via) recordRecent(recentsKeyForThread(id), { kind: entry.kind, value: entry.address, title: entry.title, at: Date.now() })
+    // Persist the source, never the ephemeral local port allocated by ports.forward.
+    let recentSource = via
+    if (!recentSource && entry.kind === 'server' && client.info) {
+      const url = new URL(entry.address)
+      if (['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) recentSource = { id: client.info.machine_id ?? client.info.environment_id, name: client.info.hostname, port: Number(url.port) || (url.protocol === 'https:' ? 443 : 80), path: addressPath(entry.address), scheme: url.protocol === 'https:' ? 'https' : 'http' }
+    }
+    if (entry.kind !== 'external') recordRecent(recentsKeyForThread(id), { kind: entry.kind, value: recentSource ? sourceAddress(recentSource) : entry.address, title: entry.title, at: Date.now(), ...(recentSource ? { machine: recentSource } : {}) })
     // No embedded web view: the page opens in the default browser as soon as it is ready (the entry keeps its ticket and relay until replaced or closed).
     if (launch || (!webHost.available && entry.kind !== 'external' && load.phase === 'ready')) await launchPreview(id)
     return true
   } catch (e) {
     if (pendingEntry) release(pendingEntry)
     if (generations.get(id) !== generation) return false
-    const message = e instanceof Error ? e.message : String(e)
+    const unsupported = !!via && !!e && typeof e === 'object' && 'code' in e && e.code === -32601
+    const unsupportedProxy = !!e && typeof e === 'object' && 'data' in e && !!e.data && typeof e.data === 'object' && 'code' in e.data && e.data.code === 'unsupported_proxy'
+    const message = unsupported
+      ? `Update Kybern on ${activeEnvironment().name} to open servers from your machines.`
+      : e instanceof Error ? e.message : String(e)
     if (target.kind === 'server') {
       const entry: Entry = { address, url: address, kind: 'server', proxy: !!proxy, title: new URL(address).host, released: true, ...(via ? { machine: via } : {}) }
-      commitEntry(id, entry, replace, proxy ? { phase: 'relay-failed' } : { phase: 'error', message })
+      commitEntry(id, entry, replace, proxy && !unsupported && !unsupportedProxy ? { phase: 'relay-failed' } : { phase: 'error', message })
     } else if (replace && old?.kind === 'file' && /doesn't exist|does not exist|not.found|isn't there/i.test(message)) {
       commitEntry(id, { ...old, released: true }, true, { phase: 'not-found', name: address.split('/').pop() ?? address })
     } else setPreview(id, { busy: false, loading: false, error: message, load: { phase: 'error', message } })
@@ -122,15 +135,19 @@ export async function openPreview(id: string, raw: string, allowFolder = false, 
 async function openForwarded(id: string, machine: RemoteServer, launch: boolean, replace: boolean, options: OpenOptions): Promise<boolean | undefined> {
   const generation = ++nextGeneration; generations.set(id, generation)
   const before = previewState(id)
-  setPreview(id, { busy: !options.retry, loading: !options.retry, error: null, permission: undefined, load: options.retry && before.load.phase === 'waiting' ? before.load : { phase: 'resolving' } })
+  setPreview(id, { busy: !options.retry, loading: !options.retry, attemptedMachine: machine, attemptedAddress: sourceAddress(machine), error: null, permission: undefined, load: options.retry && before.load.phase === 'waiting' ? before.load : { phase: 'resolving' } })
   try {
-    const forward = await forwardPort(localClient()!, machine.id, machine.port)
+    const client = localClient()!
+    const primaryId = client.info?.machine_id ?? client.info?.environment_id
+    const address = primaryId === machine.id ? sourceAddress(machine) : forwardedAddress(await forwardPort(client, machine.id, machine.port), machine.path, machine.scheme)
     if (generations.get(id) !== generation) return false
-    return await openPreview(id, forwardedAddress(forward, machine.path), false, launch, replace, { ...options, machine, forwarded: true })
+    return await openPreview(id, address, false, launch, replace, { ...options, machine, forwarded: true })
   } catch (e) {
     if (generations.get(id) !== generation) return false
     const message = e instanceof Error ? e.message : String(e)
-    setPreview(id, { busy: false, loading: false, error: message, load: { phase: 'error', message } })
+    const address = sourceAddress(machine)
+    commitEntry(id, { address, url: address, title: machine.name, kind: 'server', machine, released: true }, replace, { phase: 'error', message })
+    setPreview(id, { error: message, loading: false })
     return false
   }
 }
@@ -156,13 +173,13 @@ export function navigatePreview(id: string, direction: number) {
   if (!entry) return
   generations.set(id, ++nextGeneration)
   release(current.entries[current.index]!)
-  setPreview(id, { index, busy: false, opened: false, error: null, attemptedAddress: undefined, permission: undefined, bridge: undefined, pageTitle: undefined, pagePath: undefined })
+  setPreview(id, { index, busy: false, opened: false, error: null, attemptedAddress: undefined, attemptedMachine: undefined, permission: undefined, bridge: undefined, pageTitle: undefined, pagePath: undefined })
   void openPreview(id, entry.address, false, false, true)
 }
 export function closePreview(id: string) {
   generations.set(id, ++nextGeneration)
   previewState(id).entries.forEach(release)
-  setPreview(id, { entries: [], load: { phase: 'idle' }, loading: false, index: -1, floating: false, opened: false, busy: false, error: null, attemptedAddress: undefined, permission: undefined, bridge: undefined, pagePath: undefined, pageTitle: undefined })
+  setPreview(id, { entries: [], load: { phase: 'idle' }, loading: false, index: -1, floating: false, opened: false, busy: false, error: null, attemptedAddress: undefined, attemptedMachine: undefined, permission: undefined, bridge: undefined, pagePath: undefined, pageTitle: undefined })
 }
 
 /** Environment lifecycle hook: clear metadata and invalidate all late responses. */
@@ -174,7 +191,7 @@ export function resetPreviews() {
 
 export function retryPreview(id: string) {
   const s = previewState(id), entry = s.entries[s.index]
-  if (entry || s.attemptedAddress) return openPreview(id, s.attemptedAddress ?? entry!.address, false, false, true, { retry: true })
+  if (entry || s.attemptedAddress) return openPreview(id, s.attemptedAddress ?? entry!.address, false, false, true, { retry: true, ...(s.attemptedMachine ? { machine: s.attemptedMachine } : {}) })
 }
 export function setPreviewProxy(id: string, proxy: boolean) {
   const s = previewState(id), entry = s.entries[s.index]

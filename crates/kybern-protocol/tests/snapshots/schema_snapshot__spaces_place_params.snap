@@ -1,0 +1,110 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(SpacesPlaceParams)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SpacesPlaceParams",
+  "type": "object",
+  "properties": {
+    "project": {
+      "$ref": "#/$defs/SpaceProject"
+    },
+    "space_id": {
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "required": [
+    "project",
+    "space_id"
+  ],
+  "$defs": {
+    "SpaceProject": {
+      "description": "A project reference carries repository identity so placements also work without a local checkout.",
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "previous_machine_ids": {
+          "description": "Local folder identities this machine replaced when leaving and rejoining.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kind": {
+          "$ref": "#/$defs/ProjectKind",
+          "default": "single"
+        },
+        "repo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RepoIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "repos": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RepoIdentity"
+          }
+        }
+      },
+      "required": [
+        "machine_id",
+        "project_id"
+      ]
+    },
+    "ProjectKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "single"
+          ]
+        },
+        {
+          "description": "A parent folder whose members are git repositories inside it.",
+          "type": "string",
+          "const": "group"
+        }
+      ]
+    },
+    "RepoIdentity": {
+      "description": "What makes two checkouts the same logical project on different machines.",
+      "type": "object",
+      "properties": {
+        "root_commit": {
+          "description": "The smallest hash in `git rev-list --max-parents=0 HEAD`. Absent for a shallow clone, whose\n\"root\" is only where the history was cut.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root_commits": {
+          "description": "Every root commit, sorted. A repository with several roots (merged histories) matches a\ncheckout that shares any of them. Empty from a daemon that predates this field.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "remote": {
+          "description": "The `origin` URL normalized to `host/owner/repo`: lowercase, no scheme, user or `.git`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

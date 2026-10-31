@@ -1177,6 +1177,14 @@ enum PreviewCmd {
         #[arg(long)]
         allow_folder: bool,
     },
+    /// Open a loopback dev server without requiring a thread on this machine.
+    Server {
+        /// Server address, such as http://localhost:5173.
+        url: String,
+        /// Serve through a device-scoped proxy ticket.
+        #[arg(long)]
+        proxy: bool,
+    },
     /// List the folders outside projects that previews may serve.
     Folders {
         /// Remove this folder from the list.
@@ -1332,6 +1340,16 @@ async fn preview_cmd(client: &Client, cmd: PreviewCmd, json: bool) -> Result<()>
                     PreviewTargetInfo::External { url } => println!("{url} (opens in your browser)"),
                     PreviewTargetInfo::File { path, .. } => println!("{path}"),
                 }
+            }
+        }
+        PreviewCmd::Server { url, proxy } => {
+            let result = client.call::<PreviewServerOpen>(PreviewServerOpenParams { url, proxy }).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else if let Some(path) = result.path {
+                println!("{path}");
+            } else if let PreviewTargetInfo::Server { url, .. } = result.target {
+                println!("{url}");
             }
         }
         PreviewCmd::Folders { remove } => {

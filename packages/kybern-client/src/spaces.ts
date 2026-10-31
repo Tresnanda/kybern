@@ -62,11 +62,11 @@ export function inSpace(projectId: string | null | undefined, projects: readonly
   return project.space_id === spaceId;
 }
 
-/** The space a deleted space's projects move to: the one above it, or the next for the first. */
+/** Deleted placements resolve to the default Space. */
 export function deleteTarget(spaces: readonly Space[], id: SpaceId): Space | null {
   const index = spaces.findIndex((space) => space.id === id);
   if (index < 0 || spaces.length < 2) return null;
-  return index === 0 ? spaces[1]! : spaces[index - 1]!;
+  return spaces.find((space) => space.is_default && space.id !== id) ?? null;
 }
 
 /** The default space stays; every other space can be deleted (the daemon still refuses the last one). */

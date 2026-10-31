@@ -591,6 +591,8 @@ fn ok<T: serde::Serialize>(value: T) -> Result<Value, RpcError> {
 pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, params: Value) -> Result<Value, RpcError> {
     let network = &state.network;
     match method {
+        PeerSpacesSync::NAME => ok(super::spaces::serve(state, link, parse(params)?).await?),
+        PeerSpaceLogo::NAME => ok(super::spaces::serve_logo(state, parse(params)?)?),
         PeerOpsSync::NAME => {
             let theirs: PeerOpsSyncParams = parse(params)?;
             let membership = network.membership().ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, "no network"))?;
@@ -806,6 +808,9 @@ async fn after_open(state: &AppState, link: &Arc<PeerLink>, dialer: bool) {
             }
             Err(error) => tracing::warn!(target: SESSION_TARGET, machine = %link.machine_id, %error.message, "operation sync failed"),
         }
+    }
+    if dialer {
+        super::spaces::sync(state, link, true).await;
     }
     let _ = link.notify(PeerPresenceMethod::NAME, serde_json::to_value(network.presence()).unwrap_or(Value::Null)).await;
 }
@@ -1055,6 +1060,10 @@ pub async fn run(state: AppState) {
     let network = state.network.clone();
     loop {
         let retry = pass(&state).await;
+        super::spaces::reconcile(&state).await;
+        for link in network.peers.links() {
+            super::spaces::sync(&state, &link, false).await;
+        }
         let tick = if network.is_watching() { network.timing.tick_watching } else { network.timing.tick_idle };
         let mut wait = retry.map_or(tick, |retry| retry.min(tick)).max(Duration::from_millis(20));
         // A listener that could not open (a daemon started at boot before Tailscale was up) is tried

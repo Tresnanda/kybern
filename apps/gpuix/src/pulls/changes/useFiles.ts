@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PrFile } from '../../../../../packages/kybern-client/src/types.ts'
 import { useApp } from '../../state.ts'
-import { prCall } from '../client.ts'
+import { prCall, prClient } from '../client.ts'
 import type { FileMeta } from './model.ts'
 
 /** Pages fetched before pausing at a "Load more files" row (1,500 files). GitHub itself stops at 3,000. */
@@ -27,8 +27,10 @@ async function fetchPage(projectId: string, number: number, repo: string | undef
   return prCall(projectId, 'github.pr.page', { project_id: projectId, number, kind: 'files', page, ...(repo ? { repo } : {}) })
 }
 
-export function useChangedFiles(projectId: string, number: number, repo: string | undefined, revision: number, head: string | undefined) {
+export function useChangedFiles(projectId: string, number: number, repo: string | undefined, revision: number, head: string | undefined, restoreThroughPage = 1) {
+  const restorePage = Math.max(1, Math.min(100, restoreThroughPage))
   const connection = useApp(s => s.status)
+  const client = prClient(projectId)
   const key = `${projectId}${repo ? `/${repo}` : ''}:${number}:${revision}:${head}`
   const [list, setList] = useState<{ key: string; value: List } | null>(null)
   const current = list?.key === key ? list.value : lists.get(key)
@@ -40,7 +42,7 @@ export function useChangedFiles(projectId: string, number: number, repo: string 
     stop.current = () => { canceled = true }
     void (async () => {
       let files = seed
-      for (let page = from; page === from || !atBurstEnd(page); page++) {
+      for (let page = from; page === from || page <= restorePage || !atBurstEnd(page); page++) {
         let data
         try { data = await fetchPage(projectId, number, repo, page) } catch (e) {
           if (!canceled) { const value = { files, resume: page, error: String(e) }; remember(lists, key, value, REMEMBERED_LISTS); setList({ key, value }) }
@@ -59,16 +61,16 @@ export function useChangedFiles(projectId: string, number: number, repo: string 
         if (last) return
       }
     })()
-  }, [projectId, number, repo, key])
+  }, [projectId, number, repo, key, restorePage])
 
   useEffect(() => {
     if (!head || connection !== 'open') return
     const known = lists.get(key)
     // A finished list, or one waiting at a burst boundary, is shown as it is; anything else resumes where it stopped.
-    if (known && (known.resume === null || (!known.error && atBurstEnd(known.resume)))) setList({ key, value: known })
+    if (known && (known.resume === null || (!known.error && atBurstEnd(known.resume) && known.resume > restorePage))) setList({ key, value: known })
     else run(known?.resume ?? 1, known?.files ?? [])
     return () => stop.current()
-  }, [key, head, connection, run])
+  }, [key, head, connection, run, client])
 
   const more = useCallback(() => { if (current && current.resume !== null) run(current.resume, current.files) }, [current, run])
   const files = current?.files ?? []
@@ -77,6 +79,7 @@ export function useChangedFiles(projectId: string, number: number, repo: string 
 
 /** The patch of the selected file, from the page cache or loaded from its page. It stays once found, whatever the cache evicts. */
 export function usePatch(projectId: string, number: number, repo: string | undefined, revision: number, head: string | undefined, file: FileMeta | undefined): { file: PrFile | undefined; loading: boolean } {
+  const client = prClient(projectId)
   const key = `${projectId}${repo ? `/${repo}` : ''}:${number}:${revision}:${head}`
   const want = file ? `${key}:${file.path}` : ''
   const [found, setFound] = useState<{ want: string; file: PrFile | undefined } | null>(null)
@@ -92,7 +95,7 @@ export function usePatch(projectId: string, number: number, repo: string | undef
       setFound({ want, file: raw.find(f => f.path === file.path) })
     }, () => { if (!canceled) setFound({ want, file: undefined }) })
     return () => { canceled = true }
-  }, [want, head, projectId, number, repo, key, file?.page])
+  }, [want, head, projectId, number, repo, key, file?.page, client])
   const ready = found?.want === want
   return { file: ready ? found.file : undefined, loading: !!file && !ready }
 }

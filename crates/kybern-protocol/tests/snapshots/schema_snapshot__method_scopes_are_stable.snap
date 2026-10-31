@@ -102,6 +102,12 @@ expression: scopes
   - "orchestration:operate"
 - - spaces.reorder
   - "orchestration:operate"
+- - spaces.place
+  - "orchestration:operate"
+- - peer.spaces.sync
+  - "machine:peer"
+- - peer.spaces.logo
+  - "machine:peer"
 - - threads.list
   - "orchestration:read"
 - - threads.search
@@ -331,6 +337,8 @@ expression: scopes
 - - threads.visuals.snapshot
   - "orchestration:read"
 - - previews.open
+  - "orchestration:operate"
+- - previews.server.open
   - "orchestration:operate"
 - - previews.close
   - "orchestration:operate"

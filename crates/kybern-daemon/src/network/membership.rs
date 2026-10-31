@@ -604,6 +604,7 @@ impl Membership {
             (META_FINGERPRINT, &keys.fingerprint()),
         ])?;
         self.store.network_clear()?;
+        self.store.space_replica_clear()?;
 
         inner.machine_id = new_machine_id.clone();
         inner.keys = keys.clone();

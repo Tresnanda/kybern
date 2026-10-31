@@ -27,6 +27,7 @@ import { Screen } from '../terminal/Terminal.tsx'
 import { clientFor, useMachines } from '../machines/index.ts'
 import { PreviewPane } from '../preview/Preview.tsx'
 import { Detail } from '../pulls/PrDetail.tsx'
+import { PR_SCROLL_LAYOUT } from '../pulls/scroll-layout.ts'
 import { goPage } from '../nav/history.ts'
 import { NoteEditor } from '../notes/NoteEditor.tsx'
 import { TaskDetail } from '../tasks/TaskDetail.tsx'
@@ -96,7 +97,7 @@ function TabBody({ leafId, threadId, tab, children }: { leafId: string; threadId
     case 'terminal': return <TerminalTab leafId={leafId} threadId={threadId} tab={tab} />
     case 'preview': return <PreviewPane threadId={threadId} />
     case 'review': return thread ? <Measured>{(width) => <ReviewPane thread={thread} width={width} />}</Measured> : <LoadingLines />
-    case 'pr': return <PrTab projectId={tab.projectId} number={tab.number} />
+    case 'pr': return <PrTab projectId={tab.projectId} number={tab.number} repo={tab.repo} viewKey={`${threadId}:${tabKey(tab)}`} />
     case 'note': return <Measured>{(width) => <NoteEditor key={tab.id} id={tab.id} width={width} onClose={() => closeTabAction(leafId, tabKey(tab))} />}</Measured>
     case 'task': return <TaskTab id={tab.id} onClose={() => closeTabAction(leafId, tabKey(tab))} />
     case 'visual': return <VisualTab threadId={threadId} visualId={tab.id} />
@@ -108,12 +109,12 @@ function TabBody({ leafId, threadId, tab, children }: { leafId: string; threadId
 }
 
 /** Width for bodies that lay out by it (Review, a PR). */
-function Measured({ children }: { children: (width: number) => ReactNode }) {
+function Measured({ children, defer = false }: { defer?: boolean; children: (width: number) => ReactNode }) {
   const renderer = useGpuixRequired()
   const [host, setHost] = useState<PublicInstance | null>(null)
-  const [width, setWidth] = useState(720)
-  useEffect(() => host ? observeElementBounds(renderer, host.id, (e) => { if (e.rect) setWidth((w) => Math.abs(w - e.rect!.width) < 0.5 ? w : e.rect!.width) }) : undefined, [renderer, host])
-  return <div ref={setHost} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0 }}>{children(width)}</div>
+  const [width, setWidth] = useState<number | null>(defer ? null : 720)
+  useEffect(() => host ? observeElementBounds(renderer, host.id, (e) => { if (e.rect) setWidth((w) => w != null && Math.abs(w - e.rect!.width) < 0.5 ? w : e.rect!.width) }) : undefined, [renderer, host])
+  return <div ref={setHost} style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0 }}>{width == null ? <LoadingLines /> : children(width)}</div>
 }
 
 /** One terminal session. A session that is gone (the daemon restarted) offers a fresh shell in the same tab. */
@@ -160,10 +161,10 @@ function TerminalTab({ leafId, threadId, tab }: { leafId: string; threadId: stri
   </div>
 }
 
-function PrTab({ projectId, number }: { projectId: string; number: number }) {
+function PrTab({ projectId, number, repo, viewKey }: { projectId: string; number: number; repo?: string; viewKey: string }) {
   const project = useApp((s) => s.projects.find((p) => p.id === projectId))
   if (!project) return <LoadingLines />
-  return <Measured>{(width) => <Detail key={number} project={project} number={number} width={width} showBack={false} onBack={() => goPage('pulls')} onChanged={() => {}} />}</Measured>
+  return <div {...(process.env.KYBERN_PR_TAB_ISLANDS === '0' ? {} : PR_SCROLL_LAYOUT)} testId="pr-tab-viewport" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, minWidth: 0 }}><Measured defer>{(width) => <Detail key={number} project={project} number={number} repo={repo} viewKey={viewKey} width={width} showBack={false} onBack={() => goPage('pulls')} onChanged={() => {}} />}</Measured></div>
 }
 
 function TaskTab({ id, onClose }: { id: string; onClose: () => void }) {

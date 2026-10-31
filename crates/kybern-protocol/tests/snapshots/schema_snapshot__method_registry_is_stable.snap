@@ -52,6 +52,9 @@ expression: names
 - spaces.update
 - spaces.delete
 - spaces.reorder
+- spaces.place
+- peer.spaces.sync
+- peer.spaces.logo
 - threads.list
 - threads.search
 - threads.read
@@ -167,6 +170,7 @@ expression: names
 - threads.visuals.revoke
 - threads.visuals.snapshot
 - previews.open
+- previews.server.open
 - previews.close
 - previews.probe
 - previews.servers.list

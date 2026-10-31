@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.20.4
+
+<!-- kybern-release-title: Spaces and previews across your machines -->
+<!-- kybern-release-summary: Keep Spaces in sync across your network, open dev servers from any connected machine, and move smoothly between pull request tabs. -->
+
+- Spaces now sync across connected machines, including names, colors, logos, order and project placement. Existing Spaces combine into one shared rail; offline changes catch up on reconnect, and new clones inherit their repository's Space. Update each machine to enable syncing.
+- Preview discovers dev servers across all connected machines, shows their machine names and puts the current project's servers first. Click a remote server to forward and open it automatically. Recents remember the original machine and offer Retry when it is offline.
+- Open other pull requests from the horizontal tab's + menu using search or a GitHub URL for a known project, or choose Open in tab from the pull request list. Grouped repositories and remote projects keep their own PR identities.
+- Pull request tabs scroll and switch files much more smoothly. Each tab restores its selected view, file and exact reading position, including after its cached data expires.
+- Fixes a race that could fail a queued delegation just as its repository finished copying to another machine.
+
 ## 0.20.3
 
 <!-- kybern-release-title: Open remote terminals with the mouse -->

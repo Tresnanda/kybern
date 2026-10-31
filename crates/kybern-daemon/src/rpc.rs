@@ -14,6 +14,32 @@ use crate::ws::ConnectionCtx;
 /// Every RPC method's handler. The match below is one large future (each arm's await state is
 /// laid out inline), so it lives on the heap: callers and tests keep a small stack frame.
 pub async fn dispatch(state: &AppState, ctx: &ConnectionCtx, method: &str, params: Value) -> Result<Value, RpcError> {
+    // Repo identity refresh publishes projects.changed. Resolve a newly identified clone before clients read its next projection.
+    if matches!(method, ProjectsList::NAME | MachinesInfo::NAME) {
+        crate::network::spaces::reconcile(state).await;
+    }
+    if matches!(method, NetworkAdd::NAME | NetworkJoin::NAME | NetworkMerge::NAME)
+        || (method == NetworkSetEnabled::NAME && params.get("enabled").and_then(Value::as_bool) == Some(true))
+    {
+        let _guard = state.network.spaces_lock.lock().await;
+        crate::network::spaces::prefer_local(state).map_err(RpcError::internal)?;
+    }
+    // Serialize user writes with replica ingestion; capture only fields touched by the mutation.
+    let replicated = matches!(method, SpacesCreate::NAME | SpacesUpdate::NAME | SpacesDelete::NAME | SpacesReorder::NAME)
+        || (method == ProjectsUpdate::NAME && params.get("space_id").is_some());
+    if replicated {
+        let _guard = state.network.spaces_lock.lock().await;
+        crate::network::spaces::prepare(state).map_err(RpcError::internal)?;
+        let before = state.store.spaces_list().map_err(RpcError::internal)?;
+        let project = if method == ProjectsUpdate::NAME {
+            params.get("project_id").cloned().and_then(|v| serde_json::from_value(v).ok())
+        } else {
+            None
+        };
+        let result = Box::pin(dispatch_method(state, ctx, method, params)).await?;
+        crate::network::spaces::record(state, &before, project).map_err(RpcError::internal)?;
+        return Ok(result);
+    }
     Box::pin(dispatch_method(state, ctx, method, params)).await
 }
 
@@ -308,7 +334,8 @@ async fn dispatch_part_4(state: &AppState, _ctx: &ConnectionCtx, method: &str, s
             state.orchestrator.publish_projects();
             ok(state.store.project_get(p.project_id).map_err(internal)?.unwrap_or(project))
         }
-        SpacesList::NAME => ok(SpacesListResult { spaces: state.orchestrator.list_spaces()? }),
+        SpacesPlace::NAME => ok(crate::network::spaces::place(state, parse(params)?).await?),
+        SpacesList::NAME => ok(crate::network::spaces::list(state)?),
         SpacesCreate::NAME => {
             let p: SpacesCreateParams = parse(params)?;
             ok(state.orchestrator.create_space(p.name, p.color, p.logo).await?)
@@ -323,7 +350,8 @@ async fn dispatch_part_4(state: &AppState, _ctx: &ConnectionCtx, method: &str, s
         }
         SpacesReorder::NAME => {
             let p: SpacesReorderParams = parse(params)?;
-            ok(SpacesListResult { spaces: state.orchestrator.reorder_spaces(&p.space_ids)? })
+            state.orchestrator.reorder_spaces(&p.space_ids)?;
+            ok(crate::network::spaces::list(state)?)
         }
         ProjectsRemove::NAME => {
             let p: ProjectsRemoveParams = parse(params)?;
@@ -1054,6 +1082,10 @@ async fn dispatch_part_12(state: &AppState, ctx: &ConnectionCtx, method: &str, s
             let p: PreviewOpenParams = parse(params)?;
             let thread = state.store.thread_get(p.thread_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("thread"))?;
             ok(crate::previews::open(state, Some(ctx.principal.token_id), &thread, &p).await.map_err(preview_error)?)
+        }
+        PreviewServerOpen::NAME => {
+            let p: PreviewServerOpenParams = parse(params)?;
+            ok(crate::previews::open_server(state, ctx.principal.token_id, &p).await.map_err(preview_error)?)
         }
         PreviewClose::NAME => {
             let p: PreviewCloseParams = parse(params)?;
