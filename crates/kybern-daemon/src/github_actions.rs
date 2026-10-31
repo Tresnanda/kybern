@@ -793,7 +793,8 @@ jobs:
     }
 }
 
-#[cfg(test)]
+// The fake `gh` is a shell script.
+#[cfg(all(test, unix))]
 mod rpc_tests {
     use kybern_protocol::methods::*;
     use serde_json::{Value, json};
@@ -825,7 +826,6 @@ esac
         (crate::test_support::script(dir, "gh", &unix, ""), log)
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn actions_methods_run_gh_in_the_project() {
         let root = std::env::temp_dir().join(format!("kybern-actions-rpc-{}", uuid::Uuid::now_v7()));
