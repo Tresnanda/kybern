@@ -39,9 +39,16 @@ impl Host {
         Self { state, url, root, server: Some(server) }
     }
     async fn client(&self) -> Client {
-        Client::connect(&Endpoint { url: format!("{}/ws", self.url.replace("http:", "ws:")), token: self.state.bootstrap_token.clone() })
-            .await
-            .unwrap()
+        let client = Client::connect(&Endpoint {
+            url: format!("{}/ws", self.url.replace("http:", "ws:")),
+            token: self.state.bootstrap_token.clone(),
+        })
+        .await
+        .unwrap();
+        // The WebSocket upgrade can finish before run() installs its notification receivers.
+        // A round trip makes this client ready before another client changes shared state.
+        client.call::<DaemonInfoMethod>(Empty {}).await.unwrap();
+        client
     }
     fn thread(&self) -> Thread {
         let project = self.state.orchestrator.add_project(self.root.to_string_lossy().into_owned(), Some("Fixture".into()), None).unwrap();

@@ -63,7 +63,8 @@ async fn plugin_list_a_to_b_then_remote_b_to_c_and_offline_frozen_copy() {
     // Queue uses the approved declaration, not whatever replaces it on the source later.
     seed(&homes.path().join(b.id()), "2.0.0");
     c.set_network_enabled(true);
-    eventually("c back", WAIT, || linked(&b, &c)).await;
+    // The copy uses b -> c, but the permission check below uses a -> c too.
+    eventually("c back on both peers", WAIT, || linked(&b, &c) && linked(&a, &c)).await;
     let item = sent(&b, id).await;
     assert_eq!(item.state, OutboxState::Delivered, "{:?}", item.last_error);
     let got = crate::plugins::inventory(&c.state).await.unwrap();
