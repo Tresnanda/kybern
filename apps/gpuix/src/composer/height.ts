@@ -26,9 +26,44 @@ function publish() {
   const priority = Math.max(-1, ...[...measurements.values()].map(value => value.priority))
   const next = Math.max(0, ...[...measurements.values()].filter(value => value.priority === priority).map(value => value.height))
   height = next
+  scheduleCardRects()
   for (const listener of listeners) listener()
 }
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } }
+
+// Reuse the clipped post-paint measurements, coalescing a batch of card/stack events.
+// Only toast consumers subscribe; no extra geometry reads or idle timer.
+let cardRects: readonly LayoutRect[] = []
+const cardListeners = new Set<() => void>()
+let cardTimer: ReturnType<typeof setTimeout> | undefined
+function refreshCardRects() {
+  const next = composerCardRects()
+  if (next.length === cardRects.length && next.every((r, i) => {
+    const old = cardRects[i]!
+    return r.x === old.x && r.y === old.y && r.width === old.width && r.height === old.height
+  })) return
+  cardRects = next
+  for (const listener of cardListeners) listener()
+}
+function scheduleCardRects() {
+  if (!cardListeners.size) { refreshCardRects(); return }
+  if (cardTimer !== undefined) return
+  cardTimer = setTimeout(() => { cardTimer = undefined; refreshCardRects() }, 0)
+}
+const subscribeCardRects = (listener: () => void) => {
+  cardListeners.add(listener)
+  return () => {
+    cardListeners.delete(listener)
+    if (!cardListeners.size && cardTimer !== undefined) {
+      clearTimeout(cardTimer)
+      cardTimer = undefined
+      refreshCardRects()
+    }
+  }
+}
+export function useComposerCardRects(): readonly LayoutRect[] {
+  return useSyncExternalStore(subscribeCardRects, () => cardRects)
+}
 
 /** Zero while unmounted. No polling and safe to consume before an editor exists. */
 export function useComposerOverlayHeight(): number {

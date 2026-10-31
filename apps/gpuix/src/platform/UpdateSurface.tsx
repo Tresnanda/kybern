@@ -26,6 +26,7 @@ import { Presence } from '../motion/Presence.tsx'
 import { frostBackdrop, frostFill, useGlass } from './glass.ts'
 import { writeClipboardText } from './os.ts'
 import { PATCHED_NATIVE } from '../native/local-build.ts'
+import { NOTIFICATION_INSET } from '../shell/toastPlacement.ts'
 
 const ICON = { download: glyph(Download04Icon), arrowRight: glyph(ArrowRight01Icon), arrowUpRight: glyph(ArrowUpRight01Icon), x: glyph(Cancel01Icon) }
 
@@ -124,7 +125,7 @@ function UpdateAnnouncement({ version, notes, leaving, onGone }: { version: stri
   const release = useMemo(() => releasePresentation(version, notes), [version, notes])
   // The card enters and leaves by paint (`t-toast`: 16px, scale 0.97 and a 2px blur, 350 / 250 ms) with no layout per frame. Reduce
   // Motion shows it at once and fades it out over 100 ms (`Presence`).
-  return <anchored position={{ x: size.width - 16, y: size.height - 16 }} anchor="bottomRight" fit="snap" snapMargin={16} deferred priority={5} occlude style={{ borderRadius: 24 }}>
+  return <anchored position={{ x: size.width - NOTIFICATION_INSET, y: size.height - NOTIFICATION_INSET }} anchor="bottomRight" fit="snap" snapMargin={NOTIFICATION_INSET} deferred priority={5} occlude style={{ borderRadius: 24 }}>
     <Presence show={!leaving} enter={TOAST_ENTER()} exit={TOAST_EXIT} onGone={onGone} style={{ borderRadius: 24 }}>
     <div testId="update-announcement" aria-label="Kybern update available" backdrop={frostBackdrop(g, 'menus', 24)} style={{ display: 'flex', flexDirection: 'column', position: 'relative', width: Math.min(352, size.width - 32), borderRadius: 24, borderWidth: 1, borderColor: g.on ? g.frostRim : t.border, backgroundColor: frostFill(g, 'menus', t.popover, 'frostMenu'), boxShadow: surfaceShadow(t), overflow: 'hidden' }}>
       <ReleaseArtwork compact />
