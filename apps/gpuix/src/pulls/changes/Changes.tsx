@@ -26,6 +26,8 @@ import { openUrl, PrLoading, Problem } from '../PrStates.tsx'
 import type { Review } from '../useReview.ts'
 import { filterFiles, flattenList, flattenTree, prKey, visibleFiles, type Row } from './model.ts'
 import { useChangedFiles, usePatch } from './useFiles.ts'
+import { readView, saveView } from '../viewState.ts'
+import { useReadingPosition } from '../useReadingPosition.ts'
 import { useClosedFolders } from './folders.ts'
 
 const ROW_HEIGHT = 26
@@ -39,13 +41,19 @@ const num = (style: object = {}) => ({ ...style, fontVariantNumeric: 'tabular-nu
 const fmt = (n: number) => n.toLocaleString('en-US')
 
 
-export function Changes({ projectId, number, repo, review, compact = false }: { projectId: string; number: number; repo?: string; review: Review; compact?: boolean }) {
+export function Changes({ projectId, number, repo, review, compact = false, viewKey }: { viewKey?: string; projectId: string; number: number; repo?: string; review: Review; compact?: boolean }) {
   const t = useTheme()
-  const [path, setPath] = useState<string | null>(null)
+  const [path, setPath] = useState<string | null>(() => viewKey ? readView(viewKey).file : null)
+  const diffScroll = useReadingPosition(viewKey, `diff:${path ?? ''}`)
   const [mode, setMode] = useState<'tree' | 'list'>(() => (load<string>(MODE_KEY, 'tree') === 'list' ? 'list' : 'tree'))
-  const [query, setQuery] = useState('')
-  const list = useChangedFiles(projectId, number, repo, review.revision, review.detail?.head_sha)
+  const [query, setQuery] = useState(() => viewKey ? readView(viewKey).query : '')
+  const [restorePage] = useState(() => viewKey ? readView(viewKey).filePage : 1)
+  const list = useChangedFiles(projectId, number, repo, review.revision, review.detail?.head_sha, restorePage)
   const { files } = list
+  const listVersion = `${review.revision}:${review.detail?.head_sha}`
+  const [settledList, setSettledList] = useState<string | null>(null)
+  useEffect(() => { if (list.loaded && (list.done || list.paused)) setSettledList(listVersion) }, [list.loaded, list.done, list.paused, listVersion])
+  const listScroll = useReadingPosition(viewKey, 'files', list.loaded && (settledList === listVersion || list.done || list.paused))
   const key = prKey(projectId, number, repo)
   const folders = useClosedFolders(key)
   const collapsed = useMemo(() => new Set(folders.entry?.closed ?? []), [folders.entry?.closed])
@@ -59,7 +67,7 @@ export function Changes({ projectId, number, repo, review, compact = false }: { 
   const fileIndex = useMemo(() => new Map(order.map((f, i) => [f.path, i])), [order])
 
   // The first file in reading order is selected once, so more pages arriving never move the selection.
-  useEffect(() => { if (!path && order[0]) setPath(order[0].path) }, [path, order])
+  useEffect(() => { if ((!path || (list.done && !files.some(f => f.path === path))) && order[0]) setPath(order[0].path) }, [path, order, files, list.done])
   const selected = files.find(f => f.path === path)
   const patchOf = usePatch(projectId, number, repo, review.revision, review.detail?.head_sha, selected)
   const file = patchOf.file
@@ -67,7 +75,7 @@ export function Changes({ projectId, number, repo, review, compact = false }: { 
   const pending = review.draft.pendingInline
   const stale = review.detail ? reviewDraftIsStale(review.draft, review.detail.head_sha) : false
   const [lineError, setLineError] = useState<string | null>(null)
-  const [visibleLines, setVisibleLines] = useState(600)
+  const [visibleLines, setVisibleLines] = useState(() => viewKey ? readView(viewKey).lines : 600)
   // The desktop table sizes its gutters from the currently expanded rows.
   // Native diff knows the full patch, so adjust its digit metric until expanded.
   const diffTheme = useMemo(() => {
@@ -80,6 +88,7 @@ export function Changes({ projectId, number, repo, review, compact = false }: { 
     return theme
   }, [t, patch, visibleLines])
 
+  useEffect(() => { if (viewKey) saveView(viewKey, { file: path, filePage: selected?.page ?? readView(viewKey).filePage, query, lines: visibleLines }) }, [viewKey, path, selected?.page, query, visibleLines])
   const select = useCallback((next: string) => { setPath(next); setVisibleLines(600) }, [])
   const toggleDir = useCallback((dir: string) => {
     const next = new Set(collapsed)
@@ -102,7 +111,7 @@ export function Changes({ projectId, number, repo, review, compact = false }: { 
             </div>
             <SearchField testId="pr-files-filter" label="Filter files" placeholder="Filter files" value={query} onChange={setQuery} />
           </div>
-          <virtual-list {...PR_SCROLL_LAYOUT} testId="pr-files" estimatedItemHeight={ROW_HEIGHT} style={{ flexGrow: 1, minHeight: 0, paddingLeft: 6, paddingRight: 6 }}>
+          <virtual-list ref={listScroll} {...PR_SCROLL_LAYOUT} testId="pr-files" estimatedItemHeight={ROW_HEIGHT} style={{ flexGrow: 1, minHeight: 0, paddingLeft: 6, paddingRight: 6 }}>
             {rows.map(r => r.kind === 'dir'
               ? <DirRow key={`d:${r.key}`} row={r} onToggle={toggleDir} />
               : <FileRow key={`f:${r.key}`} index={fileIndex.get(r.key) ?? 0} row={r} tree={mode === 'tree'} selected={selected?.path === r.file.path} draft={review.draft.inline.some(c => c.path === r.file.path)} onSelect={select} />)}
@@ -116,12 +125,12 @@ export function Changes({ projectId, number, repo, review, compact = false }: { 
           </virtual-list>
         </div>
         <div style={{ ...column, flexGrow: 1, minWidth: 0, minHeight: 0, borderWidth: selected ? 1 : 0, borderColor: t.border, borderRadius: 8, overflow: 'hidden' }}>
-          {!selected ? (list.loaded ? <Label color={t.textSecondary} size={13}>No changed files.</Label> : <div style={{ padding: 16 }}><PrLoading label="Loading changes…" rows={7} /></div>) : <>
+          {!selected ? (list.done ? <Label color={t.textSecondary} size={13}>No changed files.</Label> : list.paused ? <Label color={t.textSecondary} size={13}>Load more files to find the selected file.</Label> : <div style={{ padding: 16 }}><PrLoading label="Loading selected file…" rows={7} /></div>) : <>
             <div style={{ ...row, gap: 0, height: 37, flexShrink: 0, borderBottomWidth: 1, borderColor: t.border, backgroundColor: t.v('--background') }}>
               <div style={{ flexGrow: 1, minWidth: 0 }}><NativeDiffHeader file={{ ...selected, oldPath: selected.old_path }} /></div>
               <IconButton icon={glyph(LinkSquare02Icon)} size="sm" glyph={14} label="Open file on GitHub" onClick={() => { if (review.detail) void prFileUrl(review.detail.pull_request.url, selected.path).then(openUrl) }} />
             </div>
-            {patchOf.loading ? <div style={{ padding: 16 }}><PrLoading label="Loading patch…" rows={5} /></div> : file?.patch ? <diff key={file.path} {...PR_SCROLL_LAYOUT} testId="pr-native-diff" patch={patch} scroll theme={diffTheme} maxLines={visibleLines} onShowMore={() => setVisibleLines(n => n + 600)} onLineClick={e => {
+            {patchOf.loading ? <div style={{ padding: 16 }}><PrLoading label="Loading patch…" rows={5} /></div> : file?.patch ? <diff ref={diffScroll} key={file.path} {...PR_SCROLL_LAYOUT} testId="pr-native-diff" patch={patch} scroll theme={diffTheme} maxLines={visibleLines} onShowMore={() => setVisibleLines(n => n + 600)} onLineClick={e => {
               if (stale) { setLineError('This draft belongs to a different commit. Resolve the previous draft before choosing a new inline anchor.'); return }
               if (pending?.body.trim()) { setLineError('Add this comment to the review or cancel it before choosing another line.'); return }
               const line = e.newLine && e.newLine > 0 ? e.newLine : e.oldLine

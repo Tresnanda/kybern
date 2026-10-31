@@ -1,8 +1,10 @@
 // How other machines' projects and threads join the local lists.
-import { expect, test } from 'bun:test'
+import { beforeEach, expect, test } from 'bun:test'
 import { mergeProjects, mergeThreads } from '../../../../packages/kybern-client/src/machineMerge.ts'
 import type { MergedView } from '../../../../packages/kybern-client/src/machines.ts'
 import { FREE_CHAT_PROJECT_ID, type Project, type Thread } from '../../../../packages/kybern-client/src/types.ts'
+import { setSpacePlacements, spaceProject } from '../../../../packages/kybern-client/src/spacePlacements.ts'
+beforeEach(() => setSpacePlacements([]))
 import { ListMerger, byPinnedThenNewest, ownProjectOf } from './merged.ts'
 
 const project = (id: string, name: string, root: string | null, extra: Partial<Project> = {}): Project => ({ id, name, path: `/w/${name}`, is_git: true, brief_in_all_threads: false, repo: root ? { root_commit: root } : null, space_id: 's-mac', created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z', ...extra }) as Project
@@ -97,4 +99,15 @@ test('a child another machine runs for a local thread is a child of that thread,
   const lists = new ListMerger().merge({ view: view({ projects: localProjects, threads: [thread('parent-1', 'p-mac', '2026-10-02T00:00:00Z')] }, { projects: remoteProjects, threads: [child, thread('t2', 'p-vps', '2026-10-03T00:00:00Z')] }), localProjects, spaceOfForeign: space })
   expect(lists.threads.map((t) => t.id)).toEqual(['t2'])
   expect(lists.children.map((t) => [t.id, t.parent_thread_id, t.project_id, t.machineId])).toEqual([['c1', 'parent-1', 'p-mac', 'vps']])
+})
+
+test('a remote-only project retains a replicated Space after a refresh while its owning machine is offline', () => {
+  const p = project('p-site', 'site', 'r2', { space_id: 'old-peer-space' })
+  const v = view({ projects: [], threads: [] }, { projects: [p], threads: [] }, true)
+  const rail = [{ id: 'work', is_default: false }, { id: 'personal', is_default: true }] as never
+  setSpacePlacements(rail, [{ project: spaceProject('vps', p), space_id: 'work', lamport: 2, signer: 'mac', op_id: 'move' }])
+  const merger = new ListMerger()
+  const first = merger.merge({ view: v, localProjects: [], spaceOfForeign: () => 'personal' })
+  expect(first.projects[0]?.space_id).toBe('work')
+  expect(merger.merge({ view: v, localProjects: [], spaceOfForeign: () => 'personal' }).projects[0]).toBe(first.projects[0]!)
 })

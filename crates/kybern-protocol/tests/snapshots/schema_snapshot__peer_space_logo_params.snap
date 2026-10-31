@@ -1,0 +1,17 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(PeerSpaceLogoParams)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PeerSpaceLogoParams",
+  "type": "object",
+  "properties": {
+    "hash": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "hash"
+  ]
+}

@@ -6,6 +6,7 @@
 // belongs to (the same repository on any machine), which means its `project_id`
 // is rewritten to that project's id for display only. Ids are unique per machine,
 // not across machines; if two machines list one id, the first in machine order wins.
+import { logicalSpace, prepareSpacePlacements } from "../../../../packages/kybern-client/src/spacePlacements";
 import type { MergedThread } from "../../../../packages/kybern-client/src/machineMerge";
 import type { MachineSummary, MergedView } from "../../../../packages/kybern-client/src/machines";
 import type { MachineId, Project, Thread, ThreadActivitySummary } from "../../../../packages/kybern-client/src/types";
@@ -74,6 +75,7 @@ export function buildLists(
   activityOf: (machineId: MachineId) => readonly ThreadActivitySummary[] | undefined = () => undefined,
 ): ListsView {
   if (view.machines.length <= 1) return singleMachineLists(local);
+  prepareSpacePlacements(view.projects);
   const machines = new Map(view.machines.map((m) => [m.machineId, m]));
   const only = filter && machines.has(filter) ? filter : null;
 
@@ -83,7 +85,8 @@ export function buildLists(
   for (const logical of view.projects) {
     const instance = (only && logical.instances.find((i) => i.machineId === only)) || (only ? undefined : logical.primary);
     if (!instance) continue;
-    projects.push(instance.project);
+    const space = logicalSpace(logical);
+    projects.push(space && instance.project.space_id !== space ? displayProject(instance.project, space) : instance.project);
     projectIdOf.set(logical.key, instance.project.id);
   }
 
@@ -128,4 +131,13 @@ export function buildLists(
       return entry && { machineId: entry.machineId, thread: entry.thread };
     },
   };
+}
+
+const projectCopies = new WeakMap<Project, { space: string; project: Project }>();
+function displayProject(project: Project, space: string): Project {
+  const old = projectCopies.get(project);
+  if (old?.space === space) return old.project;
+  const copy = { ...project, space_id: space };
+  projectCopies.set(project, { space, project: copy });
+  return copy;
 }

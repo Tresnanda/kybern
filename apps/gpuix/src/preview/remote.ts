@@ -4,7 +4,7 @@
 import type { PortForward, PortsForwardParams } from '../../../../packages/kybern-client/src/types.ts'
 
 /** A server on another machine, as an entry remembers it so reload, back and forward can forward the port again. */
-export interface RemoteServer { id: string; name: string; port: number; path: string }
+export interface RemoteServer { id: string; name: string; port: number; path: string; scheme?: 'http' | 'https' }
 
 export interface ForwardClient { call(method: 'ports.forward', params: PortsForwardParams): Promise<PortForward> }
 
@@ -12,7 +12,9 @@ export interface ForwardClient { call(method: 'ports.forward', params: PortsForw
 export const forwardPort = (client: ForwardClient, machineId: string, port: number): Promise<PortForward> => client.call('ports.forward', { machine: machineId, remote_port: port })
 
 /** The page to show once the port is forwarded. */
-export const forwardedAddress = (forward: Pick<PortForward, 'local_port'>, path = ''): string => `http://localhost:${forward.local_port}${path.startsWith('/') || !path ? path : `/${path}`}`
+export const forwardedAddress = (forward: Pick<PortForward, 'local_port'>, path = '', scheme = 'http'): string => `${scheme}://localhost:${forward.local_port}${path.startsWith('/') || !path ? path : `/${path}`}`
+
+export const sourceAddress = (source: RemoteServer): string => forwardedAddress({ local_port: source.port }, source.path, source.scheme)
 
 /** The part of a server's address after the host. */
 export function addressPath(url: string): string {

@@ -542,9 +542,11 @@ pub async fn open(
         result.path = Some(file_path_for(&ticket, &plan.rel));
         result.ticket = Some(ticket);
     } else if let (true, PreviewTargetInfo::Server { url, port }) = (params.proxy, &resolved.info) {
-        let host = reqwest::Url::parse(url).ok().and_then(|url| url.host_str().map(str::to_owned)).unwrap_or_default();
+        let parsed = reqwest::Url::parse(url).map_err(|_| PreviewError::invalid_address())?;
+        let host = parsed.host_str().unwrap_or_default();
         // The proxy only ever reaches loopback on the daemon host.
-        if is_loopback_host(&host) {
+        if is_loopback_host(host) {
+            require_http_proxy(&parsed)?;
             // Never a proxy into the daemon's own HTTP API, on any listener it holds.
             if crate::network::ports::own_ports(state).contains(port) {
                 return Err(PreviewError::invalid_address());
@@ -556,6 +558,54 @@ pub async fn open(
             result.path = Some(format!("/preview-proxy/{ticket}/"));
             result.ticket = Some(ticket);
         }
+    }
+    Ok(result)
+}
+
+/// The daemon's loopback proxy speaks HTTP. Keep direct HTTPS intact, but never mint a ticket
+/// that would silently send plaintext HTTP to an HTTPS listener.
+fn require_http_proxy(url: &reqwest::Url) -> Result<(), PreviewError> {
+    if url.scheme() == "https" {
+        return Err(PreviewError {
+            code: "unsupported_proxy",
+            message: "HTTPS servers cannot be proxied yet. Use the server's HTTP port, or open its HTTPS address directly on that machine."
+                .into(),
+        });
+    }
+    Ok(())
+}
+
+/// Server-only counterpart of `open`. It deliberately has no folder policy or thread lookup:
+/// the only capability it may mint is the same bounded loopback proxy used by thread previews.
+pub async fn open_server(
+    state: &crate::state::AppState,
+    principal: uuid::Uuid,
+    params: &kybern_protocol::methods::PreviewServerOpenParams,
+) -> Result<kybern_protocol::methods::PreviewOpenResult, PreviewError> {
+    use kybern_protocol::methods::{PreviewOpenResult, PreviewTargetInfo};
+    let url = reqwest::Url::parse(params.url.trim()).map_err(|_| PreviewError::invalid_address())?;
+    let host = url.host_str().unwrap_or_default();
+    if !matches!(url.scheme(), "http" | "https") || !is_loopback_host(host) || !url.username().is_empty() || url.password().is_some() {
+        return Err(PreviewError::invalid_address());
+    }
+    let port = url.port_or_known_default().filter(|port| *port != 0).ok_or_else(PreviewError::invalid_address)?;
+    if crate::network::ports::own_ports(state).contains(&port) {
+        return Err(PreviewError::invalid_address());
+    }
+    let mut result = PreviewOpenResult {
+        target: PreviewTargetInfo::Server { url: url.to_string(), port },
+        ticket: None,
+        path: None,
+        needs_permission: None,
+    };
+    if params.proxy {
+        require_http_proxy(&url)?;
+        if proxy::listener_addr(port).await.is_none() {
+            return Err(PreviewError { code: "not_found", message: "Nothing is listening on that port yet.".into() });
+        }
+        let ticket = state.previews.mint_server(port, principal);
+        result.path = Some(format!("/preview-proxy/{ticket}/"));
+        result.ticket = Some(ticket);
     }
     Ok(result)
 }

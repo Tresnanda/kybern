@@ -26,7 +26,7 @@ pub enum TicketKind {
 #[derive(Debug, Clone)]
 pub struct TicketInfo {
     pub kind: TicketKind,
-    pub thread_id: ThreadId,
+    pub thread_id: Option<ThreadId>,
     /// Device id the ticket was minted for, when the caller had one.
     pub principal: Option<Uuid>,
 }
@@ -72,7 +72,16 @@ impl PreviewTickets {
         self.mint_at(kind, thread_id, principal, Instant::now())
     }
 
+    /// A server ticket belongs to the caller's device, without claiming a thread on this daemon.
+    pub fn mint_server(&self, port: u16, principal: Uuid) -> String {
+        self.mint_scoped(TicketKind::Proxy { port }, None, Some(principal), Instant::now())
+    }
+
     pub fn mint_at(&self, kind: TicketKind, thread_id: ThreadId, principal: Option<Uuid>, now: Instant) -> String {
+        self.mint_scoped(kind, Some(thread_id), principal, now)
+    }
+
+    fn mint_scoped(&self, kind: TicketKind, thread_id: Option<ThreadId>, principal: Option<Uuid>, now: Instant) -> String {
         let mut entries = self.lock();
         entries.retain(|_, entry| self.live(entry, now));
         while entries.len() >= self.max {
@@ -110,7 +119,7 @@ impl PreviewTickets {
     pub fn revoke_thread(&self, thread_id: ThreadId) -> usize {
         let mut entries = self.lock();
         let before = entries.len();
-        entries.retain(|_, entry| entry.info.thread_id != thread_id);
+        entries.retain(|_, entry| entry.info.thread_id != Some(thread_id));
         before - entries.len()
     }
 

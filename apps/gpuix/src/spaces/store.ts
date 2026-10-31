@@ -9,6 +9,8 @@ import { toast } from '../shell/toasts.tsx'
 import { getClient, getState, refreshLists, set, setForeignSpace } from '../state.ts'
 import { getNav, setNav } from '../nav/store.ts'
 import { markSpaceCreated } from './ui.ts'
+import { machineHub } from '../machines/index.ts'
+import { setSpacePlacements, spaceProject, subscribeSpacePlacements } from '../../../../packages/kybern-client/src/spacePlacements.ts'
 
 const METHOD_NOT_FOUND = -32601
 
@@ -24,10 +26,12 @@ const listeners = new Set<() => void>()
 export const getSpaces = () => state
 
 // Another machine's projects have no space here: they are listed in the default space (`state.ts`).
-setForeignSpace(() => state.supported ? (state.spaces[0]?.id ?? null) : null)
+setForeignSpace(() => state.supported ? (state.spaces.find((space) => space.is_default)?.id ?? null) : null)
+// A reply can update the replica before its notification arrives. Resolve remote rows immediately in that case too.
+subscribeSpacePlacements(() => { if (getClient()) void refreshLists() })
 
 /** Replace the state wholesale (tests and automation). */
-export const setSpacesState = (next: SpacesState) => setSpaces(next)
+export const setSpacesState = (next: SpacesState) => { setSpacePlacements(next.spaces); setSpaces(next) }
 
 function setSpaces(next: SpacesState) {
   if (next.supported === state.supported && next.spaces === state.spaces) return
@@ -48,7 +52,7 @@ export function useSpaces<T>(select: (s: SpacesState) => T): T {
 function sameSpaces(a: Space[], b: Space[]): boolean {
   return a.length === b.length && a.every((space, i) => {
     const other = b[i]!
-    return space.id === other.id && space.updated_at === other.updated_at && space.position === other.position && space.name === other.name
+    return space.id === other.id && space.updated_at === other.updated_at && space.position === other.position && space.name === other.name && space.color === other.color && space.is_default === other.is_default && JSON.stringify(space.logo) === JSON.stringify(other.logo)
   })
 }
 
@@ -57,14 +61,19 @@ function adopt(spaces: Space[]) {
 }
 
 /** Read the spaces once per connection. Any failure but "no such method" leaves `supported` null to retry on the next open. */
+let spacesLoadVersion = 0
 export async function loadSpaces(): Promise<void> {
+  const version = ++spacesLoadVersion
   const client = getClient()
   if (!client) return
   try {
     const result = await client.call('spaces.list', {})
-    if (getClient() === client) adopt(result.spaces)
+    if (getClient() === client && version === spacesLoadVersion) {
+      setSpacePlacements(result.spaces, result.placements)
+      adopt(result.spaces)
+    }
   } catch (error) {
-    if (getClient() !== client) return
+    if (getClient() !== client || version !== spacesLoadVersion) return
     if (error instanceof RpcCallError && error.code === METHOD_NOT_FOUND) setSpaces({ supported: false, spaces: [] })
   }
 }
@@ -75,12 +84,14 @@ export function followSpaces(): () => void {
   const client = getClient()
   if (!client) return () => {}
   stopNotifications?.()
+  setSpacePlacements([])
   stopNotifications = client.onNotification(SPACES_CHANGED_NOTIFICATION, (params) => {
     if (getClient() !== client) return
     const spaces = (params as { spaces?: Space[] } | null)?.spaces
-    if (Array.isArray(spaces)) adopt(spaces)
+    if (Array.isArray(spaces)) { adopt(spaces); void loadSpaces() }
   })
-  return () => { stopNotifications?.(); stopNotifications = undefined }
+  const stopPlacements = client.onNotification("spaces.placements_changed", () => { if (getClient() === client) void loadSpaces() })
+  return () => { stopNotifications?.(); stopNotifications = undefined; stopPlacements() }
 }
 
 // ---- actions ----
@@ -148,7 +159,18 @@ export async function moveProjectToSpace(project: Pick<Project, 'id' | 'name'>, 
   patch(target.id)
   moveToEndOfOrder(project.id)
   try {
-    await client.call('projects.update', { project_id: project.id, space_id: target.id })
+    const view = machineHub().view()
+    const logical = view.projects.find((p) => p.instances.some((i) => i.project.id === project.id))
+    const instance = logical?.instances.find((i) => i.project.id === project.id) ?? logical?.primary
+    if (instance) {
+      try {
+        const result = await client.call('spaces.place', { project: spaceProject(instance.machineId, instance.project), space_id: target.id })
+        setSpacePlacements(result.spaces, result.placements)
+      } catch (error) {
+        if (!(error instanceof RpcCallError) || error.code !== METHOD_NOT_FOUND) throw error
+        await machineHub().clientFor(instance.machineId).call('projects.update', { project_id: instance.project.id, space_id: target.id })
+      }
+    } else await client.call('projects.update', { project_id: project.id, space_id: target.id })
   } catch {
     patch(previous)
     setNav({ projectOrder: orderBefore })

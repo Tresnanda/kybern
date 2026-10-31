@@ -1,3 +1,5 @@
+import { openPullTab } from './openTab.ts'
+import { targetOf } from './tabTargets.ts'
 import { PR_SCROLL_LAYOUT } from './scroll-layout.ts'
 import { Icon } from '../icons.tsx'
 import { ResizeHandle, useResize } from '../kit/Resize.tsx'
@@ -149,7 +151,7 @@ export function PullRequestsPage() {
           {flat.length === 0 && <div key="empty" style={{ ...column, gap: 10, padding: 24, paddingTop: 64 }}><Label color={t.text} size={16} weight={500}>{!targets.length ? 'No GitHub projects' : query.trim() ? `No results for “${query.trim()}”` : `No ${stateWord}pull requests`}</Label><Label color={t.textSecondary} size={13}>{!targets.length ? 'Add a project with a GitHub remote to review its pull requests here.' : query.trim() ? '' : `Pull requests from ${scope.project ? targets[0]?.name : 'your GitHub projects'} appear here.`}</Label>{query.trim() && <Button size="sm" style={{ alignSelf: 'flex-start' }} onClick={() => setQuery('')}>Clear search</Button>}</div>}
           {groups.flatMap(group => [
             ...(group.label ? [<div key={`group-${group.group ?? 'done'}`} testId={`pr-group-${group.group ?? 'done'}`} style={{ ...row, gap: 6, height: 30, paddingLeft: 16, paddingRight: 8, paddingTop: 8 }}><Label color={t.textSecondary} size={12} lineHeight={16} weight={500}>{group.label}</Label><Label color={t.textTertiary} size={12} lineHeight={16}>{String(group.rows.length)}</Label></div>] : []),
-            ...group.rows.map(r => <PrListRow key={keyFor(r)} item={r} selected={!!selection && refOf(selection.project.id, selection.number, selection.repo) === keyFor(r)} focused={focus === keyFor(r)} onOpen={() => open(r)} onFocus={() => setFocus(keyFor(r))} onKey={key => {
+            ...group.rows.map(r => <PrListRow key={keyFor(r)} item={r} selected={!!selection && refOf(selection.project.id, selection.number, selection.repo) === keyFor(r)} focused={focus === keyFor(r)} onOpen={() => open(r)} onOpenInTab={() => openPullTab(targetOf(r.project,r.pr))} onFocus={() => setFocus(keyFor(r))} onKey={key => {
               const at = flat.findIndex(x => keyFor(x) === keyFor(r))
               const next = key === 'down' ? Math.min(flat.length - 1, at + 1) : key === 'up' ? Math.max(0, at - 1) : key === 'home' ? 0 : key === 'end' ? flat.length - 1 : -1
               if (next >= 0) setFocus(keyFor(flat[next]!))

@@ -15,7 +15,7 @@ export type Tab =
   | { kind: 'terminal'; id: string; title?: string; cli?: string; machineId?: string }
   | { kind: 'preview' }
   | { kind: 'review' }
-  | { kind: 'pr'; projectId: string; number: number; title?: string }
+  | { kind: 'pr'; projectId: string; number: number; repo?: string; title?: string }
   | { kind: 'note'; id: string; title?: string }
   | { kind: 'task'; id: string; title?: string }
   | { kind: 'visual'; id: string; title?: string }
@@ -71,7 +71,7 @@ export function tabKey(tab: Tab): string {
     case 'file': return `file:${tab.root}:${tab.path}`
     case 'diff': return `diff:${tab.path ?? '*'}`
     case 'terminal': return `terminal:${tab.id}`
-    case 'pr': return `pr:${tab.projectId}:${tab.number}`
+    case 'pr': return `pr:${tab.projectId}${tab.repo ? `/${tab.repo}` : ''}:${tab.number}`
     case 'note': case 'task': case 'visual': case 'thread': return `${tab.kind}:${tab.id}`
     case 'artifact': return `artifact:${tab.path}`
     case 'mermaid': return `mermaid:${hash(tab.code)}`
@@ -273,7 +273,7 @@ const KINDS: Record<TabKind, (t: Record<string, unknown>) => boolean> = {
   file: (t) => typeof t.path === 'string' && (t.root === 'project' || t.root === 'thread') && (t.line === undefined || Number.isInteger(t.line)),
   diff: (t) => t.path === undefined || typeof t.path === 'string',
   terminal: (t) => typeof t.id === 'string' && (t.machineId === undefined || typeof t.machineId === 'string'),
-  pr: (t) => typeof t.projectId === 'string' && Number.isInteger(t.number),
+  pr: (t) => typeof t.projectId === 'string' && Number.isInteger(t.number) && Number(t.number) > 0 && (t.repo === undefined || typeof t.repo === 'string'),
   note: (t) => typeof t.id === 'string',
   task: (t) => typeof t.id === 'string',
   visual: (t) => typeof t.id === 'string',

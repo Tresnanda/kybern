@@ -151,3 +151,17 @@ test('a terminal on another machine keeps its machine through storage', () => {
   expect(group?.tabs).toEqual([CHAT_TAB, remote])
   expect(group?.active).toBe('terminal:t1')
 })
+
+
+test('PR tabs distinguish member repositories and preserve legacy single-repository keys',()=>{
+  const a: Tab={kind:'pr',projectId:'group',repo:'api',number:108}
+  const b: Tab={kind:'pr',projectId:'group',repo:'docs',number:108}
+  const single: Tab={kind:'pr',projectId:'single',number:108}
+  let group=openIn(openIn(openIn(chatGroup(),a),b),single)
+  expect(group.tabs.map(tabKey)).toEqual(['chat','pr:group/api:108','pr:group/docs:108','pr:single:108'])
+  group=openIn(group,a)
+  expect(group.tabs).toHaveLength(4)
+  expect(group.active).toBe('pr:group/api:108')
+  expect(readGroup(JSON.parse(JSON.stringify(group)))).toEqual(group)
+  expect(readGroup({tabs:[{kind:'pr',projectId:'bad',repo:3,number:108}]})).toBeNull()
+})

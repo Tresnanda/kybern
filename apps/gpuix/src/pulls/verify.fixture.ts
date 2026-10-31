@@ -7,13 +7,18 @@ import { PROTOCOL_VERSION } from '../../../../packages/kybern-client/src/types.t
 import { stateDetail, type PrState } from './verify.states.ts'
 import type { PrDetailResult, PrFile, PrReviewEntry, PrTimelineEvent, PullRequest, UsageRow } from '../../../../packages/kybern-client/src/types.ts'
 
-export function actionFixture(options: { long?: boolean; /** Extra running checks beyond the one in the base fixture. */ running?: number; /** A group project of three repositories (ADE-79): api and docs both have #108, web fails, infra is skipped. */ group?: boolean; /** ADE-85 list and Timeline: a group project of three repositories with pull requests in every readiness group, and a timeline history. */ readiness?: boolean; /** 65 distinct files in folders, with short patches (30 a page), for the Changes tab. */ changes?: boolean; /** A verdict state of the detail page (`verify.states.ts`). */ state?: PrState } = {}) {
+export function actionFixture(options: { long?: boolean; horizontal?: boolean; picker?: boolean; paged?: boolean; slowFiles?: boolean; /** Extra running checks beyond the one in the base fixture. */ running?: number; /** A group project of three repositories (ADE-79): api and docs both have #108, web fails, infra is skipped. */ group?: boolean; /** ADE-85 list and Timeline: a group project of three repositories with pull requests in every readiness group, and a timeline history. */ readiness?: boolean; /** 65 distinct files in folders, with short patches (30 a page), for the Changes tab. */ changes?: boolean; /** A verdict state of the detail page (`verify.states.ts`). */ state?: PrState } = {}) {
   const scratch = mkdtempSync(path.join(tmpdir(), 'gpuix-scratch-pages-'))
   const now = new Date().toISOString()
   const members = (options.readiness ? READINESS_REPOS : ['api', 'web', 'docs', 'infra']).map(path => ({ path, name: path, status: 'ok' as const }))
   const project = options.group || options.readiness
     ? { id: 'pages-fixture', name: 'Acme', path: '/tmp/kybern-pages-fixture', is_git: false, kind: 'group' as const, members, created_at: now, updated_at: now }
     : { id: 'pages-fixture', name: 'Kybern fixture', path: '/tmp/kybern-pages-fixture', is_git: true, created_at: now, updated_at: now }
+  const thread = { id: 'linked', project_id: project.id, title: 'Linked conversation', provider: { kind: 'codex', instance: 'default' }, status: 'idle', permission_mode: 'supervised', last_seq: 0, created_at: now, updated_at: now }
+  if (options.horizontal) writeFileSync(path.join(scratch, 'gpuix-ui.json'), JSON.stringify({ 'kybern.split-view.v2': { version: 2, root: { kind: 'leaf', id: 'main', threadId: thread.id }, focusedPaneId: 'main', groups: { main: { threadId: thread.id, tabs: [{kind:'chat'}, {kind:'pr', projectId: project.id, number:108, ...(options.group ? {repo:'api'}:{})}], active: `pr:${project.id}${options.group ? '/api':''}:108`, preview: null } } } }))
+  const subscribers = new Map<string, (event: object) => void>()
+  let streamSeq=0
+  const emit = (payload: object) => { for(const send of subscribers.values())send({thread_id:thread.id,turn_id:'stream-turn',seq:++streamSeq,at:new Date().toISOString(),...payload}) }
   const params: { method: string; params: Record<string, unknown> }[] = []
   const pr: PullRequest = { number: 108, title: 'Preserve reading position while streaming', url: 'https://example.com/pull/108', state: 'OPEN', head: 'fix/reading-position', base: 'main', is_draft: false, author: 'reviewer', updated_at: now, created_at: now, additions: 240, deletions: 28, mergeable: 'MERGEABLE', review_decision: 'APPROVED', checks_summary: { total: 3, passed: 2, failed: 0, pending: 1, skipped: 0 }, labels: [{ name: 'performance', color: '4285f4' }] }
   const detail: PrDetailResult = { pull_request: pr, body: '## Summary\n\nPreserve the reader’s position while a turn streams.\n\n- Stable rows keep their identity.\n- A bounded native list keeps old messages reachable.\n- Keyboard navigation remains immediate.\n\n### Verification\n\nChecked selection, wrapping, and follow behavior.', head_sha: '1234567890abcdef', reviewers: ['teammate'], checks: [{ name: 'Typecheck', status: 'COMPLETED', conclusion: 'SUCCESS', url: '' }, { name: 'Tests', status: 'COMPLETED', conclusion: 'SUCCESS', url: '' }, { name: 'Native visual verification', status: 'IN_PROGRESS', conclusion: '', url: '' }, ...Array.from({ length: options.running ?? 0 }, (_, i) => ({ name: `Running job ${i + 2}`, status: 'IN_PROGRESS', conclusion: '', url: '' }))], changed_files: 65, merge_state_status: 'CLEAN', reviews: [{ login: 'teammate', state: 'APPROVED' }], comment_count: 45, ...(options.readiness ? { timeline_counts: TIMELINE_COUNTS } : {}) }
@@ -55,27 +60,30 @@ export function actionFixture(options: { long?: boolean; /** Extra running check
         let error: string | undefined
         switch (message.method) {
           case 'daemon.info': result = { protocol_version: PROTOCOL_VERSION, environment_id: 'pages-fixture', version: 'fixture', scopes: [] }; break
-          case 'projects.list': result = { projects: [project] }; break
+          case 'projects.list': result = { projects: [project, ...(options.picker ? [{...project,id:'other-known',kind:'single',members:[],is_git:true,name:'Other known project',space_id:'other-space',repo:{remote:'github.com/acme/other'}}]:[])] }; break
+          case 'projects.members.status': result = { members: members.map(m=>({...m,dirty_files:0,remote_url:`git@github.com:acme/${m.path}.git`})), agents_md:false,claude_md:false }; break
           case 'threads.list': result = { threads: [{id:'linked',project_id:project.id,title:'Linked conversation',provider:{kind:'codex',instance:'default'},status:'idle',permission_mode:'supervised',worktree:{branch:pr.head,path:project.path},created_at:now,updated_at:now}], activity: [] }; break
+          case 'threads.get': result = { thread, transcript: [], pending_approvals: [] }; break
           case 'queue.list': result = { messages: [] }; break
           case 'providers.list': result = { providers: [] }; break
           case 'providers.accounts.list': result = { accounts: [] }; break
-          case 'settings.get': result = { default_provider: 'claude-code', default_permission_mode: 'supervised' }; break
-          case 'events.subscribe': result = { subscription_id: 'fixture', head_seq: 0, replay_ready: true }; break
+          case 'settings.get': result = { default_provider: 'claude-code', default_permission_mode: 'supervised', providers: {} }; break
+          case 'events.subscribe': { const id=`fixture-${message.id}`; result = { subscription_id:id,head_seq:0,replay_ready:true }; if(message.params.thread_id)subscribers.set(id,event=>ws.send(JSON.stringify({jsonrpc:'2.0',method:'event',params:{subscription_id:id,event}}))); break }
           case 'usage.limits': result = { providers: [], accounts: [], refreshing: [] }; break
           case 'usage.summary': {
             const rows = message.params.group_by === 'day' ? Array.from({ length: 30 }, (_, i) => { const d = new Date(); d.setUTCDate(d.getUTCDate() - 29 + i); return usage(d.toISOString().slice(0, 10), 5 + (i * 17) % 50) }) : [usage(message.params.group_by === 'model' ? 'claude-opus-5-5' : 'claude-code', 420), usage(message.params.group_by === 'model' ? 'gpt-6' : 'codex', 260)]
             result = { rows, total: usage('total', 680) }; break
           }
           case 'github.pr.list':
+            if(options.picker && message.params.project_id==='other-known') {result={pull_requests:[{...pr,url:'https://github.com/acme/other/pull/108',title:'PR from another Space'}]};break}
             if (problem) error = problem === 'missing' ? 'gh: command not found' : 'authentication required; run gh auth login'
             else if(empty) result = {pull_requests:[]}
             else if (options.readiness) result = { pull_requests: readinessPulls(now, String(message.params.state ?? 'open')) }
             else if (options.group) result = {
               pull_requests: [
-                { ...pr, repo: 'api', title: 'Add SSO to the API' },
+                { ...pr, repo: 'api', title: 'Add SSO to the API', ...(options.picker ? {url:'https://github.com/acme/api/pull/108'}:{}) },
                 { ...pr, repo: 'api', number: 109, title: 'Rate-limit login', updated_at: new Date(Date.now() - 3600_000).toISOString() },
-                { ...pr, repo: 'docs', title: 'Document SSO setup', updated_at: new Date(Date.now() - 600_000).toISOString() },
+                { ...pr, repo: 'docs', title: 'Document SSO setup', ...(options.picker ? {url:'https://github.com/acme/docs/pull/108'}:{}), updated_at: new Date(Date.now() - 600_000).toISOString() },
               ],
               repos: [
                 { repo: 'api', name: 'api' },
@@ -87,13 +95,16 @@ export function actionFixture(options: { long?: boolean; /** Extra running check
             else result = { pull_requests: Array.from({ length: 30 }, (_, i) => ({ ...pr, number: 108 + i, title: i ? `Review change ${i}` : pr.title })) }
             break
           case 'github.pr.action': actions.push(message.params); if(failAction)error='Fixture action rejected';else result={message:'Done'};break
-          case 'github.pr.detail': if ((options.group || options.readiness) && typeof message.params.repo !== 'string') { error = 'Acme has several repositories, so this pull request needs its repository.'; break }
+          case 'github.pr.detail': if ((options.group || options.readiness) && message.params.project_id === project.id && typeof message.params.repo !== 'string') { error = 'Acme has several repositories, so this pull request needs its repository.'; break }
             result = { ...detail, ...(options.long ? { body: Array.from({length: 40}, (_,i) => `### Verification ${i+1}\n\nPreserve **formatted content**, reading position and selection while scrolling.\n\n- Stable rows keep their identity.\n- The complete description remains reachable.\n\n\`row.id\` survives a refresh.`).join('\n\n') } : {}), pull_request: { ...pr, number: Number(message.params.number) } }; if (options.state) { const rich = stateDetail(options.state, result as PrDetailResult); result = { ...rich, pull_request: { ...rich.pull_request, number: Number(message.params.number) } } } break
-          case 'github.pr.page': if (message.params.kind === 'timeline') { result = timelinePage(now, typeof message.params.cursor === 'string' ? message.params.cursor : undefined, options.long); break }
+          case 'github.pr.page': if (options.paged && message.params.kind === 'timeline') { const second=message.params.cursor==='page-2'; result={files:[],entries:[],page:second?2:1,has_more:!second,...(!second?{next_cursor:'page-2'}:{}),timeline:Array.from({length:30},(_,i)=>({id:`paged-${(second?30:0)+i}`,kind:'comment',created_at:now,author:'reviewer',body:`### Timeline item ${(second?30:0)+i+1}\n\nPreserve this later-page reading anchor.\n\n- Keep the selected history.\n- Rehydrate before restoring.`}))}; break }
+            if (message.params.kind === 'timeline') { result = timelinePage(now, typeof message.params.cursor === 'string' ? message.params.cursor : undefined, options.long); break }
             result = { files: message.params.kind === 'files' ? (options.changes ? Array.from({ length: Math.max(0, Math.min(30, 65 - (((Number(message.params.page) || 1) - 1) * 30))) }, (_, i) => changedFile(((Number(message.params.page) || 1) - 1) * 30 + i)) : files) : [], entries: message.params.kind === 'files' ? [] : entries, page: message.params.page ?? 1, has_more: (Number(message.params.page) || 1) < 3 }; break
           default: if (!['events.unsubscribe', 'ping'].includes(message.method)) error = `Fixture rejects ${message.method}`
         }
-        ws.send(JSON.stringify(error ? { jsonrpc: '2.0', id: message.id, error: { code: -32000, message: error } } : { jsonrpc: '2.0', id: message.id, result }))
+        const response=JSON.stringify(error ? { jsonrpc: '2.0', id: message.id, error: { code: -32000, message: error } } : { jsonrpc: '2.0', id: message.id, result })
+        if(options.slowFiles && message.method==='github.pr.page' && message.params.kind==='files' && Number(message.params.page)>1)setTimeout(()=>{try{ws.send(response)}catch{}},300)
+        else ws.send(response)
       },
     },
   })
@@ -104,6 +115,7 @@ export function actionFixture(options: { long?: boolean; /** Extra running check
   ].map(file => ({ file, before: existsSync(file) ? readFileSync(file) : null }))
   return {
     env: { KYBERN_URL: url, KYBERN_TOKEN: 'local-fixture', GPUIX_BACKGROUND: '1', KYBERN_DATA_DIR: scratch, KYBERN_CLIENT_CONFIG_DIR: scratch, KYBERN_GPUIX_CREDENTIALS_DIR: scratch },
+    stream: (delta: string) => emit({kind:'assistant_text_delta',message_id:'stream-message',origin:{kind:'root'},delta}), startStream: () => emit({kind:'turn_started',message_id:'stream-user',message:{parts:[{type:'text',text:'Keep reading the pull request while I stream.'}]}}),
     calls, params, actions, fail: (value:boolean)=>{failAction=value}, empty:(value:boolean)=>{empty=value},
     problem: (kind: typeof problem) => { problem = kind },
     close: () => {

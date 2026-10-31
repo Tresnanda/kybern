@@ -2,6 +2,7 @@
 // announces every change with `spaces.changed`; which space is active is this
 // phone's choice, remembered per computer. Shared rules (`inSpace`, colours,
 // copy, the default space) live in `packages/kybern-client/src/spaces.ts`.
+import { setSpacePlacements, spaceProject } from "../../../../packages/kybern-client/src/spacePlacements";
 import {
   canDeleteSpace,
   inSpace,
@@ -23,13 +24,15 @@ import {
 } from "./protocol";
 import {
   activeEnvironment,
+  machineHub,
   mutate,
   onClientAttach,
   onEnvironmentReset,
   onSubscriptionReady,
   rpc,
-  useProjects,
 } from "./runtime";
+
+import { useLists } from "./useLists";
 
 export { canDeleteSpace, inSpace, nextSpaceColor, SPACE_COPY };
 
@@ -68,8 +71,9 @@ onClientAttach((client, isCurrent) => {
   client.onNotification(SPACES_CHANGED_NOTIFICATION, (params) => {
     if (!isCurrent()) return;
     const spaces = (params as SpacesChangedNotification | null)?.spaces;
-    if (Array.isArray(spaces)) publish({ supported: true, spaces: ordered(spaces) });
+    if (Array.isArray(spaces)) { publish({ supported: true, spaces: ordered(spaces) }); void loadSpaces(); }
   });
+  client.onNotification("spaces.placements_changed", () => { if (isCurrent()) void loadSpaces(); });
   const key = savedKey();
   if (key && Platform.OS !== "web")
     void SecureStore.getItemAsync(key)
@@ -79,13 +83,18 @@ onClientAttach((client, isCurrent) => {
       .catch(() => {});
 });
 onSubscriptionReady(() => void loadSpaces());
-onEnvironmentReset(() => publish({ supported: null, spaces: [], savedId: null }));
+onEnvironmentReset(() => { spacesLoadVersion++; setSpacePlacements([]); publish({ supported: null, spaces: [], savedId: null }); });
 
+let spacesLoadVersion = 0;
 export async function loadSpaces() {
+  const version = ++spacesLoadVersion;
   try {
     const result = await rpc("spaces.list", {});
+    if (version !== spacesLoadVersion) return;
+    setSpacePlacements(result.spaces, result.placements);
     publish({ supported: true, spaces: ordered(result.spaces) });
   } catch (e) {
+    if (version !== spacesLoadVersion) return;
     if ((e as { code?: number } | null)?.code === METHOD_NOT_FOUND)
       publish({ supported: false, spaces: [] });
   }
@@ -120,7 +129,7 @@ export function setCurrentSpace(id: SpaceId) {
 
 /** The projects of the active space (every project when the daemon has no spaces). */
 export function useSpaceProjects(): Project[] {
-  const projects = useProjects();
+  const { projects } = useLists();
   const s = useSpaces();
   const id = currentSpaceId(s);
   return useMemo(
@@ -131,7 +140,7 @@ export function useSpaceProjects(): Project[] {
 
 /** A predicate for items with a project: true when they belong to the active space. */
 export function useInSpace() {
-  const projects = useProjects();
+  const { projects } = useLists();
   const id = currentSpaceId(useSpaces());
   return useMemo(
     () => (projectId: string | null | undefined) => inSpace(projectId, projects, id),
@@ -178,6 +187,19 @@ export async function moveSpace(id: SpaceId, offset: -1 | 1) {
 }
 
 /** Moves a project (with its threads, notes and tasks) to another space. */
-export function moveProjectToSpace(projectId: string, spaceId: SpaceId) {
+export async function moveProjectToSpace(projectId: string, spaceId: SpaceId) {
+  const hub = machineHub();
+  const logical = hub.view().projects.find((p) => p.instances.some((i) => i.project.id === projectId));
+  const instance = logical?.instances.find((i) => i.project.id === projectId) ?? logical?.primary;
+  if (instance) {
+    try {
+      const result = await rpc("spaces.place", { project: spaceProject(instance.machineId, instance.project), space_id: spaceId }, hub.primaryMachineId ?? undefined);
+      setSpacePlacements(result.spaces, result.placements);
+      publish({ spaces: ordered(result.spaces) });
+      return result;
+    } catch (error) {
+      if ((error as { code?: number })?.code !== METHOD_NOT_FOUND) throw error;
+    }
+  }
   return mutate("projects.update", { project_id: projectId, space_id: spaceId });
 }

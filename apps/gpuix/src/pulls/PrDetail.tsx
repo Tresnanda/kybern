@@ -28,22 +28,23 @@ import { useReview, type Review } from './useReview.ts'
 import { Sidebar } from './detail/Sidebar.tsx'
 import { Summary, SIDEBAR_BREAKPOINT } from './detail/Summary.tsx'
 import { actionFailure, actionKind, agentPrompt, failingNames, type ActionRequest } from './detail/model.ts'
+import { readView, saveView, type PrSection } from './viewState.ts'
 import { useFlash } from './detail/useFlash.ts'
 
-type Tab = 'summary' | 'changes' | 'timeline'
+type Tab = PrSection
 /** What a confirmation dialog is for: the merge and close of the verdict card, and "Check out in conversation" of the ⋯ menu. */
 type Confirmation = { request: Extract<ActionRequest, { kind: 'merge' | 'close' }> | { kind: 'checkout' }; head: string }
 const METHOD_WORDS = { squash: 'Squash merge', merge: 'Merge', rebase: 'Rebase and merge' } as const
 
-export function Detail({ project, number, repo, onBack, width, onChanged, showBack = true }: { project: Project; number: number; /** Group projects: the member repository the pull request is in. */ repo?: string; onBack: () => void; width: number; onChanged: () => void; showBack?: boolean }) {
+export function Detail({ project, number, repo, onBack, width, onChanged, showBack = true, viewKey }: { viewKey?: string; project: Project; number: number; /** Group projects: the member repository the pull request is in. */ repo?: string; onBack: () => void; width: number; onChanged: () => void; showBack?: boolean }) {
   const t = useTheme()
   const review = useReview(project.id, number, repo)
   const memberName = repo ? project.members?.find(m => m.path === repo)?.name ?? repo : undefined
   const { detail, loading, error } = review
-  const [tab, setTab] = useState<Tab>('summary')
+  const [tab, setTab] = useState<Tab>(() => viewKey ? readView(viewKey).section : 'summary')
   // A tab chosen by pointer rises in (`t-pane`); the keyboard shows it at once.
   const [paneIn, setPaneIn] = useState(false)
-  const go = (next: Tab, byKey = false) => { setTab(next); setPaneIn(!byKey && !getNav().keyboardNav) }
+  const go = (next: Tab, byKey = false) => { setTab(next); if (viewKey) saveView(viewKey, { section: next }); setPaneIn(!byKey && !getNav().keyboardNav) }
   const [merged, flashMerged] = useFlash()
   const [sendOpen, setSendOpen] = useState(false)
   const [reviewOpen, setReviewOpen] = useState(false)
@@ -122,7 +123,7 @@ export function Detail({ project, number, repo, onBack, width, onChanged, showBa
     </div>
     {error && <div style={{ padding: 24 }}><Problem error={error} refresh={review.refresh} /></div>}
     {!detail && !error && <div style={{ padding: 24 }}><PrLoading label="Loading pull request…" /></div>}
-    {detail && <Rise key={tab} kind="pane" play={paneIn} style={{ flexGrow: 1, minHeight: 0 }}>{tab === 'summary' ? <Summary detail={detail} projectId={project.id} {...(repo ? { repo } : {})} repoName={memberName ?? project.name} width={width} side={side} /> : tab === 'changes' ? <Changes projectId={project.id} number={number} repo={repo} review={review} compact={width < 700} /> : <Timeline projectId={project.id} number={number} repo={repo} review={review} onSend={() => { setSendOpen(true); setReviewOpen(false) }} />}</Rise>}
+    {detail && <Rise key={tab} kind="pane" play={paneIn} style={{ flexGrow: 1, minHeight: 0 }}>{tab === 'summary' ? <Summary viewKey={viewKey} detail={detail} projectId={project.id} {...(repo ? { repo } : {})} repoName={memberName ?? project.name} width={width} side={side} /> : tab === 'changes' ? <Changes viewKey={viewKey} projectId={project.id} number={number} repo={repo} review={review} compact={width < 700} /> : <Timeline viewKey={viewKey} projectId={project.id} number={number} repo={repo} review={review} onSend={() => { setSendOpen(true); setReviewOpen(false) }} />}</Rise>}
     {confirmation && detail && <ConfirmDialog confirmation={confirmation} number={number} base={pr?.base} linkedTitle={linked?.title} review={review} close={() => setConfirmation(null)} onDone={(request) => { if (request.kind === 'merge') flashMerged(); setConfirmation(null); onChanged() }} linkedId={linked?.id} />}
   </div>
 }

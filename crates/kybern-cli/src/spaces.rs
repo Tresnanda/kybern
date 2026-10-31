@@ -36,7 +36,17 @@ pub enum SpacesCmd {
         #[arg(long)]
         initials: bool,
     },
-    /// Delete a space. Its projects move to the space above it.
+    /// Place a local or replicated remote project in a Space (works while its owner is offline).
+    Place {
+        /// The project's UUID.
+        project: ProjectId,
+        /// A Space name or UUID.
+        space: String,
+        /// The owning machine's name or id; defaults to this machine.
+        #[arg(long)]
+        machine: Option<String>,
+    },
+    /// Delete a space. Its projects move to the default space.
     Delete {
         /// A space id or name.
         space: String,
@@ -114,10 +124,46 @@ fn confirmed(prompt: &str) -> Result<bool> {
 
 pub async fn run(client: &Client, cmd: SpacesCmd, json: bool) -> Result<()> {
     match cmd {
+        SpacesCmd::Place { project, space, machine } => {
+            let all = client.call::<SpacesList>(Empty {}).await?;
+            let space_id = resolve_space(&all.spaces, &space)?;
+            let me = client.call::<DaemonInfoMethod>(Empty {}).await?.machine_id;
+            let owner = match machine {
+                Some(key) => {
+                    crate::machines::resolve_machine(&client.call::<NetworkStatusMethod>(Empty {}).await?.members, &key)?.machine_id.clone()
+                }
+                None => me.clone(),
+            };
+            let reference = if owner == me {
+                let local = client
+                    .call::<ProjectsList>(ProjectsListParams { refresh_git: Some(false) })
+                    .await?
+                    .projects
+                    .into_iter()
+                    .find(|p| p.id == project)
+                    .ok_or_else(|| anyhow!("Project not found"))?;
+                SpaceProject {
+                    machine_id: owner,
+                    project_id: project,
+                    previous_machine_ids: vec![],
+                    kind: local.kind,
+                    repo: local.repo,
+                    repos: local.repos,
+                }
+            } else {
+                all.placements
+                    .into_iter()
+                    .find(|p| p.project.machine_id == owner && p.project.project_id == project)
+                    .map(|p| p.project)
+                    .ok_or_else(|| anyhow!("This project has not synced yet; connect its machine once first"))?
+            };
+            let result = client.call::<SpacesPlace>(SpacesPlaceParams { project: reference, space_id }).await?;
+            if json { println!("{}", serde_json::to_string_pretty(&result)?) } else { println!("moved to {space}") }
+        }
         SpacesCmd::List => {
             let spaces = list(client).await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&SpacesListResult { spaces })?);
+                println!("{}", serde_json::to_string_pretty(&SpacesListResult { spaces, placements: vec![] })?);
             } else {
                 let projects = client.call::<ProjectsList>(ProjectsListParams { refresh_git: Some(false) }).await?.projects;
                 render(&spaces, &projects);
@@ -195,11 +241,9 @@ fn projects_phrase(count: usize) -> String {
     if count == 1 { "1 project".into() } else { format!("{count} projects") }
 }
 
-/// The name of the space a deleted space's projects move to (above it, or the next for the first).
+/// The name of the default Space a deleted Space's projects resolve to.
 fn target_name(spaces: &[Space], deleted: SpaceId) -> String {
-    let index = spaces.iter().position(|space| space.id == deleted).unwrap_or(0);
-    let target = if index == 0 { spaces.get(1) } else { spaces.get(index - 1) };
-    target.map(|space| space.name.clone()).unwrap_or_default()
+    spaces.iter().find(|space| space.is_default && space.id != deleted).map(|space| space.name.clone()).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -245,10 +289,11 @@ mod tests {
     }
 
     #[test]
-    fn delete_targets_the_space_above_or_the_next() {
-        let spaces = [space("A"), space("B"), space("C")];
+    fn delete_targets_the_default_regardless_of_order() {
+        let mut spaces = [space("A"), space("B"), space("C")];
+        spaces[1].is_default = true;
         assert_eq!(target_name(&spaces, spaces[0].id), "B");
         assert_eq!(target_name(&spaces, spaces[2].id), "B");
-        assert_eq!(target_name(&spaces, spaces[1].id), "A");
+        assert_eq!(target_name(&spaces, spaces[1].id), "");
     }
 }

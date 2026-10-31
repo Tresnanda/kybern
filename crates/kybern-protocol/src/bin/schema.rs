@@ -139,6 +139,9 @@ fn main() {
     method::<SpacesUpdate>(&mut methods);
     method::<SpacesDelete>(&mut methods);
     method::<SpacesReorder>(&mut methods);
+    method::<SpacesPlace>(&mut methods);
+    method::<PeerSpacesSync>(&mut methods);
+    method::<PeerSpaceLogo>(&mut methods);
     method::<ThreadsList>(&mut methods);
     method::<ThreadsSearch>(&mut methods);
     method::<ThreadsRead>(&mut methods);
@@ -254,6 +257,7 @@ fn main() {
     method::<HtmlRevoke>(&mut methods);
     method::<HtmlSnapshot>(&mut methods);
     method::<PreviewOpen>(&mut methods);
+    method::<PreviewServerOpen>(&mut methods);
     method::<PreviewClose>(&mut methods);
     method::<PreviewProbe>(&mut methods);
     method::<PreviewServersList>(&mut methods);

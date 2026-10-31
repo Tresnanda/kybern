@@ -39,6 +39,7 @@ pub mod removal;
 pub mod repo_identity;
 pub mod session;
 pub mod skill_sync;
+pub mod spaces;
 pub mod status;
 pub mod tailscale;
 pub mod updates;
@@ -228,6 +229,7 @@ pub struct Network {
     /// Retry bookkeeping for the joining pass (N4).
     pub join: join::JoinState,
     store: Store,
+    pub(crate) spaces_lock: tokio::sync::Mutex<()>,
     /// The daemon's token-revocation channel, so tokens revoked by a removal close their sockets.
     revoked: OnceLock<broadcast::Sender<uuid::Uuid>>,
     listen: Mutex<ListenInfo>,
@@ -265,6 +267,7 @@ impl Network {
             http: http.build().unwrap_or_default(),
             join: Default::default(),
             store: store.clone(),
+            spaces_lock: Default::default(),
             revoked: OnceLock::new(),
             tailscale,
             timing,
@@ -319,6 +322,7 @@ impl Network {
         }
         vec![
             features::NETWORK_V1.to_string(),
+            features::SPACES_SYNC_V1.to_string(),
             features::RELAY_V1.to_string(),
             features::DELEGATE_REMOTE_V1.to_string(),
             features::TOOLS_FORWARD_V1.to_string(),

@@ -11,6 +11,7 @@ mod outbox;
 mod projection;
 mod schema;
 mod secrets;
+mod space_replica;
 mod spaces;
 mod subagent_messages;
 mod tasks;
@@ -441,7 +442,7 @@ impl Store {
                     kind, instructions_offer_dismissed, worktree_copy)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
                          CASE WHEN ?1 = ?11 THEN NULL
-                              ELSE COALESCE(?10, (SELECT id FROM spaces ORDER BY position, created_at LIMIT 1)) END,
+                              ELSE COALESCE(?10, (SELECT id FROM spaces ORDER BY is_default DESC, position, created_at LIMIT 1)) END,
                          ?12, ?13, ?14)",
                 params![
                     p.id.to_string(),

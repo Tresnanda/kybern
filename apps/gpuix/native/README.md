@@ -1261,6 +1261,26 @@ screenshots/logs are in `/Users/mymac/projects/ade/previews/gpuix/p1/`; redundan
 task screenshots were removed from the native build directory. The installed app,
 port 4219 and normal user data were not changed.
 
+## Exact native diff scroll anchors
+
+Scrolling `<diff>` elements publish their own live `gpui::ListState` through the
+renderer’s existing virtual-list registry. `getListScrollTop(diffId)` returns
+`[itemIndex, offsetInItemPx, viewportHeightPx]`, and post-paint bounds observers
+include `scrollTop: [itemIndex, offsetInItemPx]`. These are GPUI’s logical row and
+pixel offset, including fractional wheel movement. `scrollToItem(diffId, index,
+offsetInItemPx)` uses the existing queued-scroll and cached-ancestor invalidation
+path; the custom adapter consumes the request after rebuilding row measurements.
+No new binding or scroll approximation is involved.
+
+The custom registry owns the handle’s lifetime, including cached renders, empty
+patches, flow mode, unmounts and reused host IDs. Separate diff elements and
+ordinary virtual lists keep independent states. `native/diff-scroll-check.ts`
+checks real wheel/read/remount/restore, observer anchors, identical restored
+viewport pixels, nested cached islands, concurrent diffs, ordinary lists,
+patch rebuild/shrink and lifecycle cleanup. Run it from `apps/gpuix` with the
+current local addon: `bun native/diff-scroll-check.ts` (the harness uses scratch
+client data and closes its window).
+
 ## Cached scroll requests and decorated inputs (package 3)
 
 `renderer.scrollToItem(elementId, index, offsetInItem?)` now wakes every cached

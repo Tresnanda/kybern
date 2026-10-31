@@ -5,14 +5,20 @@ import { load, save as persist } from './persist.ts'
 import { getData } from '../composer/store.ts'
 import { openThread } from '../nav/history.ts'
 import { refreshLists, useApp } from '../state.ts'
+import { useMachines } from '../machines/index.ts'
 import { prCall, prClient } from './client.ts'
+
+const details = new Map<string, PrDetailResult>()
 
 /** `repo`: the member repository of a group project the pull request is in. */
 export function useReview(projectId: string, number: number, repo?: string) {
   const key = `pulls.draft.${projectId}${repo ? `.${repo}` : ''}.${number}`
   const member = repo ? { repo } : {}
   const connection = useApp(s => s.status)
-  const [detail, setDetail] = useState<PrDetailResult | null>(null)
+  useMachines() // A remote project's reconnect retries its active review.
+  const client = prClient(projectId)
+  const detailKey = `${projectId}/${repo ?? ''}:${number}`
+  const [detail, setDetail] = useState<PrDetailResult | null>(() => details.get(detailKey) ?? null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [revision, refresh] = useState(0)
@@ -35,10 +41,16 @@ export function useReview(projectId: string, number: number, repo?: string) {
     let canceled = false
     setLoading(true)
     void prCall(projectId, 'github.pr.detail', { project_id: projectId, number, ...member }).then(next => {
-      if (!canceled) { setDetail(next); setError(null); setLoading(false) }
+      if (!canceled) {
+        const known = details.get(detailKey)
+        const value = known && JSON.stringify(known) === JSON.stringify(next) ? known : next
+        details.delete(detailKey); details.set(detailKey, value)
+        while (details.size > 8) details.delete(details.keys().next().value!)
+        setDetail(value); setError(null); setLoading(false)
+      }
     }, e => { if (!canceled) { setError(String(e)); setLoading(false) } })
     return () => { canceled = true }
-  }, [projectId, number, repo, revision, connection])
+  }, [projectId, number, repo, revision, connection, client, detailKey])
   /** `options`: `merge` and `enable_auto_merge` take a method; `merge` may be an admin merge ("Merge anyway"). */
   const submit = async (action: PrActionKind, confirmedHead?: string, threadId?: string, options: { merge_method?: MergeMethod; admin?: boolean } = {}): Promise<boolean> => {
     if (!detail || submitting.current || !prClient(projectId)) return false
