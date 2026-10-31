@@ -365,6 +365,46 @@ async fn two_started_daemons_of_one_user_join_and_the_cli_lists_checks_and_remov
     let direct = Client::connect(&Endpoint { url: format!("ws://127.0.0.1:{}/ws", port_b.trim()), token: grant.token }).await.unwrap();
     assert_eq!(direct.call::<DaemonInfoMethod>(Default::default()).await.unwrap().environment_id, id_b);
 
+    // A real dev server: raw TCP carries both HTTP and a WebSocket upgrade through the new path.
+    {
+        use axum::{Router, extract::ws::WebSocketUpgrade, routing::get};
+        use futures::{SinkExt, StreamExt};
+        use kybern_protocol::{
+            PortsForwardParams, PortsStopParams,
+            methods::{PortsForward, PortsStop},
+        };
+        use tokio_tungstenite::tungstenite::Message;
+        let server = Router::new().route("/", get(|| async { "process forward" })).route(
+            "/hmr",
+            get(|ws: WebSocketUpgrade| async {
+                ws.on_upgrade(|mut socket| async move {
+                    while let Some(Ok(message)) = socket.recv().await {
+                        if socket.send(message).await.is_err() {
+                            break;
+                        }
+                    }
+                })
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let dev = tokio::spawn(async move {
+            axum::serve(listener, server).await.unwrap();
+        });
+        let forwarded =
+            client_a.call::<PortsForward>(PortsForwardParams { machine: id_b.clone(), remote_port: port, local_port: None }).await.unwrap();
+        assert!(forwarded.local_port > port, "the server occupies the same local port");
+        let page = reqwest::get(format!("http://127.0.0.1:{}/", forwarded.local_port)).await.unwrap().text().await.unwrap();
+        assert_eq!(page, "process forward");
+        a.wait_for_log("transport=\"tcp\"").await;
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/hmr", forwarded.local_port)).await.unwrap();
+        ws.send(Message::Text("update".into())).await.unwrap();
+        assert_eq!(ws.next().await.unwrap().unwrap(), Message::Text("update".into()));
+        client_a.call::<PortsStop>(PortsStopParams { id: forwarded.id }).await.unwrap();
+        assert!(tokio::time::timeout(Duration::from_secs(3), ws.next()).await.is_ok(), "stop must end the active socket");
+        dev.abort();
+    }
+
     // Removal from the command line reaches the other daemon.
     let (ok, removed) = machines_cli(&a.dir, &["remove", &id_b, "--yes"]);
     assert!(ok, "{removed}");

@@ -39,7 +39,7 @@ pub enum PortsCmd {
         machine: String,
         /// The port on that machine.
         remote_port: u16,
-        /// The port to listen on here. Any free port when left out.
+        /// The port to listen on here. Defaults to the remote port or the next free port.
         #[arg(long)]
         local_port: Option<u16>,
     },

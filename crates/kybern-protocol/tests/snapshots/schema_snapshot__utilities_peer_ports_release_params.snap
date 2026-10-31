@@ -1,0 +1,18 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(PeerPortsReleaseParams)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PeerPortsReleaseParams",
+  "type": "object",
+  "properties": {
+    "forward_id": {
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "required": [
+    "forward_id"
+  ]
+}

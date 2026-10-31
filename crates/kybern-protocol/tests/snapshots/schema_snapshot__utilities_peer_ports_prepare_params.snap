@@ -1,0 +1,26 @@
+---
+source: crates/kybern-protocol/tests/schema_snapshot.rs
+expression: schema_for!(PeerPortsPrepareParams)
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PeerPortsPrepareParams",
+  "description": "Authorize a forward without connecting to the destination service.",
+  "type": "object",
+  "properties": {
+    "forward_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "port": {
+      "type": "integer",
+      "format": "uint16",
+      "minimum": 0,
+      "maximum": 65535
+    }
+  },
+  "required": [
+    "forward_id",
+    "port"
+  ]
+}

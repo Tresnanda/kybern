@@ -1,9 +1,9 @@
 //! Port forwarding between machines (ADE-86 M4 / U3, design §8.3).
 //!
-//! `ports.forward` binds `127.0.0.1:<local>` on this machine. Each connection to it opens a stream on the
-//! session with the target (`peer.ports.open`), and the target connects to its own loopback port. The
-//! stream is the relay's: the same credit window, base64 frames and ids, under the `peer.ports.*`
-//! method names so `machine:ports` gates the open.
+//! `ports.forward` binds `127.0.0.1:<local>` here, preferring the remote port then the next free port.
+//! New peers authorize once with `peer.ports.prepare`; each connection carries raw bytes on its own
+//! Tailscale TCP socket. Older or indirect peers retain the existing `peer.ports.open` relay streams.
+//! Both paths require `machine:ports`, connect only to the target's loopback, and preserve half-close.
 //!
 //! * The target refuses the ports of its own kybernd (its listeners and the default port): a forward is
 //!   never a way to reach another machine's daemon without a token.
@@ -34,6 +34,8 @@ use super::peers::PeerLink;
 use super::relay::{Chunk, Slot, Stream, StreamKind, frame_cost};
 use crate::state::AppState;
 
+pub mod direct;
+
 const TARGET: &str = "kybern::network::ports";
 const OPEN_TIMEOUT: Duration = Duration::from_secs(15);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -55,6 +57,8 @@ struct Forward {
     created_at: chrono::DateTime<chrono::Utc>,
     connections: AtomicU32,
     cancel: CancellationToken,
+    direct: Option<(SocketAddr, PeerPortsDirect)>,
+    prepared: bool,
 }
 
 impl Forward {
@@ -75,6 +79,7 @@ impl Forward {
 #[derive(Default)]
 pub struct Forwards {
     list: std::sync::Mutex<Vec<Arc<Forward>>>,
+    pub direct: direct::Listeners,
 }
 
 impl Forwards {
@@ -94,6 +99,7 @@ impl Forwards {
 
     /// Close every forward (the daemon is shutting down, or the network was turned off).
     pub fn close_all(&self) {
+        self.direct.close_all();
         for forward in self.lock().drain(..) {
             forward.cancel.cancel();
         }
@@ -161,49 +167,81 @@ pub async fn forward_to(
         .peers
         .link(machine_id)
         .ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, format!("{machine_name} is offline, so its ports cannot be forwarded.")))?;
-    // Ask the target once, so a refusal (its own daemon's port, a scope turned off) is reported now rather than
-    // when the first browser connects. A port nothing listens on yet is fine: the server may start later.
-    match open_stream(&link, network, remote_port).await {
-        Ok((stream, _incoming, _slot)) => {
-            send_close(&link, stream.id).await;
-            link.relays.remove(stream.id);
-        }
-        Err(error) if matches!(error.code, codes::FORBIDDEN | codes::METHOD_NOT_FOUND | codes::INVALID_PARAMS) => {
-            return Err(match error.code {
-                codes::FORBIDDEN => RpcError::new(codes::FORBIDDEN, format!("{machine_name}: {}", error.message)),
-                codes::METHOD_NOT_FOUND => {
-                    RpcError::new(codes::NOT_AVAILABLE, format!("{machine_name} needs a newer Kybern to forward ports."))
+    let id = Uuid::now_v7();
+    let capable = network.peers.status(machine_id).presence.is_none_or(|p| p.features.iter().any(|f| f == features::PORTS_DIRECT_V1));
+    let (prepared, direct) = if capable {
+        match link.call::<PeerPortsPrepare>(PeerPortsPrepareParams { forward_id: id, port: remote_port }).await {
+            Ok(result) => {
+                let endpoint = match result.direct {
+                    Some(endpoint) => direct::destination(network, machine_id, endpoint.port).await.map(|addr| (addr, endpoint)),
+                    None => None,
+                };
+                if endpoint.is_none() {
+                    let _ = link.notify(PeerPortsRelease::NAME, json!({"forward_id": id})).await;
                 }
-                _ => error,
-            });
+                (true, endpoint)
+            }
+            Err(error) if error.code == codes::METHOD_NOT_FOUND => (false, None),
+            Err(error) => return Err(error),
         }
-        Err(_) => {}
-    }
-    let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, local_port.unwrap_or(0))))
-        .await
-        .map_err(|error| RpcError::new(codes::CONFLICT, format!("Could not use that local port: {error}")))?;
+    } else {
+        (false, None)
+    };
+    let listener = match bind_local(remote_port, local_port).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            if prepared {
+                let _ = link.notify(PeerPortsRelease::NAME, json!({"forward_id": id})).await;
+            }
+            return Err(error);
+        }
+    };
     let bound = listener.local_addr().map_err(RpcError::internal)?.port();
     let forward = Arc::new(Forward {
-        id: Uuid::now_v7(),
+        id,
         machine_id: machine_id.to_string(),
         machine_name: machine_name.to_string(),
         remote_port,
         local_port: bound,
         created_at: chrono::Utc::now(),
+        direct,
+        prepared,
         connections: AtomicU32::new(0),
         cancel: CancellationToken::new(),
     });
-    {
+    let added = {
         let mut list = network.ports.lock();
         if list.len() >= MAX_PORT_FORWARDS {
-            return Err(RpcError::new(codes::CONFLICT, format!("{MAX_PORT_FORWARDS} ports are forwarded already. Stop one first.")));
+            false
+        } else {
+            list.push(forward.clone());
+            true
         }
-        list.push(forward.clone());
+    };
+    if !added {
+        if prepared {
+            let _ = link.notify(PeerPortsRelease::NAME, json!({"forward_id": id})).await;
+        }
+        return Err(RpcError::new(codes::CONFLICT, format!("{MAX_PORT_FORWARDS} ports are forwarded already. Stop one first.")));
     }
     tokio::spawn(accept_loop(network.clone(), shutdown.clone(), forward.clone(), listener));
     announce(network);
-    tracing::info!(target: TARGET, machine = machine_id, remote_port, local_port = bound, "forwarding a port");
+    tracing::info!(target: TARGET, machine = machine_id, remote_port, local_port = bound, transport = if forward.direct.is_some() { "tcp" } else { "websocket" }, "forwarding a port");
     Ok(forward.view())
+}
+
+/// Start at the remote port, then try each higher port. An explicitly chosen port is exact.
+async fn bind_local(remote: u16, local: Option<u16>) -> Result<TcpListener, RpcError> {
+    let start = local.unwrap_or(remote);
+    let end = if local.is_some() { start } else { u16::MAX };
+    for port in start..=end {
+        match TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).await {
+            Ok(listener) => return Ok(listener),
+            Err(error) if local.is_none() && error.kind() == std::io::ErrorKind::AddrInUse => continue,
+            Err(error) => return Err(RpcError::new(codes::CONFLICT, format!("Could not use that local port: {error}"))),
+        }
+    }
+    Err(RpcError::new(codes::CONFLICT, "No local port is free. Stop a forward and try again."))
 }
 
 /// What a preview target names on another machine: the port of its dev server, and the path to open.
@@ -262,6 +300,11 @@ async fn accept_loop(network: Arc<Network>, shutdown: CancellationToken, forward
         }
     }
     forward.cancel.cancel();
+    if forward.prepared
+        && let Some(link) = network.peers.link(&forward.machine_id)
+    {
+        let _ = link.notify(PeerPortsRelease::NAME, json!({"forward_id": forward.id})).await;
+    }
     network.ports.remove(forward.id);
     announce(&network);
 }
@@ -281,9 +324,27 @@ impl Drop for Counted {
     }
 }
 
-async fn connection(network: Arc<Network>, forward: Arc<Forward>, socket: TcpStream) {
+async fn connection(network: Arc<Network>, forward: Arc<Forward>, mut socket: TcpStream) {
     let _count = Counted::new(&forward);
     let Some(link) = network.peers.link(&forward.machine_id) else { return };
+    if let Some((address, endpoint)) = &forward.direct {
+        let Some(_slot) = network.relays.acquire(&format!("ports:{}", link.machine_id)) else {
+            return;
+        };
+        let remote = tokio::select! {
+            _ = forward.cancel.cancelled() => return,
+            remote = direct::connect(&network, *address, endpoint) => remote,
+        };
+        if let Some(mut remote) = remote {
+            let _ = socket.set_nodelay(true);
+            tokio::select! {
+                _ = forward.cancel.cancelled() => {},
+                _ = link.closed() => {},
+                _ = tokio::io::copy_bidirectional(&mut socket, &mut remote) => {},
+            }
+            return;
+        }
+    }
     let (stream, incoming, slot) = match open_stream(&link, &network, forward.remote_port).await {
         Ok(opened) => opened,
         Err(error) => {
@@ -335,12 +396,7 @@ pub fn own_ports(state: &AppState) -> Vec<u16> {
 
 /// `peer.ports.open`: connect a stream to a loopback port of this machine.
 pub async fn handle_open(state: &AppState, link: &Arc<PeerLink>, params: PeerPortsOpenParams) -> Result<Value, RpcError> {
-    if params.port == 0 {
-        return Err(RpcError::invalid_params("port must be 1-65535"));
-    }
-    if own_ports(state).contains(&params.port) {
-        return Err(RpcError::new(codes::FORBIDDEN, format!("Port {} belongs to Kybern itself and is not forwarded.", params.port)));
-    }
+    validate_port(state, params.port)?;
     let slot = state
         .network
         .relays
@@ -357,6 +413,16 @@ pub async fn handle_open(state: &AppState, link: &Arc<PeerLink>, params: PeerPor
         pump(link, stream, incoming, socket, slot, cancel).await;
     });
     Ok(json!({}))
+}
+
+fn validate_port(state: &AppState, port: u16) -> Result<(), RpcError> {
+    if port == 0 {
+        return Err(RpcError::invalid_params("port must be 1-65535"));
+    }
+    if own_ports(state).contains(&port) {
+        return Err(RpcError::new(codes::FORBIDDEN, format!("Port {port} belongs to Kybern itself and is not forwarded.")));
+    }
+    Ok(())
 }
 
 /// `127.0.0.1`, else `::1`: a dev server may listen on either.
@@ -485,6 +551,22 @@ async fn pump(
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn local_port_selection_preserves_free_ports_and_skips_occupied_ports() {
+        let reserved = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = reserved.local_addr().unwrap().port();
+        assert!(bind_local(port, Some(port)).await.is_err());
+        if port == u16::MAX {
+            assert!(bind_local(port, None).await.is_err());
+            return;
+        }
+        let next = bind_local(port, None).await.unwrap();
+        assert!(next.local_addr().unwrap().port() > port);
+        drop(reserved);
+        let same = bind_local(port, None).await.unwrap();
+        assert_eq!(same.local_addr().unwrap().port(), port);
+    }
+
     #[test]
     fn a_preview_target_on_another_machine_is_a_localhost_dev_server() {
         assert_eq!(parse_server_target("http://localhost:5173").unwrap(), (5173, "/".to_string()));
@@ -505,6 +587,8 @@ mod tests {
             remote_port: 5173,
             local_port: 40000,
             created_at: chrono::Utc::now(),
+            direct: None,
+            prepared: false,
             connections: AtomicU32::new(0),
             cancel: CancellationToken::new(),
         };

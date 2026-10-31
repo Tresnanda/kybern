@@ -520,6 +520,7 @@ impl Network {
     /// End the streams this machine serves for members that lost the capability: paused, removed, or a register
     /// that turned relaying or ports off. Opening is refused at use time; this ends what was already open.
     pub(crate) fn close_unpermitted_streams(&self) {
+        self.ports.direct.close_unpermitted(self);
         for link in self.peers.links() {
             let ended = link.relays.close_unpermitted(&effective_scopes(self, &link));
             if ended > 0 {
@@ -654,6 +655,12 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
         PeerClipboardGet::NAME => ok(super::clipboard::peer_get(state).await?),
         PeerClipboardAuto::NAME => {
             super::clipboard::peer_auto(state, link, parse(params)?).await?;
+            ok(Empty {})
+        }
+        PeerPortsPrepare::NAME => ok(super::ports::direct::prepare(state, link, parse(params)?).await?),
+        PeerPortsRelease::NAME => {
+            let request: PeerPortsReleaseParams = parse(params)?;
+            network.ports.direct.release(&link.machine_id, request.forward_id);
             ok(Empty {})
         }
         PeerPortsOpen::NAME => super::ports::handle_open(state, link, parse(params)?).await,

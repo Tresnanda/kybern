@@ -538,6 +538,10 @@ expression: scopes
   - "machine:clipboard"
 - - peer.clipboard.auto
   - "machine:clipboard_auto"
+- - peer.ports.prepare
+  - "machine:ports"
+- - peer.ports.release
+  - "machine:peer"
 - - peer.ports.open
   - "machine:ports"
 - - peer.ports.data

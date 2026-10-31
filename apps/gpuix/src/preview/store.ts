@@ -66,14 +66,14 @@ export async function openPreview(id: string, raw: string, allowFolder = false, 
   setPreview(id, { busy: !options.retry, attemptedAddress: address, attemptedMachine: machine, loading: !options.retry, error: null, permission: undefined, load: options.retry && before.load.phase === 'waiting' ? before.load : { phase: 'resolving' } })
   let pendingEntry: Entry | undefined
   try {
-    // A forwarded page is reached from this machine, so this machine's daemon probes and serves it.
+    // Forwarded pages load immediately; the web view reports connection and navigation failures.
     const client = (via ? localClient() : threadClient(id))!
     if (target.kind === 'server' && proxy && new URL(address).protocol === 'https:') {
       throw Object.assign(new Error("HTTPS servers cannot be proxied yet. Use the server's HTTP port, or open its HTTPS address directly on that machine."), { data: { code: 'unsupported_proxy' } })
     }
     let load: PreviewLoad = { phase: target.kind === 'external' || target.kind === 'search' ? 'external' : 'ready' }
     let title: string | undefined
-    if (target.kind === 'server' && !(proxy && activeEnvironment().local)) {
+    if (target.kind === 'server' && !via && !(proxy && activeEnvironment().local)) {
       const probe: PreviewProbeResult = await client.call('previews.probe', { url: address })
       if (generations.get(id) !== generation) return false
       title = probe.title

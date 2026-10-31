@@ -340,6 +340,8 @@ fn main() {
     method::<PeerClipboardSet>(&mut methods);
     method::<PeerClipboardGet>(&mut methods);
     method::<PeerClipboardAuto>(&mut methods);
+    method::<PeerPortsPrepare>(&mut methods);
+    method::<PeerPortsRelease>(&mut methods);
     method::<PeerPortsOpen>(&mut methods);
     method::<PeerPortsData>(&mut methods);
     method::<PeerPortsClose>(&mut methods);
