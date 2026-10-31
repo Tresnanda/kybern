@@ -7,6 +7,7 @@ import type { Project, Thread } from '../../../../packages/kybern-client/src/typ
 import type { EnvironmentProfile } from '../environments/registry.ts'
 import { MachineHub, type MachineHubOptions } from './hub.ts'
 import { LEGACY_PREFIX, recordOfProfile, recordsFromRegistry } from './records.ts'
+import { finishMachineSetup } from '../composer/machineSetup.ts'
 
 const project = (id: string, name: string, root: string): Project => ({ id, name, path: `/w/${name}`, is_git: true, brief_in_all_threads: false, repo: { root_commit: root }, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z' }) as unknown as Project
 const thread = (id: string, project_id: string, updated_at: string, extra: Record<string, unknown> = {}): Thread => ({ id, project_id, title: id, status: 'idle', pinned: false, updated_at, ...extra }) as unknown as Thread
@@ -260,6 +261,47 @@ test('lists changed on another machine are read again once, however many notific
   release()
   await settle()
   expect(reads - initial).toBe(2)
+})
+
+test('successful project setup waits for an overlapping notification refresh before selecting the machine', async () => {
+  const source = project('source', 'kybern-website', 'website-root')
+  const destination = project('destination', 'kybern-website', 'website-root')
+  let projects: Project[] = []
+  let hold = false
+  let release: () => void = () => {}
+  const remote = new FakeDaemon('pc', {
+    'projects.list': async () => {
+      const snapshot = projects
+      if (hold) await new Promise<void>(resolve => { release = resolve })
+      return { projects: snapshot }
+    },
+    'threads.list': () => ({ threads: [] }),
+  })
+  const { hub } = makeHub([saved('pc', { environment_id: 'pc' })], { transport: { createClient: () => remote.asClient() } })
+  await openPrimary(hub, new FakeDaemon('mac-1'), undefined, { projects: [source], threads: [] })
+  await hub.set.ensureAll()
+  await settle()
+  const key = hub.view().projects.find(item => item.instances.some(instance => instance.project.id === source.id))!.key
+  hold = true
+  remote.notify('threads.changed')
+  await settle()
+  // Setup finishes while an older list response is still on its way back.
+  projects = [destination]
+  hold = false
+  const selected: string[] = []
+  let outcome = 'pending'
+  const completion = finishMachineSetup({ projectId: source.id, key, targetId: 'pc', paneId: 'original-pane' }, {
+    refresh: id => hub.refreshMachineLists(id), projects: () => hub.view().projects, localMachineId: hub.localMachineId,
+    paths: async () => {}, providers: async () => {}, select: (_key, machineId) => { selected.push(machineId) },
+  }).then(() => { outcome = 'selected' }, error => { outcome = error.message })
+  await settle()
+  const beforeResponse = outcome
+  release()
+  await completion
+  await settle()
+  expect(beforeResponse).toBe('pending')
+  expect(outcome).toBe('selected')
+  expect(selected).toEqual(['pc'])
 })
 
 test('the primary is never dialed by the set, and a stand-in profile record does not survive its daemon’s real id', async () => {

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.20.2
+
+<!-- kybern-release-title: Machine setup finishes without an extra retry -->
+<!-- kybern-release-summary: After adding a project to another machine, Kybern waits for the refreshed project list before selecting it, avoiding an unnecessary Retry selection error. -->
+
+- Fixes successful project setup showing “The project list has not refreshed yet” when another refresh was already running. The composer now waits for the updated project list and selects the destination automatically, preserving your draft.
+
 ## 0.20.1
 
 <!-- kybern-release-title: Set up your machines with fewer steps -->

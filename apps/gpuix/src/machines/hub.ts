@@ -91,7 +91,7 @@ export class MachineHub {
   /** Live event streams of the machines the set connects itself, by the machine's proxy (it survives routes and re-keys). */
   private readonly streams = new Map<KybernClient, Subscription>()
   private readonly eventListeners = new Set<(machineId: MachineId, event: ThreadEvent) => void>()
-  private readonly refreshes = new Map<MachineId, boolean>()
+  private readonly refreshes = new Map<MachineId, { again: boolean; done: Promise<void> }>()
   private readonly listeners = new Set<() => void>()
   /** Told when the machines or their status change (not when lists do); watching is free. */
   private readonly machineListeners = new Set<() => void>()
@@ -282,7 +282,7 @@ export class MachineHub {
     }
   }
 
-  /** Read one machine's lists again now (folded with a read already running). */
+  /** Read one machine's lists again, waiting for any queued reread as well as the current read. */
   refreshMachineLists(machineId: MachineId): Promise<void> {
     return this.refreshMachine(machineId).catch(() => {})
   }
@@ -409,17 +409,24 @@ export class MachineHub {
   }
 
   /** One read per machine at a time; a change that arrives during a read folds into one rerun. */
-  private async refreshMachine(id: MachineId): Promise<void> {
-    if (this.refreshes.has(id)) { this.refreshes.set(id, true); return }
-    this.refreshes.set(id, false)
-    try {
-      do {
-        this.refreshes.set(id, false)
-        await this.set.refresh(id)
-      } while (this.refreshes.get(id) && !this.disposed)
-    } finally {
-      this.refreshes.delete(id)
-    }
+  private refreshMachine(id: MachineId): Promise<void> {
+    const pending = this.refreshes.get(id)
+    if (pending) { pending.again = true; return pending.done }
+    const refresh = { again: false, done: Promise.resolve() }
+    // Publish the shared promise before starting a read: notifications and setup
+    // completion may arrive together, and every caller must await the fresh lists.
+    refresh.done = Promise.resolve().then(async () => {
+      try {
+        do {
+          refresh.again = false
+          await this.set.refresh(id)
+        } while (refresh.again && !this.disposed)
+      } finally {
+        this.refreshes.delete(id)
+      }
+    })
+    this.refreshes.set(id, refresh)
+    return refresh.done
   }
 
   // The set caches and merges whatever it is given. With one machine and nothing
