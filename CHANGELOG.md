@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.20.1
+
+<!-- kybern-release-title: Set up your machines with fewer steps -->
+<!-- kybern-release-summary: Connect trusted machines automatically and set up missing projects directly from the composer, with clear progress and retries. -->
+
+- Turning on machine networking immediately refreshes connected machines and login broker choices, without restarting the desktop.
+- Automatically connect machines through saved pairing or verified SSH access while preserving machines you explicitly turned off. Install and connect offers verified Kybern installation on supported macOS and Linux machines.
+- Set up a missing repository or incomplete project group from the composer on one or all missing machines. Choose destination folders and env files, follow each machine's progress, and retry failures without repeating successful work.
+- Platform logos, status badges and a source-to-destination diagram make setup easier to scan. Queued work, drafts and destination agent accounts stay intact through setup and retries.
+
 ## 0.20.0
 
 <!-- kybern-release-title: Your machines, together in Kybern -->
