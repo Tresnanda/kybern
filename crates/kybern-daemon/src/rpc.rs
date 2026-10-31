@@ -1328,6 +1328,13 @@ async fn dispatch_part_15(state: &AppState, ctx: &ConnectionCtx, method: &str, s
             }
             ok(Empty {})
         }
+        ActionsRuns::NAME
+        | ActionsRun::NAME
+        | ActionsLog::NAME
+        | ActionsWorkflows::NAME
+        | ActionsWorkflow::NAME
+        | ActionsAction::NAME
+        | ActionsDispatch::NAME => actions_call(state, "gh", method, params).await,
         WorktreeInspect::NAME => {
             let p: WorktreeInspectParams = parse(params)?;
             ok(state.orchestrator.worktree_inspect(p.thread_id).await.map_err(bad)?)
@@ -1530,6 +1537,50 @@ async fn dispatch_part_17(state: &AppState, _ctx: &ConnectionCtx, method: &str, 
         | PeerLoginReleaseAll::NAME
         | PeerLoginUsage::NAME
         | PeerSecretsPut::NAME => Err(RpcError::new(codes::NOT_AVAILABLE, format!("{method} is only available between machines."))),
+        _ => Err(RpcError::method_not_found(method)),
+    }
+}
+
+/// The `github.actions.*` methods (ADE-97), run with the `gh` program named here so tests can fake it.
+pub(crate) async fn actions_call(state: &AppState, gh: &str, method: &str, params: Value) -> Result<Value, RpcError> {
+    use crate::github_actions as actions;
+    /// The project folder (or group member) a call names.
+    fn dir(state: &AppState, project_id: ProjectId, repo: Option<&str>) -> Result<std::path::PathBuf, RpcError> {
+        let project = state.store.project_get(project_id).map_err(internal)?.ok_or_else(|| RpcError::not_found("project"))?;
+        pr_dir(&project, repo)
+    }
+    match method {
+        ActionsRuns::NAME => {
+            let p: ActionsRunsParams = parse(params)?;
+            ok(actions::runs(gh, &dir(state, p.project_id, p.repo.as_deref())?, &p).await.map_err(bad)?)
+        }
+        ActionsRun::NAME => {
+            let p: ActionsRunParams = parse(params)?;
+            ok(actions::run_detail(gh, &dir(state, p.project_id, p.repo.as_deref())?, p.run_id).await.map_err(bad)?)
+        }
+        ActionsLog::NAME => {
+            let p: ActionsLogParams = parse(params)?;
+            let cache = state.paths.root.join("cache").join("actions-logs");
+            ok(actions::log(gh, &dir(state, p.project_id, p.repo.as_deref())?, &cache, &p).await.map_err(bad)?)
+        }
+        ActionsWorkflows::NAME => {
+            let p: ActionsWorkflowsParams = parse(params)?;
+            ok(actions::workflows(gh, &dir(state, p.project_id, p.repo.as_deref())?).await.map_err(bad)?)
+        }
+        ActionsWorkflow::NAME => {
+            let p: ActionsWorkflowParams = parse(params)?;
+            ok(actions::workflow(gh, &dir(state, p.project_id, p.repo.as_deref())?, &p).await.map_err(bad)?)
+        }
+        ActionsAction::NAME => {
+            let p: ActionsActionParams = parse(params)?;
+            actions::action(gh, &dir(state, p.project_id, p.repo.as_deref())?, &p).await.map_err(bad)?;
+            ok(Empty {})
+        }
+        ActionsDispatch::NAME => {
+            let p: ActionsDispatchParams = parse(params)?;
+            actions::dispatch(gh, &dir(state, p.project_id, p.repo.as_deref())?, &p).await.map_err(bad)?;
+            ok(Empty {})
+        }
         _ => Err(RpcError::method_not_found(method)),
     }
 }

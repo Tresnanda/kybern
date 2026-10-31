@@ -302,6 +302,20 @@ expression: scopes
   - "orchestration:read"
 - - github.pr.action
   - "orchestration:operate"
+- - github.actions.runs
+  - "orchestration:read"
+- - github.actions.run
+  - "orchestration:read"
+- - github.actions.log
+  - "orchestration:read"
+- - github.actions.workflows
+  - "orchestration:read"
+- - github.actions.workflow
+  - "orchestration:read"
+- - github.actions.action
+  - "orchestration:operate"
+- - github.actions.dispatch
+  - "orchestration:operate"
 - - threads.worktree.inspect
   - "orchestration:read"
 - - threads.worktree.remove

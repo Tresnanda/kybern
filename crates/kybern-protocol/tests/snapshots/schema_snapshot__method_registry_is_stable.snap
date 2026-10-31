@@ -152,6 +152,13 @@ expression: names
 - github.pr.detail
 - github.pr.page
 - github.pr.action
+- github.actions.runs
+- github.actions.run
+- github.actions.log
+- github.actions.workflows
+- github.actions.workflow
+- github.actions.action
+- github.actions.dispatch
 - threads.worktree.inspect
 - threads.worktree.remove
 - files.search

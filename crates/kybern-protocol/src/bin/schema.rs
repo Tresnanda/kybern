@@ -239,6 +239,13 @@ fn main() {
     method::<PrDetail>(&mut methods);
     method::<PrPage>(&mut methods);
     method::<PrAction>(&mut methods);
+    method::<ActionsRuns>(&mut methods);
+    method::<ActionsRun>(&mut methods);
+    method::<ActionsLog>(&mut methods);
+    method::<ActionsWorkflows>(&mut methods);
+    method::<ActionsWorkflow>(&mut methods);
+    method::<ActionsAction>(&mut methods);
+    method::<ActionsDispatch>(&mut methods);
     method::<WorktreeInspect>(&mut methods);
     method::<WorktreeRemove>(&mut methods);
     method::<FilesSearch>(&mut methods);

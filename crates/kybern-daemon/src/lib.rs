@@ -16,6 +16,7 @@ mod discovery;
 mod exposure;
 mod files;
 mod github;
+mod github_actions;
 mod github_review;
 mod harness_updates;
 mod http;
