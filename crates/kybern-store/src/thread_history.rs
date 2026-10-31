@@ -389,7 +389,8 @@ fn read_message_row(row: &rusqlite::Row<'_>, thread_id: ThreadId) -> Result<Mess
         turn_id: row.get::<_, Option<String>>(1)?.map(parse_uuid).transpose()?,
         at: parse_time(row.get(2)?)?,
         role,
-        bytes: row.get(4)?,
+        // `substr` of a zero-length blob is NULL: a thinking-only answer has no text.
+        bytes: row.get::<_, Option<Vec<u8>>>(4)?.unwrap_or_default(),
         total_bytes: u64::try_from(row.get::<_, i64>(5)?).map_err(|_| anyhow!("stored message has an invalid byte length"))?,
         attribution,
     })
@@ -785,5 +786,27 @@ mod tests {
         assert!(!page_allows_message(7, true));
         assert!(page_allows_message(8, true));
         assert!(page_allows_message(2, false));
+    }
+
+    #[test]
+    fn empty_answer_text_reads_as_an_empty_message() {
+        let store = Store::open_in_memory().unwrap();
+        let now = Utc::now();
+        let project = uuid::Uuid::now_v7();
+        insert_project(&store, project, now);
+        let thread = thread(project, "Thinking only", now);
+        store.thread_upsert(&thread).unwrap();
+        let turn = Some(uuid::Uuid::now_v7());
+        for payload in [
+            serde_json::json!({ "kind": "turn_started", "message_id": uuid::Uuid::now_v7(), "message": { "parts": [{ "type": "text", "text": "hi" }] } }),
+            serde_json::json!({ "kind": "assistant_message_completed", "message_id": uuid::Uuid::now_v7(), "text": "", "thinking": "only thoughts" }),
+            serde_json::json!({ "kind": "assistant_message_completed", "message_id": uuid::Uuid::now_v7(), "text": "done" }),
+        ] {
+            store.event_append(thread.id, turn, serde_json::from_value(payload).unwrap()).unwrap();
+        }
+        let page = store.read_thread_history(thread.id, None, None, 10, None, Some(0)).unwrap();
+        let texts: Vec<_> = page.messages.iter().map(|m| m.text.as_str()).collect();
+        assert_eq!(texts, ["hi", "", "done"]);
+        assert!(page.messages.iter().all(|m| !m.text_truncated));
     }
 }
