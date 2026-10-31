@@ -2,9 +2,10 @@
 
 ## 0.20.5
 
-<!-- kybern-release-title: Faster machines and Cursor, plus update tracks -->
-<!-- kybern-release-summary: Open dev servers, previews and images on other machines more reliably, start Cursor threads faster, choose a Stable or Dev update track, and avoid a freeze on macOS. -->
+<!-- kybern-release-title: GitHub Actions in Kybern -->
+<!-- kybern-release-summary: Follow and control your GitHub Actions runs from the Pull requests page, open dev servers on other machines faster, start Cursor threads faster, and choose a Stable or Dev update track. -->
 
+- The Pull requests page has an Actions tab for the repository's GitHub Actions runs, grouped by branch with their pull requests. A run shows its job graph with the failure path highlighted, and each job's steps beside its log. Rerun all or failed jobs, rerun one job, cancel, or start a workflow with its inputs, and send a failed job to an agent with Fix with agent. Kybern lets you know when a run you started, or one on your current branch, finishes.
 - Dev servers on another machine open much faster: port forwarding uses direct Tailscale connections when both machines support them, and keeps the existing tunnel for older or relayed machines.
 - Pasting an image into a thread on another machine works, as do attachment previews, Space logos, thread images and note moves for that machine.
 - Artifact previews, live visuals and Preview for a thread on another machine load that machine's pages, including Open in browser.
