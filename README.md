@@ -68,7 +68,7 @@ Download installers and assets directly from [GitHub Releases](https://github.co
 | **Windows** | Windows 10 (1809+) & Windows 11 (x64) | [Download Setup `.exe`](https://github.com/Tresnanda/kybern/releases/latest) |
 | **Linux** | Ubuntu, Debian, Fedora, openSUSE, Arch (x64) | `curl -fsSL https://github.com/Tresnanda/kybern/releases/latest/download/kybern-gpuix-linux-install.sh \| sh` |
 | **Remote Server** | Headless Linux & macOS (over SSH / Tailscale) | `curl -LsSf https://github.com/Tresnanda/kybern/releases/latest/download/kybern-remote-install.sh \| sh -s -- --service` |
-| **Mobile Companion** | Android & iOS | [Download Preview APK](https://expo.dev/accounts/treshnanda/projects/kybern-mobile/builds) |
+| **Mobile Companion** | Android & iOS | [Download Preview APK](https://github.com/Tresnanda/kybern/releases/download/android-build-9/kybern-0.1.2-android-build-9.apk) |
 
 ---
 
@@ -128,7 +128,7 @@ curl -fsSL https://github.com/Tresnanda/kybern/releases/latest/download/kybern-g
 
 Track agent progress when away from your desk. The companion app streams turns, requests approvals, browses files and diffs, and manages project tasks.
 
-- **Android:** Download the preview APK from the [EAS project builds page](https://expo.dev/accounts/treshnanda/projects/kybern-mobile/builds).
+- **Android:** Download the preview APK from the [GitHub release](https://github.com/Tresnanda/kybern/releases/download/android-build-9/kybern-0.1.2-android-build-9.apk).
 - **iOS:** Available via development build (see the [Mobile Companion README](apps/mobile/README.md)).
 - **Pairing:** In the desktop app, click **Pair a device** and scan the QR code with your phone. To connect across external networks, enable **Reachable over Tailscale**.
 
