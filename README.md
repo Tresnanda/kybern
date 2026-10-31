@@ -12,6 +12,10 @@
 </p>
 
 <p align="center">
+  <b>English</b> • <a href="README.id.md">Bahasa Indonesia</a>
+</p>
+
+<p align="center">
   <a href="https://github.com/Tresnanda/kybern/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Tresnanda/kybern/ci.yml?branch=main&label=CI&logo=github" alt="CI Status"></a>
   <a href="https://github.com/Tresnanda/kybern/releases/latest"><img src="https://img.shields.io/github/v/release/Tresnanda/kybern?color=7F77DD&label=release" alt="Latest Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-6A62C9" alt="MIT License"></a>
