@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Full checks for a release candidate that did not itself bump the version.
+  workflow_dispatch:
 
 # A new push to a pull request supersedes its running checks. Pushes to main
 # never cancel anything: each commit has its own group, because a release
@@ -23,9 +25,9 @@ env:
 
 jobs:
   changes:
-    # Pull requests run only the jobs their files can affect. main runs every
-    # job on every push (releases require all of them), so there every output
-    # is true. The paths are the inputs of each job, not of the product:
+    # PRs and ordinary main pushes run only affected jobs. Version bumps on
+    # main and manual runs check everything for the exact-commit release gate.
+    # scripts/ci-paths.mjs owns the paths, which are inputs of each job:
     #   rust     the Cargo workspace and the transcript fixtures its tests embed
     #   release  the scripts, workflows, dist config and Cursor SDK host the
     #            release and tooling regression tests read
@@ -43,25 +45,14 @@ jobs:
       release: ${{ steps.paths.outputs.release }}
       gpuix: ${{ steps.paths.outputs.gpuix }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - id: paths
         env:
           GH_TOKEN: ${{ github.token }}
-          EVENT: ${{ github.event_name }}
-          PULL_REQUEST: ${{ github.event.pull_request.number }}
-        run: |
-          if [ "$EVENT" != pull_request ]; then
-            files=ALL
-          else
-            files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST/files" --jq '.[] | .filename, (.previous_filename // empty)')
-          fi
-          echo "changed files:"; echo "${files:-<none>}" | sed 's/^/  /'
-          matches() { [ "$files" = ALL ] || echo "$files" | grep -Eq "$1"; }
-          output() { if matches "$2"; then echo "$1=true"; else echo "$1=false"; fi >> "$GITHUB_OUTPUT"; }
-          # Editing this workflow or its setup action runs everything.
-          self='^\.github/(workflows/ci\.yml|actions/setup-pnpm-apps/)'
-          output rust "$self|^(crates/|fixtures/|Cargo\.(toml|lock)$|rust(-toolchain|fmt)\.toml$|\.cargo/)"
-          output release "$self|^(scripts/|\.github/|dist-workspace\.toml$|Cargo\.toml$|crates/kybern/dist\.toml$|crates/kybern-drivers/src/cursor/sdk/)"
-          output gpuix "$self|^(apps/gpuix/|packages/|assets/release-background\.png$|fixtures/|crates/kybern-daemon/src/visuals/)"
+        run: node scripts/ci-paths.mjs
 
   fmt:
     name: rustfmt
@@ -143,7 +134,7 @@ jobs:
         with:
           node-version: 22
       - name: Release gate and updater manifest regression tests
-        run: node --test scripts/check-release-ci.test.mjs scripts/updater-manifest.test.mjs
+        run: node --test scripts/ci-paths.test.mjs scripts/check-release-ci.test.mjs scripts/updater-manifest.test.mjs
       - name: release.yml matches dist's output
         run: |
           version=$(sed -n 's/^cargo-dist-version = "\(.*\)"$/\1/p' dist-workspace.toml)
@@ -182,7 +173,7 @@ jobs:
 
   ci:
     # One check that is red when any job failed or was cancelled, and green when
-    # the jobs a pull request does not need were skipped. A branch protection
+    # the jobs a change does not need were skipped. A branch protection
     # rule needs only this name.
     name: CI
     if: always()

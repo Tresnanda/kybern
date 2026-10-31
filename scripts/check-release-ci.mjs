@@ -2,15 +2,15 @@ import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 
-// Every job of ci.yml that a push to main runs. Pull requests skip the jobs
-// their files cannot affect, but main runs all of them, so a skipped job on the
-// release commit means the gate cannot be trusted. The `changes` and `CI`
+// Every job of ci.yml that a release candidate must pass. Ordinary main pushes
+// are filtered; version bumps and manual full runs execute all jobs. A skipped
+// job cannot qualify a commit for release. The `changes` and `CI`
 // bookkeeping jobs are not listed; the run's own conclusion already covers them.
 export const requiredJobs = ['rustfmt', 'clippy + test (ubuntu-24.04)', 'clippy + test (macos-15)', 'cargo check (windows-latest)', 'release checks', 'gpuix (typecheck + test)']
 
 export function assessCI(runs, sha) {
-  // PR checks may test a merge ref. Only the main push for this exact commit qualifies.
-  const run = runs.filter(run => run.head_sha === sha && run.event === 'push' && run.head_branch === 'main')
+  // PR checks may test a merge ref. Require this exact commit from main.
+  const run = runs.filter(run => run.head_sha === sha && ['push', 'workflow_dispatch'].includes(run.event) && run.head_branch === 'main')
     .sort((a, b) => b.run_number - a.run_number || b.run_attempt - a.run_attempt)[0]
   if (!run) return { state: 'waiting', reason: 'No main CI run exists for the release commit yet.' }
   if (run.status !== 'completed') return { state: 'waiting', reason: `CI is ${run.status}.`, run }
@@ -29,12 +29,12 @@ async function main() {
   if (!/^[0-9a-f]{40}$/.test(sha) || !/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error('Invalid release commit or repository.')
   const deadline = Date.now() + 90 * 60_000
   for (;;) {
-    const result = assessCI(api(`repos/${repo}/actions/workflows/ci.yml/runs?head_sha=${sha}&event=push&branch=main&per_page=100`).workflow_runs, sha)
+    const result = assessCI(api(`repos/${repo}/actions/workflows/ci.yml/runs?head_sha=${sha}&branch=main&per_page=100`).workflow_runs, sha)
     console.log(`${sha}: ${result.reason}${result.run ? ` ${result.run.html_url}` : ''}`)
     if (result.state === 'failed') throw new Error('Release blocked: exact-commit CI did not pass.')
     if (result.state === 'success') {
       const jobs = api(`repos/${repo}/actions/runs/${result.run.id}/attempts/${result.run.run_attempt}/jobs?per_page=100`).jobs
-      if (!verifyJobs(jobs)) throw new Error('Release blocked: required CI jobs are missing, skipped, or unsuccessful.')
+      if (!verifyJobs(jobs)) throw new Error('Release blocked: required CI jobs are missing, skipped, or unsuccessful. Run CI manually on main at the release commit (gh workflow run ci.yml --ref main), wait for it to pass, then retry the release gate.')
       console.log('Release CI gate passed.')
       return
     }

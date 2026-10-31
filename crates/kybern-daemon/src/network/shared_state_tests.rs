@@ -142,6 +142,10 @@ async fn an_offline_machine_is_queued_and_gets_the_change_when_it_returns() {
         .unwrap();
     assert_eq!(shared.machines.len(), 2);
     eventually("the vps took it", WAIT, || t.c.state.settings.get().default_permission_mode == PermissionMode::Auto).await;
+    // Applying the patch precedes its acknowledgment. The pending view reads
+    // the sender's outbox, so wait for that delivery to finish there too.
+    eventually("the vps delivery is acknowledged", WAIT, || !queued_settings_items(&t.a, &t.c.id(), OutboxState::Delivered).is_empty())
+        .await;
     assert_eq!(t.b.state.settings.get().default_permission_mode, PermissionMode::Supervised, "the offline machine has not heard");
 
     let queued = queued_settings_items(&t.a, &t.b.id(), OutboxState::Queued);

@@ -3,9 +3,10 @@ import assert from 'node:assert/strict'
 import { assessCI, requiredJobs, verifyJobs } from './check-release-ci.mjs'
 const sha = 'a'.repeat(40)
 const run = { id: 1, head_sha: sha, head_branch: 'main', event: 'push', run_number: 1, run_attempt: 1, status: 'completed', conclusion: 'success' }
-test('only an exact main push qualifies', () => {
-  for (const change of [{ head_sha: 'b'.repeat(40) }, { event: 'pull_request' }, { head_branch: 'feature' }]) assert.equal(assessCI([{ ...run, ...change }], sha).state, 'waiting')
+test('only an exact main push or manual run qualifies', () => {
+  for (const change of [{ head_sha: 'b'.repeat(40) }, { event: 'pull_request' }, { event: 'schedule' }, { head_branch: 'feature' }, { event: 'workflow_dispatch', head_branch: 'feature' }]) assert.equal(assessCI([{ ...run, ...change }], sha).state, 'waiting')
   assert.equal(assessCI([run], sha).state, 'success')
+  assert.equal(assessCI([{ ...run, event: 'workflow_dispatch' }], sha).state, 'success')
 })
 test('pending or unsuccessful CI cannot publish', () => {
   assert.equal(assessCI([{ ...run, status: 'in_progress' }], sha).state, 'waiting')
@@ -14,6 +15,7 @@ test('pending or unsuccessful CI cannot publish', () => {
 test('latest run and attempt take precedence over prior success', () => {
   assert.equal(assessCI([run, { ...run, run_attempt: 2, conclusion: 'failure' }], sha).state, 'failed')
   assert.equal(assessCI([run, { ...run, run_number: 2, status: 'queued' }], sha).state, 'waiting')
+  assert.equal(assessCI([run, { ...run, event: 'workflow_dispatch', run_number: 2, status: 'queued' }], sha).state, 'waiting')
 })
 test('every required job must complete successfully', () => {
   const jobs = requiredJobs.map(name => ({ name, status: 'completed', conclusion: 'success' }))
@@ -59,7 +61,7 @@ test('desktop bundles start with the daemon archives, and host waits for them an
   for (const result of ['failure', 'cancelled']) assert.equal(allowed('custom-desktop', result), false)
 })
 
-test('every required job is a job of ci.yml, and main runs all of them', async () => {
+test('every required job is a job of ci.yml, with manual full runs and tested path selection', async () => {
   const { readFileSync } = await import('node:fs')
   const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8')
   const jobs = workflow.split('\njobs:\n')[1].split(/\n  (?=[\w-]+:\n)/)
@@ -73,9 +75,12 @@ test('every required job is a job of ci.yml, and main runs all of them', async (
     return keys.flatMap(key => lists[key].map(value => template.replace(`\${{ matrix.${key} }}`, value)))
   })
   for (const name of requiredJobs) assert.ok(names.includes(name), `ci.yml has no job named "${name}"`)
-  // A pull request may skip a job through the `changes` job; a push must not.
+  assert.match(workflow, /\n  workflow_dispatch:/)
   const changes = jobs.find(job => job.trimStart().startsWith('changes:'))
-  assert.match(changes, /if \[ "\$EVENT" != pull_request \]; then\n\s+files=ALL/)
+  assert.match(changes, /run: node scripts\/ci-paths\.mjs/)
+  assert.match(workflow, /node --test scripts\/ci-paths\.test\.mjs/)
+  // Affected main checks still populate caches PRs and releases can restore.
+  assert.match(workflow, /shared-key: check\n\s+save-if: \$\{\{ github.ref == 'refs\/heads\/main' \}\}/)
 })
 
 test('GPUIX bundles both macOS targets from dist binaries without compiling the daemon', async () => {
