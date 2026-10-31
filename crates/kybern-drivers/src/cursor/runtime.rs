@@ -12,7 +12,7 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use crate::ndjson::{NdjsonChild, SessionLifetime};
 use crate::{DriverError, DriverEvent, ProbeContext, Result};
 
-pub const SDK_VERSION: &str = "1.0.35";
+pub const SDK_VERSION: &str = "1.2.0";
 const NODE_MINIMUM: &str = "22.13";
 const SETUP_HINT: &str = "Install it in Settings → Agent providers, or run `kybern cursor install`.";
 const HOST: &str = include_str!("sdk/host.mjs");

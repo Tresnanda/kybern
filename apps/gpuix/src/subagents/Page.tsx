@@ -9,6 +9,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { formatTokenCount, isSubagentQueued, subagentBarState, subagentSpan, subagentThreadPhase, subagentTokenCount } from '../../../../packages/kybern-client/src/subagents.ts'
 import { useNav } from '../nav/store.ts'
+import { parentMachineOf } from '../nav/remoteChildren.ts'
 import { openThread } from '../nav/history.ts'
 import { controlSubagent } from '../requests/Activity.tsx'
 import { getThreadOpen, subscribe, useApp, usePaneAccess, PaneProvider, type AppState } from '../state.ts'
@@ -65,8 +66,16 @@ export function SubagentPageMotion({ children }: { children: ReactNode }) {
   </div>
 }
 
+/** Open the thread a subagent runs for: on the subagent's machine, the one its page is open on. */
+function useOpenParent(thread: Thread): (() => void) | undefined {
+  const machineId = useApp(s => s.selectedMachineId)
+  const parentId = thread.parent_thread_id
+  return parentId ? () => openThread(parentId, parentMachineOf(thread) ?? machineId) : undefined
+}
+
 export function SubagentBar({ thread, embedded = false }: { thread: Thread; embedded?: boolean }) {
   const t = useTheme(), info = thread.subagent!, phase = subagentThreadPhase(thread)
+  const openParent = useOpenParent(thread)
   const span = subagentSpan(thread)
   // Lifecycle timestamps are sufficient here: the transcript already owns the
   // live elapsed clock. Settled values never wake React or GPUI.
@@ -90,7 +99,7 @@ export function SubagentBar({ thread, embedded = false }: { thread: Thread; embe
     <Label color={muted(t)} size={12} truncate>{[thread.model, thread.effort, tokens].filter(Boolean).join(' · ')}</Label>
     <div style={{ flexGrow: 1 }} />
     {phase === 'failed' && (info.result || info.detail) && <BarAction play={settled}><Button variant="ghost" size="sm" onClick={() => copyText(info.result || info.detail || '')}>Copy error</Button></BarAction>}
-    {thread.parent_thread_id && <Button variant="ghost" size="sm" testId="subagent-open-parent" onClick={() => openThread(thread.parent_thread_id!)}>Open parent</Button>}
+    {openParent && <Button variant="ghost" size="sm" testId="subagent-open-parent" onClick={openParent}>Open parent</Button>}
     {phase === 'working' && info.capabilities?.background && !info.backgrounded && <Button variant="ghost" size="sm" testId="subagent-run-background" onClick={() => void controlSubagent(thread, 'background')}>Run in background</Button>}
     {phase === 'working' && info.capabilities?.stop !== false && <Button size="sm" testId="subagent-stop" onClick={() => void controlSubagent(thread, 'stop')}>Stop</Button>}
   </div>
@@ -100,11 +109,12 @@ export function SubagentDivider({ thread, end = false }: { thread: Thread; end?:
   const t = useTheme()
   const parent = useApp(s => s.threads.find(t => t.id === thread.parent_thread_id))
   const childParent = useNav(s => thread.parent_thread_id ? s.children[thread.parent_thread_id] : undefined)
+  const openParent = useOpenParent(thread)
   const name = parent?.title || childParent?.title || 'its parent'
   const phase = subagentThreadPhase(thread)
   if (end && phase === 'working') return null
   const label = end ? phase === 'done' ? `Result returned to ${name}` : phase === 'failed' ? `Failure reported to ${name}` : 'Stopped' : `Subagent of ${name}`
-  return <div testId={end ? 'subagent-end' : 'subagent-divider'} style={{ display: 'flex', alignItems: 'center', gap: 12, paddingTop: end ? 22 : 8, paddingBottom: end ? 8 : 18 }}><div style={{ height: 1, flexGrow: 1, backgroundColor: t.border }} /><div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>{!end && <ProviderMark kind={thread.provider.kind} size={11} />}<div onClick={thread.parent_thread_id ? () => openThread(thread.parent_thread_id!) : undefined} style={{ cursor: thread.parent_thread_id ? 'pointer' : 'default', maxWidth: '75%' }}><Para color={phase === 'failed' && end ? t.red : muted(t)} size={11}>{`${label}${!end && thread.subagent?.started_at ? ` · ${clockTime(thread.subagent.started_at)}` : ''}`}</Para></div></div><div style={{ height: 1, flexGrow: 1, backgroundColor: t.border }} /></div>
+  return <div testId={end ? 'subagent-end' : 'subagent-divider'} style={{ display: 'flex', alignItems: 'center', gap: 12, paddingTop: end ? 22 : 8, paddingBottom: end ? 8 : 18 }}><div style={{ height: 1, flexGrow: 1, backgroundColor: t.border }} /><div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>{!end && <ProviderMark kind={thread.provider.kind} size={11} />}<div onClick={openParent} style={{ cursor: openParent ? 'pointer' : 'default', maxWidth: '75%' }}><Para color={phase === 'failed' && end ? t.red : muted(t)} size={11}>{`${label}${!end && thread.subagent?.started_at ? ` · ${clockTime(thread.subagent.started_at)}` : ''}`}</Para></div></div><div style={{ height: 1, flexGrow: 1, backgroundColor: t.border }} /></div>
 }
 
 /** `sa-bar-action`: a bar action that appears because the child changed state fades in from a 2 px blur over 150 ms (`--ease-out`). */

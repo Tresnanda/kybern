@@ -27,7 +27,7 @@ import type { MachineId, MethodName, ParamsOf, Project, ResultOf, Thread, Thread
 import { mergeIntoCurrent } from '../../../packages/kybern-client/src/newChat.ts'
 import { newChats } from './composer/newChats.ts'
 import { getNav, setNav } from './nav/store.ts'
-import { withRemoteChildren } from './nav/remoteChildren.ts'
+import { OriginChildren, remoteChildStore, underParents, withRemoteChildren } from './nav/remoteChildren.ts'
 
 export interface AppState {
   status: ConnectionStatus
@@ -183,6 +183,9 @@ export function machineOfThreadId(id: ThreadId, hint?: MachineId): MachineId | u
   if (hub.machineCount <= 1) return undefined
   const listed = state.threads.find(t => t.id === id)
   if (listed) return listed.machineId
+  // A subagent or delegated child is reached from its parent, never listed: `nav.children` knows its machine.
+  const child = getNav().children[id] as StateThread | undefined
+  if (child) return child.machineId
   const owner = hub.machineOfThread(id)
   return owner === hub.localMachineId ? undefined : owner
 }
@@ -444,6 +447,21 @@ function composeLists(localProjects: readonly Project[], localThreads: readonly 
   return composed
 }
 
+/** Children another machine's threads started on this one: listed by its daemon, reached from the thread that started them. */
+const originChildren = new OriginChildren()
+/**
+ * `live.ts` hands over every event of a child another machine started here. With several machines it is nested under the
+ * thread that started it (`composeLists`) and this returns true; with one, `live.ts` keeps it as it always did.
+ */
+export function noteOriginChild(thread: Thread): boolean {
+  const several = machineHub().machineCount > 1
+  if (originChildren.put(thread) && several) remoteChanged()
+  return several
+}
+export function forgetOriginChild(id: ThreadId) {
+  if (originChildren.remove(id) && machineHub().machineCount > 1) remoteChanged()
+}
+
 /** Delegated children other machines run for threads listed here; they go to `nav.children`, not the thread list. */
 let remoteChildIds: ReadonlySet<string> = new Set()
 function applyRemoteChildren(children: readonly StateThread[]) {
@@ -460,14 +478,12 @@ function composeListsOnly(localProjects: readonly Project[], localThreads: reado
     return { projects: localProjects as Project[], threads: localThreads as StateThread[], children: [] }
   }
   hub.ingestPrimaryNow()
-  const merged = merger.merge({ view: hub.view(), localProjects, spaceOfForeign: foreignSpace })
+  const merged = merger.merge({ view: hub.view(), localProjects, spaceOfForeign: foreignSpace, children: remoteChildStore.get() })
   foreignIds = new Set(merged.projects.slice(localProjects.length).map(p => p.id))
   machinesOf = merged.machinesOf
-  return {
-    projects: merged.projects,
-    threads: merged.threads.length ? [...localThreads, ...merged.threads].sort(byPinnedThenNewest) : localThreads as StateThread[],
-    children: merged.children,
-  }
+  const threads = merged.threads.length ? [...localThreads, ...merged.threads].sort(byPinnedThenNewest) : localThreads as StateThread[]
+  const children = originChildren.list.length ? [...merged.children, ...originChildren.list] : merged.children
+  return { projects: merged.projects, threads, children: underParents(children, threads, hub.localMachineId!) }
 }
 
 let viewStop: (() => void) | undefined
@@ -503,7 +519,10 @@ function watchMachines() {
     if (!several && viewStop) { viewStop(); viewStop = undefined }
     remoteChanged()
   }
-  machinesStop ??= hub.onMachinesChanged(sync)
+  if (!machinesStop) {
+    const stops = [hub.onMachinesChanged(sync), remoteChildStore.subscribe(remoteChanged)]
+    machinesStop = () => { for (const stop of stops) stop() }
+  }
   sync()
 }
 /** A machine that cannot be reached is a notice, not an error screen. */
@@ -532,6 +551,7 @@ async function loadLists() {
   listedThreads = t.threads
     .filter((th) => !isChildThread(th) && !isInboundThread(th) && th.status !== 'archived')
     .sort(byPinnedThenNewest)
+  originChildren.replace(t.threads)
   // The set learns this machine's lists first, so a project the user has here is not listed again for another machine's checkout.
   machineHub().ingestPrimary(owner, p.projects, t.threads, t.activity)
   const composed = composeLists(p.projects, listedThreads)

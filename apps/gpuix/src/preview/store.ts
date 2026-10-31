@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react'
 import { classifyPreviewInput, PREVIEW_REJECTED_MESSAGE } from '../../../../packages/kybern-client/src/previewTarget.ts'
 import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import type { PreviewOpenResult, PreviewTargetInfo, PreviewProbeResult } from '../../../../packages/kybern-client/src/types.ts'
-import { getState, localClient, threadClient } from '../state.ts'
+import { getState, localClient, machineOfThreadId, threadClient } from '../state.ts'
 import { launchBrowser } from './browser.ts'
 import { openTab } from '../tabs/open.ts'
 import { openRelay } from './relay.ts'
@@ -49,6 +49,7 @@ function commitEntry(id: string, entry: Entry, replace: boolean, load: PreviewLo
   }
   setPreview(id, { entries, index: replacing ? current.index : entries.length - 1, floating: entry.kind === 'external' ? false : current.floating, busy: false, loading: load.phase === 'ready' && webHost.available, load, wsFailed: false, wsNoticeDismissed: false, navigatedAway: false, opened: false, bridge: undefined, pageTitle: undefined, pagePath: undefined })
 }
+const REMOTE_FILE_MESSAGE = "Files on another machine can't be previewed here yet. Ask the agent to serve the page, then open its address."
 export interface OpenOptions { proxy?: boolean; retry?: boolean; suffix?: string; /** A server on another machine; its port is forwarded to this machine first. */ machine?: RemoteServer; /** The forward exists: `raw` is its local address. */ forwarded?: boolean }
 export async function openPreview(id: string, raw: string, allowFolder = false, launch = false, replace = false, options: OpenOptions = {}): Promise<boolean | undefined> {
   const earlier = previewState(id), machine = options.machine ?? (replace ? earlier.entries[earlier.index]?.machine : undefined)
@@ -62,7 +63,9 @@ export async function openPreview(id: string, raw: string, allowFolder = false, 
   const address = target.kind === 'search' ? `https://www.google.com/search?q=${encodeURIComponent(target.query)}` : target.kind === 'file' ? target.path : target.url
   const generation = ++nextGeneration; generations.set(id, generation)
   const before = previewState(id), old = before.entries[before.index]
-  const proxy = !activeEnvironment().local || (options.proxy ?? (replace && old?.kind === 'server' ? old.proxy : false))
+  // A thread on another machine of the network: its servers are proxied by that machine and reached through its connection.
+  const remote = !via && !!machineOfThreadId(id), near = activeEnvironment().local && !remote
+  const proxy = !near || (options.proxy ?? (replace && old?.kind === 'server' ? old.proxy : false))
   setPreview(id, { busy: !options.retry, attemptedAddress: address, attemptedMachine: machine, loading: !options.retry, error: null, permission: undefined, load: options.retry && before.load.phase === 'waiting' ? before.load : { phase: 'resolving' } })
   let pendingEntry: Entry | undefined
   try {
@@ -73,7 +76,7 @@ export async function openPreview(id: string, raw: string, allowFolder = false, 
     }
     let load: PreviewLoad = { phase: target.kind === 'external' || target.kind === 'search' ? 'external' : 'ready' }
     let title: string | undefined
-    if (target.kind === 'server' && !via && !(proxy && activeEnvironment().local)) {
+    if (target.kind === 'server' && !via && !(proxy && near)) {
       const probe: PreviewProbeResult = await client.call('previews.probe', { url: address })
       if (generations.get(id) !== generation) return false
       title = probe.title
@@ -90,14 +93,18 @@ export async function openPreview(id: string, raw: string, allowFolder = false, 
       : { target: { kind: 'server', url: address, port: Number(new URL(address).port) || 80 } }
     if (generations.get(id) !== generation) { if (result.ticket) await client.call('previews.close', { ticket: result.ticket }); return }
     if (result.needs_permission) { setPreview(id, { busy: false, loading: false, load: { phase: 'idle' }, permission: { address, ...result.needs_permission } }); return false }
-    const url = result.path ? `${httpBase(client.endpoint.url)}${result.path}${result.target.kind === 'file' ? options.suffix ?? '' : ''}` : result.target.kind === 'file' ? null : result.target.url
+    if (remote && result.target.kind === 'file') { if (result.ticket) void client.call('previews.close', { ticket: result.ticket }).catch(() => {}); throw new Error(REMOTE_FILE_MESSAGE) }
+    // Another machine's ticket has no address here: its relay below is the page's address.
+    const url = result.path ? remote ? result.path : `${httpBase(client.endpoint.url)}${result.path}${result.target.kind === 'file' ? options.suffix ?? '' : ''}` : result.target.kind === 'file' ? null : result.target.url
     if (!url) throw new Error('Unable to open this local file. Choose an HTML file and try again.')
     const entry: Entry = { target: result.target, proxy: !!proxy, ...(target.kind === 'search' ? { query: target.query } : {}), address: result.target.kind === 'file' ? result.target.path : address, url, title: title ?? (result.target.kind === 'file' ? result.target.path.split('/').pop() ?? 'Preview' : new URL(address).host), ticket: result.ticket, kind: result.target.kind, ...(via ? { machine: via } : {}) }
     pendingEntry = entry
     entry.releaseTicket = () => { if (result.ticket) void client.call('previews.close', { ticket: result.ticket }).catch(() => {}) }
     if (result.target.kind === 'server' && proxy && !result.path) throw Error('Kybern cannot forward this server through the current connection.')
     if (result.target.kind === 'server' && result.path) {
-      const relay = await openRelay(url, httpBase(client.endpoint.url), { onWebSocketFailure: () => { if (generations.get(id) === generation) setPreview(id, { wsFailed: true }) } })
+      const onWebSocketFailure = () => { if (generations.get(id) === generation) setPreview(id, { wsFailed: true }) }
+      const relay = remote ? await client.openPage(result.path, { onWebSocketFailure }) : await openRelay(url, httpBase(client.endpoint.url), { onWebSocketFailure })
+      if (remote) entry.url = relay.url
       const original = new URL(address)
       entry.frameUrl = `${relay.url.replace(/\/$/, '')}${original.pathname}${original.search}${original.hash}`; entry.closeRelay = relay.close
       if (generations.get(id) !== generation) { release(entry); return }
@@ -158,8 +165,10 @@ export async function launchPreview(id: string) {
   if (!entry) return
   const current = () => previewState(id).entries[previewState(id).index] === entry
   try {
-    if (entry.kind === 'file' && !activeEnvironment().local) return
-    await launchBrowser(browserAddress(entry, previewState(id).pagePath, activeEnvironment().local, webHost.available)); if (current()) setPreview(id, { opened: true, error: null }) }
+    // A forwarded server is reached from this machine; another machine's own server only through its relay.
+    const local = activeEnvironment().local && (!!entry.machine || !machineOfThreadId(id))
+    if (entry.kind === 'file' && !local) return
+    await launchBrowser(browserAddress(entry, previewState(id).pagePath, local, webHost.available)); if (current()) setPreview(id, { opened: true, error: null }) }
   catch (error) { if (current()) setPreview(id, { error: String(error) }) }
 }
 /** What the browser-only state copies: the page's address (never a ticket URL, which works once). */

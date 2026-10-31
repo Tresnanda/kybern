@@ -12,7 +12,7 @@ import { chooseTab, setDock } from '../dock/store.ts'
 import { onLiveEvent } from '../nav/live.ts'
 import { setNav, useNav } from '../nav/store.ts'
 import { activeEnvironment } from '../shell/environment.ts'
-import { threadClient, useApp, type StateThread } from '../state.ts'
+import { machineOfThreadId, threadClient, useApp, type StateThread } from '../state.ts'
 import { loadTarget, useComposer } from '../composer/store.ts'
 import { Para, muted } from '../transcript/kit.tsx'
 import { Button } from '../kit/Button.tsx'
@@ -43,7 +43,9 @@ export function useRequestActivity(threadId: string | null) {
     let alive = true, generation = 0
     const loadHeld = () => { const version = ++generation; void client.call('threads.messages.list', { thread_id: threadId, states: ['held'] }).then(r => { if (alive && owner === activeEnvironment() && version === generation) setHeld(r.messages.filter(m => m.to_thread_id === threadId)) }).catch(e => { if (alive && owner === activeEnvironment()) reportError('Unable to load held messages', e) }) }
     loadHeld()
-    void client.call('threads.list', { parent_thread_id: threadId }).then(r => { if (alive && owner === activeEnvironment()) setChildren(r.threads) }).catch(() => {})
+    // Children are on their parent's machine and open there.
+    const machine = machineOfThreadId(threadId)
+    void client.call('threads.list', { parent_thread_id: threadId }).then(r => { if (alive && owner === activeEnvironment()) setChildren(machine ? r.threads.map(child => ({ ...child, machineId: machine })) : r.threads) }).catch(() => {})
     const update = (e: import('../../../../packages/kybern-client/src/types.ts').ThreadEvent) => {
       if (e.thread_id === threadId && e.kind.startsWith('thread_message_')) loadHeld()
       if ((e.kind === 'thread_created' || e.kind === 'thread_updated') && e.thread.parent_thread_id === threadId) setChildren(rows => [...rows.filter(t => t.id !== e.thread.id), e.thread])

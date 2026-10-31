@@ -67,7 +67,26 @@ export interface ClientOptions {
    * reaches the target under the member's `/relay/<id>/http`, and needs the member's own `headers`.
    */
   http?: { base: string; headers?: Record<string, string> };
+  /**
+   * Serves one of the machine's ticket routes on a loopback origin of its own (`openPage`). Set by an
+   * app for a connection to another machine: a web view or the system browser cannot send the relay
+   * member's header, so the opener adds whatever the route needs and the page never sees it.
+   */
+  pageRelay?: PageRelay;
 }
+
+/** A page of the machine a web view or browser can load: `close` ends its relay, if it has one. */
+export interface DaemonPage {
+  url: string;
+  close(): void;
+}
+export interface PageOptions {
+  /** A preview's WebSocket (hot reload) was refused on the way. */
+  onWebSocketFailure?: () => void;
+}
+/** Opens a loopback relay to `upstream`, a ticket route on the client's own route. */
+export type PageRelay = (upstream: string, options: PageOptions) => Promise<DaemonPage>;
+
 type Pending = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
@@ -210,6 +229,24 @@ export class KybernClient {
     headers.set("authorization", `Bearer ${this.endpoint.token}`);
     try {
       return fetch(`${http?.base ?? httpBase(this.endpoint.url)}${path}`, { ...init, headers, redirect: "error" });
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
+  /**
+   * A ticket route of this machine (`/visual-frame/<ticket>`, `/artifact-preview/<ticket>`,
+   * `/preview-proxy/<ticket>/`) as an address a web view or browser can load. Without a `pageRelay`
+   * it is the daemon's own address, as for the machine the app runs beside; with one, a loopback
+   * relay to the client's route. Tickets carry no credential, and the address never does.
+   */
+  openPage(path: string, options: PageOptions = {}): Promise<DaemonPage> {
+    if (!path.startsWith("/") || path.startsWith("//"))
+      return Promise.reject(new Error("A daemon page needs a path that starts with /"));
+    try {
+      const upstream = `${this.options.http?.base ?? httpBase(this.endpoint.url)}${path}`;
+      if (this.options.pageRelay) return this.options.pageRelay(upstream, options);
+      return Promise.resolve({ url: upstream, close() {} });
     } catch (error) {
       return Promise.reject(error);
     }

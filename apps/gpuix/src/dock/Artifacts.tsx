@@ -9,10 +9,9 @@ import { Dialog, DialogHeader } from '../nav/overlay.tsx'
 import { visualTheme } from '../preview/theme.ts'
 import { visualLink } from '../../../../packages/kybern-client/src/visuals.ts'
 import { artifactView, publishArtifactPrompt, type ArtifactView } from '../../../../packages/kybern-client/src/artifacts.ts'
-import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import type { ArtifactTool, FilesReadResult, Thread } from '../../../../packages/kybern-client/src/types.ts'
 import { threadClient } from '../state.ts'
-import { launchBrowser } from '../preview/browser.ts'
+import { launchBrowser, launchPage } from '../preview/browser.ts'
 import { openUrl } from '../pulls/PrStates.tsx'
 import { cachedMarkdownTheme } from '../transcript/kit.tsx'
 import { TaskWindow, type TaskWindowEntry } from '../tasks/TaskWindow.tsx'
@@ -77,14 +76,14 @@ export function ArtifactsPane({ thread }: { thread: Thread }) {
     {selected && <ArtifactPreview key={`${thread.id}:${selected.path}`} thread={thread} artifact={selected} close={() => setSelected(null)} />}
   </div>
 }
-/** An artifact's file and, for HTML, its local preview ticket URL. */
+/** An artifact's file and, for HTML, its preview ticket's page: on another machine, a loopback relay that closes with the tab or dialog. */
 function useArtifactFile(threadId: string, path: string) {
   const [file, setFile] = useState<FilesReadResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [url, setUrl] = useState<string | null>(null)
   const markdown = /\.(md|markdown)$/i.test(path)
   useEffect(() => {
-    let alive = true
+    let alive = true, close = () => {}
     setFile(null); setError(null); setUrl(null)
     const client = threadClient(threadId)!
     void client.call('threads.artifacts.read', { thread_id: threadId, path: path }).then(async result => {
@@ -92,9 +91,14 @@ function useArtifactFile(threadId: string, path: string) {
       if (!alive) return
       setFile(result)
       // Without a web view no frame will show the page: the ticket is minted when the reader opens it in the browser.
-      if (!markdown && webHost.available) { const preview = await client.call('threads.artifacts.preview', { thread_id: threadId, path: path }); if (alive) setUrl(`${httpBase(client.endpoint.url)}/artifact-preview/${encodeURIComponent(preview.ticket)}`) }
+      if (!markdown && webHost.available) {
+        const preview = await client.call('threads.artifacts.preview', { thread_id: threadId, path: path })
+        if (!alive) return
+        const page = await client.openPage(`/artifact-preview/${encodeURIComponent(preview.ticket)}`)
+        if (alive) { close = page.close; setUrl(page.url) } else page.close()
+      }
     }).catch(e => { if (alive) setError(String(e).replace(/^Error: /, '')) })
-    return () => { alive = false }
+    return () => { alive = false; close() }
   }, [threadId, path])
   return { file, error, setError, url, markdown }
 }
@@ -104,7 +108,7 @@ async function openArtifactInBrowser(threadId: string, path: string) {
   const client = threadClient(threadId)
   if (!client) throw Error('Kybern is not connected. Reconnect, then open the artifact again.')
   const preview = await client.call('threads.artifacts.preview', { thread_id: threadId, path })
-  await launchBrowser(`${httpBase(client.endpoint.url)}/artifact-preview/${encodeURIComponent(preview.ticket)}`)
+  await launchPage(await client.openPage(`/artifact-preview/${encodeURIComponent(preview.ticket)}`))
 }
 
 /** Where the artifact's frame would be: the page lives in the browser (`artifactFallback.ts`). */

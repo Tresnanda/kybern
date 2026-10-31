@@ -1,5 +1,5 @@
 import { ProviderMark } from '../ui.tsx'
-import { getState } from '../state.ts'
+import { getState, type StateThread } from '../state.ts'
 import { getNav } from '../nav/store.ts'
 import { PanelPresence, PanelEnter } from '../requests/Panel.tsx'
 import { LaunchMember, PinRow } from '../subagents/Launch.tsx'
@@ -498,7 +498,7 @@ const ToolRow = memo(function ToolRow({ block, ctx }: { block: ToolBlock; ctx: R
         }
         chevron={opensActivity ? 'forward' : canExpand ? (open ? 'open' : 'closed') : undefined}
         stem={open && canExpand && children.length > 0}
-        onClick={child ? () => openThread(child.id) : canExpand ? () => { if (!open) markTreeOpen(); setOpen(!open) } : undefined}
+        onClick={child ? () => openThread(child.id, (child as StateThread).machineId) : canExpand ? () => { if (!open) markTreeOpen(); setOpen(!open) } : undefined}
       />
       {view.item?.write && agentItemWriteResult(view.itemResult) && (!ctx.inlineItemIds || ctx.inlineItemIds.has(block.call.id)) && <AgentItemCard result={agentItemWriteResult(view.itemResult)!} />}
       {canExpand && <ToolPanel block={block} ctx={ctx} view={view} open={open} nested={children} />}
@@ -710,7 +710,7 @@ export function RuntimeTaskRow({ task, thread }: { task: RuntimeTask; thread?: T
         </Label>
       }
       chevron={task.kind === 'agent' ? 'forward' : undefined}
-      onClick={thread ? () => openThread(thread.id) : undefined}
+      onClick={thread ? () => openThread(thread.id, (thread as StateThread).machineId) : undefined}
     />
   )
   return (

@@ -3,11 +3,10 @@
 // (owner `inline` → `tab` or `modal`) with its state, and a row the virtualiser unmounts does not reload it. At most
 // MAX_DOCS documents exist, live or warm: a warm one is hidden with its state for WARM_MS, then destroyed. Opening a
 // third retires the least recently used one: its owner first turns it back into a picture (`retire`), then it is destroyed.
-import { httpBase } from '../../../../packages/kybern-client/src/address.ts'
 import { visualHeight, visualLink, visualThemeFragment, type VisualTheme } from '../../../../packages/kybern-client/src/visuals.ts'
 import { activeEnvironment } from '../shell/environment.ts'
 import { threadClient } from '../state.ts'
-import { launchBrowser } from '../preview/browser.ts'
+import { launchBrowser, launchPage } from '../preview/browser.ts'
 import { webHost, type WebEvent } from '../native/webview.ts'
 import { VISUAL_NO_WEB_VIEW } from './visualFallback.ts'
 
@@ -35,6 +34,8 @@ interface Doc {
   visualId: string
   generation: number
   ticket?: string
+  /** Ends the frame's loopback relay (a visual on another machine). */
+  closePage?: () => void
   ready: boolean
   error: string
   owner: DocOwner | null
@@ -105,6 +106,7 @@ function destroy(doc: Doc) {
   clearTimeout(doc.warm)
   docs.delete(doc.id)
   webHost.destroy(doc.id)
+  doc.closePage?.()
   let client: ReturnType<typeof threadClient> = null
   try { client = threadClient(doc.threadId) } catch { /* that machine is offline: its ticket expires on its own */ }
   if (doc.ticket && client) void client.call('threads.visuals.revoke', { thread_id: doc.threadId, ticket: doc.ticket }).catch(() => {})
@@ -153,11 +155,14 @@ export function claimDoc(threadId: string, visualId: string, owner: DocOwner, th
   // No embedded web view: nothing can show a live page, and a frame ticket minted for it would never be served.
   if (!webHost.available) { created.error = VISUAL_NO_WEB_VIEW; changed(); return id }
   if (!client) { created.error ||= 'Kybern is not connected. Reconnect, then reload the visual.'; changed(); return id }
-  void client.call('threads.visuals.frame', { thread_id: threadId, visual_id: visualId }).then(result => {
-    if (docs.get(id) !== created || environment !== activeEnvironment()) { void client.call('threads.visuals.revoke', { thread_id: threadId, ticket: result.ticket }).catch(() => {}); return }
+  const current = () => docs.get(id) === created && environment === activeEnvironment()
+  void client.call('threads.visuals.frame', { thread_id: threadId, visual_id: visualId }).then(async result => {
+    if (!current()) { void client.call('threads.visuals.revoke', { thread_id: threadId, ticket: result.ticket }).catch(() => {}); return }
     created.ticket = result.ticket
-    const url = `${httpBase(client.endpoint.url)}/visual-frame/${encodeURIComponent(result.ticket)}` + visualThemeFragment(created.theme)
-    created.generation = webHost.create(id, url, 'visual')
+    const page = await client.openPage(`/visual-frame/${encodeURIComponent(result.ticket)}`)
+    if (!current()) { page.close(); return }
+    created.closePage = page.close
+    created.generation = webHost.create(id, page.url + visualThemeFragment(created.theme), 'visual')
   }).catch(error => { if (docs.get(id) === created) { created.error = String(error?.message ?? error); changed(); for (const l of created.listeners) l({ kind: 'error', message: created.error }) } })
   return id
 }
@@ -215,6 +220,6 @@ export async function openVisualInBrowser(threadId: string, visualId: string, th
   const client = threadClient(threadId)
   if (!client) throw Error('Kybern is not connected. Reconnect, then open the visual again.')
   const { ticket } = await client.call('threads.visuals.frame', { thread_id: threadId, visual_id: visualId })
-  try { await launchBrowser(`${httpBase(client.endpoint.url)}/visual-frame/${encodeURIComponent(ticket)}` + visualThemeFragment(theme)) }
+  try { await launchPage(await client.openPage(`/visual-frame/${encodeURIComponent(ticket)}`), visualThemeFragment(theme)) }
   catch (error) { void client.call('threads.visuals.revoke', { thread_id: threadId, ticket }).catch(() => {}); throw error }
 }

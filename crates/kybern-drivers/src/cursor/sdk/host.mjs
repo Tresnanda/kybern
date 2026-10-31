@@ -7,7 +7,7 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { format } from "node:util";
 
-export const SDK_VERSION = "1.0.35";
+export const SDK_VERSION = "1.2.0";
 export const SETTING_SOURCES = ["project", "user", "team", "mdm", "plugins"];
 const runtimeSecrets = [process.env.CURSOR_API_KEY];
 
@@ -40,16 +40,18 @@ export function modelSelection(selector, effort) {
     }
     const legacyEffort = parsed.params.find((p) => EFFORT_PARAMS.has(p.id));
     const effortParam = parsed.effortParam ?? legacyEffort?.id;
-    const params = parsed.params.filter((p) => !effort || !EFFORT_PARAMS.has(p.id)).map((p) => ({ ...p }));
+    // Old catalogs copied this hidden, constant SDK default into every Opus
+    // selector. It was never a user choice. Keep all explicit context/fast values.
+    const params = parsed.params.filter((p) => !(p.id === "cyber" && p.value === "false") &&
+      !parsed.defaultParams?.some((value) => value.id === p.id && value.value === p.value) &&
+      (!effort || !EFFORT_PARAMS.has(p.id))).map((p) => ({ ...p }));
     if (effort) {
       if (!EFFORT_PARAMS.has(effortParam) || (parsed.effortValues && !parsed.effortValues.includes(effort))) {
         throw new Error("This Cursor model does not offer that effort. Refresh models and select an available effort.");
       }
       params.push({ id: effortParam, value: effort });
-    } else if (parsed.defaultEffort && parsed.effortParam) {
-      params.push({ id: parsed.effortParam, value: parsed.defaultEffort });
     }
-    return { id: parsed.id, params };
+    return { id: parsed.id, ...(params.length ? { params } : {}) };
   }
   if (effort) throw new Error("This Cursor model has no effort control.");
   return { id: selector };
@@ -130,7 +132,13 @@ export function modelCatalog(models) {
 
     const variantFor = (group) => {
       const defaultEffort = group.efforts.includes("medium") ? "medium" : group.efforts[0];
-      const selection = { id: model.id, params: group.params,
+      // Only traits different from the native default are explicit choices.
+      // Constant hidden SDK parameters (e.g. cyber=false) have no picker control.
+      const defaultParams = group.params.filter((p) => !parameters.some((parameter) => parameter.id === p.id) ||
+        initial.params.find((value) => value.id === p.id)?.value === p.value);
+      // Keep full params in the opaque ID so existing clients still recognize
+      // saved selectors. defaultParams records what Kybern inferred, not chose.
+      const selection = { id: model.id, params: group.params, defaultParams,
         ...(group.effortParam ? { effortParam: group.effortParam, effortValues: group.efforts, defaultEffort } : {}) };
       const values = {};
       for (const { id } of parameters) values[id] = group.params.find((p) => p.id === id)?.value ?? absent(id);
@@ -145,6 +153,14 @@ export function modelCatalog(models) {
     });
   }
   return out;
+}
+
+export function modelError(error, selection) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!/invalid parameters|model not found|unsupported.*(?:model|parameter)|invalid.*(?:model|parameter)/i.test(message)) return error;
+  const settings = selection.params?.map(({ id, value }) => `${id}=${value}`).join(", ");
+  return new Error(`Cursor rejected model "${selection.id}"${settings ? ` with ${settings}` : ""}: ${message}. ` +
+    (settings ? "Change the named context, fast, or effort setting in the model picker and try again." : "Refresh models and select an available model."));
 }
 
 function isAbort(error) {
@@ -211,7 +227,8 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [] } = {}) {
       if (!local.sandboxOptions.enabled) await primeSandbox(request.cwd);
       const previous = agent;
       const id = request.agentId ?? previous?.agentId;
-      agent = id ? await sdk.Agent.resume(id, next) : await sdk.Agent.create(next);
+      try { agent = id ? await sdk.Agent.resume(id, next) : await sdk.Agent.create(next); }
+      catch (error) { throw modelError(error, next.model); }
       options = next;
       modelSelector = request.model;
       selectedEffort = request.effort;
@@ -257,7 +274,7 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [] } = {}) {
       try { turn.run = await start(); } catch (error) {
         // T3 recovers a stale persisted run only on the first send after resume.
         // Never force every prompt: it could cancel a legitimately active run.
-        if (!recoverAbandonedRun || !/already has active run/i.test(safeError(error))) throw error;
+        if (!recoverAbandonedRun || !/already has active run/i.test(safeError(error))) throw modelError(error, options.model);
         recoverAbandonedRun = false;
         const readOptions = localReadOptions(options.local.cwd);
         const runs = await sdk.Agent.listRuns(agent.agentId, { ...readOptions, limit: 1 });
