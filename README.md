@@ -12,7 +12,7 @@ to each one through its own protocol instead of wrapping a terminal.
 Kybern is inspired by [T3 Code](https://github.com/pingdotgg/t3code) and
 [Synara](https://github.com/Emanuele-web04/synara).
 
-## Install
+## Installation
 
 You need at least one agent installed and signed in on the same machine, for
 example the [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or
