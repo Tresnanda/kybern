@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.20.5
+
+<!-- kybern-release-title: Faster machines and Cursor, plus update tracks -->
+<!-- kybern-release-summary: Open dev servers, previews and images on other machines more reliably, start Cursor threads faster, choose a Stable or Dev update track, and avoid a freeze on macOS. -->
+
+- Dev servers on another machine open much faster: port forwarding uses direct Tailscale connections when both machines support them, and keeps the existing tunnel for older or relayed machines.
+- Pasting an image into a thread on another machine works, as do attachment previews, Space logos, thread images and note moves for that machine.
+- Artifact previews, live visuals and Preview for a thread on another machine load that machine's pages, including Open in browser.
+- Delegated agents of a thread on another machine nest under it in the sidebar and open on the right machine.
+- Cursor threads start much faster: the next turn and new conversations reach the first reply in about 2 seconds instead of 8–25 seconds.
+- Cursor's long-context models, such as Claude at 1M and Grok at 500k, start instead of failing with “AI Model Not Found”. Kybern sends only the settings you chose, and a rejected selection says which setting to change.
+- Choose an update track in Settings → About: Stable, or Dev for early builds. The choice is shared across your machines, new installs start on Stable, and switching back to Stable never installs an older version.
+- Fixes a macOS freeze where Kybern stopped responding with a spinning cursor.
+- Thread history reads answers that contain only thinking instead of failing on them.
+- Toasts and the update announcement sit in the window's bottom-right corner instead of floating above the composer.
+- A redesigned README with a quick install matrix. Thanks to @gianabif14, Kybern's first outside contributor.
+
 ## 0.20.4
 
 <!-- kybern-release-title: Spaces and previews across your machines -->
