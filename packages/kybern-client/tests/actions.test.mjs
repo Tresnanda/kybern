@@ -103,7 +103,7 @@ test("log lines map GitHub markers and ANSI colours, never showing escapes", () 
 
 test("the log window pages both ways and stays bounded", () => {
   assert.equal(openingOffset(5000, [4100, 4200], true), 4200 - ERROR_CONTEXT);
-  assert.equal(openingOffset(300, [10], true), 0);
+  assert.equal(openingOffset(300, [5], true), 0, "near the top it opens at the top");
   assert.equal(openingOffset(5000, [4999], true), 4999 - ERROR_CONTEXT);
   assert.equal(openingOffset(5000, [100], false), 0);
   const lines = (from, n) => Array.from({ length: n }, (_, i) => `line ${from + i}`);

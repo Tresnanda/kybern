@@ -19,7 +19,7 @@ export function runBucket(item: Statused): RunBucket {
 
 export const RUN_WORDS: Record<RunBucket, string> = {
   failed: "Failed",
-  running: "In progress",
+  running: "Running",
   queued: "Queued",
   passed: "Passed",
   skipped: "Skipped",
@@ -192,8 +192,9 @@ export function windowFrom(result: ActionsLogResult): LogWindow {
   return { offset: result.offset, lines: result.lines, total: result.total_lines, errors: result.error_lines ?? [] }
 }
 
-/** Lines shown above a failed log's last error when it opens. */
-export const ERROR_CONTEXT = 20
+/** Lines shown above a failed log's last error when it opens: enough for the panic or assertion, with the error still on screen
+ * in a log pane under the job graph. */
+export const ERROR_CONTEXT = 8
 
 /** Where a failed job's log opens: a few lines before its last error, so the failure is the first thing on screen. */
 export function openingOffset(total: number, errors: readonly number[], failed: boolean): number {

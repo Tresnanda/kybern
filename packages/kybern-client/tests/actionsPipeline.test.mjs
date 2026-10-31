@@ -14,6 +14,7 @@ import {
   jobProgress,
   jobTimes,
   matchJobs,
+  nodeTime,
   placeGraph,
   runSummary,
   sameRow,
@@ -50,6 +51,7 @@ const job = (name, status = "completed", conclusion = "success", over = {}) => (
   id: nextId++, name, status, conclusion: status === "completed" ? conclusion : "", url: "u", steps: [],
   started_at: "2026-10-31T16:59:05Z", completed_at: status === "completed" ? "2026-10-31T17:05:20Z" : undefined, ...over,
 });
+const rustfmtId = jobs => jobs.find(j => j.name === "rustfmt").id;
 const names = (graph, column) => graph.nodes.filter(n => n.column === column).map(n => n.job.name);
 
 test("CI's real jobs land in columns by needs, matrix names included", () => {
@@ -64,7 +66,8 @@ test("CI's real jobs land in columns by needs, matrix names included", () => {
   assert.deepEqual(names(graph, 1), ["rustfmt", "clippy + test (ubuntu-24.04)", "clippy + test (macos-15)", "cargo check (windows-latest)", "release checks", "gpuix (typecheck + test)"]);
   assert.deepEqual(names(graph, 2), ["CI"]);
   assert.equal(graph.rows, 6);
-  assert.equal(graph.edges.length, 6 + 7, "changes fans out to six, CI waits on all seven");
+  assert.equal(graph.edges.length, 6 + 6, "changes fans out to six, CI waits on those six (its direct need on changes is implied)");
+  assert.ok(!graph.edges.some(e => e.from === jobs[0].id && e.to === jobs[7].id));
 });
 
 test("a skipped job's edges are skipped and an unexpanded name still matches", () => {
@@ -136,7 +139,7 @@ test("the failure path runs from the root through the first failure to the final
   const red = graph.edges.filter(e => e.kind === "failure").map(e => [e.from, e.to]);
   assert.deepEqual(red, [[changes, ubuntu], [ubuntu, ci]]);
   assert.equal(graph.edges.find(e => e.from === changes && e.to === gpuix).kind, "skipped");
-  assert.equal(graph.edges.find(e => e.from === changes && e.to === ci).kind, "done", "the gate's other inputs stay neutral");
+  assert.equal(graph.edges.find(e => e.from === rustfmtId(jobs) && e.to === ci).kind, "done", "the gate's other inputs stay neutral");
   assert.equal(runSummary({ status: "completed" }, graph, null), "The failure runs through clippy + test (ubuntu-24.04)");
 });
 
@@ -153,6 +156,8 @@ test("running edges flow, waiting ones wait, and the header counts done jobs", (
   assert.equal(toCi.find(e => e.from === macos).hot, true);
   assert.equal(toCi.find(e => e.from === rustfmt).hot, undefined);
   assert.equal(runSummary({ status: "in_progress" }, graph, 500), "5 of 8 jobs done · usually 8m 20s");
+  assert.equal(nodeTime(graph, graph.nodes.find(n => n.job.id === ci)), "Waits for 2 jobs", "the two running checks; the finished ones don't count");
+  assert.ok(columnWidths(graph, t => t.length * 7)[2] > 128, "the gate's column fits its name and what it waits for");
   assert.equal(runSummary({ status: "completed" }, buildGraph([job("changes"), job("release checks", "completed", "skipped")], CI), null), "1 job passed, 1 skipped");
 });
 
@@ -170,6 +175,7 @@ test("geometry: columns left to right, centred, S-curves between edges", () => {
   const edge = layout.edges.find(e => e.from === jobs[0].id && e.to === jobs[1].id);
   assert.equal(edge.d, "M141 36C191 36 191 16 241 16");
   assert.ok(edge.length >= 100);
+  assert.deepEqual(columnWidths(graph, t => t.length * 7, { budget: 400 }), [136, 136, 128], "the widest column gives way first, then the next");
   const fallback = placeGraph(buildGraph([job("changes"), job("rustfmt"), job("nope")], CI), { columnWidths: [200], nodeHeight: 32, rowGap: 8, columnGap: 100 });
   assert.equal(fallback.width, 224, "room for the loops on the right");
   assert.match(fallback.edges[0].d, /^M200 16C2\d\d/);

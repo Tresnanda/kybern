@@ -1,16 +1,16 @@
-// The Actions tab of the Pull requests page (ADE-97): the repository's workflow runs on every branch, tags and dispatches
-// included, filtered by workflow, status and branch, in the pull request list's column; the selected run, or the form that
-// starts a workflow, beside it. Lists refresh every 10 s while a run in them is in progress, every 60 s otherwise, and not at
+// The Actions tab of the Pull requests page (ADE-97, design "C · Pipeline"): the repository's workflow runs grouped by branch
+// in the pull request list's column (the default branch pinned with a bead string per workflow, release tags included, then
+// every branch, latest push first, with its pull request), filtered by status and workflow (read from GitHub) and by branch
+// (as you type); the selected run, or the form that starts a workflow, beside it. Lists refresh every 10 s while a run in them is in progress, every 60 s otherwise, and not at
 // all while the window is hidden (`refreshDelay`). Every list read also feeds the finished-run notices (`watch.ts`).
 import { PlayIcon } from '@hugeicons/core-free-icons'
 import { useGpuix } from '@gpuix/react'
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { relativeTime } from '@/lib/format'
-import { elapsed, eventWord, isActive, refreshDelay, repoKey, runWord, type ActionsRepo } from '../../../../../packages/kybern-client/src/actions.ts'
-import type { ActionsRunsResult, ActionsWorkflowsResult, Project, WorkflowRun } from '../../../../../packages/kybern-client/src/types.ts'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { isActive, refreshDelay, repoKey, type ActionsRepo } from '../../../../../packages/kybern-client/src/actions.ts'
+import { filterGroups, groupRuns, usualDuration } from '../../../../../packages/kybern-client/src/actionsPipeline.ts'
+import type { ActionsRunsResult, ActionsWorkflowsResult, Project } from '../../../../../packages/kybern-client/src/types.ts'
 import { glyph, Icon } from '../../icons.tsx'
 import { Button } from '../../kit/Button.tsx'
-import { RADIUS } from '../../kit/controls.ts'
 import { IconButton } from '../../kit/IconButton.tsx'
 import { PickerChip } from '../../kit/PickerChip.tsx'
 import { ResizeHandle, useResize } from '../../kit/Resize.tsx'
@@ -24,7 +24,7 @@ import { Menu, MenuItem, MenuLabel, MenuSeparator } from '../../nav/overlay.tsx'
 import { useNav } from '../../nav/store.ts'
 import { useSpaceProjects } from '../../spaces/current.ts'
 import { useApp } from '../../state.ts'
-import { ink, Label, useTheme } from '../../ui.tsx'
+import { Label, useTheme } from '../../ui.tsx'
 import { column, row } from '../../usage/controls.tsx'
 import { prCall } from '../client.ts'
 import { hasPullRequests, isGroup, listableMembers } from '../list/model.ts'
@@ -33,16 +33,18 @@ import { PrLoading, Problem } from '../PrStates.tsx'
 import { PullsHeader } from '../PullsTabs.tsx'
 import { PR_SCROLL_LAYOUT } from '../scroll-layout.ts'
 import { Dispatch } from './Dispatch.tsx'
-import { RunGlyph } from './glyph.tsx'
+import { BEAD_PITCH } from './Beads.tsx'
 import { RunDetail } from './RunDetail.tsx'
+import { BranchesHeading, BranchItem, DefaultCard } from './RunList.tsx'
 import { usePullsTab } from './store.ts'
 import { observe } from './watch.ts'
 
 type Status = '' | 'in_progress' | 'failure' | 'success'
 const STATUSES = [['', 'All'], ['in_progress', 'Running'], ['failure', 'Failed'], ['success', 'Passed']] as const
-const PAGE = 30
-/** Runs one list shows at most; older ones are a filter away. */
-const MAX_RUNS = 100
+/** Runs per read: one page of GitHub's, enough to fill the default branch's beads and the recent branches. */
+const PAGE = 100
+/** Runs one list shows at most (three pages); older ones are a filter away. */
+const MAX_RUNS = 300
 const REPO_KEY = 'pulls.actions.repo'
 const PLAY = glyph(PlayIcon)
 
@@ -77,7 +79,6 @@ export function ActionsPage() {
   const [workflow, setWorkflow] = useState('')
   const [status, setStatus] = useState<Status>('')
   const [branch, setBranch] = useState('')
-  const [branchDraft, setBranchDraft] = useState('')
   const [limit, setLimit] = useState(PAGE)
   const [revision, refresh] = useState(0)
   const [data, setData] = useState<{ key: string; result?: ActionsRunsResult; error?: string } | null>(null)
@@ -90,12 +91,12 @@ export function ActionsPage() {
   const visible = useWindowVisible()
   const list = useResize({ initial: 352, min: 288, max: 512, side: 'left', storageKey: 'kybern.pulls.listWidth' })
   const [windowWidth, setWindowWidth] = useState(() => renderer?.getWindowSize?.().width ?? 1280)
-  const measure = () => setWindowWidth(renderer?.getWindowSize?.().width ?? 1280)
+  const measure = () => { const size = renderer?.getWindowSize?.(); setWindowWidth(size?.width ?? 1280); if (size?.height) setWindowHeight(size.height) }
   const available = windowWidth - 60 - (peek ? 256 : 0)
   const wide = available >= 832
   const key = choice ? repoKey(choice) : ''
   const member = choice?.repo ? { repo: choice.repo } : {}
-  const loadKey = `${key}|${workflow}|${status}|${branch}|${limit}`
+  const loadKey = `${key}|${workflow}|${status}|${limit}`
 
   const pick = (next: ActionsRepo) => {
     const id = repoKey(next)
@@ -108,7 +109,7 @@ export function ActionsPage() {
     if (!focus || lastFocus.current === focusSeq) return
     lastFocus.current = focusSeq
     pick(focus)
-    setStatus(''); setBranch(focus.branch ?? ''); setBranchDraft(focus.branch ?? '')
+    setStatus(''); setBranch(focus.branch ?? '')
     setSelected(focus.runId ?? null)
   }, [focusSeq])
 
@@ -126,8 +127,8 @@ export function ActionsPage() {
     let canceled = false
     setPending(true)
     void prCall(choice.projectId, 'github.actions.runs', {
-      project_id: choice.projectId, ...member, per_page: Math.min(limit, MAX_RUNS),
-      ...(workflow ? { workflow } : {}), ...(status ? { status } : {}), ...(branch ? { branch } : {}),
+      project_id: choice.projectId, ...member, per_page: PAGE, pages: Math.ceil(Math.min(limit, MAX_RUNS) / PAGE), pulls: true,
+      ...(workflow ? { workflow } : {}), ...(status ? { status } : {}),
     }).then(result => {
       if (canceled) return
       setData({ key: loadKey, result }); setPending(false)
@@ -152,9 +153,22 @@ export function ActionsPage() {
   const workflowList = workflows?.key === key ? workflows.result.workflows : []
   const workflowName = workflowList.find(w => String(w.id) === workflow)?.name ?? 'All workflows'
   const failure = shown?.error
-  const open = (id: number) => { setSelected(id); setDispatching(false) }
+  const open = useCallback((id: number) => { setSelected(id); setDispatching(false) }, [])
   const selectedRun = runs.find(r => r.id === selected)
   const detailWidth = available - (wide ? list.width : 0)
+  const listWidth = wide ? list.width : available
+  const defaultBranch = workflows?.key === key ? workflows.result.default_branch : undefined
+  // As many beads as the column fits: the card's and a branch's workflow label, number and padding taken off.
+  const beads = { main: Math.max(4, Math.floor((listWidth - 24 - 24 - 84 - 16 - 44) / BEAD_PITCH)), branch: Math.max(3, Math.floor((listWidth - 16 - 24 - 18 - 60 - 16 - 44) / BEAD_PITCH)) }
+  const grouped = useMemo(() => groupRuns(runs, { ...(defaultBranch ? { defaultBranch } : {}), pulls: shown?.result?.pulls ?? [], beads }), [shown, defaultBranch, beads.main, beads.branch])
+  const query = branch.trim()
+  const branches = useMemo(() => filterGroups(grouped.branches, query), [grouped, query])
+  const main = grouped.main && filterGroups([grouped.main], query).length ? grouped.main : undefined
+  // A running run measures itself against the workflow's recent passing runs.
+  const reference = selectedRun && runs.find(r => r.workflow_id === selectedRun.workflow_id && r.id !== selectedRun.id && r.status === 'completed' && r.conclusion === 'success')
+  const usual = selectedRun ? usualDuration(runs, selectedRun.workflow_id, selectedRun.id) : null
+  const filtered = !!(query || status || workflow)
+  const [windowHeight, setWindowHeight] = useState(() => renderer?.getWindowSize?.().height ?? 800)
   const showList = wide || (selected === null && !dispatching)
 
   if (!choice) return <div testId="page-actions" style={{ ...column, flexGrow: 1 }}>
@@ -181,23 +195,24 @@ export function ActionsPage() {
             {workflowList.map(w => <MenuItem key={w.id} id={String(w.id)} testId={`actions-workflow-${w.id}`} label={w.name} {...(w.state !== 'active' ? { detail: 'Off' } : {})} onSelect={() => { setWorkflow(String(w.id)); setLimit(PAGE) }} />)}
           </Menu></div>
           <div style={{ flexGrow: 1, minWidth: 0 }}>
-            <SearchField label="Filter by branch" testId="actions-branch" value={branchDraft} placeholder="Branch" width="100%" onChange={v => { setBranchDraft(v); if (!v) setBranch('') }}
-              onBlur={() => setBranch(branchDraft.trim())} onKeyDown={e => { if (e.key === 'enter') setBranch(branchDraft.trim()) }} />
+            <SearchField label="Filter by branch" testId="actions-branch" value={branch} placeholder="Branch" width="100%" onChange={setBranch} />
           </div>
         </div>
       </div>
-      <virtual-list {...PR_SCROLL_LAYOUT} testId="actions-list" estimatedItemHeight={64} style={{ flexGrow: 1, minHeight: 0 }}>
+      <virtual-list {...PR_SCROLL_LAYOUT} testId="actions-list" estimatedItemHeight={96} style={{ flexGrow: 1, minHeight: 0, paddingTop: 2, paddingBottom: 12 }}>
         {failure ? <div key="error" style={{ padding: 20 }}><Problem error={failure} refresh={() => refresh(n => n + 1)} /></div>
           : !shown ? <div key="loading" style={{ padding: 24 }}><PrLoading label="Loading workflow runs…" kind="list" rows={6} /></div>
           : <>
-            {runs.length === 0 && <div key="empty" style={{ ...column, gap: 10, padding: 24, paddingTop: 64 }}>
-              <Label color={t.text} size={16} weight={500}>{branch || status || workflow ? 'No matching runs' : 'No workflow runs yet'}</Label>
-              <Label color={t.textSecondary} size={13} lineHeight={20}>{branch || status || workflow ? 'Change or clear the filters to see more runs.' : `Runs of ${choice.name}'s GitHub Actions workflows appear here.`}</Label>
-              {(branch || status || workflow) && <Button size="sm" style={{ alignSelf: 'flex-start' }} onClick={() => { setBranch(''); setBranchDraft(''); setStatus(''); setWorkflow('') }}>Clear filters</Button>}
+            {!main && branches.length === 0 && <div key="empty" style={{ ...column, gap: 10, padding: 24, paddingTop: 64 }}>
+              <Label color={t.text} size={16} weight={500}>{filtered ? 'No matching runs' : 'No workflow runs yet'}</Label>
+              <Label color={t.textSecondary} size={13} lineHeight={20}>{filtered ? 'Change or clear the filters to see more runs.' : `Runs of ${choice.name}'s GitHub Actions workflows appear here.`}</Label>
+              {filtered && <Button size="sm" style={{ alignSelf: 'flex-start' }} onClick={() => { setBranch(''); setStatus(''); setWorkflow('') }}>Clear filters</Button>}
             </div>}
-            {runs.map(r => <RunRow key={r.id} run={r} selected={r.id === selected} own={!!ownBranch && r.head_branch === ownBranch} onOpen={() => open(r.id)} />)}
-            {shown.result?.has_more && limit < MAX_RUNS && <div key="more" style={{ ...row, justifyContent: 'center', padding: 12 }}><Button size="sm" testId="actions-more" busy={pending} onClick={() => setLimit(l => Math.min(MAX_RUNS, l + PAGE))}>Show more runs</Button></div>}
-            {shown.result?.has_more && limit >= MAX_RUNS && <div key="cap" style={{ padding: 16 }}><Label color={t.textTertiary} size={12} lineHeight={16}>Showing the latest 100 runs. Filter by workflow or branch to find older ones.</Label></div>}
+            {main && <DefaultCard key="default" group={main} selected={selected} onOpen={open} />}
+            {branches.length > 0 && <BranchesHeading key="heading" count={branches.length} />}
+            {branches.map((g, i) => <BranchItem key={`branch:${g.branch}`} group={g} selected={selected} last={i === branches.length - 1} onOpen={open} />)}
+            {shown.result?.has_more && limit < MAX_RUNS && <div key="more" style={{ ...row, justifyContent: 'center', padding: 12 }}><Button size="sm" testId="actions-more" busy={pending} onClick={() => setLimit(l => Math.min(MAX_RUNS, l + PAGE))}>Show older runs</Button></div>}
+            {shown.result?.has_more && limit >= MAX_RUNS && <div key="cap" style={{ padding: 16, paddingLeft: 20 }}><Label color={t.textTertiary} size={12} lineHeight={16}>Showing the latest 300 runs. Filter by workflow or status to find older ones.</Label></div>}
           </>}
       </virtual-list>
       {wide && <ResizeHandle testId="actions-list-resize" edge="right" label="Resize run list" dragging={list.dragging} onPointerDown={list.onPointerDown} onReset={list.reset}
@@ -205,7 +220,7 @@ export function ActionsPage() {
     </div>}
     {dispatching ? <Dispatch key={`dispatch-${key}`} target={choice} workflows={workflowList} defaultBranch={workflows?.key === key ? workflows.result.default_branch ?? '' : ''} ownBranch={ownBranch ?? null} initial={workflow} showBack={!wide}
         onClose={() => setDispatching(false)} onStarted={() => { setDispatching(false); refresh(n => n + 1) }} />
-      : selected !== null ? <RunDetail key={`${key}:${selected}`} target={choice} runId={selected} listed={selectedRun} width={detailWidth} showBack={!wide} visible={visible} onBack={() => setSelected(null)} onActive={setSelectedActive} onChanged={() => refresh(n => n + 1)} />
+      : selected !== null ? <RunDetail key={`${key}:${selected}`} target={choice} runId={selected} listed={selectedRun} {...(reference ? { reference } : {})} usual={usual} width={detailWidth} height={windowHeight} showBack={!wide} visible={visible} onBack={() => setSelected(null)} onActive={setSelectedActive} onChanged={() => refresh(n => n + 1)} />
       : wide && <div style={{ ...column, flexGrow: 1, alignItems: 'center', justifyContent: 'center', gap: 16, padding: 24 }}>
         <Icon source={PLAY} size={24} color={t.textSecondary} />
         <Label color={t.text} size={16} weight={500}>Select a run</Label>
@@ -230,30 +245,3 @@ function RepoPicker({ choices, current, onPick }: { choices: Choice[]; current: 
 function Lead({ on, color }: { on: boolean; color: string }) {
   return <div style={{ width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{on && <Icon source={N.check} size={14} color={color} />}</div>
 }
-
-/** One run: its mark, the commit or dispatch title (two lines at most), then workflow and number, branch, trigger and age. */
-const RunRow = memo(function RunRow({ run, selected, own, onOpen }: { run: WorkflowRun; selected: boolean; own: boolean; onOpen: () => void }) {
-  const t = useTheme()
-  const time = isActive(run) ? elapsed(run.started_at ?? run.created_at, undefined) : relativeTime(run.created_at)
-  return <div style={{ display: 'flex', paddingLeft: 8, paddingRight: 8 }}>
-    <div testId={`actions-run-${run.id}`} role="button" tabIndex={0} aria-current={selected ? 'page' : undefined} aria-label={`${run.title}, ${run.workflow_name} #${run.number}, ${runWord(run)}`}
-      onClick={onOpen} onKeyDown={e => { if (e.key === 'enter' || e.key === 'space') onOpen() }}
-      style={{ ...row, alignItems: 'flex-start', flexGrow: 1, gap: 10, paddingLeft: 10, paddingRight: 10, paddingTop: 8, paddingBottom: 9, borderRadius: RADIUS.md, backgroundColor: selected ? ink(t, .07) : 'transparent', hover: { backgroundColor: selected ? ink(t, .07) : t.hover } }}>
-      <div style={{ paddingTop: 2 }}><RunGlyph item={run} /></div>
-      <div style={{ ...column, flexGrow: 1, flexShrink: 1, gap: 4 }}>
-        <div style={{ ...row, alignItems: 'flex-start', gap: 8 }}>
-          <Label color={t.text} size={13} lineHeight={18} weight={500} style={{ flexGrow: 1, minWidth: 0, lineClamp: 2, textOverflow: 'ellipsis' }}>{run.title || run.workflow_name}</Label>
-          <Label color={t.textTertiary} size={12} lineHeight={18} style={{ flexShrink: 0 }}>{time}</Label>
-        </div>
-        <div style={{ ...row, gap: 6 }}>
-          <Label color={t.textSecondary} size={12} lineHeight={16} style={{ flexShrink: 0 }}>{`${run.workflow_name} #${run.number}`}</Label>
-          {run.head_branch && <div style={{ ...row, gap: 3, flexShrink: 1, minWidth: 0 }}>
-            <Icon source={N.branch} size={11} color={own ? t.link : t.textTertiary} style={{ flexShrink: 0 }} />
-            <Label color={own ? t.link : t.textTertiary} size={12} lineHeight={16} truncate>{run.head_branch}</Label>
-          </div>}
-          <Label color={t.textTertiary} size={12} lineHeight={16} style={{ flexShrink: 0 }}>{eventWord(run.event)}</Label>
-        </div>
-      </div>
-    </div>
-  </div>
-})

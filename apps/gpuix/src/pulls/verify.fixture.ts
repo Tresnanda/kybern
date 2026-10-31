@@ -5,9 +5,11 @@ import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import { PROTOCOL_VERSION } from '../../../../packages/kybern-client/src/types.ts'
 import { stateDetail, type PrState } from './verify.states.ts'
+import { ACTION_PULLS, actionRun, actionRuns } from './verify.actions-fixture.ts'
 import type { PrDetailResult, PrFile, PrReviewEntry, PrTimelineEvent, PullRequest, UsageRow } from '../../../../packages/kybern-client/src/types.ts'
 
-export function actionFixture(options: { long?: boolean; horizontal?: boolean; picker?: boolean; paged?: boolean; slowFiles?: boolean; /** Extra running checks beyond the one in the base fixture. */ running?: number; /** A group project of three repositories (ADE-79): api and docs both have #108, web fails, infra is skipped. */ group?: boolean; /** ADE-85 list and Timeline: a group project of three repositories with pull requests in every readiness group, and a timeline history. */ readiness?: boolean; /** 65 distinct files in folders, with short patches (30 a page), for the Changes tab. */ changes?: boolean; /** A verdict state of the detail page (`verify.states.ts`). */ state?: PrState } = {}) {
+export function actionFixture(options: { long?: boolean; horizontal?: boolean; picker?: boolean; paged?: boolean; slowFiles?: boolean; /** Extra running checks beyond the one in the base fixture. */ running?: number; /** A group project of three repositories (ADE-79): api and docs both have #108, web fails, infra is skipped. */ group?: boolean; /** ADE-85 list and Timeline: a group project of three repositories with pull requests in every readiness group, and a timeline history. */ readiness?: boolean; /** 65 distinct files in folders, with short patches (30 a page), for the Changes tab. */ changes?: boolean; /** A verdict state of the detail page (`verify.states.ts`). */ state?: PrState; /** ADE-97: 100 runs over 24 branches and a 40-job run, for the Actions performance check. */ actionsBig?: boolean } = {}) {
+  const actionRunList = actionRuns(options.actionsBig)
   const scratch = mkdtempSync(path.join(tmpdir(), 'gpuix-scratch-pages-'))
   const now = new Date().toISOString()
   const members = (options.readiness ? READINESS_REPOS : ['api', 'web', 'docs', 'infra']).map(path => ({ path, name: path, status: 'ok' as const }))
@@ -101,10 +103,14 @@ export function actionFixture(options: { long?: boolean; horizontal?: boolean; p
             if (message.params.kind === 'timeline') { result = timelinePage(now, typeof message.params.cursor === 'string' ? message.params.cursor : undefined, options.long); break }
             result = { files: message.params.kind === 'files' ? (options.changes ? Array.from({ length: Math.max(0, Math.min(30, 65 - (((Number(message.params.page) || 1) - 1) * 30))) }, (_, i) => changedFile(((Number(message.params.page) || 1) - 1) * 30 + i)) : files) : [], entries: message.params.kind === 'files' ? [] : entries, page: message.params.page ?? 1, has_more: (Number(message.params.page) || 1) < 3 }; break
           // ADE-97: fake GitHub Actions. Writes are only recorded in `actions`.
-          case 'github.actions.runs': result = { runs: ACTION_RUNS.filter(r => !message.params.status || (message.params.status === 'in_progress' ? r.status !== 'completed' : r.conclusion === message.params.status)), total_count: ACTION_RUNS.length, page: 1, has_more: false, viewer: 'ana' }; break
-          case 'github.actions.run': { const run = ACTION_RUNS.find(r => r.id === message.params.run_id)!; result = { run, jobs: run.status === 'completed' ? ACTION_JOBS : ACTION_JOBS.map(j => ({ ...j, status: 'in_progress', conclusion: '', completed_at: undefined, steps: j.steps.map((st, i) => i < 2 ? st : { ...st, status: i === 2 ? 'in_progress' : 'queued', conclusion: '' }) })) }; break }
+          case 'github.actions.runs': {
+            const status = message.params.status as string | undefined
+            const runs = actionRunList.filter(r => !status || (status === 'in_progress' ? r.status !== 'completed' : r.conclusion === status)).filter(r => !message.params.workflow || String(r.workflow_id) === message.params.workflow).filter(r => !message.params.branch || r.head_branch === message.params.branch)
+            result = { runs, total_count: runs.length, page: 1, has_more: false, viewer: 'ana', ...(message.params.pulls ? { pulls: ACTION_PULLS } : {}) }; break
+          }
+          case 'github.actions.run': result = actionRun(actionRunList, Number(message.params.run_id), message.params.attempt ? Number(message.params.attempt) : undefined); break
           case 'github.actions.log': { const offset = Math.min(Number(message.params.offset) || 0, ACTION_LOG.length); const limit = Number(message.params.limit) || 500; result = { available: true, lines: message.params.excerpt ? ACTION_LOG.slice(-40) : ACTION_LOG.slice(offset, offset + limit), offset: message.params.excerpt ? ACTION_LOG.length - 40 : offset, total_lines: ACTION_LOG.length, error_lines: [ACTION_LOG.length - 1] }; break }
-          case 'github.actions.workflows': result = { workflows: [{ id: 1, name: 'CI', path: '.github/workflows/ci.yml', state: 'active' }, { id: 2, name: 'GPUIX platforms', path: '.github/workflows/gpuix-platforms.yml', state: 'active' }], default_branch: 'main' }; break
+          case 'github.actions.workflows': result = { workflows: [{ id: 1, name: 'CI', path: '.github/workflows/ci.yml', state: 'active' }, { id: 2, name: 'GPUIX platforms', path: '.github/workflows/gpuix-platforms.yml', state: 'active' }, { id: 3, name: 'Release', path: '.github/workflows/release.yml', state: 'active' }, { id: 4, name: 'Dist cache', path: '.github/workflows/dist-cache.yml', state: 'active' }], default_branch: 'main' }; break
           case 'github.actions.workflow': result = message.params.workflow === '2' ? { dispatchable: true, inputs: [{ name: 'checks', description: 'All, or a comma-separated list of checks', required: true, default: 'all', kind: 'string' }, { name: 'platform', kind: 'choice', options: ['all', 'windows', 'linux'], default: 'all' }, { name: 'verbose', kind: 'boolean', default: 'false' }] } : { dispatchable: false, inputs: [] }; break
           case 'github.actions.action': case 'github.actions.dispatch': actions.push({ method: message.method, ...message.params }); result = {}; break
           case 'git.branches': result = { current: 'fix/reading-position', branches: [] }; break
@@ -140,17 +146,6 @@ export function actionFixture(options: { long?: boolean; horizontal?: boolean; p
 
 // ---- ADE-97 Actions fixtures ----
 
-const ACTION_RUN_BASE = { attempt: 1, workflow_id: 1, workflow_path: '.github/workflows/ci.yml', head_sha: '356376dfbd67d8dd6b0bb87027a09a9fced0dba2', created_at: new Date(Date.now() - 3_600_000).toISOString(), started_at: new Date(Date.now() - 3_600_000).toISOString(), updated_at: new Date(Date.now() - 3_200_000).toISOString(), actor: 'ana' }
-export const ACTION_RUNS = [
-  { ...ACTION_RUN_BASE, id: 3, number: 697, workflow_name: 'CI', title: 'Preserve reading position while streaming', head_branch: 'fix/reading-position', event: 'pull_request', status: 'in_progress', conclusion: '', url: 'https://example.com/runs/3', created_at: new Date(Date.now() - 120_000).toISOString(), started_at: new Date(Date.now() - 110_000).toISOString() },
-  { ...ACTION_RUN_BASE, id: 2, number: 696, workflow_name: 'CI', title: 'Read thinking-only answers in thread history', head_branch: 'main', event: 'push', status: 'completed', conclusion: 'failure', url: 'https://example.com/runs/2' },
-  { ...ACTION_RUN_BASE, id: 1, number: 41, workflow_name: 'GPUIX platforms', workflow_id: 2, title: 'GPUIX platforms', head_branch: 'main', event: 'workflow_dispatch', status: 'completed', conclusion: 'success', url: 'https://example.com/runs/1' },
-]
-const step = (number: number, name: string, conclusion = 'success') => ({ number, name, status: 'completed', conclusion })
-export const ACTION_JOBS = [
-  { id: 11, name: 'rustfmt', status: 'completed', conclusion: 'success', url: 'https://example.com/jobs/11', started_at: ACTION_RUN_BASE.started_at, completed_at: new Date(Date.parse(ACTION_RUN_BASE.started_at) + 17_000).toISOString(), steps: [step(1, 'Set up job'), step(2, 'cargo fmt --check')] },
-  { id: 12, name: 'clippy + test (ubuntu-24.04)', status: 'completed', conclusion: 'failure', url: 'https://example.com/jobs/12', started_at: ACTION_RUN_BASE.started_at, completed_at: new Date(Date.parse(ACTION_RUN_BASE.started_at) + 394_000).toISOString(), steps: [step(1, 'Set up job'), step(2, 'Run actions/checkout'), step(3, 'clippy'), step(4, 'test', 'failure'), step(5, 'Post Run actions/checkout', 'skipped')] },
-]
 export const ACTION_LOG = [
   '##[group]Run cargo test --workspace', 'cargo test --workspace', '##[endgroup]',
   ...Array.from({ length: 1200 }, (_, i) => `test orchestrator::tests::case_${i} ... \u001b[32mok\u001b[0m`),

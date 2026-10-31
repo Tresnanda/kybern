@@ -179,7 +179,29 @@ export function buildGraph(jobs: readonly WorkflowJob[], specs: readonly Workflo
     }
   }
   const columns = placedGraph ? Math.max(1, ...nodes.map(n => n.column + 1)) : 1
-  return finish(nodes, edges, nodes.length ? columns : 0, !placedGraph)
+  return finish(nodes, reduce(edges), nodes.length ? columns : 0, !placedGraph)
+}
+
+/**
+ * Only the edges no longer path implies: `CI` waiting on `changes` directly as well as through every check would draw a line
+ * straight through the checks' column, and says nothing the path doesn't.
+ */
+function reduce(edges: GraphEdge[]): GraphEdge[] {
+  const out = new Map<number, number[]>()
+  for (const e of edges) out.set(e.from, [...(out.get(e.from) ?? []), e.to])
+  const reachesWithoutEdge = (from: number, to: number) => {
+    const seen = new Set<number>()
+    const queue = (out.get(from) ?? []).filter(x => x !== to)
+    while (queue.length) {
+      const x = queue.pop()!
+      if (x === to) return true
+      if (seen.has(x)) continue
+      seen.add(x)
+      queue.push(...(out.get(x) ?? []))
+    }
+    return false
+  }
+  return edges.filter(e => !reachesWithoutEdge(e.from, e.to))
 }
 
 function finish(nodes: GraphNode[], edges: GraphEdge[], columns: number, fallback: boolean): JobGraph {
@@ -273,13 +295,47 @@ const r = (v: number) => Math.round(v * 10) / 10
 
 /**
  * Column widths for labels measured by `measure` (an estimate is fine): room for the glyph, the name and the duration,
- * between `min` and `max`; a column wider than `max` truncates its names.
+ * between `min` and `max`; a column wider than `max` truncates its names. With a `budget` (the room for all columns) the widest
+ * columns give way first, down to `min`, so short columns keep their names whole.
  */
-export function columnWidths(graph: JobGraph, measure: (text: string) => number, { min = 128, max = 300, chrome = 92 } = {}): number[] {
-  return Array.from({ length: graph.columns }, (_, c) => {
-    const widest = Math.max(0, ...graph.nodes.filter(n => n.column === c).map(n => measure(n.job.name)))
+export function columnWidths(graph: JobGraph, measure: (text: string) => number, { min = 128, max = 300, chrome = 92, budget = Infinity } = {}): number[] {
+  // `chrome` holds the glyph, padding and a duration; a waiting job's "Waits for 2 jobs" needs more.
+  const room = (n: GraphNode) => measure(n.job.name) + Math.max(0, measure(nodeTime(graph, n)) - (chrome - 52))
+  const widths = Array.from({ length: graph.columns }, (_, c) => {
+    const widest = Math.max(0, ...graph.nodes.filter(n => n.column === c).map(room))
     return Math.round(Math.min(max, Math.max(min, widest + chrome)))
   })
+  let over = widths.reduce((a, b) => a + b, 0) - budget
+  while (over > 0) {
+    const top = Math.max(...widths)
+    if (top <= min) break
+    const next = Math.max(min, ...widths.filter(w => w < top))
+    const at = widths.filter(w => w === top).length
+    const cut = Math.min(top - next, Math.ceil(over / at))
+    for (let i = 0; i < widths.length; i++) if (widths[i] === top) widths[i] = top - cut
+    over -= cut * at
+  }
+  return widths
+}
+
+/** How many unfinished jobs a waiting job still waits for. */
+export function waitsFor(graph: JobGraph, node: GraphNode): number {
+  if (node.bucket !== "queued") return 0
+  const open = new Set(graph.nodes.filter(n => n.bucket === "running" || n.bucket === "queued").map(n => n.job.id))
+  return graph.edges.filter(e => e.to === node.job.id && open.has(e.from)).length
+}
+
+/** The text at a node's trailing edge, when it isn't a duration: `Skipped`, `Waits for 2 jobs`, `Queued`, `Cancelled`. */
+export function nodeTime(graph: JobGraph, node: GraphNode): string {
+  switch (node.bucket) {
+    case "skipped": return "Skipped"
+    case "cancelled": return "Cancelled"
+    case "queued": {
+      const n = waitsFor(graph, node)
+      return n ? `Waits for ${n} ${n === 1 ? "job" : "jobs"}` : "Queued"
+    }
+    default: return ""
+  }
 }
 
 // ---- the run header ----
