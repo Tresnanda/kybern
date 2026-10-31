@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createHost, modelCatalog, modelSelection, runtimePolicy, errorText, modelError } from "./host.mjs";
+import { createHost, createAccountHost, nativeCatalog, modelCatalog, modelSelection, runtimePolicy, errorText, modelError } from "./host.mjs";
 
-function fixture({ duringStart, failStart } = {}) {
+function fixture({ duringStart, failStart, warmGate } = {}) {
   const terminal = Promise.withResolvers();
   const started = Promise.withResolvers();
   const events = [];
@@ -27,7 +27,12 @@ function fixture({ duringStart, failStart } = {}) {
     resume: async (id, options) => { calls.push(["resume", id, options]); return agent; },
     listRuns: async () => ({ items: [{ id: "old", status: "running" }] }),
     cancelRun: async (id) => calls.push(["recover", id]),
-  }, createAgentPlatform: async () => ({ prewarmLocalWorkspace: async () => { calls.push(["prime"]); return () => {}; } }) };
+  }, createAgentPlatform: async () => ({
+    resolveLocalModelSelection: async (selection) => selection,
+    createAgent: async (options) => sdk.Agent.create(options),
+    resumeAgent: async (id,options) => sdk.Agent.resume(id,options),
+    prewarmLocalWorkspace: async () => { calls.push(["prime"]); await warmGate; return () => {}; },
+  }) };
   const host = createHost(sdk, async (event) => { await Promise.resolve(); events.push(event); }, { apiKey: "secret" });
   return { host, events, calls, terminal, started, delta: (update) => callback({ update }) };
 }
@@ -209,6 +214,11 @@ test("native defaults never become chosen effort, context, fast or hidden cyber 
     { params: [{id:"cyber",value:"false"},{id:"context",value:"1m"},{id:"fast",value:"false"},{id:"effort",value:"medium"}] },
   ] }]);
   assert.deepEqual(modelSelection(row.id), {id:"opus"});
+  const encoded = JSON.parse(Buffer.from(row.id.slice(13),"base64url").toString("utf8"));
+  // The shared picker compares full params in saved opaque selectors. Keeping
+  // those identities must not turn inferred defaults into SDK request params.
+  assert.deepEqual(encoded.params,[{id:"cyber",value:"false"},{id:"context",value:"300k"},{id:"fast",value:"false"}]);
+  assert.deepEqual(encoded.defaultParams,encoded.params);
   assert.deepEqual(modelSelection(row.variants[1].id), {id:"opus",params:[{id:"context",value:"1m"}]});
   const legacy = `cursor-model:${Buffer.from(JSON.stringify({id:"opus",params:[{id:"cyber",value:"false"},{id:"context",value:"1m"},{id:"fast",value:"false"}],effortParam:"effort",defaultEffort:"medium"})).toString("base64url")}`;
   assert.deepEqual(modelSelection(legacy), {id:"opus",params:[{id:"context",value:"1m"},{id:"fast",value:"false"}]});
@@ -221,4 +231,95 @@ test("registry errors name the model and explicit values without downgrading the
   assert.match(error.message,/Change.*setting/);
   const auth=new Error("Unauthorized");
   assert.equal(modelError(auth,model),auth);
+});
+
+
+test("account host shares SDK/platform/catalog but scopes concurrent agents, events, askpass and close", async () => {
+  const {spawnSync} = await import("node:child_process");
+  const events=[];
+  const seen=[];
+  let creates=0, platforms=0, catalogs=0, releases=0;
+  const sdk={Cursor:{models:{list:async()=>{catalogs++;return [{id:"m",displayName:"M"}];}}},
+    createAgentPlatform:async()=>{
+      platforms++;
+      return {
+        resolveLocalModelSelection:async selection=>selection,
+        prewarmLocalWorkspace:async()=>()=>{releases++;},
+        createAgent:async()=>{
+          const id="agent"+(++creates);
+          return {agentId:id,close(){},send:async(_message,{onDelta})=>{
+            await new Promise(done=>setImmediate(done));
+            // Child-process environment must see the calling session's
+            // capability even with two interleaved sends in one Node process.
+            const token=spawnSync(process.execPath,["-e","process.stdout.write(process.env.KYBERN_ASKPASS_TOKEN||'')"],{encoding:"utf8"}).stdout;
+            seen.push([id,token]);
+            await onDelta({update:{type:"text-delta",text:id}});
+            return {id,wait:async()=>({id,status:"finished",result:id}),cancel:async()=>{}};
+          }};
+        },
+      };
+    }};
+  const ambient=process.env;
+  const host=createAccountHost(sdk,async event=>events.push(event),{apiKey:"key"});
+  try {
+    await Promise.all(["a","b"].map(session=>host.request({type:"open",session,cwd:"/repo",model:"m",mode:"auto",env:{KYBERN_ASKPASS_TOKEN:`scope-${session}-capability`}})));
+    await Promise.all(["a","b"].map(session=>host.request({type:"send",session,message:{text:"test"}})));
+    await tick();
+    assert.deepEqual(seen.sort(),[["agent1","scope-a-capability"],["agent2","scope-b-capability"]]);
+    assert.ok(events.filter(event=>event.type==="update").every(event=>event.update.text===(event.session==="a"?"agent1":"agent2")));
+    assert.equal(catalogs,1);
+    await host.request({type:"catalog",catalog:modelCatalog([{id:"m",displayName:"M"},{id:"new",displayName:"New"}])});
+    assert.ok(JSON.parse(process.env.CURSOR_SDK_LOCAL_MODEL_CATALOG_JSON).some(model=>model.id==="new"));
+    assert.equal(catalogs,1);
+    assert.equal(platforms,1);
+    assert.equal(process.env.KYBERN_ASKPASS_TOKEN,undefined);
+    await host.request({type:"close",session:"a"});
+    await host.request({type:"send",session:"b",message:{text:"still here"}});
+    await tick();
+    assert.match(host.safeError(new Error("key scope-a-capability scope-b-capability")),/^\[redacted\]/);
+  } finally {await host.close();}
+  assert.equal(process.env,ambient);
+  assert.equal(releases,2);
+});
+
+test("cached catalog preserves native max mode; old incomplete metadata triggers discovery", () => {
+  const raw=[{id:"m",displayName:"M",aliases:["m-latest"],variants:[
+    {isDefault:true,params:[{id:"context",value:"300k"},{id:"effort",value:"low"}]},
+    {isMaxMode:true,params:[{id:"context",value:"1m"},{id:"effort",value:"high"}]},
+  ]}];
+  const catalog=nativeCatalog(modelCatalog(raw));
+  assert.deepEqual(catalog[1].aliases,["m-latest"]);
+  assert.equal(catalog[1].variants.find(variant=>variant.params.some(param=>param.value==="1m")).isMaxMode,true);
+  assert.equal(catalog[1].variants.find(variant=>variant.params.some(param=>param.value==="300k")).isMaxMode,false);
+  const old="cursor-model:"+Buffer.from(JSON.stringify({id:"m",params:[]})).toString("base64url");
+  assert.equal(nativeCatalog([{id:old}]),undefined);
+});
+
+
+test("interrupt during workspace prewarm never admits the pending prompt", async () => {
+  const gate=Promise.withResolvers();
+  const f=fixture({warmGate:gate.promise});
+  await open(f.host);
+  const sending=f.host.request({type:"send",message:{text:"must not reach the SDK"}});
+  await f.host.request({type:"cancel"});
+  gate.resolve();
+  assert.deepEqual(await sending,{cancelled:true});
+  assert.ok(!f.calls.some(call=>call[0]==="send"));
+  await f.host.close();
+});
+
+
+test("close during pending prewarm returns immediately and never sends the queued prompt", async () => {
+  const gate=Promise.withResolvers();
+  const f=fixture({warmGate:gate.promise});
+  await open(f.host);
+  const sending=f.host.request({type:"send",message:{text:"cancel before admission"}});
+  const closed=f.host.close();
+  const sentinel=Symbol("still warming");
+  assert.notEqual(await Promise.race([closed,tick().then(()=>sentinel)]),sentinel);
+  gate.resolve();
+  assert.deepEqual(await sending,{cancelled:true});
+  await tick();
+  assert.ok(!f.calls.some(call=>call[0]==="send"));
+  assert.ok(f.calls.some(call=>call[0]==="close"));
 });

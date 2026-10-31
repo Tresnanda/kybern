@@ -2,6 +2,7 @@
 // Keep the SDK package on disk: its lazy chunks and platform helpers cannot be
 // folded into our Rust binary. Rust embeds this small host, not the SDK.
 import { createRequire } from "node:module";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -10,6 +11,10 @@ import { format } from "node:util";
 export const SDK_VERSION = "1.2.0";
 export const SETTING_SOURCES = ["project", "user", "team", "mdm", "plugins"];
 const runtimeSecrets = [process.env.CURSOR_API_KEY];
+const processStarted = performance.now();
+function timing(phase, started, extra = {}) {
+  process.stderr.write(`cursor_timing ${JSON.stringify({phase, ms: Math.round((performance.now() - started) * 100) / 100, ...extra})}\n`);
+}
 
 export function runtimePolicy(mode) {
   switch (mode) {
@@ -87,14 +92,16 @@ export function modelCatalog(models) {
       const key = JSON.stringify([...params].sort((a, b) => a.id.localeCompare(b.id))) + (effort?.id ?? "");
       let group = groups.get(key);
       if (!group) {
-        group = { params, effortParam: effort?.id, efforts: [], isDefault: false };
+        group = { params, effortParam: effort?.id, efforts: [], isDefault: false, allMax: true };
         groups.set(key, group);
       }
       group.isDefault ||= !!variant.isDefault;
+      group.allMax &&= !!variant.isMaxMode;
       if (effort && !group.efforts.includes(effort.value)) group.efforts.push(effort.value);
     }
     if (!groups.size) {
-      out.push({ id: model.id, display_name: base, description: model.description, is_default: false, efforts: [] });
+      const id = model.aliases?.length ? selectorFor({id:model.id,params:[],nativeParams:[],maxMode:false,aliases:model.aliases}) : model.id;
+      out.push({ id, ...(id !== model.id ? {resolved_id:model.id} : {}), display_name: base, description: model.description, is_default: false, efforts: [] });
       continue;
     }
     const list = [...groups.values()];
@@ -138,7 +145,7 @@ export function modelCatalog(models) {
         initial.params.find((value) => value.id === p.id)?.value === p.value);
       // Keep full params in the opaque ID so existing clients still recognize
       // saved selectors. defaultParams records what Kybern inferred, not chose.
-      const selection = { id: model.id, params: group.params, defaultParams,
+      const selection = { id: model.id, params: group.params, defaultParams, nativeParams: group.params, maxMode: group.allMax, ...(model.aliases?.length ? {aliases:model.aliases} : {}),
         ...(group.effortParam ? { effortParam: group.effortParam, effortValues: group.efforts, defaultEffort } : {}) };
       const values = {};
       for (const { id } of parameters) values[id] = group.params.find((p) => p.id === id)?.value ?? absent(id);
@@ -179,8 +186,8 @@ export function errorText(error, secrets = []) {
   return text.slice(0, 4000);
 }
 
-/** One agent per host. emit is ordered and applies stdout backpressure. */
-export function createHost(sdk, emit, { apiKey, store, secrets = [] } = {}) {
+/** One agent per logical session. emit is ordered and applies stdout backpressure. */
+export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}, sessionId } = {}) {
   let agent;
   let options;
   let modelSelector;
@@ -190,20 +197,46 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [] } = {}) {
   let opened = Promise.resolve();
   let closing = false;
   let recoverAbandonedRun = false;
-  let sandboxPrimed;
+  let warmRelease;
+  let warming;
+  let warmPending = 0;
   const localReadOptions = (cwd) => ({ runtime: "local", cwd, ...(store ? { store } : {}) });
-  secrets.push(apiKey);
+  secrets = [...new Set([...secrets, apiKey])];
+  const remember = (...values) => { for (const value of values) if (value && !secrets.includes(value)) secrets.push(value); };
+  const trace = (phase, started, extra) => timing(phase, started, {...(sessionId ? {session:sessionId} : {}), ...extra});
   const safeError = (error) => errorText(error, secrets);
+
+  let currentPlatform;
+  function releasePlatform() {
+    if (!currentPlatform) return;
+    const {cwd,entry} = currentPlatform;
+    if (--entry.refs === 0 && shared.platforms.get(cwd) === entry) shared.platforms.delete(cwd);
+    currentPlatform = undefined;
+  }
+  function platformFor(cwd) {
+    if (currentPlatform?.cwd === cwd) return currentPlatform.entry.loading;
+    releasePlatform();
+    shared.platforms ??= new Map();
+    let entry = shared.platforms.get(cwd);
+    if (!entry) {
+      entry = {refs:0,loading:sdk.createAgentPlatform({workspaceRef:cwd, ...(store ? {localStore:store} : {})})};
+      shared.platforms.set(cwd, entry);
+      entry.loading.catch(()=>{ if (shared.platforms.get(cwd) === entry) shared.platforms.delete(cwd); });
+    }
+    entry.refs++;
+    currentPlatform = {cwd,entry};
+    return entry.loading;
+  }
 
   async function primeSandbox(cwd) {
     // Cursor caches sandbox availability per process. T3 primes the sandbox
     // before the first Full access run so a later restricted run still works.
-    sandboxPrimed ??= (async () => {
-      const platform = await sdk.createAgentPlatform({ workspaceRef: cwd });
+    shared.sandboxPrimed ??= (async () => {
+      const platform = await platformFor(cwd);
       const release = await platform.prewarmLocalWorkspace({ apiKey, local: { cwd, settingSources: [], sandboxOptions: { enabled: true } } });
       await release();
     })().catch(() => undefined);
-    await sandboxPrimed;
+    await shared.sandboxPrimed;
   }
 
   function idle() {
@@ -218,17 +251,39 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [] } = {}) {
     opened = openingDone.promise;
     try {
       const local = { cwd: request.cwd, settingSources: SETTING_SOURCES, ...runtimePolicy(request.mode), enableAgentRetries: true, ...(store ? { store } : {}) };
-      const next = { apiKey, model: modelSelection(request.model, request.effort), mode: "agent", local, ...(request.mcpServers ? { mcpServers: request.mcpServers } : {}) };
+      const checkStarted = performance.now();
+      const platform = await platformFor(request.cwd);
+      const requested = modelSelection(request.model, request.effort);
+      let selected;
+      try { selected = await platform.resolveLocalModelSelection(requested, apiKey); }
+      catch (error) { throw modelError(error, requested); }
+      trace("model_check", checkStarted);
+      const next = { apiKey, model: selected, mode: "agent", local, ...(request.mcpServers ? { mcpServers: request.mcpServers } : {}) };
       for (const server of Object.values(request.mcpServers ?? {})) {
         for (const value of Object.values(server.headers ?? {})) {
-          secrets.push(value, value.replace(/^Bearer\s+/i, ""));
+          remember(value, value.replace(/^Bearer\s+/i, ""));
         }
       }
       if (!local.sandboxOptions.enabled) await primeSandbox(request.cwd);
       const previous = agent;
       const id = request.agentId ?? previous?.agentId;
-      try { agent = id ? await sdk.Agent.resume(id, next) : await sdk.Agent.create(next); }
+      const previousWarm = warming;
+      // Hold the lease until close. Releasing it immediately discards the
+      // executor and moves the same scan back into the first send.
+      warmPending++;
+      warming = (async () => {
+        await previousWarm;
+        const warmStarted = performance.now();
+        const release = await platform.prewarmLocalWorkspace(next);
+        trace("prewarm", warmStarted);
+        const previousRelease = warmRelease;
+        warmRelease = release;
+        await previousRelease?.();
+      })().catch((error) => trace("prewarm_failed", performance.now(), {error: safeError(error)})).finally(()=>warmPending--);
+      const createStarted = performance.now();
+      try { agent = id ? await platform.resumeAgent(id, next) : await platform.createAgent(next); }
       catch (error) { throw modelError(error, next.model); }
+      finally { trace("agent_creation", createStarted, {resume: !!id}); }
       options = next;
       modelSelector = request.model;
       selectedEffort = request.effort;
@@ -251,8 +306,10 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [] } = {}) {
   async function send(request) {
     idle();
     if (!agent) throw new Error("Open a Cursor session before sending a message.");
+    const sendStarted = performance.now();
+    let firstEvent = true;
     const starting = Promise.withResolvers();
-    const turn = { run: null, cancelled: false, ready: false, pending: [], pendingBytes: 0, updates: Promise.resolve(), done: null, started: starting.promise };
+    const turn = { run: null, prewarming: true, cancelled: false, ready: false, pending: [], pendingBytes: 0, updates: Promise.resolve(), done: null, started: starting.promise };
     active = turn;
     const dispatch = (update) => {
       // Serializing callbacks preserves provider order even when the SDK does
@@ -261,6 +318,7 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [] } = {}) {
       return turn.updates;
     };
     const onDelta = ({ update }) => {
+      if (firstEvent) { firstEvent = false; trace("first_event", sendStarted); }
       if (!turn.ready) {
         turn.pendingBytes += JSON.stringify(update).length;
         if (turn.pendingBytes > 16 * 1024 * 1024) throw new Error("Cursor emitted too much output before starting its run.");
@@ -269,8 +327,16 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [] } = {}) {
       }
       return dispatch(update);
     };
+    await warming;
+    turn.prewarming = false;
     const start = () => agent.send(request.message, { model: options.model, mcpServers: options.mcpServers, onDelta });
     try {
+      // An interrupt received while prewarming has not admitted a prompt.
+      // Do not start a billable run merely to cancel it immediately afterwards.
+      if (turn.cancelled || closing) {
+        if (active === turn) active = null;
+        return {cancelled:true};
+      }
       try { turn.run = await start(); } catch (error) {
         // T3 recovers a stale persisted run only on the first send after resume.
         // Never force every prompt: it could cancel a legitimately active run.
@@ -326,12 +392,26 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [] } = {}) {
     if (active) {
       const turn = active;
       turn.cancelled = true;
-      await turn.started;
-      await cancelRun(turn);
-      await turn.done;
+      if (!turn.prewarming) {
+        await turn.started;
+        await cancelRun(turn);
+        await turn.done;
+      } else if (active === turn) {
+        active = null;
+      }
     }
     agent?.close();
     agent = undefined;
+    const release = async () => {
+      await warming;
+      await warmRelease?.();
+      warmRelease = undefined;
+      releasePlatform();
+    };
+    // SDK prewarm has no cancellation API. Release its eventual lease in the
+    // background so closing an unused session cannot time out a sibling's host.
+    if (warmPending) void release().catch((error)=>trace("prewarm_release_failed",performance.now(),{error:safeError(error)}));
+    else await release();
   }
 
   return {
@@ -370,6 +450,107 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [] } = {}) {
   };
 }
 
+/** Rehydrate the SDK catalog without losing its max-mode resolution rules. */
+export function nativeCatalog(models) {
+  if (!Array.isArray(models)) return undefined;
+  const out = [];
+  for (const model of models) {
+    if (model.id === "default") { out.push({id:"default",displayName:"Default"}); continue; }
+    const selectors = model.variants?.length ? model.variants.map((variant) => variant.id) : [model.id];
+    const variants = [];
+    let id = model.resolved_id || model.id;
+    let aliases;
+    for (const selector of selectors) {
+      if (!selector.startsWith("cursor-model:")) continue;
+      const selection = JSON.parse(Buffer.from(selector.slice(13), "base64url").toString("utf8"));
+      // Older caches did not preserve native max-mode metadata. Discover once
+      // rather than inventing it (or silently sending a smaller context).
+      if (!Array.isArray(selection.nativeParams) || typeof selection.maxMode !== "boolean") return undefined;
+      id = selection.id;
+      aliases = selection.aliases;
+      for (const effort of selection.effortValues?.length ? selection.effortValues : [undefined]) {
+        variants.push({params: [...selection.nativeParams, ...(effort ? [{id:selection.effortParam,value:effort}] : [])],isMaxMode:selection.maxMode});
+      }
+    }
+    out.push({id,displayName:model.display_name, ...(aliases?.length ? {aliases} : {}), ...(variants.length ? {variants} : {})});
+  }
+  return out;
+}
+
+/** Each logical session owns its agent, MCP capability, run, and warm lease. */
+export function createAccountHost(sdk, emit, options = {}) {
+  options.secrets ??= [];
+  options.secrets.push(options.apiKey);
+  const sessions = new Map();
+  const shared = {};
+  const environment = new AsyncLocalStorage();
+  // Node resolves child-process env through this object. Async-local reads
+  // keep askpass capabilities scoped even when account agents run concurrently.
+  // No per-thread capability is ever written to the host's ambient environment.
+  const ambient = process.env;
+  const scopedKeys = new Set(["SUDO_ASKPASS", "SSH_ASKPASS", "SSH_ASKPASS_REQUIRE", "GIT_ASKPASS", "GIT_TERMINAL_PROMPT", "KYBERN_ASKPASS_URL", "KYBERN_ASKPASS_TOKEN"]);
+  const env = new Proxy(ambient, {
+    set(target,key,value) {
+      if (scopedKeys.has(key)) {
+        const scope = environment.getStore();
+        if (scope) scope[key] = String(value);
+        return true;
+      }
+      return Reflect.set(target,key,value,target);
+    },
+    get(target, key) { return scopedKeys.has(key) ? environment.getStore()?.[key] : Reflect.get(target, key); },
+    ownKeys(target) { return [...new Set([...Reflect.ownKeys(target), ...Object.keys(environment.getStore() ?? {})])]; },
+    getOwnPropertyDescriptor(target, key) {
+      if (scopedKeys.has(key)) {
+        const value = environment.getStore()?.[key];
+        return value === undefined ? undefined : {value, writable:true, enumerable:true, configurable:true};
+      }
+      return Reflect.getOwnPropertyDescriptor(target,key);
+    },
+  });
+  process.env = env;
+  return {
+    safeError: (error) => [...sessions.values()].reduce((message,session)=>session.host.safeError(message), errorText(error, options.secrets)),
+    async close() {
+      await Promise.all([...sessions.values()].map(({host,env}) => environment.run(env,()=>host.close())));
+      sessions.clear();
+      if (process.env === env) process.env = ambient;
+    },
+    async request(request) {
+      if (request.type === "shutdown") { await this.close(); return {}; }
+      if (request.type === "catalog") {
+        const catalog=nativeCatalog(request.catalog);
+        if (catalog) {
+          shared.catalog=Promise.resolve(catalog);
+          process.env.CURSOR_SDK_LOCAL_MODEL_CATALOG_JSON=JSON.stringify(catalog);
+        }
+        return {};
+      }
+      const id = request.session ?? "default";
+      let session = sessions.get(id);
+      if (!session) {
+        if (!["open","list","read"].includes(request.type)) throw new Error("Cursor session is not open.");
+        const env = Object.fromEntries(Object.entries(request.env ?? {}).filter(([key])=>scopedKeys.has(key)));
+        session = {env, host:createHost(sdk, (value)=>emit({...value,session:id}), {...options,shared,sessionId:id,secrets:[...options.secrets,env.KYBERN_ASKPASS_TOKEN]})};
+        sessions.set(id,session);
+      }
+      if (request.type === "open") {
+        const started = performance.now();
+        const cached = request.catalog && nativeCatalog(request.catalog);
+        if (cached) shared.catalog = Promise.resolve(cached);
+        shared.catalog ??= sdk.Cursor.models.list({apiKey:options.apiKey}).catch((error) => { shared.catalog = undefined; throw error; });
+        process.env.CURSOR_SDK_LOCAL_MODEL_CATALOG_JSON = JSON.stringify(await shared.catalog);
+        timing("model_catalog", started, {session:id,cached:!!cached});
+      }
+      let result;
+      try { result = await environment.run(session.env,()=>session.host.request(request)); }
+      catch (error) { throw new Error(session.host.safeError(error)); }
+      if (request.type === "close") sessions.delete(id);
+      return result;
+    },
+  };
+}
+
 async function loadSdk() {
   const [major, minor] = process.versions.node.split(".").map(Number);
   if (major < 22 || (major === 22 && minor < 13)) throw new Error("Cursor SDK requires Node.js 22.13 or newer.");
@@ -386,9 +567,13 @@ async function main(mode) {
   const write = (value) => new Promise((done, reject) => process.stdout.write(`${JSON.stringify(value)}\n`, (error) => error ? reject(error) : done()));
   let writes = Promise.resolve();
   const emit = (value) => (writes = writes.then(() => write(value)));
-  const log = (...args) => process.stderr.write(`${errorText(format(...args), runtimeSecrets)}\n`);
+  let sanitize = (error) => errorText(error, runtimeSecrets);
+  const log = (...args) => process.stderr.write(`${sanitize(format(...args))}\n`);
   console.log = console.info = console.debug = log;
+  timing("node_start", processStarted, {uptimeMs: Math.round(process.uptime() * 1000)});
+  const sdkStarted = performance.now();
   const sdk = await loadSdk();
+  timing("sdk_load", sdkStarted);
   const credentialStore = new sdk.FileCredentialStore(process.env.KYBERN_CURSOR_AUTH_FILE);
   if (mode === "version") { await emit({ version: SDK_VERSION }); return; }
   if (mode === "login") {
@@ -424,7 +609,8 @@ async function main(mode) {
     return;
   }
   if (mode !== "stdio") throw new Error(`Unknown Cursor SDK host mode: ${mode}`);
-  const host = createHost(sdk, emit, { apiKey, store, secrets: runtimeSecrets });
+  const host = createAccountHost(sdk, emit, { apiKey, store, secrets: runtimeSecrets });
+  sanitize = host.safeError;
   let stopping;
   const stop = () => (stopping ??= host.close().finally(async () => { await writes; process.exit(0); }));
   process.once("SIGTERM", () => void stop());
@@ -439,7 +625,7 @@ async function main(mode) {
         if (request.type === "open" && !apiKey) throw new Error("Sign in to Cursor in Settings → Agent providers, or run `kybern cursor login`.");
         const result = await host.request(request);
         await emit({ id: request.id, result });
-        if (request.type === "close") await stop();
+        if (request.type === "shutdown") await stop();
       } catch (error) {
         await emit({ id: request?.id, error: host.safeError(error) });
       }

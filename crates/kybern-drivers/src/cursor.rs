@@ -1,16 +1,17 @@
-//! Cursor's official local SDK, isolated in a Node helper owned by the session.
+//! Cursor's official local SDK, isolated in one supervised Node host per account.
 //!
 //! New session IDs are namespaced so existing ACP sessions continue to resume
 //! with the CLI that created them. We never reinterpret a CLI conversation as
 //! an SDK agent or silently replace a missing conversation with an empty one.
 mod acp;
 mod models;
+mod pool;
 mod runtime;
 pub use models::legacy_model_selection;
 mod stream;
 pub mod usage;
 
-pub(crate) use runtime::Connection;
+pub(crate) use pool::Connection;
 pub use runtime::{
     SDK_VERSION, auth_status, install, installed, login_command, node_version, npm_available, setup_command, setup_error, sign_out,
 };
