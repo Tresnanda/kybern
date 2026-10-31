@@ -110,6 +110,8 @@ impl Daemon {
             .args(["--port", "0", "--bind", "127.0.0.1"])
             .env("KYBERN_TAILSCALE_FAKE", fixture)
             .env("RUST_LOG", "info,kybern=debug")
+            // Plain text, so a needle naming a field (`transport="tcp"`) matches between the color codes.
+            .env("NO_COLOR", "1")
             .env_remove("KYBERN_URL")
             .env_remove("KYBERN_TOKEN")
             .env_remove("KYBERN_ADVERTISE_URL")
