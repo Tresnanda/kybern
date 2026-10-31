@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -80,4 +80,35 @@ test('a failed Linux job leaves no Linux GPUIX entry and does not hold back the 
   const latest = manifest({ ...macFiles, [win]: 'x', [`${win}.sig`]: 'win-sig' })
   assert.equal(latest.platforms['linux-x86_64-gpuix'], undefined)
   assert.deepEqual(Object.keys(latest.platforms), ['darwin-aarch64-gpuix', 'windows-x86_64-gpuix'])
+})
+
+// A copy of the script in a scratch root whose Cargo.toml carries `version`: the script reads the version beside it.
+function manifestAt(version, files) {
+  const scratch = mkdtempSync(join(tmpdir(), 'kybern-manifest-root-'))
+  mkdirSync(join(scratch, 'scripts'))
+  copyFileSync(join(root, 'scripts/updater-manifest.mjs'), join(scratch, 'scripts/updater-manifest.mjs'))
+  writeFileSync(join(scratch, 'Cargo.toml'), `[workspace.package]\nversion = "${version}"\n`)
+  const dist = join(scratch, 'dist')
+  mkdirSync(dist)
+  for (const [name, body] of Object.entries(files)) writeFileSync(join(dist, name), body)
+  execFileSync('node', [join(scratch, 'scripts/updater-manifest.mjs'), '--dist', dist, '--tag', `v${version}`, '--repo', 'o/r'], { stdio: 'pipe' })
+  return { dist, files: readdirSync(dist) }
+}
+
+test('a dev release writes latest-dev.json, never latest.json, pointing at its own prerelease', () => {
+  const version = '0.21.0-dev.2'
+  const asset = `kybern-gpuix_${version}_aarch64.app.tar.gz`
+  const { dist, files } = manifestAt(version, { [asset]: 'x', [`${asset}.sig`]: 'dev-sig\n' })
+  assert.ok(files.includes('latest-dev.json'))
+  assert.ok(!files.includes('latest.json'), 'a dev build must not become the stable feed')
+  const feed = JSON.parse(readFileSync(join(dist, 'latest-dev.json'), 'utf8'))
+  assert.equal(feed.version, version)
+  assert.deepEqual(feed.platforms['darwin-aarch64-gpuix'], { signature: 'dev-sig', url: `https://github.com/o/r/releases/download/v${version}/${asset}` })
+})
+
+test('a stable release writes latest.json only', () => {
+  const asset = 'kybern-gpuix_0.21.0_aarch64.app.tar.gz'
+  const { files } = manifestAt('0.21.0', { [asset]: 'x', [`${asset}.sig`]: 's' })
+  assert.ok(files.includes('latest.json'))
+  assert.ok(!files.includes('latest-dev.json'))
 })

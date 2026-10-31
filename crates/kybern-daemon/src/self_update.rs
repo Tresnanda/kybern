@@ -5,11 +5,18 @@
 //! request from a client, and only while no turn, approval, background task or
 //! queued message is in flight. A daemon the desktop app started is left
 //! alone: that binary lives in the app bundle and updates with the app.
+//!
+//! `update_track` picks the feed: Stable reads the latest GitHub release, Dev
+//! also reads the dev feed (a rolling `dev-feed` prerelease whose
+//! `latest-dev.json` every `vX.Y.Z-dev.N` release replaces) and takes the newer
+//! of the two. Versions are ordered as semver, so `0.21.0-dev.2` sits between
+//! `0.20.x` and `0.21.0`, and a daemon never moves to an older version: after
+//! Dev → Stable it keeps its dev build until a stable release is newer.
 use crate::state::AppState;
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
 use kybern_protocol::process::NoWindow;
-use kybern_protocol::{DaemonUpdate, DaemonUpdateStatus as Status};
+use kybern_protocol::{DaemonUpdate, DaemonUpdateStatus as Status, UpdateTrack};
 use kybern_store::Store;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -32,6 +39,9 @@ pub struct DaemonUpdates {
     /// set this to see a request get as far as being queued.
     #[cfg(test)]
     pub(crate) allow_development: AtomicBool,
+    /// Loopback feeds a test serves in place of GitHub's.
+    #[cfg(test)]
+    pub(crate) test_feeds: Mutex<Option<Feeds>>,
 }
 
 impl DaemonUpdates {
@@ -64,6 +74,8 @@ impl DaemonUpdates {
             worker: tokio::sync::Mutex::new(()),
             #[cfg(test)]
             allow_development: AtomicBool::new(false),
+            #[cfg(test)]
+            test_feeds: Mutex::new(None),
         })
     }
 
@@ -102,40 +114,99 @@ fn http() -> Result<reqwest::Client> {
         .build()?)
 }
 
-async fn latest_version(client: &reqwest::Client) -> Result<String> {
-    let manifest: serde_json::Value = client
-        .get(format!("https://github.com/{REPO}/releases/latest/download/dist-manifest.json"))
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await
-        .context("read the release manifest")?;
+/// Where each track's newest release is announced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Feeds {
+    /// dist's manifest of the latest (non-prerelease) GitHub release; its `announcement_tag` names it.
+    pub stable: String,
+    /// `latest-dev.json` on the rolling `dev-feed` prerelease (`.github/workflows/dev-feed.yml`); its `version` names it.
+    pub dev: String,
+}
+
+impl Feeds {
+    #[cfg(not(test))]
+    fn github() -> Self {
+        Self {
+            stable: format!("https://github.com/{REPO}/releases/latest/download/dist-manifest.json"),
+            dev: format!("https://github.com/{REPO}/releases/download/dev-feed/latest-dev.json"),
+        }
+    }
+}
+
+fn feeds(state: &AppState) -> Option<Feeds> {
+    #[cfg(test)]
+    {
+        // Tests never reach for the network.
+        state.daemon_updates.test_feeds.lock().unwrap().clone()
+    }
+    #[cfg(not(test))]
+    {
+        let _ = state;
+        Some(Feeds::github())
+    }
+}
+
+async fn read_json(client: &reqwest::Client, url: &str) -> Result<serde_json::Value> {
+    client.get(url).send().await?.error_for_status()?.json().await.context("read the release manifest")
+}
+
+async fn stable_version(client: &reqwest::Client, feeds: &Feeds) -> Result<String> {
+    let manifest = read_json(client, &feeds.stable).await?;
     let tag = manifest["announcement_tag"].as_str().context("the release manifest has no version")?;
     Ok(tag.trim_start_matches('v').to_string())
 }
 
-/// The newest version on the release feed, when it can be read.
-pub async fn feed_latest() -> Option<String> {
-    // Tests never reach for the network.
-    if cfg!(test) {
-        return None;
+async fn dev_version(client: &reqwest::Client, feeds: &Feeds) -> Result<String> {
+    let manifest = read_json(client, &feeds.dev).await?;
+    let version = manifest["version"].as_str().context("the dev feed has no version")?;
+    Ok(version.trim_start_matches('v').to_string())
+}
+
+/// The newest release `track` offers, from what each feed answered. Dev also takes stable releases, so a
+/// stable version that overtakes the dev line reaches both tracks, and a missing dev feed (before the first
+/// dev release) only matters when the stable one fails too.
+pub(crate) fn track_latest(track: UpdateTrack, stable: Result<String>, dev: Option<Result<String>>) -> Result<String> {
+    match (track, dev) {
+        (UpdateTrack::Stable, _) | (UpdateTrack::Dev, None) => stable,
+        (UpdateTrack::Dev, Some(dev)) => match (stable, dev) {
+            (Ok(stable), Ok(dev)) => Ok(if newer(&dev, &stable) { dev } else { stable }),
+            (Ok(version), Err(_)) | (Err(_), Ok(version)) => Ok(version),
+            (Err(error), Err(_)) => Err(error),
+        },
     }
-    latest_version(&http().ok()?).await.ok()
 }
 
-fn parse_version(version: &str) -> Option<(u64, u64, u64)> {
-    let core = version.trim().trim_start_matches('v').split(['-', '+']).next()?;
-    let mut parts = core.split('.').map(|part| part.parse::<u64>().ok());
-    Some((parts.next()??, parts.next()??, parts.next()??))
+async fn latest_version(client: &reqwest::Client, feeds: &Feeds, track: UpdateTrack) -> Result<String> {
+    let stable = stable_version(client, feeds).await;
+    let dev = match track {
+        UpdateTrack::Stable => None,
+        UpdateTrack::Dev => Some(dev_version(client, feeds).await),
+    };
+    track_latest(track, stable, dev)
 }
 
-/// Whether `latest` is a newer release than `current`.
+/// The newest version this daemon's update track offers, when it can be read.
+pub async fn feed_latest(state: &AppState) -> Option<String> {
+    let feeds = feeds(state)?;
+    latest_version(&http().ok()?, &feeds, state.settings.get().update_track).await.ok()
+}
+
+fn parse_version(version: &str) -> Option<semver::Version> {
+    semver::Version::parse(version.trim().trim_start_matches('v')).ok()
+}
+
+/// Whether `latest` is a newer release than `current`, in semver precedence: `0.2.0-dev.10` is newer
+/// than `0.2.0-dev.9` and older than `0.2.0`.
 pub fn newer(latest: &str, current: &str) -> bool {
     match (parse_version(latest), parse_version(current)) {
-        (Some(a), Some(b)) => a > b,
+        (Some(a), Some(b)) => a.cmp_precedence(&b).is_gt(),
         _ => false,
     }
+}
+
+/// Whether a machine on `track` takes `version`: Stable never takes a prerelease.
+pub fn on_track(track: UpdateTrack, version: &str) -> bool {
+    track == UpdateTrack::Dev || parse_version(version).is_some_and(|version| version.pre.is_empty())
 }
 
 fn archive_name() -> Result<String> {
@@ -293,7 +364,8 @@ pub async fn check(state: &AppState) -> DaemonUpdate {
     record.status = Status::Checking;
     record.message = "Checking the release feed…".into();
     state.daemon_updates.save(&state.store, record.clone());
-    let latest = async { latest_version(&http()?).await }.await;
+    let track = state.settings.get().update_track;
+    let latest = async { latest_version(&http()?, &feeds(state).context("no release feed in tests")?, track).await }.await;
     record.checked_at = Some(Utc::now());
     match latest {
         Ok(latest) => {
@@ -302,7 +374,12 @@ pub async fn check(state: &AppState) -> DaemonUpdate {
                 record.message = format!("{latest} is available");
             } else {
                 record.status = Status::Current;
-                record.message = "Up to date".into();
+                record.message = if on_track(track, CURRENT_VERSION) {
+                    "Up to date".into()
+                } else {
+                    // Dev → Stable never downgrades: the dev build stays until a stable release passes it.
+                    format!("Up to date. Stays on {CURRENT_VERSION} until a stable release is newer")
+                };
             }
             record.latest_version = Some(latest);
         }
@@ -432,6 +509,91 @@ mod tests {
         assert!(!newer("0.1.3", "0.1.3"));
         assert!(!newer("0.1.3-rc.1", "0.1.3"));
         assert!(!newer("garbage", "0.1.3"));
+    }
+
+    #[test]
+    fn orders_dev_builds_between_releases() {
+        assert!(newer("0.21.0-dev.1", "0.20.9"));
+        assert!(newer("0.21.0", "0.21.0-dev.9"));
+        assert!(newer("0.21.0-dev.10", "0.21.0-dev.9"), "numeric prerelease parts compare as numbers");
+        assert!(!newer("0.21.0-dev.9", "0.21.0-dev.10"));
+        assert!(!newer("0.21.0-dev.3", "0.21.0-dev.3"));
+        assert!(!newer("0.20.9", "0.21.0-dev.1"), "a stable release older than the dev build is not an update");
+        assert!(!newer("0.21.0-dev.1", "0.21.0"));
+        assert!(newer("v0.22.0-dev.1", "0.21.0"));
+    }
+
+    #[test]
+    fn a_track_takes_its_releases() {
+        assert!(on_track(UpdateTrack::Stable, "0.21.0"));
+        assert!(!on_track(UpdateTrack::Stable, "0.21.0-dev.2"));
+        assert!(on_track(UpdateTrack::Dev, "0.21.0-dev.2"));
+        assert!(on_track(UpdateTrack::Dev, "0.21.0"));
+        assert!(!on_track(UpdateTrack::Stable, "garbage"));
+    }
+
+    #[test]
+    fn dev_takes_the_newer_feed_and_stable_reads_only_its_own() {
+        let ok = |version: &str| Ok::<_, anyhow::Error>(version.to_string());
+        let gone = || Err::<String, _>(anyhow!("404"));
+        // Stable never looks at the dev feed.
+        assert_eq!(track_latest(UpdateTrack::Stable, ok("0.20.1"), Some(ok("0.21.0-dev.2"))).unwrap(), "0.20.1");
+        assert_eq!(track_latest(UpdateTrack::Stable, ok("0.20.1"), None).unwrap(), "0.20.1");
+        // Dev takes whichever is newer: the dev build, or a stable release that overtook it.
+        assert_eq!(track_latest(UpdateTrack::Dev, ok("0.20.1"), Some(ok("0.21.0-dev.2"))).unwrap(), "0.21.0-dev.2");
+        assert_eq!(track_latest(UpdateTrack::Dev, ok("0.21.0"), Some(ok("0.21.0-dev.2"))).unwrap(), "0.21.0");
+        // Before the first dev release the dev feed is missing; the stable feed still answers.
+        assert_eq!(track_latest(UpdateTrack::Dev, ok("0.20.1"), Some(gone())).unwrap(), "0.20.1");
+        assert_eq!(track_latest(UpdateTrack::Dev, gone(), Some(ok("0.21.0-dev.2"))).unwrap(), "0.21.0-dev.2");
+        assert!(track_latest(UpdateTrack::Dev, gone(), Some(gone())).is_err());
+        assert!(track_latest(UpdateTrack::Stable, gone(), Some(ok("0.21.0-dev.2"))).is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_daemon_checks_the_feed_of_its_own_update_track() {
+        use axum::{Json, Router, routing::get};
+        let current = semver::Version::parse(CURRENT_VERSION).unwrap();
+        let dev = format!("{}.{}.0-dev.1", current.major, current.minor + 1);
+        let stable_body = serde_json::json!({ "announcement_tag": format!("v{CURRENT_VERSION}") });
+        let dev_body = serde_json::json!({ "version": dev, "platforms": {} });
+        let app = Router::new()
+            .route("/dist-manifest.json", get(move || async move { Json(stable_body) }))
+            .route("/latest-dev.json", get(move || async move { Json(dev_body) }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let root = std::env::temp_dir().join(format!("kybern-track-test-{}", uuid::Uuid::now_v7()));
+        let state = AppState::initialize(&crate::config::Paths::resolve(Some(root.clone())).unwrap()).unwrap();
+        state.daemon_updates.allow_development.store(true, Ordering::SeqCst);
+        let feeds = |dev: &str| Feeds { stable: format!("{base}/dist-manifest.json"), dev: format!("{base}/{dev}") };
+        *state.daemon_updates.test_feeds.lock().unwrap() = Some(feeds("latest-dev.json"));
+        let set_track = |track| {
+            let mut settings = state.settings.get();
+            settings.update_track = track;
+            state.settings.set(settings).unwrap();
+        };
+
+        // A new install is on Stable and does not see the dev build.
+        assert_eq!(state.settings.get().update_track, UpdateTrack::Stable);
+        let record = check(&state).await;
+        assert_eq!((record.status, record.latest_version.as_deref()), (Status::Current, Some(CURRENT_VERSION)), "{record:?}");
+
+        set_track(UpdateTrack::Dev);
+        let record = check(&state).await;
+        assert_eq!((record.status, record.latest_version.as_deref()), (Status::Available, Some(dev.as_str())), "{record:?}");
+        assert_eq!(feed_latest(&state).await.as_deref(), Some(dev.as_str()), "update_all aims at the dev build too");
+
+        // Before the first dev release the dev feed is missing; Dev still reads the stable one.
+        *state.daemon_updates.test_feeds.lock().unwrap() = Some(feeds("missing.json"));
+        let record = check(&state).await;
+        assert_eq!((record.status, record.latest_version.as_deref()), (Status::Current, Some(CURRENT_VERSION)), "{record:?}");
+
+        set_track(UpdateTrack::Stable);
+        *state.daemon_updates.test_feeds.lock().unwrap() = Some(feeds("latest-dev.json"));
+        assert_eq!(check(&state).await.status, Status::Current);
+        drop(state);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

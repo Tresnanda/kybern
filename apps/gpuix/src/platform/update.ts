@@ -33,8 +33,19 @@
 // only announce the release with a download link (a package's install command
 // too; `linuxPackage.ts` reads which format this is).
 //
-// Tests point the app at a local feed with KYBERN_UPDATE_FEED (loopback only)
-// and KYBERN_UPDATE_PUBKEY; nothing else can change the key.
+// Update tracks: the local daemon's `update_track` setting picks the feed.
+// Stable reads `latest.json` of the latest GitHub release. Dev also reads
+// `latest-dev.json` on the rolling `dev-feed` prerelease, which every
+// `vX.Y.Z-dev.N` release replaces, and takes the newer of the two, so a stable
+// release that overtakes the dev line reaches Dev as well. Versions compare as
+// semver, so switching Dev → Stable never offers a downgrade: the dev build
+// stays until a stable release is newer. The last track a local daemon reported
+// is remembered for checks made while it is unreachable or while this window
+// is at another machine.
+//
+// Tests point the app at a local feed with KYBERN_UPDATE_FEED and
+// KYBERN_UPDATE_DEV_FEED (loopback only) and KYBERN_UPDATE_PUBKEY; nothing
+// else can change the key.
 import { spawn, execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { chmod, mkdtemp, open, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
@@ -73,6 +84,7 @@ export interface AppUpdateState {
   manual: ManualUpdate | null
 }
 export interface ManualUpdate { url: string; file: string; command: string | null }
+export type UpdateTrack = 'stable' | 'dev'
 
 let state: AppUpdateState = { phase: 'idle', appVersion: null, version: null, notes: null, progress: null, error: null, errorKind: null, checkedAt: null, announcementOpen: false, detailsOpen: false, unpublished: null, manual: null }
 const listeners = new Set<() => void>()
@@ -85,6 +97,7 @@ export function useAppUpdate<T>(select: (s: AppUpdateState) => T): T {
 const FIRST_CHECK_DELAY = 15_000
 const CHECK_INTERVAL = 6 * 60 * 60 * 1000
 const DISMISSED_UPDATE_KEY = 'kybern.update.dismissed-version'
+const TRACK_KEY = 'kybern.update.track'
 /** The feed entry for this build (Tauri's `{os}-{arch}-{bundle}` form). Windows is x64 only. */
 export const platformKey = (platform: NodeJS.Platform, arch: string) =>
   platform === 'win32' ? 'windows-x86_64-gpuix' : `${platform === 'linux' ? 'linux' : 'darwin'}-${arch === 'arm64' ? 'aarch64' : 'x86_64'}-gpuix`
@@ -116,18 +129,19 @@ export function windowsInstall(execPath = process.execPath, exists: (file: strin
   if (process.env.KYBERN_UPDATE_BUNDLE && testFeed()) return process.env.KYBERN_UPDATE_BUNDLE
   return installedWindowsFolder(execPath, exists)
 }
-function testFeed(): URL | null {
-  const override = process.env.KYBERN_UPDATE_FEED
+function testFeed(name: 'KYBERN_UPDATE_FEED' | 'KYBERN_UPDATE_DEV_FEED' = 'KYBERN_UPDATE_FEED'): URL | null {
+  const override = process.env[name]
   if (!override) return null
   const url = new URL(override)
-  if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) throw Error('KYBERN_UPDATE_FEED must be a loopback http address')
+  if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) throw Error(`${name} must be a loopback http address`)
   return url
 }
 
-function feed(): { endpoints: string[]; pubkey: string } {
+export interface Feeds { stable: string[]; dev: string[] }
+function feed(): Feeds & { pubkey: string } {
   const local = testFeed()
-  if (local) return { endpoints: [local.href], pubkey: process.env.KYBERN_UPDATE_PUBKEY ?? updater.pubkey }
-  return { endpoints: updater.endpoints, pubkey: updater.pubkey }
+  if (local) return { stable: [local.href], dev: [testFeed('KYBERN_UPDATE_DEV_FEED')?.href].filter((href): href is string => !!href), pubkey: process.env.KYBERN_UPDATE_PUBKEY ?? updater.pubkey }
+  return { stable: updater.endpoints, dev: updater.devEndpoints, pubkey: updater.pubkey }
 }
 
 /** True when this build can replace itself: a packaged `.app` on macOS, an installed copy on Windows, a running AppImage in a folder its user can write. */
@@ -169,7 +183,10 @@ export function checkForAppUpdate(options: { manual?: boolean } = {}): Promise<v
   return checkInFlight
 }
 
-export async function readFeed(current: string, endpoints: string[], fetcher: typeof fetch = fetch): Promise<{ version: string; notes: string | null; entry: FeedEntry | null } | null> {
+type FeedRelease = { version: string; notes: string | null; entry: FeedEntry | null }
+
+/** The release one feed announces, from the first endpoint that answers; null when it answers 204. */
+async function readManifest(endpoints: string[], fetcher: typeof fetch): Promise<FeedRelease | null> {
   let lastError: unknown
   for (const endpoint of endpoints) {
     try {
@@ -179,7 +196,6 @@ export async function readFeed(current: string, endpoints: string[], fetcher: ty
       const data = await response.json() as { version?: unknown; notes?: unknown; platforms?: Record<string, Partial<FeedEntry>> }
       if (typeof data.version !== 'string') throw Error('The update manifest is incomplete. Try again later.')
       const version = data.version.replace(/^v/, '')
-      if (compareVersions(version, current) <= 0) return null
       const raw = data.platforms?.[PLATFORM_KEY]
       const entry = raw && typeof raw.url === 'string' && typeof raw.signature === 'string' ? { url: raw.url, signature: raw.signature } : null
       return { version, notes: typeof data.notes === 'string' ? data.notes : null, entry }
@@ -188,11 +204,57 @@ export async function readFeed(current: string, endpoints: string[], fetcher: ty
   throw lastError
 }
 
+/** The feed's release when it is newer than `current`. */
+export async function readFeed(current: string, endpoints: string[], fetcher: typeof fetch = fetch): Promise<FeedRelease | null> {
+  const release = await readManifest(endpoints, fetcher)
+  return release && compareVersions(release.version, current) > 0 ? release : null
+}
+
+/**
+ * The newest release `track` offers that is newer than `current`. Stable reads only its own feed. Dev reads both
+ * and takes the newer, so a stable release that overtakes the dev line arrives on Dev too; one feed failing (the dev
+ * feed is missing until the first dev release) only matters when the other fails as well.
+ */
+export async function readTrack(current: string, track: UpdateTrack, feeds: Feeds, fetcher: typeof fetch = fetch): Promise<FeedRelease | null> {
+  if (track === 'stable' || !feeds.dev.length) return readFeed(current, feeds.stable, fetcher)
+  const results = await Promise.allSettled([readManifest(feeds.stable, fetcher), readManifest(feeds.dev, fetcher)])
+  const found = results.flatMap(result => result.status === 'fulfilled' && result.value ? [result.value] : [])
+  if (!found.length) {
+    const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+    if (failed) throw failed.reason
+    return null
+  }
+  const newest = found.reduce((a, b) => compareVersions(b.version, a.version) > 0 ? b : a)
+  return compareVersions(newest.version, current) > 0 ? newest : null
+}
+
+const storedTrack = (): UpdateTrack => readPref<UpdateTrack>(TRACK_KEY, 'stable') === 'dev' ? 'dev' : 'stable'
+function rememberTrack(track: UpdateTrack) {
+  try { if (storedTrack() !== track) writePref(TRACK_KEY, track) } catch { /* the next check asks the daemon again */ }
+}
+
+/** The track this app follows: the local daemon's `update_track`, or the last one it reported. */
+async function currentTrack(): Promise<UpdateTrack> {
+  try {
+    const [{ activeEnvironment }, { getClient }] = await Promise.all([import('../shell/environment.ts'), import('../state.ts')])
+    const client = activeEnvironment().local ? getClient() : null
+    if (client) rememberTrack((await client.call('settings.get', {})).update_track === 'dev' ? 'dev' : 'stable')
+  } catch { /* the remembered track stands */ }
+  return storedTrack()
+}
+
+/** After the update track changed in Settings: remember it and look again, so Dev sees the dev build at once and Stable drops an offer it no longer takes. */
+export function updateTrackChanged(track: UpdateTrack) {
+  rememberTrack(track)
+  if (state.phase === 'installing') return
+  void (checkInFlight ?? Promise.resolve()).then(() => checkForAppUpdate())
+}
+
 async function runUpdateCheck(options: { manual?: boolean }) {
   if (state.phase === 'installing') return
   set({ phase: 'checking', error: null, errorKind: null })
   try {
-    const result = await readFeed(desktopVersion(), feed().endpoints)
+    const result = await readTrack(desktopVersion(), await currentTrack(), feed())
     if (!result || !result.entry) {
       pending = null
       set({ phase: 'current', version: null, notes: null, checkedAt: Date.now(), announcementOpen: false, detailsOpen: false, unpublished: result?.version ?? null, manual: null })

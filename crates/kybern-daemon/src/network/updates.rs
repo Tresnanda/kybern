@@ -10,20 +10,23 @@
 //!
 //! A machine that cannot replace itself says so instead of failing: a daemon the desktop app started
 //! "updates with the app", and a development build is rebuilt rather than replaced.
+//!
+//! Each machine keeps to its own `update_track`: a Stable machine asked to reach a dev build, or
+//! following a member that runs one, looks at its own (stable) feed instead.
 
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use kybern_protocol::methods::PeerUpdateStart;
 use kybern_protocol::{
-    MachineId, NetworkStatus, NetworkUpdateAllResult, NetworkUpdateSkipped, PeerUpdateStartParams, PeerUpdateStartResult, RpcError, codes,
-    features,
+    MachineId, NetworkStatus, NetworkUpdateAllResult, NetworkUpdateSkipped, PeerUpdateStartParams, PeerUpdateStartResult, RpcError,
+    UpdateTrack, codes, features,
 };
 use serde_json::json;
 
 use super::TARGET;
 use super::join::JoinError;
-use crate::self_update::{self, CURRENT_VERSION, newer};
+use crate::self_update::{self, CURRENT_VERSION, newer, on_track};
 use crate::state::AppState;
 
 /// How long one member gets to answer `peer.update.start`.
@@ -43,9 +46,11 @@ pub enum Decision {
     Skip(String),
 }
 
-/// The pure part of the answer: whether a machine at `current` that is `desktop_managed` or
-/// `unsupported` for another reason starts for a request that wants `wanted`.
-pub fn decide(desktop_managed: bool, unsupported: Option<&str>, current: &str, wanted: Option<&str>) -> Decision {
+/// The pure part of the answer: whether a machine at `current` on `track` that is `desktop_managed` or
+/// `unsupported` for another reason starts for a request that wants `wanted`. A version off its track
+/// counts as no version: the machine checks its own feed.
+pub fn decide(desktop_managed: bool, unsupported: Option<&str>, current: &str, wanted: Option<&str>, track: UpdateTrack) -> Decision {
+    let wanted = wanted.filter(|wanted| on_track(track, wanted));
     if desktop_managed {
         return Decision::Skip(UPDATES_WITH_THE_APP.into());
     }
@@ -63,7 +68,8 @@ pub fn decide(desktop_managed: bool, unsupported: Option<&str>, current: &str, w
 pub async fn start_self(state: &AppState, wanted: Option<&str>) -> PeerUpdateStartResult {
     let desktop_managed = state.desktop_managed.load(Ordering::SeqCst);
     let unsupported = self_update::unsupported(state);
-    match decide(desktop_managed, unsupported.as_deref(), CURRENT_VERSION, wanted) {
+    let track = state.settings.get().update_track;
+    match decide(desktop_managed, unsupported.as_deref(), CURRENT_VERSION, wanted, track) {
         Decision::Skip(reason) => PeerUpdateStartResult { started: false, reason: Some(reason) },
         Decision::Start => {
             state.daemon_updates.request(&state.store);
@@ -106,7 +112,7 @@ async fn target_version(state: &AppState, members: &[MachineId], me: &str) -> Op
         }
     }
     // The feed names the release everyone is moving to even when every member is still on the old one.
-    highest(target, self_update::feed_latest().await)
+    highest(target, self_update::feed_latest(state).await)
 }
 
 /// `network.update_all`.
@@ -205,17 +211,18 @@ pub async fn set_follow(state: &AppState, enabled: bool) -> Result<NetworkStatus
         .ok_or_else(|| JoinError::Unavailable("The machine network is unavailable on this machine.".into()))
 }
 
-/// The newest version an online member runs that is newer than this machine's own.
+/// The newest version an online member runs that is newer than this machine's own and on its track.
 fn newest_peer_version(state: &AppState) -> Option<String> {
-    let mut newest: Option<String> = None;
-    for link in state.network.peers.links() {
-        if let Some(presence) = state.network.peers.status(&link.machine_id).presence
-            && newer(&presence.version, CURRENT_VERSION)
-        {
-            newest = highest(newest, Some(presence.version));
-        }
-    }
-    newest
+    let versions = state.network.peers.links().into_iter().filter_map(|link| state.network.peers.status(&link.machine_id).presence);
+    newest_to_follow(state.settings.get().update_track, CURRENT_VERSION, versions.map(|presence| presence.version))
+}
+
+/// Of the versions the members run, the newest a machine at `current` on `track` would follow.
+fn newest_to_follow(track: UpdateTrack, current: &str, versions: impl IntoIterator<Item = String>) -> Option<String> {
+    versions
+        .into_iter()
+        .filter(|version| newer(version, current) && on_track(track, version))
+        .fold(None, |newest, version| highest(newest, Some(version)))
 }
 
 /// What a following machine does after looking at the others.
@@ -284,18 +291,44 @@ mod tests {
 
     #[test]
     fn a_machine_decides_from_who_manages_it_and_what_is_wanted() {
-        assert_eq!(decide(true, None, "0.19.0", Some("0.20.0")), Decision::Skip("Updates with the app".into()));
+        let stable = UpdateTrack::Stable;
+        assert_eq!(decide(true, None, "0.19.0", Some("0.20.0"), stable), Decision::Skip("Updates with the app".into()));
         assert_eq!(
-            decide(false, Some("Development build; rebuild it instead."), "0.19.0", None),
+            decide(false, Some("Development build; rebuild it instead."), "0.19.0", None, stable),
             Decision::Skip("Development build; rebuild it instead.".into())
         );
-        assert_eq!(decide(false, None, "0.20.0", Some("0.20.0")), Decision::Skip("Already up to date".into()));
-        assert_eq!(decide(false, None, "0.21.0", Some("0.20.0")), Decision::Skip("Already up to date".into()));
-        assert_eq!(decide(false, None, "0.19.0", Some("0.20.0")), Decision::Start);
+        assert_eq!(decide(false, None, "0.20.0", Some("0.20.0"), stable), Decision::Skip("Already up to date".into()));
+        assert_eq!(decide(false, None, "0.21.0", Some("0.20.0"), stable), Decision::Skip("Already up to date".into()));
+        assert_eq!(decide(false, None, "0.19.0", Some("0.20.0"), stable), Decision::Start);
         // Without a target version the machine looks at the release feed itself.
-        assert_eq!(decide(false, None, "0.19.0", None), Decision::Start);
+        assert_eq!(decide(false, None, "0.19.0", None, stable), Decision::Start);
         // The app wins over everything else.
-        assert_eq!(decide(true, Some("x"), "0.19.0", None), Decision::Skip("Updates with the app".into()));
+        assert_eq!(decide(true, Some("x"), "0.19.0", None, stable), Decision::Skip("Updates with the app".into()));
+    }
+
+    #[test]
+    fn a_machine_keeps_to_its_own_update_track() {
+        // A dev build is no target for a Stable machine: it checks its own feed, which may still have a newer stable.
+        assert_eq!(decide(false, None, "0.20.0", Some("0.21.0-dev.2"), UpdateTrack::Stable), Decision::Start);
+        assert_eq!(decide(false, None, "0.21.0-dev.2", Some("0.21.0-dev.2"), UpdateTrack::Stable), Decision::Start);
+        assert_eq!(
+            decide(false, None, "0.21.0-dev.2", Some("0.21.0-dev.2"), UpdateTrack::Dev),
+            Decision::Skip("Already up to date".into())
+        );
+        assert_eq!(
+            decide(false, None, "0.21.0-dev.3", Some("0.21.0-dev.2"), UpdateTrack::Dev),
+            Decision::Skip("Already up to date".into())
+        );
+
+        let members = || ["0.20.0".to_string(), "0.21.0-dev.2".to_string(), "0.20.1".to_string()];
+        assert_eq!(newest_to_follow(UpdateTrack::Dev, "0.20.0", members()).as_deref(), Some("0.21.0-dev.2"));
+        assert_eq!(
+            newest_to_follow(UpdateTrack::Stable, "0.20.0", members()).as_deref(),
+            Some("0.20.1"),
+            "a Stable machine never follows a dev build"
+        );
+        assert_eq!(newest_to_follow(UpdateTrack::Stable, "0.21.0-dev.2", members()), None, "nor moves back to an older stable");
+        assert_eq!(newest_to_follow(UpdateTrack::Stable, "0.21.0-dev.2", ["0.21.0".to_string()]).as_deref(), Some("0.21.0"));
     }
 
     #[test]

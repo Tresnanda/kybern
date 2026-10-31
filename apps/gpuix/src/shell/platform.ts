@@ -86,14 +86,28 @@ export async function checkRelease(currentVersion: string, fetcher: (url: string
   return { version: data.version, newer, notes: 'notes' in data && typeof data.notes === 'string' ? data.notes : '', installable: false as const }
 }
 function versionParts(value: string) {
-  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(value.trim())
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+.*)?$/.exec(value.trim())
   if (!match) throw Error('The release version is invalid')
-  return match.slice(1, 4).map(Number)
+  return { core: match.slice(1, 4).map(Number), pre: match[4]?.split('.') ?? [] }
 }
+/**
+ * Semver precedence: `0.21.0-dev.2` sorts after `0.20.x` and before `0.21.0`, and `dev.10` after `dev.9`
+ * (numeric identifiers compare as numbers). Build metadata (`+…`) is ignored.
+ */
 export function compareVersions(a: string, b: string) {
   const left = versionParts(a), right = versionParts(b)
-  for (let i = 0; i < 3; i++) if (left[i] !== right[i]) return left[i]! - right[i]!
-  return 0
+  for (let i = 0; i < 3; i++) if (left.core[i] !== right.core[i]) return left.core[i]! - right.core[i]!
+  // A release is newer than any of its prereleases.
+  if (!left.pre.length || !right.pre.length) return right.pre.length - left.pre.length
+  for (let i = 0; i < Math.min(left.pre.length, right.pre.length); i++) {
+    const x = left.pre[i]!, y = right.pre[i]!
+    if (x === y) continue
+    const numeric = /^\d+$/
+    if (numeric.test(x) && numeric.test(y)) return Number(x) - Number(y)
+    if (numeric.test(x) !== numeric.test(y)) return numeric.test(x) ? -1 : 1
+    return x < y ? -1 : 1
+  }
+  return left.pre.length - right.pre.length
 }
 
 export interface CliPaths { bundled: string; target: string }

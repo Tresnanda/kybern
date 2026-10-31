@@ -244,7 +244,10 @@ native module" in `apps/gpuix/native/README.md` first.
 ## Release versions
 
 Daemon, CLI and GPUIX share the workspace version and
-`vX.Y.Z` release pipeline. The mobile app has its own `expo.version`; EAS manages native build
+`vX.Y.Z` release pipeline. Dev releases (`vX.Y.Z-dev.N`, GitHub prereleases with
+`latest-dev.json` on the rolling `dev-feed` release) reach installs on the Dev
+update track first; stable versions are promoted from them (RELEASING.md,
+"Update tracks"). The mobile app has its own `expo.version`; EAS manages native build
 numbers remotely. A push to `main` is not a release. The desktop release script
 does not version or build mobile. See `RELEASING.md`.
 Do not push mobile version tags through the broad daemon release trigger without

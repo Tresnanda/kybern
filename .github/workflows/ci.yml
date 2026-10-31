@@ -134,7 +134,7 @@ jobs:
         with:
           node-version: 22
       - name: Release gate and updater manifest regression tests
-        run: node --test scripts/ci-paths.test.mjs scripts/check-release-ci.test.mjs scripts/updater-manifest.test.mjs
+        run: node --test scripts/ci-paths.test.mjs scripts/check-release-ci.test.mjs scripts/updater-manifest.test.mjs scripts/release.test.mjs
       - name: release.yml matches dist's output
         run: |
           version=$(sed -n 's/^cargo-dist-version = "\(.*\)"$/\1/p' dist-workspace.toml)

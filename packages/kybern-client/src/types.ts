@@ -2555,6 +2555,9 @@ export interface AccessSettings {
   tailscale: boolean;
 }
 
+/** `stable` gets a version once it has shipped on `dev`; `dev` gets every `vX.Y.Z-dev.N` prerelease first. Never a downgrade. */
+export type UpdateTrack = "stable" | "dev";
+
 export interface Settings {
   default_provider: ProviderKind;
   default_permission_mode: PermissionMode;
@@ -2566,6 +2569,8 @@ export interface Settings {
   notifications: boolean;
   auto_update_harnesses: boolean;
   auto_update_daemon: boolean;
+  /** Which releases the desktop app and a self-updating daemon move to. Absent from a daemon older than update tracks (Stable). */
+  update_track?: UpdateTrack;
   background: BackgroundSettings;
   access: AccessSettings;
   computer_use: ComputerUseSettings;

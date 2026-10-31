@@ -51,7 +51,9 @@ export function selectJobs(eventName, event, repository, run = command) {
     }
     const oldVersion = workspaceVersion(run('git', ['show', `${before}:Cargo.toml`]))
     const newVersion = workspaceVersion(run('git', ['show', `${after}:Cargo.toml`]))
-    if (oldVersion !== newVersion) return { ...all }
+    // A stable version needs the full suite on its commit (`scripts/check-release-ci.mjs`); a dev release
+    // (`X.Y.Z-dev.N`) only needs main's CI on its commit to pass, so its bump runs the jobs its files affect.
+    if (oldVersion !== newVersion && !/^\d+\.\d+\.\d+-dev\.\d+$/.test(newVersion)) return { ...all }
     // Include both names of a rename as deletion + addition. NUL separators
     // preserve filenames with whitespace; compare the whole push, not HEAD^.
     return affectedJobs(run('git', ['diff', '--name-only', '--no-renames', '-z', before, after, '--']).split('\0').filter(Boolean))

@@ -129,6 +129,7 @@ export const SHARED_SETTINGS = [
   "notifications",
   "auto_update_harnesses",
   "auto_update_daemon",
+  "update_track",
   "orchestration",
   "tell_agents_about_kybern",
   "ask_deadlines",

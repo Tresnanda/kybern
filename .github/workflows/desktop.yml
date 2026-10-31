@@ -483,11 +483,12 @@ jobs:
           cp scripts/install-remote.sh dist/kybern-remote-install.sh
           cp scripts/install-mac-gpuix.sh dist/kybern-gpuix-mac-install.sh
           cp scripts/install-linux-gpuix.sh dist/kybern-gpuix-linux-install.sh
-          cat dist/latest.json
+          cat dist/latest*.json
       - name: Collect the release assets
         run: |
           mkdir release
-          cp dist/kybern-* dist/latest.json release/
+          # latest.json for a stable release, latest-dev.json for a dev release (updater-manifest.mjs).
+          cp dist/kybern-* dist/latest*.json release/
           ls -l release
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

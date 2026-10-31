@@ -82,6 +82,11 @@ expression: schema_for!(Settings)
       "type": "boolean",
       "default": false
     },
+    "update_track": {
+      "description": "Which releases the desktop app and a self-updating daemon move to.",
+      "$ref": "#/$defs/UpdateTrack",
+      "default": "stable"
+    },
     "background": {
       "description": "How the daemon trims CPU and memory while nothing needs it.",
       "$ref": "#/$defs/BackgroundSettings",
@@ -277,6 +282,14 @@ expression: schema_for!(Settings)
       "required": [
         "name",
         "directory"
+      ]
+    },
+    "UpdateTrack": {
+      "description": "The release line updates come from. Every release reaches Dev first as a\n`vX.Y.Z-dev.N` prerelease; Stable gets a version later, once it has shipped\non Dev. A machine never moves to an older version: after switching from Dev\nto Stable it keeps its dev build until a stable release is newer.",
+      "type": "string",
+      "enum": [
+        "stable",
+        "dev"
       ]
     },
     "BackgroundSettings": {

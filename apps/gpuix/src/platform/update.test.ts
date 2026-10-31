@@ -7,7 +7,7 @@ import path from 'node:path'
 import { appImageName } from './linuxPackage.ts'
 import { verifyMinisign } from './minisign.ts'
 import { relaunchEnv } from '../shell/daemon.ts'
-import { assertSignedRelease, assertWindowsInstaller, manualUpdate, PLATFORM_KEY, platformKey, readFeed, removeStaleInstallers, replaceAppImage, replaceBundle, stageWindowsInstaller, windowsInstall, windowsInstallerCommand } from './update.ts'
+import { assertSignedRelease, assertWindowsInstaller, manualUpdate, PLATFORM_KEY, platformKey, readFeed, readTrack, removeStaleInstallers, replaceAppImage, replaceBundle, stageWindowsInstaller, windowsInstall, windowsInstallerCommand } from './update.ts'
 import { archive, fakeBundle, testKey } from './verify.feed.ts'
 
 let root = ''
@@ -33,6 +33,31 @@ test('reads only the GPUIX platform entry and ignores older versions', async () 
   expect(await readFeed('0.9.1', ['x'], feed({ version: '0.9.2', platforms }))).toMatchObject({ version: '0.9.2', entry: null })
   const ours = await readFeed('0.9.1', ['x'], feed({ version: 'v0.9.2', notes: 'n', platforms: { ...platforms, [PLATFORM_KEY]: { url: 'https://example/gpuix.tar.gz', signature: 'g' } } }))
   expect(ours).toEqual({ version: '0.9.2', notes: 'n', entry: { url: 'https://example/gpuix.tar.gz', signature: 'g' } })
+})
+
+test('each update track reads its own feeds and never offers a downgrade', async () => {
+  const entry = { url: 'https://example/gpuix.tar.gz', signature: 'g' }
+  // `stable` and `dev` stand in for latest.json and latest-dev.json; a missing feed answers 404.
+  const feeds = (stable: string | null, dev: string | null) => (async (url: string) => {
+    const version = url === 'stable' ? stable : dev
+    return version ? Response.json({ version, notes: url, platforms: { [PLATFORM_KEY]: entry } }) : new Response('', { status: 404 })
+  }) as unknown as typeof fetch
+  const both = { stable: ['stable'], dev: ['dev'] }
+  // Stable never sees a dev build.
+  expect(await readTrack('0.20.0', 'stable', both, feeds('0.20.0', '0.21.0-dev.2'))).toBeNull()
+  expect(await readTrack('0.20.0', 'stable', both, feeds('0.20.1', '0.21.0-dev.2'))).toMatchObject({ version: '0.20.1', notes: 'stable' })
+  // Dev takes the newer of the two feeds: the dev build, or a stable release that overtook it.
+  expect(await readTrack('0.20.0', 'dev', both, feeds('0.20.1', '0.21.0-dev.2'))).toMatchObject({ version: '0.21.0-dev.2', notes: 'dev', entry })
+  expect(await readTrack('0.21.0-dev.2', 'dev', both, feeds('0.20.1', '0.21.0-dev.10'))).toMatchObject({ version: '0.21.0-dev.10' })
+  expect(await readTrack('0.21.0-dev.2', 'dev', both, feeds('0.21.0', '0.21.0-dev.2'))).toMatchObject({ version: '0.21.0', notes: 'stable' })
+  // Dev → Stable keeps the dev build: an older stable is no update, a newer one is.
+  expect(await readTrack('0.21.0-dev.2', 'stable', both, feeds('0.20.1', '0.21.0-dev.3'))).toBeNull()
+  expect(await readTrack('0.21.0-dev.2', 'stable', both, feeds('0.21.0', '0.21.0-dev.3'))).toMatchObject({ version: '0.21.0' })
+  // The dev feed is missing until the first dev release; Dev still reads the stable one. Only both failing is an error.
+  expect(await readTrack('0.20.0', 'dev', both, feeds('0.20.1', null))).toMatchObject({ version: '0.20.1' })
+  expect(await readTrack('0.20.1', 'dev', both, feeds('0.20.1', null))).toBeNull()
+  await expect(readTrack('0.20.0', 'dev', both, feeds(null, null))).rejects.toThrow('404')
+  await expect(readTrack('0.20.0', 'stable', both, feeds(null, '0.21.0-dev.2'))).rejects.toThrow('404')
 })
 
 // The swap reads the new bundle's identifier with macOS's PlistBuddy, so this runs on macOS only.

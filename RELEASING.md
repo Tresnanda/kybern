@@ -10,10 +10,61 @@ that release builds restore. Publishing is a separate action.
 | Android and iOS mobile app | Use `expo.version` in `apps/mobile/app.json`, independent of the desktop release number. EAS builds use the selected commit and profile. Android `versionCode` and iOS `buildNumber` identify individual binaries; EAS manages these remotely. Preview and production builds increment them automatically. |
 | Wire protocol | `PROTOCOL_VERSION` is a compatibility contract, not an app release number. Bump it for breaking wire changes and update both clients and the daemon together. Additive features may still require a newer daemon even when the protocol number is unchanged. |
 
+## Update tracks
+
+Desktop installs and self-updating daemons follow one of two tracks, the
+`update_track` setting (Settings → About → Update track; stored by the daemon,
+shared across the machine network, Stable for new installs):
+
+| Track | Gets | Feed |
+| --- | --- | --- |
+| Dev | every `vX.Y.Z-dev.N` release, and stable releases | `latest-dev.json` on the rolling `dev-feed` release, plus `latest.json`; the newer wins |
+| Stable | `vX.Y.Z` releases, each promoted from a dev build | `latest.json` of the latest GitHub release |
+
+Versions compare as semver: `0.21.0-dev.2` is newer than `0.20.x`, older than
+`0.21.0`, and `dev.10` is newer than `dev.9`. Nothing ever moves to an older
+version, so a machine switched from Dev to Stable keeps its dev build until a
+stable release is newer (the store also refuses a data folder a newer version
+upgraded).
+
+**Cut a dev release** (as often as you like, from `main`):
+
+```sh
+# Optional: a `## 0.21.0-dev.1` entry at the top of CHANGELOG.md becomes the release notes.
+scripts/release.sh 0.21.0-dev.1
+```
+
+The tag runs the same release workflow, builds and signing as a stable one.
+dist publishes it as a GitHub prerelease (which `releases/latest` skips);
+`scripts/updater-manifest.mjs` writes `latest-dev.json` instead of `latest.json`;
+and dist's post-announce job `dev-feed.yml` copies that file to the `dev-feed`
+prerelease (created on first use; never moved back to an older dev build). Dev
+installs read
+`https://github.com/Tresnanda/kybern/releases/download/dev-feed/latest-dev.json`.
+The gate for a `-dev.N` tag only needs main's latest CI run for the tagged
+commit to have succeeded; that run may be filtered, because a bump to a dev
+version runs only the jobs its files affect (`scripts/ci-paths.mjs`). Number dev
+builds of a version upwards (`-dev.1`, `-dev.2`, …) and move to the next
+version's `-dev.1` after its stable release.
+
+**Promote to stable** once a dev build has proven itself:
+
+```sh
+scripts/release.sh 0.21.0
+```
+
+`release.sh` refuses a stable version unless `main` matches the newest dev tag
+apart from version lines and `CHANGELOG.md`: cut one more dev release first if
+anything landed since. `--allow-unshipped` overrides that for an urgent fix. The
+stable tag needs the full gate below.
+
+## The release gate
+
 The tag-triggered release workflow requires successful main CI for the exact
 tagged commit, including all six jobs `scripts/check-release-ci.mjs` lists
 (`requiredJobs`: rustfmt, clippy + test on Linux and macOS, Windows cargo check,
-release checks, and gpuix). A push that changes `[workspace.package].version` runs the full suite
+release checks, and gpuix); a dev tag (`vX.Y.Z-dev.N`) needs only that run's success.
+A push that changes `[workspace.package].version` to a stable version runs the full suite
 automatically. For a release candidate without a version change, run
 `gh workflow run ci.yml --ref main` while `main` points at that candidate and
 wait for it to pass before tagging. A manual run qualifies only for its exact
@@ -45,7 +96,7 @@ cache after seven days without use). `gpuix-wpe.yml` also preserves its
 input-triggered and weekly warmer. Affected Rust and GPUIX checks on `main`
 continue saving their Rust and pnpm caches; PR runs only restore them.
 
-`latest.json` lists only the `-gpuix` keys (`darwin-aarch64-gpuix`,
+`latest.json` (and a dev release's `latest-dev.json`) lists only the `-gpuix` keys (`darwin-aarch64-gpuix`,
 `darwin-x86_64-gpuix`, `windows-x86_64-gpuix`, `linux-x86_64-gpuix`). The plain
 `darwin-aarch64`-style keys belonged to the retired Tauri app; releases after
 0.18.0 no longer publish them, so Tauri installs stop updating at 0.18.0. The
