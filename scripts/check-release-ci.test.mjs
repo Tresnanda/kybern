@@ -110,6 +110,25 @@ test('GPUIX bundles both macOS targets from dist binaries without compiling the 
   assert.match(gpuix, /name: desktop-gpuix-\$\{\{ matrix\.target \}\}/)
 })
 
+test('the release Mac builds and the desktop dry run use the same supported macOS runners', async () => {
+  const { readFileSync, readdirSync } = await import('node:fs')
+  const config = readFileSync(new URL('../dist-workspace.toml', import.meta.url), 'utf8')
+  const runners = config.split('\n[dist.github-custom-runners]\n')[1].split('\n[')[0]
+  const binaries = readFileSync(new URL('../.github/workflows/desktop.yml', import.meta.url), 'utf8')
+    .split('\n  binaries:\n')[1].split('\n  gpuix:\n')[0]
+  // Without an entry dist falls back to its own default runner, macos-14 in dist 0.32.
+  for (const target of ['aarch64-apple-darwin', 'x86_64-apple-darwin']) {
+    const runner = runners.match(new RegExp(`^${target} = (?:"([\\w.-]+)"|\\{ runner = "([\\w.-]+)")`, 'm'))
+    assert.ok(runner, `dist-workspace.toml has no custom runner for ${target}`)
+    assert.match(binaries, new RegExp(`- target: ${target}\\n\\s+os: ${runner[1] ?? runner[2]}\\n`))
+  }
+  // GitHub retired macos-13 and macos-14 (actions/runner-images#13518).
+  const workflows = new URL('../.github/workflows/', import.meta.url)
+  for (const [name, text] of [['dist-workspace.toml', config], ...readdirSync(workflows).map(file => [file, readFileSync(new URL(file, workflows), 'utf8')])]) {
+    assert.doesNotMatch(text.replace(/#.*$/gm, ''), /macos-1[34]\b/, `${name} uses a retired macOS runner`)
+  }
+})
+
 test('the Linux GPUIX beta is its own job: dist\'s musl binaries on the ubuntu-22.04 glibc floor, and its failure cannot skip the manifest', async () => {
   const { readFileSync } = await import('node:fs')
   const workflow = readFileSync(new URL('../.github/workflows/desktop.yml', import.meta.url), 'utf8')

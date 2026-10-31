@@ -68,7 +68,10 @@ github-build-setup = "../dist-build-setup.yml"
 "actions/upload-artifact" = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"   # v7.0.1
 "actions/download-artifact" = "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" # v8.0.1
 
+# dist 0.32 defaults the Apple Silicon build to macos-14, which GitHub retires
+# on 2026-11-02 (actions/runner-images#13518).
 # Cross-compile the Intel Mac build on Apple Silicon, like the desktop app does:
 # the Intel runner took about 29 minutes and set the release's pace.
 [dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
 x86_64-apple-darwin = { runner = "macos-15", host = "aarch64-apple-darwin" }
