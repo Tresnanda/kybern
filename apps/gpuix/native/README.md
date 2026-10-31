@@ -971,6 +971,24 @@ submitted pixels after acquisition recovers. It reads presented-frame dumps with
 This reproduces a confirmed blocking path; the original field trigger and any separate persistent stale-view fault
 remain unproven until verified in normal use.
 
+**Kick deadlock (ADE-110, fork branches `kick-deadlock`).** 0.20.4 froze with a spinning cursor: the main thread
+waited forever on its own window lock. `MacWindow::draw` holds the window lock across `renderer.draw`; a starved draw
+kicked the layer, and the kick's `[CATransaction flush]` ran AppKit's display cycle right there, whose tracking-area
+update called `resetCursorRects`, which locks the same `parking_lot` mutex. The kick now flushes on a later turn of
+the main queue (one flush pending at most), outside any draw; its other steps, counters and backoff are unchanged.
+The AppKit callbacks a display cycle can run (`resetCursorRects`, `_opaqueRectForWindowMoveWhenInTitlebar`,
+`displayLayer:`, `setFrameSize:`, `viewDidChangeBackingProperties`, `viewDidChangeEffectiveAppearance`,
+`windowDidResize:`) no longer wait for that lock: when it is held they defer their work to the next main-queue turn
+(the cursor rects are invalidated again, the frame size is applied to the renderer then), and the titlebar rect comes
+from a view ivar. `makeBackingLayer` still locks; AppKit asks for it only when the view becomes layer-backed. Input
+and drag callbacks still lock too: AppKit delivers them as events, not from a commit.
+`KYBERN_FRAME_STALL_TEST=kick-reentry:<ms>` invalidates the cursor rects inside a draw and kicks every <ms>;
+`flush-in-draw:<ms>` flushes inside the draw directly. AppKit updates cursor rects in a flush only for the key window,
+so under either fault the background test window answers `isKeyWindow` with YES instead of activating the app.
+`native/kick-reentry-check.ts` (with `frame-stall-lab.tsx`) runs both: before the fix each hung on the first fault
+with `reset_cursor_rects` in `lock_slow`, the field stack; after it every fault's draw continues and the deferred
+cursor rects are applied on the next turn.
+
 Subtree scale is now `paintTransform` ("Paint-only subtree transforms" below); the reasons in the native springs
 section: quads, paths, masks, glyphs and hitboxes need one coordinated GPUI scene
 transform. Translation is not presented as scale.
