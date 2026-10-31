@@ -186,20 +186,63 @@ export function errorText(error, secrets = []) {
   return text.slice(0, 4000);
 }
 
+// A workspace's executor (rules, skills, plugins, MCP, the sandbox) is the
+// slowest part of a first turn: dozens of sequential requests to Cursor. The
+// SDK caches it by workspace, account, settings and policy, so every agent in
+// that workspace shares one. A lease outlives its last session by this long so
+// the next conversation there starts warm.
+export const WORKSPACE_LINGER_MS = 10 * 60_000;
+
+/** Kybern's per-conversation MCP tools, run in this host as SDK custom tools.
+ * Agent-level MCP servers are part of the executor cache key, so a scoped
+ * capability there would give every conversation its own cold executor. */
+export async function kybernTools(spec, { fetch = globalThis.fetch, remember = () => {} } = {}) {
+  const authorization = spec.authorization;
+  remember(authorization, authorization.replace(/^Bearer\s+/i, ""));
+  const call = async (method, params) => {
+    const response = await fetch(spec.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: authorization },
+      body: JSON.stringify({ jsonrpc: "2.0", id: crypto.randomUUID(), method, params }),
+    });
+    const body = await response.json().catch(() => undefined);
+    if (body?.error) throw new Error(body.error.message ?? "Kybern tool request failed.");
+    if (!response.ok || !body) throw new Error(`Kybern tools are unavailable (HTTP ${response.status}). Send again to reconnect this conversation.`);
+    return body.result;
+  };
+  const { tools } = await call("tools/list", {});
+  return Object.fromEntries(tools.map((tool) => [tool.name, {
+    ...(tool.description ? { description: tool.description } : {}),
+    inputSchema: tool.inputSchema ?? { type: "object" },
+    ...(tool.annotations ? { annotations: tool.annotations } : {}),
+    async execute(args) {
+      try { return toolResult(await call("tools/call", { name: tool.name, arguments: args ?? {} })); }
+      catch (error) { return { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] }; }
+    },
+  }]));
+}
+
+export function toolResult(result) {
+  const content = (result?.content ?? []).map((block) =>
+    block.type === "text" ? { type: "text", text: block.text } :
+    block.type === "image" ? { type: "image", data: block.data, ...(block.mimeType ? { mimeType: block.mimeType } : {}) } :
+    { type: "text", text: JSON.stringify(block) });
+  return { content, ...(result?.isError ? { isError: true } : {}), ...(result?.structuredContent ? { structuredContent: result.structuredContent } : {}) };
+}
+
 /** One agent per logical session. emit is ordered and applies stdout backpressure. */
-export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}, sessionId } = {}) {
+export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}, sessionId, ensureCatalog, fetch } = {}) {
   let agent;
   let options;
   let modelSelector;
   let selectedEffort;
+  let tools;
   let active;
   let opening = false;
   let opened = Promise.resolve();
   let closing = false;
   let recoverAbandonedRun = false;
-  let warmRelease;
-  let warming;
-  let warmPending = 0;
+  let lease;
   const localReadOptions = (cwd) => ({ runtime: "local", cwd, ...(store ? { store } : {}) });
   secrets = [...new Set([...secrets, apiKey])];
   const remember = (...values) => { for (const value of values) if (value && !secrets.includes(value)) secrets.push(value); };
@@ -228,6 +271,36 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
     return entry.loading;
   }
 
+  // Shared, reference-counted workspace executors. The key mirrors the SDK's
+  // own cache key for what varies here; everything else is per account.
+  function acquireWarm(platform, local) {
+    shared.warm ??= new Map();
+    const key = JSON.stringify([local.cwd, local.sandboxOptions, local.autoReview]);
+    let entry = shared.warm.get(key);
+    if (!entry) {
+      const started = performance.now();
+      entry = { refs: 0, timer: undefined };
+      entry.ready = platform.prewarmLocalWorkspace({ apiKey, local }).then(
+        (release) => { trace("prewarm", started); return release; },
+        (error) => { trace("prewarm_failed", started, {error: safeError(error)}); if (shared.warm.get(key) === entry) shared.warm.delete(key); });
+      entry.release = async () => { if (shared.warm.get(key) === entry) shared.warm.delete(key); await (await entry.ready)?.(); };
+      shared.warm.set(key, entry);
+    } else trace("prewarm_shared", performance.now());
+    clearTimeout(entry.timer);
+    entry.refs++;
+    let held = true;
+    return {
+      ready: entry.ready.then(() => {}),
+      release() {
+        if (!held) return;
+        held = false;
+        if (--entry.refs > 0) return;
+        entry.timer = setTimeout(() => { if (!entry.refs) void entry.release().catch(() => {}); }, shared.lingerMs ?? WORKSPACE_LINGER_MS);
+        entry.timer.unref?.();
+      },
+    };
+  }
+
   async function primeSandbox(cwd) {
     // Cursor caches sandbox availability per process. T3 primes the sandbox
     // before the first Full access run so a later restricted run still works.
@@ -249,51 +322,57 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
     opening = true;
     const openingDone = Promise.withResolvers();
     opened = openingDone.promise;
+    let next;
     try {
       const local = { cwd: request.cwd, settingSources: SETTING_SOURCES, ...runtimePolicy(request.mode), enableAgentRetries: true, ...(store ? { store } : {}) };
-      const checkStarted = performance.now();
       const platform = await platformFor(request.cwd);
+      if (!local.sandboxOptions.enabled) await primeSandbox(request.cwd);
+      // Start the workspace scan before anything else: it needs neither the
+      // model catalog nor the agent, so their requests overlap it.
+      next = acquireWarm(platform, local);
+      const toolsStarted = performance.now();
+      const loadingTools = request.nativeTools && (request.nativeTools === tools?.spec ? Promise.resolve(tools)
+        : kybernTools(request.nativeTools, { remember, ...(fetch ? { fetch } : {}) }).then((value) => { trace("tools", toolsStarted); return { spec: request.nativeTools, value }; }));
+      const checkStarted = performance.now();
+      await ensureCatalog?.(request);
       const requested = modelSelection(request.model, request.effort);
       let selected;
       try { selected = await platform.resolveLocalModelSelection(requested, apiKey); }
       catch (error) { throw modelError(error, requested); }
       trace("model_check", checkStarted);
-      const next = { apiKey, model: selected, mode: "agent", local, ...(request.mcpServers ? { mcpServers: request.mcpServers } : {}) };
-      for (const server of Object.values(request.mcpServers ?? {})) {
-        for (const value of Object.values(server.headers ?? {})) {
-          remember(value, value.replace(/^Bearer\s+/i, ""));
-        }
-      }
-      if (!local.sandboxOptions.enabled) await primeSandbox(request.cwd);
+      const nextTools = await loadingTools;
+      const nextOptions = { apiKey, model: selected, mode: "agent", local: { ...local, ...(nextTools ? { customTools: nextTools.value } : {}) } };
       const previous = agent;
       const id = request.agentId ?? previous?.agentId;
-      const previousWarm = warming;
-      // Hold the lease until close. Releasing it immediately discards the
-      // executor and moves the same scan back into the first send.
-      warmPending++;
-      warming = (async () => {
-        await previousWarm;
-        const warmStarted = performance.now();
-        const release = await platform.prewarmLocalWorkspace(next);
-        trace("prewarm", warmStarted);
-        const previousRelease = warmRelease;
-        warmRelease = release;
-        await previousRelease?.();
-      })().catch((error) => trace("prewarm_failed", performance.now(), {error: safeError(error)})).finally(()=>warmPending--);
       const createStarted = performance.now();
-      try { agent = id ? await platform.resumeAgent(id, next) : await platform.createAgent(next); }
-      catch (error) { throw modelError(error, next.model); }
+      try { agent = id ? await platform.resumeAgent(id, nextOptions) : await platform.createAgent(nextOptions); }
+      catch (error) { throw modelError(error, nextOptions.model); }
       finally { trace("agent_creation", createStarted, {resume: !!id}); }
-      options = next;
+      options = nextOptions;
+      tools = nextTools;
       modelSelector = request.model;
       selectedEffort = request.effort;
       previous?.close();
+      [lease, next] = [next, lease];
       recoverAbandonedRun = !!id;
       if (closing) throw new Error("Cursor session is closing.");
       return { agentId: agent.agentId, model: request.model || "default" };
     } finally {
+      next?.release();
       opening = false;
       openingDone.resolve();
+    }
+  }
+
+  // Runs list oldest first, so the abandoned one is usually on the last page.
+  async function runningRun(agentId, readOptions) {
+    let cursor;
+    for (let page = 0; page < 20; page++) {
+      const runs = await sdk.Agent.listRuns(agentId, { ...readOptions, limit: 100, ...(cursor ? { cursor } : {}) });
+      const running = runs.items.findLast((run) => run.status === "running");
+      if (running) return running;
+      cursor = runs.nextCursor;
+      if (!cursor) return undefined;
     }
   }
 
@@ -307,7 +386,8 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
     idle();
     if (!agent) throw new Error("Open a Cursor session before sending a message.");
     const sendStarted = performance.now();
-    let firstEvent = true;
+    let firstEvent;
+    let firstText = true;
     const starting = Promise.withResolvers();
     const turn = { run: null, prewarming: true, cancelled: false, ready: false, pending: [], pendingBytes: 0, updates: Promise.resolve(), done: null, started: starting.promise };
     active = turn;
@@ -318,7 +398,9 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
       return turn.updates;
     };
     const onDelta = ({ update }) => {
-      if (firstEvent) { firstEvent = false; trace("first_event", sendStarted); }
+      // Timing from send: first SDK event, then first streamed text.
+      if (firstEvent === undefined) { firstEvent = performance.now(); trace("first_event", sendStarted); }
+      if (firstText && update?.type === "text-delta") { firstText = false; trace("first_text", sendStarted, {sinceEventMs: Math.round(performance.now() - firstEvent)}); }
       if (!turn.ready) {
         turn.pendingBytes += JSON.stringify(update).length;
         if (turn.pendingBytes > 16 * 1024 * 1024) throw new Error("Cursor emitted too much output before starting its run.");
@@ -327,9 +409,16 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
       }
       return dispatch(update);
     };
-    await warming;
+    // The run would build the same executor; waiting here keeps an interrupt
+    // during the scan from admitting the prompt.
+    const waitStarted = performance.now();
+    await lease?.ready;
+    trace("prewarm_wait", waitStarted);
     turn.prewarming = false;
-    const start = () => agent.send(request.message, { model: options.model, mcpServers: options.mcpServers, onDelta });
+    // MCP servers stay on the agent. A send-level override makes the SDK build
+    // a fresh MCP lease for the run: it reconnects every project and user
+    // server, and the run's tool listing waits for the slowest one.
+    const start = () => agent.send(request.message, { model: options.model, onDelta });
     try {
       // An interrupt received while prewarming has not admitted a prompt.
       // Do not start a billable run merely to cancel it immediately afterwards.
@@ -343,13 +432,13 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
         if (!recoverAbandonedRun || !/already has active run/i.test(safeError(error))) throw modelError(error, options.model);
         recoverAbandonedRun = false;
         const readOptions = localReadOptions(options.local.cwd);
-        const runs = await sdk.Agent.listRuns(agent.agentId, { ...readOptions, limit: 1 });
-        const abandoned = runs.items.find((run) => run.status === "running");
+        const abandoned = await runningRun(agent.agentId, readOptions);
         if (!abandoned) throw error;
         await sdk.Agent.cancelRun(abandoned.id, readOptions);
         turn.run = await start();
       }
       recoverAbandonedRun = false;
+      trace("run_started", sendStarted);
       await emit({ type: "run_started", runId: turn.run.id });
       // Queue buffered updates before opening the gate for new callbacks.
       for (const update of turn.pending) dispatch(update);
@@ -402,16 +491,11 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
     }
     agent?.close();
     agent = undefined;
-    const release = async () => {
-      await warming;
-      await warmRelease?.();
-      warmRelease = undefined;
-      releasePlatform();
-    };
-    // SDK prewarm has no cancellation API. Release its eventual lease in the
-    // background so closing an unused session cannot time out a sibling's host.
-    if (warmPending) void release().catch((error)=>trace("prewarm_release_failed",performance.now(),{error:safeError(error)}));
-    else await release();
+    // The workspace lease lingers for the next conversation; a pending scan
+    // (the SDK cannot cancel one) never delays this close.
+    lease?.release();
+    lease = undefined;
+    releasePlatform();
   }
 
   return {
@@ -426,7 +510,7 @@ export function createHost(sdk, emit, { apiKey, store, secrets = [], shared = {}
         case "set_effort": idle(); if (!agent) throw new Error("Cursor session is not open."); options.model = modelSelection(modelSelector, request.effort); selectedEffort = request.effort; return {};
         case "set_mode":
           if (!agent) throw new Error("Cursor session is not open.");
-          return open({ cwd: options.local.cwd, model: request.model ?? modelSelector, effort: selectedEffort, mode: request.mode, mcpServers: options.mcpServers });
+          return open({ cwd: options.local.cwd, model: request.model ?? modelSelector, effort: selectedEffort, mode: request.mode, nativeTools: tools?.spec });
         case "list": return sdk.Agent.list({ ...localReadOptions(request.cwd), limit: 50, ...(request.cursor ? { cursor: request.cursor } : {}) });
         case "read": {
           const readOptions = localReadOptions(request.cwd);
@@ -482,7 +566,7 @@ export function createAccountHost(sdk, emit, options = {}) {
   options.secrets ??= [];
   options.secrets.push(options.apiKey);
   const sessions = new Map();
-  const shared = {};
+  const shared = { lingerMs: options.lingerMs };
   const environment = new AsyncLocalStorage();
   // Node resolves child-process env through this object. Async-local reads
   // keep askpass capabilities scoped even when account agents run concurrently.
@@ -509,11 +593,23 @@ export function createAccountHost(sdk, emit, options = {}) {
     },
   });
   process.env = env;
+  // Called by open after it starts the workspace scan, so a missing catalog
+  // is fetched in parallel with it. One list serves every agent on the account.
+  async function ensureCatalog(request) {
+    const started = performance.now();
+    const cached = request.catalog && nativeCatalog(request.catalog);
+    if (cached) shared.catalog = Promise.resolve(cached);
+    const reused = !cached && !!shared.catalog;
+    shared.catalog ??= sdk.Cursor.models.list({apiKey:options.apiKey}).catch((error) => { shared.catalog = undefined; throw error; });
+    process.env.CURSOR_SDK_LOCAL_MODEL_CATALOG_JSON = JSON.stringify(await shared.catalog);
+    timing("model_catalog", started, {session:request.session ?? "default",source:cached ? "daemon" : reused ? "host" : "fetched"});
+  }
   return {
     safeError: (error) => [...sessions.values()].reduce((message,session)=>session.host.safeError(message), errorText(error, options.secrets)),
     async close() {
       await Promise.all([...sessions.values()].map(({host,env}) => environment.run(env,()=>host.close())));
       sessions.clear();
+      for (const entry of shared.warm?.values() ?? []) { clearTimeout(entry.timer); await entry.release().catch(() => {}); }
       if (process.env === env) process.env = ambient;
     },
     async request(request) {
@@ -531,16 +627,8 @@ export function createAccountHost(sdk, emit, options = {}) {
       if (!session) {
         if (!["open","list","read"].includes(request.type)) throw new Error("Cursor session is not open.");
         const env = Object.fromEntries(Object.entries(request.env ?? {}).filter(([key])=>scopedKeys.has(key)));
-        session = {env, host:createHost(sdk, (value)=>emit({...value,session:id}), {...options,shared,sessionId:id,secrets:[...options.secrets,env.KYBERN_ASKPASS_TOKEN]})};
+        session = {env, host:createHost(sdk, (value)=>emit({...value,session:id}), {...options,shared,sessionId:id,ensureCatalog,secrets:[...options.secrets,env.KYBERN_ASKPASS_TOKEN]})};
         sessions.set(id,session);
-      }
-      if (request.type === "open") {
-        const started = performance.now();
-        const cached = request.catalog && nativeCatalog(request.catalog);
-        if (cached) shared.catalog = Promise.resolve(cached);
-        shared.catalog ??= sdk.Cursor.models.list({apiKey:options.apiKey}).catch((error) => { shared.catalog = undefined; throw error; });
-        process.env.CURSOR_SDK_LOCAL_MODEL_CATALOG_JSON = JSON.stringify(await shared.catalog);
-        timing("model_catalog", started, {session:id,cached:!!cached});
       }
       let result;
       try { result = await environment.run(session.env,()=>session.host.request(request)); }
@@ -609,7 +697,7 @@ async function main(mode) {
     return;
   }
   if (mode !== "stdio") throw new Error(`Unknown Cursor SDK host mode: ${mode}`);
-  const host = createAccountHost(sdk, emit, { apiKey, store, secrets: runtimeSecrets });
+  const host = createAccountHost(sdk, emit, { apiKey, store, secrets: runtimeSecrets, lingerMs: Number(process.env.KYBERN_CURSOR_LINGER_MS) || undefined });
   sanitize = host.safeError;
   let stopping;
   const stop = () => (stopping ??= host.close().finally(async () => { await writes; process.exit(0); }));

@@ -1,6 +1,8 @@
 //! One supervised SDK process per account/environment. Logical sessions retain
 //! independent event streams and capabilities. Only confirmed native IDs are
 //! resumed after a crash; an ambiguously admitted prompt is never replayed.
+//! The host outlives its last session by `HOST_LINGER`, with its warm
+//! workspaces, so the next conversation on the account starts warm.
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -14,8 +16,14 @@ use crate::ndjson::{NdjsonChild, SessionLifetime};
 use crate::{DriverError, DriverEvent, ProbeContext, Result};
 
 type Reply = oneshot::Sender<std::result::Result<Value, String>>;
-type Hosts = Mutex<HashMap<[u8; 32], Weak<Hub>>>;
+type Hosts = Mutex<HashMap<[u8; 32], Arc<Hub>>>;
 static HOSTS: OnceLock<Hosts> = OnceLock::new();
+#[cfg(not(test))]
+pub(super) const HOST_LINGER: Duration = Duration::from_secs(10 * 60);
+#[cfg(test)]
+pub(super) const HOST_LINGER: Duration = Duration::from_millis(1500);
+/// Recent host stderr kept for crash diagnostics.
+const STDERR_LINES: usize = 64;
 const RESTORING: &str = "Cursor is resuming after its host restarted.";
 const SCOPED_ENV: [&str; 7] = [
     "SUDO_ASKPASS",
@@ -81,7 +89,7 @@ pub(super) fn update_catalog(context: &ProbeContext, catalog: Value) {
     let Ok(key) = account_key(&account_context(context)) else { return };
     let Some(hosts) = HOSTS.get() else { return };
     let hosts = hosts.lock().unwrap_or_else(|poison| poison.into_inner());
-    if let Some(host) = hosts.get(&key).and_then(Weak::upgrade) {
+    if let Some(host) = hosts.get(&key) {
         let _ = host.tx.send(Command::Catalog(catalog));
     }
 }
@@ -90,19 +98,24 @@ impl Connection {
     pub(crate) fn spawn(context: &ProbeContext) -> Result<(Self, mpsc::Receiver<DriverEvent>)> {
         let account = account_context(context);
         let key = account_key(&account)?;
+        // Registration happens under this lock, which is what lets a lingering
+        // host retire itself without racing a new session (see `serve`).
         let mut hosts = HOSTS.get_or_init(Mutex::default).lock().unwrap_or_else(|poison| poison.into_inner());
-        hosts.retain(|_, host| host.strong_count() > 0);
-        let hub = match hosts.get(&key).and_then(Weak::upgrade).filter(|hub| !hub.closed.load(Ordering::Acquire)) {
-            Some(hub) => hub,
+        hosts.retain(|_, host| !host.closed.load(Ordering::Acquire));
+        let hub = match hosts.get(&key) {
+            Some(hub) => {
+                tracing::debug!(target: "kybern_drivers::cursor::timing", phase = "host_reused", "Cursor startup timing");
+                hub.clone()
+            }
             None => {
                 let started = Instant::now();
-                let child = Arc::new(NdjsonChild::spawn(super::runtime::command(&account, "stdio")?)?);
-                tracing::debug!(phase = "node_start", elapsed_ms = started.elapsed().as_millis(), "Cursor startup timing");
+                let child = Arc::new(NdjsonChild::spawn(host_command(&account)?)?);
+                tracing::debug!(target: "kybern_drivers::cursor::timing", phase = "node_spawn", elapsed_ms = started.elapsed().as_millis(), "Cursor startup timing");
                 let (tx, rx) = mpsc::unbounded_channel();
                 let closed = Arc::new(AtomicBool::new(false));
                 let hub = Arc::new(Hub { tx, closed: closed.clone() });
-                tokio::spawn(serve(account, child, rx, closed));
-                hosts.insert(key, Arc::downgrade(&hub));
+                tokio::spawn(serve(key, Arc::downgrade(&hub), account, child, rx, closed));
+                hosts.insert(key, hub.clone());
                 hub
             }
         };
@@ -171,6 +184,29 @@ impl Drop for Connection {
     }
 }
 
+fn host_command(context: &ProbeContext) -> Result<tokio::process::Command> {
+    let mut command = super::runtime::command(context, "stdio")?;
+    // Workspace executors linger exactly as long as the host does.
+    command.env("KYBERN_CURSOR_LINGER_MS", HOST_LINGER.as_millis().to_string());
+    Ok(command)
+}
+
+/// Keeps the newest stderr lines for diagnostics and forwards the host's
+/// per-step timings, so a long-lived host never reports stale output.
+async fn drain_stderr(child: &NdjsonChild, recent: &mut VecDeque<String>) {
+    let mut stderr = child.stderr.lock().await;
+    while let Ok(line) = stderr.try_recv() {
+        if let Some(timing) = line.strip_prefix("cursor_timing ") {
+            tracing::debug!(target: "kybern_drivers::cursor::timing", "{timing}");
+            continue;
+        }
+        if recent.len() == STDERR_LINES {
+            recent.pop_front();
+        }
+        recent.push_back(line);
+    }
+}
+
 async fn write(child: &NdjsonChild, session: &str, operation: &str, mut params: Value) -> Result<String> {
     let id = uuid::Uuid::new_v4().to_string();
     params["id"] = json!(id);
@@ -227,6 +263,8 @@ fn deliver(slot: &mut Slot, events: Vec<DriverEvent>) -> bool {
 }
 
 async fn serve(
+    key: [u8; 32],
+    hub: Weak<Hub>,
     context: ProbeContext,
     mut child: Arc<NdjsonChild>,
     mut commands: mpsc::UnboundedReceiver<Command>,
@@ -236,18 +274,19 @@ async fn serve(
     let mut slots: HashMap<String, Slot> = HashMap::new();
     let mut pending: HashMap<String, Pending> = HashMap::new();
     let mut crashes = VecDeque::new();
-    let mut timer = tokio::time::interval(Duration::from_secs(1));
+    let mut recent = VecDeque::new();
+    let mut timer = tokio::time::interval(Duration::from_millis(250));
     let mut failed = false;
+    // Set while no session is registered; the host retires once it is older than HOST_LINGER.
+    let mut idle_since = Some(Instant::now());
     loop {
         if failed {
             let now = Instant::now();
             crashes.retain(|when| now.duration_since(*when) < Duration::from_secs(60));
             crashes.push_back(now);
-            let mut diagnostics = Vec::new();
-            while let Ok(line) = child.stderr.lock().await.try_recv() {
-                diagnostics.push(line);
-            }
-            let diagnostic = super::runtime::diagnostic(diagnostics.join("\n").as_bytes());
+            drain_stderr(&child, &mut recent).await;
+            let diagnostic = super::runtime::diagnostic(recent.iter().map(String::as_str).collect::<Vec<_>>().join("\n").as_bytes());
+            recent.clear();
             for (_, call) in pending.drain() {
                 if call.operation == "close" {
                     slots.remove(&call.session);
@@ -266,7 +305,7 @@ async fn serve(
             if crashes.len() > 3 || slots.is_empty() {
                 break;
             }
-            let next = super::runtime::command(&context, "stdio").and_then(NdjsonChild::spawn);
+            let next = host_command(&context).and_then(NdjsonChild::spawn);
             match next {
                 Ok(next) => {
                     drop(lifetime);
@@ -322,7 +361,7 @@ async fn serve(
             command = commands.recv() => {
                 match command {
                     None => break,
-                    Some(Command::Register(id,events)) => { slots.insert(id,Slot{events,stream:Default::default(),open:None,restoring:false}); }
+                    Some(Command::Register(id,events)) => { idle_since = None; slots.insert(id,Slot{events,stream:Default::default(),open:None,restoring:false}); }
                     Some(Command::Catalog(catalog)) => {
                         for slot in slots.values_mut() { if let Some(open)=&mut slot.open {open["catalog"]=catalog.clone();} }
                         if write(&child,"catalog","catalog",json!({"catalog":catalog})).await.is_err() {failed=true;}
@@ -337,7 +376,6 @@ async fn serve(
                         }
                     }
                 }
-                if slots.is_empty() { break; }
             }
             value = incoming => {
                 let Some(value) = value else { failed=true; continue };
@@ -371,7 +409,6 @@ async fn serve(
                             });
                         }
                         if let Some(reply)=call.reply { let _=reply.send(result); }
-                        if slots.is_empty() { break; }
                     }
                 } else {
                     // Untagged events are accepted only by the single-session
@@ -382,20 +419,42 @@ async fn serve(
                             if !deliver(slot,events) {
                                 slots.remove(&id);
                                 if retire(&child,&mut pending,&id).await.is_err() {failed=true;}
-                                if slots.is_empty() { break; }
                             }
                     }
                 }
             }
             _ = timer.tick() => {
+                drain_stderr(&child, &mut recent).await;
                 if pending.values().any(|call|call.deadline<=Instant::now()) {
                     tracing::warn!("Cursor SDK operation timed out; retiring host before any prompt can be replayed");
                     failed=true;
                 }
             }
         }
+        if !slots.is_empty() || !pending.is_empty() {
+            continue;
+        }
+        let since = *idle_since.get_or_insert_with(Instant::now);
+        if since.elapsed() >= HOST_LINGER {
+            // Sessions register while holding HOSTS, so an empty queue under
+            // the lock means no new session can still be bound to this host.
+            let mut hosts = HOSTS.get_or_init(Mutex::default).lock().unwrap_or_else(|poison| poison.into_inner());
+            if commands.is_empty() {
+                closed.store(true, Ordering::Release);
+                if hosts.get(&key).is_some_and(|current| std::ptr::eq(Arc::as_ptr(current), hub.as_ptr())) {
+                    hosts.remove(&key);
+                }
+                break;
+            }
+        }
     }
     closed.store(true, Ordering::Release);
+    {
+        let mut hosts = HOSTS.get_or_init(Mutex::default).lock().unwrap_or_else(|poison| poison.into_inner());
+        if hosts.get(&key).is_some_and(|current| std::ptr::eq(Arc::as_ptr(current), hub.as_ptr())) {
+            hosts.remove(&key);
+        }
+    }
     for (_, call) in pending {
         if let Some(reply) = call.reply {
             let _ = reply.send(Err("Cursor host closed".into()));
@@ -497,6 +556,27 @@ for line in sys.stdin:
         assert_ne!(other.call("open", json!({})).await.unwrap()["pid"], b["pid"]);
         other.close().await.unwrap();
         second.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_host_lingers_for_the_next_session_then_retires() {
+        let root = tempfile::tempdir().unwrap();
+        let context = fixture(root.path());
+        let (first, _) = spawn(&context);
+        let pid = first.call("open", json!({})).await.unwrap()["pid"].clone();
+        first.close().await.unwrap();
+        drop(first);
+        tokio::time::sleep(HOST_LINGER / 3).await;
+        let (second, _) = spawn(&context);
+        assert_eq!(second.call("open", json!({})).await.unwrap()["pid"], pid);
+        second.close().await.unwrap();
+        drop(second);
+        tokio::time::sleep(HOST_LINGER + Duration::from_secs(1)).await;
+        let alive = std::process::Command::new("kill").args(["-0", &pid.to_string()]).status().unwrap().success();
+        assert!(!alive, "a retired host process must exit");
+        let (third, _) = spawn(&context);
+        assert_ne!(third.call("open", json!({})).await.unwrap()["pid"], pid);
+        third.close().await.unwrap();
     }
 
     #[tokio::test]

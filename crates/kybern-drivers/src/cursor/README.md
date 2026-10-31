@@ -64,11 +64,14 @@ handles. The daemon suppresses its generic tool/task fallback for SDK events.
 Cancellation during admission is remembered and applied as soon as a run exists.
 Close waits for admission, cancels that session's run, releases its workspace
 warm lease, and closes its SDK agent. The daemon's existing idle policy closes
-logical sessions; releasing the final session terminates the account process
-group. Dropping a cancelled startup releases only its own session. A timed-out
+logical sessions. The account process outlives its final session by
+`HOST_LINGER` (10 minutes) with its warm workspaces, then exits; a session
+opened meanwhile reuses it. Dropping a cancelled startup releases only its own session. A timed-out
 or crashed host is retired before it can admit another prompt.
 A first send after resume may recover an abandoned persisted run once, using
 `Agent.listRuns` and `Agent.cancelRun`; new sessions never force-cancel runs.
+Runs list oldest first, so recovery pages through them for the running one
+(a host killed mid-turn otherwise left its agent stuck with an "active run").
 SDK shell failures cannot crash the Rust daemon.
 
 The Rust supervisor restarts a crashed account host and resumes every confirmed
@@ -83,9 +86,9 @@ Events carry a logical session ID and fold through an independent transcript
 stream per agent. A saturated output receiver retires only that session with
 an explicit error, so sibling control requests cannot hang behind it. Scoped askpass credentials use an async-local environment view
 rather than replacing the account host's ambient credentials. Sessions retain
-their own MCP headers, cancellation state and SDK agent. Workspace platforms and
-prewarm leases are reference counted and discarded with the last user; catalog
-data stays loaded for the account process's lifetime.
+their own tool capability, cancellation state and SDK agent. Workspace platforms
+are reference counted; workspace executors are shared (below); catalog data
+stays loaded for the account process's lifetime.
 
 The daemon passes its cached model catalog to new sessions. Opaque selectors
 retain native parameter and max-mode metadata so the host can reconstruct the
@@ -93,41 +96,58 @@ SDK catalog and seed `CURSOR_SDK_LOCAL_MODEL_CATALOG_JSON` without another netwo
 list. Old caches lacking this metadata deliberately discover once per host,
 then share the result across workspaces. A provider refresh updates the live
 account catalog without restarting its agents. No max-mode label is added to the picker.
-`prewarmLocalWorkspace` starts during open with the exact eventual workspace,
-settings, sandbox and MCP options; its lease survives until session close.
+A missing catalog is fetched while the workspace scan runs, not before it.
+
+## Workspace executors and Kybern tools
+
+The SDK's local executor (rules, skills, plugins, user and project MCP servers,
+sandbox) is the slowest part of a first turn: about 7–25 s of sequential
+requests to Cursor from this network. The SDK caches executors by workspace,
+account, settings, sandbox/auto-review policy **and agent-level MCP servers**.
+The host therefore:
+
+- calls `prewarmLocalWorkspace` first in open, keyed only by workspace and
+  policy, and shares that lease between every agent in the workspace; it
+  lingers `HOST_LINGER` after its last session;
+- serves Kybern's tools as SDK `local.customTools` (`kybernTools` in
+  `host.mjs`): it lists the daemon's per-thread MCP endpoint with that thread's
+  scoped bearer and forwards each call there. A per-thread bearer in
+  `mcpServers` would give every conversation its own cold executor. Tool events
+  arrive from the SDK's `custom-user-tools` server and are named
+  `mcp__kybern__<tool>` as before. Custom tools are not subject to Cursor's
+  auto-review; the daemon's own consent rules still apply to every call;
+- never passes `mcpServers` to `send`. A send-level override makes the SDK
+  build a fresh MCP lease for the run, reconnecting every project and user
+  server; the run's tool listing waited for the slowest one (about 6 s per turn
+  with the 20 servers on the test machine). T3 omits it for the same reason.
 
 Commands, model changes, history, and authentication use the official SDK APIs.
-`/compress` is a native message command. MCP uses the daemon’s per-thread HTTP
-endpoint and scoped bearer capability. Secrets never appear in response errors.
+`/compress` is a native message command. Secrets, including the tool
+capability, never appear in response errors.
 
 ## Startup measurements (2026-10-31)
 
-Apple M1 MacBookPro17,1, macOS arm64, Node 24.22.1, SDK 1.2.0, existing browser
-login; `Reply with OK` on GPT-5.4 Nano, scratch JSONL stores and workspaces.
-Native project/user/team/MDM/plugin settings remained enabled. These are small
-live samples, with uncontrolled network latency and other agents compiling on
-the same Mac, not latency guarantees.
+Apple M1 MacBookPro17,1, Node 24.22.1, SDK 1.2.0, existing browser login,
+GPT-5.4 Nano, `Reply with OK`, scratch stores and workspaces, all native setting
+sources enabled (the user's 20 MCP servers included). Round-trip time to Cursor's
+backend was about 270 ms with 0.6–3 s TLS handshakes; other agents were compiling
+on the same Mac (load averages 5–42). Old (process per session) and new runs were
+interleaved. Small samples, not guarantees.
 
-| Boundary | Before account host | Account host |
+| Send → first streamed text | Before | After |
 | --- | ---: | ---: |
-| Process start to agent open | 5,389 ms | 372 ms |
-| Cold start to first SDK delta | 24,679 ms | 28,506 ms |
-| Warm send to first SDK delta | 3,284 ms | 7,945 ms |
-| Second agent open in the same host | — | 74 ms |
-| Second agent open through first SDK delta | — | 6,006 ms |
+| Next turn, same conversation | 9.6–16.2 s | 2.1–2.3 s |
+| New conversation, warm workspace in the host | (cold) | 2.3–2.6 s |
+| New conversation within the linger window | (cold) | 2.6 s |
+| Fully cold (open + send) | 24.8–31.3 s | 23.2–26.5 s |
 
-A separate scratch-daemon run included the real Kybern guide and per-thread MCP
-capability. It reached session readiness in 400 ms cold, 1 ms for the same
-session, and 44 ms for another agent in the same host. End-to-end first provider
-events were **38,818 / 9,521 / 29,738 ms** respectively. SDK prewarm alone took
-25,877 ms cold and 9,541 ms for the second agent's distinct MCP configuration.
-One SDK load served both agents. All three replies completed as `OK`.
-
-The under-2-second warm / under-5-second cold first-output targets are **not
-met**. Host/model-discovery overhead is reduced, but workspace/runtime setup and
-backend first-event latency still dominate. No settings, tools, context size,
-permissions or output were removed to improve these numbers. Ten tiny prompts
-were sent across all ADE-105 benchmarks; ADE-106 variant checks sent none.
+Scratch daemon (real guide, real tool endpoint): 17.3 s cold, 2.7 s for the next
+turn, 3.3 s for a new conversation in the same workspace, 12.9 s for a new
+workspace in a running host. Fully cold time is Cursor's: the executor build
+and the first run on a new executor (two key exchanges, a new TLS connection and
+about 2.4 s of in-stream setup) cannot be done without a run. Under 2 s warm is
+reached for the host-protocol path only in its best samples; under 5 s cold is
+not reachable from the client on this network.
 
 ## Setup and distribution
 
@@ -159,9 +179,11 @@ CARGO_INCREMENTAL=0 cargo test -p kybern-drivers --lib
 CARGO_INCREMENTAL=0 cargo test -p kybern-drivers --test live_drivers cursor_completes_a_turn -- --nocapture
 ```
 
-Timing logs are permanent: `RUST_LOG=provider.stderr=debug,kybern::turn_startup=info`
-shows `cursor_timing` phases for Node start, SDK load, catalog/model check, agent
-creation, workspace prewarm and first SDK event. The existing daemon startup
+Timing logs are permanent: `RUST_LOG=kybern_drivers::cursor::timing=debug,kybern::turn_startup=info`
+shows the host's phases: `node_spawn`/`host_reused`, `node_start`, `sdk_load`,
+`tools`, `model_catalog` (source daemon/host/fetched), `model_check`,
+`agent_creation`, `prewarm`/`prewarm_shared`, and per send `prewarm_wait`,
+`run_started`, `first_event` and `first_text`. The existing daemon startup
 spans measure session/checkpoint readiness and the first provider event from
 turn admission. Session IDs correlate interleaved account-host phases; prompts,
 keys and MCP capabilities are not logged.

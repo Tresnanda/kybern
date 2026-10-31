@@ -186,7 +186,12 @@ impl Stream {
                 }));
             }
             let name = if kind == "mcp" {
-                format!("mcp__{}__{}", input["providerIdentifier"].as_str().unwrap_or("mcp"), input["toolName"].as_str().unwrap_or("tool"))
+                // Kybern's tools reach the SDK as its custom-tools server.
+                let server = match input["providerIdentifier"].as_str().unwrap_or("mcp") {
+                    "custom-user-tools" => "kybern",
+                    server => server,
+                };
+                format!("mcp__{server}__{}", input["toolName"].as_str().unwrap_or("tool"))
             } else {
                 kind.to_string()
             };

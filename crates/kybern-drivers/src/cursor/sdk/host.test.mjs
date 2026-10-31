@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createHost, createAccountHost, nativeCatalog, modelCatalog, modelSelection, runtimePolicy, errorText, modelError } from "./host.mjs";
+import { createHost, createAccountHost, kybernTools, toolResult, nativeCatalog, modelCatalog, modelSelection, runtimePolicy, errorText, modelError } from "./host.mjs";
 
-function fixture({ duringStart, failStart, warmGate } = {}) {
+function fixture({ duringStart, failStart, warmGate, fetch } = {}) {
   const terminal = Promise.withResolvers();
   const started = Promise.withResolvers();
   const events = [];
@@ -25,15 +25,18 @@ function fixture({ duringStart, failStart, warmGate } = {}) {
   const sdk = { Agent: {
     create: async (options) => { calls.push(["create", options]); return agent; },
     resume: async (id, options) => { calls.push(["resume", id, options]); return agent; },
-    listRuns: async () => ({ items: [{ id: "old", status: "running" }] }),
+    // Oldest first and paged, like the SDK: the stale run is not the first item.
+    listRuns: async (_id, { limit, cursor }) => cursor === "next"
+      ? { items: [{ id: "done", status: "finished" }, { id: "old", status: "running" }] }
+      : { items: [{ id: "first", status: "finished" }].slice(0, limit), nextCursor: "next" },
     cancelRun: async (id) => calls.push(["recover", id]),
   }, createAgentPlatform: async () => ({
     resolveLocalModelSelection: async (selection) => selection,
     createAgent: async (options) => sdk.Agent.create(options),
     resumeAgent: async (id,options) => sdk.Agent.resume(id,options),
-    prewarmLocalWorkspace: async () => { calls.push(["prime"]); await warmGate; return () => {}; },
+    prewarmLocalWorkspace: async (options) => { calls.push(["prime", options]); await warmGate; return () => {}; },
   }) };
-  const host = createHost(sdk, async (event) => { await Promise.resolve(); events.push(event); }, { apiKey: "secret" });
+  const host = createHost(sdk, async (event) => { await Promise.resolve(); events.push(event); }, { apiKey: "secret", fetch });
   return { host, events, calls, terminal, started, delta: (update) => callback({ update }) };
 }
 const open = (host, extra = {}) => host.request({ type: "open", cwd: "/repo", mode: "auto", model: "model", ...extra });
@@ -103,9 +106,64 @@ test("permission changes resume the same agent with sandbox primed before full a
 });
 
 
+// Stands in for the daemon's per-conversation MCP endpoint.
+function daemonTools(requests = []) {
+  return async (url, init) => {
+    const body = JSON.parse(init.body);
+    requests.push({ url, authorization: init.headers.Authorization, ...body });
+    if (init.headers.Authorization !== "Bearer capability") return new Response("Native tool session is unavailable", { status: 401 });
+    const result = body.method === "tools/list"
+      ? { tools: [{ name: "kybern_ping", description: "Ping", inputSchema: { type: "object", properties: { text: { type: "string" } } }, annotations: { readOnlyHint: true } }] }
+      : body.params.arguments.fail ? { isError: true, content: [{ type: "text", text: "nope" }] }
+      : { content: [{ type: "text", text: `pong ${body.params.arguments.text}` }, { type: "image", data: "aW1n", mimeType: "image/png" }, { type: "resource", resource: { uri: "x" } }] };
+    return Response.json({ jsonrpc: "2.0", id: body.id, result });
+  };
+}
+const nativeTools = { url: "http://127.0.0.1:9/native-tools/mcp", authorization: "Bearer capability" };
+
+test("Kybern tools run as host custom tools against the scoped daemon endpoint", async () => {
+  const requests = [];
+  const tools = await kybernTools(nativeTools, { fetch: daemonTools(requests) });
+  assert.deepEqual(Object.keys(tools), ["kybern_ping"]);
+  assert.deepEqual(tools.kybern_ping.annotations, { readOnlyHint: true });
+  assert.equal(tools.kybern_ping.inputSchema.properties.text.type, "string");
+  assert.deepEqual(await tools.kybern_ping.execute({ text: "hi" }, {}), { content: [
+    { type: "text", text: "pong hi" }, { type: "image", data: "aW1n", mimeType: "image/png" }, { type: "text", text: '{"type":"resource","resource":{"uri":"x"}}' }] });
+  assert.deepEqual(await tools.kybern_ping.execute({ fail: true }, {}), { content: [{ type: "text", text: "nope" }], isError: true });
+  assert.deepEqual(requests.map((r) => [r.method, r.authorization, r.params.name]), [
+    ["tools/list", "Bearer capability", undefined], ["tools/call", "Bearer capability", "kybern_ping"], ["tools/call", "Bearer capability", "kybern_ping"]]);
+  assert.notEqual(requests[1].id, requests[2].id);
+  // A revoked capability is a readable tool error, never a crashed run.
+  const revoked = await kybernTools(nativeTools, { fetch: async (url, init) => JSON.parse(init.body).method === "tools/list"
+    ? Response.json({ jsonrpc: "2.0", result: { tools: [{ name: "kybern_ping" }] } }) : new Response("gone", { status: 401 }) });
+  const failed = await revoked.kybern_ping.execute({}, {});
+  assert.equal(failed.isError, true);
+  assert.match(failed.content[0].text, /unavailable \(HTTP 401\)/);
+  assert.deepEqual(toolResult({ content: [], structuredContent: { a: 1 } }), { content: [], structuredContent: { a: 1 } });
+});
+
+test("tools stay off the executor key and off every send", async () => {
+  const f = fixture({ fetch: daemonTools() });
+  await open(f.host, { nativeTools });
+  const created = f.calls.find((c) => c[0] === "create")[1];
+  assert.equal(created.mcpServers, undefined);
+  assert.deepEqual(Object.keys(created.local.customTools), ["kybern_ping"]);
+  const primed = f.calls.find((c) => c[0] === "prime")[1];
+  assert.equal(primed.mcpServers, undefined);
+  assert.equal(primed.local.customTools, undefined);
+  await f.host.request({ type: "send", message: { text: "hello" } });
+  // A send-level MCP override would rebuild every MCP server for the run.
+  assert.deepEqual(Object.keys(f.calls.find((c) => c[0] === "send")[2]).sort(), ["model", "onDelta"]);
+  f.terminal.resolve({ id: "r1", status: "finished" });
+  await tick();
+  await f.host.request({ type: "set_mode", mode: "full-access", model: "other" });
+  assert.deepEqual(Object.keys(f.calls.filter((c) => c[0] === "resume").at(-1)[2].local.customTools), ["kybern_ping"]);
+  await f.host.close();
+});
+
 test("run errors redact the SDK key and scoped MCP capability", async () => {
-  const f = fixture();
-  await open(f.host, { mcpServers: { kybern: { type: "http", url: "http://localhost/mcp", headers: { Authorization: "Bearer capability" } } } });
+  const f = fixture({ fetch: daemonTools() });
+  await open(f.host, { nativeTools });
   await f.host.request({ type: "send", message: { text: "hello" } });
   f.terminal.resolve({ id: "r1", status: "error", error: { message: "secret capability Bearer capability" } });
   await tick();
@@ -279,7 +337,45 @@ test("account host shares SDK/platform/catalog but scopes concurrent agents, eve
     assert.match(host.safeError(new Error("key scope-a-capability scope-b-capability")),/^\[redacted\]/);
   } finally {await host.close();}
   assert.equal(process.env,ambient);
-  assert.equal(releases,2);
+  // Both agents share the workspace executor; host close releases it at once.
+  assert.equal(releases,1);
+});
+
+test("workspace executors are shared, warmed before the catalog, and linger after the last close", async () => {
+  const calls=[];
+  const catalog=Promise.withResolvers();
+  const sdk={Cursor:{models:{list:async()=>{calls.push("catalog");return catalog.promise;}}},
+    createAgentPlatform:async({workspaceRef})=>({
+      resolveLocalModelSelection:async selection=>selection,
+      prewarmLocalWorkspace:async({local})=>{calls.push(local.settingSources.length ? `prewarm ${workspaceRef} ${local.autoReview}` : "sandbox prime");return async()=>{calls.push(`release ${workspaceRef} ${local.autoReview}`);};},
+      createAgent:async()=>({agentId:"agent",close(){}}),
+      resumeAgent:async()=>({agentId:"agent",close(){}}),
+    })};
+  const host=createAccountHost(sdk,async()=>{},{apiKey:"key",lingerMs:30});
+  const opening=host.request({type:"open",session:"a",cwd:"/repo",model:"m",mode:"auto"});
+  await tick();
+  // The scan does not wait for a missing model catalog.
+  assert.deepEqual(calls,["prewarm /repo true","catalog"]);
+  catalog.resolve([{id:"m",displayName:"M"}]);
+  await opening;
+  await host.request({type:"open",session:"b",cwd:"/repo",model:"m",mode:"auto"});
+  await host.request({type:"open",session:"c",cwd:"/repo",model:"m",mode:"full-access"});
+  await host.request({type:"open",session:"d",cwd:"/other",model:"m",mode:"auto"});
+  assert.deepEqual(calls.filter(call=>call.startsWith("prewarm")),["prewarm /repo true","prewarm /repo false","prewarm /other true"]);
+  for (const session of ["a","b"]) await host.request({type:"close",session});
+  // A conversation opened in the linger window reuses the warm executor.
+  await host.request({type:"open",session:"e",cwd:"/repo",model:"m",mode:"auto"});
+  await host.request({type:"close",session:"e"});
+  assert.ok(!calls.includes("release /repo true"));
+  await new Promise(done=>setTimeout(done,60));
+  assert.ok(calls.includes("release /repo true"));
+  assert.ok(!calls.includes("release /other true"));
+  // After the linger the workspace is scanned again.
+  await host.request({type:"open",session:"f",cwd:"/repo",model:"m",mode:"auto"});
+  await host.close();
+  assert.ok(calls.includes("release /other true"));
+  assert.equal(calls.filter(call=>call.startsWith("prewarm")).length,4);
+  assert.equal(calls.filter(call=>call==="sandbox prime").length,1);
 });
 
 test("cached catalog preserves native max mode; old incomplete metadata triggers discovery", () => {
