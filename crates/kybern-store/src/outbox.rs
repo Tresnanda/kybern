@@ -252,6 +252,18 @@ impl Store {
         })
     }
 
+    /// A successful provisioning overlapped this attempt, so its "missing project" reply may be stale.
+    pub fn outbox_provision_completed_since(&self, target: &str, since: DateTime<Utc>) -> Result<bool> {
+        self.with(|c| {
+            Ok(c.query_row(
+                "SELECT EXISTS(SELECT 1 FROM outbox WHERE kind = 'provision' AND target = ?1
+                 AND state = 'delivered' AND updated_at >= ?2)",
+                params![target, since.to_rfc3339()],
+                |r| r.get::<_, bool>(0),
+            )?)
+        })
+    }
+
     /// Make the queued items for `target` that were waiting for a provisioning ("Waiting for …") due now: it settled.
     pub fn outbox_wake_waiting(&self, target: &str) -> Result<usize> {
         self.with(|c| {

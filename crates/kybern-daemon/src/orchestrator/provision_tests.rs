@@ -398,11 +398,61 @@ async fn a_delegation_that_reaches_a_machine_without_the_repository_waits_for_it
         fixture.tool(&parent, &live, "d1", "kybern_agent_delegate", json!({"task": "Waits for the project", "machine": b.id()})).await.unwrap();
     assert!(started.get("provision").is_none(), "an offline machine is not asked about");
     b.set_network_enabled(true);
-    wait_until("the child started on b", WAIT * 4, || !spawned.lock().unwrap().is_empty()).await;
+    wait_until("the child started on b", WAIT * 4, || {
+        for item in a.state.store.outbox_list(None, None).unwrap() {
+            assert!(!matches!(item.state, OutboxState::Failed | OutboxState::Expired), "{:?}: {:?}", item.kind, item.last_error);
+        }
+        !spawned.lock().unwrap().is_empty()
+    }).await;
     wait_until("provisioning and delegation acknowledged", WAIT * 4, || {
         let items = a.state.store.outbox_list(None, None).unwrap();
         !items.is_empty() && items.iter().all(|item| item.state == OutboxState::Delivered)
     }).await;
+}
+
+#[tokio::test]
+async fn a_missing_project_reply_retries_when_provisioning_finished_during_the_attempt() {
+    use super::remote_delegation::Delivery;
+
+    let fixture = Fixture::new();
+    let started = chrono::Utc::now();
+    let mut provision = OutboxItem {
+        id: Uuid::now_v7(),
+        operation_id: Uuid::now_v7(),
+        target: "target".into(),
+        kind: OutboxKind::Provision,
+        payload: json!({}),
+        origin: None,
+        state: OutboxState::Sending,
+        attempts: 1,
+        next_attempt_at: None,
+        last_error: None,
+        result: None,
+        created_at: started,
+        expires_at: started + chrono::Duration::days(7),
+        updated_at: started,
+    };
+    fixture.store.outbox_insert(&provision).unwrap();
+    let mut delivery = OutboxItem { kind: OutboxKind::Delegate, ..provision.clone() };
+    let missing = RpcError::new(codes::NOT_FOUND, "No checkout").with_data(json!({"needs": NEEDS_PROJECT}));
+    assert!(matches!(fixture.orchestrator.remote_refusal(&delivery, &missing), Delivery::Retry(_)));
+
+    // The target rejected the request before the clone was registered, but its reply reaches the
+    // source after the provisioning acknowledgement. It must get another attempt.
+    provision.state = OutboxState::Delivered;
+    provision.updated_at = started + chrono::Duration::seconds(1);
+    fixture.store.outbox_update(&provision).unwrap();
+    assert!(matches!(fixture.orchestrator.remote_refusal(&delivery, &missing), Delivery::Retry(_)));
+
+    delivery.updated_at = started + chrono::Duration::seconds(2);
+    assert!(matches!(fixture.orchestrator.remote_refusal(&delivery, &missing), Delivery::Failed(_)), "a later attempt must not retry forever");
+    delivery.updated_at = started;
+    delivery.target = "another-machine".into();
+    assert!(matches!(fixture.orchestrator.remote_refusal(&delivery, &missing), Delivery::Failed(_)));
+    delivery.target = provision.target.clone();
+    provision.state = OutboxState::Failed;
+    fixture.store.outbox_update(&provision).unwrap();
+    assert!(matches!(fixture.orchestrator.remote_refusal(&delivery, &missing), Delivery::Failed(_)));
 }
 
 /// A group exercises a clone and a local-only bundle in the same delivery. Nested member paths also
