@@ -81,8 +81,8 @@ interface MenuTree {
   closeSubs: () => void
   /** The latest pointer position any panel or row of the tree reported. */
   last: { current: (Point & { t: number }) | null }
-  /** A panel at `depth` lost the pointer (its notification carries no position): decide from `last`. */
-  left: (depth: number) => void
+  /** A native hover leave can come from layout reconciliation while the pointer is still inside the menu tree. */
+  left: (depth: number, point?: PointerPayload) => void
   note: (point: PointerPayload | undefined) => void
 }
 
@@ -136,11 +136,21 @@ function useMenuTree(close: () => void): MenuTree {
       closeSubs: () => levels.get(0)?.closeChild(),
       last,
       note: (point) => { if (point?.x !== undefined && point.y !== undefined) last.current = { x: point.x, y: point.y, t: performance.now() } },
-      // Native leave notifications carry no position, and GPUI treats an overlay as a hard hover barrier, so entering a
-      // submenu also "leaves" its trigger and the root. What the tree itself reports tells them apart: a pointer that moved
-      // on within the menu keeps producing moves inside some panel (a beat before or after the leave), whereas a pointer that
-      // left produces none, and its last reported point is inside the panel it left. Checked a beat later.
-      left: (depth) => {
+      left: (depth, position) => {
+        // Current native leaves carry the actual pointer position. Opening a deferred submenu or replaying a cached
+        // header can make its parent lose hover without the pointer leaving the menu. Silence after that event is not an
+        // exit: keep the submenu while the pointer is inside any panel, including the parent trigger's panel.
+        if (position?.x !== undefined && position.y !== undefined) {
+          const point = { x: position.x, y: position.y }
+          last.current = { ...point, t: performance.now() }
+          if (panelAt(point) < 0) {
+            levels.get(0)?.closeChild()
+            levels.get(0)?.clearActive()
+          }
+          return
+        }
+        // Older addons omit leave coordinates. Let a move on another panel distinguish entering a submenu from
+        // leaving the whole tree. A later positioned event also invalidates this fallback.
         const at = performance.now()
         setTimeout(() => {
           const point = last.current
@@ -388,7 +398,7 @@ export function Menu({
           }}
           onKeyDown={(e) => { input.byKey(); menu.route(e) }}
           onMouseMove={tree.note}
-          onMouseLeave={() => tree.left(0)}
+          onMouseLeave={(e) => tree.left(0, e)}
           onMouseDown={() => { input.byPointer(); pointerNav() }}
           style={panel ? { ...panelStyle(t, width, minWidth), ...panel } : panelStyle(t, width, minWidth)}
         >
@@ -445,7 +455,7 @@ export function ContextMenu({
       }}
       onKeyDown={(e) => { input.byKey(); menu.route(e) }}
       onMouseMove={tree.note}
-      onMouseLeave={() => tree.left(0)}
+      onMouseLeave={(e) => tree.left(0, e)}
       onMouseDown={() => { input.byPointer(); pointerNav() }}
       style={panelStyle(t, undefined, width)}
     >
@@ -730,7 +740,7 @@ export function MenuSub({
             origin.current = null
             parent.tree.owner.current = parent.depth + 1
           }}
-          onMouseLeave={() => parent.tree.left(parent.depth + 1)}
+          onMouseLeave={(e) => parent.tree.left(parent.depth + 1, e)}
           onMouseDown={pointerNav}
           style={panelStyle(t, width)}
         >
