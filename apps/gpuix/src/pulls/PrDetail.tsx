@@ -30,6 +30,8 @@ import { Summary, SIDEBAR_BREAKPOINT } from './detail/Summary.tsx'
 import { actionFailure, actionKind, agentPrompt, failingNames, type ActionRequest } from './detail/model.ts'
 import { readView, saveView, type PrSection } from './viewState.ts'
 import { useFlash } from './detail/useFlash.ts'
+import { focusActions } from './actions/store.ts'
+import { goPage } from '../nav/history.ts'
 
 type Tab = PrSection
 /** What a confirmation dialog is for: the merge and close of the verdict card, and "Check out in conversation" of the ⋯ menu. */
@@ -89,7 +91,8 @@ export function Detail({ project, number, repo, onBack, width, onChanged, showBa
   }
   const requestChanges = detail?.reviews?.filter(r => r.state === 'CHANGES_REQUESTED').map(r => r.login) ?? []
   const side = detail && assessment && <Sidebar detail={detail} assessment={assessment} groups={groups} compact={width < SIDEBAR_BREAKPOINT} pending={pending} error={cardFailed && !confirmation ? `${actionFailure(review.actionError ?? 'The action failed')} Check the pull request on GitHub and try again.` : null} canAgent={!repo && !busyThread && !!settings}
-    onRequest={request} onFixChecks={() => startAgent('checks', failingNames(groups))} onFixGroup={(group: CheckGroup) => startAgent('checks', [group.label])} onAddressFeedback={() => startAgent('feedback', requestChanges)} onTimeline={() => go('timeline')} />
+    onRequest={request} onFixChecks={() => startAgent('checks', failingNames(groups))} onFixGroup={(group: CheckGroup) => startAgent('checks', [group.label])} onAddressFeedback={() => startAgent('feedback', requestChanges)} onTimeline={() => go('timeline')}
+    onOpenActions={pr ? () => { goPage('pulls'); focusActions({ projectId: project.id, ...(repo ? { repo } : {}), branch: pr.head }) } : undefined} />
   return <div testId="pr-detail" style={{ ...column, flexGrow: 1, minHeight: 0 }}>
     <div style={{ ...row, flexWrap: 'wrap', gap: 6, minHeight: 46, paddingLeft: 12, paddingRight: 12, paddingTop: 4, paddingBottom: 4, borderBottomWidth: 1, borderColor: t.border }}>
       {showBack && <IconButton icon={N.arrowLeft} label="Back to pull requests" testId="pr-back" onClick={onBack} />}

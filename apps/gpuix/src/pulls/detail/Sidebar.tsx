@@ -67,7 +67,7 @@ function CheckRow({ group, canAgent, onFix }: { group: CheckGroup; canAgent: boo
   )
 }
 
-function ChecksSection({ groups, summary, canAgent, onFix }: { groups: CheckGroup[]; summary: NonNullable<PrDetailResult['pull_request']['checks_summary']>; canAgent: boolean; onFix: (group: CheckGroup) => void }) {
+function ChecksSection({ groups, summary, canAgent, onFix, onOpenActions }: { groups: CheckGroup[]; summary: NonNullable<PrDetailResult['pull_request']['checks_summary']>; canAgent: boolean; onFix: (group: CheckGroup) => void; onOpenActions?: () => void }) {
   const t = useTheme()
   const [expanded, setExpanded] = useState(false)
   const rows = foldChecks(groups)
@@ -86,6 +86,10 @@ function ChecksSection({ groups, summary, canAgent, onFix }: { groups: CheckGrou
         </div>
         {expanded && rows.folded.map(g => <CheckRow key={g.key} group={g} canAgent={false} onFix={onFix} />)}
       </>}
+      {onOpenActions && <div testId="pr-checks-actions" role="link" aria-label="Open this branch's runs in Actions" onClick={onOpenActions} style={{ display: 'flex', alignItems: 'center', gap: 4, minHeight: 30, marginLeft: -6, marginRight: -6, paddingLeft: 6, paddingRight: 6, borderRadius: 7, cursor: 'pointer', hover: { backgroundColor: t.hover } }}>
+        <Label color={t.link} size={12.5} lineHeight={16}>Open runs in Actions</Label>
+        <Icon source={N.chevronRight} size={12} color={t.link} />
+      </div>}
     </div>
   )
 }
@@ -135,7 +139,7 @@ function Details({ detail, onTimeline }: { detail: PrDetailResult; onTimeline: (
   </>
 }
 
-export function Sidebar({ detail, assessment, groups, compact, pending, error, canAgent, onRequest, onFixChecks, onFixGroup, onAddressFeedback, onTimeline }: {
+export function Sidebar({ detail, assessment, groups, compact, pending, error, canAgent, onRequest, onFixChecks, onFixGroup, onAddressFeedback, onTimeline, onOpenActions }: {
   detail: PrDetailResult
   assessment: PrAssessment
   groups: CheckGroup[]
@@ -149,13 +153,15 @@ export function Sidebar({ detail, assessment, groups, compact, pending, error, c
   onFixGroup: (group: CheckGroup) => void
   onAddressFeedback: () => void
   onTimeline: () => void
+  /** The checks' link to this branch's runs in the Actions tab (ADE-97). */
+  onOpenActions?: () => void
 }) {
   const t = useTheme()
   const [open, setOpen] = useState(false)
   const summary = detail.pull_request.checks_summary ?? { total: detail.checks.length, passed: detail.checks.filter(c => checkBucket(c) === 'passed').length, failed: detail.checks.filter(c => checkBucket(c) === 'failed').length, pending: detail.checks.filter(c => checkBucket(c) === 'pending').length, skipped: detail.checks.filter(c => checkBucket(c) === 'skipped').length }
   const reviewers = reviewerRows(detail)
   const card = <VerdictCard assessment={assessment} pending={pending} error={error} canAgent={canAgent} onRequest={onRequest} onFixChecks={onFixChecks} onAddressFeedback={onAddressFeedback} />
-  const checks = groups.length > 0 && <InspectorGroup first={!compact}><ChecksSection groups={groups} summary={summary} canAgent={canAgent} onFix={onFixGroup} /></InspectorGroup>
+  const checks = groups.length > 0 && <InspectorGroup first={!compact}><ChecksSection groups={groups} summary={summary} canAgent={canAgent} onFix={onFixGroup} onOpenActions={onOpenActions} /></InspectorGroup>
   const rest = <Details detail={detail} onTimeline={onTimeline} />
   if (compact) {
     const brief = [checksSummaryLine(summary).split(' · ').find(s => /running|failed/.test(s)), reviewers.find(r => r.state === 'requested') ? `${reviewers.filter(r => r.state === 'requested').length} requested` : ''].filter(Boolean).join(' · ')

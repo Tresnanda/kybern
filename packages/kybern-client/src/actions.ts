@@ -21,7 +21,7 @@ export const RUN_WORDS: Record<RunBucket, string> = {
   failed: "Failed",
   running: "In progress",
   queued: "Queued",
-  passed: "Succeeded",
+  passed: "Passed",
   skipped: "Skipped",
   cancelled: "Cancelled",
 }
@@ -123,7 +123,7 @@ export function finishedSince(previous: RunSnapshot, runs: readonly WorkflowRun[
 /** A finished run's notice: "CI #695 failed" over "main · Fix the importer". */
 export function finishNotice(run: WorkflowRun): { title: string; body: string; kind: "success" | "error" | "default" } {
   const bucket = runBucket(run)
-  const verb = bucket === "passed" ? "succeeded" : bucket === "cancelled" ? "was cancelled" : bucket === "skipped" ? "was skipped" : run.conclusion === "timed_out" ? "timed out" : "failed"
+  const verb = bucket === "passed" ? "passed" : bucket === "cancelled" ? "was cancelled" : bucket === "skipped" ? "was skipped" : run.conclusion === "timed_out" ? "timed out" : "failed"
   return {
     title: `${run.workflow_name || "Workflow"} #${run.number} ${verb}`,
     body: [run.head_branch, run.title].filter(Boolean).join(" · "),
@@ -192,11 +192,14 @@ export function windowFrom(result: ActionsLogResult): LogWindow {
   return { offset: result.offset, lines: result.lines, total: result.total_lines, errors: result.error_lines ?? [] }
 }
 
-/** Where a failed job's log opens: a page ending a little after its last error, or the start. */
+/** Lines shown above a failed log's last error when it opens. */
+export const ERROR_CONTEXT = 20
+
+/** Where a failed job's log opens: a few lines before its last error, so the failure is the first thing on screen. */
 export function openingOffset(total: number, errors: readonly number[], failed: boolean): number {
   if (!failed || !errors.length) return 0
   const last = errors[errors.length - 1]!
-  return Math.max(0, Math.min(total - LOG_PAGE, last + 20 - LOG_PAGE))
+  return Math.max(0, Math.min(total - 1, last - ERROR_CONTEXT))
 }
 
 /** The next read for `direction`, or null at that edge. */

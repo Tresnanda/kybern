@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   ACTIVE_REFRESH_MS,
+  ERROR_CONTEXT,
   IDLE_REFRESH_MS,
   LOG_PAGE,
   LOG_WINDOW,
@@ -40,7 +41,7 @@ test("runs, jobs and steps read as one bucket and word", () => {
   for (const c of ["failure", "timed_out", "startup_failure", "action_required"]) assert.equal(runBucket({ status: "completed", conclusion: c }), "failed", c);
   assert.equal(runWord({ status: "completed", conclusion: "timed_out" }), "Timed out");
   assert.equal(runWord({ status: "waiting" }), "Waiting");
-  assert.equal(runWord({ status: "completed", conclusion: "success" }), "Succeeded");
+  assert.equal(runWord({ status: "completed", conclusion: "success" }), "Passed");
   assert.equal(eventWord("workflow_dispatch"), "Manual");
   assert.equal(eventWord("pull_request"), "Pull request");
   assert.equal(eventWord("check_suite"), "Check suite");
@@ -82,7 +83,7 @@ test("notices go to runs the user started or runs on their branch", () => {
   assert.equal(shouldAnnounce(run({ attempt: 2 }), { ...none, viewer: "ana" }), true);
   assert.equal(shouldAnnounce(run(), { ...none, viewer: "ana" }), false, "a push is not a run they started by hand");
   assert.deepEqual(finishNotice(run()), { title: "CI #695 failed", body: "main · Fix the importer", kind: "error" });
-  assert.equal(finishNotice(run({ conclusion: "success" })).title, "CI #695 succeeded");
+  assert.equal(finishNotice(run({ conclusion: "success" })).title, "CI #695 passed");
   assert.equal(finishNotice(run({ conclusion: "timed_out" })).title, "CI #695 timed out");
 });
 
@@ -101,9 +102,9 @@ test("log lines map GitHub markers and ANSI colours, never showing escapes", () 
 });
 
 test("the log window pages both ways and stays bounded", () => {
-  assert.equal(openingOffset(5000, [4100, 4200], true), 4200 + 20 - LOG_PAGE);
-  assert.equal(openingOffset(300, [250], true), 0);
-  assert.equal(openingOffset(5000, [4999], true), 5000 - LOG_PAGE);
+  assert.equal(openingOffset(5000, [4100, 4200], true), 4200 - ERROR_CONTEXT);
+  assert.equal(openingOffset(300, [10], true), 0);
+  assert.equal(openingOffset(5000, [4999], true), 4999 - ERROR_CONTEXT);
   assert.equal(openingOffset(5000, [100], false), 0);
   const lines = (from, n) => Array.from({ length: n }, (_, i) => `line ${from + i}`);
   let window = { offset: 1000, lines: lines(1000, 500), total: 5000, errors: [] };
