@@ -1158,13 +1158,21 @@ mod tests {
             }
         }
         let record = root.join("urls");
-        let status = std::process::Command::new(shim.join(if cfg!(windows) { "open.cmd" } else { "open" }))
-            .arg("https://example.test/a?b=c&state=test!value")
-            .env("KYBERN_LOGIN_URL_FILE", &record)
-            .status()
-            .unwrap();
+        // A parallel test can fork while the fixture is being written and briefly
+        // inherit its writable descriptor. Read the Unix script through its shell
+        // to avoid Linux ETXTBSY; its executable mode is checked above.
+        #[cfg(unix)]
+        let mut command = {
+            let mut command = std::process::Command::new("/bin/sh").no_window();
+            command.arg(shim.join("open"));
+            command
+        };
+        #[cfg(not(unix))]
+        let mut command = std::process::Command::new(shim.join("open.cmd")).no_window();
+        let status = command.arg("https://example.test/a?b=c&state=test!value").env("KYBERN_LOGIN_URL_FILE", &record).status().unwrap();
         assert!(status.success());
         assert_eq!(std::fs::read_to_string(&record).unwrap().replace("\r\n", "\n"), "https://example.test/a?b=c&state=test!value\n");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

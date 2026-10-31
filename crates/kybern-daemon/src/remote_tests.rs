@@ -2459,6 +2459,11 @@ async fn spaces_are_created_updated_and_announced() {
     let initial = desktop.call::<SpacesList>(Empty {}).await.unwrap().spaces;
     assert_eq!(initial.len(), 1);
     assert_eq!(initial[0].name, "Personal");
+    // A completed WebSocket handshake does not mean the server's connection task
+    // has registered its notification receivers yet. An RPC response on this
+    // client is the readiness barrier before another client changes the spaces.
+    let phone_initial = phone.call::<SpacesList>(Empty {}).await.unwrap().spaces;
+    assert_eq!(phone_initial[0].id, initial[0].id);
 
     let work = desktop.call::<SpacesCreate>(space_create("  Work  ")).await.unwrap();
     assert_eq!((work.name.as_str(), work.position, work.logo.clone()), ("Work", 1, SpaceLogo::Initials));
