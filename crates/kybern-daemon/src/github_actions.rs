@@ -994,22 +994,25 @@ jobs:
 
     #[test]
     fn jobs_from_kyberns_release_and_platforms_workflows() {
+        // The real files change (a new job, a new need): check what the graph relies on, not the whole file.
         let release = parse_jobs(include_str!("../../../.github/workflows/release.yml"));
         let ids: Vec<_> = release.iter().map(|j| j.id.as_str()).collect();
-        assert_eq!(
-            ids,
-            ["plan", "build-local-artifacts", "custom-release-ci", "build-global-artifacts", "custom-desktop", "host", "announce"]
-        );
+        for id in ["plan", "build-local-artifacts", "custom-release-ci", "build-global-artifacts", "custom-desktop", "host", "announce"] {
+            assert!(ids.contains(&id), "{id} in {ids:?}");
+        }
+        assert_eq!(ids[0], "plan", "file order");
         let local = spec(&release, "build-local-artifacts");
         assert_eq!(local.name, "build-local-artifacts (${{ join(matrix.targets, ', ') }})");
         assert_eq!((local.needs.clone(), local.matrix.clone()), (vec!["plan".to_owned()], Some(vec![])), "a matrix built by an expression");
         assert_eq!(spec(&release, "custom-release-ci").uses, "./.github/workflows/release-ci.yml");
-        assert_eq!(spec(&release, "custom-desktop").needs, ["plan", "build-local-artifacts"]);
-        assert_eq!(
-            spec(&release, "host").needs,
-            ["plan", "build-local-artifacts", "custom-release-ci", "build-global-artifacts", "custom-desktop"]
-        );
-        assert_eq!(spec(&release, "announce").needs, ["plan", "host"]);
+        assert_eq!(spec(&release, "custom-desktop").uses, "./.github/workflows/desktop.yml");
+        assert!(spec(&release, "custom-desktop").needs.starts_with(&["plan".to_owned(), "build-local-artifacts".to_owned()]));
+        let host = spec(&release, "host").needs;
+        for need in ["plan", "build-local-artifacts", "custom-release-ci", "build-global-artifacts", "custom-desktop"] {
+            assert!(host.iter().any(|n| n == need), "host needs {need}: {host:?}");
+        }
+        assert!(spec(&release, "host").conditional);
+        assert!(spec(&release, "announce").needs.iter().any(|n| n == "host"));
 
         let platforms = parse_jobs(include_str!("../../../.github/workflows/gpuix-platforms.yml"));
         let ids: Vec<_> = platforms.iter().map(|j| j.id.as_str()).collect();
