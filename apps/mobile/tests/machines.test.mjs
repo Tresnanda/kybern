@@ -283,3 +283,61 @@ test("a machine added by code is connected by the set with its token", async () 
   assert.equal(creds.tokens.get("vps"), "tok-vps");
   assert.deepEqual(world.clients.map((c) => [c.machineId, c.token]), [["vps", "tok-vps"]]);
 });
+
+test("in Hermes (no globalThis.crypto) the hub's own random source still lets other machines connect", async (t) => {
+  // The fake machine signs with node:crypto (noble's signing wants Web Crypto); the hub under test runs without it, as
+  // in Hermes, and only verifies (which needs no random source).
+  const { generateKeyPairSync, sign } = await import("node:crypto");
+  const pair = generateKeyPairSync("ed25519");
+  const key = Buffer.from(pair.publicKey.export({ format: "jwk" }).x, "base64url").toString("base64");
+  const original = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+  Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: true, writable: true });
+  t.after(() => Object.defineProperty(globalThis, "crypto", original));
+  const clock = manualClock();
+  const nonces = [];
+  const opened = [];
+  // The app's transport has no nonce of its own: the hub makes one from `randomFill` (expo-crypto in the app).
+  const transport = {
+    probe: async (url) => {
+      const parsed = new URL(url);
+      const nonce = parsed.searchParams.get("nonce");
+      nonces.push(nonce);
+      const at = new Date(clock.now()).toISOString();
+      const proof = sign(null, Buffer.from(wellKnownProofMessage({ nonce, machineId: "box", at, host: parsed.host })), pair.privateKey);
+      return { machine_id: "box", name: "box", os: "linux", signing_key: key, at, proof: proof.toString("base64") };
+    },
+    createClient: ({ record, token }) => {
+      const world = { handlers: { box: { "projects.list": () => ({ projects: [] }), "threads.list": () => ({ threads: [] }) } } };
+      const info = { machine_id: record.machineId, environment_id: record.machineId, version: "0.21.0", features: ["network.v1"] };
+      const client = new FakeClient(world, { machineId: record.machineId, online: true, info }, { url: "ws://box/ws" }, token);
+      opened.push(client);
+      return client;
+    },
+  };
+  let fills = 0;
+  const { hub } = setup({ records: [rec("box", { member: true })], credentials: { box: "tok" }, transport, clock });
+  // `setup` builds the hub without a random source; build the one the app builds.
+  hub.dispose();
+  const appHub = new MachineHub({
+    store: memoryStore([rec("box", { member: true })]),
+    credentials: memoryCredentials({ box: "tok" }),
+    cache: new MachineCache(),
+    deviceId: "phone-1",
+    clock,
+    transport,
+    randomFill: (bytes) => { fills++; for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 31 + fills) & 255; },
+  });
+  hubs.push(appHub);
+  await appHub.set.ensureAll();
+  const box = appHub.set.connection("box");
+  assert.equal(box.status, "online", box.error?.message);
+  assert.equal(opened.length, 1);
+  assert.ok(fills > 0, "the nonce came from the phone's random source");
+  assert.match(nonces[0], /^[A-Za-z0-9_-]{43}$/);
+
+  // Without it (the build before this fix) the row says why instead of a bare "Offline".
+  const bare = new MachineHub({ store: memoryStore([rec("box", { member: true })]), credentials: memoryCredentials({ box: "tok" }), cache: new MachineCache(), deviceId: "phone-1", clock, transport });
+  hubs.push(bare);
+  await bare.set.ensureAll();
+  assert.match(bare.set.connection("box").error?.message ?? "", /no secure random source/);
+});

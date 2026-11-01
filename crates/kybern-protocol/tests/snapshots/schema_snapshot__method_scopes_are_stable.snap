@@ -402,6 +402,10 @@ expression: scopes
   - "network:admin"
 - - network.client_grant
   - "network:read"
+- - network.relay_page.open
+  - "orchestration:read"
+- - network.relay_page.close
+  - "orchestration:read"
 - - network.routes
   - "network:read"
 - - network.allow.set

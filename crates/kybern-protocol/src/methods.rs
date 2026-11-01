@@ -4531,6 +4531,14 @@ method!(NetworkRename, "network.rename", Some(Scope::NetworkAdmin), NetworkRenam
 method!(NetworkMerge, "network.merge", Some(Scope::NetworkAdmin), NetworkFoundParams, NetworkStatus);
 method!(NetworkRejoin, "network.rejoin", Some(Scope::NetworkAdmin), Empty, NetworkStatus);
 method!(NetworkClientGrant, "network.client_grant", Some(Scope::NetworkRead), NetworkClientGrantParams, NetworkClientGrantResult);
+method!(
+    NetworkRelayPageOpen,
+    "network.relay_page.open",
+    Some(Scope::OrchestrationRead),
+    NetworkRelayPageOpenParams,
+    NetworkRelayPageOpenResult
+);
+method!(NetworkRelayPageClose, "network.relay_page.close", Some(Scope::OrchestrationRead), NetworkRelayPageCloseParams, Empty);
 method!(NetworkRoutes, "network.routes", Some(Scope::NetworkRead), NetworkRoutesParams, NetworkRoutesResult);
 method!(NetworkAllowSet, "network.allow.set", Some(Scope::NetworkAdmin), NetworkAllowSetParams, MachineCard);
 method!(NetworkUpdateAll, "network.update_all", Some(Scope::NetworkAdmin), Empty, NetworkUpdateAllResult);
@@ -4889,6 +4897,8 @@ registry!(
     NetworkMerge,
     NetworkRejoin,
     NetworkClientGrant,
+    NetworkRelayPageOpen,
+    NetworkRelayPageClose,
     NetworkRoutes,
     NetworkAllowSet,
     NetworkUpdateAll,

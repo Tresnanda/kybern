@@ -162,3 +162,24 @@ test("a connection change during a request aborts it with a readable error", asy
   caller.abort(new Error("cancelled by the page"));
   await assert.rejects(mine, /cancelled by the page/);
 });
+
+test("request gives a native loader the route's URL and headers, relay member's token included", () => {
+  const direct = kybernClientFactory(socket)({ record: rec("b", []), route: tailnet(T), token: "tok-b" });
+  assert.deepEqual(direct.request("/assets/x"), { url: `${T}/assets/x`, headers: { authorization: "Bearer tok-b" } });
+  const relayed = kybernClientFactory(socket)({
+    record: rec("b", []),
+    route: { kind: "relay", url: `${A}/relay/b`, via: "a" },
+    token: "tok-b",
+    relayToken: "tok-a",
+  });
+  assert.deepEqual(relayed.request("/threads/t/image?path=a.png"), {
+    url: `${A}/relay/b/http/threads/t/image?path=a.png`,
+    headers: { "X-Kybern-Relay-Auth": "Bearer tok-a", authorization: "Bearer tok-b" },
+  });
+  assert.throws(() => relayed.request("//evil/x"), /starts with \//);
+});
+
+test("a machine proxy's request follows its connection and is offline without one", () => {
+  const proxy = new MachineClientProxy("b", () => true);
+  assert.throws(() => proxy.request("/assets/x"), OfflineError);
+});

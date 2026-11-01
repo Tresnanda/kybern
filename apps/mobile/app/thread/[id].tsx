@@ -25,7 +25,10 @@ import { AgentsCapsule, openAgents, useAgents } from "../../src/features/AgentsS
 import { agentsCapsuleLabel } from "../../src/state/agents";
 import { HeldBubbles, useHeldMessages, useSenderName } from "../../src/features/HeldMessages";
 import { ChildThreadBar } from "../../src/features/ChildThreadBar";
+import { MachineGlyph } from "../../src/features/MachineGlyph";
 import { MoveBanner } from "../../src/features/MoveBanner";
+import { machineParity } from "../../src/state/machineActions";
+import { threadMachineLine } from "../../src/state/threadMachineModel";
 import { QueuedCapsule } from "../../src/features/QueuedPrompts";
 import { useLayout } from "../../src/state/layout";
 import {
@@ -33,10 +36,12 @@ import {
   loadThread,
   ensureThread,
   loadEarlier,
+  machineHub,
   newChats,
   refresh,
   rpc,
   useApp,
+  useMachineView,
   useNewChat,
   useThread,
 } from "../../src/state/runtime";
@@ -118,6 +123,11 @@ function ThreadHeader({ thread, threadId }: { thread?: Thread | null; threadId: 
   const project = app.projects.find((p) => p.id === thread?.project_id);
   const main = thread?.parent_thread_id ? mainConversation(thread, app.threads) : null;
   const subtitle = [project?.name ?? "Workspace", thread?.worktree?.branch].filter(Boolean).join(" · ");
+  // With two or more machines the subtitle also says where the thread runs, the machine the phone is at included (ADE-99 §2.2).
+  const view = useMachineView();
+  const hostId = thread ? machineHub().machineOfThread(thread.id) : undefined;
+  const host = hostId && machineParity(hostId) ? view.machines.find((m) => m.machineId === hostId) : undefined;
+  const hostLine = threadMachineLine(view.machines.length, host);
   const openDetails = () => router.push({ pathname: "/workspace", params: { threadId, tab: "More" } });
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.sm, paddingVertical: 6 }}>
@@ -144,9 +154,19 @@ function ThreadHeader({ thread, threadId }: { thread?: Thread | null; threadId: 
             <Icon name="chevron.down" size={10} color={colors.muted} />
           </View>
           {!main && (
-            <T variant="footnote" tone="secondary" numberOfLines={1}>
-              {subtitle}
-            </T>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, maxWidth: "100%" }}>
+              <T variant="footnote" tone="secondary" numberOfLines={1} style={{ flexShrink: 1 }}>
+                {subtitle}
+              </T>
+              {hostLine && host ? (
+                <View accessible accessibilityLabel={`Runs ${hostLine}`} style={{ flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 2 }}>
+                  <MachineGlyph glyph={host.glyph} size={14} />
+                  <T variant="footnote" tone="secondary" numberOfLines={1} style={{ flexShrink: 1 }}>
+                    {hostLine}
+                  </T>
+                </View>
+              ) : null}
+            </View>
           )}
         </Tap>
         {main && (

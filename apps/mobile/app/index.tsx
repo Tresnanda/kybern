@@ -71,18 +71,21 @@ function continueThreads(threads: readonly Thread[], projectId: string | undefin
 }
 
 /** A quiet chip in the footer: an icon, a value and a chevron. */
+/** A chip of the row above the composer. It shrinks with the row and truncates its value; `iconOnly` keeps just the icon. */
 function FooterChip({
   icon,
   label,
   value,
   onPress,
   chevron = true,
+  iconOnly = false,
 }: {
   icon: IconName;
   label: string;
   value: string;
   onPress: () => void;
   chevron?: boolean;
+  iconOnly?: boolean;
 }) {
   const { colors } = useTheme();
   return (
@@ -97,14 +100,18 @@ function FooterChip({
         minHeight: 36,
         paddingHorizontal: space.sm,
         borderRadius: radius.full,
-        flexShrink: 1,
+        flexShrink: iconOnly ? 0 : 1,
+        // An icon-only chip keeps a full touch target; a labelled one may shrink to its icon and an ellipsis.
+        minWidth: iconOnly ? 44 : 0,
       }}
     >
       <Icon name={icon} size={15} color={colors.secondary} />
-      <T variant="footnote" tone="secondary" numberOfLines={1} style={{ flexShrink: 1 }}>
-        {value}
-      </T>
-      {chevron && <Icon name="chevron.down" size={9} color={colors.muted} />}
+      {!iconOnly && (
+        <T variant="footnote" tone="secondary" numberOfLines={1} style={{ flexShrink: 1 }}>
+          {value}
+        </T>
+      )}
+      {chevron && !iconOnly && <Icon name="chevron.down" size={9} color={colors.muted} />}
     </Tap>
   );
 }
@@ -114,7 +121,7 @@ function HomeScreen() {
   const lists = useLists();
   const draft = useDraft();
   const { colors } = useTheme();
-  const { width } = useWindowDimensions();
+  const { width, fontScale } = useWindowDimensions();
   const { regular, sidebarOpen, toggleSidebar } = useLayout();
   const insets = useSafeAreaInsets();
   const chrome = useChromeInsets();
@@ -441,7 +448,7 @@ function HomeScreen() {
                 paddingHorizontal: space.sm,
               }}
             >
-              <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs, flexShrink: 1 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs, flexShrink: 1, minWidth: 0 }}>
                 <FooterChip
                   icon="folder"
                   label={project ? `Change project, ${project.name}` : "Add a project"}
@@ -455,6 +462,9 @@ function HomeScreen() {
                     icon="arrow.triangle.branch"
                     label={`Thread setup, ${workspaceLabel}`}
                     value={workspaceLabel}
+                    // Beside the machine chip on a phone (or with large text) the row has no room for three labels:
+                    // the setup chip keeps its icon, and the project and machine names truncate.
+                    iconOnly={target.show && width / fontScale < 430}
                     onPress={() => router.push("/configure")}
                   />
                 )}
@@ -464,7 +474,7 @@ function HomeScreen() {
                   label="View agent activity"
                   feedback="highlight"
                   onPress={() => router.push("/activity")}
-                  style={{ flexDirection: "row", alignItems: "center", minHeight: 36, paddingHorizontal: space.sm, borderRadius: radius.full }}
+                  style={{ flexDirection: "row", alignItems: "center", minHeight: 36, paddingHorizontal: space.sm, borderRadius: radius.full, flexShrink: 0 }}
                 >
                   <T variant="footnote" tone="accent" style={{ fontWeight: "600" }}>
                     {app.approvals.length

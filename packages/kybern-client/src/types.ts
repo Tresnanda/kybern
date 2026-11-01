@@ -3492,6 +3492,8 @@ export const NETWORK_FEATURES = {
   loginBroker: "login.broker.v1",
   update: "update.v1",
   group: "group.v1",
+  /** The relay serves ticket pages (`network.relay_page.open`) to a web view that cannot send the relay header. */
+  relayPage: "relay.page.v1",
 } as const;
 
 /** Scopes only a daemon-to-daemon grant carries, never a device token. */
@@ -3768,6 +3770,30 @@ export interface DoctorCheck {
   next_step?: string | null;
   /** The peer a per-peer check is about. */
   machine_id?: MachineId | null;
+}
+
+/**
+ * `network.relay_page.open`, asked of the relay member M: a short-lived address under
+ * `/relay/<machine_id>/page/<ticket>/…` that serves one ticket page of `machine_id` (a preview, a
+ * visual frame, an artifact preview) without the `X-Kybern-Relay-Auth` header, so a web view can load it.
+ */
+export interface NetworkRelayPageOpenParams {
+  /** The machine the page is on (B). Never the relay member itself. */
+  machine_id: MachineId;
+  /**
+   * The page's ticket path on B: `/preview-proxy/<t>/…` or `/preview-files/<t>/…` (the whole ticket
+   * subtree is served), or `/visual-frame/<t>` / `/artifact-preview/<t>` (that one document).
+   */
+  path: string;
+}
+
+export interface NetworkRelayPageOpenResult {
+  /** The relay page ticket; give it back with `network.relay_page.close`. */
+  ticket: string;
+  /** Origin-relative path on M to load: `/relay/<machine_id>/page/<ticket>` followed by `path`. */
+  path: string;
+  /** The ticket root on M under which requests stay in the page (the WebView's scope). Ends with `/` for a subtree. */
+  scope: string;
 }
 
 export interface DoctorReport {
@@ -4666,6 +4692,8 @@ export interface Methods {
   "network.doctor": [{ machine_id?: MachineId | null }, DoctorReport];
   "machines.info": [Empty, MachineInfo];
   "network.follow_updates.set": [{ enabled: boolean }, NetworkStatus];
+  "network.relay_page.open": [NetworkRelayPageOpenParams, NetworkRelayPageOpenResult];
+  "network.relay_page.close": [{ ticket: string }, Empty];
   "peer.ops.sync": [PeerOpsSyncParams, PeerOpsSyncResult];
   "peer.ops.push": [{ ops: OpEnvelope[] }, { accepted: number; rejected: number }];
   "peer.presence": [PeerPresence, Empty];

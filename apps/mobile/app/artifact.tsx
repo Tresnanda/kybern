@@ -2,9 +2,8 @@ import { Stack, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import { ScrollView, View } from "react-native";
 import { WebView } from "react-native-webview";
-import { httpBase } from "../../../packages/kybern-client/src/address";
+import { openMachinePage, type OwnedPage } from "../src/state/machineRequests";
 import {
-  activeEnvironment,
   errorText,
   rpc,
   useApp,
@@ -28,7 +27,7 @@ export default function ArtifactPreview() {
   const markdown = /\.(md|markdown)$/i.test(path ?? "");
   useEffect(() => {
     let alive = true;
-    const environment = activeEnvironment();
+    let page: OwnedPage | null = null;
     setSource(null);
     setUri("");
     setError("");
@@ -39,15 +38,15 @@ export default function ArtifactPreview() {
             "This file is binary or larger than 1 MB. Open the hosted artifact instead.",
           );
         if (alive) setSource(result.content);
-        if (!markdown && environment) {
+        if (!markdown) {
           const result = await rpc("threads.artifacts.preview", {
             thread_id: threadId,
             path,
           });
-          if (alive)
-            setUri(
-              `${httpBase(environment.url)}/artifact-preview/${encodeURIComponent(result.ticket)}`,
-            );
+          const opened = await openMachinePage(`/artifact-preview/${encodeURIComponent(result.ticket)}`, { threadId });
+          if (!alive) return opened.close();
+          page = opened;
+          setUri(opened.url);
         }
       })
       .catch((e) => {
@@ -55,6 +54,7 @@ export default function ArtifactPreview() {
       });
     return () => {
       alive = false;
+      page?.close();
     };
   }, [threadId, path, markdown, app.activeId]);
   return (
@@ -106,9 +106,7 @@ export default function ArtifactPreview() {
             >
               <WebView
                 source={{ uri }}
-                originWhitelist={[
-                  httpBase(activeEnvironment()?.url ?? "http://localhost"),
-                ]}
+                originWhitelist={[new URL(uri).origin]}
                 onShouldStartLoadWithRequest={(request) =>
                   request.url === uri || request.url === "about:blank"
                 }

@@ -7,7 +7,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Linking, StyleSheet, View } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
-import { httpBase } from "../../../../packages/kybern-client/src/address";
 import {
   visualFrameHeight,
   visualHeight,
@@ -26,7 +25,8 @@ import {
   visualAnswerInput,
 } from "../../../../packages/kybern-client/src/visualAnswer";
 import type { ApprovalRequest, HtmlSnapshotResult, JsonValue } from "../state/protocol";
-import { activeEnvironment, errorText, rpc, useThreadValue } from "../state/runtime";
+import { errorText, rpc, useThreadValue } from "../state/runtime";
+import { machineSource, openMachinePage, ownerClient, type OwnedPage } from "../state/machineRequests";
 import type { Block, ThreadState } from "../state/transcript";
 import { haptics } from "../ui/haptics";
 import { Button, ErrorBanner, Icon, T, Tap } from "../ui/primitives";
@@ -75,7 +75,10 @@ function useVisualAnswerApproval(threadId: string, visualId: string) {
 
 export const InlineVisual = memo(function InlineVisual({ block, threadId }: { block: VisualBlock; threadId: string }) {
   const { colors, dark } = useTheme();
-  const environment = activeEnvironment();
+  // Everything about a visual is on the machine that owns its thread.
+  const reachable = !!ownerClient({ threadId });
+  const livePage = useRef<OwnedPage | null>(null);
+  useEffect(() => () => livePage.current?.close(), []);
   const [width, setWidth] = useState(0);
   const [picture, setPicture] = useState<HtmlSnapshotResult | null>(null);
   const [pictureFailed, setPictureFailed] = useState(false);
@@ -121,13 +124,16 @@ export const InlineVisual = memo(function InlineVisual({ block, threadId }: { bl
   }, [key, width, live, threadId, block.id, theme]);
 
   const open = async () => {
-    if (!environment || opening) return;
+    if (!reachable || opening) return;
     setOpening(true);
     setError("");
     try {
       const { ticket } = await rpc("threads.visuals.frame", { thread_id: threadId, visual_id: block.id });
       const fragment = `${visualThemeFragment(theme)}${lock ? `&kybern-lock=${encodeURIComponent(JSON.stringify(lock))}` : ""}`;
-      setLive(`${httpBase(environment.url)}/visual-frame/${encodeURIComponent(ticket)}${fragment}`);
+      const page = await openMachinePage(`/visual-frame/${encodeURIComponent(ticket)}`, { threadId });
+      livePage.current?.close();
+      livePage.current = page;
+      setLive(`${page.url}${fragment}`);
     } catch (e) {
       setError(errorText(e) || "Unable to open the visual. Check the connection and try again.");
     } finally {
@@ -159,10 +165,12 @@ export const InlineVisual = memo(function InlineVisual({ block, threadId }: { bl
 
   const restHeight = picture ? (picture.clamped ? picture.clamp : picture.height) : width ? visualFrameHeight(block.visual, width) : 160;
   const frameHeight = liveHeight ?? (width ? visualFrameHeight(block.visual, width) : 160);
-  const pictureUri =
-    picture && environment
-      ? `${httpBase(environment.url)}/threads/${encodeURIComponent(threadId)}/visuals/${encodeURIComponent(block.id)}/snapshot/${picture.key}${picture.clamped ? "-fade" : ""}.png`
-      : null;
+  const pictureSource = picture
+    ? machineSource(
+        `/threads/${encodeURIComponent(threadId)}/visuals/${encodeURIComponent(block.id)}/snapshot/${picture.key}${picture.clamped ? "-fade" : ""}.png`,
+        { threadId },
+      )
+    : undefined;
   return (
     <View style={{ gap: space.sm }}>
       <View
@@ -205,12 +213,12 @@ export const InlineVisual = memo(function InlineVisual({ block, threadId }: { bl
             hint={approval ? "Open it to choose" : undefined}
             onPress={() => void open()}
             feedback="none"
-            disabled={!environment}
+            disabled={!reachable}
             style={{ height: restHeight }}
           >
-            {pictureUri ? (
+            {pictureSource ? (
               <AuthedImage
-                source={{ uri: pictureUri, headers: { authorization: `Bearer ${environment?.token ?? ""}` } }}
+                source={pictureSource}
                 accessibilityIgnoresInvertColors
                 fadeDuration={0}
                 resizeMode="cover"
@@ -232,13 +240,13 @@ export const InlineVisual = memo(function InlineVisual({ block, threadId }: { bl
           {block.visual.title}
         </T>
         {live ? (
-          <Tap label="Close the live visual" onPress={() => { setLive(null); setLiveHeight(null); }} style={{ alignItems: "center", justifyContent: "center" }}>
+          <Tap label="Close the live visual" onPress={() => { livePage.current?.close(); livePage.current = null; setLive(null); setLiveHeight(null); }} style={{ alignItems: "center", justifyContent: "center" }}>
             <T variant="footnote" tone="accent">
               Done
             </T>
           </Tap>
         ) : (
-          <Tap label="Open the live visual" onPress={() => void open()} disabled={!environment || opening} style={{ alignItems: "center", justifyContent: "center" }}>
+          <Tap label="Open the live visual" onPress={() => void open()} disabled={!reachable || opening} style={{ alignItems: "center", justifyContent: "center" }}>
             <T variant="footnote" tone="accent">
               {opening ? "Opening…" : "Open"}
             </T>

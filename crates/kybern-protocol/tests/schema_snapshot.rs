@@ -447,6 +447,11 @@ fn machine_scopes_are_kept_out_of_client_tokens() {
 #[test]
 fn every_network_method_has_a_scope_and_peer_methods_need_a_machine_scope() {
     for method in METHODS.iter().filter(|m| m.name.starts_with("network.") || m.name.starts_with("machines.")) {
+        // The relay page tickets use the relay's own caller scope: a web view with a device token opens them (ADE-99).
+        if method.name.starts_with("network.relay_page.") {
+            assert_eq!(method.scope, Some(Scope::OrchestrationRead), "{}", method.name);
+            continue;
+        }
         assert!(matches!(method.scope, Some(Scope::NetworkRead | Scope::NetworkAdmin)), "{}", method.name);
     }
     let peers: Vec<_> = METHODS.iter().filter(|m| m.name.starts_with("peer.")).collect();
@@ -472,7 +477,7 @@ fn an_older_daemon_info_and_project_still_parse_and_the_network_defaults_to_off(
     let saved: Settings = serde_json::from_value(serde_json::json!({ "network": { "enabled": true } })).unwrap();
     assert_eq!(saved.network, NetworkSettings { configured: true, enabled: true, port: DEFAULT_PORT });
     assert_eq!(NETWORK_PROTOCOL, 1);
-    assert_eq!(features::ALL.len(), 20);
+    assert_eq!(features::ALL.len(), 21);
 }
 
 #[test]

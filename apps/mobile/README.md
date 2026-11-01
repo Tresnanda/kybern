@@ -76,8 +76,9 @@ each machine's last lists for "Offline · last seen".
   bounded list cache in `kybern-machine-cache.json`. The first start after the update
   migrates `kybern.ink.environments` (tokens move out of the JSON, the old item is deleted).
 - Lists: with two or more machines Home, Threads and the iPad sidebar read the merged
-  lists (`state/machineLists.ts`, `state/useLists.ts`); a thread's machine glyph shows only
-  for machines other than the one the phone is at, an offline machine's threads are greyed,
+  lists (`state/machineLists.ts`, `state/useLists.ts`); a thread on a machine other than the
+  one the phone is paired with names it in its second line ("Claude Code · SatyaMas"), an
+  offline machine's threads are greyed,
   and the "All machines" filter lives in the Home title and the Threads menu. With one
   machine nothing changes.
 - Requests: `rpc()` and `mutate()` route by `thread_id`/`project_id` to the machine that
