@@ -936,9 +936,13 @@ export async function mutate<M extends MethodName>(
   await refresh(target);
   return result;
 }
+/** An attachment's address on the computer the phone is at; other machines go through `machineRequests.assetSource`. */
 export function assetUrl(id: string) {
-  const env = activeEnvironment();
-  return env ? `${httpBase(env.url)}/assets/${encodeURIComponent(id)}` : "";
+  try {
+    return client?.request(`/assets/${encodeURIComponent(id)}`).url ?? "";
+  } catch {
+    return "";
+  }
 }
 export function taskActive(task: RuntimeTask) {
   return ["pending", "running", "waiting", "stopping"].includes(task.status);

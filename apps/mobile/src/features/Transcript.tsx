@@ -24,8 +24,9 @@ import { commandOf } from "../../../../packages/kybern-client/src/signIn";
 import type { LoginRecipe } from "../../../../packages/kybern-client/src/loginRecipes";
 import { sendFollowUp } from "../state/followUp";
 import { createNote } from "../state/notes";
-import { httpBase, type ApprovalDecision, type ApprovalRequest } from "../state/protocol";
-import { activeEnvironment, errorText, getState } from "../state/runtime";
+import { type ApprovalDecision, type ApprovalRequest } from "../state/protocol";
+import { errorText, getState } from "../state/runtime";
+import { threadImageSource } from "../state/machineRequests";
 import { type Block } from "../state/transcript";
 import type { TurnRow } from "../state/turnRows";
 import { turnFooterText } from "../state/format";
@@ -326,20 +327,10 @@ function answerMenu(text: string, threadId: string, turnId: string | null): Menu
   ];
 }
 
-function agentImageUri(threadId: string, source: string) {
-  const env = activeEnvironment();
-  return env
-    ? {
-        uri: `${httpBase(env.url)}/threads/${encodeURIComponent(threadId)}/image?path=${encodeURIComponent(source)}`,
-        headers: { authorization: `Bearer ${env.token}` },
-      }
-    : undefined;
-}
-
 function AgentImage({ block, threadId }: { block: Extract<Block, { kind: "image" }>; threadId: string }) {
   const { colors } = useTheme();
   const [open, setOpen] = useState(false);
-  const source = agentImageUri(threadId, block.source);
+  const source = threadImageSource(threadId, block.source);
   return (
     <>
       <Tap label="Image from the agent. Open full screen" onPress={() => setOpen(true)} feedback="none">
@@ -387,7 +378,7 @@ export const TranscriptBlock = memo(function TranscriptBlock({
         return (
           <View style={{ gap: space.sm }}>
             {block.message.parts.map((part, index) => (
-              <MessagePart key={index} part={part} />
+              <MessagePart key={index} part={part} owner={{ threadId }} />
             ))}
           </View>
         );

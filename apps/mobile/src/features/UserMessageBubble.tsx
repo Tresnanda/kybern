@@ -179,7 +179,7 @@ export function UserMessageBubble({
                   }}
                 >
                   <Image
-                    source={imageSource(part, localUris.current.get(index))}
+                    source={imageSource(part, localUris.current.get(index), { threadId })}
                     fadeDuration={0}
                     resizeMode="cover"
                     style={{ width: "100%", height: "100%" }}
@@ -240,6 +240,7 @@ export function UserMessageBubble({
                   <MessagePart
                     part={entries[0]!.part}
                     localUri={localUris.current.get(entries[0]!.index)}
+                    owner={{ threadId }}
                   />
                 )}
               </View>
@@ -287,7 +288,7 @@ export function UserMessageBubble({
       </Animated.View>
       {viewing !== null && (
         <Lightbox
-          source={imageSource(block.message.parts[viewing]!, localUris.current.get(viewing))}
+          source={imageSource(block.message.parts[viewing]!, localUris.current.get(viewing), { threadId })}
           label="Attached image"
           onClose={() => setViewing(null)}
         />

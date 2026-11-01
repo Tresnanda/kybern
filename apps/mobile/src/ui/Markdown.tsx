@@ -5,8 +5,7 @@ import { chatLink, kybernRef, splitKybernRefs, type KybernRef } from "../../../.
 import { ChatFileContext } from "../state/chatFileContext";
 import { Alert } from "./Alert";
 import { Linking, ScrollView, Text, View, type ViewStyle } from "react-native";
-import { httpBase } from "../state/protocol";
-import { activeEnvironment } from "../state/runtime";
+import { threadImageSource } from "../state/machineRequests";
 import { Lightbox } from "../features/Lightbox";
 import { Icon, IconButton, T, Tap, styles } from "./primitives";
 import {
@@ -283,13 +282,9 @@ export const Markdown = memo(function Markdown({
 function imageSource(image: MarkdownImage, threadId?: string) {
   if (isRemoteImage(image.target)) return { uri: image.target };
   const path = localImagePath(image.target);
-  const env = activeEnvironment();
-  if (!path || !env || !threadId) return undefined;
-  // The daemon resolves the path against the thread's folder and refuses protected ones.
-  return {
-    uri: `${httpBase(env.url)}/threads/${encodeURIComponent(threadId)}/image?path=${encodeURIComponent(path)}`,
-    headers: { authorization: `Bearer ${env.token}` },
-  };
+  if (!path || !threadId) return undefined;
+  // The thread's own machine resolves the path against its folder and refuses protected ones.
+  return threadImageSource(threadId, path);
 }
 
 /** An image in a reply: shown at the column width with its caption below; a caption card when it can't load. */

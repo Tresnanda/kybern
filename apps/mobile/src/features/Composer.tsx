@@ -11,7 +11,6 @@ import { ComposerCamera } from "./ComposerCamera";
 import { File } from "expo-file-system";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
-import { fetch as expoFetch } from "expo/fetch";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Image,
@@ -30,7 +29,6 @@ import {
   useDraft,
 } from "../state/draft";
 import {
-  httpBase,
   type ContentPart,
   type Thread,
   type SkillInfo,
@@ -45,12 +43,14 @@ import { inlineTokenSources, isInlinePart } from "../state/inlineMessage";
 import { ComposerSuggestions } from "./ComposerSuggestions";
 import { ComposerControls } from "./ComposerControls";
 import {
-  activeEnvironment,
   errorText,
   loadThread,
   rpc,
+  useProjects,
   useThreadValue,
 } from "../state/runtime";
+import { uploadAsset, type RequestOwner } from "../state/machineRequests";
+import { useMachineTarget } from "../state/machineTarget";
 import {
   ErrorBanner,
   Icon,
@@ -225,6 +225,17 @@ export const Composer = memo(function Composer({
     setAdding(false);
   }
   const draft = useDraft();
+  // Attachments are uploaded to the machine that will own the thread: the thread's own, or the one
+  // the new chat is sent to (a send queued for an offline machine uploads to the member it queues on).
+  const projects = useProjects();
+  const machineTarget = useMachineTarget(
+    thread ? undefined : projects.find((p) => p.id === draft.projectId),
+  );
+  const uploadOwner: RequestOwner = thread
+    ? { threadId: thread.id }
+    : machineTarget.chosen
+      ? { machineId: machineTarget.chosen.machineId }
+      : {};
   const [text, setText] = useState("");
   const [selection, setSelection] = useState({ start: 0, end: 0 });
   const [requestedSelection, setRequestedSelection] = useState<{
@@ -477,40 +488,17 @@ export const Composer = memo(function Composer({
     mimeType?: string;
     size?: number;
   }): Promise<Extract<ContentPart, { type: "attachment" }>> {
-    const env = activeEnvironment();
-    if (!env)
-      throw new Error("Connect your computer, then attach the file again.");
     const file = new File(asset.uri);
     if ((asset.size ?? file.size ?? 0) > 25 * 1024 * 1024)
       throw new Error("Choose a file smaller than 25 MB.");
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
     try {
-      const response = await expoFetch(`${httpBase(env.url)}/assets`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${env.token}`,
-          "content-type": asset.mimeType ?? "application/octet-stream",
-          "x-kybern-filename": encodeURIComponent(asset.name),
-        },
-        body: file,
-        signal: controller.signal,
-      });
-      if (!response.ok)
-        throw new Error(
-          "Unable to attach this file. Check your connection and try again.",
-        );
-      const result = (await response.json()) as {
-        id: string;
-        name: string;
-        media_type: string;
-        size: number;
-      };
-      const current = activeEnvironment();
-      if (current?.url !== env.url || current.token !== env.token)
-        throw new Error(
-          "The connected computer changed. Attach the file again.",
-        );
+      const result = await uploadAsset(
+        file,
+        { name: asset.name, mimeType: asset.mimeType, signal: controller.signal },
+        uploadOwner,
+      );
       return {
         type: "attachment",
         asset_id: result.id,

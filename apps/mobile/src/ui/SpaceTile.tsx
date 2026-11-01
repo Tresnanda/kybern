@@ -4,7 +4,7 @@
 import { spaceInitials } from "../../../../packages/kybern-client/src/spaces";
 import type { Space, SpaceColor } from "../state/protocol";
 import { StyleSheet, View } from "react-native";
-import { activeEnvironment, assetUrl } from "../state/runtime";
+import { assetSource } from "../state/machineRequests";
 import type { IconName } from "./icons";
 import { Icon, T } from "./primitives";
 import { radius, useTheme } from "./theme";
@@ -60,20 +60,20 @@ export const SPACE_SWATCHES: Record<SpaceColor, { fill: string; fg: string }> = 
 export function SpaceTile({
   space,
   size = 20,
+  machineId,
 }: {
   space: Pick<Space, "name" | "color"> & { logo?: Space["logo"] };
   size?: number;
+  /** The machine that owns the space. */
+  machineId?: string;
 }) {
   const { colors } = useTheme();
   const swatch = SPACE_SWATCHES[space.color] ?? SPACE_SWATCHES.graphite;
   const initials = spaceInitials(space.name).slice(0, size < 24 ? 1 : 2);
   const logo = space.logo;
   const glyph = logo?.kind === "icon" ? SPACE_GLYPHS[logo.icon] : undefined;
-  const env = logo?.kind === "image" ? activeEnvironment() : undefined;
-  const image =
-    logo?.kind === "image" && env
-      ? { uri: assetUrl(logo.asset_id), headers: { authorization: `Bearer ${env.token}` } }
-      : undefined;
+  // A space's logo lives on the machine that owns the space; the computer the phone is at when that is unknown.
+  const image = logo?.kind === "image" ? assetSource(logo.asset_id, machineId ? { machineId } : {}) : undefined;
   const corner = size >= 28 ? radius.sm - 2 : radius.xs;
   return (
     <View
