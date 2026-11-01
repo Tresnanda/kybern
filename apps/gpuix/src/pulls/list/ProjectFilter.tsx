@@ -1,6 +1,7 @@
 import { N } from '../../nav/glyphs.ts'
 import { Icon } from '../../icons.tsx'
-import { COMPACT_CHIP } from '../PullsTabs.tsx'
+import { IconButton } from '../../kit/IconButton.tsx'
+import { FOLDER } from '../PullsTabs.tsx'
 import { Menu, MenuItem, MenuLabel, MenuSeparator } from '../../nav/overlay.tsx'
 import { PickerChip } from '../../kit/PickerChip.tsx'
 import { Label, useTheme } from '../../ui.tsx'
@@ -31,7 +32,7 @@ export function ProjectFilter({ projects, scope, remembered, onChange, counts, c
   const label = current ? current.name : 'All projects'
   const count = (key: string) => counts.get(key)
   return <Menu testId="pr-project-filter" align="start" width={264} {...(compact ? { rootStyle: { flexShrink: 0 } } : {})} trigger={open => compact
-    ? <PickerChip size="sm" open={open} icon="folder" chevron={false} selected={!!current} quiet style={COMPACT_CHIP} label={`Project: ${label}`} />
+    ? <IconButton icon={FOLDER} label={`Project: ${label}`} active={open || !!current} />
     : <PickerChip size="sm" open={open} truncate maxWidth={150} label={`Project: ${label}`}>{label}</PickerChip>}>
     <MenuItem id="all" iconNode={<Lead on={!scope.project} />} label="All projects" onSelect={() => onChange(pickProject(null))} />
     {groups.length > 0 && <>

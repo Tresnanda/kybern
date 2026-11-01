@@ -1,6 +1,8 @@
 // The Pull requests page's two tabs, "Pull requests" and "Actions" (ADE-97), drawn in the list column's 46 px header where
 // the page title was. Each tab's own header controls follow them.
+import { Folder01Icon } from '@hugeicons/core-free-icons'
 import type { ReactNode } from 'react'
+import { glyph } from '../icons.tsx'
 import { Tabs } from '../kit/Tabs.tsx'
 import { useTheme } from '../ui.tsx'
 import { row } from '../usage/controls.tsx'
@@ -10,8 +12,8 @@ import { setPullsTab, usePullsTab, type PullsTab } from './actions/store.ts'
  *  readable width and the header's icon buttons don't fit together (one button on Pull requests, two on Actions). */
 export const HEADER_COMPACT_PULLS = 336
 export const HEADER_COMPACT_ACTIONS = 352
-/** The compact picker is square like the icon buttons beside it. */
-export const COMPACT_CHIP = { paddingLeft: 6, paddingRight: 6, flexShrink: 0 }
+/** The compact picker's glyph: the kit's folder at the standard icon stroke, matching the header's other icon buttons. */
+export const FOLDER = glyph(Folder01Icon)
 
 const ITEMS = [{ key: 'pulls', label: 'Pull requests', testId: 'pulls-tab-pulls' }, { key: 'actions', label: 'Actions', testId: 'pulls-tab-actions' }]
 
