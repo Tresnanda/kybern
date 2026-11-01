@@ -49,6 +49,8 @@ test("remote daemons route claude and omp to paste, codex to a device code and c
   assert.equal(initialLoginMode("cursor", true), "browser")
   assert.equal(initialLoginMode("opencode", false), "terminal")
   assert.equal(initialLoginMode("pi", true), "terminal")
+assert.equal(initialLoginMode("antigravity", false), "terminal")
+assert.equal(initialLoginMode("antigravity", true), "terminal")
 })
 
 test("the remote note names the host and the transport", () => {

@@ -123,7 +123,8 @@ expression: schema_for!(SessionsScanChanged)
         "opencode",
         "pi",
         "omp",
-        "cursor"
+        "cursor",
+        "antigravity"
       ]
     },
     "ScanProviderState": {

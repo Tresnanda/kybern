@@ -750,6 +750,7 @@ impl Orchestrator {
 }
 
 pub(super) fn validate_permission(thread: &Thread, mode: PermissionMode) -> Result<()> {
+    super::antigravity_rules::require_full_access(thread.provider.kind, mode)?;
     let legacy_cursor = thread.provider_session_id.as_deref().is_some_and(|id| !id.starts_with("cursor-sdk:"));
     if thread.provider.kind == ProviderKind::Cursor && !legacy_cursor {
         ensure!(

@@ -116,6 +116,7 @@ export const PROVIDER_LABEL: Record<ProviderKind, string> = {
   pi: "pi",
   omp: "Oh My Pi",
   cursor: "Cursor",
+  antigravity: "Antigravity",
 }
 
 /** Availability check for collapsed rows; never serialize a full result. */

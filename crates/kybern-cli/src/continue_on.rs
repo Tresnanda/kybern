@@ -29,7 +29,7 @@ pub struct ContinueArgs {
     /// Title of the continuing thread. Defaults to this thread's.
     #[arg(long)]
     title: Option<String>,
-    /// Agent for the continuing thread: claude, codex, opencode, pi, omp or cursor. Defaults to this thread's.
+    /// Agent for the continuing thread: claude-code, codex, opencode, pi, omp, cursor or antigravity. Defaults to this thread's.
     #[arg(long)]
     agent: Option<String>,
     #[arg(long)]

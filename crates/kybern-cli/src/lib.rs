@@ -4,6 +4,7 @@ mod coordinator;
 mod credentials;
 mod fork;
 mod machines;
+mod mcp_bridge;
 mod outbox;
 mod plugin_sync;
 mod render;
@@ -151,6 +152,9 @@ enum Cmd {
         /// The prompt, as the asking program passes it.
         prompt: Vec<String>,
     },
+    /// The stdio MCP server Antigravity starts to reach Kybern's tools. Inert outside a Kybern session.
+    #[command(hide = true)]
+    McpBridge,
     /// See or press the request cards agents summon: sign-ins, permissions, questions with a deadline.
     Requests {
         #[command(subcommand)]
@@ -1546,6 +1550,10 @@ pub async fn run() -> Result<()> {
     if let Cmd::Askpass { prompt } = &cli.cmd {
         return requests::askpass(prompt).await;
     }
+    // Speaks MCP on stdio to `agy` and to its own session's gateway.
+    if matches!(cli.cmd, Cmd::McpBridge) {
+        return mcp_bridge::run().await;
+    }
     // Local too: the GPUIX client calls this to keep device tokens in the platform store.
     if let Cmd::Credentials { cmd } = &cli.cmd {
         let code = credentials::run(cmd);
@@ -1565,6 +1573,7 @@ pub async fn run() -> Result<()> {
     match cli.cmd {
         Cmd::Cursor { .. } => unreachable!("local Cursor setup handled before connecting"),
         Cmd::Askpass { .. } => unreachable!("askpass handled before connecting"),
+        Cmd::McpBridge => unreachable!("mcp-bridge handled before connecting"),
         Cmd::Credentials { .. } => unreachable!("credentials handled before connecting"),
         Cmd::Requests { cmd } => requests::requests(&client, cmd).await?,
         Cmd::Coordinator { cmd } => coordinator::coordinator(&client, cmd).await?,

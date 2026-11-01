@@ -1395,7 +1395,8 @@ expression: schema_for!(ThreadEvent)
         "opencode",
         "pi",
         "omp",
-        "cursor"
+        "cursor",
+        "antigravity"
       ]
     },
     "PermissionMode": {

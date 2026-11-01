@@ -24,6 +24,7 @@ use crate::settings::SettingsStore;
 
 mod accounts;
 mod agent_items;
+mod antigravity_rules;
 mod askpass;
 mod change_report;
 mod child_questions;
@@ -828,6 +829,11 @@ fn instructions_key(session_id: &str) -> String {
     format!("instructions_delivered:{session_id}")
 }
 
+/// Harnesses with no system channel: Kybern's instructions block is the start of the first prompt.
+fn carries_instructions_in_conversation(kind: ProviderKind) -> bool {
+    matches!(kind, ProviderKind::Cursor | ProviderKind::Antigravity)
+}
+
 /// How `send_with_id` took a message.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Admission {
@@ -1382,6 +1388,10 @@ impl Orchestrator {
     }
 
     fn update_thread(&self, thread: Thread) -> Result<Thread> {
+        antigravity_rules::require_full_access(thread.provider.kind, thread.permission_mode)?;
+        if thread.coordinator_project_id.is_some() {
+            antigravity_rules::refuse_lead(thread.provider.kind)?;
+        }
         let _updates = self.inner.thread_updates.lock().map_err(|_| anyhow!("thread update lock poisoned"))?;
         self.write_thread_update(thread, true)
     }
@@ -1791,6 +1801,10 @@ impl Orchestrator {
             None => self.ensure_free_chat_project()?,
         };
         let settings = self.inner.settings.get();
+        let permission_mode =
+            params.permission_mode.unwrap_or_else(|| default_provider_permission(params.provider.kind, settings.default_permission_mode));
+        // Before anything is created: Antigravity only runs in Full access.
+        antigravity_rules::require_full_access(params.provider.kind, permission_mode)?;
         let configured_model = settings.providers.get(&params.provider.kind).and_then(|provider| provider.model.clone());
         let selected_model = params.model.as_deref().or(configured_model.as_deref());
         self.validate_provider_selection(project.id, &params.provider, selected_model, params.effort.as_deref()).await?;
@@ -1859,9 +1873,7 @@ impl Orchestrator {
             title: params.title.clone().unwrap_or_else(|| DEFAULT_TITLE.to_string()),
             model: params.model.or(configured_model),
             effort: params.effort,
-            permission_mode: params
-                .permission_mode
-                .unwrap_or_else(|| default_provider_permission(params.provider.kind, settings.default_permission_mode)),
+            permission_mode,
             provider: params.provider,
             status: ThreadStatus::Idle,
             worktree,
@@ -3659,29 +3671,52 @@ impl Orchestrator {
         let lead_settings = instructions.as_ref().and_then(|instructions| instructions.lead_settings.clone());
         let coordinator_instructions = instructions.map(|instructions| instructions.text);
         let computer_tools = self.computer_tools_offered(thread, &restrictions);
-        let native_tool_bridge = self
-            .inner
-            .native_tools
-            .as_ref()
-            .map(|gateway| {
-                let mut tools = crate::app_tools::native_tool_definitions();
-                // Privacy permissions are a macOS thing.
-                tools.retain(|tool| cfg!(target_os = "macos") || tool.name != PERMISSION_REQUEST_TOOL);
-                if thread.coordinator_project_id.is_some() {
-                    // Only the project Coordinator is offered the git tool.
-                    tools.push(crate::lead_git::tool_definition());
-                }
-                if self.computer_available(thread) {
-                    tools.extend(crate::computer::ComputerUse::tool_definitions());
-                }
-                if thread.coordinator_project_id.is_some() {
-                    tools.extend(lead_proposals::tool_definitions());
-                }
-                self.offer_machine_tools(thread, &mut tools);
-                let guide = self.agent_guide(&tools, &restrictions);
-                gateway.register_coordinator(thread.id, session_instance_id, tools, restrictions, coordinator_instructions, guide)
+        // Antigravity reaches the gateway through the one global `kybern` MCP entry (`kybern
+        // mcp-bridge`), which reads this session's endpoint and credential from the environment
+        // of each turn. Without that entry, or with the setting off, it gets no tools and no
+        // gateway session; its guide is then rendered from an empty tool list so it never
+        // describes a tool `agy` cannot call. The driver puts the guide at the top of the
+        // conversation's first prompt either way.
+        let antigravity_tools = if thread.provider.kind == ProviderKind::Antigravity && self.inner.native_tools.is_some() {
+            self.antigravity_tools_ready(thread).await
+        } else {
+            false
+        };
+        let native_tool_bridge = if thread.provider.kind == ProviderKind::Antigravity && !antigravity_tools {
+            let guide = self.agent_guide(&[], &restrictions);
+            (guide.is_some() || coordinator_instructions.is_some()).then(|| kybern_drivers::NativeToolBridge {
+                server_name: "kybern".into(),
+                endpoint: None,
+                authorization: None,
+                coordinator_instructions: coordinator_instructions.clone(),
+                guide,
+                tools: Vec::new(),
+                restrictions: restrictions.clone(),
             })
-            .transpose()?;
+        } else {
+            self.inner
+                .native_tools
+                .as_ref()
+                .map(|gateway| {
+                    let mut tools = crate::app_tools::native_tool_definitions();
+                    // Privacy permissions are a macOS thing.
+                    tools.retain(|tool| cfg!(target_os = "macos") || tool.name != PERMISSION_REQUEST_TOOL);
+                    if thread.coordinator_project_id.is_some() {
+                        // Only the project Coordinator is offered the git tool.
+                        tools.push(crate::lead_git::tool_definition());
+                    }
+                    if self.computer_available(thread) {
+                        tools.extend(crate::computer::ComputerUse::tool_definitions());
+                    }
+                    if thread.coordinator_project_id.is_some() {
+                        tools.extend(lead_proposals::tool_definitions());
+                    }
+                    self.offer_machine_tools(thread, &mut tools);
+                    let guide = self.agent_guide(&tools, &restrictions);
+                    gateway.register_coordinator(thread.id, session_instance_id, tools, restrictions, coordinator_instructions, guide)
+                })
+                .transpose()?
+        };
         // Claude Code gives up on an MCP tool call after about a minute, which would end a
         // sign-in, a permission request or a question with a deadline while the user is
         // still deciding. The daemon bounds every call itself (the longest waits are a few
@@ -3699,14 +3734,14 @@ impl Orchestrator {
         if askpass_allowed && let Some(env) = self.askpass_env(thread.id, session_instance_id) {
             provider_settings.env.extend(env);
         }
-        // Cursor has no system channel: the block rides in the conversation, once.
+        // Cursor and Antigravity have no system channel: the block rides in the conversation, once.
         let resume_lacks_instructions = match &thread.provider_session_id {
-            Some(id) if thread.provider.kind == ProviderKind::Cursor && rewind.is_none() => {
+            Some(id) if carries_instructions_in_conversation(thread.provider.kind) && rewind.is_none() => {
                 self.inner.store.meta_get(&instructions_key(id))?.is_none()
             }
             _ => false,
         };
-        let instructions_unconfirmed = thread.provider.kind == ProviderKind::Cursor
+        let instructions_unconfirmed = carries_instructions_in_conversation(thread.provider.kind)
             && (thread.provider_session_id.is_none() || resume_lacks_instructions)
             && native_tool_bridge.as_ref().is_some_and(|bridge| bridge.provider_instructions().is_some());
         // Cursor's account host reuses the daemon catalog; old entries lacking
@@ -3842,6 +3877,31 @@ impl Orchestrator {
             && self.computer_available(thread)
             && (restrictions.allowed_tools.is_empty() || restrictions.allowed_tools.iter().any(|tool| tool == PROBE))
             && !restrictions.denied_tools.iter().any(|tool| tool == PROBE)
+    }
+
+    /// Whether an Antigravity session can use Kybern's tools: the setting is on and the
+    /// `kybern` entry in `agy`'s MCP servers is present and Kybern's (re-added when it
+    /// is missing or points at a command that is gone). When it cannot, the thread says why.
+    async fn antigravity_tools_ready(&self, thread: &Thread) -> bool {
+        let settings = self.inner.settings.get();
+        if !settings.antigravity.kybern_tools {
+            return false;
+        }
+        match crate::antigravity_mcp::turn_on(&settings).await {
+            Ok(()) => true,
+            Err(error) => {
+                let _ = self.emit(
+                    thread.id,
+                    None,
+                    EventPayload::ProviderNotice {
+                        level: NoticeLevel::Warning,
+                        text: format!("Antigravity is running without Kybern's tools. {error}"),
+                        data: None,
+                    },
+                );
+                false
+            }
+        }
     }
 
     /// The "Working in Kybern" guide for a session with these tools, or `None`
@@ -5059,6 +5119,8 @@ fn generic_runtime_task_for_provider(provider: ProviderKind, call: &ToolCall) ->
         // guessed tool row with the native identity duplicates batched/nested
         // children and can finish them at the wrong edge.
         ProviderKind::ClaudeCode | ProviderKind::Codex | ProviderKind::Omp => None,
+        // Antigravity's subagent calls stay tool cards: no guessed task rows or child threads.
+        ProviderKind::Antigravity => None,
         ProviderKind::Opencode if task.kind == RuntimeTaskKind::Agent => None,
         // pi and Cursor currently expose only tool-scoped observation through
         // the protocols Kybern drives. OpenCode still uses the conservative
@@ -8810,6 +8872,7 @@ for line in sys.stdin:
         assert!(!kinds.contains(&"turn_failed"));
     }
 
+    include!("orchestrator/antigravity_tests.rs");
     include!("orchestrator/delegation_tests.rs");
     include!("orchestrator/remote_delegation_tests.rs");
     include!("orchestrator/provision_tests.rs");

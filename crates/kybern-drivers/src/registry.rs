@@ -30,6 +30,7 @@ impl DriverRegistry {
         r.register(Arc::new(crate::pi::PiDriver::pi()));
         r.register(Arc::new(crate::pi::PiDriver::omp()));
         r.register(Arc::new(crate::cursor::CursorDriver));
+        r.register(Arc::new(crate::antigravity::AntigravityDriver::default()));
         r
     }
 

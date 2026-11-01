@@ -23,6 +23,21 @@ impl ProcessTree {
         signal_group(self.0, "-TERM");
     }
 
+    /// Send Ctrl+C (SIGINT) to every process in the group, the way a terminal
+    /// does, so a CLI can wind down its own turn. Windows has no such signal
+    /// for a detached console process, so it reports `false` and the caller
+    /// goes straight to `terminate` and the forced stop.
+    pub(crate) fn interrupt(&self) -> bool {
+        #[cfg(unix)]
+        {
+            signal_group(self.0, "-INT")
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
+    }
+
     /// Kill the group now, for a process that ignored `terminate`.
     pub(crate) fn kill_now(self) {
         force_kill(self.0);

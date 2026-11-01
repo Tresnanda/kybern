@@ -1,3 +1,4 @@
+import { onlyFullAccess } from '../../../../packages/kybern-client/src/permissionModes.ts'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { isLiveRun, latestRun } from '@/state/tasksModel'
 import type {
@@ -70,8 +71,9 @@ export function RunComposer({ ids, onEmptyChange }: { ids: string[]; onEmptyChan
         : null
   const status = available.find((p) => p.kind === provider?.kind)
   const preferred = choices.permissionMode ?? settings?.default_permission_mode ?? 'supervised'
-  const permission =
-    status && !status.supported_permission_modes.includes(preferred) ? (status.supported_permission_modes[0] ?? preferred) : preferred
+  const permission = onlyFullAccess(status ?? provider?.kind)
+    ? 'full-access'
+    : status && !status.supported_permission_modes.includes(preferred) ? (status.supported_permission_modes[0] ?? preferred) : preferred
   const model = followup ? run?.model : choices.model
   const worktree = !!project?.is_git && (choices.useWorktree ?? true)
   const [branches, setBranches] = useState<GitBranchesResult | null>(null)

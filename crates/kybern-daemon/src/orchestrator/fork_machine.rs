@@ -193,6 +193,8 @@ impl Orchestrator {
             .filter(|effort| !effort.trim().is_empty())
             .or_else(|| (same_kind && asked_model.is_none()).then(|| thread.effort.clone()).flatten());
         let permission_mode = params.permission_mode.unwrap_or(thread.permission_mode);
+        super::antigravity_rules::require_full_access(kind, permission_mode)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
 
         let origin = Origin {
             machine_id: hub.self_id(),
@@ -710,6 +712,9 @@ impl Orchestrator {
         let path = worktree.path.clone();
         let now = Utc::now();
         let provider = ProviderInstance::default_for(kind);
+        let permission_mode = narrower(params.permission_mode, origin.permission_cap);
+        super::antigravity_rules::require_full_access(kind, permission_mode)
+            .map_err(|error| RpcError::invalid_params(error.to_string()))?;
         let thread = Thread {
             id: thread_id,
             project_id: project.id,
@@ -717,7 +722,7 @@ impl Orchestrator {
             provider,
             model,
             effort,
-            permission_mode: narrower(params.permission_mode, origin.permission_cap),
+            permission_mode,
             status: ThreadStatus::Idle,
             worktree: Some(worktree),
             cwd: path,

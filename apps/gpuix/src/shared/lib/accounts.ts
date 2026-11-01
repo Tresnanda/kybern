@@ -139,7 +139,8 @@ export function supportsDeviceCode(kind: ProviderKind): boolean {
  * device code. Cursor's page polls, so it keeps the browser.
  */
 export function initialLoginMode(kind: ProviderKind, remote: boolean): AccountLoginMode {
-  if (kind === "opencode" || kind === "pi") return "terminal"
+  // Antigravity signs in only through `agy` in a terminal on the machine.
+  if (kind === "opencode" || kind === "pi" || kind === "antigravity") return "terminal"
   if (!remote) return "browser"
   if (supportsPasteCode(kind)) return "paste"
   if (supportsDeviceCode(kind)) return "device_code"

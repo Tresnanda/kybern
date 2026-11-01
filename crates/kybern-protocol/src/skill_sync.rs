@@ -86,7 +86,11 @@ impl SkillHome {
     /// The harnesses that load skills from this folder.
     pub fn readers(self) -> &'static [ProviderKind] {
         match self {
-            SkillHome::Agents => &[ProviderKind::Codex, ProviderKind::Cursor, ProviderKind::Opencode, ProviderKind::Omp],
+            // Antigravity loads `.agents/skills/<name>/SKILL.md` (its own help text); the
+            // per-user location is not documented, so this lists the shared folder only.
+            SkillHome::Agents => {
+                &[ProviderKind::Codex, ProviderKind::Cursor, ProviderKind::Opencode, ProviderKind::Omp, ProviderKind::Antigravity]
+            }
             SkillHome::Claude => &[ProviderKind::ClaudeCode, ProviderKind::Cursor, ProviderKind::Opencode],
             SkillHome::Codex => &[ProviderKind::Codex, ProviderKind::Cursor],
             SkillHome::Cursor => &[ProviderKind::Cursor],

@@ -1,13 +1,13 @@
 // Which agents a machine can run for you (ADE-86 dogfood). A harness that exists on a machine may still be signed out
 // there, and a fork, a move or a new thread that starts a turn with it fails at once with "Failed to authenticate".
-// Only Claude, Codex and Cursor have an account to sign in to; omp, OpenCode and pi use whatever provider keys the
+// Only Claude, Codex, Cursor and Antigravity have an account to sign in to; omp, OpenCode and pi use whatever provider keys the
 // machine has, so they are never reported as signed out (see `signedInOf`).
 import { findModel, selectedVariant } from "./models.ts";
 import { PROVIDER_DISPLAY_NAME } from "./types.ts";
 import type { AccountSummary, HarnessSummary, ProviderKind, ProviderModel } from "./types.ts";
 
 /** The harnesses with an account. */
-export const SIGN_IN_KINDS: readonly ProviderKind[] = ["claude-code", "codex", "cursor"];
+export const SIGN_IN_KINDS: readonly ProviderKind[] = ["claude-code", "codex", "cursor", "antigravity"];
 
 export const hasSignIn = (kind: ProviderKind): boolean => SIGN_IN_KINDS.includes(kind);
 

@@ -106,7 +106,7 @@ export const AUTH_QUERY_PARAM = "token";
 // ---- model ----
 
 export type ProviderKind =
-  "claude-code" | "codex" | "opencode" | "pi" | "omp" | "cursor";
+  "claude-code" | "codex" | "opencode" | "pi" | "omp" | "cursor" | "antigravity";
 
 export const PROVIDER_DISPLAY_NAME: Record<ProviderKind, string> = {
   "claude-code": "Claude Code",
@@ -115,6 +115,7 @@ export const PROVIDER_DISPLAY_NAME: Record<ProviderKind, string> = {
   pi: "pi",
   omp: "Oh My Pi",
   cursor: "Cursor",
+  antigravity: "Antigravity",
 };
 
 export interface ProviderInstance {
@@ -2574,6 +2575,8 @@ export interface Settings {
   background: BackgroundSettings;
   access: AccessSettings;
   computer_use: ComputerUseSettings;
+  /** Antigravity's link to Kybern's tools. Absent from older daemons (off). */
+  antigravity?: AntigravitySettings;
   /** Limits on agents delegating work to other agents. */
   orchestration: OrchestrationSettings;
   /** Give new agent sessions a short guide to Kybern. Defaults to on. */
@@ -2660,6 +2663,11 @@ export interface ComputerUseSettings {
   always_allowed_apps?: string[];
   /** Unset means the OS default (CuaDriver on macOS, agent-desktop elsewhere). Per machine. */
   driver?: ComputerDriver | null;
+}
+
+/** One `kybern` entry in this machine's `agy` MCP servers, managed through `agy mcp`. */
+export interface AntigravitySettings {
+  kybern_tools: boolean;
 }
 
 export type ComputerPermission = "granted" | "missing" | "unknown";

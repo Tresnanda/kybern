@@ -77,7 +77,8 @@ expression: schema_for!(SessionsImportAllParams)
         "opencode",
         "pi",
         "omp",
-        "cursor"
+        "cursor",
+        "antigravity"
       ]
     }
   }

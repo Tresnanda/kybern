@@ -931,7 +931,24 @@ async fn dispatch_part_11(state: &AppState, ctx: &ConnectionCtx, method: &str, s
     match method {
         SettingsUpdate::NAME => {
             let p: SettingsUpdateParams = parse(params)?;
+            // Antigravity's MCP list is machine-wide: change it only when the switch flips, and refuse
+            // the switch when someone else's `kybern` entry holds the name. A missing `agy` is not an error.
+            let was_on = state.settings.get().antigravity.kybern_tools;
+            let wants = p.settings.antigravity.kybern_tools;
+            if wants && !was_on {
+                match crate::antigravity_mcp::turn_on(&p.settings).await {
+                    Err(crate::antigravity_mcp::Failure::Foreign) => return Err(RpcError::invalid_params(crate::antigravity_mcp::FOREIGN)),
+                    Err(error) => tracing::warn!(%error, "could not add Kybern's Antigravity MCP entry"),
+                    Ok(()) => {}
+                }
+            }
             let updated = state.settings.set(p.settings).map_err(internal)?;
+            if was_on
+                && !wants
+                && let Err(error) = crate::antigravity_mcp::turn_off(&updated).await
+            {
+                tracing::warn!(%error, "could not remove Kybern's Antigravity MCP entry");
+            }
             state.orchestrator.usage().settings_changed();
             ok(updated)
         }

@@ -80,6 +80,7 @@ classify!(SETTINGS_FIELDS, every_settings_field_is_classified, Settings, {
     background => PerMachine,
     access => PerMachine,
     computer_use => PerMachine,
+    antigravity => PerMachine,
     orchestration => Shared,
     tell_agents_about_kybern => Shared,
     ask_deadlines => Shared,
@@ -568,7 +569,7 @@ mod tests {
         ] {
             assert_eq!(class(shared), Sharing::Shared, "{shared}");
         }
-        for own in ["background", "access", "computer_use", "preview_allowed_folders", "network"] {
+        for own in ["background", "access", "computer_use", "antigravity", "preview_allowed_folders", "network"] {
             assert_eq!(class(own), Sharing::PerMachine, "{own}");
         }
         assert_eq!(class("providers"), Sharing::PerProvider);
