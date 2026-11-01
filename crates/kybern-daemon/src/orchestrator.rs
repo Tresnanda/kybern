@@ -7211,17 +7211,18 @@ mod tests {
         git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]);
         let thread = fixture.thread(ThreadStatus::Idle);
         let (live, _) = fixture.park(&thread, Instant::now()).await;
+        let mut events = fixture.orchestrator.inner.events.subscribe();
         fixture.orchestrator.send(thread.id, UserMessage::text("edit a file")).await.unwrap();
         live.turn_ready.notified().await;
         let turn_id = live.turn.lock().await.as_ref().unwrap().id;
-        // The before snapshot is taken once the turn is ready.
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while fixture.store.checkpoint_get(turn_id).unwrap().is_none() {
-                tokio::time::sleep(Duration::from_millis(5)).await;
+        // The before snapshot is taken once the turn is ready, and announced after it is stored.
+        // Wait for that, however long git takes on a loaded runner, not against a short clock.
+        while fixture.store.checkpoint_get(turn_id).unwrap().is_none() {
+            match tokio::time::timeout(Duration::from_secs(60), events.recv()).await.expect("the before checkpoint is announced") {
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(error) => panic!("thread events ended: {error:?}"),
             }
-        })
-        .await
-        .unwrap();
+        }
         std::fs::write(fixture.root.join("edited.txt"), "agent output\n").unwrap();
 
         // Hold the thread's checkpoint lock, as a slow snapshot of a large tree would.
@@ -7268,16 +7269,17 @@ mod tests {
         git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]);
         let thread = fixture.thread(ThreadStatus::Idle);
         let (live, _) = fixture.park(&thread, Instant::now()).await;
+        let mut events = fixture.orchestrator.inner.events.subscribe();
         fixture.orchestrator.send(thread.id, UserMessage::text("edit a file")).await.unwrap();
         live.turn_ready.notified().await;
         let turn_id = live.turn.lock().await.as_ref().unwrap().id;
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while fixture.store.checkpoint_get(turn_id).unwrap().is_none() {
-                tokio::time::sleep(Duration::from_millis(5)).await;
+        // Wait for the before checkpoint's announcement, not against a short clock.
+        while fixture.store.checkpoint_get(turn_id).unwrap().is_none() {
+            match tokio::time::timeout(Duration::from_secs(60), events.recv()).await.expect("the before checkpoint is announced") {
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(error) => panic!("thread events ended: {error:?}"),
             }
-        })
-        .await
-        .unwrap();
+        }
         fixture.orchestrator.handle_driver_event(thread.id, &live, completed_response(StopReason::Completed)).await.unwrap();
         // The after snapshot of a large tree is still running.
         let slow = fixture.orchestrator.checkpoint_lock(thread.id).lock_owned().await;
