@@ -1,8 +1,8 @@
 import { attentionItems } from "../../../../packages/kybern-client/src/threadAttention";
 import { BlurView } from "expo-blur";
 import { router, useGlobalSearchParams, usePathname } from "expo-router";
-import { useCallback, useMemo, useState, type ReactNode } from "react";
-import { Platform, ScrollView, StyleSheet, View } from "react-native";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { Platform, ScrollView, StyleSheet, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLayout } from "../state/layout";
 import { attentionSignals, dismissAttention, useListState } from "../state/listState";
@@ -26,13 +26,12 @@ import {
 import { MenuButton } from "../ui/ActionMenu";
 import { Brand } from "../ui/Brand";
 import { useReduceTransparency, useWindowControlsInset } from "../ui/ChromeBar";
-import { DisclosureRow, ListSurface, SectionHeader } from "../ui/List";
+import { ListSurface, SectionHeader } from "../ui/List";
 import type { MenuItem } from "../ui/menuModel";
 import { Empty, Icon, IconButton, T, Tap } from "../ui/primitives";
-import { SearchField } from "../ui/Search";
-import { Segmented } from "../ui/Segmented";
+import { haptics } from "../ui/haptics";
 import { SpaceTile } from "../ui/SpaceTile";
-import { radius, space, useTheme } from "../ui/theme";
+import { maxScale, radius, space, useTheme, useType } from "../ui/theme";
 import { useMachineMenuItems } from "./MachineFilter";
 import { useSpaceMenuItems } from "./Spaces";
 import { ThreadListRow, type ThreadRowContext } from "./ThreadRows";
@@ -63,8 +62,8 @@ function SidebarTitle() {
   const active = s.spaces.find((x) => x.id === currentSpaceId(s));
   const content = (
     <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 44, paddingHorizontal: space.sm }}>
-      {active && s.spaces.length > 1 ? <SpaceTile space={active} size={24} /> : <Brand size={22} />}
-      <T variant="headline" numberOfLines={1} style={{ flexShrink: 1 }}>
+      {active && s.spaces.length > 1 ? <SpaceTile space={active} size={22} /> : <Brand size={20} />}
+      <T variant="headline" numberOfLines={1} style={{ flexShrink: 1, fontSize: 18 }}>
         {active && s.spaces.length > 1 ? active.name : "kybern"}
       </T>
       {items.length ? <Icon name="chevron.up.chevron.down" size={12} color={colors.muted} /> : null}
@@ -80,6 +79,93 @@ function SidebarTitle() {
     >
       <View style={{ borderRadius: radius.md }}>{content}</View>
     </MenuButton>
+  );
+}
+
+/** The sidebar's search, at the original tablet size (129bd40): a 40 pt raised field with footnote text. */
+function SidebarSearch({ value, onChangeText }: { value: string; onChangeText: (text: string) => void }) {
+  const { colors } = useTheme();
+  const typography = useType();
+  const input = useRef<TextInput>(null);
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 40, paddingStart: 11, borderRadius: 13, backgroundColor: colors.raised }}>
+      <Icon name="magnifyingglass" size={15} color={colors.secondary} />
+      <TextInput
+        ref={input}
+        value={value}
+        onChangeText={onChangeText}
+        placeholder="Search threads"
+        placeholderTextColor={colors.muted}
+        selectionColor={colors.accent}
+        autoCapitalize="none"
+        autoCorrect={false}
+        returnKeyType="search"
+        accessibilityLabel="Search threads"
+        maxFontSizeMultiplier={maxScale("footnote")}
+        underlineColorAndroid="transparent"
+        style={[typography.footnote, { flex: 1, color: colors.ink, paddingVertical: 8 }]}
+      />
+      {value ? (
+        <Tap
+          label="Clear search"
+          feedback="none"
+          onPress={() => {
+            onChangeText("");
+            input.current?.focus();
+          }}
+          style={{ alignItems: "center", minHeight: 40, minWidth: 40 }}
+        >
+          <Icon name="xmark.circle" size={15} color={colors.muted} />
+        </Tap>
+      ) : (
+        <View style={{ width: 11 }} />
+      )}
+    </View>
+  );
+}
+
+/** A filter chip of the original tablet sidebar: the chosen one is an ink pill, the rest sit on `raised`. */
+function SidebarChip({ title, selected, onPress }: { title: string; selected: boolean; onPress: () => void }) {
+  const { colors } = useTheme();
+  return (
+    <Tap
+      label={title}
+      selected={selected}
+      onPress={() => {
+        haptics.select();
+        onPress();
+      }}
+      hitSlop={{ top: 5, bottom: 5 }}
+      style={{ minHeight: 34, minWidth: 0, paddingHorizontal: 12, borderRadius: radius.full, justifyContent: "center", backgroundColor: selected ? colors.ink : colors.raised }}
+    >
+      <T variant="footnote" tone={selected ? "inverse" : "secondary"} numberOfLines={1}>
+        {title}
+      </T>
+    </Tap>
+  );
+}
+
+/** A project group's header in the sidebar: folder, name, count, and a chevron that folds the group. */
+function GroupHeader({ name, count, open, onToggle }: { name: string; count: number; open: boolean; onToggle?: () => void }) {
+  const { colors } = useTheme();
+  const content = (
+    <>
+      <Icon name={open ? "folder.fill" : "folder"} size={14} color={colors.secondary} />
+      <T variant="footnote" tone="secondary" numberOfLines={1} style={{ flexShrink: 1 }} accessibilityRole="header">
+        {name}
+      </T>
+      <T variant="caption" tone="muted" style={{ fontVariant: ["tabular-nums"], flex: 1 }}>
+        {count}
+      </T>
+      {onToggle ? <Icon name={open ? "chevron.down" : "chevron.right"} size={10} color={colors.muted} /> : null}
+    </>
+  );
+  const style = { flexDirection: "row" as const, alignItems: "center" as const, gap: space.sm, paddingHorizontal: space.sm, minHeight: 32, borderRadius: 9 };
+  if (!onToggle) return <View style={style}>{content}</View>;
+  return (
+    <Tap label={`${name}, ${count} threads`} expanded={open} feedback="highlight" onPress={onToggle} style={style}>
+      {content}
+    </Tap>
   );
 }
 
@@ -186,12 +272,6 @@ export function Sidebar() {
         })),
       ],
     },
-    {
-      title: "Show archived",
-      icon: "archivebox",
-      checked: filter.archived,
-      onPress: () => setFilter((f) => ({ ...f, archived: !f.archived, scope: "all" })),
-    },
     ...(attention.length
       ? [{ title: "Mark all as read", icon: "checkmark.circle" as const, onPress: () => dismissAttention(attention.map((i) => i.thread)) }]
       : []),
@@ -206,11 +286,6 @@ export function Sidebar() {
     { title: "Activity", icon: "waveform.path", path: "/activity", meta: app.approvals.length ? String(app.approvals.length) : undefined },
   ];
   const empty = emptyText(filter, agentName);
-  const inset = (node: ReactNode, key: string) => (
-    <View key={key} style={{ marginHorizontal: ROW_INSET, borderRadius: radius.md, overflow: "hidden" }}>
-      {node}
-    </View>
-  );
 
   return (
     <View style={{ flex: 1, width: "100%" }}>
@@ -220,7 +295,8 @@ export function Sidebar() {
       <ListSurface color="transparent">
         <View
           style={{
-            paddingTop: insets.top + space.xs,
+            paddingTop: insets.top + space.sm,
+            paddingBottom: 6,
             paddingStart: Math.max(space.sm, controls),
             paddingEnd: space.xs,
             flexDirection: "row",
@@ -241,12 +317,8 @@ export function Sidebar() {
           showsVerticalScrollIndicator={false}
           contentContainerStyle={{ paddingBottom: space.lg }}
         >
-          <View style={{ paddingHorizontal: space.lg, paddingTop: space.xs, paddingBottom: space.sm }}>
-            <SearchField
-              value={filter.query}
-              onChangeText={(query) => setFilter((f) => ({ ...f, query }))}
-              placeholder="Search threads"
-            />
+          <View style={{ paddingHorizontal: 10, paddingTop: 6, paddingBottom: space.sm }}>
+            <SidebarSearch value={filter.query} onChangeText={(query) => setFilter((f) => ({ ...f, query }))} />
           </View>
           <View style={{ paddingHorizontal: ROW_INSET }}>
             {nav.map((item) => (
@@ -260,27 +332,20 @@ export function Sidebar() {
               />
             ))}
           </View>
-          <View style={{ paddingHorizontal: space.lg, paddingTop: space.sm, gap: space.sm }}>
-            {filter.archived ? (
-              <SectionHeader
-                first
-                title="Archived threads"
-                action={{ title: "Done", label: "Show live threads", onPress: () => setFilter((f) => ({ ...f, archived: false })) }}
-              />
-            ) : (
-              <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
-                <View style={{ flex: 1 }}>
-                  <Segmented
-                    compact
-                    label="Show threads"
-                    options={THREAD_SCOPES}
-                    value={filter.scope}
-                    onChange={(scope) => setFilter((f) => ({ ...f, scope }))}
-                  />
-                </View>
-                <MenuButton items={menu} title="Threads" label="Thread filters" icon="ellipsis" />
-              </View>
-            )}
+          <View style={{ paddingHorizontal: 10, paddingTop: space.sm, paddingBottom: 6, gap: space.sm }}>
+            {/* The original tablet sidebar's chips: All, Working, Pinned and Archived, then the rest of the filters. */}
+            <View accessibilityRole="tablist" accessibilityLabel="Show threads" style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              {THREAD_SCOPES.map((option) => (
+                <SidebarChip
+                  key={option.value}
+                  title={option.label}
+                  selected={!filter.archived && filter.scope === option.value}
+                  onPress={() => setFilter((f) => ({ ...f, archived: false, scope: option.value }))}
+                />
+              ))}
+              <SidebarChip title="Archived" selected={filter.archived} onPress={() => setFilter((f) => ({ ...f, archived: !f.archived, scope: "all" }))} />
+              <MenuButton items={menu} title="Threads" label="Thread filters" icon="ellipsis" />
+            </View>
             {agentName && !filter.archived ? (
               <SectionHeader
                 first
@@ -298,26 +363,25 @@ export function Sidebar() {
               : rows.filter((row) => (row.depth === 0 ? ++counted <= MAX_PROJECT_THREADS : counted <= MAX_PROJECT_THREADS));
             const hidden = group.threads.length - shown.filter((r) => r.depth === 0).length;
             return (
-              <View key={group.projectId}>
-                <View style={{ paddingHorizontal: space.lg }}>
-                  <SectionHeader
-                    title={group.name}
-                    count={group.threads.length}
-                    open={open}
-                    onToggle={filtering ? undefined : () => setCollapsed((c) => ({ ...c, [group.projectId]: open }))}
-                  />
-                </View>
-                {open &&
-                  shown.map((row) => inset(<ThreadListRow row={row} ctx={ctx} />, row.thread.id))}
+              <View key={group.projectId} style={{ paddingHorizontal: 10, marginBottom: 6 }}>
+                <GroupHeader
+                  name={group.name}
+                  count={group.threads.length}
+                  open={open}
+                  {...(filtering ? {} : { onToggle: () => setCollapsed((c) => ({ ...c, [group.projectId]: open })) })}
+                />
+                {open && shown.map((row) => <ThreadListRow key={row.thread.id} row={row} ctx={ctx} />)}
                 {open && hidden > 0 ? (
-                  <View style={{ minHeight: 36, justifyContent: "center" }}>
-                    <DisclosureRow
-                      title={`Show ${hidden} more`}
-                      open={false}
-                      indent={ROW_INSET}
-                      onToggle={() => setShowAll((value) => ({ ...value, [group.projectId]: true }))}
-                    />
-                  </View>
+                  <Tap
+                    label={`Show ${hidden} more threads`}
+                    feedback="highlight"
+                    onPress={() => setShowAll((value) => ({ ...value, [group.projectId]: true }))}
+                    style={{ paddingStart: 12, minHeight: 32, justifyContent: "center", borderRadius: 9 }}
+                  >
+                    <T variant="caption" tone="accent">
+                      Show {hidden} more
+                    </T>
+                  </Tap>
                 ) : null}
               </View>
             );

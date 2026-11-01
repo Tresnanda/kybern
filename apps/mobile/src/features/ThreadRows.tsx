@@ -14,9 +14,10 @@ import type { ThreadMachine } from "../state/machineLists";
 import { errorText, mutate, refresh, threadHasActivity, useApp } from "../state/runtime";
 import type { StatusPhase } from "../state/status";
 import { relativeTime, type ThreadRow } from "../state/threadList";
+import { ContextMenu } from "../ui/ActionMenu";
 import { DisclosureRow, ListRow, rowInset, type SwipeAction } from "../ui/List";
 import type { MenuItem } from "../ui/menuModel";
-import { T } from "../ui/primitives";
+import { Icon, T, Tap } from "../ui/primitives";
 import { ProviderMark } from "../ui/ProviderMark";
 import { StatusGlyph } from "../ui/TaskGlyphs";
 import { radius, space, useTheme } from "../ui/theme";
@@ -43,6 +44,95 @@ function AttentionBadge({ text }: { text: string }) {
         {text}
       </T>
     </View>
+  );
+}
+
+/**
+ * The iPad sidebar's thread row, at the density of the original tablet sidebar (129bd40): the title in `label` with its
+ * time in `caption`, and below it a 12 pt mark (agent, or the live status) with the subtitle in `caption`. No leading
+ * column, no per-row fill: only the selected row draws its rounded pill. Long-press opens the same menu as the list.
+ */
+function CompactThreadRow({
+  title,
+  subtitle,
+  mark,
+  unread,
+  meta,
+  badge,
+  selected,
+  dimmed,
+  label,
+  menu,
+  onPress,
+}: {
+  title: string;
+  subtitle: string;
+  mark: React.ReactNode;
+  unread: boolean;
+  meta?: string;
+  badge: string | null;
+  selected: boolean;
+  dimmed?: boolean;
+  label: string;
+  menu: readonly MenuItem[];
+  onPress: () => void;
+}) {
+  const { colors } = useTheme();
+  const fill = selected ? colors.raised : "transparent";
+  const body = (onLongPress?: Parameters<Parameters<typeof ContextMenu>[0]["children"]>[0]["onLongPress"]) => (
+    <Tap
+      label={label}
+      selected={selected}
+      feedback="highlight"
+      onPress={onPress}
+      onLongPress={onLongPress}
+      style={{ paddingStart: 12, paddingEnd: 10, paddingVertical: 8, minHeight: 0, borderRadius: 11, gap: 3, backgroundColor: fill, ...(dimmed ? { opacity: 0.55 } : null) }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+        <T variant="label" numberOfLines={1} style={{ flex: 1 }}>
+          {title}
+        </T>
+        {unread ? <View accessible={false} style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: colors.accent }} /> : null}
+        {badge ? (
+          <AttentionBadge text={badge} />
+        ) : meta ? (
+          <T variant="caption" tone="muted" style={{ fontVariant: ["tabular-nums"] }}>
+            {meta}
+          </T>
+        ) : null}
+      </View>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
+        <View style={{ width: 12, alignItems: "center" }}>{mark}</View>
+        <T variant="caption" tone="secondary" numberOfLines={1} style={{ flex: 1 }}>
+          {subtitle}
+        </T>
+      </View>
+    </Tap>
+  );
+  if (!menu.length) return body();
+  return (
+    <ContextMenu items={menu} title={title} surface={fill} radius={11}>
+      {({ onLongPress }) => body(onLongPress)}
+    </ContextMenu>
+  );
+}
+
+/** The sidebar's "3 helpers ›": a quiet caption that folds a thread's children. */
+function CompactDisclosure({ title, open, onToggle }: { title: string; open: boolean; onToggle: () => void }) {
+  const { colors } = useTheme();
+  return (
+    <Tap
+      label={`${title}, ${open ? "expanded" : "collapsed"}`}
+      expanded={open}
+      feedback="highlight"
+      onPress={onToggle}
+      style={{ flexDirection: "row", alignItems: "center", gap: 5, paddingStart: 12, paddingEnd: 10, minHeight: 32, borderRadius: 9 }}
+    >
+      <T variant="caption" tone="secondary">
+        {title}
+      </T>
+      <Icon name={open ? "chevron.down" : "chevron.right"} size={9} color={colors.muted} />
+    </Tap>
   );
 }
 
@@ -126,6 +216,9 @@ function ThreadListRowView({
   const fail = (e: unknown) => ctx.onError?.(errorText(e));
 
   let leading;
+  // The sidebar's 12 pt mark: the same status or agent, smaller.
+  let mark: React.ReactNode;
+  let unread = false;
   let subtitle: string;
   let badge: string | null = null;
   let label: string;
@@ -138,6 +231,7 @@ function ThreadListRowView({
     leading = (
       <StatusGlyph phase={state.phase as StatusPhase} animated={state.phase === "working" || state.phase === "waiting"} />
     );
+    mark = <StatusGlyph phase={state.phase as StatusPhase} size={12} animated={state.phase === "working" || state.phase === "waiting"} />;
     const kind = thread.delegation ? delegationRoleLabel(thread.delegation.role) : "Subagent";
     subtitle = `${kind} · ${state.word}`;
     label = `${untitled(thread)}, ${subtitle}`;
@@ -157,6 +251,16 @@ function ThreadListRowView({
     ) : (
       <AgentMark thread={thread} unread={attention.unread} />
     );
+    mark = waiting ? (
+      <StatusGlyph phase="waiting" size={12} animated />
+    ) : running ? (
+      <StatusGlyph phase="working" size={12} animated />
+    ) : failed ? (
+      <StatusGlyph phase="failed" size={12} />
+    ) : (
+      <ProviderMark kind={thread.provider.kind} size={12} />
+    );
+    unread = attention.unread;
     const parts = ctx.variant === "list" ? [ctx.projectName(thread.project_id), agent] : [agent];
     // A thread another machine started by a fork or a delegation says where it came from.
     const from = originLabel(thread);
@@ -208,6 +312,28 @@ function ThreadListRowView({
         ],
       };
   }
+
+  if (ctx.variant === "sidebar")
+    return (
+      <View style={{ paddingStart: indent }}>
+        <CompactThreadRow
+          title={untitled(thread)}
+          subtitle={subtitle}
+          mark={mark}
+          unread={unread}
+          meta={child ? undefined : relativeTime(thread.updated_at)}
+          badge={badge}
+          selected={ctx.activeId === thread.id}
+          dimmed={home?.offline}
+          label={label}
+          menu={menu}
+          onPress={() => open(thread, ctx.variant)}
+        />
+        {childCount > 0 ? (
+          <CompactDisclosure title={count(childCount, "helper")} open={childrenOpen} onToggle={() => ctx.onToggleChildren(thread.id, !childrenOpen)} />
+        ) : null}
+      </View>
+    );
 
   return (
     <View style={{ paddingStart: indent }}>
