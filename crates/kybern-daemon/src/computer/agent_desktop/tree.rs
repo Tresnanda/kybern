@@ -22,7 +22,7 @@ pub(crate) struct ParsedTree {
 pub(crate) fn parse_snapshot(data: &Value) -> ParsedTree {
     let mut walk = Walk::default();
     if let Some(tree) = data.get("tree") {
-        walk.visit(tree, 0, false, true);
+        walk.visit(tree, 0, false, true, None);
     }
     let window_bounds = walk.elements.iter().find(|element| element.role == "window").and_then(|element| element.bounds);
     let truncated = data.get("complete").and_then(Value::as_bool).is_some_and(|complete| !complete)
@@ -42,7 +42,7 @@ struct Walk {
 }
 
 impl Walk {
-    fn visit(&mut self, node: &Value, depth: usize, in_menu_bar: bool, is_root: bool) {
+    fn visit(&mut self, node: &Value, depth: usize, in_menu_bar: bool, is_root: bool, control: Option<&str>) {
         if depth > MAX_DEPTH {
             return;
         }
@@ -88,6 +88,15 @@ impl Walk {
             bounds,
         };
         let below_menu_bar = element.in_menu_bar;
+        // A control's own caption (GTK and Qt buttons hold their label as a
+        // text child) is already its label; listing it again is noise.
+        let repeats_control =
+            control.is_some_and(|control| !control.is_empty() && (element.label == control || element.value.as_deref() == Some(control)));
+        let child_control = if element.token.is_some() && !matches!(element.role.as_str(), "text" | "heading" | "progress") {
+            Some(element.label.clone())
+        } else {
+            control.map(str::to_owned)
+        };
         if is_root || element.role == "window" {
             // The window element carries the bounds the live view marks clicks against.
             if is_root || self.elements.iter().all(|existing| existing.role != "window") {
@@ -95,7 +104,7 @@ impl Walk {
             }
         } else if matches!(element.role.as_str(), "text" | "heading" | "progress") {
             // Text is read, not pressed, even where the platform gives it a ref (a calculator's display).
-            if element.rendered && (!element.label.is_empty() || element.value.is_some()) && !below_menu_bar {
+            if element.rendered && (!element.label.is_empty() || element.value.is_some()) && !below_menu_bar && !repeats_control {
                 self.texts.push(Element { token: None, has_actions: false, bounds: None, ..element });
             }
         } else if element.token.is_some() {
@@ -114,7 +123,7 @@ impl Walk {
         }
         if let Some(children) = node.get("children").and_then(Value::as_array) {
             for child in children {
-                self.visit(child, depth + 1, below_menu_bar, false);
+                self.visit(child, depth + 1, below_menu_bar, false, child_control.as_deref());
             }
         }
     }
@@ -266,8 +275,8 @@ mod tests {
         let seven = snapshot.elements.iter().find(|(_, element)| element.label == "7").unwrap();
         assert_eq!(seven.1.role, "button");
         assert!(seven.1.rendered);
-        // The buttons' inner labels repeat the button name: they are text rows, kept.
-        assert!(snapshot.texts.iter().any(|(_, element)| element.label == "7"));
+        // The buttons' inner labels repeat the button name, so they are not text rows.
+        assert!(!snapshot.texts.iter().any(|(_, element)| element.label == "7"));
     }
 
     #[test]
@@ -290,5 +299,22 @@ mod tests {
         assert_eq!(bounds(Some(&json!([1, 2, 3, 4]))), Some((1.0, 2.0, 3.0, 4.0)));
         assert_eq!(bounds(Some(&json!("nope"))), None);
         assert_eq!(bounds(None), None);
+    }
+}
+
+#[cfg(test)]
+mod caption_tests {
+    use serde_json::json;
+
+    #[test]
+    fn a_buttons_own_caption_is_not_listed_again_as_text() {
+        let data = json!({"tree": {"role": "window", "name": "Calculator", "children": [
+            {"role": "button", "name": "7", "ref_id": "@s1:e1", "children": [{"role": "label", "name": "7"}]},
+            {"role": "statictext", "name": "12"},
+        ]}});
+        let parsed = super::parse_snapshot(&data);
+        let texts: Vec<_> = parsed.snapshot.texts.iter().map(|(_, element)| element.label.clone()).collect();
+        assert_eq!(texts, vec!["12".to_owned()]);
+        assert!(parsed.snapshot.elements.iter().any(|(_, element)| element.label == "7" && element.token.is_some()));
     }
 }
