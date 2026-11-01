@@ -38,6 +38,11 @@ pub(crate) async fn status(computer: &ComputerUse) -> ComputerStatus {
         screen_recording: ComputerPermission::Unknown,
         ready: false,
         checks: Vec::new(),
+        platform: None,
+        driver: None,
+        drivers: Vec::new(),
+        permission_holder: None,
+        session: None,
     };
     if !status.supported {
         status.checks.push(check("platform", false, "Computer use needs macOS.", None));

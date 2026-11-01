@@ -883,7 +883,7 @@ async fn dispatch_part_10(state: &AppState, ctx: &ConnectionCtx, method: &str, s
         ComputerStatusGet::NAME => ok(crate::computer::status(state.orchestrator.computer()).await),
         ComputerFrameGet::NAME => {
             let p: ComputerFrameParams = parse(params)?;
-            ok(ComputerFrameResult { frame: state.orchestrator.computer().frame(p.thread_id, p.after) })
+            ok(ComputerFrameResult { frame: state.orchestrator.computer().frame(p.thread_id, p.after), paused: None })
         }
         ComputerSetup::NAME => {
             let p: ComputerSetupParams = parse(params)?;

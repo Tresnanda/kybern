@@ -343,7 +343,7 @@ expression: schema_for!(Settings)
       }
     },
     "ComputerUseSettings": {
-      "description": "Agents drive apps on this Mac through a separately installed CuaDriver.\nCodex keeps OpenAI's own computer-use plugin.",
+      "description": "Agents drive apps on this computer through a separately installed\nprogram: CuaDriver or agent-desktop on macOS, agent-desktop on Windows and\nLinux. Codex keeps OpenAI's own computer-use plugin where it has one.",
       "type": "object",
       "properties": {
         "enabled": {
@@ -367,6 +367,17 @@ expression: schema_for!(Settings)
           "items": {
             "type": "string"
           }
+        },
+        "driver": {
+          "description": "The program behind the tools on this machine. Unset means the OS\ndefault: CuaDriver on macOS, agent-desktop on Windows and Linux. A\ndriver this OS lacks falls back to the default.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ComputerDriver"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
@@ -381,6 +392,21 @@ expression: schema_for!(Settings)
           "description": "Background only.",
           "type": "string",
           "const": "never"
+        }
+      ]
+    },
+    "ComputerDriver": {
+      "description": "A program that reads and drives apps for the computer tools.",
+      "oneOf": [
+        {
+          "description": "trycua's CuaDriver.app (macOS).",
+          "type": "string",
+          "const": "cua_driver"
+        },
+        {
+          "description": "vercel-labs' agent-desktop CLI (macOS, Windows, Linux).",
+          "type": "string",
+          "const": "agent_desktop"
         }
       ]
     },

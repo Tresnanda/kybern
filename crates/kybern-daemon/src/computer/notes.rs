@@ -40,6 +40,7 @@ impl NoteStore {
         let body = body.trim();
         (!body.is_empty()).then(|| ComputerNote {
             bundle_id: bundle_id.to_owned(),
+            app_id: bundle_id.to_owned(),
             app: app.unwrap_or(bundle_id).to_owned(),
             text: body.to_owned(),
             updated_at,
