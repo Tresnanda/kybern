@@ -31,7 +31,7 @@ pub struct ForkArgs {
     /// Title of the new thread. Defaults to this thread's.
     #[arg(long)]
     title: Option<String>,
-    /// Agent for the new thread: claude, codex, opencode, pi, omp or cursor. Defaults to this thread's.
+    /// Agent for the new thread: claude-code, codex, opencode, pi, omp, cursor or antigravity. Defaults to this thread's.
     #[arg(long)]
     agent: Option<String>,
     #[arg(long)]

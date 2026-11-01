@@ -83,6 +83,8 @@ fn layout(kind: ProviderKind, env: &BTreeMap<String, String>, home: &Path) -> (P
         // Cursor already discovers skills from regular HOME; these links also
         // cover content put inside an imported isolated account directory.
         ProviderKind::Cursor => (home.join(".cursor"), skills),
+        // Kybern links nothing into `agy`'s storage.
+        ProviderKind::Antigravity => (home.join(".gemini/antigravity-cli"), vec![]),
         ProviderKind::Pi => (
             configured("PI_CODING_AGENT_DIR", home.join(".pi/agent")),
             vec![("skills", "skills", true), ("extensions", "extensions", true)],

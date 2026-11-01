@@ -3271,6 +3271,17 @@ mod orchestration_tests {
     use super::*;
 
     #[test]
+    fn antigravity_is_a_provider_kind_with_its_own_binary() {
+        assert_eq!(ProviderKind::ALL.last(), Some(&ProviderKind::Antigravity));
+        let kind: ProviderKind = "antigravity".parse().unwrap();
+        assert_eq!((kind, kind.display_name(), kind.default_binary()), (ProviderKind::Antigravity, "Antigravity", "agy"));
+        assert_eq!(serde_json::to_value(kind).unwrap(), "antigravity");
+        for kind in ProviderKind::ALL {
+            assert_eq!(kind.as_str().parse::<ProviderKind>().unwrap(), kind);
+        }
+    }
+
+    #[test]
     fn provider_model_traits_are_additive() {
         let plain: ProviderModel = serde_json::from_str(r#"{"id":"m","display_name":"M","is_default":false}"#).unwrap();
         assert!(plain.parameters.is_empty() && plain.variants.is_empty());

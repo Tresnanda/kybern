@@ -302,6 +302,8 @@ pub fn login_args(kind: ProviderKind, mode: AccountLoginMode, upstream: Option<&
         (ProviderKind::Opencode, AccountLoginMode::Terminal) => Ok(strings(&["auth", "login"])),
         // Interactive native /login selects the upstream provider; the caller types it.
         (ProviderKind::Pi, AccountLoginMode::Terminal) => Ok(Vec::new()),
+        // Bare `agy` opens its interface and starts Google's browser sign-in when signed out.
+        (ProviderKind::Antigravity, AccountLoginMode::Terminal) => Ok(Vec::new()),
         _ => Err(unsupported()),
     }
 }

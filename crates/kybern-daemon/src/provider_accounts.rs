@@ -17,6 +17,10 @@ pub fn validate_color(color: &str) -> Result<()> {
     Ok(())
 }
 
+/// Antigravity signs in once per machine; there is nothing to isolate a second login in.
+pub const ANTIGRAVITY_ONE_ACCOUNT: &str =
+    "Antigravity has one account per machine. Sign in from Settings → Agents → Antigravity, or use a Gemini API key.";
+
 /// The first color no other account of this agent uses, cycling once all are taken.
 pub fn next_color(provider: &ProviderSettings) -> String {
     let used: Vec<&str> = provider.accounts.values().filter_map(|account| account.color.as_deref()).collect();
@@ -52,6 +56,7 @@ pub fn credential_keys(kind: ProviderKind) -> &'static [&'static str] {
         ProviderKind::ClaudeCode => &["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
         ProviderKind::Codex => &["OPENAI_API_KEY", "CODEX_API_KEY"],
         ProviderKind::Cursor => &["CURSOR_API_KEY"],
+        ProviderKind::Antigravity => &["GEMINI_API_KEY"],
         ProviderKind::Pi | ProviderKind::Omp | ProviderKind::Opencode => &[
             "ANTHROPIC_API_KEY",
             "OPENAI_API_KEY",
@@ -114,12 +119,15 @@ fn build_environment(settings: &ProviderSettings, kind: ProviderKind, instance: 
             env.insert("XDG_STATE_HOME".into(), path("state"));
             env.insert("XDG_CACHE_HOME".into(), path("cache"));
         }
+        // `agy` has no supported config-root override, so a second account cannot be isolated.
+        ProviderKind::Antigravity => return Err(anyhow!(ANTIGRAVITY_ONE_ACCOUNT)),
     }
     Ok(env)
 }
 
 pub fn validate(settings: &Settings) -> Result<()> {
     for (kind, provider) in &settings.providers {
+        ensure!(*kind != ProviderKind::Antigravity || provider.accounts.is_empty(), "{ANTIGRAVITY_ONE_ACCOUNT}");
         for (id, account) in &provider.accounts {
             ensure!(
                 id != "default" && !id.is_empty() && id.len() <= 80 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
@@ -139,6 +147,7 @@ pub fn validate(settings: &Settings) -> Result<()> {
 }
 
 pub fn create(state: &AppState, params: AccountsCreateParams) -> Result<ProviderInstance> {
+    ensure!(params.kind != ProviderKind::Antigravity, "{ANTIGRAVITY_ONE_ACCOUNT}");
     ensure!(!params.name.trim().is_empty() && params.name.len() <= 120, "Enter an account name up to 120 characters.");
     let id = uuid::Uuid::now_v7().to_string();
     let directory = match params.directory {
@@ -218,6 +227,7 @@ pub fn sign_in(state: &AppState, instance: ProviderInstance) -> Result<TerminalI
             ProviderKind::Pi => &[],
             ProviderKind::Omp => &["auth-broker", "login"],
             ProviderKind::Cursor => unreachable!(),
+            ProviderKind::Antigravity => return Err(anyhow!(ANTIGRAVITY_ONE_ACCOUNT)),
         };
         std::iter::once(binary.to_string_lossy().into_owned()).chain(args.iter().map(|s| s.to_string())).collect()
     };
@@ -483,6 +493,9 @@ pub async fn usage(state: &AppState, instance: ProviderInstance) -> Result<Provi
         }
         ProviderKind::Codex => kybern_drivers::codex::read_account_limits(cwd, context.binary.as_ref(), &context.env).await,
         ProviderKind::Cursor => kybern_drivers::cursor::usage::read_account_usage(&context.env).await.map(|usage| usage.limits),
+        ProviderKind::Antigravity => {
+            kybern_drivers::antigravity::read_account_usage(cwd, context.binary.as_ref(), &context.env).await.ok().map(|(limits, _)| limits)
+        }
         _ => None,
     };
     Ok(ProviderUsage { limits, ..Default::default() })
