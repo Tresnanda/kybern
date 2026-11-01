@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.21.1
+
+<!-- kybern-release-title: Clearer model picker and agent settings -->
+<!-- kybern-release-summary: Antigravity's Gemini models get an effort slider, the model picker fits every agent, and Settings says what each agent actually needs. -->
+
+- Antigravity lists Gemini 3.8 Flash once, with a Low, Medium and High effort slider, instead of one model per level. Threads that picked a level before keep working and follow the slider.
+- The model picker fits every agent beside a selected account's name, so the Antigravity tab no longer slides under the reload button. With more agents than fit, the strip scrolls.
+- Choosing an agent that isn't set up in the model picker opens its setup in Settings, and an account that needs signing in opens the sign-in sheet. Before, nothing happened.
+- Settings → Agent providers says what is true for each agent: where it runs from, when its update was last checked, or why it can't run. Cursor shows an older installed SDK as an update with an Update SDK button, rather than as not installed. "Update now" is now "Check for updates", and appears only where Kybern can run the agent's updater. The list follows a running update on its own, so the Refresh row is gone.
+- Kybern tools for Antigravity are on by default for new installs. Turning them off still removes Kybern's entry from Antigravity's MCP servers.
+
 ## 0.21.0
 
 <!-- kybern-release-title: Antigravity, and computer use on Windows and Linux -->
