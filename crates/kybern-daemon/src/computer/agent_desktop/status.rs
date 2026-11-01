@@ -60,12 +60,15 @@ pub(super) fn classify_desktop(current: &str) -> (DesktopSupport, &'static str) 
     } else if has(&["kde", "plasma"]) {
         (
             DesktopSupport::BestEffort,
-            "KDE Plasma works on a best-effort basis: reading apps is expected to work, input and screenshots have gaps",
+            "KDE Plasma works on a best-effort basis: reading apps is expected to work, input and screenshots have gaps. Turn on assistive technologies in the desktop's accessibility settings so apps join the accessibility bus",
         )
     } else if lower.is_empty() {
         (DesktopSupport::Unknown, "the desktop is not named (XDG_CURRENT_DESKTOP is empty)")
     } else {
-        (DesktopSupport::Unknown, "this desktop is untested")
+        (
+            DesktopSupport::Unknown,
+            "this desktop is untested. Turn on assistive technologies in its accessibility settings (on XFCE: Settings → Accessibility), or GTK apps stay invisible to agents",
+        )
     }
 }
 
