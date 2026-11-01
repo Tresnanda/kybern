@@ -174,6 +174,20 @@ pub(crate) struct Snapshot {
 }
 
 impl Snapshot {
+    /// A snapshot from elements a backend already parsed, in document order,
+    /// with neutral roles. Identities are assigned here.
+    #[allow(dead_code)] // Used by the backends in the ADE-83 refactor.
+    pub(crate) fn new(
+        elements: Vec<Element>,
+        texts: Vec<Element>,
+        truncated: bool,
+        degraded: Option<String>,
+        title: Option<String>,
+        app_name: Option<String>,
+    ) -> Self {
+        Self { elements: with_identities(elements), texts: with_identities(texts), truncated, degraded, title, app_name }
+    }
+
     pub(crate) fn parse(structured: &Value) -> Self {
         let raw = structured.get("elements").and_then(Value::as_array).cloned().unwrap_or_default();
         let mut parsed: Vec<(Option<i64>, Option<i64>, Element)> = raw

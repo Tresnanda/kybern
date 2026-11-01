@@ -358,6 +358,14 @@ pub(crate) trait ComputerBackend: Send + Sync {
     /// Deliver one action. A refusal is an `Outcome`, not an error; an error
     /// means the backend failed (crashed, timed out, could not start).
     async fn act(&self, target: Target, act: &Act, mode: Mode, session: &str) -> Result<Outcome>;
+
+    /// Why pictures are off for this daemon run (Wayland screenshot consent
+    /// declined or unanswered). The live view shows it instead of frames.
+    fn capture_paused(&self) -> Option<String> {
+        None
+    }
+    /// Try pictures again; Settings → Computer use calls it on open.
+    fn resume_capture(&self) {}
 }
 
 /// The neutral role vocabulary the digest shows. Raw roles from AX
