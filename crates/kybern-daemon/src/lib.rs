@@ -2,6 +2,7 @@ mod access;
 mod account_identity;
 mod account_login;
 mod agent_guide;
+mod antigravity_mcp;
 mod app_tools;
 mod artifacts;
 mod askpass;

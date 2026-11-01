@@ -692,6 +692,24 @@ impl AccountLogins {
         });
     }
 
+    /// A working Antigravity sign-in turns Kybern's tools on once, unless someone else's
+    /// `kybern` MCP entry is in the way. Never fails the sign-in.
+    async fn offer_kybern_tools(&self, state: &AppState) {
+        let mut settings = state.settings.get();
+        if settings.antigravity.kybern_tools {
+            return;
+        }
+        match crate::antigravity_mcp::turn_on(&settings).await {
+            Ok(()) => {
+                settings.antigravity.kybern_tools = true;
+                if let Err(error) = state.settings.set(settings) {
+                    tracing::warn!(%error, "could not save the Antigravity Kybern tools setting");
+                }
+            }
+            Err(error) => tracing::warn!(%error, "Kybern tools stay off for Antigravity"),
+        }
+    }
+
     /// The harness finished: read the folder's identity, detect duplicates and
     /// suggest a name and color.
     async fn verify(&self, state: &AppState, id: &str, spec: &Spec) {
@@ -713,6 +731,8 @@ impl AccountLogins {
             };
             if !working {
                 status = AccountStatus::NeedsSignIn;
+            } else {
+                self.offer_kybern_tools(state).await;
             }
         }
         if status != AccountStatus::SignedIn {

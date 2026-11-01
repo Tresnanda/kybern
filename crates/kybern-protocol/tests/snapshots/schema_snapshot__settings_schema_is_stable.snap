@@ -117,6 +117,13 @@ expression: schema_for!(Settings)
         "show_cursor": false
       }
     },
+    "antigravity": {
+      "description": "Antigravity's link to Kybern's tools. Per machine: it is one entry in this machine's `agy` MCP servers.",
+      "$ref": "#/$defs/AntigravitySettings",
+      "default": {
+        "kybern_tools": false
+      }
+    },
     "orchestration": {
       "description": "Limits on agents delegating work to other agents.",
       "$ref": "#/$defs/OrchestrationSettings",
@@ -387,6 +394,17 @@ expression: schema_for!(Settings)
           "const": "never"
         }
       ]
+    },
+    "AntigravitySettings": {
+      "description": "Antigravity has no per-session MCP configuration, so Kybern keeps one entry,\n`kybern`, in `agy`'s own MCP servers (added and removed with `agy mcp`).",
+      "type": "object",
+      "properties": {
+        "kybern_tools": {
+          "description": "Let Antigravity sessions use Kybern's tools through that entry. Turned on\nby a successful Antigravity sign-in.",
+          "type": "boolean",
+          "default": false
+        }
+      }
     },
     "OrchestrationSettings": {
       "description": "Limits for `kybern_agent_delegate`. Read each time an agent delegates.",

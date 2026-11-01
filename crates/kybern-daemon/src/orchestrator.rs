@@ -3666,11 +3666,18 @@ impl Orchestrator {
         let lead_settings = instructions.as_ref().and_then(|instructions| instructions.lead_settings.clone());
         let coordinator_instructions = instructions.map(|instructions| instructions.text);
         let computer_tools = self.computer_tools_offered(thread, &restrictions);
-        // Antigravity has no per-session MCP configuration, and Kybern must not edit the
-        // user's `agy mcp` setup, so it gets no tools and no gateway session. Its guide is
-        // still rendered, from an empty tool list, so it never describes a tool `agy`
-        // cannot call; the driver puts it at the top of the conversation's first prompt.
-        let native_tool_bridge = if thread.provider.kind == ProviderKind::Antigravity {
+        // Antigravity reaches the gateway through the one global `kybern` MCP entry (`kybern
+        // mcp-bridge`), which reads this session's endpoint and credential from the environment
+        // of each turn. Without that entry, or with the setting off, it gets no tools and no
+        // gateway session; its guide is then rendered from an empty tool list so it never
+        // describes a tool `agy` cannot call. The driver puts the guide at the top of the
+        // conversation's first prompt either way.
+        let antigravity_tools = if thread.provider.kind == ProviderKind::Antigravity && self.inner.native_tools.is_some() {
+            self.antigravity_tools_ready(thread).await
+        } else {
+            false
+        };
+        let native_tool_bridge = if thread.provider.kind == ProviderKind::Antigravity && !antigravity_tools {
             let guide = self.agent_guide(&[], &restrictions);
             (guide.is_some() || coordinator_instructions.is_some()).then(|| kybern_drivers::NativeToolBridge {
                 server_name: "kybern".into(),
@@ -3848,6 +3855,31 @@ impl Orchestrator {
             && self.inner.computer.offered_to(thread.provider.kind)
             && (restrictions.allowed_tools.is_empty() || restrictions.allowed_tools.iter().any(|tool| tool == PROBE))
             && !restrictions.denied_tools.iter().any(|tool| tool == PROBE)
+    }
+
+    /// Whether an Antigravity session can use Kybern's tools: the setting is on and the
+    /// `kybern` entry in `agy`'s MCP servers is present and Kybern's (re-added when it
+    /// is missing or points at a command that is gone). When it cannot, the thread says why.
+    async fn antigravity_tools_ready(&self, thread: &Thread) -> bool {
+        let settings = self.inner.settings.get();
+        if !settings.antigravity.kybern_tools {
+            return false;
+        }
+        match crate::antigravity_mcp::turn_on(&settings).await {
+            Ok(()) => true,
+            Err(error) => {
+                let _ = self.emit(
+                    thread.id,
+                    None,
+                    EventPayload::ProviderNotice {
+                        level: NoticeLevel::Warning,
+                        text: format!("Antigravity is running without Kybern's tools. {error}"),
+                        data: None,
+                    },
+                );
+                false
+            }
+        }
     }
 
     /// The "Working in Kybern" guide for a session with these tools, or `None`

@@ -2669,6 +2669,8 @@ pub struct Settings {
     pub access: AccessSettings,
     /// Desktop control through CuaDriver for non-Codex harnesses.
     pub computer_use: ComputerUseSettings,
+    /// Antigravity's link to Kybern's tools. Per machine: it is one entry in this machine's `agy` MCP servers.
+    pub antigravity: AntigravitySettings,
     /// Limits on agents delegating work to other agents.
     pub orchestration: OrchestrationSettings,
     /// Give new agent sessions a short guide to Kybern: images, notes and
@@ -2928,6 +2930,16 @@ pub struct ComputerUseSettings {
     pub always_allowed_apps: Vec<String>,
 }
 
+/// Antigravity has no per-session MCP configuration, so Kybern keeps one entry,
+/// `kybern`, in `agy`'s own MCP servers (added and removed with `agy mcp`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct AntigravitySettings {
+    /// Let Antigravity sessions use Kybern's tools through that entry. Turned on
+    /// by a successful Antigravity sign-in.
+    pub kybern_tools: bool,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ComputerForeground {
@@ -2965,6 +2977,7 @@ impl Default for Settings {
             background: BackgroundSettings::default(),
             access: AccessSettings::default(),
             computer_use: ComputerUseSettings::default(),
+            antigravity: AntigravitySettings::default(),
             orchestration: OrchestrationSettings::default(),
             tell_agents_about_kybern: true,
             ask_deadlines: AskDeadlineSettings::default(),
