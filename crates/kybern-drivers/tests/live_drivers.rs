@@ -705,6 +705,7 @@ async fn antigravity_streams_runs_a_tool_resumes_and_lists_models() {
     session.close().await.unwrap();
 }
 
+#[cfg(unix)]
 fn process_alive(pid: &str) -> bool {
     std::process::Command::new("/bin/kill")
         .args(["-0", pid])
