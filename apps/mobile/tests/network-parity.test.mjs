@@ -10,7 +10,7 @@ registerHooks({ resolve(specifier, context, next) {
 } });
 const { NETWORK_PARITY_MIN_VERSION, gateDisabled, parityFooter, parityOn, versionOf } = await import("../src/machines/gate.ts");
 const { cancelOutboxText, deviceSubtitle, groupDevices, outboxEntries, reachText, specRows, osLabel } = await import("../src/machines/settingsModel.ts");
-const { FORK_COPY, MACHINE_ROW_COPY, machineMenuRows, missingDetail, offersMachineMoves, threadMachineLine, threadMachineModel, withPaired } = await import(
+const { FORK_COPY, MACHINE_ROW_COPY, machineMenuRows, missingDetail, offersMachineMoves, threadMachineLine, threadMachineModel, threadMachineWord, withPaired } = await import(
   "../src/state/threadMachineModel.ts"
 );
 
@@ -260,4 +260,14 @@ test("the fork sheet's missing rows lead into setup only when the sender can sen
     [["vps", false, "No checkout"]],
     "a sender below the gate cannot set the project up: the row says why and does nothing",
   );
+});
+
+test("a thread row names another machine in words, and nothing for the paired one or a one-machine list", () => {
+  assert.equal(threadMachineWord({ showGlyph: true, name: "SatyaMas" }), "SatyaMas");
+  assert.equal(threadMachineWord({ showGlyph: true, name: "Treshnandas-Macbook.local" }), "Treshnandas-Macbook");
+  assert.equal(threadMachineWord({ showGlyph: true, name: "studio.tail1234.ts.net" }), "studio");
+  assert.equal(threadMachineWord({ showGlyph: false, name: "Mac" }), "", "the paired machine, or a list with one machine");
+  assert.equal(threadMachineWord(undefined), "");
+  const long = "a-machine-whose-host-name-goes-on-and-on-and-on";
+  assert.equal(threadMachineWord({ showGlyph: true, name: long }), long, "kept whole; the row's one-line subtitle truncates it");
 });

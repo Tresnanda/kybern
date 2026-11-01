@@ -21,9 +21,9 @@ import { ProviderMark } from "../ui/ProviderMark";
 import { StatusGlyph } from "../ui/TaskGlyphs";
 import { radius, space, useTheme } from "../ui/theme";
 import { showToast } from "../ui/Toast";
-import { MachineGlyph } from "./MachineGlyph";
 import { originLabel } from "../../../../packages/kybern-client/src/forkMachine";
 import { threadMenuItems } from "./threadActions";
+import { threadMachineWord } from "../state/threadMachineModel";
 
 const untitled = (thread: Thread) => thread.title.trim() || "Untitled thread";
 
@@ -163,8 +163,12 @@ function ThreadListRowView({
     if (from) parts.push(from);
     if (home?.offline) parts.push("Offline");
     if (word) parts.push(word);
-    subtitle = parts.join(" · ");
-    label = [untitled(thread), subtitle, home?.showGlyph ? `On ${home.name}` : "", badge, attention.unread ? "Unread" : "", thread.pinned ? "Pinned" : ""]
+    // Where the thread lives, in the same quiet line after the agent ("Claude Code · SatyaMas"), only for a machine
+    // other than the one the phone is paired with. VoiceOver hears it as "On SatyaMas".
+    const where = threadMachineWord(home);
+    const shown = where ? [...parts.slice(0, ctx.variant === "list" ? 2 : 1), where, ...parts.slice(ctx.variant === "list" ? 2 : 1)] : parts;
+    subtitle = shown.join(" · ");
+    label = [untitled(thread), parts.join(" · "), where ? `On ${home!.name}` : "", badge, attention.unread ? "Unread" : "", thread.pinned ? "Pinned" : ""]
       .filter(Boolean)
       .join(", ");
 
@@ -213,14 +217,7 @@ function ThreadListRowView({
         subtitleLines={1}
         leading={leading}
         meta={child ? undefined : relativeTime(thread.updated_at)}
-        trailing={
-          badge || home?.showGlyph ? (
-            <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-              {badge ? <AttentionBadge text={badge} /> : null}
-              {home?.showGlyph ? <MachineGlyph glyph={home.glyph} /> : null}
-            </View>
-          ) : undefined
-        }
+        trailing={badge ? <AttentionBadge text={badge} /> : undefined}
         dimmed={home?.offline}
         selected={ctx.activeId === thread.id}
         label={label}

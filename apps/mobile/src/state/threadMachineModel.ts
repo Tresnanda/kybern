@@ -1,7 +1,7 @@
 // Who can take a fork or a move of a thread, on the phone (ADE-99 §2.2, §2.3). Pure: it reads the merged view, so the same rows
 // feed the sheet, the menu and the tests. One row per machine: a machine with the project can be chosen; one without it reads
 // "No checkout · Set up project" and leads into setting it up, or "No checkout" when it cannot be set up from here.
-import { forkTargets, type ForkInstance } from "../../../../packages/kybern-client/src/forkMachine";
+import { forkTargets, shortMachineName, type ForkInstance } from "../../../../packages/kybern-client/src/forkMachine";
 import { machineChoiceDetail } from "../../../../packages/kybern-client/src/machineAgents";
 import type { LogicalProject } from "../../../../packages/kybern-client/src/machineMerge";
 import type { MachineSummary } from "../../../../packages/kybern-client/src/machines";
@@ -49,6 +49,15 @@ export function missingDetail(online: boolean, canSetUp: boolean): string {
 
 /** `detail` with "Paired with this phone" after it for the machine the phone is paired with. */
 export const withPaired = (detail: string, paired: boolean): string => (paired ? (detail ? `${detail} · ${MACHINE_ROW_COPY.paired}` : MACHINE_ROW_COPY.paired) : detail);
+
+/**
+ * Where a listed thread lives, as words for its row's second line ("Claude Code · SatyaMas"). Only for a thread on a
+ * machine other than the one the phone is paired with, and only when the list has more than one machine (`showGlyph`);
+ * otherwise empty, so a list from one machine carries no repeated name.
+ */
+export function threadMachineWord(home: { showGlyph: boolean; name: string } | undefined | null): string {
+  return home?.showGlyph ? shortMachineName(home.name) : "";
+}
 
 /** One row of the new-thread machine menu: pick the machine, or set the project up there. */
 export interface MachineMenuRow {

@@ -174,7 +174,9 @@ export function Sidebar() {
   return (
     <View style={{ flex: 1, width: "100%" }}>
       <SidebarMaterial />
-      <ListSurface color="transparent" lift={colors.surface}>
+      {/* Rows rest on the material itself. An opaque lift colour here became every row's resting fill on iOS, and the
+          rounded inset of each stacked row then scalloped the list's edges; a selected row still draws its pill. */}
+      <ListSurface color="transparent">
         <View
           style={{
             paddingTop: insets.top + space.xs,
