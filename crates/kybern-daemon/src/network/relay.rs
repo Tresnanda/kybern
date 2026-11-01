@@ -791,8 +791,13 @@ fn page_headers(state: &AppState, headers: &HeaderMap) -> Vec<(String, String)> 
 }
 
 /// `ANY /relay/{machine_id}/page/{ticket}/{*path}`: a page of another machine, opened with a relay page ticket
-/// (`network.relay_page.open`) instead of the relay header.
-pub async fn serve_page(State(state): State<AppState>, Path((target, ticket)): Path<(String, String)>, request: Request) -> Response {
+/// (`network.relay_page.open`) instead of the relay header. The path is read from the raw URI below, not from the
+/// decoded parameter, so it is checked as the page wrote it.
+pub async fn serve_page(
+    State(state): State<AppState>,
+    Path((target, ticket, _path)): Path<(String, String, String)>,
+    request: Request,
+) -> Response {
     let (mut parts, body) = request.into_parts();
     let Some(page) = state.network.pages.lookup(&ticket) else {
         return refuse(StatusCode::NOT_FOUND, "this page address has expired");
