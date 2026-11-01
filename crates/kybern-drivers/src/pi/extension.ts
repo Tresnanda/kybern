@@ -54,6 +54,7 @@ const APP_TOOL_NAMES = new Set([
   "kybern_computer_act",
   "kybern_computer_screenshot",
   "kybern_computer_help",
+  "kybern_computer_note",
   "kybern_notes_search",
   "kybern_note_read",
   "kybern_note_create",

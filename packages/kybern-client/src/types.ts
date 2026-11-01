@@ -2650,7 +2650,10 @@ export interface EffectiveCoordinatorSettings {
 /** Whether an agent may ask to use the real cursor and focus. */
 export type ComputerForeground = "ask" | "never";
 
-/** Agents drive apps on this Mac through a separately installed CuaDriver. Codex keeps its own plugin. */
+/** A program that reads and drives apps for the computer tools. */
+export type ComputerDriver = "cua_driver" | "agent_desktop";
+
+/** Agents drive apps through a separately installed program: CuaDriver or agent-desktop on macOS, agent-desktop on Windows and Linux. Codex keeps its own plugin where it has one. */
 export interface ComputerUseSettings {
   enabled: boolean;
   foreground: ComputerForeground;
@@ -2658,6 +2661,8 @@ export interface ComputerUseSettings {
   show_cursor?: boolean;
   /** Apps agents may use in the background without asking. */
   always_allowed_apps?: string[];
+  /** Unset means the OS default (CuaDriver on macOS, agent-desktop elsewhere). Per machine. */
+  driver?: ComputerDriver | null;
 }
 
 /** One `kybern` entry in this machine's `agy` MCP servers, managed through `agy mcp`. */
@@ -2686,6 +2691,16 @@ export interface ComputerStatus {
   screen_recording: ComputerPermission;
   ready: boolean;
   checks: ComputerCheck[];
+  /** `macos`, `windows` or `linux`. */
+  platform?: string | null;
+  /** The driver in use here (the setting, or the OS default). */
+  driver?: ComputerDriver | null;
+  /** The drivers this machine can use, the default first. */
+  drivers?: ComputerDriver[];
+  /** macOS with agent-desktop: the app System Settings lists for the grants. */
+  permission_holder?: string | null;
+  /** Linux: the display session, e.g. `wayland (GNOME)`. */
+  session?: string | null;
 }
 
 /** What an agent last saw while using an app. Transient: never stored in the transcript. */
@@ -2712,6 +2727,8 @@ export interface ComputerFrameParams {
 
 export interface ComputerFrameResult {
   frame?: ComputerFrame | null;
+  /** Pictures are off for now, and why (e.g. screenshot consent declined on Wayland). */
+  paused?: string | null;
 }
 
 export type ComputerSetupAction = "install" | "grant_permissions";
@@ -2751,7 +2768,10 @@ export interface CursorSetupParams {
 
 /** What agents learned about using one app, shown to later sessions. */
 export interface ComputerNote {
+  /** The app id, under its old name. */
   bundle_id: string;
+  /** macOS bundle id, Windows lowercase exe name (`code.exe`), Linux desktop-entry id. */
+  app_id?: string;
   app: string;
   text: string;
   updated_at: string;

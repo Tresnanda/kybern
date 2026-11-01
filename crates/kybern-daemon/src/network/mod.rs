@@ -236,6 +236,9 @@ pub struct Network {
     self_ts: Mutex<Option<(Instant, SelfTs)>>,
     watching: Mutex<Option<Instant>>,
     nudged: Mutex<Option<Instant>>,
+    /// Features that come and go while the daemon runs (computer use is listed only while this
+    /// machine's tools are ready). Appended to [`Network::features`] after the static list.
+    dynamic_features: Mutex<std::collections::BTreeSet<&'static str>>,
     wake: Notify,
     changed: broadcast::Sender<()>,
     /// Outbox items as they change, forwarded to clients as `outbox.changed`.
@@ -284,6 +287,7 @@ impl Network {
             self_ts: Default::default(),
             watching: Default::default(),
             nudged: Default::default(),
+            dynamic_features: Default::default(),
             wake: Notify::new(),
             changed: broadcast::channel(16).0,
             outbox_changed: broadcast::channel(64).0,
@@ -320,7 +324,7 @@ impl Network {
         if self.membership.is_none() {
             return Vec::new();
         }
-        vec![
+        let mut list = vec![
             features::NETWORK_V1.to_string(),
             features::SPACES_SYNC_V1.to_string(),
             features::RELAY_V1.to_string(),
@@ -341,7 +345,21 @@ impl Network {
             features::PROVISION_V1.to_string(),
             features::SKILLS_SYNC_V1.to_string(),
             features::PLUGINS_SYNC_V1.to_string(),
-        ]
+        ];
+        list.extend(self.lock(&self.dynamic_features).iter().map(|feature| feature.to_string()));
+        list
+    }
+
+    /// List or drop a feature that depends on this machine's state right now. Presence carries the
+    /// change at its next heartbeat.
+    pub fn set_dynamic_feature(&self, feature: &'static str, on: bool) {
+        let changed = {
+            let mut list = self.lock(&self.dynamic_features);
+            if on { list.insert(feature) } else { list.remove(feature) }
+        };
+        if changed {
+            self.wake();
+        }
     }
 
     /// `settings.network.enabled`, as the worker last saw it.

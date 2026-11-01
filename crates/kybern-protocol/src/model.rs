@@ -2911,8 +2911,9 @@ impl OrchestrationSettings {
     }
 }
 
-/// Agents drive apps on this Mac through a separately installed CuaDriver.
-/// Codex keeps OpenAI's own computer-use plugin.
+/// Agents drive apps on this computer through a separately installed
+/// program: CuaDriver or agent-desktop on macOS, agent-desktop on Windows and
+/// Linux. Codex keeps OpenAI's own computer-use plugin where it has one.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct ComputerUseSettings {
@@ -2928,6 +2929,21 @@ pub struct ComputerUseSettings {
     /// asking. Filled by "Always allow" on the approval card.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub always_allowed_apps: Vec<String>,
+    /// The program behind the tools on this machine. Unset means the OS
+    /// default: CuaDriver on macOS, agent-desktop on Windows and Linux. A
+    /// driver this OS lacks falls back to the default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub driver: Option<ComputerDriver>,
+}
+
+/// A program that reads and drives apps for the computer tools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ComputerDriver {
+    /// trycua's CuaDriver.app (macOS).
+    CuaDriver,
+    /// vercel-labs' agent-desktop CLI (macOS, Windows, Linux).
+    AgentDesktop,
 }
 
 /// Antigravity has no per-session MCP configuration, so Kybern keeps one entry,
