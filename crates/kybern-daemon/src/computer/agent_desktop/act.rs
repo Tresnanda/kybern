@@ -369,6 +369,9 @@ impl AgentDesktopBackend {
         let Some((first, rest)) = path.split_first() else { return Ok(Outcome::refused("The menu path is empty.", None)) };
         let app = self.known(target.window_id).map(|known| known.app).unwrap_or_default();
         let mut last: Option<Outcome> = None;
+        // The menu bar item that opened the menu, pressed again to close it if
+        // a later title is missing, so a failed walk never leaves a menu open.
+        let mut opener: Option<String> = None;
         for (index, title) in std::iter::once(first).chain(rest.iter()).enumerate() {
             let cmd = if index == 0 && self.os == Os::Windows {
                 Cmd::new("find").session(session).flag("--window-id", native).flag("--role", "menuitem")
@@ -386,9 +389,18 @@ impl AgentDesktopBackend {
                 Found::Missing if index == 0 && self.os == Os::Windows => {
                     return Ok(Outcome::refused("This app has no menu bar. Press its menu button instead.", None));
                 }
-                Found::Missing => return Ok(Outcome::refused(note("ELEMENT_NOT_FOUND", &format!("No menu item named {title:?}.")), None)),
-                Found::Failed(outcome) => return Ok(outcome),
+                Found::Missing => {
+                    self.close_menu(&app, opener.as_deref(), headed, session).await;
+                    return Ok(Outcome::refused(note("ELEMENT_NOT_FOUND", &format!("No menu item named {title:?}.")), None));
+                }
+                Found::Failed(outcome) => {
+                    self.close_menu(&app, opener.as_deref(), headed, session).await;
+                    return Ok(outcome);
+                }
             };
+            if index == 0 {
+                opener = Some(token.clone());
+            }
             let click =
                 self.deliver(Cmd::new("click").session(session).headed(headed).timeout_ms(ACTION_MS).positional(token), context).await?;
             let is_last = index == rest.len();
@@ -404,11 +416,41 @@ impl AgentDesktopBackend {
         }
         Ok(last.unwrap_or_else(|| Outcome::refused("The menu path is empty.", None)))
     }
+
+    /// Best effort: when a menu is still open, press the menu bar item that
+    /// opened it again, which closes it. A closed menu is left alone, since a
+    /// press would open it.
+    async fn close_menu(&self, app: &str, opener: Option<&str>, headed: bool, session: &str) {
+        let Some(opener) = opener else { return };
+        let Ok(envelope) = self.run(Cmd::new("list-surfaces").flag("--app", app)).await else { return };
+        let Ok(data) = envelope.into_data() else { return };
+        if !menu_open(&data) {
+            return;
+        }
+        let _ = self.run(Cmd::new("click").session(session).headed(headed).timeout_ms(ACTION_MS).positional(opener.to_owned())).await;
+    }
+}
+
+/// Whether a `list-surfaces` answer lists an open menu.
+fn menu_open(data: &serde_json::Value) -> bool {
+    data.get("surfaces").and_then(serde_json::Value::as_array).is_some_and(|surfaces| {
+        surfaces.iter().any(|surface| {
+            ["type", "kind", "surface"].iter().any(|key| surface.get(*key).and_then(serde_json::Value::as_str) == Some("menu"))
+                || surface.get("menu").is_some()
+        })
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_an_open_menu_is_closed() {
+        assert!(!menu_open(&serde_json::json!({"pid": 1, "surfaces": []})));
+        assert!(menu_open(&serde_json::json!({"surfaces": [{"type": "menu", "item_count": 4}]})));
+        assert!(!menu_open(&serde_json::json!({"surfaces": [{"type": "window"}]})));
+    }
 
     #[test]
     fn launch_arguments_follow_each_platforms_identifier_rules() {

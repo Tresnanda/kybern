@@ -192,5 +192,11 @@ async fn calculator_through_the_tools() {
     println!("{menu}");
 
     computer.shutdown().await;
+    // Quit the calculator this test opened.
+    let _ = match Os::current() {
+        Os::Mac => std::process::Command::new("/usr/bin/osascript").args(["-e", "quit app \"Calculator\""]).status(),
+        Os::Windows => std::process::Command::new("taskkill").args(["/IM", "CalculatorApp.exe", "/F"]).status(),
+        Os::Linux | Os::Other => std::process::Command::new("pkill").args(["-x", "gnome-calculator"]).status(),
+    };
     let _ = std::fs::remove_dir_all(&root);
 }
