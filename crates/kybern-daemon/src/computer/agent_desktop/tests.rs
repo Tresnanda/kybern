@@ -448,7 +448,7 @@ async fn a_missing_install_says_so_without_running_anything() {
 #[test]
 fn capabilities_follow_the_per_os_table() {
     let mac = super::capabilities(Os::Mac, Display::None);
-    assert!(mac.menu_bar && mac.pixels && mac.background_keys && mac.background_typing && !mac.background_pixels);
+    assert!(mac.menu_bar && mac.pixels && !mac.background_keys && mac.background_typing && !mac.background_pixels);
     let windows = super::capabilities(Os::Windows, Display::None);
     assert!(windows.menu_bar && windows.pixels && !windows.background_typing && !windows.background_keys && windows.background_scroll);
     let x11 = super::capabilities(Os::Linux, Display::X11);

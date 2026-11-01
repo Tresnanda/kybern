@@ -472,12 +472,14 @@ fn extract_picture(data: &Value) -> Option<Vec<u8>> {
 /// What the tools may ask for here (design §5, "Per OS").
 pub(crate) fn capabilities(os: Os, display: Display) -> Capabilities {
     match os {
+        // `press` is physical keyboard input to the focused app on macOS, so a
+        // key step needs foreground consent (CuaDriver posts keys to the app).
         Os::Mac => Capabilities {
             menu_bar: true,
             background_pixels: false,
             pixels: true,
             background_typing: true,
-            background_keys: true,
+            background_keys: false,
             background_scroll: true,
             window_capture: true,
             zoom: true,

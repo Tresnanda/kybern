@@ -144,6 +144,8 @@ async fn calculator_through_the_tools() {
             None => panic!("no button named any of {names:?}"),
         }
     }
+    // Calculators show the result a moment after "=".
+    steps.push(json!({ "wait_for": "12", "timeout_ms": 3000 }));
     let started = Instant::now();
     let acted = text(&computer.execute(ctx(), "kybern_computer_act", json!({ "window": window, "steps": steps })).await.unwrap());
     timed("act", started);
