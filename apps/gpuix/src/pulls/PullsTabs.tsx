@@ -12,10 +12,11 @@ export function PullsHeader({ children }: { children?: ReactNode }) {
   const t = useTheme()
   const tab = usePullsTab(s => s.tab)
   return <div style={{ ...row, height: 46, flexShrink: 0, paddingLeft: 12, paddingRight: 12, borderBottomWidth: 1, borderColor: t.border }}>
-    <div style={{ ...row, height: 38, flexShrink: 1, minWidth: 0 }}>
+    {/* The tabs keep their width; the controls after them truncate first (a narrow column overlapped "Actions"). */}
+    <div style={{ ...row, height: 38, flexShrink: 0 }}>
       <Tabs testId="pulls-tab" minWidth={0} overflow={false} animate={false} underlineGap={9} active={tab} onSelect={key => setPullsTab(key as PullsTab)} items={ITEMS} />
     </div>
-    <div style={{ flexGrow: 1 }} />
-    {children}
+    <div style={{ flexGrow: 1, minWidth: 12 }} />
+    {children && <div style={{ ...row, gap: 4, flexShrink: 1, minWidth: 0 }}>{children}</div>}
   </div>
 }
