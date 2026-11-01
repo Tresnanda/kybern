@@ -648,7 +648,7 @@ async fn documents_refuse_subpaths_and_sockets_the_mint_refuses_bad_requests_and
     assert_eq!(http.get(format!("{}{}", a.http_url(), frame.path)).send().await.unwrap().status(), 401);
 
     // With the network off on the relay member, a new page is refused too.
-    a.state.network.set_enabled(false);
+    network_set(&a, false).await;
     let off = admin(&a).await;
     let error = off
         .call::<NetworkRelayPageOpen>(NetworkRelayPageOpenParams { machine_id: b.id(), path: "/preview-proxy/abc/".into() })
@@ -656,6 +656,13 @@ async fn documents_refuse_subpaths_and_sockets_the_mint_refuses_bad_requests_and
         .unwrap_err()
         .to_string();
     assert!(error.ends_with(&format!("(code {})", codes::NOT_FOUND)), "{error}");
+}
+
+/// Turn the network on or off the way a user does (its setting), and wait until the node acts on it. Flipping only the
+/// in-memory switch would race the worker, which sets it back from the setting on its next pass.
+async fn network_set(node: &Node, enabled: bool) {
+    node.set_network_enabled(enabled);
+    eventually("the network follows its setting", WAIT, || node.state.network.is_enabled() == enabled).await;
 }
 
 fn token_id_of(node: &Node, token: &str) -> Uuid {
@@ -763,9 +770,9 @@ async fn a_page_keeps_its_cookies_and_stops_when_the_network_is_off_or_its_machi
     assert_eq!(cookies, [format!("sid=1; HttpOnly; Path={scope}/"), format!("pref=2; SameSite=Lax; Path={scope}/api")]);
 
     // With the network off on the relay member the page stops answering; with its machine gone, too.
-    a.state.network.set_enabled(false);
+    network_set(&a, false).await;
     assert_eq!(reqwest::get(format!("{}{}", a.http_url(), page.path)).await.unwrap().status(), 404);
-    a.state.network.set_enabled(true);
+    network_set(&a, true).await;
     b.stop();
     let deadline = tokio::time::Instant::now() + WAIT;
     loop {
