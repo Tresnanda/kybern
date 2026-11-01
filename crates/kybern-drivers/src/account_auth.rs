@@ -65,6 +65,9 @@ async fn claude_identity(context: &ProbeContext) -> (AccountStatus, Option<Accou
     let Ok(binary) = crate::binary::resolve(ProviderKind::ClaudeCode, context.binary.as_ref()) else {
         return (AccountStatus::Unknown, None);
     };
+    if let Some(oauth) = crate::claude_config::login_due_for_refresh(context).await {
+        return claude_identity_from_login(&oauth);
+    }
     let Some((_, status)) = run_json(&binary, &["auth", "status", "--json"], context).await else {
         return (AccountStatus::Unknown, None);
     };
@@ -85,6 +88,19 @@ pub fn claude_identity_from_status(status: &Value, credentials_file: bool) -> (A
         None => None,
     };
     (AccountStatus::SignedIn, Some(AccountIdentity { email: text("email"), plan, organization: text("orgName") }))
+}
+
+/// A login due for a refresh, read from Claude Code's stored `claudeAiOauth`
+/// without running it. Its refresh token lets the next session renew it, so it
+/// is still signed in; the store has no email, which stays unknown.
+pub fn claude_identity_from_login(oauth: &Value) -> (AccountStatus, Option<AccountIdentity>) {
+    let plan = oauth
+        .get("subscriptionType")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|plan| !plan.is_empty())
+        .map(|plan| claude_plan_label(&plan.to_ascii_lowercase()));
+    (AccountStatus::SignedIn, Some(AccountIdentity { plan, ..Default::default() }))
 }
 
 pub fn claude_plan_label(plan: &str) -> String {
@@ -429,6 +445,41 @@ mod tests {
         }
         let api = json!({"loggedIn": true, "authMethod": "api_key"});
         assert_eq!(claude_identity_from_status(&api, false).1.unwrap().plan.as_deref(), Some("API key"));
+    }
+
+    #[test]
+    fn claude_login_due_for_refresh_stays_signed_in_with_its_plan() {
+        let (state, identity) =
+            claude_identity_from_login(&json!({"accessToken": "a", "refreshToken": "r", "expiresAt": 1, "subscriptionType": "max"}));
+        assert_eq!(state, AccountStatus::SignedIn);
+        assert_eq!(identity, Some(AccountIdentity { plan: Some("Max".into()), ..Default::default() }));
+        assert_eq!(claude_identity_from_login(&json!({"refreshToken": "r"})).1.unwrap().plan, None);
+    }
+
+    #[tokio::test]
+    async fn claude_identity_never_runs_auth_status_for_a_login_due_for_refresh() {
+        let temp = tempfile::tempdir().unwrap();
+        // Not a program: running it fails, which would make the identity unknown.
+        let binary = temp.path().join("claude.txt");
+        std::fs::write(&binary, "not a program").unwrap();
+        let context = ProbeContext {
+            binary: Some(binary),
+            cwd: None,
+            env: [("CLAUDE_CONFIG_DIR".to_string(), temp.path().to_string_lossy().into_owned())].into(),
+        };
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        let write = |expires_at: u64| {
+            let oauth = json!({"accessToken": "a", "refreshToken": "r", "expiresAt": expires_at, "subscriptionType": "pro"});
+            std::fs::write(temp.path().join(".credentials.json"), json!({"claudeAiOauth": oauth}).to_string()).unwrap();
+        };
+
+        write(now - 1);
+        let (state, identity) = claude_identity(&context).await;
+        assert_eq!(state, AccountStatus::SignedIn, "an expired access token with a refresh token is not signed out");
+        assert_eq!(identity.unwrap().plan.as_deref(), Some("Pro"));
+
+        write(now + 8 * 60 * 60 * 1000);
+        assert_eq!(claude_identity(&context).await.0, AccountStatus::Unknown, "a login that is not due still asks Claude Code");
     }
 
     #[test]
