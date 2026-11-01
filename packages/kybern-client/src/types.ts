@@ -106,7 +106,7 @@ export const AUTH_QUERY_PARAM = "token";
 // ---- model ----
 
 export type ProviderKind =
-  "claude-code" | "codex" | "opencode" | "pi" | "omp" | "cursor";
+  "claude-code" | "codex" | "opencode" | "pi" | "omp" | "cursor" | "antigravity";
 
 export const PROVIDER_DISPLAY_NAME: Record<ProviderKind, string> = {
   "claude-code": "Claude Code",
@@ -115,6 +115,7 @@ export const PROVIDER_DISPLAY_NAME: Record<ProviderKind, string> = {
   pi: "pi",
   omp: "Oh My Pi",
   cursor: "Cursor",
+  antigravity: "Antigravity",
 };
 
 export interface ProviderInstance {
