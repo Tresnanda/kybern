@@ -34,7 +34,7 @@ export function machineStatusLine(machine: MachineLine, now = Date.now()): strin
     case "needs-update":
       return `Online${version} · Update Kybern to use it fully`;
     case "paused":
-      return "Paused";
+      return "Disconnected on this phone";
     case "unpaired":
       return machine.error ?? "Not paired with this phone";
     default: {

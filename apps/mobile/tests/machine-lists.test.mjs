@@ -110,7 +110,7 @@ test("machine sentences", () => {
   assert.equal(machineStatusLine({ status: "offline", connecting: true }), "Connecting…");
   assert.equal(machineStatusLine({ status: "offline", error: "This address answered as a different machine" }), "Offline · This address answered as a different machine");
   assert.equal(machineStatusLine({ status: "unpaired", error: "Pair this device with VPS" }), "Pair this device with VPS");
-  assert.equal(machineStatusLine({ status: "paused" }), "Paused");
+  assert.equal(machineStatusLine({ status: "paused" }), "Disconnected on this phone");
   assert.equal(machinesSummary(["online", "online", "offline", "online"]), "4 machines · 1 offline");
   assert.equal(machinesSummary(["online"]), "1 machine");
 });

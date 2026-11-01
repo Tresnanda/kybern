@@ -20,6 +20,7 @@ import type { Diff, GitStatus, Thread } from "../state/protocol";
 import { activeEnvironment, errorText, refresh, rpc, useApp } from "../state/runtime";
 import { type InspectorTab, useLayout } from "../state/layout";
 import { prPlan, repoPullRows } from "../state/groups";
+import { useThreadMachineItems } from "./threadActions";
 
 // Tabs that have a live inspector pane on wide layouts, so the menu reveals them
 // in the dock instead of pushing a full-screen route.
@@ -71,6 +72,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
   const menu = useMenuSurface();
   const anchor = useRef<View>(null);
   const threadId = thread?.id;
+  const machineMoves = useThreadMachineItems(thread);
 
   function navigate(tab: string) {
     const inspectorTab = INSPECTOR_TAB[tab];
@@ -235,6 +237,7 @@ export function WorkspaceMenu({ thread }: { thread?: Thread | null }) {
               thread?.pinned ? "Thread unpinned" : "Thread pinned",
             ),
         },
+        ...machineMoves,
         { title: "Details", icon: "slider.horizontal.3", onPress: () => navigate("More") },
         { title: "Agents", subtitle: "Delegated agents and processes", icon: "person.2", onPress: () => openAgents(threadId!, "agents") },
         { title: "Preview", subtitle: "Dev servers and pages", icon: "globe", onPress: () => navigate("Preview") },

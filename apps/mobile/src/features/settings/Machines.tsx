@@ -5,69 +5,126 @@
 import { router } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import { View } from "react-native";
-import type { FoundMachine } from "../../../../../packages/kybern-client/src/types";
+import { updateSummary } from "../../../../../packages/kybern-client/src/networkSettings";
+import type { FoundMachine, MachineId, NetworkStatus } from "../../../../../packages/kybern-client/src/types";
+import { parityFooter } from "../../machines/gate";
 import { machineStatusLine } from "../../machines/labels";
-import { addFoundMachine, canManageNetwork, joinWithCode, networkStatus, removeFromNetwork } from "../../state/machineActions";
-import { connect, errorText, machineHub, removeMachine, useApp, useMachineView } from "../../state/runtime";
+import { cancelOutboxText, deviceSubtitle, groupDevices, MACHINES_COPY, outboxEntries, type DeviceGroup, type OutboxEntry } from "../../machines/settingsModel";
+import {
+  addFoundMachine,
+  canManageNetwork,
+  joinWithCode,
+  listPairedDevices,
+  memberMachine,
+  memberParity,
+  networkStatus,
+  olderMembers,
+  revokeDeviceTokens,
+  setFollowUpdates,
+  setNetworkEnabled,
+  updateAllMachines,
+} from "../../state/machineActions";
+import { cancelOutboxItem, listOutboxes, onOutboxesChanged, retryOutboxItem } from "../../state/outbox";
+import { errorText, machineHub, useApp, useMachineView } from "../../state/runtime";
 import { Alert, confirm } from "../../ui/Alert";
+import { MenuButton } from "../../ui/ActionMenu";
 import { ListRow } from "../../ui/List";
 import { Button, ErrorBanner, Field } from "../../ui/primitives";
+import { Busy } from "../../ui/Busy";
 import { space } from "../../ui/theme";
 import { MachineGlyph, StatusDot } from "../MachineGlyph";
-import { Section } from "./common";
+import { Section, ToggleRow } from "./common";
+import { machineMenu } from "./machineActions";
 
 export function MachinesSettings() {
   const app = useApp();
   const view = useMachineView();
   const [error, setError] = useState("");
-  const [found, setFound] = useState<FoundMachine[]>([]);
+  const [network, setNetwork] = useState<NetworkStatus | null>(null);
   const [adding, setAdding] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [updateLine, setUpdateLine] = useState("");
+  const [outbox, setOutbox] = useState<OutboxEntry[]>([]);
+  const [devices, setDevices] = useState<DeviceGroup[]>([]);
   const hub = machineHub();
   const manage = canManageNetwork();
   const connections = hub.connections();
+  const found: FoundMachine[] = network?.found ?? [];
+  const gated = manage && memberParity();
+  const older = manage ? olderMembers() : [];
+  const memberName = memberMachine()?.name ?? "this machine";
 
   // What the network found on the tailnet, read from a member whenever the list of machines changes.
   const reloadFound = useCallback(async () => {
-    if (!canManageNetwork()) return setFound([]);
+    if (!canManageNetwork()) return setNetwork(null);
     try {
-      setFound((await networkStatus()).found);
+      setNetwork(await networkStatus());
     } catch {
-      setFound([]);
+      setNetwork(null);
     }
   }, []);
   useEffect(() => {
     void reloadFound();
   }, [reloadFound, view.version]);
 
+  // Outbox and paired devices span every live machine, so they read again when the machines change.
+  const names = new Map(connections.map((c) => [c.record.machineId, c.record.name] as const));
+  const reloadOutbox = useCallback(async () => {
+    if (!gated) return setOutbox([]);
+    const lists = await listOutboxes();
+    setOutbox(outboxEntries(lists, new Map(machineHub().connections().map((c) => [c.record.machineId, c.record.name] as const))));
+  }, [gated]);
+  useEffect(() => {
+    void reloadOutbox().catch(() => {});
+    return gated ? onOutboxesChanged(() => void reloadOutbox().catch(() => {})) : undefined;
+  }, [reloadOutbox, gated, view.version]);
+  useEffect(() => {
+    if (!gated) return setDevices([]);
+    let live = true;
+    listPairedDevices().then(
+      (entries) => live && setDevices(groupDevices(entries)),
+      () => live && setDevices([]),
+    );
+    return () => {
+      live = false;
+    };
+  }, [gated, view.version]);
+
   const run = (work: () => Promise<unknown>) => {
     setError("");
     work().catch((e) => setError(errorText(e)));
   };
 
-  const remove = (id: string, name: string, member: boolean) => {
-    const forget = () => run(() => removeMachine(id));
-    if (!member || !manage)
-      return confirm({
-        title: `Forget “${name}”?`,
-        message: "This removes the machine from this phone. Its projects and conversations stay on the machine.",
-        confirm: "Forget machine",
-        onConfirm: forget,
-      });
-    Alert.alert(`Remove “${name}”?`, "Removing it from your network takes it out of every machine's list. Its projects and conversations stay on it.", [
-      { text: "Cancel", style: "cancel" },
-      { text: "Forget on this phone only", onPress: forget },
-      {
-        text: "Remove from your network",
-        style: "destructive",
-        onPress: () => run(async () => { await removeFromNetwork(id, false); await removeMachine(id); }),
-      },
-      {
-        text: "Lost or stolen",
-        style: "destructive",
-        onPress: () => run(async () => { await removeFromNetwork(id, true); await removeMachine(id); }),
-      },
+  const networkPaused = (id: MachineId) => network?.members.find((card) => card.machine_id === id)?.status === "paused";
+  const updateAll = () => {
+    setUpdating(true);
+    setUpdateLine("");
+    updateAllMachines()
+      .then((result) => setUpdateLine(updateSummary(result)))
+      .catch((e) => setError(errorText(e)))
+      .finally(() => setUpdating(false));
+  };
+  const turnOff = () =>
+    confirm({
+      title: MACHINES_COPY.offTitle(memberName),
+      message: MACHINES_COPY.offBody(memberName),
+      confirm: MACHINES_COPY.offButton,
+      onConfirm: () => run(async () => { await setNetworkEnabled(false); await reloadFound(); }),
+    });
+  const cancelItem = (entry: OutboxEntry) => {
+    const text = cancelOutboxText(entry);
+    Alert.alert(text.title, text.message, [
+      { text: MACHINES_COPY.keep, style: "cancel" },
+      { text: MACHINES_COPY.cancelSend, style: "destructive", onPress: () => run(async () => { await cancelOutboxItem(entry.holder, entry.id); await reloadOutbox(); }) },
     ]);
   };
+  const revokeGroup = (group: DeviceGroup) =>
+    confirm({
+      title: `Revoke “${group.label}”?`,
+      message: "This device loses access to these machines until it pairs again.",
+      confirm: "Revoke access",
+      onConfirm: () => run(async () => { await revokeDeviceTokens(group.tokens); setDevices((list) => list.filter((item) => item !== group)); }),
+    });
 
   return (
     <>
@@ -95,6 +152,16 @@ export function MachinesSettings() {
             ...(connection.info?.version ? { version: connection.info.version } : {}),
             connecting: connection.connecting,
           });
+          const state = {
+            id,
+            name: connection.record.name,
+            member: connection.record.member,
+            here,
+            disconnected: paused,
+            networkPaused: networkPaused(id),
+            open: app.status === "open",
+            offline: connection.status === "offline",
+          };
           return (
             <ListRow
               key={id}
@@ -105,28 +172,72 @@ export function MachinesSettings() {
               trailing={<StatusDot status={connection.status} connecting={connection.connecting} />}
               dimmed={connection.status === "offline" || paused}
               label={`${connection.record.name}, ${subtitle}`}
-              menu={[
-                ...(here
-                  ? app.status !== "open"
-                    ? [{ title: "Reconnect", icon: "arrow.clockwise" as const, onPress: () => connect(app.activeId) }]
-                    : []
-                  : [
-                      ...(!paused ? [{ title: "Try again", icon: "arrow.clockwise" as const, onPress: () => run(() => hub.retry(id)) }] : []),
-                      paused
-                        ? { title: "Resume", icon: "arrow.right" as const, onPress: () => run(() => hub.setPaused(id, false)) }
-                        : { title: "Pause", icon: "pause.circle" as const, onPress: () => run(() => hub.setPaused(id, true)) },
-                    ]),
-                {
-                  title: connection.record.member && manage ? "Remove…" : "Forget machine",
-                  icon: "trash" as const,
-                  destructive: true,
-                  onPress: () => remove(id, connection.record.name, connection.record.member),
-                },
-              ]}
+              chevron
+              onPress={() => router.push({ pathname: "/machine/[id]", params: { id } })}
+              menu={machineMenu(state, run, { activeId: app.activeId })}
             />
           );
         })}
       </Section>
+      {manage && (gated || older.length) ? (
+        <Section title={MACHINES_COPY.yourNetwork} footer={gated ? (older.length ? parityFooter(older) : MACHINES_COPY.followFooter) : parityFooter(older)}>
+          {gated ? (
+            <ToggleRow
+              title={MACHINES_COPY.useNetwork}
+              value={network?.enabled ?? true}
+              leading="globe"
+              onChange={(value) => (value ? run(async () => { await setNetworkEnabled(true); await reloadFound(); }) : turnOff())}
+            />
+          ) : null}
+          {gated ? (
+            <ToggleRow
+              title={MACHINES_COPY.follow}
+              value={network?.follow_updates ?? false}
+              leading="arrow.clockwise"
+              onChange={(value) => run(async () => { await setFollowUpdates(value); await reloadFound(); })}
+            />
+          ) : null}
+          {gated ? (
+            <ListRow
+              title={MACHINES_COPY.updateAll}
+              subtitle={updateLine || undefined}
+              leading="arrow.up"
+              trailing={updating ? <Busy /> : undefined}
+              disabled={updating}
+              onPress={updateAll}
+            />
+          ) : null}
+          {gated ? <ListRow title={MACHINES_COPY.check} leading="checkmark.circle" chevron onPress={() => router.push("/network-check")} /> : null}
+        </Section>
+      ) : null}
+      {gated && outbox.length ? (
+        <Section title={MACHINES_COPY.outbox}>
+          {outbox.map((entry) => (
+            <ListRow
+              key={entry.id}
+              title={entry.title}
+              subtitle={entry.detail}
+              subtitleLines={3}
+              leading="paperplane"
+              trailing={
+                entry.canRetry || entry.canCancel ? (
+                  <MenuButton
+                    label={`${entry.title}. Actions`}
+                    items={[
+                      ...(entry.canRetry ? [{ title: MACHINES_COPY.retry, icon: "arrow.clockwise" as const, onPress: () => run(async () => { await retryOutboxItem(entry.holder, entry.id); await reloadOutbox(); }) }] : []),
+                      ...(entry.canCancel ? [{ title: MACHINES_COPY.cancel, icon: "xmark.circle" as const, destructive: true, onPress: () => cancelItem(entry) }] : []),
+                    ]}
+                  />
+                ) : undefined
+              }
+              menu={[
+                ...(entry.canRetry ? [{ title: MACHINES_COPY.retry, icon: "arrow.clockwise" as const, onPress: () => run(async () => { await retryOutboxItem(entry.holder, entry.id); await reloadOutbox(); }) }] : []),
+                ...(entry.canCancel ? [{ title: MACHINES_COPY.cancel, icon: "xmark.circle" as const, destructive: true, onPress: () => cancelItem(entry) }] : []),
+              ]}
+            />
+          ))}
+        </Section>
+      ) : null}
       {found.length ? (
         <Section title="Found on your tailnet" footer="Add a machine you own to use it from this phone too.">
           {found.map((machine) => (
@@ -161,6 +272,21 @@ export function MachinesSettings() {
         {manage && adding ? <AddByCode onDone={() => { setAdding(false); void reloadFound(); }} onError={setError} /> : null}
         <ListRow title="Pair another computer" subtitle="With a pairing code, QR code or access token" leading="qrcode.viewfinder" chevron onPress={() => router.push("/connect")} />
       </Section>
+      {gated && devices.length ? (
+        <Section title={MACHINES_COPY.devices} footer="Swipe or touch and hold a device to revoke it on every machine it reaches.">
+          {devices.map((group) => (
+            <ListRow
+              key={group.label}
+              title={group.label}
+              subtitle={deviceSubtitle(group)}
+              subtitleLines={2}
+              leading="lock.shield"
+              menu={[{ title: "Revoke access", icon: "trash", destructive: true, onPress: () => revokeGroup(group) }]}
+              swipe={{ trailing: [{ title: "Revoke", icon: "trash", tone: "negative", onPress: () => revokeGroup(group) }] }}
+            />
+          ))}
+        </Section>
+      ) : null}
     </>
   );
 }
