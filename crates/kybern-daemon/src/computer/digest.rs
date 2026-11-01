@@ -1,13 +1,13 @@
 //! Compact window digests with stable references.
 //!
-//! CuaDriver element tokens are bound to one snapshot. Kybern gives each
+//! A backend's element tokens are bound to one snapshot. Kybern gives each
 //! element a short `@N` reference bound to its identity (role, label and
 //! duplicate ordinal) so the model can keep using a reference across
-//! observations, and resolves it to the newest driver token when acting.
+//! observations, and resolves it to the newest backend token when acting.
+//! Roles arrive already mapped to the neutral vocabulary of
+//! [`super::backend::neutral_role`], so a digest reads the same on every OS.
 
 use std::collections::{BTreeMap, HashMap};
-
-use serde_json::Value;
 
 const LABEL_CHARS: usize = 60;
 const VALUE_CHARS: usize = 40;
@@ -20,36 +20,29 @@ const MAX_DIFF_LINES: usize = 40;
 const MAX_REMOVED_LINES: usize = 8;
 const DEFAULT_TEXT_ROWS: usize = 12;
 
-/// Roles the model can act on. Static text is listed only with `text:true`.
+/// Roles the model can act on (neutral vocabulary). Static text is listed
+/// only with `text:true`.
 const ACTIONABLE_ROLES: &[&str] = &[
     "button",
     "checkbox",
-    "radiobutton",
-    "popupbutton",
-    "menubutton",
+    "radio",
+    "switch",
     "combobox",
+    "menubutton",
     "textfield",
-    "securetextfield",
-    "textarea",
-    "searchfield",
+    "password",
+    "datefield",
     "link",
     "menuitem",
     "menubaritem",
     "tab",
     "slider",
-    "incrementor",
     "stepper",
-    "disclosuretriangle",
-    "cell",
+    "disclosure",
     "row",
-    "outlinerow",
-    "colorwell",
-    "datefield",
-    "switch",
-    "toggle",
-    "segmentedcontrol",
+    "cell",
 ];
-const CONTAINER_ROLES: &[&str] = &["sheet", "dialog", "alert", "popover", "menu", "list", "table", "outline", "tabgroup", "webarea"];
+const CONTAINER_ROLES: &[&str] = &["sheet", "dialog", "alert", "popover", "menu", "list", "table", "tree", "tablist", "webarea"];
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Element {
@@ -70,41 +63,6 @@ pub(crate) struct Element {
 }
 
 impl Element {
-    fn from_value(value: &Value) -> Option<Self> {
-        let role = value.get("role").and_then(Value::as_str)?;
-        let text = |key: &str| value.get(key).and_then(Value::as_str).map(str::trim).filter(|text| !text.is_empty()).map(str::to_owned);
-        let label = text("label").or_else(|| text("title")).or_else(|| text("description")).or_else(|| text("help")).unwrap_or_default();
-        let bounds = value.get("frame").and_then(Value::as_object).and_then(|frame| {
-            let number = |key: &str| frame.get(key).and_then(Value::as_f64);
-            Some((number("x")?, number("y")?, number("w")?, number("h")?))
-        });
-        let rendered = match value.get("frame") {
-            None => true,
-            Some(Value::Object(frame)) => {
-                let size = |key: &str| frame.get(key).and_then(Value::as_f64).unwrap_or(0.0);
-                size("w") > 1.0 && size("h") > 1.0
-            }
-            Some(_) => false,
-        };
-        Some(Self {
-            token: text("element_token"),
-            role: short_role(role),
-            label: one_line(&label),
-            value: match value.get("value") {
-                Some(Value::String(text)) if !text.trim().is_empty() => Some(one_line(text)),
-                Some(Value::Number(number)) => Some(number.to_string()),
-                Some(Value::Bool(flag)) => Some(flag.to_string()),
-                _ => None,
-            },
-            enabled: value.get("enabled").and_then(Value::as_bool),
-            selected: value.get("selected").and_then(Value::as_bool),
-            has_actions: value.get("actions").and_then(Value::as_array).is_some_and(|actions| !actions.is_empty()),
-            rendered,
-            in_menu_bar: false,
-            bounds,
-        })
-    }
-
     /// A control worth a reference in the default digest.
     fn listed(&self) -> bool {
         if !self.rendered || self.in_menu_bar || matches!(self.role.as_str(), "window" | "menubar" | "application") {
@@ -120,12 +78,7 @@ impl Element {
     }
 }
 
-/// `AXButton` → `button`, `AXTextField` → `textfield`.
-fn short_role(role: &str) -> String {
-    role.strip_prefix("AX").unwrap_or(role).to_ascii_lowercase()
-}
-
-fn one_line(text: &str) -> String {
+pub(crate) fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -159,13 +112,13 @@ fn with_identities(elements: impl IntoIterator<Item = Element>) -> Vec<(Identity
         .collect()
 }
 
-/// One parsed `get_window_state` response.
+/// One read of a window, parsed by the backend.
 #[derive(Debug, Clone)]
 pub(crate) struct Snapshot {
-    /// Indexed (actionable) rows from `structuredContent.elements`.
+    /// Indexed (actionable) rows.
     pub elements: Vec<(Identity, Element)>,
-    /// Text rows. The driver lists them only in `tree_markdown`, and they
-    /// carry results such as a calculator display or a status line.
+    /// Text rows. They carry results such as a calculator display or a
+    /// status line.
     pub texts: Vec<(Identity, Element)>,
     pub truncated: bool,
     pub degraded: Option<String>,
@@ -176,7 +129,6 @@ pub(crate) struct Snapshot {
 impl Snapshot {
     /// A snapshot from elements a backend already parsed, in document order,
     /// with neutral roles. Identities are assigned here.
-    #[allow(dead_code)] // Used by the backends in the ADE-83 refactor.
     pub(crate) fn new(
         elements: Vec<Element>,
         texts: Vec<Element>,
@@ -186,38 +138,6 @@ impl Snapshot {
         app_name: Option<String>,
     ) -> Self {
         Self { elements: with_identities(elements), texts: with_identities(texts), truncated, degraded, title, app_name }
-    }
-
-    pub(crate) fn parse(structured: &Value) -> Self {
-        let raw = structured.get("elements").and_then(Value::as_array).cloned().unwrap_or_default();
-        let mut parsed: Vec<(Option<i64>, Option<i64>, Element)> = raw
-            .iter()
-            .filter_map(|value| {
-                Element::from_value(value).map(|element| {
-                    (value.get("element_index").and_then(Value::as_i64), value.get("parent_index").and_then(Value::as_i64), element)
-                })
-            })
-            .collect();
-        // Mark everything below a menu bar; parents precede children.
-        let mut menu_bar = std::collections::HashSet::new();
-        for (index, parent, element) in &mut parsed {
-            let below = parent.is_some_and(|parent| menu_bar.contains(&parent));
-            if below || element.role == "menubar" {
-                element.in_menu_bar = true;
-                if let Some(index) = index {
-                    menu_bar.insert(*index);
-                }
-            }
-        }
-        let text = |key: &str| structured.get(key).and_then(Value::as_str).map(str::to_owned);
-        Self {
-            elements: with_identities(parsed.into_iter().map(|(_, _, element)| element)),
-            texts: with_identities(structured.get("tree_markdown").and_then(Value::as_str).map(markdown_texts).unwrap_or_default()),
-            truncated: structured.get("truncated").and_then(Value::as_bool).unwrap_or(false),
-            degraded: text("degraded_reason"),
-            title: text("window_title"),
-            app_name: text("app_name"),
-        }
     }
 
     /// Where an element sits inside its window, from 0 to 1 on each axis,
@@ -244,105 +164,6 @@ impl Snapshot {
                 || element.value.as_deref().is_some_and(|value| value.to_lowercase().contains(&needle))
         })
     }
-}
-
-/// Unindexed rows of `tree_markdown` that carry text, e.g.
-/// `    - AXStaticText = "408" (Edit field)`. Menu bar rows are skipped.
-fn markdown_texts(markdown: &str) -> Vec<Element> {
-    let mut rows = Vec::new();
-    let mut menu_bar_indent: Option<usize> = None;
-    for line in markdown.lines() {
-        let indent = line.len() - line.trim_start().len();
-        let Some(rest) = line.trim_start().strip_prefix("- ") else { continue };
-        if menu_bar_indent.is_some_and(|menu| indent <= menu) {
-            menu_bar_indent = None;
-        }
-        let rest = match rest.strip_prefix('[') {
-            Some(indexed) => {
-                // Indexed rows come from structured elements; only track the menu bar.
-                if indexed.split_once("] ").is_some_and(|(_, row)| row.starts_with("AXMenuBar ") || row == "AXMenuBar") {
-                    menu_bar_indent = Some(indent);
-                }
-                continue;
-            }
-            None => rest,
-        };
-        if menu_bar_indent.is_some() {
-            continue;
-        }
-        let (role, mut rest) = rest.split_once(' ').unwrap_or((rest, ""));
-        if !role.starts_with("AX")
-            || !matches!(role, "AXStaticText" | "AXHeading" | "AXText" | "AXValueIndicator" | "AXLevelIndicator" | "AXProgressIndicator")
-        {
-            continue;
-        }
-        let mut title = None;
-        let mut value = None;
-        let mut description = None;
-        rest = rest.trim_start();
-        if rest.starts_with('"') {
-            let (text, remainder) = quoted(rest);
-            title = Some(text);
-            rest = remainder.trim_start();
-        }
-        if let Some(after) = rest.strip_prefix("= ") {
-            if after.starts_with('"') {
-                let (text, remainder) = quoted(after);
-                value = Some(text);
-                rest = remainder.trim_start();
-            } else {
-                let end = after.find(" (").unwrap_or(after.len());
-                value = Some(after[..end].to_owned());
-                rest = after[end..].trim_start();
-            }
-        }
-        if let Some(after) = rest.strip_prefix('(')
-            && let Some(end) = after.rfind(')')
-        {
-            description = Some(after[..end].to_owned());
-        }
-        let label = description.clone().or(title.clone()).unwrap_or_default();
-        let value = value.or(if description.is_some() { title } else { None });
-        if label.trim().is_empty() && value.as_deref().is_none_or(|value| value.trim().is_empty()) {
-            continue;
-        }
-        rows.push(Element {
-            token: None,
-            role: short_role(role),
-            label: one_line(&label),
-            value: value.map(|value| one_line(&value)).filter(|value| !value.is_empty()),
-            enabled: None,
-            selected: None,
-            has_actions: false,
-            rendered: true,
-            in_menu_bar: false,
-            bounds: None,
-        });
-    }
-    rows
-}
-
-/// Split a leading JSON-style quoted string from the rest of the line.
-fn quoted(text: &str) -> (String, &str) {
-    let mut out = String::new();
-    let mut escaped = false;
-    for (index, character) in text.char_indices().skip(1) {
-        if escaped {
-            out.push(match character {
-                'n' => '\n',
-                't' => '\t',
-                other => other,
-            });
-            escaped = false;
-        } else if character == '\\' {
-            escaped = true;
-        } else if character == '"' {
-            return (out, &text[index + 1..]);
-        } else {
-            out.push(character);
-        }
-    }
-    (out, "")
 }
 
 /// Reference numbers for one thread and window. Numbers are never reused
@@ -502,12 +323,32 @@ fn changes(before: &[(Identity, Element)], after: &[(Identity, Element)], mut re
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    use serde_json::json;
 
-    fn snapshot(elements: Value) -> Snapshot {
-        Snapshot::parse(&json!({ "snapshot_id": "s00000001", "elements": elements }))
+    /// An element as a backend would build it.
+    pub(crate) fn el(role: &str, label: &str) -> Element {
+        Element {
+            token: None,
+            role: role.into(),
+            label: label.into(),
+            value: None,
+            enabled: None,
+            selected: None,
+            has_actions: false,
+            rendered: true,
+            in_menu_bar: false,
+            bounds: None,
+        }
+    }
+
+    fn token(mut element: Element, token: &str) -> Element {
+        element.token = Some(token.into());
+        element
+    }
+
+    fn snapshot(elements: Vec<Element>) -> Snapshot {
+        Snapshot::new(elements, Vec::new(), false, None, None, None)
     }
 
     fn options(query: Option<&str>, limit: usize) -> DigestOptions<'_> {
@@ -516,20 +357,24 @@ mod tests {
 
     #[test]
     fn digest_lists_actionable_elements_with_stable_refs() {
-        let first = snapshot(json!([
-            {"element_index":0,"element_token":"s1:0","role":"AXWindow","label":"Notes"},
-            {"element_index":1,"element_token":"s1:1","role":"AXButton","label":"New Note","actions":["AXPress"]},
-            {"element_index":2,"element_token":"s1:2","role":"AXTextArea","label":"Body","value":"eggs,\n milk"},
-            {"element_index":4,"element_token":"s1:4","role":"AXButton","label":"Delete","enabled":false},
-            {"element_index":5,"element_token":"s1:5","role":"AXButton","label":"Delete"},
-        ]));
+        let mut body = token(el("textfield", "Body"), "s1:2");
+        body.value = Some("eggs, milk".into());
+        let mut disabled = token(el("button", "Delete"), "s1:4");
+        disabled.enabled = Some(false);
+        let first = snapshot(vec![
+            token(el("window", "Notes"), "s1:0"),
+            token(el("button", "New Note"), "s1:1"),
+            body,
+            disabled,
+            token(el("button", "Delete"), "s1:5"),
+        ]);
         let mut refs = RefTable::default();
         let (lines, matched, omitted) = render(&first, &mut refs, &options(None, DEFAULT_LIMIT));
         assert_eq!(
             lines,
             vec![
                 "@1 button \"New Note\"",
-                "@2 textarea \"Body\" = \"eggs, milk\"",
+                "@2 textfield \"Body\" = \"eggs, milk\"",
                 "@3 button \"Delete\" (disabled)",
                 "@4 button \"Delete\""
             ]
@@ -537,10 +382,7 @@ mod tests {
         assert_eq!((matched, omitted), (4, 0));
 
         // Reordered snapshot: references follow identity, not position.
-        let second = snapshot(json!([
-            {"element_index":0,"element_token":"s2:0","role":"AXButton","label":"Share"},
-            {"element_index":1,"element_token":"s2:1","role":"AXButton","label":"New Note"},
-        ]));
+        let second = snapshot(vec![token(el("button", "Share"), "s2:0"), token(el("button", "New Note"), "s2:1")]);
         let (lines, _, _) = render(&second, &mut refs, &options(None, DEFAULT_LIMIT));
         assert_eq!(lines, vec!["@5 button \"Share\"", "@1 button \"New Note\""]);
         let identity = refs.identity(1).unwrap().clone();
@@ -549,54 +391,52 @@ mod tests {
 
     #[test]
     fn closed_menus_and_unrendered_rows_stay_out_of_the_digest() {
-        let snapshot = snapshot(json!([
-            {"element_index":0,"role":"AXButton","label":"Equals","frame":{"x":1,"y":1,"w":48,"h":48}},
-            {"element_index":1,"role":"AXButton","label":"Offscreen row","frame":{"x":1,"y":1,"w":200,"h":1}},
-            {"element_index":2,"role":"AXMenuBar","frame":{"x":0,"y":0,"w":1440,"h":30}},
-            {"element_index":3,"role":"AXMenuBarItem","label":"Apple","parent_index":2,"frame":null},
-            {"element_index":4,"role":"AXMenuItem","label":"Restart…","parent_index":3,"frame":{"x":1,"y":1,"w":200,"h":20}},
-            {"element_index":5,"role":"AXMenuItem","label":"Copy","frame":{"x":1,"y":1,"w":200,"h":20}},
-        ]));
+        let mut offscreen = el("button", "Offscreen row");
+        offscreen.rendered = false;
+        let mut hidden = el("menuitem", "Restart…");
+        hidden.in_menu_bar = true;
+        let snapshot = snapshot(vec![el("button", "Equals"), offscreen, el("menubar", ""), hidden, el("menuitem", "Copy")]);
         let (lines, _, _) = render(&snapshot, &mut RefTable::default(), &options(None, DEFAULT_LIMIT));
         assert_eq!(lines, vec!["@1 button \"Equals\"", "@2 menuitem \"Copy\""]);
     }
 
     #[test]
-    fn markdown_text_rows_show_results_and_changes() {
-        let markdown = |display: &str| {
-            format!(
-                "- [0] AXWindow \"Calculator\" [id=main actions=[raise]]\n    - AXStaticText = \"{display}\" (Edit field)\n    - [1] AXButton (Equals) [id=Equals actions=[press]]\n    - AXGroup\n- [2] AXMenuBar [actions=[cancel]]\n  - AXStaticText = \"hidden\"\n"
-            )
-        };
-        let parse = |display: &str| {
-            Snapshot::parse(&json!({
-                "elements": [{"element_index":1,"element_token":"s:1","role":"AXButton","label":"Equals","actions":["AXPress"]}],
-                "tree_markdown": markdown(display),
-            }))
-        };
-        let before = parse("12");
-        assert_eq!(before.texts.len(), 1);
-        let mut refs = RefTable::default();
-        let (lines, _, _) = render(&before, &mut refs, &options(None, DEFAULT_LIMIT));
-        assert_eq!(lines, vec!["@1 button \"Equals\"", "statictext \"Edit field\" = \"12\""]);
-        let after = parse("408");
-        assert!(after.contains_label("408"));
-        assert_eq!(diff(&before, &after, &mut refs), vec!["~statictext \"Edit field\" = \"408\""]);
+    fn every_neutral_actionable_role_is_listed_and_native_words_are_not() {
+        for role in ACTIONABLE_ROLES {
+            assert!(el(role, "x").listed(), "{role}");
+        }
+        for old in ["popupbutton", "statictext", "securetextfield", "textarea", "outlinerow", "radiobutton"] {
+            assert!(!el(old, "").listed(), "{old} is not a neutral role");
+        }
+        // A container needs a label; text never lists without actions.
+        assert!(el("dialog", "Save As").listed());
+        assert!(!el("dialog", "").listed());
+        assert!(!el("text", "408").listed());
+        let mut custom = el("group", "Custom");
+        custom.has_actions = true;
+        assert!(custom.listed());
     }
 
     #[test]
-    fn quoted_strings_unescape() {
-        assert_eq!(quoted(r#""say \"hi\"" rest"#), ("say \"hi\"".to_owned(), " rest"));
-        let rows = markdown_texts("  - AXHeading \"Inbox\"\n  - AXStaticText = \"3 unread\"\n");
-        assert_eq!(
-            rows.iter().map(|row| (row.label.as_str(), row.value.as_deref())).collect::<Vec<_>>(),
-            vec![("Inbox", None), ("", Some("3 unread"))]
-        );
+    fn text_rows_show_results_and_changes() {
+        let texts = |display: &str| {
+            let mut field = el("text", "Edit field");
+            field.value = Some(display.into());
+            vec![field]
+        };
+        let build = |display: &str| Snapshot::new(vec![token(el("button", "Equals"), "s:1")], texts(display), false, None, None, None);
+        let before = build("12");
+        let mut refs = RefTable::default();
+        let (lines, _, _) = render(&before, &mut refs, &options(None, DEFAULT_LIMIT));
+        assert_eq!(lines, vec!["@1 button \"Equals\"", "text \"Edit field\" = \"12\""]);
+        let after = build("408");
+        assert!(after.contains_label("408"));
+        assert_eq!(diff(&before, &after, &mut refs), vec!["~text \"Edit field\" = \"408\""]);
     }
 
     #[test]
     fn limit_and_query_report_omissions() {
-        let many = snapshot(Value::Array((0..10).map(|i| json!({"role":"AXButton","label":format!("Item {i}")})).collect()));
+        let many = snapshot((0..10).map(|i| el("button", &format!("Item {i}"))).collect());
         let mut refs = RefTable::default();
         let (lines, matched, omitted) = render(&many, &mut refs, &options(None, 3));
         assert_eq!((lines.len(), matched, omitted), (3, 10, 7));
@@ -607,15 +447,12 @@ mod tests {
 
     #[test]
     fn diff_reports_added_removed_and_changed_values() {
-        let before = snapshot(json!([
-            {"role":"AXTextField","label":"Name","value":""},
-            {"role":"AXButton","label":"Save"},
-        ]));
-        let after = snapshot(json!([
-            {"role":"AXTextField","label":"Name","value":"Report"},
-            {"role":"AXSheet","label":"Save As"},
-            {"role":"AXButton","label":"Cancel"},
-        ]));
+        let mut name = el("textfield", "Name");
+        name.value = Some("".into());
+        let before = snapshot(vec![name, el("button", "Save")]);
+        let mut named = el("textfield", "Name");
+        named.value = Some("Report".into());
+        let after = snapshot(vec![named, el("sheet", "Save As"), el("button", "Cancel")]);
         let mut refs = RefTable::default();
         render(&before, &mut refs, &options(None, DEFAULT_LIMIT));
         let lines = diff(&before, &after, &mut refs);
@@ -627,8 +464,8 @@ mod tests {
 
     #[test]
     fn many_removals_are_counted_not_listed() {
-        let before = snapshot(Value::Array((0..12).map(|i| json!({"role":"AXLink","label":format!("Result {i}")})).collect()));
-        let after = snapshot(json!([{"role":"AXButton","label":"Reload"}]));
+        let before = snapshot((0..12).map(|i| el("link", &format!("Result {i}"))).collect());
+        let after = snapshot(vec![el("button", "Reload")]);
         let mut refs = RefTable::default();
         render(&before, &mut refs, &options(None, DEFAULT_LIMIT));
         assert_eq!(diff(&before, &after, &mut refs), vec!["+@13 button \"Reload\"", "-12 elements gone"]);
@@ -636,10 +473,11 @@ mod tests {
 
     #[test]
     fn click_points_are_relative_to_the_window() {
-        let snapshot = snapshot(json!([
-            {"role":"AXWindow","label":"Calculator","frame":{"x":100,"y":200,"w":200,"h":400}},
-            {"role":"AXButton","label":"Equals","frame":{"x":240,"y":540,"w":40,"h":40}},
-        ]));
+        let mut window = el("window", "Calculator");
+        window.bounds = Some((100.0, 200.0, 200.0, 400.0));
+        let mut equals = el("button", "Equals");
+        equals.bounds = Some((240.0, 540.0, 40.0, 40.0));
+        let snapshot = snapshot(vec![window, equals]);
         let identity = Identity { role: "button".into(), label: "Equals".into(), ordinal: 0 };
         assert_eq!(snapshot.point_of(&identity), Some([0.8, 0.9]));
     }

@@ -62,5 +62,6 @@ Don't stop at a missing sign-in, prompt or permission.
 - A macOS privacy permission (camera, screen recording…): `kybern_request_permission`.
 - A low-risk choice the user may be away for: `kybern_ask_user` with a default and `deadline_seconds`.
 
-## The user's Mac
+## The user's computer
 Use and open apps with the `kybern_computer_*` tools (start with `kybern_computer_apps`), not shell commands. Kybern asks the user to approve each app.
+If computer use is not set up here, pass `machine` to each `kybern_computer_*` call; the error names the machines where it is.
