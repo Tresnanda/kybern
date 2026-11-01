@@ -8,8 +8,8 @@ retries = 0
 [profile.ci]
 # Quarantine instead of block: a test that fails and then passes on its retry
 # does not fail the job. scripts/report-flaky-tests.mjs lists it in the job
-# summary and files or updates its `flaky` issue, which still has to be fixed.
-# A test that fails both attempts fails CI.
+# summary and, on pushes to main, files or updates its `flaky` issue, which
+# still has to be fixed. A test that fails both attempts fails CI.
 retries = 1
 # Report every failure in one run.
 fail-fast = false

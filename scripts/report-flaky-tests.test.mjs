@@ -123,6 +123,18 @@ test('a test that failed every attempt is a failure, never filed as flaky', () =
   ])
 })
 
+test('an issue filed by hand that names the test is updated instead of duplicated', () => {
+  const client = fakeClient([
+    { number: 188, title: 'Flaky: orchestrator::tests::a_turn_ends', state: 'open', html_url: 'u/188' },
+    { number: 9, title: 'Flaky: orchestrator::tests::a_turn_ends_later', state: 'open', html_url: 'u/9' },
+  ])
+  const results = fileIssues([
+    { suite: 'kybern-daemon', name: 'orchestrator::tests::a_turn_ends', output: '' },
+    { suite: 'kybern-daemon', name: 'orchestrator::tests::a_turn', output: '' },
+  ], client, 'run')
+  assert.deepEqual(results.map(r => [r.action, r.number]), [['updated', 188], ['filed', 100]])
+})
+
 test('a read-only token or API failure is reported per test, never thrown', () => {
   const denied = { ...fakeClient([]), ensureLabel: () => { throw Object.assign(new Error('x'), { stderr: 'HTTP 403: Resource not accessible by integration' }) } }
   assert.deepEqual(fileIssues([{ suite: 'a', name: 'b', output: '' }], denied, 'run'), [{ error: 'could not read the flaky issues (HTTP 403: Resource not accessible by integration)' }])

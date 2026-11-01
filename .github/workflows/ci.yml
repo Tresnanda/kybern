@@ -105,9 +105,9 @@ jobs:
     # child can never hold another test's freshly written fixture open (Linux
     # ETXTBSY), and the test binaries run in parallel. The `ci` profile in
     # .config/nextest.toml retries a failed test once: a test that then passes
-    # is quarantined, not blocking, and scripts/report-flaky-tests.mjs lists it
-    # in the job summary and files or updates its `flaky` issue. A test that
-    # fails both attempts fails the job. The workspace has no doctests, which
+    # is quarantined, not blocking: scripts/report-flaky-tests.mjs lists it in
+    # the job summary and, on pushes to main only, files or updates its `flaky`
+    # issue. A test that fails both attempts fails the job. The workspace has no doctests, which
     # nextest does not run; add `cargo test --workspace --doc` here with the first.
     name: test (${{ matrix.os }})
     needs: changes
@@ -119,7 +119,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
-      # Filing and updating flaky-test issues.
+      # Filing and updating flaky-test issues (pushes to main only).
       issues: write
     env:
       # Panics keep file and line numbers; full debug info only slows compiling and linking.

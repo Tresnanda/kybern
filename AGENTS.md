@@ -296,11 +296,12 @@ needs `cargo test --workspace --doc` added to `ci.yml`. The whole CI run must
 stay under 10 minutes; measure the jobs on a real run when you add slow tests.
 A test that fails at random on CI is quarantined, not rerun until green: the CI
 profile retries a failed test once, and one that then passes keeps the job
-green but is listed under "Flaky tests" in the job summary and gets a `flaky`
-issue titled after it (filed, or commented on and reopened, by
-`scripts/report-flaky-tests.mjs`). That issue still has to be fixed or the test
-removed; make tests wait on events or conditions, not sleeps or clocks. A test
-that fails both attempts fails CI.
+green but is listed under "Flaky tests" in the job summary. On pushes to
+`main`, `scripts/report-flaky-tests.mjs` also files a `flaky` issue titled after
+it, or comments on and reopens the existing one (at most five a run; pull
+requests and branches only get the summary). That issue still has to be fixed
+or the test removed; make tests wait on events or conditions, not sleeps or
+clocks. A test that fails both attempts fails CI.
 Mobile checks and EAS builds are currently manual; run the mobile checks for
 mobile or shared-client changes. Native configuration changes need a new build.
 EAS Update uses preview/production channels and fingerprint runtime compatibility.

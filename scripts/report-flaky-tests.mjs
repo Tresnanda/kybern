@@ -48,6 +48,9 @@ export function parseJUnit(xml) {
   return { tests: Number(attribute(root, 'tests') ?? 0), failures: Number(attribute(root, 'failures') ?? 0), flaky }
 }
 
+// A flaky issue filed by hand ("Flaky: orchestrator::tests::x") names the test as a whole word.
+const namesTest = (title, name) => name && new RegExp(`(^|[\\s\`'"(])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[\\s\`'")])`).test(title)
+
 /** The issue title: the nextest binary id and the test's path, e.g. `Flaky test: kybern-daemon network::tests::x`. */
 export const issueTitle = test => `Flaky test: ${test.suite} ${test.name}`.trim()
 
@@ -159,7 +162,7 @@ export function fileIssues(flaky, client, context, limit = MAX_ISSUES) {
     }
     handled.add(title)
     try {
-      const issue = existing.find(issue => issue.title === title)
+      const issue = existing.find(issue => issue.title === title) ?? existing.find(issue => namesTest(issue.title, test.name))
       if (!issue) {
         const created = client.create(title, issueBody(test, context))
         existing.push(created)
