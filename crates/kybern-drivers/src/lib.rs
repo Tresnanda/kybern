@@ -661,22 +661,39 @@ mod lifecycle_tests {
                 },
             };
             let driver = registry.get(kind).unwrap();
-            let mut startup = Box::pin(driver.spawn(config));
+            let mut startup = Box::pin(driver.spawn(config.clone()));
             let mut session = None;
             let ready = root.path().join("ready");
+            // Linux refuses to run a file that another test's freshly forked child still holds open
+            // for writing (ETXTBSY) until that child execs, so a busy fixture starts again.
+            let mut busy_retries = 0;
             tokio::time::timeout(Duration::from_secs(10), async {
                 while !ready.exists() {
+                    let mut busy = false;
                     tokio::select! {
                         result = &mut startup, if session.is_none() => {
-                            let spawned = result.unwrap_or_else(|error| panic!("{kind} fixture startup failed: {error}"));
-                            // Antigravity starts one process per turn, so its session is
-                            // lazy: a message starts the process this test then drops.
-                            if kind == ProviderKind::Antigravity {
-                                spawned.session.send_message("fixture", &UserMessage::text("hello")).await.unwrap();
+                            let spawned = match result {
+                                Err(DriverError::Io(error)) if error.kind() == std::io::ErrorKind::ExecutableFileBusy && busy_retries < 50 => {
+                                    busy = true;
+                                    None
+                                }
+                                result => Some(result.unwrap_or_else(|error| panic!("{kind} fixture startup failed: {error}"))),
+                            };
+                            if let Some(spawned) = spawned {
+                                // Antigravity starts one process per turn, so its session is
+                                // lazy: a message starts the process this test then drops.
+                                if kind == ProviderKind::Antigravity {
+                                    spawned.session.send_message("fixture", &UserMessage::text("hello")).await.unwrap();
+                                }
+                                session = Some(spawned);
                             }
-                            session = Some(spawned);
                         }
                         _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+                    }
+                    if busy {
+                        busy_retries += 1;
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                        startup = Box::pin(driver.spawn(config.clone()));
                     }
                 }
             })
