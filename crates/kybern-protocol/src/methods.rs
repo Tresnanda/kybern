@@ -1964,6 +1964,10 @@ pub struct CursorSetupStatus {
     /// The exact `@cursor/sdk` version this daemon installs and requires.
     pub sdk_version: String,
     pub installed: bool,
+    /// An earlier Kybern release's SDK, set up on this machine while `sdk_version`
+    /// is not: setup is an update, not a first install.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_version: Option<String>,
     /// The Node.js version the SDK runs on, e.g. `v24.1.0`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_version: Option<String>,

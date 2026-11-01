@@ -692,21 +692,17 @@ impl AccountLogins {
         });
     }
 
-    /// A working Antigravity sign-in turns Kybern's tools on once, unless someone else's
-    /// `kybern` MCP entry is in the way. Never fails the sign-in.
+    /// A working Antigravity sign-in adds Kybern's `kybern` MCP entry right away when
+    /// Kybern's tools are on (the default); someone who turned them off keeps them off.
+    /// Sessions add the entry too, so a failure here only waits for the next one.
+    /// Never fails the sign-in.
     async fn offer_kybern_tools(&self, state: &AppState) {
-        let mut settings = state.settings.get();
-        if settings.antigravity.kybern_tools {
+        let settings = state.settings.get();
+        if !settings.antigravity.kybern_tools {
             return;
         }
-        match crate::antigravity_mcp::turn_on(&settings).await {
-            Ok(()) => {
-                settings.antigravity.kybern_tools = true;
-                if let Err(error) = state.settings.set(settings) {
-                    tracing::warn!(%error, "could not save the Antigravity Kybern tools setting");
-                }
-            }
-            Err(error) => tracing::warn!(%error, "Kybern tools stay off for Antigravity"),
+        if let Err(error) = crate::antigravity_mcp::turn_on(&settings).await {
+            tracing::warn!(%error, "could not add Kybern's Antigravity MCP entry after sign-in");
         }
     }
 

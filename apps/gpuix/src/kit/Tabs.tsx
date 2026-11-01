@@ -81,6 +81,10 @@ export interface TabsProps {
   overflow?: boolean
   /** Tabs narrower than 96 (text-only strips). */
   minWidth?: number
+  /** Side padding of icon-only tabs (the geometry's own by default): a strip of many marks packs them tighter. */
+  iconPad?: number
+  /** The » menu of an overflowing strip (on by default). A strip inside a popover scrolls without it. */
+  overflowMenu?: boolean
   /** A drag in progress: the insertion line before this index. */
   dropIndex?: number | null
   /** Controls after the tabs, inside the strip (a + menu). */
@@ -232,7 +236,7 @@ export const Tabs = memo(function Tabs(props: TabsProps) {
           {dropIndex !== null && dropIndex >= items.length && <DropLine color={tok.accent} />}
         </div>
       </div>
-      {overflowing && <div style={{ display: 'flex', flexShrink: 0, marginRight: trailing ? 4 : 0 }}><OverflowMenu items={items} active={active} onSelect={onSelect} size={size} testId={testId} /></div>}
+      {overflowing && props.overflowMenu !== false && <div style={{ display: 'flex', flexShrink: 0, marginRight: trailing ? 4 : 0 }}><OverflowMenu items={items} active={active} onSelect={onSelect} size={size} testId={testId} /></div>}
       {trailing}
     </div>
   )
@@ -277,6 +281,7 @@ const TabView = memo(function TabView({ item, index, size, active, focused, prop
   const labelColor = item.disabled ? t.textTertiary : active ? (dim ? t.textSecondary : t.text) : hover ? t.text : t.textSecondary
   const iconColor = active && !dim ? t.text : t.textSecondary
   const minWidth = props.minWidth ?? 96
+  const pad = item.iconOnly && props.iconPad !== undefined ? props.iconPad : geometry.pad
   const underlineGap = props.underlineGap ?? (size === 'md' ? 9 : 4)
   const glyphNode = item.iconNode ?? (item.mark ? <ProviderMark kind={item.mark} size={geometry.glyph} /> : item.icon ? <Icon source={item.icon} size={geometry.glyph} color={iconColor} /> : null)
   // A label longer than the tab's room fades out at its trailing edge instead of ending in "…" (the tooltip has the rest).
@@ -316,7 +321,7 @@ const TabView = memo(function TabView({ item, index, size, active, focused, prop
           if (next) props.onSelect(next.key)
         }
       }}
-      style={{ display: 'flex', alignItems: 'center', gap: 6, flexGrow: 1, flexShrink: 1, minWidth: 0, height: geometry.height, paddingLeft: geometry.pad, paddingRight: closable ? 6 : geometry.pad, cursor: 'pointer' }}
+      style={{ display: 'flex', alignItems: 'center', gap: 6, flexGrow: 1, flexShrink: 1, minWidth: 0, height: geometry.height, paddingLeft: pad, paddingRight: closable ? 6 : pad, cursor: 'pointer' }}
     >
       {glyphNode && <div style={{ display: 'flex', width: geometry.glyph, height: geometry.glyph, alignItems: 'center', justifyContent: 'center', flexShrink: 0, pointerEvents: 'none' }}>{glyphNode}</div>}
       {label && <div edgeFade={fade ? LABEL_FADE : undefined} style={{ display: 'flex', alignItems: 'center', flexGrow: 1, flexShrink: 1, minWidth: 0, pointerEvents: 'none', ...(fade ? { overflow: 'hidden' } : {}) }}>{label}</div>}

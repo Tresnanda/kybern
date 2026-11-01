@@ -73,7 +73,7 @@ use tokio::sync::mpsc;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DriverError {
-    #[error("provider binary not found: {0}")]
+    #[error("{0} isn’t installed or isn’t on PATH")]
     BinaryNotFound(String),
     #[error("provider version {found} is older than required {required}")]
     VersionTooOld { found: String, required: String },

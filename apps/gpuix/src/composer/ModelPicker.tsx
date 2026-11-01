@@ -55,6 +55,7 @@ import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { Dim, SwapOnChange } from './motion.tsx'
 import { patch, useComposer } from './store.ts'
 import { isPrimary } from '../platform/keys.ts'
+import { showDialog } from '../dialogs/store.ts'
 
 const SEARCH_RESULT_LIMIT = 150
 const SECTION_STEP = 100
@@ -361,7 +362,20 @@ function ModelPickerPanel({
     setActiveKey(null)
   }
   const selectAccountTab = async (tab: Extract<PickerTab, { type: 'account' }>) => {
-    if (busy || tab.notSetUp || tab.needsSignIn || tab.disabled) return
+    if (busy || tab.disabled) return
+    // An agent that isn't set up opens its setup, and an account that needs sign-in its sign-in sheet.
+    // A login on another machine can't be fixed from here; its tooltip says where.
+    if (tab.notSetUp) {
+      close()
+      void import('../settings/SettingsScreen.tsx').then((m) => m.openSettingsTab('agents'))
+      return
+    }
+    if (tab.needsSignIn) {
+      if (tab.signedOutOn) return
+      close()
+      showDialog({ kind: 'account', provider: tab.kind, instance: tab.instance })
+      return
+    }
     if (tab.kind === provider.kind) {
       setView('all')
       if (tab.instance !== (accountInstance ?? provider.instance) || (accountFollowsDefaults && tab.multi)) {
@@ -532,10 +546,14 @@ function Tabs({
   const [hover, setHover] = useState<string | null>(null)
   const yellow = t.v('--color-accent-yellow')
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 2, paddingLeft: 6, paddingRight: 6, paddingTop: 6 }}>
-      {/* The kit strip (ADE-55 §2.7): Starred, then one tab per account; an account that needs setting up is shown, dimmed. */}
-      <div style={{ display: 'flex', alignItems: 'center', minWidth: 0, height: 32, paddingBottom: 4, flexGrow: 1 }}>
-        <KitTabs testId="model-tabs" minWidth={0} overflow={false} animate={false} underlineGap={4}
+    <div style={{ display: 'flex', alignItems: 'center', gap: 2, paddingLeft: 6, paddingRight: 6, paddingTop: 2 }}>
+      {/* The kit strip (ADE-55 §2.7): Starred, then one tab per account; an account that needs setting up is shown, dimmed.
+          Marks pack at 24px so every agent fits beside a selected multi-account tab's name; beyond that the strip
+          scrolls under the kit's edge fades instead of running under the reload button (a » menu would open inside
+          this popover). The scroller clips, so the tabs sit centred in a 36px band and the underline (4px under the
+          tab, as before) ends on its bottom edge. */}
+      <div style={{ display: 'flex', alignItems: 'center', minWidth: 0, height: 36, flexGrow: 1, flexShrink: 1 }}>
+        <KitTabs testId="model-tabs" minWidth={0} iconPad={5} overflowMenu={false} animate={false} underlineGap={4}
           active={tabs.find((tab) => tab.selected)?.key ?? null}
           items={tabs.map((tab): TabsItem => tab.type === 'starred'
             ? { key: tab.key, label: 'Starred', iconOnly: true, testId: `model-tab-${tab.key}`, iconNode: <Icon source={tab.selected ? G.starFilled : G.star} size={14} color={tab.selected ? yellow : t.textSecondary} /> }
@@ -554,7 +572,6 @@ function Tabs({
             justifyContent: 'center',
             width: 28,
             height: 28,
-            marginBottom: 4,
             borderRadius: ROW_RADIUS,
             flexShrink: 0,
             cursor: 'pointer',

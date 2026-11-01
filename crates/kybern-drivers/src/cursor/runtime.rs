@@ -86,6 +86,11 @@ pub(super) fn command(context: &ProbeContext, mode: &str) -> Result<Command> {
 }
 
 pub(super) async fn probe(context: &ProbeContext) -> Result<(PathBuf, Value)> {
+    if !installed(context)
+        && let Some(previous) = previous_version(context)
+    {
+        return Err(DriverError::Protocol(outdated(&previous)));
+    }
     let binary = node(context)?;
     let mut cmd = command(context, "probe")?;
     let output = tokio::time::timeout(Duration::from_secs(25), crate::process_tree::output(&mut cmd)).await.map_err(|_| {
@@ -169,6 +174,34 @@ fn npm() -> std::result::Result<PathBuf, which::Error> {
 /// npm installs the SDK; it ships with Node.js but can be missing.
 pub fn npm_available() -> bool {
     npm().is_ok()
+}
+
+/// The newest SDK an earlier Kybern release installed beside the pinned one
+/// (`~/.kybern/cache/cursor-sdk/<version>`). Each release pins its own version
+/// and never upgrades on its own, so after an update this is the one the user
+/// set up. `None` with `KYBERN_CURSOR_SDK_DIR`, which names one directory.
+pub fn previous_version(context: &ProbeContext) -> Option<String> {
+    if env(context, "KYBERN_CURSOR_SDK_DIR").is_some() {
+        return None;
+    }
+    let cache = installed_dir(context).ok()?.parent()?.to_path_buf();
+    std::fs::read_dir(cache)
+        .ok()?
+        .flatten()
+        .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+        .filter_map(|entry| {
+            let bytes = std::fs::read(entry.path().join("node_modules/@cursor/sdk/package.json")).ok()?;
+            let version = serde_json::from_slice::<Value>(&bytes).ok()?["version"].as_str()?.to_string();
+            (version != SDK_VERSION).then_some(version)
+        })
+        .max_by_key(|version| version.split('.').map(|part| part.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>())
+}
+
+/// Why Cursor can't run when only an earlier release's SDK is installed.
+pub fn outdated(previous: &str) -> String {
+    format!(
+        "This machine has Cursor’s SDK {previous}, and this Kybern release uses {SDK_VERSION}. Update it in Settings → Agent providers, or run `kybern cursor install`."
+    )
 }
 
 /// Whether the pinned SDK is in place where new sessions load it.
@@ -347,6 +380,45 @@ for line in sys.stdin:
         assert!(!installed(&context));
         std::fs::write(package.join("package.json"), format!(r#"{{"version":"{SDK_VERSION}"}}"#)).unwrap();
         assert!(installed(&context));
+    }
+
+    #[tokio::test]
+    async fn an_earlier_releases_sdk_makes_setup_an_update() {
+        let home = tempfile::tempdir().unwrap();
+        let context = ProbeContext {
+            env: std::collections::BTreeMap::from([("HOME".into(), home.path().display().to_string())]),
+            ..Default::default()
+        };
+        let sdk = |version: &str| {
+            let package = home.path().join(".kybern/cache/cursor-sdk").join(version).join("node_modules/@cursor/sdk");
+            std::fs::create_dir_all(&package).unwrap();
+            std::fs::write(package.join("package.json"), format!(r#"{{"version":"{version}"}}"#)).unwrap();
+        };
+        assert_eq!(previous_version(&context), None);
+        sdk("1.0.9");
+        sdk("1.0.35");
+        // A staging folder from an interrupted install is not a release's SDK.
+        std::fs::create_dir_all(home.path().join(".kybern/cache/cursor-sdk/.cursor-install-x/node_modules/@cursor/sdk")).unwrap();
+        assert_eq!(previous_version(&context).as_deref(), Some("1.0.35"));
+        // Model discovery says what happened instead of "isn't installed", without starting Node.
+        let error = reason_of(probe(&context).await.unwrap_err());
+        assert!(error.contains("SDK 1.0.35") && error.contains(SDK_VERSION) && error.contains("Update it"), "{error}");
+        // An explicit directory is the only SDK Kybern looks at.
+        let explicit = ProbeContext {
+            env: std::collections::BTreeMap::from([
+                ("HOME".into(), home.path().display().to_string()),
+                ("KYBERN_CURSOR_SDK_DIR".into(), home.path().join("elsewhere").display().to_string()),
+            ]),
+            ..Default::default()
+        };
+        assert_eq!(previous_version(&explicit), None);
+    }
+
+    fn reason_of(error: DriverError) -> String {
+        match error {
+            DriverError::Protocol(text) => text,
+            error => error.to_string(),
+        }
     }
 
     async fn status_retrying(context: &ProbeContext) -> Result<Value> {

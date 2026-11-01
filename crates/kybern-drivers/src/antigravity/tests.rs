@@ -288,6 +288,50 @@ fn models_come_from_the_tab_separated_list() {
     assert!(parse_models("Fetching available models...\n").is_empty());
 }
 
+/// `agy models` as 1.4.12 prints it on a signed-in Mac.
+const TIERED_MODELS: &str = "Fetching available models...\ngemini-3.8-flash-high\tGemini 3.8 Flash (High)\ngemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)\ngemini-3.8-flash-low\tGemini 3.8 Flash (Low)\nclaude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)\nclaude-opus-4-6-thinking\tClaude Opus 4.6 (Thinking)\ngpt-oss-120b-medium\tGPT-OSS 120B (Medium)\n";
+
+#[test]
+fn tiers_of_one_model_become_one_row_with_efforts() {
+    let models = parse_models(TIERED_MODELS);
+    let rows: Vec<(&str, &str)> = models.iter().map(|model| (model.id.as_str(), model.display_name.as_str())).collect();
+    assert_eq!(
+        rows,
+        [
+            ("gemini-3.8-flash-high", "Gemini 3.8 Flash"),
+            ("claude-sonnet-4-6", "Claude Sonnet 4.6 (Thinking)"),
+            ("claude-opus-4-6-thinking", "Claude Opus 4.6 (Thinking)"),
+            // A single tier is just a model.
+            ("gpt-oss-120b-medium", "GPT-OSS 120B (Medium)"),
+        ]
+    );
+    assert_eq!(models[0].efforts, ["low", "medium", "high"]);
+    assert_eq!(models[0].default_effort.as_deref(), Some("high"));
+    assert!(models[0].is_default);
+    assert!(models[1..].iter().all(|model| model.efforts.is_empty() && model.default_effort.is_none() && !model.is_default));
+}
+
+#[test]
+fn the_effort_picks_the_tier_slug() {
+    let families = tier_families(&parse_models(TIERED_MODELS));
+    assert_eq!(families, [TierFamily { base: "gemini-3.8-flash".into(), tiers: vec!["low".into(), "medium".into(), "high".into()] }]);
+    let run = |model: Option<&str>, effort: Option<&str>| turn_model(model, effort, &families);
+    let pair = |model: &str, effort: Option<&str>| (Some(model.to_string()), effort.map(str::to_string));
+    // The row's id at low effort runs the low tier, without --effort.
+    assert_eq!(run(Some("gemini-3.8-flash-high"), Some("low")), pair("gemini-3.8-flash-low", None));
+    // A thread that picked a tier before rows were grouped follows the effort too.
+    assert_eq!(run(Some("gemini-3.8-flash-medium"), Some("high")), pair("gemini-3.8-flash-high", None));
+    // No tier for the effort (or no effort): the held tier.
+    assert_eq!(run(Some("gemini-3.8-flash-medium"), Some("max")), pair("gemini-3.8-flash-medium", None));
+    assert_eq!(run(Some("gemini-3.8-flash-low"), None), pair("gemini-3.8-flash-low", None));
+    // Other models keep their effort; a look-alike prefix is not a tier.
+    assert_eq!(run(Some("gpt-oss-120b-medium"), Some("high")), pair("gpt-oss-120b-medium", Some("high")));
+    assert_eq!(run(Some("gemini-3.8-flash-highx"), Some("low")), pair("gemini-3.8-flash-highx", Some("low")));
+    assert_eq!(run(None, Some("xhigh")), (None, Some("xhigh".to_string())));
+    // Without a catalog the slug runs as listed.
+    assert_eq!(turn_model(Some("gemini-3.8-flash-high"), Some("low"), &[]), pair("gemini-3.8-flash-high", Some("low")));
+}
+
 #[test]
 fn one_turn_is_built_exactly_as_the_spec_says() {
     let log = Path::new("/tmp/s/agy.log");

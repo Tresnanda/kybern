@@ -2744,6 +2744,8 @@ export interface CursorSetupStatus {
   /** The exact `@cursor/sdk` version this daemon installs and requires. */
   sdk_version: string;
   installed: boolean;
+  /** An earlier Kybern release's SDK, set up here while `sdk_version` is not: setup is an update. */
+  previous_version?: string | null;
   /** The Node.js version the SDK runs on, e.g. `v24.1.0`. */
   node_version?: string | null;
   /** What to fix on the machine before installing, e.g. a missing Node.js. */

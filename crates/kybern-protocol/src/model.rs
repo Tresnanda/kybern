@@ -2948,12 +2948,19 @@ pub enum ComputerDriver {
 
 /// Antigravity has no per-session MCP configuration, so Kybern keeps one entry,
 /// `kybern`, in `agy`'s own MCP servers (added and removed with `agy mcp`).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct AntigravitySettings {
-    /// Let Antigravity sessions use Kybern's tools through that entry. Turned on
-    /// by a successful Antigravity sign-in.
+    /// Let Antigravity sessions use Kybern's tools through that entry. On by
+    /// default: a session adds the entry when it starts, and turning this off
+    /// removes it.
     pub kybern_tools: bool,
+}
+
+impl Default for AntigravitySettings {
+    fn default() -> Self {
+        Self { kybern_tools: true }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
