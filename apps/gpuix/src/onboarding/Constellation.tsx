@@ -19,18 +19,20 @@ import { Later } from './sceneKit.tsx'
 import { STATE_WORD, type AgentState } from './model.ts'
 
 /** Clockwise from the top left: how the tiles arrive. */
-const ARRIVAL: readonly ProviderKind[] = ['claude-code', 'cursor', 'omp', 'pi', 'opencode', 'codex']
+const ARRIVAL: readonly ProviderKind[] = ['claude-code', 'cursor', 'omp', 'pi', 'opencode', 'codex', 'antigravity']
 const SQUARE = 0.72
 
 export interface Orbit { width: number; height: number; rx: number; ry: number; cx: number; cy: number }
 export function orbitFor(width: number, height: number): Orbit {
   return { width, height, rx: Math.min(width / 2 - 76, 300), ry: Math.min(height * 0.34, 118), cx: width / 2, cy: height * 0.44 }
 }
-/** The six spots, relative to the hub (SPEC §3a). */
+/** The seven spots: three on each wing and Antigravity at the bottom of the outer ring, relative to the hub (SPEC §3a). */
 export function spotFor(kind: ProviderKind, o: Orbit): { x: number; y: number } {
   const { rx, ry } = o
+  // The bottom of the outer ring, held clear of the scene's edge so its label fits.
+  const below = Math.min(ry / Math.sqrt(1 - SQUARE * SQUARE), o.height - o.cy - 64)
   const at: Record<ProviderKind, [number, number]> = {
-    'claude-code': [-SQUARE * rx, -ry], codex: [-rx, 0], opencode: [-SQUARE * rx, ry], cursor: [SQUARE * rx, -ry], omp: [rx, 0], pi: [SQUARE * rx, ry],
+    'claude-code': [-SQUARE * rx, -ry], codex: [-rx, 0], opencode: [-SQUARE * rx, ry], cursor: [SQUARE * rx, -ry], omp: [rx, 0], pi: [SQUARE * rx, ry], antigravity: [0, below],
   }
   return { x: o.cx + at[kind][0], y: o.cy + at[kind][1] }
 }

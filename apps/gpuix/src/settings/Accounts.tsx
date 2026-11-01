@@ -38,6 +38,7 @@ import { IconButton } from '../kit/IconButton.tsx'
 import { S } from './glyphs.ts'
 import { openSettingsTab } from './SettingsScreen.tsx'
 import { useSettings } from './store.ts'
+import { requestAntigravitySignIn } from '../antigravity/notice.ts'
 import { LoginBrokerSection } from './LoginBroker.tsx'
 
 /** Skeleton rows fade in after 150 ms (the fade's own `delay`, no timer), so a fast answer never flashes them. */
@@ -51,10 +52,11 @@ const CLI_SIGN_IN_COMMAND: Record<ProviderKind, string> = {
   omp: 'omp login',
   opencode: 'opencode auth login',
   pi: 'pi',
+  antigravity: 'agy',
 }
 
 /** Agents whose identity the daemon can read; others keep an unknown status without a loading placeholder. */
-const IDENTITY_KINDS: ProviderKind[] = ['claude-code', 'codex', 'cursor', 'omp']
+const IDENTITY_KINDS: ProviderKind[] = ['claude-code', 'codex', 'cursor', 'omp', 'antigravity']
 
 const agentLabel = (kind: ProviderKind, providers: ProviderStatus[]) => providers.find((p) => p.kind === kind)?.display_name ?? PROVIDER_NAMES[kind] ?? kind
 
@@ -119,7 +121,7 @@ function AgentSection({ provider, accounts, readOnly, onRemove, onAssign }: { pr
     {!readOnly && accounts.length > 1 && <div style={{ display: 'flex' }}><Note>Accounts share skills and installed plugin files. Sign-ins, sessions and connections stay separate. Conflicting local files are kept in backups.</Note></div>}
     <div style={{ display: 'flex', flexDirection: 'column', ...settingsCardStyle(t, g), overflow: 'hidden' }}><GlassEdge radius={12} color={g.highlight} />
       {accounts.map((account, index) => <AccountRow key={account.provider.instance} first={index === 0} account={account} readOnly={readOnly} onRemove={onRemove} onAssign={onAssign} />)}
-      {!readOnly && <div style={{ display: 'flex', alignItems: 'center', minHeight: 44, paddingLeft: 12, paddingRight: 12, borderTopWidth: accounts.length ? 1 : 0, borderColor: t.v('--app-settings-card-border') }}><Button testId={`account-add-${provider.kind}`} variant="ghost" icon={N.plus} label={`Add ${provider.display_name} account`} onClick={() => openAddAccount({ provider: provider.kind })}>{`Add ${provider.display_name} account`}</Button></div>}
+      {!readOnly && provider.kind !== 'antigravity' && <div style={{ display: 'flex', alignItems: 'center', minHeight: 44, paddingLeft: 12, paddingRight: 12, borderTopWidth: accounts.length ? 1 : 0, borderColor: t.v('--app-settings-card-border') }}><Button testId={`account-add-${provider.kind}`} variant="ghost" icon={N.plus} label={`Add ${provider.display_name} account`} onClick={() => openAddAccount({ provider: provider.kind })}>{`Add ${provider.display_name} account`}</Button></div>}
     </div>
   </div></PageBlock>
 }
@@ -219,7 +221,7 @@ function StatusCell({ account, cli }: { account: AccountSummary; cli: boolean })
   const legacy = useAccountsLegacy()
   const wrap = (children: ReactNode) => <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, minWidth: 104, flexShrink: 0 }}>{children}</div>
   const muted = (text: string) => <Label color={t.textSecondary} size={13} lineHeight={19.5}>{text}</Label>
-  const signIn = cli ? <HowToSignIn kind={kind} /> : <Button testId={`account-signin-${kind}-${instance}`} onClick={() => openAddAccount({ provider: kind, instance })}>Sign in</Button>
+  const signIn = kind === 'antigravity' ? <Button testId="account-signin-antigravity" onClick={() => requestAntigravitySignIn(() => openAddAccount({ provider: kind }))}>Sign in</Button> : cli ? <HowToSignIn kind={kind} /> : <Button testId={`account-signin-${kind}-${instance}`} onClick={() => openAddAccount({ provider: kind, instance })}>Sign in</Button>
   switch (account.status) {
     case 'signed_in': return wrap(muted('Signed in'))
     case 'needs_sign_in': return wrap(<><div style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Icon source={S.triangleAlert} size={12} color={t.warning} /><Label color={t.warning} size={13} lineHeight={19.5}>Needs sign-in</Label></div>{signIn}</>)

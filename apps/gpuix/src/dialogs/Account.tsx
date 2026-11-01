@@ -67,6 +67,7 @@ const OMP_UPSTREAMS = [
 const TERMINAL_COPY: Partial<Record<ProviderKind, string>> = {
   opencode: 'OpenCode asks for an API key. Paste it into the prompt below.',
   pi: 'Pi asks which provider to sign in to. Follow its prompts below.',
+  antigravity: 'Antigravity opens your browser to finish signing in with Google. Kybern checks the sign-in when it finishes.',
 }
 
 export function Account({ close, provider, instance }: { close: () => void; provider?: ProviderKind; instance?: string }) {
@@ -85,6 +86,8 @@ export function Account({ close, provider, instance }: { close: () => void; prov
   // Signing in again: opened for an account, or "Sign in again to Work" from the duplicate step.
   const reauthInstance = login?.instance ?? instance
   const reauth = !!reauthInstance
+  // Antigravity has one account per machine: no pick step, no name or colour, and nothing to add.
+  const single = (kind ?? provider) === 'antigravity'
   const accounts = useAccounts(kind)
   const { settings } = useSettings()
   const environment = activeEnvironment()
@@ -114,7 +117,7 @@ export function Account({ close, provider, instance }: { close: () => void; prov
   const forcedDefault = namedCount === 0 && !providerSettings?.default_account
   const defaultOn = forcedDefault || makeDefault
 
-  const step: SheetStep | null = failure ? 'error' : api.legacyTerminal ? 'terminal' : instance && !login ? null : stepFor(login)
+  const step: SheetStep | null = failure ? 'error' : api.legacyTerminal ? 'terminal' : (instance || single) && !login ? null : stepFor(login)
   const verifying = login?.phase === 'verifying'
   const modeFor = (k: ProviderKind): AccountLoginMode => initialLoginMode(k, remote)
 
@@ -128,12 +131,12 @@ export function Account({ close, provider, instance }: { close: () => void; prov
   // Signing in again starts straight away, with no pick step.
   const started = useRef(false)
   useEffect(() => {
-    if (!reauth || !kind || started.current) return
+    if (!(reauth || single) || !kind || started.current) return
     started.current = true
     void begin()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-  useEffect(() => { if (instance && provider && !kind) setKind(provider) }, [instance, provider, kind])
+  useEffect(() => { if ((instance || single) && provider && !kind) setKind(provider) }, [instance, provider, kind, single])
 
   const finish = async (): Promise<boolean> => {
     const client = getClient()
@@ -164,7 +167,11 @@ export function Account({ close, provider, instance }: { close: () => void; prov
     dismissed.current = true
     const current = stateRef.current
     const client = getClient()
-    if (client && shouldFinishOnClose(current.login) && current.login && isNameValid(current.shownName)) {
+    if (single) {
+      // The machine's one Antigravity sign-in is already saved by `agy`; there is nothing to name or finish.
+      if (current.login?.phase === 'signed_in') void refreshAccounts()
+      else void apiRef.current.cancel()
+    } else if (client && shouldFinishOnClose(current.login) && current.login && isNameValid(current.shownName)) {
       const label = current.shownName.trim()
       void client.call('providers.accounts.login.finish', { id: current.login.id, name: label, color: current.shownColor, make_default: current.defaultOn }).then(
         async (result) => { await refreshAccounts(); flashAccount(result.kind, result.instance); toast.success(`${label} added`) },
@@ -194,7 +201,7 @@ export function Account({ close, provider, instance }: { close: () => void; prov
   let footer: ReactNode
   if (step === 'pick' || (!step && !reauth)) {
     const ready = !!kind && providers.some((p) => p.kind === kind && p.available)
-    body = <PickStep providers={providers} kind={kind} onKind={(next) => {
+    body = <PickStep providers={providers.filter((p) => p.kind !== 'antigravity')} kind={kind} onKind={(next) => {
       const status = providers.find((p) => p.kind === next)
       if (status && !status.available) { setNav({ settingsOpen: true }); close(); void import('../settings/SettingsScreen.tsx').then((m) => m.openSettingsTab('agents')); return }
       setKind(next)
@@ -262,7 +269,7 @@ export function Account({ close, provider, instance }: { close: () => void; prov
         {meta && <Desc center>{meta}</Desc>}
         {emailChanged && <Label color={t.textSecondary} size={13} lineHeight={19.5} style={{ textAlign: 'center' }}>{`${targetName} was ${login.previous_email}. It now uses ${email}.`}</Label>}
       </div>
-      {!reauth && <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {!reauth && !single && <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <Label color={t.text} size={14} lineHeight={21} weight={500}>Name</Label>
           <TextField testId="account-name" label="Name" size="lg" invalid={!isNameValid(shownName)} value={shownName} onChange={(value) => setName(value)} width="100%" onSubmit={() => { if (isNameValid(shownName)) void finish().then((ok) => { if (ok) { dismissed.current = true; close() } }) }} />
@@ -280,7 +287,7 @@ export function Account({ close, provider, instance }: { close: () => void; prov
       </div>}
       {finishError && <Label color={t.v('--destructive')} size={13} lineHeight={19.5}>{finishError}</Label>}
     </Body>
-    footer = reauth
+    footer = reauth || single
       ? <Button size="lg" testId="account-done" variant="primary" onClick={() => { void refreshAccounts(); dismissed.current = true; close() }}>Done</Button>
       : <Button size="lg" testId="account-finish" variant="primary" disabled={!isNameValid(shownName) || finishing} onClick={() => void finish().then((ok) => { if (ok) { dismissed.current = true; close() } })}>Add account</Button>
   } else if (step === 'duplicate' && login && kind) {
@@ -304,7 +311,7 @@ export function Account({ close, provider, instance }: { close: () => void; prov
     </Body>
     footer = <><Button size="lg" testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button>{login?.mode !== 'terminal' && kind && !legacy && <Button size="lg" testId="account-show-terminal" onClick={showTerminal}>Show terminal</Button>}<Button size="lg" testId="account-retry" variant="primary" onClick={() => void tryAgain()}>Try again</Button></>
   } else {
-    body = <Body><Title>Add an account</Title><div style={{ height: 64, marginTop: 12, borderRadius: 6, backgroundColor: t.buttonSecondary }} /></Body>
+    body = <Body><Title>{single ? 'Sign in to Antigravity' : 'Add an account'}</Title><div style={{ height: 64, marginTop: 12, borderRadius: 6, backgroundColor: t.buttonSecondary }} /></Body>
     footer = <Button size="lg" testId="account-cancel" variant="ghost" onClick={dismiss}>Cancel</Button>
   }
   return <Dialog onClose={dismiss} width={448} testId="add-account">
