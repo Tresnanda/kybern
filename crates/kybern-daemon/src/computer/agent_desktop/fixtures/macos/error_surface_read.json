@@ -1,0 +1,1 @@
+{"command":"list-windows","error":{"code":"PERM_DENIED","details":{"attribute":"AXFrontmost","ax_error":-25211,"kind":"surface_read"},"disposition":{"delivery":"not_delivered","retry":"safe"},"message":"Accessibility surface read failed for AXFrontmost","suggestion":"Retry after the application finishes updating its accessibility surfaces"},"ok":false,"version":"2.5"}

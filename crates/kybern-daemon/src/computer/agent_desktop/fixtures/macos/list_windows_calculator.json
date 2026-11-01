@@ -1,0 +1,1 @@
+{"command": "list-windows", "data": [{"accessible": true, "app_name": "Calculator", "bounds": {"height": 408.0, "width": 230.0, "x": 269.0, "y": 416.0}, "id": "w-37219", "is_focused": false, "pid": 7737, "process_instance": "macos-proc-v1:1793522161:54542", "title": "Calculator", "visible": true}], "ok": true, "version": "2.5"}

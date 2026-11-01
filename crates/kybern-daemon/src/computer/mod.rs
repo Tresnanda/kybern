@@ -11,6 +11,7 @@
 //! agent-desktop on macOS, Windows and Linux (design:
 //! `docs/design/ade-83-computer-backends.md`).
 
+mod agent_desktop;
 mod backend;
 mod cua;
 mod digest;
