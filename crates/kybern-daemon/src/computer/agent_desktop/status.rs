@@ -78,17 +78,18 @@ fn on_path(program: &str) -> bool {
 /// The app System Settings lists for Accessibility and Screen Recording when
 /// `agent-desktop` is started from `chain[0]` (an executable path), where
 /// `chain` runs from the daemon up through its parents. macOS attributes the
-/// grant to the responsible process: the nearest ancestor that is a GUI app
-/// bundle; a daemon with no app above it (parent `launchd`) is its own.
-pub(super) fn holder_from_chain(chain: &[String], daemon: &str) -> String {
-    for path in chain {
-        if let Some(end) = path.find(".app/").or_else(|| path.strip_suffix(".app").map(str::len)) {
-            let bundle = &path[..end + 4];
-            let name = Path::new(bundle).file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_else(|| bundle.to_owned());
-            return format!("{name} ({bundle})");
-        }
-    }
-    format!("kybernd ({daemon})")
+/// grant to the responsible process: the app that started the daemon. A
+/// daemon inside an app bundle, or with an app among its parents, names it.
+/// A daemon outside any bundle that outlived its parent (now `launchd`'s
+/// child) keeps the app that started it, which `ps` no longer shows, so the
+/// holder is unknown (`None`) rather than guessed.
+pub(super) fn holder_from_chain(chain: &[String]) -> Option<String> {
+    chain.iter().find_map(|path| {
+        let end = path.find(".app/").or_else(|| path.strip_suffix(".app").map(str::len))?;
+        let bundle = &path[..end + 4];
+        let name = Path::new(bundle).file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_else(|| bundle.to_owned());
+        Some(format!("{name} ({bundle})"))
+    })
 }
 
 async fn process_ancestry(start: u32) -> Vec<String> {
@@ -117,9 +118,13 @@ async fn process_ancestry(start: u32) -> Vec<String> {
     chain
 }
 
-async fn mac_permission_holder() -> String {
-    let daemon = std::env::current_exe().map(|path| path.display().to_string()).unwrap_or_else(|_| "kybernd".into());
-    holder_from_chain(&process_ancestry(std::process::id()).await, &daemon)
+async fn mac_permission_holder() -> Option<String> {
+    let mut chain = process_ancestry(std::process::id()).await;
+    // `ps` prints a short name for some processes; the daemon's own path counts too.
+    if let Ok(path) = std::env::current_exe() {
+        chain.insert(0, path.display().to_string());
+    }
+    holder_from_chain(&chain)
 }
 
 async fn glibc_output() -> Option<String> {
@@ -262,10 +267,15 @@ pub(super) async fn status(backend: &AgentDesktopBackend) -> BackendStatus {
             checks.push(check(
                 "permission_holder",
                 true,
-                format!("macOS lists {holder} for these permissions. If it also lists the agent-desktop binary, turn that on too."),
+                match &holder {
+                    Some(holder) => {
+                        format!("macOS lists {holder} for these permissions. If it also lists the agent-desktop binary, turn that on too.")
+                    }
+                    None => "macOS lists the app that started Kybern's daemon (Kybern GPUIX, or the terminal you started it from). If it also lists the agent-desktop binary, turn that on too.".to_owned(),
+                },
                 None,
             ));
-            status.permission_holder = Some(holder);
+            status.permission_holder = holder;
         }
         Os::Windows => {
             let ok = windows_session_ok(std::env::var("USERNAME").ok().as_deref(), std::env::var("SESSIONNAME").ok().as_deref());
@@ -421,22 +431,23 @@ mod tests {
     fn the_mac_permission_holder_is_the_nearest_app_above_the_daemon() {
         let chain = |parts: &[&str]| parts.iter().map(|part| part.to_string()).collect::<Vec<_>>();
         assert_eq!(
-            holder_from_chain(
-                &chain(&["/Applications/Kybern.app/Contents/Resources/kybernd", "/Applications/Kybern.app/Contents/MacOS/kybern"]),
-                "/x/kybernd"
-            ),
-            "Kybern (/Applications/Kybern.app)"
+            holder_from_chain(&chain(&[
+                "/Applications/Kybern.app/Contents/Resources/kybernd",
+                "/Applications/Kybern.app/Contents/MacOS/kybern"
+            ])),
+            Some("Kybern (/Applications/Kybern.app)".to_owned())
         );
         assert_eq!(
-            holder_from_chain(
-                &chain(&["/usr/local/bin/kybernd", "/bin/zsh", "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"]),
-                "/usr/local/bin/kybernd"
-            ),
-            "Terminal (/System/Applications/Utilities/Terminal.app)"
+            holder_from_chain(&chain(&[
+                "/usr/local/bin/kybernd",
+                "/bin/zsh",
+                "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+            ])),
+            Some("Terminal (/System/Applications/Utilities/Terminal.app)".to_owned())
         );
-        // Started by launchd with no app above: the daemon holds its own grant.
-        assert_eq!(holder_from_chain(&chain(&["/usr/local/bin/kybernd"]), "/usr/local/bin/kybernd"), "kybernd (/usr/local/bin/kybernd)");
-        assert_eq!(holder_from_chain(&[], "/opt/kybernd"), "kybernd (/opt/kybernd)");
+        // A daemon that outlived the app that started it: unknown, not guessed.
+        assert_eq!(holder_from_chain(&chain(&["/usr/local/bin/kybernd"])), None);
+        assert_eq!(holder_from_chain(&[]), None);
     }
 
     #[test]

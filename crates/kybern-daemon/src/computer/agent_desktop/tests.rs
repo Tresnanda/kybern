@@ -429,7 +429,8 @@ async fn status_reads_permissions_in_one_call() {
     let status = mac.backend.status().await;
     assert!(!status.ready);
     assert_eq!(status.accessibility, kybern_protocol::methods::ComputerPermission::Missing);
-    assert!(status.permission_holder.is_some());
+    // The holder is named only when an app bundle is among the daemon's parents.
+    assert!(status.checks.iter().any(|check| check.name == "permission_holder" && check.ok));
     assert!(status.checks.iter().any(|check| check.name == "accessibility" && !check.ok));
 }
 
