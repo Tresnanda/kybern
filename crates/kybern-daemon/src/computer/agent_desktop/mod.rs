@@ -103,7 +103,7 @@ impl AgentDesktopBackend {
     }
 
     /// For tests: a given binary, OS and display, whatever the environment says.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn with(data_dir: &Path, binary: Option<std::path::PathBuf>, os: Os, display: Display) -> Self {
         Self::build(data_dir, binary, os, display)
     }

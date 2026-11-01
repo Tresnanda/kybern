@@ -255,7 +255,7 @@ mod registry {
         let mut size = 0u32;
         // SAFETY: a null data pointer asks only for the size.
         let sized = unsafe { RegQueryValueExW(key, std::ptr::null(), std::ptr::null(), &mut kind, std::ptr::null_mut(), &mut size) };
-        let value = if sized == ERROR_SUCCESS && (kind == REG_SZ || kind == REG_EXPAND_SZ) && size >= 2 && size < 32_768 {
+        let value = if sized == ERROR_SUCCESS && (kind == REG_SZ || kind == REG_EXPAND_SZ) && (2..32_768).contains(&size) {
             let mut buffer = vec![0u16; (size as usize).div_ceil(2) + 1];
             let mut bytes = size;
             // SAFETY: `buffer` holds at least `size` bytes.
