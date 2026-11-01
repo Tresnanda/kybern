@@ -6,6 +6,13 @@ import { useTheme } from '../ui.tsx'
 import { row } from '../usage/controls.tsx'
 import { setPullsTab, usePullsTab, type PullsTab } from './actions/store.ts'
 
+/** List-column widths below which a header picker shows a folder glyph instead of its name: the tabs, the picker at a
+ *  readable width and the header's icon buttons don't fit together (one button on Pull requests, two on Actions). */
+export const HEADER_COMPACT_PULLS = 336
+export const HEADER_COMPACT_ACTIONS = 352
+/** The compact picker is square like the icon buttons beside it. */
+export const COMPACT_CHIP = { paddingLeft: 6, paddingRight: 6, flexShrink: 0 }
+
 const ITEMS = [{ key: 'pulls', label: 'Pull requests', testId: 'pulls-tab-pulls' }, { key: 'actions', label: 'Actions', testId: 'pulls-tab-actions' }]
 
 export function PullsHeader({ children }: { children?: ReactNode }) {
@@ -16,7 +23,7 @@ export function PullsHeader({ children }: { children?: ReactNode }) {
     <div style={{ ...row, height: 38, flexShrink: 0 }}>
       <Tabs testId="pulls-tab" minWidth={0} overflow={false} animate={false} underlineGap={9} active={tab} onSelect={key => setPullsTab(key as PullsTab)} items={ITEMS} />
     </div>
-    <div style={{ flexGrow: 1, minWidth: 12 }} />
-    {children && <div style={{ ...row, gap: 4, flexShrink: 1, minWidth: 0 }}>{children}</div>}
+    <div style={{ flexGrow: 1, minWidth: 6 }} />
+    {children && <div style={{ ...row, flexShrink: 1, minWidth: 0 }}>{children}</div>}
   </div>
 }

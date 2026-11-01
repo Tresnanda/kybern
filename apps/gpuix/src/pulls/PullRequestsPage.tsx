@@ -17,7 +17,7 @@ import { addWindowKeyHandler } from '../nav/keys.ts'
 import { useNav } from '../nav/store.ts'
 import { Label, useTheme } from '../ui.tsx'
 import { column, row } from '../usage/controls.tsx'
-import { PullsHeader } from './PullsTabs.tsx'
+import { HEADER_COMPACT_PULLS, PullsHeader } from './PullsTabs.tsx'
 import { usePullsTab } from './actions/store.ts'
 import { ActionsPage } from './actions/ActionsPage.tsx'
 import { Button } from '../kit/Button.tsx'
@@ -67,8 +67,8 @@ function PullRequestsList() {
   const [selection, setSelection] = useState(lastSelection)
   const search = useRef<PublicInstance | null>(null)
   const [focus, setFocus] = useState<string | null>(null)
-  // `PullRequests.tsx`: the list column resizes 288-512 (352 by default), saved, arrows 16px (shift 64px), double-click resets.
-  const list = useResize({ initial: 352, min: 288, max: 512, side: 'left', storageKey: 'kybern.pulls.listWidth' })
+  // `PullRequests.tsx`: the list column resizes 304-512 (352 by default; below 304 the Actions header's controls no longer fit), saved, arrows 16px (shift 64px), double-click resets.
+  const list = useResize({ initial: 352, min: 304, max: 512, side: 'left', storageKey: 'kybern.pulls.listWidth' })
   const [windowWidth, setWindowWidth] = useState(() => renderer?.getWindowSize?.().width ?? 1280)
   // Read geometry on user input, with no idle resize polling.
   const measure = () => setWindowWidth(renderer?.getWindowSize?.().width ?? 1280)
@@ -146,7 +146,7 @@ function PullRequestsList() {
   const failure = data?.rows.length ? undefined : data?.errors.find(e => ['gh-missing', 'gh-auth'].includes(classifyPrError(e)))
   return <div {...PR_SCROLL_LAYOUT} testId="page-pulls" onMouseMove={measure} style={{ display: 'flex', flexGrow: 1, minHeight: 0, minWidth: 0 }}>
     {(wide || !selection) && <div style={{ ...column, width: wide ? list.width : '100%', flexShrink: 0, position: 'relative', borderRightWidth: wide ? 1 : 0, borderColor: t.border }}>
-      <PullsHeader><ProjectFilter projects={projects.filter(hasPullRequests)} scope={scope} remembered={remembered} counts={counts} onChange={changeScope} /><IconButton testId="pr-refresh" icon={N.refresh} label="Refresh" disabled={pending} onClick={() => refresh(n => n + 1)}><SwapOnChange kind="icon" active={pending ? 'busy' : 'idle'} style={{ width: 16, height: 16 }}>{pending ? <SpinIcon testId="pr-refresh-spinner" source={N.refresh} size={16} color={t.iconSecondary}/> : <Icon source={N.refresh} size={16} color={t.iconSecondary}/>}</SwapOnChange></IconButton></PullsHeader>
+      <PullsHeader><ProjectFilter projects={projects.filter(hasPullRequests)} scope={scope} remembered={remembered} counts={counts} onChange={changeScope} compact={wide && list.width < HEADER_COMPACT_PULLS} /><IconButton testId="pr-refresh" icon={N.refresh} label="Refresh" disabled={pending} onClick={() => refresh(n => n + 1)}><SwapOnChange kind="icon" active={pending ? 'busy' : 'idle'} style={{ width: 16, height: 16 }}>{pending ? <SpinIcon testId="pr-refresh-spinner" source={N.refresh} size={16} color={t.iconSecondary}/> : <Icon source={N.refresh} size={16} color={t.iconSecondary}/>}</SwapOnChange></IconButton></PullsHeader>
       <div style={{ ...column, gap: 8, paddingLeft: 12, paddingRight: 12, paddingTop: 2, paddingBottom: 10 }}>
         {scopeProject && isGroup(scopeProject) && <RepoChips project={scopeProject} scope={scope} onChange={changeScope} />}
         <div style={{ ...row, gap: 6 }}>
