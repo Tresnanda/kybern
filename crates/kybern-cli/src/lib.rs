@@ -4,6 +4,7 @@ mod coordinator;
 mod credentials;
 mod fork;
 mod machines;
+mod mcp_bridge;
 mod outbox;
 mod plugin_sync;
 mod render;
@@ -151,6 +152,9 @@ enum Cmd {
         /// The prompt, as the asking program passes it.
         prompt: Vec<String>,
     },
+    /// The stdio MCP server Antigravity starts to reach Kybern's tools. Inert outside a Kybern session.
+    #[command(hide = true)]
+    McpBridge,
     /// See or press the request cards agents summon: sign-ins, permissions, questions with a deadline.
     Requests {
         #[command(subcommand)]
@@ -438,7 +442,7 @@ enum Cmd {
         #[command(subcommand)]
         cmd: Option<SettingsCmd>,
     },
-    /// Set up and check computer use (CuaDriver).
+    /// Set up and check computer use (CuaDriver or agent-desktop).
     Computer {
         #[command(subcommand)]
         cmd: Option<ComputerCmd>,
@@ -1277,15 +1281,35 @@ enum PreviewCmd {
     },
 }
 
+/// The driver a machine's computer use runs on, in words for the person.
+fn computer_driver_name(status: &ComputerStatus) -> &'static str {
+    match status.driver {
+        Some(ComputerDriver::CuaDriver) => "CuaDriver",
+        Some(ComputerDriver::AgentDesktop) | None => "agent-desktop",
+    }
+}
+
+fn computer_grant_hint(status: &ComputerStatus) -> String {
+    match (status.driver, status.platform.as_deref()) {
+        (Some(ComputerDriver::CuaDriver), _) => "Follow CuaDriver's prompts to allow Accessibility and Screen Recording.".into(),
+        (_, Some("macos")) => {
+            "Follow the prompts to allow Accessibility and Screen Recording for Kybern, then run `kybern computer doctor`.".into()
+        }
+        _ => {
+            format!("{} needs no permission prompts here; `kybern computer doctor` lists what else to check.", computer_driver_name(status))
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum ComputerCmd {
     /// Print computer-use status as JSON.
     Status,
     /// Check each requirement and say how to fix what is missing.
     Doctor,
-    /// Install or update CuaDriver into /Applications.
+    /// Install or update the driver this machine uses (CuaDriver or agent-desktop).
     Install,
-    /// Start CuaDriver's Accessibility and Screen Recording prompts.
+    /// Start the Accessibility and Screen Recording prompts (macOS).
     Grant,
     /// Save what a thread's agent last saw while using an app.
     Frame {
@@ -1296,7 +1320,7 @@ enum ComputerCmd {
     },
     /// List what agents learned about apps, or show, replace or clear one app's notes.
     Notes {
-        /// App name or bundle id.
+        /// App name or app id (a bundle id, exe name or desktop-entry id).
         app: Option<String>,
         /// Replace the notes with this UTF-8 file (`-` reads stdin).
         #[arg(long, conflicts_with = "clear", requires = "app")]
@@ -1526,6 +1550,10 @@ pub async fn run() -> Result<()> {
     if let Cmd::Askpass { prompt } = &cli.cmd {
         return requests::askpass(prompt).await;
     }
+    // Speaks MCP on stdio to `agy` and to its own session's gateway.
+    if matches!(cli.cmd, Cmd::McpBridge) {
+        return mcp_bridge::run().await;
+    }
     // Local too: the GPUIX client calls this to keep device tokens in the platform store.
     if let Cmd::Credentials { cmd } = &cli.cmd {
         let code = credentials::run(cmd);
@@ -1545,6 +1573,7 @@ pub async fn run() -> Result<()> {
     match cli.cmd {
         Cmd::Cursor { .. } => unreachable!("local Cursor setup handled before connecting"),
         Cmd::Askpass { .. } => unreachable!("askpass handled before connecting"),
+        Cmd::McpBridge => unreachable!("mcp-bridge handled before connecting"),
         Cmd::Credentials { .. } => unreachable!("credentials handled before connecting"),
         Cmd::Requests { cmd } => requests::requests(&client, cmd).await?,
         Cmd::Coordinator { cmd } => coordinator::coordinator(&client, cmd).await?,
@@ -2386,11 +2415,13 @@ pub async fn run() -> Result<()> {
                     return Ok(());
                 }
                 ComputerCmd::Install => {
-                    eprintln!("Installing CuaDriver; this can take a few minutes…");
+                    let name = computer_driver_name(&client.call::<ComputerStatusGet>(Empty {}).await?);
+                    eprintln!("Installing {name}; this can take a few minutes…");
                     client.call::<ComputerSetup>(ComputerSetupParams { action: ComputerSetupAction::Install }).await?
                 }
                 ComputerCmd::Grant => {
-                    eprintln!("Follow CuaDriver's prompts to allow Accessibility and Screen Recording.");
+                    let before = client.call::<ComputerStatusGet>(Empty {}).await?;
+                    eprintln!("{}", computer_grant_hint(&before));
                     client.call::<ComputerSetup>(ComputerSetupParams { action: ComputerSetupAction::GrantPermissions }).await?
                 }
             };
@@ -2400,12 +2431,15 @@ pub async fn run() -> Result<()> {
                     println!("  → {fix}");
                 }
             }
+            if let Some(session) = status.session.as_deref() {
+                println!("Session: {session}");
+            }
             println!(
                 "{}",
                 if status.ready {
-                    "Computer use is ready for new Claude, OpenCode, Cursor, and Pi conversations."
+                    format!("Computer use ({}) is ready for new conversations.", computer_driver_name(&status))
                 } else {
-                    "Computer use is not ready yet."
+                    format!("Computer use ({}) is not ready yet.", computer_driver_name(&status))
                 }
             );
         }

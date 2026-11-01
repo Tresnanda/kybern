@@ -11,6 +11,7 @@ import { PATCHED_NATIVE } from '../native/local-build.ts'
 import { frostBackdrop, frostFill, useGlass } from '../platform/glass.ts'
 import { Label, ProviderMark, REDUCED_MOTION, useTheme } from '../ui.tsx'
 import type { ProviderKind } from '../../../../packages/kybern-client/src/types.ts'
+import { requestAntigravitySignIn } from '../antigravity/notice.ts'
 import { agents, assumeReady, cursorSetup, openPopover, openSheet, recheck, setDefaultAgent, signInWithBrowser, type Agent } from './agentsStore.ts'
 import { POPOVER_DEFAULT } from './model.ts'
 import { bez } from './motion.tsx'
@@ -43,6 +44,11 @@ function Actions({ agent, isDefault }: { agent: Agent; isDefault: boolean }) {
   const row = (children: React.ReactNode) => <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignSelf: 'stretch' }}>{children}</div>
   if (state === 'ready') return isDefault ? null : row(<Button testId="agent-make-default" block onClick={() => { setDefaultAgent(kind); closePopover() }}>Start new chats with it</Button>)
   if (state === 'signin' || state === 'unknown') {
+    // Antigravity has no browser flow of its own: `agy` signs in from a terminal, after the one-time notice.
+    if (kind === 'antigravity') return row(<>
+      <Button testId="agent-signin-terminal" block variant="secondary" onClick={() => requestAntigravitySignIn(() => void openSheet(kind, 'login'))}>Sign in in the terminal</Button>
+      {state === 'unknown' && <Button testId="agent-works" block variant="ghost" onClick={() => assumeReady(kind)}>It already works</Button>}
+    </>)
     return row(<>
       <Button testId="agent-signin-browser" block variant="secondary" onClick={() => signInWithBrowser(kind)}>Sign in with your browser</Button>
       {cli && kind !== 'opencode' && <Button testId="agent-signin-terminal" block variant="ghost" onClick={() => void openSheet(kind, 'login')}>Sign in in the terminal</Button>}

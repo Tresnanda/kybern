@@ -11,3 +11,12 @@ test('hidden and stopped views make no requests, late frames are discarded', asy
   await pause(15); expect(frames).toBe(0); expect(calls).toBe(1)
   poll.show(true); expect(calls).toBe(2); poll.stop(); resolve({ frame: null }); await pause(15); expect(calls).toBe(2)
 })
+test('a paused answer is reported and polling continues at the normal rate', async () => {
+  const reasons: (string | null)[] = []
+  let calls = 0
+  const poll = new FramePoller('test', async () => { calls++; return calls < 3 ? { frame: null, paused: 'Screenshot consent was declined' } : { frame: null } }, () => {}, Date.now(), 5)
+  poll.onPaused = reason => reasons.push(reason)
+  poll.show(true); await pause(60); poll.stop()
+  expect(reasons.slice(0, 3)).toEqual(['Screenshot consent was declined', 'Screenshot consent was declined', null])
+  expect(calls).toBeGreaterThanOrEqual(3)
+})

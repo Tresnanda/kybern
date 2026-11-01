@@ -40,11 +40,19 @@ pub enum ProviderKind {
     Pi,
     Omp,
     Cursor,
+    Antigravity,
 }
 
 impl ProviderKind {
-    pub const ALL: [ProviderKind; 6] =
-        [ProviderKind::ClaudeCode, ProviderKind::Codex, ProviderKind::Opencode, ProviderKind::Pi, ProviderKind::Omp, ProviderKind::Cursor];
+    pub const ALL: [ProviderKind; 7] = [
+        ProviderKind::ClaudeCode,
+        ProviderKind::Codex,
+        ProviderKind::Opencode,
+        ProviderKind::Pi,
+        ProviderKind::Omp,
+        ProviderKind::Cursor,
+        ProviderKind::Antigravity,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -54,6 +62,7 @@ impl ProviderKind {
             ProviderKind::Pi => "pi",
             ProviderKind::Omp => "omp",
             ProviderKind::Cursor => "cursor",
+            ProviderKind::Antigravity => "antigravity",
         }
     }
 
@@ -65,6 +74,7 @@ impl ProviderKind {
             ProviderKind::Pi => "pi",
             ProviderKind::Omp => "Oh My Pi",
             ProviderKind::Cursor => "Cursor",
+            ProviderKind::Antigravity => "Antigravity",
         }
     }
 
@@ -77,6 +87,7 @@ impl ProviderKind {
             ProviderKind::Pi => "pi",
             ProviderKind::Omp => "omp",
             ProviderKind::Cursor => "agent",
+            ProviderKind::Antigravity => "agy",
         }
     }
 }
@@ -2658,6 +2669,8 @@ pub struct Settings {
     pub access: AccessSettings,
     /// Desktop control through CuaDriver for non-Codex harnesses.
     pub computer_use: ComputerUseSettings,
+    /// Antigravity's link to Kybern's tools. Per machine: it is one entry in this machine's `agy` MCP servers.
+    pub antigravity: AntigravitySettings,
     /// Limits on agents delegating work to other agents.
     pub orchestration: OrchestrationSettings,
     /// Give new agent sessions a short guide to Kybern: images, notes and
@@ -2898,8 +2911,9 @@ impl OrchestrationSettings {
     }
 }
 
-/// Agents drive apps on this Mac through a separately installed CuaDriver.
-/// Codex keeps OpenAI's own computer-use plugin.
+/// Agents drive apps on this computer through a separately installed
+/// program: CuaDriver or agent-desktop on macOS, agent-desktop on Windows and
+/// Linux. Codex keeps OpenAI's own computer-use plugin where it has one.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct ComputerUseSettings {
@@ -2915,6 +2929,31 @@ pub struct ComputerUseSettings {
     /// asking. Filled by "Always allow" on the approval card.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub always_allowed_apps: Vec<String>,
+    /// The program behind the tools on this machine. Unset means the OS
+    /// default: CuaDriver on macOS, agent-desktop on Windows and Linux. A
+    /// driver this OS lacks falls back to the default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub driver: Option<ComputerDriver>,
+}
+
+/// A program that reads and drives apps for the computer tools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ComputerDriver {
+    /// trycua's CuaDriver.app (macOS).
+    CuaDriver,
+    /// vercel-labs' agent-desktop CLI (macOS, Windows, Linux).
+    AgentDesktop,
+}
+
+/// Antigravity has no per-session MCP configuration, so Kybern keeps one entry,
+/// `kybern`, in `agy`'s own MCP servers (added and removed with `agy mcp`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct AntigravitySettings {
+    /// Let Antigravity sessions use Kybern's tools through that entry. Turned on
+    /// by a successful Antigravity sign-in.
+    pub kybern_tools: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -2954,6 +2993,7 @@ impl Default for Settings {
             background: BackgroundSettings::default(),
             access: AccessSettings::default(),
             computer_use: ComputerUseSettings::default(),
+            antigravity: AntigravitySettings::default(),
             orchestration: OrchestrationSettings::default(),
             tell_agents_about_kybern: true,
             ask_deadlines: AskDeadlineSettings::default(),
@@ -3258,6 +3298,17 @@ pub struct AsyncQuestionRequest {
 #[cfg(test)]
 mod orchestration_tests {
     use super::*;
+
+    #[test]
+    fn antigravity_is_a_provider_kind_with_its_own_binary() {
+        assert_eq!(ProviderKind::ALL.last(), Some(&ProviderKind::Antigravity));
+        let kind: ProviderKind = "antigravity".parse().unwrap();
+        assert_eq!((kind, kind.display_name(), kind.default_binary()), (ProviderKind::Antigravity, "Antigravity", "agy"));
+        assert_eq!(serde_json::to_value(kind).unwrap(), "antigravity");
+        for kind in ProviderKind::ALL {
+            assert_eq!(kind.as_str().parse::<ProviderKind>().unwrap(), kind);
+        }
+    }
 
     #[test]
     fn provider_model_traits_are_additive() {

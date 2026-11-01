@@ -54,6 +54,10 @@ pub mod features {
     /// `network.relay_page.open`: this machine, as a relay member, serves ticket pages of another machine to a web
     /// view that cannot send `X-Kybern-Relay-Auth`, under `/relay/{machine_id}/page/{ticket}/…`.
     pub const RELAY_PAGE_V1: &str = "relay.page.v1";
+    /// This machine's `kybern_computer_*` tools are set up and ready, so another machine's agents may
+    /// pass `machine` to use apps here. Listed in presence only while that is true, so it is not part
+    /// of [`ALL`].
+    pub const COMPUTER_USE_V1: &str = "computer.use.v1";
 
     /// Every feature the network design names, in design order.
     pub const ALL: [&str; 21] = [

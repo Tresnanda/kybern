@@ -7,6 +7,8 @@ export class FramePoller {
   private visible = false
   private stopped = false
   private after: number | null = null
+  /** The daemon's reason pictures are off for now, or null when they are on. Called on every answer, never per frame. */
+  onPaused?: (reason: string | null) => void
   constructor(private threadId: string, private request: (p: ComputerFrameParams) => Promise<ComputerFrameResult>, private accept: (frame: ComputerFrame) => void, private startedAt = Date.now(), private interval = 700) {}
   show(visible: boolean) {
     if (this.stopped || visible === this.visible) return
@@ -19,7 +21,8 @@ export class FramePoller {
     const generation = this.generation
     this.busy = true
     try {
-      const { frame } = await this.request({ thread_id: this.threadId, after: this.after })
+      const { frame, paused } = await this.request({ thread_id: this.threadId, after: this.after })
+      if (generation === this.generation && this.visible && !this.stopped) this.onPaused?.(paused || null)
       if (frame && generation === this.generation && this.visible && !this.stopped) {
         this.after = frame.seq
         if (Date.parse(frame.captured_at) >= this.startedAt - 5000) this.accept(frame)

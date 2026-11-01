@@ -222,7 +222,8 @@ const b64 = (text: string) => Buffer.from(text).toString('base64')
 /** Open the sheet: a shell with the command typed and never run. Return runs it; nothing runs before. */
 export async function openSheet(kind: ProviderKind, mode: SheetMode) {
   const client = getClient()
-  const command = agentCommand(kind, mode === 'login' ? 'login' : mode)
+  // A remote machine's own OS is not known here; the terminal there is a POSIX shell in practice.
+  const command = agentCommand(kind, mode === 'login' ? 'login' : mode, activeEnvironment().local ? process.platform : 'linux')
   if (!client || !command) return
   const name = AGENT_NAMES[kind]
   agents.set({ popover: null, sheet: { kind, mode, title: mode === 'login' ? `Sign in to ${name}` : mode === 'update' ? `Update ${name}` : `Install ${name}`, command, info: null, exited: false, error: null } })

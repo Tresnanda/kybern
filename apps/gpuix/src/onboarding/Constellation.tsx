@@ -19,18 +19,20 @@ import { Later } from './sceneKit.tsx'
 import { STATE_WORD, type AgentState } from './model.ts'
 
 /** Clockwise from the top left: how the tiles arrive. */
-const ARRIVAL: readonly ProviderKind[] = ['claude-code', 'cursor', 'omp', 'pi', 'opencode', 'codex']
+const ARRIVAL: readonly ProviderKind[] = ['claude-code', 'cursor', 'omp', 'pi', 'opencode', 'codex', 'antigravity']
 const SQUARE = 0.72
 
 export interface Orbit { width: number; height: number; rx: number; ry: number; cx: number; cy: number }
 export function orbitFor(width: number, height: number): Orbit {
   return { width, height, rx: Math.min(width / 2 - 76, 300), ry: Math.min(height * 0.34, 118), cx: width / 2, cy: height * 0.44 }
 }
-/** The six spots, relative to the hub (SPEC §3a). */
+/** The seven spots: three on each wing and Antigravity centred on the bottom row, relative to the hub (SPEC §3a). */
 export function spotFor(kind: ProviderKind, o: Orbit): { x: number; y: number } {
   const { rx, ry } = o
+  // Antigravity sits between OpenCode and pi, a little lower so it clears the hub's "ready" count. Lower than the row's
+  // labels and its own label runs into the headline under the scene.
   const at: Record<ProviderKind, [number, number]> = {
-    'claude-code': [-SQUARE * rx, -ry], codex: [-rx, 0], opencode: [-SQUARE * rx, ry], cursor: [SQUARE * rx, -ry], omp: [rx, 0], pi: [SQUARE * rx, ry],
+    'claude-code': [-SQUARE * rx, -ry], codex: [-rx, 0], opencode: [-SQUARE * rx, ry], cursor: [SQUARE * rx, -ry], omp: [rx, 0], pi: [SQUARE * rx, ry], antigravity: [0, ry + 8],
   }
   return { x: o.cx + at[kind][0], y: o.cy + at[kind][1] }
 }
@@ -154,7 +156,10 @@ function Dots({ x, y, hub, ready }: { x: number; y: number; hub: { x: number; y:
   const t = useTheme()
   const dx = hub.x - x, dy = hub.y - y
   const length = Math.hypot(dx, dy)
-  const start = 50, end = Math.max(start + 20, length - 74)
+  const start = 50, end = length - 74
+  // No room between the tile and the hub (Antigravity, right under it): the dots would land on the hub's "ready" count,
+  // so the tile's ring alone says it is ready.
+  if (end < start + 20) return null
   return (
     <>
       {[0, 1, 2, 3, 4].map((i) => {

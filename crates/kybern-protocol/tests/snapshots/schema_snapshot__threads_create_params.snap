@@ -142,7 +142,8 @@ expression: schema_for!(ThreadsCreateParams)
         "opencode",
         "pi",
         "omp",
-        "cursor"
+        "cursor",
+        "antigravity"
       ]
     },
     "PermissionMode": {

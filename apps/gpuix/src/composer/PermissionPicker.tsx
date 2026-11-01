@@ -6,6 +6,7 @@
 import { Icon } from '../icons.tsx'
 import { Label, useTheme } from '../ui.tsx'
 import type { PermissionMode, ProviderStatus } from '../../../../packages/kybern-client/src/types.ts'
+import { onlyFullAccess, permissionLockNote } from '../../../../packages/kybern-client/src/permissionModes.ts'
 import { G } from './glyphs.ts'
 import { CheckMark, PickerItem, PickerMenu } from './Menu.tsx'
 import { PickerChip } from '../kit/PickerChip.tsx'
@@ -37,7 +38,7 @@ export function modesFor(kind: string | undefined, legacyCursor: boolean): ModeI
 }
 
 export function PermissionPicker({
-  mode,
+  mode: modeProp,
   kind,
   status,
   legacyCursor = false,
@@ -52,8 +53,13 @@ export function PermissionPicker({
   onChange: (mode: PermissionMode) => void
 }) {
   const t = useTheme()
-  const modes = modesFor(kind, legacyCursor)
+  let mode = modeProp
+  // Antigravity only runs in Full access: the menu lists that one mode, shown as chosen and not selectable, with the reason below it.
+  const fullAccessOnly = kind === 'antigravity' || (!!status && onlyFullAccess(status))
+  const note = permissionLockNote(kind as ProviderStatus['kind'] | undefined)
+  const modes = fullAccessOnly ? MODES.filter((m) => m.mode === 'full-access') : modesFor(kind, legacyCursor)
   const supported = (m: PermissionMode) => legacyCursor || !status || status.supported_permission_modes.includes(m)
+  if (fullAccessOnly) mode = 'full-access'
   const current = modes.find((m) => m.mode === mode && supported(m.mode))
   const effective = MODES.find((m) => m.mode === mode)!
   const info = current ?? { ...effective, label: 'Choose permissions', description: `${effective.label} is not supported by the selected agent` }
@@ -112,6 +118,13 @@ export function PermissionPicker({
           </PickerItem>
         )
       })}
+      {fullAccessOnly && note ? (
+        <div data-kybern-id="mode-lock-note" style={{ paddingLeft: 10, paddingRight: 10, paddingTop: 6, paddingBottom: 4 }}>
+          <Label color={t.textSecondary} size={12} lineHeight={16.5}>
+            {note}
+          </Label>
+        </div>
+      ) : null}
     </PickerMenu>
   )
 }

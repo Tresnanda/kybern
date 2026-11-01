@@ -102,6 +102,12 @@ describe('agent state', () => {
     expect(agentCommand('claude-code', 'login')).toBe('claude auth login')
     expect(agentCommand('cursor', 'install')).toBeNull()
   })
+  test('Antigravity installs with its script per OS and signs in with agy', () => {
+    expect(agentCommand('antigravity', 'install', 'darwin')).toBe('curl -fsSL https://antigravity.google/cli/install.sh | bash')
+    expect(agentCommand('antigravity', 'install', 'linux')).toBe('curl -fsSL https://antigravity.google/cli/install.sh | bash')
+    expect(agentCommand('antigravity', 'install', 'win32')).toBe('irm https://antigravity.google/cli/install.ps1 | iex')
+    expect(agentCommand('antigravity', 'login')).toBe('agy')
+  })
 })
 
 describe('window material', () => {

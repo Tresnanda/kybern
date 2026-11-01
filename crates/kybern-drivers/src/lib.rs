@@ -6,6 +6,7 @@
 //! and turns [`DriverEvent`]s into persisted thread events.
 
 pub mod account_auth;
+pub mod antigravity;
 pub mod binary;
 #[cfg(test)]
 mod test_process;
@@ -642,7 +643,11 @@ mod lifecycle_tests {
                 cwd: root.path().into(),
                 model: None,
                 effort: None,
-                permission_mode: if kind == ProviderKind::Cursor { PermissionMode::Auto } else { PermissionMode::Supervised },
+                permission_mode: match kind {
+                    ProviderKind::Cursor => PermissionMode::Auto,
+                    ProviderKind::Antigravity => PermissionMode::FullAccess,
+                    _ => PermissionMode::Supervised,
+                },
                 native_tool_bridge: None,
                 resume_session_id: None,
                 resume_lacks_instructions: false,
@@ -663,7 +668,13 @@ mod lifecycle_tests {
                 while !ready.exists() {
                     tokio::select! {
                         result = &mut startup, if session.is_none() => {
-                            session = Some(result.unwrap_or_else(|error| panic!("{kind} fixture startup failed: {error}")));
+                            let spawned = result.unwrap_or_else(|error| panic!("{kind} fixture startup failed: {error}"));
+                            // Antigravity starts one process per turn, so its session is
+                            // lazy: a message starts the process this test then drops.
+                            if kind == ProviderKind::Antigravity {
+                                spawned.session.send_message("fixture", &UserMessage::text("hello")).await.unwrap();
+                            }
+                            session = Some(spawned);
                         }
                         _ = tokio::time::sleep(Duration::from_millis(10)) => {}
                     }

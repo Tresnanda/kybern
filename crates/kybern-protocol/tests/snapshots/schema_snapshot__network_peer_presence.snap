@@ -95,7 +95,8 @@ expression: schema_for!(PeerPresence)
         "opencode",
         "pi",
         "omp",
-        "cursor"
+        "cursor",
+        "antigravity"
       ]
     }
   }

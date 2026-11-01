@@ -127,6 +127,12 @@ impl NdjsonChild {
         }
     }
 
+    /// Send Ctrl+C to the process group. `false` when the process has already
+    /// been reaped or the platform has no such signal.
+    pub fn interrupt(&self) -> bool {
+        self.tree.lock().unwrap().as_ref().is_some_and(|tree| tree.interrupt())
+    }
+
     pub async fn wait(&self) -> Option<i32> {
         // Never hold the child mutex across wait: stdout can close while the
         // process remains alive, and close/kill must still be able to acquire it.

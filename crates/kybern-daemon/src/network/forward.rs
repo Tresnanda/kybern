@@ -26,8 +26,28 @@
 use std::collections::BTreeMap;
 
 use kybern_drivers::NativeToolDefinition;
-use kybern_protocol::{PermissionMode, Scope, ThreadId};
+use kybern_protocol::{PermissionMode, Scope, ThreadId, features};
+
+use crate::orchestrator::remote_delegation::RemoteTarget;
 use serde_json::{Value, json};
+
+/// The names of the machines where `kybern_computer_*` can run for this thread: online, not paused,
+/// and listing [`features::COMPUTER_USE_V1`] (set up and ready). Empty when the thread may not
+/// forward (another machine started it: hops == 1).
+pub fn computer_ready_machines(targets: &[RemoteTarget], may_forward: bool) -> Vec<String> {
+    if !may_forward {
+        return Vec::new();
+    }
+    targets
+        .iter()
+        .filter(|target| {
+            target.online
+                && !target.paused
+                && target.features.as_ref().is_some_and(|list| list.iter().any(|feature| feature == features::COMPUTER_USE_V1))
+        })
+        .map(|target| target.name.clone())
+        .collect()
+}
 
 /// The tool that lists the members of the network.
 pub const MACHINES_TOOL: &str = "kybern_machines";
@@ -280,6 +300,30 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn computer_tools_reach_only_online_machines_that_list_the_feature() {
+        let target = |name: &str, online: bool, paused: bool, features: Option<&[&str]>| RemoteTarget {
+            id: name.to_lowercase(),
+            name: name.into(),
+            online,
+            paused,
+            features: features.map(|list| list.iter().map(|feature| feature.to_string()).collect()),
+        };
+        let ready = [features::TOOLS_FORWARD_V1, features::COMPUTER_USE_V1];
+        let targets = [
+            target("Studio Mac", true, false, Some(&ready)),
+            target("Old Mac", true, false, Some(&[features::TOOLS_FORWARD_V1])),
+            target("Asleep Mac", false, false, Some(&ready)),
+            target("Paused Mac", true, true, Some(&ready)),
+            target("Unheard", true, false, None),
+            target("Linux Box", true, false, Some(&ready)),
+        ];
+        assert_eq!(computer_ready_machines(&targets, true), ["Studio Mac", "Linux Box"]);
+        // A thread another machine started may not use a third machine.
+        assert!(computer_ready_machines(&targets, false).is_empty());
+        assert!(computer_ready_machines(&[], true).is_empty());
     }
 
     #[test]

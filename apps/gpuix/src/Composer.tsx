@@ -89,6 +89,7 @@ import { useThreadCommands } from './composer/commands.ts'
 import { tokenIcon } from './composer/token-icons.ts'
 import { accountLead, ModelPicker, ModelTriggerLabel } from './composer/ModelPicker.tsx'
 import { PermissionPicker } from './composer/PermissionPicker.tsx'
+import { onlyFullAccess } from '../../../packages/kybern-client/src/permissionModes.ts'
 import { MachinePicker } from './composer/MachinePicker.tsx'
 import { chooseMachine, useMachineLists, useMachineTarget } from './composer/machineTarget.ts'
 import { groupPathsKey } from './composer/groupPaths.ts'
@@ -294,7 +295,7 @@ export function useDraftTarget(stayLocal = false) {
   const pinAccount = !!draft.provider && provider?.kind === draft.provider.kind && provider?.instance === draft.provider.instance && (draft.provider.pinAccount ?? draft.provider.instance !== 'default')
   const preferred = draft.mode ?? settings?.default_permission_mode ?? 'supervised'
   const status = provider ? available.find((p) => p.kind === provider.kind) : undefined
-  const mode: PermissionMode = status && !status.supported_permission_modes.includes(preferred) ? status.supported_permission_modes[0] ?? preferred : preferred
+  const mode: PermissionMode = onlyFullAccess(status ?? provider?.kind) ? 'full-access' : status && !status.supported_permission_modes.includes(preferred) ? status.supported_permission_modes[0] ?? preferred : preferred
   const useWorktree = !projectId ? false : draft.worktree ?? project?.worktrees_default ?? settings?.worktrees_default ?? false
   return { draft, projectId, project, listed, machine, providers, accounts, listsLoading, listsLoaded, provider, pinAccount, mode, status, useWorktree, choice: provider ? draft.models[provider.kind] : undefined }
 }
@@ -350,7 +351,8 @@ export function DraftComposer({ tray, extras = {} }: { tray?: ReactNode; extras?
       onProviderChange={async (next, nextChoice) => {
         const models = nextChoice ? { ...getData(pane.id).draft.models, [next.kind]: nextChoice } : getData(pane.id).draft.models
         const nextStatus = providers.find((item) => item.kind === next.kind)
-        const keepMode = !nextStatus || nextStatus.supported_permission_modes.includes(mode)
+        // A Full-access-only harness (Antigravity) gets Full access from the derived mode; the draft keeps its own choice for switching back.
+        const keepMode = !nextStatus || onlyFullAccess(nextStatus) || nextStatus.supported_permission_modes.includes(mode)
         patchDraft({
           provider: { ...next, pinAccount: nextChoice?.pinAccount ?? next.instance !== 'default' },
           models,

@@ -1,13 +1,14 @@
 // One agent's configuration on the computer: version and update, executable,
 // default model and environment variables.
 import { Stack, useLocalSearchParams } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { View } from "react-native";
 import { useHarnessUpdates } from "../src/features/settings/Agents";
 import { Section } from "../src/features/settings/common";
-import { harnessUpdateLabel } from "../src/features/settings/labels";
+import { accountStatusLabel, harnessUpdateLabel } from "../src/features/settings/labels";
 import { PROVIDER_DISPLAY_NAME, type ProviderKind, type ProviderSettings } from "../src/state/protocol";
 import { errorText, rpc, useApp } from "../src/state/runtime";
+import { loadAccounts, useAccounts } from "../src/state/accounts";
 import { saveSettings, useSettings } from "../src/state/settings";
 import { ListRow, SectionFooter } from "../src/ui/List";
 import { Button, ErrorBanner, Field, Page } from "../src/ui/primitives";
@@ -24,6 +25,12 @@ export default function SettingsAgentScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const name = provider?.display_name ?? PROVIDER_DISPLAY_NAME[kind] ?? "Agent";
+  // Antigravity has one account per computer, signed in there. The phone shows its state.
+  const { accounts } = useAccounts();
+  useEffect(() => {
+    if (kind === "antigravity") void loadAccounts();
+  }, [kind]);
+  const account = kind === "antigravity" ? accounts.find((a) => a.provider.kind === kind) : undefined;
   const custom = !!settings?.providers[kind]?.binary;
   const runUpdate = () => {
     setBusy(true);
@@ -45,6 +52,15 @@ export default function SettingsAgentScreen() {
         {provider?.binary_path ? <ListRow title="Location" subtitle={provider.binary_path} subtitleLines={2} /> : null}
         {update ? <ListRow title="Updates" value={harnessUpdateLabel(update.status)} /> : null}
       </Section>
+      {kind === "antigravity" && provider?.available ? (
+        <Section footer="Sign in on your computer, in Settings › Agent providers.">
+          <ListRow
+            title="Account"
+            subtitle={account?.identity?.email}
+            value={account ? accountStatusLabel(account.status) : "Status unknown"}
+          />
+        </Section>
+      ) : null}
       {provider?.available && kind !== "cursor" && !custom ? (
         <View style={{ marginTop: space.lg }}>
           <Button icon="arrow.clockwise" busy={busy || update?.status === "updating"} onPress={runUpdate}>

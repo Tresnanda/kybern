@@ -171,6 +171,11 @@ impl AppState {
         network.set_enabled(settings.get().network.enabled);
         let revoked_tokens = broadcast::channel(128).0;
         network.attach_revocations(revoked_tokens.clone());
+        // Other machines learn from presence whether this one's computer tools are ready.
+        let feature_network = network.clone();
+        orchestrator.computer().set_offer_sink(Arc::new(move |on| {
+            feature_network.set_dynamic_feature(kybern_protocol::features::COMPUTER_USE_V1, on);
+        }));
         // A device revoked while this daemon was down, but already in its operation set, stays revoked.
         network.revoke_revoked_devices();
         // Clients paired before the network existed hold the network scopes too (N4).

@@ -491,3 +491,42 @@ async fn a_dev_server_on_the_other_machine_is_previewed_from_here_through_a_forw
     assert!(elsewhere.is_err(), "{elsewhere:?}");
     assert_eq!(p.inbound_on_b().len(), 1);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn computer_tools_run_on_the_machine_that_has_them_ready_and_ask_there() {
+    use crate::computer::fake::{Fake, everything};
+    let Some(p) = Pair::new().await else { return };
+    p.set_mode(PermissionMode::FullAccess);
+    // Not set up on b: the call fails there and says so; nothing is offered in presence.
+    assert!(!p.b.state.network.features().iter().any(|feature| feature == kybern_protocol::features::COMPUTER_USE_V1));
+    let off = p.on_b("kybern_computer_apps", json!({})).await.unwrap_err().to_string();
+    assert!(off.contains("Computer use is turned off"), "{off}");
+
+    // Turn it on with a driver on b: presence lists the feature, and the call runs there.
+    let computer = p.b.state.orchestrator.computer();
+    computer.use_backend(Fake::new(everything()));
+    let mut settings = p.b.state.settings.get();
+    settings.computer_use.enabled = true;
+    p.b.state.settings.set(settings).unwrap();
+    eventually(|| async { p.b.state.network.features().iter().any(|feature| feature == kybern_protocol::features::COMPUTER_USE_V1).then_some(()) })
+        .await;
+
+    // Per-app consent is asked on b whatever the caller holds, as a card on the inbound thread.
+    let call = p.on_b("kybern_computer_apps", json!({"launch": "Notes"}));
+    let answer = async {
+        let card = eventually(|| async { p.pending_on_b().into_iter().next() }).await;
+        assert_eq!(card.thread_id, p.inbound_on_b()[0].id, "the card sits on the inbound thread");
+        p.b.state.orchestrator.respond_approval(card.id, ApprovalDecision::AllowOnce).await.unwrap();
+    };
+    let (opened, ()) = tokio::join!(call, answer);
+    let opened = opened.unwrap();
+    let text = crate::computer::content_blocks(&opened).iter().filter_map(|block| block["text"].as_str().map(str::to_owned)).collect::<Vec<_>>().join("\n");
+    assert!(text.contains("Opened Notes in the background"), "{text}");
+
+    // Turning it off withdraws the feature again.
+    let mut settings = p.b.state.settings.get();
+    settings.computer_use.enabled = false;
+    p.b.state.settings.set(settings).unwrap();
+    eventually(|| async { (!p.b.state.network.features().iter().any(|feature| feature == kybern_protocol::features::COMPUTER_USE_V1)).then_some(()) })
+        .await;
+}

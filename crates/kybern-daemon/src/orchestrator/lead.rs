@@ -160,6 +160,7 @@ impl Orchestrator {
 
     async fn coordinator_open_inner(&self, params: methods::CoordinatorOpenParams) -> Result<methods::CoordinatorOpenResult> {
         let _lead = self.inner.lead_commands.lock().await;
+        super::antigravity_rules::refuse_lead(params.provider.kind)?;
         ensure!(!is_free_chat_project(params.project_id), "Chats without a project have no Coordinator. Choose a project.");
         let project =
             self.inner.store.project_get(params.project_id)?.ok_or_else(|| anyhow!("Project not found. Choose another project."))?;
@@ -259,6 +260,7 @@ impl Orchestrator {
     /// history stay.
     pub async fn coordinator_switch_harness(&self, params: methods::CoordinatorSwitchHarnessParams) -> Result<Thread> {
         let _lead = self.inner.lead_commands.lock().await;
+        super::antigravity_rules::refuse_lead(params.provider.kind)?;
         let current = self
             .coordinator_get(params.project_id)?
             .ok_or_else(|| anyhow!("Open the project's Coordinator before switching its harness."))?;

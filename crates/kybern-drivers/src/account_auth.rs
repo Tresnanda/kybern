@@ -56,6 +56,29 @@ pub async fn identity(kind: ProviderKind, context: &ProbeContext) -> (AccountSta
         ProviderKind::Omp => omp_identity(context).await,
         ProviderKind::Opencode => opencode_identity(context),
         ProviderKind::Pi => pi_identity(context),
+        ProviderKind::Antigravity => antigravity_identity(context).await,
+    }
+}
+
+// ---- Antigravity ----
+
+/// Who is signed in to `agy` on this machine. Only the email and the plan label
+/// leave this function: the stored token is read for its claims and dropped.
+async fn antigravity_identity(context: &ProbeContext) -> (AccountStatus, Option<AccountIdentity>) {
+    if let Some(login) = crate::antigravity::read_login(home_dir(context).as_deref()).await {
+        return (AccountStatus::SignedIn, Some(AccountIdentity { email: login.email.clone(), plan: None, organization: None }));
+    }
+    if env_value(context, "GEMINI_API_KEY").is_some() {
+        return (AccountStatus::SignedIn, Some(AccountIdentity { email: None, plan: Some("Gemini API key".into()), organization: None }));
+    }
+    // No login Kybern can read (a keychain it cannot reach, or none). `agy` itself knows.
+    let Ok(binary) = crate::binary::resolve(ProviderKind::Antigravity, context.binary.as_ref()) else {
+        return (AccountStatus::Unknown, None);
+    };
+    if crate::antigravity::signed_in_by_models(&binary, context).await {
+        (AccountStatus::SignedIn, Some(AccountIdentity { email: None, plan: None, organization: None }))
+    } else {
+        (AccountStatus::SignedOut, None)
     }
 }
 
@@ -279,6 +302,8 @@ pub fn login_args(kind: ProviderKind, mode: AccountLoginMode, upstream: Option<&
         (ProviderKind::Opencode, AccountLoginMode::Terminal) => Ok(strings(&["auth", "login"])),
         // Interactive native /login selects the upstream provider; the caller types it.
         (ProviderKind::Pi, AccountLoginMode::Terminal) => Ok(Vec::new()),
+        // Bare `agy` opens its interface and starts Google's browser sign-in when signed out.
+        (ProviderKind::Antigravity, AccountLoginMode::Terminal) => Ok(Vec::new()),
         _ => Err(unsupported()),
     }
 }

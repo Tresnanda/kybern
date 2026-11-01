@@ -45,6 +45,9 @@ expression: schema_for!(Settings)
     "providers": {
       "type": "object",
       "properties": {
+        "antigravity": {
+          "$ref": "#/$defs/ProviderSettings"
+        },
         "claude-code": {
           "$ref": "#/$defs/ProviderSettings"
         },
@@ -114,6 +117,13 @@ expression: schema_for!(Settings)
         "show_cursor": false
       }
     },
+    "antigravity": {
+      "description": "Antigravity's link to Kybern's tools. Per machine: it is one entry in this machine's `agy` MCP servers.",
+      "$ref": "#/$defs/AntigravitySettings",
+      "default": {
+        "kybern_tools": false
+      }
+    },
     "orchestration": {
       "description": "Limits on agents delegating work to other agents.",
       "$ref": "#/$defs/OrchestrationSettings",
@@ -167,7 +177,8 @@ expression: schema_for!(Settings)
         "opencode",
         "pi",
         "omp",
-        "cursor"
+        "cursor",
+        "antigravity"
       ]
     },
     "PermissionMode": {
@@ -343,7 +354,7 @@ expression: schema_for!(Settings)
       }
     },
     "ComputerUseSettings": {
-      "description": "Agents drive apps on this Mac through a separately installed CuaDriver.\nCodex keeps OpenAI's own computer-use plugin.",
+      "description": "Agents drive apps on this computer through a separately installed\nprogram: CuaDriver or agent-desktop on macOS, agent-desktop on Windows and\nLinux. Codex keeps OpenAI's own computer-use plugin where it has one.",
       "type": "object",
       "properties": {
         "enabled": {
@@ -367,6 +378,17 @@ expression: schema_for!(Settings)
           "items": {
             "type": "string"
           }
+        },
+        "driver": {
+          "description": "The program behind the tools on this machine. Unset means the OS\ndefault: CuaDriver on macOS, agent-desktop on Windows and Linux. A\ndriver this OS lacks falls back to the default.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ComputerDriver"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
@@ -383,6 +405,32 @@ expression: schema_for!(Settings)
           "const": "never"
         }
       ]
+    },
+    "ComputerDriver": {
+      "description": "A program that reads and drives apps for the computer tools.",
+      "oneOf": [
+        {
+          "description": "trycua's CuaDriver.app (macOS).",
+          "type": "string",
+          "const": "cua_driver"
+        },
+        {
+          "description": "vercel-labs' agent-desktop CLI (macOS, Windows, Linux).",
+          "type": "string",
+          "const": "agent_desktop"
+        }
+      ]
+    },
+    "AntigravitySettings": {
+      "description": "Antigravity has no per-session MCP configuration, so Kybern keeps one entry,\n`kybern`, in `agy`'s own MCP servers (added and removed with `agy mcp`).",
+      "type": "object",
+      "properties": {
+        "kybern_tools": {
+          "description": "Let Antigravity sessions use Kybern's tools through that entry. Turned on\nby a successful Antigravity sign-in.",
+          "type": "boolean",
+          "default": false
+        }
+      }
     },
     "OrchestrationSettings": {
       "description": "Limits for `kybern_agent_delegate`. Read each time an agent delegates.",

@@ -117,7 +117,8 @@ expression: schema_for!(MachineInfo)
         "opencode",
         "pi",
         "omp",
-        "cursor"
+        "cursor",
+        "antigravity"
       ]
     },
     "RepoIdentity": {

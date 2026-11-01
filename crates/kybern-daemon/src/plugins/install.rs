@@ -56,6 +56,7 @@ async fn run(state: &AppState, ctx: &Context, provider: ProviderKind, args: Vec<
                     ProviderKind::Pi => "pi",
                     ProviderKind::Opencode => "opencode",
                     ProviderKind::Cursor => "agent",
+                    ProviderKind::Antigravity => "agy",
                 })
             },
         )
@@ -281,6 +282,8 @@ async fn apply(
             run(state, ctx, p.provider, a).await?;
         }
         ProviderKind::Cursor => return Err("Install this plugin in Cursor’s marketplace.".into()),
+        // Kybern never edits the user's Antigravity plugins, hooks or settings.
+        ProviderKind::Antigravity => return Err("Install this plugin with `agy plugin install` on the target.".into()),
     }
     Ok(())
 }

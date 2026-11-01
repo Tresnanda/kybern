@@ -1,0 +1,1 @@
+{"command":"click","error":{"code":"INVALID_ARGS","disposition":{"delivery":"not_delivered","retry":"safe"},"message":"Invalid ref_id 'bad': expected @<snapshot_id>:e<N>","suggestion":"Use the snapshot-qualified ref that snapshot prints, for example @s8f3k2p9:e1. A bare @eN ref is not accepted."},"ok":false,"version":"2.5"}
