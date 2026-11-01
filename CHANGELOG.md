@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.20.6
+
+<!-- kybern-release-title: A tidier Pull requests header -->
+<!-- kybern-release-summary: The Pull requests and Actions headers keep their tabs readable in a narrow list, and Kybern's release builds move to GitHub's macOS 15 machines. -->
+
+- In a narrow list column, the project and repository pickers no longer cover the Actions tab. Below the default width they become a folder button that opens the same menu, sized and spaced like the buttons beside it, and the list column's minimum width is now 304 pt.
+- The run-workflow button's triangle is balanced with the icons beside it.
+- Kybern's Apple Silicon builds use GitHub's macOS 15 machines, ahead of macOS 14's retirement.
+- An Indonesian README with a language switcher, thanks to @gianabif14. The Android APK links in both READMEs point to the GitHub release.
+
 ## 0.20.5
 
 <!-- kybern-release-title: GitHub Actions in Kybern -->
