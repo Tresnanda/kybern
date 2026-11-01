@@ -26,9 +26,9 @@ import {
 import { MenuButton } from "../ui/ActionMenu";
 import { Brand } from "../ui/Brand";
 import { useReduceTransparency, useWindowControlsInset } from "../ui/ChromeBar";
-import { DisclosureRow, ListRow, ListSurface, SectionHeader } from "../ui/List";
+import { DisclosureRow, ListSurface, SectionHeader } from "../ui/List";
 import type { MenuItem } from "../ui/menuModel";
-import { Empty, Icon, IconButton, T } from "../ui/primitives";
+import { Empty, Icon, IconButton, T, Tap } from "../ui/primitives";
 import { SearchField } from "../ui/Search";
 import { Segmented } from "../ui/Segmented";
 import { SpaceTile } from "../ui/SpaceTile";
@@ -80,6 +80,47 @@ function SidebarTitle() {
     >
       <View style={{ borderRadius: radius.md }}>{content}</View>
     </MenuButton>
+  );
+}
+
+type NavIcon = "checklist" | "doc.text" | "folder" | "waveform.path" | "gearshape";
+
+/**
+ * A destination row at iPadOS sidebar density: 40 pt at the default text size (it grows with Dynamic Type), the icon
+ * in a 24 pt column 8 pt from the label, so the threads get the height. Same icons, type and selection pill as the
+ * list rows; the icon lines up with the search field and the thread filter.
+ */
+function SidebarNavRow({ title, icon, meta, selected, onPress }: { title: string; icon: NavIcon; meta?: string; selected: boolean; onPress: () => void }) {
+  const { colors } = useTheme();
+  return (
+    <Tap
+      label={meta ? `${title}, ${meta}` : title}
+      selected={selected}
+      feedback="highlight"
+      onPress={onPress}
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: space.sm,
+        minHeight: 40,
+        paddingVertical: 6,
+        paddingHorizontal: space.sm,
+        borderRadius: radius.md,
+        backgroundColor: selected ? colors.accentSoft : "transparent",
+      }}
+    >
+      <View style={{ width: 24, alignItems: "center" }}>
+        <Icon name={icon} size={20} color={selected ? colors.accent : colors.secondary} />
+      </View>
+      <T variant="body" tone={selected ? "accent" : "ink"} numberOfLines={1} style={[{ flex: 1 }, selected ? { fontWeight: "600" } : null]}>
+        {title}
+      </T>
+      {meta ? (
+        <T variant="subhead" tone="muted" style={{ fontVariant: ["tabular-nums"] }}>
+          {meta}
+        </T>
+      ) : null}
+    </Tap>
   );
 }
 
@@ -157,12 +198,12 @@ export function Sidebar() {
     { title: "Resume a session", icon: "clock.arrow.circlepath", onPress: () => router.navigate("/sessions") },
   ];
 
-  const nav: { title: string; icon: "checklist" | "doc.text" | "folder" | "waveform.path" | "gearshape"; path: string; meta?: string }[] = [
+  // Settings is not a place in the list: it sits in the sidebar's footer, below the threads.
+  const nav: { title: string; icon: NavIcon; path: string; meta?: string }[] = [
     { title: "Tasks", icon: "checklist", path: "/todo", meta: taskActivity || undefined },
     { title: "Notes", icon: "doc.text", path: "/notes" },
     { title: "Projects", icon: "folder", path: "/projects" },
     { title: "Activity", icon: "waveform.path", path: "/activity", meta: app.approvals.length ? String(app.approvals.length) : undefined },
-    { title: "Settings", icon: "gearshape", path: "/settings" },
   ];
   const empty = emptyText(filter, agentName);
   const inset = (node: ReactNode, key: string) => (
@@ -198,7 +239,7 @@ export function Sidebar() {
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: insets.bottom + space.lg }}
+          contentContainerStyle={{ paddingBottom: space.lg }}
         >
           <View style={{ paddingHorizontal: space.lg, paddingTop: space.xs, paddingBottom: space.sm }}>
             <SearchField
@@ -207,19 +248,19 @@ export function Sidebar() {
               placeholder="Search threads"
             />
           </View>
-          {nav.map((item) =>
-            inset(
-              <ListRow
+          <View style={{ paddingHorizontal: ROW_INSET }}>
+            {nav.map((item) => (
+              <SidebarNavRow
+                key={item.path}
                 title={item.title}
-                leading={item.icon}
+                icon={item.icon}
                 meta={item.meta}
                 selected={pathname === item.path}
                 onPress={() => router.navigate(item.path as never)}
-              />,
-              item.path,
-            ),
-          )}
-          <View style={{ paddingHorizontal: space.lg, paddingTop: space.xl, gap: space.sm }}>
+              />
+            ))}
+          </View>
+          <View style={{ paddingHorizontal: space.lg, paddingTop: space.sm, gap: space.sm }}>
             {filter.archived ? (
               <SectionHeader
                 first
@@ -285,6 +326,17 @@ export function Sidebar() {
             <Empty variant="inline" title={`${empty.title}.`} />
           ) : null}
         </ScrollView>
+        <View
+          style={{
+            paddingHorizontal: ROW_INSET,
+            paddingTop: space.xs,
+            paddingBottom: Math.max(insets.bottom, space.sm),
+            borderTopWidth: StyleSheet.hairlineWidth,
+            borderTopColor: colors.line,
+          }}
+        >
+          <SidebarNavRow title="Settings" icon="gearshape" selected={pathname === "/settings"} onPress={() => router.navigate("/settings")} />
+        </View>
       </ListSurface>
     </View>
   );
