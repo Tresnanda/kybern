@@ -397,6 +397,7 @@ impl Orchestrator {
                     session_instance_id,
                     turn_id,
                     consent: &consent,
+                    ready_elsewhere: self.computer_machines(thread),
                 };
                 return self.inner.computer.execute(ctx, name, arguments).await;
             }
@@ -733,7 +734,9 @@ impl Orchestrator {
     /// `kybern://task/<id>` mention the task.
     /// Everything else passes through unchanged; the stored message keeps the chips.
     fn provider_message<'a>(&self, message: &'a UserMessage, live: &LiveSession) -> std::borrow::Cow<'a, UserMessage> {
-        let computer = crate::computer::ComputerUse::expand_mention(message, live.computer_tools);
+        // The tools are in this session but not set up on this machine: they reach another one.
+        let remote_only = live.computer_tools && !self.inner.computer.locally_offerable();
+        let computer = crate::computer::ComputerUse::expand_mention(message, live.computer_tools, remote_only);
         let items = match self.expand_item_mentions(computer.as_ref().unwrap_or(message)) {
             Some(expanded) => std::borrow::Cow::Owned(expanded),
             None => match computer {
@@ -3018,11 +3021,13 @@ impl Orchestrator {
         request: crate::computer::ConsentRequest,
     ) -> Result<crate::computer::ConsentAnswer> {
         use crate::computer::{ConsentAnswer, Mode};
-        let key = format!("{}:{:?}", request.bundle_id.as_deref().unwrap_or(&request.app.to_lowercase()), request.mode);
+        let key = format!("{}:{:?}", request.app_id.as_deref().unwrap_or(&request.app.to_lowercase()), request.mode);
         let foreground = request.mode == Mode::Foreground;
         let input = serde_json::json!({
             "app": request.app,
-            "bundle_id": request.bundle_id,
+            // `bundle_id` is the older name for the same value.
+            "bundle_id": request.app_id,
+            "app_id": request.app_id,
             "mode": if foreground { "foreground" } else { "background" },
             "action": request.first_action,
         });
@@ -3666,7 +3671,7 @@ impl Orchestrator {
                     // Only the project Coordinator is offered the git tool.
                     tools.push(crate::lead_git::tool_definition());
                 }
-                if self.inner.computer.offered_to(thread.provider.kind) {
+                if self.computer_available(thread) {
                     tools.extend(crate::computer::ComputerUse::tool_definitions());
                 }
                 if thread.coordinator_project_id.is_some() {
@@ -3813,11 +3818,28 @@ impl Orchestrator {
         }
     }
 
+    /// Names of the other machines where computer use is ready: online, not
+    /// paused, and listing `computer.use.v1`. Empty for a thread another machine
+    /// started, which may not reach a third one.
+    fn computer_machines(&self, thread: &Thread) -> Vec<String> {
+        let Some(hub) = self.remote_hub() else { return Vec::new() };
+        let may_forward = !fork_machine::second_hop(thread) && thread.inbound.is_none();
+        crate::network::forward::computer_ready_machines(&hub.targets(), may_forward)
+    }
+
+    /// The computer tools belong in this thread's sessions: this machine's are
+    /// offerable, or a machine of the network has them ready and this thread may
+    /// reach it.
+    fn computer_available(&self, thread: &Thread) -> bool {
+        self.inner.computer.offered_to(thread.provider.kind)
+            || (crate::computer::ComputerUse::offered_for_remote(thread.provider.kind) && !self.computer_machines(thread).is_empty())
+    }
+
     /// Whether a session spawned now would expose the computer-use tools.
     fn computer_tools_offered(&self, thread: &Thread, restrictions: &kybern_drivers::NativeToolRestrictions) -> bool {
         const PROBE: &str = "kybern_computer_act";
         self.inner.native_tools.is_some()
-            && self.inner.computer.offered_to(thread.provider.kind)
+            && self.computer_available(thread)
             && (restrictions.allowed_tools.is_empty() || restrictions.allowed_tools.iter().any(|tool| tool == PROBE))
             && !restrictions.denied_tools.iter().any(|tool| tool == PROBE)
     }
@@ -6196,7 +6218,7 @@ mod tests {
         let turn_id = live.turn.lock().await.as_ref().unwrap().id;
         let request = || ConsentRequest {
             app: "Notes".into(),
-            bundle_id: Some("com.apple.Notes".into()),
+            app_id: Some("com.apple.Notes".into()),
             mode: Mode::Background,
             first_action: "press @1".into(),
         };

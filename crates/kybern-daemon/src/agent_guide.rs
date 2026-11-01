@@ -10,11 +10,11 @@
 use std::collections::BTreeSet;
 
 /// Bumped with every wording change so a changed guide is a deliberate act.
-pub(crate) const GUIDE_VERSION: u32 = 20;
+pub(crate) const GUIDE_VERSION: u32 = 21;
 
 /// Hard ceiling for the rendered guide (about 1.5k tokens at 4 bytes a token).
 #[cfg(test)]
-pub(crate) const MAX_GUIDE_BYTES: usize = 8400;
+pub(crate) const MAX_GUIDE_BYTES: usize = 8600;
 
 /// Which groups of Kybern tools a session has.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -196,9 +196,15 @@ pub(crate) fn render(tools: &GuideTools) -> String {
     }
     if tools.has("kybern_computer_act") {
         out.push_str(
-            "\n## The user's Mac\n\
+            "\n## The user's computer\n\
              Use and open apps with the `kybern_computer_*` tools (start with `kybern_computer_apps`), not shell commands. Kybern asks the user to approve each app.\n",
         );
+        if tools.has("kybern_machines") {
+            // The text never names a machine: it must stay byte-identical across turns.
+            out.push_str(
+                "If computer use is not set up here, pass `machine` to each `kybern_computer_*` call; the error names the machines where it is.\n",
+            );
+        }
     }
     out
 }
@@ -234,7 +240,7 @@ mod tests {
             include_str!("agent_guide_full.golden.txt").replace("\r\n", "\n"),
             "guide wording changed: bump GUIDE_VERSION and update the golden file (KYBERN_UPDATE_GOLDEN=1)"
         );
-        assert_eq!(GUIDE_VERSION, 20);
+        assert_eq!(GUIDE_VERSION, 21);
     }
 
     #[test]
@@ -258,7 +264,7 @@ mod tests {
     #[test]
     fn sections_appear_only_with_their_tools() {
         let none = guide_for(&[]);
-        for absent in ["## Notes and tasks", "## Threads and the workspace", "## Helpers", "## The user's Mac", "kybern_"] {
+        for absent in ["## Notes and tasks", "## Threads and the workspace", "## Helpers", "## The user's computer", "kybern_"] {
             assert!(!none.contains(absent), "{absent:?} must be omitted without tools");
         }
         assert!(none.contains("## Images and files") && none.contains("stands on its own"));
@@ -272,7 +278,7 @@ mod tests {
         assert!(threads.contains("`kybern_thread_read` (read a thread)") && !threads.contains("kybern_thread_send"));
 
         let reading = guide_for(&["kybern_thread_read", "kybern_note_read"]);
-        assert!(!reading.contains("## Helpers") && !reading.contains("The user's Mac"));
+        assert!(!reading.contains("## Helpers") && !reading.contains("The user's computer"));
 
         let delegating = guide_for(&["kybern_agent_delegate", "kybern_thread_send"]);
         assert!(delegating.contains("## Helpers") && delegating.contains("end your turn") && delegating.contains("worktree"));
@@ -305,6 +311,9 @@ mod tests {
 
         let computer = guide_for(&["kybern_computer_act"]);
         assert!(computer.contains("kybern_computer_apps") && !computer.contains("## Notes and tasks"));
+        assert!(computer.contains("## The user's computer") && !computer.contains("pass `machine`"), "no machines, no forwarding advice");
+        let remote = guide_for(&["kybern_computer_act", "kybern_machines"]);
+        assert!(remote.contains("If computer use is not set up here, pass `machine`"));
     }
 
     #[test]

@@ -51,6 +51,10 @@ pub mod features {
     /// and takes skill copies.
     pub const PLUGINS_SYNC_V1: &str = "plugins.sync.v1";
     pub const SKILLS_SYNC_V1: &str = "skills.sync.v1";
+    /// This machine's `kybern_computer_*` tools are set up and ready, so another machine's agents may
+    /// pass `machine` to use apps here. Listed in presence only while that is true, so it is not part
+    /// of [`ALL`].
+    pub const COMPUTER_USE_V1: &str = "computer.use.v1";
 
     /// Every feature the network design names, in design order.
     pub const ALL: [&str; 20] = [

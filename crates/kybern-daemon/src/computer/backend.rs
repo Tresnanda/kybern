@@ -13,9 +13,6 @@
 //! agent-desktop CLI). Roles reach the tools already mapped to the neutral
 //! vocabulary below, so the digest reads the same on every OS.
 
-// The tools adopt this seam in the ADE-83 refactor; until then it is unused.
-#![allow(dead_code)]
-
 use anyhow::Result;
 use async_trait::async_trait;
 use kybern_protocol::methods::{ComputerCheck, ComputerPermission};
