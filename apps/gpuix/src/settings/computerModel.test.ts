@@ -29,7 +29,7 @@ test('notes key by app id', () => {
   // An older daemon's default app id is an empty string.
   expect(noteKey({ bundle_id: 'a', app_id: '' })).toBe('a')
 })
-import { checkTitle, readyHint } from './computerModel.ts'
+import { checkTitle, readyHint, safetyNote } from './computerModel.ts'
 test('check titles', () => {
   expect(checkTitle('uia')).toBe('UI Automation')
   expect(checkTitle('some_new_check')).toBe('Some new check')
@@ -39,4 +39,9 @@ test('Codex gets the tools on Linux only', () => {
   expect(readyHint('linux')).not.toContain('Codex')
   expect(readyHint('windows')).toContain('except Codex')
   expect(readyHint('macos')).toContain('except Codex')
+})
+test('the safety note names each OS', () => {
+  expect(safetyNote('macos')).toContain('Keychain Access')
+  expect(safetyNote('windows')).toContain('Credential Manager')
+  expect(safetyNote('linux')).not.toContain('Codex')
 })

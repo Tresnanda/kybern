@@ -17,7 +17,7 @@ import { TextArea } from '../kit/TextArea.tsx'
 import { TokenChip } from '../kit/TokenChip.tsx'
 import { Switch } from '../kit/Switch.tsx'
 import { openSystemSettings, systemSettingsFailure } from './external.ts'
-import { DRIVER_NAME, INSTALL_CHECKS, checkTitle, OWN_ROW_CHECKS, PANE_ACCESSIBILITY, PANE_SCREEN, activeDriver, computerOs, driverHint, driverSetting, noteKey, offeredDrivers, readyHint, thisComputer } from './computerModel.ts'
+import { DRIVER_NAME, INSTALL_CHECKS, checkTitle, OWN_ROW_CHECKS, PANE_ACCESSIBILITY, PANE_SCREEN, activeDriver, computerOs, driverHint, driverSetting, noteKey, offeredDrivers, readyHint, safetyNote, thisComputer } from './computerModel.ts'
 import { latestSettings, refreshSettings, updateSettings, useSettings } from './store.ts'
 
 /** Mirrors the daemon's per-app limit (`computer/notes.rs`). */
@@ -97,7 +97,7 @@ export function ComputerUse() {
       <Row title="Apps allowed without asking" description={allowed.length ? 'Agents use these in the background without asking. They still ask before taking over your cursor.' : 'None yet. Choose “Always allow” when an agent asks to use an app.'}>
         {allowed.length > 0 && <div testId="computer-allowed" style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 6, maxWidth: 320 }}>{allowed.map((app) => <AllowedApp key={app} app={app} onRemove={() => update({ always_allowed_apps: allowed.filter((item) => item !== app) })} />)}</div>}
       </Row>
-      <Row title="" description="Codex uses its own computer use. Password managers, Keychain Access, and System Settings are never available to agents. Changes apply to new conversations." />
+      <Row title="" description={safetyNote(os)} />
     </Section>
     <Section title="Setup">
       {status && <Row title="Driver" description={driverHint(os, offered.length > 1)}>

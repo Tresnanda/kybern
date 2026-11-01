@@ -79,3 +79,10 @@ export function readyHint(os: OsName): string {
     ? 'Ready. Ask any agent to use an app, like “Add milk to my shopping list in Notes.”'
     : 'Ready. Ask any agent except Codex to use an app, like “Add milk to my shopping list in Notes.”'
 }
+
+/** What agents can never reach here, and who keeps their own tools (mirrors the daemon's `policy.rs`). */
+export function safetyNote(os: OsName): string {
+  if (os === 'windows') return 'Codex uses its own computer use. Password managers, Credential Manager, Windows Security, Settings and Registry Editor are never available to agents. Changes apply to new conversations.'
+  if (os === 'linux') return 'Password managers, Passwords and Keys, KWallet and system settings are never available to agents. Changes apply to new conversations.'
+  return 'Codex uses its own computer use. Password managers, Keychain Access, and System Settings are never available to agents. Changes apply to new conversations.'
+}
