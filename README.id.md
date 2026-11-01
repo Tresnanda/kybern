@@ -72,7 +72,7 @@ Unduh installer dan paket rilis langsung dari [GitHub Releases](https://github.c
 | **Windows** | Windows 10 (1809+) & Windows 11 (x64) | [Unduh Setup `.exe`](https://github.com/Tresnanda/kybern/releases/latest) |
 | **Linux** | Ubuntu, Debian, Fedora, openSUSE, Arch (x64) | `curl -fsSL https://github.com/Tresnanda/kybern/releases/latest/download/kybern-gpuix-linux-install.sh \| sh` |
 | **Remote Server** | Headless Linux & macOS (via SSH / Tailscale) | `curl -LsSf https://github.com/Tresnanda/kybern/releases/latest/download/kybern-remote-install.sh \| sh -s -- --service` |
-| **Aplikasi Mobile** | Android & iOS | [Unduh Preview APK](https://expo.dev/accounts/treshnanda/projects/kybern-mobile/builds) |
+| **Aplikasi Mobile** | Android & iOS | [Unduh Preview APK](https://github.com/Tresnanda/kybern/releases/download/android-build-9/kybern-0.1.2-android-build-9.apk) |
 
 ---
 
@@ -132,7 +132,7 @@ curl -fsSL https://github.com/Tresnanda/kybern/releases/latest/download/kybern-g
 
 Tetap bisa memantau pekerjaan agent walau sedang jauh dari meja kerja. Aplikasi pendamping ini bisa menampilkan percakapan secara streaming, meminta persetujuan, melihat file dan diff, serta mengelola tugas project.
 
-- **Android:** Unduh APK preview dari [halaman EAS project builds](https://expo.dev/accounts/treshnanda/projects/kybern-mobile/builds).
+- **Android:** Unduh APK preview dari [rilis GitHub](https://github.com/Tresnanda/kybern/releases/download/android-build-9/kybern-0.1.2-android-build-9.apk).
 - **iOS:** Tersedia lewat development build (lihat [Panduan Mobile Companion](apps/mobile/README.md)).
 - **Pairing:** Di aplikasi desktop, klik **Pair a device** lalu scan kode QR dengan HP-mu. Kalau HP tidak satu jaringan dengan komputer, aktifkan **Reachable over Tailscale**.
 
