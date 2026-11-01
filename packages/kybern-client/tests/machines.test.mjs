@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { MachineSet, OfflineError, RELAY_AUTH_HEADER, UnknownMachineError, kybernClientFactory, relayHeadersFor } from "../src/machines.ts";
+import { MachineSet, OfflineError, RELAY_AUTH_HEADER, UnknownMachineError, kybernClientFactory, randomNonce, relayHeadersFor } from "../src/machines.ts";
 import { MachineCache } from "../src/machineCache.ts";
 import { scopedKey } from "../src/machineMerge.ts";
 import { routeId } from "../src/machineRoutes.ts";
@@ -834,5 +834,86 @@ test("a connection that fails leaves online at once, before the retry finishes",
   assert.equal(set.connection("b").status, "offline");
   assert.throws(() => set.clientFor("b"), OfflineError);
   await clock.flush();
+  set.dispose();
+});
+
+// ---- device blockers found on the iPad (ADE-99) ----
+
+function bareSetup({ records, credentials, transport, localMachineId }) {
+  const clock = manualClock();
+  const world = fakeWorld(clock);
+  const set = new MachineSet({
+    store: memoryStore(records),
+    credentials: memoryCredentials(credentials),
+    deviceId: "phone-1",
+    verifyProof,
+    transport: transport(world),
+    clock,
+    cache: new MachineCache(memoryCacheStorage()),
+    ...(localMachineId ? { localMachineId } : {}),
+  });
+  return { clock, world, set };
+}
+
+test("without Web Crypto the default nonce fails loudly on the row, and a supplied random source connects", async (t) => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+  Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: true, writable: true });
+  t.after(() => Object.defineProperty(globalThis, "crypto", original));
+  assert.equal(globalThis.crypto, undefined, "Hermes: no globalThis.crypto");
+  assert.throws(() => randomNonce(), /no secure random source/);
+
+  const records = [rec("b", [tailnet(T)], { signingKey: "key-b" })];
+  // The default transport nonce (Web Crypto) throws: the machine is offline with the reason, not silently.
+  const broken = bareSetup({ records, credentials: { b: "tok-b" }, transport: ({ nonce, ...rest }) => rest });
+  broken.world.host(T, "b");
+  broken.world.lists("b", [], []);
+  await broken.set.ensureAll();
+  const offline = broken.set.connection("b");
+  assert.equal(offline.status, "offline");
+  assert.match(offline.error?.message ?? "", /Unable to connect to b: This runtime has no secure random source/);
+  broken.set.dispose();
+
+  // The phone's own random source (expo-crypto in the app) makes the nonce, and the machine connects.
+  let filled = 0;
+  const fill = (bytes) => { filled++; for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 37 + filled) & 255; };
+  const working = bareSetup({ records, credentials: { b: "tok-b" }, transport: (world) => ({ ...world.transport, nonce: () => randomNonce(fill) }) });
+  working.world.host(T, "b");
+  working.world.lists("b", [], []);
+  await working.set.ensureAll();
+  assert.equal(working.set.connection("b").status, "online");
+  assert.ok(filled > 0);
+  assert.match(randomNonce(fill), /^[A-Za-z0-9_-]{43}$/);
+  working.set.dispose();
+});
+
+test("a dead local machine does not hide the network: a live saved computer that speaks it is asked, and adds but never removes", async () => {
+  const C = "http://100.64.0.3:4173";
+  const { world, set } = bareSetup({
+    records: [
+      rec("a", [tailnet("http://100.64.0.1:4173")], { signingKey: "key-a" }),
+      rec("c", [advertised(C)], { member: false }),
+      rec("x", [], { signingKey: "key-x" }),
+    ],
+    credentials: { a: "tok-a", c: "tok-c" },
+    transport: (w) => w.transport,
+    localMachineId: "a",
+  });
+  world.host("http://100.64.0.1:4173", "a", { online: false });
+  world.host(C, "c");
+  world.host(T, "b");
+  world.lists("c", [], []);
+  world.lists("b", [], []);
+  world.on("c", "network.status", () => ({ enabled: true, self_machine: card("c"), members: [card("c"), card("b", { name: "satyamas" })] }));
+  world.on("c", "network.routes", ({ machine_id }) => ({ routes: machine_id === "b" ? [tailnet(T)] : [] }));
+  world.on("c", "network.client_grant", () => ({ token: "tok-b", scopes: [], routes: [tailnet(T)], signing_key: "key-b" }));
+  await set.ensureAll();
+  await set.flush();
+  assert.equal(set.connection("a").status, "offline", "the local machine is down");
+  assert.equal(set.connection("c").record.member, true, "the computer that answered is now known as a member");
+  const b = set.connection("b");
+  assert.ok(b, "the rest of the network appears");
+  assert.equal(b.record.name, "satyamas");
+  assert.equal(b.status, "online");
+  assert.ok(set.connection("x"), "a member the answering computer does not list is not forgotten on its word");
   set.dispose();
 });

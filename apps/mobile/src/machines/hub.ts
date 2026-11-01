@@ -15,6 +15,8 @@ import { MachineCache } from "../../../../packages/kybern-client/src/machineCach
 import {
   MachineSet,
   probeAuth,
+  randomNonce,
+  type RandomFill,
   relayHeadersFor,
   routeHttp,
   UnknownMachineError,
@@ -53,6 +55,11 @@ export interface MachineHubOptions {
   cache?: MachineCache;
   /** This device's id for `network.client_grant`. */
   deviceId: string;
+  /**
+   * The phone's secure random source (expo-crypto). Hermes has no `globalThis.crypto`, so without it the identity
+   * check's nonce cannot be made and no machine but the paired one ever connects.
+   */
+  randomFill?: RandomFill;
   /** The socket other machines open (the native one on a phone). */
   socket?: SocketFactory;
   /** Replaces the sockets of non-primary machines (tests). */
@@ -169,7 +176,11 @@ export class MachineHub {
       verifyProof: verifyMachineProof,
       cache: options.cache ?? new MachineCache(),
       ...(options.socket ? { socket: options.socket } : {}),
-      transport: { ...options.transport, createClient: (args) => this.createClient(args) },
+      transport: {
+        ...options.transport,
+        ...(!options.transport?.nonce && options.randomFill ? { nonce: () => randomNonce(options.randomFill) } : {}),
+        createClient: (args) => this.createClient(args),
+      },
       ...(options.clock ? { clock: options.clock } : {}),
     });
     this.set.onChange((event) => this.onSetChange(event));

@@ -22,6 +22,14 @@ export const MACHINES_COPY = {
   offTitle: (name: string) => `Turn off your network on ${name}?`,
   offBody: (name: string) => `This phone can still reach ${name}. Your other machines stop syncing with it.`,
   offButton: "Turn off",
+  /** Make this computer the one the phone goes through (it is paired with this phone already). */
+  switchTo: "Connect through this machine",
+  hereDown: (name: string) => `${name} isn't answering. Touch and hold a computer that is online and choose Connect through this machine.`,
+  /** A machine on the tailnet that has a network of its own: merging joins the two networks into one. */
+  mergeDetail: "Has its own network · Merge it with yours",
+  mergeTitle: (name: string) => `Merge ${name}'s network with yours?`,
+  mergeBody: (name: string) => `${name} and the machines in its network join yours, and every machine sees all of them. You can remove any machine later.`,
+  mergeButton: "Merge networks",
   follow: "Keep all machines on the same version",
   followFooter: "A machine updates itself, once it is idle, when another one runs a newer version.",
   updateAll: "Update all machines",

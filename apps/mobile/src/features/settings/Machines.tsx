@@ -8,7 +8,7 @@ import { View } from "react-native";
 import { updateSummary } from "../../../../../packages/kybern-client/src/networkSettings";
 import type { FoundMachine, MachineId, NetworkStatus } from "../../../../../packages/kybern-client/src/types";
 import { parityFooter } from "../../machines/gate";
-import { machineStatusLine } from "../../machines/labels";
+import { machineStatusLine, sameNameAddresses } from "../../machines/labels";
 import { cancelOutboxText, deviceSubtitle, groupDevices, MACHINES_COPY, outboxEntries, type DeviceGroup, type OutboxEntry } from "../../machines/settingsModel";
 import {
   addFoundMachine,
@@ -53,6 +53,14 @@ export function MachinesSettings() {
   const gated = manage && memberParity();
   const older = manage ? olderMembers() : [];
   const memberName = memberMachine()?.name ?? "this machine";
+  // Saved computers that share a name (old scratch daemons) are told apart by their address.
+  const addresses = sameNameAddresses(connections.map((c) => ({ id: c.record.machineId, name: c.record.name, routes: c.record.routes })));
+  const live = (status: string) => status === "online" || status === "relaying" || status === "needs-update";
+  const hereConnection = connections.find((c) => c.record.machineId === app.activeId);
+  // The computer the phone goes through stopped answering while another saved one is up: say how to switch.
+  const hereDown =
+    !!hereConnection && app.status !== "open" && !live(hereConnection.status) &&
+    connections.some((c) => c.record.machineId !== app.activeId && live(c.status) && app.environments.some((e) => e.id === c.record.machineId));
 
   // What the network found on the tailnet, read from a member whenever the list of machines changes.
   const reloadFound = useCallback(async () => {
@@ -133,9 +141,11 @@ export function MachinesSettings() {
         title="Your machines"
         first
         footer={
-          connections.length
-            ? "Pair this phone once and it reaches every machine on your network. Touch and hold a machine for more."
-            : "Connect a computer to get started."
+          hereDown && hereConnection
+            ? MACHINES_COPY.hereDown(hereConnection.record.name)
+            : connections.length
+              ? "Pair this phone once and it reaches every machine on your network. Touch and hold a machine for more."
+              : "Connect a computer to get started."
         }
       >
         {connections.map((connection) => {
@@ -161,17 +171,20 @@ export function MachinesSettings() {
             networkPaused: networkPaused(id),
             open: app.status === "open",
             offline: connection.status === "offline",
+            switchable: !here && live(connection.status) && app.environments.some((e) => e.id === id),
           };
+          const address = addresses.get(id);
+          const line = address ? `${address} · ${subtitle}` : subtitle;
           return (
             <ListRow
               key={id}
               title={connection.record.name}
-              subtitle={here ? `${subtitle} · Paired with this phone` : subtitle}
+              subtitle={here ? `${line} · Paired with this phone` : line}
               subtitleLines={2}
               leading={summary ? <MachineGlyph glyph={summary.glyph} size={24} /> : "laptopcomputer"}
               trailing={<StatusDot status={connection.status} connecting={connection.connecting} />}
               dimmed={connection.status === "offline" || paused}
-              label={`${connection.record.name}, ${subtitle}`}
+              label={`${connection.record.name}, ${line}`}
               chevron
               onPress={() => router.push({ pathname: "/machine/[id]", params: { id } })}
               menu={machineMenu(state, run, { activeId: app.activeId })}
@@ -180,10 +193,11 @@ export function MachinesSettings() {
         })}
       </Section>
       {manage && (gated || older.length) ? (
-        <Section title={MACHINES_COPY.yourNetwork} footer={gated ? (older.length ? parityFooter(older) : MACHINES_COPY.followFooter) : parityFooter(older)}>
+        <Section title={MACHINES_COPY.yourNetwork} footer={older.length ? parityFooter(older) : undefined}>
           {gated ? (
             <ToggleRow
               title={MACHINES_COPY.useNetwork}
+              subtitle={MACHINES_COPY.useNetworkFooter}
               value={network?.enabled ?? true}
               leading="globe"
               onChange={(value) => (value ? run(async () => { await setNetworkEnabled(true); await reloadFound(); }) : turnOff())}
@@ -192,6 +206,7 @@ export function MachinesSettings() {
           {gated ? (
             <ToggleRow
               title={MACHINES_COPY.follow}
+              subtitle={MACHINES_COPY.followFooter}
               value={network?.follow_updates ?? false}
               leading="arrow.clockwise"
               onChange={(value) => run(async () => { await setFollowUpdates(value); await reloadFound(); })}
@@ -244,18 +259,33 @@ export function MachinesSettings() {
             <ListRow
               key={machine.found_id}
               title={machine.name}
-              subtitle={machine.action === "code" ? "Needs a code · Add by code below" : machine.os ?? "On your tailnet"}
+              subtitle={
+                machine.action === "code"
+                  ? "Needs a code · Add by code below"
+                  : machine.action === "merge"
+                    ? MACHINES_COPY.mergeDetail
+                    : [machine.os, machine.version ? `Version ${machine.version}` : null].filter(Boolean).join(" · ") || "On your tailnet"
+              }
+              subtitleLines={2}
               leading="laptopcomputer"
               trailing={
                 machine.action === "code" ? undefined : (
                   <Button
                     size="medium"
                     role="plain"
-                    onPress={() => run(async () => {
-                      const result = await addFoundMachine(machine);
-                      if (result.needs_code) throw new Error(`Show a code on ${machine.name}, then add it by code.`);
-                      await reloadFound();
-                    })}
+                    label={machine.action === "merge" ? `Merge ${machine.name}'s network with yours` : `Add ${machine.name}`}
+                    onPress={() => {
+                      const add = () =>
+                        run(async () => {
+                          const result = await addFoundMachine(machine);
+                          if (result.needs_code) throw new Error(`Show a code on ${machine.name}, then add it by code.`);
+                          await reloadFound();
+                        });
+                      // Merging changes both networks, so it asks first; adding one machine does not.
+                      if (machine.action === "merge")
+                        confirm({ title: MACHINES_COPY.mergeTitle(machine.name), message: MACHINES_COPY.mergeBody(machine.name), confirm: MACHINES_COPY.mergeButton, onConfirm: add });
+                      else add();
+                    }}
                   >
                     {machine.action === "merge" ? "Merge" : "Add"}
                   </Button>

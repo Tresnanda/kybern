@@ -298,6 +298,10 @@ export function machineHub(): MachineHub {
       credentials: machineCredentials(secureKv),
       cache: new MachineCache(cacheFile),
       deviceId: phoneDeviceId,
+      // Hermes has no Web Crypto: the identity check's nonce comes from expo-crypto (the app already ships it).
+      randomFill: (bytes) => {
+        getRandomValues(bytes);
+      },
       socket: Platform.OS === "web" ? undefined : createNativeSocket,
       onRekey: (oldId, newId) => {
         // The daemon answered with its real id: the saved computer follows it.

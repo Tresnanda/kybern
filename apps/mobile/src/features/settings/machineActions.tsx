@@ -22,6 +22,11 @@ export interface MachineRowState {
   /** Status of the phone's connection to the machine. */
   open: boolean;
   offline: boolean;
+  /**
+   * A computer the phone saved itself and can reach now, while it is not the one the phone goes through: the phone can
+   * switch to it (the way off a computer that stopped answering).
+   */
+  switchable?: boolean;
 }
 
 /** Runs `work`, reporting a failure through `onError`. */
@@ -65,6 +70,9 @@ export function machineMenu(state: MachineRowState, run: (work: () => Promise<un
   const hub = machineHub();
   const gated = state.member && memberParity();
   return [
+    ...(state.switchable
+      ? [{ title: MACHINES_COPY.switchTo, icon: "arrow.triangle.swap" as const, onPress: () => run(async () => { connect(state.id); }) }]
+      : []),
     ...(state.here
       ? !state.open
         ? [{ title: "Reconnect", icon: "arrow.clockwise" as const, onPress: () => run(async () => { connect(options.activeId); }) }]

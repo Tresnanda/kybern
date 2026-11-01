@@ -271,3 +271,20 @@ test("a thread row names another machine in words, and nothing for the paired on
   const long = "a-machine-whose-host-name-goes-on-and-on-and-on";
   assert.equal(threadMachineWord({ showGlyph: true, name: long }), long, "kept whole; the row's one-line subtitle truncates it");
 });
+
+test("saved computers that share a name are told apart by their address; others keep just the name", async () => {
+  const { machineAddress, sameNameAddresses } = await import("../src/machines/labels.ts");
+  const at = (url) => [{ kind: "direct_advertised", url }];
+  const machines = [
+    { id: "a", name: "Treshnandas-Macbook.local", routes: at("http://192.168.110.199:4291") },
+    { id: "b", name: "treshnandas-macbook.local", routes: at("http://192.168.110.199:4292") },
+    { id: "c", name: "Treshnandas-Macbook.local", routes: [] },
+    { id: "d", name: "SatyaMas", routes: at("http://100.64.0.2:4173") },
+  ];
+  const addresses = sameNameAddresses(machines);
+  assert.equal(addresses.get("a"), "192.168.110.199:4291");
+  assert.equal(addresses.get("b"), "192.168.110.199:4292", "names compare without case");
+  assert.equal(addresses.has("c"), false, "no route, nothing to show");
+  assert.equal(addresses.has("d"), false, "a unique name needs no address");
+  assert.equal(machineAddress([{ kind: "relay", url: "http://m/relay/x" }]), "", "a relay is not the machine's address");
+});

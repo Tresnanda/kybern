@@ -113,10 +113,14 @@ const LIVE_STATES = new Set(["online", "relaying", "needs-update"]);
 /** Machines the phone can ask right now. */
 export const liveMachines = () => machineHub().set.connections().filter((c) => LIVE_STATES.has(c.status));
 
-/** Tokens (paired devices) of every live machine the phone may ask; a machine that refuses is left out. */
+/**
+ * Tokens (paired devices) of every live machine that lets this phone read them. A phone pairing carries no `access:*`
+ * scope on purpose (paired devices are managed on the computer, `Scope::CLIENT` plus `network:admin`), so for a normal
+ * phone this asks nobody and the section stays hidden; a full-access token sees them.
+ */
 export async function listPairedDevices(): Promise<{ machineId: MachineId; machineName: string; token: TokenInfo }[]> {
   const hub = machineHub();
-  const live = liveMachines().filter((c) => parityOn(c.info?.version));
+  const live = liveMachines().filter((c) => parityOn(c.info?.version) && (c.info?.scopes ?? []).includes("access_read"));
   const results = await Promise.allSettled(live.map((c) => hub.clientFor(c.record.machineId).call("access.tokens.list", {})));
   return results.flatMap((result, index) =>
     result.status === "fulfilled"
