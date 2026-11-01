@@ -248,12 +248,10 @@ pub fn setup_error(stderr: &[u8]) -> String {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
     fn fixture(root: &std::path::Path, body: &str) -> ProbeContext {
         let path = root.join("node-fixture");
-        std::fs::write(&path, format!("#!/usr/bin/env python3\n{body}")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        kybern_protocol::process::write_executable(&path, format!("#!/usr/bin/env python3\n{body}")).unwrap();
         ProbeContext {
             cwd: Some(root.into()),
             env: std::collections::BTreeMap::from([("KYBERN_CURSOR_NODE".into(), path.display().to_string())]),

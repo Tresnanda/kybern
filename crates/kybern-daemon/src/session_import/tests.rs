@@ -255,14 +255,12 @@ async fn a_scan_groups_sessions_by_repository_and_flags_the_active_ones() {
 #[cfg(unix)]
 #[tokio::test]
 async fn one_harness_failing_is_an_error_on_its_row_not_a_failed_scan() {
-    use std::os::unix::fs::PermissionsExt;
     let f = fixture();
     let repo = f.dir("app", true);
     f.claude("c1", &repo, days(1));
     // A Codex that dies at startup, and an OpenCode that is not installed at all.
     let broken = f.root.join("codex-broken");
-    std::fs::write(&broken, "#!/bin/sh\nexit 1\n").unwrap();
-    std::fs::set_permissions(&broken, std::fs::Permissions::from_mode(0o755)).unwrap();
+    kybern_protocol::process::write_executable(&broken, "#!/bin/sh\nexit 1\n").unwrap();
     let mut settings = f.state.settings.get();
     settings.providers.entry(ProviderKind::Codex).or_default().binary = Some(broken.to_string_lossy().into_owned());
     settings.providers.entry(ProviderKind::Opencode).or_default().binary =

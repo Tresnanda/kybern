@@ -8415,11 +8415,10 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn omp_processes_inherit_project_profiles_and_resume_with_the_original_profile() {
-        use std::os::unix::fs::PermissionsExt;
         let fixture = Fixture::with_drivers(DriverRegistry::with_defaults());
         let binary = fixture.root.join("fake-omp");
         let capture = fixture.root.join("launches.jsonl");
-        std::fs::write(
+        kybern_protocol::process::write_executable(
             &binary,
             r#"#!/usr/bin/env python3
 import json, os, sys
@@ -8433,7 +8432,6 @@ for line in sys.stdin:
 "#,
         )
         .unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
         let settings_store = &fixture.orchestrator.inner.settings;
         let mut settings = settings_store.get();
         let provider = settings.providers.entry(ProviderKind::Omp).or_default();

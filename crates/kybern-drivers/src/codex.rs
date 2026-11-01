@@ -2132,14 +2132,12 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn model_discovery_uses_project_and_configured_environment() {
-        use std::os::unix::fs::PermissionsExt;
-
         use crate::{AgentDriver, ProbeContext};
 
         let fixture = tempfile::tempdir().unwrap();
         std::fs::write(fixture.path().join("project-marker"), "present").unwrap();
         let binary = fixture.path().join("codex-fixture");
-        std::fs::write(
+        kybern_protocol::process::write_executable(
             &binary,
             r##"#!/bin/sh
 if [ "$1" = "--version" ]; then
@@ -2159,9 +2157,6 @@ fi
 "##,
         )
         .unwrap();
-        let mut permissions = std::fs::metadata(&binary).unwrap().permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&binary, permissions).unwrap();
 
         let status = super::CodexDriver
             .probe_with_context(&ProbeContext {
@@ -2457,7 +2452,7 @@ fi
 #[cfg(all(test, unix))]
 mod startup_cleanup_tests {
     use super::*;
-    use std::{os::unix::fs::PermissionsExt, time::Duration};
+    use std::time::Duration;
 
     /// Linux refuses to run a file that another test's freshly forked child
     /// still holds open for writing (ETXTBSY) until that child execs. Retry.
@@ -2491,7 +2486,7 @@ mod startup_cleanup_tests {
             let root = tempfile::tempdir().unwrap();
             let binary = root.path().join("codex-fixture");
             let requests = root.path().join("requests");
-            std::fs::write(
+            kybern_protocol::process::write_executable(
                 &binary,
                 r#"#!/bin/sh
 IFS= read -r line
@@ -2508,7 +2503,6 @@ wait
 "#,
             )
             .unwrap();
-            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
             let bridge = NativeToolBridge {
                 server_name: "kybern".into(),
                 endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
@@ -2559,7 +2553,7 @@ wait
         let root = tempfile::tempdir().unwrap();
         let binary = root.path().join("codex-fixture");
         std::fs::write(root.path().join("history"), "existing conversation").unwrap();
-        std::fs::write(
+        kybern_protocol::process::write_executable(
             &binary,
             r#"#!/bin/sh
 read line
@@ -2572,7 +2566,6 @@ wait
 "#,
         )
         .unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
         let result = spawn_fixture(SessionConfig {
             cwd: root.path().into(),
             model: None,

@@ -214,14 +214,13 @@ mod tests {
 #[cfg(all(test, unix))]
 mod native_command_tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
     #[tokio::test]
     async fn mutations_preserve_scope_and_never_bypass_installer_consent() {
         let root = std::env::temp_dir().join(format!("kybern-claude-integrations-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(&root).unwrap();
         let binary = root.join("claude");
-        std::fs::write(
+        kybern_protocol::process::write_executable(
             &binary,
             r#"#!/bin/sh
 if [ "$1" = plugin ] && [ "$2" = list ]; then
@@ -234,7 +233,6 @@ fi
 "#,
         )
         .unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
         let args = root.join("args");
         let context = ProbeContext {
             binary: Some(binary),

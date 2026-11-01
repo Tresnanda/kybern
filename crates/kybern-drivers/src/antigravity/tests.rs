@@ -478,12 +478,11 @@ fn agy_is_found_where_its_installer_puts_it() {
 #[cfg(unix)]
 mod process {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
     /// A stand-in `agy`: records its arguments and stdin, then plays a script.
     fn fake_agy(root: &Path, script: &str) -> PathBuf {
         let binary = root.join("agy");
-        std::fs::write(
+        kybern_protocol::process::write_executable(
             &binary,
             format!(
                 "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 1.4.12; exit 0; fi\nif [ \"$1\" = models ]; then printf 'Fetching available models...\\ngemini-3.8-flash-low\\tGemini 3.8 Flash (Low)\\nclaude-sonnet-4-6\\tClaude Sonnet 4.6\\n'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"{root}/args.log\"\nIFS= read -r line\nprintf '%s\\n' \"$line\" >> \"{root}/stdin.log\"\n{script}\n",
@@ -491,7 +490,6 @@ mod process {
             ),
         )
         .unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
         binary
     }
 

@@ -4,7 +4,6 @@
 //! envelopes are the real ones in `fixtures/`.
 #![cfg(unix)]
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use base64::Engine;
@@ -40,8 +39,7 @@ impl Fake {
         let dir = std::env::temp_dir().join(format!("kybern-ad-fake-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("bin")).unwrap();
         let script = dir.join("bin").join("agent-desktop");
-        std::fs::write(&script, FAKE).unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        kybern_protocol::process::write_executable(&script, FAKE).unwrap();
         for (name, content) in recordings {
             std::fs::write(dir.join("bin").join(format!("{name}.json")), content).unwrap();
         }
