@@ -7,6 +7,7 @@
 //! foreground control. CuaDriver (installed separately as `CuaDriver.app`)
 //! does the macOS work behind this contract.
 
+mod agent_desktop;
 mod backend;
 mod digest;
 mod driver;
