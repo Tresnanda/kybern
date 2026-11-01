@@ -583,7 +583,6 @@ async fn pi_completes_a_turn() {
     assert_completed_with_text(ProviderKind::Pi, &events);
 }
 
-#[allow(dead_code)]
 // ---- Antigravity ----
 
 const AGY_MODEL: &str = "gemini-3.8-flash-low";
@@ -780,4 +779,5 @@ async fn antigravity_one_shot_answers_a_title_prompt_without_editing() {
     assert!(created.is_empty(), "plan mode left the checkout alone: {created:?}");
 }
 
+#[allow(dead_code)]
 fn _unused(_: PathBuf) {}

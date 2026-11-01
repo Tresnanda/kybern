@@ -32,7 +32,7 @@ mod tests {
     #[test]
     fn only_antigravity_is_held_to_full_access() {
         for mode in PermissionMode::ALL {
-            assert_eq!(require_full_access(ProviderKind::ClaudeCode, mode).is_ok(), true);
+            assert!(require_full_access(ProviderKind::ClaudeCode, mode).is_ok());
             assert_eq!(require_full_access(ProviderKind::Antigravity, mode).is_ok(), mode == PermissionMode::FullAccess);
         }
         let error = require_full_access(ProviderKind::Antigravity, PermissionMode::Auto).unwrap_err();
