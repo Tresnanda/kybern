@@ -51,7 +51,7 @@ pub enum Entry {
 }
 
 pub fn home() -> Option<PathBuf> {
-    ["HOME", "USERPROFILE"].iter().find_map(|key| std::env::var_os(key)).filter(|home| !home.is_empty()).map(PathBuf::from)
+    ["HOME", "USERPROFILE"].iter().find_map(std::env::var_os).filter(|home| !home.is_empty()).map(PathBuf::from)
 }
 
 fn config_path(home: &Path) -> PathBuf {
