@@ -1957,6 +1957,7 @@ dependencies = [
  "kybern-client",
  "kybern-drivers",
  "kybern-protocol",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",

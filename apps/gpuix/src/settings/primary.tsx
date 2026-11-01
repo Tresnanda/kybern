@@ -1,4 +1,5 @@
 import { activeEnvironment } from '../shell/environment.ts'
+import { AntigravitySetup } from './Antigravity.tsx'
 import { CursorSetup } from './Cursor.tsx'
 import { load, save } from '../shell/persist.ts'
 import { useState, useSyncExternalStore } from 'react'
@@ -118,6 +119,7 @@ export function Agents() {
     </Section>
     <Section title="Installed agents">{providers.map((p) => <Row key={p.kind} title={p.display_name} description={[p.unavailable_reason ?? p.binary_path ?? 'Not found on PATH', updates.data?.updates.find((u) => u.kind === p.kind)?.message].filter(Boolean).join('\n')}><Label color={t.textSecondary} size={12}>{p.version ?? (p.available ? 'Installed' : 'Not installed')}</Label>{p.available && p.kind !== 'cursor' && !s.providers[p.kind]?.binary && <Button disabled={!!busy} onClick={() => void runUpdate(p.kind)}>{busy === p.kind ? 'Updating…' : 'Update now'}</Button>}</Row>)}<Row title="Update status" description={message || updates.error || 'Refresh to read the latest update status.'}><Button onClick={updates.refresh}>Refresh</Button></Row></Section>
     <CursorSetup />
+    <AntigravitySetup />
   </>
 }
 

@@ -291,7 +291,8 @@ expression: schema_for!(NetworkStatus)
         "opencode",
         "pi",
         "omp",
-        "cursor"
+        "cursor",
+        "antigravity"
       ]
     },
     "JoinVia": {

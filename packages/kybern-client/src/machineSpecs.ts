@@ -98,6 +98,7 @@ const HARNESS_NAME: Record<ProviderKind, string> = {
   pi: "pi",
   omp: "omp",
   cursor: "Cursor",
+  antigravity: "Antigravity",
 };
 
 /** "2.1.312 (Claude Code)", "codex-cli 0.165.0" and "omp/18.13.2" all say one number: the first dotted version in the text. */
@@ -111,7 +112,7 @@ export interface HarnessChip {
   kind: ProviderKind;
   /** "Claude 2.1.312". */
   label: string;
-  /** Installed, but nobody is signed in (only for harnesses with an account sign-in: Claude, Codex, Cursor). */
+  /** Installed, but nobody is signed in (only for harnesses with an account sign-in: Claude, Codex, Cursor, Antigravity). */
   signedOut: boolean;
 }
 
@@ -130,4 +131,4 @@ export function harnessChips(harnesses: readonly HarnessSummary[] | undefined): 
  * Harnesses with one account sign-in of their own. omp, OpenCode and pi run on whichever model
  * providers are configured in them, so "signed out" means nothing for them and is never shown.
  */
-const SIGNS_IN: ReadonlySet<ProviderKind> = new Set<ProviderKind>(["claude-code", "codex", "cursor"]);
+const SIGNS_IN: ReadonlySet<ProviderKind> = new Set<ProviderKind>(["claude-code", "codex", "cursor", "antigravity"]);

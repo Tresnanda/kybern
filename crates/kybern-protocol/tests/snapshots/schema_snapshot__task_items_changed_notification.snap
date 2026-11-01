@@ -257,7 +257,8 @@ expression: schema_for!(TaskItemsChangedNotification)
         "opencode",
         "pi",
         "omp",
-        "cursor"
+        "cursor",
+        "antigravity"
       ]
     },
     "TaskRunState": {

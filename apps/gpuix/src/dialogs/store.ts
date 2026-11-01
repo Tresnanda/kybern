@@ -15,6 +15,8 @@ type Dialog =
   /** Add a project to another machine (`provision/ProvisionSheet.tsx`); `machineId` is the machine of the row it was opened on. */
   | { kind: 'provision'; projectId: string; machineId?: string }
   | { kind: 'account'; provider?: ProviderKind; instance?: string }
+  /** The one-time Antigravity sign-in notice; `proceed` starts the sign-in once it is accepted. */
+  | { kind: 'antigravity-notice'; proceed: () => void }
 let dialog: Dialog | null = null
 const listeners = new Set<() => void>()
 export type WorkspaceDialog = NonNullable<typeof dialog>

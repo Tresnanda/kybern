@@ -14,7 +14,32 @@ pub fn resolve(kind: ProviderKind, override_path: Option<&PathBuf>) -> Result<Pa
         }
         return Err(DriverError::BinaryNotFound(p.display().to_string()));
     }
-    which::which(kind.default_binary()).map_err(|_| DriverError::BinaryNotFound(kind.default_binary().to_string()))
+    which::which(kind.default_binary())
+        .ok()
+        .or_else(|| installed_location(kind))
+        .ok_or_else(|| DriverError::BinaryNotFound(kind.default_binary().to_string()))
+}
+
+/// Where a harness's own installer puts its binary when that folder is not on
+/// the daemon's PATH (a desktop app starts with a short PATH).
+fn installed_location(kind: ProviderKind) -> Option<PathBuf> {
+    if kind != ProviderKind::Antigravity {
+        return None;
+    }
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
+    let local_app_data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    antigravity_candidates(home.as_deref(), local_app_data.as_deref()).into_iter().find(|path| path.is_file())
+}
+
+pub(crate) fn antigravity_candidates(home: Option<&Path>, local_app_data: Option<&Path>) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(home) = home {
+        paths.push(home.join(".local").join("bin").join("agy"));
+    }
+    if let Some(local) = local_app_data {
+        paths.push(local.join("agy").join("bin").join("agy.exe"));
+    }
+    paths
 }
 
 /// Run `<bin> --version` and return the first line, trimmed.

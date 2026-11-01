@@ -388,6 +388,8 @@ pub(super) fn read(ctx: &Context) -> PluginInventory {
             ProviderKind::Codex => codex(ctx),
             ProviderKind::Pi | ProviderKind::Opencode => packages(ctx, provider),
             ProviderKind::Cursor => Ok(cursor(ctx)),
+            // Kybern does not read or change the user's Antigravity plugins.
+            ProviderKind::Antigravity => Ok(Vec::new()),
         };
         match items {
             Ok(items) => result.plugins.extend(items),
