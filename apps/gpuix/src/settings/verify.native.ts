@@ -26,7 +26,8 @@ const server=Bun.serve({port:0,hostname:'127.0.0.1',fetch(req,server){if(server.
  case 'daemon.info':result={protocol_version:PROTOCOL_VERSION,environment_id:'settings-fixture',version:'1.0.0',hostname:'Fixture',os:'macOS',arch:'arm64',data_dir:scratch};break
  case 'projects.list':result={projects:[project]};break
  case 'threads.list':result={threads:[],activity:[]};break
- case 'providers.list':result={providers:[]};break
+ // Cursor without its SDK: its Installed agents row carries the install button.
+ case 'providers.list':result={providers:[{kind:'cursor',display_name:'Cursor',available:false,binary_path:null,version:null,unavailable_reason:'fixture',supported_permission_modes:['auto'],supports_fork:false,supports_model_switch:true,supports_effort_switch:true,supported_efforts:[],models:[],instances:['default']}]};break
  case 'settings.get':result=settings;break
  case 'settings.update':settings=params.settings;result=settings;ws.send(JSON.stringify({jsonrpc:'2.0',method:'settings.changed',params:{settings}}));break
  case 'providers.accounts.list':result={accounts:accounts.map(a=>({...a,is_default:(settings.providers.codex?.default_account??'default')===a.provider.instance}))};break

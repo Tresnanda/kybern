@@ -189,28 +189,113 @@ pub async fn signed_in_by_models(binary: &Path, context: &ProbeContext) -> bool 
 
 /// `agy models`: a "Fetching available models..." line, then `slug<TAB>Display name`.
 /// The first slug is the default.
+///
+/// `agy` lists each thinking tier of a model as its own slug
+/// (`gemini-3.8-flash-high`, `-medium`, `-low`, named "Gemini 3.8 Flash (High)"…).
+/// Two or more tiers of one model become one row whose efforts are the tiers,
+/// so pickers show a single model with an effort slider. The row's id is the
+/// first tier `agy` listed (a real slug, so it still runs without the catalog),
+/// and its default effort is that tier. [`turn_model`] turns the row and the
+/// chosen effort back into the tier's slug.
 pub fn parse_models(text: &str) -> Vec<ProviderModel> {
-    let mut models: Vec<ProviderModel> = Vec::new();
+    let mut entries: Vec<(&str, &str)> = Vec::new();
     for line in text.lines() {
         let Some((slug, name)) = line.split_once('\t') else { continue };
         let (slug, name) = (slug.trim(), name.trim());
-        if slug.is_empty() || slug.contains(char::is_whitespace) || models.iter().any(|model| model.id == slug) {
+        if slug.is_empty() || slug.contains(char::is_whitespace) || entries.iter().any(|(seen, _)| *seen == slug) {
             continue;
         }
+        entries.push((slug, name));
+    }
+    // Tiers of each base, in the order `agy` listed them.
+    let mut tiers: BTreeMap<&str, Vec<&'static str>> = BTreeMap::new();
+    for (slug, name) in &entries {
+        if let Some((base, tier, _)) = split_tier(slug, name) {
+            tiers.entry(base).or_default().push(tier);
+        }
+    }
+    let mut models: Vec<ProviderModel> = Vec::new();
+    let mut grouped: Vec<&str> = Vec::new();
+    for (slug, name) in entries {
+        let family = split_tier(slug, name).filter(|(base, _, _)| tiers.get(base).is_some_and(|list| list.len() > 1));
+        let (display_name, efforts, default_effort) = match family {
+            Some((base, _, _)) if grouped.contains(&base) => continue,
+            Some((base, tier, family_name)) => {
+                grouped.push(base);
+                let listed = &tiers[base];
+                let efforts = EFFORTS.iter().filter(|effort| listed.contains(effort)).map(|effort| effort.to_string()).collect();
+                (family_name.to_string(), efforts, Some(tier.to_string()))
+            }
+            None => (if name.is_empty() { crate::models::prettify_model_id(slug) } else { name.to_string() }, vec![], None),
+        };
         models.push(ProviderModel {
             id: slug.to_string(),
-            display_name: if name.is_empty() { crate::models::prettify_model_id(slug) } else { name.to_string() },
+            display_name,
             resolved_id: None,
             description: None,
             provider: None,
-            efforts: vec![],
-            default_effort: None,
+            efforts,
+            default_effort,
             is_default: models.is_empty(),
             parameters: vec![],
             variants: vec![],
         });
     }
     models
+}
+
+/// `gemini-3.8-flash-high` named "Gemini 3.8 Flash (High)" → (`gemini-3.8-flash`,
+/// `high`, "Gemini 3.8 Flash"). The slug's suffix and the name's parenthesis
+/// must both name the tier, so `gpt-oss-120b-medium` alone stays a plain model
+/// and `claude-opus-4-6-thinking` is never mistaken for one.
+fn split_tier<'a>(slug: &'a str, name: &'a str) -> Option<(&'a str, &'static str, &'a str)> {
+    EFFORTS.iter().find_map(|tier| {
+        let base = slug.strip_suffix(tier)?.strip_suffix('-').filter(|base| !base.is_empty())?;
+        let open = name.rfind(" (")?;
+        let label = name[open + 2..].strip_suffix(')')?;
+        label.eq_ignore_ascii_case(tier).then_some((base, *tier, name[..open].trim_end()))
+    })
+}
+
+/// A model `agy` lists once per tier, as [`parse_models`] grouped it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TierFamily {
+    base: String,
+    tiers: Vec<String>,
+}
+
+/// The tiered families in a catalog [`parse_models`] built.
+fn tier_families(models: &[ProviderModel]) -> Vec<TierFamily> {
+    models
+        .iter()
+        .filter(|model| model.efforts.len() > 1)
+        .filter_map(|model| {
+            let tier = model.default_effort.as_deref()?;
+            let base = model.id.strip_suffix(tier)?.strip_suffix('-')?;
+            Some(TierFamily { base: base.to_string(), tiers: model.efforts.clone() })
+        })
+        .collect()
+}
+
+/// The `--model` and `--effort` of a turn. A tier of a grouped family runs the
+/// tier the effort names (`gemini-3.8-flash-high` at low effort runs
+/// `gemini-3.8-flash-low`) and sends no `--effort`, because the tier is the
+/// effort; an effort the family has no tier for keeps the held tier. Any other
+/// model passes through with its effort.
+fn turn_model(model: Option<&str>, effort: Option<&str>, families: &[TierFamily]) -> (Option<String>, Option<String>) {
+    let tiered = model.and_then(|model| {
+        families.iter().find_map(|family| {
+            let held = model.strip_prefix(family.base.as_str())?.strip_prefix('-')?;
+            family.tiers.iter().any(|tier| tier == held).then_some((family, held))
+        })
+    });
+    match tiered {
+        Some((family, held)) => {
+            let tier = effort.filter(|effort| family.tiers.iter().any(|tier| tier == effort)).unwrap_or(held);
+            (Some(format!("{}-{tier}", family.base)), None)
+        }
+        None => (model.map(str::to_string), effort.map(str::to_string)),
+    }
 }
 
 fn valid_model(model: &str) -> bool {
@@ -313,8 +398,10 @@ impl AgentDriver for AntigravityDriver {
         let model = config.model.filter(|model| valid_model(model));
         let effort = config.effort.filter(|effort| EFFORTS.contains(&effort.as_str()));
         let state = State { conversation: config.resume_session_id, model, effort, guide, turn: None, closed: false, next_turn: 0 };
-        let session =
-            Session { state: Arc::new(Mutex::new(state)), run: Arc::new(Run { binary, cwd: config.cwd, env, home, scratch, tx }) };
+        let session = Session {
+            state: Arc::new(Mutex::new(state)),
+            run: Arc::new(Run { families: tier_families(&self.last_good(&binary)), binary, cwd: config.cwd, env, home, scratch, tx }),
+        };
         Ok(SpawnedSession { session: Box::new(session), events })
     }
 }
@@ -348,6 +435,8 @@ impl Drop for Scratch {
 /// What every turn needs and a session never changes.
 struct Run {
     binary: PathBuf,
+    /// Tiered models from the catalog at spawn: their effort picks the slug.
+    families: Vec<TierFamily>,
     cwd: PathBuf,
     env: BTreeMap<String, String>,
     home: Option<PathBuf>,
@@ -422,10 +511,11 @@ impl AgentSession for Session {
             Some(guide) => crate::cursor::with_guide(guide, &text),
             None => text,
         };
+        let (model, effort) = turn_model(state.model.as_deref(), state.effort.as_deref(), &self.run.families);
         let mut command = Command::new(&self.run.binary).no_window();
         command.current_dir(&self.run.cwd).args(turn_args(
-            state.model.as_deref(),
-            state.effort.as_deref(),
+            model.as_deref(),
+            effort.as_deref(),
             state.conversation.as_deref(),
             &self.run.scratch.log_file(),
         ));

@@ -44,7 +44,7 @@ export function AntigravitySetup() {
     }
   }
 
-  const toolsOn = settings?.antigravity?.kybern_tools ?? false
+  const toolsOn = settings?.antigravity?.kybern_tools ?? true
   const setTools = async (kybern_tools: boolean) => {
     await updateSettings({ antigravity: { ...(latestSettings()?.antigravity ?? {}), kybern_tools } })
     // The daemon refuses the switch when another program already uses the name `kybern`; say why.

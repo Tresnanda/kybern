@@ -6094,6 +6094,11 @@ mod tests {
             let root = std::env::temp_dir().join(format!("kybern-orchestrator-test-{}", Uuid::now_v7()));
             let paths = Paths::resolve(Some(root.clone())).unwrap();
             let settings = SettingsStore::load(&paths.settings).unwrap();
+            // Kybern tools for Antigravity are on by default, and turning them on runs this machine's
+            // real `agy mcp add`. Tests start with them off; a test that needs them on stubs `agy`.
+            let mut initial = settings.get();
+            initial.antigravity.kybern_tools = false;
+            settings.set(initial).unwrap();
             let store = if on_disk { Store::open(&root.join("state.sqlite")).unwrap() } else { Store::open_in_memory().unwrap() };
             let now = chrono::Utc::now();
             let project = Project {

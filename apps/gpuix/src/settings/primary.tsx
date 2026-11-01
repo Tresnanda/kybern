@@ -1,6 +1,7 @@
 import { activeEnvironment } from '../shell/environment.ts'
 import { AntigravitySetup } from './Antigravity.tsx'
-import { CursorSetup } from './Cursor.tsx'
+import { CursorAccountSection, useCursorSetup } from './Cursor.tsx'
+import { InstalledAgents } from './InstalledAgents.tsx'
 import { load, save } from '../shell/persist.ts'
 import { useState, useSyncExternalStore } from 'react'
 import { globalNotesHome, setGlobalNotesHome, watchGlobalNotesHome } from '../notes/home.ts'
@@ -82,19 +83,11 @@ export function Agents() {
   const t = useTheme()
   const { settings: s, saving } = useSettings()
   const providers = useNav((s) => s.providers)
-  const updates = useResource('harness_updates.list', {})
-  const [message, setMessage] = useState('')
-  const [busy, setBusy] = useState('')
+  const cursor = useCursorSetup()
   if (!s) return null
   const current = s.orchestration
   const effective = effectiveCoordinatorSettings(current, null)
   const change = (patch: Partial<OrchestrationSettings>) => void updateSettings({ orchestration: { ...latestSettings()!.orchestration, ...patch } })
-  const runUpdate = async (kind: ProviderKind) => {
-    setBusy(kind); setMessage('')
-    try { const result = await getClient()!.call('harness_updates.run', { kind }); setMessage(result.message); updates.refresh(); await loadProviders(true) }
-    catch (e) { setMessage(`Unable to start update. ${String(e)}`) }
-    finally { setBusy('') }
-  }
   return <>
     <Section title="Updates">
       <Row title="Update harnesses automatically" description="Check daily on this machine. Install when the agent's turns and background work are finished." shared="auto_update_harnesses"><Switch aria-label="Update harnesses automatically" testId="settings-harness-updates" checked={s.auto_update_harnesses} disabled={saving} onCheckedChange={(auto_update_harnesses) => void updateSettings({ auto_update_harnesses })} /></Row>
@@ -117,8 +110,8 @@ export function Agents() {
       <Row title={COPY.models} description="When the Coordinator delegates without choosing a model. Each project can override these in its Project tab." />
       {COORDINATOR_ROLES.map(({ role, label }) => <RoleRow key={role} label={label} value={current.role_defaults?.[role]} onChange={(value) => void updateSettings({ orchestration: withGlobalRoleDefault(latestSettings()!.orchestration, role, value) })} />)}
     </Section>
-    <Section title="Installed agents">{providers.map((p) => <Row key={p.kind} title={p.display_name} description={[p.unavailable_reason ?? p.binary_path ?? 'Not found on PATH', updates.data?.updates.find((u) => u.kind === p.kind)?.message].filter(Boolean).join('\n')}><Label color={t.textSecondary} size={12}>{p.version ?? (p.available ? 'Installed' : 'Not installed')}</Label>{p.available && p.kind !== 'cursor' && !s.providers[p.kind]?.binary && <Button disabled={!!busy} onClick={() => void runUpdate(p.kind)}>{busy === p.kind ? 'Updating…' : 'Update now'}</Button>}</Row>)}<Row title="Update status" description={message || updates.error || 'Refresh to read the latest update status.'}><Button onClick={updates.refresh}>Refresh</Button></Row></Section>
-    <CursorSetup />
+    <InstalledAgents providers={providers} customBinary={(kind) => !!s.providers[kind]?.binary} cursor={cursor} />
+    <CursorAccountSection setup={cursor} />
     <AntigravitySetup />
   </>
 }

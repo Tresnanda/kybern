@@ -13,7 +13,8 @@ pub mod usage;
 
 pub(crate) use pool::Connection;
 pub use runtime::{
-    SDK_VERSION, auth_status, install, installed, login_command, node_version, npm_available, setup_command, setup_error, sign_out,
+    SDK_VERSION, auth_status, install, installed, login_command, node_version, npm_available, outdated, previous_version, setup_command,
+    setup_error, sign_out,
 };
 
 use std::path::PathBuf;

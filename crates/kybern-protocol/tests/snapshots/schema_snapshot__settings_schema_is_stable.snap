@@ -121,7 +121,7 @@ expression: schema_for!(Settings)
       "description": "Antigravity's link to Kybern's tools. Per machine: it is one entry in this machine's `agy` MCP servers.",
       "$ref": "#/$defs/AntigravitySettings",
       "default": {
-        "kybern_tools": false
+        "kybern_tools": true
       }
     },
     "orchestration": {
@@ -426,9 +426,9 @@ expression: schema_for!(Settings)
       "type": "object",
       "properties": {
         "kybern_tools": {
-          "description": "Let Antigravity sessions use Kybern's tools through that entry. Turned on\nby a successful Antigravity sign-in.",
+          "description": "Let Antigravity sessions use Kybern's tools through that entry. On by\ndefault: a session adds the entry when it starts, and turning this off\nremoves it.",
           "type": "boolean",
-          "default": false
+          "default": true
         }
       }
     },

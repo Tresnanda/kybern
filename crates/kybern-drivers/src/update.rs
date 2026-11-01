@@ -42,7 +42,9 @@ fn brew_package(kind: ProviderKind, path: &Path) -> Option<(PathBuf, String, boo
 
 pub async fn plan(kind: ProviderKind, binary: &Path, env: &BTreeMap<String, String>, cwd: &Path) -> Result<UpdateCommand> {
     if kind == ProviderKind::Cursor {
-        bail!("Cursor SDK is pinned to this Kybern release. Update Kybern, then run `kybern cursor install`.");
+        bail!(
+            "Each Kybern release uses its own Cursor SDK version. Install or update it under Cursor SDK in Settings → Agent providers, or run `kybern cursor install`."
+        );
     }
     let canonical = std::fs::canonicalize(binary)?;
     let paths = format!("{} {}", binary.display(), canonical.display());
