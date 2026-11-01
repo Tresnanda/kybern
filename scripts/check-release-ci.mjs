@@ -6,7 +6,10 @@ import { resolve } from 'node:path'
 // are filtered; version bumps and manual full runs execute all jobs. A skipped
 // job cannot qualify a commit for release. The `changes` and `CI`
 // bookkeeping jobs are not listed; the run's own conclusion already covers them.
-export const requiredJobs = ['rustfmt', 'clippy + test (ubuntu-24.04)', 'clippy + test (macos-15)', 'cargo check (windows-latest)', 'release checks', 'gpuix (typecheck + test)']
+export const requiredJobs = [
+  'rustfmt', 'clippy (ubuntu-24.04)', 'clippy (macos-15)', 'test (ubuntu-24.04)', 'test (macos-15)',
+  'cargo check (windows-latest)', 'release checks', 'gpuix (typecheck + test)',
+]
 
 // A dev release (`vX.Y.Z-dev.N`) ships to Dev installs first, so it needs only main's latest CI for the tagged
 // commit to have passed: that run may be filtered (`scripts/ci-paths.mjs`) and skip jobs. Every other tag, stable
