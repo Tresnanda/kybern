@@ -17,7 +17,7 @@ import { TextArea } from '../kit/TextArea.tsx'
 import { TokenChip } from '../kit/TokenChip.tsx'
 import { Switch } from '../kit/Switch.tsx'
 import { openSystemSettings, systemSettingsFailure } from './external.ts'
-import { DRIVER_NAME, checkTitle, OWN_ROW_CHECKS, PANE_ACCESSIBILITY, PANE_SCREEN, activeDriver, computerOs, driverHint, driverSetting, noteKey, offeredDrivers, thisComputer } from './computerModel.ts'
+import { DRIVER_NAME, INSTALL_CHECKS, checkTitle, OWN_ROW_CHECKS, PANE_ACCESSIBILITY, PANE_SCREEN, activeDriver, computerOs, driverHint, driverSetting, noteKey, offeredDrivers, readyHint, thisComputer } from './computerModel.ts'
 import { latestSettings, refreshSettings, updateSettings, useSettings } from './store.ts'
 
 /** Mirrors the daemon's per-app limit (`computer/notes.rs`). */
@@ -78,16 +78,16 @@ export function ComputerUse() {
   if (!settings) return null
   if (loadError && !status) return <Section title="Computer use"><Row title="Unavailable on this machine" description={`${loadError}. Update Kybern on the connected machine to use computer use.`} /></Section>
   if (status && !status.supported) return <Section title="Computer use"><Row title="Not available here" description="Computer use is not supported on this operating system yet." /></Section>
-  const needsInstall = !!status && (!status.installed || status.checks.some((check) => (check.name === 'version' || check.name === 'signature') && !check.ok))
+  const needsInstall = !!status && (!status.installed || status.checks.some((check) => INSTALL_CHECKS.includes(check.name) && check.name !== 'installed' && !check.ok))
   // Only macOS has permissions to grant; Windows and Linux show the doctor's checks instead.
   const permissions = os === 'macos' && !!status && status.enabled && status.installed && !needsInstall
   const missingPermission = !!permissions && (status.accessibility !== 'granted' || status.screen_recording !== 'granted')
   const problems = status?.checks.filter((check) => !check.ok && !OWN_ROW_CHECKS.includes(check.name)) ?? []
-  const readiness = !enabled ? undefined : status?.ready ? 'Ready. Ask any agent except Codex to use an app, like “Add milk to my shopping list in Notes.”' : status ? 'Finish setup below to start.' : undefined
+  const readiness = !enabled ? undefined : status?.ready ? readyHint(os) : status ? 'Finish setup below to start.' : undefined
   const onChooseDriver = (value: string) => update({ driver: driverSetting(value as ComputerDriver, offered) })
   const openPane = (address: string, pane: string) => void openSystemSettings(address).catch((error) => toast.error('Unable to open System Settings', { description: `${systemSettingsFailure(pane, '')} ${errorText(error)}` }))
   const update = (patch: Partial<NonNullable<typeof computer>>) => void updateSettings({ computer_use: { enabled, foreground: 'ask', ...latestSettings()?.computer_use, ...patch } })
-  const needsInstallMessage = status?.checks.find((check) => !check.ok && ['installed', 'version', 'signature'].includes(check.name))?.message
+  const needsInstallMessage = status?.checks.find((check) => !check.ok && INSTALL_CHECKS.includes(check.name))?.message
   return <>
     <Section title="Access">
       <Row title={`Let agents use apps on ${where}`} description="Agents can read an app’s window and click and type in it. You approve each app the first time a conversation uses it." status={readiness}><Switch testId="computer-enabled" aria-label={`Let agents use apps on ${where}`} checked={enabled} onCheckedChange={(checked) => update({ enabled: checked })} /></Row>
@@ -124,7 +124,7 @@ export function ComputerUse() {
 
 function DriverVersion({ status, driver }: { status: ComputerStatus; driver: ComputerDriver }) {
   const t = useTheme()
-  const signed = status.signed ? (driver === 'cua_driver' ? ' · Signed by Cua AI' : ' · Signed') : ''
+  const signed = status.signed ? (driver === 'cua_driver' ? ' · Signed by Cua AI' : ' · Checksum verified') : ''
   return <div style={{ display: 'flex', flexDirection: 'column' }}><Label color={t.textSecondary} size={14} lineHeight={21.7}>{`Version ${status.version ?? 'unknown'}${signed}${status.required_version ? ` · needs ${status.required_version} or newer` : ''}`}</Label>{status.app_path && <Label color={t.textSecondary} size={14} lineHeight={21.7} truncate>{status.app_path}</Label>}</div>
 }
 

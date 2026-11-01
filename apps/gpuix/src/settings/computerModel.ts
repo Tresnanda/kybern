@@ -44,13 +44,38 @@ export function driverHint(os: OsName, selectable: boolean): string {
 }
 
 /** Notes are keyed by the app id when the daemon sends one, else by the old bundle id. */
-export const noteKey = (note: Pick<ComputerNote, 'app_id' | 'bundle_id'>): string => note.app_id ?? note.bundle_id
+export const noteKey = (note: Pick<ComputerNote, 'app_id' | 'bundle_id'>): string => note.app_id || note.bundle_id
 
 /** Checks that already have a row of their own on macOS; everything else is a "problem" row. Off macOS nothing is hidden. */
-export const OWN_ROW_CHECKS = ['installed', 'enabled', 'version', 'signature', 'accessibility', 'screen_recording']
+export const OWN_ROW_CHECKS = ['installed', 'enabled', 'version', 'signature', 'verified', 'accessibility', 'screen_recording', 'permission_holder']
 
-const CHECK_TITLES: Record<string, string> = { uia: 'UI Automation', 'at-spi': 'Accessibility bus (AT-SPI)', at_spi: 'Accessibility bus (AT-SPI)', portal: 'Screenshot portal', integrity: 'Integrity level', session: 'Display session' }
+/** Checks that mean the driver must be installed again (missing, too old, or not the pinned build). */
+export const INSTALL_CHECKS = ['installed', 'version', 'signature', 'verified']
+
+const CHECK_TITLES: Record<string, string> = {
+  version: 'Version',
+  verified: 'Checksum',
+  atspi: 'Accessibility bus (AT-SPI)',
+  'at-spi': 'Accessibility bus (AT-SPI)',
+  at_spi: 'Accessibility bus (AT-SPI)',
+  glibc: 'C library',
+  display: 'Display server',
+  desktop: 'Desktop',
+  clipboard: 'Clipboard',
+  session: 'Desktop session',
+  elevation: 'Apps run as administrator',
+  arm64: 'Windows on Arm',
+  uia: 'UI Automation',
+  portal: 'Screenshot portal',
+}
 /** A doctor check's row title: a known name in words, else the daemon's name in sentence case. */
 export function checkTitle(name: string): string {
   return CHECK_TITLES[name.toLowerCase()] ?? name.replace(/[_-]+/g, ' ').replace(/^./, (c) => c.toUpperCase())
+}
+
+/** Agents that get Kybern's computer tools here: Codex keeps OpenAI's own on macOS and Windows. */
+export function readyHint(os: OsName): string {
+  return os === 'linux'
+    ? 'Ready. Ask any agent to use an app, like “Add milk to my shopping list in Notes.”'
+    : 'Ready. Ask any agent except Codex to use an app, like “Add milk to my shopping list in Notes.”'
 }
