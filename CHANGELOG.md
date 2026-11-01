@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.21.0
+
+<!-- kybern-release-title: Antigravity, and computer use on Windows and Linux -->
+<!-- kybern-release-summary: Run Google's Antigravity as an agent, let agents use apps on Windows and Linux, and reach every machine in your network from the mobile app. -->
+
+- Antigravity joins Kybern as an agent. Kybern runs Google's `agy` CLI, streams its replies and tool calls, resumes conversations, lists its models and shows its usage limits. Antigravity runs only in Full access, and the composer says so. Sign in with a Gemini API key, or with Google after a notice: Google says using Antigravity through other apps on a personal plan may get the account suspended. Turn on Kybern tools in Settings → Agent providers → Antigravity to give its conversations notes, tasks, delegation and computer use. Onboarding offers it with the official install command.
+- Agents can use apps on Windows and Linux through agent-desktop, which Kybern installs and checks for you. On a Mac, agent-desktop is an alternative to CuaDriver: choose it in Settings → Computer use → Driver. Linux supports GNOME on X11 and Wayland; KDE and other desktops are best effort and need assistive technologies turned on. Conversations on a machine without computer use can use the apps on another machine in your network. Codex gets Kybern's computer tools on Linux, where OpenAI's plugin isn't available.
+- Claude Code conversations identify as Kybern, instead of using the label that others measured using up the 5-hour limit about twice as fast for the same tokens.
+- The mobile app reaches every machine in your network. Machines that are only reachable through a relay now connect, along with their images, attachments, uploads, previews, visuals and artifacts. The mobile update needs your machines on 0.21.0.
+- On mobile, Settings → Machines can rename and pause machines, check the network, update all machines, retry or cancel queued messages, and show each machine's specs and agents. Threads say which machine they run on, and offer Fork to and Continue on another machine, including setting up the project there.
+- The mobile app connects to machines other than the one it's paired with. Since 0.20.0 it couldn't: those machines always showed as offline. If the paired computer isn't answering, another of your saved computers can show your network instead.
+- The iPad sidebar is compact again, with smaller rows, filter chips and Settings in the footer.
+
 ## 0.20.6
 
 <!-- kybern-release-title: A tidier Pull requests header -->
