@@ -1,12 +1,13 @@
 // Who can take a fork or a move of a thread, on the phone (ADE-99 §2.2, §2.3). Pure: it reads the merged view, so the same rows
-// feed the sheet, the menu and the tests. Machines with the project can be chosen; the others are listed disabled with
-// "No checkout on <machine>" and can be set up from the row.
+// feed the sheet, the menu and the tests. One row per machine: a machine with the project can be chosen; one without it reads
+// "No checkout · Set up project" and leads into setting it up, or "No checkout" when it cannot be set up from here.
 import { forkTargets, type ForkInstance } from "../../../../packages/kybern-client/src/forkMachine";
 import { machineChoiceDetail } from "../../../../packages/kybern-client/src/machineAgents";
 import type { LogicalProject } from "../../../../packages/kybern-client/src/machineMerge";
 import type { MachineSummary } from "../../../../packages/kybern-client/src/machines";
 import { completeProvisionProject, provisionSource } from "../../../../packages/kybern-client/src/provision";
 import { machineReachable } from "../../../../packages/kybern-client/src/machineTarget";
+import type { MachineChoice } from "../../../../packages/kybern-client/src/machineTarget";
 import type { MachineId, Project, ProjectId } from "../../../../packages/kybern-client/src/types";
 
 export interface SheetTarget {
@@ -15,8 +16,10 @@ export interface SheetTarget {
   online: boolean;
   /** The target machine's project; empty while `missing`. */
   projectId: ProjectId;
-  /** No checkout of the project there: shown disabled, with Set up project. */
+  /** No checkout of the project there: it cannot take the thread until the project is set up there. */
   missing: boolean;
+  /** `missing`, and the project can be set up there from here (the row leads into Set up project). */
+  canSetUp: boolean;
   detail: string;
 }
 
@@ -29,7 +32,68 @@ export interface ThreadMachineModel {
   provisionFrom: { machineId: MachineId; projectId: ProjectId } | null;
 }
 
-export const noCheckoutText = (machine: string) => `No checkout on ${machine}`;
+/** A machine's row says what it lacks; its name is already the title. */
+export const MACHINE_ROW_COPY = {
+  noCheckout: "No checkout",
+  setUp: "No checkout · Set up project",
+  offline: "No checkout · Offline",
+  /** The machine the phone is paired with: the phone reaches the others through it. */
+  paired: "Paired with this phone",
+} as const;
+
+/** The second line of a machine without the project. */
+export function missingDetail(online: boolean, canSetUp: boolean): string {
+  if (!online) return MACHINE_ROW_COPY.offline;
+  return canSetUp ? MACHINE_ROW_COPY.setUp : MACHINE_ROW_COPY.noCheckout;
+}
+
+/** `detail` with "Paired with this phone" after it for the machine the phone is paired with. */
+export const withPaired = (detail: string, paired: boolean): string => (paired ? (detail ? `${detail} · ${MACHINE_ROW_COPY.paired}` : MACHINE_ROW_COPY.paired) : detail);
+
+/** One row of the new-thread machine menu: pick the machine, or set the project up there. */
+export interface MachineMenuRow {
+  machineId: MachineId;
+  title: string;
+  subtitle: string;
+  checked: boolean;
+  disabled: boolean;
+  action: "pick" | "setup" | "none";
+}
+
+/**
+ * The machine chip's menu (§2.3): one row per machine. A machine without the project leads into Set up project when
+ * `sender` (an online machine with the project) and the gate allow it; otherwise it is disabled and says why.
+ */
+export function machineMenuRows(input: {
+  choices: readonly MachineChoice[];
+  chosen: MachineId | undefined;
+  online: (machineId: MachineId) => boolean;
+  /** Whether the project can be set up on this machine from here (a sender exists and both run 0.21.0+). */
+  canSetUp: (machineId: MachineId) => boolean;
+}): MachineMenuRow[] {
+  return input.choices.map((choice) => {
+    if (choice.state === "no-checkout") {
+      const online = input.online(choice.machineId);
+      const setUp = online && input.canSetUp(choice.machineId);
+      return {
+        machineId: choice.machineId,
+        title: choice.name,
+        subtitle: withPaired(missingDetail(online, setUp), choice.isLocal),
+        checked: false,
+        disabled: !setUp,
+        action: setUp ? "setup" : "none",
+      };
+    }
+    return {
+      machineId: choice.machineId,
+      title: choice.name,
+      subtitle: withPaired(choice.detail, choice.isLocal),
+      checked: choice.machineId === input.chosen,
+      disabled: !choice.selectable,
+      action: choice.selectable ? "pick" : "none",
+    };
+  });
+}
 
 /**
  * `gate` says whether a target is new enough (spec §0: fork and move check the target). Paused machines are left out, as on
@@ -53,18 +117,30 @@ export function threadMachineModel(input: {
     .filter((i) => online.has(i.machineId) && completeProvisionProject(source.project, i.project))
     .map((i) => ({ machineId: i.machineId, machineName: known.find((m) => m.machineId === i.machineId)!.name, projectId: i.project.id, online: online.get(i.machineId)!, project: i.project }));
   const having = forkTargets(instances, { machineId: threadMachine, project: source.project }).map(
-    (item): SheetTarget => ({ machineId: item.machineId, machineName: item.machineName, online: item.online, projectId: item.projectId, missing: false, detail: machineChoiceDetail(item.online, null) }),
+    (item): SheetTarget => ({
+      machineId: item.machineId,
+      machineName: item.machineName,
+      online: item.online,
+      projectId: item.projectId,
+      missing: false,
+      canSetUp: false,
+      detail: machineChoiceDetail(item.online, null),
+    }),
   );
-  const haveIds = new Set(having.map((item) => item.machineId));
-  const missing = known
-    .filter((m) => !haveIds.has(m.machineId))
-    .map((m): SheetTarget => ({ machineId: m.machineId, machineName: m.name, online: online.get(m.machineId)!, projectId: "", missing: true, detail: noCheckoutText(m.name) }))
-    .sort((a, b) => Number(b.online) - Number(a.online) || a.machineName.localeCompare(b.machineName));
   const sender = provisionSource(
     logical.instances.map((i) => ({ machineId: i.machineId, online: i.machineId === threadMachine || machineReachable(machines.find((m) => m.machineId === i.machineId)?.status ?? "offline") })),
     threadMachine,
   );
   const senderInstance = logical.instances.find((i) => i.machineId === sender);
+  const settable = !!senderInstance && gate(senderInstance.machineId);
+  const haveIds = new Set(having.map((item) => item.machineId));
+  const missing = known
+    .filter((m) => !haveIds.has(m.machineId))
+    .map((m): SheetTarget => {
+      const up = online.get(m.machineId)!;
+      return { machineId: m.machineId, machineName: m.name, online: up, projectId: "", missing: true, canSetUp: up && settable, detail: missingDetail(up, up && settable) };
+    })
+    .sort((a, b) => Number(b.online) - Number(a.online) || a.machineName.localeCompare(b.machineName));
   return {
     sourceMachine: threadMachine,
     sourceProject: source.project,

@@ -10,7 +10,9 @@ registerHooks({ resolve(specifier, context, next) {
 } });
 const { NETWORK_PARITY_MIN_VERSION, gateDisabled, parityFooter, parityOn, versionOf } = await import("../src/machines/gate.ts");
 const { cancelOutboxText, deviceSubtitle, groupDevices, outboxEntries, reachText, specRows, osLabel } = await import("../src/machines/settingsModel.ts");
-const { FORK_COPY, noCheckoutText, offersMachineMoves, threadMachineLine, threadMachineModel } = await import("../src/state/threadMachineModel.ts");
+const { FORK_COPY, MACHINE_ROW_COPY, machineMenuRows, missingDetail, offersMachineMoves, threadMachineLine, threadMachineModel, withPaired } = await import(
+  "../src/state/threadMachineModel.ts"
+);
 
 // ---- the gate ----
 
@@ -152,8 +154,8 @@ test("targets: machines with the project are choices, the rest say no checkout, 
   ]);
   assert.equal(model.targets[0].detail, "Online");
   assert.match(model.targets[1].detail, /Offline/);
-  assert.equal(model.targets[2].detail, "No checkout on vps");
-  assert.equal(noCheckoutText("vps"), "No checkout on vps");
+  assert.equal(model.targets[2].detail, "No checkout · Set up project");
+  assert.deepEqual(model.targets.map((t) => t.canSetUp), [false, false, true]);
   assert.deepEqual(model.provisionFrom, { machineId: "mac", projectId: "p-mac" });
   assert.equal(offersMachineMoves(model, 4), true);
 });
@@ -201,4 +203,61 @@ test("the header says where the thread runs only with two machines, and flags an
 test("the sheet keeps the spec's words", () => {
   assert.equal(FORK_COPY.forkAction, "Fork thread");
   assert.equal(FORK_COPY.moveAction, "Continue there");
+});
+
+// ---- one row per machine (user feedback on #184) ----
+
+test("a machine without the project is one row: set up when it can be, otherwise the reason", () => {
+  assert.equal(missingDetail(true, true), "No checkout · Set up project");
+  assert.equal(missingDetail(true, false), "No checkout");
+  assert.equal(missingDetail(false, true), "No checkout · Offline");
+  assert.equal(withPaired("Online", true), "Online · Paired with this phone");
+  assert.equal(withPaired("", true), MACHINE_ROW_COPY.paired);
+  assert.equal(withPaired("Online", false), "Online");
+
+  const choice = (machineId, name, state, extra = {}) => ({ machineId, name, state, isLocal: false, selectable: state !== "no-checkout", detail: state === "online" ? "Online" : "", ...extra });
+  const choices = [
+    choice("mac", "Treshnandas-Macbook", "online", { isLocal: true, projectId: "p" }),
+    choice("box", "instabox-anjay", "no-checkout"),
+    choice("sat", "SatyaMas", "no-checkout"),
+    choice("srv", "srv1544252", "no-checkout"),
+  ];
+  const rows = machineMenuRows({ choices, chosen: "mac", online: (id) => id !== "srv", canSetUp: (id) => id !== "sat" });
+  assert.equal(rows.length, 4, "no extra Set up rows");
+  assert.deepEqual(
+    rows.map((row) => [row.title, row.subtitle, row.action, row.disabled, row.checked]),
+    [
+      ["Treshnandas-Macbook", "Online · Paired with this phone", "pick", false, true],
+      ["instabox-anjay", "No checkout · Set up project", "setup", false, false],
+      ["SatyaMas", "No checkout", "none", true, false],
+      ["srv1544252", "No checkout · Offline", "none", true, false],
+    ],
+  );
+  assert.ok(rows.every((row) => !/ on |this phone is here/.test(row.subtitle) && !row.title.includes("(")), "no machine name repeated, no aside in the title");
+});
+
+test("the fork sheet's missing rows lead into setup only when the sender can send the project", () => {
+  const model = threadMachineModel({
+    machines: [machine("mac", "Mac Studio"), machine("vps", "vps"), machine("old", "old-box")],
+    projects: [logical([instance("mac", "p-mac")])],
+    threadMachine: "mac",
+    projectId: "p-mac",
+    gate: () => true,
+  });
+  assert.deepEqual(model.targets.map((t) => [t.machineName, t.canSetUp, t.detail]), [
+    ["old-box", true, "No checkout · Set up project"],
+    ["vps", true, "No checkout · Set up project"],
+  ]);
+  const noSender = threadMachineModel({
+    machines: [machine("mac", "Mac Studio"), machine("vps", "vps")],
+    projects: [logical([instance("mac", "p-mac")])],
+    threadMachine: "mac",
+    projectId: "p-mac",
+    gate: (id) => id !== "mac",
+  });
+  assert.deepEqual(
+    noSender.targets.map((t) => [t.machineName, t.canSetUp, t.detail]),
+    [["vps", false, "No checkout"]],
+    "a sender below the gate cannot set the project up: the row says why and does nothing",
+  );
 });

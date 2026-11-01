@@ -31,7 +31,7 @@ export function useMachineMenuItems(): MenuItem[] {
           title: machine.name,
           subtitle:
             machine.status === "online" || machine.status === "needs-update"
-              ? machine.isLocal ? "Online · this phone is here" : "Online"
+              ? machine.isLocal ? "Online · Paired with this phone" : "Online"
               : machine.status === "relaying" ? "Relaying" : machine.status === "paused" ? "Paused" : "Offline",
           checked: chosen === machine.machineId,
           onPress: () => setMachineFilter(machine.machineId),

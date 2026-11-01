@@ -166,7 +166,7 @@ export function MachinesSettings() {
             <ListRow
               key={id}
               title={connection.record.name}
-              subtitle={here ? `${subtitle} · This phone is here` : subtitle}
+              subtitle={here ? `${subtitle} · Paired with this phone` : subtitle}
               subtitleLines={2}
               leading={summary ? <MachineGlyph glyph={summary.glyph} size={24} /> : "laptopcomputer"}
               trailing={<StatusDot status={connection.status} connecting={connection.connecting} />}

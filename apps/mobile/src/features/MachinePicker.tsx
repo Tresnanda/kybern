@@ -1,7 +1,6 @@
-// The machines a fork or a move can go to (ADE-99 §2.2): a machine with the project is a choice; one without it is disabled with
-// "No checkout on <machine>" and offers Set up project (§2.3). Used by the fork and continue sheet.
+// The machines a fork or a move can go to (ADE-99 §2.2): one row per machine. A machine with the project is a choice; one
+// without it reads "No checkout · Set up project" and leads into setting it up (§2.3), or says why it cannot.
 import { InsetGroup, ListRow } from "../ui/List";
-import { Button } from "../ui/primitives";
 import type { SheetTarget } from "../state/threadMachineModel";
 import { useMachineView } from "../state/runtime";
 import { MachineGlyph } from "./MachineGlyph";
@@ -16,7 +15,7 @@ export function MachinePickerRows({
   targets: readonly SheetTarget[];
   selected: string | undefined;
   onSelect: (machineId: string) => void;
-  /** Present when the project can be set up from here; absent hides the button. */
+  /** Opens Set up project for a row that offers it (`canSetUp`). */
   onSetup?: (target: SheetTarget) => void;
   disabled?: boolean;
 }) {
@@ -25,6 +24,7 @@ export function MachinePickerRows({
     <InsetGroup>
       {targets.map((target) => {
         const glyph = view.machines.find((m) => m.machineId === target.machineId)?.glyph;
+        const setUp = target.missing && target.canSetUp && onSetup ? () => onSetup(target) : undefined;
         return (
           <ListRow
             key={target.machineId}
@@ -33,17 +33,11 @@ export function MachinePickerRows({
             subtitleLines={2}
             leading={glyph ? <MachineGlyph glyph={glyph} size={24} /> : "laptopcomputer"}
             checked={!target.missing && target.machineId === selected}
-            disabled={disabled}
-            dimmed={!target.missing && !target.online}
+            disabled={disabled || (target.missing && !setUp)}
+            dimmed={target.missing ? !setUp : !target.online}
+            chevron={!!setUp}
             label={target.missing ? `${target.machineName}. ${target.detail}` : target.machineName}
-            onPress={target.missing ? undefined : () => onSelect(target.machineId)}
-            trailing={
-              target.missing && onSetup && target.online ? (
-                <Button size="medium" role="plain" label={`Set up project on ${target.machineName}`} disabled={disabled} onPress={() => onSetup(target)}>
-                  Set up project
-                </Button>
-              ) : undefined
-            }
+            onPress={target.missing ? setUp : () => onSelect(target.machineId)}
           />
         );
       })}

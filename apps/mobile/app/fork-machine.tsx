@@ -79,7 +79,6 @@ export default function ForkMachine() {
       setBusy(false);
     }
   };
-  const canSetUp = !!model?.provisionFrom && machineParity(model.provisionFrom.machineId);
   const action = move ? FORK_COPY.moveAction : FORK_COPY.forkAction;
   return (
     <KeyboardAvoidingView behavior="padding" style={{ flex: 1, backgroundColor: colors.grouped }}>
@@ -100,7 +99,7 @@ export default function ForkMachine() {
               disabled={busy}
               onSelect={setPick}
               onSetup={
-                canSetUp && model?.provisionFrom
+                model?.provisionFrom
                   ? (target) =>
                       router.push({
                         pathname: "/setup-project",
