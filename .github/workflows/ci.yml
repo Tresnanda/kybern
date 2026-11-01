@@ -87,7 +87,7 @@ jobs:
           # Clippy only type-checks, so its cache is separate from the test
           # builds'. As below, pull requests restore main's cache; only main writes it.
           shared-key: clippy
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || github.head_ref == 'ci/nextest-quarantine' }}
       - name: Linux credential-store dependencies
         if: runner.os == 'Linux'
         # Usually under a minute; a stalled mirror once held this step for 18 minutes.
@@ -138,7 +138,7 @@ jobs:
           # Pull requests restore main's cache; only main writes it, which
           # keeps the repository's cache storage under its limit.
           shared-key: check
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || github.head_ref == 'ci/nextest-quarantine' }}
       - name: Linux credential-store dependencies
         if: runner.os == 'Linux'
         # Usually under a minute; a stalled mirror once held this step for 18 minutes.
