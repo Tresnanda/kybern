@@ -2424,11 +2424,10 @@ mod tests {
     #[tokio::test]
     async fn one_shot_keeps_the_prompt_out_of_variadic_tool_rules() {
         use crate::AgentDriver;
-        use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
         let binary = root.path().join("claude-fixture");
-        std::fs::write(&binary, "#!/usr/bin/env python3\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n").unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        kybern_protocol::process::write_executable(&binary, "#!/usr/bin/env python3\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n")
+            .unwrap();
         let out =
             super::ClaudeDriver::default().one_shot(root.path(), "Name this session", Some(&binary), &Default::default()).await.unwrap();
         let args: Vec<String> = serde_json::from_str(&out).unwrap();
@@ -2821,11 +2820,10 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn the_usage_read_lets_claude_finish_saving_a_refreshed_login() {
-        use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir().unwrap();
         let (binary, saved, launches) = (temp.path().join("claude"), temp.path().join("saved-login"), temp.path().join("launches"));
         let result = r#"{"type":"result","result":"Current session: 7% used · resets Sep 16 at 7:30pm (UTC)"}"#;
-        std::fs::write(
+        kybern_protocol::process::write_executable(
             &binary,
             format!(
                 "#!/bin/sh\necho launch >> '{}'\nread message\necho '{result}'\nwhile read line; do :; done\nsleep 0.3\necho rotated > '{}'\n",
@@ -2834,7 +2832,6 @@ mod tests {
             ),
         )
         .unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
         let config = temp.path().join("config");
         let env = std::collections::BTreeMap::from([("CLAUDE_CONFIG_DIR".to_string(), config.to_string_lossy().into_owned())]);
 

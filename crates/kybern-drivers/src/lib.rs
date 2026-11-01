@@ -580,7 +580,7 @@ pub fn summarize_tool_call(name: &str, input: &Value) -> String {
 #[cfg(all(test, unix))]
 mod lifecycle_tests {
     use super::*;
-    use std::{os::unix::fs::PermissionsExt, time::Duration};
+    use std::time::Duration;
 
     #[test]
     fn native_bridge_debug_redacts_session_capability() {
@@ -633,12 +633,7 @@ mod lifecycle_tests {
             // A live descendant announces readiness and cannot expire during
             // the assertion. Cleanup is tested directly, not against a touch
             // racing an 80 ms startup timeout on a loaded CI runner.
-            std::fs::write(
-                &binary,
-                "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 0.80.5; exit 0; fi\nsleep 300 &\nchild=$!\nprintf '%s %s' \"$$\" \"$child\" > ready.tmp\nmv ready.tmp ready\ncat >/dev/null\nwait\n",
-            )
-            .unwrap();
-            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+            kybern_protocol::process::write_executable(&binary, "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 0.80.5; exit 0; fi\nsleep 300 &\nchild=$!\nprintf '%s %s' \"$$\" \"$child\" > ready.tmp\nmv ready.tmp ready\ncat >/dev/null\nwait\n").unwrap();
             let config = SessionConfig {
                 cwd: root.path().into(),
                 model: None,

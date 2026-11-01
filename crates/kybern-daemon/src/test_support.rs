@@ -4,12 +4,8 @@ use std::path::{Path, PathBuf};
 pub fn script(dir: &Path, name: &str, unix: &str, windows: &str) -> PathBuf {
     std::fs::create_dir_all(dir).unwrap();
     let path = dir.join(if cfg!(windows) { format!("{name}.cmd") } else { name.into() });
-    std::fs::write(&path, if cfg!(windows) { windows } else { unix }).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    // Written so that a test thread forking meanwhile cannot leave it busy (Linux ETXTBSY).
+    kybern_protocol::process::write_executable(&path, if cfg!(windows) { windows } else { unix }).unwrap();
     path
 }
 

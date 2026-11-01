@@ -304,8 +304,6 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn only_runners_whose_conversation_lacks_the_guide_send_it_once_and_retry_it_after_rejection() {
-        use std::os::unix::fs::PermissionsExt;
-
         for (resume, enabled, lacks) in [
             (None, true, false),
             (Some("cursor-sdk:restored"), true, false),
@@ -316,7 +314,7 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             let host = root.path().join("node-fixture");
             let log = root.path().join("requests.jsonl");
-            std::fs::write(
+            kybern_protocol::process::write_executable(
                 &host,
                 r#"#!/usr/bin/env python3
 import json, sys
@@ -334,7 +332,6 @@ for line in sys.stdin:
 "#,
             )
             .unwrap();
-            std::fs::set_permissions(&host, std::fs::Permissions::from_mode(0o755)).unwrap();
             let config = SessionConfig {
                 cwd: root.path().into(),
                 model: None,

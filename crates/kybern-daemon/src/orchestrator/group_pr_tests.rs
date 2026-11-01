@@ -107,7 +107,6 @@ fn group_branches_of_an_unknown_member_name_the_project() {
 /// write the new body next to the log.
 #[cfg(unix)]
 fn fake_group_gh(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
-    use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(dir).unwrap();
     let (log, script) = (dir.join("gh.log"), dir.join("gh"));
     let body = r#"#!/bin/sh
@@ -125,8 +124,7 @@ esac
 "#
     .replace("LOG", &log.to_string_lossy())
     .replace("DIR", &dir.to_string_lossy());
-    std::fs::write(&script, body).unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    kybern_protocol::process::write_executable(&script, body).unwrap();
     (script, log)
 }
 
@@ -223,7 +221,6 @@ async fn group_pull_requests_skip_repos_without_a_remote_and_cross_link_the_rest
 /// `lab` has only a remote `gh` doesn't know (GitLab), `quiet` fails with no stderr.
 #[cfg(unix)]
 fn fake_list_gh(dir: &std::path::Path) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(dir).unwrap();
     let script = dir.join("gh");
     let body = r#"#!/bin/sh
@@ -236,8 +233,7 @@ case "$name" in
   *) echo '[{"number":1,"title":"Docs","url":"https://github.com/acme/x/pull/1","state":"OPEN","headRefName":"d","baseRefName":"main","isDraft":false,"author":{"login":"me"},"updatedAt":"2026-01-01T00:00:00Z"}]' ;;
 esac
 "#;
-    std::fs::write(&script, body).unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    kybern_protocol::process::write_executable(&script, body).unwrap();
     script
 }
 

@@ -67,8 +67,8 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all --check
 
-  check:
-    name: clippy + test (${{ matrix.os }})
+  clippy:
+    name: clippy (${{ matrix.os }})
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     strategy:
@@ -84,9 +84,9 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          # Pull requests restore main's cache; only main writes it, which
-          # keeps the repository's cache storage under its limit.
-          shared-key: check
+          # Clippy only type-checks, so its cache is separate from the test
+          # builds'. As below, pull requests restore main's cache; only main writes it.
+          shared-key: clippy
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Linux credential-store dependencies
         if: runner.os == 'Linux'
@@ -99,8 +99,63 @@ jobs:
         run: >
           cargo clippy --workspace --all-targets
           -- -D warnings
+
+  test:
+    # cargo-nextest runs every test in its own process, so one test's forked
+    # child can never hold another test's freshly written fixture open (Linux
+    # ETXTBSY), and the test binaries run in parallel. The `ci` profile in
+    # .config/nextest.toml retries a failed test once: a test that then passes
+    # is quarantined, not blocking: scripts/report-flaky-tests.mjs lists it in
+    # the job summary and, on pushes to main only, files or updates its `flaky`
+    # issue. A test that fails both attempts fails the job. The workspace has no doctests, which
+    # nextest does not run; add `cargo test --workspace --doc` here with the first.
+    name: test (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      # Filing and updating flaky-test issues (pushes to main only).
+      issues: write
+    env:
+      # Panics keep file and line numbers; full debug info only slows compiling and linking.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: "1.99.1"
+      - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2.87.33
+        with:
+          # A prebuilt binary, checked against the action's pinned checksum.
+          tool: cargo-nextest@0.9.150
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Pull requests restore main's cache; only main writes it, which
+          # keeps the repository's cache storage under its limit.
+          shared-key: check
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Linux credential-store dependencies
+        if: runner.os == 'Linux'
+        # Usually under a minute; a stalled mirror once held this step for 18 minutes.
+        timeout-minutes: 6
+        run: |
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y libdbus-1-dev
+      - name: build tests
+        run: cargo nextest run --workspace --profile ci --no-run
       - name: test
-        run: cargo test --workspace
+        run: cargo nextest run --workspace --profile ci
+      - name: Report flaky tests
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FLAKY_RUNNER: ${{ matrix.os }}
+        run: node scripts/report-flaky-tests.mjs target/nextest/ci/junit.xml
 
   windows-check:
     name: cargo check (windows-latest)
@@ -134,7 +189,7 @@ jobs:
         with:
           node-version: 22
       - name: Release gate and updater manifest regression tests
-        run: node --test scripts/ci-paths.test.mjs scripts/check-release-ci.test.mjs scripts/updater-manifest.test.mjs scripts/release.test.mjs
+        run: node --test scripts/ci-paths.test.mjs scripts/check-release-ci.test.mjs scripts/report-flaky-tests.test.mjs scripts/updater-manifest.test.mjs scripts/release.test.mjs
       - name: release.yml matches dist's output
         run: |
           version=$(sed -n 's/^cargo-dist-version = "\(.*\)"$/\1/p' dist-workspace.toml)
@@ -177,7 +232,7 @@ jobs:
     # rule needs only this name.
     name: CI
     if: always()
-    needs: [changes, fmt, check, windows-check, release, gpuix]
+    needs: [changes, fmt, clippy, test, windows-check, release, gpuix]
     runs-on: ubuntu-24.04
     steps:
       - env:

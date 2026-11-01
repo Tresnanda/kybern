@@ -8,7 +8,6 @@
 #![cfg(unix)]
 
 use std::collections::HashMap;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -66,8 +65,7 @@ impl LoginSource for Scripted {
 
 fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
     let path = dir.join(name);
-    std::fs::write(&path, body).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    kybern_protocol::process::write_executable(&path, body).unwrap();
     path
 }
 

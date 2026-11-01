@@ -305,8 +305,7 @@ mod tests {
 
         pub(crate) fn script(dir: &Path, body: &str) -> PathBuf {
             let path = dir.join("agent-desktop");
-            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            kybern_protocol::process::write_executable(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
             path
         }
 

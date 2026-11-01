@@ -977,19 +977,18 @@ jobs:
     fn jobs_and_needs_from_kyberns_ci() {
         let jobs = parse_jobs(include_str!("../../../.github/workflows/ci.yml"));
         let ids: Vec<_> = jobs.iter().map(|j| j.id.as_str()).collect();
-        assert_eq!(ids, ["changes", "fmt", "check", "windows-check", "release", "gpuix", "ci"]);
+        assert_eq!(ids, ["changes", "fmt", "clippy", "test", "windows-check", "release", "gpuix", "ci"]);
         assert_eq!(spec(&jobs, "changes").needs, Vec::<String>::new());
-        let check = spec(&jobs, "check");
-        assert_eq!(
-            (check.name.as_str(), check.needs.clone(), check.conditional),
-            ("clippy + test (${{ matrix.os }})", vec!["changes".to_owned()], true)
-        );
-        assert_eq!(check.matrix, Some(vec!["os".to_owned()]));
+        for (id, name) in [("clippy", "clippy (${{ matrix.os }})"), ("test", "test (${{ matrix.os }})")] {
+            let job = spec(&jobs, id);
+            assert_eq!((job.name.as_str(), job.needs.clone(), job.conditional), (name, vec!["changes".to_owned()], true));
+            assert_eq!(job.matrix, Some(vec!["os".to_owned()]));
+        }
         assert_eq!(spec(&jobs, "fmt").name, "rustfmt");
         assert_eq!(spec(&jobs, "fmt").matrix, None);
         let ci = spec(&jobs, "ci");
         assert_eq!(ci.name, "CI");
-        assert_eq!(ci.needs, ["changes", "fmt", "check", "windows-check", "release", "gpuix"]);
+        assert_eq!(ci.needs, ["changes", "fmt", "clippy", "test", "windows-check", "release", "gpuix"]);
     }
 
     #[test]
