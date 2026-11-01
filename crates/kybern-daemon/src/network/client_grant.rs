@@ -231,6 +231,7 @@ pub fn revoke_device_local(state: &AppState, device_id: &str) -> usize {
             for id in &ids {
                 let _ = state.revoked_tokens.send(*id);
                 state.previews.revoke_principal(*id);
+                state.network.pages.revoke_principal(*id);
             }
             ids.len()
         }

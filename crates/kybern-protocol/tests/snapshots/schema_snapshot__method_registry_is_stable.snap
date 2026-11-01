@@ -202,6 +202,8 @@ expression: names
 - network.merge
 - network.rejoin
 - network.client_grant
+- network.relay_page.open
+- network.relay_page.close
 - network.routes
 - network.allow.set
 - network.update_all

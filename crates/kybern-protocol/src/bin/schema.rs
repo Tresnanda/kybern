@@ -289,6 +289,8 @@ fn main() {
     method::<NetworkMerge>(&mut methods);
     method::<NetworkRejoin>(&mut methods);
     method::<NetworkClientGrant>(&mut methods);
+    method::<NetworkRelayPageOpen>(&mut methods);
+    method::<NetworkRelayPageClose>(&mut methods);
     method::<NetworkRoutes>(&mut methods);
     method::<NetworkAllowSet>(&mut methods);
     method::<NetworkUpdateAll>(&mut methods);

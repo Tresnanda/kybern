@@ -96,7 +96,7 @@ fn connection_tokens(headers: &HeaderMap) -> Vec<String> {
 /// Whether a value is a Kybern credential that must never reach a dev server.
 pub type IsSecret<'a> = &'a (dyn Fn(&str) -> bool + Sync);
 
-fn filter_cookie(cookie: &str, is_secret: IsSecret) -> Option<String> {
+pub(crate) fn filter_cookie(cookie: &str, is_secret: IsSecret) -> Option<String> {
     let kept: Vec<&str> = cookie
         .split(';')
         .map(str::trim)
@@ -213,9 +213,14 @@ fn plain(status: StatusCode, message: &'static str) -> Response {
     (status, [(header::CACHE_CONTROL, "no-store")], message).into_response()
 }
 
+/// Whether `value` is a live Kybern credential, which must never reach a dev server.
+pub(crate) fn is_kybern_credential(state: &AppState, value: &str) -> bool {
+    value.starts_with("kyb_") && crate::auth::authenticate(&state.store, value).ok().flatten().is_some()
+}
+
 /// Axum handler for every method on `/preview-proxy/{ticket}` and below.
 pub async fn serve(State(state): State<AppState>, request: Request) -> Response {
-    let is_secret = |value: &str| value.starts_with("kyb_") && crate::auth::authenticate(&state.store, value).ok().flatten().is_some();
+    let is_secret = |value: &str| is_kybern_credential(&state, value);
     handle(&state.previews, request, &is_secret).await
 }
 

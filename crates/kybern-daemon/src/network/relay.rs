@@ -412,7 +412,7 @@ fn local_url(scheme: &str, addr: std::net::SocketAddr, path: &str) -> Option<req
 }
 
 /// `text` with each `%XX` replaced by its byte; anything else is kept as it is.
-fn percent_decoded(text: &str) -> String {
+pub(super) fn percent_decoded(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut at = 0;
@@ -456,23 +456,28 @@ fn caller(state: &AppState, headers: &HeaderMap) -> Result<Principal, Response> 
     Err(refuse(StatusCode::UNAUTHORIZED, "the relay needs a device token for this machine in X-Kybern-Relay-Auth"))
 }
 
+/// The link to the target, or the status and message to refuse with.
+pub(super) fn route_check(state: &AppState, target: &str) -> Result<Arc<PeerLink>, (StatusCode, &'static str)> {
+    let network = &state.network;
+    let Some(membership) = network.membership() else {
+        return Err((StatusCode::SERVICE_UNAVAILABLE, "the machine network is unavailable"));
+    };
+    if !network.is_enabled() {
+        return Err((StatusCode::NOT_FOUND, "the machine network is turned off on this machine"));
+    }
+    if target == membership.machine_id() {
+        return Err((StatusCode::BAD_REQUEST, "this is the machine you are talking to; connect to it directly"));
+    }
+    if !membership.is_member(target) {
+        return Err((StatusCode::NOT_FOUND, "that machine is not in this network"));
+    }
+    network.peers.link(target).ok_or((StatusCode::BAD_GATEWAY, "this machine has no open session to that machine"))
+}
+
 /// The link to the target, or the refusal to send.
 #[allow(clippy::result_large_err)]
 fn route(state: &AppState, target: &str) -> Result<Arc<PeerLink>, Response> {
-    let network = &state.network;
-    let Some(membership) = network.membership() else {
-        return Err(refuse(StatusCode::SERVICE_UNAVAILABLE, "the machine network is unavailable"));
-    };
-    if !network.is_enabled() {
-        return Err(refuse(StatusCode::NOT_FOUND, "the machine network is turned off on this machine"));
-    }
-    if target == membership.machine_id() {
-        return Err(refuse(StatusCode::BAD_REQUEST, "this is the machine you are talking to; connect to it directly"));
-    }
-    if !membership.is_member(target) {
-        return Err(refuse(StatusCode::NOT_FOUND, "that machine is not in this network"));
-    }
-    network.peers.link(target).ok_or_else(|| refuse(StatusCode::BAD_GATEWAY, "this machine has no open session to that machine"))
+    route_check(state, target).map_err(|(status, message)| refuse(status, message))
 }
 
 fn open_error(error: RpcError) -> Response {
@@ -535,14 +540,26 @@ async fn relay_ws(state: &AppState, target: &str, headers: &HeaderMap, path: Str
         Ok(link) => link,
         Err(response) => return response,
     };
-    let Some(slot) = state.network.relays.acquire(&principal.token_id.to_string()) else {
+    open_ws(state, &principal.token_id.to_string(), link, headers, forwarded_headers(headers), path, ws).await
+}
+
+/// Relay a WebSocket over `link`: `forwarded` are the request headers to pass on, `client` the stream-limit key.
+async fn open_ws(
+    state: &AppState,
+    client: &str,
+    link: Arc<PeerLink>,
+    headers: &HeaderMap,
+    mut forwarded: Vec<(String, String)>,
+    path: String,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let Some(slot) = state.network.relays.acquire(client) else {
         return refuse(StatusCode::TOO_MANY_REQUESTS, "too many relayed connections");
     };
     let Some((stream, incoming)) = link.relays.create(None, StreamKind::Relay, None) else {
         return refuse(StatusCode::INTERNAL_SERVER_ERROR, "stream id clash");
     };
     let protocols = requested_protocols(headers);
-    let mut forwarded = forwarded_headers(headers);
     if !protocols.is_empty() {
         forwarded.push((PROTOCOLS_HEADER.to_string(), protocols.join(", ")));
     }
@@ -559,7 +576,7 @@ async fn relay_ws(state: &AppState, target: &str, headers: &HeaderMap, path: Str
             return refuse(StatusCode::GATEWAY_TIMEOUT, "the machine did not open the relayed connection in time");
         }
     }
-    tracing::debug!(target: TARGET, machine = %target, stream = stream.id, "relaying a WebSocket");
+    tracing::debug!(target: TARGET, machine = %link.machine_id, stream = stream.id, "relaying a WebSocket");
     ws.protocols(protocols).on_upgrade(move |socket| async move {
         pump_client_ws(link, stream, incoming, socket).await;
         drop(slot);
@@ -634,23 +651,40 @@ pub async fn serve_http(State(state): State<AppState>, Path((target, path)): Pat
     if path_refused(&path) {
         return refuse(StatusCode::FORBIDDEN, "the relay does not carry this path");
     }
-    let Some(slot) = state.network.relays.acquire(&principal.token_id.to_string()) else {
+    let target_path = match parts.uri.query() {
+        Some(query) => format!("{path}?{query}"),
+        None => path,
+    };
+    forward_http(
+        &state,
+        &principal.token_id.to_string(),
+        link,
+        parts.method.to_string(),
+        forwarded_headers(&parts.headers),
+        target_path,
+        body,
+    )
+    .await
+}
+
+/// Carry one HTTP request over `link` and stream the answer back. `client` is the stream-limit key, `target_path`
+/// the origin-relative path and query on the target, already checked.
+async fn forward_http(
+    state: &AppState,
+    client: &str,
+    link: Arc<PeerLink>,
+    method: String,
+    headers: Vec<(String, String)>,
+    target_path: String,
+    body: Body,
+) -> Response {
+    let Some(slot) = state.network.relays.acquire(client) else {
         return refuse(StatusCode::TOO_MANY_REQUESTS, "too many relayed connections");
     };
     let Some((stream, mut incoming)) = link.relays.create(None, StreamKind::Relay, None) else {
         return refuse(StatusCode::INTERNAL_SERVER_ERROR, "stream id clash");
     };
-    let target_path = match parts.uri.query() {
-        Some(query) => format!("{path}?{query}"),
-        None => path,
-    };
-    let open = PeerRelayOpenParams {
-        stream_id: stream.id,
-        kind: RelayStreamKind::Http,
-        path: target_path,
-        method: Some(parts.method.to_string()),
-        headers: forwarded_headers(&parts.headers),
-    };
+    let open = PeerRelayOpenParams { stream_id: stream.id, kind: RelayStreamKind::Http, path: target_path, method: Some(method), headers };
     match tokio::time::timeout(OPEN_TIMEOUT, link.call::<PeerRelayOpen>(open)).await {
         Ok(Ok(_)) => {}
         Ok(Err(error)) => {
@@ -735,6 +769,77 @@ pub async fn serve_http(State(state): State<AppState>, Path((target, path)): Pat
         }
     }
     response
+}
+
+/// Request headers for a page request: the usual relay rules, but never an `Authorization` header and no cookie whose
+/// value is a Kybern credential (the web view has none; this keeps a page from replaying one).
+fn page_headers(state: &AppState, headers: &HeaderMap) -> Vec<(String, String)> {
+    let is_secret = |value: &str| crate::previews::proxy::is_kybern_credential(state, value);
+    let mut out = Vec::new();
+    for (name, value) in forwarded_headers(headers) {
+        match name.as_str() {
+            "authorization" => {}
+            "cookie" => {
+                if let Some(cookie) = crate::previews::proxy::filter_cookie(&value, &is_secret) {
+                    out.push((name, cookie));
+                }
+            }
+            _ => out.push((name, value)),
+        }
+    }
+    out
+}
+
+/// `ANY /relay/{machine_id}/page/{ticket}/{*path}`: a page of another machine, opened with a relay page ticket
+/// (`network.relay_page.open`) instead of the relay header.
+pub async fn serve_page(State(state): State<AppState>, Path((target, ticket)): Path<(String, String)>, request: Request) -> Response {
+    let (mut parts, body) = request.into_parts();
+    let Some(page) = state.network.pages.lookup(&ticket) else {
+        return refuse(StatusCode::NOT_FOUND, "this page address has expired");
+    };
+    if page.target != target {
+        return refuse(StatusCode::NOT_FOUND, "this page address has expired");
+    }
+    if !state.store.token_is_active(page.token_id).unwrap_or(false) {
+        return refuse(StatusCode::UNAUTHORIZED, "the device that opened this page was revoked");
+    }
+    let link = match route(&state, &target) {
+        Ok(link) => link,
+        Err(response) => return response,
+    };
+    // The raw path keeps percent-encoding as the page wrote it; it is normalized and bound-checked below.
+    let base = format!("/relay/{target}/page/{ticket}");
+    let Some(rest) = parts.uri.path().strip_prefix(base.as_str()).filter(|rest| rest.is_empty() || rest.starts_with('/')) else {
+        return refuse(StatusCode::NOT_FOUND, "this page address has expired");
+    };
+    let requested = match parts.uri.query() {
+        Some(query) => format!("{rest}?{query}"),
+        None => rest.to_string(),
+    };
+    let Some(url) = local_url("http", std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 1)), &requested) else {
+        return refuse(StatusCode::FORBIDDEN, "the relay does not carry this path");
+    };
+    if !page.admits(url.path()) {
+        return refuse(StatusCode::FORBIDDEN, "this address is outside the page that was opened");
+    }
+    let target_path = match url.query() {
+        Some(query) => format!("{}?{query}", url.path()),
+        None => url.path().to_string(),
+    };
+    let client = page.token_id.to_string();
+    if is_websocket_upgrade(&parts.headers) {
+        if page.document {
+            return refuse(StatusCode::FORBIDDEN, "this page address does not open connections");
+        }
+        let ws = match WebSocketUpgrade::from_request_parts(&mut parts, &state).await {
+            Ok(ws) => ws,
+            Err(rejection) => return rejection.into_response(),
+        };
+        let forwarded = page_headers(&state, &parts.headers);
+        return open_ws(&state, &client, link, &parts.headers, forwarded, target_path, ws).await;
+    }
+    let headers = page_headers(&state, &parts.headers);
+    forward_http(&state, &client, link, parts.method.to_string(), headers, target_path, body).await
 }
 
 fn tokio_stream_from(

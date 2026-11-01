@@ -459,6 +459,164 @@ async fn a_preview_of_a_dev_server_on_another_machine_loads_through_the_relay_wi
         .await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_page_ticket_loads_a_relayed_preview_without_the_relay_header_and_stays_in_its_page() {
+    let Some((_cluster, a, b)) = pair().await else { return };
+    let port = dev_server().await;
+    let ticket = b.state.previews.mint(crate::previews::tickets::TicketKind::Proxy { port }, Uuid::now_v7(), None);
+    assert!(a.state.network.features().iter().any(|feature| feature == features::RELAY_PAGE_V1));
+    // The phone's client talks to a with its own device token and asks a for a page of b.
+    let client = admin(&a).await;
+    let page = client
+        .call::<NetworkRelayPageOpen>(NetworkRelayPageOpenParams { machine_id: b.id(), path: format!("/preview-proxy/{ticket}/") })
+        .await
+        .unwrap();
+    let root = format!("/relay/{}/page/{}", b.id(), page.ticket);
+    assert_eq!(page.path, format!("{root}/preview-proxy/{ticket}/"));
+    assert_eq!(page.scope, format!("{root}/preview-proxy/{ticket}/"));
+
+    // No relay header, no Authorization: the ticket in the URL is the capability.
+    let http = reqwest::Client::new();
+    let loaded = http.get(format!("{}{}", a.http_url(), page.path)).send().await.unwrap();
+    assert_eq!(loaded.status(), 200);
+    assert_eq!(loaded.text().await.unwrap(), "<html>dev</html>");
+
+    // A Kybern credential in the Authorization header or a cookie is dropped on the way, and the page still loads.
+    let token = a.device_token(&Scope::CLIENT);
+    let with_credentials = http
+        .get(format!("{}{}", a.http_url(), page.path))
+        .header("authorization", format!("Bearer {token}"))
+        .header("cookie", format!("kybern={token}; theme=dark"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(with_credentials.status(), 200);
+
+    // Hot reload: the WebSocket under the subtree opens, subprotocol included.
+    let url = format!("ws://{}{root}/preview-proxy/{ticket}/hmr", a.primary);
+    let mut request = url.into_client_request().unwrap();
+    request.headers_mut().insert("sec-websocket-protocol", "vite-hmr".parse().unwrap());
+    let (mut socket, response) = tokio_tungstenite::connect_async(request).await.unwrap();
+    assert_eq!(response.headers().get("sec-websocket-protocol").map(|value| value.to_str().unwrap()), Some("vite-hmr"));
+    socket.send(Message::Text("update".into())).await.unwrap();
+    let reply = tokio::time::timeout(Duration::from_secs(10), socket.next()).await.expect("no reply").unwrap().unwrap();
+    assert_eq!(reply, Message::Text("echo:update".into()));
+    socket.close(None).await.unwrap();
+
+    // Outside the page: a longer id, another ticket, other roots, the API, and dot segments.
+    for outside in [
+        format!("/preview-proxy/{ticket}x/"),
+        "/preview-proxy/other/".to_string(),
+        format!("/preview-files/{ticket}/"),
+        "/ws".to_string(),
+        "/api/threads".to_string(),
+        format!("/preview-proxy/{ticket}/../other/"),
+        format!("/preview-proxy/{ticket}/%2e%2e/other/"),
+        format!("/preview-proxy/{ticket}/%2e%2e%2fother/"),
+    ] {
+        let refused = http.get(format!("{}{root}{outside}", a.http_url())).send().await.unwrap();
+        assert_eq!(refused.status(), 403, "{outside} is outside the page");
+    }
+    let outside = format!("ws://{}{root}/ws", a.primary).into_client_request().unwrap();
+    match tokio_tungstenite::connect_async(outside).await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => assert_eq!(response.status(), 403),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+
+    // An unknown ticket, and a ticket used for another machine.
+    let unknown =
+        http.get(format!("{}/relay/{}/page/{}/preview-proxy/{ticket}/", a.http_url(), b.id(), Uuid::new_v4())).send().await.unwrap();
+    assert_eq!(unknown.status(), 404);
+    let wrong_machine =
+        http.get(format!("{}/relay/{}/page/{}/preview-proxy/{ticket}/", a.http_url(), Uuid::now_v7(), page.ticket)).send().await.unwrap();
+    assert_eq!(wrong_machine.status(), 404);
+
+    // Only the minting device closes a page; closing twice is fine; a closed page is gone.
+    let stranger = admin(&a).await;
+    stranger.call::<NetworkRelayPageClose>(NetworkRelayPageCloseParams { ticket: page.ticket.clone() }).await.unwrap();
+    assert_eq!(http.get(format!("{}{}", a.http_url(), page.path)).send().await.unwrap().status(), 200, "another device cannot close it");
+    client.call::<NetworkRelayPageClose>(NetworkRelayPageCloseParams { ticket: page.ticket.clone() }).await.unwrap();
+    client.call::<NetworkRelayPageClose>(NetworkRelayPageCloseParams { ticket: page.ticket.clone() }).await.unwrap();
+    assert_eq!(http.get(format!("{}{}", a.http_url(), page.path)).send().await.unwrap().status(), 404);
+    eventually("streams are released", WAIT, || a.state.network.relays.open_streams() == 0 && b.state.network.relays.open_streams() == 0)
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn documents_refuse_subpaths_and_sockets_the_mint_refuses_bad_requests_and_a_revoked_device_loses_its_pages() {
+    let Some((_cluster, a, b)) = pair().await else { return };
+    let phone = a.device_token(&crate::access::paired_scopes());
+    let client = Client::connect(&Endpoint { url: a.ws_url(), token: phone.clone() }).await.unwrap();
+    let http = reqwest::Client::new();
+
+    // A visual frame is a document: its own path (with a query) is carried to b, nothing below it, and no sockets.
+    let frame = client
+        .call::<NetworkRelayPageOpen>(NetworkRelayPageOpenParams { machine_id: b.id(), path: "/visual-frame/nope?theme=dark".into() })
+        .await
+        .unwrap();
+    let root = format!("/relay/{}/page/{}", b.id(), frame.ticket);
+    assert_eq!(frame.path, format!("{root}/visual-frame/nope?theme=dark"));
+    assert_eq!(frame.scope, format!("{root}/visual-frame/nope"));
+    let at_b = http.get(format!("{}{}", a.http_url(), frame.path)).send().await.unwrap();
+    assert_ne!(at_b.status(), 403, "the document is carried; b answers for it");
+    for outside in ["/visual-frame/nope/sub", "/visual-frame/nopex", "/artifact-preview/nope"] {
+        let refused = http.get(format!("{}{root}{outside}", a.http_url())).send().await.unwrap();
+        assert_eq!(refused.status(), 403, "{outside}");
+    }
+    let socket = format!("ws://{}{root}/visual-frame/nope", a.primary).into_client_request().unwrap();
+    match tokio_tungstenite::connect_async(socket).await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => assert_eq!(response.status(), 403),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    let artifact = client
+        .call::<NetworkRelayPageOpen>(NetworkRelayPageOpenParams { machine_id: b.id(), path: "/artifact-preview/abc".into() })
+        .await
+        .unwrap();
+    assert_ne!(http.get(format!("{}{}", a.http_url(), artifact.path)).send().await.unwrap().status(), 403);
+
+    // Refusals at the mint.
+    let refused = |path: &'static str, machine: String| {
+        let client = &client;
+        async move {
+            client
+                .call::<NetworkRelayPageOpen>(NetworkRelayPageOpenParams { machine_id: machine, path: path.into() })
+                .await
+                .unwrap_err()
+                .to_string()
+        }
+    };
+    assert!(
+        refused("/preview-proxy/abc/", a.id()).await.ends_with(&format!("(code {})", codes::INVALID_PARAMS)),
+        "a machine is no relay to itself"
+    );
+    assert!(
+        refused("/preview-proxy/abc/", Uuid::now_v7().to_string()).await.ends_with(&format!("(code {})", codes::NOT_FOUND)),
+        "not a member"
+    );
+    for bad in ["/ws", "/preview-proxy/abc/../x", "/preview-proxy/abc/%2e%2e/x", "/preview-proxy/a\\b/", "/visual-frame/abc/x"] {
+        assert!(refused(bad, b.id()).await.ends_with(&format!("(code {})", codes::INVALID_PARAMS)), "{bad}");
+    }
+
+    // Revoking the device ends its pages at once.
+    a.state.store.token_revoke(token_id_of(&a, &phone)).unwrap();
+    assert_eq!(http.get(format!("{}{}", a.http_url(), artifact.path)).send().await.unwrap().status(), 401);
+    assert_eq!(http.get(format!("{}{}", a.http_url(), frame.path)).send().await.unwrap().status(), 401);
+
+    // With the network off on the relay member, a new page is refused too.
+    a.state.network.set_enabled(false);
+    let off = admin(&a).await;
+    let error = off
+        .call::<NetworkRelayPageOpen>(NetworkRelayPageOpenParams { machine_id: b.id(), path: "/preview-proxy/abc/".into() })
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.ends_with(&format!("(code {})", codes::NOT_FOUND)), "{error}");
+}
+
+fn token_id_of(node: &Node, token: &str) -> Uuid {
+    crate::auth::authenticate(&node.state.store, token).unwrap().unwrap().token_id
+}
+
 async fn echo_server() -> u16 {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();

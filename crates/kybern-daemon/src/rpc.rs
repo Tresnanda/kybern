@@ -978,6 +978,7 @@ async fn dispatch_part_11(state: &AppState, ctx: &ConnectionCtx, method: &str, s
             state.store.token_revoke(p.token_id).map_err(internal)?;
             let _ = state.revoked_tokens.send(p.token_id);
             state.previews.revoke_principal(p.token_id);
+            state.network.pages.revoke_principal(p.token_id);
             // A device is revoked on every machine, not only the one it was revoked on (§3.4).
             if let Some(device) = device {
                 crate::network::client_grant::revoke_device_everywhere(state, &device).await;
@@ -1478,6 +1479,15 @@ async fn dispatch_part_16(state: &AppState, ctx: &ConnectionCtx, method: &str, s
         NetworkClientGrant::NAME => {
             let p: NetworkClientGrantParams = parse(params)?;
             ok(crate::network::client_grant::grant(state, &ctx.principal, p).await?)
+        }
+        NetworkRelayPageOpen::NAME => {
+            let p: NetworkRelayPageOpenParams = parse(params)?;
+            ok(crate::network::relay_pages::open(state, &ctx.principal, p)?)
+        }
+        NetworkRelayPageClose::NAME => {
+            let p: NetworkRelayPageCloseParams = parse(params)?;
+            crate::network::relay_pages::close(state, &ctx.principal, &p.ticket);
+            ok(Empty {})
         }
         NetworkRoutes::NAME => {
             let p: NetworkRoutesParams = parse(params)?;
