@@ -127,6 +127,9 @@ pub fn upstream_request_headers(incoming: &HeaderMap, port: u16, is_secret: IsSe
         if is_hop_header(name, &tokens)
             || matches!(name.as_str(), "cookie" | "host" | "origin" | "referer")
             || name.as_str().starts_with("sec-websocket-")
+            // What the relay tells this daemon about a page is for this daemon, never for the dev server.
+            || name.as_str() == crate::network::relay_pages::PREFIX_HEADER
+            || name.as_str() == crate::network::relay_pages::LOCAL_MARK_HEADER
         {
             continue;
         }

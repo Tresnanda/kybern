@@ -40,6 +40,7 @@ use tokio_tungstenite::tungstenite::http::{HeaderName as TName, HeaderValue as T
 use tokio_util::sync::CancellationToken;
 
 use super::peers::{Direction, PeerLink};
+use super::relay_pages::{self, MAX_STREAMS_PER_PAGE, PageGrant};
 use crate::auth::Principal;
 use crate::state::AppState;
 
@@ -255,10 +256,13 @@ impl Drop for Slot {
 impl RelayHub {
     /// A place for a stream of `client`, or `None` over a limit.
     pub fn acquire(&self, client: &str) -> Option<Slot> {
+        self.acquire_within(client, MAX_STREAMS_PER_CLIENT)
+    }
+
+    /// A place for a stream of `client` under its own `limit` (a page ticket's, say), or `None` over it.
+    pub fn acquire_within(&self, client: &str, limit: usize) -> Option<Slot> {
         let mut clients = self.per_client.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if self.total.load(Ordering::SeqCst) >= MAX_STREAMS_PER_DAEMON
-            || clients.get(client).copied().unwrap_or(0) >= MAX_STREAMS_PER_CLIENT
-        {
+        if self.total.load(Ordering::SeqCst) >= MAX_STREAMS_PER_DAEMON || clients.get(client).copied().unwrap_or(0) >= limit {
             return None;
         }
         self.total.fetch_add(1, Ordering::SeqCst);
@@ -364,10 +368,13 @@ fn hop_by_hop(name: &str) -> bool {
         || name == RELAY_AUTH_HEADER
 }
 
+/// The client's headers to carry: never the per-hop ones, and never the page headers only M and B set
+/// (a client that sent them could otherwise choose the prefix B writes into a page's policy).
 fn forwarded_headers(headers: &HeaderMap) -> Vec<(String, String)> {
     headers
         .iter()
         .filter(|(name, _)| !hop_by_hop(name.as_str()))
+        .filter(|(name, _)| name.as_str() != relay_pages::PREFIX_HEADER && name.as_str() != relay_pages::LOCAL_MARK_HEADER)
         .filter_map(|(name, value)| Some((name.as_str().to_string(), value.to_str().ok()?.to_string())))
         .collect()
 }
@@ -540,25 +547,63 @@ async fn relay_ws(state: &AppState, target: &str, headers: &HeaderMap, path: Str
         Ok(link) => link,
         Err(response) => return response,
     };
-    open_ws(state, &principal.token_id.to_string(), link, headers, forwarded_headers(headers), path, ws).await
+    open_ws(state, Limits::device(&principal.token_id.to_string()), link, headers, forwarded_headers(headers), path, ws).await
 }
 
-/// Relay a WebSocket over `link`: `forwarded` are the request headers to pass on, `client` the stream-limit key.
+/// What ends a page's stream besides the stream itself: its ticket's cancellation and hard cap.
+#[derive(Clone)]
+struct PageStop {
+    cancel: CancellationToken,
+    deadline: Instant,
+}
+
+/// The stream-limit key, limit and stop of a request: a device's own (`None`), or a page ticket's.
+struct Limits<'a> {
+    client: &'a str,
+    limit: usize,
+    stop: Option<PageStop>,
+}
+
+impl<'a> Limits<'a> {
+    fn device(client: &'a str) -> Self {
+        Self { client, limit: MAX_STREAMS_PER_CLIENT, stop: None }
+    }
+}
+
+/// End `stream` when the page it serves is closed, revoked, evicted or past its hard cap.
+fn stop_with(link: &Arc<PeerLink>, stream: &Arc<Stream>, stop: Option<PageStop>) {
+    let Some(stop) = stop else { return };
+    let link = link.clone();
+    let stream = stream.clone();
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = stop.cancel.cancelled() => {}
+            _ = tokio::time::sleep_until(stop.deadline.into()) => {}
+            _ = stream.cancel.cancelled() => return,
+        }
+        tracing::debug!(target: TARGET, machine = %link.machine_id, stream = stream.id, "a page's ticket ended; closing its stream");
+        send_close(&link, stream.id, Some("the page was closed")).await;
+        link.relays.remove(stream.id);
+    });
+}
+
+/// Relay a WebSocket over `link`: `forwarded` are the request headers to pass on, `limits` the stream-limit key.
 async fn open_ws(
     state: &AppState,
-    client: &str,
+    limits: Limits<'_>,
     link: Arc<PeerLink>,
     headers: &HeaderMap,
     mut forwarded: Vec<(String, String)>,
     path: String,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let Some(slot) = state.network.relays.acquire(client) else {
+    let Some(slot) = state.network.relays.acquire_within(limits.client, limits.limit) else {
         return refuse(StatusCode::TOO_MANY_REQUESTS, "too many relayed connections");
     };
     let Some((stream, incoming)) = link.relays.create(None, StreamKind::Relay, None) else {
         return refuse(StatusCode::INTERNAL_SERVER_ERROR, "stream id clash");
     };
+    stop_with(&link, &stream, limits.stop);
     let protocols = requested_protocols(headers);
     if !protocols.is_empty() {
         forwarded.push((PROTOCOLS_HEADER.to_string(), protocols.join(", ")));
@@ -657,7 +702,7 @@ pub async fn serve_http(State(state): State<AppState>, Path((target, path)): Pat
     };
     forward_http(
         &state,
-        &principal.token_id.to_string(),
+        Limits::device(&principal.token_id.to_string()),
         link,
         parts.method.to_string(),
         forwarded_headers(&parts.headers),
@@ -671,19 +716,20 @@ pub async fn serve_http(State(state): State<AppState>, Path((target, path)): Pat
 /// the origin-relative path and query on the target, already checked.
 async fn forward_http(
     state: &AppState,
-    client: &str,
+    limits: Limits<'_>,
     link: Arc<PeerLink>,
     method: String,
     headers: Vec<(String, String)>,
     target_path: String,
     body: Body,
 ) -> Response {
-    let Some(slot) = state.network.relays.acquire(client) else {
+    let Some(slot) = state.network.relays.acquire_within(limits.client, limits.limit) else {
         return refuse(StatusCode::TOO_MANY_REQUESTS, "too many relayed connections");
     };
     let Some((stream, mut incoming)) = link.relays.create(None, StreamKind::Relay, None) else {
         return refuse(StatusCode::INTERNAL_SERVER_ERROR, "stream id clash");
     };
+    stop_with(&link, &stream, limits.stop);
     let open = PeerRelayOpenParams { stream_id: stream.id, kind: RelayStreamKind::Http, path: target_path, method: Some(method), headers };
     match tokio::time::timeout(OPEN_TIMEOUT, link.call::<PeerRelayOpen>(open)).await {
         Ok(Ok(_)) => {}
@@ -772,8 +818,10 @@ async fn forward_http(
 }
 
 /// Request headers for a page request: the usual relay rules, but never an `Authorization` header and no cookie whose
-/// value is a Kybern credential (the web view has none; this keeps a page from replaying one).
-fn page_headers(state: &AppState, headers: &HeaderMap) -> Vec<(String, String)> {
+/// value is a Kybern credential (the web view has none; this keeps a page from replaying one). A `Referer` loses the
+/// page's ticket prefix (one from another page is dropped), so the ticket never reaches B's dev server, and B is told
+/// the prefix (`prefix`, `/relay/<machine>/page/<ticket>`) for the policy it writes.
+fn page_headers(state: &AppState, headers: &HeaderMap, prefix: &str) -> Vec<(String, String)> {
     let is_secret = |value: &str| crate::previews::proxy::is_kybern_credential(state, value);
     let mut out = Vec::new();
     for (name, value) in forwarded_headers(headers) {
@@ -784,9 +832,62 @@ fn page_headers(state: &AppState, headers: &HeaderMap) -> Vec<(String, String)> 
                     out.push((name, cookie));
                 }
             }
+            "referer" => {
+                if let Some(referer) = unprefixed_referer(&value, prefix) {
+                    out.push((name, referer));
+                }
+            }
             _ => out.push((name, value)),
         }
     }
+    out.push((relay_pages::PREFIX_HEADER.to_string(), prefix.to_string()));
+    out
+}
+
+/// `referer` with the page's own ticket prefix taken out of its path, or `None` when it is not this page's address.
+fn unprefixed_referer(referer: &str, prefix: &str) -> Option<String> {
+    let mut url = reqwest::Url::parse(referer).ok()?;
+    let rest = url.path().strip_prefix(prefix).filter(|rest| rest.is_empty() || rest.starts_with('/'))?;
+    let rest = if rest.is_empty() { "/".to_string() } else { rest.to_string() };
+    url.set_path(&rest);
+    Some(url.to_string())
+}
+
+/// A page's `Set-Cookie` confined to its own ticket: `Domain` is dropped, and `Path` becomes the page's address on this
+/// machine. A page's cookie therefore never reaches another page relayed through this machine, another machine's dev
+/// server included. `scope` is the ticket's outside path (`/relay/<machine>/page/<ticket><bound>`); for a subtree the
+/// cookie's own path is kept under it.
+fn scoped_set_cookie(cookie: &str, scope: &str, document: bool) -> String {
+    let mut parts = cookie.split(';');
+    let pair = parts.next().unwrap_or_default().trim();
+    let mut own_path = None;
+    let mut kept = Vec::new();
+    for attribute in parts {
+        let attribute = attribute.trim();
+        let name = attribute.split('=').next().unwrap_or_default().trim().to_ascii_lowercase();
+        match name.as_str() {
+            "domain" => {}
+            "path" => own_path = attribute.split_once('=').map(|(_, value)| value.trim().to_string()),
+            _ if attribute.is_empty() => {}
+            _ => kept.push(attribute.to_string()),
+        }
+    }
+    let path = if document {
+        scope.to_string()
+    } else {
+        let base = scope.trim_end_matches('/');
+        match own_path.filter(|path| path.starts_with('/') && path.bytes().all(|b| b.is_ascii_graphic() && b != b';' && b != b',')) {
+            Some(path) if path != "/" => format!("{base}{path}"),
+            _ => format!("{base}/"),
+        }
+    };
+    let mut out = pair.to_string();
+    for attribute in kept {
+        out.push_str("; ");
+        out.push_str(&attribute);
+    }
+    out.push_str("; Path=");
+    out.push_str(&path);
     out
 }
 
@@ -799,7 +900,7 @@ pub async fn serve_page(
     request: Request,
 ) -> Response {
     let (mut parts, body) = request.into_parts();
-    let Some(page) = state.network.pages.lookup(&ticket) else {
+    let Some(PageGrant { info: page, cancel, deadline }) = state.network.pages.lookup(&ticket) else {
         return refuse(StatusCode::NOT_FOUND, "this page address has expired");
     };
     if page.target != target {
@@ -831,7 +932,9 @@ pub async fn serve_page(
         Some(query) => format!("{}?{query}", url.path()),
         None => url.path().to_string(),
     };
-    let client = page.token_id.to_string();
+    // The page's streams count under its own ticket, with their own small cap, and stop with it.
+    let client = format!("page:{ticket}");
+    let limits = Limits { client: &client, limit: MAX_STREAMS_PER_PAGE, stop: Some(PageStop { cancel, deadline }) };
     if is_websocket_upgrade(&parts.headers) {
         if page.document {
             return refuse(StatusCode::FORBIDDEN, "this page address does not open connections");
@@ -840,11 +943,26 @@ pub async fn serve_page(
             Ok(ws) => ws,
             Err(rejection) => return rejection.into_response(),
         };
-        let forwarded = page_headers(&state, &parts.headers);
-        return open_ws(&state, &client, link, &parts.headers, forwarded, target_path, ws).await;
+        let forwarded = page_headers(&state, &parts.headers, &base);
+        return open_ws(&state, limits, link, &parts.headers, forwarded, target_path, ws).await;
     }
-    let headers = page_headers(&state, &parts.headers);
-    forward_http(&state, &client, link, parts.method.to_string(), headers, target_path, body).await
+    let headers = page_headers(&state, &parts.headers, &base);
+    let mut response = forward_http(&state, limits, link, parts.method.to_string(), headers, target_path, body).await;
+    let scope = format!("{base}{}", page.bound);
+    let cookies: Vec<String> = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .map(|cookie| scoped_set_cookie(cookie, &scope, page.document))
+        .collect();
+    response.headers_mut().remove(header::SET_COOKIE);
+    for cookie in cookies {
+        if let Ok(value) = HeaderValue::from_str(&cookie) {
+            response.headers_mut().append(header::SET_COOKIE, value);
+        }
+    }
+    response
 }
 
 fn tokio_stream_from(
@@ -875,6 +993,10 @@ pub async fn handle_open(state: &AppState, link: &Arc<PeerLink>, params: PeerRel
     let Some(url) = local_url(scheme, addr, &params.path) else {
         return Err(RpcError::new(codes::FORBIDDEN, "the relay does not carry this path"));
     };
+    let mut params = params;
+    // Only this process can mark its own request as relayed; a mark the other machine sent is not kept.
+    params.headers.retain(|(name, _)| !name.eq_ignore_ascii_case(relay_pages::LOCAL_MARK_HEADER));
+    params.headers.push((relay_pages::LOCAL_MARK_HEADER.to_string(), state.network.pages.local_mark().to_string()));
     let slot = state
         .network
         .relays
@@ -1068,6 +1190,58 @@ async fn open_local_http(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pages_cookies_are_confined_to_its_own_address() {
+        let scope = "/relay/b/page/t/preview-proxy/x/";
+        assert_eq!(scoped_set_cookie("sid=1; Path=/; HttpOnly", scope, false), "sid=1; HttpOnly; Path=/relay/b/page/t/preview-proxy/x/");
+        assert_eq!(
+            scoped_set_cookie("a=2; Domain=example.com; path=/api; Secure", scope, false),
+            "a=2; Secure; Path=/relay/b/page/t/preview-proxy/x/api"
+        );
+        assert_eq!(scoped_set_cookie("a=3", scope, false), "a=3; Path=/relay/b/page/t/preview-proxy/x/", "no path is the page's root");
+        assert_eq!(
+            scoped_set_cookie("a=4; Path=api", scope, false),
+            "a=4; Path=/relay/b/page/t/preview-proxy/x/",
+            "a relative path is not kept"
+        );
+        assert_eq!(scoped_set_cookie("a=5; Path=/x;y", scope, false), "a=5; y; Path=/relay/b/page/t/preview-proxy/x/x");
+        let document = "/relay/b/page/t/visual-frame/v";
+        assert_eq!(scoped_set_cookie("a=6; Path=/anything", document, true), "a=6; Path=/relay/b/page/t/visual-frame/v");
+    }
+
+    #[test]
+    fn a_referer_loses_its_page_prefix_and_another_pages_is_dropped() {
+        let prefix = "/relay/b/page/t";
+        assert_eq!(
+            unprefixed_referer("http://m:4173/relay/b/page/t/preview-proxy/x/app?q=1", prefix).as_deref(),
+            Some("http://m:4173/preview-proxy/x/app?q=1")
+        );
+        assert_eq!(unprefixed_referer("http://m:4173/relay/b/page/t", prefix).as_deref(), Some("http://m:4173/"));
+        assert_eq!(unprefixed_referer("http://m:4173/relay/b/page/other/preview-proxy/x/", prefix), None);
+        assert_eq!(unprefixed_referer("http://m:4173/relay/b/page/tt/x", prefix), None);
+        assert_eq!(unprefixed_referer("not a url", prefix), None);
+    }
+
+    #[test]
+    fn page_streams_count_under_their_own_cap() {
+        let hub = RelayHub::default();
+        let page: Vec<_> = (0..MAX_STREAMS_PER_PAGE).map(|_| hub.acquire_within("page:t", MAX_STREAMS_PER_PAGE).unwrap()).collect();
+        assert!(hub.acquire_within("page:t", MAX_STREAMS_PER_PAGE).is_none(), "the page is at its cap");
+        assert!(hub.acquire("device").is_some(), "the device's own streams are not the page's");
+        drop(page);
+        assert!(hub.acquire_within("page:t", MAX_STREAMS_PER_PAGE).is_some());
+    }
+
+    #[test]
+    fn page_headers_never_carry_the_daemons_page_headers_a_client_sent() {
+        let mut headers = HeaderMap::new();
+        headers.insert(relay_pages::PREFIX_HEADER, HeaderValue::from_static("/relay/x/page/y"));
+        headers.insert(relay_pages::LOCAL_MARK_HEADER, HeaderValue::from_static("forged"));
+        headers.insert("accept", HeaderValue::from_static("text/html"));
+        let forwarded = forwarded_headers(&headers);
+        assert_eq!(forwarded, vec![("accept".to_string(), "text/html".to_string())]);
+    }
 
     #[test]
     fn hop_by_hop_headers_and_the_relay_header_never_cross() {

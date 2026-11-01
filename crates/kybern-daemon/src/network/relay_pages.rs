@@ -6,18 +6,43 @@
 //! A ticket binds one device token, one target machine and one path: a **subtree** (`/preview-proxy/<id>/`,
 //! `/preview-files/<id>/`) or a **document** (`/visual-frame/<id>`, `/artifact-preview/<id>`). It follows the rules of
 //! the preview tickets (UUIDv4, sliding 30 minutes, hard cap 12 hours, at most 64, oldest evicted first) in its own store.
+//!
+//! A page's streams belong to its ticket: they count under `page:<ticket>` with their own small cap
+//! ([`MAX_STREAMS_PER_PAGE`]), so a page cannot use up its device's relay streams, and they end when the ticket is
+//! closed, revoked, evicted or expires ([`PageGrant::cancel`], [`PageGrant::deadline`]).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use kybern_protocol::*;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::relay::route_check;
 use crate::auth::{Principal, PrincipalKind};
 use crate::previews::tickets::{HARD_CAP, MAX_TICKETS, SLIDING_EXPIRY};
 use crate::state::AppState;
+
+/// Streams one page ticket may hold open at once (requests and hot-reload sockets together).
+pub const MAX_STREAMS_PER_PAGE: usize = 8;
+
+/// The header B reads a page's outside prefix from (`/relay/<machine>/page/<ticket>`), so a sandboxed page's
+/// policy points at the address the web view loaded. B trusts it only beside [`LOCAL_MARK_HEADER`].
+pub const PREFIX_HEADER: &str = "x-kybern-page-prefix";
+/// Set by B on the local request it makes for a relayed stream, with a value only this process knows. A request a
+/// client sends to B directly cannot carry it, so a forged [`PREFIX_HEADER`] is ignored there.
+pub const LOCAL_MARK_HEADER: &str = "x-kybern-relay-local";
+
+/// A live ticket as one request sees it.
+#[derive(Debug, Clone)]
+pub struct PageGrant {
+    pub info: PageInfo,
+    /// Fires when the ticket is closed, revoked, evicted or found expired: its open streams stop.
+    pub cancel: CancellationToken,
+    /// The hard cap: no stream of the ticket outlives it.
+    pub deadline: Instant,
+}
 
 /// What a ticket is bound to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +67,7 @@ struct Entry {
     info: PageInfo,
     created: Instant,
     last_used: Instant,
+    cancel: CancellationToken,
 }
 
 /// The relay page tickets of this machine.
@@ -50,6 +76,7 @@ pub struct RelayPages {
     sliding: Duration,
     hard_cap: Duration,
     max: usize,
+    local_mark: String,
 }
 
 impl Default for RelayPages {
@@ -60,7 +87,12 @@ impl Default for RelayPages {
 
 impl RelayPages {
     pub fn with_limits(sliding: Duration, hard_cap: Duration, max: usize) -> Self {
-        Self { entries: Mutex::default(), sliding, hard_cap, max }
+        Self { entries: Mutex::default(), sliding, hard_cap, max, local_mark: Uuid::new_v4().simple().to_string() }
+    }
+
+    /// The value of [`LOCAL_MARK_HEADER`] on this process's own relayed requests.
+    pub fn local_mark(&self) -> &str {
+        &self.local_mark
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Entry>> {
@@ -77,38 +109,50 @@ impl RelayPages {
 
     pub fn mint_at(&self, info: PageInfo, now: Instant) -> String {
         let mut entries = self.lock();
-        entries.retain(|_, entry| self.live(entry, now));
+        entries.retain(|_, entry| {
+            let live = self.live(entry, now);
+            if !live {
+                entry.cancel.cancel();
+            }
+            live
+        });
         while entries.len() >= self.max {
             let Some(oldest) = entries.iter().min_by_key(|(_, entry)| entry.created).map(|(id, _)| id.clone()) else { break };
-            entries.remove(&oldest);
+            if let Some(entry) = entries.remove(&oldest) {
+                entry.cancel.cancel();
+            }
         }
         let ticket = Uuid::new_v4().to_string();
-        entries.insert(ticket.clone(), Entry { info, created: now, last_used: now });
+        entries.insert(ticket.clone(), Entry { info, created: now, last_used: now, cancel: CancellationToken::new() });
         ticket
     }
 
     /// Look a ticket up and slide its expiry. An expired ticket is removed.
-    pub fn lookup(&self, ticket: &str) -> Option<PageInfo> {
+    pub fn lookup(&self, ticket: &str) -> Option<PageGrant> {
         self.lookup_at(ticket, Instant::now())
     }
 
-    pub fn lookup_at(&self, ticket: &str, now: Instant) -> Option<PageInfo> {
+    pub fn lookup_at(&self, ticket: &str, now: Instant) -> Option<PageGrant> {
         let mut entries = self.lock();
         let live = entries.get(ticket).map(|entry| self.live(entry, now))?;
         if !live {
-            entries.remove(ticket);
+            if let Some(entry) = entries.remove(ticket) {
+                entry.cancel.cancel();
+            }
             return None;
         }
         let entry = entries.get_mut(ticket)?;
         entry.last_used = now;
-        Some(entry.info.clone())
+        Some(PageGrant { info: entry.info.clone(), cancel: entry.cancel.clone(), deadline: entry.created + self.hard_cap })
     }
 
     /// Close a ticket for the token that minted it. Idempotent; a ticket of another token behaves as if it did not exist.
     pub fn close(&self, ticket: &str, token_id: Uuid) -> bool {
         let mut entries = self.lock();
         if entries.get(ticket).is_some_and(|entry| entry.info.token_id == token_id) {
-            entries.remove(ticket);
+            if let Some(entry) = entries.remove(ticket) {
+                entry.cancel.cancel();
+            }
             return true;
         }
         false
@@ -118,7 +162,13 @@ impl RelayPages {
     pub fn revoke_principal(&self, token_id: Uuid) -> usize {
         let mut entries = self.lock();
         let before = entries.len();
-        entries.retain(|_, entry| entry.info.token_id != token_id);
+        entries.retain(|_, entry| {
+            let keep = entry.info.token_id != token_id;
+            if !keep {
+                entry.cancel.cancel();
+            }
+            keep
+        });
         before - entries.len()
     }
 
@@ -282,6 +332,34 @@ mod tests {
         assert!(pages.lookup_at(&first, now + Duration::from_millis(3)).is_none());
         assert!(pages.lookup_at(&second, now + Duration::from_millis(3)).is_some());
         assert!(pages.lookup_at(&third, now + Duration::from_millis(3)).is_some());
+    }
+
+    #[test]
+    fn a_tickets_streams_are_told_to_stop_when_it_is_closed_revoked_evicted_or_expired() {
+        let pages = RelayPages::with_limits(Duration::from_secs(100), Duration::from_secs(300), 2);
+        let (owner, start) = (Uuid::new_v4(), Instant::now());
+        let closed = pages.mint_at(info(owner, "/preview-proxy/a/", false), start);
+        let grant = pages.lookup_at(&closed, start).unwrap();
+        assert_eq!(grant.deadline, start + Duration::from_secs(300), "the hard cap bounds every stream");
+        assert!(!grant.cancel.is_cancelled());
+        assert!(pages.close(&closed, owner));
+        assert!(grant.cancel.is_cancelled(), "closed");
+
+        let revoked = pages.mint_at(info(owner, "/preview-proxy/b/", false), start);
+        let grant = pages.lookup_at(&revoked, start).unwrap();
+        pages.revoke_principal(owner);
+        assert!(grant.cancel.is_cancelled(), "revoked");
+
+        let expired = pages.mint_at(info(owner, "/preview-proxy/c/", false), start);
+        let grant = pages.lookup_at(&expired, start).unwrap();
+        assert!(pages.lookup_at(&expired, start + Duration::from_secs(150)).is_none());
+        assert!(grant.cancel.is_cancelled(), "expired");
+
+        let first = pages.mint_at(info(owner, "/preview-proxy/d/", false), start);
+        let grant = pages.lookup_at(&first, start).unwrap();
+        pages.mint_at(info(owner, "/preview-proxy/e/", false), start + Duration::from_millis(1));
+        pages.mint_at(info(owner, "/preview-proxy/f/", false), start + Duration::from_millis(2));
+        assert!(grant.cancel.is_cancelled(), "evicted");
     }
 
     #[test]

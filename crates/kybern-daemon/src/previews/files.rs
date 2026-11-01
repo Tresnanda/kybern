@@ -26,15 +26,35 @@ pub async fn serve(
     headers: HeaderMap,
     UrlPath((ticket, path)): UrlPath<(String, String)>,
 ) -> Response<Body> {
-    respond(&state.previews, state.port.load(std::sync::atomic::Ordering::Relaxed), &headers, &ticket, &path, MAX_FILE_BYTES).await
+    let prefix = relayed_prefix(&headers, state.network.pages.local_mark());
+    let port = state.port.load(std::sync::atomic::Ordering::Relaxed);
+    respond_at(&state.previews, port, &headers, prefix.as_deref(), &ticket, &path, MAX_FILE_BYTES).await
 }
 
 pub async fn serve_index(State(state): State<AppState>, headers: HeaderMap, UrlPath(ticket): UrlPath<String>) -> Response<Body> {
-    respond(&state.previews, state.port.load(std::sync::atomic::Ordering::Relaxed), &headers, &ticket, "", MAX_FILE_BYTES).await
+    let prefix = relayed_prefix(&headers, state.network.pages.local_mark());
+    let port = state.port.load(std::sync::atomic::Ordering::Relaxed);
+    respond_at(&state.previews, port, &headers, prefix.as_deref(), &ticket, "", MAX_FILE_BYTES).await
+}
+
+/// The outside prefix (`/relay/<machine>/page/<ticket>`) of a page another machine relays to a web view, when this
+/// request came through this daemon's own relay stream (it carries `mark`) and names one. A client that sends the
+/// prefix straight to this daemon cannot carry the mark, so it is ignored there.
+pub fn relayed_prefix(headers: &HeaderMap, mark: &str) -> Option<String> {
+    use crate::network::relay_pages::{LOCAL_MARK_HEADER, PREFIX_HEADER};
+    let marked = headers.get(LOCAL_MARK_HEADER).and_then(|value| value.to_str().ok()) == Some(mark);
+    let prefix = headers.get(PREFIX_HEADER)?.to_str().ok()?;
+    let id = |part: &str| (1..=128).contains(&part.len()) && part.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    let well_formed = match prefix.strip_prefix("/relay/").and_then(|rest| rest.split_once("/page/")) {
+        Some((machine, ticket)) => id(machine) && id(ticket),
+        None => false,
+    };
+    (marked && well_formed).then(|| prefix.to_string())
 }
 
 /// Everything the route does, minus axum state, so tests drive it directly.
 /// `path` is the percent-decoded request path after the ticket.
+#[cfg(test)]
 pub async fn respond(
     tickets: &PreviewTickets,
     daemon_port: u16,
@@ -43,9 +63,22 @@ pub async fn respond(
     path: &str,
     max_bytes: u64,
 ) -> Response<Body> {
+    respond_at(tickets, daemon_port, headers, None, ticket, path, max_bytes).await
+}
+
+/// [`respond`] for a page whose address starts with `prefix` on the host the web view loaded (a relay page).
+pub async fn respond_at(
+    tickets: &PreviewTickets,
+    daemon_port: u16,
+    headers: &HeaderMap,
+    prefix: Option<&str>,
+    ticket: &str,
+    path: &str,
+    max_bytes: u64,
+) -> Response<Body> {
     let Some(info) = tickets.lookup(ticket) else { return text(StatusCode::NOT_FOUND, EXPIRED, None) };
     let TicketKind::Files { root } = info.kind else { return text(StatusCode::NOT_FOUND, EXPIRED, None) };
-    let base = format!("http://{}/preview-files/{ticket}/", host_for_csp(headers, daemon_port));
+    let base = format!("http://{}{}/preview-files/{ticket}/", host_for_csp(headers, daemon_port), prefix.unwrap_or_default());
     let policy = Some(csp(&base));
     let Some(target) = locate(&root, path).await else { return text(StatusCode::NOT_FOUND, "Not found", policy) };
     let len = match tokio::fs::metadata(&target).await {
@@ -400,6 +433,29 @@ mod tests {
         // Errors carry the same hardening.
         let missing = get(&tickets, &ticket, "nope.css").await;
         assert_eq!(missing.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    }
+
+    #[tokio::test]
+    async fn a_relayed_page_gets_its_outside_prefix_only_with_this_daemons_mark() {
+        use crate::network::relay_pages::{LOCAL_MARK_HEADER, PREFIX_HEADER};
+        let mut headers = HeaderMap::new();
+        headers.insert(PREFIX_HEADER, HeaderValue::from_static("/relay/b-1/page/t_2"));
+        assert_eq!(relayed_prefix(&headers, "mark"), None, "no mark: a client sent it");
+        headers.insert(LOCAL_MARK_HEADER, HeaderValue::from_static("other"));
+        assert_eq!(relayed_prefix(&headers, "mark"), None, "a mark this process did not make");
+        headers.insert(LOCAL_MARK_HEADER, HeaderValue::from_static("mark"));
+        assert_eq!(relayed_prefix(&headers, "mark").as_deref(), Some("/relay/b-1/page/t_2"));
+        for bad in ["/relay/b/page/t/x", "/relay/b/page/", "/elsewhere", "/relay/b/page/t;script-src *", "/relay//page/t"] {
+            headers.insert(PREFIX_HEADER, HeaderValue::from_str(bad).unwrap());
+            assert_eq!(relayed_prefix(&headers, "mark"), None, "{bad}");
+        }
+        let (dir, tickets, ticket) = fixture();
+        dir.write("a.css", b"x");
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("100.64.0.1:4173"));
+        let response = respond_at(&tickets, 1, &headers, Some("/relay/b/page/t"), &ticket, "a.css", MAX_FILE_BYTES).await;
+        let policy = response.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap().to_owned();
+        assert!(policy.contains(&format!("default-src http://100.64.0.1:4173/relay/b/page/t/preview-files/{ticket}/ ")), "{policy}");
     }
 
     #[tokio::test]

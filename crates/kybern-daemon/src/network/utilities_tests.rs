@@ -385,23 +385,47 @@ async fn a_machine_that_turned_files_off_refuses_a_send() {
 
 // ---- U3: ports and previews ----
 
-/// A dev server: pages at `/`, and a Vite-style hot-reload socket at `/hmr` that echoes, with the
-/// `vite-hmr` subprotocol.
+/// A dev server: pages at `/`, a Vite-style hot-reload socket at `/hmr` that echoes, with the
+/// `vite-hmr` subprotocol, `/headers`, which answers with the request headers it got, and `/set-cookie`.
 async fn dev_server() -> u16 {
-    let app = Router::new().route("/", get(|| async { "<html>dev</html>" })).route(
-        "/hmr",
-        get(|ws: WebSocketUpgrade| async move {
-            ws.protocols(["vite-hmr"])
-                .on_upgrade(|mut socket| async move {
-                    while let Some(Ok(message)) = socket.recv().await {
-                        if let AxumMessage::Text(text) = message {
-                            let _ = socket.send(AxumMessage::Text(format!("echo:{text}").into())).await;
+    let app = Router::new()
+        .route("/", get(|| async { "<html>dev</html>" }))
+        .route(
+            "/headers",
+            get(|headers: axum::http::HeaderMap| async move {
+                let seen: Vec<(String, String)> = headers
+                    .iter()
+                    .map(|(name, value)| (name.as_str().to_string(), value.to_str().unwrap_or_default().to_string()))
+                    .collect();
+                axum::Json(seen)
+            }),
+        )
+        .route(
+            "/set-cookie",
+            get(|| async {
+                (
+                    axum::response::AppendHeaders([
+                        (axum::http::header::SET_COOKIE, "sid=1; Path=/; HttpOnly"),
+                        (axum::http::header::SET_COOKIE, "pref=2; Domain=localhost; Path=/api; SameSite=Lax"),
+                    ]),
+                    "ok",
+                )
+            }),
+        )
+        .route(
+            "/hmr",
+            get(|ws: WebSocketUpgrade| async move {
+                ws.protocols(["vite-hmr"])
+                    .on_upgrade(|mut socket| async move {
+                        while let Some(Ok(message)) = socket.recv().await {
+                            if let AxumMessage::Text(text) = message {
+                                let _ = socket.send(AxumMessage::Text(format!("echo:{text}").into())).await;
+                            }
                         }
-                    }
-                })
-                .into_response()
-        }),
-    );
+                    })
+                    .into_response()
+            }),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -481,16 +505,31 @@ async fn a_page_ticket_loads_a_relayed_preview_without_the_relay_header_and_stay
     assert_eq!(loaded.status(), 200);
     assert_eq!(loaded.text().await.unwrap(), "<html>dev</html>");
 
-    // A Kybern credential in the Authorization header or a cookie is dropped on the way, and the page still loads.
+    // Kybern credentials (Authorization, the relay header, a `kyb_` cookie), the page headers only the daemons set,
+    // and the ticket in the Referer never reach the dev server; the page's own cookie does.
     let token = a.device_token(&Scope::CLIENT);
-    let with_credentials = http
-        .get(format!("{}{}", a.http_url(), page.path))
+    assert!(token.starts_with("kyb_"), "{token}");
+    let seen: Vec<(String, String)> = http
+        .get(format!("{}{root}/preview-proxy/{ticket}/headers", a.http_url()))
         .header("authorization", format!("Bearer {token}"))
+        .header(super::relay::RELAY_AUTH_HEADER, format!("Bearer {token}"))
         .header("cookie", format!("kybern={token}; theme=dark"))
+        .header("referer", format!("{}{root}/preview-proxy/{ticket}/", a.http_url()))
+        .header(super::relay_pages::PREFIX_HEADER, "/relay/x/page/y")
+        .header(super::relay_pages::LOCAL_MARK_HEADER, "forged")
         .send()
         .await
+        .unwrap()
+        .json()
+        .await
         .unwrap();
-    assert_eq!(with_credentials.status(), 200);
+    let header = |name: &str| seen.iter().find(|(key, _)| key == name).map(|(_, value)| value.clone());
+    assert_eq!(header("authorization"), None, "{seen:?}");
+    assert_eq!(header(super::relay::RELAY_AUTH_HEADER), None, "{seen:?}");
+    assert_eq!(header(super::relay_pages::PREFIX_HEADER), None, "{seen:?}");
+    assert_eq!(header(super::relay_pages::LOCAL_MARK_HEADER), None, "{seen:?}");
+    assert_eq!(header("cookie").as_deref(), Some("theme=dark"), "{seen:?}");
+    assert!(seen.iter().all(|(_, value)| !value.contains(&token) && !value.contains(&page.ticket)), "{seen:?}");
 
     // Hot reload: the WebSocket under the subtree opens, subprotocol included.
     let url = format!("ws://{}{root}/preview-proxy/{ticket}/hmr", a.primary);
@@ -503,7 +542,9 @@ async fn a_page_ticket_loads_a_relayed_preview_without_the_relay_header_and_stay
     assert_eq!(reply, Message::Text("echo:update".into()));
     socket.close(None).await.unwrap();
 
-    // Outside the page: a longer id, another ticket, other roots, the API, and dot segments.
+    // Outside the page: a longer id, another ticket, other roots, the API, and dot segments. The paths are sent as
+    // written (an HTTP client would normalize the dot segments before they left).
+    let address = a.primary.to_string();
     for outside in [
         format!("/preview-proxy/{ticket}x/"),
         "/preview-proxy/other/".to_string(),
@@ -513,10 +554,14 @@ async fn a_page_ticket_loads_a_relayed_preview_without_the_relay_header_and_stay
         format!("/preview-proxy/{ticket}/../other/"),
         format!("/preview-proxy/{ticket}/%2e%2e/other/"),
         format!("/preview-proxy/{ticket}/%2e%2e%2fother/"),
+        format!("/preview-proxy/{ticket}/%2E%2E/%2E%2E/preview-proxy/other/"),
+        format!("/preview-proxy/{ticket}/..%2f..%2fapi/threads"),
     ] {
-        let refused = http.get(format!("{}{root}{outside}", a.http_url())).send().await.unwrap();
-        assert_eq!(refused.status(), 403, "{outside} is outside the page");
+        assert_eq!(raw_status(&address, &format!("{root}{outside}")).await, 403, "{outside} is outside the page");
     }
+    // Encoded twice, it is one plain segment inside the page: the dev server gets it as written and has no such page.
+    let twice = raw_status(&address, &format!("{root}/preview-proxy/{ticket}/%252e%252e%252fother/")).await;
+    assert!(twice == 404 || twice == 403, "a doubly encoded dot segment stays inside the page ({twice})");
     let outside = format!("ws://{}{root}/ws", a.primary).into_client_request().unwrap();
     match tokio_tungstenite::connect_async(outside).await {
         Err(tokio_tungstenite::tungstenite::Error::Http(response)) => assert_eq!(response.status(), 403),
@@ -615,6 +660,160 @@ async fn documents_refuse_subpaths_and_sockets_the_mint_refuses_bad_requests_and
 
 fn token_id_of(node: &Node, token: &str) -> Uuid {
     crate::auth::authenticate(&node.state.store, token).unwrap().unwrap().token_id
+}
+
+/// The status of a `GET` for `path` sent exactly as written, without the normalization an HTTP client applies.
+async fn raw_status(address: &str, path: &str) -> u16 {
+    let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+    let request = format!("GET {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n");
+    socket.write_all(request.as_bytes()).await.unwrap();
+    let mut response = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(20), socket.read_to_end(&mut response)).await;
+    let text = String::from_utf8_lossy(&response);
+    text.split(' ').nth(1).and_then(|code| code.parse().ok()).unwrap_or_else(|| panic!("no status for {path}: {text}"))
+}
+
+/// Whether `socket` ends (a close frame, the end of the stream or an error) within `wait`.
+async fn ends_within<S>(socket: &mut S, wait: Duration) -> bool
+where
+    S: futures::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    let deadline = tokio::time::Instant::now() + wait;
+    loop {
+        match tokio::time::timeout_at(deadline, socket.next()).await {
+            Err(_) => return false,
+            Ok(None) | Ok(Some(Err(_))) | Ok(Some(Ok(Message::Close(_)))) => return true,
+            Ok(Some(Ok(_))) => continue,
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_page_has_its_own_stream_cap_and_its_streams_end_with_its_ticket() {
+    let Some((_cluster, a, b)) = pair().await else { return };
+    let port = dev_server().await;
+    let ticket = b.state.previews.mint(crate::previews::tickets::TicketKind::Proxy { port }, Uuid::now_v7(), None);
+    let phone = a.device_token(&crate::access::paired_scopes());
+    let client = Client::connect(&Endpoint { url: a.ws_url(), token: phone.clone() }).await.unwrap();
+    let open = || async {
+        client
+            .call::<NetworkRelayPageOpen>(NetworkRelayPageOpenParams { machine_id: b.id(), path: format!("/preview-proxy/{ticket}/") })
+            .await
+            .unwrap()
+    };
+    let socket_of = |page: &NetworkRelayPageOpenResult| format!("ws://{}{}hmr", a.primary, page.path);
+
+    // A page holds at most MAX_STREAMS_PER_PAGE streams; the next is refused, and the device's own relayed
+    // connections are not counted against it.
+    let page = open().await;
+    let mut sockets = Vec::new();
+    for _ in 0..super::relay_pages::MAX_STREAMS_PER_PAGE {
+        let (socket, _) = tokio_tungstenite::connect_async(socket_of(&page)).await.unwrap();
+        sockets.push(socket);
+    }
+    match tokio_tungstenite::connect_async(socket_of(&page)).await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => assert_eq!(response.status(), 429),
+        other => panic!("expected the page's cap, got {other:?}"),
+    }
+    let mut own = format!("ws://{}/relay/{}/http/preview-proxy/{ticket}/hmr", a.primary, b.id()).into_client_request().unwrap();
+    own.headers_mut().insert(super::relay::RELAY_AUTH_HEADER, format!("Bearer {phone}").parse().unwrap());
+    let (mut own, _) = tokio_tungstenite::connect_async(own).await.expect("the device keeps its own streams");
+    own.send(Message::Text("still here".into())).await.unwrap();
+    let reply = tokio::time::timeout(Duration::from_secs(10), own.next()).await.expect("no reply").unwrap().unwrap();
+    assert_eq!(reply, Message::Text("echo:still here".into()));
+
+    // Closing the page ends every stream it holds, not only new requests.
+    client.call::<NetworkRelayPageClose>(NetworkRelayPageCloseParams { ticket: page.ticket.clone() }).await.unwrap();
+    for socket in &mut sockets {
+        assert!(ends_within(socket, Duration::from_secs(10)).await, "a page socket outlived its closed ticket");
+    }
+    own.send(Message::Text("after".into())).await.unwrap();
+    let reply = tokio::time::timeout(Duration::from_secs(10), own.next()).await.expect("no reply").unwrap().unwrap();
+    assert_eq!(reply, Message::Text("echo:after".into()), "the device's own socket is not the page's");
+    own.close(None).await.unwrap();
+
+    // Revoking the device (access.tokens.revoke) ends its pages' open streams too.
+    let page = open().await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(socket_of(&page)).await.unwrap();
+    let admin = Client::connect(&Endpoint { url: a.ws_url(), token: a.device_token(&Scope::ALL) }).await.unwrap();
+    admin.call::<TokensRevoke>(TokensRevokeParams { token_id: token_id_of(&a, &phone) }).await.unwrap();
+    assert!(ends_within(&mut socket, Duration::from_secs(10)).await, "a page socket outlived its revoked device");
+    assert_eq!(reqwest::get(format!("{}{}", a.http_url(), page.path)).await.unwrap().status(), 404);
+    eventually("streams are released", WAIT, || a.state.network.relays.open_streams() == 0 && b.state.network.relays.open_streams() == 0)
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_page_keeps_its_cookies_and_stops_when_the_network_is_off_or_its_machine_is_gone() {
+    let Some((_cluster, a, mut b)) = pair().await else { return };
+    let port = dev_server().await;
+    let ticket = b.state.previews.mint(crate::previews::tickets::TicketKind::Proxy { port }, Uuid::now_v7(), None);
+    let client = admin(&a).await;
+    let page = client
+        .call::<NetworkRelayPageOpen>(NetworkRelayPageOpenParams { machine_id: b.id(), path: format!("/preview-proxy/{ticket}/") })
+        .await
+        .unwrap();
+    let scope = page.scope.trim_end_matches('/').to_string();
+
+    // A dev server's cookies stay on the page that set it: their path moves under the page's address and Domain goes.
+    let response = reqwest::get(format!("{}{}set-cookie", a.http_url(), page.path)).await.unwrap();
+    assert_eq!(response.status(), 200);
+    let cookies: Vec<String> =
+        response.headers().get_all(axum::http::header::SET_COOKIE).iter().map(|value| value.to_str().unwrap().to_string()).collect();
+    assert_eq!(cookies, [format!("sid=1; HttpOnly; Path={scope}/"), format!("pref=2; SameSite=Lax; Path={scope}/api")]);
+
+    // With the network off on the relay member the page stops answering; with its machine gone, too.
+    a.state.network.set_enabled(false);
+    assert_eq!(reqwest::get(format!("{}{}", a.http_url(), page.path)).await.unwrap().status(), 404);
+    a.state.network.set_enabled(true);
+    b.stop();
+    let deadline = tokio::time::Instant::now() + WAIT;
+    loop {
+        let status = reqwest::get(format!("{}{}", a.http_url(), page.path)).await.unwrap().status();
+        if status == 502 || status == 404 {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "the page still answers with {status} after its machine stopped");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_preview_files_page_through_the_relay_allows_its_relative_scripts_and_a_forged_prefix_is_ignored() {
+    let Some((_cluster, a, b)) = pair().await else { return };
+    let dir = TempDir::new("relay-page-files");
+    std::fs::write(dir.path().join("index.html"), "<script src=\"app.js\"></script>").unwrap();
+    std::fs::write(dir.path().join("app.js"), "console.log('hi')").unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let ticket = b.state.previews.mint(crate::previews::tickets::TicketKind::Files { root }, Uuid::now_v7(), None);
+    let client = admin(&a).await;
+    let page = client
+        .call::<NetworkRelayPageOpen>(NetworkRelayPageOpenParams {
+            machine_id: b.id(),
+            path: format!("/preview-files/{ticket}/index.html"),
+        })
+        .await
+        .unwrap();
+    let loaded = reqwest::get(format!("{}{}", a.http_url(), page.path)).await.unwrap();
+    assert_eq!(loaded.status(), 200);
+    let policy = loaded.headers()[axum::http::header::CONTENT_SECURITY_POLICY].to_str().unwrap().to_string();
+    // The policy's base is the address the web view loaded, so `app.js` (relative) is allowed.
+    let base = format!("http://{}{}", a.primary, page.scope);
+    assert!(policy.contains(&format!("default-src {base} ")), "{policy}");
+    let script = reqwest::get(format!("{base}app.js")).await.unwrap();
+    assert_eq!(script.status(), 200);
+    assert_eq!(script.text().await.unwrap(), "console.log('hi')");
+
+    // Straight to b, a client cannot choose the prefix: it carries no relay mark.
+    let direct = reqwest::Client::new()
+        .get(format!("{}/preview-files/{ticket}/index.html", b.http_url()))
+        .header(super::relay_pages::PREFIX_HEADER, "/relay/x/page/y")
+        .send()
+        .await
+        .unwrap();
+    let policy = direct.headers()[axum::http::header::CONTENT_SECURITY_POLICY].to_str().unwrap().to_string();
+    assert!(policy.contains(&format!("default-src http://{}/preview-files/{ticket}/ ", b.primary)), "{policy}");
+    assert!(!policy.contains("/relay/x/page/y"), "{policy}");
 }
 
 async fn echo_server() -> u16 {
