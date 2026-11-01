@@ -521,7 +521,8 @@ async fn installed_harnesses_round_trip_a_scoped_native_bridge_tool() {
         if selected.as_deref().is_some_and(|name| name != kind.as_str()) {
             continue;
         }
-        // Antigravity has no per-session MCP configuration, so it gets no bridge tools.
+        // Antigravity reaches the bridge through a global `agy mcp` entry (see antigravity_mcp.rs), which a
+        // scratch HOME run covers; this test has no per-session config to point it at.
         if kind == ProviderKind::Antigravity {
             continue;
         }

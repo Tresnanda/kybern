@@ -8,9 +8,11 @@
 //! are in `docs/design/ade-111-antigravity.md`.
 //!
 //! Antigravity only runs in Full access (`--dangerously-skip-permissions`):
-//! Kybern has no way to approve or limit its tools. It also gets no Kybern
-//! tools, because `agy` has no per-session MCP configuration and Kybern must
-//! not edit the user's `agy mcp` setup.
+//! Kybern has no way to approve or limit its tools. Kybern's own tools reach it
+//! through one global MCP entry (`kybern mcp-bridge`, added with `agy mcp add`)
+//! that forwards to the session's gateway; the session's endpoint and
+//! credential travel in the environment of each `agy` process, never on its
+//! command line.
 mod login;
 mod stream;
 mod tools;
@@ -42,6 +44,9 @@ use stream::TurnMapper;
 
 /// `result.finished_reason` first shipped in this version.
 const MIN_VERSION: (u64, u64, u64) = (1, 4, 11);
+/// What `kybern mcp-bridge` reads from the environment `agy` hands it.
+const BRIDGE_URL: &str = "KYBERN_MCP_URL";
+const BRIDGE_AUTHORIZATION: &str = "KYBERN_MCP_AUTHORIZATION";
 const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 const INSTALL_HINT: &str = "Install with: curl -fsSL https://antigravity.google/cli/install.sh | bash (Windows PowerShell: irm https://antigravity.google/cli/install.ps1 | iex)";
 /// The sentence every refused permission mode gets, wherever it is refused.
@@ -278,11 +283,11 @@ impl AgentDriver for AntigravityDriver {
             }
         }
         let binary = resolve(ProviderKind::Antigravity, config.binary.as_ref())?;
-        // No Kybern tools: only the guide (and any role text) rides in the first
-        // prompt, because `agy` has no system channel Kybern can reach. The
-        // daemon hands this driver a tool-free guide, so it never advertises a
-        // tool the agent cannot call. A resumed conversation that already holds
-        // the block gets nothing; one that never received it gets it once.
+        // The guide (and any role text) rides in the first prompt, because `agy` has
+        // no system channel Kybern can reach. The daemon renders it from the tools
+        // this session really has, so it never advertises one the agent cannot call.
+        // A resumed conversation that already holds the block gets nothing; one that
+        // never received it gets it once.
         let guide = match (&config.resume_session_id, config.resume_lacks_instructions) {
             (None, _) | (Some(_), true) => config.native_tool_bridge.as_ref().and_then(|bridge| bridge.provider_instructions()),
             (Some(_), false) => None,
@@ -292,15 +297,24 @@ impl AgentDriver for AntigravityDriver {
             .find_map(|key| config.env.get(*key).cloned().or_else(|| std::env::var(key).ok()))
             .filter(|home| !home.is_empty())
             .map(PathBuf::from);
+        let mut env: BTreeMap<String, String> = config.env.into_iter().collect();
+        // The bridge process `agy` starts inherits these; without them it serves no tools.
+        for key in [BRIDGE_URL, BRIDGE_AUTHORIZATION] {
+            env.remove(key);
+        }
+        if let Some(bridge) = config.native_tool_bridge.as_ref()
+            && let (Some(endpoint), Some(authorization)) = (&bridge.endpoint, &bridge.authorization)
+        {
+            env.insert(BRIDGE_URL.into(), endpoint.clone());
+            env.insert(BRIDGE_AUTHORIZATION.into(), authorization.clone());
+        }
         let scratch = Arc::new(Scratch::new()?);
         let (tx, events) = mpsc::channel(1024);
         let model = config.model.filter(|model| valid_model(model));
         let effort = config.effort.filter(|effort| EFFORTS.contains(&effort.as_str()));
         let state = State { conversation: config.resume_session_id, model, effort, guide, turn: None, closed: false, next_turn: 0 };
-        let session = Session {
-            state: Arc::new(Mutex::new(state)),
-            run: Arc::new(Run { binary, cwd: config.cwd, env: config.env.into_iter().collect(), home, scratch, tx }),
-        };
+        let session =
+            Session { state: Arc::new(Mutex::new(state)), run: Arc::new(Run { binary, cwd: config.cwd, env, home, scratch, tx }) };
         Ok(SpawnedSession { session: Box::new(session), events })
     }
 }

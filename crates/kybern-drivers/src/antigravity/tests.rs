@@ -120,6 +120,46 @@ fn a_tool_that_only_reports_done_still_gets_its_start() {
 }
 
 #[test]
+fn a_kybern_tool_call_is_named_like_the_other_harnesses_name_it() {
+    let mut mapper = TurnMapper::new(None);
+    let events = feed(
+        &mut mapper,
+        r#"{"event":"step_update","step_update":{"conversation_id":"c","step_index":4,"state":"ACTIVE","step_type":"tool","tool_name":"call_mcp_tool","tool_info":{"name":"call_mcp_tool","parameters":{"ServerName":"kybern","ToolName":"kybern_notes_search","Arguments":{"query":"auth"}}}}}
+{"event":"step_update","step_update":{"conversation_id":"c","step_index":4,"state":"DONE","step_type":"tool","tool_name":"call_mcp_tool","tool_info":{"name":"call_mcp_tool","parameters":{"ServerName":"kybern","ToolName":"kybern_notes_search","Arguments":{"query":"auth"}},"output":"2 notes"}}}"#,
+    );
+    assert!(matches!(&events[0], DriverEvent::ToolStarted(call)
+        if call.name == "mcp__kybern__kybern_notes_search" && call.input["query"] == "auth"));
+    assert!(matches!(&events[1], DriverEvent::ToolCompleted { output, is_error: false, .. } if output == "2 notes"));
+}
+
+#[test]
+fn a_tool_step_that_ends_in_error_still_completes_with_the_error_text() {
+    let mut mapper = TurnMapper::new(None);
+    let events = feed(
+        &mut mapper,
+        r#"{"event":"step_update","step_update":{"conversation_id":"c","step_index":4,"state":"ACTIVE","step_type":"tool","tool_name":"call_mcp_tool","tool_info":{"name":"call_mcp_tool","parameters":{"ServerName":"kybern","ToolName":"kybern_project_map","Arguments":"{}"}}}}
+{"event":"step_update","step_update":{"conversation_id":"c","step_index":4,"state":"ERROR","step_type":"tool","tool_name":"call_mcp_tool","error":"This project has no commits yet, so it has no map."}}"#,
+    );
+    assert!(matches!(&events[0], DriverEvent::ToolStarted(call) if call.name == "mcp__kybern__kybern_project_map"));
+    assert!(matches!(&events[1], DriverEvent::ToolCompleted { output, is_error: true, .. }
+        if output.as_str().is_some_and(|text| text.contains("no commits yet"))));
+}
+
+#[test]
+fn agy_reading_its_own_mcp_schema_shows_nothing() {
+    let mut mapper = TurnMapper::new(None);
+    let events = feed(
+        &mut mapper,
+        r#"{"event":"step_update","step_update":{"conversation_id":"c","step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"read_file","tool_info":{"name":"read_file","parameters":{"Path":"/Users/me/.gemini/antigravity-cli/mcp/kybern/kybern_notes_search.json"}}}}
+{"event":"step_update","step_update":{"conversation_id":"c","step_index":2,"state":"DONE","step_type":"tool","tool_name":"read_file","tool_info":{"name":"read_file","parameters":{"Path":"/Users/me/.gemini/antigravity-cli/mcp/kybern/kybern_notes_search.json"},"output":"{}"}}}
+{"event":"step_update","step_update":{"conversation_id":"c","step_index":3,"state":"DONE","step_type":"tool","tool_name":"read_file","tool_info":{"name":"read_file","parameters":{"Path":"/work/src/mcp/notes.rs"},"output":"1 lines"}}}"#,
+    );
+    // Only the ordinary file read of step 3 is shown.
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert!(matches!(&events[0], DriverEvent::ToolStarted(call) if call.input["file_path"] == "/work/src/mcp/notes.rs"));
+}
+
+#[test]
 fn an_interrupted_result_ends_the_turn_as_interrupted() {
     let mut mapper = TurnMapper::new(None);
     feed(
@@ -513,6 +553,37 @@ printf '%s\n\n' '{"event":"result","result":{"conversation_id":"conv-1","status"
         assert!(args[0].contains("kybern-agy-"), "{}", args[0]);
         session.close().await.unwrap();
         assert!(matches!(events.recv().await, Some(DriverEvent::Exited { .. })));
+    }
+
+    #[tokio::test]
+    async fn the_bridge_endpoint_travels_in_the_environment_not_on_the_command_line() {
+        let root = tempfile::tempdir().unwrap();
+        let script = format!(
+            "printf '%s|%s\\n' \"$KYBERN_MCP_URL\" \"$KYBERN_MCP_AUTHORIZATION\" >> \"{}/env.log\"\n{REPLY}",
+            root.path().display()
+        );
+        let binary = fake_agy(root.path(), &script);
+        let driver = AntigravityDriver::default();
+        let mut config = config(&binary, root.path());
+        config.env.insert("KYBERN_MCP_URL".into(), "http://stale".into());
+        config.native_tool_bridge = Some(NativeToolBridge {
+            server_name: "kybern".into(),
+            endpoint: Some("http://127.0.0.1:4199/native-tools/mcp".into()),
+            authorization: Some("secret-credential".into()),
+            coordinator_instructions: None,
+            guide: None,
+            tools: vec![],
+            restrictions: Default::default(),
+        });
+        assert!(!format!("{:?}", config.native_tool_bridge).contains("secret-credential"));
+        let SpawnedSession { session, mut events } = driver.spawn(config).await.unwrap();
+        session.send_message("m1", &UserMessage::text("hi")).await.unwrap();
+        next_turn_end(&mut events).await;
+        let env = std::fs::read_to_string(root.path().join("env.log")).unwrap();
+        assert_eq!(env.trim(), "http://127.0.0.1:4199/native-tools/mcp|secret-credential");
+        let args = std::fs::read_to_string(root.path().join("args.log")).unwrap();
+        assert!(!args.contains("secret-credential") && !args.contains("127.0.0.1"), "{args}");
+        session.close().await.unwrap();
     }
 
     #[tokio::test]

@@ -143,6 +143,18 @@ fn mcp_part(part: &str) -> String {
     if cleaned.is_empty() { "tool".into() } else { cleaned }
 }
 
+/// Whether a normalized call is `agy` reading the schema it cached for an MCP tool
+/// (`~/.gemini/antigravity-cli/mcp/<server>/<tool>.json` or `instructions.md`). The model
+/// does this before it calls a deferred MCP tool; it is not the user's work, so it is not shown.
+pub(crate) fn reads_own_mcp_schema(kybern_name: &str, input: &Value) -> bool {
+    const CACHE: &str = "/.gemini/antigravity-cli/mcp/";
+    kybern_name == "Read"
+        && input
+            .get("file_path")
+            .and_then(Value::as_str)
+            .is_some_and(|path| path.replace('\\', "/").contains(CACHE) && !path.contains(".."))
+}
+
 /// A shell result that says it failed: "Command exited with code 2." (not 0).
 pub(crate) fn exited_nonzero(output: &str) -> bool {
     const MARKER: &str = "Command exited with code ";

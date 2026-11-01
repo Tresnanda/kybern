@@ -32,6 +32,8 @@ pub(crate) struct TurnMapper {
     /// The last assistant message that carried text: its id and text.
     last_message: Option<(String, String)>,
     started_tools: HashSet<u64>,
+    /// Steps that are `agy` reading its own MCP tool schemas: nothing is shown for them.
+    hidden_tools: HashSet<u64>,
     counted_usage: HashSet<u64>,
     usage: Usage,
     outcome: Option<Outcome>,
@@ -52,6 +54,7 @@ impl TurnMapper {
             messages: HashMap::new(),
             last_message: None,
             started_tools: HashSet::new(),
+            hidden_tools: HashSet::new(),
             counted_usage: HashSet::new(),
             usage: Usage::default(),
             outcome: None,
@@ -122,10 +125,12 @@ impl TurnMapper {
         if self.conversation.is_none() {
             self.conversation = update.get("conversation_id").and_then(Value::as_str).map(str::to_string);
         }
-        let done = update.get("state").and_then(Value::as_str) == Some("DONE");
+        let state = update.get("state").and_then(Value::as_str);
+        let done = state == Some("DONE");
         match update.get("step_type").and_then(Value::as_str) {
             Some("agent_response") => self.agent_response(update, index, done),
-            Some("tool") => self.tool(update, index, done),
+            // A tool that fails ends in ERROR, not DONE: it still needs its result card.
+            Some("tool") => self.tool(update, index, done || matches!(state, Some("ERROR" | "FAILED" | "CANCELED" | "CANCELLED"))),
             _ => Vec::new(),
         }
     }
@@ -176,10 +181,21 @@ impl TurnMapper {
             let (kybern_name, input) = tools::normalize(name, &params, |name| {
                 conversation.as_deref().and_then(|c| tools::transcript_args(self.home.as_deref(), c, index, name))
             });
-            events.push(DriverEvent::ToolStarted(ToolCall { id: id.clone(), name: kybern_name, input, parent_id: None }));
+            if tools::reads_own_mcp_schema(&kybern_name, &input) {
+                self.hidden_tools.insert(index);
+            } else {
+                events.push(DriverEvent::ToolStarted(ToolCall { id: id.clone(), name: kybern_name, input, parent_id: None }));
+            }
         }
-        if done {
-            let output = info.and_then(|info| info.get("output")).and_then(Value::as_str).unwrap_or("").to_string();
+        if done && !self.hidden_tools.contains(&index) {
+            let output = info
+                .and_then(|info| info.get("output"))
+                .and_then(Value::as_str)
+                .filter(|output| !output.is_empty())
+                .or_else(|| error_text(update.get("error")))
+                .or_else(|| error_text(info.and_then(|info| info.get("error"))))
+                .unwrap_or("")
+                .to_string();
             let failed_state = matches!(update.get("state").and_then(Value::as_str), Some("ERROR" | "FAILED" | "CANCELED" | "CANCELLED"));
             let is_error = failed_state
                 || info.is_some_and(|info| info.get("error").is_some_and(|error| !error.is_null()))
@@ -270,6 +286,12 @@ impl TurnMapper {
             }
         }
     }
+}
+
+/// An error field is a string or an object with a `message`.
+fn error_text(value: Option<&Value>) -> Option<&str> {
+    let value = value?;
+    value.as_str().or_else(|| value.get("message").and_then(Value::as_str))
 }
 
 /// A sentence that says what to do next, whatever `agy` printed.

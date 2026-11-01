@@ -6,17 +6,18 @@ import { GEMINI_API_KEY_ENV } from '../../../../packages/kybern-client/src/antig
 import { requestAntigravitySignIn } from '../antigravity/notice.ts'
 import { showDialog } from '../dialogs/store.ts'
 import { Button } from '../kit/Button.tsx'
+import { Switch } from '../kit/Switch.tsx'
 import { TextField } from '../kit/Field.tsx'
 import { errorText } from '../nav/actions.ts'
 import { useNav } from '../nav/store.ts'
 import { toast } from '../shell/toasts.tsx'
 import { updateProviderSettings, useAccounts } from '../usage/accounts.ts'
 import { Row, Section } from './controls.tsx'
-import { useSettings } from './store.ts'
+import { latestError, latestSettings, updateSettings, useSettings } from './store.ts'
 
 export function AntigravitySetup() {
   const available = useNav((s) => s.providers.some((p) => p.kind === 'antigravity'))
-  const { settings } = useSettings()
+  const { settings, saving } = useSettings()
   const accounts = useAccounts('antigravity')
   const [key, setKey] = useState('')
   const [busy, setBusy] = useState(false)
@@ -43,6 +44,14 @@ export function AntigravitySetup() {
     }
   }
 
+  const toolsOn = settings?.antigravity?.kybern_tools ?? false
+  const setTools = async (kybern_tools: boolean) => {
+    await updateSettings({ antigravity: { ...(latestSettings()?.antigravity ?? {}), kybern_tools } })
+    // The daemon refuses the switch when another program already uses the name `kybern`; say why.
+    const failed = latestError()
+    if (failed) toast.error('Unable to change Kybern tools', { description: failed.replace(/^.*?try again\.\s*(Error:\s*)?/, '') })
+  }
+
   return (
     <Section title="Antigravity">
       <Row title="Use a Gemini API key" description={hasKey ? 'A key is saved on this machine. Antigravity uses it for every chat.' : 'Paste a key from Google AI Studio. It stays on this machine.'}>
@@ -59,6 +68,9 @@ export function AntigravitySetup() {
         <Button testId="antigravity-signin" variant={signedIn ? 'secondary' : 'primary'} onClick={() => requestAntigravitySignIn(() => showDialog({ kind: 'account', provider: 'antigravity' }))}>
           {signedIn ? 'Sign in again' : 'Sign in with Google'}
         </Button>
+      </Row>
+      <Row title="Kybern tools" description="Lets Antigravity use Kybern's notes, tasks and agents. Kybern adds one entry, kybern, to Antigravity's MCP servers.">
+        <Switch aria-label="Kybern tools" testId="antigravity-kybern-tools" checked={toolsOn} disabled={saving} onCheckedChange={(on) => void setTools(on)} />
       </Row>
     </Section>
   )
