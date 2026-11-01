@@ -17,6 +17,8 @@ mod cua;
 mod digest;
 #[cfg(test)]
 pub(crate) mod fake;
+#[cfg(test)]
+mod live_tools;
 mod notes;
 mod policy;
 mod setup;
