@@ -11,7 +11,7 @@ before touching UI.
 
 | Path | What |
 | --- | --- |
-| `crates/kybern-protocol` | Wire types. Every RPC method lives in `methods.rs` with its scope. `kybern-schema` bin dumps JSON Schema. `process.rs` is the one `NoWindow` helper (Windows `CREATE_NO_WINDOW`) that daemon, driver and git children use; wrap background `Command::new(..)` with `.no_window()`, never the terminal PTY. |
+| `crates/kybern-protocol` | Wire types. Every RPC method lives in `methods.rs` with its scope. `kybern-schema` bin dumps JSON Schema. `process.rs` is the one `NoWindow` helper (Windows `CREATE_NO_WINDOW`) that daemon, driver and git children use; wrap background `Command::new(..)` with `.no_window()`, never the terminal PTY. Its `write_executable` writes a program the process starts next (every test fixture script): a plain write can leave the file busy (Linux ETXTBSY) for a sibling thread's forked child. |
 | `crates/kybern-store` | SQLite. Migrations are the array in `schema.rs`; append a new entry, never edit an old one. `projection.rs` folds events into transcripts. |
 | `crates/kybern-git` | Snapshots, diffs, worktrees via the `git` CLI. |
 | `crates/kybern-drivers` | One module per agent: `claude`, `codex`, `opencode`, `pi` (also omp), `cursor`, `antigravity` (`agy`: one process per turn, Full access only; Kybern tools through the one global `kybern` MCP entry (`kybern mcp-bridge`, `antigravity_mcp.rs`, setting `antigravity.kybern_tools`); spec in `docs/design/ade-111-antigravity.md`; the daemon rules are in `orchestrator/antigravity_rules.rs`). All implement `AgentDriver` + `AgentSession` from `lib.rs`. `sessions/` reads saved native sessions without running anything; `SessionReader` (`AgentDriver::open_session_reader`) keeps one helper process (Codex app-server, `opencode serve`, Cursor sidecar) open across many list/read calls for scans and bulk imports. |
@@ -272,6 +272,7 @@ Afterwards, check that `latest.json` lists the `-gpuix` keys for macOS,
 
 ```sh
 cargo test --workspace                                    # unit + snapshot + live driver tests
+cargo nextest run --workspace                             # the same tests the way CI runs them, one process each
 cargo test -p kybern-drivers --test live_drivers          # runs real agent CLIs when installed, skips otherwise
 cargo fmt --all --check && cargo clippy --workspace -- -D warnings
 
@@ -289,7 +290,17 @@ point: review the diff, then `INSTA_UPDATE=always cargo test -p kybern-protocol`
 CI runs fmt, clippy and the Rust tests on ubuntu and macos, checks every Rust
 target on Windows without running tests, and runs the GPUIX, shared-client and
 release checks on ubuntu (see Cross-platform checks for the GPUIX on-screen checks).
-A test that fails at random on CI gets fixed or removed, not rerun until green.
+The Rust tests run under cargo-nextest (`.config/nextest.toml`), each in its own
+process; the workspace has no doctests, which nextest skips, so the first one
+needs `cargo test --workspace --doc` added to `ci.yml`. The whole CI run must
+stay under 10 minutes; measure the jobs on a real run when you add slow tests.
+A test that fails at random on CI is quarantined, not rerun until green: the CI
+profile retries a failed test once, and one that then passes keeps the job
+green but is listed under "Flaky tests" in the job summary and gets a `flaky`
+issue titled after it (filed, or commented on and reopened, by
+`scripts/report-flaky-tests.mjs`). That issue still has to be fixed or the test
+removed; make tests wait on events or conditions, not sleeps or clocks. A test
+that fails both attempts fails CI.
 Mobile checks and EAS builds are currently manual; run the mobile checks for
 mobile or shared-client changes. Native configuration changes need a new build.
 EAS Update uses preview/production channels and fingerprint runtime compatibility.
