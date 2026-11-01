@@ -3,17 +3,24 @@
 // nextest's `ci` profile retries a failed test once. A test that then passes
 // does not fail the job; it is "flaky" and appears in the JUnit report as a
 // passing test case with <flakyFailure> attempts. This script lists those tests
-// in the job summary and files a GitHub issue per test (labelled `flaky`,
-// titled after the test, deduplicated by title), or comments on the existing
-// one and reopens it if it was closed. Reporting never fails the job: a missing
-// report (the build failed) or a read-only token (a fork's pull request) only
-// leaves a warning.
+// in the job summary. On pushes to main only, it also files a GitHub issue per
+// test (labelled `flaky`, titled after the test, deduplicated by title against
+// open and closed issues), or comments on the existing one and reopens it if it
+// was closed; at most MAX_ISSUES a run, so a broken runner cannot flood the
+// tracker. Pull requests and other branches only get the summary: a flake there
+// may come from the change under review. A test that failed every attempt is a
+// failure, not a flake, and never gets an issue. Reporting never fails the job:
+// a missing report (the build failed) or an API error only leaves a warning.
 import { execFileSync } from 'node:child_process'
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const LABEL = 'flaky'
+export const MAX_ISSUES = 5
+
+/** Issues are filed only from pushes to main; everything else gets the job summary alone. */
+export const filesIssues = env => env.GITHUB_EVENT_NAME === 'push' && env.GITHUB_REF === 'refs/heads/main'
 const EXCERPT_LINES = 40
 
 const decode = text => text.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (_, entity) => {
@@ -74,18 +81,23 @@ export function issueBody(test, context) {
 
 export const commentBody = (test, context) => [`Flaked again: ${context}`, '', excerpt(test.output)].join('\n')
 
-export function summary(report, results) {
+export function summary(report, results, filing = true) {
   if (!report) return '### Flaky tests\n\nNo nextest report was written, so flaky tests could not be checked (did the build fail?).\n'
   if (!report.flaky.length) return `### Flaky tests\n\nNone: ${report.tests} tests ran without needing a retry.\n`
+  const count = report.flaky.length
   const rows = report.flaky.map((test, index) => {
     const result = results[index]
-    const issue = result?.url ? `[#${result.number}](${result.url}) ${result.action}` : `not filed: ${result?.error ?? 'unknown error'}`
+    const issue = !filing ? 'not filed from this run' : result?.url ? `[#${result.number}](${result.url}) ${result.action}`
+      : result?.skipped ? 'not filed (over the limit)' : `not filed: ${result?.error ?? 'unknown error'}`
     return `| \`${test.suite}\` \`${test.name}\` | ${test.attempts} | ${issue} |`
   })
+  const skipped = results.filter(result => result?.skipped).length
   return [
     '### Flaky tests',
     '',
-    `${report.flaky.length} test${report.flaky.length === 1 ? '' : 's'} failed and then passed on retry. They are quarantined: the job does not fail, but each one has an issue to fix.`,
+    `${count} test${count === 1 ? '' : 's'} failed and then passed on retry. They are quarantined: the job does not fail, but each one has to be fixed.`,
+    ...(filing ? [] : ['', 'Issues are filed only from pushes to main; this run lists them here.']),
+    ...(skipped ? ['', `${skipped} more flaky test${skipped === 1 ? ' was' : 's were'} not filed: a run files at most ${MAX_ISSUES} issues. So many flakes at once usually means a broken runner or a shared cause; look at the run first.`] : []),
     '',
     '| Test | Failed attempts | Issue |',
     '| --- | --- | --- |',
@@ -123,8 +135,11 @@ export function ghClient(repository, run = (args, input) => execFileSync('gh', a
   }
 }
 
-/** File or update one issue per flaky test. Returns `{ action, number, url }` or `{ error }` per test. */
-export function fileIssues(flaky, client, context) {
+/**
+ * File or update one issue per flaky test, for at most `limit` distinct tests.
+ * Returns `{ action, number, url }`, `{ skipped: true }` (over the limit) or `{ error }` per test.
+ */
+export function fileIssues(flaky, client, context, limit = MAX_ISSUES) {
   if (!flaky.length) return []
   let existing
   try {
@@ -135,8 +150,14 @@ export function fileIssues(flaky, client, context) {
     return flaky.map(() => ({ error: message }))
   }
   const results = []
+  const handled = new Set()
   for (const test of flaky) {
     const title = issueTitle(test)
+    if (!handled.has(title) && handled.size >= limit) {
+      results.push({ skipped: true })
+      continue
+    }
+    handled.add(title)
     try {
       const issue = existing.find(issue => issue.title === title)
       if (!issue) {
@@ -161,8 +182,11 @@ function main() {
   const path = process.argv[2] ?? 'target/nextest/ci/junit.xml'
   const report = existsSync(path) ? parseJUnit(readFileSync(path, 'utf8')) : null
   let results = []
+  const filing = filesIssues(process.env)
   if (report?.flaky.length) {
     for (const test of report.flaky) console.log(`::warning title=Flaky test (quarantined)::${test.suite} ${test.name} failed and then passed on retry`)
+  }
+  if (report?.flaky.length && filing) {
     try {
       results = fileIssues(report.flaky, ghClient(process.env.GITHUB_REPOSITORY), runContext(process.env))
     } catch (error) {
@@ -170,10 +194,10 @@ function main() {
     }
     for (const result of results) {
       if (result.error) console.log(`::warning title=Flaky test issue not filed::${result.error}`)
-      else console.log(`${result.action} ${result.url}`)
+      else if (result.url) console.log(`${result.action} ${result.url}`)
     }
   }
-  const text = summary(report, results)
+  const text = summary(report, results, filing)
   console.log(text)
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, text)
 }

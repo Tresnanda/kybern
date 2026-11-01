@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { commentBody, fileIssues, ghClient, issueBody, issueTitle, parseJUnit, runContext, summary } from './report-flaky-tests.mjs'
+import { MAX_ISSUES, commentBody, fileIssues, filesIssues, ghClient, issueBody, issueTitle, parseJUnit, runContext, summary } from './report-flaky-tests.mjs'
 
 // The shape cargo-nextest writes (https://nexte.st/docs/machine-readable/junit).
 const junit = `<?xml version="1.0" encoding="UTF-8"?>
@@ -82,6 +82,45 @@ test('issues are deduplicated by title: filed once, then commented on, and reope
   assert.deepEqual(results.map(r => [r.action, r.number]), [['filed', 100], ['updated', 1], ['reopened', 2], ['updated', 100]])
   assert.deepEqual(client.calls, [['label'], ['create', 'Flaky test: a new'], ['comment', 1, 'Flaked again: run'], ['reopen', 2], ['comment', 2, 'Flaked again: run'], ['comment', 100, 'Flaked again: run']])
   assert.deepEqual(fileIssues([], client, 'run'), [])
+})
+
+test('only pushes to main file issues; pull requests, other branches and manual runs only get the summary', () => {
+  assert.equal(filesIssues({ GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/main' }), true)
+  for (const env of [
+    { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/189/merge' },
+    { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/heads/main' },
+    { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/ci/nextest-quarantine' },
+    { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/tags/v1.0.0' },
+    { GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REF: 'refs/heads/main' },
+    {},
+  ]) assert.equal(filesIssues(env), false, JSON.stringify(env))
+  const text = summary(parseJUnit(junit), [], false)
+  assert.match(text, /Issues are filed only from pushes to main/)
+  assert.match(text, /\| `kybern-daemon` `network::ports::tests::flaky_<port>` \| 1 \| not filed from this run \|/)
+})
+
+test('a run files at most MAX_ISSUES issues; the rest are listed as over the limit', () => {
+  assert.equal(MAX_ISSUES, 5)
+  const flaky = Array.from({ length: 8 }, (_, i) => ({ suite: 'a', name: `t${i}`, attempts: 1, output: '' }))
+  // One already has an issue: commenting on it counts toward the limit too.
+  const client = fakeClient([{ number: 1, title: 'Flaky test: a t0', state: 'open', html_url: 'u/1' }])
+  // The same test reported twice (two binaries) is still one issue.
+  const results = fileIssues([...flaky.slice(0, 5), flaky[4], ...flaky.slice(5)], client, 'run')
+  assert.deepEqual(results.map(r => r.skipped ? 'skipped' : r.action), ['updated', 'filed', 'filed', 'filed', 'filed', 'updated', 'skipped', 'skipped', 'skipped'])
+  assert.equal(client.calls.filter(([call]) => call === 'create').length, 4)
+  const report = { tests: 9, failures: 0, flaky: [...flaky.slice(0, 5), flaky[4], ...flaky.slice(5)] }
+  assert.match(summary(report, results), /3 more flaky tests were not filed: a run files at most 5 issues/)
+  assert.match(summary(report, results), /\| `a` `t7` \| 1 \| not filed \(over the limit\) \|/)
+})
+
+test('a test that failed every attempt is a failure, never filed as flaky', () => {
+  const report = parseJUnit(junit)
+  assert.equal(report.flaky.some(t => t.name === 'fails_twice'), false)
+  const client = fakeClient([])
+  fileIssues(report.flaky, client, 'run')
+  assert.deepEqual(client.calls.filter(([call]) => call === 'create').map(([, title]) => title), [
+    'Flaky test: kybern-daemon network::ports::tests::flaky_<port>', 'Flaky test: kybern-drivers::live_drivers error_then_pass',
+  ])
 })
 
 test('a read-only token or API failure is reported per test, never thrown', () => {
