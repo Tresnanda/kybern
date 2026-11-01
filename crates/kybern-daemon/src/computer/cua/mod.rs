@@ -64,7 +64,7 @@ impl CuaDriverBackend {
     }
 
     /// Whether a `cua-driver mcp` proxy is open.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub(crate) async fn is_open(&self) -> bool {
         self.inner.client.lock().await.is_some()
     }
