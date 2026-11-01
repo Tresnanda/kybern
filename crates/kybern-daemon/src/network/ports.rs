@@ -232,10 +232,20 @@ pub async fn forward_to(
 
 /// Start at the remote port, then try each higher port. An explicitly chosen port is exact.
 async fn bind_local(remote: u16, local: Option<u16>) -> Result<TcpListener, RpcError> {
+    bind_first_free(remote, local, |port| TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port)))).await
+}
+
+/// The port choice of `bind_local`, with the bind passed in so it can be tested without real ports:
+/// the asked-for local port or nothing, else the remote port number or the first free one above it.
+async fn bind_first_free<T, F, Fut>(remote: u16, local: Option<u16>, mut bind: F) -> Result<T, RpcError>
+where
+    F: FnMut(u16) -> Fut,
+    Fut: std::future::Future<Output = std::io::Result<T>>,
+{
     let start = local.unwrap_or(remote);
     let end = if local.is_some() { start } else { u16::MAX };
     for port in start..=end {
-        match TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).await {
+        match bind(port).await {
             Ok(listener) => return Ok(listener),
             Err(error) if local.is_none() && error.kind() == std::io::ErrorKind::AddrInUse => continue,
             Err(error) => return Err(RpcError::new(codes::CONFLICT, format!("Could not use that local port: {error}"))),
@@ -553,29 +563,31 @@ mod tests {
 
     #[tokio::test]
     async fn local_port_selection_preserves_free_ports_and_skips_occupied_ports() {
+        // The choice itself, against a fixed set of taken ports: other tests binding ephemeral
+        // ports cannot take a "free" one in between, as they could with real sockets.
+        let taken = [5173u16, 5174, 5176, u16::MAX];
+        let bind = |port: u16| {
+            let tried = port;
+            async move { if taken.contains(&tried) { Err(std::io::Error::from(std::io::ErrorKind::AddrInUse)) } else { Ok(tried) } }
+        };
+        assert_eq!(bind_first_free(3000, None, bind).await.unwrap(), 3000, "a free remote port number is kept locally");
+        assert_eq!(bind_first_free(5173, None, bind).await.unwrap(), 5175, "an occupied one moves to the next free port");
+        assert_eq!(bind_first_free(5176, None, bind).await.unwrap(), 5177);
+        assert_eq!(bind_first_free(5173, Some(4000), bind).await.unwrap(), 4000, "an asked-for local port is used as is");
+        assert_eq!(bind_first_free(5173, Some(5174), bind).await.unwrap_err().code, codes::CONFLICT, "and never replaced");
+        assert_eq!(bind_first_free(u16::MAX, None, bind).await.unwrap_err().code, codes::CONFLICT);
+        // Any error other than "in use" is reported, not skipped.
+        let denied = |_port: u16| async { Err::<u16, _>(std::io::Error::from(std::io::ErrorKind::PermissionDenied)) };
+        assert_eq!(bind_first_free(3000, None, denied).await.unwrap_err().code, codes::CONFLICT);
+
+        // And with real sockets, on a port this test holds: an asked-for port is refused, and an
+        // automatic choice moves above it.
         let reserved = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let port = reserved.local_addr().unwrap().port();
         assert!(bind_local(port, Some(port)).await.is_err());
-        if port == u16::MAX {
-            assert!(bind_local(port, None).await.is_err());
-            return;
+        if port < u16::MAX {
+            assert!(bind_local(port, None).await.unwrap().local_addr().unwrap().port() > port);
         }
-        let next = bind_local(port, None).await.unwrap();
-        assert!(next.local_addr().unwrap().port() > port);
-        drop(reserved);
-        let same = bind_local(port, None).await.unwrap();
-        // Tests running alongside bind ephemeral ports too, so one may take the freed port first.
-        let mut kept = same.local_addr().unwrap().port() == port;
-        for _ in 0..10 {
-            if kept {
-                break;
-            }
-            let free = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
-            let port = free.local_addr().unwrap().port();
-            drop(free);
-            kept = bind_local(port, None).await.unwrap().local_addr().unwrap().port() == port;
-        }
-        assert!(kept, "a free remote port number is kept locally");
     }
 
     #[test]
