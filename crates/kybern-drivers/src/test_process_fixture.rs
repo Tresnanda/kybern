@@ -30,7 +30,7 @@ fn main() {
         let args = std::env::args().skip(1).map(|a| json_string(&a)).collect::<Vec<_>>();
         std::fs::write("argv.tmp", format!("[{}]", args.join(","))).unwrap();
         std::fs::rename("argv.tmp", "argv.json").unwrap();
-        let env = ["CLAUDE_CODE_ARTIFACT", "CLAUDE_CODE_ARTIFACT_AUTO_OPEN"]
+        let env = ["CLAUDE_CODE_ARTIFACT", "CLAUDE_CODE_ARTIFACT_AUTO_OPEN", "CLAUDE_CODE_ENTRYPOINT"]
             .map(|key| format!("{}:{}", json_string(key), json_string(&std::env::var(key).unwrap_or_default())));
         std::fs::write("env.tmp", format!("{{{}}}", env.join(","))).unwrap();
         std::fs::rename("env.tmp", "env.json").unwrap();
