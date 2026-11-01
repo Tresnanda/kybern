@@ -34,7 +34,7 @@ export const TABS = [
   ['integrations', 'Integrations', 'Plugins and connectors for your agents.', S.plugin, 'tools mcp skills authentication'],
   ['skills', 'Skills', 'Your skills on every machine, in the folders each agent reads. Copy one where it’s missing; nothing copies by itself.', S.skills, 'skills skill.md claude codex agents cursor opencode pi omp copy sync machines different missing replace'],
   ['plugins', 'Plugins', 'Your agents’ plugins and marketplaces across machines. Review what they bring, then choose where to install them.', S.plugin, 'plugins packages marketplaces extensions copy sync machines missing different'],
-  ['computer', 'Computer use', 'Let agents read and use apps on this Mac.', N.laptop, 'cuadriver screen accessibility recording cursor'],
+  ['computer', 'Computer use', 'Let agents read and use apps on your computer.', N.laptop, 'cuadriver agent-desktop driver screen accessibility recording cursor'],
   ['machines', 'Machines', 'Your network: the machines you code on, and which ones can run agents for you.', N.laptop, 'network tailscale tailnet add code pair remote ssh status version update pause remove glyph'],
   ['devices', 'Paired devices', 'Phones and other devices that reach all your machines.', N.users, 'phone pair qr code ipad iphone android invitation'],
   ['background', 'Background activity', 'Manage idle agents, terminals, and power use.', S.backgroundTray, 'memory warm shells daemon battery'],

@@ -39,6 +39,12 @@ function Live({ threadId, running, insetBottom }: { threadId: string; running: b
   const [frame, setFrame] = useState<ComputerFrame | null>(null)
   const [imageRevision, setImageRevision] = useState(0)
   const [previous, setPrevious] = useState<ComputerFrame | null>(null)
+  // The daemon turned pictures off (e.g. screenshot consent declined on Wayland). Polling goes on at its normal rate: it is what marks the chat watched.
+  const [paused, setPaused] = useState<string | null>(null)
+  const [veilSeen, setVeilSeen] = useState(false)
+  const lastReason = useRef('')
+  if (paused) lastReason.current = paused
+  const acceptPaused = useCallback((reason: string | null) => { setPaused(reason); if (reason) setVeilSeen(true) }, [])
   const latestFrame = useRef(frame); latestFrame.current = frame
   const acceptFrame = useCallback((next: ComputerFrame) => {
     const previous = latestFrame.current
@@ -58,14 +64,14 @@ function Live({ threadId, running, insetBottom }: { threadId: string; running: b
   const [dismissed, setDismissed] = useState(false)
   // Hiding (the ✕ or the 12 s after a task ends) fades the card out first; `closing` carries which one it is.
   const [closing, setClosing] = useState<'dismiss' | 'idle' | null>(null)
-  useEffect(() => { if (running) { setDismissed(false); setClosing(null); setFrame(null); setPrevious(null) } }, [running])
-  const left = () => { if (closing === 'dismiss') setDismissed(true); setClosing(null); setFrame(null); setPrevious(null) }
+  useEffect(() => { if (running) { setDismissed(false); setClosing(null); setFrame(null); setPrevious(null); setPaused(null); setVeilSeen(false) } }, [running])
+  const left = () => { if (closing === 'dismiss') setDismissed(true); setClosing(null); setFrame(null); setPrevious(null); setPaused(null); setVeilSeen(false) }
   // `.computer-live-marker`: a ring ripples out from where the agent clicked (480 ms, at most three alive, none under Reduce Motion).
   const [ripples, setRipples] = useState<{ id: number; x: number; y: number }[]>([])
   const lastClick = useRef('')
   useEffect(() => {
     const point = frame?.point
-    if (!frame || !point || !PATCHED_NATIVE || REDUCED_MOTION) return
+    if (!frame || !point || paused || !PATCHED_NATIVE || REDUCED_MOTION) return
     const key = `${point[0]},${point[1]},${frame.action ?? ''}`
     if (key === lastClick.current) return
     lastClick.current = key
@@ -74,23 +80,35 @@ function Live({ threadId, running, insetBottom }: { threadId: string; running: b
   useEffect(() => {
     if (!running || dismissed || closing) return
     const poll = new FramePoller(threadId, p => getClient()!.call('computer.frame', p), acceptFrame)
+    poll.onPaused = acceptPaused
     const off = onWindowVisibility(visible => poll.show(visible))
     poll.show(isWindowVisible())
     return () => { poll.stop(); off() }
   }, [threadId, running, dismissed, !!closing])
-  useEffect(() => { if (running || !frame) return; const timer = setTimeout(() => setClosing(current => current ?? 'idle'), 12_000); return () => clearTimeout(timer) }, [running, !!frame])
-  if (!frame || dismissed) return null
-  const aspect = frame.width > 0 && frame.height > 0 ? frame.width / frame.height : 1.6
+  useEffect(() => { if (running || (!frame && !paused)) return; const timer = setTimeout(() => setClosing(current => current ?? 'idle'), 12_000); return () => clearTimeout(timer) }, [running, !!frame, !!paused])
+  if ((!frame && !paused) || dismissed) return null
+  const aspect = frame && frame.width > 0 && frame.height > 0 ? frame.width / frame.height : 1.6
   const width = Math.max(208, Math.min(expanded ? 520 : 320, (expanded ? 480 : 360) * aspect))
   return <Floating insetBottom={insetBottom} storageKey="kybern.computerLiveView.corner" testId="computer-live" width={width} height={width / aspect} overlayDrag leaving={!!closing} onLeft={left} cardStyle={LIVE_CARD} insetEnd={dock.open ? Math.min(dock.width, 538) : 0}>
     <div onMouseEnter={() => setOverBody(true)} onMouseLeave={() => setOverBody(false)} style={{ position: 'relative', flexGrow: 1, minHeight: 0 }}>{previous && <motion.div key={imageRevision - 1} initial={false} animate={{ opacity: 1 }} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none' }}><FrameImage frame={previous} /></motion.div>}
-      <motion.div key={imageRevision} initial={previous && !REDUCED_MOTION ? { opacity: 0 } : false} animate={{ opacity: 1 }} transition={{ duration: 0.18, ease: EASE_OUT }} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none' }}><FrameImage frame={frame} current /></motion.div>{frame.point && <div style={{ position: 'absolute', left: Math.max(0, Math.min(1, frame.point[0])) * width - 7, top: Math.max(0, Math.min(1, frame.point[1])) * width / aspect - 7, width: 14, height: 14, borderRadius: 7, borderWidth: 2, borderColor: '#ffffff', backgroundColor: 'rgba(40,110,245,0.6)', pointerEvents: 'none' }} />}
+      {frame && <motion.div key={imageRevision} initial={previous && !REDUCED_MOTION ? { opacity: 0 } : false} animate={{ opacity: 1 }} transition={{ duration: 0.18, ease: EASE_OUT }} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none' }}><FrameImage frame={frame} current /></motion.div>}{frame?.point && !paused && <div style={{ position: 'absolute', left: Math.max(0, Math.min(1, frame.point[0])) * width - 7, top: Math.max(0, Math.min(1, frame.point[1])) * width / aspect - 7, width: 14, height: 14, borderRadius: 7, borderWidth: 2, borderColor: '#ffffff', backgroundColor: 'rgba(40,110,245,0.6)', pointerEvents: 'none' }} />}
       <Scrim height={width >= 260 ? 76 : 56} />
-      <div style={{ position: 'absolute', left: 12, right: 12, bottom: 10, display: 'flex', flexDirection: 'column', gap: 1, pointerEvents: 'none' }}>{width >= 260 && <Label color="rgba(255,255,255,0.72)" size={11} lineHeight={14} weight={500} truncate>{frame.app}</Label>}<Caption action={frame.action ?? (running ? 'Working' : 'Done')} live={running} /></div>
+      <div style={{ position: 'absolute', left: 12, right: 12, bottom: 10, display: 'flex', flexDirection: 'column', gap: 1, pointerEvents: 'none' }}>{frame && width >= 260 && <Label color="rgba(255,255,255,0.72)" size={11} lineHeight={14} weight={500} truncate>{frame.app}</Label>}{frame && <Caption action={frame.action ?? (running ? 'Working' : 'Done')} live={running} />}</div>
+      {veilSeen && <PausedVeil shown={!!paused} reason={paused ?? lastReason.current} dimmed={!!frame} />}
       {ripples.map(ripple => <Ripple key={ripple.id} x={ripple.x * width} y={ripple.y * width / aspect} onDone={() => setRipples(list => list.filter(item => item.id !== ripple.id))} />)}
       <LiveControls hovered={hovered} expanded={expanded} onEnter={() => setOverControls(true)} onLeave={() => setOverControls(false)} onToggle={() => setExpanded(!expanded)} onClose={() => setClosing('dismiss')} />
     </div>
   </Floating>
+}
+
+/** "Live view paused": the last frame dims, the reason sits under the title in secondary text. It fades in and out (opacity only, instant under Reduce Motion); the card never gets a modal or a prompt. */
+export function PausedVeil({ shown, reason, dimmed }: { shown: boolean; reason: string; dimmed: boolean }) {
+  return <motion.div initial={false} animate={{ opacity: shown ? 1 : 0 }} transition={REDUCED_MOTION ? { duration: 0 } : { duration: shown ? 0.24 : 0.16, ease: EASE_OUT }} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, paddingLeft: 20, paddingRight: 20, borderRadius: 16, backgroundColor: dimmed ? 'rgba(0,0,0,0.62)' : 'rgba(0,0,0,0)', pointerEvents: 'none' }}>
+    <div role="status" aria-label={`Live view paused. ${reason}`} testId="computer-live-paused" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, minWidth: 0, maxWidth: '100%' }}>
+      <Label color="rgba(255,255,255,0.92)" size={13} lineHeight={17} weight={500}>Live view paused</Label>
+      <Label color="rgba(255,255,255,0.62)" size={12} lineHeight={16} style={{ textAlign: 'center' }}>{reason}</Label>
+    </div>
+  </motion.div>
 }
 
 // The keyed motion wrappers keep the old current image alive as the previous
