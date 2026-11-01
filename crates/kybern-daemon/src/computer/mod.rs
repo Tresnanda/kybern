@@ -20,7 +20,6 @@ pub(crate) mod fake;
 mod notes;
 mod policy;
 mod setup;
-mod unavailable;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
@@ -235,8 +234,7 @@ fn make_backend(driver: ComputerDriver, settings: &SettingsStore) -> Arc<dyn Com
 /// installed"; to switch it on, declare `mod agent_desktop;` above and make
 /// this body `Arc::new(agent_desktop::AgentDesktopBackend::new(data_dir.to_owned()))`.
 fn agent_desktop_backend(data_dir: &Path) -> Arc<dyn ComputerBackend> {
-    let _ = data_dir;
-    Arc::new(unavailable::NotInstalled::new(BackendKind::AgentDesktop))
+    Arc::new(agent_desktop::AgentDesktopBackend::new(data_dir))
 }
 
 /// Whether this provider keeps its own computer-use plugin on this OS: OpenAI's

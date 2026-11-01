@@ -193,6 +193,7 @@ fn windows_names_through_registry(_requested: &str) -> Option<WindowsExe> {
 }
 
 /// Expand `%NAME%` references with the process environment.
+#[cfg(any(windows, test))]
 pub(crate) fn expand_percent(value: &str) -> String {
     let mut out = String::new();
     let mut rest = value;

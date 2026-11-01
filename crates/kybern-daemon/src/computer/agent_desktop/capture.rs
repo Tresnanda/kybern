@@ -116,6 +116,7 @@ fn encode(image: &DynamicImage) -> Result<Image> {
 }
 
 /// Pixels of a decoded picture, for geometry.
+#[cfg(test)]
 pub(crate) fn dimensions(png: &[u8]) -> Result<(u32, u32)> {
     let decoded = image::load_from_memory(png).context("agent-desktop returned a picture that is not an image")?;
     Ok((decoded.width(), decoded.height()))

@@ -8,9 +8,6 @@
 //! the 1.0.2 binary on macOS, Windows 11 and GNOME 46 Wayland are in
 //! `fixtures/`.
 
-// The tools adopt the backend in the ADE-83 refactor; until then it is unused.
-#![allow(dead_code)]
-
 mod act;
 mod apps;
 mod capture;
@@ -49,8 +46,6 @@ use super::backend::{
 /// Seen windows: what a window number needs to be acted on.
 #[derive(Debug, Clone)]
 struct Known {
-    native: String,
-    pid: i64,
     app: String,
     bounds: Option<capture::Rect>,
 }
@@ -176,7 +171,7 @@ impl AgentDesktopBackend {
             let bounds = tree::bounds(row.get("bounds"));
             let visible = row.get("visible").and_then(Value::as_bool).unwrap_or(true);
             let minimized = row.get("minimized").and_then(Value::as_bool).unwrap_or(false);
-            Self::lock(&self.windows).insert(window_id, Known { native: native.to_owned(), pid, app: app.clone(), bounds });
+            Self::lock(&self.windows).insert(window_id, Known { app: app.clone(), bounds });
             listed.push(WindowInfo {
                 window_id,
                 pid,
