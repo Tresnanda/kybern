@@ -40,11 +40,19 @@ pub enum ProviderKind {
     Pi,
     Omp,
     Cursor,
+    Antigravity,
 }
 
 impl ProviderKind {
-    pub const ALL: [ProviderKind; 6] =
-        [ProviderKind::ClaudeCode, ProviderKind::Codex, ProviderKind::Opencode, ProviderKind::Pi, ProviderKind::Omp, ProviderKind::Cursor];
+    pub const ALL: [ProviderKind; 7] = [
+        ProviderKind::ClaudeCode,
+        ProviderKind::Codex,
+        ProviderKind::Opencode,
+        ProviderKind::Pi,
+        ProviderKind::Omp,
+        ProviderKind::Cursor,
+        ProviderKind::Antigravity,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -54,6 +62,7 @@ impl ProviderKind {
             ProviderKind::Pi => "pi",
             ProviderKind::Omp => "omp",
             ProviderKind::Cursor => "cursor",
+            ProviderKind::Antigravity => "antigravity",
         }
     }
 
@@ -65,6 +74,7 @@ impl ProviderKind {
             ProviderKind::Pi => "pi",
             ProviderKind::Omp => "Oh My Pi",
             ProviderKind::Cursor => "Cursor",
+            ProviderKind::Antigravity => "Antigravity",
         }
     }
 
@@ -77,6 +87,7 @@ impl ProviderKind {
             ProviderKind::Pi => "pi",
             ProviderKind::Omp => "omp",
             ProviderKind::Cursor => "agent",
+            ProviderKind::Antigravity => "agy",
         }
     }
 }

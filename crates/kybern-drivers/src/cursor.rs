@@ -195,7 +195,7 @@ const GUIDE_OPEN: &str = "<kybern_instructions>";
 const GUIDE_CLOSE: &str = "</kybern_instructions>";
 
 /// The provider's copy of the first prompt: the guide in a tagged block, then the user's request.
-fn with_guide(guide: &str, text: &str) -> String {
+pub(crate) fn with_guide(guide: &str, text: &str) -> String {
     format!("{GUIDE_OPEN}\n{guide}\n{GUIDE_CLOSE}\n\n{text}")
 }
 

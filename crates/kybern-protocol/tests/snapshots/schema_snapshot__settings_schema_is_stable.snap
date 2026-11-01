@@ -45,6 +45,9 @@ expression: schema_for!(Settings)
     "providers": {
       "type": "object",
       "properties": {
+        "antigravity": {
+          "$ref": "#/$defs/ProviderSettings"
+        },
         "claude-code": {
           "$ref": "#/$defs/ProviderSettings"
         },
@@ -167,7 +170,8 @@ expression: schema_for!(Settings)
         "opencode",
         "pi",
         "omp",
-        "cursor"
+        "cursor",
+        "antigravity"
       ]
     },
     "PermissionMode": {

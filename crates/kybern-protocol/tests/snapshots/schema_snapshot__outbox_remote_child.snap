@@ -122,7 +122,8 @@ expression: schema_for!(RemoteChild)
         "opencode",
         "pi",
         "omp",
-        "cursor"
+        "cursor",
+        "antigravity"
       ]
     },
     "DelegationInfo": {
