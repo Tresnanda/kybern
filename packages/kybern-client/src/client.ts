@@ -75,6 +75,12 @@ export interface ClientOptions {
   pageRelay?: PageRelay;
 }
 
+/** An authenticated request a native loader makes itself (`KybernClient.request`). */
+export interface DaemonRequest {
+  url: string;
+  headers: Record<string, string>;
+}
+
 /** A page of the machine a web view or browser can load: `close` ends its relay, if it has one. */
 export interface DaemonPage {
   url: string;
@@ -221,17 +227,34 @@ export class KybernClient {
    * token stay in the client.
    */
   fetch(path: string, init: RequestInit = {}): Promise<Response> {
-    if (!path.startsWith("/") || path.startsWith("//"))
-      return Promise.reject(new Error("A daemon request needs a path that starts with /"));
-    const http = this.options.http;
-    const headers = new Headers(init.headers);
-    for (const [name, value] of Object.entries(http?.headers ?? {})) headers.set(name, value);
-    headers.set("authorization", `Bearer ${this.endpoint.token}`);
+    let target: DaemonRequest;
     try {
-      return fetch(`${http?.base ?? httpBase(this.endpoint.url)}${path}`, { ...init, headers, redirect: "error" });
+      target = this.request(path);
     } catch (error) {
       return Promise.reject(error);
     }
+    const headers = new Headers(init.headers);
+    for (const [name, value] of Object.entries(target.headers)) headers.set(name, value);
+    try {
+      return fetch(target.url, { ...init, headers, redirect: "error" });
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
+  /**
+   * The URL and headers of an authenticated request to one of this machine's routes, for a loader
+   * that makes the request itself (an `Image` source, a file download, a native upload). On a relay
+   * route the URL goes through the member and the headers carry its token beside this machine's.
+   * Hand both to the loader as they are; never put them in a page or a log.
+   */
+  request(path: string): DaemonRequest {
+    if (!path.startsWith("/") || path.startsWith("//")) throw new Error("A daemon request needs a path that starts with /");
+    const http = this.options.http;
+    return {
+      url: `${http?.base ?? httpBase(this.endpoint.url)}${path}`,
+      headers: { ...http?.headers, authorization: `Bearer ${this.endpoint.token}` },
+    };
   }
 
   /**
