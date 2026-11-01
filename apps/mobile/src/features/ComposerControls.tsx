@@ -39,6 +39,7 @@ import {
   traitValues,
   triggerTraits,
 } from "../../../../packages/kybern-client/src/models";
+import { onlyFullAccess, permissionLockNote } from "../../../../packages/kybern-client/src/permissionModes";
 const selectUsage = (state: ThreadState) => state.providerUsage;
 
 const modes: { value: PermissionMode; label: string; detail: string }[] = [
@@ -88,7 +89,9 @@ export function ComposerControls({
   const provider = app.providers.find((p) => p.kind === kind);
   const model = thread ? thread.model : draft.model;
   const effort = thread ? thread.effort : draft.effort;
-  const mode = thread?.permission_mode ?? draft.permission;
+  // Antigravity only runs in Full access, whatever the draft or the last agent had.
+  const locked = onlyFullAccess(provider ?? kind);
+  const mode = locked ? "full-access" : (thread?.permission_mode ?? draft.permission);
   const selectedModel = findModel(provider?.models ?? [], model);
   const modelLabel =
     selectedModel?.display_name || model || PROVIDER_DISPLAY_NAME[kind];
@@ -221,7 +224,9 @@ export function ComposerOptions({
   const provider = app.providers.find((p) => p.kind === kind);
   const model = thread ? thread.model : draft.model;
   const effort = thread ? thread.effort : draft.effort;
-  const mode = thread?.permission_mode ?? draft.permission;
+  // Antigravity only runs in Full access, whatever the draft or the last agent had.
+  const locked = onlyFullAccess(provider ?? kind);
+  const mode = locked ? "full-access" : (thread?.permission_mode ?? draft.permission);
   const selectedModel = findModel(provider?.models ?? [], model);
   const context = usage?.context;
   const fraction =
@@ -273,7 +278,7 @@ export function ComposerOptions({
     if (next.kind === kind && inst === instance) return;
     const permission = next.supported_permission_modes.includes(mode) ? mode : next.supported_permission_modes[0] ?? "supervised";
     if (!thread) {
-      setDraft({ provider: next.kind, instance: inst, ...(next.kind !== kind ? { model: "", effort: "" } : {}), permission });
+      setDraft({ provider: next.kind, instance: inst, ...(next.kind !== kind ? { model: "", effort: "" } : {}), ...(onlyFullAccess(next) ? {} : { permission }) });
       setModelQuery("");
       return;
     }
@@ -355,13 +360,14 @@ export function ComposerOptions({
                 subtitle={m.detail}
                 leading={m.value === "full-access" ? <Icon name="lock.open" size={20} color={colors.warning} /> : "lock.shield"}
                 checked={mode === m.value}
-                disabled={busy}
+                disabled={busy || locked}
                 onPress={() => void update({ permission_mode: m.value }).then((saved) => saved && router.back())}
               />
             ))}
         </InsetGroup>
         <SectionFooter inset>
-          {thread ? "Applies from the agent's next action in this thread." : "Applies to the next chat you start."}
+          {permissionLockNote(kind) ??
+            (thread ? "Applies from the agent's next action in this thread." : "Applies to the next chat you start.")}
         </SectionFooter>
       </Sheet>
     );
