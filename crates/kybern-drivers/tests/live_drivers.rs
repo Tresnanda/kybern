@@ -521,6 +521,10 @@ async fn installed_harnesses_round_trip_a_scoped_native_bridge_tool() {
         if selected.as_deref().is_some_and(|name| name != kind.as_str()) {
             continue;
         }
+        // Antigravity has no per-session MCP configuration, so it gets no bridge tools.
+        if kind == ProviderKind::Antigravity {
+            continue;
+        }
         run_native_bridge_turn(kind).await;
     }
 }
@@ -580,4 +584,200 @@ async fn pi_completes_a_turn() {
 }
 
 #[allow(dead_code)]
+// ---- Antigravity ----
+
+const AGY_MODEL: &str = "gemini-3.8-flash-low";
+
+/// `Some(driver)` when `agy` is installed and signed in; otherwise skip (or fail under KYBERN_LIVE_TESTS).
+async fn antigravity_ready() -> Option<Arc<dyn kybern_drivers::AgentDriver>> {
+    let driver = DriverRegistry::with_defaults().get(ProviderKind::Antigravity).expect("driver registered");
+    let status = driver.probe(None).await;
+    let strict = std::env::var_os("KYBERN_LIVE_TESTS").is_some();
+    if !status.available {
+        assert!(!strict, "Antigravity unavailable: {:?}", status.unavailable_reason);
+        eprintln!("skipping Antigravity: {:?}", status.unavailable_reason);
+        return None;
+    }
+    if status.models.is_empty() {
+        // `agy models` fails when signed out.
+        assert!(!strict, "Antigravity is signed out");
+        eprintln!("skipping Antigravity: signed out (agy models returned no models)");
+        return None;
+    }
+    Some(driver)
+}
+
+fn antigravity_config(dir: &std::path::Path, resume: Option<String>) -> SessionConfig {
+    SessionConfig {
+        cwd: dir.to_path_buf(),
+        model: Some(AGY_MODEL.into()),
+        effort: None,
+        permission_mode: PermissionMode::FullAccess,
+        native_tool_bridge: None,
+        resume_session_id: resume,
+        resume_lacks_instructions: false,
+        fork: false,
+        rewind: None,
+        binary: None,
+        env: HashMap::new(),
+    }
+}
+
+async fn until_turn_ends(events: &mut tokio::sync::mpsc::Receiver<DriverEvent>, seconds: u64) -> Vec<DriverEvent> {
+    let mut seen = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    loop {
+        let event = match tokio::time::timeout_at(deadline, events.recv()).await {
+            Ok(Some(event)) => event,
+            Ok(None) => break,
+            Err(_) => panic!("Antigravity: no turn completion within {seconds}s; events so far: {seen:?}"),
+        };
+        let done = matches!(event, DriverEvent::TurnCompleted { .. } | DriverEvent::TurnFailed { .. } | DriverEvent::Exited { .. });
+        seen.push(event);
+        if done {
+            break;
+        }
+    }
+    seen
+}
+
+#[tokio::test]
+async fn antigravity_streams_runs_a_tool_resumes_and_lists_models() {
+    let Some(driver) = antigravity_ready().await else { return };
+    let status = driver.probe(None).await;
+    assert!(status.models.iter().any(|model| model.id == AGY_MODEL), "models: {:?}", status.models);
+    assert_eq!(status.supported_permission_modes, vec![PermissionMode::FullAccess]);
+    let dir = tempfile::tempdir().unwrap();
+    let spawned = driver.spawn(antigravity_config(dir.path(), None)).await.expect("spawn");
+    let (session, mut events) = (spawned.session, spawned.events);
+
+    session
+        .send_message("m1", &UserMessage::text("Run the shell command `echo hi` and then tell me its output in one short sentence."))
+        .await
+        .unwrap();
+    let first = until_turn_ends(&mut events, 180).await;
+    eprintln!("first turn: {first:#?}");
+    let conversation = first
+        .iter()
+        .find_map(|event| match event {
+            DriverEvent::SessionBound { session_id, .. } => Some(session_id.clone()),
+            _ => None,
+        })
+        .expect("a conversation id");
+    assert!(first.iter().any(|event| matches!(event, DriverEvent::TextDelta { .. })), "text streams");
+    let tool = first.iter().find_map(|event| match event {
+        DriverEvent::ToolStarted(call) if call.name == "Bash" => Some(call.clone()),
+        _ => None,
+    });
+    let tool = tool.expect("one Bash tool call");
+    assert!(tool.input["command"].as_str().unwrap_or("").contains("echo hi"), "{:?}", tool.input);
+    assert!(
+        first.iter().any(|event| matches!(event, DriverEvent::ToolCompleted { tool_call_id, output, is_error: false } if *tool_call_id == tool.id && output.as_str().unwrap_or("").contains("hi"))),
+        "the tool completed with its output"
+    );
+    let Some(DriverEvent::TurnCompleted { stop_reason, usage, .. }) = first.last() else { panic!("{:?}", first.last()) };
+    assert_eq!(*stop_reason, StopReason::Completed);
+    assert!(usage.input_tokens > 0);
+
+    // Resume: the same conversation answers from what it already knows.
+    session
+        .send_message(
+            "m2",
+            &UserMessage::text("Without using any tool: what shell command did you just run? Answer with the command only."),
+        )
+        .await
+        .unwrap();
+    let second = until_turn_ends(&mut events, 180).await;
+    assert!(
+        second.iter().any(|event| matches!(event, DriverEvent::SessionBound { session_id, .. } if *session_id == conversation)),
+        "the second turn resumed {conversation}"
+    );
+    let answer = second
+        .iter()
+        .rev()
+        .find_map(|event| match event {
+            DriverEvent::MessageCompleted { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .expect("an answer");
+    assert!(answer.contains("echo"), "{answer}");
+    assert!(matches!(second.last(), Some(DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. })));
+    session.close().await.unwrap();
+}
+
+fn process_alive(pid: &str) -> bool {
+    std::process::Command::new("/bin/kill")
+        .args(["-0", pid])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn antigravity_interrupt_ends_the_turn_and_kills_the_tool_child() {
+    let Some(driver) = antigravity_ready().await else { return };
+    let dir = tempfile::tempdir().unwrap();
+    // A distinctive duration so the child is easy to find among other processes.
+    let marker = "sleep 31.417";
+    let spawned = driver.spawn(antigravity_config(dir.path(), None)).await.expect("spawn");
+    let (session, mut events) = (spawned.session, spawned.events);
+    session
+        .send_message("m1", &UserMessage::text(format!("Run exactly this shell command and wait for it: `{marker}`. Do nothing else.")))
+        .await
+        .unwrap();
+    // Wait for the tool to start, then let the sleep begin.
+    let mut seen = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+    loop {
+        let event = tokio::time::timeout_at(deadline, events.recv()).await.expect("the tool started in time").expect("events open");
+        let started = matches!(&event, DriverEvent::ToolStarted(call) if call.name == "Bash");
+        seen.push(event);
+        if started {
+            break;
+        }
+    }
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    let pids = || {
+        let out = std::process::Command::new("pgrep").args(["-f", marker]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).split_whitespace().map(str::to_string).collect::<Vec<_>>()
+    };
+    let before = pids();
+    eprintln!("sleep processes before the interrupt: {before:?}");
+    assert!(!before.is_empty(), "the sleep is running: {seen:?}");
+    let started = std::time::Instant::now();
+    session.interrupt().await.unwrap();
+    let ended = until_turn_ends(&mut events, 40).await;
+    eprintln!("interrupt took {:?}: {ended:#?}", started.elapsed());
+    assert!(matches!(ended.last(), Some(DriverEvent::TurnCompleted { stop_reason: StopReason::Interrupted, .. })), "{:?}", ended.last());
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    for pid in &before {
+        assert!(!process_alive(pid), "the sleep child {pid} outlived the interrupt");
+    }
+    // The conversation survives an interrupted turn.
+    session.send_message("m2", &UserMessage::text("Reply with the single word: ready")).await.unwrap();
+    let after = until_turn_ends(&mut events, 180).await;
+    assert!(matches!(after.last(), Some(DriverEvent::TurnCompleted { stop_reason: StopReason::Completed, .. })), "{:?}", after.last());
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn antigravity_one_shot_answers_a_title_prompt_without_editing() {
+    let Some(driver) = antigravity_ready().await else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let answer = driver
+        .one_shot(
+            dir.path(),
+            "Reply with a title of at most four words for a chat about sorting arrays. Output only the title.",
+            None,
+            &Default::default(),
+        )
+        .await
+        .expect("one-shot");
+    eprintln!("title: {answer:?}");
+    assert!(!answer.trim().is_empty());
+    let created: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+    assert!(created.is_empty(), "plan mode left the checkout alone: {created:?}");
+}
+
 fn _unused(_: PathBuf) {}
