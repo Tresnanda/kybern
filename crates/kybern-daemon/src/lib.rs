@@ -148,6 +148,12 @@ fn desktop_listen_port(requested: u16, desktop_managed: bool, root: &std::path::
     }
 }
 
+/// The login item passes `--port 0`, meaning the port the desktop app saved. Without that file it would bind a random
+/// port that no client knows, and a second daemon could end up serving the same data folder.
+fn login_item_may_listen(login_service: bool, port: u16) -> bool {
+    !login_service || port != 0
+}
+
 /// Stack for each runtime thread. Unoptimized builds give every arm of an
 /// `rpc` dispatch match its own stack slots (the whole match was a poll frame of
 /// about 1.4 MB on macOS and larger with MSVC, now split into parts), so a
@@ -212,6 +218,13 @@ async fn serve() -> Result<()> {
     // Before the state opens: a second daemon would recover the first one's turns.
     if args.login_service && login_service::already_served(&paths.root) {
         tracing::info!(data_dir = %paths.root.display(), "another daemon already serves this data folder; the login item has nothing to start");
+        return Ok(());
+    }
+    if !login_item_may_listen(args.login_service, desktop_listen_port(args.port, args.login_service, &paths.root)?) {
+        tracing::warn!(
+            data_dir = %paths.root.display(),
+            "the login item has no saved desktop port (desktop.port) and would listen on a random port beside the daemon the app starts; it starts nothing. Open Kybern on this machine once to save the port."
+        );
         return Ok(());
     }
     let state = state::AppState::initialize(&paths)?;
@@ -486,7 +499,7 @@ fn owns_endpoint_file(contents: &str, expected: &str) -> bool {
 mod tests {
     #[cfg(unix)]
     use super::nvm_default_bin;
-    use super::{desktop_listen_port, owns_endpoint_file, runtime, startup_announcement_filename};
+    use super::{desktop_listen_port, login_item_may_listen, owns_endpoint_file, runtime, startup_announcement_filename};
 
     /// A spawned task (every RPC runs in one) has room for more than Tokio's 2 MiB default.
     #[test]
@@ -510,6 +523,11 @@ mod tests {
         assert_eq!(desktop_listen_port(0, true, &root).unwrap(), 59930);
         assert_eq!(desktop_listen_port(4219, true, &root).unwrap(), 4219);
         assert_eq!(desktop_listen_port(0, false, &root).unwrap(), 0);
+        // The login item (`--login-service --port 0`) starts nothing without a saved port.
+        assert!(login_item_may_listen(true, 59930) && login_item_may_listen(false, 0));
+        let unsaved = root.join("unsaved");
+        std::fs::create_dir_all(&unsaved).unwrap();
+        assert!(!login_item_may_listen(true, desktop_listen_port(0, true, &unsaved).unwrap()));
         std::fs::write(root.join("desktop.port"), "broken").unwrap();
         assert!(desktop_listen_port(0, true, &root).is_err());
         std::fs::remove_dir_all(root).unwrap();

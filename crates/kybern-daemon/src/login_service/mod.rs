@@ -281,6 +281,10 @@ impl LoginService {
         let running_here = self.launched();
         let allow_dev = self.allow_development_build.load(Ordering::SeqCst);
         let outcome = match spec_for(state) {
+            // The item starts `--port 0`, the port the app saved; without one it would listen where no client looks.
+            Ok(_) if wanted && manager.kind().is_some() && !has_desktop_port(&state.paths.root) => {
+                Applied { error: Some(NO_DESKTOP_PORT.to_string()), retry: true, ..Applied::default() }
+            }
             Err(error) if manager.kind().is_some() => {
                 Applied { error: Some(format!("Kybern could not check its login item: {error:#}")), retry: true, ..Applied::default() }
             }
@@ -298,6 +302,14 @@ impl LoginService {
         }
         *self.applied() = Applied { wanted: Some(wanted), ..outcome };
     }
+}
+
+/// Why the item is not registered yet on a machine whose daemon the desktop app never started.
+pub const NO_DESKTOP_PORT: &str = "Kybern registers itself to start at login once the desktop app has chosen this machine's daemon port. Open Kybern on this machine once, then try again.";
+
+/// The desktop app saved the port its daemon listens on (`desktop.port`), which the item's `--port 0` means.
+pub fn has_desktop_port(root: &Path) -> bool {
+    std::fs::read_to_string(root.join("desktop.port")).ok().and_then(|text| text.trim().parse::<u16>().ok()).is_some_and(|port| port != 0)
 }
 
 /// Whether the login item should exist: the setting is on, the network is on, and this machine is a

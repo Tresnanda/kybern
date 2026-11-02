@@ -187,8 +187,20 @@ async fn joining_registers_the_login_item_and_being_removed_or_turning_it_off_re
     assert!(!at_a.registered() && !at_b.registered());
     assert!(!wanted(&a.state));
 
+    // `a`'s daemon was started by the desktop app, which saved its port; `b`'s never was.
+    std::fs::write(a.state.paths.root.join("desktop.port"), "59931").unwrap();
     cluster.form(&a, &[&b], JoinVia::Auto).await;
-    eventually("both register once they are in a network", WAIT, || at_a.registered() && at_b.registered()).await;
+    eventually("a registers once it is in a network", WAIT, || at_a.registered()).await;
+    // The item's `--port 0` means the saved port: without one, it would start a daemon on a random port.
+    eventually("b says why it has no login item", WAIT, || {
+        b.state.login_service.status(&b.state).error.as_deref() == Some(NO_DESKTOP_PORT)
+    })
+    .await;
+    assert!(wanted(&b.state) && !at_b.registered());
+    std::fs::write(b.state.paths.root.join("desktop.port"), "59932").unwrap();
+    set_enabled(&b.state, true).await.unwrap();
+    assert!(at_b.registered(), "registered once the app saved its port");
+    assert!(b.state.login_service.status(&b.state).error.is_none());
     let status = a.state.login_service.status(&a.state);
     assert!(status.enabled && status.wanted && status.registered && !status.running && status.kind.is_some());
 
