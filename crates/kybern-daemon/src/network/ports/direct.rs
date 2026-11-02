@@ -539,11 +539,19 @@ pub struct Route {
     warm: Mutex<VecDeque<(Instant, TcpStream)>>,
     wanted: Notify,
     last_used: Mutex<Instant>,
+    /// Ends the ready sockets: the forward stopped, or a new session replaced this route.
+    cancel: CancellationToken,
 }
 
 impl Route {
-    pub fn new(address: SocketAddr, endpoint: PeerPortsDirect) -> Self {
-        Self { address, endpoint, warm: Mutex::default(), wanted: Notify::new(), last_used: Mutex::new(Instant::now()) }
+    pub fn new(address: SocketAddr, endpoint: PeerPortsDirect, cancel: CancellationToken) -> Self {
+        Self { address, endpoint, warm: Mutex::default(), wanted: Notify::new(), last_used: Mutex::new(Instant::now()), cancel }
+    }
+
+    /// This route is replaced: drop its ready sockets.
+    pub fn stop(&self) {
+        self.cancel.cancel();
+        self.warm.lock().unwrap_or_else(|p| p.into_inner()).clear();
     }
 
     pub fn ready_sockets(&self) -> bool {
@@ -594,10 +602,11 @@ impl Route {
     }
 
     /// Keep [`WARM_SOCKETS`] ready while the forward is in use, replacing those that grow old, until `cancel`.
-    pub async fn keep_warm(self: Arc<Self>, network: Arc<Network>, cancel: CancellationToken) {
+    pub async fn keep_warm(self: Arc<Self>, network: Arc<Network>) {
         if !self.ready_sockets() {
             return;
         }
+        let cancel = self.cancel.clone();
         loop {
             let (count, oldest) = {
                 let mut warm = self.warm.lock().unwrap_or_else(|p| p.into_inner());

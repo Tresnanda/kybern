@@ -31,13 +31,15 @@ const TARGET: &str = "kybern::network::ports";
 /// The one HTTP/2 connection of a forward to its target, opened on first use and again after it ends.
 #[derive(Default)]
 pub struct Tunnel {
-    sender: tokio::sync::Mutex<Option<SendRequest<Incoming>>>,
+    /// The connection and the route it runs on: a new route (a new session) needs a new connection.
+    sender: tokio::sync::Mutex<Option<(Arc<direct::Route>, SendRequest<Incoming>)>>,
 }
 
 impl Tunnel {
-    async fn sender(&self, network: &Network, route: &direct::Route, cancel: &CancellationToken) -> Option<SendRequest<Incoming>> {
+    async fn sender(&self, network: &Network, route: &Arc<direct::Route>, cancel: &CancellationToken) -> Option<SendRequest<Incoming>> {
         let mut held = self.sender.lock().await;
-        if let Some(sender) = held.as_ref()
+        if let Some((on, sender)) = held.as_ref()
+            && Arc::ptr_eq(on, route)
             && !sender.is_closed()
         {
             return Some(sender.clone());
@@ -52,7 +54,13 @@ impl Tunnel {
             .keep_alive_interval(Some(Duration::from_secs(20)))
             .keep_alive_timeout(Duration::from_secs(20))
             .keep_alive_while_idle(true);
-        let (sender, connection) = builder.handshake(TokioIo::new(socket)).await.ok()?;
+        let (sender, connection) = match builder.handshake(TokioIo::new(socket)).await {
+            Ok(handshake) => handshake,
+            Err(error) => {
+                tracing::debug!(target: TARGET, ?error, "could not open a forward's HTTP/2 connection");
+                return None;
+            }
+        };
         let cancel = cancel.clone();
         tokio::spawn(async move {
             tokio::select! {
@@ -60,19 +68,19 @@ impl Tunnel {
                 _ = cancel.cancelled() => {}
             }
         });
-        *held = Some(sender.clone());
+        *held = Some((route.clone(), sender.clone()));
         Some(sender)
     }
 
     /// Open the connection ahead of the first request.
-    pub async fn warm(&self, network: &Network, route: &direct::Route, cancel: &CancellationToken) {
+    pub async fn warm(&self, network: &Network, route: &Arc<direct::Route>, cancel: &CancellationToken) {
         let _ = self.sender(network, route, cancel).await;
     }
 }
 
 /// Start the HTTPS listener of `forward` and return its port.
 pub(super) async fn start(network: &Arc<Network>, forward: &Arc<Forward>) -> Result<u16, RpcError> {
-    let Some(route) = forward.route.clone().filter(|route| route.ready_sockets()) else {
+    let Some(route) = super::current_route(network, forward).await.filter(|route| route.ready_sockets()) else {
         return Err(RpcError::new(
             codes::NOT_AVAILABLE,
             "That machine cannot serve this preview over HTTP/2. Update Kybern there to use Fast mode.",
@@ -96,17 +104,23 @@ pub(super) async fn start(network: &Arc<Network>, forward: &Arc<Forward>) -> Res
             };
             let Ok((socket, _)) = accepted else { continue };
             let _ = socket.set_nodelay(true);
-            let (network, forward, route, acceptor) = (network.clone(), forward.clone(), route.clone(), acceptor.clone());
+            let (network, forward, acceptor) = (network.clone(), forward.clone(), acceptor.clone());
             tokio::spawn(async move {
                 let _count = Counted::new(&forward);
                 let Ok(Ok(tls)) = tokio::time::timeout(Duration::from_secs(10), acceptor.accept(socket)).await else { return };
                 let alpn = tls.get_ref().1.alpn_protocol().map(|p| String::from_utf8_lossy(p).into_owned()).unwrap_or_default();
                 tracing::debug!(target: TARGET, port = forward.local_port, alpn = %alpn, "a page connection to a Fast listener");
                 let service = {
-                    let (network, forward, route) = (network.clone(), forward.clone(), route.clone());
+                    let (network, forward) = (network.clone(), forward.clone());
                     hyper::service::service_fn(move |request: Request<Incoming>| {
-                        let (network, forward, route) = (network.clone(), forward.clone(), route.clone());
-                        async move { Ok::<_, Infallible>(handle(&network, &forward, &route, request).await) }
+                        let (network, forward) = (network.clone(), forward.clone());
+                        async move {
+                            // The route of the session open now: after the target restarts this prepares the forward again.
+                            let Some(route) = super::current_route(&network, &forward).await.filter(|route| route.ready_sockets()) else {
+                                return Ok::<_, Infallible>(status_response(StatusCode::BAD_GATEWAY));
+                            };
+                            Ok::<_, Infallible>(handle(&network, &forward, &route, request).await)
+                        }
                     })
                 };
                 let mut builder = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());

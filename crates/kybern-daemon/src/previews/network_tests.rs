@@ -366,7 +366,10 @@ async fn run_direct_ports() {
     let forwarded =
         client.call::<PortsForward>(PortsForwardParams { machine: b.id(), remote_port, local_port: None, https: false }).await.unwrap();
     assert!(forwarded.local_port > remote_port, "the occupied remote port is followed by a higher free port");
-    assert!(a.state.network.ports.lock().iter().find(|f| f.id == forwarded.id).unwrap().route.is_some(), "no negotiated direct route");
+    assert!(
+        a.state.network.ports.lock().iter().find(|f| f.id == forwarded.id).unwrap().route_now().is_some(),
+        "no negotiated direct route"
+    );
     let page = reqwest::get(format!("http://127.0.0.1:{}/", forwarded.local_port)).await.unwrap().text().await.unwrap();
     assert_eq!(page, "hello direct");
     let mut request = format!("ws://127.0.0.1:{}/hmr", forwarded.local_port).into_client_request().unwrap();
@@ -390,9 +393,8 @@ async fn run_direct_ports() {
     let (on_c, _) = c.client(&Scope::ALL).await;
     let second =
         on_c.call::<PortsForward>(PortsForwardParams { machine: b.id(), remote_port, local_port: None, https: false }).await.unwrap();
-    let token_a =
-        a.state.network.ports.lock().iter().find(|f| f.id == forwarded.id).unwrap().route.as_ref().unwrap().endpoint.token.clone();
-    let token_c = c.state.network.ports.lock().iter().find(|f| f.id == second.id).unwrap().route.as_ref().unwrap().endpoint.token.clone();
+    let token_a = a.state.network.ports.lock().iter().find(|f| f.id == forwarded.id).unwrap().route_now().unwrap().endpoint.token.clone();
+    let token_c = c.state.network.ports.lock().iter().find(|f| f.id == second.id).unwrap().route_now().unwrap().endpoint.token.clone();
     assert!(token_a != token_c, "each member must get its own token");
     let (mut other, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/hmr", second.local_port)).await.unwrap();
     other.send(Message::Text("client-c".into())).await.unwrap();
@@ -660,6 +662,28 @@ async fn run_fast_mode() {
     assert_eq!(response.headers()["sec-websocket-protocol"], "vite-hmr");
     websocket.send(Message::Text("update".into())).await.unwrap();
     assert_eq!(websocket.next().await.unwrap().unwrap(), Message::Text("update".into()));
+
+    // The target's listener lives with the session it was prepared on. After a new session (a restart there, a renewed
+    // connection), the forward prepares itself again: plain and HTTPS pages keep loading through the same local ports.
+    let before = a.state.network.ports.lock().iter().find(|f| f.id == forward.id).unwrap().route_now().unwrap();
+    a.state.network.peers.link(&b.id()).unwrap().close();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    a.link(&b).await;
+    let page = reqwest::get(format!("http://127.0.0.1:{}/module/2", forward.local_port)).await.unwrap().text().await.unwrap();
+    assert_eq!(page, "export default 2", "the plain listener works on the new session");
+    let after = a.state.network.ports.lock().iter().find(|f| f.id == forward.id).unwrap().route_now().unwrap();
+    assert!(!Arc::ptr_eq(&before, &after), "the forward was prepared again");
+    assert_ne!(before.endpoint.port, after.endpoint.port);
+    let socket = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let tls = connector.connect("localhost".try_into().unwrap(), socket).await.unwrap();
+    let (mut again, connection) =
+        hyper::client::conn::http2::handshake(hyper_util::rt::TokioExecutor::new(), hyper_util::rt::TokioIo::new(tls)).await.unwrap();
+    tokio::spawn(connection);
+    let response = again
+        .send_request(hyper::Request::get(format!("https://localhost:{port}/module/3")).body(Empty::<Bytes>::new()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200, "HTTPS works on the new session");
 
     // Stopping the forward ends the HTTPS listener too.
     client.call::<PortsStop>(PortsStopParams { id: forward.id }).await.unwrap();

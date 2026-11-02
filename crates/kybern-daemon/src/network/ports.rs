@@ -60,7 +60,10 @@ struct Forward {
     created_at: chrono::DateTime<chrono::Utc>,
     connections: AtomicU32,
     cancel: CancellationToken,
-    route: Option<Arc<direct::Route>>,
+    /// The direct route, and the session it was prepared on: the target's listener for it lives as long as that session,
+    /// so a new session (the target restarted, the connection was renewed) prepares it again ([`current_route`]).
+    route: std::sync::Mutex<(Option<Arc<direct::Route>>, std::sync::Weak<PeerLink>)>,
+    rerouting: tokio::sync::Mutex<()>,
     prepared: bool,
     rtt_ms: Option<u32>,
     /// The HTTPS (HTTP/2) listener, once asked for, and the certificate it presents.
@@ -71,6 +74,10 @@ struct Forward {
 }
 
 impl Forward {
+    fn route_now(&self) -> Option<Arc<direct::Route>> {
+        self.route.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).0.clone()
+    }
+
     fn view(&self) -> PortForward {
         let https = self.https.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
         PortForward {
@@ -82,7 +89,7 @@ impl Forward {
             connections: self.connections.load(Ordering::Relaxed),
             created_at: self.created_at,
             rtt_ms: self.rtt_ms,
-            https_available: self.route.as_ref().is_some_and(|route| route.ready_sockets()),
+            https_available: self.route_now().is_some_and(|route| route.ready_sockets()),
             https_port: https.as_ref().map(|(port, _)| *port),
             https_certificate: https.as_ref().map(|(_, cert)| cert.pem.clone()),
             https_certificate_sha256: https.as_ref().map(|(_, cert)| cert.sha256.clone()),
@@ -207,31 +214,9 @@ pub async fn forward_to(
         .link(machine_id)
         .ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, format!("{machine_name} is offline, so its ports cannot be forwarded.")))?;
     let id = Uuid::now_v7();
-    let presence = network.peers.status(machine_id).presence;
-    let capable = presence.as_ref().is_none_or(|p| p.features.iter().any(|f| f == features::PORTS_DIRECT_V1));
     let asked = Instant::now();
-    let (prepared, route) = if capable {
-        // Version 2 is asked for every time: a machine that does not know it ignores the field and answers version 1.
-        let prepare = PeerPortsPrepareParams { forward_id: id, port: remote_port, direct_version: Some(2) };
-        match link.call::<PeerPortsPrepare>(prepare).await {
-            Ok(result) => {
-                let route = match result.direct {
-                    Some(endpoint) => direct::destination(network, machine_id, endpoint.port)
-                        .await
-                        .map(|addr| Arc::new(direct::Route::new(addr, endpoint))),
-                    None => None,
-                };
-                if route.is_none() {
-                    let _ = link.notify(PeerPortsRelease::NAME, json!({"forward_id": id})).await;
-                }
-                (true, route)
-            }
-            Err(error) if error.code == codes::METHOD_NOT_FOUND => (false, None),
-            Err(error) => return Err(error),
-        }
-    } else {
-        (false, None)
-    };
+    let cancel = CancellationToken::new();
+    let (prepared, route) = prepare_route(network, &link, id, remote_port, &cancel).await?;
     // The route's round trip: a ready socket's TCP connect (which also leaves the first browser connection a socket
     // to use), else the authorizing call over the session.
     let mut rtt = asked.elapsed();
@@ -257,14 +242,15 @@ pub async fn forward_to(
         remote_port,
         local_port: bound,
         created_at: chrono::Utc::now(),
-        route,
+        route: std::sync::Mutex::new((route, Arc::downgrade(&link))),
+        rerouting: tokio::sync::Mutex::new(()),
         prepared,
         rtt_ms: Some(rtt.as_millis().min(u32::MAX as u128) as u32),
         https: std::sync::Mutex::new(None),
         https_start: tokio::sync::Mutex::new(()),
         tunnel: fast::Tunnel::default(),
         connections: AtomicU32::new(0),
-        cancel: CancellationToken::new(),
+        cancel,
     });
     let added = {
         let mut list = network.ports.lock();
@@ -282,8 +268,8 @@ pub async fn forward_to(
         return Err(RpcError::new(codes::CONFLICT, format!("{MAX_PORT_FORWARDS} ports are forwarded already. Stop one first.")));
     }
     tokio::spawn(accept_loop(network.clone(), shutdown.clone(), forward.clone(), listener));
-    if let Some(route) = forward.route.clone() {
-        tokio::spawn(route.keep_warm(network.clone(), forward.cancel.clone()));
+    if let Some(route) = forward.route_now() {
+        tokio::spawn(route.keep_warm(network.clone()));
     }
     if https && let Err(error) = start_https(network, &forward).await {
         tracing::info!(target: TARGET, machine = machine_id, error = %error.message, "the forward has no HTTPS listener");
@@ -295,10 +281,85 @@ pub async fn forward_to(
         remote_port,
         local_port = bound,
         rtt_ms = forward.rtt_ms,
-        transport = match &forward.route { Some(route) if route.ready_sockets() => "tcp-ready", Some(_) => "tcp", None => "websocket" },
+        transport = match forward.route_now() { Some(route) if route.ready_sockets() => "tcp-ready", Some(_) => "tcp", None => "websocket" },
         "forwarding a port"
     );
     Ok(forward.view())
+}
+
+/// Authorize a forward on `link` (`peer.ports.prepare`) and resolve its direct route: `(prepared, route)`, where an older
+/// machine has no prepare at all and a machine that cannot be reached directly has no route (the WebSocket streams carry
+/// the forward then). The route's ready sockets are kept until `cancel`.
+async fn prepare_route(
+    network: &Arc<Network>,
+    link: &Arc<PeerLink>,
+    id: Uuid,
+    remote_port: u16,
+    cancel: &CancellationToken,
+) -> Result<(bool, Option<Arc<direct::Route>>), RpcError> {
+    let presence = network.peers.status(&link.machine_id).presence;
+    if !presence.as_ref().is_none_or(|p| p.features.iter().any(|f| f == features::PORTS_DIRECT_V1)) {
+        return Ok((false, None));
+    }
+    // Version 2 is asked for every time: a machine that does not know it ignores the field and answers version 1.
+    let prepare = PeerPortsPrepareParams { forward_id: id, port: remote_port, direct_version: Some(2) };
+    match link.call::<PeerPortsPrepare>(prepare).await {
+        Ok(result) => {
+            let route = match result.direct {
+                Some(endpoint) => direct::destination(network, &link.machine_id, endpoint.port)
+                    .await
+                    .map(|addr| Arc::new(direct::Route::new(addr, endpoint, cancel.child_token()))),
+                None => None,
+            };
+            if route.is_none() {
+                let _ = link.notify(PeerPortsRelease::NAME, json!({"forward_id": id})).await;
+            }
+            Ok((true, route))
+        }
+        Err(error) if error.code == codes::METHOD_NOT_FOUND => Ok((false, None)),
+        Err(error) => Err(error),
+    }
+}
+
+/// The forward's direct route on the session open now. The target's listener for a route ends with the session it was
+/// prepared on, so after a new session (the target restarted or the connection was renewed) the forward is prepared
+/// again and the old route's ready sockets are dropped. `None` when the forward has no direct route.
+async fn current_route(network: &Arc<Network>, forward: &Arc<Forward>) -> Option<Arc<direct::Route>> {
+    let link = network.peers.link(&forward.machine_id)?;
+    let fresh = |forward: &Forward| {
+        let held = forward.route.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        held.1.upgrade().is_some_and(|prepared_on| Arc::ptr_eq(&prepared_on, &link)).then(|| held.0.clone())
+    };
+    if let Some(route) = fresh(forward) {
+        return route;
+    }
+    if !forward.prepared {
+        return None;
+    }
+    let _rerouting = forward.rerouting.lock().await;
+    if let Some(route) = fresh(forward) {
+        return route;
+    }
+    let route = match prepare_route(network, &link, forward.id, forward.remote_port, &forward.cancel).await {
+        Ok((_, route)) => route,
+        // The old session's listener is still being torn down there: keep the forward as it is and try again next time.
+        Err(error) => {
+            tracing::debug!(target: TARGET, machine = %forward.machine_id, error = %error.message, "could not prepare a forward again");
+            return None;
+        }
+    };
+    let old = std::mem::replace(
+        &mut *forward.route.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
+        (route.clone(), Arc::downgrade(&link)),
+    );
+    if let Some(old) = old.0 {
+        old.stop();
+    }
+    if let Some(route) = &route {
+        tokio::spawn(route.clone().keep_warm(network.clone()));
+    }
+    tracing::info!(target: TARGET, machine = %forward.machine_id, remote_port = forward.remote_port, direct = route.is_some(), "prepared a forward again on a new session");
+    route
 }
 
 /// Open the HTTPS (HTTP/2) listener of a forward, once.
@@ -423,7 +484,7 @@ async fn connection(network: Arc<Network>, forward: Arc<Forward>, mut socket: Tc
     let _count = Counted::new(&forward);
     let _ = socket.set_nodelay(true);
     let Some(link) = network.peers.link(&forward.machine_id) else { return };
-    if let Some(route) = &forward.route {
+    if let Some(route) = current_route(&network, &forward).await {
         // Over the limit, the browser's connection waits for a place rather than being closed.
         let key = format!("ports:{}", link.machine_id);
         let Some(_slot) = network.relays.acquire_wait(&key, relay::MAX_STREAMS_PER_CLIENT, direct::QUEUE_WAIT, &forward.cancel).await
@@ -698,7 +759,8 @@ mod tests {
             remote_port: 5173,
             local_port: 40000,
             created_at: chrono::Utc::now(),
-            route: None,
+            route: std::sync::Mutex::new((None, std::sync::Weak::new())),
+            rerouting: tokio::sync::Mutex::new(()),
             prepared: false,
             rtt_ms: None,
             https: std::sync::Mutex::new(None),
