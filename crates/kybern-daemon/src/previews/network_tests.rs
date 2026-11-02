@@ -696,3 +696,52 @@ async fn run_fast_mode() {
     }
     dev.abort();
 }
+
+#[test]
+fn a_member_at_its_stream_limit_is_refused_at_once_and_its_other_requests_keep_running() {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .thread_stack_size(crate::RUNTIME_THREAD_STACK)
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(run_full_stream_limit());
+}
+
+async fn run_full_stream_limit() {
+    use crate::network::relay::MAX_INBOUND_PER_MEMBER;
+    let (a, b) = direct_pair().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let remote_port = listener.local_addr().unwrap().port();
+    let dev = tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            held.push(socket);
+        }
+    });
+    // `a` already holds every stream it may hold on `b` (warm direct sockets and relayed connections).
+    let key = format!("inbound:{}", a.id());
+    let mut places: Vec<_> =
+        (0..MAX_INBOUND_PER_MEMBER).map(|_| b.state.network.relays.acquire_within(&key, MAX_INBOUND_PER_MEMBER).unwrap()).collect();
+    let link = a.state.network.peers.link(&b.id()).unwrap();
+    // More opens than the session has request places (16). Each used to wait 10 s for a stream place while holding one,
+    // and everything else on the session queued behind them.
+    let started = std::time::Instant::now();
+    let opens = (0..24u64).map(|n| {
+        let link = link.clone();
+        async move { link.call::<PeerPortsOpen>(PeerPortsOpenParams { stream_id: 1_000_001 + 2 * n, port: remote_port }).await }
+    });
+    let results = futures::future::join_all(opens).await;
+    for result in &results {
+        assert_eq!(result.as_ref().unwrap_err().code, codes::CONFLICT, "{result:?}");
+    }
+    let prepared =
+        link.call::<PeerPortsPrepare>(PeerPortsPrepareParams { forward_id: Uuid::now_v7(), port: remote_port, direct_version: Some(2) });
+    assert!(prepared.await.is_ok(), "another request of the session still runs");
+    assert!(started.elapsed() < Duration::from_secs(3), "the session waited {:?}", started.elapsed());
+    // A freed place is used by the next open.
+    drop(places.pop());
+    link.call::<PeerPortsOpen>(PeerPortsOpenParams { stream_id: 2_000_001, port: remote_port }).await.unwrap();
+    drop(places);
+    dev.abort();
+}

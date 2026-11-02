@@ -522,20 +522,33 @@ async fn open_stream(link: &Arc<PeerLink>, network: &Network, port: u16) -> Resu
         .acquire_wait(&format!("ports:{}", link.machine_id), relay::MAX_STREAMS_PER_CLIENT, direct::QUEUE_WAIT, &cancel)
         .await
         .ok_or_else(|| RpcError::new(codes::CONFLICT, "too many forwarded connections"))?;
-    let (stream, incoming) = link.relays.create(None, StreamKind::Ports, None).ok_or_else(|| RpcError::internal("stream id clash"))?;
-    let open = PeerPortsOpenParams { stream_id: stream.id, port };
-    match tokio::time::timeout(OPEN_TIMEOUT, link.call::<PeerPortsOpen>(open)).await {
-        Ok(Ok(_)) => Ok((stream, incoming, slot)),
-        Ok(Err(error)) => {
-            link.relays.remove(stream.id);
-            Err(error)
+    // The target refuses at once when this machine holds all its places there (it never waits while holding one of the
+    // session's request places); the connection waits here instead, asking again as places may have freed up.
+    let deadline = Instant::now() + direct::QUEUE_WAIT;
+    let mut pause = OPEN_RETRY_FIRST;
+    loop {
+        let (stream, incoming) = link.relays.create(None, StreamKind::Ports, None).ok_or_else(|| RpcError::internal("stream id clash"))?;
+        let open = PeerPortsOpenParams { stream_id: stream.id, port };
+        let error = match tokio::time::timeout(OPEN_TIMEOUT, link.call::<PeerPortsOpen>(open)).await {
+            Ok(Ok(_)) => return Ok((stream, incoming, slot)),
+            Ok(Err(error)) => error,
+            Err(_) => RpcError::internal("the machine did not open the connection in time"),
+        };
+        link.relays.remove(stream.id);
+        if error.code != codes::CONFLICT || Instant::now() + pause >= deadline {
+            return Err(error);
         }
-        Err(_) => {
-            link.relays.remove(stream.id);
-            Err(RpcError::internal("the machine did not open the connection in time"))
+        tokio::select! {
+            _ = cancel.cancelled() => return Err(error),
+            _ = tokio::time::sleep(pause) => {}
         }
+        pause = (pause * 2).min(OPEN_RETRY_MAX);
     }
 }
+
+/// How long a connection waits before asking a busy target again, doubling up to [`OPEN_RETRY_MAX`].
+const OPEN_RETRY_FIRST: Duration = Duration::from_millis(50);
+const OPEN_RETRY_MAX: Duration = Duration::from_secs(1);
 
 // ---- the target: peer.ports.open ----
 
@@ -555,15 +568,15 @@ pub fn own_ports(state: &AppState) -> Vec<u16> {
     ports
 }
 
-/// `peer.ports.open`: connect a stream to a loopback port of this machine.
+/// `peer.ports.open`: connect a stream to a loopback port of this machine. Over the stream limits it refuses at once with
+/// `CONFLICT`: waiting here would hold one of the session's few request places, and every other request of the session
+/// (presence, operations, relays) would queue behind it. The caller waits and asks again.
 pub async fn handle_open(state: &AppState, link: &Arc<PeerLink>, params: PeerPortsOpenParams) -> Result<Value, RpcError> {
     validate_port(state, params.port)?;
-    let cancel = link.token();
     let slot = state
         .network
         .relays
-        .acquire_wait(&format!("inbound:{}", link.machine_id), relay::MAX_INBOUND_PER_MEMBER, direct::QUEUE_WAIT, &cancel)
-        .await
+        .acquire_within(&format!("inbound:{}", link.machine_id), relay::MAX_INBOUND_PER_MEMBER)
         .ok_or_else(|| RpcError::new(codes::CONFLICT, "too many forwarded connections on this machine"))?;
     let socket = connect_loopback(params.port).await?;
     let _ = socket.set_nodelay(true);

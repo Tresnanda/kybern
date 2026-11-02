@@ -895,6 +895,12 @@ pub fn effective_scopes(network: &Network, link: &PeerLink) -> Vec<Scope> {
     }
 }
 
+/// How long a request may wait for one of a session's [`MAX_INBOUND_REQUESTS`] places: no longer than its caller waits
+/// for the answer. A stream open is given up after 15 s ([`super::relay`], [`super::ports`]); any other call after 60 s.
+fn queue_deadline(method: &str) -> Duration {
+    if [PeerRelayOpen::NAME, PeerPortsOpen::NAME].contains(&method) { Duration::from_secs(15) } else { Duration::from_secs(60) }
+}
+
 /// Handle one text frame from a peer: an answer to our request, a request, or a notification.
 pub async fn inbound(state: &AppState, link: &Arc<PeerLink>, text: &str) {
     link.touch();
@@ -915,6 +921,7 @@ pub async fn inbound(state: &AppState, link: &Arc<PeerLink>, text: &str) {
     let link = link.clone();
     let busy_link = link.clone();
     let busy_id = id.clone();
+    let method_name = method.clone();
     let inbound = link.inbound.clone();
     let work = async move {
         let result = match scope_for(&method) {
@@ -943,13 +950,22 @@ pub async fn inbound(state: &AppState, link: &Arc<PeerLink>, text: &str) {
             work.await;
         });
     } else if busy_link.queued.fetch_add(1, Ordering::SeqCst) < MAX_QUEUED_REQUESTS {
-        // A burst (a page opening many relayed requests at once) waits its turn instead of failing.
+        // A burst (a page opening many relayed requests at once) waits its turn instead of failing, but only while its
+        // caller still waits for the answer: a stream opened after that would have no reader.
         let queued = busy_link.queued.clone();
+        let deadline = tokio::time::Instant::now() + queue_deadline(&method_name);
         tokio::spawn(async move {
-            let permit = inbound.acquire_owned().await;
+            let permit = tokio::time::timeout_at(deadline, inbound.acquire_owned()).await;
             queued.fetch_sub(1, Ordering::SeqCst);
-            if let Ok(_permit) = permit {
-                work.await;
+            match permit {
+                Ok(Ok(_permit)) => work.await,
+                Ok(Err(_)) => {}
+                Err(_) => {
+                    tracing::debug!(target: SESSION_TARGET, machine = %busy_link.machine_id, method = %method_name, "dropped a request that waited longer than its caller");
+                    if let Some(id) = busy_id {
+                        busy_link.respond(RpcResponse::err(id, RpcError::internal("too many concurrent requests on this session"))).await;
+                    }
+                }
             }
         });
     } else {
@@ -1643,6 +1659,13 @@ mod tests {
         peers.after_resume();
         assert!(peers.due("m") && peers.due("n") && peers.status("m").failures == 0);
         assert!(peers.nudge_out_due("d", Duration::from_secs(30)), "the member that dials this one hears at once");
+    }
+
+    #[test]
+    fn a_queued_request_waits_no_longer_than_its_caller() {
+        assert_eq!(queue_deadline(PeerPortsOpen::NAME), Duration::from_secs(15));
+        assert_eq!(queue_deadline(PeerRelayOpen::NAME), Duration::from_secs(15));
+        assert_eq!(queue_deadline(PeerPresenceMethod::NAME), Duration::from_secs(60));
     }
 
     #[test]
