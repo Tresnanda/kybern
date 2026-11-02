@@ -47,6 +47,9 @@ const WARM_KEEP: Duration = Duration::from_secs(45);
 const WARM_SOCKETS: usize = 4;
 /// A forward keeps sockets ready for this long after its last connection.
 const WARM_WHILE_ACTIVE: Duration = Duration::from_secs(10 * 60);
+/// Connections one forward's listener checks at once (token, `whois`, at most [`HANDSHAKE_TIMEOUT`] each); more are
+/// dropped unanswered.
+const MAX_HANDSHAKES: usize = 32;
 /// How long a connection waits for a place under the stream limits before it is refused.
 pub(super) const QUEUE_WAIT: Duration = Duration::from_secs(10);
 
@@ -160,6 +163,7 @@ pub async fn prepare(state: &AppState, link: &Arc<PeerLink>, request: PeerPortsP
     tokio::spawn(async move {
         let mut idle_since = Instant::now();
         let active = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let handshakes = Arc::new(tokio::sync::Semaphore::new(MAX_HANDSHAKES));
         let idle_limit = state.network.timing.ports_idle;
         let tick = (idle_limit / 4).clamp(Duration::from_millis(50), Duration::from_secs(30));
         loop {
@@ -174,12 +178,17 @@ pub async fn prepare(state: &AppState, link: &Arc<PeerLink>, request: PeerPortsP
                 }
                 accepted = listener.accept() => {
                     let Ok((socket, source)) = accepted else { continue; };
+                    // Anyone on the tailnet can connect before the token is checked: over the cap, a connection is dropped.
+                    let Ok(handshake) = handshakes.clone().try_acquire_owned() else {
+                        tracing::debug!(target: TARGET, %source, "dropped a direct connection: too many handshakes in flight");
+                        continue;
+                    };
                     let _ = socket.set_nodelay(true);
                     idle_since = Instant::now();
                     let (state, serving, node, token_hash, active) = (state.clone(), serving.clone(), node.clone(), token_hash.clone(), active.clone());
                     tokio::spawn(async move {
                         active.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        transfer(&state, &serving, socket, source.ip(), &node, &token_hash, request.port).await;
+                        transfer(&state, &serving, socket, source.ip(), &node, &token_hash, request.port, handshake).await;
                         active.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     });
                 }
@@ -204,7 +213,19 @@ async fn verify_source(state: &AppState, serving: &Serving, source: IpAddr, node
     true
 }
 
-async fn transfer(state: &AppState, serving: &Serving, mut socket: TcpStream, source: IpAddr, node: &str, token_hash: &str, port: u16) {
+/// One connection to a forward's listener. `handshake` is its place among the connections not yet authorized
+/// ([`MAX_HANDSHAKES`]), given back once the token and source are checked.
+#[allow(clippy::too_many_arguments)]
+async fn transfer(
+    state: &AppState,
+    serving: &Serving,
+    mut socket: TcpStream,
+    source: IpAddr,
+    node: &str,
+    token_hash: &str,
+    port: u16,
+    handshake: tokio::sync::OwnedSemaphorePermit,
+) {
     let link = &serving.link;
     let ended = async {
         tokio::select! {
@@ -235,6 +256,7 @@ async fn transfer(state: &AppState, serving: &Serving, mut socket: TcpStream, so
     if !authorized_now {
         return;
     }
+    drop(handshake);
     let mode = if serving.version >= 2 {
         if socket.write_all(&[ACK]).await.is_err() {
             return;

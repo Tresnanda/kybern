@@ -745,3 +745,51 @@ async fn run_full_stream_limit() {
     drop(places);
     dev.abort();
 }
+
+#[test]
+fn a_direct_listener_checks_a_bounded_number_of_connections_at_once() {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .thread_stack_size(crate::RUNTIME_THREAD_STACK)
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(run_handshake_cap());
+}
+
+async fn run_handshake_cap() {
+    use crate::network::ports::direct;
+    use tokio::io::AsyncReadExt;
+    let (a, b) = direct_pair().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let remote_port = listener.local_addr().unwrap().port();
+    let link = a.state.network.peers.link(&b.id()).unwrap();
+    let prepared = link
+        .call::<PeerPortsPrepare>(PeerPortsPrepareParams { forward_id: Uuid::now_v7(), port: remote_port, direct_version: Some(2) })
+        .await
+        .unwrap();
+    let endpoint = prepared.direct.expect("a direct listener on the fake tailnet");
+    let destination = direct::destination(&a.state.network, &b.id(), endpoint.port).await.unwrap();
+    // Connections that never send a token hold every place under the cap (until the 3 s handshake limit).
+    let mut idle = Vec::new();
+    for _ in 0..32 {
+        idle.push(tokio::net::TcpStream::connect(destination).await.unwrap());
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // One more is dropped at once instead of waiting out a handshake.
+    let mut over = tokio::net::TcpStream::connect(destination).await.unwrap();
+    let mut byte = [0u8; 1];
+    let read = tokio::time::timeout(Duration::from_secs(2), over.read(&mut byte)).await.expect("dropped at once, not after a handshake");
+    assert!(matches!(read, Ok(0) | Err(_)), "{read:?}");
+    // Once they are gone, a real caller gets through.
+    drop(idle);
+    let mut ready = None;
+    for _ in 0..40 {
+        ready = direct::connect(&a.state.network, destination, &endpoint).await;
+        if ready.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(ready.is_some(), "an authorized connection after the idle ones closed");
+}
