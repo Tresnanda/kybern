@@ -191,9 +191,10 @@ impl Default for LoginService {
 
 impl LoginService {
     /// Register real login items from now on. Only `kybernd` itself calls this, and not when it plays a
-    /// tailnet from a fixture (the process tests).
+    /// tailnet from a fixture (the process tests), unless [`ANY_BINARY_ENV`] asks for a real check.
     pub fn use_platform(&self) {
-        if std::env::var_os("KYBERN_TAILSCALE_FAKE").is_none() {
+        let fixture = std::env::var_os("KYBERN_TAILSCALE_FAKE").is_some();
+        if !fixture || std::env::var(ANY_BINARY_ENV).as_deref() == Ok("1") {
             self.set_manager(platform());
         }
     }

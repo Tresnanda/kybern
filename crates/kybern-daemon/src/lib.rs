@@ -180,19 +180,35 @@ async fn console_closed() {
     std::future::pending::<()>().await
 }
 
+/// `daemon.log`, opened for appending, for a daemon the Windows login item started.
+fn login_service_log(login_service: bool, root: &std::path::Path) -> Option<std::fs::File> {
+    if !(cfg!(windows) && login_service) {
+        return None;
+    }
+    OpenOptions::new().create(true).append(true).open(root.join("daemon.log")).ok()
+}
+
 pub fn run() -> Result<()> {
     runtime()?.block_on(serve())
 }
 
 async fn serve() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,kybern=debug")))
-        .with_target(true)
-        .init();
-
     let args = Args::parse();
+    let paths = config::Paths::resolve(args.data_dir.clone())?;
+    let filter = || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,kybern=debug"));
+    // Windows' login item runs the daemon under a headless console, where its output goes nowhere:
+    // it logs to `daemon.log` itself, as the app's own launch does. launchd and systemd keep the output.
+    match login_service_log(args.login_service, &paths.root) {
+        Some(file) => tracing_subscriber::fmt()
+            .with_env_filter(filter())
+            .with_target(true)
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(file))
+            .init(),
+        None => tracing_subscriber::fmt().with_env_filter(filter()).with_target(true).init(),
+    }
+
     widen_path();
-    let paths = config::Paths::resolve(args.data_dir)?;
     // Before the state opens: a second daemon would recover the first one's turns.
     if args.login_service && login_service::already_served(&paths.root) {
         tracing::info!(data_dir = %paths.root.display(), "another daemon already serves this data folder; the login item has nothing to start");
@@ -318,6 +334,7 @@ async fn serve() -> Result<()> {
     }
 
     let shutdown_token = state.shutdown.clone();
+    let shutdown_orchestrator = state.orchestrator.clone();
     let shutdown = async move {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => tracing::info!("Ctrl+C received"),
@@ -327,6 +344,8 @@ async fn serve() -> Result<()> {
         // Signal-driven shutdown must also wake maintenance/update workers
         // before we await them and release the endpoint files.
         shutdown_token.cancel();
+        // The same signal reaches the agents; their failures from here on are this stop.
+        shutdown_orchestrator.begin_shutdown();
         tracing::info!("shutting down");
     };
     // The askpass endpoint checks which process holds the connection (`askpass::connection_owned_by`).
