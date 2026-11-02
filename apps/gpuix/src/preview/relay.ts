@@ -78,7 +78,8 @@ export async function openRelay(upstream: string, daemon: string, options?: { ca
     let body: ReturnType<typeof bodyFraming> | null = null
     const queued: Buffer[] = []
     const up = (chunk: Buffer) => { if (!chunk.length || !socket) return; if (connected) socket.write(chunk); else queued.push(chunk) }
-    const refuse = (status: string) => { client.end(`HTTP/1.1 ${status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`) }
+    // Once an upstream response is streaming to the page, an error response would interleave with its bytes: close instead.
+    const refuse = (status: string) => { if (connected) client.destroy(); else client.end(`HTTP/1.1 ${status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`) }
     const open = (upgrade: boolean) => {
       const connection = { host: hostname, port: Number(target.port) || (secure ? 443 : 80) }
       // Wait for certificate + hostname validation before any page bytes leave.
@@ -121,7 +122,11 @@ export async function openRelay(upstream: string, daemon: string, options?: { ca
         if (end < 0) { if (pending.length > 65536) client.destroy(); return }
         let head: string
         try { head = rewriteRelayHead(pending.subarray(0, end + 4).toString('latin1'), target.host, prefix, (server.address() as { port: number }).port, extra, document) }
-        catch (error) { refuse(error instanceof Error ? error.message : '400 Bad Request'); pending = Buffer.alloc(0); return }
+        catch (error) {
+          // A refused request after an earlier one on this connection: that response may still be in flight, so close.
+          if (used) client.destroy(); else refuse(error instanceof Error ? error.message : '400 Bad Request')
+          pending = Buffer.alloc(0); return
+        }
         pending = pending.subarray(end + 4)
         const upgrade = /\r\nupgrade:\s*websocket\r\n/i.test(head)
         if (!socket) open(upgrade && !used)
