@@ -10,7 +10,7 @@ import { activeEnvironment } from '../shell/environment.ts'
 import { recordRecent, recentsKeyForThread } from './recents.ts'
 import { browserAddress, currentAddress } from './address.ts'
 import { webHost } from '../native/webview.ts'
-import { addressPath, forwardedAddress, forwardPort, sourceAddress, type RemoteServer } from './remote.ts'
+import { addressPath, forwardedAddress, forwardPort, localServerOn, sourceAddress, type RemoteServer } from './remote.ts'
 import { fastAddress, fastKey, wantsFast, type FastMode } from './fast.ts'
 import { machineHub, machineRows } from '../machines/index.ts'
 import { shortMachineName } from '../../../../packages/kybern-client/src/forkMachine.ts'
@@ -64,13 +64,8 @@ export interface OpenOptions { proxy?: boolean; retry?: boolean; suffix?: string
 function threadServer(id: string, raw: string, options: OpenOptions): RemoteServer | undefined {
   if (options.machine || options.forwarded || options.ticketRoute || !activeEnvironment().local) return undefined
   const machineId = machineOfThreadId(id)
-  if (!machineId) return undefined
-  let url: URL
-  try { url = new URL(/^\d+$/.test(raw.trim()) ? `http://localhost:${raw.trim()}` : raw.includes('://') ? raw : `http://${raw}`) } catch { return undefined }
-  if (!['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || !['http:', 'https:'].includes(url.protocol)) return undefined
-  const row = machineRows(machineHub()).find(m => m.machineId === machineId)
-  if (!row || row.offline) return undefined
-  return { id: machineId, name: shortMachineName(row.name) || row.name, port: Number(url.port) || (url.protocol === 'https:' ? 443 : 80), path: addressPath(url.toString()), scheme: url.protocol === 'https:' ? 'https' : 'http' }
+  const row = machineId ? machineRows(machineHub()).find(m => m.machineId === machineId) : undefined
+  return row ? localServerOn(raw, { id: row.machineId, name: shortMachineName(row.name) || row.name, offline: row.offline }) : undefined
 }
 export async function openPreview(id: string, raw: string, allowFolder = false, launch = false, replace = false, options: OpenOptions = {}): Promise<boolean | undefined> {
   const earlier = previewState(id), machine = options.machine ?? (replace && !options.ticketRoute ? earlier.entries[earlier.index]?.machine : undefined)
