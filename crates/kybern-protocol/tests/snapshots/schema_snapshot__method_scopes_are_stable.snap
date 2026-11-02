@@ -316,6 +316,10 @@ expression: scopes
   - "orchestration:operate"
 - - github.actions.dispatch
   - "orchestration:operate"
+- - github.starred
+  - "orchestration:read"
+- - github.star
+  - "orchestration:operate"
 - - threads.worktree.inspect
   - "orchestration:read"
 - - threads.worktree.remove

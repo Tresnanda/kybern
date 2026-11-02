@@ -3303,6 +3303,15 @@ export interface ActionsWorkflowResult { dispatchable: boolean; inputs: Workflow
 export type ActionsActionKind = "rerun" | "rerun_failed" | "rerun_job" | "cancel"
 export interface ActionsActionParams { project_id: ProjectId; repo?: string; action: ActionsActionKind; run_id: number; job_id?: number }
 export interface ActionsDispatchParams { project_id: ProjectId; repo?: string; workflow: string; ref: string; inputs?: Record<string, string> }
+/** `github.starred` / `github.star` (ADE-117): Kybern's own repository (`Tresnanda/kybern`) through the daemon's `gh`. */
+export type GithubStarredParams = Record<string, never>
+export interface GithubStarredResult {
+  /** GitHub answered 204. False on 404, and when `gh` is missing or signed out. */
+  starred: boolean
+  /** `gh` is installed and signed in, so `github.star` can star the repository. */
+  can_star: boolean
+}
+export type GithubStarParams = Record<string, never>
 export interface WorktreeInspectParams { thread_id: ThreadId }
 export interface WorktreeInspectResult { path: string; branch: string; exists: boolean; clean: boolean; merged: boolean; ignored_files: number; blockers: string[]; eligible: boolean }
 export interface WorktreeRemoveParams { thread_id: ThreadId; force?: boolean; delete_branch?: boolean }
@@ -4701,6 +4710,8 @@ export interface Methods {
   "github.actions.workflow": [ActionsWorkflowParams, ActionsWorkflowResult];
   "github.actions.action": [ActionsActionParams, Empty];
   "github.actions.dispatch": [ActionsDispatchParams, Empty];
+  "github.starred": [GithubStarredParams, GithubStarredResult];
+  "github.star": [GithubStarParams, Empty];
   "threads.worktree.inspect": [WorktreeInspectParams, WorktreeInspectResult];
   "threads.worktree.remove": [WorktreeRemoveParams, WorktreeInspectResult];
   "network.status": [Empty, NetworkStatus];

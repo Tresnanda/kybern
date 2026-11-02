@@ -1354,6 +1354,15 @@ async fn dispatch_part_15(state: &AppState, ctx: &ConnectionCtx, method: &str, s
         | ActionsWorkflow::NAME
         | ActionsAction::NAME
         | ActionsDispatch::NAME => actions_call(state, "gh", method, params).await,
+        GithubStarred::NAME => {
+            let _: GithubStarredParams = parse(params)?;
+            ok(crate::github::starred_with("gh").await.map_err(bad)?)
+        }
+        GithubStar::NAME => {
+            let _: GithubStarParams = parse(params)?;
+            crate::github::star_with("gh").await.map_err(bad)?;
+            ok(Empty {})
+        }
         WorktreeInspect::NAME => {
             let p: WorktreeInspectParams = parse(params)?;
             ok(state.orchestrator.worktree_inspect(p.thread_id).await.map_err(bad)?)

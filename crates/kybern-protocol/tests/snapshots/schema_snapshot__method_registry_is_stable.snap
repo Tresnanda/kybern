@@ -159,6 +159,8 @@ expression: names
 - github.actions.workflow
 - github.actions.action
 - github.actions.dispatch
+- github.starred
+- github.star
 - threads.worktree.inspect
 - threads.worktree.remove
 - files.search
