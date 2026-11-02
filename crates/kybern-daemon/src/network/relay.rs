@@ -159,6 +159,20 @@ pub struct LinkRelays {
 /// Frames a stream's receiving queue holds: enough for the larger window at the smallest frame cost, twice over.
 const QUEUE_FRAMES: usize = (RELAY_WINDOW_V2 as usize / MIN_FRAME_COST) * 2;
 
+/// What all the large windows of one session's streams add up to before they shrink: a few streams each get the full
+/// [`RELAY_WINDOW_V2`] (a fast route needs it), and many share this, so what a session may have in flight, and the other
+/// machine may have to queue, grows slowly with the stream count instead of by 4 MiB a stream.
+pub(super) const LINK_WINDOW_BUDGET: i64 = 16 * 1024 * 1024;
+
+/// The window of a new stream when `open` streams already run on its session: `largest` (what the other machine reads)
+/// shared out of [`LINK_WINDOW_BUDGET`], never below the original [`WINDOW`].
+pub(super) fn stream_window(largest: i64, open: usize) -> i64 {
+    if largest <= WINDOW {
+        return largest;
+    }
+    (LINK_WINDOW_BUDGET / (open as i64 + 1)).clamp(WINDOW, largest)
+}
+
 impl LinkRelays {
     pub fn new(direction: Direction) -> Self {
         Self {
@@ -181,20 +195,20 @@ impl LinkRelays {
     /// capability the other side needs for a stream this machine serves; `None` for one it opened.
     pub(super) fn create(&self, id: Option<u64>, kind: StreamKind, serves: Option<Scope>) -> Option<(Arc<Stream>, mpsc::Receiver<Chunk>)> {
         let id = id.unwrap_or_else(|| self.next.fetch_add(2, Ordering::Relaxed));
+        let mut streams = self.lock();
+        if streams.contains_key(&id) {
+            return None;
+        }
         let (tx, rx) = mpsc::channel(QUEUE_FRAMES);
         let stream = Arc::new(Stream {
             id,
             kind,
             serves,
             incoming: tx,
-            credit: Credit::new(self.window.load(Ordering::Relaxed)),
+            credit: Credit::new(stream_window(self.window.load(Ordering::Relaxed), streams.len())),
             cancel: CancellationToken::new(),
             activity: Mutex::new(Instant::now()),
         });
-        let mut streams = self.lock();
-        if streams.contains_key(&id) {
-            return None;
-        }
         streams.insert(id, stream.clone());
         Some((stream, rx))
     }
@@ -330,21 +344,28 @@ async fn send_data(link: &PeerLink, stream: &Stream, bytes: &[u8], text: bool) -
 }
 
 /// A data frame of either kind of stream, after its credit: a binary message when the other machine reads them, else a
-/// `peer.relay.data` / `peer.ports.data` notification with base64 data.
+/// `peer.relay.data` / `peer.ports.data` notification with base64 data. Both go on the session's data lane, which waits
+/// for room on a slow route instead of failing ([`super::peers::BulkLane`]); the wait ends with the stream.
 pub(super) async fn send_frame(link: &PeerLink, stream: &Stream, bytes: &[u8], text: bool) -> bool {
     if !stream.credit.take(frame_cost(bytes.len()), &stream.cancel).await {
         return false;
     }
     stream.touch();
-    if link.binary_frames() {
-        return link.send_binary(encode_frame(stream.kind, stream.id, text, bytes)).await;
-    }
-    let params = PeerRelayDataParams { stream_id: stream.id, data: B64.encode(bytes), credit: None, text };
-    let method = match stream.kind {
-        StreamKind::Relay => PeerRelayData::NAME,
-        StreamKind::Ports => kybern_protocol::methods::PeerPortsData::NAME,
+    let send = async {
+        if link.binary_frames() {
+            return link.send_binary(encode_frame(stream.kind, stream.id, text, bytes)).await;
+        }
+        let params = PeerRelayDataParams { stream_id: stream.id, data: B64.encode(bytes), credit: None, text };
+        let method = match stream.kind {
+            StreamKind::Relay => PeerRelayData::NAME,
+            StreamKind::Ports => kybern_protocol::methods::PeerPortsData::NAME,
+        };
+        link.notify_bulk(method, serde_json::to_value(params).unwrap_or(Value::Null)).await
     };
-    link.notify(method, serde_json::to_value(params).unwrap_or(Value::Null)).await
+    tokio::select! {
+        sent = send => sent,
+        _ = stream.cancel.cancelled() => false,
+    }
 }
 
 const FRAME_RELAY: u8 = 0;
@@ -398,9 +419,10 @@ async fn grant(link: &PeerLink, stream: &Stream, bytes: usize) {
     let _ = link.notify(PeerRelayData::NAME, serde_json::to_value(params).unwrap_or(Value::Null)).await;
 }
 
+/// After the stream's data, on the same lane: a close must not overtake bytes still queued.
 async fn send_close(link: &PeerLink, stream_id: u64, reason: Option<&str>) {
     let params = PeerRelayCloseParams { stream_id, reason: reason.map(str::to_string) };
-    let _ = link.notify(PeerRelayClose::NAME, serde_json::to_value(params).unwrap_or(Value::Null)).await;
+    let _ = link.notify_bulk(PeerRelayClose::NAME, serde_json::to_value(params).unwrap_or(Value::Null)).await;
 }
 
 /// `peer.relay.data` and `peer.ports.data`: a frame for a stream of that kind, or credit, or both.
@@ -1316,6 +1338,22 @@ mod tests {
         assert_eq!(small.credit.balance.load(Ordering::SeqCst), WINDOW);
         assert_eq!(large.credit.balance.load(Ordering::SeqCst), RELAY_WINDOW_V2);
         assert!(QUEUE_FRAMES as i64 * MIN_FRAME_COST as i64 >= RELAY_WINDOW_V2, "the queue holds a full window of small frames");
+    }
+
+    #[test]
+    fn many_streams_on_one_session_share_the_large_window_instead_of_each_taking_it() {
+        assert_eq!(stream_window(WINDOW, 100), WINDOW, "an older machine keeps the original window");
+        assert_eq!(stream_window(RELAY_WINDOW_V2, 0), RELAY_WINDOW_V2);
+        assert_eq!(stream_window(RELAY_WINDOW_V2, 3), RELAY_WINDOW_V2, "a few streams each get the whole window");
+        assert_eq!(stream_window(RELAY_WINDOW_V2, 7), LINK_WINDOW_BUDGET / 8);
+        assert_eq!(stream_window(RELAY_WINDOW_V2, 127), WINDOW, "never below the original window");
+        let relays = LinkRelays::new(Direction::Accepted);
+        relays.set_large_window(true);
+        let held: Vec<_> = (0..MAX_INBOUND_PER_MEMBER).map(|_| relays.create(None, StreamKind::Ports, None).unwrap()).collect();
+        let in_flight: i64 = held.iter().map(|(stream, _)| stream.credit.balance.load(Ordering::SeqCst)).sum();
+        // 128 streams at 4 MiB each would be 512 MiB the other machine may have to queue.
+        assert!(in_flight < 96 * 1024 * 1024, "{in_flight} bytes in flight on one session");
+        assert!(held.iter().all(|(stream, _)| stream.credit.balance.load(Ordering::SeqCst) >= WINDOW));
     }
 
     use super::*;

@@ -124,8 +124,12 @@ Measured on a 361-module Vite app (Chrome, 2026-11-03): 16.3 s cold over a 213 m
   `http://localhost:3000` for its API, an OAuth redirect URI or a cookie scoped to the HTTP origin
   sees mixed content or a mismatch. One click on the chip goes back to plain HTTP.
 - Between two current machines, relay and port streams over the session send binary frames and
-  use a 4 MiB window (`relay.frames.v2`); limits queue for up to 10 s before refusing, and the
-  listeners and session sockets set `TCP_NODELAY`.
+  use a window of up to 4 MiB (`relay.frames.v2`); limits queue for up to 10 s before refusing, and
+  the listeners and session sockets set `TCP_NODELAY`. The windows of one session share 16 MiB
+  (`LINK_WINDOW_BUDGET`): a few streams get 4 MiB each, more get less, never under 256 KiB. Stream
+  data and closes wait in the session's own 4 MiB data lane (`peers::BulkLane`) for as long as a
+  slow route needs, and the socket writer sends control frames (requests, answers, credit) first,
+  so a backlog of data never trips the 30 s send limit that ends a session or delays an RPC.
 
 Measure with real browsers: the fixtures kept with the ADE-116 report (`.kybern-artifacts/ade-116/`)
 drive headless Chrome over CDP (`--ignore-certificate-errors-spki-list` pins the same leaf) and

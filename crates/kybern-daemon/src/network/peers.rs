@@ -58,31 +58,109 @@ pub trait FrameSink: Send + Sync {
     /// Queue one JSON frame; `false` once the socket is gone.
     async fn send(&self, frame: Value) -> bool;
 
-    /// Queue one binary frame (relay data, `relay.frames.v2`); `false` once the socket is gone or it carries none.
-    async fn send_binary(&self, _frame: Vec<u8>) -> bool {
-        false
+    /// Queue one frame of stream data (relay and port bytes; binary between machines that list `relay.frames.v2`). It
+    /// waits for room in the session's [`BulkLane`] as long as the route needs and never ends the session for being
+    /// slow; `false` once the socket is gone. A sink without a lane sends JSON through [`FrameSink::send`] and refuses
+    /// binary frames.
+    async fn send_bulk(&self, frame: Outgoing) -> bool {
+        match frame {
+            Outgoing::Text(text) => match serde_json::from_str(&text) {
+                Ok(value) => self.send(value).await,
+                Err(_) => false,
+            },
+            Outgoing::Binary(_) => false,
+        }
     }
 }
 
-/// A frame for the dialer's socket writer.
-pub(super) enum Outgoing {
+/// A frame for a session socket.
+pub enum Outgoing {
     Text(String),
     Binary(Vec<u8>),
 }
 
-struct ChannelSink(mpsc::Sender<Outgoing>);
+impl Outgoing {
+    fn size(&self) -> usize {
+        match self {
+            Outgoing::Text(text) => text.len(),
+            Outgoing::Binary(bytes) => bytes.len(),
+        }
+    }
+}
+
+/// Stream data one session socket queues at most, in bytes, apart from its control frames. A stream waits here for room
+/// (the route is slow, not broken), so no timeout applies, and the writer sends control frames first ([`next_frame`]):
+/// requests, answers and credit grants never queue behind data.
+pub const BULK_BYTES: usize = 4 * 1024 * 1024;
+const BULK_FRAMES: usize = 1024;
+
+/// The data lane of one session socket.
+pub struct BulkLane {
+    sender: mpsc::Sender<BulkFrame>,
+    budget: Arc<tokio::sync::Semaphore>,
+    closed: CancellationToken,
+}
+
+/// A queued data frame. Its share of the lane's budget is held until the writer has sent it.
+pub struct BulkFrame {
+    message: Outgoing,
+    permit: tokio::sync::OwnedSemaphorePermit,
+}
+
+impl BulkFrame {
+    /// The message, and the budget it holds: drop that once the message is on the socket.
+    pub fn into_parts(self) -> (Outgoing, tokio::sync::OwnedSemaphorePermit) {
+        (self.message, self.permit)
+    }
+}
+
+impl BulkLane {
+    /// A lane whose waits end once `closed` fires, and the receiver its writer drains.
+    pub fn new(closed: CancellationToken) -> (Self, mpsc::Receiver<BulkFrame>) {
+        let (sender, receiver) = mpsc::channel(BULK_FRAMES);
+        (Self { sender, budget: Arc::new(tokio::sync::Semaphore::new(BULK_BYTES)), closed }, receiver)
+    }
+
+    /// Queue a frame, waiting for room. `false` once the socket is gone.
+    pub async fn send(&self, message: Outgoing) -> bool {
+        let size = message.size().clamp(1, BULK_BYTES) as u32;
+        let queue = async {
+            let permit = self.budget.clone().acquire_many_owned(size).await.ok()?;
+            self.sender.send(BulkFrame { message, permit }).await.ok()
+        };
+        tokio::select! {
+            _ = self.closed.cancelled() => false,
+            queued = queue => queued.is_some(),
+        }
+    }
+}
+
+/// The next frame for a session socket: a control frame when one waits, else stream data, so a backlog of data on a slow
+/// route never delays a request, an answer or a credit grant. `None` once the control channel is closed.
+pub async fn next_frame<C>(control: &mut mpsc::Receiver<C>, bulk: &mut mpsc::Receiver<BulkFrame>) -> Option<Result<C, BulkFrame>> {
+    tokio::select! {
+        biased;
+        frame = control.recv() => frame.map(Ok),
+        Some(frame) = bulk.recv() => Some(Err(frame)),
+    }
+}
+
+struct ChannelSink {
+    control: mpsc::Sender<Outgoing>,
+    bulk: BulkLane,
+}
 
 #[async_trait]
 impl FrameSink for ChannelSink {
     async fn send(&self, frame: Value) -> bool {
         match serde_json::to_string(&frame) {
-            Ok(text) => self.0.send(Outgoing::Text(text)).await.is_ok(),
+            Ok(text) => self.control.send(Outgoing::Text(text)).await.is_ok(),
             Err(_) => false,
         }
     }
 
-    async fn send_binary(&self, frame: Vec<u8>) -> bool {
-        self.0.send(Outgoing::Binary(frame)).await.is_ok()
+    async fn send_bulk(&self, frame: Outgoing) -> bool {
+        self.bulk.send(frame).await
     }
 }
 
@@ -184,9 +262,18 @@ impl PeerLink {
         self.binary.load(Ordering::Relaxed)
     }
 
-    /// Send a binary frame. `false` when the session is gone.
+    /// Send a binary data frame on the session's data lane. `false` when the session is gone.
     pub async fn send_binary(&self, frame: Vec<u8>) -> bool {
-        self.sink.send_binary(frame).await
+        self.sink.send_bulk(Outgoing::Binary(frame)).await
+    }
+
+    /// Send a data notification (`peer.relay.data` / `peer.ports.data` with base64 data, for a machine that reads no
+    /// binary frames) on the session's data lane. `false` when the session is gone.
+    pub async fn notify_bulk(&self, method: &str, params: Value) -> bool {
+        match serde_json::to_string(&RpcNotification::new(method, params)) {
+            Ok(text) => self.sink.send_bulk(Outgoing::Text(text)).await,
+            Err(_) => false,
+        }
     }
 
     /// Send a notification (no answer expected). `false` when the session is gone.
@@ -1058,33 +1145,47 @@ pub(super) fn run_dialed<S>(
 {
     let (mut sink, mut stream) = socket.split();
     let (out_tx, mut out_rx) = mpsc::channel::<Outgoing>(256);
+    let lane_closed = CancellationToken::new();
+    let (bulk, mut bulk_rx) = BulkLane::new(lane_closed.clone());
     let link = PeerLink::new(
         target.machine_id.clone(),
         Direction::Dialed,
         None,
         established.scopes.clone(),
-        Arc::new(ChannelSink(out_tx.clone())),
+        Arc::new(ChannelSink { control: out_tx, bulk }),
     );
     let timing = state.network.timing.clone();
     let (ping_tx, mut ping_rx) = mpsc::channel::<()>(1);
 
-    // Writer: text frames and pings.
+    // Writer: pings, control frames, then stream data.
     let writer_link = link.clone();
     tokio::spawn(async move {
         loop {
             tokio::select! {
+                biased;
                 _ = writer_link.closed() => break,
-                frame = out_rx.recv() => match frame {
-                    Some(Outgoing::Text(text)) => if sink.send(Message::Text(text.into())).await.is_err() { break },
-                    Some(Outgoing::Binary(bytes)) => if sink.send(Message::Binary(bytes.into())).await.is_err() { break },
-                    None => break,
-                },
                 ping = ping_rx.recv() => match ping {
                     Some(()) => if sink.send(Message::Ping(Vec::new().into())).await.is_err() { break },
                     None => break,
                 },
+                frame = next_frame(&mut out_rx, &mut bulk_rx) => {
+                    let (message, _held) = match frame {
+                        Some(Ok(message)) => (message, None),
+                        Some(Err(data)) => {
+                            let (message, held) = data.into_parts();
+                            (message, Some(held))
+                        }
+                        None => break,
+                    };
+                    let message = match message {
+                        Outgoing::Text(text) => Message::Text(text.into()),
+                        Outgoing::Binary(bytes) => Message::Binary(bytes.into()),
+                    };
+                    if sink.send(message).await.is_err() { break }
+                }
             }
         }
+        lane_closed.cancel();
         let _ = sink.close().await;
         writer_link.close();
     });

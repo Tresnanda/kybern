@@ -617,9 +617,10 @@ async fn grant(link: &PeerLink, stream: &Stream, bytes: usize) {
     let _ = link.notify(PeerPortsData::NAME, serde_json::to_value(params).unwrap_or(Value::Null)).await;
 }
 
+/// After the stream's data, on the same lane: a close must not overtake bytes still queued.
 async fn send_close(link: &PeerLink, stream_id: u64) {
     let params = PeerRelayCloseParams { stream_id, reason: None };
-    let _ = link.notify(PeerPortsClose::NAME, serde_json::to_value(params).unwrap_or(Value::Null)).await;
+    let _ = link.notify_bulk(PeerPortsClose::NAME, serde_json::to_value(params).unwrap_or(Value::Null)).await;
 }
 
 /// Carry bytes between a TCP socket and a stream until either side ends. Reading and writing run apart, so a
