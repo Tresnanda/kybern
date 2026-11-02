@@ -47,29 +47,33 @@ export interface StarPromptDeps {
 }
 
 let shownThisSession = false
+/** Settled for good (dismissed) or for this session (prefs unusable): later sends skip the disk read. */
+let settled = false
 /** Tests: a fresh app session. */
-export function resetStarSession() { shownThisSession = false }
+export function resetStarSession() { shownThisSession = false; settled = false }
 
 function saveDismissal(deps: Pick<StarPromptDeps, 'read' | 'write'>) {
   try {
     deps.read()
     deps.write(DISMISSED_KEY, true)
+    settled = true
   } catch { /* Unwritable prefs: the next session cannot have seen a count either. */ }
 }
 
 /** Count one message sent from a composer, and ask for a star when it is time (see the header). */
 export async function recordComposerSend(deps: StarPromptDeps): Promise<void> {
-  if (shownThisSession || FORCED) return
+  if (shownThisSession || settled || FORCED) return
   if (!deps.onboarded()) return
   let sent: number
   try {
     const prefs = deps.read()
-    if (prefs[DISMISSED_KEY] === true) return
+    if (prefs[DISMISSED_KEY] === true) { settled = true; return }
     const before = typeof prefs[SENT_KEY] === 'number' && Number.isFinite(prefs[SENT_KEY]) ? (prefs[SENT_KEY] as number) : 0
     sent = before + 1
     deps.write(SENT_KEY, sent)
   } catch {
     // Prefs that cannot be read or written could not keep a dismissal either: never ask.
+    settled = true
     return
   }
   if (sent <= SENDS_BEFORE_ASKING) return
