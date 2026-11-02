@@ -125,7 +125,7 @@ fn render_forwards(forwards: &[PortForward]) {
 pub async fn run_ports(client: &Client, cmd: PortsCmd, json: bool) -> Result<()> {
     match cmd {
         PortsCmd::Forward { machine, remote_port, local_port } => {
-            let forward = client.call::<PortsForward>(PortsForwardParams { machine, remote_port, local_port }).await?;
+            let forward = client.call::<PortsForward>(PortsForwardParams { machine, remote_port, local_port, https: false }).await?;
             if json { println!("{}", serde_json::to_string_pretty(&forward)?) } else { render_forwards(&[forward]) }
         }
         PortsCmd::List => {

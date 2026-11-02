@@ -47,6 +47,8 @@ const DISCOVERY_TARGET: &str = "kybern::network::discovery";
 pub const PORT_RANGE: std::ops::RangeInclusive<u16> = DEFAULT_PORT..=DEFAULT_PORT + 6;
 const MAX_CONCURRENT_PROBES: usize = 8;
 const MAX_INBOUND_REQUESTS: usize = 16;
+/// Requests that wait for one of the [`MAX_INBOUND_REQUESTS`] places instead of being refused.
+const MAX_QUEUED_REQUESTS: usize = 256;
 
 // ---- the link ----
 
@@ -92,6 +94,8 @@ pub struct PeerLink {
     closed: CancellationToken,
     last_frame: Mutex<Instant>,
     inbound: Arc<tokio::sync::Semaphore>,
+    /// Requests waiting for an `inbound` place.
+    queued: Arc<std::sync::atomic::AtomicUsize>,
     pub relays: LinkRelays,
 }
 
@@ -115,6 +119,7 @@ impl PeerLink {
             closed: CancellationToken::new(),
             last_frame: Mutex::new(Instant::now()),
             inbound: Arc::new(tokio::sync::Semaphore::new(MAX_INBOUND_REQUESTS)),
+            queued: Arc::default(),
             relays: LinkRelays::new(direction),
         })
     }
@@ -810,13 +815,26 @@ pub async fn inbound(state: &AppState, link: &Arc<PeerLink>, text: &str) {
     };
     if ordered {
         work.await;
-    } else if let Ok(permit) = inbound.try_acquire_owned() {
+    } else if let Ok(permit) = inbound.clone().try_acquire_owned() {
         tokio::spawn(async move {
             let _permit = permit;
             work.await;
         });
-    } else if let Some(id) = busy_id {
-        busy_link.respond(RpcResponse::err(id, RpcError::internal("too many concurrent requests on this session"))).await;
+    } else if busy_link.queued.fetch_add(1, Ordering::SeqCst) < MAX_QUEUED_REQUESTS {
+        // A burst (a page opening many relayed requests at once) waits its turn instead of failing.
+        let queued = busy_link.queued.clone();
+        tokio::spawn(async move {
+            let permit = inbound.acquire_owned().await;
+            queued.fetch_sub(1, Ordering::SeqCst);
+            if let Ok(_permit) = permit {
+                work.await;
+            }
+        });
+    } else {
+        busy_link.queued.fetch_sub(1, Ordering::SeqCst);
+        if let Some(id) = busy_id {
+            busy_link.respond(RpcResponse::err(id, RpcError::internal("too many concurrent requests on this session"))).await;
+        }
     }
 }
 
@@ -896,7 +914,10 @@ pub(super) async fn tcp_connect(network: &Network, addr: SocketAddr) -> std::io:
     {
         socket.bind(SocketAddr::new(source, 0))?;
     }
-    tokio::time::timeout(Duration::from_secs(10), socket.connect(addr)).await.map_err(|_| std::io::ErrorKind::TimedOut)?
+    let stream = tokio::time::timeout(Duration::from_secs(10), socket.connect(addr)).await.map_err(|_| std::io::ErrorKind::TimedOut)??;
+    // Session frames are small and latency-bound (requests, credit grants): Nagle would hold them for an ACK.
+    let _ = stream.set_nodelay(true);
+    Ok(stream)
 }
 
 /// Open the WebSocket of an established session.

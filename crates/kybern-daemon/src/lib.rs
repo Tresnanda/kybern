@@ -349,6 +349,11 @@ async fn serve() -> Result<()> {
         tracing::info!("shutting down");
     };
     // The askpass endpoint checks which process holds the connection (`askpass::connection_owned_by`).
+    // TCP_NODELAY: previews, relayed pages and session frames are small, latency-bound writes.
+    use axum::serve::ListenerExt as _;
+    let listener = listener.tap_io(|socket| {
+        let _ = socket.set_nodelay(true);
+    });
     axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(shutdown).await?;
     queue_worker.abort();
     notes_worker.abort();

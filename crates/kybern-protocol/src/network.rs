@@ -36,6 +36,13 @@ pub mod features {
     pub const CLIPBOARD_V1: &str = "clipboard.v1";
     pub const PORTS_DIRECT_V1: &str = "ports.direct.v1";
     pub const PORTS_V1: &str = "ports.v1";
+    /// The direct port transport's second handshake: an authorized socket waits for a mode byte, so a forward keeps
+    /// sockets ready before the browser asks (pre-warmed), and one socket can carry an HTTP/2 connection that the
+    /// target spreads over pooled HTTP/1.1 connections to its dev server (the Fast mode of a preview).
+    pub const PORTS_DIRECT_V2: &str = "ports.direct.v2";
+    /// Relay and port stream data travels as binary WebSocket frames, without base64 or JSON, and a stream's
+    /// credit window is [`crate::RELAY_WINDOW_V2`] instead of 256 KiB.
+    pub const RELAY_FRAMES_V2: &str = "relay.frames.v2";
     pub const SETTINGS_FANOUT_V1: &str = "settings.fanout.v1";
     pub const NOTES_FEDERATED_V1: &str = "notes.federated.v1";
     pub const SECRETS_STORE_V1: &str = "secrets.store.v1";
@@ -60,7 +67,7 @@ pub mod features {
     pub const COMPUTER_USE_V1: &str = "computer.use.v1";
 
     /// Every feature the network design names, in design order.
-    pub const ALL: [&str; 21] = [
+    pub const ALL: [&str; 23] = [
         NETWORK_V1,
         SPACES_SYNC_V1,
         RELAY_V1,
@@ -72,6 +79,8 @@ pub mod features {
         CLIPBOARD_V1,
         PORTS_V1,
         PORTS_DIRECT_V1,
+        PORTS_DIRECT_V2,
+        RELAY_FRAMES_V2,
         SETTINGS_FANOUT_V1,
         NOTES_FEDERATED_V1,
         SECRETS_STORE_V1,

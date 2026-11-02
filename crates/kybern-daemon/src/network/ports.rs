@@ -12,6 +12,9 @@
 //! * A preview of a dev server on another machine (`kybern_preview_open { machine }`) starts a forward
 //!   and shows `http://localhost:<local>`: the page, its assets and its hot-reload WebSocket are plain
 //!   TCP to the browser, so nothing in the page changes.
+//! * Speed (ADE-116): a forward to a `ports.direct.v2` machine keeps authorized sockets ready, so a browser connection
+//!   starts without a round trip ([`direct::Route`]), and can also serve `https://localhost:<https_port>` over HTTP/2
+//!   for Kybern's web views ([`fast`]), which multiplexes every request of a page over one connection to the target.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -31,10 +34,12 @@ use uuid::Uuid;
 
 use super::Network;
 use super::peers::PeerLink;
-use super::relay::{Chunk, Slot, Stream, StreamKind, frame_cost};
+use super::relay::{self, Chunk, Slot, Stream, StreamKind, frame_cost};
 use crate::state::AppState;
 
 pub mod direct;
+pub mod fast;
+pub mod tls;
 
 const TARGET: &str = "kybern::network::ports";
 const OPEN_TIMEOUT: Duration = Duration::from_secs(15);
@@ -57,12 +62,19 @@ struct Forward {
     created_at: chrono::DateTime<chrono::Utc>,
     connections: AtomicU32,
     cancel: CancellationToken,
-    direct: Option<(SocketAddr, PeerPortsDirect)>,
+    route: Option<Arc<direct::Route>>,
     prepared: bool,
+    rtt_ms: Option<u32>,
+    /// The HTTPS (HTTP/2) listener, once asked for, and the certificate it presents.
+    https: std::sync::Mutex<Option<(u16, Arc<tls::PreviewCert>)>>,
+    /// Starting the HTTPS listener happens once.
+    https_start: tokio::sync::Mutex<()>,
+    tunnel: fast::Tunnel,
 }
 
 impl Forward {
     fn view(&self) -> PortForward {
+        let https = self.https.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
         PortForward {
             id: self.id,
             machine_id: self.machine_id.clone(),
@@ -71,6 +83,11 @@ impl Forward {
             local_port: self.local_port,
             connections: self.connections.load(Ordering::Relaxed),
             created_at: self.created_at,
+            rtt_ms: self.rtt_ms,
+            https_available: self.route.as_ref().is_some_and(|route| route.ready_sockets()),
+            https_port: https.as_ref().map(|(port, _)| *port),
+            https_certificate: https.as_ref().map(|(_, cert)| cert.pem.clone()),
+            https_certificate_sha256: https.as_ref().map(|(_, cert)| cert.sha256.clone()),
         }
     }
 }
@@ -80,9 +97,21 @@ impl Forward {
 pub struct Forwards {
     list: std::sync::Mutex<Vec<Arc<Forward>>>,
     pub direct: direct::Listeners,
+    certs: std::sync::OnceLock<tls::CertStore>,
 }
 
 impl Forwards {
+    pub fn new(data_dir: &std::path::Path) -> Self {
+        let forwards = Self::default();
+        let _ = forwards.certs.set(tls::CertStore::new(data_dir.join("network").join("preview-tls")));
+        forwards
+    }
+
+    /// The certificate of the HTTPS (Fast) listeners, created on first use.
+    pub fn certificate(&self) -> anyhow::Result<Arc<tls::PreviewCert>> {
+        self.certs.get().ok_or_else(|| anyhow::anyhow!("no data directory for the preview certificate"))?.get()
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Arc<Forward>>> {
         self.list.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -140,7 +169,7 @@ pub fn stop(state: &AppState, id: Uuid) -> Result<PortsListResult, RpcError> {
 pub async fn forward(state: &AppState, params: PortsForwardParams) -> Result<PortForward, RpcError> {
     let hub = state.orchestrator.remote_hub().ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, "the machine network is not available"))?;
     let target = hub.resolve(&params.machine).map_err(|message| RpcError::new(codes::NOT_FOUND, message))?;
-    forward_to(&state.network, &state.shutdown, &target.id, &target.name, params.remote_port, params.local_port).await
+    forward_to(&state.network, &state.shutdown, &target.id, &target.name, params.remote_port, params.local_port, params.https).await
 }
 
 /// [`forward`] for a machine already resolved; the agent's preview tool comes through here too.
@@ -151,13 +180,25 @@ pub async fn forward_to(
     machine_name: &str,
     remote_port: u16,
     local_port: Option<u16>,
+    https: bool,
 ) -> Result<PortForward, RpcError> {
     if remote_port == 0 {
         return Err(RpcError::invalid_params("Name a port between 1 and 65535."));
     }
-    if let Some(existing) = network.ports.lock().iter().find(|forward| {
-        forward.machine_id == machine_id && forward.remote_port == remote_port && local_port.is_none_or(|port| port == forward.local_port)
-    }) {
+    let existing = network
+        .ports
+        .lock()
+        .iter()
+        .find(|forward| {
+            forward.machine_id == machine_id
+                && forward.remote_port == remote_port
+                && local_port.is_none_or(|port| port == forward.local_port)
+        })
+        .cloned();
+    if let Some(existing) = existing {
+        if https {
+            start_https(network, &existing).await?;
+        }
         return Ok(existing.view());
     }
     if network.ports.lock().len() >= MAX_PORT_FORWARDS {
@@ -168,18 +209,24 @@ pub async fn forward_to(
         .link(machine_id)
         .ok_or_else(|| RpcError::new(codes::NOT_AVAILABLE, format!("{machine_name} is offline, so its ports cannot be forwarded.")))?;
     let id = Uuid::now_v7();
-    let capable = network.peers.status(machine_id).presence.is_none_or(|p| p.features.iter().any(|f| f == features::PORTS_DIRECT_V1));
-    let (prepared, direct) = if capable {
-        match link.call::<PeerPortsPrepare>(PeerPortsPrepareParams { forward_id: id, port: remote_port }).await {
+    let presence = network.peers.status(machine_id).presence;
+    let capable = presence.as_ref().is_none_or(|p| p.features.iter().any(|f| f == features::PORTS_DIRECT_V1));
+    let asked = Instant::now();
+    let (prepared, route) = if capable {
+        // Version 2 is asked for every time: a machine that does not know it ignores the field and answers version 1.
+        let prepare = PeerPortsPrepareParams { forward_id: id, port: remote_port, direct_version: Some(2) };
+        match link.call::<PeerPortsPrepare>(prepare).await {
             Ok(result) => {
-                let endpoint = match result.direct {
-                    Some(endpoint) => direct::destination(network, machine_id, endpoint.port).await.map(|addr| (addr, endpoint)),
+                let route = match result.direct {
+                    Some(endpoint) => direct::destination(network, machine_id, endpoint.port)
+                        .await
+                        .map(|addr| Arc::new(direct::Route::new(addr, endpoint))),
                     None => None,
                 };
-                if endpoint.is_none() {
+                if route.is_none() {
                     let _ = link.notify(PeerPortsRelease::NAME, json!({"forward_id": id})).await;
                 }
-                (true, endpoint)
+                (true, route)
             }
             Err(error) if error.code == codes::METHOD_NOT_FOUND => (false, None),
             Err(error) => return Err(error),
@@ -187,6 +234,14 @@ pub async fn forward_to(
     } else {
         (false, None)
     };
+    // The route's round trip: a ready socket's TCP connect (which also leaves the first browser connection a socket
+    // to use), else the authorizing call over the session.
+    let mut rtt = asked.elapsed();
+    if let Some(route) = &route
+        && let Some(connect) = route.warm_one(network).await
+    {
+        rtt = connect;
+    }
     let listener = match bind_local(remote_port, local_port).await {
         Ok(listener) => listener,
         Err(error) => {
@@ -204,8 +259,12 @@ pub async fn forward_to(
         remote_port,
         local_port: bound,
         created_at: chrono::Utc::now(),
-        direct,
+        route,
         prepared,
+        rtt_ms: Some(rtt.as_millis().min(u32::MAX as u128) as u32),
+        https: std::sync::Mutex::new(None),
+        https_start: tokio::sync::Mutex::new(()),
+        tunnel: fast::Tunnel::default(),
         connections: AtomicU32::new(0),
         cancel: CancellationToken::new(),
     });
@@ -225,9 +284,37 @@ pub async fn forward_to(
         return Err(RpcError::new(codes::CONFLICT, format!("{MAX_PORT_FORWARDS} ports are forwarded already. Stop one first.")));
     }
     tokio::spawn(accept_loop(network.clone(), shutdown.clone(), forward.clone(), listener));
+    if let Some(route) = forward.route.clone() {
+        tokio::spawn(route.keep_warm(network.clone(), forward.cancel.clone()));
+    }
+    if https && let Err(error) = start_https(network, &forward).await {
+        tracing::info!(target: TARGET, machine = machine_id, error = %error.message, "the forward has no HTTPS listener");
+    }
     announce(network);
-    tracing::info!(target: TARGET, machine = machine_id, remote_port, local_port = bound, transport = if forward.direct.is_some() { "tcp" } else { "websocket" }, "forwarding a port");
+    tracing::info!(
+        target: TARGET,
+        machine = machine_id,
+        remote_port,
+        local_port = bound,
+        rtt_ms = forward.rtt_ms,
+        transport = match &forward.route { Some(route) if route.ready_sockets() => "tcp-ready", Some(_) => "tcp", None => "websocket" },
+        "forwarding a port"
+    );
     Ok(forward.view())
+}
+
+/// Open the HTTPS (HTTP/2) listener of a forward, once.
+async fn start_https(network: &Arc<Network>, forward: &Arc<Forward>) -> Result<(), RpcError> {
+    let _starting = forward.https_start.lock().await;
+    if forward.https.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_some() {
+        return Ok(());
+    }
+    let port = fast::start(network, forward).await?;
+    let cert = network.ports.certificate().map_err(|error| RpcError::internal(format!("{error:#}")))?;
+    *forward.https.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((port, cert));
+    announce(network);
+    tracing::info!(target: TARGET, machine = %forward.machine_id, remote_port = forward.remote_port, https_port = port, "serving a forward over HTTP/2");
+    Ok(())
 }
 
 /// Start at the remote port, then try each higher port. An explicitly chosen port is exact.
@@ -336,17 +423,20 @@ impl Drop for Counted {
 
 async fn connection(network: Arc<Network>, forward: Arc<Forward>, mut socket: TcpStream) {
     let _count = Counted::new(&forward);
+    let _ = socket.set_nodelay(true);
     let Some(link) = network.peers.link(&forward.machine_id) else { return };
-    if let Some((address, endpoint)) = &forward.direct {
-        let Some(_slot) = network.relays.acquire(&format!("ports:{}", link.machine_id)) else {
+    if let Some(route) = &forward.route {
+        // Over the limit, the browser's connection waits for a place rather than being closed.
+        let key = format!("ports:{}", link.machine_id);
+        let Some(_slot) = network.relays.acquire_wait(&key, relay::MAX_STREAMS_PER_CLIENT, direct::QUEUE_WAIT, &forward.cancel).await
+        else {
             return;
         };
         let remote = tokio::select! {
             _ = forward.cancel.cancelled() => return,
-            remote = direct::connect(&network, *address, endpoint) => remote,
+            remote = route.open(&network, direct::MODE_RAW) => remote,
         };
         if let Some(mut remote) = remote {
-            let _ = socket.set_nodelay(true);
             tokio::select! {
                 _ = forward.cancel.cancelled() => {},
                 _ = link.closed() => {},
@@ -367,9 +457,11 @@ async fn connection(network: Arc<Network>, forward: Arc<Forward>, mut socket: Tc
 
 /// Open a stream to a port of the machine on the other end of `link`.
 async fn open_stream(link: &Arc<PeerLink>, network: &Network, port: u16) -> Result<(Arc<Stream>, mpsc::Receiver<Chunk>, Slot), RpcError> {
+    let cancel = link.token();
     let slot = network
         .relays
-        .acquire(&format!("ports:{}", link.machine_id))
+        .acquire_wait(&format!("ports:{}", link.machine_id), relay::MAX_STREAMS_PER_CLIENT, direct::QUEUE_WAIT, &cancel)
+        .await
         .ok_or_else(|| RpcError::new(codes::CONFLICT, "too many forwarded connections"))?;
     let (stream, incoming) = link.relays.create(None, StreamKind::Ports, None).ok_or_else(|| RpcError::internal("stream id clash"))?;
     let open = PeerPortsOpenParams { stream_id: stream.id, port };
@@ -407,12 +499,15 @@ pub fn own_ports(state: &AppState) -> Vec<u16> {
 /// `peer.ports.open`: connect a stream to a loopback port of this machine.
 pub async fn handle_open(state: &AppState, link: &Arc<PeerLink>, params: PeerPortsOpenParams) -> Result<Value, RpcError> {
     validate_port(state, params.port)?;
+    let cancel = link.token();
     let slot = state
         .network
         .relays
-        .acquire(&format!("inbound:{}", link.machine_id))
+        .acquire_wait(&format!("inbound:{}", link.machine_id), relay::MAX_STREAMS_PER_CLIENT, direct::QUEUE_WAIT, &cancel)
+        .await
         .ok_or_else(|| RpcError::new(codes::CONFLICT, "too many forwarded connections on this machine"))?;
     let socket = connect_loopback(params.port).await?;
+    let _ = socket.set_nodelay(true);
     let (stream, incoming) = link
         .relays
         .create(Some(params.stream_id), StreamKind::Ports, Some(Scope::MachinePorts))
@@ -610,8 +705,12 @@ mod tests {
             remote_port: 5173,
             local_port: 40000,
             created_at: chrono::Utc::now(),
-            direct: None,
+            route: None,
             prepared: false,
+            rtt_ms: None,
+            https: std::sync::Mutex::new(None),
+            https_start: tokio::sync::Mutex::new(()),
+            tunnel: fast::Tunnel::default(),
             connections: AtomicU32::new(0),
             cancel: CancellationToken::new(),
         };

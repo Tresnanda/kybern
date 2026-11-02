@@ -60,6 +60,8 @@ pub const MAX_STREAMS_PER_DAEMON: usize = 256;
 /// Request bodies and response bodies are cut into pieces of this size.
 const CHUNK: usize = 16 * 1024;
 const OPEN_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a request waits for a place under the stream limits before it is refused with 429.
+const QUEUE_WAIT: Duration = Duration::from_secs(10);
 pub const RELAY_AUTH_HEADER: &str = "x-kybern-relay-auth";
 
 // ---- streams ----
@@ -231,25 +233,31 @@ impl Default for LinkRelays {
 pub struct RelayHub {
     total: Arc<AtomicUsize>,
     per_client: Arc<Mutex<HashMap<String, usize>>>,
+    /// Woken whenever a place frees up, for [`RelayHub::acquire_wait`].
+    freed: Arc<Notify>,
 }
 
 /// Holds one stream's place under the limits until dropped.
 pub struct Slot {
     total: Arc<AtomicUsize>,
     per_client: Arc<Mutex<HashMap<String, usize>>>,
+    freed: Arc<Notify>,
     client: String,
 }
 
 impl Drop for Slot {
     fn drop(&mut self) {
         self.total.fetch_sub(1, Ordering::SeqCst);
-        let mut clients = self.per_client.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(count) = clients.get_mut(&self.client) {
-            *count -= 1;
-            if *count == 0 {
-                clients.remove(&self.client);
+        {
+            let mut clients = self.per_client.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(count) = clients.get_mut(&self.client) {
+                *count -= 1;
+                if *count == 0 {
+                    clients.remove(&self.client);
+                }
             }
         }
+        self.freed.notify_waiters();
     }
 }
 
@@ -267,7 +275,26 @@ impl RelayHub {
         }
         self.total.fetch_add(1, Ordering::SeqCst);
         *clients.entry(client.to_string()).or_default() += 1;
-        Some(Slot { total: self.total.clone(), per_client: self.per_client.clone(), client: client.to_string() })
+        Some(Slot { total: self.total.clone(), per_client: self.per_client.clone(), freed: self.freed.clone(), client: client.to_string() })
+    }
+
+    /// [`RelayHub::acquire_within`], waiting up to `wait` for a place to free up instead of refusing at once: a browser
+    /// that opens a burst of connections sees them queue, not fail. `None` after the wait or once `cancel` fires.
+    pub async fn acquire_wait(&self, client: &str, limit: usize, wait: Duration, cancel: &CancellationToken) -> Option<Slot> {
+        let deadline = tokio::time::Instant::now() + wait;
+        loop {
+            let freed = self.freed.notified();
+            tokio::pin!(freed);
+            freed.as_mut().enable();
+            if let Some(slot) = self.acquire_within(client, limit) {
+                return Some(slot);
+            }
+            tokio::select! {
+                _ = freed => {}
+                _ = cancel.cancelled() => return None,
+                _ = tokio::time::sleep_until(deadline) => return self.acquire_within(client, limit),
+            }
+        }
     }
 
     pub fn open_streams(&self) -> usize {
@@ -597,7 +624,8 @@ async fn open_ws(
     path: String,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let Some(slot) = state.network.relays.acquire_within(limits.client, limits.limit) else {
+    // A burst waits for a place (a page opens many connections at once); only a long wait is refused.
+    let Some(slot) = state.network.relays.acquire_wait(limits.client, limits.limit, QUEUE_WAIT, &CancellationToken::new()).await else {
         return refuse(StatusCode::TOO_MANY_REQUESTS, "too many relayed connections");
     };
     let Some((stream, incoming)) = link.relays.create(None, StreamKind::Relay, None) else {
@@ -723,7 +751,8 @@ async fn forward_http(
     target_path: String,
     body: Body,
 ) -> Response {
-    let Some(slot) = state.network.relays.acquire_within(limits.client, limits.limit) else {
+    // A burst waits for a place (a page opens many connections at once); only a long wait is refused.
+    let Some(slot) = state.network.relays.acquire_wait(limits.client, limits.limit, QUEUE_WAIT, &CancellationToken::new()).await else {
         return refuse(StatusCode::TOO_MANY_REQUESTS, "too many relayed connections");
     };
     let Some((stream, mut incoming)) = link.relays.create(None, StreamKind::Relay, None) else {

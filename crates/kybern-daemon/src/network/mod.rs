@@ -297,7 +297,7 @@ impl Network {
             relays: Default::default(),
             pages: Default::default(),
             files: Default::default(),
-            ports: Default::default(),
+            ports: ports::Forwards::new(data_dir),
             clipboard: Default::default(),
             provisions: Default::default(),
             listen: Default::default(),
