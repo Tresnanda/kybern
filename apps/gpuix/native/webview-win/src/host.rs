@@ -1419,7 +1419,8 @@ impl Doc {
         }));
         unsafe { webview.add_FrameNavigationStarting(&guard_frames, &mut token)? };
         // A Fast preview (`https://localhost`) presents Kybern's per-install certificate, which no trust store knows:
-        // allow exactly that certificate for the document's own loopback origin; every other error keeps failing.
+        // allow exactly that certificate for the document's own loopback origin; every other error keeps failing. WebView2 remembers an
+        // `ALWAYS_ALLOW` per host and certificate (not port), in this document's own InPrivate profile only.
         if !self.trusted.is_empty()
             && let Ok(webview14) = webview.cast::<ICoreWebView2_14>()
         {

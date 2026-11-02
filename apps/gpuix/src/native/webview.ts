@@ -144,7 +144,9 @@ export const webHost = {
     return generation
   },
   /** `trust`: the one certificate a Fast preview's `https://localhost` origin presents (ADE-116). The host accepts exactly it,
-   *  for that loopback origin only (macOS by SHA-256 of the DER, Windows and Linux by its PEM); every other TLS error fails. */
+   *  (macOS by SHA-256 of the DER for its exact origin; Windows by PEM for its exact origin, remembered per host in the
+   *  document's own InPrivate profile; Linux by PEM for its host, for every web view of the process: WPE has no narrower exception);
+   *  every other TLS error fails. */
   create(id: string, url: string, kind: 'file' | 'server' | 'visual', trust?: { sha256: string; pem: string }) {
     const generation = ++nextGeneration
     if (!SUPPORT.available) return generation

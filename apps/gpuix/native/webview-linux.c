@@ -884,6 +884,20 @@ static gboolean bool_member(JSCValue *cmd, const char *name) {
   return result;
 }
 
+// The host a Fast preview's certificate is pinned for: its one allowed origin, `https://localhost:<port>` or
+// `https://127.0.0.1:<port>`. NULL for anything else, which then gets no exception at all.
+static char *pinned_loopback_host(char **origins) {
+  if (!origins || !origins[0] || origins[1]) return NULL;
+  GUri *uri = g_uri_parse(origins[0], G_URI_FLAGS_NONE, NULL);
+  if (!uri) return NULL;
+  const char *scheme = g_uri_get_scheme(uri), *name = g_uri_get_host(uri);
+  char *pinned = NULL;
+  if (scheme && !g_ascii_strcasecmp(scheme, "https") && name && (!g_ascii_strcasecmp(name, "localhost") || !strcmp(name, "127.0.0.1")))
+    pinned = g_ascii_strdown(name, -1);
+  g_uri_unref(uri);
+  return pinned;
+}
+
 static void create_host(JSCValue *cmd, const char *id) {
   char *category = string_member(cmd, "category");
   guint previews = 0;
@@ -911,10 +925,15 @@ static void create_host(JSCValue *cmd, const char *id) {
   g_ptr_array_add(origins, NULL);
   host->allowed_origins = (char **)g_ptr_array_free(origins, FALSE);
   // A Fast preview (`https://localhost`, ADE-116) presents Kybern's per-install certificate, which no trust store knows.
-  // The session accepts exactly that certificate for the loopback hosts; every other TLS error still fails the load.
-  if (jsc_value_object_has_property(cmd, "trustedCertificatePems")) {
+  // Only a preview whose one origin is HTTPS on a loopback host pins it, and only for that host name; every other TLS error
+  // still fails the load. WPE accepts a certificate per host name for the whole network process, not per port, session
+  // or view (a separate ephemeral session was tried and still accepted it in another preview), so once pinned, every
+  // document accepts exactly this certificate on that host until the app restarts. Only Kybern's own Fast forwards hold
+  // its private key (in the data folder), so what that exposes is other Kybern forwards on the same machine.
+  if (!g_strcmp0(category, "preview") && jsc_value_object_has_property(cmd, "trustedCertificatePems")) {
+    char *pinned_host = pinned_loopback_host(host->allowed_origins);
     JSCValue *list = jsc_value_object_get_property(cmd, "trustedCertificatePems");
-    if (jsc_value_is_array(list)) {
+    if (pinned_host && jsc_value_is_array(list)) {
       JSCValue *length = jsc_value_object_get_property(list, "length");
       int n = jsc_value_to_int32(length); g_object_unref(length);
       for (int i = 0; i < n && i < 8; i++) {
@@ -924,8 +943,7 @@ static void create_host(JSCValue *cmd, const char *id) {
           GError *error = NULL;
           GTlsCertificate *certificate = g_tls_certificate_new_from_pem(pem, -1, &error);
           if (certificate) {
-            webkit_network_session_allow_tls_certificate_for_host(session, certificate, "localhost");
-            webkit_network_session_allow_tls_certificate_for_host(session, certificate, "127.0.0.1");
+            webkit_network_session_allow_tls_certificate_for_host(session, certificate, pinned_host);
             g_object_unref(certificate);
           } else g_clear_error(&error);
           g_free(pem);
@@ -934,6 +952,7 @@ static void create_host(JSCValue *cmd, const char *id) {
       }
     }
     g_object_unref(list);
+    g_free(pinned_host);
   }
   char *escaped = g_uri_escape_string(id, G_URI_RESERVED_CHARS_ALLOWED_IN_PATH, FALSE);
   host->wrapper_url = g_strconcat("tauri://localhost/embedded/", escaped, NULL);

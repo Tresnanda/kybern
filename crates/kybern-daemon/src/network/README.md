@@ -115,11 +115,27 @@ Measured on a 361-module Vite app (Chrome, 2026-11-03): 16.3 s cold over a 213 m
   strong `ETag` becomes weak). Compressing responses that mix secrets with reflected input is what
   BREACH exploits; the risk is low here, since only the user's own dev server is served this way,
   inside WireGuard, to a web view on the user's machine. WebSocket upgrades (hot reload) use HTTP/1.1 on the same origin, each on a raw ready socket.
-  Kybern's web views accept exactly that certificate, for that loopback origin only: WKWebView by
-  the leaf's SHA-256 in its server-trust challenge (`native/webview.m`), WebView2 by PEM in
-  `ServerCertificateErrorDetected` (`webview-win/src/policy.rs`), WPE through
-  `webkit_network_session_allow_tls_certificate_for_host` (`webview-linux.c`). It is never added
-  to a system trust store, so any other browser refuses it.
+  Kybern's web views accept exactly that certificate and no other. Which origins and documents
+  accept it depends on the platform:
+  - macOS: WKWebView checks the leaf's SHA-256 in each server-trust challenge against the
+    preview's own origin (scheme, host and port) (`native/webview.m`).
+  - Windows: WebView2 checks the PEM and the exact origin in `ServerCertificateErrorDetected`
+    (`webview-win/src/policy.rs`). `ALWAYS_ALLOW` is the only way to accept it, and WebView2 then
+    remembers host and certificate, not the port. That memory lives in the document's own InPrivate
+    profile, so it can't reach other documents.
+  - Linux: WPE accepts a certificate for a host name, not a port
+    (`webkit_network_session_allow_tls_certificate_for_host`, `webview-linux.c`). Only a pinned
+    Fast preview adds it, for its own origin's host only (`localhost` or `127.0.0.1`). After that,
+    every web view of the app accepts that certificate on that host, on any port, until the app
+    restarts. That includes other previews, visuals and the renderer. A separate ephemeral network
+    session per preview does not change this, because the exception lives in the shared WPE
+    network process (the `webview` on-screen check showed it). Making it exact would need a WPE
+    patch.
+
+  On Windows the preview's own page, and on Linux any document, could also reach another loopback
+  port that presents the same certificate. Only Kybern's own Fast forwards hold its private key,
+  which is kept in the data folder, so what that exposes is other Kybern forwards on the same
+  machine. The certificate is never added to a system trust store, so any other browser refuses it.
 - The desktop turns Fast mode on when the forward's measured round trip (`rtt_ms`) is above 40 ms,
   and remembers a choice made with the **Fast** chip in the address bar or **Fast loading
   (HTTP/2)** in the page menu (`apps/gpuix/src/preview/fast.ts`).
