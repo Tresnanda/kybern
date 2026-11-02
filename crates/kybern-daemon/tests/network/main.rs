@@ -414,7 +414,8 @@ async fn two_started_daemons_of_one_user_join_and_the_cli_lists_checks_and_remov
         assert!(forwarded.local_port > port, "the server occupies the same local port");
         let page = reqwest::get(format!("http://127.0.0.1:{}/", forwarded.local_port)).await.unwrap().text().await.unwrap();
         assert_eq!(page, "process forward");
-        a.wait_for_log("transport=\"tcp\"").await;
+        // Both daemons speak ports.direct.v2: the forward keeps ready sockets.
+        a.wait_for_log("transport=\"tcp-ready\"").await;
         let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/hmr", forwarded.local_port)).await.unwrap();
         ws.send(Message::Text("update".into())).await.unwrap();
         assert_eq!(ws.next().await.unwrap().unwrap(), Message::Text("update".into()));
