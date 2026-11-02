@@ -817,6 +817,13 @@ async fn run_machine(state: AppState, socket: WebSocket, principal: Principal) {
                 if matches!(notice, Ok(id) if id == principal.token_id) { break; }
             }
             _ = beat.tick() => {
+                // A machine that was removed is told so on this socket, which then closes by itself: the removal's own
+                // push may not have reached it, and no member opens another session with it.
+                let removed = !state.network.membership().is_some_and(|membership| membership.is_member(&link.machine_id));
+                if removed || link.saying_farewell() {
+                    state.network.say_farewell(link.clone());
+                    continue;
+                }
                 // Three missed pings, or a grant, membership or policy that no longer allows the session.
                 if link.idle_for() > timing.dead_after || !principal_is_active(&state, &principal) {
                     tracing::info!(target: "kybern::network::session", machine = %link.machine_id, "closing a session that went quiet or lost its grant");

@@ -46,6 +46,8 @@ const DISCOVERY_TARGET: &str = "kybern::network::discovery";
 /// The ports a peer's network listener may hold (§3.1): the default and the next six.
 pub const PORT_RANGE: std::ops::RangeInclusive<u16> = DEFAULT_PORT..=DEFAULT_PORT + 6;
 const MAX_CONCURRENT_PROBES: usize = 8;
+/// How long the session with a removed machine stays open for it to take the operations that removed it.
+const FAREWELL_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_INBOUND_REQUESTS: usize = 16;
 /// Requests that wait for one of the [`MAX_INBOUND_REQUESTS`] places instead of being refused.
 const MAX_QUEUED_REQUESTS: usize = 256;
@@ -191,6 +193,8 @@ pub struct PeerLink {
     queued: Arc<std::sync::atomic::AtomicUsize>,
     /// The other machine reads binary relay frames (it listed `relay.frames.v2`).
     binary: std::sync::atomic::AtomicBool,
+    /// The machine is no longer a member and is being told so before the link closes ([`Network::say_farewell`]).
+    farewell: std::sync::atomic::AtomicBool,
     pub relays: LinkRelays,
 }
 
@@ -216,6 +220,7 @@ impl PeerLink {
             inbound: Arc::new(tokio::sync::Semaphore::new(MAX_INBOUND_REQUESTS)),
             queued: Arc::default(),
             binary: std::sync::atomic::AtomicBool::new(false),
+            farewell: std::sync::atomic::AtomicBool::new(false),
             relays: LinkRelays::new(direction),
         })
     }
@@ -311,6 +316,11 @@ impl PeerLink {
 
     pub fn is_closed(&self) -> bool {
         self.closed.is_cancelled()
+    }
+
+    /// Whether the link is telling a removed machine of its removal; it closes itself once done.
+    pub fn saying_farewell(&self) -> bool {
+        self.farewell.load(Ordering::SeqCst)
     }
 
     /// Resolves when the link is closed.
@@ -452,10 +462,14 @@ impl Peers {
 
     /// Close the link to a member, if any (removal, a tampered operation, the network turned off).
     pub fn close(&self, machine_id: &str) {
-        let link = self.lock().links.remove(machine_id);
-        if let Some(link) = link {
+        if let Some(link) = self.take(machine_id) {
             link.close();
         }
+    }
+
+    /// Remove a machine's link from the table without closing it.
+    fn take(&self, machine_id: &str) -> Option<Arc<PeerLink>> {
+        self.lock().links.remove(machine_id)
     }
 
     pub fn close_all(&self) {
@@ -704,13 +718,47 @@ impl Network {
 
     /// Close every session with a machine and revoke every grant it holds (§2.5).
     pub fn drop_machine(&self, machine_id: &str) {
-        self.peers.close(machine_id);
+        if let Some(link) = self.peers.take(machine_id) {
+            self.say_farewell(link);
+        }
         let revoked = self.grants.revoke_machine(machine_id);
         if !revoked.is_empty() {
             tracing::info!(target: SESSION_TARGET, machine = machine_id, grants = revoked.len(), "revoked the grants of a removed machine");
         }
         // The client tokens it asked this machine to mint die with it (§2.5).
         self.revoke_tokens_issued_via(machine_id);
+    }
+
+    /// End the session with a machine that is no longer a member, telling it first. The removed machine learns of its
+    /// removal only from a member: once its sessions close, every member refuses it a new one. `remove` pushes the
+    /// operation, but a session that was opening at that moment closes here before the push can arrive, so the
+    /// operations go once more on the link being closed, and the accepting side's membership check hands a removed
+    /// machine's socket here instead of closing it. Its streams end now and its requests are refused (a removed machine
+    /// has no scopes); it closes once the machine answers, or after [`FAREWELL_TIMEOUT`]. Saying it again on the same
+    /// link does nothing.
+    pub fn say_farewell(&self, link: Arc<PeerLink>) {
+        if link.farewell.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let ops = self
+            .membership()
+            .filter(|membership| !membership.is_member(&link.machine_id))
+            .map(|membership| membership.all_ops())
+            .unwrap_or_default();
+        let runtime = tokio::runtime::Handle::try_current();
+        let (Ok(runtime), false, false) = (runtime, ops.is_empty(), link.is_closed()) else {
+            link.close();
+            return;
+        };
+        link.relays.close_all();
+        runtime.spawn(async move {
+            let told = tokio::time::timeout(FAREWELL_TIMEOUT, link.call::<PeerOpsPush>(PeerOpsPushParams { ops })).await;
+            if !matches!(told, Ok(Ok(_))) {
+                // It closes its own sessions on applying the removal, often before it answers.
+                tracing::debug!(target: SESSION_TARGET, machine = %link.machine_id, "no answer to the removal on the closing session");
+            }
+            link.close();
+        });
     }
 
     /// The presence this machine pushes (§4.1): version and features now; harnesses, load and
@@ -1019,13 +1067,13 @@ async fn after_open(state: &AppState, link: &Arc<PeerLink>, dialer: bool) {
 
 /// A removal can land while a session is being opened, after `drop_machine` closed the links that
 /// existed. Looked at once the link is registered, so either the removal finds the link or the
-/// link finds the removal: a removed machine never keeps a session.
+/// link finds the removal: a removed machine never keeps a session. The link was just registered, so
+/// `drop_machine` ends it (or the link that replaced it already did) after telling the machine.
 fn removed_while_opening(state: &AppState, link: &Arc<PeerLink>) -> bool {
     if !state.network.membership().is_some_and(|membership| !membership.is_member(&link.machine_id)) {
         return false;
     }
     state.network.drop_machine(&link.machine_id);
-    link.close();
     true
 }
 
