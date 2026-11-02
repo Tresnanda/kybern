@@ -418,7 +418,9 @@ async fn run_direct_ports() {
     b.state.network.publish_ops(vec![op]);
     let mut old = b.state.network.presence();
     old.version = "0.20.4".into();
-    old.features.retain(|f| f != features::PORTS_DIRECT_V1);
+    old.features.retain(|f| f != features::PORTS_DIRECT_V1 && f != features::PORTS_DIRECT_V2 && f != features::RELAY_FRAMES_V2);
+    // a now sends JSON frames with base64 data and the 256 KiB window; b still sends a binary frames.
+    a.state.network.peers.link(&b.id()).unwrap().set_peer_features(&old.features);
     a.state.network.peers.set_presence(&b.id(), old);
     let legacy =
         client.call::<PortsForward>(PortsForwardParams { machine: b.id(), remote_port, local_port: None, https: false }).await.unwrap();

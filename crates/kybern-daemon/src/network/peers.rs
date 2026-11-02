@@ -57,17 +57,32 @@ const MAX_QUEUED_REQUESTS: usize = 256;
 pub trait FrameSink: Send + Sync {
     /// Queue one JSON frame; `false` once the socket is gone.
     async fn send(&self, frame: Value) -> bool;
+
+    /// Queue one binary frame (relay data, `relay.frames.v2`); `false` once the socket is gone or it carries none.
+    async fn send_binary(&self, _frame: Vec<u8>) -> bool {
+        false
+    }
 }
 
-struct ChannelSink(mpsc::Sender<String>);
+/// A frame for the dialer's socket writer.
+pub(super) enum Outgoing {
+    Text(String),
+    Binary(Vec<u8>),
+}
+
+struct ChannelSink(mpsc::Sender<Outgoing>);
 
 #[async_trait]
 impl FrameSink for ChannelSink {
     async fn send(&self, frame: Value) -> bool {
         match serde_json::to_string(&frame) {
-            Ok(text) => self.0.send(text).await.is_ok(),
+            Ok(text) => self.0.send(Outgoing::Text(text)).await.is_ok(),
             Err(_) => false,
         }
+    }
+
+    async fn send_binary(&self, frame: Vec<u8>) -> bool {
+        self.0.send(Outgoing::Binary(frame)).await.is_ok()
     }
 }
 
@@ -96,6 +111,8 @@ pub struct PeerLink {
     inbound: Arc<tokio::sync::Semaphore>,
     /// Requests waiting for an `inbound` place.
     queued: Arc<std::sync::atomic::AtomicUsize>,
+    /// The other machine reads binary relay frames (it listed `relay.frames.v2`).
+    binary: std::sync::atomic::AtomicBool,
     pub relays: LinkRelays,
 }
 
@@ -120,6 +137,7 @@ impl PeerLink {
             last_frame: Mutex::new(Instant::now()),
             inbound: Arc::new(tokio::sync::Semaphore::new(MAX_INBOUND_REQUESTS)),
             queued: Arc::default(),
+            binary: std::sync::atomic::AtomicBool::new(false),
             relays: LinkRelays::new(direction),
         })
     }
@@ -153,6 +171,22 @@ impl PeerLink {
     pub async fn call<M: Method>(&self, params: M::Params) -> Result<M::Result, RpcError> {
         let value = self.call_raw(M::NAME, serde_json::to_value(params).map_err(RpcError::internal)?).await?;
         serde_json::from_value(value).map_err(RpcError::internal)
+    }
+
+    /// What the other machine listed in its presence: binary frames and the larger stream window.
+    pub fn set_peer_features(&self, features: &[String]) {
+        let v2 = features.iter().any(|feature| feature == features::RELAY_FRAMES_V2);
+        self.binary.store(v2, Ordering::Relaxed);
+        self.relays.set_large_window(v2);
+    }
+
+    pub fn binary_frames(&self) -> bool {
+        self.binary.load(Ordering::Relaxed)
+    }
+
+    /// Send a binary frame. `false` when the session is gone.
+    pub async fn send_binary(&self, frame: Vec<u8>) -> bool {
+        self.sink.send_binary(frame).await
     }
 
     /// Send a notification (no answer expected). `false` when the session is gone.
@@ -637,6 +671,7 @@ pub async fn dispatch(state: &AppState, link: &Arc<PeerLink>, method: &str, para
         }
         PeerPresenceMethod::NAME => {
             let presence: PeerPresence = parse(params)?;
+            link.set_peer_features(&presence.features);
             network.peers.set_presence(&link.machine_id, presence);
             network.notify_changed();
             ok(Empty {})
@@ -838,6 +873,21 @@ pub async fn inbound(state: &AppState, link: &Arc<PeerLink>, text: &str) {
     }
 }
 
+/// Handle one binary frame from a peer: relay or port data (`relay.frames.v2`), under the same capability as its JSON
+/// notification.
+pub fn inbound_binary(state: &AppState, link: &Arc<PeerLink>, frame: &[u8]) {
+    link.touch();
+    let Some((kind, stream_id, text, bytes)) = super::relay::decode_frame(frame) else { return };
+    let method = match kind {
+        StreamKind::Relay => PeerRelayData::NAME,
+        StreamKind::Ports => PeerPortsData::NAME,
+    };
+    let Some(Some(scope)) = scope_for(method) else { return };
+    if effective_scopes(&state.network, link).contains(&scope) {
+        super::relay::handle_binary(link, kind, stream_id, text, bytes);
+    }
+}
+
 /// After a link opens: compare membership and exchange what each side lacks, then say who we are.
 async fn after_open(state: &AppState, link: &Arc<PeerLink>, dialer: bool) {
     let network = &state.network;
@@ -1007,7 +1057,7 @@ pub(super) fn run_dialed<S>(
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     let (mut sink, mut stream) = socket.split();
-    let (out_tx, mut out_rx) = mpsc::channel::<String>(256);
+    let (out_tx, mut out_rx) = mpsc::channel::<Outgoing>(256);
     let link = PeerLink::new(
         target.machine_id.clone(),
         Direction::Dialed,
@@ -1024,8 +1074,9 @@ pub(super) fn run_dialed<S>(
         loop {
             tokio::select! {
                 _ = writer_link.closed() => break,
-                text = out_rx.recv() => match text {
-                    Some(text) => if sink.send(Message::Text(text.into())).await.is_err() { break },
+                frame = out_rx.recv() => match frame {
+                    Some(Outgoing::Text(text)) => if sink.send(Message::Text(text.into())).await.is_err() { break },
+                    Some(Outgoing::Binary(bytes)) => if sink.send(Message::Binary(bytes.into())).await.is_err() { break },
                     None => break,
                 },
                 ping = ping_rx.recv() => match ping {
@@ -1072,6 +1123,7 @@ pub(super) fn run_dialed<S>(
                 _ = reader_link.closed() => break,
                 frame = stream.next() => match frame {
                     Some(Ok(Message::Text(text))) => inbound(&reader_state, &reader_link, text.as_str()).await,
+                    Some(Ok(Message::Binary(frame))) => inbound_binary(&reader_state, &reader_link, &frame),
                     Some(Ok(Message::Close(_))) | None => break,
                     Some(Ok(_)) => reader_link.touch(),
                     Some(Err(failure)) => { error = Some(failure.to_string()); break }

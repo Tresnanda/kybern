@@ -3,6 +3,8 @@
 //!
 //! * `GET /relay/{machine_id}/ws` upgrades to a WebSocket and `ANY /relay/{machine_id}/http/{*path}`
 //!   carries one HTTP request (previews, assets, uploads, the well-known check).
+//! * Between two machines that list `relay.frames.v2`, data frames are binary WebSocket messages (see
+//!   [`encode_frame`]) and a stream's window is [`RELAY_WINDOW_V2`]; credit grants and closes stay JSON.
 //! * M authenticates the caller with a device token that has `orchestration:read`, sent in
 //!   `X-Kybern-Relay-Auth: Bearer …` (the `Authorization` header belongs to B, see below). It then
 //!   opens a **stream** on its session with B: `peer.relay.open`, then `peer.relay.data` frames in
@@ -83,8 +85,8 @@ pub(super) struct Credit {
 }
 
 impl Credit {
-    fn new() -> Self {
-        Self { balance: AtomicI64::new(WINDOW), changed: Notify::new() }
+    fn new(window: i64) -> Self {
+        Self { balance: AtomicI64::new(window), changed: Notify::new() }
     }
 
     pub(super) fn add(&self, bytes: i64) {
@@ -146,11 +148,26 @@ impl Stream {
 pub struct LinkRelays {
     streams: Mutex<HashMap<u64, Arc<Stream>>>,
     next: AtomicU64,
+    /// The window a new stream may send into: what the other machine's queue holds ([`WINDOW`], or
+    /// [`RELAY_WINDOW_V2`] once it listed `relay.frames.v2`).
+    window: AtomicI64,
 }
+
+/// Frames a stream's receiving queue holds: enough for the larger window at the smallest frame cost, twice over.
+const QUEUE_FRAMES: usize = (RELAY_WINDOW_V2 as usize / MIN_FRAME_COST) * 2;
 
 impl LinkRelays {
     pub fn new(direction: Direction) -> Self {
-        Self { streams: Mutex::new(HashMap::new()), next: AtomicU64::new(if direction == Direction::Dialed { 1 } else { 2 }) }
+        Self {
+            streams: Mutex::new(HashMap::new()),
+            next: AtomicU64::new(if direction == Direction::Dialed { 1 } else { 2 }),
+            window: AtomicI64::new(WINDOW),
+        }
+    }
+
+    /// The other machine takes the larger window (it listed `relay.frames.v2`).
+    pub fn set_large_window(&self, large: bool) {
+        self.window.store(if large { RELAY_WINDOW_V2 } else { WINDOW }, Ordering::Relaxed);
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<u64, Arc<Stream>>> {
@@ -161,13 +178,13 @@ impl LinkRelays {
     /// capability the other side needs for a stream this machine serves; `None` for one it opened.
     pub(super) fn create(&self, id: Option<u64>, kind: StreamKind, serves: Option<Scope>) -> Option<(Arc<Stream>, mpsc::Receiver<Chunk>)> {
         let id = id.unwrap_or_else(|| self.next.fetch_add(2, Ordering::Relaxed));
-        let (tx, rx) = mpsc::channel(256);
+        let (tx, rx) = mpsc::channel(QUEUE_FRAMES);
         let stream = Arc::new(Stream {
             id,
             kind,
             serves,
             incoming: tx,
-            credit: Credit::new(),
+            credit: Credit::new(self.window.load(Ordering::Relaxed)),
             cancel: CancellationToken::new(),
             activity: Mutex::new(Instant::now()),
         });
@@ -306,12 +323,58 @@ impl RelayHub {
 
 /// Send `bytes` on a stream, waiting for credit. `false` when the stream or the session ended.
 async fn send_data(link: &PeerLink, stream: &Stream, bytes: &[u8], text: bool) -> bool {
+    send_frame(link, stream, bytes, text).await
+}
+
+/// A data frame of either kind of stream, after its credit: a binary message when the other machine reads them, else a
+/// `peer.relay.data` / `peer.ports.data` notification with base64 data.
+pub(super) async fn send_frame(link: &PeerLink, stream: &Stream, bytes: &[u8], text: bool) -> bool {
     if !stream.credit.take(frame_cost(bytes.len()), &stream.cancel).await {
         return false;
     }
     stream.touch();
+    if link.binary_frames() {
+        return link.send_binary(encode_frame(stream.kind, stream.id, text, bytes)).await;
+    }
     let params = PeerRelayDataParams { stream_id: stream.id, data: B64.encode(bytes), credit: None, text };
-    link.notify(PeerRelayData::NAME, serde_json::to_value(params).unwrap_or(Value::Null)).await
+    let method = match stream.kind {
+        StreamKind::Relay => PeerRelayData::NAME,
+        StreamKind::Ports => kybern_protocol::methods::PeerPortsData::NAME,
+    };
+    link.notify(method, serde_json::to_value(params).unwrap_or(Value::Null)).await
+}
+
+const FRAME_RELAY: u8 = 0;
+const FRAME_PORTS: u8 = 1;
+const FRAME_TEXT: u8 = 1;
+const FRAME_HEADER: usize = 10;
+
+/// A binary data frame: the stream kind (0 relay, 1 ports), flags (bit 0: a text frame), the stream id (u64, big
+/// endian), then the bytes.
+pub(super) fn encode_frame(kind: StreamKind, stream_id: u64, text: bool, bytes: &[u8]) -> Vec<u8> {
+    let mut frame = Vec::with_capacity(FRAME_HEADER + bytes.len());
+    frame.push(match kind {
+        StreamKind::Relay => FRAME_RELAY,
+        StreamKind::Ports => FRAME_PORTS,
+    });
+    frame.push(if text { FRAME_TEXT } else { 0 });
+    frame.extend_from_slice(&stream_id.to_be_bytes());
+    frame.extend_from_slice(bytes);
+    frame
+}
+
+/// The parts of a binary data frame, or `None` for one this machine cannot read.
+pub(super) fn decode_frame(frame: &[u8]) -> Option<(StreamKind, u64, bool, &[u8])> {
+    if frame.len() < FRAME_HEADER {
+        return None;
+    }
+    let kind = match frame[0] {
+        FRAME_RELAY => StreamKind::Relay,
+        FRAME_PORTS => StreamKind::Ports,
+        _ => return None,
+    };
+    let stream_id = u64::from_be_bytes(frame[2..FRAME_HEADER].try_into().ok()?);
+    Some((kind, stream_id, frame[1] & FRAME_TEXT != 0, &frame[FRAME_HEADER..]))
 }
 
 /// Send `bytes` cut into pieces (HTTP bodies); WebSocket messages go whole through [`send_data`].
@@ -346,9 +409,21 @@ pub async fn handle_data(link: &Arc<PeerLink>, params: PeerRelayDataParams, kind
     if params.data.is_empty() && !params.text {
         return Ok(json!({}));
     }
-    stream.touch();
     let bytes = B64.decode(params.data.as_bytes()).map_err(|_| RpcError::invalid_params("data is not base64"))?;
-    let chunk = if params.text { Chunk::Text(bytes) } else { Chunk::Binary(bytes) };
+    deliver(link, &stream, bytes, params.text);
+    Ok(json!({}))
+}
+
+/// A binary data frame for a stream of `kind` (the caller checked the kind's scope).
+pub fn handle_binary(link: &Arc<PeerLink>, kind: StreamKind, stream_id: u64, text: bool, bytes: &[u8]) {
+    if let Some(stream) = link.relays.get(stream_id, kind) {
+        deliver(link, &stream, bytes.to_vec(), text);
+    }
+}
+
+fn deliver(link: &Arc<PeerLink>, stream: &Arc<Stream>, bytes: Vec<u8>, text: bool) {
+    stream.touch();
+    let chunk = if text { Chunk::Text(bytes) } else { Chunk::Binary(bytes) };
     match stream.incoming.try_send(chunk) {
         Ok(()) => {}
         // The local consumer is gone (a GET has no request body to receive): nothing to deliver.
@@ -359,7 +434,6 @@ pub async fn handle_data(link: &Arc<PeerLink>, params: PeerRelayDataParams, kind
             link.relays.remove(stream.id);
         }
     }
-    Ok(json!({}))
 }
 
 /// `peer.relay.close` and `peer.ports.close`: the other side ended a stream of that kind.
@@ -1218,6 +1292,29 @@ async fn open_local_http(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn binary_frames_round_trip_and_unknown_kinds_are_ignored() {
+        let frame = encode_frame(StreamKind::Ports, 0x0102_0304_0506_0708, true, b"hello");
+        assert_eq!(frame.len(), FRAME_HEADER + 5);
+        let (kind, id, text, bytes) = decode_frame(&frame).unwrap();
+        assert_eq!((kind, id, text, bytes), (StreamKind::Ports, 0x0102_0304_0506_0708, true, &b"hello"[..]));
+        let empty = encode_frame(StreamKind::Relay, 3, false, b"");
+        assert_eq!(decode_frame(&empty).unwrap(), (StreamKind::Relay, 3, false, &b""[..]));
+        let mut unknown = frame.clone();
+        unknown[0] = 9;
+        assert!(decode_frame(&unknown).is_none());
+        assert!(decode_frame(&frame[..4]).is_none());
+        // A stream created after the other machine listed the larger window may send that much.
+        let relays = LinkRelays::new(Direction::Dialed);
+        let (small, _rx) = relays.create(None, StreamKind::Ports, None).unwrap();
+        relays.set_large_window(true);
+        let (large, _rx2) = relays.create(None, StreamKind::Ports, None).unwrap();
+        assert_eq!(small.credit.balance.load(Ordering::SeqCst), WINDOW);
+        assert_eq!(large.credit.balance.load(Ordering::SeqCst), RELAY_WINDOW_V2);
+        assert!(QUEUE_FRAMES as i64 * MIN_FRAME_COST as i64 >= RELAY_WINDOW_V2, "the queue holds a full window of small frames");
+    }
+
     use super::*;
 
     #[test]
@@ -1377,7 +1474,7 @@ mod tests {
 
     #[tokio::test]
     async fn credit_blocks_a_sender_until_the_receiver_grants_more_and_stops_on_cancel() {
-        let credit = Arc::new(Credit::new());
+        let credit = Arc::new(Credit::new(WINDOW));
         let cancel = CancellationToken::new();
         // A message larger than the window goes through once and leaves a debt.
         assert!(credit.take(WINDOW as usize + 1000, &cancel).await);

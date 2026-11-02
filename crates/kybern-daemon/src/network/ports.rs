@@ -21,8 +21,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as B64;
 use kybern_protocol::methods::*;
 use kybern_protocol::*;
 use serde_json::{Value, json};
@@ -545,12 +543,7 @@ async fn connect_loopback(port: u16) -> Result<TcpStream, RpcError> {
 // ---- the stream ----
 
 async fn send_data(link: &PeerLink, stream: &Stream, bytes: &[u8], text: bool) -> bool {
-    if !stream.credit.take(frame_cost(bytes.len()), &stream.cancel).await {
-        return false;
-    }
-    stream.touch();
-    let params = PeerRelayDataParams { stream_id: stream.id, data: B64.encode(bytes), credit: None, text };
-    link.notify(PeerPortsData::NAME, serde_json::to_value(params).unwrap_or(Value::Null)).await
+    relay::send_frame(link, stream, bytes, text).await
 }
 
 async fn grant(link: &PeerLink, stream: &Stream, bytes: usize) {

@@ -98,6 +98,8 @@ pub async fn upgrade(
 const OUTBOX_BYTES: usize = 8 * 1024 * 1024;
 struct QueuedFrame {
     text: String,
+    /// A binary frame (relay data between machines, `relay.frames.v2`); `text` is empty then.
+    binary: Option<Vec<u8>>,
     _permit: tokio::sync::OwnedSemaphorePermit,
 }
 
@@ -177,6 +179,20 @@ fn mark_stream_recoverable(event: &ThreadEvent) -> Option<ThreadEvent> {
 }
 
 impl Outbox {
+    async fn send_binary(&self, bytes: Vec<u8>) -> Result<(), ()> {
+        let send = async {
+            let permit = self.budget.clone().acquire_many_owned(bytes.len().clamp(1, OUTBOX_BYTES) as u32).await.map_err(|_| ())?;
+            self.sender.send(QueuedFrame { text: String::new(), binary: Some(bytes), _permit: permit }).await.map_err(|_| ())
+        };
+        tokio::select! {
+            _ = self.closed.cancelled() => Err(()),
+            result = tokio::time::timeout(std::time::Duration::from_secs(30), send) => match result {
+                Ok(result) => result,
+                Err(_) => { self.closed.cancel(); Err(()) }
+            }
+        }
+    }
+
     async fn notify(&self, method: &'static str, params: impl serde::Serialize) -> Result<(), ()> {
         self.send(TypedNotification { jsonrpc: JsonRpcVersion, method, params }).await
     }
@@ -197,7 +213,7 @@ impl Outbox {
         let send = async {
             let permit = self.budget.clone().acquire_many_owned(size.0.clamp(1, OUTBOX_BYTES) as u32).await.map_err(|_| ())?;
             let text = serde_json::to_string(&frame).map_err(|_| ())?;
-            self.sender.send(QueuedFrame { text, _permit: permit }).await.map_err(|_| ())
+            self.sender.send(QueuedFrame { text, binary: None, _permit: permit }).await.map_err(|_| ())
         };
         tokio::select! {
             _ = self.closed.cancelled() => Err(()),
@@ -733,6 +749,10 @@ impl FrameSink for OutboxSink {
     async fn send(&self, frame: Value) -> bool {
         self.0.send(frame).await.is_ok()
     }
+
+    async fn send_binary(&self, frame: Vec<u8>) -> bool {
+        self.0.send_binary(frame).await.is_ok()
+    }
 }
 
 /// Serve a session socket from another member (design §3.3): one JSON-RPC link used both ways. It
@@ -755,6 +775,7 @@ async fn run_machine(state: AppState, socket: WebSocket, principal: Principal) {
                 _ = writer_link.closed() => break,
                 _ = writer_closed.cancelled() => break,
                 frame = out_rx.recv() => match frame {
+                    Some(QueuedFrame { binary: Some(bytes), .. }) => if sink.send(Message::Binary(bytes.into())).await.is_err() { break },
                     Some(frame) => if sink.send(Message::Text(frame.text.into())).await.is_err() { break },
                     None => break,
                 },
@@ -790,6 +811,7 @@ async fn run_machine(state: AppState, socket: WebSocket, principal: Principal) {
             }
             frame = stream.next() => match frame {
                 Some(Ok(Message::Text(text))) => peers::inbound(&state, &link, text.as_str()).await,
+                Some(Ok(Message::Binary(frame))) => peers::inbound_binary(&state, &link, &frame),
                 Some(Ok(Message::Close(_))) | None => break,
                 Some(Ok(_)) => link.touch(),
                 Some(Err(error)) => { tracing::debug!(%error, "peer socket read error"); break; }
