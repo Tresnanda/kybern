@@ -3521,6 +3521,8 @@ export interface NetworkSettings {
   enabled: boolean;
   /** The fixed port the Tailscale listener binds; the daemon tries the next six when it is taken. */
   port: number;
+  /** "Keep this machine reachable when Kybern is closed": start the daemon at login while in a network. Per machine. Absent on older daemons. */
+  keep_reachable?: boolean;
 }
 
 /** A machine's id: the daemon's `environment_id`. */
@@ -3700,6 +3702,30 @@ export interface NetworkStatus {
   removed?: boolean;
   /** "Keep all machines on the same version": a member that sees a newer version updates itself when idle. */
   follow_updates?: boolean;
+  /** "Keep this machine reachable when Kybern is closed" and its login item. Absent on older daemons. */
+  keep_reachable?: KeepReachableStatus | null;
+}
+
+/** What starts the daemon at login: Windows, macOS, Linux with and without a user systemd. */
+export type LoginServiceKind = "task_scheduler" | "launch_agent" | "systemd_user" | "xdg_autostart";
+
+export interface KeepReachableStatus {
+  /** The setting, `settings.network.keep_reachable`. */
+  enabled: boolean;
+  /** The login item should exist now: the setting, the network and membership are all on. */
+  wanted: boolean;
+  /** Absent where Kybern cannot register a login item. */
+  kind?: LoginServiceKind | null;
+  /** The login item is registered for this data folder. */
+  registered: boolean;
+  /** This daemon was started by the login item. */
+  running: boolean;
+  /** Another service (a remote install's) already starts the daemon; Kybern leaves it alone. */
+  external?: string | null;
+  /** Why registering or removing the item failed, and what to do next. */
+  error?: string | null;
+  /** Problems with a service that starts the daemon, each with what to do next. */
+  warnings?: string[];
 }
 
 export type RouteKind = "direct_tailnet" | "direct_advertised" | "ssh" | "relay";
@@ -4694,6 +4720,7 @@ export interface Methods {
   "network.doctor": [{ machine_id?: MachineId | null }, DoctorReport];
   "machines.info": [Empty, MachineInfo];
   "network.follow_updates.set": [{ enabled: boolean }, NetworkStatus];
+  "network.keep_reachable.set": [{ enabled: boolean }, NetworkStatus];
   "network.relay_page.open": [NetworkRelayPageOpenParams, NetworkRelayPageOpenResult];
   "network.relay_page.close": [{ ticket: string }, Empty];
   "peer.ops.sync": [PeerOpsSyncParams, PeerOpsSyncResult];

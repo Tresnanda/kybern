@@ -418,6 +418,8 @@ expression: scopes
   - "network:read"
 - - network.follow_updates.set
   - "network:admin"
+- - network.keep_reachable.set
+  - "network:admin"
 - - peer.ops.sync
   - "machine:peer"
 - - peer.ops.push

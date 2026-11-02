@@ -210,6 +210,7 @@ expression: names
 - network.doctor
 - machines.info
 - network.follow_updates.set
+- network.keep_reachable.set
 - peer.ops.sync
 - peer.ops.push
 - peer.presence
