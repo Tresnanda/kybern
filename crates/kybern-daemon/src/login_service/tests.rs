@@ -261,3 +261,35 @@ fn a_login_item_start_finds_a_daemon_that_already_serves_the_folder() {
     std::fs::write(starting.path().join(".gpuix-startup-lock"), "1:x").unwrap();
     assert!(already_served(starting.path()));
 }
+
+/// The real LaunchAgent round trip on this Mac: write, load, read back, unload, remove. It runs
+/// `/usr/bin/true` under a throwaway label, so it never starts a daemon. Run it by hand:
+/// `cargo test -p kybern-daemon login_service::tests::launch_agent_real -- --ignored`.
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "touches this user's launchd domain"]
+fn launch_agent_real_round_trip() {
+    let manager = macos::LaunchAgent;
+    let data = crate::network::testutil::TempDir::new("login-launchd");
+    let spec = ServiceSpec {
+        name: format!("dev.kybern.kybernd.login.selftest-{}", std::process::id()),
+        exe: PathBuf::from("/usr/bin/true"),
+        data_dir: data.path().to_path_buf(),
+        path_env: Some("/usr/bin:/bin".into()),
+    };
+    let plist = PathBuf::from(std::env::var("HOME").unwrap()).join("Library/LaunchAgents").join(format!("{}.plist", spec.name));
+    let label = format!("gui/{}/{}", unsafe { libc::getuid() }, spec.name);
+    let loaded = || std::process::Command::new("/bin/launchctl").args(["print", &label]).output().unwrap().status.success();
+
+    assert_eq!(manager.registration(&spec).unwrap(), Registration::Missing);
+    manager.install(&spec).unwrap();
+    let lint = std::process::Command::new("/usr/bin/plutil").arg("-lint").arg(&plist).output().unwrap();
+    assert!(lint.status.success(), "plutil: {}", String::from_utf8_lossy(&lint.stdout));
+    assert_eq!(manager.registration(&spec).unwrap(), Registration::Current);
+    assert!(loaded(), "launchctl did not load {label}");
+
+    manager.uninstall(&spec, false).unwrap();
+    assert!(!plist.exists(), "the plist is still there");
+    assert!(!loaded(), "{label} is still loaded");
+    assert_eq!(manager.registration(&spec).unwrap(), Registration::Missing);
+}
