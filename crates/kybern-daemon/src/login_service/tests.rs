@@ -87,21 +87,21 @@ fn a_binary_in_a_cargo_target_folder_is_a_development_build() {
 #[test]
 fn apply_registers_when_wanted_and_removes_when_not() {
     let manager = Recording::default();
-    let outcome = apply(&manager, &spec(INSTALLED), true, false);
+    let outcome = apply(&manager, &spec(INSTALLED), true, false, false);
     assert!(outcome.registered && outcome.error.is_none());
     assert_eq!(manager.calls(), ["install /opt/Kybern/kybernd"]);
-    let again = apply(&manager, &spec(INSTALLED), true, false);
+    let again = apply(&manager, &spec(INSTALLED), true, false, false);
     assert!(again.registered);
     assert_eq!(manager.calls().len(), 1, "a current item is left as it is");
     // An update moved the binary: the item follows it.
-    apply(&manager, &spec("/opt/Kybern2/kybernd"), true, false);
+    apply(&manager, &spec("/opt/Kybern2/kybernd"), true, false, false);
     assert_eq!(manager.calls().last().unwrap(), "install /opt/Kybern2/kybernd");
     // The daemon the item started is told not to stop itself while removing it.
-    let removed = apply(&manager, &spec("/opt/Kybern2/kybernd"), false, true);
+    let removed = apply(&manager, &spec("/opt/Kybern2/kybernd"), false, true, false);
     assert!(!removed.registered && !manager.registered());
     assert_eq!(manager.calls().last().unwrap(), "uninstall running_here=true");
     let before = manager.calls().len();
-    apply(&manager, &spec(INSTALLED), false, false);
+    apply(&manager, &spec(INSTALLED), false, false, false);
     assert_eq!(manager.calls().len(), before, "nothing to remove");
 }
 
@@ -111,30 +111,56 @@ fn apply_leaves_an_external_service_and_reports_a_failure_with_its_reason() {
         external: Some("The systemd user service kybernd.service already starts Kybern at login.".into()),
         ..Recording::default()
     };
-    let outcome = apply(&external, &spec(INSTALLED), true, false);
+    let outcome = apply(&external, &spec(INSTALLED), true, false, false);
     assert!(outcome.external.is_some() && !outcome.registered && external.calls().is_empty());
 
     let failing = Recording { fail_install: true, ..Recording::default() };
-    let outcome = apply(&failing, &spec(INSTALLED), true, false);
+    let outcome = apply(&failing, &spec(INSTALLED), true, false, false);
     assert!(!outcome.registered);
     assert!(outcome.error.as_deref().is_some_and(|error| error.contains("Access is denied.")), "{outcome:?}");
 
-    let unsupported = apply(&Inert, &spec(INSTALLED), true, false);
+    let unsupported = apply(&Inert, &spec(INSTALLED), true, false, false);
     assert!(!unsupported.registered && unsupported.error.is_none(), "nothing to say where nothing can be registered");
 }
 
 #[test]
-fn a_development_build_never_registers_itself() {
-    if std::env::var(ANY_BINARY_ENV).as_deref() == Ok("1") {
-        return;
-    }
+fn an_external_service_replaces_ours_and_a_failure_is_tried_again() {
     let manager = Recording::default();
-    let outcome = apply(&manager, &spec("/src/kybern/target/debug/kybernd"), true, false);
+    apply(&manager, &spec(INSTALLED), true, false, false);
+    assert!(manager.registered());
+    let both = Recording {
+        external: Some("The systemd user service kybernd.service already starts Kybern at login.".into()),
+        ..Recording::default()
+    };
+    *both.registered.lock().unwrap() = Some(spec(INSTALLED));
+    let outcome = apply(&both, &spec(INSTALLED), true, false, false);
+    assert!(!both.registered() && !outcome.registered && outcome.external.is_some(), "two items would start two daemons");
+    assert!(!outcome.retry);
+    let failing = Recording { fail_install: true, ..Recording::default() };
+    assert!(apply(&failing, &spec(INSTALLED), true, false, false).retry, "a refused registration is tried again at the next reconcile");
+    assert!(!apply(&manager, &spec(INSTALLED), true, false, false).retry);
+}
+
+#[test]
+fn the_item_starts_the_binary_an_update_put_in_place() {
+    let dir = crate::network::testutil::TempDir::new("login-binary");
+    let exe = dir.path().join("kybernd");
+    std::fs::write(&exe, b"binary").unwrap();
+    let deleted = PathBuf::from(format!("{} (deleted)", exe.display()));
+    assert_eq!(installed_binary(deleted).unwrap(), exe, "Linux names a replaced binary `<path> (deleted)`");
+    assert_eq!(installed_binary(exe.clone()).unwrap(), exe);
+    assert!(installed_binary(dir.path().join("gone")).is_err(), "never register a binary that is not there");
+}
+
+#[test]
+fn a_development_build_never_registers_itself() {
+    let manager = Recording::default();
+    let outcome = apply(&manager, &spec("/src/kybern/target/debug/kybernd"), true, false, false);
     assert!(!outcome.registered && manager.calls().is_empty());
     assert!(outcome.error.as_deref().is_some_and(|error| error.contains("development build")));
     // It may still remove what is there.
     *manager.registered.lock().unwrap() = Some(spec(INSTALLED));
-    apply(&manager, &spec("/src/kybern/target/debug/kybernd"), false, false);
+    apply(&manager, &spec("/src/kybern/target/debug/kybernd"), false, false, false);
     assert!(!manager.registered());
 }
 
@@ -143,20 +169,17 @@ fn installed_manager() -> Arc<Recording> {
     Arc::new(Recording::default())
 }
 
-fn allow_any_binary() {
-    // SAFETY: every test that reads it sets it to the same value.
-    unsafe { std::env::set_var(ANY_BINARY_ENV, "1") };
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn joining_registers_the_login_item_and_being_removed_or_turning_it_off_removes_it() {
-    allow_any_binary();
     let Some(cluster) = Cluster::new(&[NodeSpec::owner("a"), NodeSpec::owner("b")]) else { return };
     let a = cluster.start("a", true).await;
     let b = cluster.start("b", true).await;
     let (at_a, at_b) = (installed_manager(), installed_manager());
     a.state.login_service.set_manager(at_a.clone());
     b.state.login_service.set_manager(at_b.clone());
+    // The test binary is a development build.
+    a.state.login_service.allow_development_build();
+    b.state.login_service.allow_development_build();
     tokio::spawn(run(a.state.clone()));
     tokio::spawn(run(b.state.clone()));
     // A lone machine is reachable by no one: nothing is registered.
@@ -215,7 +238,26 @@ fn a_login_item_start_finds_a_daemon_that_already_serves_the_folder() {
     std::fs::write(root.path().join("daemon.port"), port.to_string()).unwrap();
     assert!(!already_served(root.path()), "daemon.listen is written with the port file");
     std::fs::write(root.path().join("daemon.listen"), format!("127.0.0.1:{port}")).unwrap();
+    // Something else took the port of a daemon that crashed: it accepts, but it is not Kybern.
+    let silent = std::thread::spawn({
+        let listener = listener.try_clone().unwrap();
+        move || drop(listener.accept())
+    });
+    assert!(!already_served(root.path()), "a listener that does not answer /health");
+    silent.join().unwrap();
+    let daemon = std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0u8; 512];
+        let _ = stream.read(&mut request);
+        stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok").unwrap();
+    });
     assert!(already_served(root.path()));
-    drop(listener);
+    daemon.join().unwrap();
     assert!(!already_served(root.path()), "stale files of a daemon that is gone");
+
+    // The desktop app is starting a daemon right now.
+    let starting = crate::network::testutil::TempDir::new("login-starting");
+    std::fs::write(starting.path().join(".gpuix-startup-lock"), "1:x").unwrap();
+    assert!(already_served(starting.path()));
 }

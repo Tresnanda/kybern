@@ -169,6 +169,8 @@ mod tests {
         sleeper.state.settings.set(settings.clone()).unwrap();
         sleeper.state.network.wake();
         eventually("the other side loses it", WAIT, || other.state.network.peers.link(&sleeper.id()).is_none()).await;
+        // The links closing wake the sleeper's worker once more; let that pass run with the network still off.
+        tokio::time::sleep(Duration::from_secs(1)).await;
         if other_id < sleeper_id {
             // 4 s after the first failure, 8 s after the second. (Failing to reach a closed port takes
             // seconds on Windows, so the count grows slowly there.)

@@ -193,7 +193,8 @@ impl Timing {
             clock_window: Duration::from_secs(60),
             auto_join: true,
             lone_wait: Duration::from_secs(3),
-            resume_tick: Duration::from_millis(100),
+            // Long enough that a loaded test runner's stall (four ticks) is not taken for a sleep.
+            resume_tick: Duration::from_secs(1),
             status_poll: Duration::from_millis(300),
         }
     }

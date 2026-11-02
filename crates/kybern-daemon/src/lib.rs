@@ -215,15 +215,15 @@ async fn serve() -> Result<()> {
         return Ok(());
     }
     let state = state::AppState::initialize(&paths)?;
-    state.login_service.use_platform();
-    if args.login_service {
-        state.login_service.mark_launched();
-    }
 
     if args.print_token {
         state.orchestrator.recover_after_restart().await?;
         println!("{}", state.bootstrap_token);
         return Ok(());
+    }
+    state.login_service.use_platform().await;
+    if args.login_service {
+        state.login_service.mark_launched();
     }
 
     // The login item runs the app's own binary on the port the app chose (`desktop.port`), so it is
@@ -320,7 +320,7 @@ async fn serve() -> Result<()> {
     let login_service_worker = tokio::spawn({
         let state = state.clone();
         async move {
-            state.login_service.migrate().await;
+            state.login_service.migrate(&state.paths.root).await;
             login_service::run(state).await;
         }
     });

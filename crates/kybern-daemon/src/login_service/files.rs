@@ -181,10 +181,11 @@ pub fn launch_agent_plist(spec: &ServiceSpec) -> String {
     )
 }
 
-/// A systemd `ExecStart=` word: quoted, with `\`, `"` and the specifier `%` escaped.
+/// A systemd `ExecStart=` word: quoted, with `\`, `"`, the specifier `%` and the variable `$` escaped.
 #[cfg(any(target_os = "linux", test))]
 fn systemd_quote(arg: &str) -> String {
-    let escaped = arg.replace('\\', "\\\\").replace('"', "\\\"").replace('%', "%%");
+    // `$` starts a variable even inside quotes; `$$` is a literal one.
+    let escaped = arg.replace('\\', "\\\\").replace('"', "\\\"").replace('%', "%%").replace('$', "$$");
     format!("\"{escaped}\"")
 }
 
@@ -224,7 +225,10 @@ pub fn autostart_desktop(spec: &ServiceSpec) -> String {
         let mut out = String::from("\"");
         for ch in arg.chars() {
             match ch {
-                '"' | '`' | '$' | '\\' => {
+                // The value is unescaped once as a string (`\\` is `\`) before the quoting rules
+                // apply, so a literal backslash takes four.
+                '\\' => out.push_str("\\\\\\\\"),
+                '"' | '`' | '$' => {
                     out.push('\\');
                     out.push(ch);
                 }
@@ -241,6 +245,17 @@ pub fn autostart_desktop(spec: &ServiceSpec) -> String {
         "[Desktop Entry]\nType=Application\nName=Kybern daemon\nComment={DESCRIPTION}\nExec={exec}\nTerminal=false\nNoDisplay=true\nX-GNOME-Autostart-enabled=true\n",
         exec = exec.join(" "),
     )
+}
+
+/// Whether a unit's `ExecStart` runs a daemon for `data_dir` (quoted or not).
+#[cfg(any(target_os = "linux", test))]
+pub fn starts_data_dir(unit: &str, data_dir: &str) -> bool {
+    unit.lines().filter(|line| line.trim_start().starts_with("ExecStart=")).any(|line| {
+        // The remote installers write plain words (their paths have no spaces); ours quotes every word.
+        let words: Vec<&str> = line.split_whitespace().map(|word| word.trim_matches('"')).collect();
+        words.windows(2).any(|pair| pair[0] == "--data-dir" && pair[1] == data_dir)
+            || line.contains(&format!("\"--data-dir\" \"{data_dir}\""))
+    })
 }
 
 /// The drop-in that gives a unit written before [`OOM_POLICY`] the policy without rewriting it.
@@ -336,10 +351,17 @@ mod tests {
         assert!(text.contains("\nRestart=on-failure\n") && text.contains("\nWantedBy=default.target\n"));
         assert!(!text.contains("OOMScoreAdjust"));
         assert!(systemd_unit(&spec("/x/100%/kybernd", "/d")).contains("\"/x/100%%/kybernd\""));
+        assert!(systemd_unit(&spec("/x/$HOME/kybernd", "/d")).contains("\"/x/$$HOME/kybernd\""), "no variable expansion");
+        let unit = systemd_unit(&spec("/x/kybernd", "/home/me/.kybern"));
+        assert!(starts_data_dir(&unit, "/home/me/.kybern") && !starts_data_dir(&unit, "/home/me/.kyb"));
+        assert!(starts_data_dir("ExecStart=/b/kybernd --bind 127.0.0.1 --port 4173 --data-dir /srv/k\n", "/srv/k"));
+        assert!(!starts_data_dir("ExecStart=/b/kybernd --data-dir /srv/kk\n", "/srv/k"), "not a prefix");
+        assert!(starts_data_dir(&systemd_unit(&spec("/x/kybernd", "/home/me/my data")), "/home/me/my data"));
     }
 
     #[test]
     fn the_autostart_entry_escapes_its_command_line() {
+        assert!(autostart_desktop(&spec("/opt/a\\b/kybernd", "/d")).contains("Exec=\"/opt/a\\\\\\\\b/kybernd\""));
         let text = autostart_desktop(&spec("/opt/my $app/kybernd", "/home/me/50%"));
         assert!(
             text.contains("Exec=\"/opt/my \\$app/kybernd\" \"--data-dir\" \"/home/me/50%%\" \"--port\" \"0\" \"--login-service\"\n"),

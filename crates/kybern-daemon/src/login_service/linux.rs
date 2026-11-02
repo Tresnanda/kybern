@@ -68,15 +68,20 @@ fn drop_ins(unit: &Path) -> Vec<String> {
         .collect()
 }
 
-/// The units of Kybern's own that need the OOM drop-in.
-fn units_missing_oom_policy() -> Vec<PathBuf> {
+/// The units of Kybern's own that start `data_dir`'s daemon and need the OOM drop-in. Units of other
+/// data folders are left to their own daemons.
+fn units_missing_oom_policy(data_dir: &Path) -> Vec<PathBuf> {
+    let dir = data_dir.to_string_lossy();
     let Ok(dir) = units_dir() else { return Vec::new() };
     let Ok(entries) = std::fs::read_dir(&dir) else { return Vec::new() };
     entries
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|ext| ext == "service"))
-        .filter(|path| std::fs::read_to_string(path).is_ok_and(|unit| files::needs_oom_drop_in(&unit, &drop_ins(path))))
+        .filter(|path| {
+            std::fs::read_to_string(path)
+                .is_ok_and(|unit| files::starts_data_dir(&unit, &dir) && files::needs_oom_drop_in(&unit, &drop_ins(path)))
+        })
         .collect()
 }
 
@@ -99,12 +104,12 @@ impl Systemd {
 
     /// Give each Kybern unit without an `OOMPolicy` the drop-in, then reload. The running daemon is
     /// not restarted: the policy applies from the reload on.
-    pub fn migrate_oom_policy(&self) -> Vec<String> {
+    pub fn migrate_oom_policy(&self, data_dir: &Path) -> Vec<String> {
         if !self.user_manager {
             return Vec::new();
         }
         let mut migrated = Vec::new();
-        for unit in units_missing_oom_policy() {
+        for unit in units_missing_oom_policy(data_dir) {
             let drop_in = PathBuf::from(format!("{}.d", unit.display())).join("oom.conf");
             match write_atomically(&drop_in, files::OOM_DROP_IN) {
                 Ok(()) => migrated.push(unit.file_name().unwrap_or_default().to_string_lossy().into_owned()),
@@ -169,17 +174,16 @@ impl ServiceManager for Systemd {
 
     fn external(&self, data_dir: &Path) -> Option<String> {
         let text = std::fs::read_to_string(units_dir().ok()?.join(REMOTE_INSTALL_UNIT)).ok()?;
-        let dir = data_dir.to_string_lossy();
-        (text.contains(&format!("--data-dir {dir}")) || text.contains(&format!("--data-dir \"{dir}\"")))
+        files::starts_data_dir(&text, &data_dir.to_string_lossy())
             .then(|| format!("The systemd user service {REMOTE_INSTALL_UNIT} already starts Kybern at login."))
     }
 
-    fn migrate(&self) -> Vec<String> {
-        self.migrate_oom_policy()
+    fn migrate(&self, data_dir: &Path) -> Vec<String> {
+        self.migrate_oom_policy(data_dir)
     }
 
-    fn warnings(&self, _data_dir: &Path) -> Vec<(String, String, String)> {
-        units_missing_oom_policy()
+    fn warnings(&self, data_dir: &Path) -> Vec<(String, String, String)> {
+        units_missing_oom_policy(data_dir)
             .into_iter()
             .map(|unit| {
                 let name = unit.file_name().unwrap_or_default().to_string_lossy().into_owned();

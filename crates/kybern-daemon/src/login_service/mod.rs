@@ -102,8 +102,8 @@ pub trait ServiceManager: Send + Sync {
     fn warnings(&self, _data_dir: &Path) -> Vec<(String, String, String)> {
         Vec::new()
     }
-    /// Bring services written by older versions up to date at start. Returns what was changed.
-    fn migrate(&self) -> Vec<String> {
+    /// Bring the services older versions wrote for `data_dir` up to date at start. Returns what was changed.
+    fn migrate(&self, _data_dir: &Path) -> Vec<String> {
         Vec::new()
     }
 }
@@ -167,12 +167,17 @@ struct Applied {
     registered: bool,
     external: Option<String>,
     error: Option<String>,
+    /// The OS refused a read, registration or removal: the next reconcile tries again even when the
+    /// decision did not change.
+    retry: bool,
 }
 
 pub struct LoginService {
     manager: RwLock<Arc<dyn ServiceManager>>,
     /// This process was started by the login item (`kybernd --login-service`).
     launched: AtomicBool,
+    /// A development build may register itself ([`ANY_BINARY_ENV`], or a test).
+    allow_development_build: AtomicBool,
     applied: Mutex<Applied>,
     /// One reconcile at a time: the worker and `network.keep_reachable.set` may race.
     busy: tokio::sync::Mutex<()>,
@@ -183,6 +188,7 @@ impl Default for LoginService {
         Self {
             manager: RwLock::new(Arc::new(Inert)),
             launched: AtomicBool::new(false),
+            allow_development_build: AtomicBool::new(std::env::var(ANY_BINARY_ENV).as_deref() == Ok("1")),
             applied: Mutex::default(),
             busy: Default::default(),
         }
@@ -192,17 +198,23 @@ impl Default for LoginService {
 impl LoginService {
     /// Register real login items from now on. Only `kybernd` itself calls this, and not when it plays a
     /// tailnet from a fixture (the process tests), unless [`ANY_BINARY_ENV`] asks for a real check.
-    pub fn use_platform(&self) {
+    /// Detecting the platform's manager may run a command (`systemctl --user`), so it runs off the runtime.
+    pub async fn use_platform(&self) {
         let fixture = std::env::var_os("KYBERN_TAILSCALE_FAKE").is_some();
         if !fixture || std::env::var(ANY_BINARY_ENV).as_deref() == Ok("1") {
-            self.set_manager(platform());
+            match tokio::task::spawn_blocking(platform).await {
+                Ok(manager) => self.set_manager(manager),
+                Err(error) => tracing::warn!(target: TARGET, %error, "could not detect how this system starts programs at login"),
+            }
         }
     }
 
-    /// Update services older versions wrote (Linux: the OOM policy), off the async runtime.
-    pub async fn migrate(&self) {
+    /// Update the services older versions wrote to start this data folder's daemon (Linux: the OOM
+    /// policy), off the async runtime.
+    pub async fn migrate(&self, data_dir: &Path) {
         let manager = self.manager();
-        if let Ok(changed) = tokio::task::spawn_blocking(move || manager.migrate()).await
+        let data_dir = data_dir.to_path_buf();
+        if let Ok(changed) = tokio::task::spawn_blocking(move || manager.migrate(&data_dir)).await
             && !changed.is_empty()
         {
             tracing::info!(target: TARGET, ?changed, "updated the services that start this daemon");
@@ -224,6 +236,12 @@ impl LoginService {
 
     pub fn launched(&self) -> bool {
         self.launched.load(Ordering::SeqCst)
+    }
+
+    /// Let this daemon register itself although it is a development build.
+    #[cfg(test)]
+    pub fn allow_development_build(&self) {
+        self.allow_development_build.store(true, Ordering::SeqCst);
     }
 
     fn applied(&self) -> std::sync::MutexGuard<'_, Applied> {
@@ -256,16 +274,25 @@ impl LoginService {
     pub async fn reconcile(&self, state: &AppState, force: bool) {
         let _busy = self.busy.lock().await;
         let wanted = wanted(state);
-        if !force && self.applied().wanted == Some(wanted) {
+        if !force && !self.applied().retry && self.applied().wanted == Some(wanted) {
             return;
         }
         let manager = self.manager();
-        let spec = spec_for(state);
         let running_here = self.launched();
-        let outcome =
-            tokio::task::spawn_blocking(move || apply(manager.as_ref(), &spec, wanted, running_here)).await.unwrap_or_else(|error| {
-                Applied { error: Some(format!("Kybern could not check its login item: {error}")), ..Applied::default() }
-            });
+        let allow_dev = self.allow_development_build.load(Ordering::SeqCst);
+        let outcome = match spec_for(state) {
+            Err(error) if manager.kind().is_some() => {
+                Applied { error: Some(format!("Kybern could not check its login item: {error:#}")), retry: true, ..Applied::default() }
+            }
+            Err(_) => Applied::default(),
+            Ok(spec) => tokio::task::spawn_blocking(move || apply(manager.as_ref(), &spec, wanted, running_here, allow_dev))
+                .await
+                .unwrap_or_else(|error| Applied {
+                    error: Some(format!("Kybern could not check its login item: {error}")),
+                    retry: true,
+                    ..Applied::default()
+                }),
+        };
         if let Some(error) = &outcome.error {
             tracing::warn!(target: TARGET, %error, wanted, "the login item is not as it should be");
         }
@@ -282,15 +309,32 @@ pub fn wanted(state: &AppState) -> bool {
         && state.network.membership().is_some_and(|membership| membership.self_is_member() && !membership.self_removed())
 }
 
-fn spec_for(state: &AppState) -> ServiceSpec {
-    let data_dir = state.paths.root.clone();
+/// The item for this daemon: its own binary and data folder, both absolute (a login item runs from
+/// another working directory).
+fn spec_for(state: &AppState) -> Result<ServiceSpec> {
+    let data_dir = std::path::absolute(&state.paths.root)?;
     let default_dir = crate::config::default_data_dir();
-    ServiceSpec {
+    let exe = installed_binary(std::env::current_exe()?)?;
+    Ok(ServiceSpec {
         name: service_name(BASE_NAME, &data_dir, default_dir.as_deref()),
-        exe: std::env::current_exe().unwrap_or_default(),
+        exe,
         data_dir,
         path_env: std::env::var("PATH").ok().filter(|path| !path.is_empty()),
+    })
+}
+
+/// The path that starts this binary at the next login. On Linux a binary an update replaced reports
+/// itself as `<path> (deleted)`; the new one at `<path>` is what the item should start.
+pub fn installed_binary(exe: PathBuf) -> Result<PathBuf> {
+    let text = exe.to_string_lossy();
+    let exe = match text.strip_suffix(" (deleted)") {
+        Some(path) => PathBuf::from(path),
+        None => exe,
+    };
+    if !exe.is_file() {
+        anyhow::bail!("this daemon's binary is gone from {}; open Kybern again so the new one registers itself", exe.display());
     }
+    Ok(exe)
 }
 
 /// The item's name for `~/.kybern` on this platform.
@@ -302,20 +346,24 @@ const BASE_NAME: &str = "dev.kybern.kybernd.login";
 const BASE_NAME: &str = "kybern-login";
 
 /// The OS work of one reconcile, off the async runtime.
-fn apply(manager: &dyn ServiceManager, spec: &ServiceSpec, wanted: bool, running_here: bool) -> Applied {
+fn apply(manager: &dyn ServiceManager, spec: &ServiceSpec, wanted: bool, running_here: bool, allow_dev: bool) -> Applied {
     if manager.kind().is_none() {
         return Applied::default();
     }
-    if let Some(external) = manager.external(&spec.data_dir) {
-        return Applied { external: Some(external), ..Applied::default() };
-    }
     let registration = match manager.registration(spec) {
         Ok(registration) => registration,
-        Err(error) => return Applied { error: Some(format!("Kybern could not read its login item: {error:#}")), ..Applied::default() },
+        Err(error) => {
+            return Applied { error: Some(format!("Kybern could not read its login item: {error:#}")), retry: true, ..Applied::default() };
+        }
     };
+    // Another service starts this data folder's daemon: ours would start a second one at login.
+    if let Some(external) = manager.external(&spec.data_dir) {
+        let removed = registration == Registration::Missing || manager.uninstall(spec, running_here).is_ok();
+        return Applied { external: Some(external), registered: !removed, retry: !removed, ..Applied::default() };
+    }
     let result = match (wanted, registration) {
         (true, Registration::Current) => Ok(true),
-        (true, existing) if is_development_build(&spec.exe) && std::env::var(ANY_BINARY_ENV).as_deref() != Ok("1") => {
+        (true, existing) if is_development_build(&spec.exe) && !allow_dev => {
             tracing::info!(target: TARGET, exe = %spec.exe.display(), "a development build does not register itself to start at login");
             return Applied {
                 registered: existing != Registration::Missing,
@@ -340,11 +388,15 @@ fn apply(manager: &dyn ServiceManager, spec: &ServiceSpec, wanted: bool, running
         Err(error) if wanted => Applied {
             registered: registration == Registration::Stale,
             error: Some(format!("Kybern could not register itself to start at login: {error:#}")),
+            retry: true,
             ..Applied::default()
         },
-        Err(error) => {
-            Applied { registered: true, error: Some(format!("Kybern could not remove its login item: {error:#}")), ..Applied::default() }
-        }
+        Err(error) => Applied {
+            registered: true,
+            error: Some(format!("Kybern could not remove its login item: {error:#}")),
+            retry: true,
+            ..Applied::default()
+        },
     }
 }
 
@@ -375,17 +427,36 @@ pub async fn set_enabled(state: &AppState, enabled: bool) -> Result<()> {
 }
 
 /// `kybernd --login-service` at login: another daemon already serves this data folder (the app was
-/// opened first, or a previous login's daemon is still up). Both endpoint files name it and it accepts
-/// a connection.
+/// opened first, or a previous login's daemon is still up), or the desktop app is starting one right
+/// now. A daemon serves when both endpoint files name it and its `/health` answers; the app is starting
+/// one while its startup lock or announcement is fresh (it holds them for at most 15 s).
 pub fn already_served(root: &Path) -> bool {
+    let fresh = |name: &str| {
+        std::fs::metadata(root.join(name))
+            .and_then(|meta| meta.modified())
+            .is_ok_and(|at| at.elapsed().is_ok_and(|age| age < Duration::from_secs(15)))
+    };
+    if fresh(".gpuix-startup-lock") || fresh(".gpuix-starting.json") {
+        return true;
+    }
     let Some(port) = std::fs::read_to_string(root.join("daemon.port")).ok().and_then(|text| text.trim().parse::<u16>().ok()) else {
         return false;
     };
-    if port == 0 || !root.join("daemon.listen").exists() {
+    port != 0 && root.join("daemon.listen").exists() && answers_health(port)
+}
+
+/// Whether a Kybern daemon answers `GET /health` on this loopback port, not merely something listening.
+fn answers_health(port: u16) -> bool {
+    use std::io::{Read, Write};
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)) else { return false };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    if stream.write_all(b"GET /health HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n").is_err() {
         return false;
     }
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-    std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
+    let mut answer = String::new();
+    let _ = stream.take(4096).read_to_string(&mut answer);
+    answer.starts_with("HTTP/1.") && answer.split_whitespace().nth(1) == Some("200") && answer.trim_end().ends_with("ok")
 }
 
 #[cfg(test)]
