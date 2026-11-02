@@ -4549,6 +4549,7 @@ method!(NetworkUpdateAll, "network.update_all", Some(Scope::NetworkAdmin), Empty
 method!(NetworkDoctor, "network.doctor", Some(Scope::NetworkRead), NetworkDoctorParams, DoctorReport);
 method!(MachinesInfo, "machines.info", Some(Scope::NetworkRead), Empty, MachineInfo);
 method!(NetworkFollowUpdatesSet, "network.follow_updates.set", Some(Scope::NetworkAdmin), NetworkFollowUpdatesParams, NetworkStatus);
+method!(NetworkKeepReachableSet, "network.keep_reachable.set", Some(Scope::NetworkAdmin), NetworkKeepReachableParams, NetworkStatus);
 
 // Daemon-to-daemon. A device token never carries a machine scope, so these refuse clients.
 method!(PeerOpsSync, "peer.ops.sync", Some(Scope::MachinePeer), PeerOpsSyncParams, PeerOpsSyncResult);
@@ -4909,6 +4910,7 @@ registry!(
     NetworkDoctor,
     MachinesInfo,
     NetworkFollowUpdatesSet,
+    NetworkKeepReachableSet,
     PeerOpsSync,
     PeerOpsPush,
     PeerPresenceMethod,

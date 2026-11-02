@@ -1520,6 +1520,15 @@ async fn dispatch_part_16(state: &AppState, ctx: &ConnectionCtx, method: &str, s
             let p: NetworkFollowUpdatesParams = parse(params)?;
             ok(crate::network::updates::set_follow(state, p.enabled).await.map_err(JoinError::into_rpc)?)
         }
+        NetworkKeepReachableSet::NAME => {
+            let p: NetworkKeepReachableParams = parse(params)?;
+            crate::login_service::set_enabled(state, p.enabled)
+                .await
+                .map_err(|error| RpcError::internal(format!("Kybern could not save the setting: {error:#}")))?;
+            ok(crate::network::status::network_status(state)
+                .await
+                .ok_or_else(|| RpcError::internal("The machine network is unavailable on this machine."))?)
+        }
         NetworkDoctor::NAME => {
             let p: NetworkDoctorParams = parse_or_default(params)?;
             ok(crate::network::doctor::report(state, p.machine_id.as_deref()).await)

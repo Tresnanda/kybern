@@ -10,7 +10,9 @@
 //! * **One link per pair, used both ways.** [`PeerLink`] sends and answers requests on one
 //!   socket. The listening side wraps its connection's outbox; the dialing side owns the socket.
 //! * **Heartbeat and backoff.** A WebSocket ping every 30 s; a link silent for three missed pings
-//!   is dead. Reconnects back off 2, 4, 8 … 300 s and start over when the tailnet's status changes.
+//!   is dead. Reconnects back off 2, 4, 8 … 300 s and start over when the tailnet's status changes,
+//!   when this machine wakes from sleep, or when a member that was away says it is back
+//!   ([`super::wake_watch`]).
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -494,6 +496,28 @@ impl Peers {
         for status in inner.status.values_mut() {
             status.failures = 0;
         }
+    }
+
+    /// This machine woke from sleep: every wait its failed attempts earned while it slept is over,
+    /// the members that dial it are told it is back at once, and the tailnet is looked at afresh.
+    pub(super) fn after_resume(&self) {
+        self.reset_backoff();
+        let mut inner = self.lock();
+        inner.nudged_out.clear();
+        inner.probed.clear();
+        inner.awaited.clear();
+    }
+
+    /// Whether `signature` (of a fresh Tailscale status) differs from the one the last pass saw.
+    pub(super) fn signature_changed(&self, signature: &str) -> bool {
+        let inner = self.lock();
+        !inner.signature.is_empty() && inner.signature != signature
+    }
+
+    /// Whether some member other than `me` that is not paused has no open link.
+    pub(super) fn any_unlinked(&self, members: &[String]) -> bool {
+        let inner = self.lock();
+        members.iter().any(|id| inner.links.get(id).is_none_or(|link| link.is_closed()))
     }
 }
 
@@ -1052,7 +1076,7 @@ pub(super) fn run_dialed<S>(
 // ---- the worker ----
 
 /// A fingerprint of who is online, to notice that the tailnet changed.
-fn signature(status: &TsStatus) -> String {
+pub(super) fn signature(status: &TsStatus) -> String {
     let mut online: Vec<&str> = status.peers.iter().filter(|peer| peer.online).map(|peer| peer.node_id.as_str()).collect();
     online.sort_unstable();
     format!("{}|{}", status.running, online.join(","))
@@ -1065,6 +1089,8 @@ const LISTEN_RETRY: Duration = Duration::from_secs(10);
 /// wake-up. It ends with the daemon.
 pub async fn run(state: AppState) {
     let network = state.network.clone();
+    // Sleep and tailnet changes cut the backoff short; it ends with the daemon too.
+    tokio::spawn(super::wake_watch::run(state.clone()));
     loop {
         let retry = pass(&state).await;
         super::spaces::reconcile(&state).await;
@@ -1426,6 +1452,34 @@ mod tests {
         assert!(!peers.due("m") && peers.status("m").failures == 2);
         peers.reset_pair("m");
         assert!(peers.due("m") && peers.status("m").failures == 0);
+    }
+
+    #[test]
+    fn waking_up_ends_every_wait_and_lets_this_machine_nudge_its_dialers_again() {
+        let peers = Peers::default();
+        let timing = crate::network::Timing::default();
+        for _ in 0..8 {
+            peers.fail("m", &timing, "refused".into());
+        }
+        peers.fail_slow("n", &timing, "asleep".into());
+        assert!(!peers.due("m") && !peers.due("n"), "long waits were earned while it slept");
+        assert!(peers.soonest_retry().unwrap() > Duration::from_secs(25));
+        assert!(peers.nudge_out_due("d", Duration::from_secs(30)));
+        assert!(!peers.nudge_out_due("d", Duration::from_secs(30)));
+        peers.after_resume();
+        assert!(peers.due("m") && peers.due("n") && peers.status("m").failures == 0);
+        assert!(peers.nudge_out_due("d", Duration::from_secs(30)), "the member that dials this one hears at once");
+    }
+
+    #[test]
+    fn a_signature_change_is_news_only_after_a_pass_saw_one() {
+        let peers = Peers::default();
+        assert!(!peers.signature_changed("true|a,b"), "no pass yet: the pass itself looks");
+        peers.lock().signature = "true|a".into();
+        assert!(!peers.signature_changed("true|a"));
+        assert!(peers.signature_changed("true|a,b"));
+        assert!(peers.any_unlinked(&["m".into()]));
+        assert!(!peers.any_unlinked(&[]));
     }
 
     #[test]
