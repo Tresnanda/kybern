@@ -644,7 +644,10 @@ async fn run_fast_mode() {
     client.call::<PortsStop>(PortsStopParams { id: forward.id }).await.unwrap();
     let end = tokio::time::timeout(Duration::from_secs(3), websocket.next()).await.expect("the WebSocket did not end");
     assert!(end.is_none_or(|frame| frame.is_err() || matches!(frame, Ok(Message::Close(_)))));
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_err(), "the HTTPS listener closed");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
+        assert!(tokio::time::Instant::now() < deadline, "the HTTPS listener closed");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     dev.abort();
 }

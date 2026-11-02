@@ -1012,9 +1012,9 @@ async fn a_terminal_on_another_machine_runs_there_and_streams_back_through_the_r
 
     assert!(call(&mut socket, 2, "terminals.subscribe", json!({"terminal_id": terminal_id, "replay": true})).await["error"].is_null());
     let command = "echo kybern-$((20+22)); cat only-on-b.txt\n";
-    assert!(
-        call(&mut socket, 3, "terminals.input", json!({"terminal_id": terminal_id, "data": B64.encode(command)})).await["error"].is_null()
-    );
+    // Sent without waiting for its answer here: the output can arrive before it, and `call` would skip it.
+    let input = json!({"jsonrpc": "2.0", "id": 3, "method": "terminals.input", "params": {"terminal_id": terminal_id, "data": B64.encode(command)}});
+    socket.send(Message::Text(input.to_string().into())).await.unwrap();
     let mut output = String::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     while !(output.contains("kybern-42") && output.contains("b-file")) {

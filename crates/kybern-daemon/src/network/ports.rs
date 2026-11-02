@@ -501,7 +501,7 @@ pub async fn handle_open(state: &AppState, link: &Arc<PeerLink>, params: PeerPor
     let slot = state
         .network
         .relays
-        .acquire_wait(&format!("inbound:{}", link.machine_id), relay::MAX_STREAMS_PER_CLIENT, direct::QUEUE_WAIT, &cancel)
+        .acquire_wait(&format!("inbound:{}", link.machine_id), relay::MAX_INBOUND_PER_MEMBER, direct::QUEUE_WAIT, &cancel)
         .await
         .ok_or_else(|| RpcError::new(codes::CONFLICT, "too many forwarded connections on this machine"))?;
     let socket = connect_loopback(params.port).await?;

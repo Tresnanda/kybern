@@ -58,6 +58,9 @@ pub(super) const fn frame_cost(len: usize) -> usize {
     if len < MIN_FRAME_COST { MIN_FRAME_COST } else { len }
 }
 pub const MAX_STREAMS_PER_CLIENT: usize = 32;
+/// Streams one member machine may hold open on this one (`inbound:<machine>`): it relays for several devices and
+/// pages at once, each under its own limit there, so its total here is larger than any one of theirs.
+pub const MAX_INBOUND_PER_MEMBER: usize = 128;
 pub const MAX_STREAMS_PER_DAEMON: usize = 256;
 /// Request bodies and response bodies are cut into pieces of this size.
 const CHUNK: usize = 16 * 1024;
@@ -1103,7 +1106,7 @@ pub async fn handle_open(state: &AppState, link: &Arc<PeerLink>, params: PeerRel
     let slot = state
         .network
         .relays
-        .acquire(&format!("inbound:{}", link.machine_id))
+        .acquire_within(&format!("inbound:{}", link.machine_id), MAX_INBOUND_PER_MEMBER)
         .ok_or_else(|| RpcError::new(codes::CONFLICT, "too many relayed connections on this machine"))?;
     let (stream, incoming) = link
         .relays

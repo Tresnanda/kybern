@@ -178,13 +178,6 @@ pub async fn prepare(state: &AppState, link: &Arc<PeerLink>, request: PeerPortsP
                     idle_since = Instant::now();
                     let (state, serving, node, token_hash, active) = (state.clone(), serving.clone(), node.clone(), token_hash.clone(), active.clone());
                     tokio::spawn(async move {
-                        // Over the limit, a connection waits for a place instead of being dropped.
-                        let key = format!("inbound:{}", serving.link.machine_id);
-                        let Some(slot) = state.network.relays.acquire_wait(&key, crate::network::relay::MAX_STREAMS_PER_CLIENT, QUEUE_WAIT, &serving.cancel).await else {
-                            tracing::debug!(target: TARGET, machine = %serving.link.machine_id, "refused a direct connection: no place under the stream limit");
-                            return;
-                        };
-                        let _slot = slot;
                         active.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         transfer(&state, &serving, socket, source.ip(), &node, &token_hash, request.port).await;
                         active.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
@@ -258,6 +251,15 @@ async fn transfer(state: &AppState, serving: &Serving, mut socket: TcpStream, so
         }
     } else {
         MODE_RAW
+    };
+    // A socket in use takes a place under the stream limits; over them it waits for one instead of being dropped. A ready
+    // socket that waits for its mode does not count.
+    let key = format!("inbound:{}", link.machine_id);
+    let Some(_slot) =
+        state.network.relays.acquire_wait(&key, crate::network::relay::MAX_INBOUND_PER_MEMBER, QUEUE_WAIT, &serving.cancel).await
+    else {
+        tracing::debug!(target: TARGET, machine = %link.machine_id, "refused a direct connection: no place under the stream limit");
+        return;
     };
     match mode {
         MODE_RAW => {
