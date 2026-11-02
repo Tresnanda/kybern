@@ -910,6 +910,31 @@ static void create_host(JSCValue *cmd, const char *id) {
   }
   g_ptr_array_add(origins, NULL);
   host->allowed_origins = (char **)g_ptr_array_free(origins, FALSE);
+  // A Fast preview (`https://localhost`, ADE-116) presents Kybern's per-install certificate, which no trust store knows.
+  // The session accepts exactly that certificate for the loopback hosts; every other TLS error still fails the load.
+  if (jsc_value_object_has_property(cmd, "trustedCertificatePems")) {
+    JSCValue *list = jsc_value_object_get_property(cmd, "trustedCertificatePems");
+    if (jsc_value_is_array(list)) {
+      JSCValue *length = jsc_value_object_get_property(list, "length");
+      int n = jsc_value_to_int32(length); g_object_unref(length);
+      for (int i = 0; i < n && i < 8; i++) {
+        JSCValue *item = jsc_value_object_get_property_at_index(list, i);
+        if (jsc_value_is_string(item)) {
+          char *pem = jsc_value_to_string(item);
+          GError *error = NULL;
+          GTlsCertificate *certificate = g_tls_certificate_new_from_pem(pem, -1, &error);
+          if (certificate) {
+            webkit_network_session_allow_tls_certificate_for_host(session, certificate, "localhost");
+            webkit_network_session_allow_tls_certificate_for_host(session, certificate, "127.0.0.1");
+            g_object_unref(certificate);
+          } else g_clear_error(&error);
+          g_free(pem);
+        }
+        g_object_unref(item);
+      }
+    }
+    g_object_unref(list);
+  }
   char *escaped = g_uri_escape_string(id, G_URI_RESERVED_CHARS_ALLOWED_IN_PATH, FALSE);
   host->wrapper_url = g_strconcat("tauri://localhost/embedded/", escaped, NULL);
   g_free(escaped);

@@ -4142,7 +4142,8 @@ export interface SkillsCopyResult {
 }
 export interface SkillCopyPayload { name: string; from_home: SkillHome; homes: SkillHome[]; replaces?: string[] }
 
-export interface PortsForwardParams { machine: string; remote_port: number; local_port?: number | null }
+/** `https`: also serve the forward as `https://localhost:<https_port>` with HTTP/2 (Fast mode) for Kybern's web views. */
+export interface PortsForwardParams { machine: string; remote_port: number; local_port?: number | null; https?: boolean }
 export interface PortForward {
   id: Uuid;
   machine_id: MachineId;
@@ -4151,10 +4152,20 @@ export interface PortForward {
   local_port: number;
   connections: number;
   created_at: DateTime;
+  /** The round trip to the machine when the forward opened, in milliseconds. */
+  rtt_ms?: number;
+  /** The machine can serve this forward over HTTP/2 (`https: true`). */
+  https_available?: boolean;
+  /** The HTTPS (HTTP/2) listener, once asked for. */
+  https_port?: number;
+  /** The PEM certificate that listener presents; only Kybern's web views trust it, and only for its pages. */
+  https_certificate?: string;
+  /** Its SHA-256 fingerprint, lowercase hex of the DER. */
+  https_certificate_sha256?: string;
 }
 export interface PortsListResult { forwards: PortForward[] }
-export interface PeerPortsPrepareParams { forward_id: string; port: number }
-export interface PeerPortsDirect { port: number; token: string }
+export interface PeerPortsPrepareParams { forward_id: string; port: number; direct_version?: number }
+export interface PeerPortsDirect { port: number; token: string; version?: number }
 export interface PeerPortsPrepareResult { direct?: PeerPortsDirect }
 export interface PeerPortsReleaseParams { forward_id: string }
 export interface PeerPortsOpenParams { stream_id: number; port: number }

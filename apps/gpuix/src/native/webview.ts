@@ -143,10 +143,14 @@ export const webHost = {
     command({ op: 'create', id, category: 'renderer', generation, allowedOrigins: [], html })
     return generation
   },
-  create(id: string, url: string, kind: 'file' | 'server' | 'visual') {
+  /** `trust`: the one certificate a Fast preview's `https://localhost` origin presents (ADE-116). The host accepts exactly it,
+   *  for that loopback origin only (macOS by SHA-256 of the DER, Windows and Linux by its PEM); every other TLS error fails. */
+  create(id: string, url: string, kind: 'file' | 'server' | 'visual', trust?: { sha256: string; pem: string }) {
     const generation = ++nextGeneration
     if (!SUPPORT.available) return generation
-    command({ op: 'create', id, category: kind === 'visual' ? 'visual' : 'preview', generation, allowedOrigins: [new URL(url).origin], html: webDocument(url, kind) })
+    const origin = new URL(url), pinned = trust && origin.protocol === 'https:' && ['localhost', '127.0.0.1'].includes(origin.hostname)
+    command({ op: 'create', id, category: kind === 'visual' ? 'visual' : 'preview', generation, allowedOrigins: [origin.origin], html: webDocument(url, kind),
+      ...(pinned ? { trustedCertificates: [trust.sha256.toLowerCase()], trustedCertificatePems: [trust.pem] } : {}) })
     live.add(id)
     return generation
   },

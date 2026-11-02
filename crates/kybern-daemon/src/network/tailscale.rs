@@ -206,8 +206,11 @@ pub struct Cli {
     whois: Mutex<HashMap<IpAddr, (Instant, Whois)>>,
     /// The `whois` call running for an address, which concurrent callers wait on instead of starting their own: a
     /// browser opening several connections at once costs one CLI call, not one each.
-    whois_running: Mutex<HashMap<IpAddr, Arc<tokio::sync::OnceCell<std::result::Result<Whois, String>>>>>,
+    whois_running: Mutex<HashMap<IpAddr, Running>>,
 }
+
+/// A `whois` call in flight: its answer, or the error's text, once it is known.
+type Running = Arc<tokio::sync::OnceCell<std::result::Result<Whois, String>>>;
 
 impl Cli {
     async fn run(&self, args: &[&str]) -> Option<(bool, String)> {
