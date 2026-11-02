@@ -521,6 +521,7 @@ async fn run_fast_mode() {
                 }
             }),
         )
+        .route("/big.js", get(|| async { ([("content-type", "text/javascript")], "export const x = 1 // padding\n".repeat(200)) }))
         .route(
             "/events",
             get(|| async {
@@ -614,12 +615,32 @@ async fn run_fast_mode() {
     // Nothing went over the session's WebSocket.
     assert_eq!(a.state.network.peers.link(&b.id()).unwrap().relays.len(), 0);
 
-    // Server-sent events stream through.
+    // A large module is gzipped on the target when the browser accepts it, and decodes to what the dev server sent; a
+    // small one, or a request that does not accept gzip, passes as it is.
+    let mut zipped = sender.clone();
+    let request = |path: &str, gzip: bool| {
+        let mut builder = hyper::Request::get(format!("https://localhost:{port}{path}"));
+        if gzip {
+            builder = builder.header("accept-encoding", "gzip, deflate, br");
+        }
+        builder.body(Empty::<Bytes>::new()).unwrap()
+    };
+    let response = zipped.send_request(request("/big.js", true)).await.unwrap();
+    assert_eq!(response.headers()["content-encoding"], "gzip");
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut flate2::read::GzDecoder::new(&body[..]), &mut text).unwrap();
+    assert_eq!(text, "export const x = 1 // padding\n".repeat(200));
+    assert!(body.len() < text.len() / 4, "compressed {} of {}", body.len(), text.len());
+    let plain = zipped.send_request(request("/big.js", false)).await.unwrap();
+    assert!(!plain.headers().contains_key("content-encoding"));
+    let small = zipped.send_request(request("/module/7", true)).await.unwrap();
+    assert!(!small.headers().contains_key("content-encoding"));
+
+    // Server-sent events stream through, never compressed.
     let mut events = sender.clone();
-    let response = events
-        .send_request(hyper::Request::get(format!("https://localhost:{port}/events")).body(Empty::<Bytes>::new()).unwrap())
-        .await
-        .unwrap();
+    let response = events.send_request(request("/events", true)).await.unwrap();
+    assert!(!response.headers().contains_key("content-encoding"));
     assert_eq!(response.headers()["content-type"], "text/event-stream");
     let text = String::from_utf8(response.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
     assert_eq!(text, "data: tick 0\n\ndata: tick 1\n\ndata: tick 2\n\n");

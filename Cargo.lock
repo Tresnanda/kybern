@@ -2087,6 +2087,7 @@ dependencies = [
  "clap",
  "directories",
  "ed25519-dalek",
+ "flate2",
  "futures",
  "http-body-util",
  "hyper",

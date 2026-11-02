@@ -56,7 +56,7 @@ impl Tunnel {
         let cancel = cancel.clone();
         tokio::spawn(async move {
             tokio::select! {
-                result = connection => if let Err(error) = result { tracing::debug!(target: TARGET, %error, "a forward's HTTP/2 connection ended"); },
+                result = connection => if let Err(error) = result { tracing::debug!(target: TARGET, ?error, "a forward's HTTP/2 connection ended"); },
                 _ = cancel.cancelled() => {}
             }
         });
@@ -100,6 +100,8 @@ pub(super) async fn start(network: &Arc<Network>, forward: &Arc<Forward>) -> Res
             tokio::spawn(async move {
                 let _count = Counted::new(&forward);
                 let Ok(Ok(tls)) = tokio::time::timeout(Duration::from_secs(10), acceptor.accept(socket)).await else { return };
+                let alpn = tls.get_ref().1.alpn_protocol().map(|p| String::from_utf8_lossy(p).into_owned()).unwrap_or_default();
+                tracing::debug!(target: TARGET, port = forward.local_port, alpn = %alpn, "a page connection to a Fast listener");
                 let service = {
                     let (network, forward, route) = (network.clone(), forward.clone(), route.clone());
                     hyper::service::service_fn(move |request: Request<Incoming>| {
@@ -167,7 +169,7 @@ async fn handle(
             Response::from_parts(parts, body.boxed())
         }
         Err(error) => {
-            tracing::debug!(target: TARGET, %error, "a forwarded HTTP/2 request failed");
+            tracing::debug!(target: TARGET, ?error, "a forwarded HTTP/2 request failed");
             status_response(StatusCode::BAD_GATEWAY)
         }
     }

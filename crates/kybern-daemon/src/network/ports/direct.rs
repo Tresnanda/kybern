@@ -353,7 +353,7 @@ async fn serve_http2(socket: TcpStream, port: u16) {
         .keep_alive_interval(Some(Duration::from_secs(20)))
         .keep_alive_timeout(Duration::from_secs(20));
     if let Err(error) = builder.serve_connection(TokioIo::new(socket), service).await {
-        tracing::debug!(target: TARGET, %error, "the HTTP/2 connection of a forward ended");
+        tracing::debug!(target: TARGET, ?error, "the HTTP/2 connection of a forward ended");
     }
 }
 
@@ -381,16 +381,117 @@ async fn to_dev_server(
     }
     parts.uri = uri;
     parts.version = hyper::Version::HTTP_11;
+    let gzip_ok = accepts_gzip(&parts.headers) && parts.method != hyper::Method::HEAD;
     match client.request(Request::from_parts(parts, body)).await {
         Ok(response) => {
             let (mut parts, body) = response.into_parts();
             strip_hop_headers(&mut parts.headers);
             parts.version = hyper::Version::HTTP_2;
+            if gzip_ok && compressible(&parts) {
+                parts.headers.remove(hyper::header::CONTENT_LENGTH);
+                parts.headers.insert(hyper::header::CONTENT_ENCODING, hyper::header::HeaderValue::from_static("gzip"));
+                parts.headers.append(hyper::header::VARY, hyper::header::HeaderValue::from_static("accept-encoding"));
+                return Response::from_parts(parts, GzipBody::new(body).boxed());
+            }
             Response::from_parts(parts, body.boxed())
         }
         Err(error) => {
-            tracing::debug!(target: TARGET, %error, "the dev server did not answer a forwarded request");
+            tracing::debug!(target: TARGET, ?error, "the dev server did not answer a forwarded request");
             status_response(StatusCode::BAD_GATEWAY)
+        }
+    }
+}
+
+// ---- compression ----
+//
+// Dev servers send their modules uncompressed: on the loopback that costs nothing, across machines the bytes are the slow
+// part (a Vite page of a few hundred modules is about 1.5 MB, mostly inline source maps, and a relayed tailnet path carries
+// a few hundred KB/s). The target gzips what the browser accepts, at the fastest level and flushed per chunk so streamed
+// responses keep streaming; the browser decompresses as from any server. Event streams and encoded bodies pass as they are.
+
+fn accepts_gzip(headers: &hyper::HeaderMap) -> bool {
+    headers
+        .get_all(hyper::header::ACCEPT_ENCODING)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|coding| coding.split(';').next().is_some_and(|name| name.trim().eq_ignore_ascii_case("gzip")) && !coding.contains("q=0"))
+}
+
+fn compressible(parts: &hyper::http::response::Parts) -> bool {
+    if parts.headers.contains_key(hyper::header::CONTENT_ENCODING) || !parts.status.is_success() || parts.status == StatusCode::NO_CONTENT {
+        return false;
+    }
+    if parts
+        .headers
+        .get(hyper::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        .is_some_and(|n| n < 512)
+    {
+        return false;
+    }
+    let kind = parts.headers.get(hyper::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_ascii_lowercase();
+    let kind = kind.split(';').next().unwrap_or_default().trim();
+    kind != "text/event-stream"
+        && (kind.starts_with("text/")
+            || matches!(
+                kind,
+                "application/javascript"
+                    | "application/json"
+                    | "application/xml"
+                    | "application/wasm"
+                    | "image/svg+xml"
+                    | "application/manifest+json"
+            ))
+}
+
+/// A response body gzipped as it streams.
+struct GzipBody {
+    inner: Incoming,
+    encoder: Option<flate2::write::GzEncoder<Vec<u8>>>,
+}
+
+impl GzipBody {
+    fn new(inner: Incoming) -> Self {
+        Self { inner, encoder: Some(flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast())) }
+    }
+}
+
+impl hyper::body::Body for GzipBody {
+    type Data = Bytes;
+    type Error = hyper::Error;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, hyper::Error>>> {
+        use std::io::Write;
+        use std::task::Poll;
+        loop {
+            if self.encoder.is_none() {
+                return Poll::Ready(None);
+            }
+            match std::pin::Pin::new(&mut self.inner).poll_frame(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Some(Err(error))) => return Poll::Ready(Some(Err(error))),
+                Poll::Ready(Some(Ok(frame))) => {
+                    let Ok(data) = frame.into_data() else { continue };
+                    let encoder = self.encoder.as_mut().expect("checked above");
+                    if encoder.write_all(&data).is_err() || encoder.flush().is_err() {
+                        self.encoder = None;
+                        return Poll::Ready(None);
+                    }
+                    let out = std::mem::take(encoder.get_mut());
+                    if !out.is_empty() {
+                        return Poll::Ready(Some(Ok(hyper::body::Frame::data(Bytes::from(out)))));
+                    }
+                }
+                Poll::Ready(None) => {
+                    let finished = self.encoder.take().and_then(|encoder| encoder.finish().ok()).unwrap_or_default();
+                    return Poll::Ready((!finished.is_empty()).then(|| Ok(hyper::body::Frame::data(Bytes::from(finished)))));
+                }
+            }
         }
     }
 }
