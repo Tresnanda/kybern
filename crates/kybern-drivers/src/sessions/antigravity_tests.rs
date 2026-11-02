@@ -81,7 +81,9 @@ impl Agy {
 }
 
 /// Every file under `dir` with its size, modification time and bytes.
-fn tree(dir: &Path) -> BTreeMap<PathBuf, (u64, Option<std::time::SystemTime>, Vec<u8>)> {
+type Tree = BTreeMap<PathBuf, (u64, Option<std::time::SystemTime>, Vec<u8>)>;
+
+fn tree(dir: &Path) -> Tree {
     let mut out = BTreeMap::new();
     let mut dirs = vec![dir.to_path_buf()];
     while let Some(dir) = dirs.pop() {
@@ -91,10 +93,22 @@ fn tree(dir: &Path) -> BTreeMap<PathBuf, (u64, Option<std::time::SystemTime>, Ve
                 dirs.push(entry.path());
             }
             let bytes = if meta.is_file() { std::fs::read(entry.path()).unwrap() } else { Vec::new() };
-            out.insert(entry.path(), (meta.len(), meta.modified().ok(), bytes));
+            // A directory's own timestamp is updated lazily by NTFS after the writes inside it, so only files carry one.
+            let modified = if meta.is_file() { meta.modified().ok() } else { None };
+            out.insert(entry.path(), (meta.len(), modified, bytes));
         }
     }
     out
+}
+
+/// The paths whose presence, size, bytes or modification time differ between two listings.
+fn changed(before: &Tree, after: &Tree) -> Vec<String> {
+    let paths: std::collections::BTreeSet<_> = before.keys().chain(after.keys()).collect();
+    paths
+        .into_iter()
+        .filter(|path| before.get(*path) != after.get(*path))
+        .map(|path| format!("{}: {:?} -> {:?}", path.display(), before.get(path).map(|e| (e.0, e.1)), after.get(path).map(|e| (e.0, e.1))))
+        .collect()
 }
 
 fn step(index: u64, source: &str, kind: &str, content: &str) -> Value {
@@ -328,7 +342,7 @@ async fn reading_never_touches_the_antigravity_folder() {
     list(ProviderKind::Antigravity, &agy.context(), None, "").await.unwrap();
     read(ProviderKind::Antigravity, &agy.context(), "conv").await.unwrap();
 
-    assert_eq!(tree(&agy.root()), before, "no file was added, changed or touched");
+    assert_eq!(changed(&before, &tree(&agy.root())), Vec::<String>::new(), "no file was added, changed or touched");
 
     // Without the writer, SQLite leaves no -wal or -shm; reading must not bring them back.
     #[cfg(unix)]
