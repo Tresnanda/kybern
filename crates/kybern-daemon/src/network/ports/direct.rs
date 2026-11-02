@@ -388,9 +388,7 @@ async fn to_dev_server(
             strip_hop_headers(&mut parts.headers);
             parts.version = hyper::Version::HTTP_2;
             if gzip_ok && compressible(&parts) {
-                parts.headers.remove(hyper::header::CONTENT_LENGTH);
-                parts.headers.insert(hyper::header::CONTENT_ENCODING, hyper::header::HeaderValue::from_static("gzip"));
-                parts.headers.append(hyper::header::VARY, hyper::header::HeaderValue::from_static("accept-encoding"));
+                mark_gzipped(&mut parts.headers);
                 return Response::from_parts(parts, GzipBody::new(body).boxed());
             }
             Response::from_parts(parts, body.boxed())
@@ -409,17 +407,38 @@ async fn to_dev_server(
 // a few hundred KB/s). The target gzips what the browser accepts, at the fastest level and flushed per chunk so streamed
 // responses keep streaming; the browser decompresses as from any server. Event streams and encoded bodies pass as they are.
 
+/// The request lists `gzip` in `Accept-Encoding` with a quality above zero.
 fn accepts_gzip(headers: &hyper::HeaderMap) -> bool {
-    headers
-        .get_all(hyper::header::ACCEPT_ENCODING)
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .flat_map(|value| value.split(','))
-        .any(|coding| coding.split(';').next().is_some_and(|name| name.trim().eq_ignore_ascii_case("gzip")) && !coding.contains("q=0"))
+    headers.get_all(hyper::header::ACCEPT_ENCODING).iter().filter_map(|value| value.to_str().ok()).flat_map(|value| value.split(',')).any(
+        |coding| {
+            let mut parts = coding.split(';');
+            let named = parts.next().is_some_and(|name| name.trim().eq_ignore_ascii_case("gzip"));
+            let quality = parts
+                .filter_map(|param| param.trim().strip_prefix("q=").or_else(|| param.trim().strip_prefix("Q=")))
+                .find_map(|q| q.trim().parse::<f32>().ok())
+                .unwrap_or(1.0);
+            named && quality > 0.0
+        },
+    )
 }
 
+/// Only a whole `200` body is gzipped: a `206` or any `Content-Range` describes the uncompressed bytes, and
+/// `Cache-Control: no-transform` forbids it (RFC 9111 §5.2.2.6).
 fn compressible(parts: &hyper::http::response::Parts) -> bool {
-    if parts.headers.contains_key(hyper::header::CONTENT_ENCODING) || !parts.status.is_success() || parts.status == StatusCode::NO_CONTENT {
+    if parts.headers.contains_key(hyper::header::CONTENT_ENCODING)
+        || parts.status != StatusCode::OK
+        || parts.headers.contains_key(hyper::header::CONTENT_RANGE)
+    {
+        return false;
+    }
+    let no_transform = parts
+        .headers
+        .get_all(hyper::header::CACHE_CONTROL)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .any(|directive| directive.trim().eq_ignore_ascii_case("no-transform"));
+    if no_transform {
         return false;
     }
     if parts
@@ -444,6 +463,20 @@ fn compressible(parts: &hyper::http::response::Parts) -> bool {
                     | "image/svg+xml"
                     | "application/manifest+json"
             ))
+}
+
+/// The headers of a response whose body is gzipped on the way: no length, the encoding, `Vary`, and a weak `ETag`, since
+/// the bytes are no longer the ones a strong tag names (RFC 9110 §8.8.3). The browser's `If-None-Match` still matches the
+/// dev server's tag, which compares weakly.
+fn mark_gzipped(headers: &mut hyper::HeaderMap) {
+    headers.remove(hyper::header::CONTENT_LENGTH);
+    headers.insert(hyper::header::CONTENT_ENCODING, hyper::header::HeaderValue::from_static("gzip"));
+    headers.append(hyper::header::VARY, hyper::header::HeaderValue::from_static("accept-encoding"));
+    let strong =
+        headers.get(hyper::header::ETAG).and_then(|tag| tag.to_str().ok()).filter(|tag| !tag.starts_with("W/")).map(str::to_string);
+    if let Some(weak) = strong.and_then(|tag| hyper::header::HeaderValue::from_str(&format!("W/{tag}")).ok()) {
+        headers.insert(hyper::header::ETAG, weak);
+    }
 }
 
 /// A response body gzipped as it streams.
@@ -635,5 +668,59 @@ impl Route {
             }
         }
         self.warm.lock().unwrap_or_else(|p| p.into_inner()).clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn response(status: u16, headers: &[(&str, &str)]) -> hyper::http::response::Parts {
+        let mut builder = Response::builder().status(status);
+        for (name, value) in headers {
+            builder = builder.header(*name, *value);
+        }
+        builder.body(()).unwrap().into_parts().0
+    }
+
+    #[test]
+    fn only_a_whole_ok_body_the_server_lets_be_transformed_is_gzipped() {
+        let js = ("content-type", "application/javascript");
+        assert!(compressible(&response(200, &[js])));
+        assert!(!compressible(&response(206, &[js, ("content-range", "bytes 0-99/5000")])), "a range of the plain bytes");
+        assert!(!compressible(&response(200, &[js, ("content-range", "bytes 0-4999/5000")])));
+        assert!(!compressible(&response(200, &[js, ("cache-control", "public, No-Transform")])));
+        assert!(!compressible(&response(203, &[js])));
+        assert!(!compressible(&response(200, &[js, ("content-encoding", "br")])));
+        assert!(!compressible(&response(200, &[("content-type", "text/event-stream")])));
+        assert!(!compressible(&response(200, &[js, ("content-length", "100")])));
+        assert!(compressible(&response(200, &[("content-type", "text/css; charset=utf-8"), ("cache-control", "no-cache")])));
+    }
+
+    #[test]
+    fn gzip_is_used_only_when_the_browser_accepts_it() {
+        let accepts = |value: &str| {
+            let mut headers = hyper::HeaderMap::new();
+            headers.insert(hyper::header::ACCEPT_ENCODING, value.parse().unwrap());
+            accepts_gzip(&headers)
+        };
+        assert!(accepts("gzip, deflate, br"));
+        assert!(accepts("br;q=1.0, GZIP;q=0.5"));
+        assert!(!accepts("gzip;q=0"));
+        assert!(!accepts("gzip; q=0.000"));
+        assert!(!accepts("br, identity"));
+        assert!(!accepts_gzip(&hyper::HeaderMap::new()));
+    }
+
+    #[test]
+    fn a_gzipped_body_gets_a_weak_etag_and_no_length() {
+        let mut parts = response(200, &[("etag", "\"abc\""), ("content-length", "4000")]);
+        mark_gzipped(&mut parts.headers);
+        assert_eq!(parts.headers[hyper::header::ETAG], "W/\"abc\"");
+        assert!(!parts.headers.contains_key(hyper::header::CONTENT_LENGTH));
+        assert_eq!(parts.headers[hyper::header::CONTENT_ENCODING], "gzip");
+        let mut weak = response(200, &[("etag", "W/\"abc\"")]);
+        mark_gzipped(&mut weak.headers);
+        assert_eq!(weak.headers[hyper::header::ETAG], "W/\"abc\"", "a weak tag stays as it is");
     }
 }

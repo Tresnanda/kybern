@@ -110,8 +110,11 @@ Measured on a 361-module Vite app (Chrome, 2026-11-03): 16.3 s cold over a 213 m
   `https://localhost:<https_port>` with HTTP/2 and Kybern's per-install certificate
   (`<data dir>/network/preview-tls/`, `ports/tls.rs`). Every request of the page travels over one
   HTTP/2 connection to the target (mode `H`), which sends them on to the dev server over pooled
-  HTTP/1.1 with the browser's `Host`, and gzips uncompressed text when the browser accepts it.
-  WebSocket upgrades (hot reload) use HTTP/1.1 on the same origin, each on a raw ready socket.
+  HTTP/1.1 with the browser's `Host`, and gzips uncompressed text when the browser accepts it
+  (whole `200` bodies only: never a `206`, a `Content-Range` or `Cache-Control: no-transform`; a
+  strong `ETag` becomes weak). Compressing responses that mix secrets with reflected input is what
+  BREACH exploits; the risk is low here, since only the user's own dev server is served this way,
+  inside WireGuard, to a web view on the user's machine. WebSocket upgrades (hot reload) use HTTP/1.1 on the same origin, each on a raw ready socket.
   Kybern's web views accept exactly that certificate, for that loopback origin only: WKWebView by
   the leaf's SHA-256 in its server-trust challenge (`native/webview.m`), WebView2 by PEM in
   `ServerCertificateErrorDetected` (`webview-win/src/policy.rs`), WPE through
